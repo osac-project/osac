@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-
 import pytest
 
 from tests.fulfillment_cli import FulfillmentCLI
@@ -44,12 +42,6 @@ def k8s_hub_client(namespace: str) -> K8sClient:
 
 
 @pytest.fixture(scope="session")
-def k8s_virt_client(namespace: str) -> K8sClient:
-    vm_kubeconfig: str = os.environ["OSAC_VM_KUBECONFIG"]
-    return K8sClient(namespace=namespace, kubeconfig=vm_kubeconfig)
-
-
-@pytest.fixture(scope="session")
 def cli(namespace: str, fulfillment_address: str, service_account: str) -> FulfillmentCLI:
     return FulfillmentCLI(
         binary=env("FULFILLMENT_CLI_PATH", "fulfillment-cli"),
@@ -57,8 +49,3 @@ def cli(namespace: str, fulfillment_address: str, service_account: str) -> Fulfi
         token_script=f"oc create token -n {namespace} {service_account} --as system:admin",
         namespace=namespace,
     )
-
-
-@pytest.fixture(scope="session")
-def vm_template() -> str:
-    return env("OSAC_VM_TEMPLATE", "osac.templates.ocp_virt_vm")

@@ -21,4 +21,4 @@ def vm_template() -> str:
 
 @pytest.fixture(scope="session")
 def network_class() -> str:
-    return env("OSAC_NETWORK_CLASS", "osac.templates.cudn_net")
+    return env("OSAC_NETWORK_CLASS", "cudn_net")

@@ -44,7 +44,7 @@ def k8s_hub_client(namespace: str) -> K8sClient:
 @pytest.fixture(scope="session")
 def cli(namespace: str, fulfillment_address: str, service_account: str) -> FulfillmentCLI:
     return FulfillmentCLI(
-        binary=env("FULFILLMENT_CLI_PATH", "fulfillment-cli"),
+        binary=env("FULFILLMENT_CLI_PATH", "osac"),
         address=f"https://{fulfillment_address.rsplit(':', 1)[0]}",
         token_script=f"oc create token -n {namespace} {service_account} --as system:admin",
         namespace=namespace,

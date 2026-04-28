@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.fulfillment_cli import FulfillmentCLI
+from tests.osac_cli import OsacCLI
 from tests.grpc_client import GRPCClient
 from tests.k8s_client import K8sClient
 from tests.runner import env, run
@@ -42,9 +42,9 @@ def k8s_hub_client(namespace: str) -> K8sClient:
 
 
 @pytest.fixture(scope="session")
-def cli(namespace: str, fulfillment_address: str, service_account: str) -> FulfillmentCLI:
-    return FulfillmentCLI(
-        binary=env("FULFILLMENT_CLI_PATH", "osac"),
+def cli(namespace: str, fulfillment_address: str, service_account: str) -> OsacCLI:
+    return OsacCLI(
+        binary=env("OSAC_CLI_PATH", "osac"),
         address=f"https://{fulfillment_address.rsplit(':', 1)[0]}",
         token_script=f"oc create token -n {namespace} {service_account} --as system:admin",
         namespace=namespace,

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.fulfillment_cli import FulfillmentCLI
+from tests.osac_cli import OsacCLI
 from tests.grpc_client import GRPCClient
 from tests.helpers import wait_for_cluster_deletion, wait_for_cluster_order_cr, wait_for_cluster_ready
 from tests.k8s_client import K8sClient
@@ -12,7 +12,7 @@ from tests.k8s_client import K8sClient
 
 @pytest.fixture
 def cluster_order(
-    cli: FulfillmentCLI, k8s_hub_client: K8sClient, cluster_template: str, pull_secret_path: str, ssh_public_key_path: str
+    cli: OsacCLI, k8s_hub_client: K8sClient, cluster_template: str, pull_secret_path: str, ssh_public_key_path: str
 ):
     uuid: str = cli.create_cluster(
         template=cluster_template,
@@ -27,7 +27,7 @@ def cluster_order(
 
 
 def test_cluster_order_lifecycle(
-    cluster_order: tuple[str, str], grpc: GRPCClient, k8s_hub_client: K8sClient, cli: FulfillmentCLI
+    cluster_order: tuple[str, str], grpc: GRPCClient, k8s_hub_client: K8sClient, cli: OsacCLI
 ) -> None:
     uuid, co_name = cluster_order
 

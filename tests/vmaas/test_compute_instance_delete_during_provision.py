@@ -54,6 +54,8 @@ def _verify_no_duplicate_deprovision(k8s: K8sClient, *, name: str) -> None:
         return
     first_id: str = k8s.get_compute_instance_latest_job_id(name=name, job_type="deprovision", checked=False)
     time.sleep(10)
+    if not k8s.is_present(resource="computeinstance", name=name):
+        return
     second_id: str = k8s.get_compute_instance_latest_job_id(name=name, job_type="deprovision", checked=False)
     assert first_id == second_id, f"Deprovision job ID changed: {first_id} -> {second_id}"
 

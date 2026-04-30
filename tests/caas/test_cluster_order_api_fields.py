@@ -11,12 +11,10 @@ import yaml
 from tests.helpers import wait_for_cluster_deletion, wait_for_cluster_ready
 from tests.k8s_client import K8sClient
 
-TEST_TEMPLATE_ID: str = "osac.templates.ocp_4_17_small"
-
 
 @pytest.fixture
-def cluster_order(k8s_hub_client: K8sClient, namespace: str, pull_secret_path: str, ssh_public_key_path: str):
-    order_name: str = f"e2e-test-co-fields-{uuid4().hex[:8]}"
+def cluster_order(k8s_hub_client: K8sClient, namespace: str, cluster_template: str, pull_secret_path: str, ssh_public_key_path: str):
+    order_name: str = f"co-fields-{uuid4().hex[:8]}"
     template_params: dict[str, str] = {
         "pull_secret": Path(pull_secret_path).read_text().strip(),
         "ssh_public_key": Path(ssh_public_key_path).read_text().strip(),
@@ -32,9 +30,9 @@ def cluster_order(k8s_hub_client: K8sClient, namespace: str, pull_secret_path: s
                 "annotations": {"osac.openshift.io/tenant": namespace},
             },
             "spec": {
-                "templateID": TEST_TEMPLATE_ID,
+                "templateID": cluster_template,
                 "templateParameters": json.dumps(template_params),
-                "nodeRequests": [{"resourceClass": "small", "numberOfNodes": 2}],
+                "nodeRequests": [{"resourceClass": "ci-worker", "numberOfNodes": 1}],
             },
         }
     )
@@ -45,17 +43,17 @@ def cluster_order(k8s_hub_client: K8sClient, namespace: str, pull_secret_path: s
     wait_for_cluster_deletion(k8s=k8s_hub_client, name=order_name)
 
 
-def test_cluster_order_api_fields(cluster_order: tuple[str, dict[str, str]], k8s_hub_client: K8sClient) -> None:
+def test_cluster_order_api_fields(cluster_order: tuple[str, dict[str, str]], cluster_template: str, k8s_hub_client: K8sClient) -> None:
     order_name, template_params = cluster_order
 
     wait_for_cluster_ready(k8s=k8s_hub_client, name=order_name)
 
     co: dict[str, Any] = k8s_hub_client.get_json(resource="clusterorder", name=order_name)
     spec: dict[str, Any] = co["spec"]
-    assert spec["templateID"] == TEST_TEMPLATE_ID, f"templateID mismatch: {spec['templateID']} != {TEST_TEMPLATE_ID}"
+    assert spec["templateID"] == cluster_template, f"templateID mismatch: {spec['templateID']} != {cluster_template}"
     assert json.loads(spec["templateParameters"]) == template_params, "templateParameters mismatch"
-    assert spec["nodeRequests"][0]["resourceClass"] == "small", "resourceClass mismatch"
-    assert spec["nodeRequests"][0]["numberOfNodes"] == 2, "numberOfNodes mismatch"
+    assert spec["nodeRequests"][0]["resourceClass"] == "ci-worker", "resourceClass mismatch"
+    assert spec["nodeRequests"][0]["numberOfNodes"] == 1, "numberOfNodes mismatch"
 
     status: dict[str, Any] = co.get("status", {})
     assert status.get("phase") == "Ready", f"Expected Ready phase, got {status.get('phase')}"

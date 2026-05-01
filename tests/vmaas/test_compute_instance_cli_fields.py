@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 from typing import Any
 
-from tests.fulfillment_cli import FulfillmentCLI
+from tests.osac_cli import OsacCLI
 from tests.grpc_client import GRPCClient
 from tests.helpers import wait_for_cr, wait_for_deletion, wait_for_provision, wait_for_running
 from tests.k8s_client import K8sClient
@@ -17,7 +17,7 @@ TEST_RUN_STRATEGY: str = "Always"
 TEST_USER_DATA: str = "#cloud-config\npackages:\n  - vim\n"
 
 
-def test_compute_instance_cli_explicit_fields(cli: FulfillmentCLI, grpc: GRPCClient, k8s_hub_client: K8sClient) -> None:
+def test_compute_instance_cli_explicit_fields(cli: OsacCLI, grpc: GRPCClient, k8s_hub_client: K8sClient) -> None:
     uuid: str = cli.create_compute_instance(
         template="osac.templates.ocp_virt_vm",
         cores=TEST_CORES,

@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from tests.fulfillment_cli import FulfillmentCLI
+from tests.osac_cli import OsacCLI
 from tests.grpc_client import GRPCClient
 from tests.helpers import wait_for_cr, wait_for_deletion, wait_for_provision, wait_for_running
 from tests.k8s_client import K8sClient
 
 
 def test_compute_instance_lifecycle(
-    cli: FulfillmentCLI, grpc: GRPCClient, k8s_hub_client: K8sClient, k8s_virt_client: K8sClient, vm_template: str
+    cli: OsacCLI, grpc: GRPCClient, k8s_hub_client: K8sClient, k8s_virt_client: K8sClient, vm_template: str
 ) -> None:
     uuid: str = cli.create_compute_instance(template=vm_template)
     assert uuid in grpc.list_compute_instance_ids()

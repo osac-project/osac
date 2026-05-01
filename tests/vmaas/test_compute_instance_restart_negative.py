@@ -3,14 +3,14 @@ from __future__ import annotations
 import time
 from datetime import UTC, datetime
 
-from tests.fulfillment_cli import FulfillmentCLI
+from tests.osac_cli import OsacCLI
 from tests.grpc_client import GRPCClient
 from tests.helpers import wait_for_cr, wait_for_deletion, wait_for_restart, wait_for_running
 from tests.k8s_client import K8sClient
 
 
 def test_compute_instance_restart_past_timestamp_ignored(
-    cli: FulfillmentCLI, grpc: GRPCClient, k8s_hub_client: K8sClient, vm_template: str
+    cli: OsacCLI, grpc: GRPCClient, k8s_hub_client: K8sClient, vm_template: str
 ) -> None:
     uuid: str = cli.create_compute_instance(template=vm_template)
     ci_name: str = wait_for_cr(k8s=k8s_hub_client, uuid=uuid)

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from tests.osac_cli import OsacCLI
-from tests.grpc_client import GRPCClient
-from tests.helpers import wait_for_cr, wait_for_deletion, wait_for_provision, wait_for_running
-from tests.k8s_client import K8sClient
+from tests.core.grpc_client import GRPCClient
+from tests.core.helpers import wait_for_cr, wait_for_deletion, wait_for_provision, wait_for_running
+from tests.core.k8s_client import K8sClient
+from tests.core.osac_cli import OsacCLI
 
 
 def test_compute_instance_lifecycle(

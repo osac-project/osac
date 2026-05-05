@@ -3,10 +3,10 @@ from __future__ import annotations
 import base64
 from typing import Any
 
-from tests.osac_cli import OsacCLI
-from tests.grpc_client import GRPCClient
-from tests.helpers import wait_for_cr, wait_for_deletion, wait_for_provision, wait_for_running
-from tests.k8s_client import K8sClient
+from tests.core.grpc_client import GRPCClient
+from tests.core.helpers import wait_for_cr, wait_for_deletion, wait_for_provision, wait_for_running
+from tests.core.k8s_client import K8sClient
+from tests.core.osac_cli import OsacCLI
 
 TEST_CORES: int = 2
 TEST_MEMORY_GIB: int = 4

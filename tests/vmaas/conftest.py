@@ -4,8 +4,8 @@ import os
 
 import pytest
 
-from tests.k8s_client import K8sClient
-from tests.runner import env
+from tests.core.k8s_client import K8sClient
+from tests.core.runner import env
 
 
 @pytest.fixture(scope="session")

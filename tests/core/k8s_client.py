@@ -197,6 +197,72 @@ class K8sClient:
             *self._base(), "get", "virtualmachine", name, "-n", vm_namespace, "-o", "jsonpath={.spec.runStrategy}"
         )
 
+    # PublicIPPool queries
+
+    def patch_public_ip_pool_implementation_strategy(
+        self, *, name: str, strategy: str = "metallb-l2"
+    ) -> tuple[str, int]:
+        return self.patch(
+            resource="publicippool",
+            name=name,
+            patch=json.dumps({"spec": {"implementationStrategy": strategy}}),
+        )
+
+    def get_public_ip_pool_name(self, *, uuid: str, checked: bool = True) -> str:
+        output, rc = self._get(
+            "get",
+            "publicippool",
+            "-n",
+            self.namespace,
+            "-l",
+            f"osac.openshift.io/publicippool-uuid={uuid}",
+            "-o",
+            "jsonpath={.items[0].metadata.name}",
+            checked=checked,
+        )
+        return output if rc == 0 else ""
+
+    def get_public_ip_pool_uuid(self, *, name: str, checked: bool = True) -> str:
+        output, rc = self._get(
+            "get", "publicippool", name, "-n", self.namespace,
+            "-o", "jsonpath={.metadata.labels.osac\\.openshift\\.io/publicippool-uuid}", checked=checked
+        )
+        return output if rc == 0 else ""
+
+    def get_public_ip_pool_phase(self, *, name: str, checked: bool = True) -> str:
+        output, rc = self._get(
+            "get", "publicippool", name, "-n", self.namespace, "-o", "jsonpath={.status.phase}", checked=checked
+        )
+        return output if rc == 0 else ""
+
+    # PublicIP queries
+
+    def get_public_ip_name(self, *, uuid: str, checked: bool = True) -> str:
+        output, rc = self._get(
+            "get",
+            "publicip",
+            "-n",
+            self.namespace,
+            "-l",
+            f"osac.openshift.io/publicip-uuid={uuid}",
+            "-o",
+            "jsonpath={.items[0].metadata.name}",
+            checked=checked,
+        )
+        return output if rc == 0 else ""
+
+    def get_public_ip_phase(self, *, name: str, checked: bool = True) -> str:
+        output, rc = self._get(
+            "get", "publicip", name, "-n", self.namespace, "-o", "jsonpath={.status.phase}", checked=checked
+        )
+        return output if rc == 0 else ""
+
+    def get_public_ip_state(self, *, name: str, checked: bool = True) -> str:
+        output, rc = self._get(
+            "get", "publicip", name, "-n", self.namespace, "-o", "jsonpath={.status.state}", checked=checked
+        )
+        return output if rc == 0 else ""
+
     # ClusterOrder queries
 
     def get_cluster_order_name(self, *, uuid: str, checked: bool = True) -> str:

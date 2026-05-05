@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from tests.runner import env
+from tests.core.runner import env
 
 
 @pytest.fixture(scope="session")

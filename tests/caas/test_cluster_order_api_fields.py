@@ -8,12 +8,14 @@ from uuid import uuid4
 import pytest
 import yaml
 
-from tests.helpers import wait_for_cluster_deletion, wait_for_cluster_ready
-from tests.k8s_client import K8sClient
+from tests.core.helpers import wait_for_cluster_deletion, wait_for_cluster_ready
+from tests.core.k8s_client import K8sClient
 
 
 @pytest.fixture
-def cluster_order(k8s_hub_client: K8sClient, namespace: str, cluster_template: str, pull_secret_path: str, ssh_public_key_path: str):
+def cluster_order(
+    k8s_hub_client: K8sClient, namespace: str, cluster_template: str, pull_secret_path: str, ssh_public_key_path: str
+):
     order_name: str = f"co-fields-{uuid4().hex[:8]}"
     template_params: dict[str, str] = {
         "pull_secret": Path(pull_secret_path).read_text().strip(),
@@ -43,7 +45,9 @@ def cluster_order(k8s_hub_client: K8sClient, namespace: str, cluster_template: s
     wait_for_cluster_deletion(k8s=k8s_hub_client, name=order_name)
 
 
-def test_cluster_order_api_fields(cluster_order: tuple[str, dict[str, str]], cluster_template: str, k8s_hub_client: K8sClient) -> None:
+def test_cluster_order_api_fields(
+    cluster_order: tuple[str, dict[str, str]], cluster_template: str, k8s_hub_client: K8sClient
+) -> None:
     order_name, template_params = cluster_order
 
     wait_for_cluster_ready(k8s=k8s_hub_client, name=order_name)

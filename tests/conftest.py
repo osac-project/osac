@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from tests.osac_cli import OsacCLI
-from tests.grpc_client import GRPCClient
-from tests.k8s_client import K8sClient
-from tests.runner import env, run
+from tests.core.grpc_client import GRPCClient
+from tests.core.k8s_client import K8sClient
+from tests.core.osac_cli import OsacCLI
+from tests.core.runner import env, run
 
 
 @pytest.fixture(scope="session")

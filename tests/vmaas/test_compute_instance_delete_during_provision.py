@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import time
 
-from tests.osac_cli import OsacCLI
-from tests.grpc_client import GRPCClient
-from tests.helpers import wait_for_cr, wait_for_deletion
-from tests.k8s_client import K8sClient
-from tests.runner import poll_until
+from tests.core.grpc_client import GRPCClient
+from tests.core.helpers import wait_for_cr, wait_for_deletion
+from tests.core.k8s_client import K8sClient
+from tests.core.osac_cli import OsacCLI
+from tests.core.runner import poll_until
 
 TERMINAL_JOB_STATES: tuple[str, ...] = ("Canceled", "Failed", "Succeeded")
 

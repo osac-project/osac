@@ -5,11 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from tests.osac_cli import OsacCLI
-from tests.grpc_client import GRPCClient
-from tests.helpers import wait_for_cluster_deletion, wait_for_cluster_order_cr
-from tests.k8s_client import K8sClient
-from tests.runner import poll_until
+from tests.core.grpc_client import GRPCClient
+from tests.core.helpers import wait_for_cluster_deletion, wait_for_cluster_order_cr
+from tests.core.k8s_client import K8sClient
+from tests.core.osac_cli import OsacCLI
+from tests.core.runner import poll_until
 
 TERMINAL_JOB_STATES: tuple[str, ...] = ("Canceled", "Failed", "Succeeded")
 

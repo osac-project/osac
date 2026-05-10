@@ -17,11 +17,14 @@ def cluster_with_explicit_fields(
     uuid: str = cli.create_cluster(
         template=cluster_template, pull_secret_file=pull_secret_path, ssh_public_key_file=ssh_public_key_path
     )
-    co_name: str = wait_for_cluster_order_cr(k8s=k8s_hub_client, uuid=uuid)
-    yield uuid, co_name
-    if k8s_hub_client.is_present(resource="clusterorder", name=co_name):
-        cli.delete_cluster(uuid=uuid)
-        wait_for_cluster_deletion(k8s=k8s_hub_client, name=co_name)
+    co_name: str | None = None
+    try:
+        co_name = wait_for_cluster_order_cr(k8s=k8s_hub_client, uuid=uuid)
+        yield uuid, co_name
+    finally:
+        if co_name and k8s_hub_client.is_present(resource="clusterorder", name=co_name):
+            cli.delete_cluster(uuid=uuid)
+            wait_for_cluster_deletion(k8s=k8s_hub_client, name=co_name)
 
 
 def test_cluster_explicit_fields(

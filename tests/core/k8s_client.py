@@ -235,3 +235,7 @@ class K8sClient:
 
     def get_cluster_order_namespace(self, *, name: str) -> str:
         return self.get_jsonpath(resource="clusterorder", name=name, jsonpath="{.status.clusterReference.namespace}")
+
+    def get_cluster_order_spec(self, *, name: str) -> dict[str, Any]:
+        output = self.get_jsonpath(resource="clusterorder", name=name, jsonpath="{.spec}")
+        return json.loads(output) if output else {}

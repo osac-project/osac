@@ -61,12 +61,18 @@ class OsacCLI:
         *,
         template: str,
         name: str | None = None,
+        pull_secret_file: str | None = None,
+        ssh_public_key_file: str | None = None,
         template_parameters: dict[str, str] | None = None,
         template_parameter_files: dict[str, str] | None = None,
     ) -> str:
         args: list[str] = [self.binary, "create", "cluster", "--template", template]
         if name is not None:
             args.extend(["--name", name])
+        if pull_secret_file is not None:
+            args.extend(["--pull-secret-file", pull_secret_file])
+        if ssh_public_key_file is not None:
+            args.extend(["--ssh-public-key-file", ssh_public_key_file])
         if template_parameters is not None:
             for key, value in template_parameters.items():
                 args.extend(["-p", f"{key}={value}"])

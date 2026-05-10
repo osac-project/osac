@@ -51,6 +51,5 @@ def test_cluster_explicit_fields(
         "Expected sshPublicKey on ClusterOrder CR to match the provided file content"
     )
 
-    assert spec.get("templateParameters") in ("", "{}", None), (
-        f"Expected templateParameters to be empty, got: {spec.get('templateParameters')}"
-    )
+    tp = spec.get("templateParameters", "")
+    assert tp in ("", "{}", None), f"Expected templateParameters to be empty, got: {tp}"

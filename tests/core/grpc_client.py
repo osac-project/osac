@@ -81,3 +81,6 @@ class GRPCClient:
     def list_cluster_ids(self) -> list[str]:
         response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.Clusters/List")
         return [item["id"] for item in response.get("items", [])]
+
+    def get_cluster(self, *, cluster_id: str) -> dict[str, Any]:
+        return self.call(service=f"{PUBLIC_API}.Clusters/Get", data={"id": cluster_id})

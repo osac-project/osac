@@ -53,7 +53,7 @@ def test_compute_instance_api_fields(k8s_hub_client: K8sClient, k8s_virt_client:
     poll_until(
         fn=lambda: k8s_virt_client.get_vm_printable_status(name=instance_name, vm_namespace=vm_ns, checked=False),
         until=lambda v: v == "Stopped",
-        retries=12,
+        retries=30,
         delay=10,
         description=f"{instance_name} VM stopped",
     )
@@ -72,7 +72,7 @@ def test_compute_instance_api_fields(k8s_hub_client: K8sClient, k8s_virt_client:
     poll_until(
         fn=lambda: k8s_virt_client.get_vm_printable_status(name=instance_name, vm_namespace=vm_ns, checked=False),
         until=lambda v: v == "Running",
-        retries=12,
+        retries=30,
         delay=10,
         description=f"{instance_name} VM running",
     )

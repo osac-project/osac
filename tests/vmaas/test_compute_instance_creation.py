@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from tests.core.grpc_client import GRPCClient
-from tests.core.helpers import wait_for_cr, wait_for_deletion, wait_for_provision, wait_for_running
+from tests.core.helpers import wait_for_cr, wait_for_deletion, wait_for_grpc_removal, wait_for_provision, wait_for_running
 from tests.core.k8s_client import K8sClient
 from tests.core.osac_cli import OsacCLI
 
@@ -23,4 +23,4 @@ def test_compute_instance_lifecycle(
 
     cli.delete_compute_instance(uuid=uuid)
     wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
-    assert uuid not in grpc.list_compute_instance_ids()
+    wait_for_grpc_removal(grpc=grpc, uuid=uuid)

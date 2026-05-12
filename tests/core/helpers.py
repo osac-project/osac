@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from tests.core.grpc_client import GRPCClient
 from tests.core.k8s_client import K8sClient
 from tests.core.runner import poll_until
 
@@ -51,6 +52,16 @@ def wait_for_deletion(*, k8s: K8sClient, name: str) -> None:
         retries=60,
         delay=5,
         description=f"{name} deletion",
+    )
+
+
+def wait_for_grpc_removal(*, grpc: GRPCClient, uuid: str) -> None:
+    poll_until(
+        fn=lambda: uuid not in grpc.list_compute_instance_ids(),
+        until=lambda v: v is True,
+        retries=30,
+        delay=2,
+        description=f"{uuid} removed from gRPC list",
     )
 
 

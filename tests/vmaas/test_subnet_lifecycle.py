@@ -26,6 +26,10 @@ def test_subnet_lifecycle(grpc: GRPCClient, k8s_hub_client: K8sClient, network_c
     subnet_cr_name: str = wait_for_subnet_cr(k8s=k8s_hub_client, uuid=subnet_id)
 
     assert subnet_id in grpc.list_subnet_ids()
+
+    subnet: dict = grpc.get_subnet(subnet_id=subnet_id)
+    assert subnet["object"]["metadata"]["name"] == subnet_name
+
     wait_for_subnet_ready(k8s=k8s_hub_client, name=subnet_cr_name)
 
     grpc.delete_subnet(subnet_id=subnet_id)

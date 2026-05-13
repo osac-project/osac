@@ -239,3 +239,25 @@ class K8sClient:
     def get_cluster_order_spec(self, *, name: str) -> dict[str, Any]:
         output = self.get_jsonpath(resource="clusterorder", name=name, jsonpath="{.spec}")
         return json.loads(output) if output else {}
+
+    # SecurityGroup queries
+
+    def get_security_group_name(self, *, uuid: str, checked: bool = True) -> str:
+        output, rc = self._get(
+            "get",
+            "securitygroup",
+            "-n",
+            self.namespace,
+            "-l",
+            f"osac.openshift.io/securitygroup-uuid={uuid}",
+            "-o",
+            "jsonpath={.items[0].metadata.name}",
+            checked=checked,
+        )
+        return output if rc == 0 else ""
+
+    def get_security_group_phase(self, *, name: str, checked: bool = True) -> str:
+        output, rc = self._get(
+            "get", "securitygroup", name, "-n", self.namespace, "-o", "jsonpath={.status.phase}", checked=checked
+        )
+        return output if rc == 0 else ""

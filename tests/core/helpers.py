@@ -154,3 +154,33 @@ def wait_for_cluster_deletion(*, k8s: K8sClient, name: str) -> None:
         delay=10,
         description=f"{name} ClusterOrder deletion",
     )
+
+
+def wait_for_security_group_cr(*, k8s: K8sClient, uuid: str) -> str:
+    return poll_until(
+        fn=lambda: k8s.get_security_group_name(uuid=uuid, checked=False),
+        until=lambda v: v != "",
+        retries=30,
+        delay=2,
+        description=f"SecurityGroup CR for {uuid}",
+    )
+
+
+def wait_for_security_group_ready(*, k8s: K8sClient, name: str) -> None:
+    poll_until(
+        fn=lambda: k8s.get_security_group_phase(name=name, checked=False),
+        until=lambda v: v == "Ready",
+        retries=60,
+        delay=5,
+        description=f"{name} SecurityGroup Ready",
+    )
+
+
+def wait_for_security_group_deletion(*, k8s: K8sClient, name: str) -> None:
+    poll_until(
+        fn=lambda: not k8s.is_present(resource="securitygroup", name=name),
+        until=lambda v: v is True,
+        retries=30,
+        delay=5,
+        description=f"{name} SecurityGroup deletion",
+    )

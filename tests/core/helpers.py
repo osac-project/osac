@@ -137,16 +137,6 @@ def wait_for_subnet_deletion(*, k8s: K8sClient, name: str) -> None:
     )
 
 
-def wait_for_public_ip_pool_uuid(*, k8s: K8sClient, name: str) -> str:
-    return poll_until(
-        fn=lambda: k8s.get_public_ip_pool_uuid(name=name, checked=False),
-        until=lambda v: v != "",
-        retries=30,
-        delay=2,
-        description=f"PublicIPPool UUID label for {name}",
-    )
-
-
 def wait_for_public_ip_pool_cr(*, k8s: K8sClient, uuid: str) -> str:
     return poll_until(
         fn=lambda: k8s.get_public_ip_pool_name(uuid=uuid, checked=False),

@@ -151,6 +151,9 @@ class GRPCClient:
         )
         return response["object"]["id"]
 
+    def get_public_ip_pool(self, *, pool_id: str) -> dict[str, Any]:
+        return self.call(service=f"{PRIVATE_API}.PublicIPPools/Get", data={"id": pool_id})
+
     def list_public_ip_pool_ids(self) -> list[str]:
         response: dict[str, Any] = self.call(service=f"{PRIVATE_API}.PublicIPPools/List")
         return [item["id"] for item in response.get("items", [])]
@@ -166,6 +169,9 @@ class GRPCClient:
             data={"object": {"metadata": {"name": name}, "spec": {"pool": pool}}},
         )
         return response["object"]["id"]
+
+    def get_public_ip(self, *, public_ip_id: str) -> dict[str, Any]:
+        return self.call(service=f"{PUBLIC_API}.PublicIPs/Get", data={"id": public_ip_id})
 
     def list_public_ip_ids(self) -> list[str]:
         response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.PublicIPs/List")

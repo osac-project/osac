@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 
 from tests.core.grpc_client import GRPCClient
-from tests.core.helpers import wait_for_cr, wait_for_deletion
+from tests.core.helpers import wait_for_cr, wait_for_deletion, wait_for_grpc_removal
 from tests.core.k8s_client import K8sClient
 from tests.core.osac_cli import OsacCLI
 from tests.core.runner import poll_until
@@ -84,7 +84,7 @@ def test_compute_instance_delete_during_provision(
     _verify_no_duplicate_deprovision(k8s_hub_client, name=ci_name)
 
     wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
-    assert uuid not in grpc.list_compute_instance_ids()
+    wait_for_grpc_removal(grpc=grpc, uuid=uuid)
 
     orphan_count: int = k8s_virt_client.count_by_label_all_namespaces(
         resource="virtualmachine", label=f"osac.openshift.io/computeinstance={ci_name}"

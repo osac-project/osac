@@ -74,27 +74,29 @@ class TestPoolCapacity:
         pool_id, _ = small_pool
         ip1_id, ip1_cr = create_ip(grpc, k8s_hub_client, pool_id)
         ip2_id, ip2_cr = create_ip(grpc, k8s_hub_client, pool_id)
-
-        assert pool_status(private_grpc, pool_id)["available"] == 0
-
-        delete_ip(grpc, k8s_hub_client, ip1_id, ip1_cr)
-
-        poll_until(
-            fn=lambda: pool_status(private_grpc, pool_id)["available"],
-            until=lambda v: v == 1,
-            retries=30,
-            delay=5,
-            description="Pool available restored to 1 after IP release",
-        )
-
-        ip3_id, ip3_cr = create_ip(grpc, k8s_hub_client, pool_id)
+        ip3_id, ip3_cr = None, None
         try:
+            assert pool_status(private_grpc, pool_id)["available"] == 0
+
+            delete_ip(grpc, k8s_hub_client, ip1_id, ip1_cr)
+            ip1_id, ip1_cr = None, None
+
+            poll_until(
+                fn=lambda: pool_status(private_grpc, pool_id)["available"],
+                until=lambda v: v == 1,
+                retries=30,
+                delay=5,
+                description="Pool available restored to 1 after IP release",
+            )
+
+            ip3_id, ip3_cr = create_ip(grpc, k8s_hub_client, pool_id)
             status = pool_status(private_grpc, pool_id)
             assert status["allocated"] == 2
             assert status["available"] == 0
         finally:
-            delete_ip(grpc, k8s_hub_client, ip3_id, ip3_cr)
-            delete_ip(grpc, k8s_hub_client, ip2_id, ip2_cr)
+            for ip_id, ip_cr in [(ip3_id, ip3_cr), (ip2_id, ip2_cr), (ip1_id, ip1_cr)]:
+                if ip_id is not None:
+                    delete_ip(grpc, k8s_hub_client, ip_id, ip_cr)
 
     def test_pool_deletion_blocked_while_ips_allocated(
         self,

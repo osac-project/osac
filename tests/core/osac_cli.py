@@ -2,14 +2,19 @@ from __future__ import annotations
 
 import re
 
-from tests.core.runner import run
+from tests.core.runner import run, run_unchecked
 
 
 class OsacCLI:
     def __init__(self, *, binary: str, address: str, token_script: str, namespace: str) -> None:
         self.binary: str = binary
         self.namespace: str = namespace
+        self._address: str = address
+        self._token_script: str = token_script
         run(binary, "login", "--address", address, "--insecure", "--token-script", token_script)
+
+    def relogin(self) -> None:
+        run(self.binary, "login", "--address", self._address, "--insecure", "--token-script", self._token_script)
 
     def create_hub(self, *, hub_id: str, kubeconfig: str) -> None:
         run(self.binary, "create", "hub", "--id", hub_id, "--kubeconfig", kubeconfig, "--namespace", self.namespace)
@@ -84,6 +89,15 @@ class OsacCLI:
         match: re.Match[str] | None = re.search(r"'([^']+)'", stdout)
         assert match is not None, f"Failed to parse UUID from CLI output: {stdout}"
         return match.group(1)
+
+    def get(self, resource: str, *, output: str | None = None) -> str:
+        args: list[str] = [self.binary, "get", resource]
+        if output is not None:
+            args.extend(["-o", output])
+        return run(*args)
+
+    def get_unchecked(self, resource: str) -> tuple[str, int]:
+        return run_unchecked(self.binary, "get", resource)
 
     def delete_cluster(self, *, uuid: str) -> None:
         run(self.binary, "delete", "cluster", uuid)

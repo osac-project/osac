@@ -18,6 +18,10 @@ def test_virtual_network_lifecycle(grpc: GRPCClient, k8s_hub_client: K8sClient, 
     cr_name: str = wait_for_virtual_network_cr(k8s=k8s_hub_client, uuid=vn_id)
 
     assert vn_id in grpc.list_virtual_network_ids()
+
+    vn: dict = grpc.get_virtual_network(vn_id=vn_id)
+    assert vn["object"]["metadata"]["name"] == vn_name
+
     wait_for_virtual_network_ready(k8s=k8s_hub_client, name=cr_name)
 
     grpc.delete_virtual_network(vn_id=vn_id)

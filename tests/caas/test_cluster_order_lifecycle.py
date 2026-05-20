@@ -5,7 +5,12 @@ from pathlib import Path
 import pytest
 
 from tests.core.grpc_client import GRPCClient
-from tests.core.helpers import wait_for_cluster_deletion, wait_for_cluster_order_cr, wait_for_cluster_ready
+from tests.core.helpers import (
+    wait_for_cluster_deletion,
+    wait_for_cluster_grpc_removal,
+    wait_for_cluster_order_cr,
+    wait_for_cluster_ready,
+)
 from tests.core.k8s_client import K8sClient
 from tests.core.osac_cli import OsacCLI
 
@@ -43,4 +48,4 @@ def test_cluster_order_lifecycle(
 
     cli.delete_cluster(uuid=uuid)
     wait_for_cluster_deletion(k8s=k8s_hub_client, name=co_name)
-    assert uuid not in grpc.list_cluster_ids()
+    wait_for_cluster_grpc_removal(grpc=grpc, uuid=uuid)

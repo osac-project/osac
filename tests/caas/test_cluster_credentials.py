@@ -27,7 +27,13 @@ def ready_cluster(
         template_parameters={"ssh_public_key": Path(ssh_public_key_path).read_text().strip()},
     )
     co_name: str = wait_for_cluster_order_cr(k8s=k8s_hub_client, uuid=uuid)
-    wait_for_cluster_ready(k8s=k8s_hub_client, name=co_name)
+    try:
+        wait_for_cluster_ready(k8s=k8s_hub_client, name=co_name)
+    except Exception:
+        if k8s_hub_client.is_present(resource="clusterorder", name=co_name):
+            cli.delete_cluster(uuid=uuid)
+            wait_for_cluster_deletion(k8s=k8s_hub_client, name=co_name)
+        raise
     yield uuid, co_name
     if k8s_hub_client.is_present(resource="clusterorder", name=co_name):
         cli.delete_cluster(uuid=uuid)

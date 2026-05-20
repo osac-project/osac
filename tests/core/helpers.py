@@ -156,6 +156,16 @@ def wait_for_cluster_deletion(*, k8s: K8sClient, name: str) -> None:
     )
 
 
+def wait_for_cluster_grpc_removal(*, grpc: GRPCClient, uuid: str) -> None:
+    poll_until(
+        fn=lambda: uuid not in grpc.list_cluster_ids(),
+        until=lambda v: v is True,
+        retries=60,
+        delay=5,
+        description=f"{uuid} removed from gRPC cluster list",
+    )
+
+
 def wait_for_security_group_cr(*, k8s: K8sClient, uuid: str) -> str:
     return poll_until(
         fn=lambda: k8s.get_security_group_name(uuid=uuid, checked=False),

@@ -46,7 +46,7 @@ def cluster_order(
         wait_for_cluster_deletion(k8s=k8s_hub_client, name=order_name)
 
 
-def test_template_id_immutable(cluster_order: str, cluster_template: str, k8s_hub_client: K8sClient) -> None:
+def test_template_id_immutable(cluster_order: str, k8s_hub_client: K8sClient) -> None:
     poll_until(
         fn=lambda: k8s_hub_client.is_present(resource="clusterorder", name=cluster_order),
         until=lambda v: v is True,
@@ -57,21 +57,4 @@ def test_template_id_immutable(cluster_order: str, cluster_template: str, k8s_hu
 
     patch: str = json.dumps({"spec": {"templateID": "osac.templates.bogus_template"}})
     _, rc = k8s_hub_client.patch(resource="clusterorder", name=cluster_order, patch=patch)
-
-    if rc != 0:
-        return
-
-    poll_until(
-        fn=lambda: k8s_hub_client.get_jsonpath(
-            resource="clusterorder", name=cluster_order, jsonpath="{.spec.templateID}"
-        ),
-        until=lambda v: v != "",
-        retries=10,
-        delay=2,
-        description=f"templateID reconciled for {cluster_order}",
-    )
-
-    actual: str = k8s_hub_client.get_jsonpath(
-        resource="clusterorder", name=cluster_order, jsonpath="{.spec.templateID}"
-    )
-    assert actual == cluster_template, f"templateID should remain {cluster_template} after patch, got {actual}"
+    assert rc != 0, "patch to templateID should be rejected by the server"

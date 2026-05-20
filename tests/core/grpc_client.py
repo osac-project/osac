@@ -5,7 +5,7 @@ import re
 import subprocess
 from typing import Any
 
-from tests.core.runner import run
+from tests.core.runner import run, run_unchecked
 
 PUBLIC_API: str = "osac.public.v1"
 PRIVATE_API: str = "osac.private.v1"
@@ -86,6 +86,13 @@ class GRPCClient:
 
     def delete_subnet(self, *, subnet_id: str) -> None:
         self.call(service=f"{PUBLIC_API}.Subnets/Delete", data={"id": subnet_id})
+
+    def call_unchecked(self, *, service: str, data: dict[str, Any] | None = None) -> tuple[str, int]:
+        args: list[str] = ["grpcurl", "-insecure", "-H", f"Authorization: Bearer {self.token}"]
+        if data is not None:
+            args.extend(["-d", json.dumps(data)])
+        args.extend([self.address, service])
+        return run_unchecked(*args)
 
     # Cluster operations
 
@@ -203,3 +210,24 @@ class GRPCClient:
 
     def delete_public_ip_attachment(self, *, attachment_id: str) -> None:
         self.call(service=f"{PUBLIC_API}.PublicIPAttachments/Delete", data={"id": attachment_id})
+
+    # ClusterCatalogItem operations
+
+    def create_cluster_catalog_item(
+        self, *, name: str, template: str, published: bool = True, field_definitions: list[dict[str, Any]] | None = None
+    ) -> str:
+        obj: dict[str, Any] = {"metadata": {"name": name}, "title": name, "template": template, "published": published}
+        if field_definitions is not None:
+            obj["field_definitions"] = field_definitions
+        response: dict[str, Any] = self.call(service=f"{PRIVATE_API}.ClusterCatalogItems/Create", data={"object": obj})
+        return response["object"]["id"]
+
+    def get_cluster_catalog_item(self, *, catalog_item_id: str) -> dict[str, Any]:
+        return self.call(service=f"{PUBLIC_API}.ClusterCatalogItems/Get", data={"id": catalog_item_id})
+
+    def list_cluster_catalog_item_ids(self) -> list[str]:
+        response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.ClusterCatalogItems/List")
+        return [item["id"] for item in response.get("items", [])]
+
+    def delete_cluster_catalog_item(self, *, catalog_item_id: str) -> None:
+        self.call(service=f"{PRIVATE_API}.ClusterCatalogItems/Delete", data={"id": catalog_item_id})

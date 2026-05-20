@@ -128,5 +128,11 @@ class OsacCLI:
     def get_unchecked(self, resource: str) -> tuple[str, int]:
         return run_unchecked(self.binary, "get", resource)
 
+    def create_cluster_with_catalog_item(self, *, catalog_item: str, name: str) -> str:
+        stdout: str = run(self.binary, "create", "cluster", "--catalog-item", catalog_item, "--name", name)
+        match: re.Match[str] | None = re.search(r"'([^']+)'", stdout)
+        assert match is not None, f"Failed to parse UUID from CLI output: {stdout}"
+        return match.group(1)
+
     def delete_cluster(self, *, uuid: str) -> None:
         run(self.binary, "delete", "cluster", uuid)

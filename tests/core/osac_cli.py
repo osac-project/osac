@@ -96,6 +96,9 @@ class OsacCLI:
             args.extend(["-o", output])
         return run(*args)
 
+    def get_cluster_credential(self, credential: str, *, uuid: str) -> str:
+        return run(self.binary, "get", credential, uuid)
+
     def get_unchecked(self, resource: str) -> tuple[str, int]:
         return run_unchecked(self.binary, "get", resource)
 

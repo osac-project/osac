@@ -62,5 +62,8 @@ def test_template_id_immutable(cluster_order: str, k8s_hub_client: K8sClient) ->
     )
 
     patch: str = json.dumps({"spec": {"templateID": "osac.templates.bogus_template"}})
-    _, rc = k8s_hub_client.patch(resource="clusterorder", name=cluster_order, patch=patch)
-    assert rc != 0, "patch to templateID should be rejected by the server"
+    output, rc = k8s_hub_client.patch(resource="clusterorder", name=cluster_order, patch=patch)
+    assert rc \!= 0, "patch to templateID should be rejected by the server"
+    assert "immutable" in output.lower() or "templateID" in output, (
+        f"patch was rejected but not for immutability: {output}"
+    )

@@ -33,6 +33,7 @@ def ready_cluster(
         if k8s_hub_client.is_present(resource="clusterorder", name=co_name):
             cli.delete_cluster(uuid=uuid)
             wait_for_cluster_deletion(k8s=k8s_hub_client, name=co_name)
+            wait_for_cluster_grpc_removal(grpc=grpc, uuid=uuid)
         raise
     yield uuid, co_name
     if k8s_hub_client.is_present(resource="clusterorder", name=co_name):

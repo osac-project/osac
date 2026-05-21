@@ -42,8 +42,14 @@ def cluster_order(
     k8s_hub_client.apply(manifest=manifest)
     yield order_name
     if k8s_hub_client.is_present(resource="clusterorder", name=order_name):
+        uuid = k8s_hub_client.get_jsonpath(
+            resource="clusterorder", name=order_name,
+            jsonpath='{.metadata.labels.osac\\.openshift\\.io/clusterorder-uuid}'
+        )
         k8s_hub_client.delete(resource="clusterorder", name=order_name)
         wait_for_cluster_deletion(k8s=k8s_hub_client, name=order_name)
+        if uuid:
+            wait_for_cluster_grpc_removal(grpc=grpc, uuid=uuid)
 
 
 def test_template_id_immutable(cluster_order: str, k8s_hub_client: K8sClient) -> None:

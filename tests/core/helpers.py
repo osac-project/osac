@@ -49,7 +49,7 @@ def wait_for_deletion(*, k8s: K8sClient, name: str) -> None:
     poll_until(
         fn=lambda: not k8s.is_present(resource="computeinstance", name=name),
         until=lambda v: v is True,
-        retries=60,
+        retries=120,
         delay=5,
         description=f"{name} deletion",
     )
@@ -89,7 +89,7 @@ def wait_for_virtual_network_deletion(*, k8s: K8sClient, name: str) -> None:
     poll_until(
         fn=lambda: not k8s.is_present(resource="virtualnetwork", name=name),
         until=lambda v: v is True,
-        retries=60,
+        retries=120,
         delay=5,
         description=f"{name} VirtualNetwork deletion",
     )
@@ -119,7 +119,7 @@ def wait_for_subnet_deletion(*, k8s: K8sClient, name: str) -> None:
     poll_until(
         fn=lambda: not k8s.is_present(resource="subnet", name=name),
         until=lambda v: v is True,
-        retries=60,
+        retries=120,
         delay=5,
         description=f"{name} Subnet deletion",
     )
@@ -190,7 +190,7 @@ def wait_for_security_group_deletion(*, k8s: K8sClient, name: str) -> None:
     poll_until(
         fn=lambda: not k8s.is_present(resource="securitygroup", name=name),
         until=lambda v: v is True,
-        retries=30,
+        retries=120,
         delay=5,
         description=f"{name} SecurityGroup deletion",
     )

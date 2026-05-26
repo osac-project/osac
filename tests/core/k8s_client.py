@@ -43,7 +43,7 @@ class K8sClient:
         subprocess.run(args, input=manifest, capture_output=True, text=True, check=True)
 
     def delete(self, *, resource: str, name: str) -> None:
-        run(*self._base(), "delete", resource, name, "-n", self.namespace)
+        run(*self._base(), "delete", resource, name, "-n", self.namespace, timeout=600)
 
     def is_present(self, *, resource: str, name: str) -> bool:
         _, rc = run_unchecked(*self._base(), "get", resource, name, "-n", self.namespace)

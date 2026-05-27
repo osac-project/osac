@@ -16,10 +16,15 @@ def wait_for_cr(*, k8s: K8sClient, uuid: str) -> str:
 
 
 def wait_for_provision(*, k8s: K8sClient, name: str) -> None:
-    poll_until(
-        fn=lambda: k8s.get_compute_instance_condition_status(
+    def _check_provisioned() -> str:
+        phase: str = k8s.get_compute_instance_phase(name=name, checked=False)
+        assert phase != "Failed", f"{name} entered Failed phase before Provisioned=True"
+        return k8s.get_compute_instance_condition_status(
             name=name, condition_type="Provisioned", checked=False
-        ),
+        )
+
+    poll_until(
+        fn=_check_provisioned,
         until=lambda v: v == "True",
         retries=120,
         delay=5,

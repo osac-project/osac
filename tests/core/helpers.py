@@ -16,17 +16,14 @@ def wait_for_cr(*, k8s: K8sClient, uuid: str) -> str:
 
 
 def wait_for_provision(*, k8s: K8sClient, name: str) -> None:
-    def _check_state() -> str:
-        state: str = k8s.get_compute_instance_latest_job_state(name=name, job_type="provision", checked=False)
-        assert state != "Failed", f"{name} provision job entered Failed state"
-        return state
-
     poll_until(
-        fn=_check_state,
-        until=lambda v: v == "Succeeded",
+        fn=lambda: k8s.get_compute_instance_condition_status(
+            name=name, condition_type="Provisioned", checked=False
+        ),
+        until=lambda v: v == "True",
         retries=120,
         delay=5,
-        description=f"provision Succeeded for {name}",
+        description=f"{name} Provisioned condition",
     )
 
 

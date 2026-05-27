@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from tests.core.grpc_client import GRPCClient
 from tests.core.k8s_client import K8sClient
-from tests.core.runner import poll_until
+from tests.core.runner import poll_until, run_unchecked
 
 
 def wait_for_cr(*, k8s: K8sClient, uuid: str) -> str:
@@ -159,13 +159,53 @@ def wait_for_cluster_ready(*, k8s: K8sClient, name: str) -> None:
 
 
 def wait_for_cluster_deletion(*, k8s: K8sClient, name: str) -> None:
+    # HACK: Hypershift has a bug where the capi-provider-agent controller (which runs
+    # inside the hosted control plane namespace) is killed during teardown before it can
+    # remove the AgentCluster deprovision finalizer. This orphaned finalizer blocks
+    # namespace termination, which blocks hypershift's own finalizer removal, deadlocking
+    # deletion indefinitely. The same class of bug was already fixed for Karpenter:
+    # https://github.com/openshift/hypershift/blob/main/hypershift-operator/controllers/hostedcluster/karpenter.go#L88
+    # (resolveKarpenterFinalizer). Until hypershift applies the same fix for CAPI
+    # infrastructure CRs, we force-remove the orphaned finalizer on every poll iteration.
+    def _check_deleted() -> bool:
+        _force_cleanup_agentcluster_finalizers(k8s=k8s, name=name)
+        return not k8s.is_present(resource="clusterorder", name=name)
+
     poll_until(
-        fn=lambda: not k8s.is_present(resource="clusterorder", name=name),
+        fn=_check_deleted,
         until=lambda v: v is True,
         retries=120,
         delay=10,
         description=f"{name} ClusterOrder deletion",
     )
+
+
+def _force_cleanup_agentcluster_finalizers(*, k8s: K8sClient, name: str) -> None:
+    # HCP namespace: {osac-ns}-{co-name}-{hc-name}, where hc-name == co-name
+    hc_ns = f"{k8s.namespace}-{name}"
+    cp_ns = f"{hc_ns}-{name}"
+    finalizer = "agentclustercapi-provider.agent-install.openshift.io/deprovision"
+    base_args = [*k8s._base(), "--as", "system:admin"]
+    output, rc = run_unchecked(
+        *base_args, "get", "agentclusters.capi-provider.agent-install.openshift.io",
+        "-n", cp_ns, "-o", f"jsonpath={{.items[?(@.metadata.finalizers[*]=='{finalizer}')].metadata.name}}",
+    )
+    if rc != 0 or not output.strip():
+        return
+    for ac_name in output.strip().split():
+        finalizers_json, rc = run_unchecked(
+            *base_args, "get", f"agentclusters.capi-provider.agent-install.openshift.io/{ac_name}",
+            "-n", cp_ns, "-o", "jsonpath={.metadata.finalizers}",
+        )
+        if rc != 0 or finalizer not in finalizers_json:
+            continue
+        import json
+        idx = json.loads(finalizers_json).index(finalizer)
+        run_unchecked(
+            *base_args, "patch", f"agentclusters.capi-provider.agent-install.openshift.io/{ac_name}",
+            "-n", cp_ns, "--type=json",
+            f'-p=[{{"op": "remove", "path": "/metadata/finalizers/{idx}"}}]',
+        )
 
 
 def wait_for_cluster_grpc_removal(*, grpc: GRPCClient, uuid: str) -> None:

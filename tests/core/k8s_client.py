@@ -102,6 +102,16 @@ class K8sClient:
             return ""
         return sorted(jobs, key=lambda j: j["timestamp"], reverse=True)[0].get("state", "")
 
+    def get_compute_instance_condition_status(self, *, name: str, condition_type: str, checked: bool = True) -> str:
+        output, rc = self._get("get", "computeinstance", name, "-n", self.namespace, "-o", "json", checked=checked)
+        if rc != 0:
+            return ""
+        conditions: list[dict[str, Any]] = json.loads(output).get("status", {}).get("conditions", [])
+        for cond in conditions:
+            if cond.get("type") == condition_type:
+                return cond.get("status", "")
+        return ""
+
     def get_compute_instance_vm_namespace(self, *, name: str) -> str:
         return self.get_jsonpath(
             resource="computeinstance", name=name, jsonpath="{.status.virtualMachineReference.namespace}"

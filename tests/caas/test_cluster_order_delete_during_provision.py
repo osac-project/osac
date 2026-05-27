@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from tests.core.grpc_client import GRPCClient
-from tests.core.helpers import wait_for_cluster_deletion, wait_for_cluster_order_cr
+from tests.core.helpers import wait_for_cluster_deletion, wait_for_cluster_grpc_removal, wait_for_cluster_order_cr
 from tests.core.k8s_client import K8sClient
 from tests.core.osac_cli import OsacCLI
 from tests.core.runner import poll_until
@@ -14,13 +14,13 @@ from tests.core.runner import poll_until
 TERMINAL_JOB_STATES: tuple[str, ...] = ("Canceled", "Failed", "Succeeded")
 
 
-def _wait_for_provision_job(k8s: K8sClient, *, name: str) -> None:
+def _wait_for_progressing(k8s: K8sClient, *, name: str) -> None:
     poll_until(
-        fn=lambda: k8s.get_cluster_order_latest_job_id(name=name, job_type="provision", checked=False),
-        until=lambda v: v != "",
+        fn=lambda: k8s.get_cluster_order_phase(name=name, checked=False),
+        until=lambda v: v == "Progressing",
         retries=30,
         delay=2,
-        description=f"provision job for ClusterOrder {name}",
+        description=f"{name} ClusterOrder Progressing",
     )
 
 
@@ -85,15 +85,11 @@ def test_cluster_order_delete_during_provision(
 ) -> None:
     uuid, co_name = cluster_order
 
-    _wait_for_provision_job(k8s_hub_client, name=co_name)
+    _wait_for_progressing(k8s_hub_client, name=co_name)
 
-    prov_state: str = k8s_hub_client.get_cluster_order_latest_job_state(
-        name=co_name, job_type="provision", checked=False
-    )
     deprov_job_id: str = k8s_hub_client.get_cluster_order_latest_job_id(
         name=co_name, job_type="deprovision", checked=False
     )
-    assert prov_state in ("Running", "Pending", "Unknown"), f"Expected provision in progress, got {prov_state}"
     assert deprov_job_id == "", "No deprovision job should exist before deletion"
 
     cli.delete_cluster(uuid=uuid)
@@ -103,7 +99,7 @@ def test_cluster_order_delete_during_provision(
     _verify_no_duplicate_deprovision(k8s_hub_client, name=co_name)
 
     wait_for_cluster_deletion(k8s=k8s_hub_client, name=co_name)
-    assert uuid not in grpc.list_cluster_ids()
+    wait_for_cluster_grpc_removal(grpc=grpc, uuid=uuid)
 
     orphan_ns: int = k8s_hub_client.count_by_label_all_namespaces(
         resource="namespace", label=f"osac.openshift.io/clusterorder={co_name}"

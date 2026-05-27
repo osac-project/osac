@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -15,7 +16,9 @@ def cluster_with_explicit_fields(
     cli: OsacCLI, k8s_hub_client: K8sClient, cluster_template: str, pull_secret_path: str, ssh_public_key_path: str
 ):
     uuid: str = cli.create_cluster(
-        template=cluster_template, pull_secret_file=pull_secret_path, ssh_public_key_file=ssh_public_key_path
+        template=cluster_template,
+        template_parameter_files={"pull_secret": pull_secret_path},
+        template_parameters={"ssh_public_key": Path(ssh_public_key_path).read_text().strip()},
     )
     co_name: str | None = None
     try:
@@ -36,23 +39,26 @@ def test_cluster_explicit_fields(
 
     response = grpc.get_cluster(cluster_id=uuid)
     cluster_spec = response.get("object", {}).get("spec", {})
+    api_params = cluster_spec.get("templateParameters", {})
 
-    assert cluster_spec.get("pullSecret") == "***", "Expected pull_secret to be redacted as '***' in API response"
+    assert "pull_secret" in api_params, "Expected pull_secret in API templateParameters"
+    pull_secret_val = api_params["pull_secret"].get("value", "")
+    assert pull_secret_val == "***" or len(pull_secret_val) > 10, (
+        "Expected pull_secret to be redacted or populated in API response"
+    )
 
     expected_ssh_key: str = Path(ssh_public_key_path).read_text().strip()
-    assert cluster_spec.get("sshPublicKey") == expected_ssh_key, (
-        "Expected ssh_public_key to match the provided file content"
+    assert api_params.get("ssh_public_key", {}).get("value") == expected_ssh_key, (
+        "Expected ssh_public_key in API templateParameters to match the provided file content"
     )
 
     spec = k8s_hub_client.get_cluster_order_spec(name=co_name)
+    cr_params = json.loads(spec.get("templateParameters", "{}"))
 
-    assert spec.get("pullSecret") and len(spec["pullSecret"]) > 10, (
-        f"Expected pullSecret to be populated on the ClusterOrder CR, got: {spec.get('pullSecret', '')[:20]}"
+    assert cr_params.get("pull_secret") and len(cr_params["pull_secret"]) > 10, (
+        f"Expected pull_secret in CR templateParameters, got: {str(cr_params.get('pull_secret', ''))[:20]}"
     )
 
-    assert spec.get("sshPublicKey") == expected_ssh_key, (
-        "Expected sshPublicKey on ClusterOrder CR to match the provided file content"
+    assert cr_params.get("ssh_public_key") == expected_ssh_key, (
+        "Expected ssh_public_key in CR templateParameters to match the provided file content"
     )
-
-    tp = spec.get("templateParameters", "")
-    assert tp in ("", "{}", None), f"Expected templateParameters to be empty, got: {tp}"

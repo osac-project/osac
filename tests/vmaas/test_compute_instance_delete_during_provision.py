@@ -17,15 +17,6 @@ def _get_deprovision_status(k8s: K8sClient, *, name: str) -> str:
     return k8s.get_compute_instance_latest_job_state(name=name, job_type="deprovision", checked=False)
 
 
-def _wait_for_provision_job(k8s: K8sClient, *, name: str) -> None:
-    poll_until(
-        fn=lambda: k8s.get_compute_instance_latest_job_id(name=name, job_type="provision", checked=False),
-        until=lambda v: v != "",
-        retries=30,
-        delay=2,
-        description=f"provision job for {name}",
-    )
-
 
 def _wait_for_provision_termination(k8s: K8sClient, *, name: str) -> None:
     poll_until(
@@ -66,15 +57,16 @@ def test_compute_instance_delete_during_provision(
     uuid: str = cli.create_compute_instance(template=vm_template)
     ci_name: str = wait_for_cr(k8s=k8s_hub_client, uuid=uuid)
 
-    _wait_for_provision_job(k8s_hub_client, name=ci_name)
-
-    prov_state: str = k8s_hub_client.get_compute_instance_latest_job_state(
-        name=ci_name, job_type="provision", checked=False
+    poll_until(
+        fn=lambda: k8s_hub_client.get_compute_instance_phase(name=ci_name, checked=False),
+        until=lambda v: v == "Starting",
+        retries=30,
+        delay=2,
+        description=f"{ci_name} Starting",
     )
     deprov_job_id: str = k8s_hub_client.get_compute_instance_latest_job_id(
         name=ci_name, job_type="deprovision", checked=False
     )
-    assert prov_state in ("Running", "Pending", "Unknown"), f"Expected provision in progress, got {prov_state}"
     assert deprov_job_id == "", "No deprovision job should exist before deletion"
 
     cli.delete_compute_instance(uuid=uuid)

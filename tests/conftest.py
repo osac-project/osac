@@ -39,7 +39,7 @@ def grpc(fulfillment_address: str, namespace: str, service_account: str) -> GRPC
 
 @pytest.fixture(scope="session", autouse=True)
 def ensure_organizations(grpc: GRPCClient) -> None:
-    for name in ("shared", "tenant1", "tenant2"):
+    for name in ("tenant1", "tenant2"):
         grpc.ensure_organization(name=name)
 
 

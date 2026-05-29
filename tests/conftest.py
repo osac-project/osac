@@ -37,6 +37,12 @@ def grpc(fulfillment_address: str, namespace: str, service_account: str) -> GRPC
     return GRPCClient(address=fulfillment_address, token=token)
 
 
+@pytest.fixture(scope="session", autouse=True)
+def ensure_organizations(grpc: GRPCClient) -> None:
+    for name in ("tenant1", "tenant2"):
+        grpc.ensure_organization(name=name)
+
+
 @pytest.fixture(scope="session")
 def k8s_hub_client(namespace: str) -> K8sClient:
     return K8sClient(namespace=namespace)

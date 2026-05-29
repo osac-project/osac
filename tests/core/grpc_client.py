@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from typing import Any
 
@@ -123,5 +124,6 @@ class GRPCClient:
                 data={"object": {"metadata": {"name": name}}},
             )
         except subprocess.CalledProcessError as e:
-            if "AlreadyExists" not in (e.stdout or "") and "AlreadyExists" not in (e.stderr or ""):
-                raise
+            output = (e.stdout or "") + (e.stderr or "")
+            if not re.search(r"Code:\s*AlreadyExists", output):
+                raise RuntimeError(f"Failed to create organization '{name}': {output}") from None

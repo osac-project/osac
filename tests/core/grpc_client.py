@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from typing import Any
 
 from tests.core.runner import run
@@ -112,3 +113,15 @@ class GRPCClient:
 
     def delete_security_group(self, *, sg_id: str) -> None:
         self.call(service=f"{PUBLIC_API}.SecurityGroups/Delete", data={"id": sg_id})
+
+    # Organization operations
+
+    def ensure_organization(self, *, name: str) -> None:
+        try:
+            self.call(
+                service=f"{PRIVATE_API}.Organizations/Create",
+                data={"object": {"metadata": {"name": name}}},
+            )
+        except subprocess.CalledProcessError as e:
+            if "AlreadyExists" not in (e.stdout or "") and "AlreadyExists" not in (e.stderr or ""):
+                raise

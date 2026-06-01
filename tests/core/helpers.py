@@ -161,7 +161,7 @@ def wait_for_public_ip_pool_deletion(*, k8s: K8sClient, name: str) -> None:
     poll_until(
         fn=lambda: not k8s.is_present(resource="publicippool", name=name),
         until=lambda v: v is True,
-        retries=60,
+        retries=18,
         delay=5,
         description=f"{name} PublicIPPool deletion",
     )
@@ -191,7 +191,7 @@ def wait_for_public_ip_deletion(*, k8s: K8sClient, name: str) -> None:
     poll_until(
         fn=lambda: not k8s.is_present(resource="publicip", name=name),
         until=lambda v: v is True,
-        retries=60,
+        retries=18,
         delay=5,
         description=f"{name} PublicIP deletion",
     )

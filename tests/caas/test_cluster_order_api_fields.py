@@ -41,7 +41,7 @@ def cluster_order(
 
     k8s_hub_client.apply(manifest=manifest)
     yield order_name, template_params
-    k8s_hub_client.delete(resource="clusterorder", name=order_name)
+    k8s_hub_client.delete(resource="clusterorder", name=order_name, wait=False)
     wait_for_cluster_deletion(k8s=k8s_hub_client, name=order_name)
 
 

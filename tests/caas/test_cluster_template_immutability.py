@@ -7,14 +7,16 @@ from uuid import uuid4
 import pytest
 import yaml
 
-from tests.core.helpers import wait_for_cluster_deletion
+from tests.core.grpc_client import GRPCClient
+from tests.core.helpers import wait_for_cluster_deletion, wait_for_cluster_grpc_removal
 from tests.core.k8s_client import K8sClient
 from tests.core.runner import poll_until
 
 
 @pytest.fixture
 def cluster_order(
-    k8s_hub_client: K8sClient, namespace: str, cluster_template: str, pull_secret_path: str, ssh_public_key_path: str
+    k8s_hub_client: K8sClient, grpc: GRPCClient, namespace: str, cluster_template: str,
+    pull_secret_path: str, ssh_public_key_path: str,
 ):
     order_name: str = f"co-immut-{uuid4().hex[:8]}"
     template_params: dict[str, str] = {
@@ -46,7 +48,7 @@ def cluster_order(
             resource="clusterorder", name=order_name,
             jsonpath='{.metadata.labels.osac\\.openshift\\.io/clusterorder-uuid}'
         )
-        k8s_hub_client.delete(resource="clusterorder", name=order_name)
+        k8s_hub_client.delete(resource="clusterorder", name=order_name, wait=False)
         wait_for_cluster_deletion(k8s=k8s_hub_client, name=order_name)
         if uuid:
             wait_for_cluster_grpc_removal(grpc=grpc, uuid=uuid)

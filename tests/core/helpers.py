@@ -159,16 +159,20 @@ def wait_for_cluster_ready(*, k8s: K8sClient, name: str) -> None:
 
 
 def wait_for_cluster_deletion(*, k8s: K8sClient, name: str) -> None:
-    # HACK: Hypershift has a bug where the capi-provider-agent controller (which runs
-    # inside the hosted control plane namespace) is killed during teardown before it can
-    # remove the AgentCluster deprovision finalizer. This orphaned finalizer blocks
-    # namespace termination, which blocks hypershift's own finalizer removal, deadlocking
-    # deletion indefinitely. The same class of bug was already fixed for Karpenter:
-    # https://github.com/openshift/hypershift/blob/main/hypershift-operator/controllers/hostedcluster/karpenter.go#L88
-    # (resolveKarpenterFinalizer). Until hypershift applies the same fix for CAPI
-    # infrastructure CRs, we force-remove the orphaned finalizer on every poll iteration.
+    # HACK: HyperShift has multiple teardown bugs where controllers leave orphaned state
+    # that deadlocks HostedCluster deletion. We force-clean on every poll iteration:
+    #
+    # 1. AgentCluster deprovision finalizer: capi-provider-agent is killed during teardown
+    #    before removing its finalizer, blocking namespace termination.
+    #    https://github.com/openshift/hypershift/blob/main/hypershift-operator/controllers/hostedcluster/karpenter.go#L88
+    #
+    # 2. Agent labels: the CAPI provider sometimes fails to clear
+    #    clusterdeployment-namespace from agents after HostedCluster deletion. The delete
+    #    playbook's detach_and_unlabel skips agents that still have this label set, leaving
+    #    the clusterorder label stuck and blocking agent reuse for subsequent tests.
     def _check_deleted() -> bool:
         _force_cleanup_agentcluster_finalizers(k8s=k8s, name=name)
+        _force_cleanup_agent_labels(k8s=k8s, name=name)
         return not k8s.is_present(resource="clusterorder", name=name)
 
     poll_until(
@@ -205,6 +209,25 @@ def _force_cleanup_agentcluster_finalizers(*, k8s: K8sClient, name: str) -> None
             *base_args, "patch", f"agentclusters.capi-provider.agent-install.openshift.io/{ac_name}",
             "-n", cp_ns, "--type=json",
             f'-p=[{{"op": "remove", "path": "/metadata/finalizers/{idx}"}}]',
+        )
+
+
+def _force_cleanup_agent_labels(*, k8s: K8sClient, name: str) -> None:
+    agent_ns = "hardware-inventory"
+    clusterorder_label = "osac.openshift.io/clusterorder"
+    clusterdeployment_ns_label = "agent-install.openshift.io/clusterdeployment-namespace"
+    base_args = [*k8s._base(), "--as", "system:admin"]
+    output, rc = run_unchecked(
+        *base_args, "get", "agents.agent-install.openshift.io",
+        "-n", agent_ns, "-l", f"{clusterorder_label}={name}",
+        "-o", "jsonpath={.items[*].metadata.name}",
+    )
+    if rc != 0 or not output.strip():
+        return
+    for agent_name in output.strip().split():
+        run_unchecked(
+            *base_args, "label", f"agents.agent-install.openshift.io/{agent_name}",
+            "-n", agent_ns, f"{clusterorder_label}-", f"{clusterdeployment_ns_label}-",
         )
 
 

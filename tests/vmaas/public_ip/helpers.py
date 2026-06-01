@@ -68,7 +68,7 @@ def delete_ip(grpc: GRPCClient, k8s: K8sClient, ip_id: str, ip_cr_name: str) -> 
     poll_until(
         fn=_ip_gone,
         until=lambda v: v is True,
-        retries=30,
+        retries=18,
         delay=5,
         description=f"PublicIP {ip_id} removal from API",
     )

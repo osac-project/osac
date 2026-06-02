@@ -3,14 +3,12 @@ from __future__ import annotations
 import ipaddress
 import logging
 import random
-import subprocess
 from typing import Any
 from uuid import uuid4
 
 from tests.core.grpc_client import GRPCClient
-from tests.core.helpers import wait_for_public_ip_allocated, wait_for_public_ip_cr, wait_for_public_ip_deletion
+from tests.core.helpers import wait_for_public_ip_allocated, wait_for_public_ip_cr
 from tests.core.k8s_client import K8sClient
-from tests.core.runner import poll_until
 
 logger = logging.getLogger(__name__)
 
@@ -55,20 +53,5 @@ def create_ip(
     return ip_id, ip_cr_name
 
 
-def delete_ip(grpc: GRPCClient, k8s: K8sClient, ip_id: str, ip_cr_name: str) -> None:
+def delete_ip(grpc: GRPCClient, ip_id: str) -> None:
     grpc.delete_public_ip(public_ip_id=ip_id)
-    wait_for_public_ip_deletion(k8s=k8s, name=ip_cr_name)
-
-    def _ip_gone() -> bool:
-        try:
-            return ip_id not in grpc.list_public_ip_ids()
-        except subprocess.CalledProcessError:
-            return False
-
-    poll_until(
-        fn=_ip_gone,
-        until=lambda v: v is True,
-        retries=18,
-        delay=5,
-        description=f"PublicIP {ip_id} removal from API",
-    )

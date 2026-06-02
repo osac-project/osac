@@ -20,7 +20,7 @@ from tests.vmaas.public_ip.helpers import create_ip, get_random_subnet
 logger = logging.getLogger(__name__)
 
 
-@pytest.fixture
+@pytest.fixture(scope="class")
 def make_pool(
     private_grpc: GRPCClient, k8s_hub_client: K8sClient
 ) -> Generator[..., None, None]:
@@ -47,6 +47,9 @@ def make_pool(
             if "Unavailable" in stderr or "no route to host" in stderr or "connection" in stderr.lower():
                 logger.warning("PublicIPPool %s teardown skipped — gRPC unreachable: %s", pool_id, stderr.strip())
                 continue
+            if "NotFound" not in stderr:
+                logger.warning("PublicIPPool %s teardown delete failed: %s", pool_id, stderr.strip())
+                continue
             logger.warning("PublicIPPool %s already deleted", pool_id)
         wait_for_public_ip_pool_deletion(k8s=k8s_hub_client, name=pool_cr_name)
 
@@ -56,10 +59,22 @@ def public_ip_pool(make_pool: Callable[..., tuple[str, str]]) -> tuple[str, str]
     return make_pool()
 
 
-@pytest.fixture
+@pytest.fixture(scope="class")
 def small_pool(make_pool: Callable[..., tuple[str, str]]) -> tuple[str, str]:
     """A /30 pool with 2 usable IPs."""
-    return make_pool(prefix=30, name_prefix="test-cap-pool")
+    return make_pool(prefix=30, name_prefix="test-small-capacity-pool")
+
+
+@pytest.fixture(scope="class")
+def created_ips(grpc: GRPCClient) -> Generator[list[tuple[str, str]], None, None]:
+    """Track IPs across chained tests; clean up any survivors on teardown."""
+    ips: list[tuple[str, str]] = []
+    yield ips
+    for ip_id, _ in reversed(ips):
+        try:
+            grpc.delete_public_ip(public_ip_id=ip_id)
+        except subprocess.CalledProcessError:
+            pass
 
 
 @pytest.fixture

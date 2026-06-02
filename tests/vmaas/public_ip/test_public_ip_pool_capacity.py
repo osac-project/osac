@@ -13,6 +13,13 @@ from tests.vmaas.public_ip.helpers import create_ip, delete_ip, pool_status
 
 
 class TestPoolCapacity:
+    """
+    Tests for PublicIPPool capacity management.
+
+    Note: Tests are order-dependent - each builds on prevous state.  This is a
+    purposeful tradeoff to greatly reduce test execution time.
+    """
+
     def test_capacity_initialized_from_cidr(
         self,
         small_pool: tuple[str, str],
@@ -30,16 +37,14 @@ class TestPoolCapacity:
         grpc: GRPCClient,
         private_grpc: GRPCClient,
         k8s_hub_client: K8sClient,
+        created_ips: list[tuple[str, str]],
     ) -> None:
         pool_id, _ = small_pool
-        ip_id, ip_cr_name = create_ip(grpc, k8s_hub_client, pool_id)
-        try:
-            status = pool_status(private_grpc, pool_id)
-            assert status["total"] == 2
-            assert status["allocated"] == 1
-            assert status["available"] == 1
-        finally:
-            delete_ip(grpc, k8s_hub_client, ip_id, ip_cr_name)
+        created_ips.append(create_ip(grpc, k8s_hub_client, pool_id))
+        status = pool_status(private_grpc, pool_id)
+        assert status["total"] == 2
+        assert status["allocated"] == 1
+        assert status["available"] == 1
 
     def test_exhaustion_rejects_creation(
         self,
@@ -47,22 +52,17 @@ class TestPoolCapacity:
         grpc: GRPCClient,
         private_grpc: GRPCClient,
         k8s_hub_client: K8sClient,
+        created_ips: list[tuple[str, str]],
     ) -> None:
         pool_id, _ = small_pool
-        created: list[tuple[str, str]] = []
-        try:
-            for _ in range(2):
-                created.append(create_ip(grpc, k8s_hub_client, pool_id))
+        created_ips.append(create_ip(grpc, k8s_hub_client, pool_id))
 
-            status = pool_status(private_grpc, pool_id)
-            assert status["available"] == 0, f"Pool should be full, available={status['available']}"
+        status = pool_status(private_grpc, pool_id)
+        assert status["available"] == 0, f"Pool should be full, available={status['available']}"
 
-            with pytest.raises(subprocess.CalledProcessError) as exc_info:
-                grpc.create_public_ip(name=f"test-ip-{uuid4().hex[:8]}", pool=pool_id)
-            assert "FailedPrecondition" in exc_info.value.stderr
-        finally:
-            for ip_id, ip_cr_name in reversed(created):
-                delete_ip(grpc, k8s_hub_client, ip_id, ip_cr_name)
+        with pytest.raises(subprocess.CalledProcessError) as exc_info:
+            grpc.create_public_ip(name=f"test-ip-{uuid4().hex[:8]}", pool=pool_id)
+        assert "FailedPrecondition" in exc_info.value.stderr
 
     def test_release_restores_capacity(
         self,
@@ -70,49 +70,34 @@ class TestPoolCapacity:
         grpc: GRPCClient,
         private_grpc: GRPCClient,
         k8s_hub_client: K8sClient,
+        created_ips: list[tuple[str, str]],
     ) -> None:
         pool_id, _ = small_pool
-        ip1_id, ip1_cr = create_ip(grpc, k8s_hub_client, pool_id)
-        ip2_id, ip2_cr = create_ip(grpc, k8s_hub_client, pool_id)
-        ip3_id, ip3_cr = None, None
-        try:
-            assert pool_status(private_grpc, pool_id)["available"] == 0
+        ip_id, _ = created_ips.pop(0)
+        delete_ip(grpc, ip_id)
 
-            delete_ip(grpc, k8s_hub_client, ip1_id, ip1_cr)
-            ip1_id, ip1_cr = None, None
+        poll_until(
+            fn=lambda: pool_status(private_grpc, pool_id)["available"],
+            until=lambda v: v == 1,
+            retries=30,
+            delay=2,
+            description="Pool available restored to 1 after IP release",
+        )
 
-            poll_until(
-                fn=lambda: pool_status(private_grpc, pool_id)["available"],
-                until=lambda v: v == 1,
-                retries=30,
-                delay=5,
-                description="Pool available restored to 1 after IP release",
-            )
-
-            ip3_id, ip3_cr = create_ip(grpc, k8s_hub_client, pool_id)
-            status = pool_status(private_grpc, pool_id)
-            assert status["allocated"] == 2
-            assert status["available"] == 0
-        finally:
-            for ip_id, ip_cr in [(ip3_id, ip3_cr), (ip2_id, ip2_cr), (ip1_id, ip1_cr)]:
-                if ip_id is not None:
-                    delete_ip(grpc, k8s_hub_client, ip_id, ip_cr)
+        created_ips.append(create_ip(grpc, k8s_hub_client, pool_id))
+        status = pool_status(private_grpc, pool_id)
+        assert status["allocated"] == 2
+        assert status["available"] == 0
 
     def test_pool_deletion_blocked_while_ips_allocated(
         self,
         small_pool: tuple[str, str],
-        grpc: GRPCClient,
         private_grpc: GRPCClient,
-        k8s_hub_client: K8sClient,
     ) -> None:
         pool_id, _ = small_pool
-        ip_id, ip_cr_name = create_ip(grpc, k8s_hub_client, pool_id)
-        try:
-            with pytest.raises(subprocess.CalledProcessError) as exc_info:
-                private_grpc.delete_public_ip_pool(pool_id=pool_id)
-            assert "FailedPrecondition" in exc_info.value.stderr
-        finally:
-            delete_ip(grpc, k8s_hub_client, ip_id, ip_cr_name)
+        with pytest.raises(subprocess.CalledProcessError) as exc_info:
+            private_grpc.delete_public_ip_pool(pool_id=pool_id)
+        assert "FailedPrecondition" in exc_info.value.stderr
 
     def test_pool_deletion_succeeds_after_all_ips_released(
         self,
@@ -120,16 +105,18 @@ class TestPoolCapacity:
         grpc: GRPCClient,
         private_grpc: GRPCClient,
         k8s_hub_client: K8sClient,
+        created_ips: list[tuple[str, str]],
     ) -> None:
         pool_id, pool_cr_name = small_pool
-        ip_id, ip_cr_name = create_ip(grpc, k8s_hub_client, pool_id)
-        delete_ip(grpc, k8s_hub_client, ip_id, ip_cr_name)
+        for ip_id, _ in created_ips:
+            delete_ip(grpc, ip_id)
+        created_ips.clear()
 
         poll_until(
             fn=lambda: pool_status(private_grpc, pool_id)["allocated"],
             until=lambda v: v == 0,
             retries=30,
-            delay=5,
+            delay=2,
             description="Pool allocated drops to 0",
         )
 

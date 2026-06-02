@@ -142,7 +142,7 @@ def wait_for_public_ip_pool_cr(*, k8s: K8sClient, uuid: str) -> str:
         fn=lambda: k8s.get_public_ip_pool_name(uuid=uuid, checked=False),
         until=lambda v: v != "",
         retries=30,
-        delay=2,
+        delay=1,
         description=f"PublicIPPool CR for {uuid}",
     )
 
@@ -152,7 +152,7 @@ def wait_for_public_ip_pool_ready(*, k8s: K8sClient, name: str) -> None:
         fn=lambda: k8s.get_public_ip_pool_phase(name=name, checked=False),
         until=lambda v: v == "Ready",
         retries=60,
-        delay=5,
+        delay=2,
         description=f"{name} PublicIPPool Ready",
     )
 
@@ -161,8 +161,8 @@ def wait_for_public_ip_pool_deletion(*, k8s: K8sClient, name: str) -> None:
     poll_until(
         fn=lambda: not k8s.is_present(resource="publicippool", name=name),
         until=lambda v: v is True,
-        retries=18,
-        delay=5,
+        retries=30,
+        delay=2,
         description=f"{name} PublicIPPool deletion",
     )
 
@@ -172,7 +172,7 @@ def wait_for_public_ip_cr(*, k8s: K8sClient, uuid: str) -> str:
         fn=lambda: k8s.get_public_ip_name(uuid=uuid, checked=False),
         until=lambda v: v != "",
         retries=30,
-        delay=2,
+        delay=1,
         description=f"PublicIP CR for {uuid}",
     )
 
@@ -182,7 +182,7 @@ def wait_for_public_ip_allocated(*, k8s: K8sClient, name: str) -> None:
         fn=lambda: k8s.get_public_ip_state(name=name, checked=False),
         until=lambda v: v == "Allocated",
         retries=60,
-        delay=5,
+        delay=2,
         description=f"{name} PublicIP Allocated",
     )
 
@@ -191,8 +191,8 @@ def wait_for_public_ip_deletion(*, k8s: K8sClient, name: str) -> None:
     poll_until(
         fn=lambda: not k8s.is_present(resource="publicip", name=name),
         until=lambda v: v is True,
-        retries=18,
-        delay=5,
+        retries=30,
+        delay=2,
         description=f"{name} PublicIP deletion",
     )
 

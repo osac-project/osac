@@ -17,9 +17,15 @@ TEST_RUN_STRATEGY: str = "Always"
 TEST_USER_DATA: str = "#cloud-config\npackages:\n  - vim\n"
 
 
-def test_compute_instance_cli_explicit_fields(cli: OsacCLI, grpc: GRPCClient, k8s_hub_client: K8sClient) -> None:
+def test_compute_instance_cli_explicit_fields(
+    cli: OsacCLI,
+    grpc: GRPCClient,
+    k8s_hub_client: K8sClient,
+    default_subnet: str,
+) -> None:
     uuid: str = cli.create_compute_instance(
         template="osac.templates.ocp_virt_vm",
+        network_attachments=[{"subnet": default_subnet}],
         cores=TEST_CORES,
         memory_gib=TEST_MEMORY_GIB,
         boot_disk_size=TEST_BOOT_DISK_SIZE,

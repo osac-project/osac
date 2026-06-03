@@ -10,9 +10,16 @@ from tests.core.osac_cli import OsacCLI
 
 
 def test_compute_instance_restart_past_timestamp_ignored(
-    cli: OsacCLI, grpc: GRPCClient, k8s_hub_client: K8sClient, vm_template: str
+    cli: OsacCLI,
+    grpc: GRPCClient,
+    k8s_hub_client: K8sClient,
+    vm_template: str,
+    default_subnet: str,
 ) -> None:
-    uuid: str = cli.create_compute_instance(template=vm_template)
+    uuid: str = cli.create_compute_instance(
+        template=vm_template,
+        network_attachments=[{"subnet": default_subnet}],
+    )
     ci_name: str = wait_for_cr(k8s=k8s_hub_client, uuid=uuid)
     wait_for_running(k8s=k8s_hub_client, name=ci_name)
 

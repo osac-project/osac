@@ -21,9 +21,17 @@ def _wait_for_new_vmi(k8s_virt: K8sClient, *, vmi_namespace: str, ci_name: str, 
 
 
 def test_compute_instance_restart(
-    cli: OsacCLI, grpc: GRPCClient, k8s_hub_client: K8sClient, k8s_virt_client: K8sClient, vm_template: str
+    cli: OsacCLI,
+    grpc: GRPCClient,
+    k8s_hub_client: K8sClient,
+    k8s_virt_client: K8sClient,
+    vm_template: str,
+    default_subnet: str,
 ) -> None:
-    uuid: str = cli.create_compute_instance(template=vm_template)
+    uuid: str = cli.create_compute_instance(
+        template=vm_template,
+        network_attachments=[{"subnet": default_subnet}],
+    )
     ci_name: str = wait_for_cr(k8s=k8s_hub_client, uuid=uuid)
     wait_for_running(k8s=k8s_hub_client, name=ci_name)
 

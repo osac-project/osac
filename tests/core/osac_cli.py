@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 from tests.core.runner import run, run_unchecked
 
@@ -23,6 +24,7 @@ class OsacCLI:
         self,
         *,
         template: str,
+        network_attachments: list[dict[str, Any]] | None = None,
         cores: int = 2,
         memory_gib: int = 4,
         boot_disk_size: int = 20,
@@ -50,6 +52,30 @@ class OsacCLI:
             "--run-strategy",
             run_strategy,
         ]
+
+        # Add network attachments
+        if network_attachments is not None:
+            for idx, attachment in enumerate(network_attachments):
+                subnet = attachment.get("subnet")
+                if not subnet or not isinstance(subnet, str):
+                    raise ValueError(f"network_attachments[{idx}]: 'subnet' must be a non-empty string, got {subnet!r}")
+
+                security_groups = attachment.get("security_groups", [])
+                if not isinstance(security_groups, list):
+                    raise ValueError(f"network_attachments[{idx}]: 'security_groups' must be a list, got {type(security_groups).__name__}")
+
+                if security_groups and not all(isinstance(sg, str) and sg for sg in security_groups):
+                    raise ValueError(f"network_attachments[{idx}]: all security_groups must be non-empty strings")
+
+                # Build network-attachment flag value
+                # Format: subnet=<id>,security-groups=<sg1>,<sg2>
+                parts = [f"subnet={subnet}"]
+                if security_groups:
+                    sg_list = ",".join(security_groups)
+                    parts.append(f"security-groups={sg_list}")
+
+                args.extend(["--network-attachment", ",".join(parts)])
+
         if user_data_secret_ref is not None:
             args.extend(["--user-data", user_data_secret_ref])
 

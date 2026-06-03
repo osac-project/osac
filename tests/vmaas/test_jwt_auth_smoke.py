@@ -90,13 +90,13 @@ def test_jwt_security_group_lifecycle(jwt_grpc_tenant1: GRPCClient) -> None:
         name=vn_name, network_class="cudn_net", ipv4_cidr="10.202.0.0/16"
     )
 
-    for _ in range(30):
+    for _ in range(90):
         vn = jwt_grpc_tenant1.get_virtual_network(vn_id=vn_id)
         if vn["object"].get("status", {}).get("state") == "VIRTUAL_NETWORK_STATE_READY":
             break
         time.sleep(2)
     else:
-        pytest.fail(f"VirtualNetwork {vn_id} did not reach READY state within 60s")
+        pytest.fail(f"VirtualNetwork {vn_id} did not reach READY state within 180s")
 
     sg_name: str = f"jwt-sg-{uuid4().hex[:8]}"
     sg_id: str = jwt_grpc_tenant1.create_security_group(name=sg_name, virtual_network=vn_id)

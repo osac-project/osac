@@ -60,9 +60,13 @@ class TestPoolCapacity:
         status = pool_status(private_grpc, pool_id)
         assert status["available"] == 0, f"Pool should be full, available={status['available']}"
 
-        with pytest.raises(subprocess.CalledProcessError) as exc_info:
-            grpc.create_public_ip(name=f"test-ip-{uuid4().hex[:8]}", pool=pool_id)
-        assert "FailedPrecondition" in exc_info.value.stderr
+        try:
+            ip_id = grpc.create_public_ip(name=f"test-ip-{uuid4().hex[:8]}", pool=pool_id)
+            created_ips.append((ip_id, ""))
+            pytest.fail("create_public_ip should have been rejected on a full pool")
+        except subprocess.CalledProcessError as exc:
+            combined = (exc.stderr or "") + (exc.stdout or "")
+            assert "FailedPrecondition" in combined
 
     def test_release_restores_capacity(
         self,
@@ -97,7 +101,8 @@ class TestPoolCapacity:
         pool_id, _ = small_pool
         with pytest.raises(subprocess.CalledProcessError) as exc_info:
             private_grpc.delete_public_ip_pool(pool_id=pool_id)
-        assert "FailedPrecondition" in exc_info.value.stderr
+        combined = (exc_info.value.stderr or "") + (exc_info.value.stdout or "")
+        assert "FailedPrecondition" in combined
 
     def test_pool_deletion_succeeds_after_all_ips_released(
         self,

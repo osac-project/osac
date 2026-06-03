@@ -124,4 +124,4 @@ class GRPCClient:
         except subprocess.CalledProcessError as e:
             output = (e.stdout or "") + (e.stderr or "")
             if not re.search(r"Code:\s*AlreadyExists", output):
-                raise RuntimeError(f"Failed to create organization '{name}': {output}") from None
+                raise RuntimeError(f"Failed to create organization '{name}': {output}") from e

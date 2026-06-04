@@ -18,13 +18,10 @@ IPV4_NETWORK: str = "172.27.0.0/16"
 _used_subnets: set[ipaddress.IPv4Network] = set()
 
 
-# This function is used to get a random subnet from the IPV4_NETWORK
-# that is not overlapping with any other subnet in the _used_subnets set
 def get_random_subnet(prefix: int = 24) -> ipaddress.IPv4Network:
     network = ipaddress.IPv4Network(IPV4_NETWORK)
     count = 2 ** (prefix - network.prefixlen)
-    for _ in range(count):
-        idx = random.randint(0, count - 1)
+    for idx in random.sample(range(count), count):
         base = int(network.network_address) + idx * (2 ** (32 - prefix))
         subnet = ipaddress.IPv4Network(f"{ipaddress.IPv4Address(base)}/{prefix}")
         if subnet not in _used_subnets and not any(subnet.overlaps(s) for s in _used_subnets):

@@ -74,7 +74,7 @@ def created_ips(grpc: GRPCClient) -> Generator[list[tuple[str, str]], None, None
         try:
             grpc.delete_public_ip(public_ip_id=ip_id)
         except subprocess.CalledProcessError:
-            pass
+            logger.warning("PublicIP %s teardown failed, may need manual cleanup", ip_id)
 
 
 @pytest.fixture
@@ -87,6 +87,6 @@ def public_ip(
     if k8s_hub_client.is_present(resource="publicip", name=ip_cr_name):
         try:
             grpc.delete_public_ip(public_ip_id=ip_id)
-        except subprocess.CalledProcessError:
-            logger.warning("PublicIP %s already deleted via gRPC, cleaning up CR", ip_id)
+        except subprocess.CalledProcessError as exc:
+            logger.warning("PublicIP %s gRPC delete failed in teardown: %s", ip_id, (exc.stderr or "").strip())
         wait_for_public_ip_deletion(k8s=k8s_hub_client, name=ip_cr_name)

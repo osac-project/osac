@@ -182,7 +182,7 @@ def wait_for_public_ip_allocated(*, k8s: K8sClient, name: str) -> None:
         fn=lambda: k8s.get_public_ip_state(name=name, checked=False),
         until=lambda v: v == "Allocated",
         retries=60,
-        delay=2,
+        delay=5,
         description=f"{name} PublicIP Allocated",
     )
 

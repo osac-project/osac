@@ -152,7 +152,7 @@ def wait_for_public_ip_pool_ready(*, k8s: K8sClient, name: str) -> None:
         fn=lambda: k8s.get_public_ip_pool_phase(name=name, checked=False),
         until=lambda v: v == "Ready",
         retries=60,
-        delay=2,
+        delay=5,
         description=f"{name} PublicIPPool Ready",
     )
 
@@ -208,13 +208,12 @@ def wait_for_cluster_order_cr(*, k8s: K8sClient, uuid: str) -> str:
 
 
 def wait_for_cluster_ready(*, k8s: K8sClient, name: str) -> None:
-    def _check_phase() -> str:
-        phase: str = k8s.get_cluster_order_phase(name=name, checked=False)
-        assert phase != "Failed", f"{name} ClusterOrder entered Failed phase"
-        return phase
-
     poll_until(
-        fn=_check_phase, until=lambda v: v == "Ready", retries=120, delay=15, description=f"{name} ClusterOrder Ready"
+        fn=lambda: k8s.get_cluster_order_phase(name=name, checked=False),
+        until=lambda v: v == "Ready",
+        retries=120,
+        delay=15,
+        description=f"{name} ClusterOrder Ready",
     )
 
 

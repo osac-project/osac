@@ -241,6 +241,28 @@ class K8sClient:
         )
         return output if rc == 0 else ""
 
+    # PublicIPAttachment queries
+
+    def get_public_ip_attachment_name(self, *, uuid: str, checked: bool = True) -> str:
+        output, rc = self._get(
+            "get",
+            "publicipattachment",
+            "-n",
+            self.namespace,
+            "-l",
+            f"osac.openshift.io/publicipattachment-uuid={uuid}",
+            "-o",
+            "jsonpath={.items[0].metadata.name}",
+            checked=checked,
+        )
+        return output if rc == 0 else ""
+
+    def get_public_ip_attachment_phase(self, *, name: str, checked: bool = True) -> str:
+        output, rc = self._get(
+            "get", "publicipattachment", name, "-n", self.namespace, "-o", "jsonpath={.status.phase}", checked=checked
+        )
+        return output if rc == 0 else ""
+
     # ClusterOrder queries
 
     def get_cluster_order_name(self, *, uuid: str, checked: bool = True) -> str:

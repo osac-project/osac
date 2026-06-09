@@ -1,8 +1,22 @@
 from __future__ import annotations
 
+import re
+import subprocess
+
+import pytest
+
 from tests.core.grpc_client import GRPCClient
 from tests.core.k8s_client import K8sClient
 from tests.core.runner import poll_until, run_unchecked
+
+
+def assert_grpc_rejected(
+    exc_info: pytest.ExceptionInfo[subprocess.CalledProcessError],
+    code: str,
+) -> None:
+    exc = exc_info.value
+    combined: str = (exc.stderr or "") + (exc.stdout or "")
+    assert re.search(rf"Code:\s*{code}", combined), f"Expected gRPC {code}, got: {combined.strip()}"
 
 
 def wait_for_cr(*, k8s: K8sClient, uuid: str) -> str:
@@ -194,6 +208,41 @@ def wait_for_public_ip_deletion(*, k8s: K8sClient, name: str) -> None:
         retries=120,
         delay=5,
         description=f"{name} PublicIP deletion",
+    )
+
+
+def wait_for_public_ip_attachment_cr(*, k8s: K8sClient, uuid: str) -> str:
+    return poll_until(
+        fn=lambda: k8s.get_public_ip_attachment_name(uuid=uuid, checked=False),
+        until=lambda v: v != "",
+        retries=30,
+        delay=1,
+        description=f"PublicIPAttachment CR for {uuid}",
+    )
+
+
+def wait_for_public_ip_attachment_ready(*, k8s: K8sClient, name: str) -> None:
+    def _check_phase() -> str:
+        phase: str = k8s.get_public_ip_attachment_phase(name=name, checked=False)
+        assert phase != "Failed", f"{name} PublicIPAttachment entered Failed phase"
+        return phase
+
+    poll_until(
+        fn=_check_phase,
+        until=lambda v: v == "Ready",
+        retries=60,
+        delay=5,
+        description=f"{name} PublicIPAttachment Ready",
+    )
+
+
+def wait_for_public_ip_attachment_deletion(*, k8s: K8sClient, name: str) -> None:
+    poll_until(
+        fn=lambda: not k8s.is_present(resource="publicipattachment", name=name),
+        until=lambda v: v is True,
+        retries=120,
+        delay=5,
+        description=f"{name} PublicIPAttachment deletion",
     )
 
 

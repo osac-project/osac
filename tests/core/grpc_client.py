@@ -179,3 +179,27 @@ class GRPCClient:
 
     def delete_public_ip(self, *, public_ip_id: str) -> None:
         self.call(service=f"{PUBLIC_API}.PublicIPs/Delete", data={"id": public_ip_id})
+
+    # PublicIPAttachment operations (public API)
+
+    def create_public_ip_attachment(self, *, name: str, public_ip: str, compute_instance: str) -> str:
+        response: dict[str, Any] = self.call(
+            service=f"{PUBLIC_API}.PublicIPAttachments/Create",
+            data={
+                "object": {
+                    "metadata": {"name": name},
+                    "spec": {"public_ip": public_ip, "compute_instance": compute_instance},
+                }
+            },
+        )
+        return response["object"]["id"]
+
+    def get_public_ip_attachment(self, *, attachment_id: str) -> dict[str, Any]:
+        return self.call(service=f"{PUBLIC_API}.PublicIPAttachments/Get", data={"id": attachment_id})
+
+    def list_public_ip_attachment_ids(self) -> list[str]:
+        response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.PublicIPAttachments/List")
+        return [item["id"] for item in response.get("items", [])]
+
+    def delete_public_ip_attachment(self, *, attachment_id: str) -> None:
+        self.call(service=f"{PUBLIC_API}.PublicIPAttachments/Delete", data={"id": attachment_id})

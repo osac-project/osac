@@ -9,12 +9,16 @@ import pytest
 
 from tests.core.grpc_client import GRPCClient
 from tests.core.helpers import (
+    wait_for_cr,
+    wait_for_deletion,
     wait_for_public_ip_deletion,
     wait_for_public_ip_pool_cr,
     wait_for_public_ip_pool_deletion,
     wait_for_public_ip_pool_ready,
+    wait_for_running,
 )
 from tests.core.k8s_client import K8sClient
+from tests.core.osac_cli import OsacCLI
 from tests.vmaas.public_ip.helpers import create_ip, get_random_subnet
 
 logger = logging.getLogger(__name__)
@@ -90,3 +94,46 @@ def public_ip(
         except subprocess.CalledProcessError as exc:
             logger.warning("PublicIP %s gRPC delete failed in teardown: %s", ip_id, (exc.stderr or "").strip())
         wait_for_public_ip_deletion(k8s=k8s_hub_client, name=ip_cr_name)
+
+
+@pytest.fixture(scope="class")
+def make_compute_instances(
+    cli: OsacCLI,
+    k8s_hub_client: K8sClient,
+    vm_template: str,
+    default_subnet: str,
+) -> Generator[Callable[..., tuple[tuple[str, str], ...]], None, None]:
+    created: list[tuple[str, str]] = []
+
+    def _make(count: int = 2) -> tuple[tuple[str, str], ...]:
+        instances: list[tuple[str, str]] = []
+        for _ in range(count):
+            uuid = cli.create_compute_instance(
+                template=vm_template,
+                network_attachments=[{"subnet": default_subnet}],
+            )
+            name = wait_for_cr(k8s=k8s_hub_client, uuid=uuid)
+            created.append((uuid, name))
+            instances.append((uuid, name))
+        for _, name in instances:
+            wait_for_running(k8s=k8s_hub_client, name=name)
+        return tuple(instances)
+
+    yield _make
+
+    for ci_uuid, ci_name in reversed(created):
+        if not k8s_hub_client.is_present(resource="computeinstance", name=ci_name):
+            continue
+        try:
+            cli.delete_compute_instance(uuid=ci_uuid)
+        except subprocess.CalledProcessError as exc:
+            logger.warning("ComputeInstance %s teardown failed: %s", ci_uuid, (exc.stderr or "").strip())
+            continue
+        wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
+
+
+@pytest.fixture(scope="class")
+def compute_instances(
+    make_compute_instances: Callable[..., tuple[tuple[str, str], ...]],
+) -> tuple[tuple[str, str], ...]:
+    return make_compute_instances(2)

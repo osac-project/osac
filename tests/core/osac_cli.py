@@ -17,6 +17,12 @@ class OsacCLI:
     def relogin(self) -> None:
         run(self.binary, "login", "--address", self._address, "--insecure", "--token-script", self._token_script)
 
+    @staticmethod
+    def _parse_uuid(stdout: str) -> str:
+        match: re.Match[str] | None = re.search(r"'([^']+)'", stdout)
+        assert match is not None, f"Failed to parse UUID from CLI output: {stdout}"
+        return match.group(1)
+
     def create_hub(self, *, hub_id: str, kubeconfig: str) -> None:
         run(self.binary, "create", "hub", "--id", hub_id, "--kubeconfig", kubeconfig, "--namespace", self.namespace)
 
@@ -79,10 +85,7 @@ class OsacCLI:
         if user_data_secret_ref is not None:
             args.extend(["--user-data", user_data_secret_ref])
 
-        stdout: str = run(*args)
-        match: re.Match[str] | None = re.search(r"'([^']+)'", stdout)
-        assert match is not None, f"Failed to parse UUID from CLI output: {stdout}"
-        return match.group(1)
+        return self._parse_uuid(run(*args))
 
     def delete_compute_instance(self, *, uuid: str) -> None:
         run(self.binary, "delete", "computeinstance", uuid)
@@ -111,10 +114,7 @@ class OsacCLI:
             for key, path in template_parameter_files.items():
                 args.extend(["-f", f"{key}={path}"])
 
-        stdout: str = run(*args)
-        match: re.Match[str] | None = re.search(r"'([^']+)'", stdout)
-        assert match is not None, f"Failed to parse UUID from CLI output: {stdout}"
-        return match.group(1)
+        return self._parse_uuid(run(*args))
 
     def get(self, resource: str, *, output: str | None = None) -> str:
         args: list[str] = [self.binary, "get", resource]
@@ -129,10 +129,7 @@ class OsacCLI:
         return run_unchecked(self.binary, "get", resource)
 
     def create_cluster_with_catalog_item(self, *, catalog_item: str, name: str) -> str:
-        stdout: str = run(self.binary, "create", "cluster", "--catalog-item", catalog_item, "--name", name)
-        match: re.Match[str] | None = re.search(r"'([^']+)'", stdout)
-        assert match is not None, f"Failed to parse UUID from CLI output: {stdout}"
-        return match.group(1)
+        return self._parse_uuid(run(self.binary, "create", "cluster", "--catalog-item", catalog_item, "--name", name))
 
     def delete_cluster(self, *, uuid: str) -> None:
         run(self.binary, "delete", "cluster", uuid)

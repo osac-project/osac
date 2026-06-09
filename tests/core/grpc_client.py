@@ -16,12 +16,15 @@ class GRPCClient:
         self.address: str = address
         self.token: str = token
 
-    def call(self, *, service: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _build_args(self, *, service: str, data: dict[str, Any] | None = None) -> list[str]:
         args: list[str] = ["grpcurl", "-insecure", "-H", f"Authorization: Bearer {self.token}"]
         if data is not None:
             args.extend(["-d", json.dumps(data)])
         args.extend([self.address, service])
-        return json.loads(run(*args))
+        return args
+
+    def call(self, *, service: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
+        return json.loads(run(*self._build_args(service=service, data=data)))
 
     def list_compute_instance_ids(self) -> list[str]:
         response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.ComputeInstances/List")
@@ -88,11 +91,7 @@ class GRPCClient:
         self.call(service=f"{PUBLIC_API}.Subnets/Delete", data={"id": subnet_id})
 
     def call_unchecked(self, *, service: str, data: dict[str, Any] | None = None) -> tuple[str, int]:
-        args: list[str] = ["grpcurl", "-insecure", "-H", f"Authorization: Bearer {self.token}"]
-        if data is not None:
-            args.extend(["-d", json.dumps(data)])
-        args.extend([self.address, service])
-        return run_unchecked(*args)
+        return run_unchecked(*self._build_args(service=service, data=data))
 
     # Cluster operations
 

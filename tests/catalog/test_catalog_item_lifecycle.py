@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import time
 from uuid import uuid4
 
 import pytest
@@ -11,6 +12,14 @@ from tests.core.osac_cli import OsacCLI
 
 def _unique_name(prefix: str) -> str:
     return f"{prefix}-{uuid4().hex[:8]}"
+
+
+def _wait_cluster_removed(grpc: GRPCClient, cluster_id: str, timeout: int = 30) -> None:
+    deadline = time.monotonic() + timeout
+    while cluster_id in grpc.list_cluster_ids():
+        if time.monotonic() > deadline:
+            break
+        time.sleep(2)
 
 
 def test_catalog_item_crud(grpc: GRPCClient, cluster_template: str) -> None:
@@ -62,6 +71,7 @@ def test_create_cluster_with_catalog_item(grpc: GRPCClient, cli: OsacCLI, cluste
     finally:
         if cluster_id:
             cli.delete_cluster(uuid=cluster_id)
+            _wait_cluster_removed(grpc, cluster_id)
         grpc.delete_cluster_catalog_item(catalog_item_id=catalog_item_id)
 
 
@@ -72,11 +82,8 @@ def test_create_cluster_with_unpublished_catalog_item_fails(
     catalog_item_id = grpc.create_cluster_catalog_item(name=name, template=cluster_template, published=False)
     try:
         cluster_name = _unique_name("e2e-cluster")
-        try:
+        with pytest.raises(subprocess.CalledProcessError):
             cli.create_cluster_with_catalog_item(catalog_item=catalog_item_id, name=cluster_name)
-            raise AssertionError("Expected cluster creation to fail with unpublished catalog item")
-        except subprocess.CalledProcessError:
-            pass
     finally:
         grpc.delete_cluster_catalog_item(catalog_item_id=catalog_item_id)
 
@@ -97,4 +104,5 @@ def test_delete_catalog_item_blocked_when_referenced(grpc: GRPCClient, cli: Osac
     finally:
         if cluster_id:
             cli.delete_cluster(uuid=cluster_id)
+            _wait_cluster_removed(grpc, cluster_id)
         grpc.delete_cluster_catalog_item(catalog_item_id=catalog_item_id)

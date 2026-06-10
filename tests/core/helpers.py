@@ -229,9 +229,15 @@ def wait_for_cluster_deletion(*, k8s: K8sClient, name: str) -> None:
     #    clusterdeployment-namespace from agents after HostedCluster deletion. The delete
     #    playbook's detach_and_unlabel skips agents that still have this label set, leaving
     #    the clusterorder label stuck and blocking agent reuse for subsequent tests.
+    #
+    # 3. Machine pre-terminate hooks: the CAPI provider sets a pre-terminate hook
+    #    annotation on Machines, but is killed before removing it. The CAPI Machine
+    #    controller waits forever for the annotation to be removed, blocking the entire
+    #    deletion cascade (Machine → MachineSet → CAPI Cluster → HostedCluster).
     def _check_deleted() -> bool:
         _force_cleanup_agentcluster_finalizers(k8s=k8s, name=name)
         _force_cleanup_agent_labels(k8s=k8s, name=name)
+        _force_cleanup_machine_preterminate_hooks(k8s=k8s, name=name)
         return not k8s.is_present(resource="clusterorder", name=name)
 
     poll_until(
@@ -287,6 +293,23 @@ def _force_cleanup_agent_labels(*, k8s: K8sClient, name: str) -> None:
         run_unchecked(
             *base_args, "label", f"agents.agent-install.openshift.io/{agent_name}",
             "-n", agent_ns, f"{clusterorder_label}-", f"{clusterdeployment_ns_label}-",
+        )
+
+
+def _force_cleanup_machine_preterminate_hooks(*, k8s: K8sClient, name: str) -> None:
+    cp_ns = f"{k8s.namespace}-{name}-{name}"
+    hook = "pre-terminate.delete.hook.machine.cluster.x-k8s.io/agentmachine"
+    base_args = [*k8s._base(), "--as", "system:admin"]
+    output, rc = run_unchecked(
+        *base_args, "get", "machines.cluster.x-k8s.io",
+        "-n", cp_ns, "-o", "jsonpath={.items[*].metadata.name}",
+    )
+    if rc != 0 or not output.strip():
+        return
+    for machine_name in output.strip().split():
+        run_unchecked(
+            *base_args, "annotate", f"machines.cluster.x-k8s.io/{machine_name}",
+            "-n", cp_ns, f"{hook}-",
         )
 
 

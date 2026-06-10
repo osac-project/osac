@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Callable
 from uuid import uuid4
 
 import pytest
@@ -24,14 +25,14 @@ class TestPublicIPPoolLifecycle:
         self,
         public_ip_pool: tuple[str, str],
         public_ip: tuple[str, str],
-        compute_instances: tuple[tuple[str, str], tuple[str, str]],
+        make_compute_instances: Callable[..., tuple[tuple[str, str], ...]],
         grpc: GRPCClient,
         private_grpc: GRPCClient,
         k8s_hub_client: K8sClient,
     ) -> None:
         pool_id, pool_cr_name = public_ip_pool
         ip_id, ip_cr_name = public_ip
-        (ci1_uuid, _ci1_name), (ci2_uuid, _ci2_name) = compute_instances
+        (ci1_uuid, _ci1_name), (ci2_uuid, _ci2_name) = make_compute_instances(2)
 
         assert pool_id in private_grpc.list_public_ip_pool_ids()
         assert ip_id in grpc.list_public_ip_ids()
@@ -105,13 +106,13 @@ class TestPublicIPPoolLifecycle:
         self,
         public_ip_pool: tuple[str, str],
         public_ip: tuple[str, str],
-        compute_instances: tuple[tuple[str, str], tuple[str, str]],
+        make_compute_instances: Callable[..., tuple[tuple[str, str], ...]],
         grpc: GRPCClient,
         k8s_hub_client: K8sClient,
     ) -> None:
         _pool_id, _pool_cr_name = public_ip_pool
         ip_id, ip_cr_name = public_ip
-        (ci1_uuid, _ci1_name), *_ = compute_instances
+        ci1_uuid, _ = make_compute_instances(1)[0]
 
         wait_for_public_ip_allocated(k8s=k8s_hub_client, name=ip_cr_name)
 

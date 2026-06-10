@@ -130,10 +130,3 @@ def make_compute_instances(
             logger.warning("ComputeInstance %s teardown failed: %s", ci_uuid, (exc.stderr or "").strip())
             continue
         wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
-
-
-@pytest.fixture(scope="class")
-def compute_instances(
-    make_compute_instances: Callable[..., tuple[tuple[str, str], ...]],
-) -> tuple[tuple[str, str], ...]:
-    return make_compute_instances(2)

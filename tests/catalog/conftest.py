@@ -1,13 +1,26 @@
 from __future__ import annotations
 
-import time
+import logging
+import re
+import subprocess
 from typing import Any, Generator
 from uuid import uuid4
 
 import pytest
 
 from tests.core.grpc_client import GRPCClient
+from tests.core.helpers import (
+    wait_for_subnet_cr,
+    wait_for_subnet_deletion,
+    wait_for_subnet_ready,
+    wait_for_virtual_network_cr,
+    wait_for_virtual_network_deletion,
+    wait_for_virtual_network_ready,
+)
+from tests.core.k8s_client import K8sClient
 from tests.core.runner import env
+
+logger = logging.getLogger(__name__)
 
 
 @pytest.fixture(scope="session")
@@ -31,32 +44,62 @@ def network_class(grpc: GRPCClient) -> str:
     return items[0]["id"]
 
 
-def _wait_virtual_network_ready(grpc: GRPCClient, vn_id: str, timeout: int = 120) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        vn = grpc.get_virtual_network(vn_id=vn_id)
-        if vn.get("object", {}).get("status", {}).get("state") == "VIRTUAL_NETWORK_STATE_READY":
+def _delete_subnet_teardown(
+    grpc: GRPCClient,
+    k8s: K8sClient,
+    *,
+    subnet_id: str,
+    subnet_cr_name: str,
+) -> None:
+    if not k8s.is_present(resource="subnet", name=subnet_cr_name):
+        return
+    try:
+        grpc.delete_subnet(subnet_id=subnet_id)
+    except subprocess.CalledProcessError as exc:
+        combined = (exc.stderr or "") + (exc.stdout or "")
+        if re.search(r"Code:\s*NotFound", combined):
+            logger.warning("Subnet %s already deleted via API", subnet_id)
+        else:
+            logger.warning("Subnet %s teardown delete failed: %s", subnet_id, combined.strip())
+            # Skip wait_for_deletion when delete failed for a non-NotFound reason
             return
-        time.sleep(3)
-    raise TimeoutError(f"VirtualNetwork {vn_id} not ready after {timeout}s")
+    wait_for_subnet_deletion(k8s=k8s, name=subnet_cr_name)
 
 
-def _wait_subnet_ready(grpc: GRPCClient, subnet_id: str, timeout: int = 120) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        subnet = grpc.get_subnet(subnet_id=subnet_id)
-        if subnet.get("object", {}).get("status", {}).get("state") == "SUBNET_STATE_READY":
+def _delete_virtual_network_teardown(
+    grpc: GRPCClient,
+    k8s: K8sClient,
+    *,
+    vn_id: str,
+    vn_cr_name: str,
+) -> None:
+    if not k8s.is_present(resource="virtualnetwork", name=vn_cr_name):
+        return
+    try:
+        grpc.delete_virtual_network(vn_id=vn_id)
+    except subprocess.CalledProcessError as exc:
+        combined = (exc.stderr or "") + (exc.stdout or "")
+        if re.search(r"Code:\s*NotFound", combined):
+            logger.warning("VirtualNetwork %s already deleted via API", vn_id)
+        else:
+            logger.warning("VirtualNetwork %s teardown delete failed: %s", vn_id, combined.strip())
+            # Skip wait_for_deletion when delete failed for a non-NotFound reason
             return
-        time.sleep(3)
-    raise TimeoutError(f"Subnet {subnet_id} not ready after {timeout}s")
+    wait_for_virtual_network_deletion(k8s=k8s, name=vn_cr_name)
 
 
 @pytest.fixture(scope="module")
-def catalog_networking(grpc: GRPCClient, network_class: str) -> Generator[dict[str, str], None, None]:
+def catalog_networking(
+    grpc: GRPCClient,
+    k8s_hub_client: K8sClient,
+    network_class: str,
+) -> Generator[dict[str, str], None, None]:
     """Create VirtualNetwork + Subnet for compute instance catalog item tests."""
     tag = uuid4().hex[:8]
-    vn_id = ""
-    subnet_id = ""
+    vn_id: str | None = None
+    vn_cr_name: str | None = None
+    subnet_id: str | None = None
+    subnet_cr_name: str | None = None
 
     try:
         vn_id = grpc.create_virtual_network(
@@ -64,27 +107,48 @@ def catalog_networking(grpc: GRPCClient, network_class: str) -> Generator[dict[s
             network_class=network_class,
             ipv4_cidr="10.200.0.0/16",
         )
-        _wait_virtual_network_ready(grpc, vn_id)
+        vn_cr_name = wait_for_virtual_network_cr(k8s=k8s_hub_client, uuid=vn_id)
+        wait_for_virtual_network_ready(k8s=k8s_hub_client, name=vn_cr_name)
 
         subnet_id = grpc.create_subnet(
             name=f"e2e-cat-subnet-{tag}",
             virtual_network=vn_id,
             ipv4_cidr="10.200.100.0/24",
         )
-        _wait_subnet_ready(grpc, subnet_id)
+        subnet_cr_name = wait_for_subnet_cr(k8s=k8s_hub_client, uuid=subnet_id)
+        wait_for_subnet_ready(k8s=k8s_hub_client, name=subnet_cr_name)
 
         yield {"virtual_network_id": vn_id, "subnet_id": subnet_id}
-    finally:
+    except Exception:
+        # If setup fails, cleanup any resources that were created
+        logger.warning("Setup failed, cleaning up partial catalog networking resources: %s", tag)
         if subnet_id:
             try:
                 grpc.delete_subnet(subnet_id=subnet_id)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Failed to cleanup subnet %s: %s", subnet_id, e)
         if vn_id:
             try:
                 grpc.delete_virtual_network(vn_id=vn_id)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Failed to cleanup virtual network %s: %s", vn_id, e)
+        raise
+    finally:
+        # Normal cleanup runs regardless of setup success/failure
+        if subnet_id and subnet_cr_name:
+            _delete_subnet_teardown(
+                grpc,
+                k8s_hub_client,
+                subnet_id=subnet_id,
+                subnet_cr_name=subnet_cr_name,
+            )
+        if vn_id and vn_cr_name:
+            _delete_virtual_network_teardown(
+                grpc,
+                k8s_hub_client,
+                vn_id=vn_id,
+                vn_cr_name=vn_cr_name,
+            )
 
 
 @pytest.fixture(scope="module")

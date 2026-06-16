@@ -18,7 +18,7 @@ def _wait_cluster_removed(grpc: GRPCClient, cluster_id: str, timeout: int = 30) 
     deadline = time.monotonic() + timeout
     while cluster_id in grpc.list_cluster_ids():
         if time.monotonic() > deadline:
-            break
+            pytest.fail(f"Timed out waiting for cluster removal: {cluster_id}")
         time.sleep(2)
 
 
@@ -35,9 +35,9 @@ def test_catalog_item_crud(grpc: GRPCClient, cluster_template: str) -> None:
         assert obj["published"] is True
 
         grpc.delete_cluster_catalog_item(catalog_item_id=catalog_item_id)
-        catalog_item_id = ""
 
         assert catalog_item_id not in grpc.list_cluster_catalog_item_ids()
+        catalog_item_id = ""
     finally:
         if catalog_item_id:
             grpc.delete_cluster_catalog_item(catalog_item_id=catalog_item_id)
@@ -88,7 +88,6 @@ def test_create_cluster_with_unpublished_catalog_item_fails(
         grpc.delete_cluster_catalog_item(catalog_item_id=catalog_item_id)
 
 
-@pytest.mark.xfail(reason="Server does not yet block deletion of referenced catalog items")
 def test_delete_catalog_item_blocked_when_referenced(grpc: GRPCClient, cli: OsacCLI, cluster_template: str) -> None:
     name = _unique_name("e2e-ref")
     catalog_item_id = grpc.create_cluster_catalog_item(name=name, template=cluster_template, published=True)
@@ -100,7 +99,8 @@ def test_delete_catalog_item_blocked_when_referenced(grpc: GRPCClient, cli: Osac
         output, rc = grpc.call_unchecked(
             service="osac.private.v1.ClusterCatalogItems/Delete", data={"id": catalog_item_id}
         )
-        assert rc != 0, f"Expected delete to be blocked, got: {output}"
+        assert rc != 0, f"Expected catalog item delete to be blocked, got: {output}"
+        assert "referenc" in output.lower() or "in use" in output.lower() or "failed precondition" in output.lower()
     finally:
         if cluster_id:
             cli.delete_cluster(uuid=cluster_id)

@@ -131,5 +131,11 @@ class OsacCLI:
     def create_cluster_with_catalog_item(self, *, catalog_item: str, name: str) -> str:
         return self._parse_uuid(run(self.binary, "create", "cluster", "--catalog-item", catalog_item, "--name", name))
 
+    def create_compute_instance_with_catalog_item(self, *, catalog_item: str, subnet: str | None = None) -> str:
+        args: list[str] = [self.binary, "create", "computeinstance", "--catalog-item", catalog_item]
+        if subnet is not None:
+            args.extend(["--network-attachment", f"subnet={subnet}"])
+        return self._parse_uuid(run(*args))
+
     def delete_cluster(self, *, uuid: str) -> None:
         run(self.binary, "delete", "cluster", uuid)

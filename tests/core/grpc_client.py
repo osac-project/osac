@@ -26,6 +26,17 @@ class GRPCClient:
     def call(self, *, service: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
         return json.loads(run(*self._build_args(service=service, data=data)))
 
+    def create_compute_instance(self, *, catalog_item: str, subnet_ids: list[str]) -> str:
+        attachments = [{"subnet": sid} for sid in subnet_ids]
+        response: dict[str, Any] = self.call(
+            service=f"{PUBLIC_API}.ComputeInstances/Create",
+            data={"object": {"spec": {"catalog_item": catalog_item, "network_attachments": attachments}}},
+        )
+        return response["object"]["id"]
+
+    def delete_compute_instance(self, *, ci_id: str) -> None:
+        self.call(service=f"{PUBLIC_API}.ComputeInstances/Delete", data={"id": ci_id})
+
     def list_compute_instance_ids(self) -> list[str]:
         response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.ComputeInstances/List")
         return [item["id"] for item in response.get("items", [])]
@@ -230,3 +241,26 @@ class GRPCClient:
 
     def delete_cluster_catalog_item(self, *, catalog_item_id: str) -> None:
         self.call(service=f"{PRIVATE_API}.ClusterCatalogItems/Delete", data={"id": catalog_item_id})
+
+    # ComputeInstanceCatalogItem operations
+
+    def create_compute_instance_catalog_item(
+        self, *, name: str, template: str, published: bool = True, field_definitions: list[dict[str, Any]] | None = None
+    ) -> str:
+        obj: dict[str, Any] = {"metadata": {"name": name}, "title": name, "template": template, "published": published}
+        if field_definitions is not None:
+            obj["field_definitions"] = field_definitions
+        response: dict[str, Any] = self.call(
+            service=f"{PRIVATE_API}.ComputeInstanceCatalogItems/Create", data={"object": obj}
+        )
+        return response["object"]["id"]
+
+    def get_compute_instance_catalog_item(self, *, catalog_item_id: str) -> dict[str, Any]:
+        return self.call(service=f"{PUBLIC_API}.ComputeInstanceCatalogItems/Get", data={"id": catalog_item_id})
+
+    def list_compute_instance_catalog_item_ids(self) -> list[str]:
+        response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.ComputeInstanceCatalogItems/List")
+        return [item["id"] for item in response.get("items", [])]
+
+    def delete_compute_instance_catalog_item(self, *, catalog_item_id: str) -> None:
+        self.call(service=f"{PRIVATE_API}.ComputeInstanceCatalogItems/Delete", data={"id": catalog_item_id})

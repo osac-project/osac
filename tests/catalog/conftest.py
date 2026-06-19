@@ -51,8 +51,6 @@ def _delete_subnet_teardown(
     subnet_id: str,
     subnet_cr_name: str,
 ) -> None:
-    if not k8s.is_present(resource="subnet", name=subnet_cr_name):
-        return
     try:
         grpc.delete_subnet(subnet_id=subnet_id)
     except subprocess.CalledProcessError as exc:
@@ -61,9 +59,9 @@ def _delete_subnet_teardown(
             logger.warning("Subnet %s already deleted via API", subnet_id)
         else:
             logger.warning("Subnet %s teardown delete failed: %s", subnet_id, combined.strip())
-            # Skip wait_for_deletion when delete failed for a non-NotFound reason
             return
-    wait_for_subnet_deletion(k8s=k8s, name=subnet_cr_name)
+    if k8s.is_present(resource="subnet", name=subnet_cr_name):
+        wait_for_subnet_deletion(k8s=k8s, name=subnet_cr_name)
 
 
 def _delete_virtual_network_teardown(
@@ -73,8 +71,6 @@ def _delete_virtual_network_teardown(
     vn_id: str,
     vn_cr_name: str,
 ) -> None:
-    if not k8s.is_present(resource="virtualnetwork", name=vn_cr_name):
-        return
     try:
         grpc.delete_virtual_network(vn_id=vn_id)
     except subprocess.CalledProcessError as exc:
@@ -83,9 +79,9 @@ def _delete_virtual_network_teardown(
             logger.warning("VirtualNetwork %s already deleted via API", vn_id)
         else:
             logger.warning("VirtualNetwork %s teardown delete failed: %s", vn_id, combined.strip())
-            # Skip wait_for_deletion when delete failed for a non-NotFound reason
             return
-    wait_for_virtual_network_deletion(k8s=k8s, name=vn_cr_name)
+    if k8s.is_present(resource="virtualnetwork", name=vn_cr_name):
+        wait_for_virtual_network_deletion(k8s=k8s, name=vn_cr_name)
 
 
 @pytest.fixture(scope="module")
@@ -126,12 +122,12 @@ def catalog_networking(
             try:
                 grpc.delete_subnet(subnet_id=subnet_id)
             except Exception as e:
-                logger.warning("Failed to cleanup subnet %s: %s", subnet_id, e)
+                logger.warning("Failed to cleanup subnet %s: %s", subnet_id, type(e).__name__)
         if vn_id:
             try:
                 grpc.delete_virtual_network(vn_id=vn_id)
             except Exception as e:
-                logger.warning("Failed to cleanup virtual network %s: %s", vn_id, e)
+                logger.warning("Failed to cleanup virtual network %s: %s", vn_id, type(e).__name__)
         raise
     finally:
         # Normal cleanup runs regardless of setup success/failure

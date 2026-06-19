@@ -239,6 +239,13 @@ class GRPCClient:
         response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.ClusterCatalogItems/List")
         return [item["id"] for item in response.get("items", [])]
 
+    def update_cluster_catalog_item(self, *, catalog_item_id: str, **fields: Any) -> dict[str, Any]:
+        if not fields:
+            raise ValueError("update_cluster_catalog_item requires at least one field to update")
+        obj: dict[str, Any] = {"id": catalog_item_id, **fields}
+        data: dict[str, Any] = {"object": obj, "update_mask": {"paths": list(fields.keys())}}
+        return self.call(service=f"{PRIVATE_API}.ClusterCatalogItems/Update", data=data)
+
     def delete_cluster_catalog_item(self, *, catalog_item_id: str) -> None:
         self.call(service=f"{PRIVATE_API}.ClusterCatalogItems/Delete", data={"id": catalog_item_id})
 
@@ -261,6 +268,13 @@ class GRPCClient:
     def list_compute_instance_catalog_item_ids(self) -> list[str]:
         response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.ComputeInstanceCatalogItems/List")
         return [item["id"] for item in response.get("items", [])]
+
+    def update_compute_instance_catalog_item(self, *, catalog_item_id: str, **fields: Any) -> dict[str, Any]:
+        if not fields:
+            raise ValueError("update_compute_instance_catalog_item requires at least one field to update")
+        obj: dict[str, Any] = {"id": catalog_item_id, **fields}
+        data: dict[str, Any] = {"object": obj, "update_mask": {"paths": list(fields.keys())}}
+        return self.call(service=f"{PRIVATE_API}.ComputeInstanceCatalogItems/Update", data=data)
 
     def delete_compute_instance_catalog_item(self, *, catalog_item_id: str) -> None:
         self.call(service=f"{PRIVATE_API}.ComputeInstanceCatalogItems/Delete", data={"id": catalog_item_id})

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import time
+import uuid
 
 import yaml
 
@@ -20,7 +20,7 @@ def test_compute_instance_api_fields(
     namespace: str,
     default_subnet_ref: str,
 ) -> None:
-    instance_name: str = f"e2e-test-api-fields-{int(time.time())}"
+    instance_name: str = f"e2e-test-api-fields-{uuid.uuid4().hex[:8]}"
 
     manifest: str = yaml.dump(
         {

@@ -115,12 +115,24 @@ class GRPCClient:
     def delete_security_group(self, *, sg_id: str) -> None:
         self.call(service=f"{PUBLIC_API}.SecurityGroups/Delete", data={"id": sg_id})
 
+    # Console operations
+
+    def create_console_session(
+        self, *, resource_type: str, resource_id: str, console_type: str, client_id: str = ""
+    ) -> dict[str, Any]:
+        data: dict[str, Any] = {
+            "object": {"resourceType": resource_type, "resourceId": resource_id, "type": console_type}
+        }
+        if client_id:
+            data["object"]["clientId"] = client_id
+        response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.ConsoleSessions/Create", data=data)
+        return response["object"]
+
+    # Organization operations
+
     def ensure_organization(self, *, name: str) -> None:
         try:
-            self.call(
-                service=f"{PRIVATE_API}.Organizations/Create",
-                data={"object": {"metadata": {"name": name}}},
-            )
+            self.call(service=f"{PRIVATE_API}.Organizations/Create", data={"object": {"metadata": {"name": name}}})
         except subprocess.CalledProcessError as e:
             output = (e.stdout or "") + (e.stderr or "")
             if not re.search(r"Code:\s*AlreadyExists", output):

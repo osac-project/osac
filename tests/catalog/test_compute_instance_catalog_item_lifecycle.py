@@ -1,27 +1,12 @@
 from __future__ import annotations
 
-import time
-from uuid import uuid4
-
-import pytest
-
+from tests.catalog.conftest import unique_name
 from tests.core.grpc_client import GRPCClient
-
-
-def _unique_name(prefix: str) -> str:
-    return f"{prefix}-{uuid4().hex[:8]}"
-
-
-def _wait_compute_instance_removed(grpc: GRPCClient, ci_id: str, timeout: int = 30) -> None:
-    deadline = time.monotonic() + timeout
-    while ci_id in grpc.list_compute_instance_ids():
-        if time.monotonic() > deadline:
-            pytest.fail(f"Timed out waiting for compute instance removal: {ci_id}")
-        time.sleep(2)
+from tests.core.runner import poll_until
 
 
 def test_compute_instance_catalog_item_crud(grpc: GRPCClient, compute_instance_template: str) -> None:
-    name = _unique_name("e2e-ci-cat")
+    name = unique_name("e2e-ci-cat")
     catalog_item_id = grpc.create_compute_instance_catalog_item(
         name=name, template=compute_instance_template, published=True
     )
@@ -34,7 +19,7 @@ def test_compute_instance_catalog_item_crud(grpc: GRPCClient, compute_instance_t
         assert obj["template"] == compute_instance_template
         assert obj["published"] is True
 
-        updated_title = _unique_name("e2e-ci-cat-updated")
+        updated_title = unique_name("e2e-ci-cat-updated")
         grpc.update_compute_instance_catalog_item(catalog_item_id=catalog_item_id, title=updated_title)
 
         item = grpc.get_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
@@ -58,7 +43,7 @@ def test_compute_instance_catalog_item_crud(grpc: GRPCClient, compute_instance_t
 def test_unpublished_compute_instance_catalog_item_not_visible_in_public_api(
     grpc: GRPCClient, compute_instance_template: str
 ) -> None:
-    name = _unique_name("e2e-ci-unpub")
+    name = unique_name("e2e-ci-unpub")
     catalog_item_id = grpc.create_compute_instance_catalog_item(
         name=name, template=compute_instance_template, published=False
     )
@@ -77,7 +62,7 @@ def test_unpublished_compute_instance_catalog_item_not_visible_in_public_api(
 def test_compute_instance_catalog_item_unpublish_transition(
     grpc: GRPCClient, compute_instance_template: str
 ) -> None:
-    name = _unique_name("e2e-ci-trans")
+    name = unique_name("e2e-ci-trans")
     catalog_item_id = grpc.create_compute_instance_catalog_item(
         name=name, template=compute_instance_template, published=True
     )
@@ -113,7 +98,7 @@ def test_compute_instance_catalog_item_field_definitions(
             "default": {"numberValue": 16},
         },
     ]
-    name = _unique_name("e2e-ci-fd")
+    name = unique_name("e2e-ci-fd")
     catalog_item_id = grpc.create_compute_instance_catalog_item(
         name=name, template=compute_instance_template, published=True, field_definitions=field_defs
     )
@@ -173,7 +158,7 @@ def test_compute_instance_catalog_item_field_definitions(
 def test_create_compute_instance_with_catalog_item(
     grpc: GRPCClient, compute_instance_template: str, default_subnet_id: str
 ) -> None:
-    name = _unique_name("e2e-ci-cat")
+    name = unique_name("e2e-ci-cat")
     catalog_item_id = grpc.create_compute_instance_catalog_item(
         name=name, template=compute_instance_template, published=True
     )
@@ -188,14 +173,20 @@ def test_create_compute_instance_with_catalog_item(
     finally:
         if ci_id:
             grpc.delete_compute_instance(ci_id=ci_id)
-            _wait_compute_instance_removed(grpc, ci_id)
+            poll_until(
+                fn=lambda: ci_id not in grpc.list_compute_instance_ids(),
+                until=lambda v: v is True,
+                retries=30,
+                delay=5,
+                description=f"ComputeInstance {ci_id} removal from API",
+            )
         grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
 
 
 def test_create_compute_instance_with_unpublished_catalog_item_fails(
     grpc: GRPCClient, compute_instance_template: str, default_subnet_id: str
 ) -> None:
-    name = _unique_name("e2e-ci-unpub")
+    name = unique_name("e2e-ci-unpub")
     catalog_item_id = grpc.create_compute_instance_catalog_item(
         name=name, template=compute_instance_template, published=False
     )
@@ -213,7 +204,7 @@ def test_create_compute_instance_with_unpublished_catalog_item_fails(
 def test_delete_compute_instance_catalog_item_blocked_when_referenced(
     grpc: GRPCClient, compute_instance_template: str, default_subnet_id: str
 ) -> None:
-    name = _unique_name("e2e-ci-ref")
+    name = unique_name("e2e-ci-ref")
     catalog_item_id = grpc.create_compute_instance_catalog_item(
         name=name, template=compute_instance_template, published=True
     )
@@ -229,5 +220,11 @@ def test_delete_compute_instance_catalog_item_blocked_when_referenced(
     finally:
         if ci_id:
             grpc.delete_compute_instance(ci_id=ci_id)
-            _wait_compute_instance_removed(grpc, ci_id)
+            poll_until(
+                fn=lambda: ci_id not in grpc.list_compute_instance_ids(),
+                until=lambda v: v is True,
+                retries=30,
+                delay=5,
+                description=f"ComputeInstance {ci_id} removal from API",
+            )
         grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_item_id)

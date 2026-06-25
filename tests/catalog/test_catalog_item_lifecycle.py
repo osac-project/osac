@@ -1,29 +1,15 @@
 from __future__ import annotations
 
 import subprocess
-import time
-from uuid import uuid4
 
-import pytest
-
+from tests.catalog.conftest import unique_name
 from tests.core.grpc_client import GRPCClient
 from tests.core.osac_cli import OsacCLI
-
-
-def _unique_name(prefix: str) -> str:
-    return f"{prefix}-{uuid4().hex[:8]}"
-
-
-def _wait_cluster_removed(grpc: GRPCClient, cluster_id: str, timeout: int = 30) -> None:
-    deadline = time.monotonic() + timeout
-    while cluster_id in grpc.list_cluster_ids():
-        if time.monotonic() > deadline:
-            pytest.fail(f"Timed out waiting for cluster removal: {cluster_id}")
-        time.sleep(2)
+from tests.core.runner import poll_until
 
 
 def test_catalog_item_crud(grpc: GRPCClient, cluster_template: str) -> None:
-    name = _unique_name("e2e-cat")
+    name = unique_name("e2e-cat")
     catalog_item_id = grpc.create_cluster_catalog_item(name=name, template=cluster_template, published=True)
     try:
         assert catalog_item_id in grpc.list_cluster_catalog_item_ids()
@@ -34,7 +20,7 @@ def test_catalog_item_crud(grpc: GRPCClient, cluster_template: str) -> None:
         assert obj["template"] == cluster_template
         assert obj["published"] is True
 
-        updated_title = _unique_name("e2e-cat-updated")
+        updated_title = unique_name("e2e-cat-updated")
         grpc.update_cluster_catalog_item(catalog_item_id=catalog_item_id, title=updated_title)
 
         item = grpc.get_cluster_catalog_item(catalog_item_id=catalog_item_id)
@@ -56,7 +42,7 @@ def test_catalog_item_crud(grpc: GRPCClient, cluster_template: str) -> None:
 
 
 def test_unpublished_catalog_item_not_visible_in_public_api(grpc: GRPCClient, cluster_template: str) -> None:
-    name = _unique_name("e2e-unpub")
+    name = unique_name("e2e-unpub")
     catalog_item_id = grpc.create_cluster_catalog_item(name=name, template=cluster_template, published=False)
     try:
         assert catalog_item_id not in grpc.list_cluster_catalog_item_ids()
@@ -69,7 +55,7 @@ def test_unpublished_catalog_item_not_visible_in_public_api(grpc: GRPCClient, cl
 
 
 def test_catalog_item_unpublish_transition(grpc: GRPCClient, cluster_template: str) -> None:
-    name = _unique_name("e2e-trans")
+    name = unique_name("e2e-trans")
     catalog_item_id = grpc.create_cluster_catalog_item(name=name, template=cluster_template, published=True)
     try:
         assert catalog_item_id in grpc.list_cluster_catalog_item_ids()
@@ -101,7 +87,7 @@ def test_catalog_item_field_definitions(grpc: GRPCClient, cluster_template: str)
             "default": {"stringValue": "172.30.0.0/16"},
         },
     ]
-    name = _unique_name("e2e-fd")
+    name = unique_name("e2e-fd")
     catalog_item_id = grpc.create_cluster_catalog_item(
         name=name, template=cluster_template, published=True, field_definitions=field_defs
     )
@@ -159,11 +145,11 @@ def test_catalog_item_field_definitions(grpc: GRPCClient, cluster_template: str)
 
 
 def test_create_cluster_with_catalog_item(grpc: GRPCClient, cli: OsacCLI, cluster_template: str) -> None:
-    name = _unique_name("e2e-cat")
+    name = unique_name("e2e-cat")
     catalog_item_id = grpc.create_cluster_catalog_item(name=name, template=cluster_template, published=True)
     cluster_id = ""
     try:
-        cluster_name = _unique_name("e2e-cluster")
+        cluster_name = unique_name("e2e-cluster")
         cluster_id = cli.create_cluster_with_catalog_item(catalog_item=catalog_item_id, name=cluster_name)
 
         assert cluster_id in grpc.list_cluster_ids()
@@ -173,14 +159,20 @@ def test_create_cluster_with_catalog_item(grpc: GRPCClient, cli: OsacCLI, cluste
     finally:
         if cluster_id:
             cli.delete_cluster(uuid=cluster_id)
-            _wait_cluster_removed(grpc, cluster_id)
+            poll_until(
+                fn=lambda: cluster_id not in grpc.list_cluster_ids(),
+                until=lambda v: v is True,
+                retries=30,
+                delay=5,
+                description=f"Cluster {cluster_id} removal from API",
+            )
         grpc.delete_cluster_catalog_item(catalog_item_id=catalog_item_id)
 
 
 def test_create_cluster_with_unpublished_catalog_item_fails(
     grpc: GRPCClient, cluster_template: str
 ) -> None:
-    name = _unique_name("e2e-unpub")
+    name = unique_name("e2e-unpub")
     catalog_item_id = grpc.create_cluster_catalog_item(name=name, template=cluster_template, published=False)
     try:
         output, rc = grpc.call_unchecked(
@@ -194,11 +186,11 @@ def test_create_cluster_with_unpublished_catalog_item_fails(
 
 
 def test_delete_catalog_item_blocked_when_referenced(grpc: GRPCClient, cli: OsacCLI, cluster_template: str) -> None:
-    name = _unique_name("e2e-ref")
+    name = unique_name("e2e-ref")
     catalog_item_id = grpc.create_cluster_catalog_item(name=name, template=cluster_template, published=True)
     cluster_id = ""
     try:
-        cluster_name = _unique_name("e2e-cluster")
+        cluster_name = unique_name("e2e-cluster")
         cluster_id = cli.create_cluster_with_catalog_item(catalog_item=catalog_item_id, name=cluster_name)
 
         output, rc = grpc.call_unchecked(
@@ -209,5 +201,11 @@ def test_delete_catalog_item_blocked_when_referenced(grpc: GRPCClient, cli: Osac
     finally:
         if cluster_id:
             cli.delete_cluster(uuid=cluster_id)
-            _wait_cluster_removed(grpc, cluster_id)
+            poll_until(
+                fn=lambda: cluster_id not in grpc.list_cluster_ids(),
+                until=lambda v: v is True,
+                retries=30,
+                delay=5,
+                description=f"Cluster {cluster_id} removal from API",
+            )
         grpc.delete_cluster_catalog_item(catalog_item_id=catalog_item_id)

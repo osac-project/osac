@@ -337,3 +337,56 @@ class GRPCClient:
 
     def delete_instance_type(self, *, name: str) -> None:
         self.call(service=f"{PRIVATE_API}.InstanceTypes/Delete", data={"id": name})
+
+    # BareMetalInstance operations (public API)
+
+    def list_baremetal_instance_ids(self) -> list[str]:
+        response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.BareMetalInstances/List")
+        return [item["id"] for item in response.get("items", [])]
+
+    def get_baremetal_instance(self, *, bmi_id: str) -> dict[str, Any]:
+        return self.call(service=f"{PUBLIC_API}.BareMetalInstances/Get", data={"id": bmi_id})
+
+    def get_baremetal_instance_state(self, *, bmi_id: str) -> str:
+        response: dict[str, Any] = self.get_baremetal_instance(bmi_id=bmi_id)
+        return response.get("object", {}).get("status", {}).get("state", "")
+
+    def update_baremetal_instance_run_strategy(self, *, bmi_id: str, run_strategy: str) -> dict[str, Any]:
+        return self.call(
+            service=f"{PUBLIC_API}.BareMetalInstances/Update",
+            data={
+                "object": {"id": bmi_id, "spec": {"run_strategy": run_strategy}},
+                "updateMask": {"paths": ["spec.run_strategy"]},
+            },
+        )
+
+    def delete_baremetal_instance(self, *, bmi_id: str) -> None:
+        self.call(service=f"{PUBLIC_API}.BareMetalInstances/Delete", data={"id": bmi_id})
+
+    # BareMetalInstanceCatalogItem operations (private API for admin setup)
+
+    def create_baremetal_instance_catalog_item(
+        self,
+        *,
+        name: str,
+        title: str,
+        description: str,
+        template: str,
+        field_definitions: list[dict[str, Any]] | None = None,
+    ) -> str:
+        obj: dict[str, Any] = {
+            "metadata": {"name": name},
+            "title": title,
+            "description": description,
+            "template": template,
+            "published": True,
+        }
+        if field_definitions is not None:
+            obj["field_definitions"] = field_definitions
+        response: dict[str, Any] = self.call(
+            service=f"{PRIVATE_API}.BareMetalInstanceCatalogItems/Create", data={"object": obj}
+        )
+        return response["object"]["id"]
+
+    def delete_baremetal_instance_catalog_item(self, *, item_id: str) -> None:
+        self.call(service=f"{PRIVATE_API}.BareMetalInstanceCatalogItems/Delete", data={"id": item_id})

@@ -439,3 +439,61 @@ class K8sClient:
             "get", "securitygroup", name, "-n", self.namespace, "-o", "jsonpath={.status.phase}", checked=checked
         )
         return output if rc == 0 else ""
+
+    # BareMetalInstance queries
+
+    def get_baremetal_instance_name(self, *, uuid: str, checked: bool = True) -> str:
+        output, rc = self._get(
+            "get",
+            "baremetalinstance",
+            "-n",
+            self.namespace,
+            "-l",
+            f"osac.openshift.io/baremetalinstance-uuid={uuid}",
+            "-o",
+            "jsonpath={.items[0].metadata.name}",
+            checked=checked,
+        )
+        return output if rc == 0 else ""
+
+    def get_baremetal_instance_external_host_id(self, *, name: str) -> str:
+        return self.get_jsonpath(resource="baremetalinstance", name=name, jsonpath="{.spec.externalHostID}")
+
+    # BareMetalHost queries (explicit namespace — BMHs live in a different namespace)
+
+    def get_bmh_provisioning_state(self, *, name: str, bmh_namespace: str) -> str:
+        output, rc = self._get(
+            "get",
+            "baremetalhost",
+            name,
+            "-n",
+            bmh_namespace,
+            "-o",
+            "jsonpath={.status.provisioning.state}",
+            checked=False,
+        )
+        return output if rc == 0 else ""
+
+    def get_bmh_image_url(self, *, name: str, bmh_namespace: str) -> str:
+        output, rc = self._get(
+            "get", "baremetalhost", name, "-n", bmh_namespace, "-o", "jsonpath={.spec.image.url}", checked=False
+        )
+        return output if rc == 0 else ""
+
+    def get_bmh_consumer_ref(self, *, name: str, bmh_namespace: str) -> str:
+        output, rc = self._get(
+            "get", "baremetalhost", name, "-n", bmh_namespace, "-o", "jsonpath={.spec.consumerRef.name}", checked=False
+        )
+        return output if rc == 0 else ""
+
+    def get_bmh_online(self, *, name: str, bmh_namespace: str) -> str:
+        output, rc = self._get(
+            "get", "baremetalhost", name, "-n", bmh_namespace, "-o", "jsonpath={.spec.online}", checked=False
+        )
+        return output if rc == 0 else ""
+
+    def get_bmh_powered_on(self, *, name: str, bmh_namespace: str) -> str:
+        output, rc = self._get(
+            "get", "baremetalhost", name, "-n", bmh_namespace, "-o", "jsonpath={.status.poweredOn}", checked=False
+        )
+        return output if rc == 0 else ""

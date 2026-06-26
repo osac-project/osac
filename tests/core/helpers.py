@@ -559,3 +559,81 @@ def wait_for_secrets_removed(*, k8s: K8sClient, tenant_name: str, namespace: str
         delay=5,
         description=f"Secrets for tenant {tenant_name} in {namespace} removed",
     )
+
+
+# BareMetalInstance helpers
+
+
+def wait_for_bmi_cr(*, k8s: K8sClient, uuid: str) -> str:
+    return poll_until(
+        fn=lambda: k8s.get_baremetal_instance_name(uuid=uuid, checked=False),
+        until=lambda v: v != "",
+        retries=30,
+        delay=2,
+        description=f"BareMetalInstance CR for {uuid}",
+    )
+
+
+def wait_for_bmi_running(*, grpc: GRPCClient, bmi_id: str) -> None:
+    def _check_state() -> str:
+        state: str = grpc.get_baremetal_instance_state(bmi_id=bmi_id)
+        assert "FAILED" not in state, f"BareMetalInstance {bmi_id} entered {state}"
+        return state
+
+    poll_until(
+        fn=_check_state,
+        until=lambda v: v == "BARE_METAL_INSTANCE_STATE_RUNNING",
+        retries=120,
+        delay=10,
+        description=f"{bmi_id} RUNNING",
+    )
+
+
+def wait_for_bmi_deletion(*, k8s: K8sClient, name: str) -> None:
+    poll_until(
+        fn=lambda: not k8s.is_present(resource="baremetalinstance", name=name),
+        until=lambda v: v is True,
+        retries=120,
+        delay=10,
+        description=f"{name} BareMetalInstance deletion",
+    )
+
+
+def wait_for_bmi_grpc_removal(*, grpc: GRPCClient, uuid: str) -> None:
+    poll_until(
+        fn=lambda: uuid not in grpc.list_baremetal_instance_ids(),
+        until=lambda v: v is True,
+        retries=60,
+        delay=5,
+        description=f"{uuid} removed from gRPC BareMetalInstance list",
+    )
+
+
+def wait_for_bmh_provisioned(*, k8s: K8sClient, name: str, bmh_namespace: str) -> None:
+    def _check() -> str:
+        state: str = k8s.get_bmh_provisioning_state(name=name, bmh_namespace=bmh_namespace)
+        assert state != "error", f"BMH {name} entered error state"
+        return state
+
+    poll_until(
+        fn=_check,
+        until=lambda v: v == "provisioned",
+        retries=120,
+        delay=10,
+        description=f"{name} BMH provisioned",
+    )
+
+
+def wait_for_bmh_available(*, k8s: K8sClient, name: str, bmh_namespace: str) -> None:
+    def _check() -> str:
+        state: str = k8s.get_bmh_provisioning_state(name=name, bmh_namespace=bmh_namespace)
+        assert state != "error", f"BMH {name} entered error state"
+        return state
+
+    poll_until(
+        fn=_check,
+        until=lambda v: v in ("available", "ready"),
+        retries=120,
+        delay=10,
+        description=f"{name} BMH available",
+    )

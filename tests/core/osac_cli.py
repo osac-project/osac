@@ -182,3 +182,16 @@ class OsacCLI:
 
     def delete_cluster(self, *, uuid: str) -> None:
         self._run("delete", "cluster", uuid)
+
+    def create_baremetal_instance(
+        self, *, name: str, catalog_item: str, ssh_key: str | None = None, user_data: str | None = None
+    ) -> str:
+        args: list[str] = ["create", "baremetalinstance", "--name", name, "--catalog-item", catalog_item]
+        if ssh_key is not None:
+            args.extend(["--ssh-key", ssh_key])
+        if user_data is not None:
+            args.extend(["--user-data", user_data])
+        return self._parse_uuid(self._run(*args))
+
+    def delete_baremetal_instance(self, *, uuid: str) -> None:
+        self._run("delete", "baremetalinstance", uuid)

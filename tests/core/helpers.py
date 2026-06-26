@@ -417,6 +417,8 @@ def wait_for_tenant_cr(*, k8s: K8sClient, name: str) -> None:
 
 def wait_for_tenant_condition(*, k8s: K8sClient, name: str, condition_type: str, expected_status: str = "True") -> None:
     def _check() -> str:
+        if not k8s.is_present(resource="tenant", name=name):
+            raise AssertionError(f"Tenant {name} disappeared before {condition_type}={expected_status}")
         phase: str = k8s.get_tenant_phase(name=name, checked=False)
         if phase == "Failed":
             cond_status = k8s.get_tenant_condition_status(name=name, condition_type=condition_type, checked=False)

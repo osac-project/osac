@@ -53,11 +53,7 @@ def test_tenant_storage_lifecycle(
         )
     finally:
         _trigger_teardown(k8s=k8s_hub_client, tenant_name=tenant_name)
-        _verify_teardown(
-            k8s=k8s_hub_client,
-            tenant_name=tenant_name,
-            storage_config_namespace=storage_config_namespace,
-        )
+        _verify_teardown(k8s=k8s_hub_client, tenant_name=tenant_name)
 
 
 def _verify_provisioning(*, k8s: K8sClient, tenant_name: str, storage_config_namespace: str) -> None:
@@ -110,9 +106,7 @@ def _trigger_teardown(*, k8s: K8sClient, tenant_name: str) -> None:
     k8s.delete(resource="tenant", name=tenant_name, wait=False)
 
 
-def _verify_teardown(
-    *, k8s: K8sClient, tenant_name: str, storage_config_namespace: str
-) -> None:
+def _verify_teardown(*, k8s: K8sClient, tenant_name: str) -> None:
     # --- Tenant CR fully deleted (storage finalizer released = all cleanup done) ---
     wait_for_tenant_deletion(k8s=k8s, name=tenant_name)
 

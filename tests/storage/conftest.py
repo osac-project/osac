@@ -24,7 +24,10 @@ def _storage_controller_configured(namespace: str) -> bool:
         "-o",
         "jsonpath={.items[*].spec.template.spec.containers[*].env[*].name}",
     )
-    if rc == 0 and "OSAC_STORAGE_BACKEND_AAP_PROVISION_TEMPLATE" in output:
+    if rc == 0 and (
+        "OSAC_STORAGE_BACKEND_AAP_PROVISION_TEMPLATE" in output
+        or "OSAC_ENABLE_STORAGE_CONTROLLER" in output
+    ):
         return True
 
     # Check envFrom secrets for the storage env var

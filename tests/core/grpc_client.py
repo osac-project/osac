@@ -203,18 +203,3 @@ class GRPCClient:
 
     def delete_public_ip_attachment(self, *, attachment_id: str) -> None:
         self.call(service=f"{PUBLIC_API}.PublicIPAttachments/Delete", data={"id": attachment_id})
-
-    # Organization operations (private API)
-
-    def create_organization(self, *, name: str) -> str:
-        response: dict[str, Any] = self.call(
-            service=f"{PRIVATE_API}.Organizations/Create", data={"object": {"metadata": {"name": name}}}
-        )
-        return response["object"]["id"]
-
-    def list_organization_ids(self) -> list[str]:
-        response: dict[str, Any] = self.call(service=f"{PRIVATE_API}.Organizations/List")
-        return [item["id"] for item in response.get("items", [])]
-
-    def delete_organization(self, *, org_id: str) -> None:
-        self.call(service=f"{PRIVATE_API}.Organizations/Delete", data={"id": org_id})

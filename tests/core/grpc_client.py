@@ -117,7 +117,10 @@ class GRPCClient:
 
     def ensure_organization(self, *, name: str) -> None:
         try:
-            self.call(service=f"{PRIVATE_API}.Organizations/Create", data={"object": {"metadata": {"name": name}}})
+            self.call(
+                service=f"{PRIVATE_API}.Organizations/Create",
+                data={"object": {"metadata": {"name": name}}},
+            )
         except subprocess.CalledProcessError as e:
             output = (e.stdout or "") + (e.stderr or "")
             if not re.search(r"Code:\s*AlreadyExists", output):

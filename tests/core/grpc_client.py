@@ -128,15 +128,18 @@ class GRPCClient:
         response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.ConsoleSessions/Create", data=data)
         return response["object"]
 
-    # Organization operations
+    # Tenant operations
 
-    def ensure_organization(self, *, name: str) -> None:
+    def ensure_tenant(self, *, name: str) -> None:
         try:
-            self.call(service=f"{PRIVATE_API}.Organizations/Create", data={"object": {"metadata": {"name": name}}})
+            self.call(
+                service=f"{PRIVATE_API}.Tenants/Create",
+                data={"object": {"metadata": {"name": name}}},
+            )
         except subprocess.CalledProcessError as e:
             output = (e.stdout or "") + (e.stderr or "")
             if not re.search(r"Code:\s*AlreadyExists", output):
-                raise RuntimeError(f"Failed to create organization '{name}': {output}") from e
+                raise RuntimeError(f"Failed to create tenant '{name}': {output}") from e
 
     # PublicIPPool operations (private API only)
 

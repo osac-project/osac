@@ -51,9 +51,9 @@ def private_grpc(fulfillment_private_address: str, namespace: str, service_accou
 
 
 @pytest.fixture(scope="session", autouse=True)
-def ensure_organizations(private_grpc: GRPCClient) -> None:
+def ensure_tenants(private_grpc: GRPCClient) -> None:
     for name in ("tenant1", "tenant2"):
-        private_grpc.ensure_organization(name=name)
+        private_grpc.ensure_tenant(name=name)
 
 
 @pytest.fixture(scope="session")

@@ -79,8 +79,3 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 @pytest.fixture(scope="session")
 def storage_config_namespace() -> str:
     return env("OSAC_STORAGE_CONFIG_NAMESPACE", "osac-system")
-
-
-@pytest.fixture(scope="session", autouse=True)
-def ensure_organizations() -> None:
-    """Override root conftest fixture — storage tests don't need Organizations."""

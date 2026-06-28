@@ -5,7 +5,7 @@ import re
 import subprocess
 from typing import Any
 
-from tests.core.runner import run
+from tests.core.runner import run, run_unchecked
 
 PUBLIC_API: str = "osac.public.v1"
 PRIVATE_API: str = "osac.private.v1"
@@ -16,12 +16,26 @@ class GRPCClient:
         self.address: str = address
         self.token: str = token
 
-    def call(self, *, service: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _build_args(self, *, service: str, data: dict[str, Any] | None = None) -> list[str]:
         args: list[str] = ["grpcurl", "-insecure", "-H", f"Authorization: Bearer {self.token}"]
         if data is not None:
             args.extend(["-d", json.dumps(data)])
         args.extend([self.address, service])
-        return json.loads(run(*args))
+        return args
+
+    def call(self, *, service: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
+        return json.loads(run(*self._build_args(service=service, data=data)))
+
+    def create_compute_instance(self, *, catalog_item: str, subnet_ids: list[str]) -> str:
+        attachments = [{"subnet": sid} for sid in subnet_ids]
+        response: dict[str, Any] = self.call(
+            service=f"{PUBLIC_API}.ComputeInstances/Create",
+            data={"object": {"spec": {"catalog_item": catalog_item, "network_attachments": attachments}}},
+        )
+        return response["object"]["id"]
+
+    def delete_compute_instance(self, *, ci_id: str) -> None:
+        self.call(service=f"{PUBLIC_API}.ComputeInstances/Delete", data={"id": ci_id})
 
     def list_compute_instance_ids(self) -> list[str]:
         response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.ComputeInstances/List")
@@ -86,6 +100,9 @@ class GRPCClient:
 
     def delete_subnet(self, *, subnet_id: str) -> None:
         self.call(service=f"{PUBLIC_API}.Subnets/Delete", data={"id": subnet_id})
+
+    def call_unchecked(self, *, service: str, data: dict[str, Any] | None = None) -> tuple[str, int]:
+        return run_unchecked(*self._build_args(service=service, data=data))
 
     # Cluster operations
 
@@ -215,3 +232,61 @@ class GRPCClient:
 
     def delete_public_ip_attachment(self, *, attachment_id: str) -> None:
         self.call(service=f"{PUBLIC_API}.PublicIPAttachments/Delete", data={"id": attachment_id})
+
+    # ClusterCatalogItem operations
+
+    def create_cluster_catalog_item(
+        self, *, name: str, template: str, published: bool = True, field_definitions: list[dict[str, Any]] | None = None
+    ) -> str:
+        obj: dict[str, Any] = {"metadata": {"name": name}, "title": name, "template": template, "published": published}
+        if field_definitions is not None:
+            obj["field_definitions"] = field_definitions
+        response: dict[str, Any] = self.call(service=f"{PRIVATE_API}.ClusterCatalogItems/Create", data={"object": obj})
+        return response["object"]["id"]
+
+    def get_cluster_catalog_item(self, *, catalog_item_id: str) -> dict[str, Any]:
+        return self.call(service=f"{PUBLIC_API}.ClusterCatalogItems/Get", data={"id": catalog_item_id})
+
+    def list_cluster_catalog_item_ids(self) -> list[str]:
+        response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.ClusterCatalogItems/List")
+        return [item["id"] for item in response.get("items", [])]
+
+    def update_cluster_catalog_item(self, *, catalog_item_id: str, **fields: Any) -> dict[str, Any]:
+        if not fields:
+            raise ValueError("update_cluster_catalog_item requires at least one field to update")
+        obj: dict[str, Any] = {"id": catalog_item_id, **fields}
+        data: dict[str, Any] = {"object": obj, "update_mask": {"paths": list(fields.keys())}}
+        return self.call(service=f"{PRIVATE_API}.ClusterCatalogItems/Update", data=data)
+
+    def delete_cluster_catalog_item(self, *, catalog_item_id: str) -> None:
+        self.call(service=f"{PRIVATE_API}.ClusterCatalogItems/Delete", data={"id": catalog_item_id})
+
+    # ComputeInstanceCatalogItem operations
+
+    def create_compute_instance_catalog_item(
+        self, *, name: str, template: str, published: bool = True, field_definitions: list[dict[str, Any]] | None = None
+    ) -> str:
+        obj: dict[str, Any] = {"metadata": {"name": name}, "title": name, "template": template, "published": published}
+        if field_definitions is not None:
+            obj["field_definitions"] = field_definitions
+        response: dict[str, Any] = self.call(
+            service=f"{PRIVATE_API}.ComputeInstanceCatalogItems/Create", data={"object": obj}
+        )
+        return response["object"]["id"]
+
+    def get_compute_instance_catalog_item(self, *, catalog_item_id: str) -> dict[str, Any]:
+        return self.call(service=f"{PUBLIC_API}.ComputeInstanceCatalogItems/Get", data={"id": catalog_item_id})
+
+    def list_compute_instance_catalog_item_ids(self) -> list[str]:
+        response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.ComputeInstanceCatalogItems/List")
+        return [item["id"] for item in response.get("items", [])]
+
+    def update_compute_instance_catalog_item(self, *, catalog_item_id: str, **fields: Any) -> dict[str, Any]:
+        if not fields:
+            raise ValueError("update_compute_instance_catalog_item requires at least one field to update")
+        obj: dict[str, Any] = {"id": catalog_item_id, **fields}
+        data: dict[str, Any] = {"object": obj, "update_mask": {"paths": list(fields.keys())}}
+        return self.call(service=f"{PRIVATE_API}.ComputeInstanceCatalogItems/Update", data=data)
+
+    def delete_compute_instance_catalog_item(self, *, catalog_item_id: str) -> None:
+        self.call(service=f"{PRIVATE_API}.ComputeInstanceCatalogItems/Delete", data={"id": catalog_item_id})

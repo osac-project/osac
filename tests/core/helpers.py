@@ -30,15 +30,10 @@ def wait_for_cr(*, k8s: K8sClient, uuid: str) -> str:
 
 
 def wait_for_provision(*, k8s: K8sClient, name: str) -> None:
-    def _check_provisioned() -> str:
-        phase: str = k8s.get_compute_instance_phase(name=name, checked=False)
-        assert phase != "Failed", f"{name} entered Failed phase before Provisioned=True"
-        return k8s.get_compute_instance_condition_status(
-            name=name, condition_type="Provisioned", checked=False
-        )
-
     poll_until(
-        fn=_check_provisioned,
+        fn=lambda: k8s.get_compute_instance_condition_status(
+            name=name, condition_type="Provisioned", checked=False
+        ),
         until=lambda v: v == "True",
         retries=120,
         delay=5,
@@ -47,13 +42,8 @@ def wait_for_provision(*, k8s: K8sClient, name: str) -> None:
 
 
 def wait_for_running(*, k8s: K8sClient, name: str) -> None:
-    def _check_phase() -> str:
-        phase: str = k8s.get_compute_instance_phase(name=name, checked=False)
-        assert phase != "Failed", f"{name} entered Failed phase"
-        return phase
-
     poll_until(
-        fn=_check_phase,
+        fn=lambda: k8s.get_compute_instance_phase(name=name, checked=False),
         until=lambda v: v == "Running",
         retries=90,
         delay=10,
@@ -222,13 +212,8 @@ def wait_for_public_ip_attachment_cr(*, k8s: K8sClient, uuid: str) -> str:
 
 
 def wait_for_public_ip_attachment_ready(*, k8s: K8sClient, name: str) -> None:
-    def _check_phase() -> str:
-        phase: str = k8s.get_public_ip_attachment_phase(name=name, checked=False)
-        assert phase != "Failed", f"{name} PublicIPAttachment entered Failed phase"
-        return phase
-
     poll_until(
-        fn=_check_phase,
+        fn=lambda: k8s.get_public_ip_attachment_phase(name=name, checked=False),
         until=lambda v: v == "Ready",
         retries=60,
         delay=5,

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pytest
 
 from tests.core.grpc_client import GRPCClient
@@ -62,13 +64,15 @@ def k8s_hub_client(namespace: str) -> K8sClient:
 
 
 @pytest.fixture(scope="session")
-def cli(namespace: str, fulfillment_address: str, service_account: str) -> OsacCLI:
-    return OsacCLI(
+def cli(namespace: str, fulfillment_address: str, service_account: str) -> Iterator[OsacCLI]:
+    instance = OsacCLI(
         binary=env("OSAC_CLI_PATH", "osac"),
         address=f"https://{fulfillment_address.rsplit(':', 1)[0]}",
         token_script=f"oc create token -n {namespace} {service_account} --as system:admin",
         namespace=namespace,
     )
+    yield instance
+    instance.close()
 
 
 @pytest.fixture(scope="session")
@@ -91,23 +95,27 @@ def _make_jwt_token_script(keycloak_url: str, username: str, password: str) -> s
 
 
 @pytest.fixture(scope="session")
-def jwt_cli_user(namespace: str, fulfillment_address: str, keycloak_url: str, jwt_password: str) -> OsacCLI:
-    return OsacCLI(
+def jwt_cli_user(namespace: str, fulfillment_address: str, keycloak_url: str, jwt_password: str) -> Iterator[OsacCLI]:
+    instance = OsacCLI(
         binary=env("OSAC_CLI_PATH", "osac"),
         address=f"https://{fulfillment_address.rsplit(':', 1)[0]}",
         token_script=_make_jwt_token_script(keycloak_url, "my_user", jwt_password),
         namespace=namespace,
     )
+    yield instance
+    instance.close()
 
 
 @pytest.fixture(scope="session")
-def jwt_cli_admin(namespace: str, fulfillment_address: str, keycloak_url: str, jwt_password: str) -> OsacCLI:
-    return OsacCLI(
+def jwt_cli_admin(namespace: str, fulfillment_address: str, keycloak_url: str, jwt_password: str) -> Iterator[OsacCLI]:
+    instance = OsacCLI(
         binary=env("OSAC_CLI_PATH", "osac"),
         address=f"https://{fulfillment_address.rsplit(':', 1)[0]}",
         token_script=_make_jwt_token_script(keycloak_url, "tenant1_admin", jwt_password),
         namespace=namespace,
     )
+    yield instance
+    instance.close()
 
 
 @pytest.fixture(scope="session")

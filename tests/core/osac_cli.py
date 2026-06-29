@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+import shutil
+import tempfile
 from typing import Any
 
 from tests.core.runner import run, run_unchecked
@@ -12,10 +14,23 @@ class OsacCLI:
         self.namespace: str = namespace
         self._address: str = address
         self._token_script: str = token_script
-        run(binary, "login", "--address", address, "--insecure", "--token-script", token_script)
+        # Each OsacCLI instance gets its own config directory so that parallel
+        # xdist workers (or multiple CLI fixtures) don't overwrite each other's
+        # login credentials via the shared ~/.config/osac/config.json.
+        self._config_dir: str = tempfile.mkdtemp(prefix="osac-config-")
+        self._run("login", "--address", address, "--insecure", "--token-script", token_script)
+
+    def close(self) -> None:
+        shutil.rmtree(self._config_dir, ignore_errors=True)
+
+    def _run(self, *args: str, timeout: int = 300) -> str:
+        return run(self.binary, "--config", self._config_dir, *args, timeout=timeout)
+
+    def _run_unchecked(self, *args: str, timeout: int = 300) -> tuple[str, int]:
+        return run_unchecked(self.binary, "--config", self._config_dir, *args, timeout=timeout)
 
     def relogin(self) -> None:
-        run(self.binary, "login", "--address", self._address, "--insecure", "--token-script", self._token_script)
+        self._run("login", "--address", self._address, "--insecure", "--token-script", self._token_script)
 
     @staticmethod
     def _parse_uuid(stdout: str) -> str:
@@ -24,7 +39,7 @@ class OsacCLI:
         return match.group(1)
 
     def create_hub(self, *, hub_id: str, kubeconfig: str) -> None:
-        run(self.binary, "create", "hub", "--id", hub_id, "--kubeconfig", kubeconfig, "--namespace", self.namespace)
+        self._run("create", "hub", "--id", hub_id, "--kubeconfig", kubeconfig, "--namespace", self.namespace)
 
     def create_compute_instance(
         self,
@@ -40,7 +55,6 @@ class OsacCLI:
         user_data_secret_ref: str | None = None,
     ) -> str:
         args: list[str] = [
-            self.binary,
             "create",
             "computeinstance",
             "--template",
@@ -68,7 +82,10 @@ class OsacCLI:
 
                 security_groups = attachment.get("security_groups", [])
                 if not isinstance(security_groups, list):
-                    raise ValueError(f"network_attachments[{idx}]: 'security_groups' must be a list, got {type(security_groups).__name__}")
+                    raise ValueError(
+                        f"network_attachments[{idx}]: 'security_groups' must be a list,"
+                        f" got {type(security_groups).__name__}"
+                    )
 
                 if security_groups and not all(isinstance(sg, str) and sg for sg in security_groups):
                     raise ValueError(f"network_attachments[{idx}]: all security_groups must be non-empty strings")
@@ -85,10 +102,10 @@ class OsacCLI:
         if user_data_secret_ref is not None:
             args.extend(["--user-data", user_data_secret_ref])
 
-        return self._parse_uuid(run(*args))
+        return self._parse_uuid(self._run(*args))
 
     def delete_compute_instance(self, *, uuid: str) -> None:
-        run(self.binary, "delete", "computeinstance", uuid)
+        self._run("delete", "computeinstance", uuid)
 
     def create_cluster(
         self,
@@ -100,7 +117,7 @@ class OsacCLI:
         template_parameters: dict[str, str] | None = None,
         template_parameter_files: dict[str, str] | None = None,
     ) -> str:
-        args: list[str] = [self.binary, "create", "cluster", "--template", template]
+        args: list[str] = ["create", "cluster", "--template", template]
         if name is not None:
             args.extend(["--name", name])
         if pull_secret_file is not None:
@@ -114,28 +131,28 @@ class OsacCLI:
             for key, path in template_parameter_files.items():
                 args.extend(["-f", f"{key}={path}"])
 
-        return self._parse_uuid(run(*args))
+        return self._parse_uuid(self._run(*args))
 
     def get(self, resource: str, *, output: str | None = None) -> str:
-        args: list[str] = [self.binary, "get", resource]
+        args: list[str] = ["get", resource]
         if output is not None:
             args.extend(["-o", output])
-        return run(*args)
+        return self._run(*args)
 
     def get_cluster_credential(self, credential: str, *, uuid: str) -> str:
-        return run(self.binary, "get", credential, uuid)
+        return self._run("get", credential, uuid)
 
     def get_unchecked(self, resource: str) -> tuple[str, int]:
-        return run_unchecked(self.binary, "get", resource)
+        return self._run_unchecked("get", resource)
 
     def create_cluster_with_catalog_item(self, *, catalog_item: str, name: str) -> str:
-        return self._parse_uuid(run(self.binary, "create", "cluster", "--catalog-item", catalog_item, "--name", name))
+        return self._parse_uuid(self._run("create", "cluster", "--catalog-item", catalog_item, "--name", name))
 
     def create_compute_instance_with_catalog_item(self, *, catalog_item: str, subnet: str | None = None) -> str:
-        args: list[str] = [self.binary, "create", "computeinstance", "--catalog-item", catalog_item]
+        args: list[str] = ["create", "computeinstance", "--catalog-item", catalog_item]
         if subnet is not None:
             args.extend(["--network-attachment", f"subnet={subnet}"])
-        return self._parse_uuid(run(*args))
+        return self._parse_uuid(self._run(*args))
 
     def delete_cluster(self, *, uuid: str) -> None:
-        run(self.binary, "delete", "cluster", uuid)
+        self._run("delete", "cluster", uuid)

@@ -385,3 +385,79 @@ def wait_for_security_group_deletion(*, k8s: K8sClient, name: str) -> None:
         delay=5,
         description=f"{name} SecurityGroup deletion",
     )
+
+
+# Tenant helpers
+
+
+def wait_for_tenant_cr(*, k8s: K8sClient, name: str) -> None:
+    poll_until(
+        fn=lambda: k8s.is_present(resource="tenant", name=name),
+        until=lambda v: v is True,
+        retries=30,
+        delay=2,
+        description=f"Tenant CR {name}",
+    )
+
+
+def wait_for_tenant_condition(*, k8s: K8sClient, name: str, condition_type: str, expected_status: str = "True") -> None:
+    def _check() -> str:
+        if not k8s.is_present(resource="tenant", name=name):
+            raise AssertionError(f"Tenant {name} disappeared before {condition_type}={expected_status}")
+        phase: str = k8s.get_tenant_phase(name=name, checked=False)
+        if phase == "Failed":
+            cond_status = k8s.get_tenant_condition_status(name=name, condition_type=condition_type, checked=False)
+            if cond_status != expected_status:
+                raise AssertionError(f"Tenant {name} entered Failed phase before {condition_type}={expected_status}")
+        return k8s.get_tenant_condition_status(name=name, condition_type=condition_type, checked=False)
+
+    poll_until(
+        fn=_check,
+        until=lambda v: v == expected_status,
+        retries=120,
+        delay=5,
+        description=f"Tenant {name} {condition_type}={expected_status}",
+    )
+
+
+def wait_for_tenant_deletion(*, k8s: K8sClient, name: str) -> None:
+    poll_until(
+        fn=lambda: not k8s.is_present(resource="tenant", name=name),
+        until=lambda v: v is True,
+        retries=120,
+        delay=5,
+        description=f"Tenant {name} deletion",
+    )
+
+
+# Storage resource helpers
+
+
+def wait_for_storage_classes_by_tenant(*, k8s: K8sClient, tenant_name: str, min_count: int = 1) -> list[str]:
+    return poll_until(
+        fn=lambda: k8s.list_storage_class_names_by_tenant(tenant_name=tenant_name),
+        until=lambda v: len(v) >= min_count,
+        retries=120,
+        delay=5,
+        description=f"StorageClasses for tenant {tenant_name} (>= {min_count})",
+    )
+
+
+def wait_for_storage_classes_removed(*, k8s: K8sClient, tenant_name: str) -> None:
+    poll_until(
+        fn=lambda: k8s.count_storage_classes_by_tenant(tenant_name=tenant_name),
+        until=lambda v: v == 0,
+        retries=120,
+        delay=5,
+        description=f"StorageClasses for tenant {tenant_name} removed",
+    )
+
+
+def wait_for_secrets_removed(*, k8s: K8sClient, tenant_name: str, namespace: str) -> None:
+    poll_until(
+        fn=lambda: k8s.count_secrets_by_tenant(tenant_name=tenant_name, namespace=namespace),
+        until=lambda v: v == 0,
+        retries=120,
+        delay=5,
+        description=f"Secrets for tenant {tenant_name} in {namespace} removed",
+    )

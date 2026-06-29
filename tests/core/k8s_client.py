@@ -319,6 +319,83 @@ class K8sClient:
         output = self.get_jsonpath(resource="clusterorder", name=name, jsonpath="{.spec}")
         return json.loads(output) if output else {}
 
+    # Tenant queries
+
+    def get_tenant_phase(self, *, name: str, checked: bool = True) -> str:
+        output, rc = self._get(
+            "get", "tenant", name, "-n", self.namespace, "-o", "jsonpath={.status.phase}", checked=checked
+        )
+        return output if rc == 0 else ""
+
+    def get_tenant_condition_status(self, *, name: str, condition_type: str, checked: bool = True) -> str:
+        output, rc = self._get("get", "tenant", name, "-n", self.namespace, "-o", "json", checked=checked)
+        if rc != 0:
+            return ""
+        conditions: list[dict[str, Any]] = json.loads(output).get("status", {}).get("conditions", [])
+        for cond in conditions:
+            if cond.get("type") == condition_type:
+                return cond.get("status", "")
+        return ""
+
+    def get_tenant_storage_classes(self, *, name: str, checked: bool = True) -> list[dict[str, str]]:
+        output, rc = self._get("get", "tenant", name, "-n", self.namespace, "-o", "json", checked=checked)
+        if rc != 0:
+            return []
+        return json.loads(output).get("status", {}).get("storageClasses", [])
+
+    def get_tenant_finalizers(self, *, name: str, checked: bool = True) -> list[str]:
+        output, rc = self._get("get", "tenant", name, "-n", self.namespace, "-o", "json", checked=checked)
+        if rc != 0:
+            return []
+        return json.loads(output).get("metadata", {}).get("finalizers", [])
+
+    # Cluster-scoped storage resource queries (no -n flag)
+
+    def count_storage_classes_by_tenant(self, *, tenant_name: str) -> int:
+        output, rc = self._get(
+            "get", "storageclass", "-l", f"osac.openshift.io/tenant={tenant_name}", "--no-headers", checked=False
+        )
+        if rc != 0 or not output.strip():
+            return 0
+        return len(output.strip().splitlines())
+
+    def list_storage_class_names_by_tenant(self, *, tenant_name: str) -> list[str]:
+        output, rc = self._get(
+            "get",
+            "storageclass",
+            "-l",
+            f"osac.openshift.io/tenant={tenant_name}",
+            "-o",
+            "jsonpath={.items[*].metadata.name}",
+            checked=False,
+        )
+        if rc != 0 or not output.strip():
+            return []
+        return output.strip().split()
+
+    def get_storage_class_labels(self, *, name: str) -> dict[str, str]:
+        output, rc = self._get("get", "storageclass", name, "-o", "json", checked=False)
+        if rc != 0:
+            return {}
+        return json.loads(output).get("metadata", {}).get("labels", {})
+
+    # Namespaced secret queries with explicit namespace (for cross-namespace lookups)
+
+    def count_secrets_by_tenant(self, *, tenant_name: str, namespace: str) -> int:
+        output, rc = self._get(
+            "get",
+            "secret",
+            "-n",
+            namespace,
+            "-l",
+            f"osac.openshift.io/tenant={tenant_name}",
+            "--no-headers",
+            checked=False,
+        )
+        if rc != 0 or not output.strip():
+            return 0
+        return len(output.strip().splitlines())
+
     # SecurityGroup queries
 
     def get_security_group_name(self, *, uuid: str, checked: bool = True) -> str:

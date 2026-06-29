@@ -7,6 +7,14 @@ import pytest
 from tests.core.grpc_client import GRPCClient
 from tests.core.k8s_client import K8sClient
 from tests.core.keycloak import get_jwt
+from tests.core.keycloak_admin import (
+    add_user_to_organization,
+    add_user_to_organization_group,
+    ensure_organization_group,
+    get_admin_token,
+    get_user_id,
+    wait_for_organization,
+)
 from tests.core.osac_cli import OsacCLI
 from tests.core.runner import env, run
 
@@ -56,6 +64,64 @@ def private_grpc(fulfillment_private_address: str, namespace: str, service_accou
 def ensure_tenants(private_grpc: GRPCClient) -> None:
     for name in ("tenant1", "tenant2"):
         private_grpc.ensure_tenant(name=name)
+
+
+@pytest.fixture(scope="session")
+def keycloak_admin_password() -> str:
+    return env("OSAC_KEYCLOAK_ADMIN_PASSWORD", "admin")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def setup_organization_memberships(
+    ensure_tenants: None, keycloak_url: str, keycloak_admin_password: str
+) -> None:
+    """
+    Add test users to their corresponding Keycloak organizations.
+    This runs after ensure_tenants creates the Tenant resources, which the
+    tenant controller syncs to Keycloak as organizations.
+    """
+    # Get admin token for Keycloak admin API
+    admin_token = get_admin_token(keycloak_url=keycloak_url, username="admin", password=keycloak_admin_password)
+
+    # Map of organization name -> list of usernames
+    org_users = {
+        "tenant1": ["tenant1_user", "tenant1_admin"],
+        "tenant2": ["tenant2_user", "tenant2_admin"],
+    }
+
+    for org_name, usernames in org_users.items():
+        # Wait for the organization to be synced to Keycloak by the tenant controller
+        org_id = wait_for_organization(keycloak_url=keycloak_url, admin_token=admin_token, org_name=org_name)
+
+        # Add each user to the organization
+        for username in usernames:
+            user_id = get_user_id(keycloak_url=keycloak_url, admin_token=admin_token, username=username)
+            add_user_to_organization(
+                keycloak_url=keycloak_url,
+                admin_token=admin_token,
+                org_id=org_id,
+                user_id=user_id,
+                username=username,
+                org_name=org_name,
+            )
+
+        # Create /members group in the organization and add all users to it
+        # This is required for the organization scope to include the organization in the JWT token
+        group_id = ensure_organization_group(
+            keycloak_url=keycloak_url, admin_token=admin_token, org_id=org_id, org_name=org_name
+        )
+
+        for username in usernames:
+            user_id = get_user_id(keycloak_url=keycloak_url, admin_token=admin_token, username=username)
+            add_user_to_organization_group(
+                keycloak_url=keycloak_url,
+                admin_token=admin_token,
+                org_id=org_id,
+                group_id=group_id,
+                user_id=user_id,
+                username=username,
+                org_name=org_name,
+            )
 
 
 @pytest.fixture(scope="session")

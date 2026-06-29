@@ -23,7 +23,7 @@ def get_jwt(*, keycloak_url: str, realm: str, client_id: str, username: str, pas
         "-d",
         f"password={password}",
         "-d",
-        "scope=openid",
+        "scope=openid organization",
     )
     response: dict[str, str] = json.loads(stdout)
     token: str | None = response.get("access_token")

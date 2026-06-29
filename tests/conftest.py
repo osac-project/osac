@@ -89,7 +89,7 @@ def _make_jwt_token_script(keycloak_url: str, username: str, password: str) -> s
     return (
         f"curl -sk -X POST {keycloak_url}/realms/osac/protocol/openid-connect/token"
         f" -d grant_type=password -d client_id=osac-cli"
-        f" -d username={username} -d password={password} -d scope=openid"
+        f" -d username={username} -d password={password} -d 'scope=openid organization'"
         " | python3 -c \"import sys,json;print(json.load(sys.stdin)['access_token'])\""
     )
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+from typing import Any
 
 import pytest
 
@@ -12,10 +13,7 @@ from tests.core.runner import poll_until, run_unchecked
 _POOL_READY_STATE = "PUBLIC_IP_POOL_STATE_READY"
 
 
-def assert_grpc_rejected(
-    exc_info: pytest.ExceptionInfo[subprocess.CalledProcessError],
-    code: str,
-) -> None:
+def assert_grpc_rejected(exc_info: pytest.ExceptionInfo[subprocess.CalledProcessError], code: str) -> None:
     exc = exc_info.value
     combined: str = (exc.stderr or "") + (exc.stdout or "")
     assert re.search(rf"Code:\s*{code}", combined), f"Expected gRPC {code}, got: {combined.strip()}"
@@ -33,9 +31,7 @@ def wait_for_cr(*, k8s: K8sClient, uuid: str) -> str:
 
 def wait_for_provision(*, k8s: K8sClient, name: str) -> None:
     poll_until(
-        fn=lambda: k8s.get_compute_instance_condition_status(
-            name=name, condition_type="Provisioned", checked=False
-        ),
+        fn=lambda: k8s.get_compute_instance_condition_status(name=name, condition_type="Provisioned", checked=False),
         until=lambda v: v == "True",
         retries=120,
         delay=5,
@@ -301,11 +297,7 @@ def wait_for_cluster_deletion(*, k8s: K8sClient, name: str) -> None:
         return not k8s.is_present(resource="clusterorder", name=name)
 
     poll_until(
-        fn=_check_deleted,
-        until=lambda v: v is True,
-        retries=120,
-        delay=10,
-        description=f"{name} ClusterOrder deletion",
+        fn=_check_deleted, until=lambda v: v is True, retries=120, delay=10, description=f"{name} ClusterOrder deletion"
     )
 
 
@@ -316,23 +308,38 @@ def _force_cleanup_agentcluster_finalizers(*, k8s: K8sClient, name: str) -> None
     finalizer = "agentclustercapi-provider.agent-install.openshift.io/deprovision"
     base_args = [*k8s._base(), "--as", "system:admin"]
     output, rc = run_unchecked(
-        *base_args, "get", "agentclusters.capi-provider.agent-install.openshift.io",
-        "-n", cp_ns, "-o", f"jsonpath={{.items[?(@.metadata.finalizers[*]=='{finalizer}')].metadata.name}}",
+        *base_args,
+        "get",
+        "agentclusters.capi-provider.agent-install.openshift.io",
+        "-n",
+        cp_ns,
+        "-o",
+        f"jsonpath={{.items[?(@.metadata.finalizers[*]=='{finalizer}')].metadata.name}}",
     )
     if rc != 0 or not output.strip():
         return
     for ac_name in output.strip().split():
         finalizers_json, rc = run_unchecked(
-            *base_args, "get", f"agentclusters.capi-provider.agent-install.openshift.io/{ac_name}",
-            "-n", cp_ns, "-o", "jsonpath={.metadata.finalizers}",
+            *base_args,
+            "get",
+            f"agentclusters.capi-provider.agent-install.openshift.io/{ac_name}",
+            "-n",
+            cp_ns,
+            "-o",
+            "jsonpath={.metadata.finalizers}",
         )
         if rc != 0 or finalizer not in finalizers_json:
             continue
         import json
+
         idx = json.loads(finalizers_json).index(finalizer)
         run_unchecked(
-            *base_args, "patch", f"agentclusters.capi-provider.agent-install.openshift.io/{ac_name}",
-            "-n", cp_ns, "--type=json",
+            *base_args,
+            "patch",
+            f"agentclusters.capi-provider.agent-install.openshift.io/{ac_name}",
+            "-n",
+            cp_ns,
+            "--type=json",
             f'-p=[{{"op": "remove", "path": "/metadata/finalizers/{idx}"}}]',
         )
 
@@ -343,16 +350,27 @@ def _force_cleanup_agent_labels(*, k8s: K8sClient, name: str) -> None:
     clusterdeployment_ns_label = "agent-install.openshift.io/clusterdeployment-namespace"
     base_args = [*k8s._base(), "--as", "system:admin"]
     output, rc = run_unchecked(
-        *base_args, "get", "agents.agent-install.openshift.io",
-        "-n", agent_ns, "-l", f"{clusterorder_label}={name}",
-        "-o", "jsonpath={.items[*].metadata.name}",
+        *base_args,
+        "get",
+        "agents.agent-install.openshift.io",
+        "-n",
+        agent_ns,
+        "-l",
+        f"{clusterorder_label}={name}",
+        "-o",
+        "jsonpath={.items[*].metadata.name}",
     )
     if rc != 0 or not output.strip():
         return
     for agent_name in output.strip().split():
         run_unchecked(
-            *base_args, "label", f"agents.agent-install.openshift.io/{agent_name}",
-            "-n", agent_ns, f"{clusterorder_label}-", f"{clusterdeployment_ns_label}-",
+            *base_args,
+            "label",
+            f"agents.agent-install.openshift.io/{agent_name}",
+            "-n",
+            agent_ns,
+            f"{clusterorder_label}-",
+            f"{clusterdeployment_ns_label}-",
         )
 
 
@@ -361,16 +379,12 @@ def _force_cleanup_machine_preterminate_hooks(*, k8s: K8sClient, name: str) -> N
     hook = "pre-terminate.delete.hook.machine.cluster.x-k8s.io/agentmachine"
     base_args = [*k8s._base(), "--as", "system:admin"]
     output, rc = run_unchecked(
-        *base_args, "get", "machines.cluster.x-k8s.io",
-        "-n", cp_ns, "-o", "jsonpath={.items[*].metadata.name}",
+        *base_args, "get", "machines.cluster.x-k8s.io", "-n", cp_ns, "-o", "jsonpath={.items[*].metadata.name}"
     )
     if rc != 0 or not output.strip():
         return
     for machine_name in output.strip().split():
-        run_unchecked(
-            *base_args, "annotate", f"machines.cluster.x-k8s.io/{machine_name}",
-            "-n", cp_ns, f"{hook}-",
-        )
+        run_unchecked(*base_args, "annotate", f"machines.cluster.x-k8s.io/{machine_name}", "-n", cp_ns, f"{hook}-")
 
 
 def wait_for_cluster_grpc_removal(*, grpc: GRPCClient, uuid: str) -> None:
@@ -453,6 +467,65 @@ def wait_for_tenant_deletion(*, k8s: K8sClient, name: str) -> None:
         retries=120,
         delay=5,
         description=f"Tenant {name} deletion",
+    )
+
+
+# CaaS cluster storage helpers
+
+
+def wait_for_cluster_order_condition(
+    *, k8s: K8sClient, name: str, condition_type: str, expected_status: str = "True"
+) -> None:
+    def _check() -> str:
+        if not k8s.is_present(resource="clusterorder", name=name):
+            raise AssertionError(f"ClusterOrder {name} disappeared before {condition_type}={expected_status}")
+        phase: str = k8s.get_cluster_order_phase(name=name, checked=False)
+        if phase == "Failed":
+            cond_status = k8s.get_cluster_order_condition_status(
+                name=name, condition_type=condition_type, checked=False
+            )
+            if cond_status != expected_status:
+                raise AssertionError(
+                    f"ClusterOrder {name} entered Failed phase before {condition_type}={expected_status}"
+                )
+        return k8s.get_cluster_order_condition_status(name=name, condition_type=condition_type, checked=False)
+
+    poll_until(
+        fn=_check,
+        until=lambda v: v == expected_status,
+        retries=120,
+        delay=10,
+        description=f"ClusterOrder {name} {condition_type}={expected_status}",
+    )
+
+
+def wait_for_tenant_cluster_storage_entry(*, k8s: K8sClient, tenant_name: str, cluster_name: str) -> dict[str, Any]:
+    def _check() -> dict[str, Any] | None:
+        entries = k8s.get_tenant_cluster_storage(name=tenant_name, checked=False)
+        for entry in entries:
+            if entry.get("clusterName") == cluster_name and entry.get("ready") is True:
+                return entry
+        return None
+
+    return poll_until(
+        fn=_check,
+        until=lambda v: v is not None,
+        retries=60,
+        delay=10,
+        description=f"Tenant {tenant_name} clusterStorage entry for {cluster_name}",
+    )
+
+
+def wait_for_tenant_cluster_storage_entry_removed(*, k8s: K8sClient, tenant_name: str, cluster_name: str) -> None:
+    poll_until(
+        fn=lambda: all(
+            entry.get("clusterName") != cluster_name
+            for entry in k8s.get_tenant_cluster_storage(name=tenant_name, checked=False)
+        ),
+        until=lambda v: v is True,
+        retries=60,
+        delay=10,
+        description=f"Tenant {tenant_name} clusterStorage entry for {cluster_name} removed",
     )
 
 

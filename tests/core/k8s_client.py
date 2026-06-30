@@ -319,6 +319,22 @@ class K8sClient:
         output = self.get_jsonpath(resource="clusterorder", name=name, jsonpath="{.spec}")
         return json.loads(output) if output else {}
 
+    def get_cluster_order_condition_status(self, *, name: str, condition_type: str, checked: bool = True) -> str:
+        output, rc = self._get("get", "clusterorder", name, "-n", self.namespace, "-o", "json", checked=checked)
+        if rc != 0:
+            return ""
+        conditions: list[dict[str, Any]] = json.loads(output).get("status", {}).get("conditions", [])
+        for cond in conditions:
+            if cond.get("type") == condition_type:
+                return cond.get("status", "")
+        return ""
+
+    def get_cluster_order_finalizers(self, *, name: str, checked: bool = True) -> list[str]:
+        output, rc = self._get("get", "clusterorder", name, "-n", self.namespace, "-o", "json", checked=checked)
+        if rc != 0:
+            return []
+        return json.loads(output).get("metadata", {}).get("finalizers", [])
+
     # Tenant queries
 
     def get_tenant_phase(self, *, name: str, checked: bool = True) -> str:
@@ -348,6 +364,12 @@ class K8sClient:
         if rc != 0:
             return []
         return json.loads(output).get("metadata", {}).get("finalizers", [])
+
+    def get_tenant_cluster_storage(self, *, name: str, checked: bool = True) -> list[dict[str, Any]]:
+        output, rc = self._get("get", "tenant", name, "-n", self.namespace, "-o", "json", checked=checked)
+        if rc != 0:
+            return []
+        return json.loads(output).get("status", {}).get("clusterStorage", [])
 
     # Cluster-scoped storage resource queries (no -n flag)
 

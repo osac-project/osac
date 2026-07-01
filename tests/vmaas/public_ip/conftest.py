@@ -14,6 +14,7 @@ from tests.core.helpers import (
     wait_for_public_ip_deletion,
     wait_for_public_ip_pool_cr,
     wait_for_public_ip_pool_deletion,
+    wait_for_public_ip_pool_grpc_ready,
     wait_for_public_ip_pool_ready,
     wait_for_running,
 )
@@ -36,6 +37,7 @@ def make_pool(
         pool_id = private_grpc.create_public_ip_pool(name=pool_name, cidrs=[str(subnet)])
         pool_cr_name = wait_for_public_ip_pool_cr(k8s=k8s_hub_client, uuid=pool_id)
         wait_for_public_ip_pool_ready(k8s=k8s_hub_client, name=pool_cr_name)
+        wait_for_public_ip_pool_grpc_ready(private_grpc=private_grpc, pool_id=pool_id)
         created.append((pool_id, pool_cr_name))
         return pool_id, pool_cr_name
 

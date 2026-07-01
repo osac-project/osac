@@ -9,6 +9,8 @@ from tests.core.grpc_client import GRPCClient
 from tests.core.k8s_client import K8sClient
 from tests.core.runner import poll_until, run_unchecked
 
+_POOL_READY_STATE = "PUBLIC_IP_POOL_STATE_READY"
+
 
 def assert_grpc_rejected(
     exc_info: pytest.ExceptionInfo[subprocess.CalledProcessError],
@@ -158,6 +160,30 @@ def wait_for_public_ip_pool_ready(*, k8s: K8sClient, name: str) -> None:
         retries=60,
         delay=5,
         description=f"{name} PublicIPPool Ready",
+    )
+
+
+def wait_for_public_ip_pool_grpc_ready(*, private_grpc: GRPCClient, pool_id: str) -> None:
+    """Poll the private gRPC API until the pool state is READY.
+
+    The K8s CR status may report Ready before the fulfillment-service database
+    has been updated by the controller feedback loop.  Polling via gRPC closes
+    this race so that subsequent PublicIP creation does not hit
+    FailedPrecondition.
+    """
+    def _state() -> str:
+        try:
+            pool = private_grpc.get_public_ip_pool(pool_id=pool_id)
+        except subprocess.CalledProcessError:
+            return ""
+        return pool.get("object", {}).get("status", {}).get("state", "")
+
+    poll_until(
+        fn=_state,
+        until=lambda v: v == _POOL_READY_STATE,
+        retries=30,
+        delay=2,
+        description=f"PublicIPPool {pool_id} gRPC READY",
     )
 
 

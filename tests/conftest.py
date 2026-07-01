@@ -165,7 +165,7 @@ def jwt_cli_user(namespace: str, fulfillment_address: str, keycloak_url: str, jw
     instance = OsacCLI(
         binary=env("OSAC_CLI_PATH", "osac"),
         address=f"https://{fulfillment_address.rsplit(':', 1)[0]}",
-        token_script=_make_jwt_token_script(keycloak_url, "my_user", jwt_password),
+        token_script=_make_jwt_token_script(keycloak_url, "tenant1_user", jwt_password),
         namespace=namespace,
     )
     yield instance

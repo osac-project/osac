@@ -23,6 +23,10 @@ class OsacCLI:
     def close(self) -> None:
         shutil.rmtree(self._config_dir, ignore_errors=True)
 
+    @property
+    def config_dir(self) -> str:
+        return self._config_dir
+
     def _run(self, *args: str, timeout: int = 300) -> str:
         return run(self.binary, "--config", self._config_dir, *args, timeout=timeout)
 
@@ -46,23 +50,20 @@ class OsacCLI:
         *,
         template: str,
         network_attachments: list[dict[str, Any]] | None = None,
-        cores: int = 2,
-        memory_gib: int = 4,
+        cores: int | None = None,
+        memory_gib: int | None = None,
         boot_disk_size: int = 20,
         image: str = "quay.io/containerdisks/fedora:latest",
         image_source_type: str = "registry",
         run_strategy: str = "Always",
         user_data_secret_ref: str | None = None,
+        instance_type: str | None = None,
     ) -> str:
         args: list[str] = [
             "create",
             "computeinstance",
             "--template",
             template,
-            "--cores",
-            str(cores),
-            "--memory-gib",
-            str(memory_gib),
             "--boot-disk-size",
             str(boot_disk_size),
             "--image",
@@ -72,6 +73,13 @@ class OsacCLI:
             "--run-strategy",
             run_strategy,
         ]
+
+        if instance_type is not None:
+            if cores is not None or memory_gib is not None:
+                raise ValueError("Cannot specify cores/memory_gib together with instance_type")
+            args.extend(["--instance-type", instance_type])
+        else:
+            args.extend(["--cores", str(2 if cores is None else cores), "--memory-gib", str(4 if memory_gib is None else memory_gib)])
 
         # Add network attachments
         if network_attachments is not None:
@@ -106,6 +114,18 @@ class OsacCLI:
 
     def delete_compute_instance(self, *, uuid: str) -> None:
         self._run("delete", "computeinstance", uuid)
+
+    def create_instance_type(self, *, name: str, cores: int, memory_gib: int, description: str = "") -> str:
+        args: list[str] = ["create", "instancetype", "--name", name, "--cores", str(cores), "--memory-gib", str(memory_gib)]
+        if description:
+            args.extend(["--description", description])
+        return self._parse_uuid(self._run(*args))
+
+    def describe_instance_type(self, *, name: str) -> str:
+        return self._run("describe", "instancetype", name)
+
+    def delete_instance_type(self, *, name: str) -> None:
+        self._run("delete", "instancetype", name)
 
     def create_cluster(
         self,

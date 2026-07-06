@@ -293,3 +293,47 @@ class GRPCClient:
 
     def delete_compute_instance_catalog_item(self, *, catalog_item_id: str) -> None:
         self.call(service=f"{PRIVATE_API}.ComputeInstanceCatalogItems/Delete", data={"id": catalog_item_id})
+
+    # InstanceType operations (private API only)
+
+    def create_instance_type(
+        self,
+        *,
+        name: str,
+        cores: int,
+        memory_gib: int,
+        description: str = "",
+    ) -> str:
+        response: dict[str, Any] = self.call(
+            service=f"{PRIVATE_API}.InstanceTypes/Create",
+            data={
+                "object": {
+                    "metadata": {"name": name},
+                    "spec": {
+                        "cores": cores,
+                        "memory_gib": memory_gib,
+                        "description": description,
+                    },
+                }
+            },
+        )
+        return response["object"]["id"]
+
+    def get_instance_type(self, *, name: str) -> dict[str, Any]:
+        return self.call(service=f"{PRIVATE_API}.InstanceTypes/Get", data={"id": name})
+
+    def list_instance_type_names(self) -> list[str]:
+        response: dict[str, Any] = self.call(service=f"{PRIVATE_API}.InstanceTypes/List")
+        return [item["metadata"]["name"] for item in response.get("items", [])]
+
+    def update_instance_type(self, *, name: str, state: str) -> dict[str, Any]:
+        return self.call(
+            service=f"{PRIVATE_API}.InstanceTypes/Update",
+            data={
+                "object": {"id": name, "spec": {"state": state}},
+                "updateMask": {"paths": ["spec.state"]},
+            },
+        )
+
+    def delete_instance_type(self, *, name: str) -> None:
+        self.call(service=f"{PRIVATE_API}.InstanceTypes/Delete", data={"id": name})

@@ -9,11 +9,20 @@ from tests.core.runner import run, run_unchecked
 
 
 class OsacCLI:
-    def __init__(self, *, binary: str, address: str, token_script: str, namespace: str) -> None:
+    def __init__(
+        self,
+        *,
+        binary: str,
+        address: str,
+        token_script: str,
+        namespace: str,
+        default_instance_type: str | None = None,
+    ) -> None:
         self.binary: str = binary
         self.namespace: str = namespace
         self._address: str = address
         self._token_script: str = token_script
+        self.default_instance_type: str | None = default_instance_type
         # Each OsacCLI instance gets its own config directory so that parallel
         # xdist workers (or multiple CLI fixtures) don't overwrite each other's
         # login credentials via the shared ~/.config/osac/config.json.
@@ -50,8 +59,6 @@ class OsacCLI:
         *,
         template: str,
         network_attachments: list[dict[str, Any]] | None = None,
-        cores: int | None = None,
-        memory_gib: int | None = None,
         boot_disk_size: int = 20,
         image: str = "quay.io/containerdisks/fedora:latest",
         image_source_type: str = "registry",
@@ -74,12 +81,11 @@ class OsacCLI:
             run_strategy,
         ]
 
-        if instance_type is not None:
-            if cores is not None or memory_gib is not None:
-                raise ValueError("Cannot specify cores/memory_gib together with instance_type")
-            args.extend(["--instance-type", instance_type])
+        effective_instance_type = instance_type if instance_type is not None else self.default_instance_type
+        if effective_instance_type is not None:
+            args.extend(["--instance-type", effective_instance_type])
         else:
-            args.extend(["--cores", str(2 if cores is None else cores), "--memory-gib", str(4 if memory_gib is None else memory_gib)])
+            raise ValueError("instance_type or default_instance_type must be set")
 
         # Add network attachments
         if network_attachments is not None:

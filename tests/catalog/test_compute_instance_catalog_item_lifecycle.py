@@ -86,16 +86,10 @@ def test_compute_instance_catalog_item_field_definitions(
 ) -> None:
     field_defs = [
         {
-            "path": "spec.cpu_cores",
-            "display_name": "CPU Cores",
+            "path": "spec.instance_type",
+            "display_name": "Instance Type",
             "editable": True,
-            "default": {"numberValue": 4},
-        },
-        {
-            "path": "spec.memory_gb",
-            "display_name": "Memory GB",
-            "editable": False,
-            "default": {"numberValue": 16},
+            "default": {"stringValue": "standard-2x4"},
         },
     ]
     name = unique_name("e2e-ci-fd")
@@ -105,52 +99,44 @@ def test_compute_instance_catalog_item_field_definitions(
     try:
         item = grpc.get_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
         returned_fds = item["object"].get("fieldDefinitions", [])
-        assert len(returned_fds) == 2
+        assert len(returned_fds) == 1
 
-        cpu_fd = next(fd for fd in returned_fds if fd["path"] == "spec.cpu_cores")
-        assert cpu_fd["displayName"] == "CPU Cores"
-        assert cpu_fd["editable"] is True
-
-        # editable=false is omitted by protobuf (default value), so we only check displayName
-        mem_fd = next(fd for fd in returned_fds if fd["path"] == "spec.memory_gb")
-        assert mem_fd["displayName"] == "Memory GB"
+        it_fd = next(fd for fd in returned_fds if fd["path"] == "spec.instance_type")
+        assert it_fd["displayName"] == "Instance Type"
+        assert it_fd["editable"] is True
 
         updated_fds = [
             {
-                "path": "spec.cpu_cores",
-                "display_name": "Number of CPU Cores",
+                "path": "spec.instance_type",
+                "display_name": "VM Size",
                 "editable": True,
-                "default": {"numberValue": 4},
-            },
-            {
-                "path": "spec.memory_gb",
-                "display_name": "Memory GB",
-                "editable": False,
-                "default": {"numberValue": 16},
+                "default": {"stringValue": "standard-2x4"},
             },
         ]
         grpc.update_compute_instance_catalog_item(catalog_item_id=catalog_item_id, field_definitions=updated_fds)
 
         item = grpc.get_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
         returned_fds = item["object"].get("fieldDefinitions", [])
-        assert len(returned_fds) == 2
-        cpu_fd = next(fd for fd in returned_fds if fd["path"] == "spec.cpu_cores")
-        assert cpu_fd["displayName"] == "Number of CPU Cores"
+        assert len(returned_fds) == 1
+        it_fd = next(fd for fd in returned_fds if fd["path"] == "spec.instance_type")
+        assert it_fd["displayName"] == "VM Size"
 
-        reduced_fds = [
+        updated_fds_v2 = [
             {
-                "path": "spec.cpu_cores",
-                "display_name": "Number of CPU Cores",
-                "editable": True,
-                "default": {"numberValue": 4},
+                "path": "spec.instance_type",
+                "display_name": "VM Size",
+                "editable": False,
+                "default": {"stringValue": "standard-4x8"},
             },
         ]
-        grpc.update_compute_instance_catalog_item(catalog_item_id=catalog_item_id, field_definitions=reduced_fds)
+        grpc.update_compute_instance_catalog_item(catalog_item_id=catalog_item_id, field_definitions=updated_fds_v2)
 
         item = grpc.get_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
         returned_fds = item["object"].get("fieldDefinitions", [])
         assert len(returned_fds) == 1
-        assert returned_fds[0]["path"] == "spec.cpu_cores"
+        it_fd = next(fd for fd in returned_fds if fd["path"] == "spec.instance_type")
+        assert it_fd["displayName"] == "VM Size"
+        assert it_fd.get("editable", False) is False
     finally:
         grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
 

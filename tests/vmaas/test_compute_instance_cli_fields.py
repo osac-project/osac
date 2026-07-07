@@ -7,9 +7,8 @@ from tests.core.grpc_client import GRPCClient
 from tests.core.helpers import wait_for_cr, wait_for_deletion, wait_for_provision, wait_for_running
 from tests.core.k8s_client import K8sClient
 from tests.core.osac_cli import OsacCLI
+from tests.vmaas.conftest import DEFAULT_IT_CORES, DEFAULT_IT_MEMORY_GIB
 
-TEST_CORES: int = 2
-TEST_MEMORY_GIB: int = 4
 TEST_BOOT_DISK_SIZE: int = 20
 TEST_IMAGE: str = "quay.io/containerdisks/fedora:latest"
 TEST_IMAGE_SOURCE_TYPE: str = "registry"
@@ -26,8 +25,6 @@ def test_compute_instance_cli_explicit_fields(
     uuid: str = cli.create_compute_instance(
         template="osac.templates.ocp_virt_vm",
         network_attachments=[{"subnet": default_subnet}],
-        cores=TEST_CORES,
-        memory_gib=TEST_MEMORY_GIB,
         boot_disk_size=TEST_BOOT_DISK_SIZE,
         image=TEST_IMAGE,
         image_source_type=TEST_IMAGE_SOURCE_TYPE,
@@ -41,8 +38,19 @@ def test_compute_instance_cli_explicit_fields(
 
     ci_spec: dict[str, Any] = k8s_hub_client.get_json(resource="computeinstance", name=ci_name)
     spec: dict[str, Any] = ci_spec["spec"]
-    assert spec["cores"] == TEST_CORES, f"cores mismatch: {spec['cores']} != {TEST_CORES}"
-    assert spec["memoryGiB"] == TEST_MEMORY_GIB, f"memoryGiB mismatch: {spec['memoryGiB']} != {TEST_MEMORY_GIB}"
+    assert spec["cores"] == DEFAULT_IT_CORES, f"cores mismatch: {spec['cores']} != {DEFAULT_IT_CORES}"
+    assert spec["memoryGiB"] == DEFAULT_IT_MEMORY_GIB, f"memoryGiB mismatch: {spec['memoryGiB']} != {DEFAULT_IT_MEMORY_GIB}"
+
+    # Verify osac.openshift.io/instance-type-name label is set by reconciler
+    labels: dict[str, str] = ci_spec["metadata"].get("labels", {})
+    it_label: str | None = labels.get("osac.openshift.io/instance-type-name")
+    assert it_label is not None, (
+        f"osac.openshift.io/instance-type-name label should be set, got: {it_label!r}"
+    )
+    assert len(it_label) > 0, (
+        f"osac.openshift.io/instance-type-name label should be non-empty, got: {it_label!r}"
+    )
+
     assert spec["bootDisk"]["sizeGiB"] == TEST_BOOT_DISK_SIZE, (
         f"bootDisk.sizeGiB mismatch: {spec['bootDisk']['sizeGiB']} != {TEST_BOOT_DISK_SIZE}"
     )

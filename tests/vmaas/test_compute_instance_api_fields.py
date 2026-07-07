@@ -9,9 +9,9 @@ from tests.core.k8s_client import K8sClient
 from tests.core.runner import poll_until
 
 TEST_IMAGE_REF: str = "quay.io/containerdisks/fedora:latest"
+TEST_BOOT_DISK_SIZE: int = 20
 TEST_CORES: int = 2
 TEST_MEMORY_GIB: int = 4
-TEST_BOOT_DISK_SIZE: int = 20
 
 
 def test_compute_instance_api_fields(
@@ -89,12 +89,16 @@ def test_compute_instance_api_fields(
     assert vm_status == "Running", f"VM should be Running, got {vm_status}"
 
     # Immutability: cores
-    output, rc = k8s_hub_client.patch(resource="computeinstance", name=instance_name, patch='{"spec":{"cores":8}}')
+    output, rc = k8s_hub_client.patch(
+        resource="computeinstance", name=instance_name, patch='{"spec":{"cores":8}}'
+    )
     assert rc != 0, "cores field should be immutable"
     assert "cores is immutable" in output, f"Expected immutability error, got: {output}"
 
     # Immutability: memoryGiB
-    output, rc = k8s_hub_client.patch(resource="computeinstance", name=instance_name, patch='{"spec":{"memoryGiB":16}}')
+    output, rc = k8s_hub_client.patch(
+        resource="computeinstance", name=instance_name, patch='{"spec":{"memoryGiB":16}}'
+    )
     assert rc != 0, "memoryGiB field should be immutable"
     assert "memoryGiB is immutable" in output, f"Expected immutability error, got: {output}"
 

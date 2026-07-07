@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import time
 import uuid
+from collections.abc import Iterator
 
 import pytest
 
@@ -16,7 +18,11 @@ from tests.core.helpers import (
     wait_for_virtual_network_ready,
 )
 from tests.core.k8s_client import K8sClient
+from tests.core.osac_cli import OsacCLI
 from tests.core.runner import env
+
+DEFAULT_IT_CORES: int = 2
+DEFAULT_IT_MEMORY_GIB: int = 4
 
 
 @pytest.fixture(scope="session")
@@ -145,3 +151,28 @@ def default_subnet(default_networking: dict[str, str]) -> str:
 def default_subnet_ref(default_networking: dict[str, str]) -> str:
     """Convenience fixture that returns the subnet CR name (for K8s API usage)."""
     return default_networking["subnet_cr_name"]
+
+
+@pytest.fixture(scope="session")
+def default_instance_type(private_grpc: GRPCClient, test_run_id: str) -> Iterator[str]:
+    """Create a default ACTIVE instance type for VM tests; clean up after."""
+    it_name = f"e2e-default-it-{test_run_id}"
+    private_grpc.create_instance_type(
+        name=it_name,
+        cores=DEFAULT_IT_CORES,
+        memory_gib=DEFAULT_IT_MEMORY_GIB,
+        description="Default E2E instance type",
+    )
+    yield it_name
+    try:
+        private_grpc.delete_instance_type(name=it_name)
+    except subprocess.CalledProcessError as e:
+        output = ((e.stdout or "") + (e.stderr or "")).lower()
+        if "not found" not in output:
+            raise
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _set_cli_default_instance_type(cli: OsacCLI, default_instance_type: str) -> None:
+    """Wire the session-scoped default instance type into the shared CLI fixture."""
+    cli.default_instance_type = default_instance_type

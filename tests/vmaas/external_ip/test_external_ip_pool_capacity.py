@@ -6,15 +6,15 @@ from uuid import uuid4
 import pytest
 
 from tests.core.grpc_client import GRPCClient
-from tests.core.helpers import assert_grpc_rejected, wait_for_public_ip_pool_deletion
+from tests.core.helpers import assert_grpc_rejected, wait_for_external_ip_pool_deletion
 from tests.core.k8s_client import K8sClient
 from tests.core.runner import poll_until
-from tests.vmaas.public_ip.helpers import create_ip, delete_ip, pool_status
+from tests.vmaas.external_ip.helpers import create_ip, delete_ip, pool_status
 
 
 class TestPoolCapacity:
     """
-    Tests for PublicIPPool capacity management.
+    Tests for ExternalIPPool capacity management.
 
     Note: Tests are order-dependent - each builds on prevous state.  This is a
     purposeful tradeoff to greatly reduce test execution time.
@@ -61,7 +61,7 @@ class TestPoolCapacity:
         assert status["available"] == 0, f"Pool should be full, available={status['available']}"
 
         with pytest.raises(subprocess.CalledProcessError) as exc_info:
-            grpc.create_public_ip(name=f"test-ip-{uuid4().hex[:8]}", pool=pool_id)
+            grpc.create_external_ip(name=f"test-ip-{uuid4().hex[:8]}", pool=pool_id)
         assert_grpc_rejected(exc_info, "FailedPrecondition")
 
     def test_release_restores_capacity(
@@ -96,7 +96,7 @@ class TestPoolCapacity:
     ) -> None:
         pool_id, _ = small_pool
         with pytest.raises(subprocess.CalledProcessError) as exc_info:
-            private_grpc.delete_public_ip_pool(pool_id=pool_id)
+            private_grpc.delete_external_ip_pool(pool_id=pool_id)
         assert_grpc_rejected(exc_info, "FailedPrecondition")
 
     def test_pool_deletion_succeeds_after_all_ips_released(
@@ -120,5 +120,5 @@ class TestPoolCapacity:
             description="Pool allocated drops to 0",
         )
 
-        private_grpc.delete_public_ip_pool(pool_id=pool_id)
-        wait_for_public_ip_pool_deletion(k8s=k8s_hub_client, name=pool_cr_name)
+        private_grpc.delete_external_ip_pool(pool_id=pool_id)
+        wait_for_external_ip_pool_deletion(k8s=k8s_hub_client, name=pool_cr_name)

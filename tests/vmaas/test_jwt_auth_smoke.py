@@ -16,7 +16,7 @@ CLIENT_LISTABLE_RESOURCES = [
     "computeinstances",
     "hosttypes",
     "networkclasses",
-    "publicips",
+    "externalips",
     "rolebindings",
     "roles",
     "securitygroups",

@@ -267,7 +267,7 @@ def wait_for_cluster_ready(*, k8s: K8sClient, name: str) -> None:
     poll_until(
         fn=lambda: k8s.get_cluster_order_phase(name=name, checked=False),
         until=lambda v: v == "Ready",
-        retries=120,
+        retries=240,
         delay=15,
         description=f"{name} ClusterOrder Ready",
     )

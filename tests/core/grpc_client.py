@@ -158,9 +158,9 @@ class GRPCClient:
             if not re.search(r"Code:\s*AlreadyExists", output):
                 raise RuntimeError(f"Failed to create tenant '{name}': {output}") from e
 
-    # PublicIPPool operations (private API only)
+    # ExternalIPPool operations (private API only)
 
-    def create_public_ip_pool(
+    def create_external_ip_pool(
         self,
         *,
         name: str,
@@ -169,7 +169,7 @@ class GRPCClient:
         implementation_strategy: str = "metallb-l2",
     ) -> str:
         response: dict[str, Any] = self.call(
-            service=f"{PRIVATE_API}.PublicIPPools/Create",
+            service=f"{PRIVATE_API}.ExternalIPPools/Create",
             data={
                 "object": {
                     "metadata": {"name": name},
@@ -183,58 +183,58 @@ class GRPCClient:
         )
         return response["object"]["id"]
 
-    def get_public_ip_pool(self, *, pool_id: str) -> dict[str, Any]:
-        return self.call(service=f"{PRIVATE_API}.PublicIPPools/Get", data={"id": pool_id})
+    def get_external_ip_pool(self, *, pool_id: str) -> dict[str, Any]:
+        return self.call(service=f"{PRIVATE_API}.ExternalIPPools/Get", data={"id": pool_id})
 
-    def list_public_ip_pool_ids(self) -> list[str]:
-        response: dict[str, Any] = self.call(service=f"{PRIVATE_API}.PublicIPPools/List")
+    def list_external_ip_pool_ids(self) -> list[str]:
+        response: dict[str, Any] = self.call(service=f"{PRIVATE_API}.ExternalIPPools/List")
         return [item["id"] for item in response.get("items", [])]
 
-    def delete_public_ip_pool(self, *, pool_id: str) -> None:
-        self.call(service=f"{PRIVATE_API}.PublicIPPools/Delete", data={"id": pool_id})
+    def delete_external_ip_pool(self, *, pool_id: str) -> None:
+        self.call(service=f"{PRIVATE_API}.ExternalIPPools/Delete", data={"id": pool_id})
 
-    # PublicIP operations (public API)
+    # ExternalIP operations (public API)
 
-    def create_public_ip(self, *, name: str, pool: str) -> str:
+    def create_external_ip(self, *, name: str, pool: str) -> str:
         response: dict[str, Any] = self.call(
-            service=f"{PUBLIC_API}.PublicIPs/Create",
+            service=f"{PUBLIC_API}.ExternalIPs/Create",
             data={"object": {"metadata": {"name": name}, "spec": {"pool": pool}}},
         )
         return response["object"]["id"]
 
-    def get_public_ip(self, *, public_ip_id: str) -> dict[str, Any]:
-        return self.call(service=f"{PUBLIC_API}.PublicIPs/Get", data={"id": public_ip_id})
+    def get_external_ip(self, *, external_ip_id: str) -> dict[str, Any]:
+        return self.call(service=f"{PUBLIC_API}.ExternalIPs/Get", data={"id": external_ip_id})
 
-    def list_public_ip_ids(self) -> list[str]:
-        response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.PublicIPs/List")
+    def list_external_ip_ids(self) -> list[str]:
+        response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.ExternalIPs/List")
         return [item["id"] for item in response.get("items", [])]
 
-    def delete_public_ip(self, *, public_ip_id: str) -> None:
-        self.call(service=f"{PUBLIC_API}.PublicIPs/Delete", data={"id": public_ip_id})
+    def delete_external_ip(self, *, external_ip_id: str) -> None:
+        self.call(service=f"{PUBLIC_API}.ExternalIPs/Delete", data={"id": external_ip_id})
 
-    # PublicIPAttachment operations (public API)
+    # ExternalIPAttachment operations (public API)
 
-    def create_public_ip_attachment(self, *, name: str, public_ip: str, compute_instance: str) -> str:
+    def create_external_ip_attachment(self, *, name: str, external_ip: str, compute_instance: str) -> str:
         response: dict[str, Any] = self.call(
-            service=f"{PUBLIC_API}.PublicIPAttachments/Create",
+            service=f"{PUBLIC_API}.ExternalIPAttachments/Create",
             data={
                 "object": {
                     "metadata": {"name": name},
-                    "spec": {"public_ip": public_ip, "compute_instance": compute_instance},
+                    "spec": {"external_ip": external_ip, "compute_instance": compute_instance},
                 }
             },
         )
         return response["object"]["id"]
 
-    def get_public_ip_attachment(self, *, attachment_id: str) -> dict[str, Any]:
-        return self.call(service=f"{PUBLIC_API}.PublicIPAttachments/Get", data={"id": attachment_id})
+    def get_external_ip_attachment(self, *, attachment_id: str) -> dict[str, Any]:
+        return self.call(service=f"{PUBLIC_API}.ExternalIPAttachments/Get", data={"id": attachment_id})
 
-    def list_public_ip_attachment_ids(self) -> list[str]:
-        response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.PublicIPAttachments/List")
+    def list_external_ip_attachment_ids(self) -> list[str]:
+        response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.ExternalIPAttachments/List")
         return [item["id"] for item in response.get("items", [])]
 
-    def delete_public_ip_attachment(self, *, attachment_id: str) -> None:
-        self.call(service=f"{PUBLIC_API}.PublicIPAttachments/Delete", data={"id": attachment_id})
+    def delete_external_ip_attachment(self, *, attachment_id: str) -> None:
+        self.call(service=f"{PUBLIC_API}.ExternalIPAttachments/Delete", data={"id": attachment_id})
 
     # ClusterCatalogItem operations
 

@@ -9,7 +9,7 @@ from tests.core.grpc_client import GRPCClient
 from tests.core.k8s_client import K8sClient
 from tests.core.runner import poll_until, run_unchecked
 
-_POOL_READY_STATE = "PUBLIC_IP_POOL_STATE_READY"
+_POOL_READY_STATE = "EXTERNAL_IP_POOL_STATE_READY"
 
 
 def assert_grpc_rejected(
@@ -143,37 +143,37 @@ def wait_for_subnet_deletion(*, k8s: K8sClient, name: str) -> None:
     )
 
 
-def wait_for_public_ip_pool_cr(*, k8s: K8sClient, uuid: str) -> str:
+def wait_for_external_ip_pool_cr(*, k8s: K8sClient, uuid: str) -> str:
     return poll_until(
-        fn=lambda: k8s.get_public_ip_pool_name(uuid=uuid, checked=False),
+        fn=lambda: k8s.get_external_ip_pool_name(uuid=uuid, checked=False),
         until=lambda v: v != "",
         retries=30,
         delay=1,
-        description=f"PublicIPPool CR for {uuid}",
+        description=f"ExternalIPPool CR for {uuid}",
     )
 
 
-def wait_for_public_ip_pool_ready(*, k8s: K8sClient, name: str) -> None:
+def wait_for_external_ip_pool_ready(*, k8s: K8sClient, name: str) -> None:
     poll_until(
-        fn=lambda: k8s.get_public_ip_pool_phase(name=name, checked=False),
+        fn=lambda: k8s.get_external_ip_pool_phase(name=name, checked=False),
         until=lambda v: v == "Ready",
         retries=60,
         delay=5,
-        description=f"{name} PublicIPPool Ready",
+        description=f"{name} ExternalIPPool Ready",
     )
 
 
-def wait_for_public_ip_pool_grpc_ready(*, private_grpc: GRPCClient, pool_id: str) -> None:
+def wait_for_external_ip_pool_grpc_ready(*, private_grpc: GRPCClient, pool_id: str) -> None:
     """Poll the private gRPC API until the pool state is READY.
 
     The K8s CR status may report Ready before the fulfillment-service database
     has been updated by the controller feedback loop.  Polling via gRPC closes
-    this race so that subsequent PublicIP creation does not hit
+    this race so that subsequent ExternalIP creation does not hit
     FailedPrecondition.
     """
     def _state() -> str:
         try:
-            pool = private_grpc.get_public_ip_pool(pool_id=pool_id)
+            pool = private_grpc.get_external_ip_pool(pool_id=pool_id)
         except subprocess.CalledProcessError:
             return ""
         return pool.get("object", {}).get("status", {}).get("state", "")
@@ -183,77 +183,77 @@ def wait_for_public_ip_pool_grpc_ready(*, private_grpc: GRPCClient, pool_id: str
         until=lambda v: v == _POOL_READY_STATE,
         retries=30,
         delay=2,
-        description=f"PublicIPPool {pool_id} gRPC READY",
+        description=f"ExternalIPPool {pool_id} gRPC READY",
     )
 
 
-def wait_for_public_ip_pool_deletion(*, k8s: K8sClient, name: str) -> None:
+def wait_for_external_ip_pool_deletion(*, k8s: K8sClient, name: str) -> None:
     poll_until(
-        fn=lambda: not k8s.is_present(resource="publicippool", name=name),
+        fn=lambda: not k8s.is_present(resource="externalippool", name=name),
         until=lambda v: v is True,
         retries=120,
         delay=5,
-        description=f"{name} PublicIPPool deletion",
+        description=f"{name} ExternalIPPool deletion",
     )
 
 
-def wait_for_public_ip_cr(*, k8s: K8sClient, uuid: str) -> str:
+def wait_for_external_ip_cr(*, k8s: K8sClient, uuid: str) -> str:
     return poll_until(
-        fn=lambda: k8s.get_public_ip_name(uuid=uuid, checked=False),
+        fn=lambda: k8s.get_external_ip_name(uuid=uuid, checked=False),
         until=lambda v: v != "",
         retries=30,
         delay=1,
-        description=f"PublicIP CR for {uuid}",
+        description=f"ExternalIP CR for {uuid}",
     )
 
 
-def wait_for_public_ip_allocated(*, k8s: K8sClient, name: str) -> None:
+def wait_for_external_ip_allocated(*, k8s: K8sClient, name: str) -> None:
     poll_until(
-        fn=lambda: k8s.get_public_ip_state(name=name, checked=False),
+        fn=lambda: k8s.get_external_ip_state(name=name, checked=False),
         until=lambda v: v == "Allocated",
         retries=60,
         delay=5,
-        description=f"{name} PublicIP Allocated",
+        description=f"{name} ExternalIP Allocated",
     )
 
 
-def wait_for_public_ip_deletion(*, k8s: K8sClient, name: str) -> None:
+def wait_for_external_ip_deletion(*, k8s: K8sClient, name: str) -> None:
     poll_until(
-        fn=lambda: not k8s.is_present(resource="publicip", name=name),
+        fn=lambda: not k8s.is_present(resource="externalip", name=name),
         until=lambda v: v is True,
         retries=120,
         delay=5,
-        description=f"{name} PublicIP deletion",
+        description=f"{name} ExternalIP deletion",
     )
 
 
-def wait_for_public_ip_attachment_cr(*, k8s: K8sClient, uuid: str) -> str:
+def wait_for_external_ip_attachment_cr(*, k8s: K8sClient, uuid: str) -> str:
     return poll_until(
-        fn=lambda: k8s.get_public_ip_attachment_name(uuid=uuid, checked=False),
+        fn=lambda: k8s.get_external_ip_attachment_name(uuid=uuid, checked=False),
         until=lambda v: v != "",
         retries=30,
         delay=1,
-        description=f"PublicIPAttachment CR for {uuid}",
+        description=f"ExternalIPAttachment CR for {uuid}",
     )
 
 
-def wait_for_public_ip_attachment_ready(*, k8s: K8sClient, name: str) -> None:
+def wait_for_external_ip_attachment_ready(*, k8s: K8sClient, name: str) -> None:
     poll_until(
-        fn=lambda: k8s.get_public_ip_attachment_phase(name=name, checked=False),
+        fn=lambda: k8s.get_external_ip_attachment_phase(name=name, checked=False),
         until=lambda v: v == "Ready",
         retries=60,
         delay=5,
-        description=f"{name} PublicIPAttachment Ready",
+        description=f"{name} ExternalIPAttachment Ready",
     )
 
 
-def wait_for_public_ip_attachment_deletion(*, k8s: K8sClient, name: str) -> None:
+def wait_for_external_ip_attachment_deletion(*, k8s: K8sClient, name: str) -> None:
     poll_until(
-        fn=lambda: not k8s.is_present(resource="publicipattachment", name=name),
+        fn=lambda: not k8s.is_present(resource="externalipattachment", name=name),
         until=lambda v: v is True,
         retries=120,
         delay=5,
-        description=f"{name} PublicIPAttachment deletion",
+        description=f"{name} ExternalIPAttachment deletion",
     )
 
 

@@ -197,69 +197,69 @@ class K8sClient:
             *self._base(), "get", "virtualmachine", name, "-n", vm_namespace, "-o", "jsonpath={.spec.runStrategy}"
         )
 
-    # PublicIPPool queries
+    # ExternalIPPool queries
 
-    def get_public_ip_pool_name(self, *, uuid: str, checked: bool = True) -> str:
+    def get_external_ip_pool_name(self, *, uuid: str, checked: bool = True) -> str:
         output, rc = self._get(
             "get",
-            "publicippool",
+            "externalippool",
             "-n",
             self.namespace,
             "-l",
-            f"osac.openshift.io/publicippool-uuid={uuid}",
+            f"osac.openshift.io/externalippool-uuid={uuid}",
             "-o",
             "jsonpath={.items[0].metadata.name}",
             checked=checked,
         )
         return output if rc == 0 else ""
 
-    def get_public_ip_pool_phase(self, *, name: str, checked: bool = True) -> str:
+    def get_external_ip_pool_phase(self, *, name: str, checked: bool = True) -> str:
         output, rc = self._get(
-            "get", "publicippool", name, "-n", self.namespace, "-o", "jsonpath={.status.phase}", checked=checked
+            "get", "externalippool", name, "-n", self.namespace, "-o", "jsonpath={.status.phase}", checked=checked
         )
         return output if rc == 0 else ""
 
-    # PublicIP queries
+    # ExternalIP queries
 
-    def get_public_ip_name(self, *, uuid: str, checked: bool = True) -> str:
+    def get_external_ip_name(self, *, uuid: str, checked: bool = True) -> str:
         output, rc = self._get(
             "get",
-            "publicip",
+            "externalip",
             "-n",
             self.namespace,
             "-l",
-            f"osac.openshift.io/publicip-uuid={uuid}",
+            f"osac.openshift.io/externalip-uuid={uuid}",
             "-o",
             "jsonpath={.items[0].metadata.name}",
             checked=checked,
         )
         return output if rc == 0 else ""
 
-    def get_public_ip_state(self, *, name: str, checked: bool = True) -> str:
+    def get_external_ip_state(self, *, name: str, checked: bool = True) -> str:
         output, rc = self._get(
-            "get", "publicip", name, "-n", self.namespace, "-o", "jsonpath={.status.state}", checked=checked
+            "get", "externalip", name, "-n", self.namespace, "-o", "jsonpath={.status.state}", checked=checked
         )
         return output if rc == 0 else ""
 
-    # PublicIPAttachment queries
+    # ExternalIPAttachment queries
 
-    def get_public_ip_attachment_name(self, *, uuid: str, checked: bool = True) -> str:
+    def get_external_ip_attachment_name(self, *, uuid: str, checked: bool = True) -> str:
         output, rc = self._get(
             "get",
-            "publicipattachment",
+            "externalipattachment",
             "-n",
             self.namespace,
             "-l",
-            f"osac.openshift.io/publicipattachment-uuid={uuid}",
+            f"osac.openshift.io/externalipattachment-uuid={uuid}",
             "-o",
             "jsonpath={.items[0].metadata.name}",
             checked=checked,
         )
         return output if rc == 0 else ""
 
-    def get_public_ip_attachment_phase(self, *, name: str, checked: bool = True) -> str:
+    def get_external_ip_attachment_phase(self, *, name: str, checked: bool = True) -> str:
         output, rc = self._get(
-            "get", "publicipattachment", name, "-n", self.namespace, "-o", "jsonpath={.status.phase}", checked=checked
+            "get", "externalipattachment", name, "-n", self.namespace, "-o", "jsonpath={.status.phase}", checked=checked
         )
         return output if rc == 0 else ""
 

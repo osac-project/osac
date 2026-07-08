@@ -80,3 +80,18 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 @pytest.fixture(scope="session")
 def storage_config_namespace() -> str:
     return env("OSAC_STORAGE_CONFIG_NAMESPACE", "osac-system")
+
+
+@pytest.fixture(scope="session")
+def cluster_template() -> str:
+    return env("OSAC_CLUSTER_TEMPLATE", "osac.templates.ocp_ci_small")
+
+
+@pytest.fixture(scope="session")
+def pull_secret_path() -> str:
+    return env("OSAC_PULL_SECRET_PATH")
+
+
+@pytest.fixture(scope="session")
+def ssh_public_key_path() -> str:
+    return env("OSAC_SSH_PUBLIC_KEY_PATH", os.path.expanduser("~/.ssh/id_rsa.pub"))

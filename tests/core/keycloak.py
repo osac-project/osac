@@ -14,6 +14,8 @@ def get_jwt(*, keycloak_url: str, realm: str, client_id: str, username: str, pas
             "curl",
             "-sk",
             "--fail-with-body",
+            "--max-time",
+            "10",
             "-X",
             "POST",
             token_url,
@@ -37,16 +39,12 @@ def get_jwt(*, keycloak_url: str, realm: str, client_id: str, username: str, pas
             token: str | None = response.get("access_token")
             if not token:
                 error: str = response.get("error_description", response.get("error", "unknown error"))
-                raise RuntimeError(f"Failed to get JWT from Keycloak for user '{username}': {error}")
+                raise RuntimeError(f"Failed to get JWT from Keycloak: {error}")
             return token
         except json.JSONDecodeError:
             # Malformed response - Keycloak might still be starting
             return None
 
     return poll_until(
-        fn=try_get_token,
-        until=lambda token: token is not None,
-        retries=24,
-        delay=5,
-        description=f"Keycloak JWT token for user '{username}'",
+        fn=try_get_token, until=lambda token: token is not None, retries=24, delay=5, description="Keycloak JWT token"
     )

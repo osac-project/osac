@@ -96,10 +96,10 @@ def test_caas_cluster_storage_lifecycle(
 
     finally:
         # --- Teardown: delete ClusterOrder and verify storage cleanup ---
+        if cluster_uuid is not None:
+            with contextlib.suppress(Exception):
+                cli.delete_cluster(uuid=cluster_uuid)
         if co_name is not None and k8s_hub_client.is_present(resource="clusterorder", name=co_name):
-            if cluster_uuid is not None:
-                with contextlib.suppress(Exception):
-                    cli.delete_cluster(uuid=cluster_uuid)
             _verify_teardown(k8s=k8s_hub_client, tenant_name=tenant_name, co_name=co_name)
 
         if k8s_hub_client.is_present(resource="tenant", name=tenant_name):

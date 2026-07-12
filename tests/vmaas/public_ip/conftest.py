@@ -20,7 +20,7 @@ from tests.core.helpers import (
 )
 from tests.core.k8s_client import K8sClient
 from tests.core.osac_cli import OsacCLI
-from tests.vmaas.public_ip.helpers import create_ip, get_random_subnet
+from tests.vmaas.public_ip.helpers import allocate_worker_subnet, create_ip
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ def make_pool(
 
     def _make(*, prefix: int = 24, name_prefix: str = "test-pool") -> tuple[str, str]:
         pool_name = f"{name_prefix}-{uuid4().hex[:8]}"
-        subnet = get_random_subnet(prefix=prefix)
+        subnet = allocate_worker_subnet(prefix=prefix)
         pool_id = private_grpc.create_public_ip_pool(name=pool_name, cidrs=[str(subnet)])
         pool_cr_name = wait_for_public_ip_pool_cr(k8s=k8s_hub_client, uuid=pool_id)
         wait_for_public_ip_pool_ready(k8s=k8s_hub_client, name=pool_cr_name)

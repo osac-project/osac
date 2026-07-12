@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 IPV4_NETWORK: str = "172.27.0.0/16"
 
 
-def get_random_subnet(prefix: int = 24) -> ipaddress.IPv4Network:
+def allocate_worker_subnet(prefix: int = 24) -> ipaddress.IPv4Network:
     """
     Allocate subnet with worker-based namespacing to prevent conflicts in parallel execution.
 
@@ -26,18 +26,18 @@ def get_random_subnet(prefix: int = 24) -> ipaddress.IPv4Network:
     - Worker 2 (gw2): 172.27.2.x
     - Worker 3 (gw3): 172.27.3.x
 
-    Within each worker, a sequential counter ensures unique CIDRs.
+    Within each worker, a sequential counter ensures unique, deterministic CIDRs.
     """
     # Get pytest-xdist worker ID (e.g., "gw0", "gw1", etc.)
     worker_id = os.environ.get("PYTEST_XDIST_WORKER", "gw0")
     worker_num = int(worker_id.replace("gw", "")) if worker_id.startswith("gw") else 0
 
     # Use a sequential counter within this worker's address space
-    if not hasattr(get_random_subnet, "_counter"):
-        get_random_subnet._counter = 0
+    if not hasattr(allocate_worker_subnet, "_counter"):
+        allocate_worker_subnet._counter = 0
 
-    counter = get_random_subnet._counter
-    get_random_subnet._counter += 1
+    counter = allocate_worker_subnet._counter
+    allocate_worker_subnet._counter += 1
 
     if prefix == 24:
         # /24 blocks use the lower half of 172.27.0.0/16 (172.27.0.0 - 172.27.127.255)

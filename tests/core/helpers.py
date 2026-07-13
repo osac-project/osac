@@ -480,15 +480,14 @@ def wait_for_cluster_order_condition(
         if not k8s.is_present(resource="clusterorder", name=name):
             raise AssertionError(f"ClusterOrder {name} disappeared before {condition_type}={expected_status}")
         phase: str = k8s.get_cluster_order_phase(name=name, checked=False)
-        if phase == "Failed":
-            cond_status = k8s.get_cluster_order_condition_status(
-                name=name, condition_type=condition_type, checked=False
+        cond_status = k8s.get_cluster_order_condition_status(
+            name=name, condition_type=condition_type, checked=False
+        )
+        if phase == "Failed" and cond_status != expected_status:
+            raise AssertionError(
+                f"ClusterOrder {name} entered Failed phase before {condition_type}={expected_status}"
             )
-            if cond_status != expected_status:
-                raise AssertionError(
-                    f"ClusterOrder {name} entered Failed phase before {condition_type}={expected_status}"
-                )
-        return k8s.get_cluster_order_condition_status(name=name, condition_type=condition_type, checked=False)
+        return cond_status
 
     poll_until(
         fn=_check,

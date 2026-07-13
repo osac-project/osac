@@ -55,7 +55,6 @@ _TENANT_MANIFEST = textwrap.dedent("""\
 def test_caas_cluster_storage_lifecycle(
     k8s_hub_client: K8sClient,
     cli: OsacCLI,
-    storage_config_namespace: str,
     cluster_template: str,
     pull_secret_path: str,
     ssh_public_key_path: str,
@@ -82,11 +81,12 @@ def test_caas_cluster_storage_lifecycle(
         )
         co_name = wait_for_cluster_order_cr(k8s=k8s_hub_client, uuid=cluster_uuid)
 
-        k8s_hub_client.patch(
+        _, rc = k8s_hub_client.patch(
             resource="clusterorder",
             name=co_name,
             patch=json.dumps({"metadata": {"annotations": {"osac.openshift.io/tenant": tenant_name}}}),
         )
+        assert rc == 0, f"Failed to patch ClusterOrder {co_name} with tenant annotation"
 
         # --- Wait for cluster provisioning ---
         wait_for_cluster_ready(k8s=k8s_hub_client, name=co_name)

@@ -391,6 +391,33 @@ def _force_cleanup_machine_preterminate_hooks(*, k8s: K8sClient, name: str) -> N
         run_unchecked(*base_args, "annotate", f"machines.cluster.x-k8s.io/{machine_name}", "-n", cp_ns, f"{hook}-")
 
 
+def wait_for_cluster_deleting(*, k8s: K8sClient, name: str) -> None:
+    poll_until(
+        fn=lambda: k8s.get_cluster_order_phase(name=name, checked=False),
+        until=lambda v: v == "Deleting",
+        retries=30,
+        delay=5,
+        description=f"{name} ClusterOrder Deleting phase",
+    )
+
+
+def wait_for_cluster_grpc_state(*, grpc: GRPCClient, uuid: str, state: str) -> None:
+    def _get_state() -> str:
+        try:
+            cluster = grpc.get_cluster(cluster_id=uuid)
+            return cluster.get("object", {}).get("status", {}).get("state", "")
+        except Exception:
+            return ""
+
+    poll_until(
+        fn=_get_state,
+        until=lambda v: v == state,
+        retries=30,
+        delay=5,
+        description=f"{uuid} cluster gRPC state {state}",
+    )
+
+
 def wait_for_cluster_grpc_removal(*, grpc: GRPCClient, uuid: str) -> None:
     # retry_on_error=True: a flaky grpcurl call hitting a momentarily-busy
     # route right after heavy cluster-deletion activity shouldn't fail the

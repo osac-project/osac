@@ -263,6 +263,16 @@ def wait_for_cluster_order_cr(*, k8s: K8sClient, uuid: str) -> str:
     )
 
 
+def wait_for_cluster_progressing(*, k8s: K8sClient, name: str) -> None:
+    poll_until(
+        fn=lambda: k8s.get_cluster_order_phase(name=name, checked=False),
+        until=lambda v: v == "Progressing",
+        retries=30,
+        delay=2,
+        description=f"{name} ClusterOrder Progressing phase",
+    )
+
+
 def wait_for_cluster_ready(*, k8s: K8sClient, name: str) -> None:
     # Must stay safely above osac-aap's own wait_for_clusteroperators_retries
     # budget (60 min) plus earlier steps in the same AAP job (create hosted

@@ -264,10 +264,14 @@ def wait_for_cluster_order_cr(*, k8s: K8sClient, uuid: str) -> str:
 
 
 def wait_for_cluster_ready(*, k8s: K8sClient, name: str) -> None:
+    # Must stay safely above osac-aap's own wait_for_clusteroperators_retries
+    # budget (60 min) plus earlier steps in the same AAP job (create hosted
+    # cluster, retrieve kubeconfig, etc.), or this times out first with a
+    # less useful error while the ClusterOrder is still legitimately Progressing.
     poll_until(
         fn=lambda: k8s.get_cluster_order_phase(name=name, checked=False),
         until=lambda v: v == "Ready",
-        retries=240,
+        retries=480,
         delay=15,
         description=f"{name} ClusterOrder Ready",
     )
@@ -388,12 +392,16 @@ def _force_cleanup_machine_preterminate_hooks(*, k8s: K8sClient, name: str) -> N
 
 
 def wait_for_cluster_grpc_removal(*, grpc: GRPCClient, uuid: str) -> None:
+    # retry_on_error=True: a flaky grpcurl call hitting a momentarily-busy
+    # route right after heavy cluster-deletion activity shouldn't fail the
+    # whole test on the first hiccup.
     poll_until(
         fn=lambda: uuid not in grpc.list_cluster_ids(),
         until=lambda v: v is True,
         retries=60,
         delay=5,
         description=f"{uuid} removed from gRPC cluster list",
+        retry_on_error=True,
     )
 
 

@@ -46,8 +46,12 @@ def service_account() -> str:
 
 @pytest.fixture(scope="session")
 def grpc(fulfillment_address: str, namespace: str, service_account: str) -> GRPCClient:
+    # wait_for_cluster_ready's own budget alone can run up to 120min on cold
+    # EC2 hardware, plus deletion/verification steps after it -- a token this
+    # short can expire mid-session, failing every subsequent grpcurl call
+    # with UNAUTHENTICATED. Stay safely above the worst-case session length.
     token: str = run(
-        "oc", "create", "token", service_account, "-n", namespace, "--duration", "1h", "--as", "system:admin"
+        "oc", "create", "token", service_account, "-n", namespace, "--duration", "4h", "--as", "system:admin"
     )
     return GRPCClient(address=fulfillment_address, token=token)
 
@@ -55,7 +59,7 @@ def grpc(fulfillment_address: str, namespace: str, service_account: str) -> GRPC
 @pytest.fixture(scope="session")
 def private_grpc(fulfillment_private_address: str, namespace: str, service_account: str) -> GRPCClient:
     token: str = run(
-        "oc", "create", "token", service_account, "-n", namespace, "--duration", "1h", "--as", "system:admin"
+        "oc", "create", "token", service_account, "-n", namespace, "--duration", "4h", "--as", "system:admin"
     )
     return GRPCClient(address=fulfillment_private_address, token=token)
 

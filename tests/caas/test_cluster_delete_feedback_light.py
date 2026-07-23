@@ -33,15 +33,24 @@ def test_cluster_delete_reports_deleting_state_without_provisioning(
         template_parameters={"ssh_public_key": Path(ssh_public_key_path).read_text().strip()},
     )
     co_name = wait_for_cluster_order_cr(k8s=k8s_hub_client, uuid=uuid)
-    assert uuid in grpc.list_cluster_ids()
 
-    wait_for_cluster_progressing(k8s=k8s_hub_client, name=co_name)
+    try:
+        assert uuid in grpc.list_cluster_ids()
 
-    cli.delete_cluster(uuid=uuid)
+        wait_for_cluster_progressing(k8s=k8s_hub_client, name=co_name)
 
-    wait_for_cluster_deleting(k8s=k8s_hub_client, name=co_name)
+        cli.delete_cluster(uuid=uuid)
 
-    wait_for_cluster_grpc_state(grpc=grpc, uuid=uuid, state="CLUSTER_STATE_DELETING")
+        wait_for_cluster_deleting(k8s=k8s_hub_client, name=co_name)
 
-    wait_for_cluster_deletion(k8s=k8s_hub_client, name=co_name)
-    wait_for_cluster_grpc_removal(grpc=grpc, uuid=uuid)
+        wait_for_cluster_grpc_state(grpc=grpc, uuid=uuid, state="CLUSTER_STATE_DELETING")
+
+        wait_for_cluster_deletion(k8s=k8s_hub_client, name=co_name)
+        wait_for_cluster_grpc_removal(grpc=grpc, uuid=uuid)
+    finally:
+        if k8s_hub_client.is_present(resource="clusterorder", name=co_name):
+            try:
+                cli.delete_cluster(uuid=uuid)
+            except Exception:
+                pass
+            wait_for_cluster_deletion(k8s=k8s_hub_client, name=co_name)

@@ -415,9 +415,9 @@ def wait_for_cluster_grpc_state(*, grpc: GRPCClient, uuid: str, state: str) -> N
     def _get_state() -> str:
         try:
             cluster = grpc.get_cluster(cluster_id=uuid)
-            return cluster.get("object", {}).get("status", {}).get("state", "")
-        except Exception:
+        except subprocess.CalledProcessError:
             return ""
+        return cluster.get("object", {}).get("status", {}).get("state", "")
 
     poll_until(
         fn=_get_state,

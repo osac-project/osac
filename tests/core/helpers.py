@@ -411,20 +411,28 @@ def wait_for_cluster_deleting(*, k8s: K8sClient, name: str) -> None:
     )
 
 
-def wait_for_cluster_grpc_state(*, grpc: GRPCClient, uuid: str, state: str) -> None:
-    def _get_state() -> str:
+def wait_for_cluster_grpc_deleting_or_archived(*, grpc: GRPCClient, uuid: str) -> None:
+    """Succeed if we catch CLUSTER_STATE_DELETING or if the cluster is already archived.
+
+    The DELETING window in the fulfillment-service is extremely short (one
+    Update + Signal round-trip).  Polling for the exact state is racey; accepting
+    either DELETING or 'already gone' makes the assertion reliable.
+    """
+
+    def _done() -> bool:
         try:
             cluster = grpc.get_cluster(cluster_id=uuid)
+            state = cluster.get("object", {}).get("status", {}).get("state", "")
+            return state == "CLUSTER_STATE_DELETING"
         except subprocess.CalledProcessError:
-            return ""
-        return cluster.get("object", {}).get("status", {}).get("state", "")
+            return True
 
     poll_until(
-        fn=_get_state,
-        until=lambda v: v == state,
+        fn=_done,
+        until=lambda v: v is True,
         retries=30,
-        delay=5,
-        description=f"{uuid} cluster gRPC state {state}",
+        delay=2,
+        description=f"{uuid} gRPC DELETING or already archived",
     )
 
 

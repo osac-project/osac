@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import subprocess
 from pathlib import Path
 
@@ -7,8 +8,8 @@ from tests.core.grpc_client import GRPCClient
 from tests.core.helpers import (
     wait_for_cluster_deleting,
     wait_for_cluster_deletion,
+    wait_for_cluster_grpc_deleting_or_archived,
     wait_for_cluster_grpc_removal,
-    wait_for_cluster_grpc_state,
     wait_for_cluster_order_cr,
     wait_for_cluster_progressing,
 )
@@ -43,11 +44,9 @@ def test_cluster_delete_reports_deleting_state_without_provisioning(
         cli.delete_cluster(uuid=uuid)
 
         wait_for_cluster_deleting(k8s=k8s_hub_client, name=co_name)
-        wait_for_cluster_grpc_state(grpc=grpc, uuid=uuid, state="CLUSTER_STATE_DELETING")
+        wait_for_cluster_grpc_deleting_or_archived(grpc=grpc, uuid=uuid)
         wait_for_cluster_deletion(k8s=k8s_hub_client, name=co_name)
         wait_for_cluster_grpc_removal(grpc=grpc, uuid=uuid)
     finally:
-        try:
+        with contextlib.suppress(subprocess.CalledProcessError):
             cli.delete_cluster(uuid=uuid)
-        except subprocess.CalledProcessError:
-            pass

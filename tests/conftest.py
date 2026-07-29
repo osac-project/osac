@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
@@ -17,6 +19,20 @@ from tests.core.keycloak_admin import (
 )
 from tests.core.osac_cli import OsacCLI
 from tests.core.runner import env, run
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Give each xdist worker its own log_file so records stay chronologically ordered.
+
+    A shared log_file is interleaved across workers as they report at their own
+    pace; gather-osac-logs.sh merges the per-worker files back into one sorted
+    e2e.log artifact.
+    """
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER")
+    if worker_id is not None:
+        log_dir = Path(config.getini("log_file")).parent
+        log_dir.mkdir(parents=True, exist_ok=True)
+        config.option.log_file = str(log_dir / f"e2e_{worker_id}.log")
 
 
 @pytest.fixture(scope="session")

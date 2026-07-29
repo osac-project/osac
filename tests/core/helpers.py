@@ -263,6 +263,16 @@ def wait_for_cluster_order_cr(*, k8s: K8sClient, uuid: str) -> str:
     )
 
 
+def wait_for_cluster_progressing(*, k8s: K8sClient, name: str) -> None:
+    poll_until(
+        fn=lambda: k8s.get_cluster_order_phase(name=name, checked=False),
+        until=lambda v: v == "Progressing",
+        retries=30,
+        delay=2,
+        description=f"{name} ClusterOrder Progressing phase",
+    )
+
+
 def wait_for_cluster_ready(*, k8s: K8sClient, name: str) -> None:
     # Must stay safely above osac-aap's own wait_for_clusteroperators_retries
     # budget (60 min) plus earlier steps in the same AAP job (create hosted
@@ -389,6 +399,41 @@ def _force_cleanup_machine_preterminate_hooks(*, k8s: K8sClient, name: str) -> N
         return
     for machine_name in output.strip().split():
         run_unchecked(*base_args, "annotate", f"machines.cluster.x-k8s.io/{machine_name}", "-n", cp_ns, f"{hook}-")
+
+
+def wait_for_cluster_deleting(*, k8s: K8sClient, name: str) -> None:
+    poll_until(
+        fn=lambda: k8s.get_cluster_order_phase(name=name, checked=False),
+        until=lambda v: v == "Deleting",
+        retries=30,
+        delay=5,
+        description=f"{name} ClusterOrder Deleting phase",
+    )
+
+
+def wait_for_cluster_grpc_deleting_or_archived(*, grpc: GRPCClient, uuid: str) -> None:
+    """Succeed if we catch CLUSTER_STATE_DELETING or if the cluster is already archived.
+
+    The DELETING window in the fulfillment-service is extremely short (one
+    Update + Signal round-trip).  Polling for the exact state is racey; accepting
+    either DELETING or 'already gone' makes the assertion reliable.
+    """
+
+    def _done() -> bool:
+        try:
+            cluster = grpc.get_cluster(cluster_id=uuid)
+            state = cluster.get("object", {}).get("status", {}).get("state", "")
+            return state == "CLUSTER_STATE_DELETING"
+        except subprocess.CalledProcessError:
+            return True
+
+    poll_until(
+        fn=_done,
+        until=lambda v: v is True,
+        retries=30,
+        delay=2,
+        description=f"{uuid} gRPC DELETING or already archived",
+    )
 
 
 def wait_for_cluster_grpc_removal(*, grpc: GRPCClient, uuid: str) -> None:

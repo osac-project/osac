@@ -284,4 +284,3 @@
       -e dnat_internal_port=443
       -e dnat_protocol=tcp
       {{ role_path }}/playbooks/l3_create_dnat.yaml
-

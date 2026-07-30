@@ -31,6 +31,13 @@
   loop_control:
     label: "{{ item.key }}"
 
+- name: Delete NMStateConfig CRs for cluster agents
+  ansible.builtin.include_role:
+    name: osac.service.nmstate_config
+  vars:
+    nmstate_config_state: absent
+    nmstate_config_cluster_name: "{{ cluster_infra_name }}"
+
 - name: Detach agents from cluster
   ansible.builtin.include_role:
     name: osac.service.manage_agents

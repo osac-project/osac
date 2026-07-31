@@ -103,7 +103,14 @@ jobs:
         VERSION: ${{ needs.guard.outputs.version }}
         REGISTRY_USERNAME: ${{ github.actor }}
         REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
-        REPO: ${{ github.repository }}
+        # Hardcoded rather than github.repository: that now resolves to
+        # osac-project/osac post-merge, which would inject a reference to an
+        # image that doesn't exist there -- the real image only ever gets
+        # published to osac-project/fulfillment-service (see build-image.yaml/
+        # publish-image.yaml's own IMAGE_NAME). Only used below to build the
+        # image reference written into the chart, nothing else in this job
+        # needs it to be the actual triggering repo.
+        REPO: osac-project/fulfillment-service
       run: |
         # Login to the registry:
         export registry="ghcr.io"

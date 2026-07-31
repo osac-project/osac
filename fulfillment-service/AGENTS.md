@@ -111,7 +111,7 @@ uv run ruff check
 go mod tidy
 ```
 
-**CRITICAL**: Always run `buf lint && buf generate` after any `.proto` file change. Generated code lands in `internal/api/` (never edit manually). Buf is installed via `buf-action` in CI (see `.github/workflows/check-pull-request.yaml`); for local use, install buf separately following the [official installation guide](https://buf.build/docs/installation).
+**CRITICAL**: Always run `buf lint && buf generate` after any `.proto` file change. Generated code lands in `internal/api/` (never edit manually). Buf is installed via `buf-action` in CI (see the root-level `.github/workflows/check-pull-request.yaml`); for local use, install buf separately following the [official installation guide](https://buf.build/docs/installation).
 
 For extending `dev.py` with new commands, see [dev/README.md](dev/README.md).
 

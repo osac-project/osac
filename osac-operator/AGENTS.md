@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-OSAC operator is a Kubernetes operator that reconciles infrastructure resources for the [OSAC](https://github.com/osac-project) project. It integrates with the [fulfillment service](https://github.com/osac-project/fulfillment-service/) and Ansible Automation Platform to provision OpenShift clusters and compute instances with networking. Includes a console proxy (aggregated API server) for KubeVirt VM console/VNC access via WebSocket.
+OSAC operator is a Kubernetes operator that reconciles infrastructure resources for the [OSAC](https://github.com/osac-project) project. It integrates with the [fulfillment service](../fulfillment-service/), a sibling component in this repository, and Ansible Automation Platform to provision OpenShift clusters and compute instances with networking. Includes a console proxy (aggregated API server) for KubeVirt VM console/VNC access via WebSocket.
 
 ### Resources Managed
 
@@ -125,7 +125,7 @@ hack/sync-helm-crds.py     # Script invoked by `make helm-crds` to sync CRDs to 
 - **Unit tests**: Ginkgo + Gomega with `envtest` (real etcd + kube-apiserver)
 - **Integration**: `make test-kustomize` (manifest validation) + `make test-smoke` (kind cluster)
 - **Go integration tests**: `test/integration/` (console_proxy_test.go, integration_suite_test.go, networking_test.go) — run against an already-running kind cluster via `make test-integration-kind` (`go test ./test/integration/ -v -ginkgo.v`)
-- **E2E tests**: pytest-based, live in the separate `osac-test-infra` repo; triggered from this repo via `.github/workflows/e2e-vmaas-full-install.yml`
+- **E2E tests**: pytest-based, live in the separate `osac-test-infra` repo; triggered by the root-level `.github/workflows/e2e-vmaas-full-install.yml`, which builds and deploys both `osac-operator` and `fulfillment-service` together
 - Kind cluster defaults to `osac` (`KIND_CLUSTER_NAME` in Makefile line 81), but smoke tests create `osac-test`
 - Clean up: `kind delete cluster --name osac-test`
 - `test-kustomize` catches missing files in kustomization.yaml — always run before committing manifest changes
@@ -170,9 +170,9 @@ Hooks are configured in `.claude/settings.json` and run automatically during age
 ## CI Workflows
 
 - **build-image.yaml**: Runs `make test`, `make test-kustomize`, `make test-smoke`, then builds and pushes container + manifest container
-- **check-pull-request.yaml**: Validates `buf generate` output unchanged (ensures gRPC client is up-to-date)
+- **check-generated-code.yaml** (repo root, matrixed across components): Validates `buf generate` output unchanged (ensures gRPC client is up-to-date)
 - **helm-lint.yaml**: Checks CRD sync (`hack/sync-helm-crds.py`) and lints Helm charts
-- **e2e-vmaas-full-install.yml**: E2E tests in VMaaS environment
+- **e2e-vmaas-full-install.yml** (repo root, shared with fulfillment-service): builds both components and runs E2E tests in a VMaaS environment
 
 ## Security
 

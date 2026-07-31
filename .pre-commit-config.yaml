@@ -19,3 +19,24 @@ repos:
       types: [file, yaml]
       entry: yamllint --strict
       exclude: ^(fulfillment-service/(charts|it/charts)/.*/templates/|osac-operator/(charts/.*/templates/|config/))
+
+- repo: local
+  hooks:
+  - id: fulfillment-service-golangci-lint
+    pass_filenames: false
+    name: fulfillment-service golangci-lint
+    language: system
+    files: ^fulfillment-service/.*\.go$
+    entry: bash -c "cd fulfillment-service && uv run dev.py lint go"
+  - id: fulfillment-service-buf-lint
+    pass_filenames: false
+    name: fulfillment-service buf-lint
+    language: system
+    files: ^fulfillment-service/.*\.proto$
+    entry: bash -c "cd fulfillment-service && uv run dev.py lint proto"
+  - id: osac-operator-golangci-lint
+    pass_filenames: false
+    name: osac-operator golangci-lint
+    language: system
+    files: ^osac-operator/.*\.go$
+    entry: bash -c "cd osac-operator && bin/golangci-lint run --fix"

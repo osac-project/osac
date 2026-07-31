@@ -17,7 +17,7 @@ name: Publish binaries
 on:
   push:
     tags:
-    - 'v*'
+    - 'fulfillment-service/v*'
 
 jobs:
 
@@ -34,9 +34,13 @@ jobs:
     - uses: ./.github/actions/setup-go
       with:
         working-directory: fulfillment-service
+    - name: Compute release version
+      # Strip this component's tag prefix (see the `tags:` trigger above) --
+      # goreleaser expects a bare vX.Y.Z, not the scoped git tag.
+      run: echo "RELEASE_VERSION=${GITHUB_REF_NAME#fulfillment-service/}" >> "$GITHUB_ENV"
     - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94  # v7
       with:
         workdir: fulfillment-service
-        args: release --clean
+        args: release --clean --current-tag ${{ env.RELEASE_VERSION }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

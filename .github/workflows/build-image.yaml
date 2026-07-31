@@ -13,7 +13,7 @@ on:
     branches:
     - main
     tags:
-    - 'v*'
+    - 'osac-operator/v*'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
@@ -80,6 +80,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Component-scoped tags (see the `tags:` trigger above) can't be used verbatim
+      # as image tags -- Docker/OCI tags can't contain the '/' the git tag does --
+      # so strip the prefix here to recover the bare vX.Y.Z for the actual image tags.
+      - name: Compute release version
+        if: startsWith(github.ref, 'refs/tags/osac-operator/')
+        run: |
+          version="${GITHUB_REF_NAME#osac-operator/}"
+          echo "RELEASE_VERSION=${version}" >> "$GITHUB_ENV"
+          echo "RELEASE_MAJOR_MINOR=${version%.*}" >> "$GITHUB_ENV"
+          echo "RELEASE_MAJOR=${version%%.*}" >> "$GITHUB_ENV"
+
       # Extract metadata (tags, labels) for Docker
       # https://github.com/docker/metadata-action
       - name: Extract Docker metadata
@@ -88,9 +99,9 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=semver,pattern=v{{version}}
-            type=semver,pattern=v{{major}}.{{minor}}
-            type=semver,pattern=v{{major}}
+            type=raw,value=${{ env.RELEASE_VERSION }},enable=${{ env.RELEASE_VERSION != '' }}
+            type=raw,value=${{ env.RELEASE_MAJOR_MINOR }},enable=${{ env.RELEASE_VERSION != '' }}
+            type=raw,value=${{ env.RELEASE_MAJOR }},enable=${{ env.RELEASE_VERSION != '' }}
             type=ref,event=branch
             type=ref,event=pr
             type=ref,event=tag

@@ -46,20 +46,32 @@ jobs:
     permissions: {}
     if: >
       github.event.workflow_run.event == 'push' &&
-      startsWith(github.event.workflow_run.head_branch, 'v')
+      (startsWith(github.event.workflow_run.head_branch, 'fulfillment-service/v') ||
+       startsWith(github.event.workflow_run.head_branch, 'osac-operator/v'))
     outputs:
       tag: ${{ github.event.workflow_run.head_branch }}
+      version: ${{ steps.check.outputs.version }}
       sha: ${{ github.event.workflow_run.head_sha }}
     steps:
     - name: Check image build result
+      id: check
       env:
         CONCLUSION: ${{ github.event.workflow_run.conclusion }}
         HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
       run: |
-        # No build-metadata (+...) suffix allowed: this tag is used verbatim as a
+        # Each component owns a scoped tag prefix (see publish-image.yaml/build-image.yaml's
+        # own `tags:` triggers) so a single tag push can't fire every component's release
+        # chain at once; strip it here to recover the bare vX.Y.Z used for artifact versions.
+        case "$HEAD_BRANCH" in
+          fulfillment-service/v*) VERSION="${HEAD_BRANCH#fulfillment-service/}" ;;
+          osac-operator/v*) VERSION="${HEAD_BRANCH#osac-operator/}" ;;
+          *) echo "::error::Tag '$HEAD_BRANCH' does not match a known component prefix"; exit 1 ;;
+        esac
+
+        # No build-metadata (+...) suffix allowed: this version is used verbatim as a
         # container image tag downstream, and Docker/OCI tags cannot contain '+'.
         semver_re='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\.((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?$'
-        if ! [[ "$HEAD_BRANCH" =~ $semver_re ]]; then
+        if ! [[ "$VERSION" =~ $semver_re ]]; then
           echo "::error::Tag '$HEAD_BRANCH' is not a valid semver release tag"
           exit 1
         fi
@@ -67,6 +79,7 @@ jobs:
           echo "::error::Image build for tag $HEAD_BRANCH did not succeed (conclusion: $CONCLUSION). Refusing to publish chart."
           exit 1
         fi
+        echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
         echo "Image build succeeded for tag $HEAD_BRANCH"
 
   publish-service-chart:
@@ -87,7 +100,7 @@ jobs:
     - id: run
       working-directory: fulfillment-service
       env:
-        TAG: ${{ needs.guard.outputs.tag }}
+        VERSION: ${{ needs.guard.outputs.version }}
         REGISTRY_USERNAME: ${{ github.actor }}
         REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
         REPO: ${{ github.repository }}
@@ -96,8 +109,9 @@ jobs:
         export registry="ghcr.io"
         echo "${REGISTRY_PASSWORD}" | helm registry login --username "${REGISTRY_USERNAME}" --password-stdin "${registry}"
 
-        # Get the git version from the tag that triggered the image build:
-        export git_version="${TAG}"
+        # Get the bare version from the tag that triggered the image build (the
+        # component-scoped prefix was already stripped by the guard job):
+        export git_version="${VERSION}"
 
         # Update the image reference in the chart:
         export app_version="${git_version}"
@@ -149,9 +163,9 @@ jobs:
 
     - name: Extract version from tag
       id: version
-      run: echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+      run: echo "version=${VERSION#v}" >> "$GITHUB_OUTPUT"
       env:
-        TAG: ${{ needs.guard.outputs.tag }}
+        VERSION: ${{ needs.guard.outputs.version }}
 
     - name: Package chart
       working-directory: osac-operator
@@ -202,9 +216,9 @@ jobs:
 
     - name: Extract version from tag
       id: version
-      run: echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+      run: echo "version=${VERSION#v}" >> "$GITHUB_OUTPUT"
       env:
-        TAG: ${{ needs.guard.outputs.tag }}
+        VERSION: ${{ needs.guard.outputs.version }}
 
     - name: Update image tag in values.yaml
       working-directory: osac-operator
@@ -250,13 +264,14 @@ jobs:
       run: |
         gh release create "${TAG}" \
           --repo "${REPO}" \
-          --title "osac-operator ${TAG}" \
+          --title "osac-operator ${VERSION}" \
           --generate-notes \
           --verify-tag \
         || gh release edit "${TAG}" \
           --repo "${REPO}" \
-          --title "osac-operator ${TAG}"
+          --title "osac-operator ${VERSION}"
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         TAG: ${{ needs.guard.outputs.tag }}
+        VERSION: ${{ needs.guard.outputs.version }}
         REPO: ${{ github.repository }}

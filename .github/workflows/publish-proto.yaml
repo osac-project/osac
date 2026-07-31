@@ -19,7 +19,7 @@ name: Publish proto
 on:
   push:
     tags:
-    - 'v*'
+    - 'fulfillment-service/v*'
 
 jobs:
 
@@ -37,4 +37,6 @@ jobs:
         version: 1.71.0
     - working-directory: fulfillment-service
       run: |
-        buf push --label "${{ github.ref_name }}"
+        # Strip this component's tag prefix (see the `tags:` trigger above) so the
+        # label reads as a plain version, not the full scoped git tag.
+        buf push --label "${GITHUB_REF_NAME#fulfillment-service/}"

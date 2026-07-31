@@ -42,8 +42,8 @@ jobs:
       with:
         workdir: fulfillment-service
         # goreleaser's own git-state pipe additionally requires a real git tag
-        # literally named GORELEASER_CURRENT_TAG to exist at HEAD, separate from
-        # (and not satisfied by) the env var override above -- our actual pushed
+        # named by the value of GORELEASER_CURRENT_TAG to exist at HEAD, separate
+        # from (and not satisfied by) the env var override above -- our actual pushed
         # tag is scoped (fulfillment-service/vX.Y.Z), so that check always fails.
         # --skip=validate disables just that check (plus an irrelevant-in-CI
         # dirty-worktree check); it doesn't affect anything else in the release.

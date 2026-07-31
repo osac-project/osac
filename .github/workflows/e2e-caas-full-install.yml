@@ -56,13 +56,21 @@ jobs:
               - '!**/*.md'
               - '!**/docs/**'
 
-  # Builds both fulfillment-service and osac-operator from this PR's current
-  # code and installs them together in one cluster -- not one "component
-  # under test" plus a stale pinned image for the other. Runs for any change
-  # touching either component (see `changes` above) rather than being
-  # path-scoped per component; splitting this by component to avoid running
-  # both suites when only one changed is deferred to the future full
-  # path-based CI matrix, once its skip-logic pattern is verified.
+  # Builds fulfillment-service, osac-operator, and bare-metal-fulfillment-operator
+  # from this PR's current code and installs them together in one cluster --
+  # not one "component under test" plus a stale pinned image for the others.
+  # Runs for any change touching any component (see `changes` above) rather
+  # than being path-scoped per component; splitting this by component to
+  # avoid running both suites when only one changed is deferred to the
+  # future full path-based CI matrix, once its skip-logic pattern is
+  # verified. (osac-aap is not built here -- that's a pre-existing scope
+  # decision for this flow, unrelated to BMF, not changed by this entry.)
+  #
+  # bare-metal-fulfillment-operator's image override (bmf.image.repository)
+  # is currently a no-op in this flow specifically: values/caas-ci/values.yaml
+  # sets bmf.enabled: false, so the chart isn't deployed here at all. Still
+  # built from source for consistency with the other components -- revisit
+  # if caas ever needs BMF enabled.
   e2e-caas-full-install:
     needs: changes
     if: needs.changes.outputs.should-run == 'true'
@@ -70,8 +78,8 @@ jobs:
     with:
       test-suite: ${{ inputs.test-suite || 'caas' }}
       test-filter: ${{ inputs.test-filter || '' }}
-      # Build both component images from the PR's fork/branch (same monorepo checkout)
-      components: '[{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.ref_name }}","containerfile":"fulfillment-service/Containerfile","imageKey":"service.images.service"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.ref_name }}","containerfile":"osac-operator/Containerfile","imageKey":"operator.image.repository"}]'
+      # Build all component images from the PR's fork/branch (same monorepo checkout)
+      components: '[{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.ref_name }}","containerfile":"fulfillment-service/Containerfile","imageKey":"service.images.service"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.ref_name }}","containerfile":"osac-operator/Containerfile","imageKey":"operator.image.repository"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.ref_name }}","containerfile":"bare-metal-fulfillment-operator/Containerfile","imageKey":"bmf.image.repository"}]'
       # Pass author_association for fork PR authorization (empty for non-fork PRs)
       fork-pr-author-association: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.author_association || '' }}
       fork-pr-author: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.user.login || '' }}

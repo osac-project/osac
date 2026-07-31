@@ -4,22 +4,6 @@ on:
   pull_request:
     branches:
     - main
-    paths:
-      - 'fulfillment-service/**'
-      - '!fulfillment-service/OWNERS'
-      - '!fulfillment-service/LICENSE'
-      - '!fulfillment-service/**/*.md'
-      - '!fulfillment-service/docs/**'
-      - 'osac-operator/**'
-      - '!osac-operator/OWNERS'
-      - '!osac-operator/LICENSE'
-      - '!osac-operator/**/*.md'
-      - '!osac-operator/docs/**'
-      - 'osac-aap/**'
-      - '!osac-aap/OWNERS'
-      - '!osac-aap/LICENSE'
-      - '!osac-aap/**/*.md'
-      - '!osac-aap/docs/**'
   workflow_dispatch:
   # 2x/day (every 12h). Offset 47 minutes past the hour, not on the hour --
   # GitHub Actions' shared cron scheduler queues everyone's on-the-hour
@@ -39,6 +23,26 @@ permissions:
 
 jobs:
 
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      should-run: ${{ github.event_name != 'pull_request' || steps.filter.outputs.code == 'true' }}
+    steps:
+      - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706  # v4.0.2
+        if: github.event_name == 'pull_request'
+        id: filter
+        with:
+          predicate-quantifier: 'every'
+          filters: |
+            code:
+              - '**'
+              - '!OWNERS'
+              - '!LICENSE'
+              - '!*.md'
+              - '!docs/**'
+
   # fulfillment-service, osac-operator, and osac-aap use genuinely different
   # integration test mechanisms (ginkgo directly, a Kind cluster + Makefile
   # target, and a Kind cluster + uv/pytest respectively), so these stay
@@ -46,6 +50,8 @@ jobs:
   # parameterize, only the workflow-level trigger/name were duplicated before.
   fulfillment-service:
     name: Run integration test (fulfillment-service)
+    needs: changes
+    if: needs.changes.outputs.should-run == 'true'
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -69,6 +75,8 @@ jobs:
 
   osac-operator:
     name: Run integration test (osac-operator)
+    needs: changes
+    if: needs.changes.outputs.should-run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -95,6 +103,8 @@ jobs:
 
   osac-aap:
     name: Run integration test (osac-aap)
+    needs: changes
+    if: needs.changes.outputs.should-run == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

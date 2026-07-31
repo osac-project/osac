@@ -18,12 +18,6 @@ on:
   pull_request:
     branches:
     - main
-    paths:
-      - 'fulfillment-service/**'
-      - '!fulfillment-service/OWNERS'
-      - '!fulfillment-service/LICENSE'
-      - '!fulfillment-service/**/*.md'
-      - '!fulfillment-service/docs/**'
   workflow_dispatch:
   # 2x/day (every 12h). Offset 13 minutes past the hour, not on the hour --
   # GitHub Actions' shared cron scheduler queues everyone's on-the-hour
@@ -39,8 +33,30 @@ permissions:
 
 jobs:
 
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      should-run: ${{ github.event_name != 'pull_request' || steps.filter.outputs.code == 'true' }}
+    steps:
+      - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706  # v4.0.2
+        if: github.event_name == 'pull_request'
+        id: filter
+        with:
+          predicate-quantifier: 'every'
+          filters: |
+            code:
+              - '**'
+              - '!OWNERS'
+              - '!LICENSE'
+              - '!*.md'
+              - '!docs/**'
+
   run-unit-tests:
     name: Run unit tests
+    needs: changes
+    if: needs.changes.outputs.should-run == 'true'
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1

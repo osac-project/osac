@@ -1,0 +1,58 @@
+#
+# Copyright (c) 2025 Red Hat Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+# the License. You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+# specific language governing permissions and limitations under the License.
+#
+
+# CI-only dummy values, used solely to satisfy this chart's `required "..."` guards so that
+# `helm lint`/`helm template` can exercise every template. Not used for real deploys -- see
+# values.yaml for the real, documented defaults and the actual deploy-time overrides.
+
+certs:
+  issuerRef:
+    name: ci-selfsigned-issuer
+  caBundle:
+    configMap: ci-ca-bundle
+
+externalHostname: fulfillment-api.ci.example.com
+internalHostname: fulfillment-internal-api.ci.example.com
+
+auth:
+  issuerUrl: https://issuer.ci.example.com
+  controllerCredentials:
+  - secret:
+      name: ci-controller-credentials
+      items:
+      - key: client-id
+        param: client-id
+      - key: client-secret
+        param: client-secret
+
+idp:
+  url: https://idp.ci.example.com
+  credentials:
+  - secret:
+      name: ci-idp-credentials
+      items:
+      - key: client-id
+        param: client-id
+      - key: client-secret
+        param: client-secret
+
+# Non-empty so grpc-server's deployment template takes its `range` branch instead of its
+# `database.connection` empty-list branch (rendering the latter is a separate, pre-existing bug
+# unrelated to the required-value guards this file otherwise exists to satisfy).
+database:
+  connection:
+  - secret:
+      name: ci-db-credentials
+      items:
+      - key: uri
+        param: url

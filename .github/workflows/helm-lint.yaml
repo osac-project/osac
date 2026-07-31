@@ -8,6 +8,7 @@ on:
       - 'osac-operator/config/crd/bases/**'
       - 'osac-operator/hack/sync-helm-crds.py'
       - 'osac-operator/Makefile'
+      - 'fulfillment-service/charts/**'
       - '.github/workflows/helm-lint.yaml'
 
 permissions:
@@ -35,17 +36,24 @@ jobs:
       working-directory: osac-operator
       run: make check-helm-crds
 
-  # fulfillment-service's chart isn't included here: it guards most values
-  # with `required "..." .Values.X` (auth/certs/idp config), so it can't be
-  # helm-lint'd with bare values.yaml the way osac-operator's charts can.
-  # Needs a CI-only dummy-values file before it can join this matrix.
+  # fulfillment-service's chart guards most values with `required "..." .Values.X`
+  # (auth/certs/idp config), so it needs its CI-only charts/service/ci-values.yaml
+  # passed via -f to lint/template cleanly -- osac-operator's charts have no such
+  # guards and lint fine bare.
   helm-lint:
-    name: Lint Helm chart (osac-operator/${{ matrix.chart }})
+    name: Lint Helm chart (${{ matrix.component }}/${{ matrix.chart }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        chart: [operator-crds, operator]
+        include:
+          - component: osac-operator
+            chart: operator-crds
+          - component: osac-operator
+            chart: operator
+          - component: fulfillment-service
+            chart: service
+            values-file: ci-values.yaml
     steps:
     - name: Checkout repository
       uses: actions/checkout@v7
@@ -58,9 +66,19 @@ jobs:
         version: v3.17.0
 
     - name: Lint chart
-      working-directory: osac-operator
-      run: helm lint charts/${{ matrix.chart }}/
+      working-directory: ${{ matrix.component }}
+      run: |
+        if [ -n "${{ matrix.values-file }}" ]; then
+          helm lint "charts/${{ matrix.chart }}/" -f "charts/${{ matrix.chart }}/${{ matrix.values-file }}"
+        else
+          helm lint "charts/${{ matrix.chart }}/"
+        fi
 
     - name: Template chart
-      working-directory: osac-operator
-      run: helm template test charts/${{ matrix.chart }}/ > /dev/null
+      working-directory: ${{ matrix.component }}
+      run: |
+        if [ -n "${{ matrix.values-file }}" ]; then
+          helm template test "charts/${{ matrix.chart }}/" -f "charts/${{ matrix.chart }}/${{ matrix.values-file }}" > /dev/null
+        else
+          helm template test "charts/${{ matrix.chart }}/" > /dev/null
+        fi

@@ -29,16 +29,9 @@ jobs:
   # component's image-build workflow fired. Each publish job below then
   # gates on github.event.workflow_run.name to only publish its own
   # component's chart -- the image-build workflows themselves stay separate
-  # per component (see build-image.yaml/publish-image.yaml), so this is the
-  # one place their otherwise-independent tag-triggered releases converge.
-  #
-  # osac-aap's execution-environment.yml is NOT wired in here yet: PR #29
-  # (OSAC-3467) is reworking this guard job to use component-scoped tags
-  # (<component>/vX.Y.Z) and a shared `version` output instead of the bare
-  # `v*` matching below, and is still open/under review. Wiring osac-aap in
-  # against the current unscoped shape would conflict with that PR and need
-  # rework regardless of merge order. Deferred to a follow-up once PR #29's
-  # final shape lands -- see OSAC-3491.
+  # per component (see build-image.yaml/publish-image.yaml/execution-environment.yml),
+  # so this is the one place their otherwise-independent tag-triggered
+  # releases converge.
   guard:
     name: Verify image build succeeded
     runs-on: ubuntu-latest
@@ -47,7 +40,8 @@ jobs:
     if: >
       github.event.workflow_run.event == 'push' &&
       (startsWith(github.event.workflow_run.head_branch, 'fulfillment-service/v') ||
-       startsWith(github.event.workflow_run.head_branch, 'osac-operator/v'))
+       startsWith(github.event.workflow_run.head_branch, 'osac-operator/v') ||
+       startsWith(github.event.workflow_run.head_branch, 'osac-aap/v'))
     outputs:
       tag: ${{ github.event.workflow_run.head_branch }}
       version: ${{ steps.check.outputs.version }}
@@ -59,12 +53,14 @@ jobs:
         CONCLUSION: ${{ github.event.workflow_run.conclusion }}
         HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
       run: |
-        # Each component owns a scoped tag prefix (see publish-image.yaml/build-image.yaml's
-        # own `tags:` triggers) so a single tag push can't fire every component's release
-        # chain at once; strip it here to recover the bare vX.Y.Z used for artifact versions.
+        # Each component owns a scoped tag prefix (see publish-image.yaml/build-image.yaml/
+        # execution-environment.yml's own `tags:` triggers) so a single tag push can't fire
+        # every component's release chain at once; strip it here to recover the bare vX.Y.Z
+        # used for artifact versions.
         case "$HEAD_BRANCH" in
           fulfillment-service/v*) VERSION="${HEAD_BRANCH#fulfillment-service/}" ;;
           osac-operator/v*) VERSION="${HEAD_BRANCH#osac-operator/}" ;;
+          osac-aap/v*) VERSION="${HEAD_BRANCH#osac-aap/}" ;;
           *) echo "::error::Tag '$HEAD_BRANCH' does not match a known component prefix"; exit 1 ;;
         esac
 
@@ -277,6 +273,115 @@ jobs:
         || gh release edit "${TAG}" \
           --repo "${REPO}" \
           --title "osac-operator ${VERSION}"
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG: ${{ needs.guard.outputs.tag }}
+        VERSION: ${{ needs.guard.outputs.version }}
+        REPO: ${{ github.repository }}
+
+  # Single job, unlike osac-operator's chart-publish/release split: osac-aap
+  # has only one chart, so there's no multi-chart parallelism to justify
+  # separating release creation into its own job -- this mirrors the old
+  # standalone osac-aap repo's own publish-aap-chart job, including its
+  # double tag-race check (once before packaging, again right before the
+  # release, since real wall-clock time passes between the two).
+  publish-osac-aap-chart:
+    name: Publish osac-aap chart
+    needs: guard
+    if: success() && github.event.workflow_run.name == 'Build execution environment'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      with:
+        ref: ${{ needs.guard.outputs.sha }}
+        persist-credentials: false
+
+    - name: Verify tag still points at the guarded commit
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG: ${{ needs.guard.outputs.tag }}
+        GUARDED_SHA: ${{ needs.guard.outputs.sha }}
+        REPO: ${{ github.repository }}
+      run: .github/scripts/osac-aap-verify-tag-matches-sha.sh
+
+    - name: Set up Helm
+      uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+      with:
+        version: v3.17.0
+
+    - name: Log in to GHCR
+      env:
+        REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        REGISTRY_USERNAME: ${{ github.actor }}
+      run: echo "${REGISTRY_PASSWORD}" | helm registry login "${REGISTRY}" -u "${REGISTRY_USERNAME}" --password-stdin
+
+    - name: Extract version from tag
+      id: version
+      run: echo "version=${VERSION#v}" >> "$GITHUB_OUTPUT"
+      env:
+        VERSION: ${{ needs.guard.outputs.version }}
+
+    - name: Update image tag in values.yaml
+      working-directory: osac-aap
+      env:
+        VERSION: ${{ steps.version.outputs.version }}
+      run: |
+        if [[ ! "$VERSION" =~ ^[0-9A-Za-z._-]+$ ]]; then
+          echo "Invalid release version: $VERSION" >&2
+          exit 1
+        fi
+
+        # sed exits 0 even when a pattern matches zero lines, so a future values.yaml
+        # format change could silently leave a placeholder unpinned. Verify the expected
+        # replacement actually landed and fail the release instead of packaging stale values.
+        replace_and_verify() {
+          local old="$1" new="$2"
+          sed -i "s|${old}|${new}|" charts/aap/values.yaml
+          if ! grep -qF -- "${new}" charts/aap/values.yaml; then
+            echo "::error::Expected '${new}' not found in charts/aap/values.yaml after substitution (placeholder '${old}' may be missing or already changed)" >&2
+            exit 1
+          fi
+        }
+
+        replace_and_verify "image: ghcr.io/osac-project/osac-aap:latest" "image: ghcr.io/osac-project/osac-aap:v${VERSION}"
+        replace_and_verify "eeImage: \"\"" "eeImage: \"ghcr.io/osac-project/osac-aap:v${VERSION}\""
+        replace_and_verify "projectGitBranch: \"\"" "projectGitBranch: \"v${VERSION}\""
+
+    - name: Package chart
+      working-directory: osac-aap
+      run: |
+        helm package charts/aap/ \
+          --version "${{ steps.version.outputs.version }}" \
+          --app-version "${{ steps.version.outputs.version }}"
+
+    - name: Push chart to GHCR
+      working-directory: osac-aap
+      run: |
+        helm push osac-aap-${{ steps.version.outputs.version }}.tgz \
+          oci://${{ env.REGISTRY }}/${{ env.CHARTS_REPO }}
+
+    - name: Verify tag still points at the guarded commit
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG: ${{ needs.guard.outputs.tag }}
+        GUARDED_SHA: ${{ needs.guard.outputs.sha }}
+        REPO: ${{ github.repository }}
+      run: .github/scripts/osac-aap-verify-tag-matches-sha.sh
+
+    - name: Create GitHub Release
+      run: |
+        gh release create "${TAG}" \
+          --repo "${REPO}" \
+          --title "osac-aap ${VERSION}" \
+          --generate-notes \
+          --verify-tag \
+        || gh release edit "${TAG}" \
+          --repo "${REPO}" \
+          --title "osac-aap ${VERSION}"
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         TAG: ${{ needs.guard.outputs.tag }}

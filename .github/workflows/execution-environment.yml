@@ -10,7 +10,7 @@ on:
     branches:
       - main
     tags:
-      - 'v*'
+      - 'osac-aap/v*'
   pull_request:
     branches:
       - main
@@ -50,6 +50,29 @@ jobs:
                                             --tag "osac-ee"         \
                                             -f "./execution-environment/execution-environment.yaml"
 
+      # Component-scoped tags (see the `tags:` trigger above) can't be used verbatim
+      # as image tags -- Docker/OCI tags can't contain the '/' the git tag does --
+      # so strip the prefix here to recover the bare vX.Y.Z for the actual image tags.
+      - name: Compute release version
+        if: startsWith(github.ref, 'refs/tags/osac-aap/')
+        run: |
+          version="${GITHUB_REF_NAME#osac-aap/}"
+          # Same SemVer rule as publish-charts.yaml's guard job -- rejects build
+          # metadata (+...) and validates the core/prerelease shape before it's
+          # trusted as an image tag.
+          semver_re='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\.((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?$'
+          if ! [[ "${version}" =~ ${semver_re} ]]; then
+            echo "::error::Tag '${GITHUB_REF_NAME}' is not a valid semver release tag"
+            exit 1
+          fi
+          # Prerelease identifiers can themselves contain dots (e.g. v1.2.3-beta.1),
+          # so derive major/minor from the prerelease-stripped core version --
+          # otherwise a dotted prerelease would corrupt the major.minor alias.
+          core="${version%%-*}"
+          echo "RELEASE_VERSION=${version}" >> "$GITHUB_ENV"
+          echo "RELEASE_MAJOR_MINOR=${core%.*}" >> "$GITHUB_ENV"
+          echo "RELEASE_MAJOR=${core%%.*}" >> "$GITHUB_ENV"
+
       - name: Extract metadata (tags, labels)
         if: github.event_name != 'pull_request'
         id: meta
@@ -60,11 +83,15 @@ jobs:
           # workflow post-merge (see OSAC-3490), colliding on mutable tags.
           # Keeping this component's pre-merge image identity stable instead.
           images: ghcr.io/osac-project/osac-aap
+          # No `type=ref,event=tag` here: the `tags:` trigger above only ever
+          # matches this component's own scoped prefix, so the tag-triggered
+          # case is always covered by the three raw entries below already --
+          # keeping it would just add a redundant, slash-sanitized duplicate
+          # tag (e.g. "osac-aap-v1.2.3").
           tags: |
-            type=semver,pattern=v{{version}}
-            type=semver,pattern=v{{major}}.{{minor}}
-            type=semver,pattern=v{{major}}
-            type=ref,event=tag
+            type=raw,value=${{ env.RELEASE_VERSION }},enable=${{ env.RELEASE_VERSION != '' }}
+            type=raw,value=${{ env.RELEASE_MAJOR_MINOR }},enable=${{ env.RELEASE_VERSION != '' }}
+            type=raw,value=${{ env.RELEASE_MAJOR }},enable=${{ env.RELEASE_VERSION != '' }}
             type=sha
             type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
 

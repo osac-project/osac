@@ -48,10 +48,10 @@ jobs:
           filters: |
             code:
               - '**'
-              - '!OWNERS'
-              - '!LICENSE'
-              - '!*.md'
-              - '!docs/**'
+              - '!**/OWNERS'
+              - '!**/LICENSE'
+              - '!**/*.md'
+              - '!**/docs/**'
 
   run-unit-tests:
     name: Run unit tests

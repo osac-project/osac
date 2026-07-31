@@ -41,7 +41,13 @@ jobs:
     - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94  # v7
       with:
         workdir: fulfillment-service
-        args: release --clean
+        # goreleaser's own git-state pipe additionally requires a real git tag
+        # literally named GORELEASER_CURRENT_TAG to exist at HEAD, separate from
+        # (and not satisfied by) the env var override above -- our actual pushed
+        # tag is scoped (fulfillment-service/vX.Y.Z), so that check always fails.
+        # --skip=validate disables just that check (plus an irrelevant-in-CI
+        # dirty-worktree check); it doesn't affect anything else in the release.
+        args: release --clean --skip=validate
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GORELEASER_CURRENT_TAG: ${{ env.RELEASE_VERSION }}

@@ -19,8 +19,9 @@ name: Scan workflow logs
 on:
   workflow_run:  # zizmor: ignore[dangerous-triggers] -- no PR-head checkout; only trusted SHA-pinned/local composite actions; untrusted event data via env:, never interpolated into run: bodies.
     workflows:
-      - E2E VMaaS Full Install
       - E2E BMaaS Full Install
+      - E2E VMaaS Full Install
+      - E2E CaaS Full Install
     types: [completed]
 
 concurrency:

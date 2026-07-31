@@ -1,5 +1,5 @@
 ---
-name: E2E BMaaS Full Install
+name: E2E CaaS Full Install
 
 permissions:
   contents: read
@@ -13,9 +13,9 @@ on:
   workflow_dispatch:
     inputs:
       test-suite:
-        description: "Test suite (bmaas, or empty for all)"
+        description: "Test suite (caas, or empty for all)"
         required: false
-        default: "bmaas"
+        default: "caas"
       test-filter:
         description: "pytest -k filter"
         required: false
@@ -26,7 +26,7 @@ on:
         default: "main"
 
 concurrency:
-  group: e2e-bmaas-full-install-${{ github.event.pull_request.number || github.run_id }}
+  group: e2e-caas-full-install-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -57,12 +57,12 @@ jobs:
   # path-scoped per component; splitting this by component to avoid running
   # both suites when only one changed is deferred to the future full
   # path-based CI matrix, once its skip-logic pattern is verified.
-  e2e-bmaas-full-install:
+  e2e-caas-full-install:
     needs: changes
     if: needs.changes.outputs.should-run == 'true'
-    uses: osac-project/osac-test-infra/.github/workflows/e2e-bmaas-full-install.yml@main
+    uses: osac-project/osac-test-infra/.github/workflows/e2e-caas-full-install.yml@main
     with:
-      test-suite: ${{ inputs.test-suite || 'bmaas' }}
+      test-suite: ${{ inputs.test-suite || 'caas' }}
       test-filter: ${{ inputs.test-filter || '' }}
       # Build both component images from the PR's fork/branch (same monorepo checkout)
       components: '[{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.ref_name }}","containerfile":"fulfillment-service/Containerfile","imageKey":"service.images.service"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.ref_name }}","containerfile":"osac-operator/Containerfile","imageKey":"operator.image.repository"}]'
@@ -73,17 +73,21 @@ jobs:
       # Checkout osac-test-infra for tests/Containerfile (not the caller repo)
       test-infra-repository: osac-project/osac-test-infra
       test-infra-ref: ${{ inputs.test-infra-ref || 'main' }}
+      # CaaS-specific inputs (cluster-template, caas-domain, flavor-image,
+      # flavor-name, namespace, installer-repo/ref, etc.) are left at the
+      # reusable workflow's own defaults -- none are required and this
+      # caller has no need to override them today.
 
   e2e:
     if: always()
-    needs: [changes, e2e-bmaas-full-install]
+    needs: [changes, e2e-caas-full-install]
     runs-on: ubuntu-latest
     steps:
       - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         run: |
           echo "Upstream job results:"
           echo "  changes: ${{ needs.changes.result }}"
-          echo "  e2e-bmaas-full-install: ${{ needs.e2e-bmaas-full-install.result }}"
+          echo "  e2e-caas-full-install: ${{ needs.e2e-caas-full-install.result }}"
           echo ""
           echo "One or more upstream jobs failed or were cancelled."
           exit 1

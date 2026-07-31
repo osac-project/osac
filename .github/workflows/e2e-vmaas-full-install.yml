@@ -65,14 +65,7 @@ jobs:
       test-suite: ${{ inputs.test-suite || 'vmaas' }}
       test-filter: ${{ inputs.test-filter || '' }}
       # Build both component images from the PR's fork/branch (same monorepo checkout)
-      component-repo: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
-      component-ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
-      component-containerfile: fulfillment-service/Containerfile
-      component-image-key: service.images.service
-      component2-repo: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
-      component2-ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
-      component2-containerfile: osac-operator/Containerfile
-      component2-image-key: operator.image.repository
+      components: '[{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.ref_name }}","containerfile":"fulfillment-service/Containerfile","imageKey":"service.images.service"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.ref_name }}","containerfile":"osac-operator/Containerfile","imageKey":"operator.image.repository"}]'
       # Pass author_association for fork PR authorization (empty for non-fork PRs)
       fork-pr-author-association: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.author_association || '' }}
       fork-pr-author: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.user.login || '' }}

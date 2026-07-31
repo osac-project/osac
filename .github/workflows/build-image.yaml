@@ -98,13 +98,17 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # No `type=ref,event=tag` here: the `tags:` trigger above only ever
+          # matches this component's own scoped prefix, so the tag-triggered
+          # case is always covered by the three raw entries below already --
+          # keeping it would just add a redundant, slash-sanitized duplicate
+          # tag (e.g. "osac-operator-v1.2.3").
           tags: |
             type=raw,value=${{ env.RELEASE_VERSION }},enable=${{ env.RELEASE_VERSION != '' }}
             type=raw,value=${{ env.RELEASE_MAJOR_MINOR }},enable=${{ env.RELEASE_VERSION != '' }}
             type=raw,value=${{ env.RELEASE_MAJOR }},enable=${{ env.RELEASE_VERSION != '' }}
             type=ref,event=branch
             type=ref,event=pr
-            type=ref,event=tag
             type=sha
             type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
 

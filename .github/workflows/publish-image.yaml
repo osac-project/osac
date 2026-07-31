@@ -25,8 +25,12 @@ permissions:
 env:
   # Use docker.io for Docker Hub if empty
   REGISTRY: ghcr.io
-  # github.repository as <account>/<repo>
-  IMAGE_NAME: ${{ github.repository }}
+  # Hardcoded rather than github.repository: that now resolves to
+  # osac-project/osac for every component's build workflow post-merge,
+  # colliding on mutable tags with osac-operator's image. Keeping this
+  # component's pre-merge image identity stable instead, same as
+  # osac-aap's execution-environment.yml does.
+  IMAGE_NAME: osac-project/fulfillment-service
 
 jobs:
   image:

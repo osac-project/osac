@@ -60,7 +60,8 @@ jobs:
   e2e-bmaas-full-install:
     needs: changes
     if: needs.changes.outputs.should-run == 'true'
-    uses: osac-project/osac-test-infra/.github/workflows/e2e-bmaas-full-install.yml@main
+    # bump this SHA when osac-test-infra reusable workflows change
+    uses: osac-project/osac-test-infra/.github/workflows/e2e-bmaas-full-install.yml@5347598040856b07c61afed01b5b1e6f428c81d7
     with:
       test-suite: ${{ inputs.test-suite || 'bmaas' }}
       test-filter: ${{ inputs.test-filter || '' }}

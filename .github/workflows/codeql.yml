@@ -1,0 +1,71 @@
+---
+name: CodeQL
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      packages: read
+      actions: read
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: go
+            build-mode: manual
+          - language: python
+            build-mode: none
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      # go.work at the repo root requires go >= 1.26.3 (it links
+      # fulfillment-service, osac-operator, and osac-operator/api into one
+      # workspace); the runner's preinstalled Go is older, so autobuild fails
+      # extraction for all three modules without this. This composite action
+      # pins exactly the Go version go.work requires, so any valid
+      # working-directory containing a go.mod satisfies the workspace-wide
+      # version floor.
+      - if: matrix.language == 'go'
+        uses: ./.github/actions/setup-go
+        with:
+          working-directory: fulfillment-service
+
+      # SAST gate: scans and uploads findings to the repo's Security tab.
+      # Deliberately NOT hard-failing the job on finding count > 0 -- doing so
+      # would turn every future PR red until the pre-existing finding backlog
+      # (predating this workflow) is triaged, which is a much bigger policy
+      # change than "add a scanning gate". The gate here is the analyze step
+      # itself completing successfully (i.e. no build/scan error); reviewing
+      # new findings in the Security tab remains a manual step. Bump this SHA
+      # when github/codeql-action needs to be updated.
+      - uses: github/codeql-action/init@f205ea1c3313d32999d8d6a48b4f6530d4437b38  # v4.37.4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      # autobuild runs `go build ./...` from the repo root, which go.work
+      # rejects ("directory prefix . does not contain modules listed in
+      # go.work or their selected dependencies") since there's no go.mod at
+      # root -- only a workspace file linking the 3 modules below. Manual
+      # build-mode with per-module working-directory scoping (same idea as
+      # the setup-go step above) avoids that.
+      - if: matrix.language == 'go'
+        name: Build Go modules
+        run: |
+          set -e
+          (cd fulfillment-service && go build ./...)
+          (cd osac-operator && go build ./...)
+          (cd osac-operator/api && go build ./...)
+
+      - uses: github/codeql-action/analyze@f205ea1c3313d32999d8d6a48b4f6530d4437b38  # v4.37.4
+        with:
+          category: "/language:${{ matrix.language }}"

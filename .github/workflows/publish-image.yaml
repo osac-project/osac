@@ -54,9 +54,21 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/fulfillment-service/')
         run: |
           version="${GITHUB_REF_NAME#fulfillment-service/}"
+          # Same SemVer rule as publish-charts.yaml's guard job -- rejects build
+          # metadata (+...) and validates the core/prerelease shape before it's
+          # trusted as an image tag.
+          semver_re='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\.((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?$'
+          if ! [[ "${version}" =~ ${semver_re} ]]; then
+            echo "::error::Tag '${GITHUB_REF_NAME}' is not a valid semver release tag"
+            exit 1
+          fi
+          # Prerelease identifiers can themselves contain dots (e.g. v1.2.3-beta.1),
+          # so derive major/minor from the prerelease-stripped core version --
+          # otherwise a dotted prerelease would corrupt the major.minor alias.
+          core="${version%%-*}"
           echo "RELEASE_VERSION=${version}" >> "$GITHUB_ENV"
-          echo "RELEASE_MAJOR_MINOR=${version%.*}" >> "$GITHUB_ENV"
-          echo "RELEASE_MAJOR=${version%%.*}" >> "$GITHUB_ENV"
+          echo "RELEASE_MAJOR_MINOR=${core%.*}" >> "$GITHUB_ENV"
+          echo "RELEASE_MAJOR=${core%%.*}" >> "$GITHUB_ENV"
 
       # Extract metadata (tags, labels) for Docker
       # https://github.com/docker/metadata-action

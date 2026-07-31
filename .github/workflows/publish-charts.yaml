@@ -16,10 +16,10 @@ name: Publish charts
 
 on:
   workflow_run:
-    # OSAC-3511 added osac-aap's guard condition and publish-osac-aap-chart
-    # job, but missed adding its actual build workflow's name here --
-    # workflow_run only fires for workflows explicitly listed, so without
-    # this the osac-aap chart-publish path silently never triggers at all.
+    # workflow_run only fires for workflows explicitly listed here -- the
+    # guard condition and publish-osac-aap-chart job alone aren't enough
+    # to trigger this workflow at all without osac-aap's build workflow
+    # name also present in this list.
     workflows: ["Container image", "Build container image", "Build execution environment"]
     types: [completed]
 

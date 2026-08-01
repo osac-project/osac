@@ -2,12 +2,11 @@ name: Check image tags match submodules
 
 on:
   pull_request:
-    paths:
-      - 'osac-installer/**'
-      - '!osac-installer/OWNERS'
-      - '!osac-installer/LICENSE'
-      - '!osac-installer/**/*.md'
-      - '!osac-installer/docs/**'
+    paths-ignore:
+      - 'OWNERS'
+      - 'LICENSE'
+      - '*.md'
+      - 'docs/**'
 
 concurrency:
   group: "check-image-tags-${{ github.head_ref || github.run_id }}"
@@ -21,5 +20,4 @@ jobs:
         with:
           submodules: recursive
       - name: Verify image tags match submodule commits
-        working-directory: osac-installer
         run: bash scripts/sync-image-tags.sh

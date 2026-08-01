@@ -67,7 +67,7 @@ jobs:
   e2e-bmaas-full-install:
     needs: changes
     if: needs.changes.outputs.should-run == 'true'
-    uses: osac-project/osac-test-infra/.github/workflows/e2e-bmaas-full-install.yml@main
+    uses: eliorerz/osac-test-infra/.github/workflows/e2e-bmaas-full-install.yml@osac-3528-drop-dead-osac-ui-followup
     with:
       test-suite: ${{ inputs.test-suite || 'bmaas' }}
       test-filter: ${{ inputs.test-filter || '' }}

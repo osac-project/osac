@@ -51,3 +51,23 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GORELEASER_CURRENT_TAG: ${{ env.RELEASE_VERSION }}
+    - name: Point release at the scoped trigger tag
+      # GORELEASER_CURRENT_TAG must be a bare, semver-parseable value (see
+      # above), so the release -- and an accompanying lightweight git tag --
+      # that goreleaser's own `gh release create` produces is necessarily
+      # named after that bare version, not the scoped tag that actually
+      # triggered this workflow (decoupling the two is a goreleaser Pro-only
+      # feature, confirmed via https://goreleaser.com/customization/monorepo/).
+      # Re-point the release at the real scoped tag for consistency with the
+      # other 3 components' releases (OSAC-3467) -- verified this works
+      # correctly for slash-containing tags (GitHub's own generated
+      # browser_download_url uses the literal, non-percent-encoded tag) --
+      # then remove the now-orphaned bare tag goreleaser left behind.
+      run: |
+        gh release edit "${RELEASE_VERSION}" \
+          --tag "${GITHUB_REF_NAME}" \
+          --title "fulfillment-service ${RELEASE_VERSION}" \
+          --verify-tag
+        gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/${RELEASE_VERSION}"
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

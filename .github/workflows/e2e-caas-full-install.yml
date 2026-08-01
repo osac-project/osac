@@ -8,14 +8,16 @@ on:
   pull_request:
     branches: [main]
   merge_group:
-  # 3x/day (every 8h). Offset 38 minutes past the hour, not on the hour --
-  # GitHub Actions' shared cron scheduler queues everyone's on-the-hour
+  # 10x/day. Offset 38 minutes past the hour, not on the hour -- GitHub
+  # Actions' shared cron scheduler queues everyone's on-the-hour
   # schedules together and can delay/drop them under load (see
   # osac-test-infra's e2e-caas-netris-caller.yml for the same reasoning).
   # Staggered from the other periodic workflows in this repo too, so they
-  # don't all land on the same offset simultaneously.
+  # don't all land on the same offset simultaneously. 24 doesn't divide
+  # evenly by 10, so this lists 10 explicit hours (roughly every 2-3h)
+  # instead of a bare */N pattern.
   schedule:
-    - cron: "38 */8 * * *"
+    - cron: "38 0,2,5,7,10,12,14,17,19,22 * * *"
   workflow_dispatch:
     inputs:
       test-suite:

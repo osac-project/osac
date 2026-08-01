@@ -28,7 +28,7 @@ with per-environment values files under `values/`.
 
 ## OSAC Components
 
-The OSAC platform relies on four core components to deliver governed self-service:
+The OSAC platform relies on five core components to deliver governed self-service:
 
 1. **Fulfillment Service:**
    The API and frontend entry point used to manage user requests and map them to specific
@@ -298,8 +298,8 @@ $ osac create hub \
 ### 4. Use the CLI
 
 Once configured, you can use the OSAC CLI to manage clusters and virtual machines.
-For detailed usage instructions and command reference, see the
-[OSAC CLI documentation](https://github.com/osac-project/fulfillment-service).
+For detailed usage instructions and command reference, see
+[OSAC-CLI-HOWTO.md](OSAC-CLI-HOWTO.md).
 
 ## Accessing Ansible Automation Platform
 
@@ -407,7 +407,7 @@ For issues and questions:
 - Check the troubleshooting section above
 - Review component logs for error messages
 - Verify prerequisites are properly installed
-- Open issues in the respective component repositories
+- Open issues in the [osac-project/osac](https://github.com/osac-project/osac) repository
 
 ## License
 

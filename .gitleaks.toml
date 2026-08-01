@@ -1,3 +1,8 @@
+[extend]
+  # Layer our allowlist on top of gitleaks' bundled default rules instead of
+  # replacing them (a config file without this is a full ruleset override).
+  useDefault = true
+
 [allowlist]
   description = "Global Allowlist"
 

@@ -23,6 +23,17 @@ __debug_bin*
 *.swo
 *~
 .DS_Store
+Thumbs.db
+
+# Backup files
+*.bak
+*.backup
+
+# Sensitive files
+*.secret
+*.key
+*.pem
+*.crt
 
 # Local dev artifacts
 .artifacts
@@ -123,3 +134,23 @@ dmypy.json
 .pytype/
 cython_debug/
 *.iml
+
+# osac-installer
+/osac-installer/kustomization-build/
+/osac-installer/dist/
+/osac-installer/local/
+/osac-installer/*.local.yaml
+/osac-installer/kubeconfig.hub-access
+/osac-installer/charts/*/charts/*.tgz
+/osac-installer/charts/*/Chart.lock
+/osac-installer/chart-versions.txt
+/osac-installer/images.txt
+/osac-installer/images-raw.txt
+
+# osac-installer secrets (values dirs, e.g. values/<env>/)
+**/dockerconfig.json
+**/*pull-secret.json
+[lL]icense.zip
+**/osac-aap-secrets.env
+**/server-ssh-key
+**/server-ssh-bastion-key

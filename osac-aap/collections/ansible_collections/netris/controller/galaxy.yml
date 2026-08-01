@@ -7,6 +7,6 @@ authors:
 readme: README.md
 license:
   - Apache-2.0
-repository: https://github.com/osac-project/osac-aap
+repository: https://github.com/osac-project/osac
 tags:
   - networking

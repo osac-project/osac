@@ -11,8 +11,8 @@ tags:
   - infrastructure
   - cloud
   - workflows
-repository: https://github.com/osac-project/osac-aap
-issues: https://github.com/osac-project/osac-aap/issues
+repository: https://github.com/osac-project/osac
+issues: https://github.com/osac-project/osac/issues
 build_ignore: []
 dependencies:
   osac.service: ">=1.0.0"

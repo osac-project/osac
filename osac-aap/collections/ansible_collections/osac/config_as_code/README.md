@@ -29,7 +29,7 @@ where applicable):
 | `AAP_ORGANIZATION_NAME` | The AAP organization that should be created | `osac` |
 | `AAP_PROJECT_NAME` | Name of the project to be created | value of `NAMESPACE` |
 | `AAP_PREFIX` | Prefix used to create resources in AAP | `AAP_ORGANIZATION_NAME` |
-| `AAP_PROJECT_GIT_URI` | Git repository URL for the AAP project | `https://github.com/osac-project/osac-aap.git` |
+| `AAP_PROJECT_GIT_URI` | Git repository URL for the AAP project | `https://github.com/osac-project/osac.git` |
 | `AAP_PROJECT_GIT_BRANCH` | Git branch to use for the project | `main` |
 | `AAP_PROJECT_ARCHIVE_URI` | Optional archive URL instead of git (e.g. tarball) | — |
 | `AAP_EE_IMAGE` | Registry URL of the execution environment image | `ghcr.io/osac/osac-aap:latest` |

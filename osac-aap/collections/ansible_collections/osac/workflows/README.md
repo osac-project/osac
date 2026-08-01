@@ -158,4 +158,4 @@ Apache License 2.0
 
 ## Support
 
-For issues and questions, please use the [GitHub issue tracker](https://github.com/osac-project/osac-aap/issues).
+For issues and questions, please use the [GitHub issue tracker](https://github.com/osac-project/osac/issues).

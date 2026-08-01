@@ -556,4 +556,4 @@ ansible-galaxy collection install -r requirements.yml
 
 - Check example overrides in the proof of concept: `/aap-override/aap-shadow-customized`
 - Review MOC implementation for real-world patterns
-- Open issues at https://github.com/osac-project/osac-aap/issues
+- Open issues at https://github.com/osac-project/osac/issues

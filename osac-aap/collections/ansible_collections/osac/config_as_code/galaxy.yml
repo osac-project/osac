@@ -9,8 +9,8 @@ license:
 - Apache-2.0
 tags:
   - infrastructure
-repository: https://github.com/osac-project/osac-aap
-issues: https://github.com/osac-project/osac-aap/issues
+repository: https://github.com/osac-project/osac
+issues: https://github.com/osac-project/osac/issues
 build_ignore: []
 dependencies:
   ansible.platform: "2.5.20250326"

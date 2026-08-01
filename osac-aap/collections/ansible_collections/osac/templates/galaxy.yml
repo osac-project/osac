@@ -39,16 +39,16 @@ tags: [cloud, infrastructure, osac-project, osac]
 dependencies: {}
 
 # The URL of the originating SCM repository
-repository: https://github.com/osac-project/osac-aap
+repository: https://github.com/osac-project/osac
 
 # The URL to any online docs
-documentation: https://github.com/osac-project/osac-aap
+documentation: https://github.com/osac-project/osac
 
 # The URL to the homepage of the collection/project
-homepage: https://github.com/osac-project/osac-aap
+homepage: https://github.com/osac-project/osac
 
 # The URL to the collection issue tracker
-issues: https://github.com/osac-project/osac-aap/issues
+issues: https://github.com/osac-project/osac/issues
 
 # A list of file glob-like patterns used to filter any files or directories that should not be included in the build
 # artifact. A pattern is matched from the relative path of the file or directory of the collection directory. This

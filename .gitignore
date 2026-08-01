@@ -62,6 +62,16 @@ __pycache__
 # Kubernetes Generated files - skip generated files, except for vendored files
 !/osac-operator/vendor/**/zz_generated.*
 
+# bare-metal-fulfillment-operator
+/bare-metal-fulfillment-operator/bin/*
+/bare-metal-fulfillment-operator/main
+/bare-metal-fulfillment-operator/Containerfile.cross
+/bare-metal-fulfillment-operator/Dockerfile.manifests
+/bare-metal-fulfillment-operator/dist/
+/bare-metal-fulfillment-operator/MEMORY.md
+/bare-metal-fulfillment-operator/charts/*/charts/
+/bare-metal-fulfillment-operator/charts/*/Chart.lock
+
 # osac-aap
 .logs/*
 *.retry

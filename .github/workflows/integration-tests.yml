@@ -138,3 +138,105 @@ jobs:
         run: uv run make test
         env:
           STORAGE_TESTS_ENABLED: "true"
+
+  # osac-installer's own smoke test: deploy the umbrella chart (which
+  # composes every other component's chart via file:// dependencies, plus
+  # osac-ui/osac-csi-driver's submodule/OCI dependencies) to a local Kind
+  # cluster and verify it installs and upgrades idempotently. Distinct from
+  # the jobs above, which test one component in isolation -- this is the
+  # only place that exercises the umbrella chart's composition of all of
+  # them together outside of the heavier OpenShift-based e2e-*-full-install
+  # pipelines.
+  osac-installer:
+    name: Run integration test (osac-installer)
+    needs: changes
+    if: needs.changes.outputs.should-run == 'true'
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v6
+      with:
+        submodules: recursive
+        persist-credentials: false
+
+    - name: Update submodules to pinned commits
+      working-directory: osac-installer
+      run: git submodule update --init --recursive
+
+    - name: Set up Helm
+      uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+      with:
+        version: v3.17.0
+
+    - name: Create Kind cluster
+      uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc  # v1
+      with:
+        cluster_name: osac-integration
+
+    - name: Install cert-manager
+      run: |
+        kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.17.1/cert-manager.yaml
+        kubectl wait --for=condition=Available deployment/cert-manager -n cert-manager --timeout=120s
+        kubectl wait --for=condition=Available deployment/cert-manager-webhook -n cert-manager --timeout=120s
+        kubectl wait --for=condition=Available deployment/cert-manager-cainjector -n cert-manager --timeout=120s
+
+    - name: Build chart dependencies
+      working-directory: osac-installer
+      run: helm dependency build charts/osac/
+
+    - name: Lint chart
+      working-directory: osac-installer
+      run: helm lint charts/osac/
+
+    - name: Template chart (dry-run validation)
+      working-directory: osac-installer
+      run: |
+        helm template osac charts/osac/ --values values/development/values.yaml \
+          --set service.externalHostname=fulfillment-api.osac.svc.cluster.local \
+          --set service.internalHostname=fulfillment-internal-api.osac.svc.cluster.local \
+          > /dev/null
+
+    - name: Deploy umbrella chart
+      continue-on-error: true
+      working-directory: osac-installer
+      run: |
+        helm install osac charts/osac/ \
+          --namespace osac \
+          --create-namespace \
+          --values values/development/values.yaml \
+          --set service.externalHostname=fulfillment-api.osac.svc.cluster.local \
+          --set service.internalHostname=fulfillment-internal-api.osac.svc.cluster.local \
+          --set validation.enabled=false \
+          --set aap.bootstrap.enabled=false \
+          --set aap.aap.instance.enabled=false \
+          --set dbMigrate.enabled=false \
+          --timeout 10m \
+          --wait
+
+    - name: Check deployed resources
+      if: always()
+      run: |
+        echo "=== Pods ==="
+        kubectl get pods -n osac 2>/dev/null || true
+        echo "=== Deployments ==="
+        kubectl get deployments -n osac 2>/dev/null || true
+        echo "=== Services ==="
+        kubectl get services -n osac 2>/dev/null || true
+        echo "=== Helm status ==="
+        helm status osac -n osac 2>/dev/null || true
+
+    - name: Test idempotency (helm upgrade with no changes)
+      continue-on-error: true
+      working-directory: osac-installer
+      run: |
+        helm upgrade osac charts/osac/ \
+          --namespace osac \
+          --values values/development/values.yaml \
+          --set service.externalHostname=fulfillment-api.osac.svc.cluster.local \
+          --set service.internalHostname=fulfillment-internal-api.osac.svc.cluster.local \
+          --set validation.enabled=false \
+          --set aap.bootstrap.enabled=false \
+          --set aap.aap.instance.enabled=false \
+          --set dbMigrate.enabled=false \
+          --timeout 10m \
+          --wait

@@ -6,6 +6,7 @@ on:
       - 'fulfillment-service/charts/**/values.yaml'
       - 'osac-operator/charts/**/values.yaml'
       - 'bare-metal-fulfillment-operator/charts/**/values.yaml'
+      - 'osac-installer/charts/**/values.yaml'
       - '.github/scripts/check-floating-tags.sh'
       - '.github/workflows/check-floating-tags.yaml'
 
@@ -23,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        component: [fulfillment-service, osac-operator, bare-metal-fulfillment-operator]
+        component: [fulfillment-service, osac-operator, bare-metal-fulfillment-operator, osac-installer]
     steps:
     - name: Checkout
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1

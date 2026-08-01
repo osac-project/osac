@@ -22,6 +22,10 @@ on:
       - E2E BMaaS Full Install
       - E2E VMaaS Full Install
       - E2E CaaS Full Install
+      # Not yet a root-level workflow (still tracked separately under
+      # OSAC-3367/OSAC-3526) -- listed ahead of time so this list doesn't
+      # need touching again once it lands there.
+      - Nightly Build
     types: [completed]
 
 concurrency:

@@ -15,6 +15,9 @@ on:
       - 'bare-metal-fulfillment-operator/Makefile'
       - 'fulfillment-service/charts/**'
       - 'osac-aap/charts/**'
+      - 'osac-installer/charts/**'
+      - 'osac-installer/values/**'
+      - 'osac-installer/ct.yaml'
       - '.github/workflows/helm-lint.yaml'
 
 permissions:
@@ -99,3 +102,61 @@ jobs:
         else
           helm template test "charts/${{ matrix.chart }}/" > /dev/null
         fi
+
+  # osac-installer's own umbrella chart (charts/osac/) composes every other
+  # component's chart as a file:// dependency plus osac-ui/osac-csi-driver's
+  # real submodule/OCI dependencies -- a different thing from linting any one
+  # component's chart in isolation above, so this stays a separate job rather
+  # than another matrix entry. Needs the actual submodules checked out (unlike
+  # the jobs above) since helm dependency build resolves osac-ui/osac-csi-driver
+  # from base/ on disk.
+  helm-lint-installer:
+    name: Lint Helm charts (osac-installer)
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v6
+      with:
+        submodules: recursive
+        persist-credentials: false
+
+    - name: Set up Helm
+      uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+      with:
+        version: v3.17.0
+
+    - name: Set up chart-testing
+      uses: helm/chart-testing-action@6ec842c01de15ebb84c8627d2744a0c2f2755c9f  # v2.8.0
+
+    - name: Build chart dependencies
+      working-directory: osac-installer
+      run: helm dependency build charts/osac/
+
+    - name: Run chart-testing lint
+      working-directory: osac-installer
+      run: ct lint --all --config ct.yaml
+
+    - name: Template with CI values
+      working-directory: osac-installer
+      run: |
+        set -euo pipefail
+        for f in charts/osac/ci/*-values.yaml; do
+          echo "--- helm template with $(basename "$f") ---"
+          helm template osac charts/osac/ --values "$f" > /dev/null
+        done
+
+    - name: Template with environment values
+      working-directory: osac-installer
+      run: |
+        set -euo pipefail
+        for f in values/*/values.yaml; do
+          echo "--- helm template with $(dirname "$f" | xargs basename) ---"
+          helm template osac charts/osac/ --values "$f" \
+            --set service.externalHostname=fulfillment-api.example.com \
+            --set service.internalHostname=fulfillment-internal-api.example.com \
+            > /dev/null
+        done
+
+    - name: Validate values schema
+      working-directory: osac-installer
+      run: python3 -m json.tool charts/osac/values.schema.json > /dev/null

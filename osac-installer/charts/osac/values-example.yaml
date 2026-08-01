@@ -305,7 +305,7 @@ aap:
 bundledPostgres:
   # When true, auto-creates fulfillment-db secret and postgres-client-cert-service
   # Certificate. Deploy in-cluster PostgreSQL via an operator per
-  # base/osac-fulfillment-service/docs/INSTALL.md first. With bundledPostgres
+  # ../fulfillment-service/docs/INSTALL.md first. With bundledPostgres
   # enabled, the chart assumes a postgres Service at postgres:5432 in the
   # install namespace.
   enabled: false

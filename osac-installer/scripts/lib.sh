@@ -153,7 +153,7 @@ resolve_release_tag() {
     echo "${tag}"
 }
 
-readonly POSTGRES_INSTALL_DOC="base/osac-fulfillment-service/docs/INSTALL.md"
+readonly POSTGRES_INSTALL_DOC="../fulfillment-service/docs/INSTALL.md"
 
 # PostgreSQL prerequisite helpers (production install via setup.sh).
 # Snapshot CI refresh mirrors host/endpoint resolution in

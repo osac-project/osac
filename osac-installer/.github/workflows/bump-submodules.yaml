@@ -24,14 +24,20 @@ jobs:
         run: |
           set -euo pipefail
 
-          # A single component's repo becoming unreachable (renamed, archived
-          # off its expected name, or deleted as part of the mono-repo
-          # cutover) must only skip that component's bump, not abort the
-          # whole job -- this used to be a bare, unguarded call under
-          # `set -e`, so one 404 here killed every other component's bump
-          # too, every 3 hours, until someone noticed. `|| return 1` on the
-          # repo lookup plus `|| VAR=""` at each call site (below) keeps
-          # set -e from propagating past a single component's failure.
+          # osac-operator, fulfillment-service, osac-aap, and
+          # bare-metal-fulfillment-operator are now part of this mono-repo
+          # and share its commit history with osac-installer itself --
+          # there's no independent submodule pin to bump toward for them
+          # anymore. Only osac-ui remains a genuinely separate repo with
+          # its own commit lineage to track.
+          #
+          # A repo becoming unreachable (renamed, archived, or deleted as
+          # part of a future mono-repo cutover) must only skip that
+          # component's bump, not abort the whole job -- this used to be a
+          # bare, unguarded call under `set -e`, so one 404 here killed the
+          # bump every 3 hours, until someone noticed. `|| return 1` on the
+          # repo lookup plus `|| VAR=""` at the call site keeps set -e from
+          # propagating past a single component's failure.
           check_image() {
             local repo=$1
             local image=$2
@@ -55,17 +61,9 @@ jobs:
             echo "${sha}"
           }
 
-          OPERATOR=$(check_image osac-operator osac-operator) || OPERATOR=""
-          FULFILLMENT=$(check_image fulfillment-service fulfillment-service) || FULFILLMENT=""
-          AAP=$(check_image osac-aap osac-aap) || AAP=""
           UI=$(check_image osac-ui osac-ui) || UI=""
-          BMFO=$(check_image bare-metal-fulfillment-operator bare-metal-fulfillment-operator) || BMFO=""
 
-          echo "operator=${OPERATOR}" >> "$GITHUB_OUTPUT"
-          echo "fulfillment=${FULFILLMENT}" >> "$GITHUB_OUTPUT"
-          echo "aap=${AAP}" >> "$GITHUB_OUTPUT"
           echo "ui=${UI}" >> "$GITHUB_OUTPUT"
-          echo "bmfo=${BMFO}" >> "$GITHUB_OUTPUT"
 
       - name: Update submodules
         id: update
@@ -96,11 +94,7 @@ jobs:
             echo "${name}: ${current:0:7} -> ${target:0:7}"
           }
 
-          update_submodule base/osac-operator osac-operator "${{ steps.find.outputs.operator }}"
-          update_submodule base/osac-fulfillment-service fulfillment-service "${{ steps.find.outputs.fulfillment }}"
-          update_submodule base/osac-aap osac-aap "${{ steps.find.outputs.aap }}"
           update_submodule base/osac-ui osac-ui "${{ steps.find.outputs.ui }}"
-          update_submodule base/bare-metal-fulfillment-operator bare-metal-fulfillment-operator "${{ steps.find.outputs.bmfo }}"
 
           echo "changed=${changed}" >> "$GITHUB_OUTPUT"
           echo -e "${summary}" > /tmp/bump-summary.txt

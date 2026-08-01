@@ -1,19 +1,25 @@
 #!/usr/bin/env bash
-# Sync image tags in Helm values files to match submodule commits.
-# Each component repo publishes SHA-tagged images on every main merge.
-# This script reads the submodule commits and updates the values files.
+# Sync image tags in Helm values files to match built component commits.
+# osac-operator, fulfillment-service, osac-aap, and
+# bare-metal-fulfillment-operator now live in the same mono-repo as
+# osac-installer itself and publish SHA-tagged images off that mono-repo's
+# own commits -- there's one shared commit for all of them, not four
+# independent submodule pins. osac-ui remains a genuinely separate
+# repo/submodule and keeps its own commit lookup.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+MONOREPO_ROOT="$(cd "${REPO_ROOT}/.." && pwd)"
 
 errors=0
 
-operator_tag="sha-$(git -C "${REPO_ROOT}" submodule status base/osac-operator | awk '{print $1}' | tr -d ' +-' | cut -c1-7)"
-fulfillment_tag="sha-$(git -C "${REPO_ROOT}" submodule status base/osac-fulfillment-service | awk '{print $1}' | tr -d ' +-' | cut -c1-7)"
-aap_tag="sha-$(git -C "${REPO_ROOT}" submodule status base/osac-aap | awk '{print $1}' | tr -d ' +-' | cut -c1-7)"
-bmf_tag="sha-$(git -C "${REPO_ROOT}" submodule status base/bare-metal-fulfillment-operator | awk '{print $1}' | tr -d ' +-' | cut -c1-7)"
+osac_tag="sha-$(git -C "${MONOREPO_ROOT}" rev-parse --short=7 HEAD)"
+operator_tag="${osac_tag}"
+fulfillment_tag="${osac_tag}"
+aap_tag="${osac_tag}"
+bmf_tag="${osac_tag}"
 ui_tag="sha-$(git -C "${REPO_ROOT}" submodule status base/osac-ui | awk '{print $1}' | tr -d ' +-' | cut -c1-7)"
 
 for values_file in "${REPO_ROOT}"/values/*/values.yaml; do
@@ -61,20 +67,16 @@ for values_file in "${REPO_ROOT}"/values/*/values.yaml; do
     fi
   done
 
-  # Sync projectGitBranch (full 40-char commit) with osac-aap submodule.
-  aap_full_commit=$(git -C "${REPO_ROOT}" submodule status base/osac-aap | awk '{print $1}' | tr -d ' +-')
-  grep -q "projectGitBranch:" "${values_file}" || continue
-  current_branch=$(grep "projectGitBranch:" "${values_file}" | head -1 | sed 's/.*projectGitBranch: *"\{0,1\}\([^"]*\)"\{0,1\}/\1/')
-  [[ -z "${current_branch}" ]] && continue
-  if [[ "${current_branch}" == "${aap_full_commit}" ]]; then
-    echo "${name} projectGitBranch: OK"
-  elif [[ "${1:-}" == "--fix" ]]; then
-    sed -i "s|projectGitBranch: .*|projectGitBranch: \"${aap_full_commit}\"|" "${values_file}"
-    echo "${name} projectGitBranch: FIXED ${current_branch} -> ${aap_full_commit}"
-  else
-    echo "${name} projectGitBranch: MISMATCH current=${current_branch} expected=${aap_full_commit}"
-    errors=$((errors + 1))
-  fi
+  # projectGitBranch/projectGitUri (osac-aap's config-as-code clone target)
+  # intentionally NOT synced here anymore. It's a *runtime* git-clone
+  # target consumed by the AAP bootstrap job inside the installed cluster,
+  # not a build-time reference -- unlike the image tags above, it can't
+  # simply track this mono-repo's own HEAD, because projectGitUri still
+  # points at the standalone osac-aap repo, which doesn't contain the
+  # mono-repo's commits. Repointing this pair needs the AAP bootstrap job
+  # itself to clone the whole mono-repo and cd into osac-aap/, a bigger
+  # change than this script's scope. Left unmanaged rather than silently
+  # synced to a SHA its current target can't resolve.
 done
 
 if [[ ${errors} -gt 0 ]]; then

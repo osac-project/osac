@@ -48,6 +48,6 @@ Additional variables are added by specific network backends — see
 
 ## Reference
 
-See `base/osac-aap/config/base/configmap-cluster-fulfillment-ig-example.yaml` and
-`base/osac-aap/config/base/secret-cluster-fulfillment-ig-example.yaml` for full
+See `../osac-aap/config/base/configmap-cluster-fulfillment-ig-example.yaml` and
+`../osac-aap/config/base/secret-cluster-fulfillment-ig-example.yaml` for full
 examples.

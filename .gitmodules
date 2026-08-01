@@ -1,15 +1,3 @@
-[submodule "osac-installer/base/osac-operator"]
-	path = osac-installer/base/osac-operator
-	url = https://github.com/osac-project/osac-operator.git
-[submodule "osac-installer/base/osac-fulfillment-service"]
-	path = osac-installer/base/osac-fulfillment-service
-	url = https://github.com/osac-project/fulfillment-service.git
-[submodule "osac-installer/base/osac-aap"]
-	path = osac-installer/base/osac-aap
-	url = https://github.com/osac-project/osac-aap.git
-[submodule "osac-installer/base/bare-metal-fulfillment-operator"]
-	path = osac-installer/base/bare-metal-fulfillment-operator
-	url = https://github.com/osac-project/bare-metal-fulfillment-operator.git
 [submodule "osac-installer/base/osac-ui"]
 	path = osac-installer/base/osac-ui
 	url = https://github.com/osac-project/osac-ui.git

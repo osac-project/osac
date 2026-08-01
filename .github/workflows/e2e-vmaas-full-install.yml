@@ -78,6 +78,13 @@ jobs:
     with:
       test-suite: ${{ inputs.test-suite || 'vmaas' }}
       test-filter: ${{ inputs.test-filter || '' }}
+      # osac-installer now lives as a subdirectory of this same monorepo checkout
+      # (its Chart.yaml deps resolve fulfillment-service/osac-operator/osac-aap/BMF
+      # as ../../../<name> siblings within it), so a PR touching those components
+      # must deploy from this PR's own fork/ref, not the reusable workflow's
+      # standalone-repo default.
+      installer-repo: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+      installer-ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
       # Build all component images from the PR's fork/branch (same monorepo checkout)
       components: '[{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.ref_name }}","containerfile":"fulfillment-service/Containerfile","imageKey":"service.images.service"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.ref_name }}","containerfile":"osac-operator/Containerfile","imageKey":"operator.image.repository"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.ref_name }}","containerfile":"osac-aap/execution-environment/execution-environment.yaml","imageKey":"aap.bootstrap.image","buildType":"ansible-builder"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.ref_name }}","containerfile":"bare-metal-fulfillment-operator/Containerfile","imageKey":"bmf.image.repository"}]'
       # Pass author_association for fork PR authorization (empty for non-fork PRs)

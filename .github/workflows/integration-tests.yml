@@ -186,7 +186,10 @@ jobs:
 
     - name: Lint chart
       working-directory: osac-installer
-      run: helm lint charts/osac/
+      run: |
+        helm lint charts/osac/ --values values/development/values.yaml \
+          --set service.externalHostname=fulfillment-api.osac.svc.cluster.local \
+          --set service.internalHostname=fulfillment-internal-api.osac.svc.cluster.local
 
     - name: Template chart (dry-run validation)
       working-directory: osac-installer

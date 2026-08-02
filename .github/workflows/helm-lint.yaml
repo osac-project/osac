@@ -25,17 +25,60 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      changes: ${{ steps.filter.outputs.changes }}
+    steps:
+      - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706  # v4.0.2
+        if: github.event_name == 'pull_request'
+        id: filter
+        with:
+          filters: |
+            osac-operator:
+              - 'osac-operator/api/**'
+              - 'osac-operator/charts/**'
+              - 'osac-operator/config/crd/bases/**'
+              - 'osac-operator/hack/sync-helm-crds.py'
+              - 'osac-operator/Makefile'
+              - '.github/workflows/helm-lint.yaml'
+            bare-metal-fulfillment-operator:
+              - 'bare-metal-fulfillment-operator/api/**'
+              - 'bare-metal-fulfillment-operator/charts/**'
+              - 'bare-metal-fulfillment-operator/config/crd/bases/**'
+              - 'bare-metal-fulfillment-operator/hack/sync-helm-crds.py'
+              - 'bare-metal-fulfillment-operator/Makefile'
+              - '.github/workflows/helm-lint.yaml'
+            fulfillment-service:
+              - 'fulfillment-service/charts/**'
+              - '.github/workflows/helm-lint.yaml'
+            osac-aap:
+              - 'osac-aap/charts/**'
+              - '.github/workflows/helm-lint.yaml'
+            osac-csi-driver:
+              - 'osac-csi-driver/charts/**'
+              - '.github/workflows/helm-lint.yaml'
+            osac-installer:
+              - 'osac-installer/charts/**'
+              - 'osac-installer/values/**'
+              - 'osac-installer/ct.yaml'
+              - '.github/workflows/helm-lint.yaml'
+
   # Matrixed over every component that generates Helm CRD templates from a
   # kubebuilder config/crd/bases/ source of truth via hack/sync-helm-crds.py
   # + make check-helm-crds (osac-operator and bare-metal-fulfillment-operator
   # share the identical mechanism; fulfillment-service/osac-aap don't have one).
   helm-crds-sync:
     name: Check Helm CRD sync (${{ matrix.component }})
+    needs: changes
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         component: [osac-operator, bare-metal-fulfillment-operator]
+    if: github.event_name != 'pull_request' || contains(fromJSON(needs.changes.outputs.changes), matrix.component)
     steps:
     - name: Checkout repository
       uses: actions/checkout@v7
@@ -57,6 +100,7 @@ jobs:
   # charts have no such guards and lint fine bare.
   helm-lint:
     name: Lint Helm chart (${{ matrix.component }}/${{ matrix.chart }})
+    needs: changes
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -79,6 +123,7 @@ jobs:
             chart: csi-driver
           - component: osac-csi-driver
             chart: csi-backends
+    if: github.event_name != 'pull_request' || contains(fromJSON(needs.changes.outputs.changes), matrix.component)
     steps:
     - name: Checkout repository
       uses: actions/checkout@v7
@@ -113,9 +158,23 @@ jobs:
   # dependency -- a different thing from linting any one component's chart in
   # isolation above, so this stays a separate job rather than another matrix
   # entry.
+  #
+  # Skip condition intentionally isn't scoped to osac-installer's own filter
+  # alone: charts/osac/ pulls in every other component's chart as a local
+  # file:// dependency, so a change to any of them changes what this job
+  # actually builds and lints, not just a change under osac-installer/ itself.
   helm-lint-installer:
     name: Lint Helm charts (osac-installer)
+    needs: changes
     runs-on: ubuntu-latest
+    if: >
+      github.event_name != 'pull_request' ||
+      contains(fromJSON(needs.changes.outputs.changes), 'osac-installer') ||
+      contains(fromJSON(needs.changes.outputs.changes), 'osac-operator') ||
+      contains(fromJSON(needs.changes.outputs.changes), 'bare-metal-fulfillment-operator') ||
+      contains(fromJSON(needs.changes.outputs.changes), 'fulfillment-service') ||
+      contains(fromJSON(needs.changes.outputs.changes), 'osac-aap') ||
+      contains(fromJSON(needs.changes.outputs.changes), 'osac-csi-driver')
     steps:
     - name: Checkout repository
       uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v6

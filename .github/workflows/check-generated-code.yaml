@@ -14,15 +14,46 @@ on:
       - '!osac-operator/**/*.md'
       - '!osac-operator/docs/**'
 
+permissions:
+  contents: read
+
 jobs:
+
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      changes: ${{ steps.filter.outputs.changes }}
+    steps:
+      - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706  # v4.0.2
+        if: github.event_name == 'pull_request'
+        id: filter
+        with:
+          predicate-quantifier: 'every'
+          filters: |
+            fulfillment-service:
+              - 'fulfillment-service/**'
+              - '!fulfillment-service/OWNERS'
+              - '!fulfillment-service/LICENSE'
+              - '!fulfillment-service/**/*.md'
+              - '!fulfillment-service/docs/**'
+            osac-operator:
+              - 'osac-operator/**'
+              - '!osac-operator/OWNERS'
+              - '!osac-operator/LICENSE'
+              - '!osac-operator/**/*.md'
+              - '!osac-operator/docs/**'
 
   check-generated-code:
     name: Check generated code (${{ matrix.component }})
+    needs: changes
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         component: [fulfillment-service, osac-operator]
+    if: github.event_name != 'pull_request' || contains(fromJSON(needs.changes.outputs.changes), matrix.component)
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       with:

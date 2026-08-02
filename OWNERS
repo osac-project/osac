@@ -23,6 +23,8 @@ filters:
     - zszabo-rh
     - wgordon17
     - avishayt
+    - masayag
+    - amito
     reviewers:
     - jhernand
     - adriengentil
@@ -46,3 +48,5 @@ filters:
     - zszabo-rh
     - wgordon17
     - avishayt
+    - masayag
+    - amito

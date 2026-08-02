@@ -588,7 +588,7 @@ var _ = Describe("update", func() {
 				HostType:       "default",
 				TemplateID:     "osac.templates.default",
 				ExternalHostID: "host-42",
-				HostClass: "openstack",
+				HostClass:      "openstack",
 			},
 		}
 

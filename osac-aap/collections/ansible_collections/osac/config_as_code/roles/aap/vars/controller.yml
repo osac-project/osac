@@ -2,7 +2,12 @@
 gateway_settings:
   gateway_access_token_expiration: 7200
 
-# Create a project from the specified git repo
+# Create a project from the specified git repo. scm_url/scm_branch aren't
+# set here -- configure_project_scm.yml merges them in at runtime from
+# aap_project_git_uri/aap_project_git_branch (config.yml), which now default
+# to the mono-repo. AWX/Controller Projects clone the whole repo with no
+# native subdirectory-scoping mechanism, so every playbook: path below is
+# prefixed with osac-aap/ to stay resolvable against that mono-repo checkout.
 controller_projects: # noqa: var-naming[no-role-prefix]
   - name: "{{ aap_prefix }}"
     description: "{{ aap_project_name }}'s project"

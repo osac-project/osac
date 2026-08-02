@@ -643,10 +643,18 @@ def wait_for_bmi_running(*, grpc: GRPCClient, bmi_id: str) -> None:
 
 
 def wait_for_bmi_deletion(*, k8s: K8sClient, name: str) -> None:
+    # 2700s (45min), not the old 1200s (20min): the deprovision AAP job this
+    # blocks on retries with exponential backoff up to a 30-minute ceiling
+    # (osac-operator's shared pkg/provisioning, BackoffMaxDelay) when it fails
+    # -- e.g. under the AAP job-pod attach flakiness tracked in OSAC-3499. A
+    # 20-minute window can time out here while the operator is still correctly
+    # retrying and would have succeeded; 45 minutes gives it room for a worst-case
+    # backoff wait plus job execution time, without silently swallowing an
+    # actually-stuck deletion (still fails, just later).
     poll_until(
         fn=lambda: not k8s.is_present(resource="baremetalinstance", name=name),
         until=lambda v: v is True,
-        retries=120,
+        retries=270,
         delay=10,
         description=f"{name} BareMetalInstance deletion",
     )

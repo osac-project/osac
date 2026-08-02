@@ -59,12 +59,13 @@ jobs:
               - '!**/docs/**'
 
   # Builds fulfillment-service, osac-operator, osac-aap's execution
-  # environment, and bare-metal-fulfillment-operator from this PR's current
-  # code and installs them together in one cluster -- not one "component
-  # under test" plus stale pinned images for the others. Runs for any
-  # change touching any component (see `changes` above) rather than being
-  # path-scoped per component; splitting this by component to avoid
-  # running both suites when only one changed is deferred to the future
+  # environment (twice -- once each for aap.bootstrap.image and
+  # aap.configAsCode.eeImage, see OSAC-3546), and bare-metal-fulfillment-operator
+  # from this PR's current code and installs them together in one cluster --
+  # not one "component under test" plus stale pinned images for the others.
+  # Runs for any change touching any component (see `changes` above) rather
+  # than being path-scoped per component; splitting this by component to
+  # avoid running both suites when only one changed is deferred to the future
   # full path-based CI matrix, once its skip-logic pattern is verified.
   e2e-bmaas-full-install:
     needs: changes
@@ -80,8 +81,13 @@ jobs:
       # standalone-repo default.
       installer-repo: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
       installer-ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
-      # Build all component images from the PR's fork/branch (same monorepo checkout)
-      components: '[{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.ref_name }}","containerfile":"fulfillment-service/Containerfile","imageKey":"service.images.service"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.ref_name }}","containerfile":"osac-operator/Containerfile","imageKey":"operator.image.repository"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.ref_name }}","containerfile":"osac-aap/execution-environment/execution-environment.yaml","imageKey":"aap.bootstrap.image","buildType":"ansible-builder"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.ref_name }}","containerfile":"bare-metal-fulfillment-operator/Containerfile","imageKey":"bmf.image.repository"}]'
+      # Build all component images from the PR's fork/branch (same monorepo checkout).
+      # osac-aap's execution-environment is built twice (aap.bootstrap.image and
+      # aap.configAsCode.eeImage): the two are logically the same image but the
+      # override mechanism keys strictly off imageKey, one build per key, so this
+      # is the only way to get both fields covered without changing that mechanism
+      # (which lives in osac-test-infra, not here). See OSAC-3546.
+      components: '[{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.ref_name }}","containerfile":"fulfillment-service/Containerfile","imageKey":"service.images.service"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.ref_name }}","containerfile":"osac-operator/Containerfile","imageKey":"operator.image.repository"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.ref_name }}","containerfile":"osac-aap/execution-environment/execution-environment.yaml","imageKey":"aap.bootstrap.image","buildType":"ansible-builder"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.ref_name }}","containerfile":"osac-aap/execution-environment/execution-environment.yaml","imageKey":"aap.configAsCode.eeImage","buildType":"ansible-builder"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.ref_name }}","containerfile":"bare-metal-fulfillment-operator/Containerfile","imageKey":"bmf.image.repository"}]'
       # Pass author_association for fork PR authorization (empty for non-fork PRs)
       fork-pr-author-association: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.author_association || '' }}
       fork-pr-author: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.user.login || '' }}

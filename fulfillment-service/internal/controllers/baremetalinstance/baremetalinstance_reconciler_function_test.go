@@ -588,8 +588,7 @@ var _ = Describe("update", func() {
 				HostType:       "default",
 				TemplateID:     "osac.templates.default",
 				ExternalHostID: "host-42",
-				HostClass:      "openstack",
-				NetworkClass:   "openstack",
+				HostClass: "openstack",
 			},
 		}
 
@@ -644,8 +643,6 @@ var _ = Describe("update", func() {
 			"ExternalHostID must be preserved — it is managed by the bare-metal-fulfillment-operator")
 		Expect(updatedCR.Spec.HostClass).To(Equal("openstack"),
 			"HostClass must be preserved — it is managed by the bare-metal-fulfillment-operator")
-		Expect(updatedCR.Spec.NetworkClass).To(Equal("openstack"),
-			"NetworkClass must be preserved — it is managed by the bare-metal-fulfillment-operator")
 	})
 })
 

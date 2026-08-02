@@ -53,19 +53,17 @@ func init() {
 }
 
 type Metal3Client struct {
-	client       client.Client
-	namespace    string
-	hostClass    string
-	networkClass string
+	client    client.Client
+	namespace string
+	hostClass string
 }
 
 // NewMetal3ClientForTest creates a Metal3Client with an injected client for testing.
-func NewMetal3ClientForTest(k8sClient client.Client, namespace, hostClass, networkClass string) *Metal3Client {
+func NewMetal3ClientForTest(k8sClient client.Client, namespace, hostClass string) *Metal3Client {
 	return &Metal3Client{
-		client:       k8sClient,
-		namespace:    namespace,
-		hostClass:    hostClass,
-		networkClass: networkClass,
+		client:    k8sClient,
+		namespace: namespace,
+		hostClass: hostClass,
 	}
 }
 
@@ -95,10 +93,9 @@ func NewMetal3Client(ctx context.Context, cfg *Config) (Client, error) {
 	}
 
 	return &Metal3Client{
-		client:       k8sClient,
-		namespace:    namespace,
-		hostClass:    cfg.HostClass,
-		networkClass: cfg.NetworkClass,
+		client:    k8sClient,
+		namespace: namespace,
+		hostClass: cfg.HostClass,
 	}, nil
 }
 
@@ -198,7 +195,7 @@ func (m *Metal3Client) FindFreeHost(ctx context.Context, matchExpressions map[st
 	})
 
 	bmh := &candidates[0]
-	return bmhToHost(bmh, m.hostClass, m.networkClass), nil
+	return bmhToHost(bmh, m.hostClass), nil
 }
 
 func (m *Metal3Client) AssignHost(ctx context.Context, inventoryHostID string, bareMetalInstanceID string, labels map[string]string) (*Host, error) {
@@ -253,7 +250,7 @@ func (m *Metal3Client) AssignHost(ctx context.Context, inventoryHostID string, b
 		return nil, fmt.Errorf("failed to assign BareMetalHost %s: %w", inventoryHostID, err)
 	}
 
-	return bmhToHost(bmh, m.hostClass, m.networkClass), nil
+	return bmhToHost(bmh, m.hostClass), nil
 }
 
 func (m *Metal3Client) UnassignHost(ctx context.Context, inventoryHostID string, labels []string) error {
@@ -288,7 +285,7 @@ func ParseHostID(hostID string) (namespace, name string, err error) {
 	return parts[0], parts[1], nil
 }
 
-func bmhToHost(bmh *metal3api.BareMetalHost, hostClass, networkClass string) *Host {
+func bmhToHost(bmh *metal3api.BareMetalHost, hostClass string) *Host {
 	labels := bmh.Labels
 	if labels == nil {
 		labels = map[string]string{}
@@ -311,7 +308,6 @@ func bmhToHost(bmh *metal3api.BareMetalHost, hostClass, networkClass string) *Ho
 		Name:                bmh.Name,
 		HostType:            labels[Metal3HostTypeLabel],
 		HostClass:           hostClass,
-		NetworkClass:        networkClass,
 		ProvisionState:      string(bmh.Status.Provisioning.State),
 		ManagedBy:           managedBy,
 	}

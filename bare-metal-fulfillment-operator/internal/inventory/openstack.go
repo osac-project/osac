@@ -56,7 +56,6 @@ type OpenStackClient struct {
 	client           *gophercloud.ServiceClient
 	newServiceClient func(ctx context.Context) (*gophercloud.ServiceClient, error)
 	HostClass        string
-	NetworkClass     string
 }
 
 // NewOpenStackClient creates a new OpenStack inventory client
@@ -72,7 +71,6 @@ func NewOpenStackClient(ctx context.Context, cfg *Config) (Client, error) {
 		client:           sc,
 		newServiceClient: factory,
 		HostClass:        cfg.HostClass,
-		NetworkClass:     cfg.NetworkClass,
 	}, nil
 }
 
@@ -228,7 +226,6 @@ func (c *OpenStackClient) findFreeHost(ctx context.Context, matchExpressions map
 				Name:                node.Name,
 				HostType:            node.ResourceClass,
 				HostClass:           c.HostClass,
-				NetworkClass:        c.NetworkClass,
 				ProvisionState:      node.ProvisionState,
 				ManagedBy:           managedBy,
 			}
@@ -333,7 +330,6 @@ func (c *OpenStackClient) assignHost(ctx context.Context, inventoryHostID string
 		Name:                node.Name,
 		HostType:            node.ResourceClass,
 		HostClass:           c.HostClass,
-		NetworkClass:        c.NetworkClass,
 		ProvisionState:      node.ProvisionState,
 		ManagedBy:           managedBy,
 	}, nil

@@ -282,7 +282,6 @@ func (r *BareMetalInstanceReconciler) reconcileInventory(ctx context.Context, ba
 	}
 
 	bareMetalInstance.Spec.HostClass = inventoryHost.HostClass
-	bareMetalInstance.Spec.NetworkClass = inventoryHost.NetworkClass
 	if err = r.Update(ctx, bareMetalInstance); err != nil {
 		log.Error(err, "Failed to update BareMetalInstance CR with HostClass", "HostClass", inventoryHost.HostClass)
 		return ctrl.Result{}, err
@@ -457,7 +456,6 @@ func (r *BareMetalInstanceReconciler) reconcileProvisioning(ctx context.Context,
 		ExternalHostID            string
 		ExternalHostName          string
 		HostClass                 string
-		NetworkClass              string
 		Selector                  v1alpha1.HostSelectorSpec
 		InventoryLabels           map[string]string
 		InventoryPersistentLabels map[string]string
@@ -468,7 +466,6 @@ func (r *BareMetalInstanceReconciler) reconcileProvisioning(ctx context.Context,
 		bareMetalInstance.Spec.ExternalHostID,
 		bareMetalInstance.Spec.ExternalHostName,
 		bareMetalInstance.Spec.HostClass,
-		bareMetalInstance.Spec.NetworkClass,
 		bareMetalInstance.Spec.Selector,
 		bareMetalInstance.Spec.InventoryLabels,
 		bareMetalInstance.Spec.InventoryPersistentLabels,

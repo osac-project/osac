@@ -31,7 +31,6 @@ import (
 const (
 	testNamespace = "test-bmaas"
 	testHostClass = "metal3"
-	testNetClass  = "metal3"
 )
 
 func newTestScheme() *runtime.Scheme {
@@ -48,10 +47,9 @@ func newMetal3ClientForTest(objects ...client.Object) *Metal3Client {
 		WithStatusSubresource(&metal3api.BareMetalHost{}).
 		Build()
 	return &Metal3Client{
-		client:       fakeClient,
-		namespace:    testNamespace,
-		hostClass:    testHostClass,
-		networkClass: testNetClass,
+		client:    fakeClient,
+		namespace: testNamespace,
+		hostClass: testHostClass,
 	}
 }
 
@@ -175,9 +173,6 @@ func TestFindFreeHost(t *testing.T) {
 		}
 		if host.HostClass != testHostClass {
 			t.Errorf("HostClass = %q, want %q", host.HostClass, testHostClass)
-		}
-		if host.NetworkClass != testNetClass {
-			t.Errorf("NetworkClass = %q, want %q", host.NetworkClass, testNetClass)
 		}
 		if host.ProvisionState != "available" {
 			t.Errorf("ProvisionState = %q, want %q", host.ProvisionState, "available")

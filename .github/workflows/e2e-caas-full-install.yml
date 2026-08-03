@@ -84,34 +84,15 @@ jobs:
     needs: changes
     runs-on: ubuntu-latest
     outputs:
-      components: ${{ steps.build.outputs.components }}
+      components: ${{ steps.resolve.outputs.components }}
     steps:
-      - id: build
-        env:
-          REPO: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
-          REF: ${{ github.event.pull_request.head.ref || github.ref_name }}
-          AAP_CHANGED: ${{ needs.changes.outputs.aap-changed }}
-        run: |
-          COMPONENTS=$(jq -nc --arg repo "${REPO}" --arg ref "${REF}" '[
-            {"repo":$repo,"ref":$ref,"containerfile":"fulfillment-service/Containerfile","imageKey":"service.images.service"},
-            {"repo":$repo,"ref":$ref,"containerfile":"osac-operator/Containerfile","imageKey":"operator.image.repository"},
-            {"repo":$repo,"ref":$ref,"containerfile":"bare-metal-fulfillment-operator/Containerfile","imageKey":"bmf.image.repository"}
-          ]')
-
-          # osac-aap's execution-environment is built twice (aap.bootstrap.image
-          # and aap.configAsCode.eeImage): the two are logically the same image
-          # but the override mechanism keys strictly off imageKey, one build per
-          # key, so this is the only way to get both fields covered without
-          # changing that mechanism (which lives in osac-test-infra, not here).
-          # See OSAC-3546.
-          if [[ "${AAP_CHANGED}" == "true" ]]; then
-            COMPONENTS=$(echo "${COMPONENTS}" | jq -c --arg repo "${REPO}" --arg ref "${REF}" '. + [
-              {"repo":$repo,"ref":$ref,"containerfile":"osac-aap/execution-environment/execution-environment.yaml","imageKey":"aap.bootstrap.image","buildType":"ansible-builder"},
-              {"repo":$repo,"ref":$ref,"containerfile":"osac-aap/execution-environment/execution-environment.yaml","imageKey":"aap.configAsCode.eeImage","buildType":"ansible-builder"}
-            ]')
-          fi
-
-          echo "components=${COMPONENTS}" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - id: resolve
+        uses: ./.github/actions/resolve-e2e-components
+        with:
+          aap-changed: ${{ needs.changes.outputs.aap-changed }}
 
   # Builds fulfillment-service, osac-operator, and bare-metal-fulfillment-operator
   # (plus osac-aap's execution environment when osac-aap/ changed -- see
@@ -164,7 +145,8 @@ jobs:
     if: >-
       always()
       && !(needs.e2e-caas-full-install.result == 'skipped'
-           && needs.changes.result == 'success')
+           && needs.changes.result == 'success'
+           && needs.resolve-components.result == 'success')
     needs: [changes, resolve-components, e2e-caas-full-install]
     runs-on: ubuntu-latest
     steps:

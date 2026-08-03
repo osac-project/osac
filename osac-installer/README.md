@@ -148,6 +148,7 @@ make install-osac VALUES_FILE=values/<env>/values.yaml        # Phase 3: OSAC ap
 |----------|---------|-------------|
 | `INSTALLER_NAMESPACE` | `osac` | Target namespace for the OSAC deployment |
 | `VALUES_FILE` | `values/development/values.yaml` | Helm values file to use |
+| `EXTRA_HELM_ARGS` | (empty) | Extra `--set`/`--set-string` args appended to `install-osac`'s helm command, e.g. `EXTRA_HELM_ARGS='--set-string aap.bootstrap.image=my-image:tag'` |
 
 #### Configure Values
 

@@ -1,0 +1,61 @@
+#
+# Copyright (c) 2025 Red Hat Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+# in compliance with the License. You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software distributed under the License
+# is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+# or implied. See the License for the specific language governing permissions and limitations under
+# the License.
+#
+
+name: Resolve E2E components
+description: >-
+  Builds the components[] JSON passed to an e2e-*-full-install reusable
+  workflow, so fulfillment-service/osac-operator/bare-metal-fulfillment-operator
+  are always built from this PR's fork/branch, and osac-aap's
+  execution-environment is only built (and only overrides the AAP Controller
+  project's git URI, see OSAC-3556) when osac-aap/ actually changed.
+inputs:
+  aap-changed:
+    description: >-
+      'true' to also build+override osac-aap's execution-environment
+      (aap.bootstrap.image and aap.configAsCode.eeImage); 'false' to omit it.
+    required: true
+outputs:
+  components:
+    description: Resolved components[] JSON for the e2e reusable workflow's `components` input
+    value: ${{ steps.build.outputs.components }}
+runs:
+  using: composite
+  steps:
+    - id: build
+      shell: bash
+      env:
+        REPO: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+        REF: ${{ github.event.pull_request.head.ref || github.ref_name }}
+        AAP_CHANGED: ${{ inputs.aap-changed }}
+      run: |
+        COMPONENTS=$(jq -nc --arg repo "${REPO}" --arg ref "${REF}" '[
+          {"repo":$repo,"ref":$ref,"containerfile":"fulfillment-service/Containerfile","imageKey":"service.images.service"},
+          {"repo":$repo,"ref":$ref,"containerfile":"osac-operator/Containerfile","imageKey":"operator.image.repository"},
+          {"repo":$repo,"ref":$ref,"containerfile":"bare-metal-fulfillment-operator/Containerfile","imageKey":"bmf.image.repository"}
+        ]')
+
+        # osac-aap's execution-environment is built twice (aap.bootstrap.image
+        # and aap.configAsCode.eeImage): the two are logically the same image
+        # but the override mechanism keys strictly off imageKey, one build per
+        # key, so this is the only way to get both fields covered without
+        # changing that mechanism (which lives in osac-test-infra, not here).
+        # See OSAC-3546.
+        if [[ "${AAP_CHANGED}" == "true" ]]; then
+          COMPONENTS=$(echo "${COMPONENTS}" | jq -c --arg repo "${REPO}" --arg ref "${REF}" '. + [
+            {"repo":$repo,"ref":$ref,"containerfile":"osac-aap/execution-environment/execution-environment.yaml","imageKey":"aap.bootstrap.image","buildType":"ansible-builder"},
+            {"repo":$repo,"ref":$ref,"containerfile":"osac-aap/execution-environment/execution-environment.yaml","imageKey":"aap.configAsCode.eeImage","buildType":"ansible-builder"}
+          ]')
+        fi
+
+        echo "components=${COMPONENTS}" >> "$GITHUB_OUTPUT"

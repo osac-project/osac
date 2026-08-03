@@ -11,7 +11,7 @@ jobs:
   bump:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           token: ${{ secrets.OSAC_BOT_PAT }}

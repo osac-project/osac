@@ -1,0 +1,85 @@
+---
+# Defensive check: dispatch (via infra.aap_configuration, next in main.yml)
+# creates/updates the controller project with update_project: true + wait:
+# true (see controller_projects in vars/controller.yml), which waits for the
+# SCM sync job itself to finish -- but Controller can take a further,
+# unbounded moment after that to finish indexing the synced checkout into the
+# project's playbook list. Job template creation immediately afterward can
+# race that indexing and fail with "Playbook not found for project" even
+# though the sync already succeeded and the file is genuinely present
+# (confirmed via a real e2e failure's own project-update stdout, which showed
+# a clean sync completing in seconds with no errors, while every subsequent
+# job template creation attempt failed identically).
+#
+# Ensure+sync the project ourselves first here, reusing the exact same
+# desired state controller_projects already declares (so this is a harmless,
+# idempotent duplicate of what dispatch would do anyway), then explicitly
+# poll the project's discovered playbook list until every playbook this
+# run's job templates need is visible. Fails loudly with a clear message
+# instead of letting the ambiguous downstream "Playbook not found" error
+# surface from job template creation.
+
+- name: Ensure controller project exists and is synced before creating job templates
+  ansible.controller.project:
+    name: "{{ item.name }}"
+    organization: "{{ item.organization }}"
+    scm_type: "{{ item.scm_type }}"
+    scm_url: "{{ item.scm_url }}"
+    scm_branch: "{{ item.scm_branch }}"
+    scm_clean: "{{ item.scm_clean }}"
+    scm_update_on_launch: "{{ item.scm_update_on_launch }}"
+    update_project: true
+    wait: true
+    controller_host: "{{ aap_hostname }}"
+    controller_username: "{{ aap_username }}"
+    controller_password: "{{ aap_password }}"
+    validate_certs: "{{ aap_validate_certs }}"
+  loop: "{{ controller_projects }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Look up the controller project's ID
+  ansible.builtin.uri:
+    url: "{{ aap_hostname }}/api/controller/v2/projects/?name={{ aap_prefix | urlencode }}"
+    method: GET
+    user: "{{ aap_username }}"
+    password: "{{ aap_password }}"
+    force_basic_auth: true
+    validate_certs: "{{ aap_validate_certs }}"
+  register: aap_project_lookup
+  failed_when: >
+    aap_project_lookup.status != 200 or
+    (aap_project_lookup.json.results | default([]) | length) == 0
+
+- name: Determine the playbooks this run's templates require
+  ansible.builtin.set_fact:
+    aap_required_playbooks: "{{ controller_templates | map(attribute='playbook') | unique | list }}"
+
+- name: Wait for the controller project's discovered playbooks to include all required playbooks
+  ansible.builtin.uri:
+    url: "{{ aap_hostname }}/api/controller/v2/projects/{{ aap_project_lookup.json.results[0].id }}/playbooks/"
+    method: GET
+    user: "{{ aap_username }}"
+    password: "{{ aap_password }}"
+    force_basic_auth: true
+    validate_certs: "{{ aap_validate_certs }}"
+  register: aap_project_playbooks
+  until: >
+    aap_project_playbooks.status == 200 and
+    (aap_required_playbooks | difference(aap_project_playbooks.json | default([]))) | length == 0
+  retries: 30
+  delay: 10
+  failed_when: false
+
+- name: Fail loudly if the project's playbook list never caught up
+  ansible.builtin.fail:
+    msg: >-
+      Controller project '{{ aap_prefix }}' (id {{ aap_project_lookup.json.results[0].id }})
+      does not list all required playbooks after waiting 300s. Missing:
+      {{ aap_required_playbooks | difference(aap_project_playbooks.json | default([])) }}.
+      The project's SCM sync completed, but Controller has not finished
+      indexing the checkout into its playbook list -- proceeding would fail
+      job template creation with "Playbook not found for project".
+  when: >
+    aap_project_playbooks.status != 200 or
+    (aap_required_playbooks | difference(aap_project_playbooks.json | default([]))) | length > 0

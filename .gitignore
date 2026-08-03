@@ -1,3 +1,12 @@
+# AI workflows and skills (installed by tools/bootstrap.sh)
+skills/
+.ai-workflows/
+.claude/skills
+.claude/commands
+.claude/agents
+.cursor/
+.gemini/
+
 # Binaries for programs and plugins
 *.exe
 *.exe~

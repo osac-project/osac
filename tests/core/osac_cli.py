@@ -58,6 +58,7 @@ class OsacCLI:
         self,
         *,
         template: str,
+        name: str | None = None,
         network_attachments: list[dict[str, Any]] | None = None,
         boot_disk_size: int = 20,
         image: str = "quay.io/containerdisks/fedora:latest",
@@ -80,6 +81,8 @@ class OsacCLI:
             "--run-strategy",
             run_strategy,
         ]
+        if name is not None:
+            args.extend(["--name", name])
 
         effective_instance_type = instance_type if instance_type is not None else self.default_instance_type
         if effective_instance_type is not None:
@@ -174,8 +177,12 @@ class OsacCLI:
     def create_cluster_with_catalog_item(self, *, catalog_item: str, name: str) -> str:
         return self._parse_uuid(self._run("create", "cluster", "--catalog-item", catalog_item, "--name", name))
 
-    def create_compute_instance_with_catalog_item(self, *, catalog_item: str, subnet: str | None = None) -> str:
+    def create_compute_instance_with_catalog_item(
+        self, *, catalog_item: str, name: str | None = None, subnet: str | None = None
+    ) -> str:
         args: list[str] = ["create", "computeinstance", "--catalog-item", catalog_item]
+        if name is not None:
+            args.extend(["--name", name])
         if subnet is not None:
             args.extend(["--network-attachment", f"subnet={subnet}"])
         return self._parse_uuid(self._run(*args))

@@ -26,11 +26,14 @@ class GRPCClient:
     def call(self, *, service: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
         return json.loads(run(*self._build_args(service=service, data=data)))
 
-    def create_compute_instance(self, *, catalog_item: str, subnet_ids: list[str]) -> str:
+    def create_compute_instance(self, *, catalog_item: str, subnet_ids: list[str], name: str | None = None) -> str:
         attachments = [{"subnet": sid} for sid in subnet_ids]
+        obj: dict[str, Any] = {"spec": {"catalog_item": catalog_item, "network_attachments": attachments}}
+        if name is not None:
+            obj["metadata"] = {"name": name}
         response: dict[str, Any] = self.call(
             service=f"{PUBLIC_API}.ComputeInstances/Create",
-            data={"object": {"spec": {"catalog_item": catalog_item, "network_attachments": attachments}}},
+            data={"object": obj},
         )
         return response["object"]["id"]
 

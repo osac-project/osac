@@ -44,6 +44,7 @@ jobs:
       pull-requests: read
     outputs:
       should-run: ${{ github.event_name != 'pull_request' || steps.filter.outputs.code == 'true' }}
+      aap-changed: ${{ github.event_name != 'pull_request' || steps.aap-filter.outputs.osac-aap == 'true' }}
     steps:
       - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706  # v4.0.2
         if: github.event_name == 'pull_request'
@@ -57,16 +58,70 @@ jobs:
               - '!**/LICENSE'
               - '!**/*.md'
               - '!**/docs/**'
+      # Separate step, not folded into the filter above: that step's
+      # predicate-quantifier: 'every' means "every changed file matches",
+      # correct for the broad code/no-code split but wrong for a single
+      # component filter (it would only fire true if ALL changed files were
+      # under osac-aap/). This step uses the default 'some' quantifier: true
+      # if ANY changed file is under osac-aap/.
+      - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706  # v4.0.2
+        if: github.event_name == 'pull_request'
+        id: aap-filter
+        with:
+          filters: |
+            osac-aap:
+              - 'osac-aap/**'
 
-  # Builds fulfillment-service, osac-operator, osac-aap's execution
-  # environment (twice -- once each for aap.bootstrap.image and
-  # aap.configAsCode.eeImage, see OSAC-3546), and bare-metal-fulfillment-operator
-  # from this PR's current code and installs them together in one cluster --
-  # not one "component under test" plus stale pinned images for the others.
-  # Runs for any change touching any component (see `changes` above) rather
-  # than being path-scoped per component; splitting this by component to
-  # avoid running both suites when only one changed is deferred to the future
-  # full path-based CI matrix, once its skip-logic pattern is verified.
+  # osac-aap's execution-environment build (and the AAP Controller project's
+  # git-URI override that comes with it) is resolved here, before the e2e
+  # job runs, and gated on aap-changed -- unconditionally redirecting the
+  # Controller project's git URI at this PR's own repo/branch, even for PRs
+  # that never touched osac-aap/, breaks job template creation the moment
+  # the first install actually applies that override on its own hook
+  # (see OSAC-3556). Non-PR triggers (schedule/workflow_dispatch/merge_group)
+  # default to true (build+override AAP) via aap-changed's own fallback.
+  resolve-components:
+    needs: changes
+    runs-on: ubuntu-latest
+    outputs:
+      components: ${{ steps.build.outputs.components }}
+    steps:
+      - id: build
+        env:
+          REPO: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          REF: ${{ github.event.pull_request.head.ref || github.ref_name }}
+          AAP_CHANGED: ${{ needs.changes.outputs.aap-changed }}
+        run: |
+          COMPONENTS=$(jq -nc --arg repo "${REPO}" --arg ref "${REF}" '[
+            {"repo":$repo,"ref":$ref,"containerfile":"fulfillment-service/Containerfile","imageKey":"service.images.service"},
+            {"repo":$repo,"ref":$ref,"containerfile":"osac-operator/Containerfile","imageKey":"operator.image.repository"},
+            {"repo":$repo,"ref":$ref,"containerfile":"bare-metal-fulfillment-operator/Containerfile","imageKey":"bmf.image.repository"}
+          ]')
+
+          # osac-aap's execution-environment is built twice (aap.bootstrap.image
+          # and aap.configAsCode.eeImage): the two are logically the same image
+          # but the override mechanism keys strictly off imageKey, one build per
+          # key, so this is the only way to get both fields covered without
+          # changing that mechanism (which lives in osac-test-infra, not here).
+          # See OSAC-3546.
+          if [[ "${AAP_CHANGED}" == "true" ]]; then
+            COMPONENTS=$(echo "${COMPONENTS}" | jq -c --arg repo "${REPO}" --arg ref "${REF}" '. + [
+              {"repo":$repo,"ref":$ref,"containerfile":"osac-aap/execution-environment/execution-environment.yaml","imageKey":"aap.bootstrap.image","buildType":"ansible-builder"},
+              {"repo":$repo,"ref":$ref,"containerfile":"osac-aap/execution-environment/execution-environment.yaml","imageKey":"aap.configAsCode.eeImage","buildType":"ansible-builder"}
+            ]')
+          fi
+
+          echo "components=${COMPONENTS}" >> "$GITHUB_OUTPUT"
+
+  # Builds fulfillment-service, osac-operator, and bare-metal-fulfillment-operator
+  # (plus osac-aap's execution environment when osac-aap/ changed -- see
+  # resolve-components above) from this PR's current code and installs them
+  # together in one cluster -- not one "component under test" plus stale
+  # pinned images for the others. Runs for any change touching any component
+  # (see `changes` above) rather than being path-scoped per component;
+  # splitting this by component to avoid running both suites when only one
+  # changed is deferred to the future full path-based CI matrix, once its
+  # skip-logic pattern is verified.
   #
   # bare-metal-fulfillment-operator's image override (bmf.image.repository)
   # is currently a no-op in this flow specifically: values/vmaas-ci/values.yaml
@@ -75,7 +130,7 @@ jobs:
   # should build from the PR in every e2e flow, even where one isn't
   # currently deployed) -- revisit if vmaas ever needs BMF enabled.
   e2e-vmaas-full-install:
-    needs: changes
+    needs: [changes, resolve-components]
     if: needs.changes.outputs.should-run == 'true'
     uses: osac-project/osac-test-infra/.github/workflows/e2e-vmaas-full-install.yml@main
     with:
@@ -88,13 +143,7 @@ jobs:
       # standalone-repo default.
       installer-repo: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
       installer-ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
-      # Build all component images from the PR's fork/branch (same monorepo checkout).
-      # osac-aap's execution-environment is built twice (aap.bootstrap.image and
-      # aap.configAsCode.eeImage): the two are logically the same image but the
-      # override mechanism keys strictly off imageKey, one build per key, so this
-      # is the only way to get both fields covered without changing that mechanism
-      # (which lives in osac-test-infra, not here). See OSAC-3546.
-      components: '[{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.ref_name }}","containerfile":"fulfillment-service/Containerfile","imageKey":"service.images.service"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.ref_name }}","containerfile":"osac-operator/Containerfile","imageKey":"operator.image.repository"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.ref_name }}","containerfile":"osac-aap/execution-environment/execution-environment.yaml","imageKey":"aap.bootstrap.image","buildType":"ansible-builder"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.ref_name }}","containerfile":"osac-aap/execution-environment/execution-environment.yaml","imageKey":"aap.configAsCode.eeImage","buildType":"ansible-builder"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.ref_name }}","containerfile":"bare-metal-fulfillment-operator/Containerfile","imageKey":"bmf.image.repository"}]'
+      components: ${{ needs.resolve-components.outputs.components }}
       # Pass author_association for fork PR authorization (empty for non-fork PRs)
       fork-pr-author-association: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.author_association || '' }}
       fork-pr-author: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.user.login || '' }}
@@ -108,13 +157,14 @@ jobs:
       always()
       && !(needs.e2e-vmaas-full-install.result == 'skipped'
            && needs.changes.result == 'success')
-    needs: [changes, e2e-vmaas-full-install]
+    needs: [changes, resolve-components, e2e-vmaas-full-install]
     runs-on: ubuntu-latest
     steps:
       - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         run: |
           echo "Upstream job results:"
           echo "  changes: ${{ needs.changes.result }}"
+          echo "  resolve-components: ${{ needs.resolve-components.result }}"
           echo "  e2e-vmaas-full-install: ${{ needs.e2e-vmaas-full-install.result }}"
           echo ""
           echo "One or more upstream jobs failed or were cancelled."

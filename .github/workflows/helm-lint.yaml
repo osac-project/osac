@@ -30,7 +30,7 @@ jobs:
     permissions:
       pull-requests: read
     outputs:
-      changes: ${{ steps.filter.outputs.changes }}
+      changes: ${{ steps.filter.outputs.changes || '[]' }}
     steps:
       - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706  # v4.0.2
         if: github.event_name == 'pull_request'
@@ -78,19 +78,26 @@ jobs:
       fail-fast: false
       matrix:
         component: [osac-operator, bare-metal-fulfillment-operator]
-    if: github.event_name != 'pull_request' || contains(fromJSON(needs.changes.outputs.changes), matrix.component)
     steps:
+    - name: Check component changes
+      id: should-run
+      if: github.event_name != 'pull_request' || contains(fromJSON(needs.changes.outputs.changes), matrix.component)
+      run: echo "run=true" >> "$GITHUB_OUTPUT"
+
     - name: Checkout repository
+      if: steps.should-run.outputs.run
       uses: actions/checkout@v7
       with:
         persist-credentials: false
 
     - name: Set up Go
+      if: steps.should-run.outputs.run
       uses: actions/setup-go@v6
       with:
         go-version: stable
 
     - name: Verify Helm CRD templates match bases
+      if: steps.should-run.outputs.run
       working-directory: ${{ matrix.component }}
       run: make check-helm-crds
 
@@ -123,19 +130,26 @@ jobs:
             chart: csi-driver
           - component: osac-csi-driver
             chart: csi-backends
-    if: github.event_name != 'pull_request' || contains(fromJSON(needs.changes.outputs.changes), matrix.component)
     steps:
+    - name: Check component changes
+      id: should-run
+      if: github.event_name != 'pull_request' || contains(fromJSON(needs.changes.outputs.changes), matrix.component)
+      run: echo "run=true" >> "$GITHUB_OUTPUT"
+
     - name: Checkout repository
+      if: steps.should-run.outputs.run
       uses: actions/checkout@v7
       with:
         persist-credentials: false
 
     - name: Set up Helm
+      if: steps.should-run.outputs.run
       uses: azure/setup-helm@v5
       with:
         version: v3.17.0
 
     - name: Lint chart
+      if: steps.should-run.outputs.run
       working-directory: ${{ matrix.component }}
       run: |
         if [ -n "${{ matrix.values-file }}" ]; then
@@ -145,6 +159,7 @@ jobs:
         fi
 
     - name: Template chart
+      if: steps.should-run.outputs.run
       working-directory: ${{ matrix.component }}
       run: |
         if [ -n "${{ matrix.values-file }}" ]; then

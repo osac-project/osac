@@ -1,5 +1,9 @@
 INSTALLER_NAMESPACE ?= osac
 VALUES_FILE ?= values/development/values.yaml
+# Extra helm --set/--set-string args appended to install-osac's install command
+# (e.g. e2e passing component image overrides), so the FIRST install already
+# uses them instead of a separate patch applied after the fact.
+EXTRA_HELM_ARGS ?=
 
 .PHONY: help
 help: ## Display this help
@@ -89,6 +93,7 @@ install-osac: helm-deps install-secrets check-postgres ## Phase 3: Install OSAC
 		--set service.externalHostname=fulfillment-api-$(INSTALLER_NAMESPACE).$(DOMAIN) \
 		--set service.internalHostname=fulfillment-internal-api-$(INSTALLER_NAMESPACE).$(DOMAIN) \
 		--set service.auth.issuerUrl=https://keycloak-keycloak.$(DOMAIN)/realms/osac \
+		$(EXTRA_HELM_ARGS) \
 		--timeout 40m --wait
 
 .PHONY: uninstall

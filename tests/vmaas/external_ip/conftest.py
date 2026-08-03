@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import pytest
 
+from tests.catalog.conftest import unique_name
 from tests.core.grpc_client import GRPCClient
 from tests.core.helpers import (
     wait_for_cr,
@@ -144,7 +145,9 @@ def make_compute_instances(
     def _make(count: int = 2) -> tuple[tuple[str, str], ...]:
         instances: list[tuple[str, str]] = []
         for _ in range(count):
+            name = unique_name("e2e-ci")
             uuid = cli.create_compute_instance(
+                name=name,
                 template=vm_template,
                 network_attachments=[{"subnet": default_subnet}],
             )

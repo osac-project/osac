@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 import websocket
 
+from tests.catalog.conftest import unique_name
 from tests.core.grpc_client import GRPCClient
 from tests.core.helpers import (
     assert_grpc_rejected,
@@ -44,7 +45,12 @@ def console_vm(
 ) -> Iterator[dict[str, str]]:
     """Create a single compute instance for all console tests in this module."""
     print("\nCreating console test VM...")
-    uuid: str = cli.create_compute_instance(template=vm_template, network_attachments=[{"subnet": default_subnet}])
+    name = unique_name("e2e-ci")
+    uuid: str = cli.create_compute_instance(
+        name=name,
+        template=vm_template,
+        network_attachments=[{"subnet": default_subnet}],
+    )
     ci_name: str | None = None
     try:
         ci_name = wait_for_cr(k8s=k8s_hub_client, uuid=uuid)

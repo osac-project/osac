@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from datetime import UTC, datetime
 
+from tests.catalog.conftest import unique_name
 from tests.core.grpc_client import GRPCClient
 from tests.core.helpers import wait_for_cr, wait_for_deletion, wait_for_restart, wait_for_running
 from tests.core.k8s_client import K8sClient
@@ -16,8 +17,10 @@ def test_compute_instance_restart_past_timestamp_ignored(
     vm_template: str,
     default_subnet: str,
 ) -> None:
+    name = unique_name("e2e-ci")
     uuid: str = cli.create_compute_instance(
         template=vm_template,
+        name=name,
         network_attachments=[{"subnet": default_subnet}],
     )
     ci_name: str = wait_for_cr(k8s=k8s_hub_client, uuid=uuid)

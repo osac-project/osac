@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 from typing import Any
 
+from tests.catalog.conftest import unique_name
 from tests.core.grpc_client import GRPCClient
 from tests.core.helpers import wait_for_cr, wait_for_deletion, wait_for_provision, wait_for_running
 from tests.core.k8s_client import K8sClient
@@ -22,8 +23,10 @@ def test_compute_instance_cli_explicit_fields(
     k8s_hub_client: K8sClient,
     default_subnet: str,
 ) -> None:
+    name = unique_name("e2e-ci")
     uuid: str = cli.create_compute_instance(
         template="osac.templates.ocp_virt_vm",
+        name=name,
         network_attachments=[{"subnet": default_subnet}],
         boot_disk_size=TEST_BOOT_DISK_SIZE,
         image=TEST_IMAGE,

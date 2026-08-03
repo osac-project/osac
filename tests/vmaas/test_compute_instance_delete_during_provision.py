@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 
+from tests.catalog.conftest import unique_name
 from tests.core.grpc_client import GRPCClient
 from tests.core.helpers import wait_for_cr, wait_for_deletion, wait_for_grpc_removal
 from tests.core.k8s_client import K8sClient
@@ -59,7 +60,9 @@ def test_compute_instance_delete_during_provision(
     vm_template: str,
     default_subnet: str,
 ) -> None:
+    name = unique_name("e2e-ci")
     uuid: str = cli.create_compute_instance(
+        name=name,
         template=vm_template,
         network_attachments=[{"subnet": default_subnet}],
     )

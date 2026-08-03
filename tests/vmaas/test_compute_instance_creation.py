@@ -1,7 +1,14 @@
 from __future__ import annotations
 
+from tests.catalog.conftest import unique_name
 from tests.core.grpc_client import GRPCClient
-from tests.core.helpers import wait_for_cr, wait_for_deletion, wait_for_grpc_removal, wait_for_provision, wait_for_running
+from tests.core.helpers import (
+    wait_for_cr,
+    wait_for_deletion,
+    wait_for_grpc_removal,
+    wait_for_provision,
+    wait_for_running,
+)
 from tests.core.k8s_client import K8sClient
 from tests.core.osac_cli import OsacCLI
 
@@ -14,7 +21,9 @@ def test_compute_instance_lifecycle(
     vm_template: str,
     default_subnet: str,
 ) -> None:
+    name = unique_name("e2e-ci")
     uuid: str = cli.create_compute_instance(
+        name=name,
         template=vm_template,
         network_attachments=[{"subnet": default_subnet}],
     )

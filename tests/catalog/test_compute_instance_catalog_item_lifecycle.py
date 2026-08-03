@@ -150,7 +150,10 @@ def test_create_compute_instance_with_catalog_item(
     )
     ci_id = ""
     try:
-        ci_id = grpc.create_compute_instance(catalog_item=catalog_item_id, subnet_ids=[default_subnet_id])
+        ci_name = unique_name("e2e-ci")
+        ci_id = grpc.create_compute_instance(
+            name=ci_name, catalog_item=catalog_item_id, subnet_ids=[default_subnet_id]
+        )
 
         assert ci_id in grpc.list_compute_instance_ids()
 
@@ -196,7 +199,10 @@ def test_delete_compute_instance_catalog_item_blocked_when_referenced(
     )
     ci_id = ""
     try:
-        ci_id = grpc.create_compute_instance(catalog_item=catalog_item_id, subnet_ids=[default_subnet_id])
+        ci_name = unique_name("e2e-ci")
+        ci_id = grpc.create_compute_instance(
+            name=ci_name, catalog_item=catalog_item_id, subnet_ids=[default_subnet_id]
+        )
 
         output, rc = grpc.call_unchecked(
             service="osac.private.v1.ComputeInstanceCatalogItems/Delete", data={"id": catalog_item_id}

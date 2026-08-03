@@ -38,6 +38,7 @@
   loop: "{{ aap_organizations }}"
   loop_control:
     label: "{{ item.name }}"
+  no_log: true
 
 - name: Ensure controller project exists and is synced before creating job templates
   ansible.controller.project:
@@ -57,6 +58,7 @@
   loop: "{{ controller_projects }}"
   loop_control:
     label: "{{ item.name }}"
+  no_log: true
 
 - name: Look up the controller project's ID
   ansible.builtin.uri:
@@ -70,6 +72,7 @@
   failed_when: >
     aap_project_lookup.status != 200 or
     (aap_project_lookup.json.results | default([]) | length) == 0
+  no_log: true
 
 - name: Determine the playbooks this run's templates require
   ansible.builtin.set_fact:
@@ -90,6 +93,7 @@
   retries: 30
   delay: 10
   failed_when: false
+  no_log: true
 
 - name: Fail loudly if the project's playbook list never caught up
   ansible.builtin.fail:

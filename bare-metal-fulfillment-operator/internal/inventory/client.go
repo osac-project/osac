@@ -23,11 +23,10 @@ import (
 
 // Config is a struct that holds info needed to create a new client implementation
 type Config struct {
-	Name         string         `json:"name"`
-	Type         string         `json:"type"`
-	Options      map[string]any `json:"options"`
-	HostClass    string         `json:"hostClass"`
-	NetworkClass string         `json:"networkClass"`
+	Name      string         `json:"name"`
+	Type      string         `json:"type"`
+	Options   map[string]any `json:"options"`
+	HostClass string         `json:"hostClass"`
 }
 
 // Host is the common return type all clients must use
@@ -38,7 +37,6 @@ type Host struct {
 	Name                string
 	HostType            string
 	HostClass           string
-	NetworkClass        string
 	ProvisionState      string
 	ManagedBy           string
 }

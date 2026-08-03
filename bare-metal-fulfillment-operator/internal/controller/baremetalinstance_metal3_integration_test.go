@@ -38,9 +38,8 @@ import (
 )
 
 const (
-	metal3TestNS       = "metal3-test"
-	metal3HostClass    = "metal3"
-	metal3NetworkClass = "metal3"
+	metal3TestNS    = "metal3-test"
+	metal3HostClass = "metal3"
 )
 
 func createMetal3BMH(name string, labels map[string]string, opStatus metal3api.OperationalStatus, provState metal3api.ProvisioningState) *metal3api.BareMetalHost {
@@ -65,7 +64,7 @@ func createMetal3BMH(name string, labels map[string]string, opStatus metal3api.O
 }
 
 func newMetal3Reconciler() *BareMetalInstanceReconciler {
-	invClient := inventory.NewMetal3ClientForTest(k8sClient, metal3TestNS, metal3HostClass, metal3NetworkClass)
+	invClient := inventory.NewMetal3ClientForTest(k8sClient, metal3TestNS, metal3HostClass)
 	mgmtClient := management.NewMetal3ClientForTest(k8sClient, metal3TestNS)
 	return NewBareMetalInstanceReconciler(
 		k8sClient,

@@ -549,7 +549,7 @@ func sanitizeConditionMessage(condType bmfov1alpha1.BareMetalInstanceConditionTy
 }
 
 // mutateBMI sets the fulfillment-service-owned metadata and spec fields, leaving
-// operator-managed fields (ExternalHostID, HostClass, NetworkClass, etc.) untouched.
+// operator-managed fields (ExternalHostID, HostClass, etc.) untouched.
 func (t *task) mutateBMI(ctx context.Context, object *bmfov1alpha1.BareMetalInstance) error {
 	if object.Labels == nil {
 		object.Labels = make(map[string]string)

@@ -54,8 +54,6 @@ type BareMetalInstanceSpec struct {
 	ExternalHostName string `json:"externalHostName,omitempty"`
 	// HostClass is host management backend class (e.g. openstack).
 	HostClass string `json:"hostClass,omitempty"`
-	// NetworkClass is the network class for this host (e.g. openstack).
-	NetworkClass string `json:"networkClass,omitempty"`
 	// Selector defines additional host selection filters.
 	// hostSelector accepts arbitrary key/value selectors such as managedBy or topology.
 	// +kubebuilder:validation:Optional
@@ -221,7 +219,6 @@ func (h *BareMetalInstance) GetPoolID() (string, bool) {
 // +kubebuilder:printcolumn:name="HostType",type=string,JSONPath=`.spec.hostType`
 // +kubebuilder:printcolumn:name="Template",type=string,JSONPath=`.spec.templateID`
 // +kubebuilder:printcolumn:name="HostClass",type=string,JSONPath=`.spec.hostClass`
-// +kubebuilder:printcolumn:name="NetworkClass",type=string,JSONPath=`.spec.networkClass`
 // +kubebuilder:printcolumn:name="ExternalHostID",type=string,JSONPath=`.spec.externalHostID`
 
 // BareMetalInstance is the Schema for the baremetalinstances API.

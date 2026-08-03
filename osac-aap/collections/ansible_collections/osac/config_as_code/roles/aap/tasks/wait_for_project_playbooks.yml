@@ -18,6 +18,26 @@
 # run's job templates need is visible. Fails loudly with a clear message
 # instead of letting the ambiguous downstream "Playbook not found" error
 # surface from job template creation.
+#
+# The project's organization must exist first -- on a fresh AAP instance,
+# nothing has created it yet at this point in main.yml (dispatch is what
+# creates aap_organizations, and dispatch hasn't run yet), so a bare project
+# ensure fails with "Request to .../organizations/?name=<org> returned 0
+# items" (confirmed live via OSAC-3556's validation runs, the first time
+# this task ever executed against real infrastructure). Ensure the
+# organization ourselves too, same harmless-idempotent-duplicate reasoning,
+# reusing the exact module/variables dispatch's own gateway_organizations
+# role uses for this.
+- name: Ensure controller organization exists before creating the project
+  ansible.platform.organization:
+    name: "{{ item.name }}"
+    gateway_hostname: "{{ aap_hostname }}"
+    gateway_username: "{{ aap_username }}"
+    gateway_password: "{{ aap_password }}"
+    gateway_validate_certs: "{{ aap_validate_certs }}"
+  loop: "{{ aap_organizations }}"
+  loop_control:
+    label: "{{ item.name }}"
 
 - name: Ensure controller project exists and is synced before creating job templates
   ansible.controller.project:

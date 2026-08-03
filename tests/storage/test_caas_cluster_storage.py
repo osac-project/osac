@@ -20,6 +20,7 @@ import textwrap
 from pathlib import Path
 from uuid import uuid4
 
+from tests.catalog.conftest import unique_name
 from tests.core.helpers import (
     wait_for_cluster_deletion,
     wait_for_cluster_order_condition,
@@ -74,7 +75,9 @@ def test_caas_cluster_storage_lifecycle(
         wait_for_tenant_condition(k8s=k8s_hub_client, name=tenant_name, condition_type="StorageBackendReady")
 
         # --- Create ClusterOrder and associate with our Tenant ---
+        name = unique_name("e2e-cluster")
         cluster_uuid = cli.create_cluster(
+            name=name,
             template=cluster_template,
             template_parameter_files={"pull_secret": pull_secret_path},
             template_parameters={"ssh_public_key": Path(ssh_public_key_path).read_text().strip()},

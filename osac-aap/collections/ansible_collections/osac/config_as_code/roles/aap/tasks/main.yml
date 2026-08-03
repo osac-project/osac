@@ -6,9 +6,6 @@
 - name: Configure project SCM and merge into controller projects
   ansible.builtin.include_tasks: configure_project_scm.yml
 
-- name: Wait for controller project sync and playbook discovery to complete
-  ansible.builtin.include_tasks: wait_for_project_playbooks.yml
-
 - name: OSAC AAP
   ansible.builtin.include_role:
     name: infra.aap_configuration.dispatch

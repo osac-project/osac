@@ -41,7 +41,11 @@ permissions: {}
 jobs:
   scan-logs:
     name: Scan and purge run logs
-    runs-on: osac-ci
+    # Dedicated label, not the shared `osac-ci` fleet-wide label the e2e jobs
+    # themselves run on: this job needs to run promptly right after each e2e
+    # run to close the credential-exposure window, and sharing a runner pool
+    # with hour-long e2e jobs means it can queue behind them instead.
+    runs-on: osac-ci-small
     timeout-minutes: 15
     permissions:
       # Fetching and deleting the completed run's logs needs actions:write.

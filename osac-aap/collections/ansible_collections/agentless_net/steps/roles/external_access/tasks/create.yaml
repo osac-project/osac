@@ -152,6 +152,39 @@
       -e dnat_protocol=tcp
       {{ role_path }}/playbooks/l3_create_dnat.yaml
 
+# --- agentless_net: announce PublicIP routes via BGP ---
+# BGP must be announced before DNS and wait_for_network_cluster_operator,
+# otherwise the admin kubeconfig (which uses the public API endpoint) is
+# unreachable from the AAP runner pod.
+
+- name: Read veth namespace-side IP from state file
+  ansible.builtin.set_fact:
+    external_access_bgp_next_hop: "{{ (external_access_api_ipam_raw.content | b64decode | from_json).veth_state[external_access_state_key].ns_ip | ansible.utils.ipaddr('address') }}"
+
+- name: Announce API PublicIP route  # noqa: no-changed-when
+  environment:
+    ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
+    ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
+  ansible.builtin.command:
+    cmd: >
+      ansible-playbook
+      -i {{ agentless_net_inventory_file }}
+      -e bgp_public_ip={{ external_access_api_public_ip }}
+      -e bgp_next_hop={{ external_access_bgp_next_hop }}
+      {{ role_path }}/playbooks/bgp_announce.yaml
+
+- name: Announce ingress PublicIP route  # noqa: no-changed-when
+  environment:
+    ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
+    ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
+  ansible.builtin.command:
+    cmd: >
+      ansible-playbook
+      -i {{ agentless_net_inventory_file }}
+      -e bgp_public_ip={{ external_access_ingress_public_ip }}
+      -e bgp_next_hop={{ external_access_bgp_next_hop }}
+      {{ role_path }}/playbooks/bgp_announce.yaml
+
 # --- DNS records ---
 
 - name: Create DNS records
@@ -252,32 +285,3 @@
       -e dnat_protocol=tcp
       {{ role_path }}/playbooks/l3_create_dnat.yaml
 
-# --- agentless_net: announce PublicIP routes via BGP ---
-
-- name: Read veth namespace-side IP from state file
-  ansible.builtin.set_fact:
-    external_access_bgp_next_hop: "{{ (external_access_api_ipam_raw.content | b64decode | from_json).veth_state[external_access_state_key].ns_ip | ansible.utils.ipaddr('address') }}"
-
-- name: Announce API PublicIP route  # noqa: no-changed-when
-  environment:
-    ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
-    ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
-  ansible.builtin.command:
-    cmd: >
-      ansible-playbook
-      -i {{ agentless_net_inventory_file }}
-      -e bgp_public_ip={{ external_access_api_public_ip }}
-      -e bgp_next_hop={{ external_access_bgp_next_hop }}
-      {{ role_path }}/playbooks/bgp_announce.yaml
-
-- name: Announce ingress PublicIP route  # noqa: no-changed-when
-  environment:
-    ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
-    ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
-  ansible.builtin.command:
-    cmd: >
-      ansible-playbook
-      -i {{ agentless_net_inventory_file }}
-      -e bgp_public_ip={{ external_access_ingress_public_ip }}
-      -e bgp_next_hop={{ external_access_bgp_next_hop }}
-      {{ role_path }}/playbooks/bgp_announce.yaml

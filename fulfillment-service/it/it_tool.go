@@ -484,10 +484,20 @@ func (t *Tool) buildImage(ctx context.Context) (result string, err error) {
 	if t.debug {
 		buildTarget = "runtime-debug"
 	}
+	// The Containerfile expects the mono-repo root as build context so
+	// that cross-module dependencies (go.work) resolve from sibling dirs.
+	buildContext := t.projectDir
+	containerfile := "Containerfile"
+	monoRepoRoot := filepath.Dir(t.projectDir)
+	if _, statErr := os.Stat(filepath.Join(monoRepoRoot, "go.work")); statErr == nil {
+		buildContext = monoRepoRoot
+		containerfile = filepath.Join(filepath.Base(t.projectDir), "Containerfile")
+	}
+
 	buildCmd, err := testing.NewCommand().
 		SetLogger(t.logger).
 		SetHome(t.projectDir).
-		SetDir(t.projectDir).
+		SetDir(buildContext).
 		SetName(podmanCmd).
 		SetArgs(
 			"build",
@@ -495,7 +505,7 @@ func (t *Tool) buildImage(ctx context.Context) (result string, err error) {
 			"--build-arg", fmt.Sprintf("VERSION=%s", gitVersion),
 			"--target", buildTarget,
 			"--tag", imageRef,
-			"--file", "Containerfile",
+			"--file", containerfile,
 			".",
 		).
 		Build()

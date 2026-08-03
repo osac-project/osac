@@ -1,0 +1,18 @@
+# Allowlist: exclude everything, then include only what Containerfiles need.
+# This keeps the build context lean when building from the mono-repo root.
+*
+
+# Go workspace
+!go.work
+!go.work.sum
+
+# fulfillment-service (full source)
+!fulfillment-service/
+
+# Cross-module dependencies resolved via go.work
+!bare-metal-fulfillment-operator/
+!osac-operator/go.mod
+!osac-operator/go.sum
+!osac-operator/api/
+!osac-csi-driver/go.mod
+!osac-csi-driver/go.sum

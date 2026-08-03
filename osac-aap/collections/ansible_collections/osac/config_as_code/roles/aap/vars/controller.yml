@@ -608,7 +608,7 @@ controller_execution_environments: # noqa: var-naming[no-role-prefix]
   - name: "{{ aap_prefix }}-ee"
     organization: "{{ aap_organization_name }}"
     image: "{{ aap_ee_image }}"
-    pull: always
+    pull: "{{ aap_ee_image_pull }}"
 
 # Customize pod templates in order to inject the configuration and the
 # credentials when the template are run, that way Kubernetes is the source

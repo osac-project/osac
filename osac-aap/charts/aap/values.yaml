@@ -24,6 +24,13 @@ configAsCode:
   manifestSecret: "config-as-code-manifest-ig"
   secret: "config-as-code-ig"
   eeImage: ""
+  # Controller's own execution_environment.pull field (always / missing /
+  # never). Left empty by default (config-as-code-secret.yaml omits the env
+  # var, Ansible side falls back to "always", preserving today's behavior
+  # for the shipped mutable :latest default); e2e sets this to "missing"
+  # alongside its own eeImage override, since that image only exists in the
+  # node's local store and was never pushed to a real registry.
+  eeImagePull: ""
   projectGitUri: ""
   projectGitBranch: ""
   importAgentsEnabled: false

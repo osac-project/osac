@@ -12,6 +12,20 @@ aap_project_git_uri: "{{ lookup('env', 'AAP_PROJECT_GIT_URI', default='https://g
 aap_project_git_branch: "{{ lookup('env', 'AAP_PROJECT_GIT_BRANCH', default='main') }}"
 aap_project_archive_uri: "{{ lookup('env', 'AAP_PROJECT_ARCHIVE_URI', default=Undefined) }}"
 aap_ee_image: "{{ lookup('env', 'AAP_EE_IMAGE', default='ghcr.io/osac-project/osac-aap:latest') }}"
+# ansible.controller.execution_environment's own `pull` field (always /
+# missing / never -- Controller's own terms, "missing" meaning the
+# Kubernetes IfNotPresent equivalent) controls the imagePullPolicy Container
+# Group execution nodes actually use for the job's assigned EE. This is a
+# separate mechanism from Instance Groups' own pod_spec_override, which does
+# NOT control this -- confirmed live: setting imagePullPolicy directly in an
+# Instance Group's pod_spec_override is silently ignored, since AWX always
+# overwrites both the image and imagePullPolicy fields on the job's worker
+# container to match the assigned EE. Defaults to "always" to preserve
+# today's shipped behavior (correct for a mutable :latest tag); e2e
+# overrides this to "missing" alongside its own aap_ee_image override, since
+# that image only exists in the node's local store and was never pushed to
+# a real registry.
+aap_ee_image_pull: "{{ lookup('env', 'AAP_EE_IMAGE_PULL', default='always') }}"
 license_manifest_path: "{{ lookup('env', 'LICENSE_MANIFEST_PATH', default='/var/secrets/config-as-code-manifest/license.zip') }}"
 remote_cluster_kubeconfig_secret_name: "{{ lookup('env', 'REMOTE_CLUSTER_KUBECONFIG_SECRET_NAME', default='') }}"
 remote_cluster_kubeconfig_secret_key: "{{ lookup('env', 'REMOTE_CLUSTER_KUBECONFIG_SECRET_KEY', default='kubeconfig') }}"

@@ -32,6 +32,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/externalippool"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/kubeconfig"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/password"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/storagetier"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/token"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
@@ -68,6 +69,7 @@ func Cmd() *cobra.Command {
 	result.AddCommand(externalippool.Cmd())
 	result.AddCommand(kubeconfig.Cmd())
 	result.AddCommand(password.Cmd())
+	result.AddCommand(storagetier.Cmd())
 	result.AddCommand(token.Cmd())
 	flags := result.Flags()
 	flags.StringVarP(

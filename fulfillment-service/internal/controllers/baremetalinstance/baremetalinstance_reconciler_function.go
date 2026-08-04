@@ -454,7 +454,7 @@ func (t *task) syncStatus(object *bmfov1alpha1.BareMetalInstance) {
 		case bmfov1alpha1.HostConditionProvisionTemplateComplete:
 			reason := cond.Reason
 			message := sanitizeConditionMessage(condType, cond.Status)
-			if cond.Status == metav1.ConditionFalse && cond.Reason == bmfov1alpha1.HostConditionReasonRetrying {
+			if cond.Status == metav1.ConditionFalse && cond.Reason == "Retrying" {
 				reason = "ConfigurationFailed"
 				message = "Configuration application encountered a transient error"
 			}

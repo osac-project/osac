@@ -1277,7 +1277,7 @@ var _ = Describe("syncStatus", func() {
 					{
 						Type:    string(bmfov1alpha1.HostConditionProvisionTemplateComplete),
 						Status:  metav1.ConditionFalse,
-						Reason:  bmfov1alpha1.HostConditionReasonRetrying,
+						Reason:  "Retrying",
 						Message: "Retry #2: Last provision failed due to AAP job timed out",
 					},
 				},

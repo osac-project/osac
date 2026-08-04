@@ -22,14 +22,14 @@ columns:
 - header: MEMORY
   value: this.spec.memory_gib
 
+- header: GPU COUNT
+  value: "has(this.spec.gpu) ? this.spec.gpu.count : 0"
+
 - header: GPU DEVICE
   value: "has(this.spec.gpu) ? this.spec.gpu.pci_device_selector : '-'"
 
 - header: GPU RESOURCE
   value: "has(this.spec.gpu) ? this.spec.gpu.resource_name : '-'"
-
-- header: GPU COUNT
-  value: "has(this.spec.gpu) ? this.spec.gpu.count : 0"
 
 - header: STATE
   value: this.spec.state

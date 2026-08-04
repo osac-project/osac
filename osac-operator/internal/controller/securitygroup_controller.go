@@ -34,6 +34,7 @@ import (
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/pkg/dispatcher"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 )
 
@@ -53,6 +54,10 @@ type SecurityGroupReconciler struct {
 	StatusPollInterval   time.Duration
 	MaxJobHistory        int
 	targetCluster        mc.ClusterName
+	// Resolver resolves a NetworkClass to its registered managers. Nil when the
+	// two-manager model isn't configured (no gRPC connection / networking namespace),
+	// in which case the controller always uses the legacy implementation-strategy path.
+	Resolver *dispatcher.Resolver
 }
 
 // NewSecurityGroupReconciler creates a new reconciler for SecurityGroup resources.
@@ -63,6 +68,7 @@ func NewSecurityGroupReconciler(
 	statusPollInterval time.Duration,
 	maxJobHistory int,
 	targetCluster mc.ClusterName,
+	resolver *dispatcher.Resolver,
 ) *SecurityGroupReconciler {
 	if mgr == nil {
 		panic("mgr must not be nil")
@@ -83,6 +89,7 @@ func NewSecurityGroupReconciler(
 		StatusPollInterval:   statusPollInterval,
 		MaxJobHistory:        maxJobHistory,
 		targetCluster:        targetCluster,
+		Resolver:             resolver,
 	}
 }
 
@@ -149,10 +156,32 @@ func (r *SecurityGroupReconciler) handleUpdate(ctx context.Context, sg *v1alpha1
 		sg.Status.Phase = v1alpha1.SecurityGroupPhaseProgressing
 	}
 
-	// Read implementation strategy from spec (set by fulfillment-service), fall back to default
-	implementationStrategy := sg.Spec.ImplementationStrategy
-	if implementationStrategy == "" {
-		implementationStrategy = defaultSecurityGroupImplementationStrategy
+	// Look up the parent VirtualNetwork's NetworkClass to check whether it has a
+	// fabricManager registered (dispatcher path).
+	var networkClassID string
+	vnetList := &v1alpha1.VirtualNetworkList{}
+	if err := r.List(ctx, vnetList,
+		client.InNamespace(sg.Namespace),
+		client.MatchingLabels{osacVirtualNetworkIDLabel: sg.Spec.VirtualNetwork},
+	); err != nil {
+		return ctrl.Result{}, err
+	} else if len(vnetList.Items) == 1 {
+		networkClassID = vnetList.Items[0].Spec.NetworkClass
+	} else {
+		log.Info("parent VirtualNetwork not found, using legacy implementation strategy", "uuid", sg.Spec.VirtualNetwork)
+	}
+
+	// Read implementation strategy from spec (set by fulfillment-service), fall back to
+	// default. This is the legacy value; resolveImplementationStrategy below only uses
+	// it when the dispatcher path isn't available (see doc comment).
+	legacyStrategy := sg.Spec.ImplementationStrategy
+	if legacyStrategy == "" {
+		legacyStrategy = defaultSecurityGroupImplementationStrategy
+	}
+
+	implementationStrategy, err := resolveImplementationStrategy(ctx, r.Resolver, "SecurityGroup", networkClassID, legacyStrategy)
+	if err != nil {
+		return ctrl.Result{}, err
 	}
 
 	// Add implementation-strategy annotation if not present or different

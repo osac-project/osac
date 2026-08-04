@@ -35,6 +35,10 @@ import (
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	privatev1 "github.com/osac-project/osac/osac-operator/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/osac-operator/internal/dispatcheradapter"
+	"github.com/osac-project/osac/osac-operator/pkg/dispatcher"
+	"github.com/osac-project/osac/osac-operator/pkg/networkmanager"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 )
 
@@ -685,6 +689,113 @@ var _ = Describe("SecurityGroupReconciler", func() {
 
 			Expect(updated.Finalizers).To(BeEmpty())
 			Expect(updated.Status.Phase).To(BeEmpty())
+		})
+	})
+
+	Context("dispatcher path", func() {
+		It("uses the resolved fabric manager name from the parent VirtualNetwork's NetworkClass", func() {
+			Expect(fakeClient.Create(ctx, newFabricManagerConfigMap("fm-netris", "test-namespace", "netris"))).To(Succeed())
+			disc, err := networkmanager.NewDiscovery(fakeClient, "test-namespace")
+			Expect(err).NotTo(HaveOccurred())
+			reconciler.Resolver = dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+				[]*privatev1.NetworkClass{{Id: "nc-dispatch", FabricManager: "netris"}}, &[]*privatev1.NetworkClass{},
+			)), disc)
+
+			vnet.Spec.NetworkClass = "nc-dispatch"
+			Expect(fakeClient.Update(ctx, vnet)).To(Succeed())
+
+			key := types.NamespacedName{Name: sg.Name, Namespace: sg.Namespace}
+			mockProvider.triggerProvisionFunc = func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+				return &provisioning.ProvisionResult{JobID: "job-dispatch", InitialState: osacv1alpha1.JobStatePending}, nil
+			}
+
+			// First reconcile adds finalizer, second sets annotation and provisions
+			_, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+			_, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &osacv1alpha1.SecurityGroup{}
+			Expect(fakeClient.Get(ctx, key, updated)).To(Succeed())
+			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("netris"))
+		})
+
+		It("falls back to SecurityGroup's own legacy implementation strategy when fabricManager is not set", func() {
+			disc, err := networkmanager.NewDiscovery(fakeClient, "test-namespace")
+			Expect(err).NotTo(HaveOccurred())
+			reconciler.Resolver = dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+				[]*privatev1.NetworkClass{{Id: "nc-legacy"}}, &[]*privatev1.NetworkClass{},
+			)), disc)
+
+			vnet.Spec.NetworkClass = "nc-legacy"
+			Expect(fakeClient.Update(ctx, vnet)).To(Succeed())
+
+			// SecurityGroup's own legacy strategy is independent of the parent VNet's
+			// ImplementationStrategy — set a distinct value here to prove the fallback
+			// reads from the SecurityGroup spec, not the VirtualNetwork's.
+			sg.Spec.ImplementationStrategy = "custom-legacy"
+			Expect(fakeClient.Update(ctx, sg)).To(Succeed())
+
+			key := types.NamespacedName{Name: sg.Name, Namespace: sg.Namespace}
+			mockProvider.triggerProvisionFunc = func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+				return &provisioning.ProvisionResult{JobID: "job-legacy", InitialState: osacv1alpha1.JobStatePending}, nil
+			}
+
+			_, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &osacv1alpha1.SecurityGroup{}
+			Expect(fakeClient.Get(ctx, key, updated)).To(Succeed())
+			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("custom-legacy"))
+		})
+
+		It("returns a reconcile error when the NetworkClass references an unregistered manager", func() {
+			disc, err := networkmanager.NewDiscovery(fakeClient, "test-namespace")
+			Expect(err).NotTo(HaveOccurred())
+			reconciler.Resolver = dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+				[]*privatev1.NetworkClass{{Id: "nc-broken", FabricManager: "does-not-exist"}}, &[]*privatev1.NetworkClass{},
+			)), disc)
+
+			vnet.Spec.NetworkClass = "nc-broken"
+			Expect(fakeClient.Update(ctx, vnet)).To(Succeed())
+
+			key := types.NamespacedName{Name: sg.Name, Namespace: sg.Namespace}
+
+			// SecurityGroup resolves the dispatch plan on the very first reconcile
+			// (unlike VirtualNetwork/Subnet, finalizer-add doesn't return early here).
+			_, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).To(HaveOccurred())
+		})
+
+		It("falls back to legacy strategy when the parent VirtualNetwork cannot be found", func() {
+			disc, err := networkmanager.NewDiscovery(fakeClient, "test-namespace")
+			Expect(err).NotTo(HaveOccurred())
+			reconciler.Resolver = dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+				nil, &[]*privatev1.NetworkClass{},
+			)), disc)
+
+			orphanSG := &osacv1alpha1.SecurityGroup{
+				ObjectMeta: metav1.ObjectMeta{Name: "orphan-sg", Namespace: "test-namespace"},
+				Spec: osacv1alpha1.SecurityGroupSpec{
+					VirtualNetwork:         "no-such-vnet-uuid",
+					ImplementationStrategy: "custom-backend",
+				},
+			}
+			Expect(fakeClient.Create(ctx, orphanSG)).To(Succeed())
+
+			key := types.NamespacedName{Name: orphanSG.Name, Namespace: orphanSG.Namespace}
+			mockProvider.triggerProvisionFunc = func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+				return &provisioning.ProvisionResult{JobID: "job-orphan", InitialState: osacv1alpha1.JobStatePending}, nil
+			}
+
+			_, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+			_, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &osacv1alpha1.SecurityGroup{}
+			Expect(fakeClient.Get(ctx, key, updated)).To(Succeed())
+			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("custom-backend"))
 		})
 	})
 

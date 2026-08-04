@@ -42,9 +42,10 @@ const (
 	// Used by ExternalIPPool (from its own spec) and ExternalIP (inherited from parent pool).
 	defaultExternalIPPoolImplementationStrategy = "metallb-l2"
 
-	// defaultSecurityGroupImplementationStrategy is the implementation strategy for SecurityGroup.
-	// SecurityGroup enforcement uses standard Kubernetes NetworkPolicy, independent of the
-	// VirtualNetwork's NetworkClass.
+	// defaultSecurityGroupImplementationStrategy is the fallback implementation strategy
+	// for SecurityGroup (standard Kubernetes NetworkPolicy) when neither the SecurityGroup
+	// spec nor the parent VirtualNetwork's NetworkClass (via the dispatcher path) resolve
+	// one.
 	defaultSecurityGroupImplementationStrategy = "network_policy"
 
 	conditionReasonConfigurationApplied  = "ConfigurationApplied"

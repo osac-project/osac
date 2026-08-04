@@ -22,15 +22,22 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	privatev1 "github.com/osac-project/osac/osac-operator/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/osac-operator/internal/dispatcheradapter"
+	"github.com/osac-project/osac/osac-operator/pkg/dispatcher"
+	"github.com/osac-project/osac/osac-operator/pkg/networkmanager"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 )
 
@@ -659,6 +666,159 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			Eventually(func() bool {
 				return errors.IsNotFound(k8sClient.Get(ctx, key, &osacv1alpha1.VirtualNetwork{}))
 			}, 5*time.Second, 100*time.Millisecond).Should(BeTrue())
+		})
+	})
+
+	Context("dispatcher path", func() {
+		var fakeDiscoveryClient client.Client
+
+		BeforeEach(func() {
+			scheme := runtime.NewScheme()
+			Expect(corev1.AddToScheme(scheme)).To(Succeed())
+			fakeDiscoveryClient = fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+				newFabricManagerConfigMap("fm-netris", "osac", "netris"),
+			).Build()
+		})
+
+		It("uses the resolved fabric manager name when the NetworkClass has fabricManager set", func() {
+			disc, err := networkmanager.NewDiscovery(fakeDiscoveryClient, "osac")
+			Expect(err).NotTo(HaveOccurred())
+			reconciler.Resolver = dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+				[]*privatev1.NetworkClass{{Id: "nc-dispatch", FabricManager: "netris"}}, &[]*privatev1.NetworkClass{},
+			)), disc)
+
+			vnet.Spec.NetworkClass = "nc-dispatch"
+			vnet.Spec.ImplementationStrategy = "legacy-value"
+			Expect(k8sClient.Create(ctx, vnet)).To(Succeed())
+
+			_, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: vnet.Name, Namespace: vnet.Namespace},
+			}})
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &osacv1alpha1.VirtualNetwork{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: vnet.Name, Namespace: vnet.Namespace}, updated)).To(Succeed())
+			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("netris"))
+		})
+
+		It("falls back to the legacy implementation-strategy path when fabricManager is not set", func() {
+			disc, err := networkmanager.NewDiscovery(fakeDiscoveryClient, "osac")
+			Expect(err).NotTo(HaveOccurred())
+			reconciler.Resolver = dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+				[]*privatev1.NetworkClass{{Id: "nc-legacy"}}, &[]*privatev1.NetworkClass{},
+			)), disc)
+
+			vnet.Spec.NetworkClass = "nc-legacy"
+			vnet.Spec.ImplementationStrategy = "cudn-net"
+			Expect(k8sClient.Create(ctx, vnet)).To(Succeed())
+
+			_, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: vnet.Name, Namespace: vnet.Namespace},
+			}})
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &osacv1alpha1.VirtualNetwork{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: vnet.Name, Namespace: vnet.Namespace}, updated)).To(Succeed())
+			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("cudn-net"))
+		})
+
+		It("returns a reconcile error when the NetworkClass references an unregistered manager", func() {
+			disc, err := networkmanager.NewDiscovery(fakeDiscoveryClient, "osac")
+			Expect(err).NotTo(HaveOccurred())
+			reconciler.Resolver = dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+				[]*privatev1.NetworkClass{{Id: "nc-broken", FabricManager: "does-not-exist"}}, &[]*privatev1.NetworkClass{},
+			)), disc)
+
+			vnet.Spec.NetworkClass = "nc-broken"
+			Expect(k8sClient.Create(ctx, vnet)).To(Succeed())
+
+			_, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: vnet.Name, Namespace: vnet.Namespace},
+			}})
+			Expect(err).To(HaveOccurred())
+		})
+
+		It("triggers a new provisioning job when the resolved strategy changes with the spec unchanged", func() {
+			disc, err := networkmanager.NewDiscovery(fakeDiscoveryClient, "osac")
+			Expect(err).NotTo(HaveOccurred())
+			reconciler.Resolver = dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+				[]*privatev1.NetworkClass{{Id: "nc-dispatch"}}, &[]*privatev1.NetworkClass{},
+			)), disc)
+
+			vnet.Spec.NetworkClass = "nc-dispatch"
+			vnet.Spec.ImplementationStrategy = "cudn-net"
+			Expect(k8sClient.Create(ctx, vnet)).To(Succeed())
+
+			req := mcreconcile.Request{Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: vnet.Name, Namespace: vnet.Namespace},
+			}}
+
+			// First reconcile: adds finalizer and sets the legacy strategy annotation
+			// (the NetworkClass has no fabricManager registered yet).
+			_, err = reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Second reconcile: triggers the initial provisioning job under the legacy strategy.
+			mockProvider.triggerProvisionFunc = func(_ context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
+				return &provisioning.ProvisionResult{
+					JobID:        "job-before-strategy-change",
+					InitialState: osacv1alpha1.JobStatePending,
+					Message:      "Provisioning triggered",
+				}, nil
+			}
+			_, err = reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			beforeVnet := &osacv1alpha1.VirtualNetwork{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: vnet.Name, Namespace: vnet.Namespace}, beforeVnet)).To(Succeed())
+			Expect(beforeVnet.Annotations[osacImplementationStrategyAnnotation]).To(Equal("cudn-net"))
+			versionBefore := beforeVnet.Status.DesiredConfigVersion
+			Expect(versionBefore).NotTo(BeEmpty())
+			jobBefore := provisioning.FindJobByID(beforeVnet.Status.ProvisioningJobs, "job-before-strategy-change")
+			Expect(jobBefore).NotTo(BeNil())
+
+			// Mark the existing job as succeeded at the current desired version, mirroring a
+			// VirtualNetwork that has already been successfully provisioned under the legacy path.
+			beforeVnet.Status.Phase = osacv1alpha1.VirtualNetworkPhaseReady
+			jobBefore.State = osacv1alpha1.JobStateSucceeded
+			jobBefore.ConfigVersion = versionBefore
+			Expect(k8sClient.Status().Update(ctx, beforeVnet)).To(Succeed())
+
+			// Simulate the NetworkClass being updated to register a fabricManager. The
+			// VirtualNetwork's spec is untouched — only the dynamically-resolved strategy changes.
+			reconciler.Resolver = dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+				[]*privatev1.NetworkClass{{Id: "nc-dispatch", FabricManager: "netris"}}, &[]*privatev1.NetworkClass{},
+			)), disc)
+
+			// Third reconcile: updates the annotation to the newly-resolved manager and requeues.
+			_, err = reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &osacv1alpha1.VirtualNetwork{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: vnet.Name, Namespace: vnet.Namespace}, updated)).To(Succeed())
+			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("netris"))
+
+			// Fourth reconcile: the resolved strategy changed with the spec unchanged, so a new
+			// desired config version — and a new provisioning job — must be produced.
+			mockProvider.triggerProvisionFunc = func(_ context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
+				return &provisioning.ProvisionResult{
+					JobID:        "job-after-strategy-change",
+					InitialState: osacv1alpha1.JobStatePending,
+					Message:      "Provisioning triggered",
+				}, nil
+			}
+			_, err = reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			afterVnet := &osacv1alpha1.VirtualNetwork{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: vnet.Name, Namespace: vnet.Namespace}, afterVnet)).To(Succeed())
+			Expect(afterVnet.Status.DesiredConfigVersion).NotTo(Equal(versionBefore),
+				"desired config version must change when the resolved strategy changes, even with an unchanged spec")
+			// Look up by ID rather than FindLatestJobByType: both jobs may land in the
+			// same envtest second, and JobStatus.Timestamp only has second resolution.
+			jobAfter := provisioning.FindJobByID(afterVnet.Status.ProvisioningJobs, "job-after-strategy-change")
+			Expect(jobAfter).NotTo(BeNil(),
+				"a new provisioning job must be triggered when the resolved strategy changes")
 		})
 	})
 

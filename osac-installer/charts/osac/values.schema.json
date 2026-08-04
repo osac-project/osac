@@ -452,6 +452,11 @@
               "description": "Number of retries for bootstrap job",
               "default": 15
             },
+            "readinessConsecutiveSuccesses": {
+              "type": "integer",
+              "description": "Number of consecutive successful AAP readiness checks required before the bootstrap Job proceeds",
+              "default": 3
+            },
             "gateway": {
               "type": "object",
               "properties": {

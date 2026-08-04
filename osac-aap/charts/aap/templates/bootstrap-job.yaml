@@ -12,6 +12,7 @@ metadata:
     "helm.sh/hook-delete-policy": before-hook-creation
 spec:
   backoffLimit: {{ .Values.bootstrap.backoffLimit }}
+  activeDeadlineSeconds: 3600
   template:
     metadata:
       labels:
@@ -24,42 +25,36 @@ spec:
           - /bin/bash
           - -c
           - |
-            echo "Gateway: ${AAP_GATEWAY_HOSTNAME}"
-            echo "Waiting for AAP controller to be ready..."
-            for i in {1..60}; do
-              echo "Attempt $i: Checking AAP controller readiness..."
-              curl -sf http://${AAP_GATEWAY_HOSTNAME}/api/gateway/v1/ping/ \
-                | grep -q 'good';
-              GATEWAY=$?
-              echo "GATEWAY exit code: $GATEWAY"
-
-              curl -sf http://${AAP_CONTROLLER_GATEWAY_HOSTNAME}/api/v2/ping/ \
-                | grep -q 'version';
-              CONTROLLER_GATEWAY=$?
-              echo "CONTROLLER_GATEWAY exit code: $CONTROLLER_GATEWAY"
-
-              auth_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-                http://${AAP_GATEWAY_HOSTNAME}/api/gateway/v1/tokens/ \
-                -d "username=admin&password=dummy")
-              [ "$auth_code" != "503" ] && [ "$auth_code" != "000" ];
-              AUTH_UPSTREAM=$?
-              echo "AUTH_UPSTREAM exit code: $AUTH_UPSTREAM (HTTP $auth_code)"
-
-              if [ $GATEWAY -eq 0 ] && [ $CONTROLLER_GATEWAY -eq 0 ] && [ $AUTH_UPSTREAM -eq 0 ];
-              then
-                echo "AAP controller is ready!"
-                exit 0
-              fi
-              echo "AAP is not ready, waiting 60 seconds..."
-              sleep 60
-            done
-            echo "Timeout waiting for AAP."
-            exit 1
+            {{- include "osac-aap.waitForAapScript" . | nindent 12 }}
         env:
+        - name: HOME
+          value: /tmp
         - name: AAP_GATEWAY_HOSTNAME
           value: {{ include "osac-aap.gatewayHostname" . | quote }}
         - name: AAP_CONTROLLER_GATEWAY_HOSTNAME
           value: {{ include "osac-aap.controllerHostname" . | quote }}
+        - name: AAP_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "osac-aap.instanceName" . }}-admin-password
+              key: password
+        - name: AAP_READINESS_CONSECUTIVE_SUCCESSES
+          value: {{ .Values.bootstrap.readinessConsecutiveSuccesses | quote }}
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
       containers:
       - name: bootstrap
         image: {{ .Values.bootstrap.image }}
@@ -88,5 +83,7 @@ spec:
       - name: config-as-code-manifest-volume
         secret:
           secretName: {{ .Values.configAsCode.manifestSecret }}
+      - name: tmp
+        emptyDir: {}
       restartPolicy: Never
 {{- end }}

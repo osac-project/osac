@@ -19,6 +19,7 @@ bootstrap:
   image: ghcr.io/osac-project/osac-aap:latest
   cliImage: quay.io/openshift/origin-cli:4.20.0
   backoffLimit: 15
+  readinessConsecutiveSuccesses: 3
 
 configAsCode:
   manifestSecret: "config-as-code-manifest-ig"

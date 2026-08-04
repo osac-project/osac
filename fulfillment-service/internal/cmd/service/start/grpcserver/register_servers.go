@@ -675,6 +675,21 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	}
 	privatev1.RegisterStorageTiersServer(registrar, privateStorageTiersServer)
 
+	// Create the storage tiers server:
+	deps.Logger.InfoContext(ctx, "Creating storage tiers server")
+	storageTiersServer, err := servers.NewStorageTiersServer().
+		SetLogger(deps.Logger).
+		SetNotifier(deps.Notifier).
+		SetAttributionLogic(deps.PublicAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetStorageBackendsDAO(storageBackendsDAO).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create storage tiers server: %w", err)
+	}
+	publicv1.RegisterStorageTiersServer(registrar, storageTiersServer)
+
 	// Create the roles server:
 	deps.Logger.InfoContext(ctx, "Creating roles server")
 	rolesServer, err := servers.NewRolesServer().

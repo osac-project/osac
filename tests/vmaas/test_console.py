@@ -47,9 +47,7 @@ def console_vm(
     print("\nCreating console test VM...")
     name = unique_name("e2e-ci")
     uuid: str = cli.create_compute_instance(
-        name=name,
-        template=vm_template,
-        network_attachments=[{"subnet": default_subnet}],
+        name=name, template=vm_template, network_attachments=[{"subnet": default_subnet}]
     )
     ci_name: str | None = None
     try:
@@ -108,14 +106,36 @@ def _ws_recv(ws: websocket.WebSocket, timeout: float) -> str | None:
 
 
 def _ws_try_connect(url: str, ticket: str) -> bool:
-    """Try to open a WebSocket connection. Returns True if successful."""
+    """Try to open a WebSocket connection. Returns True if the session is
+    established, False if rejected.
+
+    Handles both handshake-level rejection (old behavior: server returns
+    non-101) and post-upgrade rejection (new behavior: server upgrades to
+    101, then sends a Close frame with an error code).
+    """
+    # TODO(console-ws-errors): Remove the handshake-rejection path once
+    # the server always uses post-upgrade close frames for setup errors.
     try:
         ws = _ws_connect(url, ticket, timeout=10)
-        ws.close()
+    except Exception as exc:
+        logger.info("WS try-connect rejected at handshake: %s: %s", type(exc).__name__, exc)
+        return False
+    try:
+        ws.settimeout(3)
+        data = ws.recv()
+        if data == "":
+            logger.info("WS try-connect rejected via close frame after upgrade")
+            return False
+        return True
+    except websocket.WebSocketTimeoutException:
         return True
     except Exception as exc:
-        logger.info("WS try-connect failed: %s: %s", type(exc).__name__, exc)
+        logger.info("WS try-connect failed after upgrade: %s: %s", type(exc).__name__, exc)
         return False
+    finally:
+        with contextlib.suppress(Exception):
+            ws.close()
+            ws.shutdown()
 
 
 def _grpc_popen(address: str, ticket: str) -> subprocess.Popen:
@@ -402,7 +422,23 @@ def test_console_session_nonexistent_vm(grpc: GRPCClient) -> None:
 
 
 def test_console_invalid_ticket_websocket(fulfillment_address: str) -> None:
-    """Connecting with a garbage ticket should fail the handshake."""
+    """Connecting with a garbage ticket must be rejected.
+
+    Old behavior: server rejects at handshake (non-101 HTTP status).
+    New behavior: server upgrades to 101, then sends Close frame (3000).
+    """
     url: str = _ws_url(fulfillment_address)
-    with pytest.raises(websocket.WebSocketException):
-        _ws_connect(url, "not-a-valid-ticket", timeout=10)
+    # TODO(console-ws-errors): Remove the handshake-rejection path once
+    # the server always uses post-upgrade close frames for setup errors.
+    try:
+        ws = _ws_connect(url, "not-a-valid-ticket", timeout=10)
+    except websocket.WebSocketException:
+        return
+    try:
+        ws.settimeout(5)
+        data = ws.recv()
+        assert data == "", f"Expected close frame after upgrade, got: {data!r}"
+    finally:
+        with contextlib.suppress(Exception):
+            ws.close()
+            ws.shutdown()

@@ -313,6 +313,7 @@ func (c *runnerContext) registerHandlers(ctx context.Context, mux *runtime.Serve
 		publicv1.RegisterJsonWebKeySetHandler,
 		publicv1.RegisterInstanceTypesHandler,
 		publicv1.RegisterBareMetalInstanceTypesHandler,
+		publicv1.RegisterStorageTiersHandler,
 
 		// Private API:
 		privatev1.RegisterCapabilitiesHandler,

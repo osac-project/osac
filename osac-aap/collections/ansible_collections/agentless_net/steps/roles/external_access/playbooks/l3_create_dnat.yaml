@@ -7,3 +7,24 @@
       ansible.builtin.include_role:
         name: agentless_net.l3.dnat
         tasks_from: create
+
+    - name: Derive veth interface name for namespace {{ dnat_router_name }}
+      ansible.builtin.set_fact:
+        _dnat_veth_iface: "v{{ dnat_router_name | hash('md5') | truncate(11, True, '') }}i"
+
+    - name: Check if veth MASQUERADE exists
+      ansible.builtin.raw: >-
+        ip netns exec {{ dnat_router_name }}
+        iptables -t nat -C POSTROUTING
+        -o {{ _dnat_veth_iface }} -j MASQUERADE 2>/dev/null
+      register: _veth_masq_check
+      changed_when: false
+      failed_when: false
+
+    - name: Add MASQUERADE on veth for DNAT return path (namespace {{ dnat_router_name }})
+      ansible.builtin.raw: >-
+        ip netns exec {{ dnat_router_name }}
+        iptables -t nat -A POSTROUTING
+        -o {{ _dnat_veth_iface }} -j MASQUERADE
+      when: _veth_masq_check.rc != 0
+      changed_when: true

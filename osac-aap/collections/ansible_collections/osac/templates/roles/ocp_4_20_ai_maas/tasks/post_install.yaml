@@ -13,6 +13,21 @@
       ocp_small pipeline. For local testing, set KUBECONFIG env var
       or pass admin_kubeconfig as a playbook variable.
 
+# Write kubeconfig to a temp file once for the entire post-install flow.
+# Using a file path prevents kubernetes.core from masking resource values
+# when kubeconfig is passed as an in-memory dict (kubernetes.core/issues/870).
+- name: Create kubeconfig temp file
+  ansible.builtin.tempfile:
+    suffix: .kubeconfig
+  register: _kubeconfig_tmpfile
+
+- name: Write kubeconfig to temp file
+  ansible.builtin.copy:
+    content: "{{ admin_kubeconfig | to_yaml }}"
+    dest: "{{ _kubeconfig_tmpfile.path }}"
+    mode: "0600"
+  no_log: true
+
 - name: Install platform operators (BOM Phase 2 + 3)
   ansible.builtin.include_tasks: install_operators.yaml
 
@@ -32,3 +47,9 @@
   when:
     - ocp_4_20_ai_maas_enable_maas | default(true) | bool
     - ocp_4_20_ai_maas_external_models | default([]) | length > 0
+
+- name: Remove kubeconfig temp file
+  ansible.builtin.file:
+    path: "{{ _kubeconfig_tmpfile.path }}"
+    state: absent
+  when: _kubeconfig_tmpfile.path is defined

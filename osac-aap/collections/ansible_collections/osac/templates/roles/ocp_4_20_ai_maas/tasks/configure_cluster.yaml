@@ -3,10 +3,12 @@
 # Discovers cluster domain, creates inference gateway, verifies observability.
 
 # --- Discover cluster domain ---
+# no_log: false prevents kubernetes.core from masking resource values when
+# admin_kubeconfig is passed as an in-memory dict (github.com/ansible-collections/kubernetes.core/issues/870)
 
 - name: Get cluster ingress domain
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: config.openshift.io/v1
     kind: Ingress
     name: cluster
@@ -18,7 +20,7 @@
 
 - name: Get ingress certificate name
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: operator.openshift.io/v1
     kind: IngressController
     name: default
@@ -56,6 +58,39 @@
 # --- openshift-ai-inference gateway ---
 # TEMPORARY WORKAROUND: RHOAI operator does not create openshift-ai-inference
 # gateway. Dashboard-deployed LLMInferenceService models need it. See: RHOAIENG-38214
+
+# HACK: The gateway controller auto-creates a LoadBalancer service for the
+# openshift-ai-inference gateway, requiring a second MetalLB IP in addition
+# to the one already used by the external-ingress service. Expand the existing
+# ingress pool by one IP before creating the gateway so the allocation succeeds.
+# The correct fix is to either have RHOAI provision this gateway (RHOAIENG-38214)
+# or rework the MetalLB pool allocation to reserve capacity for MaaS upfront.
+- name: Get current MetalLB ingress IP pool
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: metallb.io/v1beta1
+    kind: IPAddressPool
+    name: ingress-ipaddresspool
+    namespace: metallb-system
+  register: _metallb_pool
+
+- name: Expand MetalLB ingress pool to accommodate AI inference and MaaS gateway LoadBalancers
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: metallb.io/v1beta1
+      kind: IPAddressPool
+      metadata:
+        name: ingress-ipaddresspool
+        namespace: metallb-system
+      spec:
+        autoAssign: false
+        addresses:
+          - "{{ _start_ip }}-{{ _start_ip | ansible.utils.ipmath(2) }}"
+  vars:
+    _start_ip: "{{ _metallb_pool.resources[0].spec.addresses[0].split('-')[0] }}"
+  when: _metallb_pool.resources | length > 0
 
 - name: Create openshift-ai-inference gateway
   kubernetes.core.k8s:

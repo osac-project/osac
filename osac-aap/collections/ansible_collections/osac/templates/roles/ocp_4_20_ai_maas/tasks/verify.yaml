@@ -3,7 +3,7 @@
 
 - name: Get cluster ingress domain (if not already set)
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: config.openshift.io/v1
     kind: Ingress
     name: cluster

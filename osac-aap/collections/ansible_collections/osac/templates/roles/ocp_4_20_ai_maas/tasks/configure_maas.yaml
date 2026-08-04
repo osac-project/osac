@@ -130,7 +130,7 @@
 
 # --- Phase 2: MaaS Prerequisites ---
 
-- name: Apply Kuadrant resources (namespace, service, Kuadrant, Authorino)
+- name: Apply Kuadrant resources (namespace and Kuadrant CR)
   kubernetes.core.k8s:
     kubeconfig: "{{ admin_kubeconfig }}"
     state: present
@@ -162,6 +162,41 @@
       | selectattr('status', 'equalto', 'True')
       | list | length > 0
 
+# Kuadrant creates the Authorino CR with listener.tls.enabled: false regardless
+# of cert availability. Set enabled: true and add the cluster root CA volume so
+# Authorino trusts the Keycloak ingress cert (signed by OU=openshift,CN=root-ca).
+# kube-root-ca.crt is auto-injected into every namespace by Kubernetes.
+- name: Configure Authorino TLS and cluster root CA volume
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    merge_type: merge
+    definition:
+      apiVersion: operator.authorino.kuadrant.io/v1beta1
+      kind: Authorino
+      metadata:
+        name: authorino
+        namespace: kuadrant-system
+      spec:
+        listener:
+          tls:
+            enabled: true
+            certSecretRef:
+              name: authorino-server-cert
+        volumes:
+          items:
+            - name: cluster-root-ca
+              configMaps:
+                - kube-root-ca.crt
+              items:
+                - key: ca.crt
+                  path: tls-ca-bundle.pem
+              mountPath: /etc/pki/ca-trust/extracted/pem
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
 - name: Apply gateway resources ConfigMap
   kubernetes.core.k8s:
     kubeconfig: "{{ admin_kubeconfig }}"
@@ -177,6 +212,33 @@
     kubeconfig: "{{ admin_kubeconfig }}"
     state: present
     definition: "{{ lookup('ansible.builtin.template', 'gateway.yaml.j2') | from_yaml }}"
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+# The OpenShift Router handles *.apps.* wildcard DNS. Without this Route the
+# Router returns 503 — same pattern as the auto-created data-science-gateway Route.
+- name: Create OpenShift Route for maas-default-gateway
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: maas-default-gateway
+        namespace: openshift-ingress
+      spec:
+        host: "{{ ocp_4_20_ai_maas_gateway_hostname }}.{{ _cluster_domain }}"
+        port:
+          targetPort: 443
+        tls:
+          termination: passthrough
+        to:
+          kind: Service
+          name: maas-default-gateway-data-science-gateway-class
+          weight: 100
   register: _r
   retries: 5
   delay: 10
@@ -563,7 +625,7 @@
 # restart, subscriptions stay Degraded and inference returns 403.
 - name: Restart maas-controller for subscription reconciliation
   environment:
-    KUBECONFIG: "{{ admin_kubeconfig | expanduser }}"
+    KUBECONFIG: "{{ _kubeconfig_tmpfile.path }}"
   ansible.builtin.shell: |
     oc rollout restart deployment/maas-controller -n redhat-ods-applications
     oc rollout status deployment/maas-controller -n redhat-ods-applications --timeout=180s

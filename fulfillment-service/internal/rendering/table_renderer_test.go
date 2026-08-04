@@ -222,9 +222,8 @@ var _ = Describe("Table renderer", func() {
 					}.Build(),
 				},
 			)
-			Expect(output).To(ContainSubstring("10DE:20B0"))
 			Expect(output).To(ContainSubstring("nvidia.com/A100"))
-			Expect(output).To(MatchRegexp(`1\s+10DE:20B0\s+nvidia\.com/A100\s+ACTIVE`))
+			Expect(output).To(MatchRegexp(`1\s+nvidia\.com/A100\s+ACTIVE`))
 		})
 
 		It("Renders blank GPU columns for non-GPU InstanceType", func(ctx context.Context) {
@@ -244,8 +243,8 @@ var _ = Describe("Table renderer", func() {
 					}.Build(),
 				},
 			)
-			Expect(output).To(ContainSubstring("GPU DEVICE"))
-			Expect(output).To(MatchRegexp(`16\s+0\s+-\s+-\s+ACTIVE`))
+			Expect(output).To(ContainSubstring("GPU NAME"))
+			Expect(output).To(MatchRegexp(`16\s+0\s+-\s+ACTIVE`))
 		})
 	})
 

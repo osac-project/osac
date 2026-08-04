@@ -162,7 +162,7 @@ def test_compute_instance_deprecated_warning(
         )
 
         dep_output, dep_rc = run_unchecked(
-            *_build_create_ci_args(cli, vm_template, default_subnet, active_instance_type),
+            *_build_create_ci_args(cli, vm_template, default_subnet, active_instance_type, ci_name=unique_name("e2e-ci")),
         )
         assert dep_rc == 0, f"create with DEPRECATED type should succeed, got: {dep_output}"
         assert "deprecat" in dep_output.lower() or "warning" in dep_output.lower(), (

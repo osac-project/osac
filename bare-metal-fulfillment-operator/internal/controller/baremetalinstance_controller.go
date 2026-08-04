@@ -488,7 +488,7 @@ func (r *BareMetalInstanceReconciler) reconcileProvisioning(ctx context.Context,
 		provisioning.DefaultMaxJobHistory, r.ProvisionPollIntervalDuration,
 		&provisioning.PollCallbacks{
 			OnFailed: func(message string) {
-				retryCount := provisioning.CountFailedJobsByConfigVersion(*provState.Jobs, desiredVersion)
+				retryCount := countFailedProvisionJobs(*provState.Jobs, desiredVersion)
 				bareMetalInstance.SetStatusCondition(
 					v1alpha1.HostConditionProvisionTemplateComplete,
 					metav1.ConditionFalse,
@@ -535,6 +535,17 @@ func (r *BareMetalInstanceReconciler) reconcileProvisioning(ctx context.Context,
 	}
 
 	return result, nil
+}
+
+func countFailedProvisionJobs(jobs []opv1alpha1.JobStatus, configVersion string) int {
+	count := 0
+	for i := range jobs {
+		j := &jobs[i]
+		if j.Type == opv1alpha1.JobTypeProvision && j.State == opv1alpha1.JobStateFailed && j.ConfigVersion == configVersion {
+			count++
+		}
+	}
+	return count
 }
 
 func (r *BareMetalInstanceReconciler) syncBareMetalInstanceStatus(bareMetalInstance *v1alpha1.BareMetalInstance, powerStatus *management.PowerStatus, reconcileErr error, log logr.Logger) {

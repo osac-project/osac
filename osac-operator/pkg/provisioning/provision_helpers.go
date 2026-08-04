@@ -123,6 +123,19 @@ func ComputeBackoffFromJobs(jobs []v1alpha1.JobStatus, configVersion string) tim
 	})
 }
 
+// CountFailedJobsByConfigVersion returns the number of failed provision jobs
+// matching the given ConfigVersion. Used to surface retry count in condition messages.
+func CountFailedJobsByConfigVersion(jobs []v1alpha1.JobStatus, configVersion string) int {
+	count := 0
+	for i := range jobs {
+		j := &jobs[i]
+		if j.Type == v1alpha1.JobTypeProvision && j.State == v1alpha1.JobStateFailed && j.ConfigVersion == configVersion {
+			count++
+		}
+	}
+	return count
+}
+
 // ComputeDeprovisionBackoff determines the next backoff duration for deprovision retries.
 func ComputeDeprovisionBackoff(jobs []v1alpha1.JobStatus) time.Duration {
 	return computeBackoffFromFailedJobs(jobs, func(j *v1alpha1.JobStatus) bool {

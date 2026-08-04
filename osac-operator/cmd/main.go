@@ -507,9 +507,21 @@ func setupNetworkingControllers(
 		return fmt.Errorf("externalip attachment provider: %w", err)
 	}
 
+	// Build a shared dispatcher Resolver for controllers that support the two-manager
+	// model (VirtualNetwork, Subnet, SecurityGroup). Only available when a
+	// fulfillment-service connection and networking namespace are both configured;
+	// nil otherwise, in which case those controllers always use the legacy
+	// implementation-strategy path.
+	var resolver *dispatcher.Resolver
 	if grpcConn != nil && networkingNamespace != "" {
+		disc, err := networkmanager.NewDiscovery(localMgr.GetClient(), networkingNamespace)
+		if err != nil {
+			return fmt.Errorf("network manager discovery: %w", err)
+		}
+		resolver = dispatcher.NewResolver(privatev1.NewNetworkClassesClient(grpcConn), disc)
+
 		if err := setupNetworkClassCapabilitiesController(
-			mgr, localMgr, grpcConn, networkingNamespace,
+			mgr, localMgr, grpcConn, networkingNamespace, resolver,
 		); err != nil {
 			return err
 		}
@@ -517,19 +529,19 @@ func setupNetworkingControllers(
 
 	if err := setupVirtualNetworkControllers(
 		mgr, localMgr, grpcConn, networkingNamespace,
-		networkingProvider, statusPollInterval, maxJobHistory, targetCluster,
+		networkingProvider, statusPollInterval, maxJobHistory, targetCluster, resolver,
 	); err != nil {
 		return err
 	}
 	if err := setupSubnetControllers(
 		mgr, localMgr, grpcConn, networkingNamespace,
-		networkingProvider, statusPollInterval, maxJobHistory, targetCluster,
+		networkingProvider, statusPollInterval, maxJobHistory, targetCluster, resolver,
 	); err != nil {
 		return err
 	}
 	if err := setupSecurityGroupControllers(
 		mgr, localMgr, grpcConn, networkingNamespace,
-		networkingProvider, statusPollInterval, maxJobHistory, targetCluster,
+		networkingProvider, statusPollInterval, maxJobHistory, targetCluster, resolver,
 	); err != nil {
 		return err
 	}
@@ -568,13 +580,9 @@ func setupNetworkingControllers(
 // is only called when grpcConn is set and a networking namespace is configured.
 func setupNetworkClassCapabilitiesController(
 	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn *grpc.ClientConn, networkingNamespace string,
+	resolver *dispatcher.Resolver,
 ) error {
-	disc, err := networkmanager.NewDiscovery(localMgr.GetClient(), networkingNamespace)
-	if err != nil {
-		return fmt.Errorf("network manager discovery: %w", err)
-	}
 	networkClassesClient := privatev1.NewNetworkClassesClient(grpcConn)
-	resolver := dispatcher.NewResolver(networkClassesClient, disc)
 
 	ncReconciler := controller.NewNetworkClassCapabilitiesReconciler(
 		networkClassesClient, resolver, networkingNamespace,
@@ -598,6 +606,7 @@ func setupVirtualNetworkControllers(
 	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn *grpc.ClientConn,
 	networkingNamespace string, provider provisioning.ProvisioningProvider,
 	statusPollInterval time.Duration, maxJobHistory int, targetCluster multicluster.ClusterName,
+	resolver *dispatcher.Resolver,
 ) error {
 	if grpcConn != nil {
 		if err := controller.NewVirtualNetworkFeedbackReconciler(
@@ -607,7 +616,7 @@ func setupVirtualNetworkControllers(
 		}
 	}
 	if err := controller.NewVirtualNetworkReconciler(
-		mgr, networkingNamespace, provider, statusPollInterval, maxJobHistory, targetCluster,
+		mgr, networkingNamespace, provider, statusPollInterval, maxJobHistory, targetCluster, resolver,
 	).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("virtualnetwork controller: %w", err)
 	}
@@ -618,6 +627,7 @@ func setupSubnetControllers(
 	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn *grpc.ClientConn,
 	networkingNamespace string, provider provisioning.ProvisioningProvider,
 	statusPollInterval time.Duration, maxJobHistory int, targetCluster multicluster.ClusterName,
+	resolver *dispatcher.Resolver,
 ) error {
 	if grpcConn != nil {
 		if err := controller.NewSubnetFeedbackReconciler(
@@ -627,7 +637,7 @@ func setupSubnetControllers(
 		}
 	}
 	if err := controller.NewSubnetReconciler(
-		mgr, networkingNamespace, provider, statusPollInterval, maxJobHistory, targetCluster,
+		mgr, networkingNamespace, provider, statusPollInterval, maxJobHistory, targetCluster, resolver,
 	).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("subnet controller: %w", err)
 	}
@@ -638,6 +648,7 @@ func setupSecurityGroupControllers(
 	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn *grpc.ClientConn,
 	networkingNamespace string, provider provisioning.ProvisioningProvider,
 	statusPollInterval time.Duration, maxJobHistory int, targetCluster multicluster.ClusterName,
+	resolver *dispatcher.Resolver,
 ) error {
 	if grpcConn != nil {
 		if err := controller.NewSecurityGroupFeedbackReconciler(
@@ -647,7 +658,7 @@ func setupSecurityGroupControllers(
 		}
 	}
 	if err := controller.NewSecurityGroupReconciler(
-		mgr, networkingNamespace, provider, statusPollInterval, maxJobHistory, targetCluster,
+		mgr, networkingNamespace, provider, statusPollInterval, maxJobHistory, targetCluster, resolver,
 	).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("securitygroup controller: %w", err)
 	}

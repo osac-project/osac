@@ -1269,6 +1269,29 @@ var _ = Describe("syncStatus", func() {
 		Expect(cond.GetMessage()).To(Equal("Configuration successfully applied"))
 	})
 
+	It("should map Retrying condition to CONFIGURATION_APPLIED with sanitized reason and message", func() {
+		t := newTask(0)
+		object := &bmfov1alpha1.BareMetalInstance{
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				Conditions: []metav1.Condition{
+					{
+						Type:    string(bmfov1alpha1.HostConditionProvisionTemplateComplete),
+						Status:  metav1.ConditionFalse,
+						Reason:  bmfov1alpha1.HostConditionReasonRetrying,
+						Message: "Retry #2: Last provision failed due to AAP job timed out",
+					},
+				},
+			},
+		}
+		t.syncStatus(object)
+		cond := findProtoCondition(t.bareMetalInstance,
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_CONFIGURATION_APPLIED)
+		Expect(cond).ToNot(BeNil())
+		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		Expect(cond.GetReason()).To(Equal("ConfigurationFailed"))
+		Expect(cond.GetMessage()).To(Equal("Configuration application encountered a transient error"))
+	})
+
 	DescribeTable("should set READY=False when state is PROVISIONING, DELETING, or FAILED",
 		func(phase bmfov1alpha1.BareMetalInstancePhaseType) {
 			t := newTask(0)

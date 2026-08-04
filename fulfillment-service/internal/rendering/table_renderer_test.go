@@ -150,33 +150,33 @@ var _ = Describe("Table renderer", func() {
 		})
 	})
 
+	renderInstanceTypes := func(ctx context.Context, items []*publicv1.InstanceType) string {
+		objectHelper := makeObjectHelper(&publicv1.InstanceType{})
+		lookupHelper := makeLookupHelper()
+
+		helper := reflection.NewMockHelper(ctrl)
+		helper.EXPECT().
+			Lookup(objectHelper.String()).
+			Return(objectHelper).
+			AnyTimes()
+		helper.EXPECT().
+			Lookup(gomock.Any()).
+			Return(lookupHelper).
+			AnyTimes()
+
+		buffer := &bytes.Buffer{}
+		renderer, err := NewTableRenderer().
+			SetLogger(logger).
+			SetHelper(helper).
+			SetWriter(buffer).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+		err = renderer.Render(ctx, items)
+		Expect(err).ToNot(HaveOccurred())
+		return buffer.String()
+	}
+
 	Describe("Integer columns", func() {
-		renderInstanceTypes := func(ctx context.Context, items []*publicv1.InstanceType) string {
-			objectHelper := makeObjectHelper(&publicv1.InstanceType{})
-			lookupHelper := makeLookupHelper()
-
-			helper := reflection.NewMockHelper(ctrl)
-			helper.EXPECT().
-				Lookup(objectHelper.String()).
-				Return(objectHelper).
-				AnyTimes()
-			helper.EXPECT().
-				Lookup(gomock.Any()).
-				Return(lookupHelper).
-				AnyTimes()
-
-			buffer := &bytes.Buffer{}
-			renderer, err := NewTableRenderer().
-				SetLogger(logger).
-				SetHelper(helper).
-				SetWriter(buffer).
-				Build()
-			Expect(err).ToNot(HaveOccurred())
-			err = renderer.Render(ctx, items)
-			Expect(err).ToNot(HaveOccurred())
-			return buffer.String()
-		}
-
 		It("Renders integer fields as plain numbers", func(ctx context.Context) {
 			output := renderInstanceTypes(
 				ctx,
@@ -194,8 +194,58 @@ var _ = Describe("Table renderer", func() {
 					}.Build(),
 				},
 			)
-			Expect(output).To(MatchRegexp(`4\s+16\s+ACTIVE`))
+			Expect(output).To(MatchRegexp(`4\s+16\s+.*ACTIVE`))
 			Expect(output).ToNot(ContainSubstring("%!s"))
+		})
+	})
+
+	Describe("Optional GPU columns", func() {
+		It("Renders GPU fields for GPU-enabled InstanceType", func(ctx context.Context) {
+			output := renderInstanceTypes(
+				ctx,
+				[]*publicv1.InstanceType{
+					publicv1.InstanceType_builder{
+						Id: "gpu-a100-8core",
+						Metadata: publicv1.Metadata_builder{
+							Name: "gpu-a100-8core",
+						}.Build(),
+						Spec: publicv1.InstanceTypeSpec_builder{
+							Cores:     8,
+							MemoryGib: 64,
+							State:     publicv1.InstanceTypeState_INSTANCE_TYPE_STATE_ACTIVE,
+							Gpu: publicv1.GpuSpec_builder{
+								PciDeviceSelector: "10DE:20B0",
+								ResourceName:      "nvidia.com/A100",
+								Count:             1,
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				},
+			)
+			Expect(output).To(ContainSubstring("10DE:20B0"))
+			Expect(output).To(ContainSubstring("nvidia.com/A100"))
+			Expect(output).To(MatchRegexp(`nvidia\.com/A100\s+1\s+ACTIVE`))
+		})
+
+		It("Renders blank GPU columns for non-GPU InstanceType", func(ctx context.Context) {
+			output := renderInstanceTypes(
+				ctx,
+				[]*publicv1.InstanceType{
+					publicv1.InstanceType_builder{
+						Id: "standard-4-16",
+						Metadata: publicv1.Metadata_builder{
+							Name: "standard-4-16",
+						}.Build(),
+						Spec: publicv1.InstanceTypeSpec_builder{
+							Cores:     4,
+							MemoryGib: 16,
+							State:     publicv1.InstanceTypeState_INSTANCE_TYPE_STATE_ACTIVE,
+						}.Build(),
+					}.Build(),
+				},
+			)
+			Expect(output).To(ContainSubstring("GPU DEVICE"))
+			Expect(output).To(MatchRegexp(`16\s+-\s+-\s+0\s+ACTIVE`))
 		})
 	})
 

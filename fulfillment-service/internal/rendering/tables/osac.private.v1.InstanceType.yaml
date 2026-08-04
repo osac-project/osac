@@ -22,7 +22,7 @@ columns:
 - header: MEMORY
   value: this.spec.memory_gib
 
-- header: GPUs
+- header: GPUS
   value: "has(this.spec.gpu) ? this.spec.gpu.count : 0"
 
 - header: GPU NAME

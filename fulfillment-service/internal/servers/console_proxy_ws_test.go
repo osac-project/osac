@@ -27,6 +27,28 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/console"
 )
 
+// dialAndExpectClose dials the WebSocket server and expects the connection to
+// be closed with the given app-level code and reason -- either during the
+// Dial handshake itself, or via a subsequent Read once the upgrade succeeds.
+func dialAndExpectClose(url string, opts *websocket.DialOptions, expectedCode websocket.StatusCode, expectedReason string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	ws, _, err := websocket.Dial(ctx, url, opts)
+	if err != nil {
+		Expect(websocket.CloseStatus(err)).To(Equal(expectedCode))
+		return
+	}
+	defer ws.CloseNow()
+
+	_, _, err = ws.Read(ctx)
+	Expect(err).To(HaveOccurred())
+	Expect(websocket.CloseStatus(err)).To(Equal(expectedCode))
+	if closeErr, ok := errors.AsType[websocket.CloseError](err); ok {
+		Expect(closeErr.Reason).To(Equal(expectedReason))
+	}
+}
+
 // rejectingOpener is a ticketOpener stub that always returns an error.
 // Used by origin-enforcement tests so the handler reaches a deterministic 401
 // instead of panicking on a nil TicketOpener.
@@ -102,7 +124,7 @@ func (s *succeedingOpener) Open(_ context.Context, _ string) (*console.Ticket, e
 }
 
 var _ = Describe("ServeHTTP ConnectBackend error handling", func() {
-	It("should return 409 when backend reports an active session", func() {
+	It("should close with 4409 when backend reports an active session", func() {
 		backend := &mockBackendForServer{conn: newMockConn("")}
 		manager, err := console.NewManager().
 			SetLogger(logger).
@@ -134,12 +156,6 @@ var _ = Describe("ServeHTTP ConnectBackend error handling", func() {
 			SetManager(manager).
 			Build()
 		Expect(err).NotTo(HaveOccurred())
-		core.opener = &succeedingOpener{ticket: ticket}
-
-		handler := &ConsoleProxyWSHandler{
-			core:           core,
-			allowedOrigins: []string{"*"},
-		}
 
 		// Second connect with different clientID triggers ErrSessionExists.
 		secondTicket := &console.Ticket{
@@ -151,15 +167,22 @@ var _ = Describe("ServeHTTP ConnectBackend error handling", func() {
 		}
 		core.opener = &succeedingOpener{ticket: secondTicket}
 
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
-		req.Header.Set("Authorization", "Bearer some-ticket")
-		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, req)
-		Expect(w.Code).To(Equal(http.StatusConflict))
-		Expect(w.Body.String()).To(ContainSubstring("console session already active"))
+		handler := &ConsoleProxyWSHandler{
+			core:           core,
+			allowedOrigins: []string{"*"},
+		}
+		srv := httptest.NewServer(handler)
+		defer srv.Close()
+
+		dialAndExpectClose(
+			"ws"+srv.URL[len("http"):],
+			&websocket.DialOptions{HTTPHeader: http.Header{"Authorization": []string{"Bearer some-ticket"}}},
+			wsStatusConsoleInUse,
+			wsReasonConsoleInUse,
+		)
 	})
 
-	It("should return 502 for generic backend errors", func() {
+	It("should close with 1014 (bad gateway) for generic backend errors", func() {
 		backend := &mockBackendForServer{
 			connErr: errors.New("dial backend failed"),
 		}
@@ -189,13 +212,15 @@ var _ = Describe("ServeHTTP ConnectBackend error handling", func() {
 			core:           core,
 			allowedOrigins: []string{"*"},
 		}
+		srv := httptest.NewServer(handler)
+		defer srv.Close()
 
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
-		req.Header.Set("Authorization", "Bearer some-ticket")
-		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, req)
-		Expect(w.Code).To(Equal(http.StatusBadGateway))
-		Expect(w.Body.String()).To(ContainSubstring("failed to connect to console backend"))
+		dialAndExpectClose(
+			"ws"+srv.URL[len("http"):],
+			&websocket.DialOptions{HTTPHeader: http.Header{"Authorization": []string{"Bearer some-ticket"}}},
+			websocket.StatusBadGateway,
+			wsReasonBadGateway,
+		)
 	})
 })
 
@@ -218,14 +243,23 @@ var _ = Describe("ServeHTTP Origin enforcement", func() {
 			core:           &ConsoleProxyCore{logger: logger, opener: &rejectingOpener{}},
 			allowedOrigins: []string{"https://good.com"},
 		}
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
-		req.AddCookie(&http.Cookie{Name: "console-ticket", Value: "some-jwt"})
-		req.Header.Set("Origin", "https://good.com")
-		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, req)
-		// Origin is present so the pre-check passes; the stub opener
-		// rejects the token, so we expect 401 (not a 403 origin error).
-		Expect(w.Code).To(Equal(http.StatusUnauthorized))
+		srv := httptest.NewServer(handler)
+		defer srv.Close()
+
+		// Origin is present so the pre-check passes; the stub opener rejects
+		// the token, so the upgrade succeeds and the close code is 3000
+		// (not a 403 origin error).
+		dialAndExpectClose(
+			"ws"+srv.URL[len("http"):],
+			&websocket.DialOptions{
+				HTTPHeader: http.Header{
+					"Cookie": []string{"console-ticket=some-jwt"},
+					"Origin": []string{"https://good.com"},
+				},
+			},
+			wsStatusUnauthorized,
+			wsReasonUnauthorized,
+		)
 	})
 
 	It("should reject cookie auth with disallowed Origin during upgrade", func() {
@@ -257,13 +291,18 @@ var _ = Describe("ServeHTTP Origin enforcement", func() {
 			core:           &ConsoleProxyCore{logger: logger, opener: &rejectingOpener{}},
 			allowedOrigins: []string{"https://good.com"},
 		}
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
-		req.Header.Set("Authorization", "Bearer some-token")
-		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, req)
+		srv := httptest.NewServer(handler)
+		defer srv.Close()
+
 		// Bearer auth with no Origin -- the pre-check only fires for cookie
 		// auth, so this proceeds to ticket verification. The stub opener
-		// rejects the token, yielding 401 (not a 403 origin error).
-		Expect(w.Code).To(Equal(http.StatusUnauthorized))
+		// rejects the token, so the upgrade succeeds and the close code is
+		// 3000 (not a 403 origin error).
+		dialAndExpectClose(
+			"ws"+srv.URL[len("http"):],
+			&websocket.DialOptions{HTTPHeader: http.Header{"Authorization": []string{"Bearer some-token"}}},
+			wsStatusUnauthorized,
+			wsReasonUnauthorized,
+		)
 	})
 })

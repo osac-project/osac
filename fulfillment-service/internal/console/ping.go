@@ -81,8 +81,8 @@ func StartPing(ctx context.Context, conn *websocket.Conn, logger *slog.Logger, c
 // PingReceivedHandler returns an OnPingReceived callback that logs at debug
 // level. The returned function has the signature expected by both
 // websocket.AcceptOptions and websocket.DialOptions.
-func PingReceivedHandler(logger *slog.Logger, ctx context.Context) func(context.Context, []byte) bool {
-	return func(_ context.Context, payload []byte) bool {
+func PingReceivedHandler(logger *slog.Logger) func(context.Context, []byte) bool {
+	return func(ctx context.Context, payload []byte) bool {
 		logger.DebugContext(ctx, "Ping received",
 			slog.Int("payload_len", len(payload)),
 		)
@@ -92,8 +92,8 @@ func PingReceivedHandler(logger *slog.Logger, ctx context.Context) func(context.
 
 // PongReceivedHandler returns an OnPongReceived callback that logs at debug
 // level.
-func PongReceivedHandler(logger *slog.Logger, ctx context.Context) func(context.Context, []byte) {
-	return func(_ context.Context, payload []byte) {
+func PongReceivedHandler(logger *slog.Logger) func(context.Context, []byte) {
+	return func(ctx context.Context, payload []byte) {
 		logger.DebugContext(ctx, "Pong received",
 			slog.Int("payload_len", len(payload)),
 		)

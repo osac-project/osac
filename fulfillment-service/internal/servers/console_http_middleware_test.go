@@ -59,11 +59,12 @@ var _ = Describe("ConsoleMetrics middleware", func() {
 			Expect(metrics).NotTo(osactesting.MatchLine(`console_websocket_connection_duration_seconds_count`))
 		})
 
-		It("should count 101 Switching Protocols as success", func() {
+		It("should count 101 Switching Protocols as success when the session is established", func() {
 			handler := ConsoleMetrics(metricsServer.Registry(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusSwitchingProtocols)
 				conn, _, err := w.(http.Hijacker).Hijack()
 				Expect(err).NotTo(HaveOccurred())
+				setSessionEstablished(r.Context())
 				conn.Close()
 			}))
 
@@ -80,6 +81,30 @@ var _ = Describe("ConsoleMetrics middleware", func() {
 			Expect(metrics).To(osactesting.MatchLine(`console_websocket_connection_duration_seconds_count\{.*\} 1`))
 		})
 
+		It("should count 101 Switching Protocols without an established session as error", func() {
+			// The WS handler upgrades to 101 before sending a close frame for
+			// setup failures (bad ticket, backend conflict), so 101 alone must
+			// not count as success.
+			handler := ConsoleMetrics(metricsServer.Registry(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusSwitchingProtocols)
+				conn, _, err := w.(http.Hijacker).Hijack()
+				Expect(err).NotTo(HaveOccurred())
+				conn.Close()
+			}))
+
+			srv := httptest.NewServer(handler)
+			defer srv.Close()
+
+			resp, err := http.Get(srv.URL)
+			if err == nil {
+				resp.Body.Close()
+			}
+
+			metrics := metricsServer.Metrics()
+			Expect(metrics).To(osactesting.MatchLine(`console_websocket_connections_total\{.*status="error".*\} 1`))
+			Expect(metrics).NotTo(osactesting.MatchLine(`console_websocket_connection_duration_seconds_count`))
+		})
+
 		It("should distinguish errors from upgrades in the same server", func() {
 			var callCount atomic.Int32
 			handler := ConsoleMetrics(metricsServer.Registry(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -90,6 +115,7 @@ var _ = Describe("ConsoleMetrics middleware", func() {
 				w.WriteHeader(http.StatusSwitchingProtocols)
 				conn, _, err := w.(http.Hijacker).Hijack()
 				Expect(err).NotTo(HaveOccurred())
+				setSessionEstablished(r.Context())
 				conn.Close()
 			}))
 
@@ -165,6 +191,7 @@ var _ = Describe("ConsoleMetrics middleware", func() {
 				w.WriteHeader(http.StatusSwitchingProtocols)
 				conn, _, err := w.(http.Hijacker).Hijack()
 				Expect(err).NotTo(HaveOccurred())
+				setSessionEstablished(r.Context())
 				conn.Close()
 			}))
 
@@ -223,6 +250,7 @@ var _ = Describe("ConsoleMetrics middleware", func() {
 					InsecureSkipVerify: true,
 				})
 				Expect(err).NotTo(HaveOccurred())
+				setSessionEstablished(r.Context())
 				ws.CloseNow()
 			})
 			handler := ConsoleMetrics(metricsServer.Registry(), wsHandler)

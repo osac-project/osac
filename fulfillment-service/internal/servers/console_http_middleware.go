@@ -14,11 +14,8 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
-	"bufio"
 	"context"
-	"errors"
 	"log/slog"
-	"net"
 	"net/http"
 	"runtime/debug"
 	"time"
@@ -31,35 +28,51 @@ import (
 // consoleContextKey is the type used to pass console metadata through context.
 type consoleContextKey int
 
-const (
-	consoleTypeKey consoleContextKey = iota
-)
+const consoleStateKey consoleContextKey = 0
 
-// consoleTypeHolder is a mutable container injected into the request context
-// by ConsoleMetrics. The inner handler sets the value after ticket verification
-// via setConsoleType, and ConsoleMetrics reads it after the handler returns.
-type consoleTypeHolder struct {
-	value string
+// consoleSessionState passes session metadata from the inner WS handler back
+// to ConsoleMetrics via request context. Because the handler upgrades to 101
+// before validating the ticket, a 101 alone does not mean success -- the
+// handler must explicitly set established.
+type consoleSessionState struct {
+	consoleType string
+	established bool
 }
 
-// initConsoleType returns a context with an empty consoleTypeHolder.
-func initConsoleType(ctx context.Context) context.Context {
-	return context.WithValue(ctx, consoleTypeKey, &consoleTypeHolder{})
+// initConsoleState returns a context with a fresh consoleSessionState.
+func initConsoleState(ctx context.Context) context.Context {
+	return context.WithValue(ctx, consoleStateKey, &consoleSessionState{})
 }
 
-// setConsoleType stores the console type in the holder already present in ctx.
+// setConsoleType stores the console type in the state already present in ctx.
 func setConsoleType(ctx context.Context, ct string) {
-	if h, ok := ctx.Value(consoleTypeKey).(*consoleTypeHolder); ok {
-		h.value = ct
+	if s, ok := ctx.Value(consoleStateKey).(*consoleSessionState); ok {
+		s.consoleType = ct
 	}
 }
 
 // consoleTypeFromContext extracts the console type from context, or "" if absent.
 func consoleTypeFromContext(ctx context.Context) string {
-	if h, ok := ctx.Value(consoleTypeKey).(*consoleTypeHolder); ok {
-		return h.value
+	if s, ok := ctx.Value(consoleStateKey).(*consoleSessionState); ok {
+		return s.consoleType
 	}
 	return ""
+}
+
+// setSessionEstablished marks the state already present in ctx as established.
+func setSessionEstablished(ctx context.Context) {
+	if s, ok := ctx.Value(consoleStateKey).(*consoleSessionState); ok {
+		s.established = true
+	}
+}
+
+// sessionEstablishedFromContext reports whether the session was established,
+// or false if absent.
+func sessionEstablishedFromContext(ctx context.Context) bool {
+	if s, ok := ctx.Value(consoleStateKey).(*consoleSessionState); ok {
+		return s.established
+	}
+	return false
 }
 
 // validConsoleTypes is the set of known console type values for metrics labeling.
@@ -87,7 +100,6 @@ func ConsolePanicRecovery(logger *slog.Logger, next http.Handler) http.Handler {
 
 // ConsoleLogging wraps an http.Handler with structured request logging.
 // It logs the sanitized path (without query string) to avoid token exposure.
-// Status code is not captured here — ConsoleMetrics handles that.
 func ConsoleLogging(logger *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -108,38 +120,6 @@ func ConsoleLogging(logger *slog.Logger, next http.Handler) http.Handler {
 			slog.Duration("duration", time.Since(start)),
 		)
 	})
-}
-
-// statusWriter captures the HTTP status code written by the handler.
-type statusWriter struct {
-	http.ResponseWriter
-	status      int
-	wroteHeader bool
-}
-
-func (w *statusWriter) WriteHeader(code int) {
-	if !w.wroteHeader {
-		w.status = code
-		w.wroteHeader = true
-	}
-	w.ResponseWriter.WriteHeader(code)
-}
-
-func (w *statusWriter) Write(b []byte) (int, error) {
-	if !w.wroteHeader {
-		w.wroteHeader = true
-	}
-	return w.ResponseWriter.Write(b)
-}
-
-// Hijack delegates to the underlying ResponseWriter so that WebSocket upgrades work
-// when the writer is wrapped by logging or metrics middleware.
-func (w *statusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
-	h, ok := w.ResponseWriter.(http.Hijacker)
-	if !ok {
-		return nil, nil, errors.New("underlying ResponseWriter does not support hijacking")
-	}
-	return h.Hijack()
 }
 
 // consoleMetricsMiddleware wraps an http.Handler with Prometheus connection metrics.
@@ -195,9 +175,8 @@ func (m *consoleMetricsMiddleware) ServeHTTP(w http.ResponseWriter, r *http.Requ
 	m.activeConns.Inc()
 	defer m.activeConns.Dec()
 
-	r = r.WithContext(initConsoleType(r.Context()))
-	sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
-	m.next.ServeHTTP(sw, r)
+	r = r.WithContext(initConsoleState(r.Context()))
+	m.next.ServeHTTP(w, r)
 
 	// The handler sets console_type via context after ticket verification.
 	consoleType := consoleTypeFromContext(r.Context())
@@ -205,12 +184,10 @@ func (m *consoleMetricsMiddleware) ServeHTTP(w http.ResponseWriter, r *http.Requ
 		consoleType = "unknown"
 	}
 
-	// coder/websocket writes 101 Switching Protocols before hijacking the
-	// connection, so a successful WebSocket upgrade is detected by the status
-	// code. Pre-upgrade failures (401/403/502) call http.Error which sets a
-	// different status code.
-	upgraded := sw.status == http.StatusSwitchingProtocols
-	if upgraded {
+	// established is set only after a successful backend connection (see
+	// setSessionEstablished), so it already implies success without a
+	// separate HTTP status check.
+	if sessionEstablishedFromContext(r.Context()) {
 		m.connDuration.WithLabelValues(consoleType).Observe(time.Since(start).Seconds())
 		m.connectTotal.WithLabelValues(consoleType, "success").Inc()
 	} else {

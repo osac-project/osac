@@ -81,7 +81,7 @@ type GenericDAO[O Object] struct {
 	jsonEncoder      *json.Encoder
 	marshalOptions   protojson.MarshalOptions
 	unmarshalOptions protojson.UnmarshalOptions
-	filterTranslator *FilterTranslator[O]
+	filterTranslator *FilterTranslator
 	tenancyLogic     auth.TenancyLogic
 
 	// Metrics:
@@ -274,8 +274,9 @@ func (b *GenericDAOBuilder[O]) Build() (result *GenericDAO[O], err error) {
 	}
 
 	// Create the filter translator:
-	filterTranslator, err := NewFilterTranslator[O]().
+	filterTranslator, err := NewFilterTranslator().
 		SetLogger(b.logger).
+		SetDescriptor(objectDesc).
 		Build()
 	if err != nil {
 		err = fmt.Errorf("failed to create filter translator: %w", err)

@@ -120,6 +120,7 @@ func (b *ProjectsServerBuilder) Build() (result *ProjectsServer, err error) {
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetFilterDesc((*publicv1.Project)(nil).ProtoReflect().Descriptor()).
 		Build()
 	if err != nil {
 		return

@@ -111,6 +111,7 @@ func (b *ExternalIPsServerBuilder) Build() (result *ExternalIPsServer, err error
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetFilterDesc((*publicv1.ExternalIP)(nil).ProtoReflect().Descriptor()).
 		Build()
 	if err != nil {
 		return

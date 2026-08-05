@@ -108,6 +108,7 @@ func (b *IdentityProvidersServerBuilder) Build() (result *IdentityProvidersServe
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetFilterDesc((*publicv1.IdentityProvider)(nil).ProtoReflect().Descriptor()).
 		Build()
 	if err != nil {
 		return

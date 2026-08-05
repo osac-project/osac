@@ -114,6 +114,7 @@ func (b *UsersServerBuilder) Build() (result *UsersServer, err error) {
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetFilterDesc((*publicv1.User)(nil).ProtoReflect().Descriptor()).
 		Build()
 	if err != nil {
 		return

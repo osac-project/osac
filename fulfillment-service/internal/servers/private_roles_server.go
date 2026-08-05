@@ -20,6 +20,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	"google.golang.org/protobuf/reflect/protoreflect"
+
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/events"
@@ -32,6 +34,7 @@ type PrivateRolesServerBuilder struct {
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
+	filterDesc        protoreflect.MessageDescriptor
 }
 
 var _ privatev1.RolesServer = (*PrivateRolesServer)(nil)
@@ -80,6 +83,13 @@ func (b *PrivateRolesServerBuilder) SetMetricsRegisterer(value prometheus.Regist
 	return b
 }
 
+// SetFilterDesc sets the protobuf message descriptor used to validate and translate CEL filter
+// expressions. This is optional. When unset, the descriptor of the O generic parameter is used.
+func (b *PrivateRolesServerBuilder) SetFilterDesc(value protoreflect.MessageDescriptor) *PrivateRolesServerBuilder {
+	b.filterDesc = value
+	return b
+}
+
 // Build creates the private roles server from the builder configuration.
 func (b *PrivateRolesServerBuilder) Build() (result *PrivateRolesServer, err error) {
 	if b.logger == nil {
@@ -98,6 +108,7 @@ func (b *PrivateRolesServerBuilder) Build() (result *PrivateRolesServer, err err
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetFilterDesc(b.filterDesc).
 		Build()
 	if err != nil {
 		return

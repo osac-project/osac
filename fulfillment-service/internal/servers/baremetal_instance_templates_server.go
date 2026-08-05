@@ -105,6 +105,7 @@ func (b *BareMetalInstanceTemplatesServerBuilder) Build() (result *BareMetalInst
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetFilterDesc((*publicv1.BareMetalInstanceTemplate)(nil).ProtoReflect().Descriptor()).
 		Build()
 	if err != nil {
 		return

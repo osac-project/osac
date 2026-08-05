@@ -117,6 +117,7 @@ func (b *RoleBindingsServerBuilder) Build() (result *RoleBindingsServer, err err
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetFilterDesc((*publicv1.RoleBinding)(nil).ProtoReflect().Descriptor()).
 		Build()
 	if err != nil {
 		return

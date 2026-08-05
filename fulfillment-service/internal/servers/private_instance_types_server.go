@@ -22,6 +22,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -36,6 +37,7 @@ type PrivateInstanceTypesServerBuilder struct {
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
+	filterDesc        protoreflect.MessageDescriptor
 }
 
 var _ privatev1.InstanceTypesServer = (*PrivateInstanceTypesServer)(nil)
@@ -78,6 +80,13 @@ func (b *PrivateInstanceTypesServerBuilder) SetMetricsRegisterer(value prometheu
 	return b
 }
 
+// SetFilterDesc sets the protobuf message descriptor used to validate and translate CEL filter
+// expressions. This is optional. When unset, the descriptor of the O generic parameter is used.
+func (b *PrivateInstanceTypesServerBuilder) SetFilterDesc(value protoreflect.MessageDescriptor) *PrivateInstanceTypesServerBuilder {
+	b.filterDesc = value
+	return b
+}
+
 func (b *PrivateInstanceTypesServerBuilder) Build() (result *PrivateInstanceTypesServer, err error) {
 	// Check parameters:
 	if b.logger == nil {
@@ -97,6 +106,7 @@ func (b *PrivateInstanceTypesServerBuilder) Build() (result *PrivateInstanceType
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetFilterDesc(b.filterDesc).
 		Build()
 	if err != nil {
 		return

@@ -27,18 +27,15 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	privatev1 "github.com/osac-project/osac/osac-operator/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/osac-operator/pkg/networkmanager"
-	"google.golang.org/grpc"
 )
 
-type stubNetworkClassesClient struct {
-	privatev1.NetworkClassesClient
-	getFunc func(ctx context.Context, in *privatev1.NetworkClassesGetRequest, opts ...grpc.CallOption) (*privatev1.NetworkClassesGetResponse, error)
+type stubNetworkClassClient struct {
+	getFunc func(ctx context.Context, networkClassID string) (*NetworkClassManagers, error)
 }
 
-func (s *stubNetworkClassesClient) Get(ctx context.Context, in *privatev1.NetworkClassesGetRequest, opts ...grpc.CallOption) (*privatev1.NetworkClassesGetResponse, error) {
-	return s.getFunc(ctx, in, opts...)
+func (s *stubNetworkClassClient) GetNetworkClass(ctx context.Context, networkClassID string) (*NetworkClassManagers, error) {
+	return s.getFunc(ctx, networkClassID)
 }
 
 func newTestFabricManagerConfigMap(name, managerName, capabilities string) *corev1.ConfigMap {
@@ -70,14 +67,11 @@ var _ = Describe("cachedResolver", func() {
 	})
 
 	It("caches successful results", func() {
-		stub := &stubNetworkClassesClient{
-			getFunc: func(_ context.Context, _ *privatev1.NetworkClassesGetRequest, _ ...grpc.CallOption) (*privatev1.NetworkClassesGetResponse, error) {
+		stub := &stubNetworkClassClient{
+			getFunc: func(_ context.Context, _ string) (*NetworkClassManagers, error) {
 				callCount++
-				return &privatev1.NetworkClassesGetResponse{
-					Object: &privatev1.NetworkClass{
-						Id:            "nc-cached",
-						FabricManager: "netris",
-					},
+				return &NetworkClassManagers{
+					FabricManager: "netris",
 				}, nil
 			},
 		}
@@ -102,8 +96,8 @@ var _ = Describe("cachedResolver", func() {
 	})
 
 	It("does not cache errors", func() {
-		stub := &stubNetworkClassesClient{
-			getFunc: func(_ context.Context, _ *privatev1.NetworkClassesGetRequest, _ ...grpc.CallOption) (*privatev1.NetworkClassesGetResponse, error) {
+		stub := &stubNetworkClassClient{
+			getFunc: func(_ context.Context, _ string) (*NetworkClassManagers, error) {
 				callCount++
 				return nil, fmt.Errorf("unavailable")
 			},
@@ -125,14 +119,11 @@ var _ = Describe("cachedResolver", func() {
 	})
 
 	It("caches different NetworkClass IDs independently", func() {
-		stub := &stubNetworkClassesClient{
-			getFunc: func(_ context.Context, req *privatev1.NetworkClassesGetRequest, _ ...grpc.CallOption) (*privatev1.NetworkClassesGetResponse, error) {
+		stub := &stubNetworkClassClient{
+			getFunc: func(_ context.Context, _ string) (*NetworkClassManagers, error) {
 				callCount++
-				return &privatev1.NetworkClassesGetResponse{
-					Object: &privatev1.NetworkClass{
-						Id:            req.GetId(),
-						FabricManager: "netris",
-					},
+				return &NetworkClassManagers{
+					FabricManager: "netris",
 				}, nil
 			},
 		}

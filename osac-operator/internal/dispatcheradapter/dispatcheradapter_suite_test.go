@@ -14,11 +14,16 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package dispatcher resolves NetworkClass names to fabric/k8s managers via a
-// caller-supplied NetworkClassClient, validates them against registered
-// ConfigMaps, and provides a dispatch table that maps resource types to the
-// manager(s) responsible for their provisioning operations. The package has no
-// dependency on any generated fulfillment-service client type, so it can be
-// imported by other operators that implement NetworkClassClient against their
-// own fulfillment-service connection.
-package dispatcher
+package dispatcheradapter_test
+
+import (
+	"testing"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+)
+
+func TestDispatcherAdapter(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "DispatcherAdapter Suite")
+}

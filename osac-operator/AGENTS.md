@@ -74,7 +74,7 @@ Each resource has a **resource controller** (provisions via AAP, manages finaliz
 
 ### Provisioning
 
-ClusterOrder and ComputeInstance controllers use direct AAP REST API integration via the `ProvisioningProvider` interface (`pkg/provisioning/provider.go` and `pkg/aap/client.go`). Networking controllers (VirtualNetwork, Subnet, SecurityGroup) and the PublicIP/ExternalIP family of controllers also use this pattern. `pkg/provisioning` and `pkg/aap` are public packages consumed outside this repo (e.g., `bare-metal-fulfillment-operator`) — changes to their interfaces can impact those consumers. Management-state annotation (`osac.openshift.io/management-state = Unmanaged`) is checked by every resource controller except `tenant_controller.go` to skip reconciliation.
+ClusterOrder and ComputeInstance controllers use direct AAP REST API integration via the `ProvisioningProvider` interface (`pkg/provisioning/provider.go` and `pkg/aap/client.go`). Networking controllers (VirtualNetwork, Subnet, SecurityGroup) and the PublicIP/ExternalIP family of controllers also use this pattern. `pkg/provisioning`, `pkg/aap`, and `pkg/dispatcher` are public packages consumed outside this repo (e.g., `bare-metal-fulfillment-operator`) — changes to their interfaces can impact those consumers. `pkg/dispatcher.NetworkClassClient` is the seam other operators implement to resolve a NetworkClass's fabric/k8s managers without depending on this repo's `internal/api` gRPC client; `internal/dispatcheradapter` is this repo's own implementation, wrapping the generated `privatev1.NetworkClassesClient`. Management-state annotation (`osac.openshift.io/management-state = Unmanaged`) is checked by every resource controller except `tenant_controller.go` to skip reconciliation.
 
 ### Multi-cluster
 
@@ -98,12 +98,14 @@ cmd/
 pkg/
   aap/                     # AAP REST API client (public package)
   provisioning/            # ProvisioningProvider abstraction
+  dispatcher/              # NetworkClass -> manager resolution (public package)
 internal/
   api/                     # Generated gRPC client (DO NOT EDIT)
   controller/              # Reconciliation logic
     {resource}_controller.go           # Provisioning controller
     {resource}_feedback_controller.go  # Feedback controller
   consoleproxy/            # Console proxy server implementation (auth, config, handlers)
+  dispatcheradapter/       # Adapts internal/api's gRPC client to pkg/dispatcher.NetworkClassClient
   migrations/              # Data migrations (e.g., migrate_subnetrefs.go)
 helpers/                   # Utility functions (at project root, not under internal/)
 config/

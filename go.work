@@ -1,9 +1,10 @@
-go 1.26.3
+go 1.26.4
 
 use (
 	./bare-metal-fulfillment-operator
 	./fulfillment-service
 	./osac-csi-driver
+	./osac-metering/adapters
 	./osac-metering/metering-service
 	./osac-operator
 	./osac-operator/api

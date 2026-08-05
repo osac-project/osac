@@ -449,18 +449,31 @@ func (s *PrivateClustersServer) getExistingCluster(ctx context.Context,
 // validateClusterStateForSpecUpdate rejects spec modifications when the cluster is in a
 // terminal failure state. The reconciler only processes clusters in PROGRESSING or READY
 // states, so spec changes on FAILED or DELETE_FAILED clusters would be silently ignored.
+//
+// This uses SetLock(true) (SELECT ... FOR UPDATE) so the row lock is held for the
+// remainder of the transaction, preventing a concurrent status transition from
+// bypassing the check before GenericServer.Update writes the spec changes.
 func (s *PrivateClustersServer) validateClusterStateForSpecUpdate(ctx context.Context,
 	request *privatev1.ClustersUpdateRequest) error {
 	if !updateIncludesField(request.GetUpdateMask(), "spec") {
 		return nil
 	}
-	existingCluster, found, err := s.getExistingCluster(ctx, request)
+	cluster := request.GetObject()
+	if cluster == nil {
+		return nil
+	}
+	id := cluster.GetId()
+	if id == "" {
+		return nil
+	}
+	getResponse, err := s.generic.dao.Get().
+		SetId(id).
+		SetLock(true).
+		Do(ctx)
 	if err != nil {
 		return err
 	}
-	if !found {
-		return nil
-	}
+	existingCluster := getResponse.GetObject()
 	state := existingCluster.GetStatus().GetState()
 	if state == privatev1.ClusterState_CLUSTER_STATE_FAILED ||
 		state == privatev1.ClusterState_CLUSTER_STATE_DELETE_FAILED {

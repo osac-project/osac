@@ -92,12 +92,12 @@ def test_instance_type_lifecycle(cli: OsacCLI, private_grpc: GRPCClient) -> None
                 raise
 
 
-def test_gpu_instance_type_lifecycle(private_grpc: GRPCClient) -> None:
+def test_gpu_instance_type(private_grpc: GRPCClient) -> None:
     gpu_name: str = f"e2e-gpu-lifecycle-{uuid4().hex[:8]}"
     nogpu_name: str = f"e2e-nogpu-lifecycle-{uuid4().hex[:8]}"
 
     try:
-        # 1. CREATE GPU-enabled InstanceType and verify fields
+        # 1. CREATE GPU-enabled InstanceType and verify GPU fields
         private_grpc.create_instance_type(
             name=gpu_name,
             cores=TEST_CORES,
@@ -107,12 +107,7 @@ def test_gpu_instance_type_lifecycle(private_grpc: GRPCClient) -> None:
         )
 
         response: dict = private_grpc.get_instance_type(name=gpu_name)
-        obj: dict = response["object"]
-        spec: dict = obj["spec"]
-        assert spec["cores"] == TEST_CORES, f"spec.cores mismatch: {spec['cores']} != {TEST_CORES}"
-        assert spec["memoryGib"] == TEST_MEMORY_GIB, (
-            f"spec.memoryGib mismatch: {spec['memoryGib']} != {TEST_MEMORY_GIB}"
-        )
+        spec: dict = response["object"]["spec"]
         assert "gpu" in spec, f"spec.gpu missing from response: {spec}"
         gpu: dict = spec["gpu"]
         assert gpu["pciDeviceSelector"] == TEST_GPU["pci_device_selector"], (
@@ -163,22 +158,9 @@ def test_gpu_instance_type_lifecycle(private_grpc: GRPCClient) -> None:
         assert "immutable" in output.lower(), f"Expected immutability error, got: {output}"
 
         response = private_grpc.get_instance_type(name=gpu_name)
-        assert response["object"]["spec"]["gpu"]["pciDeviceSelector"] == TEST_GPU["pci_device_selector"], (
+        assert response["object"]["spec"]["gpu"] == gpu, (
             "GPU fields should be unchanged after rejected update"
         )
-
-        # 4. DELETE GPU InstanceType
-        private_grpc.delete_instance_type(name=gpu_name)
-        names: list[str] = private_grpc.list_instance_type_names()
-        assert gpu_name not in names, f"GPU InstanceType {gpu_name} still in list after delete: {names}"
-
-        output, rc = private_grpc.call_unchecked(
-            service=f"{PRIVATE_API}.InstanceTypes/Get", data={"id": gpu_name},
-        )
-        assert rc != 0, f"get after delete should fail, but rc={rc}, output: {output}"
-        assert any(term in output.lower() for term in [
-            "not found", "404", "notfound",
-        ]), f"Expected not-found error after delete, got: {output}"
 
     finally:
         for name in (gpu_name, nogpu_name):

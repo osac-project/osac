@@ -306,19 +306,18 @@ class GRPCClient:
         cores: int,
         memory_gib: int,
         description: str = "",
+        gpu: dict[str, Any] | None = None,
     ) -> str:
+        spec: dict[str, Any] = {
+            "cores": cores,
+            "memory_gib": memory_gib,
+            "description": description,
+        }
+        if gpu is not None:
+            spec["gpu"] = gpu
         response: dict[str, Any] = self.call(
             service=f"{PRIVATE_API}.InstanceTypes/Create",
-            data={
-                "object": {
-                    "metadata": {"name": name},
-                    "spec": {
-                        "cores": cores,
-                        "memory_gib": memory_gib,
-                        "description": description,
-                    },
-                }
-            },
+            data={"object": {"metadata": {"name": name}, "spec": spec}},
         )
         return response["object"]["id"]
 

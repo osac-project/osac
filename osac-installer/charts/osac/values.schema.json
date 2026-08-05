@@ -447,6 +447,10 @@
               "type": "string",
               "description": "Bootstrap job container image"
             },
+            "cliImage": {
+              "type": "string",
+              "description": "OpenShift CLI image used by the bootstrap job's init containers (wait-for-admin-secret, wait-for-aap)"
+            },
             "backoffLimit": {
               "type": "integer",
               "description": "Number of retries for bootstrap job",
@@ -455,7 +459,8 @@
             "readinessConsecutiveSuccesses": {
               "type": "integer",
               "description": "Number of consecutive successful AAP readiness checks required before the bootstrap Job proceeds",
-              "default": 3
+              "default": 3,
+              "minimum": 1
             },
             "gateway": {
               "type": "object",

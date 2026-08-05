@@ -12,13 +12,31 @@ metadata:
     "helm.sh/hook-delete-policy": before-hook-creation
 spec:
   backoffLimit: 5
-  activeDeadlineSeconds: 3600
+  # Job-level CUMULATIVE deadline across every backoffLimit-driven pod retry
+  # (not per-pod). Must stay comfortably above the combined worst-case runtime
+  # of both init containers (wait-for-admin-secret + wait-for-aap, see
+  # osac-aap.waitForAapScript's docstring in _helpers.tpl for the math) so a
+  # stuck attempt hits the script's own clean "Timeout waiting for AAP" exit
+  # (diagnosable, lets backoffLimit retry) rather than being silently
+  # SIGKILLed by DeadlineExceeded mid-attempt. Note: osac-installer's
+  # `make install-osac` wraps this in `helm ... --timeout 40m --wait`, a
+  # separate, tighter ceiling on the overall install that this value doesn't
+  # control.
+  activeDeadlineSeconds: 8400
   template:
     metadata:
       labels:
         {{- include "osac-aap.labels" . | nindent 8 }}
     spec:
       initContainers:
+      - name: wait-for-admin-secret
+        image: {{ .Values.bootstrap.cliImage }}
+        command:
+          - /bin/bash
+          - -c
+          - |
+            {{- include "osac-aap.waitForAdminSecretScript" . | nindent 12 }}
+        {{- include "osac-aap.waitForAdminSecretContainerSpec" . | nindent 8 }}
       - name: wait-for-aap
         image: {{ .Values.bootstrap.cliImage }}
         command:
@@ -26,35 +44,7 @@ spec:
           - -c
           - |
             {{- include "osac-aap.waitForAapScript" . | nindent 12 }}
-        env:
-        - name: HOME
-          value: /tmp
-        - name: AAP_GATEWAY_HOSTNAME
-          value: {{ include "osac-aap.gatewayHostname" . | quote }}
-        - name: AAP_CONTROLLER_GATEWAY_HOSTNAME
-          value: {{ include "osac-aap.controllerHostname" . | quote }}
-        - name: AAP_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: {{ include "osac-aap.instanceName" . }}-admin-password
-              key: password
-        - name: AAP_READINESS_CONSECUTIVE_SUCCESSES
-          value: {{ .Values.bootstrap.readinessConsecutiveSuccesses | quote }}
-        volumeMounts:
-        - name: tmp
-          mountPath: /tmp
-        resources:
-          requests:
-            cpu: 50m
-            memory: 128Mi
-          limits:
-            cpu: 200m
-            memory: 256Mi
-        securityContext:
-          allowPrivilegeEscalation: false
-          readOnlyRootFilesystem: true
-          capabilities:
-            drop: ["ALL"]
+        {{- include "osac-aap.waitForAapContainerSpec" . | nindent 8 }}
       containers:
       - name: create-token
         image: {{ .Values.bootstrap.cliImage }}
@@ -64,9 +54,15 @@ spec:
           - |
             set -euo pipefail
             AAP_PASSWORD=$(cat /var/run/secrets/aap-admin/password)
+            # Credentials go into a netrc file rather than curl's -u flag: -u puts the
+            # password on the command line, readable by any process in this container's
+            # PID namespace (/proc/<pid>/cmdline, `ps`). Same pattern as the shared
+            # wait-for-aap readiness script in _helpers.tpl.
+            trap 'rm -f /tmp/.netrc' EXIT
+            ( umask 077; printf 'machine %s\nlogin admin\npassword %s\n' "{{ include "osac-aap.gatewayHostname" . }}" "${AAP_PASSWORD}" > /tmp/.netrc )
             echo "Creating AAP API token..."
             TOKEN=$(curl -s --connect-timeout 5 --max-time 30 -X POST \
-              -u "admin:${AAP_PASSWORD}" \
+              --netrc-file /tmp/.netrc \
               -H "Content-Type: application/json" \
               -d '{"description": "osac-operator", "scope": "write"}' \
               "http://{{ include "osac-aap.gatewayHostname" . }}/api/gateway/v1/tokens/" \

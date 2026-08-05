@@ -18,6 +18,8 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 
 	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 )
@@ -324,5 +326,21 @@ var _ = Describe("Public Users Server", func() {
 		for _, item := range listResp.GetItems() {
 			Expect(item.GetSpec().GetUsername()).To(HavePrefix("groupb-"))
 		}
+	})
+
+	// SECURITY: Users is excluded from the reflection-driven suite in
+	// internal/cmd/service/start/grpcserver/register_servers_test.go because its private half is built outside
+	// RegisterResourceServers (see users_server.go / start_grpc_server_cmd.go). This is the only regression
+	// coverage confirming the public UsersServer's internal PrivateUsersServer delegate still rejects filters on
+	// keycloak_user_id, the private-only UserStatus field (private user_type.proto field 3, absent from public
+	// UserStatus).
+	It("Rejects filter referencing the private-only keycloak_user_id field", func() {
+		_, err := publicServer.List(ctx, publicv1.UsersListRequest_builder{
+			Filter: new("this.status.keycloak_user_id != ''"),
+		}.Build())
+		Expect(err).To(HaveOccurred())
+		status, ok := grpcstatus.FromError(err)
+		Expect(ok).To(BeTrue())
+		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 	})
 })

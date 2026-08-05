@@ -181,7 +181,11 @@ while [ "$(date +%s)" -lt "${READINESS_DEADLINE}" ]; do
     if [ -z "${token_id}" ]; then
       consecutive_successes=0
       delete_code="skipped"
-      echo "WARNING: readiness-check token created but its ID could not be parsed from the response (auth_body='${auth_body}')"
+      # Deliberately not logging auth_body here: on a 200/201 it's the token
+      # creation response, which can include the live token value itself
+      # (per AAP Gateway's token resource schema) -- logging it on a parse
+      # failure could leak a real credential into pod logs.
+      echo "WARNING: readiness-check token created but its ID could not be parsed from the response"
     else
       delete_code=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 15 \
         -X DELETE --netrc-file /tmp/.netrc \

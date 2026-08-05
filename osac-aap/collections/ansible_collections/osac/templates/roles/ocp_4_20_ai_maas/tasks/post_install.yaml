@@ -3,15 +3,16 @@
 # Orchestrates: operator installation → MaaS configuration → verification.
 # Uses admin_kubeconfig from the parent pipeline (retrieved at step 5).
 
-- name: Verify admin_kubeconfig is available
+- name: Verify admin_kubeconfig is available and is not a file path
   ansible.builtin.assert:
     that:
       - admin_kubeconfig is defined
       - admin_kubeconfig | length > 0
+      - admin_kubeconfig is not string or not admin_kubeconfig.startswith('/')
     fail_msg: >-
-      admin_kubeconfig is not set. In production, this is provided by the
-      ocp_small pipeline. For local testing, set KUBECONFIG env var
-      or pass admin_kubeconfig as a playbook variable.
+      admin_kubeconfig must be a kubeconfig dict or raw YAML string, not a
+      file path. In production this is provided by the ocp_small pipeline.
+      For local testing pass the kubeconfig content, not a path.
 
 # Write kubeconfig to a temp file once for the entire post-install flow.
 # Using a file path prevents kubernetes.core from masking resource values

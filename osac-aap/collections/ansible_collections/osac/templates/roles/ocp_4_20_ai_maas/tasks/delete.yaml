@@ -4,6 +4,22 @@
 # gateway, PostgreSQL). Operators are NOT removed — in the OSAC pipeline, the cluster
 # itself is deleted after this step, which removes everything.
 
+# Initialize kubeconfig tmpfile if not already set (delete runs independently
+# of post_install, so _kubeconfig_tmpfile may not exist yet).
+- name: Create kubeconfig temp file for delete flow
+  ansible.builtin.tempfile:
+    suffix: .kubeconfig
+  register: _kubeconfig_tmpfile
+  when: _kubeconfig_tmpfile is not defined or _kubeconfig_tmpfile.path is not defined
+
+- name: Write kubeconfig to temp file
+  ansible.builtin.copy:
+    content: "{{ admin_kubeconfig | to_yaml if admin_kubeconfig is mapping else admin_kubeconfig }}"
+    dest: "{{ _kubeconfig_tmpfile.path }}"
+    mode: "0600"
+  no_log: true
+  when: _kubeconfig_tmpfile.path is defined
+
 - name: Delete external model subscriptions
   kubernetes.core.k8s:
     kubeconfig: "{{ _kubeconfig_tmpfile.path }}"

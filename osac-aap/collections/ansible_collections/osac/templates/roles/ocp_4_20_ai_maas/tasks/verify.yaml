@@ -159,7 +159,7 @@
 
 - name: Check RHCL operator versions
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: operators.coreos.com/v1alpha1
     kind: ClusterServiceVersion
     namespace: openshift-operators
@@ -183,7 +183,7 @@
 
 - name: Get COO CSV status
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: operators.coreos.com/v1alpha1
     kind: ClusterServiceVersion
     name: "{{ ocp_4_20_ai_maas_coo_starting_csv }}"
@@ -193,7 +193,7 @@
 
 - name: Get OTel Subscription status
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: operators.coreos.com/v1alpha1
     kind: Subscription
     name: "{{ ocp_4_20_ai_maas_otel_package }}"
@@ -203,7 +203,7 @@
 
 - name: Wait for Perses pod running
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: v1
     kind: Pod
     namespace: redhat-ods-monitoring

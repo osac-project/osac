@@ -28,7 +28,7 @@ ocp_4_20_ai_maas_nfs_path: "/var/nfs-provisioner"
 ocp_4_20_ai_maas_nfs_storage_size: "50Gi"
 ocp_4_20_ai_maas_nfs_sc_name: "nfs"
 ocp_4_20_ai_maas_nfs_node: ""
-ocp_4_20_ai_maas_nfs_setup_image: "registry.access.redhat.com/ubi9/ubi-minimal"
+ocp_4_20_ai_maas_nfs_setup_image: "registry.access.redhat.com/ubi9/ubi-minimal:9.5"
 ocp_4_20_ai_maas_cert_manager_channel: stable-v1.18
 ocp_4_20_ai_maas_cert_manager_source: redhat-operators
 

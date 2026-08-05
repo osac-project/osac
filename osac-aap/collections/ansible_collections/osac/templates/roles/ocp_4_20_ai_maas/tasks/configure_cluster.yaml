@@ -43,7 +43,7 @@
 
 - name: Apply User Workload Monitoring
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     definition: "{{ item }}"
   loop: "{{ lookup('ansible.builtin.template', 'user-workload-monitoring.yaml.j2') | from_yaml_all | list }}"
@@ -67,16 +67,16 @@
 # or rework the MetalLB pool allocation to reserve capacity for MaaS upfront.
 - name: Get current MetalLB ingress IP pool
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: metallb.io/v1beta1
     kind: IPAddressPool
     name: ingress-ipaddresspool
     namespace: metallb-system
   register: _metallb_pool
 
-- name: Expand MetalLB ingress pool to accommodate AI inference and MaaS gateway LoadBalancers
+- name: Expand MetalLB ingress pool by 2 IPs for gateway LoadBalancers
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     definition:
       apiVersion: metallb.io/v1beta1
@@ -85,16 +85,19 @@
         name: ingress-ipaddresspool
         namespace: metallb-system
       spec:
-        autoAssign: false
-        addresses:
-          - "{{ _start_ip }}-{{ _start_ip | ansible.utils.ipmath(2) }}"
+        autoAssign: "{{ _metallb_pool.resources[0].spec.autoAssign | default(false) }}"
+        addresses: >-
+          {{ _metallb_pool.resources[0].spec.addresses[1:] +
+             [_start_ip ~ '-' ~ (_end_ip | ansible.utils.ipmath(2))] }}
   vars:
-    _start_ip: "{{ _metallb_pool.resources[0].spec.addresses[0].split('-')[0] }}"
+    _addr0: "{{ _metallb_pool.resources[0].spec.addresses[0] }}"
+    _start_ip: "{{ _addr0.split('-')[0] }}"
+    _end_ip: "{{ _addr0.split('-')[-1] }}"
   when: _metallb_pool.resources | length > 0
 
 - name: Create openshift-ai-inference gateway
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     template: openshift-ai-inference-gateway.yaml.j2
   register: _r
@@ -104,7 +107,7 @@
 
 - name: Wait for openshift-ai-inference gateway Programmed
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: gateway.networking.k8s.io/v1
     kind: Gateway
     name: openshift-ai-inference
@@ -139,7 +142,7 @@
 
 - name: Apply hardware profiles
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     definition: "{{ item }}"
   loop: >-
@@ -164,7 +167,7 @@
 
 - name: Patch OdhDashboardConfig with observability flag
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     merge_type: merge
     definition:
@@ -186,7 +189,7 @@
 
 - name: Patch OdhDashboardConfig with general flags
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     merge_type: merge
     definition:
@@ -210,7 +213,7 @@
 
 - name: Wait for Monitoring CR Ready
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: services.platform.opendatahub.io/v1alpha1
     kind: Monitoring
     name: default-monitoring
@@ -230,7 +233,7 @@
 
 - name: Verify Perses pod running
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: v1
     kind: Pod
     namespace: redhat-ods-monitoring
@@ -248,7 +251,7 @@
 
 - name: Verify PersesDatasources created
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: perses.dev/v1alpha2
     kind: PersesDatasource
     namespace: redhat-ods-monitoring
@@ -263,7 +266,7 @@
 
 - name: Verify PersesDashboards created
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: perses.dev/v1alpha2
     kind: PersesDashboard
     namespace: redhat-ods-monitoring

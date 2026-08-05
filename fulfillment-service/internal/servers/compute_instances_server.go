@@ -116,6 +116,7 @@ func (b *ComputeInstancesServerBuilder) Build() (result *ComputeInstancesServer,
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetFilterDesc((*publicv1.ComputeInstance)(nil).ProtoReflect().Descriptor()).
 		Build()
 	if err != nil {
 		return

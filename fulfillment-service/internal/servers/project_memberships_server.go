@@ -117,6 +117,7 @@ func (b *ProjectMembershipsServerBuilder) Build() (result *ProjectMembershipsSer
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetFilterDesc((*publicv1.ProjectMembership)(nil).ProtoReflect().Descriptor()).
 		Build()
 	if err != nil {
 		return

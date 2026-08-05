@@ -111,6 +111,7 @@ func (b *ExternalIPAttachmentsServerBuilder) Build() (result *ExternalIPAttachme
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetFilterDesc((*publicv1.ExternalIPAttachment)(nil).ProtoReflect().Descriptor()).
 		Build()
 	if err != nil {
 		return

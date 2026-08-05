@@ -116,6 +116,7 @@ func (b *SecurityGroupsServerBuilder) Build() (result *SecurityGroupsServer, err
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetFilterDesc((*publicv1.SecurityGroup)(nil).ProtoReflect().Descriptor()).
 		Build()
 	if err != nil {
 		return

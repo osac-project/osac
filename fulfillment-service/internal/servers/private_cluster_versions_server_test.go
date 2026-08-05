@@ -24,9 +24,11 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 )
 
 var _ = Describe("Private cluster versions server", func() {
@@ -216,6 +218,141 @@ var _ = Describe("Private cluster versions server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(getResponse.GetObject().GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
+		})
+
+		It("Blocks delete when referenced by an active cluster", func() {
+			versionName := "del-prot-4-17-0"
+			response, err := server.Create(ctx, privatev1.ClusterVersionsCreateRequest_builder{
+				Object: privatev1.ClusterVersion_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: versionName,
+					}.Build(),
+					Spec: privatev1.ClusterVersionSpec_builder{
+						Version: "4.17.0",
+						Image:   "quay.io/ocp:4.17.0",
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			cv := response.GetObject()
+
+			clustersDao, err := dao.NewGenericDAO[*privatev1.Cluster]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = clustersDao.Create().SetObject(
+				privatev1.Cluster_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:   "ref-cluster",
+						Tenant: "system",
+					}.Build(),
+					Spec: privatev1.ClusterSpec_builder{
+						Version: &privatev1.ClusterVersionReference{Name: versionName},
+					}.Build(),
+				}.Build(),
+			).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = server.Delete(ctx, privatev1.ClusterVersionsDeleteRequest_builder{
+				Id: cv.GetId(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+			Expect(status.Message()).To(ContainSubstring(versionName))
+		})
+
+		It("Blocks delete when referenced by an active cluster template", func() {
+			versionName := "del-prot-4-17-1"
+			response, err := server.Create(ctx, privatev1.ClusterVersionsCreateRequest_builder{
+				Object: privatev1.ClusterVersion_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: versionName,
+					}.Build(),
+					Spec: privatev1.ClusterVersionSpec_builder{
+						Version: "4.17.1",
+						Image:   "quay.io/ocp:4.17.1",
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			cv := response.GetObject()
+
+			templatesDao, err := dao.NewGenericDAO[*privatev1.ClusterTemplate]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = templatesDao.Create().SetObject(
+				privatev1.ClusterTemplate_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:   "ref-template",
+						Tenant: "system",
+					}.Build(),
+					SpecDefaults: privatev1.ClusterTemplateSpecDefaults_builder{
+						Version: &privatev1.ClusterVersionReference{Name: versionName},
+					}.Build(),
+				}.Build(),
+			).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = server.Delete(ctx, privatev1.ClusterVersionsDeleteRequest_builder{
+				Id: cv.GetId(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+			Expect(status.Message()).To(ContainSubstring(versionName))
+		})
+
+		It("Blocks delete when referenced by an active cluster catalog item", func() {
+			versionName := "del-prot-4-17-2"
+			response, err := server.Create(ctx, privatev1.ClusterVersionsCreateRequest_builder{
+				Object: privatev1.ClusterVersion_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: versionName,
+					}.Build(),
+					Spec: privatev1.ClusterVersionSpec_builder{
+						Version: "4.17.2",
+						Image:   "quay.io/ocp:4.17.2",
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			cv := response.GetObject()
+
+			catalogItemsDao, err := dao.NewGenericDAO[*privatev1.ClusterCatalogItem]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = catalogItemsDao.Create().SetObject(
+				privatev1.ClusterCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:   "ref-catalog-item",
+						Tenant: "system",
+					}.Build(),
+					FieldDefinitions: []*privatev1.FieldDefinition{
+						privatev1.FieldDefinition_builder{
+							Path:    "version",
+							Default: structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{"name": structpb.NewStringValue(versionName)}}),
+						}.Build(),
+					},
+				}.Build(),
+			).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = server.Delete(ctx, privatev1.ClusterVersionsDeleteRequest_builder{
+				Id: cv.GetId(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+			Expect(status.Message()).To(ContainSubstring(versionName))
 		})
 
 		Describe("Field mask merge", func() {

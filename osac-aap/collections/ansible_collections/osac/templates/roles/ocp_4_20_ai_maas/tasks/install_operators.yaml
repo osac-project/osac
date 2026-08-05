@@ -39,6 +39,7 @@
       - ocp_4_20_ai_maas_rhcl_starting_csv is regex('^[\w.\-]+$')
       - ocp_4_20_ai_maas_sm_starting_csv is regex('^[\w.\-]+$')
       - ocp_4_20_ai_maas_coo_starting_csv is regex('^[\w.\-]+$')
+      - ocp_4_20_ai_maas_nfs_path is regex('^/[\w/\-]+$')
     fail_msg: "Shell-interpolated variables contain invalid characters"
 
 - name: Validate external models require MaaS
@@ -115,7 +116,7 @@
 
 - name: Check for existing default StorageClass
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: storage.k8s.io/v1
     kind: StorageClass
   register: _existing_scs
@@ -133,7 +134,7 @@
 
 - name: Get worker nodes for NFS placement
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: v1
     kind: Node
     label_selectors:
@@ -148,9 +149,18 @@
          else (_worker_nodes.get('resources', []) | json_query('[0].metadata.name') | default('')) }}
   when: not _has_default_sc | bool
 
+- name: Fail if no NFS node available
+  ansible.builtin.fail:
+    msg: >-
+      No worker node found for NFS provisioner. Set ocp_4_20_ai_maas_nfs_node
+      to a specific node name or ensure worker nodes exist.
+  when:
+    - not _has_default_sc | bool
+    - _nfs_node | length == 0
+
 - name: Label node for NFS provisioner
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     definition:
       apiVersion: v1
@@ -163,7 +173,7 @@
 
 - name: Create NFS directory on node with container_file_t SELinux context
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     definition:
       apiVersion: batch/v1
@@ -172,7 +182,7 @@
         name: nfs-dir-setup
         namespace: kube-system
       spec:
-        ttlSecondsAfterFinished: 60
+        ttlSecondsAfterFinished: 600
         template:
           spec:
             restartPolicy: Never
@@ -203,7 +213,7 @@
 
 - name: Wait for NFS directory setup job to complete
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: batch/v1
     kind: Job
     name: nfs-dir-setup
@@ -218,7 +228,7 @@
 
 - name: Install NFS Provisioner operator
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     definition: "{{ item }}"
   loop:
@@ -245,11 +255,12 @@
         name: nfs-provisioner-operator
         source: community-operators
         sourceNamespace: openshift-marketplace
+        startingCSV: "{{ ocp_4_20_ai_maas_nfs_starting_csv | default(omit) }}"
   when: not _has_default_sc | bool
 
 - name: Wait for NFS Provisioner operator to be ready
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: operators.coreos.com/v1alpha1
     kind: ClusterServiceVersion
     namespace: nfs-provisioner
@@ -265,7 +276,7 @@
 
 - name: Create NFSProvisioner instance
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     definition:
       apiVersion: cache.jhouse.com/v1alpha1
@@ -285,7 +296,7 @@
 
 - name: Wait for NFS server pod to be running
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: v1
     kind: Pod
     namespace: nfs-provisioner
@@ -299,9 +310,21 @@
     - _nfs_pod.resources[0].status.phase | default('') == 'Running'
   when: not _has_default_sc | bool
 
+- name: Wait for NFS StorageClass to exist before marking default
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
+    api_version: storage.k8s.io/v1
+    kind: StorageClass
+    name: "{{ ocp_4_20_ai_maas_nfs_sc_name }}"
+  register: _nfs_sc
+  retries: 20
+  delay: 15
+  until: _nfs_sc.resources | length > 0
+  when: not _has_default_sc | bool
+
 - name: Set NFS StorageClass as default
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: patched
     api_version: storage.k8s.io/v1
     kind: StorageClass
@@ -318,7 +341,7 @@
 
 - name: Check if cert-manager is already installed
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: operators.coreos.com/v1alpha1
     kind: ClusterServiceVersion
     namespace: cert-manager-operator
@@ -332,7 +355,7 @@
   block:
     - name: Create cert-manager namespace
       kubernetes.core.k8s:
-        kubeconfig: "{{ admin_kubeconfig }}"
+        kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
         state: present
         definition:
           apiVersion: v1
@@ -346,7 +369,7 @@
 
     - name: Create cert-manager OperatorGroup
       kubernetes.core.k8s:
-        kubeconfig: "{{ admin_kubeconfig }}"
+        kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
         state: present
         definition:
           apiVersion: operators.coreos.com/v1
@@ -362,7 +385,7 @@
 
     - name: Create cert-manager Subscription
       kubernetes.core.k8s:
-        kubeconfig: "{{ admin_kubeconfig }}"
+        kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
         state: present
         definition:
           apiVersion: operators.coreos.com/v1alpha1
@@ -383,7 +406,7 @@
 
     - name: Wait for cert-manager CSV
       kubernetes.core.k8s_info:
-        kubeconfig: "{{ admin_kubeconfig }}"
+        kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
         api_version: operators.coreos.com/v1alpha1
         kind: Subscription
         name: openshift-cert-manager-operator
@@ -568,7 +591,7 @@
 
     - name: Discover latest v1.3.x CSVs from PackageManifests
       kubernetes.core.k8s_info:
-        kubeconfig: "{{ admin_kubeconfig }}"
+        kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
         api_version: packages.operators.coreos.com/v1
         kind: PackageManifest
         name: "{{ item }}"
@@ -585,25 +608,25 @@
     - name: Set discovered CSV versions
       ansible.builtin.set_fact:
         _authorino_csv: >-
-          {{ (_pkgmanifests.results[0].resources[0].status.channels
+          {{ ((_pkgmanifests.results[0].resources | default([{}]))[0].status.channels | default([])
              | map(attribute='entries') | flatten
              | map(attribute='name') | select('search', 'v1\.3\.')
-             | list | sort | last) | default(ocp_4_20_ai_maas_authorino_starting_csv) }}
+             | list | community.general.version_sort | last) | default(ocp_4_20_ai_maas_authorino_starting_csv) }}
         _limitador_csv: >-
-          {{ (_pkgmanifests.results[1].resources[0].status.channels
+          {{ ((_pkgmanifests.results[1].resources | default([{}]))[0].status.channels | default([])
              | map(attribute='entries') | flatten
              | map(attribute='name') | select('search', 'v1\.3\.')
-             | list | sort | last) | default(ocp_4_20_ai_maas_limitador_starting_csv) }}
+             | list | community.general.version_sort | last) | default(ocp_4_20_ai_maas_limitador_starting_csv) }}
         _dns_csv: >-
-          {{ (_pkgmanifests.results[2].resources[0].status.channels
+          {{ ((_pkgmanifests.results[2].resources | default([{}]))[0].status.channels | default([])
              | map(attribute='entries') | flatten
              | map(attribute='name') | select('search', 'v1\.3\.')
-             | list | sort | last) | default(ocp_4_20_ai_maas_dns_starting_csv) }}
+             | list | community.general.version_sort | last) | default(ocp_4_20_ai_maas_dns_starting_csv) }}
         _rhcl_csv: >-
-          {{ (_pkgmanifests.results[3].resources[0].status.channels
+          {{ ((_pkgmanifests.results[3].resources | default([{}]))[0].status.channels | default([])
              | map(attribute='entries') | flatten
              | map(attribute='name') | select('search', 'v1\.3\.')
-             | list | sort | last) | default(ocp_4_20_ai_maas_rhcl_starting_csv) }}
+             | list | community.general.version_sort | last) | default(ocp_4_20_ai_maas_rhcl_starting_csv) }}
 
     - name: Report discovered CSV versions
       ansible.builtin.debug:
@@ -620,7 +643,7 @@
 
     - name: Pre-create Authorino Subscription (v1.3.1, Manual)
       kubernetes.core.k8s:
-        kubeconfig: "{{ admin_kubeconfig }}"
+        kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
         state: present
         definition:
           apiVersion: operators.coreos.com/v1alpha1
@@ -642,7 +665,7 @@
 
     - name: Pre-create Limitador Subscription (v1.3.1, Manual)
       kubernetes.core.k8s:
-        kubeconfig: "{{ admin_kubeconfig }}"
+        kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
         state: present
         definition:
           apiVersion: operators.coreos.com/v1alpha1
@@ -664,7 +687,7 @@
 
     - name: Pre-create DNS Subscription (v1.3.1, Manual)
       kubernetes.core.k8s:
-        kubeconfig: "{{ admin_kubeconfig }}"
+        kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
         state: present
         definition:
           apiVersion: operators.coreos.com/v1alpha1
@@ -751,7 +774,7 @@
 
     - name: Create RHCL Subscription (v1.3.4, Manual)
       kubernetes.core.k8s:
-        kubeconfig: "{{ admin_kubeconfig }}"
+        kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
         state: present
         definition:
           apiVersion: operators.coreos.com/v1alpha1
@@ -804,7 +827,7 @@
 
 - name: Create LWS namespace
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     definition:
       apiVersion: v1
@@ -818,7 +841,7 @@
 
 - name: Create LWS OperatorGroup
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     definition:
       apiVersion: operators.coreos.com/v1
@@ -836,7 +859,7 @@
 
 - name: Create LWS Subscription
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     definition:
       apiVersion: operators.coreos.com/v1alpha1
@@ -857,7 +880,7 @@
 
 - name: Wait for LWS CSV
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: operators.coreos.com/v1alpha1
     kind: Subscription
     name: leader-worker-set
@@ -873,7 +896,7 @@
 
 - name: Create RHOAI namespace
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     definition:
       apiVersion: v1
@@ -887,7 +910,7 @@
 
 - name: Create RHOAI OperatorGroup
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     definition:
       apiVersion: operators.coreos.com/v1
@@ -903,7 +926,7 @@
 
 - name: Create RHOAI Subscription
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     definition:
       apiVersion: operators.coreos.com/v1alpha1
@@ -924,7 +947,7 @@
 
 - name: Wait for RHOAI CSV
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: operators.coreos.com/v1alpha1
     kind: Subscription
     name: rhods-operator
@@ -990,7 +1013,7 @@
 
 - name: Create OTel namespace
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     definition:
       apiVersion: v1
@@ -1005,7 +1028,7 @@
 
 - name: Create OTel OperatorGroup
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     definition:
       apiVersion: operators.coreos.com/v1
@@ -1022,7 +1045,7 @@
 
 - name: Create OTel Subscription
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     definition:
       apiVersion: operators.coreos.com/v1alpha1
@@ -1044,7 +1067,7 @@
 
 - name: Wait for OTel CSV
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: operators.coreos.com/v1alpha1
     kind: Subscription
     name: "{{ ocp_4_20_ai_maas_otel_package }}"
@@ -1065,7 +1088,7 @@
 
 - name: Create COO namespace
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     definition:
       apiVersion: v1
@@ -1080,7 +1103,7 @@
 
 - name: Create COO OperatorGroup
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     definition:
       apiVersion: operators.coreos.com/v1
@@ -1120,7 +1143,7 @@
 
 - name: Create COO Subscription (Manual approval, pinned to v1.4.0)
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     definition:
       apiVersion: operators.coreos.com/v1alpha1
@@ -1171,7 +1194,7 @@
 
 - name: Wait for DSCInitialization to be ready
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: dscinitialization.opendatahub.io/v1
     kind: DSCInitialization
     name: default-dsci
@@ -1197,7 +1220,7 @@
 # Step 6c: Patch DSCI metrics (before DSC creation so operator sees it on first reconciliation)
 - name: Patch DSCI with monitoring metrics configuration
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     merge_type: merge
     definition:
@@ -1220,7 +1243,7 @@
 
 - name: Wait for RHOAI webhook endpoints ready
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: v1
     kind: Endpoints
     name: rhods-operator-service
@@ -1251,7 +1274,7 @@
 
 - name: Create DataScienceCluster
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     definition:
       apiVersion: datasciencecluster.opendatahub.io/v1
@@ -1267,7 +1290,7 @@
 
 - name: Wait for DataScienceCluster Ready
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: datasciencecluster.opendatahub.io/v1
     kind: DataScienceCluster
     name: default-dsc
@@ -1295,7 +1318,7 @@
 # so the deployment is absent and there is nothing to restore.
 - name: Check if Ingress Operator deployment exists on guest cluster
   kubernetes.core.k8s_info:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     api_version: apps/v1
     kind: Deployment
     name: ingress-operator
@@ -1304,7 +1327,7 @@
 
 - name: Scale up Ingress Operator
   kubernetes.core.k8s:
-    kubeconfig: "{{ admin_kubeconfig }}"
+    kubeconfig: "{{ _kubeconfig_tmpfile.path }}"
     state: present
     definition:
       apiVersion: apps/v1

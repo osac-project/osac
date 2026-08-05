@@ -16,3 +16,10 @@ lvms_storage_provisioner: "topolvm.io"
 
 # LVMCluster device class name created by osac-installer's configure-lvms.sh hook.
 lvms_storage_device_class: "vg1"
+
+# OLM subscription channel for LVMS operator — used when installing LVMS on CaaS
+# guest clusters. Must match the OCP version of the guest cluster.
+lvms_storage_operator_channel: "stable-4.22"
+
+# Namespace where the LVMS operator is installed via OLM.
+lvms_storage_operator_namespace: "openshift-storage"

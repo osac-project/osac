@@ -6,11 +6,23 @@
 
 # Initialize kubeconfig tmpfile if not already set (delete runs independently
 # of post_install, so _kubeconfig_tmpfile may not exist yet).
+# Use a separate register variable (_delete_tmpfile) because Ansible always
+# defines registered variables (even skipped tasks), so re-registering into
+# _kubeconfig_tmpfile would overwrite it with a skipped result.
+- name: Check if kubeconfig temp file already exists from post_install
+  ansible.builtin.set_fact:
+    _delete_needs_tmpfile: "{{ (_kubeconfig_tmpfile | default({})).path | default('') == '' }}"
+
 - name: Create kubeconfig temp file for delete flow
   ansible.builtin.tempfile:
     suffix: .kubeconfig
-  register: _kubeconfig_tmpfile
-  when: _kubeconfig_tmpfile is not defined or _kubeconfig_tmpfile.path is not defined
+  register: _delete_tmpfile
+  when: _delete_needs_tmpfile | bool
+
+- name: Point _kubeconfig_tmpfile at the newly created temp file
+  ansible.builtin.set_fact:
+    _kubeconfig_tmpfile: "{{ _delete_tmpfile }}"
+  when: _delete_needs_tmpfile | bool
 
 - name: Write kubeconfig to temp file
   ansible.builtin.copy:
@@ -18,7 +30,7 @@
     dest: "{{ _kubeconfig_tmpfile.path }}"
     mode: "0600"
   no_log: true
-  when: _kubeconfig_tmpfile.path is defined
+  when: _delete_needs_tmpfile | bool
 
 - name: Delete external model subscriptions
   kubernetes.core.k8s:

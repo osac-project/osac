@@ -251,7 +251,7 @@
         namespace: nfs-provisioner
       spec:
         channel: "{{ ocp_4_20_ai_maas_nfs_channel }}"
-        installPlanApproval: Automatic
+        installPlanApproval: Manual
         name: nfs-provisioner-operator
         source: community-operators
         sourceNamespace: openshift-marketplace
@@ -288,6 +288,8 @@
         storageSize: "{{ ocp_4_20_ai_maas_nfs_storage_size }}"
         scForNFS: "{{ ocp_4_20_ai_maas_nfs_sc_name }}"
         hostPathDir: "{{ ocp_4_20_ai_maas_nfs_path }}"
+        nodeSelector:
+          app: nfs-provisioner
   register: _r
   retries: 5
   delay: 10

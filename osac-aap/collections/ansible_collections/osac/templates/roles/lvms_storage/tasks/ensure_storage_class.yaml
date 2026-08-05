@@ -1,7 +1,125 @@
 ---
-# LVMS ensure_storage_class: create per-tenant labeled StorageClass on the hub cluster.
-# Uses the topolvm provisioner backed by the lvms-vg1 VolumeGroup created by
-# osac-installer's configure-lvms.sh hook. One StorageClass per tier. Idempotent.
+# LVMS ensure_storage_class: create per-tenant labeled StorageClass on the target cluster.
+#
+# Hub path (_remote_kubeconfig undefined): targets the hub cluster. Assumes LVMS is
+# already installed (by osac-installer's configure-lvms.sh hook).
+#
+# CaaS path (_remote_kubeconfig defined): targets a HCP guest cluster. Installs the
+# LVMS operator via OLM, creates an LVMCluster that auto-discovers the second data
+# disk (added to the agent VM by setup-caas-agents.sh via AGENT_VM_DATA_DISK_SIZE),
+# then creates per-tenant StorageClasses on the guest cluster.
+#
+# Both paths are idempotent.
+
+- name: Install LVMS on guest cluster
+  when: _remote_kubeconfig is defined
+  block:
+    - name: Create openshift-storage namespace on guest cluster
+      kubernetes.core.k8s:
+        kubeconfig: "{{ _remote_kubeconfig }}"
+        validate_certs: "{{ not (_remote_kubeconfig_insecure | default(false)) }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ lvms_storage_operator_namespace }}"
+
+    - name: Create LVMS OperatorGroup on guest cluster
+      kubernetes.core.k8s:
+        kubeconfig: "{{ _remote_kubeconfig }}"
+        validate_certs: "{{ not (_remote_kubeconfig_insecure | default(false)) }}"
+        state: present
+        definition:
+          apiVersion: operators.coreos.com/v1
+          kind: OperatorGroup
+          metadata:
+            name: lvms-operator
+            namespace: "{{ lvms_storage_operator_namespace }}"
+
+    - name: Create LVMS Subscription on guest cluster
+      kubernetes.core.k8s:
+        kubeconfig: "{{ _remote_kubeconfig }}"
+        validate_certs: "{{ not (_remote_kubeconfig_insecure | default(false)) }}"
+        state: present
+        definition:
+          apiVersion: operators.coreos.com/v1alpha1
+          kind: Subscription
+          metadata:
+            name: lvms-operator
+            namespace: "{{ lvms_storage_operator_namespace }}"
+          spec:
+            channel: "{{ lvms_storage_operator_channel }}"
+            installPlanApproval: Automatic
+            name: lvms-operator
+            source: redhat-operators
+            sourceNamespace: openshift-marketplace
+
+    - name: Wait for LVMS CSV to reach Succeeded phase
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ _remote_kubeconfig }}"
+        validate_certs: "{{ not (_remote_kubeconfig_insecure | default(false)) }}"
+        api_version: operators.coreos.com/v1alpha1
+        kind: ClusterServiceVersion
+        namespace: "{{ lvms_storage_operator_namespace }}"
+        label_selectors:
+          - "operators.coreos.com/lvms-operator.{{ lvms_storage_operator_namespace }}"
+      register: _lvms_csv
+      until:
+        - _lvms_csv.resources | length > 0
+        - _lvms_csv.resources[0].status.phase | default('') == 'Succeeded'
+      retries: 30
+      delay: 20
+
+    - name: Create LVMCluster on guest cluster
+      kubernetes.core.k8s:
+        kubeconfig: "{{ _remote_kubeconfig }}"
+        validate_certs: "{{ not (_remote_kubeconfig_insecure | default(false)) }}"
+        state: present
+        definition:
+          apiVersion: lvm.topolvm.io/v1alpha1
+          kind: LVMCluster
+          metadata:
+            name: lvms-cluster
+            namespace: "{{ lvms_storage_operator_namespace }}"
+          spec:
+            storage:
+              deviceClasses:
+                - name: "{{ lvms_storage_device_class }}"
+                  thinPoolConfig:
+                    name: thin-pool-1
+                    sizePercent: 90
+                    overprovisionFactor: 10
+
+    - name: Wait for LVMCluster to be Ready on guest cluster
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ _remote_kubeconfig }}"
+        validate_certs: "{{ not (_remote_kubeconfig_insecure | default(false)) }}"
+        api_version: lvm.topolvm.io/v1alpha1
+        kind: LVMCluster
+        name: lvms-cluster
+        namespace: "{{ lvms_storage_operator_namespace }}"
+      register: _lvms_cluster_status
+      until:
+        - _lvms_cluster_status.resources | length > 0
+        - _lvms_cluster_status.resources[0].status.state | default('') == 'Ready'
+      failed_when:
+        - _lvms_cluster_status.resources | length > 0
+        - _lvms_cluster_status.resources[0].status.state | default('') == 'Failed'
+      retries: 30
+      delay: 20
+
+    - name: Wait for LVMS StorageClass to appear on guest cluster
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ _remote_kubeconfig }}"
+        validate_certs: "{{ not (_remote_kubeconfig_insecure | default(false)) }}"
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "lvms-{{ lvms_storage_device_class }}"
+      register: _lvms_guest_sc
+      until: _lvms_guest_sc.resources | length > 0
+      retries: 30
+      delay: 20
 
 - name: Assert _provider_tiers is defined and non-empty
   ansible.builtin.assert:
@@ -33,6 +151,8 @@
 
 - name: Check existing tenant StorageClasses
   kubernetes.core.k8s_info:
+    kubeconfig: "{{ _remote_kubeconfig | default(omit) }}"
+    validate_certs: "{{ not (_remote_kubeconfig_insecure | default(false)) }}"
     api_version: storage.k8s.io/v1
     kind: StorageClass
     label_selectors:
@@ -49,6 +169,8 @@
 
 - name: Create missing per-tenant StorageClasses
   kubernetes.core.k8s:
+    kubeconfig: "{{ _remote_kubeconfig | default(omit) }}"
+    validate_certs: "{{ not (_remote_kubeconfig_insecure | default(false)) }}"
     state: present
     definition:
       apiVersion: storage.k8s.io/v1

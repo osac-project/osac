@@ -994,7 +994,7 @@
                 "url": {
                   "type": "string",
                   "description": "Fulfillment API URL",
-                  "default": "https://fulfillment-api:8000"
+                  "default": "https://fulfillment-internal-api:8001"
                 },
                 "certs": {
                   "type": "object",

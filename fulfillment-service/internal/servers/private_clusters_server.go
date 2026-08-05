@@ -446,9 +446,10 @@ func (s *PrivateClustersServer) getExistingCluster(ctx context.Context,
 	return existingCluster, true, nil
 }
 
-// validateClusterStateForSpecUpdate rejects spec modifications when the cluster is in a
-// terminal failure state. The reconciler only processes clusters in PROGRESSING or READY
-// states, so spec changes on FAILED or DELETE_FAILED clusters would be silently ignored.
+// validateClusterStateForSpecUpdate rejects spec modifications when the cluster is not in a
+// reconcilable state. The reconciler only processes clusters in PROGRESSING or READY — it
+// returns nil for every other state — so spec changes outside those states would be silently
+// ignored. This allowlist mirrors the reconciler guard and is future-proof if new states are added.
 //
 // This uses SetLock(true) (SELECT ... FOR UPDATE) so the row lock is held for the
 // remainder of the transaction, preventing a concurrent status transition from
@@ -475,8 +476,8 @@ func (s *PrivateClustersServer) validateClusterStateForSpecUpdate(ctx context.Co
 	}
 	existingCluster := getResponse.GetObject()
 	state := existingCluster.GetStatus().GetState()
-	if state == privatev1.ClusterState_CLUSTER_STATE_FAILED ||
-		state == privatev1.ClusterState_CLUSTER_STATE_DELETE_FAILED {
+	if state != privatev1.ClusterState_CLUSTER_STATE_PROGRESSING &&
+		state != privatev1.ClusterState_CLUSTER_STATE_READY {
 		return grpcstatus.Errorf(
 			grpccodes.InvalidArgument,
 			"cannot update cluster spec when cluster state is %s",

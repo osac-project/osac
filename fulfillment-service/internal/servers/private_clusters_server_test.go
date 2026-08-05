@@ -1124,6 +1124,58 @@ var _ = Describe("Private clusters server", func() {
 				Expect(status.Message()).To(ContainSubstring("CLUSTER_STATE_DELETE_FAILED"))
 			})
 
+			It("Rejects spec update when cluster state is deleting", func() {
+				object := createClusterWithState(privatev1.ClusterState_CLUSTER_STATE_DELETING)
+
+				_, err := server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Id: object.GetId(),
+						Spec: privatev1.ClusterSpec_builder{
+							NodeSets: map[string]*privatev1.ClusterNodeSet{
+								"compute": privatev1.ClusterNodeSet_builder{
+									Size: 5,
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{
+						Paths: []string{"spec.node_sets.compute.size"},
+					},
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				status, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+				Expect(status.Message()).To(ContainSubstring("cannot update cluster spec"))
+				Expect(status.Message()).To(ContainSubstring("CLUSTER_STATE_DELETING"))
+			})
+
+			It("Rejects spec update when cluster state is unspecified", func() {
+				object := createClusterWithState(privatev1.ClusterState_CLUSTER_STATE_UNSPECIFIED)
+
+				_, err := server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Id: object.GetId(),
+						Spec: privatev1.ClusterSpec_builder{
+							NodeSets: map[string]*privatev1.ClusterNodeSet{
+								"compute": privatev1.ClusterNodeSet_builder{
+									Size: 5,
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{
+						Paths: []string{"spec.node_sets.compute.size"},
+					},
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				status, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+				Expect(status.Message()).To(ContainSubstring("cannot update cluster spec"))
+				Expect(status.Message()).To(ContainSubstring("CLUSTER_STATE_UNSPECIFIED"))
+			})
+
 			It("Allows status-only update when cluster state is failed", func() {
 				object := createClusterWithState(privatev1.ClusterState_CLUSTER_STATE_FAILED)
 

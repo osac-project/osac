@@ -29,12 +29,12 @@ def unique_name(prefix: str) -> str:
 
 @pytest.fixture(scope="session")
 def cluster_template() -> str:
-    return env("OSAC_CLUSTER_TEMPLATE", "osac.templates.ocp_4_17_small")
+    return env("OSAC_CLUSTER_TEMPLATE", "ocp-small")
 
 
 @pytest.fixture(scope="session")
 def compute_instance_template() -> str:
-    return env("OSAC_VM_TEMPLATE", "osac.templates.ocp_virt_vm")
+    return env("OSAC_VM_TEMPLATE", "ocp-virt-vm")
 
 
 @pytest.fixture(scope="session")
@@ -45,7 +45,7 @@ def network_class(grpc: GRPCClient) -> str:
     response: dict[str, Any] = grpc.call(service="osac.public.v1.NetworkClasses/List")
     items = response.get("items", [])
     assert items, "No network classes found; set OSAC_NETWORK_CLASS"
-    return items[0]["id"]
+    return items[0]["metadata"]["name"]
 
 
 def _delete_subnet_teardown(

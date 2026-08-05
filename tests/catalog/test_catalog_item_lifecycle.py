@@ -17,7 +17,7 @@ def test_catalog_item_crud(grpc: GRPCClient, cluster_template: str) -> None:
         item = grpc.get_cluster_catalog_item(catalog_item_id=catalog_item_id)
         obj = item["object"]
         assert obj["title"] == name
-        assert obj["template"] == cluster_template
+        assert obj["template"]["name"] == cluster_template
         assert obj["published"] is True
 
         updated_title = unique_name("e2e-cat-updated")
@@ -155,7 +155,7 @@ def test_create_cluster_with_catalog_item(grpc: GRPCClient, cli: OsacCLI, cluste
         assert cluster_id in grpc.list_cluster_ids()
 
         cluster = grpc.get_cluster(cluster_id=cluster_id)
-        assert cluster["object"]["spec"]["catalogItem"] == catalog_item_id
+        assert cluster["object"]["spec"]["catalogItem"]["id"] == catalog_item_id
     finally:
         if cluster_id:
             cli.delete_cluster(uuid=cluster_id)
@@ -177,7 +177,7 @@ def test_create_cluster_with_unpublished_catalog_item_fails(
     try:
         output, rc = grpc.call_unchecked(
             service="osac.public.v1.Clusters/Create",
-            data={"object": {"spec": {"catalog_item": catalog_item_id}}},
+            data={"object": {"spec": {"catalog_item": {"id": catalog_item_id}}}},
         )
         assert rc != 0, f"Expected create to fail for unpublished catalog item, got: {output}"
         assert "not published" in output.lower() or "not found" in output.lower()

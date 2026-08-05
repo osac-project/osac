@@ -16,7 +16,7 @@ def test_compute_instance_catalog_item_crud(grpc: GRPCClient, compute_instance_t
         item = grpc.get_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
         obj = item["object"]
         assert obj["title"] == name
-        assert obj["template"] == compute_instance_template
+        assert obj["template"]["name"] == compute_instance_template
         assert obj["published"] is True
 
         updated_title = unique_name("e2e-ci-cat-updated")
@@ -158,7 +158,7 @@ def test_create_compute_instance_with_catalog_item(
         assert ci_id in grpc.list_compute_instance_ids()
 
         ci = grpc.get_compute_instance(ci_id=ci_id)
-        assert ci["object"]["spec"]["catalogItem"] == catalog_item_id
+        assert ci["object"]["spec"]["catalogItem"]["id"] == catalog_item_id
     finally:
         if ci_id:
             grpc.delete_compute_instance(ci_id=ci_id)
@@ -182,7 +182,14 @@ def test_create_compute_instance_with_unpublished_catalog_item_fails(
     try:
         output, rc = grpc.call_unchecked(
             service="osac.public.v1.ComputeInstances/Create",
-            data={"object": {"spec": {"catalog_item": catalog_item_id, "network_attachments": [{"subnet": default_subnet_id}]}}},
+            data={
+                "object": {
+                    "spec": {
+                        "catalog_item": {"id": catalog_item_id},
+                        "network_attachments": [{"subnet": {"id": default_subnet_id}}],
+                    }
+                }
+            },
         )
         assert rc != 0, f"Expected create to fail for unpublished catalog item, got: {output}"
         assert "not published" in output.lower() or "not found" in output.lower()

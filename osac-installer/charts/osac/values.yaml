@@ -201,7 +201,7 @@ ui:
   externalHostname: ""
   api:
     fulfillment:
-      url: https://fulfillment-api:8000
+      url: https://fulfillment-internal-api:8001
       certs:
         caBundle:
           configMap: ca-bundle

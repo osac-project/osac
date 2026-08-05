@@ -9,7 +9,7 @@ from tests.core.runner import env
 
 @pytest.fixture(scope="session")
 def cluster_template() -> str:
-    return env("OSAC_CLUSTER_TEMPLATE", "osac.templates.ocp_ci_small")
+    return env("OSAC_CLUSTER_TEMPLATE", "ocp-ci-small")
 
 
 @pytest.fixture(scope="session")

@@ -66,18 +66,29 @@ parameters — every input comes from the calling container's own env block:
 AAP_GATEWAY_HOSTNAME, AAP_CONTROLLER_GATEWAY_HOSTNAME, AAP_PASSWORD, and
 AAP_READINESS_CONSECUTIVE_SUCCESSES.
 
-Loop-bound / activeDeadlineSeconds relationship: POLL_INTERVAL=5s x 300
-iterations = 1500s (25 min) nominal timeout for THIS script. The preceding
-wait-for-admin-secret init container adds up to another 300s (60 x 5s), so the
-real per-pod-attempt worst case is ~1800s. This MUST stay well under the
-activeDeadlineSeconds set on the calling Job (bootstrap-job.yaml / hooks/
-create-api-token.yaml) -- activeDeadlineSeconds is a Job-level CUMULATIVE
-deadline across every backoffLimit-driven pod retry, not a per-pod budget.
-Sizing activeDeadlineSeconds to comfortably exceed one combined worst-case
-attempt ensures a stuck attempt hits this script's own "Timeout waiting for
-AAP" branch (clean exit 1, diagnosable logs, backoffLimit gets to retry)
-instead of being silently SIGKILLed by DeadlineExceeded. If you change either
-loop bound, re-check activeDeadlineSeconds against the new combined total.
+Wall-clock deadline / activeDeadlineSeconds relationship: this script bounds
+itself to READINESS_DEADLINE_SECONDS=1500 (25 min) of WALL-CLOCK time via an
+absolute epoch deadline checked at the top of each loop iteration -- NOT a
+fixed iteration count. A fixed count (e.g. "300 iterations x 5s") is not a
+reliable time bound here: each iteration can run up to 4 sequential curls
+(controller ping, gateway ping, token POST, token DELETE) at --max-time 15
+each, so a single iteration can legitimately take anywhere from ~5s (fast
+failures) to ~65s (a degraded-but-technically-up AAP that's slow on every
+call). An iteration-count loop under that variance could run for hours;
+the epoch-deadline check bounds actual wall-clock time to ~1500s plus at
+most one in-flight iteration's overrun (~65s worst case), regardless of how
+each iteration resolves. The preceding wait-for-admin-secret init container
+adds its own wall-clock-bounded budget (see its docstring below), so the
+real per-pod-attempt worst case is the sum of both. This MUST stay well
+under the activeDeadlineSeconds set on the calling Job (bootstrap-job.yaml /
+hooks/create-api-token.yaml) -- activeDeadlineSeconds is a Job-level
+CUMULATIVE deadline across every backoffLimit-driven pod retry, not a
+per-pod budget. Sizing activeDeadlineSeconds to comfortably exceed one
+combined worst-case attempt ensures a stuck attempt hits this script's own
+"Timeout waiting for AAP" branch (clean exit 1, diagnosable logs,
+backoffLimit gets to retry) instead of being silently SIGKILLed by
+DeadlineExceeded. If you change either deadline, re-check
+activeDeadlineSeconds against the new combined total.
 
 Note: osac-installer's `make install-osac` target runs `helm upgrade --install
 ... --timeout 40m --wait`, which is a SEPARATE, tighter timeout on the overall
@@ -126,7 +137,10 @@ POLL_INTERVAL=5
 AUTH_FAILURE_LIMIT=5
 consecutive_successes=0
 auth_failures=0
-for i in {1..300}; do
+READINESS_DEADLINE=$(( $(date +%s) + 1500 ))
+i=0
+while [ "$(date +%s)" -lt "${READINESS_DEADLINE}" ]; do
+  i=$((i + 1))
   curl -sf --connect-timeout 5 --max-time 15 \
     "http://${AAP_CONTROLLER_GATEWAY_HOSTNAME}/api/v2/ping/" \
     | grep -q 'version'
@@ -220,11 +234,17 @@ AnsibleAutomationPlatform CR yet) blocks the whole pod in
 Init:CreateContainerConfigError with no log output at all. Takes no
 Go-template parameters -- inputs come from the calling container's own env
 block: NAMESPACE, AAP_ADMIN_SECRET_NAME.
+
+Worst-case wall-clock time: 60 iterations, each bounded to at most
+`--request-timeout=10s` (a slow/unresponsive API server) plus a 5s sleep --
+~900s (15 min) worst case, not the ~300s a naive "60 x 5s sleep" reading
+would suggest. See osac-aap.waitForAapScript's docstring above for why an
+explicit per-call timeout matters here.
 */}}
 {{- define "osac-aap.waitForAdminSecretScript" -}}
 echo "Waiting for AAP admin password Secret '${AAP_ADMIN_SECRET_NAME}' to be created by the operator..."
 for i in {1..60}; do
-  if oc get secret "${AAP_ADMIN_SECRET_NAME}" -n "${NAMESPACE}" >/dev/null 2>&1; then
+  if oc get secret "${AAP_ADMIN_SECRET_NAME}" -n "${NAMESPACE}" --request-timeout=10s >/dev/null 2>&1; then
     echo "Found Secret ${AAP_ADMIN_SECRET_NAME} in namespace ${NAMESPACE}."
     exit 0
   fi
@@ -270,6 +290,7 @@ resources:
 securityContext:
   allowPrivilegeEscalation: false
   readOnlyRootFilesystem: true
+  runAsNonRoot: true
   capabilities:
     drop: ["ALL"]
 {{- end }}
@@ -306,6 +327,7 @@ resources:
 securityContext:
   allowPrivilegeEscalation: false
   readOnlyRootFilesystem: true
+  runAsNonRoot: true
   capabilities:
     drop: ["ALL"]
 {{- end }}

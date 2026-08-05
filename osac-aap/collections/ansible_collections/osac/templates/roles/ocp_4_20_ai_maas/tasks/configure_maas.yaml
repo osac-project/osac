@@ -162,6 +162,17 @@
       | selectattr('status', 'equalto', 'True')
       | list | length > 0
 
+- name: Fail if Kuadrant never became Ready
+  ansible.builtin.fail:
+    msg: "Kuadrant did not become Ready after {{ ocp_4_20_ai_maas_operator_retries }} retries."
+  when: >-
+    _kuadrant.resources is not defined
+    or _kuadrant.resources | length == 0
+    or (_kuadrant.resources[0].status.conditions | default([])
+       | selectattr('type', 'equalto', 'Ready')
+       | selectattr('status', 'equalto', 'True')
+       | list | length == 0)
+
 # Kuadrant creates the Authorino CR with listener.tls.enabled: false regardless
 # of cert availability. Set enabled: true and add the cluster root CA volume so
 # Authorino trusts the Keycloak ingress cert (signed by OU=openshift,CN=root-ca).

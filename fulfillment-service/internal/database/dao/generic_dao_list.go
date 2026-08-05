@@ -75,6 +75,7 @@ func (r *ListRequest[O]) do(ctx context.Context) (response *ListResponse[O], err
 		var filter string
 		filter, err = r.dao.filterTranslator.Translate(ctx, r.filter)
 		if err != nil {
+			err = &ErrInvalidFilter{Reason: err.Error()}
 			return
 		}
 		if r.sql.filter.Len() > 0 {

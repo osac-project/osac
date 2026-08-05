@@ -47,6 +47,7 @@ type GenericDAOBuilder[O Object] struct {
 	eventCallbacks    []EventCallback
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
+	filterDesc        protoreflect.MessageDescriptor
 }
 
 // GenericDAO provides generic data access operations for protocol buffers messages. It assumes that objects will be
@@ -191,6 +192,14 @@ func (b *GenericDAOBuilder[O]) SetTableName(value string) *GenericDAOBuilder[O] 
 	return b
 }
 
+// SetFilterDesc sets the protobuf message descriptor used to validate and translate CEL filter expressions. This is
+// optional. When unset, the descriptor of the O generic parameter is used. Pass a different descriptor to restrict
+// which fields clients may reference in filters — public servers over private storage pass the public descriptor.
+func (b *GenericDAOBuilder[O]) SetFilterDesc(value protoreflect.MessageDescriptor) *GenericDAOBuilder[O] {
+	b.filterDesc = value
+	return b
+}
+
 // Build creates a new generic DAO using the configuration stored in the builder.
 func (b *GenericDAOBuilder[O]) Build() (result *GenericDAO[O], err error) {
 	// Check parameters:
@@ -273,10 +282,15 @@ func (b *GenericDAOBuilder[O]) Build() (result *GenericDAO[O], err error) {
 		DiscardUnknown: true,
 	}
 
-	// Create the filter translator:
+	// Create the filter translator. The filter descriptor defaults to the object's own descriptor, but callers
+	// may override it via SetFilterDesc to restrict which fields are visible to filter expressions.
+	filterDesc := b.filterDesc
+	if filterDesc == nil {
+		filterDesc = objectDesc
+	}
 	filterTranslator, err := NewFilterTranslator().
 		SetLogger(b.logger).
-		SetDescriptor(objectDesc).
+		SetDescriptor(filterDesc).
 		Build()
 	if err != nil {
 		err = fmt.Errorf("failed to create filter translator: %w", err)

@@ -260,6 +260,23 @@ var _ = Describe("Errors", func() {
 		})
 	})
 
+	Describe("ErrInvalidFilter", func() {
+		It("Implements the error interface", func() {
+			var err error = &ErrInvalidFilter{Reason: "field doesn't exist"}
+			Expect(err).To(HaveOccurred())
+		})
+
+		It("Returns the Reason field as the error message", func() {
+			err := &ErrInvalidFilter{Reason: "field 'my_field' doesn't exist"}
+			Expect(err.Error()).To(Equal("field 'my_field' doesn't exist"))
+		})
+
+		It("Returns empty string when Reason is empty", func() {
+			err := &ErrInvalidFilter{}
+			Expect(err.Error()).To(BeEmpty())
+		})
+	})
+
 	Describe("ErrReference", func() {
 		It("Implements the error interface", func() {
 			var err error = &ErrReference{

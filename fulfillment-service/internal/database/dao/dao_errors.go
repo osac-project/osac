@@ -143,6 +143,20 @@ func (e *ErrImmutable) Error() string {
 	return fmt.Sprintf("fields %s are immutable", english.WordSeries(quoted, "and"))
 }
 
+// ErrInvalidFilter indicates that a CEL filter expression failed to translate — either a syntax error, a reference
+// to a field that doesn't exist on the type visible to the caller, or an unsupported operation on a field kind. The
+// reason string is derived from the caller's own filter expression and CEL diagnostics, so it is safe to return as
+// part of the error response, for example as the message of a gRPC status error — it must never be built by
+// interpolating internal implementation details, such as generated SQL text, into the message.
+type ErrInvalidFilter struct {
+	Reason string
+}
+
+// Error returns the error message.
+func (e *ErrInvalidFilter) Error() string {
+	return e.Reason
+}
+
 // ErrReference indicates that an operation failed because it references an entity that doesn't exist, for example a
 // tenant or a project.
 type ErrReference struct {

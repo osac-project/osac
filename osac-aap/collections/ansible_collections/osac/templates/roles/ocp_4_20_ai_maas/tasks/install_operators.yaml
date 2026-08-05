@@ -201,6 +201,13 @@
                 securityContext:
                   privileged: true
                   runAsUser: 0
+                resources:
+                  requests:
+                    cpu: 100m
+                    memory: 64Mi
+                  limits:
+                    cpu: 500m
+                    memory: 128Mi
                 volumeMounts:
                   - name: host-root
                     mountPath: /host

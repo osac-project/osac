@@ -33,11 +33,12 @@ type Server struct {
 	server   *grpc.Server
 }
 
-// NewServer creates a new gRPC server that listens in a randomly selected port in the local host.
-func NewServer() *Server {
+// NewServer creates a new gRPC server that listens in a randomly selected port in the local host. Any options
+// passed are forwarded to grpc.NewServer, for example to wire in interceptors that production also uses.
+func NewServer(opts ...grpc.ServerOption) *Server {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	Expect(err).ToNot(HaveOccurred())
-	server := grpc.NewServer()
+	server := grpc.NewServer(opts...)
 	return &Server{
 		listener: listener,
 		server:   server,

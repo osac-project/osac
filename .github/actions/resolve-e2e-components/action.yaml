@@ -40,9 +40,9 @@ runs:
         AAP_CHANGED: ${{ inputs.aap-changed }}
       run: |
         COMPONENTS=$(jq -nc --arg repo "${REPO}" --arg ref "${REF}" '[
-          {"repo":$repo,"ref":$ref,"containerfile":"fulfillment-service/Containerfile","imageKey":"service.images.service"},
-          {"repo":$repo,"ref":$ref,"containerfile":"osac-operator/Containerfile","imageKey":"operator.image.repository"},
-          {"repo":$repo,"ref":$ref,"containerfile":"bare-metal-fulfillment-operator/Containerfile","imageKey":"bmf.image.repository"},
+          {"repo":$repo,"ref":$ref,"containerfile":"fulfillment-service/Containerfile","context":".","imageKey":"service.images.service"},
+          {"repo":$repo,"ref":$ref,"containerfile":"osac-operator/Containerfile","context":".","imageKey":"operator.image.repository"},
+          {"repo":$repo,"ref":$ref,"containerfile":"bare-metal-fulfillment-operator/Containerfile","context":".","imageKey":"bmf.image.repository"},
           {"repo":$repo,"ref":$ref,"containerfile":"osac-metering/metering-service/Containerfile","imageKey":"metering.image.repository"}
         ]')
 

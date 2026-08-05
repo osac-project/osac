@@ -4,8 +4,8 @@ import (
 	"context"
 
 	csi "github.com/container-storage-interface/spec/lib/go/csi"
-	"github.com/osac-project/osac-csi-driver/pkg/fulfillment"
-	"github.com/osac-project/osac-csi-driver/pkg/proxy"
+	"github.com/osac-project/osac/osac-csi-driver/pkg/fulfillment"
+	"github.com/osac-project/osac/osac-csi-driver/pkg/proxy"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/klog/v2"

@@ -170,15 +170,15 @@ CSIEOF
   kubectl create namespace test-tenant-ns || true
 
   # Write VAST env vars to file for run_tests.sh (Make runs each recipe line in a separate shell)
+  # VAST_ENDPOINT/VAST_USERNAME/VAST_PASSWORD/STORAGE_TIERS are no longer read by any
+  # playbook or role (OSAC-1992 moved credential/tier input to
+  # storage_provider_backend_connections/storage_provider_tiers extra_vars, set directly
+  # by each test target) -- only VIP pool and TLS settings remain relevant here.
   cat > "${SCRIPT_DIR}/.storage_env" <<'ENVEOF'
-export VAST_ENDPOINT="127.0.0.1:18443"
-export VAST_USERNAME="admin"
-export VAST_PASSWORD="admin"
 export VAST_VIP_POOL_NAME="osac-test-pool"
 export VAST_VIP_POOL_IP_RANGES='[["10.0.0.10","10.0.0.50"]]'
 export VAST_VIP_POOL_SUBNET_CIDR="24"
 export VAST_VALIDATE_CERTS="false"
-export STORAGE_TIERS='[{"name":"default","protocol":"nfs","provider":"vast","qos_policy":"test-qos","qos_limits":{"static_limits":{"max_reads_bw_mbps":100,"max_writes_bw_mbps":100}}}]'
 ENVEOF
 fi
 

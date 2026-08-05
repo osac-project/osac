@@ -23,7 +23,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	grpcstatus "google.golang.org/grpc/status"
 
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 )
 
 var _ = Describe("Protovalidate interceptor", func() {

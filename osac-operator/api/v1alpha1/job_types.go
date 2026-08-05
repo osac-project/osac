@@ -99,4 +99,11 @@ type JobStatus struct {
 	// If they match, the controller retries with exponential backoff.
 	// +kubebuilder:validation:Optional
 	ConfigVersion string `json:"configVersion,omitempty"`
+
+	// Target identifies which manager this job was dispatched to, for resources
+	// that provision through multiple managers concurrently (e.g. a Subnet
+	// dispatching to both a fabric manager and a k8s manager). Empty for
+	// resources with a single provisioning target.
+	// +kubebuilder:validation:Optional
+	Target string `json:"target,omitempty"`
 }

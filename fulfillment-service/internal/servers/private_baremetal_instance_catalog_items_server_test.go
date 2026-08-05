@@ -24,8 +24,8 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/fulfillment-service/internal/database/dao"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 )
 
 var _ = Describe("Private bare metal instance catalog items server", func() {
@@ -87,7 +87,7 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
 					Title:       "My catalog item",
 					Description: "A test catalog item.",
-					Template:    "my-template-id",
+					Template:    privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
 					Published:   true,
 					Tenant:      "my-tenant",
 				}.Build(),
@@ -96,7 +96,7 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 			object := response.GetObject()
 			Expect(object.GetId()).ToNot(BeEmpty())
 			Expect(object.GetTitle()).To(Equal("My catalog item"))
-			Expect(object.GetTemplate()).To(Equal("my-template-id"))
+			Expect(object.GetTemplate().GetId()).To(Equal("my-template-id"))
 			Expect(object.GetPublished()).To(BeTrue())
 			Expect(object.GetTenant()).To(Equal("my-tenant"))
 		})
@@ -107,7 +107,7 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 				_, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 					Object: privatev1.BareMetalInstanceCatalogItem_builder{
 						Title:    fmt.Sprintf("Catalog item %d", i),
-						Template: "my-template-id",
+						Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -122,7 +122,7 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 			createResponse, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
 					Title:    "Original title",
-					Template: "my-template-id",
+					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -132,7 +132,7 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
 					Id:       object.GetId(),
 					Title:    "Updated title",
-					Template: "my-template-id",
+					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -146,7 +146,7 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 						Finalizers: []string{"keep"},
 					}.Build(),
 					Title:    "My catalog item",
-					Template: "my-template-id",
+					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -168,7 +168,7 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 			createResponse, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
 					Title:     "Referenced catalog item",
-					Template:  "my-template-id",
+					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
 					Published: true,
 				}.Build(),
 			}.Build())
@@ -187,7 +187,7 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 						Tenant: "system",
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem: catalogItem.GetId(),
+						CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItem.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			).Do(ctx)
@@ -207,7 +207,7 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 			response, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
 					Title:    "Catalog item with fields",
-					Template: "my-template-id",
+					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
 					FieldDefinitions: []*privatev1.FieldDefinition{
 						privatev1.FieldDefinition_builder{
 							Path:        "spec.run_strategy",
@@ -226,7 +226,7 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 			_, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
 					Title:    "Bad catalog item",
-					Template: "my-template-id",
+					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
 					FieldDefinitions: []*privatev1.FieldDefinition{
 						privatev1.FieldDefinition_builder{
 							Path:     "spec.pull_secret",
@@ -247,7 +247,7 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 			response, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
 					Title:    "Good catalog item",
-					Template: "my-template-id",
+					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
 					FieldDefinitions: []*privatev1.FieldDefinition{
 						privatev1.FieldDefinition_builder{
 							Path:     "spec.pull_secret",
@@ -272,7 +272,7 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 			response, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
 					Title:    "Editable no default",
-					Template: "my-template-id",
+					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
 					FieldDefinitions: []*privatev1.FieldDefinition{
 						privatev1.FieldDefinition_builder{
 							Path:     "spec.pull_secret",
@@ -296,7 +296,7 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 			_, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
 					Title:    "Bad catalog item",
-					Template: "my-template-id",
+					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
 					FieldDefinitions: []*privatev1.FieldDefinition{
 						privatev1.FieldDefinition_builder{
 							Path:     "spec.pull_secret",
@@ -320,7 +320,7 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 			_, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
 					Title:    "Bad schema catalog item",
-					Template: "my-template-id",
+					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
 					FieldDefinitions: []*privatev1.FieldDefinition{
 						privatev1.FieldDefinition_builder{
 							Path:             "spec.cores",
@@ -342,7 +342,7 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 			response, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
 					Title:    "Valid schema catalog item",
-					Template: "my-template-id",
+					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
 					FieldDefinitions: []*privatev1.FieldDefinition{
 						privatev1.FieldDefinition_builder{
 							Path:             "spec.cores",
@@ -367,7 +367,7 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 			createResponse, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
 					Title:    "Valid catalog item",
-					Template: "my-template-id",
+					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -405,7 +405,7 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 			createResponse, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
 					Title:    "Valid catalog item",
-					Template: "my-template-id",
+					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())

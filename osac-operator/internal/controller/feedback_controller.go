@@ -29,9 +29,9 @@ import (
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
-	ckv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
-	privatev1 "github.com/osac-project/osac-operator/internal/api/osac/private/v1"
-	"github.com/osac-project/osac-operator/internal/controller/feedback"
+	ckv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	privatev1 "github.com/osac-project/osac/osac-operator/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/osac-operator/internal/controller/feedback"
 )
 
 // FeedbackReconciler sends updates to the fulfillment service.
@@ -217,7 +217,7 @@ func syncClusterOrderNodeRequests(ctx context.Context, obj *ckv1alpha1.ClusterOr
 
 		var nodeSetID string
 		for candidateNodeSetID, candidateNodeSet := range remote.GetSpec().GetNodeSets() {
-			if candidateNodeSet.GetHostType() == nodeRequest.ResourceClass {
+			if candidateNodeSet.GetHostType().GetName() == nodeRequest.ResourceClass {
 				nodeSetID = candidateNodeSetID
 				break
 			}
@@ -235,7 +235,9 @@ func syncClusterOrderNodeRequests(ctx context.Context, obj *ckv1alpha1.ClusterOr
 		nodeSet := nodeSets[nodeSetID]
 		if nodeSet == nil {
 			nodeSet = privatev1.ClusterNodeSet_builder{
-				HostType: nodeRequest.ResourceClass,
+				HostType: privatev1.HostTypeReference_builder{
+					Name: nodeRequest.ResourceClass,
+				}.Build(),
 			}.Build()
 			nodeSets[nodeSetID] = nodeSet
 		}

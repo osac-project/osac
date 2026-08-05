@@ -58,14 +58,14 @@ import (
 	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 	"sigs.k8s.io/multicluster-runtime/providers/single"
 
-	bmfov1alpha1 "github.com/osac-project/bare-metal-fulfillment-operator/api/v1alpha1"
-	v1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac-operator/helpers"
-	privatev1 "github.com/osac-project/osac-operator/internal/api/osac/private/v1"
-	"github.com/osac-project/osac-operator/internal/controller"
-	"github.com/osac-project/osac-operator/internal/migrations"
-	"github.com/osac-project/osac-operator/pkg/aap"
-	"github.com/osac-project/osac-operator/pkg/provisioning"
+	bmfov1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
+	v1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/helpers"
+	privatev1 "github.com/osac-project/osac/osac-operator/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/osac-operator/internal/controller"
+	"github.com/osac-project/osac/osac-operator/internal/migrations"
+	"github.com/osac-project/osac/osac-operator/pkg/aap"
+	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -472,6 +472,7 @@ func setupNetworkingControllers(
 	networkingNamespace := os.Getenv(envNetworkingNamespace)
 	computeInstanceNamespace := os.Getenv(envComputeInstanceNamespace)
 	clusterOrderNamespace := os.Getenv(envClusterOrderNamespace)
+	bareMetalInstanceNamespace := os.Getenv(envBareMetalInstanceNamespace)
 
 	aapURL := os.Getenv(envAAPURL)
 	aapToken := os.Getenv(envAAPToken)
@@ -526,7 +527,8 @@ func setupNetworkingControllers(
 		return err
 	}
 	if err := setupExternalIPAttachmentControllers(
-		mgr, localMgr, grpcConn, networkingNamespace, computeInstanceNamespace, clusterOrderNamespace,
+		mgr, localMgr, grpcConn,
+		networkingNamespace, computeInstanceNamespace, clusterOrderNamespace, bareMetalInstanceNamespace,
 		externalIPAttachmentProvider, statusPollInterval, maxJobHistory, targetCluster,
 	); err != nil {
 		return err
@@ -643,12 +645,13 @@ func setupExternalIPControllers(
 
 func setupExternalIPAttachmentControllers(
 	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn *grpc.ClientConn,
-	networkingNamespace string, computeInstanceNamespace string, clusterOrderNamespace string,
+	networkingNamespace, computeInstanceNamespace, clusterOrderNamespace, baremetalInstanceNamespace string,
 	provider provisioning.ProvisioningProvider,
 	statusPollInterval time.Duration, maxJobHistory int, targetCluster multicluster.ClusterName,
 ) error {
 	if err := controller.NewExternalIPAttachmentReconciler(
-		mgr, networkingNamespace, computeInstanceNamespace, clusterOrderNamespace,
+		mgr, networkingNamespace, computeInstanceNamespace,
+		clusterOrderNamespace, baremetalInstanceNamespace,
 		provider, statusPollInterval, maxJobHistory, targetCluster,
 	).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("externalipattachment controller: %w", err)

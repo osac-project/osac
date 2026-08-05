@@ -23,7 +23,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	"github.com/osac-project/osac-operator/pkg/networkmanager"
+	"github.com/osac-project/osac/osac-operator/pkg/networkmanager"
 )
 
 var _ = Describe("ParseConfigMap", func() {

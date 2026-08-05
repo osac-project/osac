@@ -37,8 +37,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	"github.com/osac-project/osac-operator/api/v1alpha1"
-	privatev1 "github.com/osac-project/osac-operator/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	privatev1 "github.com/osac-project/osac/osac-operator/internal/api/osac/private/v1"
 )
 
 var _ = Describe("ExternalIPFeedbackController", func() {
@@ -49,6 +49,8 @@ var _ = Describe("ExternalIPFeedbackController", func() {
 		testPool          = "pool-abc"
 		testAddress       = "192.168.1.100"
 	)
+
+	testPoolRef := &privatev1.ExternalIPPoolReference{Name: testPool}
 
 	var (
 		ctx        context.Context
@@ -107,7 +109,7 @@ var _ = Describe("ExternalIPFeedbackController", func() {
 					Name: publicIPName,
 				},
 				Spec: &privatev1.ExternalIPSpec{
-					Pool: testPool,
+					Pool: testPoolRef,
 				},
 				Status: &privatev1.ExternalIPStatus{
 					State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED,
@@ -156,7 +158,7 @@ var _ = Describe("ExternalIPFeedbackController", func() {
 					Name: publicIPName,
 				},
 				Spec: &privatev1.ExternalIPSpec{
-					Pool: testPool,
+					Pool: testPoolRef,
 				},
 				Status: &privatev1.ExternalIPStatus{
 					State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING,
@@ -205,7 +207,7 @@ var _ = Describe("ExternalIPFeedbackController", func() {
 					Name: publicIPName,
 				},
 				Spec: &privatev1.ExternalIPSpec{
-					Pool: testPool,
+					Pool: testPoolRef,
 				},
 				Status: &privatev1.ExternalIPStatus{
 					State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED,
@@ -254,7 +256,7 @@ var _ = Describe("ExternalIPFeedbackController", func() {
 					Name: publicIPName,
 				},
 				Spec: &privatev1.ExternalIPSpec{
-					Pool: testPool,
+					Pool: testPoolRef,
 				},
 				Status: &privatev1.ExternalIPStatus{
 					State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING,
@@ -303,7 +305,7 @@ var _ = Describe("ExternalIPFeedbackController", func() {
 					Name: publicIPName,
 				},
 				Spec: &privatev1.ExternalIPSpec{
-					Pool: testPool,
+					Pool: testPoolRef,
 				},
 				Status: &privatev1.ExternalIPStatus{
 					State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING,
@@ -375,7 +377,7 @@ var _ = Describe("ExternalIPFeedbackController", func() {
 					Name: publicIPName,
 				},
 				Spec: &privatev1.ExternalIPSpec{
-					Pool: testPool,
+					Pool: testPoolRef,
 				},
 				Status: &privatev1.ExternalIPStatus{
 					State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED,
@@ -427,7 +429,7 @@ var _ = Describe("ExternalIPFeedbackController", func() {
 					Name: publicIPName,
 				},
 				Spec: &privatev1.ExternalIPSpec{
-					Pool: testPool,
+					Pool: testPoolRef,
 				},
 				Status: &privatev1.ExternalIPStatus{
 					State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED,
@@ -475,7 +477,7 @@ var _ = Describe("ExternalIPFeedbackController", func() {
 					Name: publicIPName,
 				},
 				Spec: &privatev1.ExternalIPSpec{
-					Pool: testPool,
+					Pool: testPoolRef,
 				},
 				Status: &privatev1.ExternalIPStatus{
 					State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED,
@@ -594,7 +596,7 @@ var _ = Describe("ExternalIPFeedbackController", func() {
 					Name: publicIPName,
 				},
 				Spec: &privatev1.ExternalIPSpec{
-					Pool: testPool,
+					Pool: testPoolRef,
 				},
 				Status: &privatev1.ExternalIPStatus{
 					State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED,

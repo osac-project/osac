@@ -13,6 +13,9 @@ language governing permissions and limitations under the License.
 
 package cluster
 
+//go:generate mockgen -source=../../api/osac/private/v1/clusters_service_grpc.pb.go -destination=clusters_client_mock.go -package=cluster ClustersClient
+//go:generate mockgen -source=../../api/osac/private/v1/cluster_versions_service_grpc.pb.go -destination=cluster_versions_client_mock.go -package=cluster ClusterVersionsClient
+
 import (
 	"context"
 	"errors"
@@ -28,19 +31,22 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 
-	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
+	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/fulfillment-service/internal/controllers"
-	"github.com/osac-project/fulfillment-service/internal/controllers/finalizers"
-	"github.com/osac-project/fulfillment-service/internal/kubernetes/annotations"
-	"github.com/osac-project/fulfillment-service/internal/kubernetes/labels"
-	"github.com/osac-project/fulfillment-service/internal/masks"
-	"github.com/osac-project/fulfillment-service/internal/utils"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
+	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/annotations"
+	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
+	"github.com/osac-project/osac/fulfillment-service/internal/masks"
+	"github.com/osac-project/osac/fulfillment-service/internal/utils"
 )
 
 // objectPrefix is the prefix that will be used in the `generateName` field of the resources created in the hub.
 const objectPrefix = "order-"
+
+// errClusterVersionNotFound indicates the requested ClusterVersion does not exist.
+var errClusterVersionNotFound = errors.New("cluster version not found")
 
 // FunctionBuilder contains the data and logic needed to build a function that reconciles clustes.
 type FunctionBuilder struct {
@@ -50,11 +56,12 @@ type FunctionBuilder struct {
 }
 
 type function struct {
-	logger         *slog.Logger
-	hubCache       controllers.HubCache
-	clustersClient privatev1.ClustersClient
-	hubsClient     privatev1.HubsClient
-	maskCalculator *masks.Calculator
+	logger                *slog.Logger
+	hubCache              controllers.HubCache
+	clustersClient        privatev1.ClustersClient
+	hubsClient            privatev1.HubsClient
+	clusterVersionsClient privatev1.ClusterVersionsClient
+	maskCalculator        *masks.Calculator
 }
 
 type task struct {
@@ -106,11 +113,12 @@ func (b *FunctionBuilder) Build() (result controllers.ReconcilerFunction[*privat
 
 	// Create and populate the object:
 	object := &function{
-		logger:         b.logger,
-		clustersClient: privatev1.NewClustersClient(b.connection),
-		hubsClient:     privatev1.NewHubsClient(b.connection),
-		hubCache:       b.hubCache,
-		maskCalculator: masks.NewCalculator().Build(),
+		logger:                b.logger,
+		clustersClient:        privatev1.NewClustersClient(b.connection),
+		hubsClient:            privatev1.NewHubsClient(b.connection),
+		clusterVersionsClient: privatev1.NewClusterVersionsClient(b.connection),
+		hubCache:              b.hubCache,
+		maskCalculator:        masks.NewCalculator().Build(),
 	}
 	result = object.run
 	return
@@ -201,8 +209,25 @@ func (t *task) update(ctx context.Context) error {
 	}
 
 	// Prepare the changes to the spec:
-	spec, err := t.buildSpec()
+	spec, err := t.buildSpec(ctx)
 	if err != nil {
+		if errors.Is(err, errClusterVersionNotFound) {
+			t.r.logger.ErrorContext(
+				ctx,
+				"Cluster version not found",
+				slog.String("error", err.Error()),
+			)
+			t.updateCondition(
+				privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_PROGRESSING,
+				privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+				"ResourcesUnavailable",
+				fmt.Sprintf(
+					"The cluster cannot be provisioned: %s.",
+					err,
+				),
+			)
+			return nil
+		}
 		return err
 	}
 
@@ -291,24 +316,26 @@ func (t *task) validateTenant() error {
 
 // buildSpec constructs the spec for the Kubernetes ClusterOrder object based on the
 // cluster from the database.
-func (t *task) buildSpec() (osacv1alpha1.ClusterOrderSpec, error) {
+func (t *task) buildSpec(ctx context.Context) (osacv1alpha1.ClusterOrderSpec, error) {
 	templateParameters, err := utils.ConvertTemplateParametersToJSON(t.cluster.GetSpec().GetTemplateParameters())
 	if err != nil {
 		return osacv1alpha1.ClusterOrderSpec{}, err
 	}
 	spec := osacv1alpha1.ClusterOrderSpec{
-		TemplateID:         t.cluster.GetSpec().GetTemplate(),
+		TemplateID:         controllers.RefKeyStr(t.cluster.GetSpec().GetTemplate()),
 		TemplateParameters: templateParameters,
 		NodeRequests:       t.prepareNodeRequests(),
 	}
 
 	// Add explicit spec fields if present:
-	t.addExplicitFields(&spec)
+	if err = t.addExplicitFields(ctx, &spec); err != nil {
+		return osacv1alpha1.ClusterOrderSpec{}, err
+	}
 
 	return spec, nil
 }
 
-func (t *task) addExplicitFields(spec *osacv1alpha1.ClusterOrderSpec) {
+func (t *task) addExplicitFields(ctx context.Context, spec *osacv1alpha1.ClusterOrderSpec) error {
 	clusterSpec := t.cluster.GetSpec()
 	if clusterSpec.HasPullSecret() {
 		spec.PullSecret = clusterSpec.GetPullSecret()
@@ -316,8 +343,13 @@ func (t *task) addExplicitFields(spec *osacv1alpha1.ClusterOrderSpec) {
 	if clusterSpec.HasSshPublicKey() {
 		spec.SSHPublicKey = clusterSpec.GetSshPublicKey()
 	}
-	if clusterSpec.HasReleaseImage() {
-		spec.ReleaseImage = clusterSpec.GetReleaseImage()
+	// Resolve version_name to a release image via the ClusterVersion resource.
+	if clusterSpec.HasVersionName() && clusterSpec.GetVersionName() != "" {
+		image, err := t.resolveVersionImage(ctx, clusterSpec.GetVersionName())
+		if err != nil {
+			return err
+		}
+		spec.ReleaseImage = image
 	}
 	if clusterSpec.HasNetwork() {
 		network := &osacv1alpha1.ClusterNetworkSpec{}
@@ -334,6 +366,37 @@ func (t *task) addExplicitFields(spec *osacv1alpha1.ClusterOrderSpec) {
 			spec.Network = network
 		}
 	}
+	return nil
+}
+
+// resolveVersionImage looks up a ClusterVersion by name and returns its release image.
+func (t *task) resolveVersionImage(ctx context.Context, versionName string) (string, error) {
+	// metadata.name is unique per tenant, so at most one result is expected.
+	response, err := t.r.clusterVersionsClient.List(ctx, privatev1.ClusterVersionsListRequest_builder{
+		Filter: new(fmt.Sprintf(
+			"this.metadata.name == %q", versionName,
+		)),
+		Limit: new(int32(1)),
+	}.Build())
+	if err != nil {
+		return "", fmt.Errorf(
+			"failed to look up cluster version '%s': %w",
+			versionName, err,
+		)
+	}
+	if len(response.GetItems()) == 0 {
+		return "", fmt.Errorf(
+			"%w: '%s'",
+			errClusterVersionNotFound, versionName,
+		)
+	}
+	if response.GetTotal() > 1 {
+		t.r.logger.WarnContext(ctx, "Multiple cluster versions found for name, using first",
+			"version_name", versionName,
+			"count", response.GetTotal(),
+		)
+	}
+	return response.GetItems()[0].GetSpec().GetImage(), nil
 }
 
 func (t *task) prepareNodeRequests() []osacv1alpha1.NodeRequest {
@@ -353,7 +416,7 @@ func (t *task) prepareNodeRequests() []osacv1alpha1.NodeRequest {
 
 func (t *task) prepareNodeRequest(nodeSet *privatev1.ClusterNodeSet) osacv1alpha1.NodeRequest {
 	return osacv1alpha1.NodeRequest{
-		ResourceClass: nodeSet.GetHostType(),
+		ResourceClass: controllers.RefKeyStr(nodeSet.GetHostType()),
 		NumberOfNodes: int(nodeSet.GetSize()),
 	}
 }

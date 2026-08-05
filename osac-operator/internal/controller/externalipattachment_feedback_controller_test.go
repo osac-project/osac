@@ -37,8 +37,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	"github.com/osac-project/osac-operator/api/v1alpha1"
-	privatev1 "github.com/osac-project/osac-operator/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	privatev1 "github.com/osac-project/osac/osac-operator/internal/api/osac/private/v1"
 )
 
 var _ = Describe("ExternalIPAttachmentFeedbackController", func() {
@@ -116,7 +116,7 @@ var _ = Describe("ExternalIPAttachmentFeedbackController", func() {
 					State: privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_UNSPECIFIED,
 				},
 			}
-			attachment.GetSpec().SetExternalIp(parentExternalIPID)
+			attachment.GetSpec().SetExternalIp(&privatev1.ExternalIPLocalReference{Id: parentExternalIPID})
 			mockAttachmentsServer.addAttachment(attachment)
 
 			cr := &v1alpha1.ExternalIPAttachment{
@@ -163,7 +163,7 @@ var _ = Describe("ExternalIPAttachmentFeedbackController", func() {
 					State: privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_PENDING,
 				},
 			}
-			attachment.GetSpec().SetExternalIp(parentExternalIPID)
+			attachment.GetSpec().SetExternalIp(&privatev1.ExternalIPLocalReference{Id: parentExternalIPID})
 			mockAttachmentsServer.addAttachment(attachment)
 
 			parentExternalIP := &privatev1.ExternalIP{
@@ -219,7 +219,7 @@ var _ = Describe("ExternalIPAttachmentFeedbackController", func() {
 					State: privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_PENDING,
 				},
 			}
-			attachment.GetSpec().SetExternalIp(parentExternalIPID)
+			attachment.GetSpec().SetExternalIp(&privatev1.ExternalIPLocalReference{Id: parentExternalIPID})
 			mockAttachmentsServer.addAttachment(attachment)
 
 			cr := &v1alpha1.ExternalIPAttachment{
@@ -262,7 +262,7 @@ var _ = Describe("ExternalIPAttachmentFeedbackController", func() {
 					State: privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_READY,
 				},
 			}
-			attachment.GetSpec().SetExternalIp(parentExternalIPID)
+			attachment.GetSpec().SetExternalIp(&privatev1.ExternalIPLocalReference{Id: parentExternalIPID})
 			mockAttachmentsServer.addAttachment(attachment)
 
 			parentExternalIP := &privatev1.ExternalIP{
@@ -321,7 +321,7 @@ var _ = Describe("ExternalIPAttachmentFeedbackController", func() {
 					State: privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_READY,
 				},
 			}
-			attachment.GetSpec().SetExternalIp(parentExternalIPID)
+			attachment.GetSpec().SetExternalIp(&privatev1.ExternalIPLocalReference{Id: parentExternalIPID})
 			mockAttachmentsServer.addAttachment(attachment)
 
 			parentExternalIP := &privatev1.ExternalIP{
@@ -498,7 +498,7 @@ var _ = Describe("ExternalIPAttachmentFeedbackController", func() {
 					State: privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_READY,
 				},
 			}
-			attachment.GetSpec().SetExternalIp(parentExternalIPID)
+			attachment.GetSpec().SetExternalIp(&privatev1.ExternalIPLocalReference{Id: parentExternalIPID})
 			mockAttachmentsServer.addAttachment(attachment)
 
 			parentExternalIP := &privatev1.ExternalIP{
@@ -553,7 +553,7 @@ var _ = Describe("ExternalIPAttachmentFeedbackController", func() {
 					State: privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_READY,
 				},
 			}
-			attachment.GetSpec().SetExternalIp(parentExternalIPID)
+			attachment.GetSpec().SetExternalIp(&privatev1.ExternalIPLocalReference{Id: parentExternalIPID})
 			mockAttachmentsServer.addAttachment(attachment)
 
 			parentExternalIP := &privatev1.ExternalIP{

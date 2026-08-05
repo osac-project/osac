@@ -27,9 +27,9 @@ import (
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
-	"github.com/osac-project/osac-operator/api/v1alpha1"
-	privatev1 "github.com/osac-project/osac-operator/internal/api/osac/private/v1"
-	"github.com/osac-project/osac-operator/internal/controller/feedback"
+	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	privatev1 "github.com/osac-project/osac/osac-operator/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/osac-operator/internal/controller/feedback"
 )
 
 var ErrExternalIPNotFound = errors.New("external IP not found in fulfillment service")

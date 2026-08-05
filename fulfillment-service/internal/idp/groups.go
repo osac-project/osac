@@ -23,7 +23,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/osac-project/fulfillment-service/internal/apiclient"
+	"github.com/osac-project/osac/fulfillment-service/internal/apiclient"
 )
 
 // CreateGroup creates a Keycloak organization group.

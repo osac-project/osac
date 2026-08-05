@@ -28,11 +28,11 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
-	"github.com/osac-project/fulfillment-service/internal/auth"
-	"github.com/osac-project/fulfillment-service/internal/controllers/finalizers"
-	"github.com/osac-project/fulfillment-service/internal/uuid"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
+	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 )
 
 func createTenant(ctx context.Context, client privatev1.TenantsClient, name string) string {
@@ -717,8 +717,10 @@ var _ = Describe("Multi-tenant resource isolation", func() {
 		vnAdminClient = privatev1.NewVirtualNetworksClient(tool.InternalView().AdminConn())
 
 		By("Creating a shared NetworkClass prerequisite")
+		ncName := fmt.Sprintf("cudn-tenant-%s", uuid.New())
 		ncResp, err := networkClassesClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 			Object: privatev1.NetworkClass_builder{
+				Metadata:               privatev1.Metadata_builder{Name: ncName}.Build(),
 				Title:                  "Phase 4 Isolation Test",
 				ImplementationStrategy: "cudn",
 				FabricManager:          "netris",
@@ -763,7 +765,7 @@ var _ = Describe("Multi-tenant resource isolation", func() {
 					Name: fmt.Sprintf("vn-%s", uuid.New()),
 				}.Build(),
 				Spec: publicv1.VirtualNetworkSpec_builder{
-					NetworkClass: networkClassId,
+					NetworkClass: publicv1.NetworkClassReference_builder{Id: networkClassId}.Build(),
 					Ipv4Cidr:     &ipv4Cidr,
 				}.Build(),
 			}.Build(),
@@ -832,7 +834,7 @@ var _ = Describe("Multi-tenant resource isolation", func() {
 					Name: fmt.Sprintf("vn-%s", uuid.New()),
 				}.Build(),
 				Spec: publicv1.VirtualNetworkSpec_builder{
-					NetworkClass: networkClassId,
+					NetworkClass: publicv1.NetworkClassReference_builder{Id: networkClassId}.Build(),
 					Ipv4Cidr:     &ipv4Cidr,
 				}.Build(),
 			}.Build(),
@@ -890,7 +892,7 @@ var _ = Describe("Multi-tenant resource isolation", func() {
 					Name: fmt.Sprintf("vn-a-%s", uuid.New()),
 				}.Build(),
 				Spec: publicv1.VirtualNetworkSpec_builder{
-					NetworkClass: networkClassId,
+					NetworkClass: publicv1.NetworkClassReference_builder{Id: networkClassId}.Build(),
 					Ipv4Cidr:     &ipv4CidrA,
 				}.Build(),
 			}.Build(),
@@ -912,7 +914,7 @@ var _ = Describe("Multi-tenant resource isolation", func() {
 					Name: fmt.Sprintf("vn-b-%s", uuid.New()),
 				}.Build(),
 				Spec: publicv1.VirtualNetworkSpec_builder{
-					NetworkClass: networkClassId,
+					NetworkClass: publicv1.NetworkClassReference_builder{Id: networkClassId}.Build(),
 					Ipv4Cidr:     &ipv4CidrB,
 				}.Build(),
 			}.Build(),

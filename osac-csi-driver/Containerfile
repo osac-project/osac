@@ -1,13 +1,22 @@
+# Build context: mono-repo root (not osac-csi-driver/ alone).
+# Invoke with: podman build -f osac-csi-driver/Containerfile .
 FROM registry.access.redhat.com/ubi10/go-toolset:1.26 AS builder
 ARG TARGETOS
 ARG TARGETARCH
 
 WORKDIR /opt/app-root/src
-COPY go.mod go.sum ./
-RUN go mod download
+COPY --chown=1001:1001 go.work go.work.sum ./
+COPY --chown=1001:1001 osac-csi-driver/go.mod osac-csi-driver/go.sum osac-csi-driver/
+COPY --chown=1001:1001 fulfillment-service/go.mod fulfillment-service/go.sum fulfillment-service/
+COPY --chown=1001:1001 bare-metal-fulfillment-operator/go.mod bare-metal-fulfillment-operator/go.sum bare-metal-fulfillment-operator/
+COPY --chown=1001:1001 osac-operator/go.mod osac-operator/go.sum osac-operator/
+COPY --chown=1001:1001 osac-operator/api/go.mod osac-operator/api/go.sum osac-operator/api/
+COPY --chown=1001:1001 osac-metering/metering-service/go.mod osac-metering/metering-service/go.sum osac-metering/metering-service/
+RUN cd osac-csi-driver && go mod download
 
-COPY . ./
+COPY --chown=1001:1001 osac-csi-driver/ osac-csi-driver/
 
+WORKDIR /opt/app-root/src/osac-csi-driver
 ARG VERSION=0.1.0
 ARG GIT_COMMIT=unknown
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
@@ -15,6 +24,6 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
     -o osac-csi-driver ./cmd/osac-csi-driver
 
 FROM registry.access.redhat.com/ubi10-minimal:10.2
-COPY --from=builder /opt/app-root/src/osac-csi-driver /usr/local/bin/
+COPY --from=builder /opt/app-root/src/osac-csi-driver/osac-csi-driver /usr/local/bin/
 USER 1001
 ENTRYPOINT ["/usr/local/bin/osac-csi-driver"]

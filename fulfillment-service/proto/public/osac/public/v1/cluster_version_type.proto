@@ -15,6 +15,7 @@ syntax = "proto3";
 
 package osac.public.v1;
 
+import "buf/validate/validate.proto";
 import "google/api/field_behavior.proto";
 import "google/protobuf/timestamp.proto";
 import "osac/public/v1/metadata_type.proto";
@@ -121,7 +122,8 @@ message ClusterVersionSpec {
   // Example: "4.17.0", "4.17.0-rc.1"
   string version = 6 [
     (google.api.field_behavior) = REQUIRED,
-    (google.api.field_behavior) = IMMUTABLE
+    (google.api.field_behavior) = IMMUTABLE,
+    (buf.validate.field).string = {min_len: 1, max_len: 256}
   ];
 }
 

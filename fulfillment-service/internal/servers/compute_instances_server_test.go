@@ -23,10 +23,10 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
-	"github.com/osac-project/fulfillment-service/internal/auth"
-	"github.com/osac-project/fulfillment-service/internal/database/dao"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 )
 
 var _ = Describe("Compute instances server", func() {
@@ -116,7 +116,7 @@ var _ = Describe("Compute instances server", func() {
 					Tenant: auth.SharedTenant,
 				}.Build(),
 				Spec: privatev1.SubnetSpec_builder{
-					VirtualNetwork: "test-vnet",
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "test-vnet"}.Build(),
 					Ipv4Cidr:       new("10.0.0.0/24"),
 				}.Build(),
 				Status: privatev1.SubnetStatus_builder{
@@ -192,7 +192,7 @@ var _ = Describe("Compute instances server", func() {
 					},
 				},
 				SpecDefaults: privatev1.ComputeInstanceTemplateSpecDefaults_builder{
-					InstanceType: new("standard-4-16"),
+					InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
 					Image: privatev1.ComputeInstanceImage_builder{
 						SourceType: "registry",
 						SourceRef:  "quay.io/containerdisks/fedora:latest",
@@ -225,11 +225,11 @@ var _ = Describe("Compute instances server", func() {
 			response, err := server.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
 				Object: publicv1.ComputeInstance_builder{
 					Spec: publicv1.ComputeInstanceSpec_builder{
-						Template:           "general.small",
+						Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: "general.small"}.Build(),
 						TemplateParameters: templateParams,
 						NetworkAttachments: []*publicv1.NetworkAttachment{
 							publicv1.NetworkAttachment_builder{
-								Subnet: "test-subnet",
+								Subnet: publicv1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
 							}.Build(),
 						},
 					}.Build(),
@@ -243,7 +243,7 @@ var _ = Describe("Compute instances server", func() {
 			object := response.GetObject()
 			Expect(object).ToNot(BeNil())
 			Expect(object.GetId()).ToNot(BeEmpty())
-			Expect(object.GetSpec().GetTemplate()).To(Equal("general.small"))
+			Expect(object.GetSpec().GetTemplate().GetId()).To(Equal("general.small"))
 			Expect(object.GetStatus().GetState()).To(Equal(publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING))
 		})
 
@@ -257,10 +257,10 @@ var _ = Describe("Compute instances server", func() {
 				_, err := server.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
 					Object: publicv1.ComputeInstance_builder{
 						Spec: publicv1.ComputeInstanceSpec_builder{
-							Template: templateID,
+							Template: publicv1.ComputeInstanceTemplateReference_builder{Id: templateID}.Build(),
 							NetworkAttachments: []*publicv1.NetworkAttachment{
 								publicv1.NetworkAttachment_builder{
-									Subnet: "test-subnet",
+									Subnet: publicv1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
 								}.Build(),
 							},
 						}.Build(),
@@ -290,10 +290,10 @@ var _ = Describe("Compute instances server", func() {
 				_, err := server.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
 					Object: publicv1.ComputeInstance_builder{
 						Spec: publicv1.ComputeInstanceSpec_builder{
-							Template: templateID,
+							Template: publicv1.ComputeInstanceTemplateReference_builder{Id: templateID}.Build(),
 							NetworkAttachments: []*publicv1.NetworkAttachment{
 								publicv1.NetworkAttachment_builder{
-									Subnet: "test-subnet",
+									Subnet: publicv1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
 								}.Build(),
 							},
 						}.Build(),
@@ -325,10 +325,10 @@ var _ = Describe("Compute instances server", func() {
 				_, err := server.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
 					Object: publicv1.ComputeInstance_builder{
 						Spec: publicv1.ComputeInstanceSpec_builder{
-							Template: templateID,
+							Template: publicv1.ComputeInstanceTemplateReference_builder{Id: templateID}.Build(),
 							NetworkAttachments: []*publicv1.NetworkAttachment{
 								publicv1.NetworkAttachment_builder{
-									Subnet: "test-subnet",
+									Subnet: publicv1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
 								}.Build(),
 							},
 						}.Build(),
@@ -358,10 +358,10 @@ var _ = Describe("Compute instances server", func() {
 			createResponse, err := server.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
 				Object: publicv1.ComputeInstance_builder{
 					Spec: publicv1.ComputeInstanceSpec_builder{
-						Template: "general.small",
+						Template: publicv1.ComputeInstanceTemplateReference_builder{Id: "general.small"}.Build(),
 						NetworkAttachments: []*publicv1.NetworkAttachment{
 							publicv1.NetworkAttachment_builder{
-								Subnet: "test-subnet",
+								Subnet: publicv1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
 							}.Build(),
 						},
 					}.Build(),
@@ -386,7 +386,7 @@ var _ = Describe("Compute instances server", func() {
 			object := getResponse.GetObject()
 			Expect(object).ToNot(BeNil())
 			Expect(object.GetId()).To(Equal(id))
-			Expect(object.GetSpec().GetTemplate()).To(Equal("general.small"))
+			Expect(object.GetSpec().GetTemplate().GetId()).To(Equal("general.small"))
 			Expect(object.GetStatus().GetState()).To(Equal(publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING))
 		})
 
@@ -398,8 +398,8 @@ var _ = Describe("Compute instances server", func() {
 			createResponse, err := server.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
 				Object: publicv1.ComputeInstance_builder{
 					Spec: publicv1.ComputeInstanceSpec_builder{
-						Template:     "general.small",
-						InstanceType: new("standard-4-16"),
+						Template:     publicv1.ComputeInstanceTemplateReference_builder{Id: "general.small"}.Build(),
+						InstanceType: publicv1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
 						RunStrategy:  new("Always"),
 						Image: publicv1.ComputeInstanceImage_builder{
 							SourceType: "registry",
@@ -410,7 +410,7 @@ var _ = Describe("Compute instances server", func() {
 						}.Build(),
 						NetworkAttachments: []*publicv1.NetworkAttachment{
 							publicv1.NetworkAttachment_builder{
-								Subnet: "test-subnet",
+								Subnet: publicv1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
 							}.Build(),
 						},
 					}.Build(),
@@ -445,8 +445,8 @@ var _ = Describe("Compute instances server", func() {
 			)
 
 			// Verify explicit fields were preserved:
-			Expect(object.GetSpec().GetTemplate()).To(Equal("general.small"))
-			Expect(object.GetSpec().GetInstanceType()).To(Equal("standard-4-16"))
+			Expect(object.GetSpec().GetTemplate().GetId()).To(Equal("general.small"))
+			Expect(object.GetSpec().GetInstanceType().GetId()).To(Equal("standard-4-16"))
 			Expect(object.GetSpec().GetRunStrategy()).To(Equal("Always"))
 			Expect(object.GetSpec().GetImage().GetSourceRef()).To(Equal("quay.io/test:latest"))
 			Expect(object.GetSpec().GetBootDisk().GetSizeGib()).To(BeNumerically("==", 20))
@@ -457,7 +457,7 @@ var _ = Describe("Compute instances server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			fetched := getResponse.GetObject()
-			Expect(fetched.GetSpec().GetInstanceType()).To(Equal("standard-4-16"))
+			Expect(fetched.GetSpec().GetInstanceType().GetId()).To(Equal("standard-4-16"))
 			Expect(fetched.GetSpec().GetRunStrategy()).To(Equal("Always"))
 			Expect(fetched.GetSpec().GetImage().GetSourceRef()).To(Equal("quay.io/test:latest"))
 			Expect(fetched.GetSpec().GetBootDisk().GetSizeGib()).To(BeNumerically("==", 20))
@@ -472,10 +472,10 @@ var _ = Describe("Compute instances server", func() {
 			createResponse, err := server.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
 				Object: publicv1.ComputeInstance_builder{
 					Spec: publicv1.ComputeInstanceSpec_builder{
-						Template: "general.small",
+						Template: publicv1.ComputeInstanceTemplateReference_builder{Id: "general.small"}.Build(),
 						NetworkAttachments: []*publicv1.NetworkAttachment{
 							publicv1.NetworkAttachment_builder{
-								Subnet: "test-subnet",
+								Subnet: publicv1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
 							}.Build(),
 						},
 					}.Build(),
@@ -550,11 +550,11 @@ var _ = Describe("Compute instances server", func() {
 			response, err := server.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
 				Object: publicv1.ComputeInstance_builder{
 					Spec: publicv1.ComputeInstanceSpec_builder{
-						Template:    "mapping-template",
+						Template:    publicv1.ComputeInstanceTemplateReference_builder{Id: "mapping-template"}.Build(),
 						RunStrategy: new("Halted"),
 						NetworkAttachments: []*publicv1.NetworkAttachment{
 							publicv1.NetworkAttachment_builder{
-								Subnet: "test-subnet",
+								Subnet: publicv1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
 							}.Build(),
 						},
 					}.Build(),
@@ -567,7 +567,7 @@ var _ = Describe("Compute instances server", func() {
 			// User-provided values preserved through mapping:
 			Expect(spec.GetRunStrategy()).To(Equal("Halted"))
 			// Template defaults should be stored:
-			Expect(spec.GetInstanceType()).To(Equal("standard-4-16"))
+			Expect(spec.GetInstanceType().GetId()).To(Equal("standard-4-16"))
 			Expect(spec.GetImage().GetSourceType()).To(Equal("registry"))
 			Expect(spec.GetImage().GetSourceRef()).To(Equal("quay.io/containerdisks/fedora:latest"))
 			Expect(spec.GetBootDisk().GetSizeGib()).To(Equal(int32(10)))

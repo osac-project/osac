@@ -26,7 +26,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/osac-project/fulfillment-service/internal/database"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 )
 
 // UpdateRequest represents a request to update an existing object.

@@ -23,10 +23,10 @@ import (
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
 
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
-	"github.com/osac-project/fulfillment-service/internal/cmd/cli/lookup"
-	"github.com/osac-project/fulfillment-service/internal/config"
-	"github.com/osac-project/fulfillment-service/internal/terminal"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/lookup"
+	"github.com/osac-project/osac/fulfillment-service/internal/config"
+	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 )
 
 // Cmd creates the command to describe a compute instance.
@@ -91,8 +91,12 @@ func renderComputeInstance(w io.Writer, ci *publicv1.ComputeInstance) {
 	writer := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	catalogItem := "-"
 	if ci.Spec != nil {
-		if catalogItemID := ci.Spec.GetCatalogItem(); catalogItemID != "" {
-			catalogItem = catalogItemID
+		if ref := ci.Spec.GetCatalogItem(); ref != nil {
+			if ref.GetName() != "" {
+				catalogItem = ref.GetName()
+			} else if ref.GetId() != "" {
+				catalogItem = ref.GetId()
+			}
 		}
 	}
 	state := "-"

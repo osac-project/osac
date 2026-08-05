@@ -21,7 +21,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 )
 
 var _ = Describe("Tenant domain validation (protovalidate)", func() {

@@ -9,7 +9,7 @@
       {{ admin_kubeconfig | default("{}") | to_yaml | osac.service.to_temp_file }}
 
   vars:
-    cluster_order: "{{ ansible_eda.event.payload }}"
+    cluster_order: "{{ osac_job_vars.resource }}"
 
   pre_tasks:
     - name: Apply default settings

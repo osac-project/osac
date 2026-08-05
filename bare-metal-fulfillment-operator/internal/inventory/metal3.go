@@ -32,7 +32,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/osac-project/bare-metal-fulfillment-operator/internal/shared"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/shared"
 )
 
 var (

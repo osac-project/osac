@@ -33,8 +33,8 @@ import (
 	"strings"
 	"time"
 
-	bmfov1alpha1 "github.com/osac-project/bare-metal-fulfillment-operator/api/v1alpha1"
-	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
+	bmfov1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
+	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"

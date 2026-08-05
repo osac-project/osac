@@ -14,7 +14,7 @@ Resource (public API — cluster or compute instance)
 
 **Templates** are infrastructure blueprints managed through the private (admin) API. They define
 the underlying provisioning logic: node set structures, host types, and spec defaults (pull secret,
-SSH key, release image, network CIDRs). Templates are not visible to end users.
+SSH key, version, network CIDRs). Templates are not visible to end users.
 
 **Catalog items** reference a template and add a curation layer on top. Using `field_definitions`,
 the admin controls which resource spec fields are exposed to end users, locks fields to fixed
@@ -40,7 +40,7 @@ to end users via the public API (list, inspect, and use when creating resources)
 
 Catalog items control **both typed spec fields and template parameters**:
 
-- **Typed spec fields** (e.g., `pull_secret`, `ssh_public_key`, `release_image`, `network.pod_cidr`,
+- **Typed spec fields** (e.g., `pull_secret`, `ssh_public_key`, `version_name`, `network.pod_cidr`,
   `node_sets.<name>.size`) — fields defined in the resource protobuf spec. Simple scalar fields have
   dedicated CLI flags (`--pull-secret`, `--ssh-public-key`, `--pod-cidr`); nested or map-like fields
   such as `node_sets.*` or `network.*` are only settable via `--set` or YAML, because expressing them as
@@ -147,10 +147,10 @@ field_definitions:
     display_name: Workers Resource Class
     editable: true
     default: "fc430"
-  - path: release_image
-    display_name: Release Image
+  - path: version_name
+    display_name: Version
     editable: false
-    default: "quay.io/openshift-release-dev/ocp-release:4.17.0-multi"
+    default: "4-17-0"  # must match an existing, enabled ClusterVersion metadata.name
   - path: network.pod_cidr
     display_name: Pod CIDR
     editable: true
@@ -270,7 +270,7 @@ catalog item, the server rejects any spec field not listed in `field_definitions
 |------|----------|-------------|
 | `pull_secret` | `--pull-secret` | Credentials for container image repositories |
 | `ssh_public_key` | `--ssh-public-key` | SSH public key installed on worker nodes |
-| `release_image` | `--release-image` | OCP release image URL |
+| `version_name` | `--version` | ClusterVersion name for the OpenShift release |
 | `network.pod_cidr` | `--pod-cidr` | Pod network CIDR (default: `10.128.0.0/14`) |
 | `network.service_cidr` | `--service-cidr` | Service network CIDR (default: `172.30.0.0/16`) |
 | `node_sets.<name>.size` | — | Number of nodes in a named node set (e.g., `node_sets.workers.size`) |
@@ -310,7 +310,7 @@ osac create cluster --catalog-item dev-sandbox \
   --name my-cluster \
   --pull-secret "$(cat pull-secret.json)" \
   --ssh-public-key "$(cat ~/.ssh/id_ed25519.pub)" \
-  --release-image "quay.io/openshift-release-dev/ocp-release:4.17.0-multi" \
+  --version "4-17-0" \
   --pod-cidr "10.128.0.0/14"
 ```
 
@@ -346,8 +346,8 @@ the server applies `field_definitions` **after** receiving the request, which me
   `validation_schema` if one is defined.
 - If an editable field is **not provided** by the user, the catalog item's default is applied.
 
-For example, given a catalog item with `release_image` set as non-editable with a fixed default,
-running `--release-image "quay.io/user1/ocp-release:4.12.0"` results in an error — the user cannot override locked fields.
+For example, given a catalog item with `version_name` set as non-editable with a fixed default,
+running `--version "4-18-0"` results in an error — the user cannot override locked fields.
 
 ### Server-side processing
 

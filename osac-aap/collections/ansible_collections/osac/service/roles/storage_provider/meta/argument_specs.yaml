@@ -12,12 +12,15 @@ argument_specs:
         required: true
         description: >
           List of storage tier definitions. Each tier declares its name, protocol,
-          provider, and optional QoS/quota settings. The dispatcher groups tiers
-          by provider and dispatches to each provider's template role with the
-          filtered tier subset.
+          provider, backend_id, and optional QoS/quota settings. qos_policy is
+          always derived by this role from the tier name — any caller-supplied
+          qos_policy value is ignored and discarded, never used. The dispatcher
+          groups tiers by provider and dispatches to each provider's template
+          role with the filtered tier subset.
           Example: [{name: default, protocol: nfs, provider: vast,
-          qos_policy: default-qos,
-          qos_limits: {static_limits: {max_reads_bw_mbps: 100, max_writes_bw_mbps: 100}}}]
+          backend_id: be-001,
+          qos_limits: {static_limits: {max_reads_bw_mbps: 100, max_writes_bw_mbps: 100}},
+          quota_bytes: 536870912000}]
       storage_provider_action:
         type: str
         required: true
@@ -46,5 +49,19 @@ argument_specs:
         required: false
         default: true
         description: >
-          Create a VolumeSnapshotClass alongside the StorageClass for K8s-native
-          snapshot support. Skipped if the VolumeSnapshot CRD is not installed.
+          Whether to create VolumeSnapshotClasses alongside StorageClasses during
+          ensure_storage_class. Only takes effect when the VolumeSnapshotClass CRD
+          is installed on the target cluster (a live CRD check gates creation
+          regardless of this flag).
+      storage_provider_backend_connections:
+        type: dict
+        required: false
+        default: {}
+        no_log: true
+        description: >
+          Backend connection details (endpoint, username, password), keyed by backend_id,
+          as resolved by osac-operator from the Tier API. Each provider's own
+          credential-sourcing logic looks up the entry for the backend_id(s) present in
+          its dispatched tier subset. Optional because teardown_cluster_storage never
+          needs backend connection details (it only touches cluster-side K8s resources).
+          Example: {be-001: {endpoint: vast.example.com:443, username: admin, password: "***"}}

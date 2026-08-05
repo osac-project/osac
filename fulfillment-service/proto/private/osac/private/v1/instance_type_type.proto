@@ -43,8 +43,8 @@ message InstanceTypeDeprecation {
   // Current deprecation state (DEPRECATED or OBSOLETE). Mirrors the spec-level state.
   InstanceTypeState state = 1;
 
-  // Suggested replacement instance type name (e.g., "standard-8-32").
-  string replacement = 2;
+  // Suggested replacement instance type.
+  InstanceTypeLocalReference replacement = 2;
 
   // When deprecation was announced. Auto-set on transition to DEPRECATED.
   google.protobuf.Timestamp deprecation_timestamp = 3;
@@ -116,3 +116,17 @@ message InstanceTypeSpec {
 //
 // Currently empty. Reserved for future reconciliation state.
 message InstanceTypeStatus {}
+
+// Reference to an InstanceType resource.
+message InstanceTypeReference {
+  string id = 1;
+  string name = 2;
+  string project = 3;
+  bool shared = 4;
+}
+
+// Local reference to an InstanceType resource.
+message InstanceTypeLocalReference {
+  string id = 1;
+  string name = 2;
+}

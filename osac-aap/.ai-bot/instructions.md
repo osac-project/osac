@@ -107,7 +107,7 @@ samples/                               Example payloads
 
 ## Standard Playbook Pattern
 
-Every playbook receives a K8s CR via `ansible_eda.event.payload`, extracts
+Every playbook receives a K8s CR via `osac_job_vars.resource`, extracts
 `implementation_strategy` from the CR annotation
 (`osac.openshift.io/implementation-strategy`), and dynamically includes the
 matching role from `osac.templates`:

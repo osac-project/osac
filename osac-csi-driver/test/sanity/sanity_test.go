@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	"github.com/kubernetes-csi/csi-test/v5/pkg/sanity"
-	"github.com/osac-project/osac-csi-driver/pkg/driver"
-	"github.com/osac-project/osac-csi-driver/pkg/fulfillment"
+	"github.com/osac-project/osac/osac-csi-driver/pkg/driver"
+	"github.com/osac-project/osac/osac-csi-driver/pkg/fulfillment"
 )
 
 // metaDriverSkips lists CSI sanity tests that don't apply to the OSAC

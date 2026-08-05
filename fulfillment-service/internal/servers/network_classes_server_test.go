@@ -21,11 +21,11 @@ import (
 	. "github.com/onsi/gomega"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
-	"github.com/osac-project/fulfillment-service/internal/auth"
-	"github.com/osac-project/fulfillment-service/internal/database"
-	"github.com/osac-project/fulfillment-service/internal/database/dao"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 )
 
 var _ = Describe("Network classes server", func() {
@@ -102,7 +102,7 @@ var _ = Describe("Network classes server", func() {
 			response, err := privateServer.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 				Object: privatev1.NetworkClass_builder{
 					Title:                  "Test Network Class",
-					ImplementationStrategy: "ovn-kubernetes",
+					ImplementationStrategy: fmt.Sprintf("ovn-%s", uuid.NewString()[:8]),
 					FabricManager:          "netris",
 				}.Build(),
 			}.Build())
@@ -115,7 +115,7 @@ var _ = Describe("Network classes server", func() {
 			response, err := privateServer.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 				Object: privatev1.NetworkClass_builder{
 					Title:                  "Default Network Class",
-					ImplementationStrategy: "ovn-kubernetes",
+					ImplementationStrategy: fmt.Sprintf("ovn-%s", uuid.NewString()[:8]),
 					FabricManager:          "netris",
 					IsDefault:              new(true),
 				}.Build(),

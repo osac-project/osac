@@ -21,11 +21,11 @@ import (
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
 
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
-	"github.com/osac-project/fulfillment-service/internal/cmd/cli/lookup"
-	"github.com/osac-project/fulfillment-service/internal/config"
-	"github.com/osac-project/fulfillment-service/internal/logging"
-	"github.com/osac-project/fulfillment-service/internal/terminal"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/lookup"
+	"github.com/osac-project/osac/fulfillment-service/internal/config"
+	"github.com/osac-project/osac/fulfillment-service/internal/logging"
+	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 )
 
 func Cmd() *cobra.Command {
@@ -131,7 +131,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	}
 
 	spec := publicv1.ExternalIPAttachmentSpec_builder{
-		ExternalIp: eip.GetId(),
+		ExternalIp: &publicv1.ExternalIPLocalReference{Id: eip.GetId()},
 	}
 
 	var targetDesc string
@@ -152,7 +152,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return err
 		}
-		spec.ComputeInstance = proto.String(ci.GetId())
+		spec.ComputeInstance = &publicv1.ComputeInstanceLocalReference{Id: ci.GetId()}
 		targetDesc = fmt.Sprintf("compute instance '%s'", ci.GetId())
 
 	case c.args.cluster != "":
@@ -170,7 +170,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return err
 		}
-		spec.Cluster = proto.String(cl.GetId())
+		spec.Cluster = &publicv1.ClusterLocalReference{Id: cl.GetId()}
 		targetDesc = fmt.Sprintf("cluster '%s'", cl.GetId())
 
 		if c.args.targetEndpoint != "" {
@@ -196,7 +196,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return err
 		}
-		spec.BaremetalInstance = proto.String(bm.GetId())
+		spec.BaremetalInstance = &publicv1.BareMetalInstanceLocalReference{Id: bm.GetId()}
 		targetDesc = fmt.Sprintf("bare metal instance '%s'", bm.GetId())
 	}
 

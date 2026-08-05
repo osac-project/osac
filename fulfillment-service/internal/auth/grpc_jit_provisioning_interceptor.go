@@ -21,7 +21,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"google.golang.org/grpc"
 
-	"github.com/osac-project/fulfillment-service/internal/util"
+	"github.com/osac-project/osac/fulfillment-service/internal/util"
 )
 
 //go:generate mockgen -source=$GOFILE -destination=grpc_jit_provisioning_interceptor_mock.go -package=$GOPACKAGE UserProvisioner

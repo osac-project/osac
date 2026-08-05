@@ -1,9 +1,12 @@
 # Define the display name and description of the template
+name: ocp-4-20-small-nico
 title: OpenShift 4.20 Cluster on NICo Bare Metal
 description: >
   This template will build a minimally configured OpenShift 4.20 cluster
   on bare metal infrastructure managed by NVIDIA NICo (Bare Metal Manager).
   Requires NETWORK_STEPS_COLLECTION=nico.steps in the AAP environment.
+
+template_type: cluster
 
 # This sets the nodeRequest field in the ClusterOrder manifest. There must be at
 # least one entry in this list.
@@ -16,3 +19,45 @@ default_node_request:
 # list is empty or unspecified, a ClusterOrder may request nodes from any
 # available resource class.
 allowed_resource_classes: []
+
+spec_defaults:
+  version_name: "4.20.0"
+
+parameters:
+  - name: pull_secret
+    title: Pull Secret
+    description: >
+      The pull secret contains credentials for authenticating to image repositories.
+    type: string
+    required: true
+  - name: ssh_public_key
+    title: SSH Public Key
+    description: >
+      A public ssh key that will be installed into the `authorized_keys` file
+      of the `core` user on cluster worker nodes.
+    type: string
+    required: false
+  - name: ip_block_id
+    title: NICo IP Block ID
+    description: >
+      NICo IP block ID for VPC prefix allocation.
+    type: string
+    required: true
+  - name: vpc_id
+    title: VPC ID
+    description: >
+      Use an existing VPC instead of creating a new one.
+    type: string
+    required: false
+  - name: vpc_prefix_id
+    title: VPC Prefix ID
+    description: >
+      Use an existing VPC prefix instead of creating a new one.
+    type: string
+    required: false
+  - name: ssh_key_group_id
+    title: SSH Key Group ID
+    description: >
+      Override SSH key group for this cluster.
+    type: string
+    required: false

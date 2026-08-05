@@ -8,7 +8,7 @@ import (
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/osac-project/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
 
 // ProvisionResult contains the result of triggering a provision operation.

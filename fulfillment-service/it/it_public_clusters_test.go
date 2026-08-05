@@ -27,12 +27,12 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
-	"github.com/osac-project/fulfillment-service/internal/kubernetes/gvks"
-	"github.com/osac-project/fulfillment-service/internal/kubernetes/labels"
-	"github.com/osac-project/fulfillment-service/internal/uuid"
-	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/gvks"
+	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
+	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
+	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
 
 var _ = Describe("Public clusters", func() {
@@ -78,7 +78,7 @@ var _ = Describe("Public clusters", func() {
 				Description: "My template.",
 				NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
 					"my-node-set": privatev1.ClusterTemplateNodeSet_builder{
-						HostType: hostTypeId,
+						HostType: privatev1.HostTypeReference_builder{Id: hostTypeId}.Build(),
 						Size:     3,
 					}.Build(),
 				},
@@ -98,7 +98,7 @@ var _ = Describe("Public clusters", func() {
 		createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
 				Spec: publicv1.ClusterSpec_builder{
-					Template: templateId,
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -125,7 +125,7 @@ var _ = Describe("Public clusters", func() {
 		Expect(metadata.HasDeletionTimestamp()).To(BeFalse())
 		spec := object.GetSpec()
 		Expect(spec).ToNot(BeNil())
-		Expect(spec.GetTemplate()).To(Equal(templateId))
+		Expect(spec.GetTemplate().GetId()).To(Equal(templateId))
 	})
 
 	It("Can get the list of clusters", func() {
@@ -133,7 +133,7 @@ var _ = Describe("Public clusters", func() {
 		createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
 				Spec: publicv1.ClusterSpec_builder{
-					Template: templateId,
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -159,7 +159,7 @@ var _ = Describe("Public clusters", func() {
 		response, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
 				Spec: publicv1.ClusterSpec_builder{
-					Template: templateId,
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -181,7 +181,7 @@ var _ = Describe("Public clusters", func() {
 		Expect(metadata.HasDeletionTimestamp()).To(BeFalse())
 		spec := object.GetSpec()
 		Expect(spec).ToNot(BeNil())
-		Expect(spec.GetTemplate()).To(Equal(templateId))
+		Expect(spec.GetTemplate().GetId()).To(Equal(templateId))
 	})
 
 	It("Can update a cluster", func() {
@@ -189,7 +189,7 @@ var _ = Describe("Public clusters", func() {
 		createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
 				Spec: publicv1.ClusterSpec_builder{
-					Template: templateId,
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -207,10 +207,10 @@ var _ = Describe("Public clusters", func() {
 			Object: publicv1.Cluster_builder{
 				Id: object.GetId(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: templateId,
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"my-node-set": {
-							HostType: hostTypeId,
+							HostType: publicv1.HostTypeReference_builder{Id: hostTypeId}.Build(),
 							Size:     4,
 						},
 					},
@@ -239,7 +239,7 @@ var _ = Describe("Public clusters", func() {
 		createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
 				Spec: publicv1.ClusterSpec_builder{
-					Template: templateId,
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -306,7 +306,7 @@ var _ = Describe("Public clusters", func() {
 		createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
 				Spec: publicv1.ClusterSpec_builder{
-					Template: templateId,
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -414,7 +414,7 @@ var _ = Describe("Public clusters", func() {
 		createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
 				Spec: publicv1.ClusterSpec_builder{
-					Template: templateId,
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -521,7 +521,7 @@ var _ = Describe("Public clusters", func() {
 		createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
 				Spec: publicv1.ClusterSpec_builder{
-					Template: templateId,
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -626,7 +626,7 @@ var _ = Describe("Public clusters", func() {
 		createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
 				Spec: publicv1.ClusterSpec_builder{
-					Template: templateId,
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -728,6 +728,58 @@ var _ = Describe("Public clusters", func() {
 		).Should(Succeed())
 	})
 
+	It("Can create a cluster with explicit version_name", func() {
+		// Create a non-default cluster version:
+		cvClient := privatev1.NewClusterVersionsClient(tool.InternalView().AdminConn())
+		version := nextCVVersion()
+		cvResponse, err := cvClient.Create(ctx, privatev1.ClusterVersionsCreateRequest_builder{
+			Object: privatev1.ClusterVersion_builder{
+				Spec: privatev1.ClusterVersionSpec_builder{
+					Version: version,
+					Image:   fmt.Sprintf("quay.io/openshift-release-dev/ocp-release:%s-multi", version),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		cvObject := cvResponse.GetObject()
+		cvName := cvObject.GetMetadata().GetName()
+		Expect(cvName).ToNot(BeEmpty(), "ClusterVersion should have a metadata.name assigned")
+		DeferCleanup(func() {
+			_, err := cvClient.Delete(ctx, privatev1.ClusterVersionsDeleteRequest_builder{
+				Id: cvObject.GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		// Create a cluster specifying that version_name:
+		createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
+			Object: publicv1.Cluster_builder{
+				Spec: publicv1.ClusterSpec_builder{
+					Template:    publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					VersionName: &cvName,
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		object := createResponse.GetObject()
+		DeferCleanup(func() {
+			_, err := clustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{
+				Id: object.GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		// Verify the cluster has the correct version_name:
+		Expect(object.GetSpec().GetVersionName()).To(Equal(cvName))
+
+		// Verify via Get as well:
+		getResponse, err := clustersClient.Get(ctx, publicv1.ClustersGetRequest_builder{
+			Id: object.GetId(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(getResponse.GetObject().GetSpec().GetVersionName()).To(Equal(cvName))
+	})
+
 	It("Sets creator to the ID of the user when creating a cluster", func() {
 		// Look up the user to get their ID:
 		usersClient := privatev1.NewUsersClient(tool.InternalView().AdminConn())
@@ -744,7 +796,7 @@ var _ = Describe("Public clusters", func() {
 		response, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
 				Spec: publicv1.ClusterSpec_builder{
-					Template: templateId,
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())

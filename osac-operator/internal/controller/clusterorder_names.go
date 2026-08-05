@@ -3,7 +3,7 @@ package controller
 import (
 	"fmt"
 
-	v1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
+	v1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
 
 const (

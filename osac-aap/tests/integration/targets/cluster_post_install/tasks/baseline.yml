@@ -12,9 +12,8 @@
 
     - name: Set test variables for baseline workflow
       ansible.builtin.set_fact:
-        ansible_eda:
-          event:
-            payload: "{{ test_cluster_order }}"
+        osac_job_vars:
+          resource: "{{ test_cluster_order }}"
         cluster_working_namespace: "cluster-test-cluster-work"
         # Override template to use no-op version for testing
         template_id_override: "osac.test_overrides.noop_template"

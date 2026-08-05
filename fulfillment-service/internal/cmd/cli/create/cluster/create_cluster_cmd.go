@@ -33,13 +33,13 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
-	"github.com/osac-project/fulfillment-service/internal/cmd/cli/create/fieldutil"
-	"github.com/osac-project/fulfillment-service/internal/config"
-	"github.com/osac-project/fulfillment-service/internal/exit"
-	"github.com/osac-project/fulfillment-service/internal/logging"
-	"github.com/osac-project/fulfillment-service/internal/reflection"
-	"github.com/osac-project/fulfillment-service/internal/terminal"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/fieldutil"
+	"github.com/osac-project/osac/fulfillment-service/internal/config"
+	"github.com/osac-project/osac/fulfillment-service/internal/exit"
+	"github.com/osac-project/osac/fulfillment-service/internal/logging"
+	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
+	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 )
 
 //go:embed templates
@@ -116,10 +116,10 @@ func Cmd() *cobra.Command {
 		sshPublicKeyFileFlagHelp,
 	)
 	flags.StringVar(
-		&runner.args.releaseImage,
-		"release-image",
+		&runner.args.version,
+		"version",
 		"",
-		releaseImageFlagHelp,
+		versionFlagHelp,
 	)
 	flags.StringVar(
 		&runner.args.podCIDR,
@@ -156,15 +156,16 @@ type runnerContext struct {
 		pullSecretFile          string
 		sshPublicKey            string
 		sshPublicKeyFile        string
-		releaseImage            string
+		version                 string
 		podCIDR                 string
 		serviceCIDR             string
 	}
-	logger          *slog.Logger
-	console         *terminal.Console
-	settings        *config.Settings
-	templatesClient publicv1.ClusterTemplatesClient
-	clustersClient  publicv1.ClustersClient
+	logger                *slog.Logger
+	console               *terminal.Console
+	settings              *config.Settings
+	templatesClient       publicv1.ClusterTemplatesClient
+	clustersClient        publicv1.ClustersClient
+	clusterVersionsClient publicv1.ClusterVersionsClient
 }
 
 func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
@@ -230,6 +231,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	// Create the gRPC clients:
 	c.templatesClient = publicv1.NewClusterTemplatesClient(conn)
 	c.clustersClient = publicv1.NewClustersClient(conn)
+	c.clusterVersionsClient = publicv1.NewClusterVersionsClient(conn)
 
 	// Resolve credentials before branching (used in both catalog-item and template paths):
 	pullSecret, sshPublicKey, err := c.resolveCredentials()
@@ -237,10 +239,19 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Resolve the version reference to a ClusterVersion metadata.name:
+	if c.args.version != "" {
+		version, err := c.findVersion(ctx)
+		if err != nil {
+			return err
+		}
+		c.args.version = version.GetMetadata().GetName()
+	}
+
 	if c.args.catalogItem != "" {
 		// Catalog item path: skip template lookup entirely (per D-04).
 		specBuilder := publicv1.ClusterSpec_builder{
-			CatalogItem: c.args.catalogItem,
+			CatalogItem: &publicv1.ClusterCatalogItemReference{Name: c.args.catalogItem},
 		}
 		c.applyOptionalSpecFields(&specBuilder, pullSecret, sshPublicKey)
 		spec := specBuilder.Build()
@@ -275,7 +286,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 	// Build the cluster spec:
 	specBuilder := publicv1.ClusterSpec_builder{
-		Template:           template.GetId(),
+		Template:           &publicv1.ClusterTemplateReference{Id: template.GetId()},
 		TemplateParameters: templateParameterValues,
 	}
 	c.applyOptionalSpecFields(&specBuilder, pullSecret, sshPublicKey)
@@ -305,7 +316,7 @@ func (c *runnerContext) resolveCredentials() (pullSecret, sshPublicKey string, e
 	return
 }
 
-// applyOptionalSpecFields sets pull secret, SSH public key, release image, and network CIDRs
+// applyOptionalSpecFields sets pull secret, SSH public key, version, and network CIDRs
 // on the spec builder when their corresponding flags are provided.
 func (c *runnerContext) applyOptionalSpecFields(
 	specBuilder *publicv1.ClusterSpec_builder, pullSecret, sshPublicKey string,
@@ -316,8 +327,8 @@ func (c *runnerContext) applyOptionalSpecFields(
 	if sshPublicKey != "" {
 		specBuilder.SshPublicKey = &sshPublicKey
 	}
-	if c.args.releaseImage != "" {
-		specBuilder.ReleaseImage = &c.args.releaseImage
+	if c.args.version != "" {
+		specBuilder.VersionName = &c.args.version
 	}
 	if c.args.podCIDR != "" || c.args.serviceCIDR != "" {
 		networkBuilder := publicv1.ClusterNetwork_builder{}
@@ -399,6 +410,61 @@ func (c *runnerContext) findTemplate(ctx context.Context) (result *publicv1.Clus
 	c.console.Render(ctx, "template_not_found.txt", map[string]any{
 		"Examples": examples,
 		"Ref":      c.args.template,
+	})
+	err = exit.Error(1)
+	return
+}
+
+// findVersion finds a cluster version by metadata.name or spec.version. If the reference matches a metadata.name and a
+// spec.version of different versions, the metadata.name match takes precedence. If no match is found it displays
+// available versions and returns an error.
+func (c *runnerContext) findVersion(ctx context.Context) (result *publicv1.ClusterVersion, err error) {
+	// Try to find the version by metadata.name or spec.version using a filter:
+	filter := fmt.Sprintf(
+		"this.metadata.name == %[1]q || this.spec.version == %[1]q",
+		c.args.version,
+	)
+	// At most 2 matches: one by metadata.name + one by spec.version (both are unique per tenant).
+	response, err := c.clusterVersionsClient.List(ctx, publicv1.ClusterVersionsListRequest_builder{
+		Filter: proto.String(filter),
+		Limit:  proto.Int32(2),
+	}.Build())
+	if err != nil {
+		return nil, fmt.Errorf("failed to list cluster versions: %w", err)
+	}
+	matches := response.GetItems()
+
+	// If there is exactly one match, use it:
+	if len(matches) == 1 {
+		result = matches[0]
+		return
+	}
+
+	// If there are two matches, one matched by metadata.name and one by spec.version. The metadata.name match takes
+	// precedence:
+	if len(matches) == 2 {
+		for _, m := range matches {
+			if m.GetMetadata().GetName() == c.args.version {
+				result = m
+				return
+			}
+		}
+		// Both matched but neither has metadata.name == ref; fall back to the first match:
+		result = matches[0]
+		return
+	}
+
+	// If we are here then no matches were found, we will show to the user some of the available versions:
+	response, err = c.clusterVersionsClient.List(ctx, publicv1.ClusterVersionsListRequest_builder{
+		Limit: proto.Int32(10),
+	}.Build())
+	if err != nil {
+		return nil, fmt.Errorf("failed to list cluster versions: %w", err)
+	}
+	examples := response.GetItems()
+	c.console.Render(ctx, "version_not_found.txt", map[string]any{
+		"Examples": examples,
+		"Ref":      c.args.version,
 	})
 	err = exit.Error(1)
 	return
@@ -823,9 +889,11 @@ const sshPublicKeyFileFlagHelp = `
 _FILE_ - Path to a file containing the SSH public key.
 `
 
-const releaseImageFlagHelp = `
-_URL_ - OCP release image URL, for example
-{{ bt }}quay.io/openshift-release-dev/ocp-release:4.17.0-multi{{ bt }}.
+const versionFlagHelp = `
+_VERSION_ - ClusterVersion {{ bt }}metadata.name{{ bt }} (for example
+{{ bt }}4-17-0{{ bt }}) or {{ bt }}spec.version{{ bt }} string (for example
+{{ bt }}4.17.0{{ bt }}). If both match different versions, the name takes
+precedence. If omitted, the template or system default version is used.
 `
 
 const podCIDRFlagHelp = `

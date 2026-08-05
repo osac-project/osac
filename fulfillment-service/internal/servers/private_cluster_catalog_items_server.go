@@ -19,10 +19,14 @@ import (
 	"log/slog"
 
 	"github.com/prometheus/client_golang/prometheus"
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/structpb"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/fulfillment-service/internal/auth"
-	"github.com/osac-project/fulfillment-service/internal/events"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	"github.com/osac-project/osac/fulfillment-service/internal/events"
 )
 
 type PrivateClusterCatalogItemsServerBuilder struct {
@@ -37,8 +41,9 @@ var _ privatev1.ClusterCatalogItemsServer = (*PrivateClusterCatalogItemsServer)(
 
 type PrivateClusterCatalogItemsServer struct {
 	privatev1.UnimplementedClusterCatalogItemsServer
-	logger  *slog.Logger
-	generic *GenericServer[*privatev1.ClusterCatalogItem]
+	logger             *slog.Logger
+	clusterVersionsDao *dao.GenericDAO[*privatev1.ClusterVersion]
+	generic            *GenericServer[*privatev1.ClusterCatalogItem]
 }
 
 func NewPrivateClusterCatalogItemsServer() *PrivateClusterCatalogItemsServerBuilder {
@@ -80,6 +85,17 @@ func (b *PrivateClusterCatalogItemsServerBuilder) Build() (result *PrivateCluste
 		err = errors.New("tenancy logic is mandatory")
 		return
 	}
+
+	// Create the cluster versions DAO:
+	clusterVersionsDao, err := dao.NewGenericDAO[*privatev1.ClusterVersion]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
 	generic, err := NewGenericServer[*privatev1.ClusterCatalogItem]().
 		SetLogger(b.logger).
 		SetService(privatev1.ClusterCatalogItems_ServiceDesc.ServiceName).
@@ -93,8 +109,9 @@ func (b *PrivateClusterCatalogItemsServerBuilder) Build() (result *PrivateCluste
 	}
 
 	result = &PrivateClusterCatalogItemsServer{
-		logger:  b.logger,
-		generic: generic,
+		logger:             b.logger,
+		clusterVersionsDao: clusterVersionsDao,
+		generic:            generic,
 	}
 	return
 }
@@ -117,6 +134,9 @@ func (s *PrivateClusterCatalogItemsServer) Create(ctx context.Context,
 		if err = validateFieldDefinitions(object.GetFieldDefinitions()); err != nil {
 			return
 		}
+		if err = s.validateFieldDefinitionsVersionName(ctx, object.GetFieldDefinitions()); err != nil {
+			return
+		}
 	}
 	err = s.generic.Create(ctx, request, &response)
 	return
@@ -125,12 +145,48 @@ func (s *PrivateClusterCatalogItemsServer) Create(ctx context.Context,
 func (s *PrivateClusterCatalogItemsServer) Update(ctx context.Context,
 	request *privatev1.ClusterCatalogItemsUpdateRequest) (response *privatev1.ClusterCatalogItemsUpdateResponse, err error) {
 	if object := request.GetObject(); object != nil {
-		if err = validateFieldDefinitions(object.GetFieldDefinitions()); err != nil {
-			return
+		if updateIncludesField(request.GetUpdateMask(), "field_definitions") {
+			if err = validateFieldDefinitions(object.GetFieldDefinitions()); err != nil {
+				return
+			}
+			if err = s.validateFieldDefinitionsVersionName(ctx, object.GetFieldDefinitions()); err != nil {
+				return
+			}
 		}
 	}
 	err = s.generic.Update(ctx, request, &response)
 	return
+}
+
+// validateFieldDefinitionsVersionName validates version_name constraints in field_definitions.
+// Rejects OBSOLETE, disabled, or non-existent cluster versions used as defaults.
+func (s *PrivateClusterCatalogItemsServer) validateFieldDefinitionsVersionName(
+	ctx context.Context,
+	fieldDefinitions []*privatev1.FieldDefinition,
+) error {
+	var versionName string
+	for _, fd := range fieldDefinitions {
+		if fd.GetPath() == "version_name" {
+			defaultValue := fd.GetDefault()
+			if defaultValue == nil {
+				break
+			}
+			switch defaultValue.GetKind().(type) {
+			case *structpb.Value_StringValue:
+				versionName = defaultValue.GetStringValue()
+			case *structpb.Value_NullValue, nil:
+				// No default specified.
+			default:
+				return grpcstatus.Errorf(grpccodes.InvalidArgument,
+					"field_definitions: version_name default must be a string")
+			}
+			break
+		}
+	}
+	if versionName == "" {
+		return nil
+	}
+	return lookupAndValidateClusterVersion(ctx, s.logger, s.clusterVersionsDao, versionName)
 }
 
 func (s *PrivateClusterCatalogItemsServer) Delete(ctx context.Context,

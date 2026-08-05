@@ -222,9 +222,8 @@ spec:
                   properties:
                     blockDeletionOnFailure:
                       description: |-
-                        BlockDeletionOnFailure indicates whether CR deletion should be blocked if this job fails
-                        AAP Direct sets this to true to prevent orphaned cloud resources
-                        EDA sets this to false as webhook handles cleanup
+                        BlockDeletionOnFailure indicates whether CR deletion should be blocked if this job fails.
+                        Set to true to prevent orphaned cloud resources.
                       type: boolean
                     configVersion:
                       description: |-
@@ -235,9 +234,7 @@ spec:
                       type: string
                     jobID:
                       description: |-
-                        JobID is the job identifier from the provisioning provider
-                        For AAP Direct: job ID from AAP API response
-                        For EDA: auto-incremented "eda-webhook-N"
+                        JobID is the job identifier from the provisioning provider (AAP job ID).
                       type: string
                     message:
                       description: Message provides human-readable status or error

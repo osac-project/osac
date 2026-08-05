@@ -32,9 +32,9 @@ import (
 	"github.com/mattn/go-isatty"
 	"gopkg.in/yaml.v3"
 
-	"github.com/osac-project/fulfillment-service/internal/reflection"
-	"github.com/osac-project/fulfillment-service/internal/rendering"
-	"github.com/osac-project/fulfillment-service/internal/templating"
+	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
+	"github.com/osac-project/osac/fulfillment-service/internal/rendering"
+	"github.com/osac-project/osac/fulfillment-service/internal/templating"
 )
 
 // ConsoleBuilder contains the data and logic needed to create a console. Don't create objects of this type directly,

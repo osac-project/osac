@@ -126,7 +126,7 @@ jobs:
         id: build-operator
         uses: docker/build-push-action@v7
         with:
-          context: bare-metal-fulfillment-operator
+          context: .
           file: bare-metal-fulfillment-operator/Containerfile
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}

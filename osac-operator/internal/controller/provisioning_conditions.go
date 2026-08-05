@@ -17,7 +17,7 @@ limitations under the License.
 package controller
 
 import (
-	v1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
+	v1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )

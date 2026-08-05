@@ -1,4 +1,5 @@
 ---
+name: netris
 title: Netris Network Implementation
 description: >
   Provisions networking resources using Netris Controller API.

@@ -8,7 +8,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/osac-project/bare-metal-fulfillment-operator/internal/management"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/management"
 )
 
 const testBackendType = "openstack"

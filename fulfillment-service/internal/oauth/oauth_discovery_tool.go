@@ -26,7 +26,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/osac-project/fulfillment-service/internal/network"
+	"github.com/osac-project/osac/fulfillment-service/internal/network"
 )
 
 // ServerMetadata represents the authorization server metadata structure as defined in RFC 8414 for OAuth 2.0 or in the

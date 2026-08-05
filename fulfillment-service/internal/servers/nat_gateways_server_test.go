@@ -17,10 +17,10 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
-	"github.com/osac-project/fulfillment-service/internal/auth"
-	"github.com/osac-project/fulfillment-service/internal/database/dao"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 )
 
 var _ = Describe("Public NAT gateways server", func() {
@@ -144,8 +144,8 @@ var _ = Describe("Public NAT gateways server", func() {
 				Object: publicv1.NATGateway_builder{
 					Metadata: publicv1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
 					Spec: publicv1.NATGatewaySpec_builder{
-						VirtualNetwork: vnID,
-						ExternalIp:     eip.GetId(),
+						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
+						ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -167,8 +167,8 @@ var _ = Describe("Public NAT gateways server", func() {
 					Object: publicv1.NATGateway_builder{
 						Metadata: publicv1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
 						Spec: publicv1.NATGatewaySpec_builder{
-							VirtualNetwork: vnID,
-							ExternalIp:     eip.GetId(),
+							VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
+							ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build())
@@ -187,8 +187,8 @@ var _ = Describe("Public NAT gateways server", func() {
 				Object: publicv1.NATGateway_builder{
 					Metadata: publicv1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
 					Spec: publicv1.NATGatewaySpec_builder{
-						VirtualNetwork: vnID,
-						ExternalIp:     eip.GetId(),
+						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
+						ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -212,8 +212,8 @@ var _ = Describe("Public NAT gateways server", func() {
 						Tenant: auth.SharedTenant,
 					}.Build(),
 					Spec: publicv1.NATGatewaySpec_builder{
-						VirtualNetwork: vnID,
-						ExternalIp:     eip.GetId(),
+						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
+						ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())

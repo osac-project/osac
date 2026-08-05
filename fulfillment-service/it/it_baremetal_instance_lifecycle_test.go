@@ -27,11 +27,11 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 
-	bmfov1alpha1 "github.com/osac-project/bare-metal-fulfillment-operator/api/v1alpha1"
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
-	"github.com/osac-project/fulfillment-service/internal/kubernetes/labels"
-	"github.com/osac-project/fulfillment-service/internal/uuid"
+	bmfov1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
+	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 )
 
 var _ = Describe("BareMetalInstance lifecycle", func() {
@@ -74,7 +74,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		catalogResp, err := bareMetalInstanceCatalogItemsClient.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 			Object: privatev1.BareMetalInstanceCatalogItem_builder{
 				Title:     "Test BMI Catalog Item",
-				Template:  templateId,
+				Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: templateId}.Build(),
 				Published: true,
 			}.Build(),
 		}.Build())
@@ -93,7 +93,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
 				Spec: publicv1.BareMetalInstanceSpec_builder{
-					CatalogItem: catalogItemId,
+					CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -142,7 +142,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		Expect(metadata).ToNot(BeNil())
 		Expect(metadata.HasCreationTimestamp()).To(BeTrue())
 		Expect(metadata.HasDeletionTimestamp()).To(BeFalse())
-		Expect(object.GetSpec().GetCatalogItem()).To(Equal(catalogItemId),
+		Expect(object.GetSpec().GetCatalogItem().GetId()).To(Equal(catalogItemId),
 			"BareMetalInstance should persist catalog item reference")
 		Expect(object.GetStatus().GetState()).To(
 			Equal(publicv1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING),
@@ -153,21 +153,21 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		_, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
 				Spec: publicv1.BareMetalInstanceSpec_builder{
-					CatalogItem: "non-existent-catalog-item",
+					CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: "non-existent-catalog-item"}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
 		Expect(err).To(HaveOccurred())
 		status, ok := grpcstatus.FromError(err)
 		Expect(ok).To(BeTrue())
-		Expect(status.Code()).To(Equal(grpccodes.NotFound))
+		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 	})
 
 	It("Creates BareMetalInstance with image and persists it", func(ctx context.Context) {
 		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
 				Spec: publicv1.BareMetalInstanceSpec_builder{
-					CatalogItem: catalogItemId,
+					CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					Image: publicv1.BareMetalInstanceImage_builder{
 						SourceType: "registry",
 						SourceRef:  "quay.io/test/rhel9:latest",
@@ -249,7 +249,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
 				Spec: publicv1.BareMetalInstanceSpec_builder{
-					CatalogItem: catalogItemId,
+					CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -307,7 +307,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
 					Title:     "Catalog item with image default template",
-					Template:  imageTemplateId,
+					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: imageTemplateId}.Build(),
 					Published: true,
 				}.Build(),
 			}.Build())
@@ -324,7 +324,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
 				Spec: publicv1.BareMetalInstanceSpec_builder{
-					CatalogItem: imageCatalogItemId,
+					CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: imageCatalogItemId}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -386,7 +386,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
 					Title:     "Catalog item for image override test",
-					Template:  imageTemplateId,
+					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: imageTemplateId}.Build(),
 					Published: true,
 				}.Build(),
 			}.Build())
@@ -403,7 +403,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
 				Spec: publicv1.BareMetalInstanceSpec_builder{
-					CatalogItem: imageCatalogItemId,
+					CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: imageCatalogItemId}.Build(),
 					Image: publicv1.BareMetalInstanceImage_builder{
 						SourceType: "registry",
 						SourceRef:  "quay.io/user/custom:v2",
@@ -444,7 +444,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		_, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
 				Spec: publicv1.BareMetalInstanceSpec_builder{
-					CatalogItem: catalogItemId,
+					CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					Image: publicv1.BareMetalInstanceImage_builder{
 						SourceRef: "quay.io/test:latest",
 					}.Build(),
@@ -462,7 +462,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		_, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
 				Spec: publicv1.BareMetalInstanceSpec_builder{
-					CatalogItem: catalogItemId,
+					CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					Image: publicv1.BareMetalInstanceImage_builder{
 						SourceType: "registry",
 					}.Build(),
@@ -480,7 +480,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
 				Spec: publicv1.BareMetalInstanceSpec_builder{
-					CatalogItem: catalogItemId,
+					CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					Image: publicv1.BareMetalInstanceImage_builder{
 						SourceType: "registry",
 						SourceRef:  "quay.io/test:latest",
@@ -510,7 +510,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			Object: privatev1.BareMetalInstance_builder{
 				Id: bareMetalInstanceId,
 				Spec: privatev1.BareMetalInstanceSpec_builder{
-					CatalogItem: catalogItemId,
+					CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					Image: privatev1.BareMetalInstanceImage_builder{
 						SourceType: "registry",
 						SourceRef:  "quay.io/other:latest",
@@ -532,7 +532,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
 				Spec: publicv1.BareMetalInstanceSpec_builder{
-					CatalogItem: catalogItemId,
+					CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())

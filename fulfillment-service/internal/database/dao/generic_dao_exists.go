@@ -20,7 +20,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/osac-project/fulfillment-service/internal/database"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 )
 
 // ExistsRequest represents a request to check if an object exists by its identifier.

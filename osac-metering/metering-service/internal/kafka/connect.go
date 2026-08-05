@@ -18,25 +18,25 @@ type ConnectionConfig struct {
 }
 
 func NewSyncProducer(cfg ConnectionConfig) (sarama.SyncProducer, error) {
-	brokers := splitAndTrim(cfg.Brokers, ",")
+	brokers := SplitAndTrim(cfg.Brokers, ",")
 	sc := NewProducerConfig()
-	if err := configureTLS(sc, cfg.TLSCACert); err != nil {
+	if err := ConfigureTLS(sc, cfg.TLSCACert); err != nil {
 		return nil, err
 	}
-	if err := configureSASL(sc, cfg.SASLUser, cfg.SASLPassFile); err != nil {
+	if err := ConfigureSASL(sc, cfg.SASLUser, cfg.SASLPassFile); err != nil {
 		return nil, err
 	}
 	return sarama.NewSyncProducer(brokers, sc)
 }
 
 func VerifyTopicExists(cfg ConnectionConfig, topic string) error {
-	brokers := splitAndTrim(cfg.Brokers, ",")
+	brokers := SplitAndTrim(cfg.Brokers, ",")
 	sc := sarama.NewConfig()
 	sc.Version = sarama.V3_9_0_0
-	if err := configureTLS(sc, cfg.TLSCACert); err != nil {
+	if err := ConfigureTLS(sc, cfg.TLSCACert); err != nil {
 		return err
 	}
-	if err := configureSASL(sc, cfg.SASLUser, cfg.SASLPassFile); err != nil {
+	if err := ConfigureSASL(sc, cfg.SASLUser, cfg.SASLPassFile); err != nil {
 		return err
 	}
 	client, err := sarama.NewClient(brokers, sc)
@@ -57,7 +57,7 @@ func VerifyTopicExists(cfg ConnectionConfig, topic string) error {
 	return fmt.Errorf("topic %q does not exist on cluster (%d topics available)", topic, len(topics))
 }
 
-func configureTLS(sc *sarama.Config, caCertPath string) error {
+func ConfigureTLS(sc *sarama.Config, caCertPath string) error {
 	sc.Net.TLS.Enable = true
 	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
 	if caCertPath != "" {
@@ -75,7 +75,7 @@ func configureTLS(sc *sarama.Config, caCertPath string) error {
 	return nil
 }
 
-func configureSASL(sc *sarama.Config, user, passFile string) error {
+func ConfigureSASL(sc *sarama.Config, user, passFile string) error {
 	password, err := os.ReadFile(passFile)
 	if err != nil {
 		return fmt.Errorf("reading SASL password file %s: %w", passFile, err)
@@ -94,7 +94,7 @@ func configureSASL(sc *sarama.Config, user, passFile string) error {
 	return nil
 }
 
-func splitAndTrim(s, sep string) []string {
+func SplitAndTrim(s, sep string) []string {
 	parts := strings.Split(s, sep)
 	result := parts[:0]
 	for _, p := range parts {

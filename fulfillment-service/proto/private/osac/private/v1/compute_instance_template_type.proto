@@ -18,6 +18,7 @@ package osac.private.v1;
 import "google/protobuf/any.proto";
 import "osac/private/v1/compute_instance_type.proto";
 import "osac/private/v1/metadata_type.proto";
+import "osac/private/v1/instance_type_type.proto";
 
 // buf:lint:ignore OSAC_OBJECT_SHAPE
 message ComputeInstanceTemplate {
@@ -59,9 +60,9 @@ message ComputeInstanceTemplateSpecDefaults {
   // Default run strategy.
   optional string run_strategy = 5;
 
-  // Default instance type name. Specifies the default compute configuration for instances
+  // Default instance type. Specifies the default compute configuration for instances
   // created from this template.
-  optional string instance_type = 6;
+  InstanceTypeReference instance_type = 6;
 
   // Default guest OS type. When true, the VM runs Windows. When false or omitted, the VM runs Linux.
   optional bool is_windows = 7;

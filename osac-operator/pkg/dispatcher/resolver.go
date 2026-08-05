@@ -20,8 +20,8 @@ import (
 	"context"
 	"fmt"
 
-	privatev1 "github.com/osac-project/osac-operator/internal/api/osac/private/v1"
-	"github.com/osac-project/osac-operator/pkg/networkmanager"
+	privatev1 "github.com/osac-project/osac/osac-operator/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/osac-operator/pkg/networkmanager"
 )
 
 // ResolvedManagers holds the validated fabric and k8s managers extracted from a NetworkClass.

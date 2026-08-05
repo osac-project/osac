@@ -1,4 +1,5 @@
 ---
+name: metallb-l2
 title: MetalLB L2 Implementation
 description: >
   Provisions MetalLB resources for ExternalIPPool and ExternalIP using L2 advertisement.

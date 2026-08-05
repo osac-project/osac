@@ -21,7 +21,7 @@ import (
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/osac-project/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
 
 var _ = Describe("NATGatewaySpec", func() {

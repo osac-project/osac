@@ -1,0 +1,13 @@
+Version '{{ .Ref }}' doesn't exist.
+
+{{ if .Examples }}
+The following are some of the valid versions:
+
+{{ table .Examples }}
+
+To see the complete list of versions use the following command:
+
+{{ binary }} get clusterversions
+{{ end }}
+
+Use the '--help' option to get more details about the command.

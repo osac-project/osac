@@ -13,9 +13,9 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
-	"github.com/osac-project/fulfillment-service/internal/uuid"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 )
 
 var _ = Describe("Multitenancy authentication error handling", Label("multitenancy", "autherrors"), func() {
@@ -142,7 +142,7 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 						Id: templateId,
 						NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
 							"my-node-set": privatev1.ClusterTemplateNodeSet_builder{
-								HostType: hostTypeId,
+								HostType: privatev1.HostTypeReference_builder{Id: hostTypeId}.Build(),
 								Size:     3,
 							}.Build(),
 						},
@@ -167,7 +167,7 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 					createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 						Object: publicv1.Cluster_builder{
 							Spec: publicv1.ClusterSpec_builder{
-								Template: templateId,
+								Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 							}.Build(),
 						}.Build(),
 					}.Build())
@@ -242,7 +242,7 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 
 			DescribeTable(
 				"cross-tenant",
-				func(ctx context.Context, operation func(ctx context.Context, client publicv1.ClustersClient, clusterID string) error) {
+				func(ctx context.Context, operation func(ctx context.Context, client publicv1.ClustersClient, clusterID string) error, expectedCode grpccodes.Code) {
 					for clusterTenant, clusters := range tenantClusterMapping {
 						for user, userTenant := range ServiceAccountTenants {
 							// Skip if cluster is owned by the same tenant
@@ -262,7 +262,7 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 								Expect(err).To(HaveOccurred())
 								status, ok := grpcstatus.FromError(err)
 								Expect(ok).To(BeTrue())
-								Expect(status.Code()).To(Equal(grpccodes.NotFound))
+								Expect(status.Code()).To(Equal(expectedCode))
 							}
 						}
 					}
@@ -277,6 +277,7 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 
 						return err
 					},
+					grpccodes.NotFound,
 				),
 				Entry(
 					"Update is not allowed",
@@ -285,13 +286,14 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 							Object: publicv1.Cluster_builder{
 								Id: clusterID,
 								Spec: publicv1.ClusterSpec_builder{
-									Template: "cross-tenant-update-template",
+									Template: publicv1.ClusterTemplateReference_builder{Name: "cross-tenant-update-template"}.Build(),
 								}.Build(),
 							}.Build(),
 						}.Build())
 
 						return err
 					},
+					grpccodes.InvalidArgument,
 				),
 			)
 		})
@@ -394,7 +396,7 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 						Id: templateId,
 						NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
 							"my-node-set": privatev1.ClusterTemplateNodeSet_builder{
-								HostType: hostTypeId,
+								HostType: privatev1.HostTypeReference_builder{Id: hostTypeId}.Build(),
 								Size:     3,
 							}.Build(),
 						},
@@ -419,7 +421,7 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 					createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 						Object: publicv1.Cluster_builder{
 							Spec: publicv1.ClusterSpec_builder{
-								Template: templateId,
+								Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 							}.Build(),
 						}.Build(),
 					}.Build())

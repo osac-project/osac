@@ -23,7 +23,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/osac-project/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 )
 
 // staticTokenSource is a trivial TokenSource for tests.

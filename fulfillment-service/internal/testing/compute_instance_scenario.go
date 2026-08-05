@@ -17,7 +17,7 @@ import (
 	"fmt"
 	"os"
 
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"gopkg.in/yaml.v3"
 )
 
@@ -142,7 +142,7 @@ func (i *InstanceData) ToProtoInstance() *publicv1.ComputeInstance {
 			Name: i.Name,
 		},
 		Spec: &publicv1.ComputeInstanceSpec{
-			Template: i.Template,
+			Template: &publicv1.ComputeInstanceTemplateReference{Name: i.Template},
 		},
 		Status: &publicv1.ComputeInstanceStatus{
 			State:             i.State,

@@ -17,7 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/osac-project/fulfillment-service/internal/collections"
+	"github.com/osac-project/osac/fulfillment-service/internal/collections"
 )
 
 // Subject represents an entity, such as person or a service account.

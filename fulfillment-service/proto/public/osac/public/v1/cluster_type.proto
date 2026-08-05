@@ -19,6 +19,9 @@ import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
 import "osac/public/v1/condition_status_type.proto";
 import "osac/public/v1/metadata_type.proto";
+import "osac/public/v1/host_type_type.proto";
+import "osac/public/v1/security_group_type.proto";
+import "osac/public/v1/subnet_type.proto";
 
 // Contains the details of the cluster.
 //
@@ -37,10 +40,10 @@ message Cluster {
 message ClusterSpec {
   // Reference to the cluster template. Either `template` or `catalog_item` is required on create.
   //
-  // Must be the value of the `id` field of one of the cluster templates. Mutually exclusive with `catalog_item`.
+  // Mutually exclusive with `catalog_item`.
   //
   // This can't be modified after the cluster is created.
-  string template = 1;
+  ClusterTemplateReference template = 1;
 
   // Values of the template parameters.
   //
@@ -146,18 +149,24 @@ message ClusterSpec {
   // If not provided, the provider's default SSH key is used.
   optional string ssh_public_key = 5;
 
-  // OCP release image URL that controls the OpenShift version.
+  // Reference to a ClusterVersion by `metadata.name`.
   //
-  // For example: `quay.io/openshift-release-dev/ocp-release:4.17.0-multi`.
-  // If not provided, the template's default release image is used.
-  optional string release_image = 6;
+  // The version is resolved with the following precedence:
+  //
+  //   1. Explicit `spec.version_name` provided by the user.
+  //   2. Template `spec_defaults.version_name` (template path) or catalog item field definition default (catalog-item
+  //      path).
+  //   3. System default (`is_default = true`).
+  //
+  // The referenced ClusterVersion must exist, be enabled, and not be in `OBSOLETE` state.
+  optional string version_name = 6;
 
   // Cluster networking configuration.
   optional ClusterNetwork network = 7;
 
   // Reference to a cluster catalog item. Mutually exclusive with template during the migration period.
   // When set, the server fetches the catalog item and applies its field definitions.
-  string catalog_item = 8;
+  ClusterCatalogItemReference catalog_item = 8;
 
   // Network attachment connecting this cluster to a tenant subnet.
   //
@@ -349,18 +358,17 @@ enum ClusterConditionType {
 // network attachment shared by all node sets. The fabric interface for each node set is resolved automatically by the
 // system from the node set's host type.
 message ClusterNetworkAttachment {
-  // Identifier of the subnet to connect the cluster to.
+  // Reference to the subnet to connect the cluster to.
   //
-  // Must be the value of the `id` field of an existing subnet. The subnet must be in `READY` state at creation time.
+  // The subnet must be in `READY` state at creation time.
   //
   // This can't be modified after the cluster is created.
-  string subnet = 1;
+  SubnetLocalReference subnet = 1;
 
-  // Identifiers of the security groups to apply to the cluster's network attachment.
+  // References to the security groups to apply to the cluster's network attachment.
   //
-  // Each value must be the `id` field of an existing security group. All security groups must belong to the same
-  // virtual network as the subnet.
-  repeated string security_groups = 2;
+  // All security groups must belong to the same virtual network as the subnet.
+  repeated SecurityGroupLocalReference security_groups = 2;
 }
 
 // Defines a set of nodes that are part of the cluster, all of them of the same type of host.
@@ -388,8 +396,30 @@ message ClusterNodeSet {
   // user.
   //
   // The user will not have permission to change this field.
-  string host_type = 1;
+  HostTypeReference host_type = 1;
 
   // Number of nodes of the set.
   int32 size = 2;
+}
+
+// Local reference to a Cluster resource.
+message ClusterLocalReference {
+  string id = 1;
+  string name = 2;
+}
+
+// Reference to a ClusterTemplate resource.
+message ClusterTemplateReference {
+  string id = 1;
+  string name = 2;
+  string project = 3;
+  bool shared = 4;
+}
+
+// Reference to a ClusterCatalogItem resource.
+message ClusterCatalogItemReference {
+  string id = 1;
+  string name = 2;
+  string project = 3;
+  bool shared = 4;
 }

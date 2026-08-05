@@ -25,7 +25,7 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/osac-project/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 )
 
 // APIError represents an HTTP API error with status code and response body.

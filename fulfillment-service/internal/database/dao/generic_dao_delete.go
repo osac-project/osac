@@ -25,7 +25,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/osac-project/fulfillment-service/internal/database"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 )
 
 // DeleteRequest represents a request to delete an object by its identifier.

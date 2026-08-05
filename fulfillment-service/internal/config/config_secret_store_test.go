@@ -23,7 +23,7 @@ import (
 	. "github.com/onsi/gomega"
 	"github.com/zalando/go-keyring"
 
-	"github.com/osac-project/fulfillment-service/internal/logging"
+	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 )
 
 var _ = Describe("Secret store", func() {

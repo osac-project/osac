@@ -20,7 +20,7 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/osac-project/fulfillment-service/internal/console"
+	"github.com/osac-project/osac/fulfillment-service/internal/console"
 )
 
 // ticketOpener abstracts the ticket-opening operation so that tests can inject

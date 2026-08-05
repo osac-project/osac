@@ -25,7 +25,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/osac-project/bare-metal-fulfillment-operator/test/utils"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/test/utils"
 )
 
 var (

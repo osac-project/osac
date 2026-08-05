@@ -37,7 +37,7 @@ instead. Write the PR description to `.ai-bot/pr.md`.
    - Workflow playbooks: `collections/ansible_collections/osac/workflows/playbooks/`
    - Filter plugins: `collections/ansible_collections/osac/service/plugins/filter/`
    - Custom modules: `collections/ansible_collections/osac/service/plugins/modules/`
-3. Understand the data flow: osac-operator -> EDA event -> playbook ->
+3. Understand the data flow: osac-operator -> osac_job_vars -> playbook ->
    implementation_strategy -> template role -> K8s resources
 4. Check `.claude/rules/playbook-patterns.md` and `.claude/rules/networking-cudn.md`
    for domain-specific patterns

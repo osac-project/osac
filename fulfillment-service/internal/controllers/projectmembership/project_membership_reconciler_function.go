@@ -22,7 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
+
 	"strings"
 
 	"google.golang.org/grpc"
@@ -30,10 +30,11 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/fulfillment-service/internal/controllers/finalizers"
-	"github.com/osac-project/fulfillment-service/internal/idp"
-	"github.com/osac-project/fulfillment-service/internal/masks"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
+	"github.com/osac-project/osac/fulfillment-service/internal/idp"
+	"github.com/osac-project/osac/fulfillment-service/internal/masks"
 )
 
 // FunctionBuilder contains the data needed to build instances of the reconciler function.
@@ -293,13 +294,14 @@ func (t *task) syncProjectMembership(ctx context.Context, existingProject *priva
 		return nil
 	}
 
-	var successfulUsers []string
+	var successfulUsers []*privatev1.UserReference
 	var assignmentErrors []string
-	for _, userID := range users {
-		if err := t.addUserToGroup(ctx, userID, organizationName, groupID); err != nil {
-			assignmentErrors = append(assignmentErrors, fmt.Sprintf("user %s: %v", userID, err))
+	for _, userRef := range users {
+		userKey := controllers.RefKeyStr(userRef)
+		if err := t.addUserToGroup(ctx, userKey, organizationName, groupID); err != nil {
+			assignmentErrors = append(assignmentErrors, fmt.Sprintf("user %s: %v", userKey, err))
 		} else {
-			successfulUsers = append(successfulUsers, userID)
+			successfulUsers = append(successfulUsers, userRef)
 		}
 	}
 
@@ -324,24 +326,24 @@ func (t *task) handleUserListChange(ctx context.Context, existingProject *privat
 
 	desiredSet := make(map[string]bool)
 	for _, u := range desiredUsers {
-		desiredSet[u] = true
+		desiredSet[controllers.RefKeyStr(u)] = true
 	}
 	syncedSet := make(map[string]bool)
 	for _, u := range syncedUsers {
-		syncedSet[u] = true
+		syncedSet[controllers.RefKeyStr(u)] = true
 	}
 
 	var usersToAdd []string
 	for _, u := range desiredUsers {
-		if !syncedSet[u] {
-			usersToAdd = append(usersToAdd, u)
+		if !syncedSet[controllers.RefKeyStr(u)] {
+			usersToAdd = append(usersToAdd, controllers.RefKeyStr(u))
 		}
 	}
 
 	var usersToRemove []string
 	for _, u := range syncedUsers {
-		if !desiredSet[u] {
-			usersToRemove = append(usersToRemove, u)
+		if !desiredSet[controllers.RefKeyStr(u)] {
+			usersToRemove = append(usersToRemove, controllers.RefKeyStr(u))
 		}
 	}
 
@@ -355,9 +357,9 @@ func (t *task) handleUserListChange(ctx context.Context, existingProject *privat
 	}
 
 	// Track the actual synced user set so partial progress is preserved on failure.
-	actualUsers := make(map[string]bool)
+	actualUsers := make(map[string]*privatev1.UserReference)
 	for _, u := range syncedUsers {
-		actualUsers[u] = true
+		actualUsers[controllers.RefKeyStr(u)] = u
 	}
 
 	var syncErrors []string
@@ -370,20 +372,22 @@ func (t *task) handleUserListChange(ctx context.Context, existingProject *privat
 		}
 	}
 
-	for _, userID := range usersToAdd {
-		if err := t.addUserToGroup(ctx, userID, organizationName, groupID); err != nil {
-			syncErrors = append(syncErrors, fmt.Sprintf("add user %s: %v", userID, err))
-		} else {
-			actualUsers[userID] = true
+	for _, u := range desiredUsers {
+		key := controllers.RefKeyStr(u)
+		if !syncedSet[key] {
+			if err := t.addUserToGroup(ctx, key, organizationName, groupID); err != nil {
+				syncErrors = append(syncErrors, fmt.Sprintf("add user %s: %v", key, err))
+			} else {
+				actualUsers[key] = u
+			}
 		}
 	}
 
 	if len(syncErrors) > 0 {
-		currentUsers := make([]string, 0, len(actualUsers))
-		for u := range actualUsers {
-			currentUsers = append(currentUsers, u)
+		currentUsers := make([]*privatev1.UserReference, 0, len(actualUsers))
+		for _, ref := range actualUsers {
+			currentUsers = append(currentUsers, ref)
 		}
-		sort.Strings(currentUsers)
 		t.membership.GetStatus().SetState(privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_FAILED)
 		t.membership.GetStatus().SetUsers(currentUsers)
 		t.membership.GetStatus().SetMessage(fmt.Sprintf(
@@ -651,9 +655,10 @@ func (t *task) cleanupProjectMembership(ctx context.Context) error {
 		return fmt.Errorf("failed to find authorization group during cleanup: %w", err)
 	}
 
-	for _, userID := range users {
-		if err := t.removeUserFromGroup(ctx, userID, organizationName, groupID); err != nil {
-			return fmt.Errorf("failed to remove user %s during cleanup: %w", userID, err)
+	for _, userRef := range users {
+		userKey := controllers.RefKeyStr(userRef)
+		if err := t.removeUserFromGroup(ctx, userKey, organizationName, groupID); err != nil {
+			return fmt.Errorf("failed to remove user %s during cleanup: %w", userKey, err)
 		}
 	}
 

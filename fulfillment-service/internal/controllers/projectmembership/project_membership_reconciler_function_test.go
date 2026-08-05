@@ -25,10 +25,19 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/fulfillment-service/internal/controllers/finalizers"
-	"github.com/osac-project/fulfillment-service/internal/idp"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
+	"github.com/osac-project/osac/fulfillment-service/internal/idp"
 )
+
+// userRefs creates a slice of UserReference messages from the given names.
+func userRefs(names ...string) []*privatev1.UserReference {
+	refs := make([]*privatev1.UserReference, len(names))
+	for i, n := range names {
+		refs[i] = privatev1.UserReference_builder{Name: n}.Build()
+	}
+	return refs
+}
 
 var _ = Describe("Finalizer Management", func() {
 	It("should add finalizer on first call", func() {
@@ -164,13 +173,13 @@ var _ = Describe("Update with FAILED state", func() {
 				Project:    "project-id",
 			}.Build(),
 			Spec: privatev1.ProjectMembershipSpec_builder{
-				Users: []string{"existing-user", "new-user"},
+				Users: userRefs("existing-user", "new-user"),
 				Role:  privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_MANAGER,
 			}.Build(),
 			Status: privatev1.ProjectMembershipStatus_builder{
 				State:   privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_FAILED,
 				Message: proto.String("previous error"),
-				Users:   []string{"existing-user"},
+				Users:   userRefs("existing-user"),
 			}.Build(),
 		}.Build()
 
@@ -198,7 +207,7 @@ var _ = Describe("Update with FAILED state", func() {
 
 		err := task.update(ctx)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(membership.GetStatus().GetUsers()).To(Equal([]string{"existing-user", "new-user"}))
+		Expect(membership.GetStatus().GetUsers()).To(Equal(userRefs("existing-user", "new-user")))
 		Expect(membership.GetStatus().GetMessage()).ToNot(ContainSubstring("previous error"))
 	})
 
@@ -223,7 +232,7 @@ var _ = Describe("Update with FAILED state", func() {
 				Project:    "project-id",
 			}.Build(),
 			Spec: privatev1.ProjectMembershipSpec_builder{
-				Users: []string{"user-id"},
+				Users: userRefs("user-id"),
 				Role:  privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_MANAGER,
 			}.Build(),
 			Status: privatev1.ProjectMembershipStatus_builder{
@@ -257,7 +266,7 @@ var _ = Describe("Update with FAILED state", func() {
 		err := task.update(ctx)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(membership.GetStatus().GetState()).To(Equal(privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_READY))
-		Expect(membership.GetStatus().GetUsers()).To(Equal([]string{"user-id"}))
+		Expect(membership.GetStatus().GetUsers()).To(Equal(userRefs("user-id")))
 		Expect(membership.GetStatus().GetMessage()).To(Equal(""))
 	})
 
@@ -268,7 +277,7 @@ var _ = Describe("Update with FAILED state", func() {
 				Project:    "deleted-project-id",
 			}.Build(),
 			Spec: privatev1.ProjectMembershipSpec_builder{
-				Users: []string{"user-id"},
+				Users: userRefs("user-id"),
 				Role:  privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_MANAGER,
 			}.Build(),
 			Status: privatev1.ProjectMembershipStatus_builder{
@@ -314,7 +323,7 @@ var _ = Describe("Update with FAILED state", func() {
 				Project:    "project-id",
 			}.Build(),
 			Spec: privatev1.ProjectMembershipSpec_builder{
-				Users: []string{"user-id"},
+				Users: userRefs("user-id"),
 				Role:  privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_MANAGER,
 			}.Build(),
 			Status: privatev1.ProjectMembershipStatus_builder{
@@ -347,7 +356,7 @@ var _ = Describe("Update with FAILED state", func() {
 				Project:    "project-id",
 			}.Build(),
 			Spec: privatev1.ProjectMembershipSpec_builder{
-				Users: []string{"user-id"},
+				Users: userRefs("user-id"),
 				Role:  privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_UNSPECIFIED,
 			}.Build(),
 			Status: privatev1.ProjectMembershipStatus_builder{
@@ -383,7 +392,7 @@ var _ = Describe("Update with FAILED state", func() {
 				Project:    "project-id",
 			}.Build(),
 			Spec: privatev1.ProjectMembershipSpec_builder{
-				Users: []string{"user-id"},
+				Users: userRefs("user-id"),
 				Role:  privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_MANAGER,
 			}.Build(),
 			Status: privatev1.ProjectMembershipStatus_builder{
@@ -430,7 +439,7 @@ var _ = Describe("Update with FAILED state", func() {
 				Project:    "project-id",
 			}.Build(),
 			Spec: privatev1.ProjectMembershipSpec_builder{
-				Users: []string{"user-id"},
+				Users: userRefs("user-id"),
 				Role:  privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_MANAGER,
 			}.Build(),
 			Status: privatev1.ProjectMembershipStatus_builder{
@@ -489,13 +498,13 @@ var _ = Describe("Update with FAILED state", func() {
 				Project:    "project-id",
 			}.Build(),
 			Spec: privatev1.ProjectMembershipSpec_builder{
-				Users: []string{"user-a"},
+				Users: userRefs("user-a"),
 				Role:  privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_MANAGER,
 			}.Build(),
 			Status: privatev1.ProjectMembershipStatus_builder{
 				State:   privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_FAILED,
 				Message: proto.String("Failed to sync user changes: add user user-a: failed to fetch user"),
-				Users:   []string{"user-a"},
+				Users:   userRefs("user-a"),
 			}.Build(),
 		}.Build()
 
@@ -569,7 +578,7 @@ var _ = Describe("Partial success tracking", func() {
 					Project:    "project-id",
 				}.Build(),
 				Spec: privatev1.ProjectMembershipSpec_builder{
-					Users: []string{"user-a", "user-b"},
+					Users: userRefs("user-a", "user-b"),
 					Role:  privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_MANAGER,
 				}.Build(),
 				Status: privatev1.ProjectMembershipStatus_builder{
@@ -609,7 +618,7 @@ var _ = Describe("Partial success tracking", func() {
 			Expect(membership.GetStatus().GetState()).To(Equal(
 				privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_FAILED,
 			))
-			Expect(membership.GetStatus().GetUsers()).To(Equal([]string{"user-a"}))
+			Expect(membership.GetStatus().GetUsers()).To(Equal(userRefs("user-a")))
 			Expect(membership.GetStatus().GetMessage()).To(ContainSubstring("user-b"))
 		})
 	})
@@ -636,12 +645,12 @@ var _ = Describe("Partial success tracking", func() {
 					Project:    "project-id",
 				}.Build(),
 				Spec: privatev1.ProjectMembershipSpec_builder{
-					Users: []string{"user-a", "user-b", "user-c"},
+					Users: userRefs("user-a", "user-b", "user-c"),
 					Role:  privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_MANAGER,
 				}.Build(),
 				Status: privatev1.ProjectMembershipStatus_builder{
 					State: privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_READY,
-					Users: []string{"user-a"},
+					Users: userRefs("user-a"),
 				}.Build(),
 			}.Build()
 
@@ -677,7 +686,7 @@ var _ = Describe("Partial success tracking", func() {
 			Expect(membership.GetStatus().GetState()).To(Equal(
 				privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_FAILED,
 			))
-			Expect(membership.GetStatus().GetUsers()).To(ConsistOf("user-a", "user-b"))
+			Expect(membership.GetStatus().GetUsers()).To(ConsistOf(userRefs("user-a", "user-b")))
 			Expect(membership.GetStatus().GetMessage()).To(ContainSubstring("user-c"))
 		})
 
@@ -702,12 +711,12 @@ var _ = Describe("Partial success tracking", func() {
 					Project:    "project-id",
 				}.Build(),
 				Spec: privatev1.ProjectMembershipSpec_builder{
-					Users: []string{"user-a"},
+					Users: userRefs("user-a"),
 					Role:  privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_MANAGER,
 				}.Build(),
 				Status: privatev1.ProjectMembershipStatus_builder{
 					State: privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_READY,
-					Users: []string{"user-a", "user-b", "user-c"},
+					Users: userRefs("user-a", "user-b", "user-c"),
 				}.Build(),
 			}.Build()
 
@@ -743,7 +752,7 @@ var _ = Describe("Partial success tracking", func() {
 			Expect(membership.GetStatus().GetState()).To(Equal(
 				privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_FAILED,
 			))
-			Expect(membership.GetStatus().GetUsers()).To(ConsistOf("user-a", "user-c"))
+			Expect(membership.GetStatus().GetUsers()).To(ConsistOf(userRefs("user-a", "user-c")))
 			Expect(membership.GetStatus().GetMessage()).To(ContainSubstring("user-c"))
 		})
 	})
@@ -770,13 +779,13 @@ var _ = Describe("Partial success tracking", func() {
 					Project:    "project-id",
 				}.Build(),
 				Spec: privatev1.ProjectMembershipSpec_builder{
-					Users: []string{"user-a", "user-b"},
+					Users: userRefs("user-a", "user-b"),
 					Role:  privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_MANAGER,
 				}.Build(),
 				Status: privatev1.ProjectMembershipStatus_builder{
 					State:   privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_FAILED,
 					Message: proto.String("Failed to sync 1 user(s): user user-b: failed to fetch user"),
-					Users:   []string{"user-a"},
+					Users:   userRefs("user-a"),
 				}.Build(),
 			}.Build()
 
@@ -805,7 +814,7 @@ var _ = Describe("Partial success tracking", func() {
 
 			err := task.update(ctx)
 			Expect(err).ToNot(HaveOccurred())
-			Expect(membership.GetStatus().GetUsers()).To(Equal([]string{"user-a", "user-b"}))
+			Expect(membership.GetStatus().GetUsers()).To(Equal(userRefs("user-a", "user-b")))
 			Expect(membership.GetStatus().GetMessage()).ToNot(ContainSubstring("Failed"))
 		})
 
@@ -824,13 +833,13 @@ var _ = Describe("Partial success tracking", func() {
 					Project:    "project-id",
 				}.Build(),
 				Spec: privatev1.ProjectMembershipSpec_builder{
-					Users: []string{"user-a", "user-b"},
+					Users: userRefs("user-a", "user-b"),
 					Role:  privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_MANAGER,
 				}.Build(),
 				Status: privatev1.ProjectMembershipStatus_builder{
 					State:   privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_FAILED,
 					Message: proto.String("Failed to sync 1 user(s): user user-b: failed to fetch user"),
-					Users:   []string{"user-a"},
+					Users:   userRefs("user-a"),
 				}.Build(),
 			}.Build()
 
@@ -859,7 +868,7 @@ var _ = Describe("Partial success tracking", func() {
 			Expect(membership.GetStatus().GetState()).To(Equal(
 				privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_FAILED,
 			))
-			Expect(membership.GetStatus().GetUsers()).To(Equal([]string{"user-a"}))
+			Expect(membership.GetStatus().GetUsers()).To(Equal(userRefs("user-a")))
 			Expect(membership.GetStatus().GetMessage()).To(ContainSubstring("user-b"))
 		})
 	})
@@ -1199,7 +1208,7 @@ var _ = Describe("Synchronization", func() {
 					Project: "project-id",
 				}.Build(),
 				Spec: privatev1.ProjectMembershipSpec_builder{
-					Users: []string{"user-id"},
+					Users: userRefs("user-id"),
 					Role:  privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_MANAGER,
 				}.Build(),
 				Status: privatev1.ProjectMembershipStatus_builder{
@@ -1232,7 +1241,7 @@ var _ = Describe("Synchronization", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(membership.GetStatus().GetState()).To(Equal(privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_READY))
 			Expect(membership.GetStatus().GetMessage()).To(Equal(""))
-			Expect(membership.GetStatus().GetUsers()).To(Equal([]string{"user-id"}))
+			Expect(membership.GetStatus().GetUsers()).To(Equal(userRefs("user-id")))
 		})
 	})
 
@@ -1268,7 +1277,7 @@ var _ = Describe("Synchronization", func() {
 					Project: "child-project-id",
 				}.Build(),
 				Spec: privatev1.ProjectMembershipSpec_builder{
-					Users: []string{"user-id"},
+					Users: userRefs("user-id"),
 					Role:  privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_VIEWER,
 				}.Build(),
 				Status: privatev1.ProjectMembershipStatus_builder{
@@ -1305,7 +1314,7 @@ var _ = Describe("Synchronization", func() {
 			err := task.syncProjectMembership(ctx, nil)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(membership.GetStatus().GetState()).To(Equal(privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_READY))
-			Expect(membership.GetStatus().GetUsers()).To(Equal([]string{"user-id"}))
+			Expect(membership.GetStatus().GetUsers()).To(Equal(userRefs("user-id")))
 		})
 	})
 
@@ -1324,7 +1333,7 @@ var _ = Describe("Synchronization", func() {
 					Project: "project-id",
 				}.Build(),
 				Spec: privatev1.ProjectMembershipSpec_builder{
-					Users: []string{"nonexistent-user"},
+					Users: userRefs("nonexistent-user"),
 					Role:  privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_MANAGER,
 				}.Build(),
 				Status: privatev1.ProjectMembershipStatus_builder{
@@ -1361,7 +1370,7 @@ var _ = Describe("Synchronization", func() {
 					Project: "nonexistent-project",
 				}.Build(),
 				Spec: privatev1.ProjectMembershipSpec_builder{
-					Users: []string{"user-id"},
+					Users: userRefs("user-id"),
 					Role:  privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_MANAGER,
 				}.Build(),
 				Status: privatev1.ProjectMembershipStatus_builder{
@@ -1402,7 +1411,7 @@ var _ = Describe("Synchronization", func() {
 					Project: "project-id",
 				}.Build(),
 				Spec: privatev1.ProjectMembershipSpec_builder{
-					Users: []string{"user-id"},
+					Users: userRefs("user-id"),
 					Role:  privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_MANAGER,
 				}.Build(),
 				Status: privatev1.ProjectMembershipStatus_builder{
@@ -1487,11 +1496,11 @@ var _ = Describe("Deletion Cleanup", func() {
 				Project:    "project-id",
 			}.Build(),
 			Spec: privatev1.ProjectMembershipSpec_builder{
-				Users: []string{"user-id"},
+				Users: userRefs("user-id"),
 				Role:  privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_MANAGER,
 			}.Build(),
 			Status: privatev1.ProjectMembershipStatus_builder{
-				Users: []string{"user-id"},
+				Users: userRefs("user-id"),
 			}.Build(),
 		}.Build()
 
@@ -1553,11 +1562,11 @@ var _ = Describe("Deletion Cleanup", func() {
 				Project:    "child-project-id",
 			}.Build(),
 			Spec: privatev1.ProjectMembershipSpec_builder{
-				Users: []string{"user-id"},
+				Users: userRefs("user-id"),
 				Role:  privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_VIEWER,
 			}.Build(),
 			Status: privatev1.ProjectMembershipStatus_builder{
-				Users: []string{"user-id"},
+				Users: userRefs("user-id"),
 			}.Build(),
 		}.Build()
 
@@ -1598,11 +1607,11 @@ var _ = Describe("Deletion Cleanup", func() {
 				Project:    "project-id",
 			}.Build(),
 			Spec: privatev1.ProjectMembershipSpec_builder{
-				Users: []string{"user-id"},
+				Users: userRefs("user-id"),
 				Role:  privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_MANAGER,
 			}.Build(),
 			Status: privatev1.ProjectMembershipStatus_builder{
-				Users: []string{"user-id"},
+				Users: userRefs("user-id"),
 			}.Build(),
 		}.Build()
 
@@ -1639,11 +1648,11 @@ var _ = Describe("Deletion Cleanup", func() {
 				Project:    "project-id",
 			}.Build(),
 			Spec: privatev1.ProjectMembershipSpec_builder{
-				Users: []string{"user-id"},
+				Users: userRefs("user-id"),
 				Role:  privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_MANAGER,
 			}.Build(),
 			Status: privatev1.ProjectMembershipStatus_builder{
-				Users: []string{"user-id"},
+				Users: userRefs("user-id"),
 			}.Build(),
 		}.Build()
 
@@ -1680,11 +1689,11 @@ var _ = Describe("Deletion Cleanup", func() {
 				Project:    "project-id",
 			}.Build(),
 			Spec: privatev1.ProjectMembershipSpec_builder{
-				Users: []string{"user-id"},
+				Users: userRefs("user-id"),
 				Role:  privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_VIEWER,
 			}.Build(),
 			Status: privatev1.ProjectMembershipStatus_builder{
-				Users: []string{"user-id"},
+				Users: userRefs("user-id"),
 			}.Build(),
 		}.Build()
 
@@ -1759,12 +1768,12 @@ var _ = Describe("User List Change Handling", func() {
 				Project: "project-id",
 			}.Build(),
 			Spec: privatev1.ProjectMembershipSpec_builder{
-				Users: []string{"existing-user", "new-user"},
+				Users: userRefs("existing-user", "new-user"),
 				Role:  privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_MANAGER,
 			}.Build(),
 			Status: privatev1.ProjectMembershipStatus_builder{
 				State: privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_READY,
-				Users: []string{"existing-user"},
+				Users: userRefs("existing-user"),
 			}.Build(),
 		}.Build()
 
@@ -1791,7 +1800,7 @@ var _ = Describe("User List Change Handling", func() {
 
 		err := task.handleUserListChange(ctx, nil)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(membership.GetStatus().GetUsers()).To(Equal([]string{"existing-user", "new-user"}))
+		Expect(membership.GetStatus().GetUsers()).To(Equal(userRefs("existing-user", "new-user")))
 	})
 
 	It("should remove users when spec.users shrinks", func() {
@@ -1814,12 +1823,12 @@ var _ = Describe("User List Change Handling", func() {
 				Project: "project-id",
 			}.Build(),
 			Spec: privatev1.ProjectMembershipSpec_builder{
-				Users: []string{"remaining-user"},
+				Users: userRefs("remaining-user"),
 				Role:  privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_MANAGER,
 			}.Build(),
 			Status: privatev1.ProjectMembershipStatus_builder{
 				State: privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_READY,
-				Users: []string{"remaining-user", "removed-user"},
+				Users: userRefs("remaining-user", "removed-user"),
 			}.Build(),
 		}.Build()
 
@@ -1846,7 +1855,7 @@ var _ = Describe("User List Change Handling", func() {
 
 		err := task.handleUserListChange(ctx, nil)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(membership.GetStatus().GetUsers()).To(Equal([]string{"remaining-user"}))
+		Expect(membership.GetStatus().GetUsers()).To(Equal(userRefs("remaining-user")))
 	})
 
 	It("should add and remove users simultaneously", func() {
@@ -1875,12 +1884,12 @@ var _ = Describe("User List Change Handling", func() {
 				Project: "project-id",
 			}.Build(),
 			Spec: privatev1.ProjectMembershipSpec_builder{
-				Users: []string{"kept-user", "new-user"},
+				Users: userRefs("kept-user", "new-user"),
 				Role:  privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_VIEWER,
 			}.Build(),
 			Status: privatev1.ProjectMembershipStatus_builder{
 				State: privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_READY,
-				Users: []string{"kept-user", "removed-user"},
+				Users: userRefs("kept-user", "removed-user"),
 			}.Build(),
 		}.Build()
 
@@ -1915,7 +1924,7 @@ var _ = Describe("User List Change Handling", func() {
 
 		err := task.handleUserListChange(ctx, nil)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(membership.GetStatus().GetUsers()).To(Equal([]string{"kept-user", "new-user"}))
+		Expect(membership.GetStatus().GetUsers()).To(Equal(userRefs("kept-user", "new-user")))
 	})
 
 	It("should be a no-op when user lists are identical", func() {
@@ -1924,12 +1933,12 @@ var _ = Describe("User List Change Handling", func() {
 				Project: "project-id",
 			}.Build(),
 			Spec: privatev1.ProjectMembershipSpec_builder{
-				Users: []string{"user-a", "user-b"},
+				Users: userRefs("user-a", "user-b"),
 				Role:  privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_MANAGER,
 			}.Build(),
 			Status: privatev1.ProjectMembershipStatus_builder{
 				State: privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_READY,
-				Users: []string{"user-a", "user-b"},
+				Users: userRefs("user-a", "user-b"),
 			}.Build(),
 		}.Build()
 
@@ -1957,12 +1966,12 @@ var _ = Describe("User List Change Handling", func() {
 				Project: "project-id",
 			}.Build(),
 			Spec: privatev1.ProjectMembershipSpec_builder{
-				Users: []string{"existing-user", "failing-user"},
+				Users: userRefs("existing-user", "failing-user"),
 				Role:  privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_MANAGER,
 			}.Build(),
 			Status: privatev1.ProjectMembershipStatus_builder{
 				State: privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_READY,
-				Users: []string{"existing-user"},
+				Users: userRefs("existing-user"),
 			}.Build(),
 		}.Build()
 

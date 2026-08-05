@@ -51,3 +51,11 @@ message NetworkInterface {
   // Human-friendly description of the interface. For example `100GbE data interface`.
   string description = 3;
 }
+
+// Reference to a HostType resource.
+message HostTypeReference {
+  string id = 1;
+  string name = 2;
+  string project = 3;
+  bool shared = 4;
+}

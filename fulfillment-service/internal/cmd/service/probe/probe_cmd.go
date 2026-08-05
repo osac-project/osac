@@ -16,7 +16,7 @@ package probe
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/osac-project/fulfillment-service/internal/cmd/service/probe/grpcserver"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/service/probe/grpcserver"
 )
 
 // Cmd creates and returns the `probe` command.

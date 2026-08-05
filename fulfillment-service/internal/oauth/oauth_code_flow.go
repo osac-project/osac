@@ -25,8 +25,8 @@ import (
 
 	"github.com/google/go-querystring/query"
 
-	"github.com/osac-project/fulfillment-service/internal/auth"
-	"github.com/osac-project/fulfillment-service/internal/network"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/network"
 )
 
 type codeFlow struct {

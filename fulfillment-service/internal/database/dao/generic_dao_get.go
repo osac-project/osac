@@ -24,7 +24,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/osac-project/fulfillment-service/internal/database"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 )
 
 // GetRequest represents a request to get a single object by its identifier.

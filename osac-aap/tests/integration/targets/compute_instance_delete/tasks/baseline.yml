@@ -12,9 +12,8 @@
 
     - name: Set test variables for baseline workflow
       ansible.builtin.set_fact:
-        ansible_eda:
-          event:
-            payload: "{{ test_compute_instance }}"
+        osac_job_vars:
+          resource: "{{ test_compute_instance }}"
         tenant_target_namespace: "computeinstance-test-vm-work"
         # Note: delete.yaml doesn't have override hooks yet, so we use noop_template
         # TODO: Refactor ocp_virt_vm delete.yaml to add override points

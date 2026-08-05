@@ -31,12 +31,12 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/fulfillment-service/internal/auth"
-	"github.com/osac-project/fulfillment-service/internal/computeinstancespec"
-	"github.com/osac-project/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/fulfillment-service/internal/events"
-	"github.com/osac-project/fulfillment-service/internal/utils"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/computeinstancespec"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	"github.com/osac-project/osac/fulfillment-service/internal/events"
+	"github.com/osac-project/osac/fulfillment-service/internal/utils"
 )
 
 type PrivateComputeInstancesServerBuilder struct {
@@ -216,18 +216,18 @@ func (s *PrivateComputeInstancesServer) Create(ctx context.Context,
 	spec := request.GetObject().GetSpec()
 	catalogItemRef := spec.GetCatalogItem()
 	templateRef := spec.GetTemplate()
-	if catalogItemRef != "" && templateRef != "" {
+	if catalogItemRef != nil && templateRef != nil {
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"catalog_item and template are mutually exclusive")
 		return
 	}
 	var template *privatev1.ComputeInstanceTemplate
-	if catalogItemRef != "" {
+	if catalogItemRef != nil {
 		err = s.validateAndTransformCatalogItem(ctx, request.GetObject())
 		if err != nil {
 			return
 		}
-		template, err = s.fetchTemplate(ctx, spec.GetTemplate())
+		template, err = s.fetchTemplate(ctx, refKey(spec.GetTemplate()))
 	} else {
 		template, err = s.fetchAndValidateTemplate(ctx, request.GetObject())
 	}
@@ -326,7 +326,7 @@ func (s *PrivateComputeInstancesServer) fetchAndValidateTemplate(ctx context.Con
 		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "compute instance spec is mandatory")
 	}
 
-	template, err := s.fetchTemplate(ctx, spec.GetTemplate())
+	template, err := s.fetchTemplate(ctx, refKey(spec.GetTemplate()))
 	if err != nil {
 		return nil, err
 	}
@@ -405,16 +405,21 @@ func (s *PrivateComputeInstancesServer) validateInstanceType(
 	ci *privatev1.ComputeInstance,
 ) ([]string, error) {
 	spec := ci.GetSpec()
-	instanceTypeName := spec.GetInstanceType()
+	instanceTypeRef := spec.GetInstanceType()
 	var warnings []string
+	var instanceTypeName string
+
+	if instanceTypeRef != nil {
+		instanceTypeName = refKey(instanceTypeRef)
+	}
 
 	if instanceTypeName == "" {
 		// instance_type not on the spec directly. If a template is referenced
 		// (e.g. via catalog item), check whether its spec_defaults provide one.
-		if templateRef := spec.GetTemplate(); templateRef != "" {
-			template, fetchErr := s.fetchTemplate(ctx, templateRef)
+		if templateRef := spec.GetTemplate(); templateRef != nil {
+			template, fetchErr := s.fetchTemplate(ctx, refKey(templateRef))
 			if fetchErr == nil && template.GetSpecDefaults().HasInstanceType() {
-				instanceTypeName = template.GetSpecDefaults().GetInstanceType()
+				instanceTypeName = refKey(template.GetSpecDefaults().GetInstanceType())
 			}
 		}
 	}
@@ -465,12 +470,12 @@ func (s *PrivateComputeInstancesServer) validateTemplateImmutability(ctx context
 	existingSpec := existingCI.GetSpec()
 	newSpec := request.GetObject().GetSpec()
 
-	if updatingTemplate && existingSpec.GetTemplate() != newSpec.GetTemplate() {
+	if updatingTemplate && refKey(existingSpec.GetTemplate()) != refKey(newSpec.GetTemplate()) {
 		return grpcstatus.Errorf(
 			grpccodes.InvalidArgument,
 			"cannot change spec.template from '%s' to '%s': template is immutable",
-			existingSpec.GetTemplate(),
-			newSpec.GetTemplate(),
+			refKey(existingSpec.GetTemplate()),
+			refKey(newSpec.GetTemplate()),
 		)
 	}
 
@@ -486,21 +491,21 @@ func (s *PrivateComputeInstancesServer) validateTemplateImmutability(ctx context
 		}
 	}
 
-	if updatingCatalogItem && existingSpec.GetCatalogItem() != newSpec.GetCatalogItem() {
+	if updatingCatalogItem && refKey(existingSpec.GetCatalogItem()) != refKey(newSpec.GetCatalogItem()) {
 		return grpcstatus.Errorf(
 			grpccodes.InvalidArgument,
 			"cannot change spec.catalog_item from '%s' to '%s': catalog item is immutable",
-			existingSpec.GetCatalogItem(),
-			newSpec.GetCatalogItem(),
+			refKey(existingSpec.GetCatalogItem()),
+			refKey(newSpec.GetCatalogItem()),
 		)
 	}
 
-	if updatingInstanceType && existingSpec.GetInstanceType() != newSpec.GetInstanceType() {
+	if updatingInstanceType && refKey(existingSpec.GetInstanceType()) != refKey(newSpec.GetInstanceType()) {
 		return grpcstatus.Errorf(
 			grpccodes.InvalidArgument,
 			"cannot change spec.instance_type from '%s' to '%s': instance type is immutable",
-			existingSpec.GetInstanceType(),
-			newSpec.GetInstanceType(),
+			refKey(existingSpec.GetInstanceType()),
+			refKey(newSpec.GetInstanceType()),
 		)
 	}
 
@@ -560,11 +565,11 @@ func (s *PrivateComputeInstancesServer) validateNetworkAttachmentsImmutability(
 	for i := range existingAttachments {
 		existingSubnet := existingAttachments[i].GetSubnet()
 		newSubnet := newAttachments[i].GetSubnet()
-		if existingSubnet != newSubnet {
+		if refKey(existingSubnet) != refKey(newSubnet) {
 			return grpcstatus.Errorf(
 				grpccodes.InvalidArgument,
 				"cannot change network_attachments[%d].subnet from '%s' to '%s': subnet is immutable",
-				i, existingSubnet, newSubnet,
+				i, refKey(existingSubnet), refKey(newSubnet),
 			)
 		}
 	}
@@ -618,17 +623,18 @@ func (s *PrivateComputeInstancesServer) validateNetworkReferencesTenancy(
 	}
 
 	for _, att := range attachments {
-		subnetID := att.GetSubnet()
-		securityGroupIDs := att.GetSecurityGroups()
+		subnetRef := att.GetSubnet()
+		securityGroupRefs := att.GetSecurityGroups()
 
-		// At this point, subnetID is guaranteed to be non-empty because
+		// At this point, subnetRef is guaranteed to be non-nil because
 		// ValidateNetworkAttachments ensures all attachments have non-empty subnet.
+		subnetIDStr := refKey(subnetRef)
 
 		// Validate tenant isolation for subnet.
 		// TenancyLogic in DAO filters out cross-tenant resources, making them appear as NotFound.
 		// We allow NotFound during deletion (resource may be deleted or cross-tenant).
 		// The key is that we ALWAYS call DAO Get() so tenant filtering happens.
-		_, getErr := s.subnetsDao.Get().SetId(subnetID).Do(ctx)
+		_, getErr := s.subnetsDao.Get().SetId(subnetIDStr).Do(ctx)
 		if getErr != nil {
 			var notFoundErr *dao.ErrNotFound
 			if errors.As(getErr, &notFoundErr) {
@@ -639,17 +645,18 @@ func (s *PrivateComputeInstancesServer) validateNetworkReferencesTenancy(
 			}
 			// Other error - propagate
 			s.logger.ErrorContext(ctx, "Failed to query Subnet for tenancy check",
-				slog.String("subnet_id", subnetID),
+				slog.String("subnet_id", subnetIDStr),
 				slog.Any("error", getErr))
 			return grpcstatus.Errorf(grpccodes.Internal, "failed to validate subnet")
 		}
 
 		// Validate tenant isolation for security groups.
-		for _, sgID := range securityGroupIDs {
-			if sgID == "" {
+		for _, sgRef := range securityGroupRefs {
+			if sgRef == nil {
 				continue
 			}
-			_, getErr := s.securityGroupsDao.Get().SetId(sgID).Do(ctx)
+			sgIDStr := refKey(sgRef)
+			_, getErr := s.securityGroupsDao.Get().SetId(sgIDStr).Do(ctx)
 			if getErr != nil {
 				var notFoundErr *dao.ErrNotFound
 				if errors.As(getErr, &notFoundErr) {
@@ -660,7 +667,7 @@ func (s *PrivateComputeInstancesServer) validateNetworkReferencesTenancy(
 				}
 				// Other error - propagate
 				s.logger.ErrorContext(ctx, "Failed to query SecurityGroup for tenancy check",
-					slog.String("security_group_id", sgID),
+					slog.String("security_group_id", sgIDStr),
 					slog.Any("error", getErr))
 				return grpcstatus.Errorf(grpccodes.Internal, "failed to validate security group")
 			}
@@ -699,27 +706,28 @@ func (s *PrivateComputeInstancesServer) validateNetworkReferencesState(
 	}
 
 	for i, att := range attachments {
-		subnetID := att.GetSubnet()
-		securityGroupIDs := att.GetSecurityGroups()
+		subnetRef := att.GetSubnet()
+		securityGroupRefs := att.GetSecurityGroups()
 
-		// At this point, subnetID is guaranteed to be non-empty because
+		// At this point, subnetRef is guaranteed to be non-nil because
 		// ValidateNetworkAttachments ensures all attachments have non-empty subnet
 		var subnet *privatev1.Subnet
 		var virtualNetworkID string
+		subnetKey := refKey(subnetRef)
 
 		// VAL-01: Validate Subnet exists and is READY
 		getSubnetResponse, getErr := s.subnetsDao.Get().
-			SetId(subnetID).
+			SetId(subnetKey).
 			Do(ctx)
 		if getErr != nil {
 			var notFoundErr *dao.ErrNotFound
 			if errors.As(getErr, &notFoundErr) {
 				return grpcstatus.Errorf(grpccodes.InvalidArgument,
-					"network_attachments[%d]: subnet '%s' does not exist", i, subnetID)
+					"network_attachments[%d]: subnet '%s' does not exist", i, subnetKey)
 			}
 			// Note: TenancyErr won't happen here because tenancy was already validated
 			s.logger.ErrorContext(ctx, "Failed to query Subnet",
-				slog.String("subnet_id", subnetID),
+				slog.String("subnet_id", subnetKey),
 				slog.Any("error", getErr))
 			return grpcstatus.Errorf(grpccodes.Internal, "failed to validate subnet")
 		}
@@ -727,35 +735,36 @@ func (s *PrivateComputeInstancesServer) validateNetworkReferencesState(
 		subnet = getSubnetResponse.GetObject()
 		if subnet == nil {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"network_attachments[%d]: subnet '%s' does not exist", i, subnetID)
+				"network_attachments[%d]: subnet '%s' does not exist", i, subnetKey)
 		}
 
 		// VAL-02: Validate READY state
 		if subnet.GetStatus().GetState() != privatev1.SubnetState_SUBNET_STATE_READY {
 			return grpcstatus.Errorf(grpccodes.FailedPrecondition,
 				"network_attachments[%d]: subnet '%s' is not in READY state (current state: %s)",
-				i, subnetID, subnet.GetStatus().GetState().String())
+				i, subnetKey, subnet.GetStatus().GetState().String())
 		}
 
-		virtualNetworkID = subnet.GetSpec().GetVirtualNetwork()
+		virtualNetworkID = refKey(subnet.GetSpec().GetVirtualNetwork())
 
-		for _, sgID := range securityGroupIDs {
-			if sgID == "" {
+		for _, sgRef := range securityGroupRefs {
+			if sgRef == nil {
 				continue
 			}
+			sgKey := refKey(sgRef)
 
 			getSGResponse, getErr := s.securityGroupsDao.Get().
-				SetId(sgID).
+				SetId(sgKey).
 				Do(ctx)
 			if getErr != nil {
 				var notFoundErr *dao.ErrNotFound
 				if errors.As(getErr, &notFoundErr) {
 					return grpcstatus.Errorf(grpccodes.InvalidArgument,
-						"network_attachments[%d]: security group '%s' does not exist", i, sgID)
+						"network_attachments[%d]: security group '%s' does not exist", i, sgKey)
 				}
 				// Note: TenancyErr won't happen here because tenancy was already validated
 				s.logger.ErrorContext(ctx, "Failed to query SecurityGroup",
-					slog.String("security_group_id", sgID),
+					slog.String("security_group_id", sgKey),
 					slog.Any("error", getErr))
 				return grpcstatus.Errorf(grpccodes.Internal, "failed to validate security group")
 			}
@@ -763,23 +772,23 @@ func (s *PrivateComputeInstancesServer) validateNetworkReferencesState(
 			sg := getSGResponse.GetObject()
 			if sg == nil {
 				return grpcstatus.Errorf(grpccodes.InvalidArgument,
-					"network_attachments[%d]: security group '%s' does not exist", i, sgID)
+					"network_attachments[%d]: security group '%s' does not exist", i, sgKey)
 			}
 
 			// VAL-02: Validate READY state
 			if sg.GetStatus().GetState() != privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY {
 				return grpcstatus.Errorf(grpccodes.FailedPrecondition,
 					"network_attachments[%d]: security group '%s' is not in READY state (current state: %s)",
-					i, sgID, sg.GetStatus().GetState().String())
+					i, sgKey, sg.GetStatus().GetState().String())
 			}
 
 			// VAL-03: Validate SecurityGroup belongs to same VirtualNetwork as Subnet
 			if virtualNetworkID != "" {
-				sgVirtualNetworkID := sg.GetSpec().GetVirtualNetwork()
+				sgVirtualNetworkID := refKey(sg.GetSpec().GetVirtualNetwork())
 				if sgVirtualNetworkID != virtualNetworkID {
 					return grpcstatus.Errorf(grpccodes.InvalidArgument,
 						"network_attachments[%d]: security group '%s' belongs to VirtualNetwork '%s', but subnet '%s' belongs to VirtualNetwork '%s'",
-						i, sgID, sgVirtualNetworkID, subnetID, virtualNetworkID)
+						i, sgKey, sgVirtualNetworkID, subnetKey, virtualNetworkID)
 				}
 			}
 		}
@@ -801,23 +810,24 @@ func (s *PrivateComputeInstancesServer) validateAndTransformCatalogItem(
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "object is mandatory")
 	}
 	catalogItemRef := ci.GetSpec().GetCatalogItem()
-	if catalogItemRef == "" {
+	if catalogItemRef == nil {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "catalog_item is mandatory")
 	}
+	catalogItemRefStr := refKey(catalogItemRef)
 
-	catalogItem, err := s.lookupCatalogItem(ctx, catalogItemRef)
+	catalogItem, err := s.lookupCatalogItem(ctx, catalogItemRefStr)
 	if err != nil {
 		return err
 	}
 
-	if err := validateCatalogItemAccess(catalogItem, catalogItemRef); err != nil {
+	if err := validateCatalogItemAccess(catalogItem, catalogItemRefStr); err != nil {
 		return err
 	}
 
 	templateRef := catalogItem.GetTemplate()
-	if templateRef == "" {
+	if templateRef == nil {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"catalog item '%s' does not reference a template", catalogItemRef)
+			"catalog item '%s' does not reference a template", catalogItemRefStr)
 	}
 	ci.GetSpec().SetTemplate(templateRef)
 

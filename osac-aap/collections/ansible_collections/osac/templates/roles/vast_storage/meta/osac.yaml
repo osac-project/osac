@@ -1,4 +1,5 @@
 ---
+name: vast-storage
 title: VAST Data Storage Provider
 description: >
   Provisions VAST Data storage resources for OSAC tenants.

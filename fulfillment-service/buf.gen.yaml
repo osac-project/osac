@@ -17,7 +17,7 @@ managed:
   enabled: true
   override:
   - file_option: go_package_prefix
-    value: github.com/osac-project/fulfillment-service/internal/api
+    value: github.com/osac-project/osac/fulfillment-service/internal/api
   disable:
   - module: buf.build/googleapis/googleapis
   - module: buf.build/grpc-ecosystem/grpc-gateway

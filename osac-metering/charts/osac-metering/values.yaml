@@ -6,6 +6,15 @@ image:
 # Fulfillment address is auto-derived from release namespace.
 # Override fulfillment.address for cross-namespace/cross-cluster (OSAC-3537).
 
+database:
+  connection: []
+
+heartbeat:
+  interval: "60s"
+
+reconciliation:
+  interval: "60m"
+
 certs:
   caBundle:
     configMap: ca-bundle
@@ -17,3 +26,10 @@ resources:
   limits:
     cpu: 500m
     memory: 256Mi
+
+testAdapter:
+  enabled: false
+  image:
+    repository: ghcr.io/osac-project/metering-test-adapter
+    tag: latest
+    pullPolicy: Always

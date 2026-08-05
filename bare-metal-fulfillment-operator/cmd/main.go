@@ -42,14 +42,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/yaml"
 
-	osacv1alpha1 "github.com/osac-project/bare-metal-fulfillment-operator/api/v1alpha1"
-	"github.com/osac-project/bare-metal-fulfillment-operator/internal/controller"
-	"github.com/osac-project/bare-metal-fulfillment-operator/internal/helpers"
-	"github.com/osac-project/bare-metal-fulfillment-operator/internal/inventory"
-	"github.com/osac-project/bare-metal-fulfillment-operator/internal/management"
-	"github.com/osac-project/bare-metal-fulfillment-operator/internal/profile"
-	"github.com/osac-project/osac-operator/pkg/aap"
-	"github.com/osac-project/osac-operator/pkg/provisioning"
+	osacv1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/controller"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/helpers"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/inventory"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/management"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/profile"
+	"github.com/osac-project/osac/osac-operator/pkg/aap"
+	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 	// +kubebuilder:scaffold:imports
 )
 

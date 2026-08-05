@@ -23,7 +23,7 @@ import (
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/osac-project/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
 
 // ErrTenantBeingDeleted is returned by getTenant when the tenant exists but has DeletionTimestamp set.

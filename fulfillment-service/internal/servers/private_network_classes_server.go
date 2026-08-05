@@ -26,10 +26,10 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/fulfillment-service/internal/auth"
-	"github.com/osac-project/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/fulfillment-service/internal/events"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	"github.com/osac-project/osac/fulfillment-service/internal/events"
 )
 
 // findDefaultNetworkClass returns the current default NetworkClass using the provided DAO, or nil if none is set.
@@ -175,6 +175,14 @@ func (s *PrivateNetworkClassesServer) Create(ctx context.Context,
 
 	// Clear any caller-provided ID so the DAO always generates a UUID.
 	nc.SetId("")
+
+	// Auto-derive metadata.name from implementation_strategy if not set.
+	if nc.GetMetadata().GetName() == "" && nc.GetImplementationStrategy() != "" {
+		if nc.GetMetadata() == nil {
+			nc.SetMetadata(&privatev1.Metadata{})
+		}
+		nc.GetMetadata().SetName(toDNSLabel(nc.GetImplementationStrategy()))
+	}
 
 	// Default-swap: if this NC is being created as the default, unset all existing defaults.
 	// Both the old-default unset(s) and the new-NC persist share this request's database transaction via ctx.

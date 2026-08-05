@@ -53,6 +53,10 @@
             name: "vast-snapshot-test-ensuresc-default"
           failed_when: false
 
+    - name: Set mock tenant manager credentials for this scenario
+      ansible.builtin.set_fact:
+        mock_tenant_manager_password: "test-csi-password"
+
     - name: Create hub Secret fixture (simulates output from setup action)
       kubernetes.core.k8s:
         state: present
@@ -76,7 +80,7 @@
             storage_provider_type: "vast"
             tenant_manager_name: "osac-test-ensuresc"
             tenant_manager_username: "osac-test-ensuresc"
-            tenant_manager_password: "test-csi-password"
+            tenant_manager_password: "{{ mock_tenant_manager_password }}"
             tenant_manager_id: "42"
             tenant_role_id: "7"
             view_policy_name: "osac-test-ensuresc-nfs"
@@ -88,9 +92,6 @@
   gather_facts: false
 
   environment:
-    VAST_ENDPOINT: "127.0.0.1:18443"
-    VAST_USERNAME: "admin"
-    VAST_PASSWORD: "admin"
     OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
 
   vars:
@@ -102,11 +103,17 @@
       - name: default
         protocol: nfs
         provider: vast
+        backend_id: be-test
       - name: block-tier
         protocol: block
         provider: vast
+        backend_id: be-test
+    storage_provider_backend_connections:
+      be-test:
+        endpoint: "127.0.0.1:18443"
+        username: "admin"
+        password: "mock-admin-password"
     storage_provider_action: ensure_storage_class
-    storage_provider_snapshots_enabled: true
     storage_provider_block_encryption_passphrase: "test-encryption-passphrase"
     vast_storage_validate_certs: false
 
@@ -266,7 +273,7 @@
           - _csi_secret.resources[0].data.username is defined
           - (_csi_secret.resources[0].data.username | b64decode) == "osac-test-ensuresc"
           - _csi_secret.resources[0].data.password is defined
-          - (_csi_secret.resources[0].data.password | b64decode) == "test-csi-password"
+          - (_csi_secret.resources[0].data.password | b64decode) == mock_tenant_manager_password
           - _csi_secret.resources[0].data.endpoint is defined
           - (_csi_secret.resources[0].data.endpoint | b64decode) == "127.0.0.1:18443"
           - _csi_secret.resources[0].data.tenant is defined
@@ -343,9 +350,6 @@
   gather_facts: false
 
   environment:
-    VAST_ENDPOINT: "127.0.0.1:18443"
-    VAST_USERNAME: "admin"
-    VAST_PASSWORD: "admin"
     OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
 
   vars:
@@ -356,11 +360,17 @@
       - name: default
         protocol: nfs
         provider: vast
+        backend_id: be-test
       - name: block-tier
         protocol: block
         provider: vast
+        backend_id: be-test
+    storage_provider_backend_connections:
+      be-test:
+        endpoint: "127.0.0.1:18443"
+        username: "admin"
+        password: "mock-admin-password"
     storage_provider_action: ensure_storage_class
-    storage_provider_snapshots_enabled: true
     storage_provider_block_encryption_passphrase: "test-encryption-passphrase"
     vast_storage_validate_certs: false
 
@@ -411,6 +421,203 @@
           - _call_log | selectattr('path', 'search', 'viewpolicies') | list | length > 0
         fail_msg: "No view policy API calls found — ensure_storage_class should create view policies"
         success_msg: "View policy API calls detected"
+
+# ── Test: storage_provider_snapshots_enabled: false suppresses VolumeSnapshotClass ──
+# Uses a separate tenant from the tests above so this scenario always goes through full
+# provisioning (the short-circuit above would otherwise mask whether the flag is honored).
+- name: "Storage Provider Ensure SC - Setup fixtures (snapshots disabled)"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Delete any pre-existing snapshots-disabled test resources (clean slate)
+      block:
+        - name: Delete hub Secret if exists
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Secret
+            name: "vast-tenant-config-test-ensuresc-nosnap"
+            namespace: "osac-system"
+          failed_when: false
+
+        - name: Delete CSI Secret if exists
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Secret
+            name: "vast-csi-test-ensuresc-nosnap"
+            namespace: "osac-system"
+          failed_when: false
+
+        - name: Delete NFS StorageClass if exists
+          kubernetes.core.k8s:
+            state: absent
+            api_version: storage.k8s.io/v1
+            kind: StorageClass
+            name: "vast-nfs-test-ensuresc-nosnap-default"
+          failed_when: false
+
+        - name: Delete VolumeSnapshotClass if exists
+          kubernetes.core.k8s:
+            state: absent
+            api_version: snapshot.storage.k8s.io/v1
+            kind: VolumeSnapshotClass
+            name: "vast-snapshot-test-ensuresc-nosnap-default"
+          failed_when: false
+
+    - name: Create hub Secret fixture for snapshots-disabled tenant
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "vast-tenant-config-test-ensuresc-nosnap"
+            namespace: "osac-system"
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/tenant: "test-ensuresc-nosnap"
+          type: Opaque
+          stringData:
+            tenant_uid_hash: "e1a8c287"
+            vast_tenant_id: "998"
+            vip_pool_name: "osac-test-pool"
+            vast_endpoint: "127.0.0.1:18443"
+            tenant_manager_username: "osac-test-ensuresc-nosnap"
+            tenant_manager_password: "{{ mock_tenant_manager_password }}"
+
+- name: "Storage Provider Ensure SC - Run with snapshots disabled"
+  hosts: localhost
+  gather_facts: false
+
+  environment:
+    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
+
+  vars:
+    tenant_name: "test-ensuresc-nosnap"
+    tenant_namespace: "osac-system"
+    _cluster_name: "test-cluster"
+    storage_provider_tiers:
+      - name: default
+        protocol: nfs
+        provider: vast
+        backend_id: be-test
+    storage_provider_backend_connections:
+      be-test:
+        endpoint: "127.0.0.1:18443"
+        username: "admin"
+        password: "mock-admin-password"
+    storage_provider_action: ensure_storage_class
+    storage_provider_snapshots_enabled: false
+    vast_storage_validate_certs: false
+
+  tasks:
+    - name: Call storage_provider role with snapshots disabled
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: ensure_storage_class
+
+- name: "Storage Provider Ensure SC - Verify snapshots_enabled: false is honored"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Verify NFS StorageClass was provisioned (proves ensure_storage_class completed)
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "vast-nfs-test-ensuresc-nosnap-default"
+      register: _nosnap_sc_result
+
+    - name: Assert exactly one NFS StorageClass exists for the snapshots-disabled tenant
+      ansible.builtin.assert:
+        that:
+          - _nosnap_sc_result.resources | length == 1
+        fail_msg: >-
+          StorageClass 'vast-nfs-test-ensuresc-nosnap-default' was not found — ensure_storage_class
+          must have failed before snapshot suppression could even be exercised.
+
+    - name: Check if VolumeSnapshotClass CRD exists
+      kubernetes.core.k8s_info:
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: volumesnapshotclasses.snapshot.storage.k8s.io
+      register: _nosnap_vsc_crd_check
+
+    - name: Assert VolumeSnapshotClass CRD is present (precondition for this test)
+      ansible.builtin.assert:
+        that:
+          - _nosnap_vsc_crd_check.resources | length > 0
+        fail_msg: >-
+          VolumeSnapshotClass CRD not found in the test cluster — this scenario only
+          proves storage_provider_snapshots_enabled is honored when the CRD IS present.
+
+    - name: Read VolumeSnapshotClass for snapshots-disabled tenant
+      kubernetes.core.k8s_info:
+        api_version: snapshot.storage.k8s.io/v1
+        kind: VolumeSnapshotClass
+        name: "vast-snapshot-test-ensuresc-nosnap-default"
+      register: _nosnap_vsc_result
+
+    - name: Assert VolumeSnapshotClass was NOT created when snapshots_enabled is false
+      ansible.builtin.assert:
+        that:
+          - _nosnap_vsc_result.resources | length == 0
+        fail_msg: >-
+          VolumeSnapshotClass 'vast-snapshot-test-ensuresc-nosnap-default' was created even
+          though storage_provider_snapshots_enabled was false — the CRD-availability check
+          must not bypass this opt-out flag.
+        success_msg: "VolumeSnapshotClass correctly suppressed when snapshots_enabled is false"
+
+# ── Cleanup (snapshots-disabled scenario) ──
+- name: "Storage Provider Ensure SC - Cleanup (snapshots disabled)"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Delete NFS StorageClass (snapshots-disabled tenant)
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "vast-nfs-test-ensuresc-nosnap-default"
+      failed_when: false
+
+    - name: Delete CSI Secret (snapshots-disabled tenant)
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "vast-csi-test-ensuresc-nosnap"
+        namespace: "osac-system"
+      failed_when: false
+
+    - name: Delete hub Secret (snapshots-disabled tenant)
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "vast-tenant-config-test-ensuresc-nosnap"
+        namespace: "osac-system"
+      failed_when: false
+
+    - name: Check if VolumeSnapshotClass CRD exists for cleanup (snapshots-disabled tenant)
+      kubernetes.core.k8s_info:
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: volumesnapshotclasses.snapshot.storage.k8s.io
+      register: _nosnap_cleanup_vsc_crd
+
+    - name: Delete VolumeSnapshotClass (snapshots-disabled tenant, safety net in case the flag ever regresses)
+      when: _nosnap_cleanup_vsc_crd.resources | length > 0
+      kubernetes.core.k8s:
+        state: absent
+        api_version: snapshot.storage.k8s.io/v1
+        kind: VolumeSnapshotClass
+        name: "vast-snapshot-test-ensuresc-nosnap-default"
+      failed_when: false
 
 # ── Cleanup ──
 - name: "Storage Provider Ensure SC - Cleanup"

@@ -24,7 +24,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/osac-project/fulfillment-service/internal/logging"
+	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 )
 
 // CommandBuilder contains the data and logic needed to create an object that helps execute a command line tool. Don't

@@ -18,8 +18,16 @@ import (
 	. "github.com/onsi/gomega"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 )
+
+func refIDs[T interface{ GetId() string }](refs []T) []string {
+	ids := make([]string, len(refs))
+	for i, r := range refs {
+		ids[i] = r.GetId()
+	}
+	return ids
+}
 
 var _ = Describe("Private role bindings server", func() {
 	var roleBindingsServer *PrivateRoleBindingsServer
@@ -73,10 +81,10 @@ var _ = Describe("Private role bindings server", func() {
 						Name: "admin-binding",
 					}.Build(),
 					Spec: privatev1.RoleBindingSpec_builder{
-						Role: "admin-role-id",
-						Users: []string{
-							"admin-user-1",
-							"admin-user-2",
+						Role: privatev1.RoleReference_builder{Id: "admin-role-id"}.Build(),
+						Users: []*privatev1.UserReference{
+							privatev1.UserReference_builder{Id: "admin-user-1"}.Build(),
+							privatev1.UserReference_builder{Id: "admin-user-2"}.Build(),
 						},
 					}.Build(),
 				}.Build(),
@@ -86,8 +94,8 @@ var _ = Describe("Private role bindings server", func() {
 			Expect(response.GetObject()).ToNot(BeNil())
 			Expect(response.GetObject().GetId()).ToNot(BeEmpty())
 			Expect(response.GetObject().GetMetadata().GetName()).To(Equal("admin-binding"))
-			Expect(response.GetObject().GetSpec().GetRole()).To(Equal("admin-role-id"))
-			Expect(response.GetObject().GetSpec().GetUsers()).To(ConsistOf("admin-user-1", "admin-user-2"))
+			Expect(response.GetObject().GetSpec().GetRole().GetId()).To(Equal("admin-role-id"))
+			Expect(refIDs(response.GetObject().GetSpec().GetUsers())).To(ConsistOf("admin-user-1", "admin-user-2"))
 		})
 
 		It("Lists role bindings", func() {
@@ -97,9 +105,9 @@ var _ = Describe("Private role bindings server", func() {
 						Name: "binding-a",
 					}.Build(),
 					Spec: privatev1.RoleBindingSpec_builder{
-						Role: "role-a",
-						Users: []string{
-							"user-1",
+						Role: privatev1.RoleReference_builder{Id: "role-a"}.Build(),
+						Users: []*privatev1.UserReference{
+							privatev1.UserReference_builder{Id: "user-1"}.Build(),
 						},
 					}.Build(),
 				}.Build(),
@@ -112,9 +120,9 @@ var _ = Describe("Private role bindings server", func() {
 						Name: "binding-b",
 					}.Build(),
 					Spec: privatev1.RoleBindingSpec_builder{
-						Role: "role-b",
-						Users: []string{
-							"user-2",
+						Role: privatev1.RoleReference_builder{Id: "role-b"}.Build(),
+						Users: []*privatev1.UserReference{
+							privatev1.UserReference_builder{Id: "user-2"}.Build(),
 						},
 					}.Build(),
 				}.Build(),
@@ -134,9 +142,9 @@ var _ = Describe("Private role bindings server", func() {
 						Name: "test-binding",
 					}.Build(),
 					Spec: privatev1.RoleBindingSpec_builder{
-						Role: "role-1",
-						Users: []string{
-							"user-a",
+						Role: privatev1.RoleReference_builder{Id: "role-1"}.Build(),
+						Users: []*privatev1.UserReference{
+							privatev1.UserReference_builder{Id: "user-a"}.Build(),
 						},
 					}.Build(),
 				}.Build(),
@@ -147,7 +155,7 @@ var _ = Describe("Private role bindings server", func() {
 				Object: privatev1.RoleBinding_builder{
 					Id: createResponse.GetObject().GetId(),
 					Spec: privatev1.RoleBindingSpec_builder{
-						Role: "role-2",
+						Role: privatev1.RoleReference_builder{Id: "role-2"}.Build(),
 					}.Build(),
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{
@@ -157,7 +165,7 @@ var _ = Describe("Private role bindings server", func() {
 				},
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(updateResponse.GetObject().GetSpec().GetRole()).To(Equal("role-2"))
+			Expect(updateResponse.GetObject().GetSpec().GetRole().GetId()).To(Equal("role-2"))
 		})
 
 		It("Ignores fields not included in the update mask", func() {
@@ -167,10 +175,10 @@ var _ = Describe("Private role bindings server", func() {
 						Name: "test-binding",
 					}.Build(),
 					Spec: privatev1.RoleBindingSpec_builder{
-						Role: "role-1",
-						Users: []string{
-							"user-a",
-							"user-b",
+						Role: privatev1.RoleReference_builder{Id: "role-1"}.Build(),
+						Users: []*privatev1.UserReference{
+							privatev1.UserReference_builder{Id: "user-a"}.Build(),
+							privatev1.UserReference_builder{Id: "user-b"}.Build(),
 						},
 					}.Build(),
 				}.Build(),
@@ -181,9 +189,9 @@ var _ = Describe("Private role bindings server", func() {
 				Object: privatev1.RoleBinding_builder{
 					Id: createResponse.GetObject().GetId(),
 					Spec: privatev1.RoleBindingSpec_builder{
-						Role: "role-2",
-						Users: []string{
-							"user-x",
+						Role: privatev1.RoleReference_builder{Id: "role-2"}.Build(),
+						Users: []*privatev1.UserReference{
+							privatev1.UserReference_builder{Id: "user-x"}.Build(),
 						},
 					}.Build(),
 				}.Build(),
@@ -194,8 +202,8 @@ var _ = Describe("Private role bindings server", func() {
 				},
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(updateResponse.GetObject().GetSpec().GetRole()).To(Equal("role-2"))
-			Expect(updateResponse.GetObject().GetSpec().GetUsers()).To(ConsistOf("user-a", "user-b"))
+			Expect(updateResponse.GetObject().GetSpec().GetRole().GetId()).To(Equal("role-2"))
+			Expect(refIDs(updateResponse.GetObject().GetSpec().GetUsers())).To(ConsistOf("user-a", "user-b"))
 		})
 
 		It("Deletes a role binding", func() {
@@ -205,9 +213,9 @@ var _ = Describe("Private role bindings server", func() {
 						Name: "to-delete",
 					}.Build(),
 					Spec: privatev1.RoleBindingSpec_builder{
-						Role: "role-1",
-						Users: []string{
-							"user-1",
+						Role: privatev1.RoleReference_builder{Id: "role-1"}.Build(),
+						Users: []*privatev1.UserReference{
+							privatev1.UserReference_builder{Id: "user-1"}.Build(),
 						},
 					}.Build(),
 				}.Build(),
@@ -227,9 +235,9 @@ var _ = Describe("Private role bindings server", func() {
 						Name: "to-signal",
 					}.Build(),
 					Spec: privatev1.RoleBindingSpec_builder{
-						Role: "role-1",
-						Users: []string{
-							"user-1",
+						Role: privatev1.RoleReference_builder{Id: "role-1"}.Build(),
+						Users: []*privatev1.UserReference{
+							privatev1.UserReference_builder{Id: "user-1"}.Build(),
 						},
 					}.Build(),
 				}.Build(),

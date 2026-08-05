@@ -17,7 +17,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 )
 
 var _ = Describe("Default networking provisioner", func() {
@@ -144,7 +144,7 @@ var _ = Describe("Default networking provisioner", func() {
 			Expect(vn.GetMetadata().GetLabels()).To(HaveKeyWithValue("osac.openshift.io/default", "true"))
 			Expect(vn.GetSpec().GetIpv4Cidr()).To(Equal("10.0.0.0/16"))
 			Expect(vn.GetSpec().GetIpv6Cidr()).To(Equal("fd00::/48"))
-			Expect(vn.GetSpec().GetNetworkClass()).ToNot(BeEmpty())
+			Expect(vn.GetSpec().GetNetworkClass().GetId()).ToNot(BeEmpty())
 			Expect(vn.GetSpec().GetImplementationStrategy()).ToNot(BeEmpty())
 			Expect(vn.GetStatus().GetState()).To(Equal(
 				privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING))
@@ -177,7 +177,7 @@ var _ = Describe("Default networking provisioner", func() {
 			Expect(ipv4Subnet.GetMetadata().GetLabels()).To(HaveKeyWithValue("osac.openshift.io/default", "true"))
 			Expect(ipv4Subnet.GetMetadata().GetAnnotations()).To(HaveKeyWithValue("osac.openshift.io/owner-reference", vnID))
 			Expect(ipv4Subnet.GetSpec().GetIpv4Cidr()).To(Equal("10.0.1.0/24"))
-			Expect(ipv4Subnet.GetSpec().GetVirtualNetwork()).To(Equal(vnID))
+			Expect(ipv4Subnet.GetSpec().GetVirtualNetwork().GetId()).To(Equal(vnID))
 			Expect(ipv4Subnet.GetStatus().GetState()).To(Equal(
 				privatev1.SubnetState_SUBNET_STATE_PENDING))
 		})
@@ -209,7 +209,7 @@ var _ = Describe("Default networking provisioner", func() {
 			Expect(ipv6Subnet.GetMetadata().GetLabels()).To(HaveKeyWithValue("osac.openshift.io/default", "true"))
 			Expect(ipv6Subnet.GetMetadata().GetAnnotations()).To(HaveKeyWithValue("osac.openshift.io/owner-reference", vnID))
 			Expect(ipv6Subnet.GetSpec().GetIpv6Cidr()).To(Equal("fd00:0:0:1::/64"))
-			Expect(ipv6Subnet.GetSpec().GetVirtualNetwork()).To(Equal(vnID))
+			Expect(ipv6Subnet.GetSpec().GetVirtualNetwork().GetId()).To(Equal(vnID))
 			Expect(ipv6Subnet.GetStatus().GetState()).To(Equal(
 				privatev1.SubnetState_SUBNET_STATE_PENDING))
 		})
@@ -235,7 +235,7 @@ var _ = Describe("Default networking provisioner", func() {
 			Expect(sg.GetMetadata().GetTenant()).To(Equal("test-tenant"))
 			Expect(sg.GetMetadata().GetLabels()).To(HaveKeyWithValue("osac.openshift.io/default", "true"))
 			Expect(sg.GetMetadata().GetAnnotations()).To(HaveKeyWithValue("osac.openshift.io/owner-reference", vnID))
-			Expect(sg.GetSpec().GetVirtualNetwork()).To(Equal(vnID))
+			Expect(sg.GetSpec().GetVirtualNetwork().GetId()).To(Equal(vnID))
 			Expect(sg.GetSpec().GetIngress()).To(HaveLen(1))
 			Expect(sg.GetSpec().GetIngress()[0].GetProtocol()).To(Equal(privatev1.Protocol_PROTOCOL_TCP))
 			Expect(sg.GetSpec().GetIngress()[0].GetPortFrom()).To(Equal(int32(22)))
@@ -312,7 +312,7 @@ var _ = Describe("Default networking provisioner", func() {
 			Expect(eipList.GetItems()).To(HaveLen(1))
 			eip := eipList.GetItems()[0]
 			Expect(eip.GetMetadata().GetLabels()).To(HaveKeyWithValue("osac.openshift.io/default", "true"))
-			Expect(eip.GetSpec().GetPool()).To(Equal(pool.GetId()))
+			Expect(eip.GetSpec().GetPool().GetId()).To(Equal(pool.GetId()))
 			Expect(eip.GetStatus().GetState()).To(Equal(privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING))
 			Expect(eip.GetStatus().GetAttached()).To(BeTrue())
 
@@ -330,7 +330,7 @@ var _ = Describe("Default networking provisioner", func() {
 			ng := ngList.GetItems()[0]
 			Expect(ng.GetMetadata().GetLabels()).To(HaveKeyWithValue("osac.openshift.io/default", "true"))
 			Expect(ng.GetMetadata().GetAnnotations()).To(HaveKeyWithValue("osac.openshift.io/owner-reference", vnID))
-			Expect(ng.GetSpec().GetExternalIp()).To(Equal(eip.GetId()))
+			Expect(ng.GetSpec().GetExternalIp().GetId()).To(Equal(eip.GetId()))
 			Expect(ng.GetStatus().GetState()).To(Equal(privatev1.NATGatewayState_NAT_GATEWAY_STATE_PENDING))
 
 			poolResp, err := provisioner.externalIPPoolDao.Get().
@@ -351,7 +351,7 @@ var _ = Describe("Default networking provisioner", func() {
 
 			err := provisioner.Provision(ctx, "nat-tenant")
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("no ExternalIP pool with available capacity"))
+			Expect(err.Error()).To(ContainSubstring("no READY ExternalIP pool with available capacity"))
 		})
 	})
 

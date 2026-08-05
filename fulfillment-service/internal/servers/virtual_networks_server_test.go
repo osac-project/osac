@@ -22,12 +22,12 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
-	"github.com/osac-project/fulfillment-service/internal/auth"
-	"github.com/osac-project/fulfillment-service/internal/collections"
-	"github.com/osac-project/fulfillment-service/internal/database"
-	"github.com/osac-project/fulfillment-service/internal/database/dao"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/collections"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 )
 
 var _ = Describe("Virtual networks server", func() {
@@ -148,7 +148,7 @@ var _ = Describe("Virtual networks server", func() {
 				Object: privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Region:                 "us-east-1",
-						NetworkClass:           "default",
+						NetworkClass:           privatev1.NetworkClassReference_builder{Id: "default"}.Build(),
 						ImplementationStrategy: "ovn-kubernetes",
 						Ipv4Cidr:               new("10.0.0.0/16"),
 						Capabilities: privatev1.VirtualNetworkCapabilities_builder{
@@ -237,7 +237,7 @@ var _ = Describe("Virtual networks server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			publicObj := getResponse.GetObject()
 			Expect(publicObj.GetId()).To(Equal(privateObj.GetId()))
-			Expect(publicObj.GetSpec().GetNetworkClass()).To(Equal("default"))
+			Expect(publicObj.GetSpec().GetNetworkClass().GetId()).To(Equal("default"))
 		})
 
 		It("Update object", func() {
@@ -252,7 +252,7 @@ var _ = Describe("Virtual networks server", func() {
 						Name: "updated-name",
 					}.Build(),
 					Spec: publicv1.VirtualNetworkSpec_builder{
-						NetworkClass: "default",
+						NetworkClass: publicv1.NetworkClassReference_builder{Id: "default"}.Build(),
 						Ipv4Cidr:     new("10.0.0.0/16"),
 						Capabilities: publicv1.VirtualNetworkCapabilities_builder{
 							EnableIpv4: true,
@@ -283,7 +283,7 @@ var _ = Describe("Virtual networks server", func() {
 						Name: "cidr-explicit",
 					}.Build(),
 					Spec: publicv1.VirtualNetworkSpec_builder{
-						NetworkClass: "default",
+						NetworkClass: publicv1.NetworkClassReference_builder{Id: "default"}.Build(),
 						Ipv4Cidr:     new("10.0.0.0/16"),
 					}.Build(),
 				}.Build(),
@@ -305,7 +305,7 @@ var _ = Describe("Virtual networks server", func() {
 						Name: "cidr-omitted",
 					}.Build(),
 					Spec: publicv1.VirtualNetworkSpec_builder{
-						NetworkClass: "default",
+						NetworkClass: publicv1.NetworkClassReference_builder{Id: "default"}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -322,7 +322,7 @@ var _ = Describe("Virtual networks server", func() {
 				Object: publicv1.VirtualNetwork_builder{
 					Id: privateObj.GetId(),
 					Spec: publicv1.VirtualNetworkSpec_builder{
-						NetworkClass: "default",
+						NetworkClass: publicv1.NetworkClassReference_builder{Id: "default"}.Build(),
 						Ipv4Cidr:     new("192.168.0.0/16"),
 					}.Build(),
 				}.Build(),
@@ -347,7 +347,7 @@ var _ = Describe("Virtual networks server", func() {
 						Version: math.MaxInt32,
 					}.Build(),
 					Spec: publicv1.VirtualNetworkSpec_builder{
-						NetworkClass: "default",
+						NetworkClass: publicv1.NetworkClassReference_builder{Id: "default"}.Build(),
 						Ipv4Cidr:     new("10.0.0.0/16"),
 					}.Build(),
 				}.Build(),
@@ -367,7 +367,7 @@ var _ = Describe("Virtual networks server", func() {
 						Name: "public-vn",
 					}.Build(),
 					Spec: publicv1.VirtualNetworkSpec_builder{
-						NetworkClass: "default",
+						NetworkClass: publicv1.NetworkClassReference_builder{Id: "default"}.Build(),
 						Ipv4Cidr:     new("10.0.0.0/16"),
 					}.Build(),
 				}.Build(),
@@ -432,7 +432,7 @@ var _ = Describe("Virtual networks server", func() {
 			Expect(err).ToNot(HaveOccurred())
 
 			// Verify the VN's network_class is the default NC's ID:
-			Expect(createResponse.GetObject().GetSpec().GetNetworkClass()).To(Equal("default"))
+			Expect(createResponse.GetObject().GetSpec().GetNetworkClass().GetId()).To(Equal("default"))
 		})
 
 		It("Public Create honors explicit network_class instead of using default", func() {
@@ -466,7 +466,7 @@ var _ = Describe("Virtual networks server", func() {
 						Name: "explicit-nc-vn",
 					}.Build(),
 					Spec: publicv1.VirtualNetworkSpec_builder{
-						NetworkClass: altNCId,
+						NetworkClass: publicv1.NetworkClassReference_builder{Id: altNCId}.Build(),
 						Ipv4Cidr:     new("10.1.0.0/16"),
 						Capabilities: publicv1.VirtualNetworkCapabilities_builder{
 							EnableIpv4: true,
@@ -477,13 +477,13 @@ var _ = Describe("Virtual networks server", func() {
 			Expect(err).ToNot(HaveOccurred())
 
 			// Verify the VN uses the alternate NC, NOT the default:
-			Expect(createResponse.GetObject().GetSpec().GetNetworkClass()).To(Equal(altNCId))
+			Expect(createResponse.GetObject().GetSpec().GetNetworkClass().GetId()).To(Equal(altNCId))
 		})
 
 		It("Public Update preserves network_class (AddIgnoredFields on inMapper)", func() {
 			// Create VN via private server with explicit network_class:
 			privateObj := createVirtualNetwork()
-			Expect(privateObj.GetSpec().GetNetworkClass()).To(Equal("default"))
+			Expect(privateObj.GetSpec().GetNetworkClass().GetId()).To(Equal("default"))
 
 			// Update via public server changing only metadata (no network_class in request):
 			updateResponse, err := publicServer.Update(ctx, publicv1.VirtualNetworksUpdateRequest_builder{
@@ -502,21 +502,21 @@ var _ = Describe("Virtual networks server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			// The network_class should still be "default" even though it was not in the public update request:
-			Expect(updateResponse.GetObject().GetSpec().GetNetworkClass()).To(Equal("default"))
+			Expect(updateResponse.GetObject().GetSpec().GetNetworkClass().GetId()).To(Equal("default"))
 			Expect(updateResponse.GetObject().GetMetadata().GetName()).To(Equal("renamed-vn"))
 		})
 
 		It("Public Update rejects explicit network_class change with immutability error", func() {
 			// Create VN via private server with explicit network_class:
 			privateObj := createVirtualNetwork()
-			Expect(privateObj.GetSpec().GetNetworkClass()).To(Equal("default"))
+			Expect(privateObj.GetSpec().GetNetworkClass().GetId()).To(Equal("default"))
 
 			// Update via public server with a different network_class:
 			_, err := publicServer.Update(ctx, publicv1.VirtualNetworksUpdateRequest_builder{
 				Object: publicv1.VirtualNetwork_builder{
 					Id: privateObj.GetId(),
 					Spec: publicv1.VirtualNetworkSpec_builder{
-						NetworkClass: "different-nc",
+						NetworkClass: publicv1.NetworkClassReference_builder{Id: "different-nc"}.Build(),
 						Ipv4Cidr:     new("10.0.0.0/16"),
 						Capabilities: publicv1.VirtualNetworkCapabilities_builder{
 							EnableIpv4: true,

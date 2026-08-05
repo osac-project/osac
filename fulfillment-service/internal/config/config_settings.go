@@ -28,11 +28,11 @@ import (
 	"github.com/spf13/pflag"
 	"google.golang.org/grpc"
 
-	"github.com/osac-project/fulfillment-service/internal/auth"
-	"github.com/osac-project/fulfillment-service/internal/network"
-	"github.com/osac-project/fulfillment-service/internal/oauth"
-	"github.com/osac-project/fulfillment-service/internal/packages"
-	"github.com/osac-project/fulfillment-service/internal/version"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/network"
+	"github.com/osac-project/osac/fulfillment-service/internal/oauth"
+	"github.com/osac-project/osac/fulfillment-service/internal/packages"
+	"github.com/osac-project/osac/fulfillment-service/internal/version"
 )
 
 // SettingsBuilder contains the data and logic needed to build a Settings object. Don't create instances of this type

@@ -29,8 +29,8 @@ import (
 	. "github.com/onsi/gomega"
 	"github.com/onsi/gomega/ghttp"
 
-	kubefiles "github.com/osac-project/fulfillment-service/internal/kubernetes/files"
-	. "github.com/osac-project/fulfillment-service/internal/testing"
+	kubefiles "github.com/osac-project/osac/fulfillment-service/internal/kubernetes/files"
+	. "github.com/osac-project/osac/fulfillment-service/internal/testing"
 )
 
 var _ = Describe("JSON web key set cache creation", func() {

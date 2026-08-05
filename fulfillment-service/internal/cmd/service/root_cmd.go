@@ -18,13 +18,13 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/osac-project/fulfillment-service/internal/cmd/cli/help"
-	"github.com/osac-project/fulfillment-service/internal/cmd/service/dev"
-	"github.com/osac-project/fulfillment-service/internal/cmd/service/migrate"
-	"github.com/osac-project/fulfillment-service/internal/cmd/service/probe"
-	"github.com/osac-project/fulfillment-service/internal/cmd/service/start"
-	"github.com/osac-project/fulfillment-service/internal/cmd/service/version"
-	"github.com/osac-project/fulfillment-service/internal/logging"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/help"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/service/dev"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/service/migrate"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/service/probe"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/service/start"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/service/version"
+	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 )
 
 func Root() *cobra.Command {

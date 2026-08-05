@@ -24,7 +24,7 @@ import (
 	"google.golang.org/genproto/googleapis/api/httpbody"
 	"google.golang.org/grpc"
 
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 )
 
 // Server is a gRPC server used only for tests.

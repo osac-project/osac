@@ -29,12 +29,13 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/fulfillment-service/internal/auth"
-	"github.com/osac-project/fulfillment-service/internal/controllers/finalizers"
-	"github.com/osac-project/fulfillment-service/internal/idp"
-	"github.com/osac-project/fulfillment-service/internal/masks"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
+	"github.com/osac-project/osac/fulfillment-service/internal/idp"
+	"github.com/osac-project/osac/fulfillment-service/internal/masks"
 )
 
 // FunctionBuilder contains the data needed to build instances of the reconciler function.
@@ -383,21 +384,31 @@ func (t *task) setConditionDefault(conditionType privatev1.TenantConditionType) 
 
 func (t *task) updateCondition(conditionType privatev1.TenantConditionType, status privatev1.ConditionStatus,
 	reason string, message string) {
-	newCondition := privatev1.TenantCondition_builder{
-		Type:    conditionType,
-		Status:  status,
-		Reason:  new(reason),
-		Message: new(message),
-	}.Build()
 	conditions := t.tenant.GetStatus().GetConditions()
 	for i, c := range conditions {
 		if c.GetType() == conditionType {
-			conditions[i] = newCondition
+			transitionTime := c.GetLastTransitionTime()
+			if c.GetStatus() != status {
+				transitionTime = timestamppb.Now()
+			}
+			conditions[i] = privatev1.TenantCondition_builder{
+				Type:               conditionType,
+				Status:             status,
+				Reason:             new(reason),
+				Message:            new(message),
+				LastTransitionTime: transitionTime,
+			}.Build()
 			t.tenant.GetStatus().SetConditions(conditions)
 			return
 		}
 	}
-	conditions = append(conditions, newCondition)
+	conditions = append(conditions, privatev1.TenantCondition_builder{
+		Type:               conditionType,
+		Status:             status,
+		Reason:             new(reason),
+		Message:            new(message),
+		LastTransitionTime: timestamppb.Now(),
+	}.Build())
 	t.tenant.GetStatus().SetConditions(conditions)
 }
 

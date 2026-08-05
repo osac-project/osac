@@ -20,9 +20,9 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/fulfillment-service/internal/auth"
-	"github.com/osac-project/fulfillment-service/internal/events"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/events"
 )
 
 type PrivateHostTypesServerBuilder struct {
@@ -118,6 +118,13 @@ func (s *PrivateHostTypesServer) Get(ctx context.Context,
 
 func (s *PrivateHostTypesServer) Create(ctx context.Context,
 	request *privatev1.HostTypesCreateRequest) (response *privatev1.HostTypesCreateResponse, err error) {
+	obj := request.GetObject()
+	if obj != nil && obj.GetMetadata().GetName() == "" && obj.GetId() != "" {
+		if obj.GetMetadata() == nil {
+			obj.SetMetadata(&privatev1.Metadata{})
+		}
+		obj.GetMetadata().SetName(toDNSLabel(obj.GetId()))
+	}
 	err = s.generic.Create(ctx, request, &response)
 	return
 }

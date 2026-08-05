@@ -23,7 +23,7 @@ columns:
   value: "has(this.metadata.name)? this.metadata.name: '-'"
 
 - header: NETWORK-CLASS
-  value: this.spec.network_class
+  value: this.spec.network_class.id
   type: osac.public.v1.NetworkClass
   lookup: true
 

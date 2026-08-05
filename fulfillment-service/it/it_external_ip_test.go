@@ -25,9 +25,9 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
-	"github.com/osac-project/fulfillment-service/internal/uuid"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 )
 
 func uniqueCIDR() string {
@@ -237,7 +237,7 @@ var _ = Describe("Private ExternalIPPool CRUD", func() {
 			Object: publicv1.ExternalIP_builder{
 				Id: ipId,
 				Spec: publicv1.ExternalIPSpec_builder{
-					Pool: poolId,
+					Pool: publicv1.ExternalIPPoolReference_builder{Id: poolId}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -339,7 +339,7 @@ var _ = Describe("ExternalIP lifecycle", func() {
 			Object: publicv1.ExternalIP_builder{
 				Id: ipId,
 				Spec: publicv1.ExternalIPSpec_builder{
-					Pool: poolId,
+					Pool: publicv1.ExternalIPPoolReference_builder{Id: poolId}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -348,7 +348,7 @@ var _ = Describe("ExternalIP lifecycle", func() {
 
 		ip := response.GetObject()
 		Expect(ip.GetId()).To(Equal(ipId))
-		Expect(ip.GetSpec().GetPool()).To(Equal(poolId))
+		Expect(ip.GetSpec().GetPool().GetId()).To(Equal(poolId))
 		Expect(ip.GetStatus().GetState()).To(Equal(publicv1.ExternalIPState_EXTERNAL_IP_STATE_PENDING))
 
 		poolResp, err := poolsClient.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{
@@ -362,7 +362,7 @@ var _ = Describe("ExternalIP lifecycle", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(getResponse.GetObject().GetId()).To(Equal(ipId))
-		Expect(getResponse.GetObject().GetSpec().GetPool()).To(Equal(poolId))
+		Expect(getResponse.GetObject().GetSpec().GetPool().GetId()).To(Equal(poolId))
 
 		listResponse, err := externalIPsClient.List(ctx, publicv1.ExternalIPsListRequest_builder{}.Build())
 		Expect(err).ToNot(HaveOccurred())
@@ -375,7 +375,7 @@ var _ = Describe("ExternalIP lifecycle", func() {
 			Object: publicv1.ExternalIP_builder{
 				Id: ipId,
 				Spec: publicv1.ExternalIPSpec_builder{
-					Pool: poolId,
+					Pool: publicv1.ExternalIPPoolReference_builder{Id: poolId}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -385,7 +385,7 @@ var _ = Describe("ExternalIP lifecycle", func() {
 			Object: publicv1.ExternalIP_builder{
 				Id: ipId,
 				Spec: publicv1.ExternalIPSpec_builder{
-					Pool: "different-pool",
+					Pool: publicv1.ExternalIPPoolReference_builder{Name: "different-pool"}.Build(),
 				}.Build(),
 			}.Build(),
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.pool"}},
@@ -400,7 +400,7 @@ var _ = Describe("ExternalIP lifecycle", func() {
 			Object: publicv1.ExternalIP_builder{
 				Id: ipId,
 				Spec: publicv1.ExternalIPSpec_builder{
-					Pool: poolId,
+					Pool: publicv1.ExternalIPPoolReference_builder{Id: poolId}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -439,7 +439,7 @@ var _ = Describe("ExternalIP lifecycle", func() {
 			Object: publicv1.ExternalIP_builder{
 				Id: ipId,
 				Spec: publicv1.ExternalIPSpec_builder{
-					Pool: poolId,
+					Pool: publicv1.ExternalIPPoolReference_builder{Id: poolId}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -458,7 +458,7 @@ var _ = Describe("ExternalIP lifecycle", func() {
 			Object: publicv1.ExternalIP_builder{
 				Id: ipId,
 				Spec: publicv1.ExternalIPSpec_builder{
-					Pool: "nonexistent-pool",
+					Pool: publicv1.ExternalIPPoolReference_builder{Name: "nonexistent-pool"}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -484,7 +484,7 @@ var _ = Describe("ExternalIP lifecycle", func() {
 			Object: publicv1.ExternalIP_builder{
 				Id: ipId,
 				Spec: publicv1.ExternalIPSpec_builder{
-					Pool: nonReadyPoolId,
+					Pool: publicv1.ExternalIPPoolReference_builder{Id: nonReadyPoolId}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -584,7 +584,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 			Object: publicv1.ExternalIP_builder{
 				Id: externalIPId,
 				Spec: publicv1.ExternalIPSpec_builder{
-					Pool: poolId,
+					Pool: publicv1.ExternalIPPoolReference_builder{Id: poolId}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -620,7 +620,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 				Title: "Test Template",
 				NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
 					"workers": privatev1.ClusterTemplateNodeSet_builder{
-						HostType: hostTypeId,
+						HostType: privatev1.HostTypeReference_builder{Id: hostTypeId}.Build(),
 						Size:     1,
 					}.Build(),
 				},
@@ -631,7 +631,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		createClusterResp, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
 				Spec: publicv1.ClusterSpec_builder{
-					Template: templateId,
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -673,8 +673,8 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 			Object: publicv1.ExternalIPAttachment_builder{
 				Id: attachmentId,
 				Spec: publicv1.ExternalIPAttachmentSpec_builder{
-					ExternalIp:     externalIPId,
-					Cluster:        &clusterId,
+					ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: externalIPId}.Build(),
+					Cluster:        publicv1.ClusterLocalReference_builder{Id: clusterId}.Build(),
 					TargetEndpoint: publicv1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_API,
 				}.Build(),
 			}.Build(),
@@ -689,8 +689,8 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 
 		attachment := response.GetObject()
 		Expect(attachment.GetId()).To(Equal(attachmentId))
-		Expect(attachment.GetSpec().GetExternalIp()).To(Equal(externalIPId))
-		Expect(attachment.GetSpec().GetCluster()).To(Equal(clusterId))
+		Expect(attachment.GetSpec().GetExternalIp().GetId()).To(Equal(externalIPId))
+		Expect(attachment.GetSpec().GetCluster().GetId()).To(Equal(clusterId))
 		Expect(attachment.GetStatus().GetState()).To(
 			Equal(publicv1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_PENDING))
 
@@ -705,8 +705,8 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(getResponse.GetObject().GetId()).To(Equal(attachmentId))
-		Expect(getResponse.GetObject().GetSpec().GetExternalIp()).To(Equal(externalIPId))
-		Expect(getResponse.GetObject().GetSpec().GetCluster()).To(Equal(clusterId))
+		Expect(getResponse.GetObject().GetSpec().GetExternalIp().GetId()).To(Equal(externalIPId))
+		Expect(getResponse.GetObject().GetSpec().GetCluster().GetId()).To(Equal(clusterId))
 
 		listResponse, err := attachmentsClient.List(ctx,
 			publicv1.ExternalIPAttachmentsListRequest_builder{}.Build())
@@ -720,8 +720,8 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 			Object: publicv1.ExternalIPAttachment_builder{
 				Id: attachmentId1,
 				Spec: publicv1.ExternalIPAttachmentSpec_builder{
-					ExternalIp:     externalIPId,
-					Cluster:        &clusterId,
+					ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: externalIPId}.Build(),
+					Cluster:        publicv1.ClusterLocalReference_builder{Id: clusterId}.Build(),
 					TargetEndpoint: publicv1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_API,
 				}.Build(),
 			}.Build(),
@@ -738,8 +738,8 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 			Object: publicv1.ExternalIPAttachment_builder{
 				Id: attachmentId2,
 				Spec: publicv1.ExternalIPAttachmentSpec_builder{
-					ExternalIp:     externalIPId,
-					Cluster:        &clusterId,
+					ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: externalIPId}.Build(),
+					Cluster:        publicv1.ClusterLocalReference_builder{Id: clusterId}.Build(),
 					TargetEndpoint: publicv1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_API,
 				}.Build(),
 			}.Build(),
@@ -753,8 +753,8 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 			Object: publicv1.ExternalIPAttachment_builder{
 				Id: attachmentId,
 				Spec: publicv1.ExternalIPAttachmentSpec_builder{
-					ExternalIp:     "nonexistent-ip",
-					Cluster:        &clusterId,
+					ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: "nonexistent-ip"}.Build(),
+					Cluster:        publicv1.ClusterLocalReference_builder{Id: clusterId}.Build(),
 					TargetEndpoint: publicv1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_API,
 				}.Build(),
 			}.Build(),
@@ -769,7 +769,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 			Object: publicv1.ExternalIP_builder{
 				Id: pendingIPId,
 				Spec: publicv1.ExternalIPSpec_builder{
-					Pool: poolId,
+					Pool: publicv1.ExternalIPPoolReference_builder{Id: poolId}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -780,8 +780,8 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 			Object: publicv1.ExternalIPAttachment_builder{
 				Id: attachmentId,
 				Spec: publicv1.ExternalIPAttachmentSpec_builder{
-					ExternalIp:     pendingIPId,
-					Cluster:        &clusterId,
+					ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: pendingIPId}.Build(),
+					Cluster:        publicv1.ClusterLocalReference_builder{Id: clusterId}.Build(),
 					TargetEndpoint: publicv1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_API,
 				}.Build(),
 			}.Build(),
@@ -796,7 +796,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 			Object: publicv1.ExternalIPAttachment_builder{
 				Id: attachmentId,
 				Spec: publicv1.ExternalIPAttachmentSpec_builder{
-					ExternalIp: externalIPId,
+					ExternalIp: publicv1.ExternalIPLocalReference_builder{Id: externalIPId}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -810,8 +810,8 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 			Object: publicv1.ExternalIPAttachment_builder{
 				Id: attachmentId,
 				Spec: publicv1.ExternalIPAttachmentSpec_builder{
-					ExternalIp: externalIPId,
-					Cluster:    &clusterId,
+					ExternalIp: publicv1.ExternalIPLocalReference_builder{Id: externalIPId}.Build(),
+					Cluster:    publicv1.ClusterLocalReference_builder{Id: clusterId}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -825,8 +825,8 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 			Object: publicv1.ExternalIPAttachment_builder{
 				Id: attachmentId,
 				Spec: publicv1.ExternalIPAttachmentSpec_builder{
-					ExternalIp:     externalIPId,
-					Cluster:        &clusterId,
+					ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: externalIPId}.Build(),
+					Cluster:        publicv1.ClusterLocalReference_builder{Id: clusterId}.Build(),
 					TargetEndpoint: publicv1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_API,
 				}.Build(),
 			}.Build(),
@@ -842,7 +842,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 			Object: publicv1.ExternalIPAttachment_builder{
 				Id: attachmentId,
 				Spec: publicv1.ExternalIPAttachmentSpec_builder{
-					ExternalIp: "different-ip",
+					ExternalIp: publicv1.ExternalIPLocalReference_builder{Id: "different-ip"}.Build(),
 				}.Build(),
 			}.Build(),
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.external_ip"}},
@@ -857,8 +857,8 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 			Object: publicv1.ExternalIPAttachment_builder{
 				Id: attachmentId,
 				Spec: publicv1.ExternalIPAttachmentSpec_builder{
-					ExternalIp:     externalIPId,
-					Cluster:        &clusterId,
+					ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: externalIPId}.Build(),
+					Cluster:        publicv1.ClusterLocalReference_builder{Id: clusterId}.Build(),
 					TargetEndpoint: publicv1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_API,
 				}.Build(),
 			}.Build(),

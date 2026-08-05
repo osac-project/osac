@@ -16,6 +16,7 @@ syntax = "proto3";
 package osac.public.v1;
 
 import "osac/public/v1/metadata_type.proto";
+import "osac/public/v1/user_type.proto";
 
 // ProjectMembership represents a member's association with a project and their role within it.
 message ProjectMembership {
@@ -37,9 +38,8 @@ message ProjectMembershipSpec {
   // Role of the members in the project. This indicates whether the members are viewers, managers, etc.
   ProjectMembershipRole role = 2;
 
-  // Identifiers of the users that are members of the project. These are user identifiers (the `id` field of User
-  // objects), not usernames or email addresses.
-  repeated string users = 3;
+  // References to the users that are members of the project.
+  repeated UserReference users = 3;
 }
 
 // Describes the role of a member in a project.

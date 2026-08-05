@@ -26,9 +26,9 @@ import (
 	. "github.com/onsi/gomega/ghttp"
 	"go.uber.org/mock/gomock"
 
-	"github.com/osac-project/fulfillment-service/internal/auth"
-	"github.com/osac-project/fulfillment-service/internal/network"
-	"github.com/osac-project/fulfillment-service/internal/testing"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/network"
+	"github.com/osac-project/osac/fulfillment-service/internal/testing"
 )
 
 var _ = Describe("Token source", func() {

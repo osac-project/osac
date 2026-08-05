@@ -25,7 +25,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/osac-project/fulfillment-service/internal/console"
+	"github.com/osac-project/osac/fulfillment-service/internal/console"
 )
 
 // consoleContextKey is the type used to pass console metadata through context.

@@ -1,7 +1,14 @@
 ---
 # Unit tests for osac.service.storage_provider dispatcher validation logic.
-# All 12 scenarios run in a single invocation -- no flags needed.
 # Tests verify validation ONLY; they do not dispatch to actual provider roles.
+#
+# A single invocation halts after "Test storage_provider -- invalid provider (should fail)":
+# ansible-core raises a runner-level ERROR! when include_role targets a genuinely-missing role
+# name, which aborts the ansible-playbook process even though that scenario's own rescue block
+# already passed. Run in two invocations to exercise every scenario:
+#   ansible-playbook collections/ansible_collections/osac/service/roles/storage_provider/tests/test.yml
+#   ansible-playbook --start-at-task "Attempt with invalid action 'destroy' (expected to fail)" \
+#     collections/ansible_collections/osac/service/roles/storage_provider/tests/test.yml
 
 # ──────────────────────────────────────────────────────────────
 # Test 1: Valid single tier passes all validation
@@ -50,8 +57,6 @@
                 'not a valid DNS label' not in (ansible_failed_result.msg | default(''))
               - >-
                 'duplicate tier names' not in (ansible_failed_result.msg | default(''))
-              - >-
-                'exceeds the maximum' not in (ansible_failed_result.msg | default(''))
             fail_msg: >-
               Validation failed unexpectedly: {{ ansible_failed_result.msg | default('unknown error') }}
             success_msg: "Validation passed -- dispatch failed as expected in unit test context"
@@ -133,6 +138,11 @@
   hosts: localhost
   gather_facts: false
 
+  pre_tasks:
+    - name: Clear any structured failure artifact from earlier scenarios
+      ansible.builtin.set_fact:
+        osac_storage_provider_failures: []
+
   tasks:
     - name: Run invalid-protocol failure test
       block:
@@ -157,11 +167,23 @@
           ansible.builtin.assert:
             that:
               - >-
-                'unsupported protocol' in (ansible_failed_result.results | default([]) | map(attribute='msg') | join(' ') | lower)
-                or 'Invalid protocol' in (ansible_failed_result.results | default([]) | map(attribute='msg') | join(' '))
-                or 'One or more items failed' in (ansible_failed_result.msg | default(''))
+                'unsupported protocol' in (ansible_failed_result.msg | default('') | lower)
             fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
             success_msg: "Role correctly rejected invalid protocol"
+
+        - name: Verify structured failure artifact was emitted for unsupported protocol
+          ansible.builtin.assert:
+            that:
+              - osac_storage_provider_failures is defined
+              - osac_storage_provider_failures | length > 0
+              - osac_storage_provider_failures[0].reason == 'unsupported_protocol'
+              - "'default' in osac_storage_provider_failures[0].tiers"
+              - "'unsupported protocol' in (osac_storage_provider_failures[0].message | lower)"
+              - osac_storage_provider_failures[0].backend_ids == []
+            fail_msg: >-
+              osac_storage_provider_failures was not set as expected:
+              {{ osac_storage_provider_failures | default('undefined') }}
+            success_msg: "Structured failure artifact correctly recorded the unsupported protocol"
 
 # ──────────────────────────────────────────────────────────────
 # Test 5: Invalid provider -- error path
@@ -191,15 +213,15 @@
             msg: "Role did not fail as expected when provider is invalid"
 
       rescue:
+        # ansible_failed_result is NOT refreshed for this kind of failure: a genuinely-missing
+        # role name is a runner-level ERROR! raised during dynamic role resolution, not a normal
+        # task failure, so it never repopulates the rescue block's ansible_failed_result -- it
+        # would still hold whatever an earlier, unrelated task last set it to. There is nothing
+        # reliable to assert about the failure's content from inside the playbook; reaching this
+        # rescue at all already proves the role failed to load for the invalid provider name.
         - name: Verify role failed for invalid provider
-          ansible.builtin.assert:
-            that:
-              - >-
-                'osac.templates.netapp_storage' in (ansible_failed_result.msg | default(''))
-                or 'was not found' in (ansible_failed_result.msg | default(''))
-                or 'One or more items failed' in (ansible_failed_result.msg | default(''))
-            fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
-            success_msg: "Role correctly rejected invalid provider"
+          ansible.builtin.debug:
+            msg: "Role correctly rejected invalid provider (rescue reached after role-resolution failure)"
 
 # ──────────────────────────────────────────────────────────────
 # Test 6: Invalid action -- error path
@@ -313,50 +335,6 @@
             success_msg: "Role correctly rejected invalid input"
 
 # ──────────────────────────────────────────────────────────────
-# Test 10: Tier count exceeds maximum -- error path
-# Expected: role fails with exceeds-maximum message
-# ──────────────────────────────────────────────────────────────
-- name: Test storage_provider -- tier count exceeds max (should fail)
-  hosts: localhost
-  gather_facts: false
-
-  tasks:
-    - name: Run tier-count-exceeds-max failure test
-      block:
-        - name: Attempt with 3 tiers but max_tiers set to 2 (expected to fail)
-          ansible.builtin.include_role:
-            name: osac.service.storage_provider
-          vars:
-            storage_provider_tiers:
-              - name: tier-a
-                protocol: nfs
-                provider: vast
-              - name: tier-b
-                protocol: nfs
-                provider: vast
-              - name: tier-c
-                protocol: block
-                provider: vast
-            storage_provider_max_tiers: 2
-            storage_provider_action: setup
-            tenant_name: "tenant-acme"
-            tenant_namespace: "osac-tenants"
-
-        - name: This task should not be reached -- role should have failed
-          ansible.builtin.fail:
-            msg: "Role did not fail as expected when tier count exceeds maximum"
-
-      rescue:
-        - name: Verify role failed with expected exceeds-maximum message
-          ansible.builtin.assert:
-            that:
-              - "'exceeds the maximum' in ansible_failed_result.msg"
-              - "'3' in ansible_failed_result.msg"
-              - "'2' in ansible_failed_result.msg"
-            fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
-            success_msg: "Role correctly rejected invalid input"
-
-# ──────────────────────────────────────────────────────────────
 # Test 11: Missing tenant_name -- error path
 # Expected: role fails with tenant_name required message
 # ──────────────────────────────────────────────────────────────
@@ -425,3 +403,567 @@
               - "'non-empty string' in ansible_failed_result.msg"
             fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
             success_msg: "Role correctly rejected invalid input"
+
+# ──────────────────────────────────────────────────────────────
+# Test 13: Tier name too long to safely derive a qos_policy -- error path
+# Expected: role fails at the length-guard task (not the downstream qos_policy DNS-label
+# validation -- that task is unreachable for auto-derived values, since the length-guard
+# rejects any QoS-enabled tier whose name would produce an over-length derived qos_policy
+# before derivation ever runs). Proves the length-guard actually catches this case
+# (OSAC-1992: tiers from osac_job_vars.storage_tier_definitions never carry
+# qos_policy -- the role derives it as '<name>-qos').
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- tier name too long for derived qos_policy (should fail)
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run derived-qos_policy-too-long failure test
+      block:
+        - name: Attempt with a 60-char tier name (no explicit qos_policy) whose derived name-qos exceeds 63 chars
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                protocol: nfs
+                provider: vast
+                qos_limits:
+                  static_limits:
+                    max_reads_bw_mbps: 100
+                    max_writes_bw_mbps: 100
+            storage_provider_action: setup
+            tenant_name: "tenant-acme"
+            tenant_namespace: "osac-tenants"
+
+        - name: This task should not be reached -- role should have failed
+          ansible.builtin.fail:
+            msg: "Role did not fail as expected when the tier name is too long for a derived qos_policy"
+
+      rescue:
+        - name: Verify role failed with expected length-guard message
+          ansible.builtin.assert:
+            that:
+              - >-
+                'capped at 59 characters' in (ansible_failed_result.results | default([]) | map(attribute='msg') | join(' '))
+              - >-
+                '-qos' in (ansible_failed_result.results | default([]) | map(attribute='msg') | join(' '))
+            fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
+            success_msg: "Role correctly rejected a tier name too long to safely derive a qos_policy"
+
+# ──────────────────────────────────────────────────────────────
+# Test 14: Explicit qos_policy is ignored; derivation always overwrites it -- success path
+# Expected: role does NOT fail on qos_policy validation even though the caller supplies a
+# deliberately invalid qos_policy value -- proving the caller's value is discarded entirely
+# and replaced by the derived '<name>-qos' (a valid DNS label for this short tier name)
+# (OSAC-1992 follow-up: closes the gap where an unvalidated override could produce
+# inconsistent naming across callers, or let a caller's invalid qos_policy silently pass
+# through unused). A short, valid tier name is used deliberately: a long one would trip the
+# Test 13 length-guard before qos_policy handling is ever reached, proving nothing about
+# discarding. If a bug ever used the caller's value instead of deriving, this test would
+# fail with an "invalid qos_policy" message quoting the caller's malformed string.
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- explicit qos_policy is ignored, derivation still runs (should succeed)
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run explicit-qos_policy-ignored test
+      block:
+        - name: Attempt with a short tier name, qos_limits, and a deliberately invalid explicit qos_policy
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: "acme-tier"
+                protocol: nfs
+                provider: vast
+                qos_policy: "Invalid Policy!"
+                qos_limits:
+                  static_limits:
+                    max_reads_bw_mbps: 100
+                    max_writes_bw_mbps: 100
+            storage_provider_action: setup
+            tenant_name: "tenant-acme"
+            tenant_namespace: "osac-tenants"
+
+        # If we get here, qos_policy validation passed on the DERIVED value
+        # ('acme-tier-qos'), proving the caller's invalid supplied value was discarded.
+        - name: Validation passed (dispatch outcome is not under test)
+          ansible.builtin.debug:
+            msg: "Validation passed -- caller's invalid qos_policy was correctly discarded"
+
+      rescue:
+        - name: Verify any failure is from dispatch, not from the caller's discarded qos_policy
+          ansible.builtin.assert:
+            that:
+              - >-
+                'invalid qos_policy' not in (ansible_failed_result.msg | default(''))
+              - >-
+                'Invalid Policy' not in (ansible_failed_result.results | default([]) | map(attribute='msg') | join(' '))
+            fail_msg: >-
+              Role failed on the caller's supplied qos_policy instead of discarding it: {{ ansible_failed_result.msg | default('unknown error') }}
+            success_msg: "Role correctly discarded the caller's invalid qos_policy and derived its own"
+
+# ──────────────────────────────────────────────────────────────
+# Test 15: Tier without configured qos_limits opts out of qos_policy entirely, even if
+# the caller supplied one -- ignored, not validated
+# Expected: role does NOT fail on qos_policy validation, proving no qos_policy survives for a
+# tier with no read/write bandwidth limits configured -- even a deliberately invalid
+# caller-supplied qos_policy is stripped without ever being format-checked. Uses a 60-char
+# tier name that WOULD fail DNS-label validation if a qos_policy were derived (same
+# construction as Test 13) -- if this test ever starts failing with an "invalid qos_policy"
+# message, the opt-out has regressed.
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- tier without qos_limits discards qos_policy entirely, even if supplied
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run qos-limits-opt-out test
+      block:
+        - name: Attempt with a 60-char tier name, no qos_limits, and an invalid explicit qos_policy (expected to fail at dispatch, not qos_policy validation)
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                protocol: nfs
+                provider: vast
+                qos_policy: "Invalid Policy!"
+            storage_provider_action: setup
+            tenant_name: "tenant-acme"
+            tenant_namespace: "osac-tenants"
+
+        - name: Validation passed (dispatch outcome is not under test)
+          ansible.builtin.debug:
+            msg: "Validation passed -- dispatch was attempted"
+
+      rescue:
+        - name: Verify failure is from dispatch, not qos_policy validation
+          ansible.builtin.assert:
+            that:
+              - >-
+                'invalid qos_policy' not in (ansible_failed_result.results | default([]) | map(attribute='msg') | join(' '))
+                and 'invalid qos_policy' not in (ansible_failed_result.msg | default(''))
+            fail_msg: >-
+              Expected no qos_policy validation failure for a tier with no qos_limits, even
+              though the caller supplied a deliberately invalid qos_policy.
+              Got: {{ ansible_failed_result.msg | default('unknown error') }}
+            success_msg: "Tier without qos_limits correctly discarded the caller's qos_policy without validating it"
+
+# ──────────────────────────────────────────────────────────────
+# Test 16: VAST tiers dispatched together reference different backend_ids -- error path
+# Expected: role fails because VAST credential resolution supports exactly one backend_id
+# per role invocation (OSAC-1992 Task 6), and emits a structured osac_storage_provider_failures
+# artifact identifying both tiers and both backend_ids involved.
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- VAST tiers reference multiple backend_ids (should fail)
+  hosts: localhost
+  gather_facts: false
+
+  pre_tasks:
+    - name: Clear any structured failure artifact from earlier scenarios
+      ansible.builtin.set_fact:
+        osac_storage_provider_failures: []
+
+  tasks:
+    - name: Run ambiguous-backend-association failure test
+      block:
+        - name: Attempt with two VAST tiers pointing at different backend_ids (expected to fail)
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: gold
+                protocol: nfs
+                provider: vast
+                backend_id: be-001
+              - name: silver
+                protocol: nfs
+                provider: vast
+                backend_id: be-002
+            storage_provider_backend_connections:
+              be-001:
+                endpoint: vast-1.example.com
+                username: admin
+                password: mock-backend-password
+              be-002:
+                endpoint: vast-2.example.com
+                username: admin
+                password: mock-backend-password
+            storage_provider_action: setup
+            tenant_name: "tenant-acme"
+            tenant_namespace: "osac-tenants"
+
+        - name: This task should not be reached -- role should have failed
+          ansible.builtin.fail:
+            msg: "Role did not fail as expected when VAST tiers reference multiple backend_ids"
+
+      rescue:
+        - name: Verify role failed for ambiguous backend association
+          ansible.builtin.assert:
+            that:
+              - "'Expected exactly one backend_id' in (ansible_failed_result.msg | default(''))"
+            fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
+            success_msg: "Role correctly rejected tiers referencing multiple backend_ids"
+
+        - name: Verify structured failure artifact was emitted for ambiguous backend association
+          ansible.builtin.assert:
+            that:
+              - osac_storage_provider_failures is defined
+              - osac_storage_provider_failures | length > 0
+              - osac_storage_provider_failures[0].reason == 'ambiguous_backend_association'
+              - "'gold' in osac_storage_provider_failures[0].tiers"
+              - "'silver' in osac_storage_provider_failures[0].tiers"
+              - "'be-001' in osac_storage_provider_failures[0].backend_ids"
+              - "'be-002' in osac_storage_provider_failures[0].backend_ids"
+              - "'expected exactly one backend_id' in (osac_storage_provider_failures[0].message | lower)"
+            fail_msg: >-
+              osac_storage_provider_failures was not set as expected:
+              {{ osac_storage_provider_failures | default('undefined') }}
+            success_msg: "Structured failure artifact correctly recorded both tiers and backend_ids"
+
+# ──────────────────────────────────────────────────────────────
+# Test 17: VAST tier's backend_id has no entry in storage_backend_connections -- error path
+# Expected: role fails because osac-operator did not resolve connection details for the
+# referenced backend_id (e.g. the StorageBackend was deleted while still referenced by a
+# StorageTier), and emits a structured osac_storage_provider_failures artifact.
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- VAST tier's backend_id has no connection entry (should fail)
+  hosts: localhost
+  gather_facts: false
+
+  pre_tasks:
+    - name: Clear any structured failure artifact from earlier scenarios
+      ansible.builtin.set_fact:
+        osac_storage_provider_failures: []
+
+  tasks:
+    - name: Run unresolved-backend-connection failure test
+      block:
+        - name: Attempt with a VAST tier whose backend_id is absent from storage_backend_connections (expected to fail)
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: default
+                protocol: nfs
+                provider: vast
+                backend_id: be-999
+            storage_provider_backend_connections: {}
+            storage_provider_action: setup
+            tenant_name: "tenant-acme"
+            tenant_namespace: "osac-tenants"
+
+        - name: This task should not be reached -- role should have failed
+          ansible.builtin.fail:
+            msg: "Role did not fail as expected when the tier's backend_id has no connection entry"
+
+      rescue:
+        - name: Verify role failed for unresolved backend connection
+          ansible.builtin.assert:
+            that:
+              - "\"No entry for backend_id 'be-999'\" in (ansible_failed_result.msg | default(''))"
+            fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
+            success_msg: "Role correctly rejected a tier whose backend_id has no connection entry"
+
+        - name: Verify structured failure artifact was emitted for unresolved backend connection
+          ansible.builtin.assert:
+            that:
+              - osac_storage_provider_failures is defined
+              - osac_storage_provider_failures | length > 0
+              - osac_storage_provider_failures[0].reason == 'unresolved_backend_connection'
+              - "'default' in osac_storage_provider_failures[0].tiers"
+              - "'be-999' in osac_storage_provider_failures[0].backend_ids"
+              - "\"No entry for backend_id 'be-999'\" in osac_storage_provider_failures[0].message"
+            fail_msg: >-
+              osac_storage_provider_failures was not set as expected:
+              {{ osac_storage_provider_failures | default('undefined') }}
+            success_msg: "Structured failure artifact correctly recorded the unresolved backend_id"
+
+# ──────────────────────────────────────────────────────────────
+# Test 18: Resolved VAST backend connection is missing a required credential field -- error path
+# Expected: role fails because the connection entry resolved for the tier's backend_id is
+# incomplete (e.g. a StorageBackend updated to blank out a credential), and emits a
+# structured osac_storage_provider_failures artifact.
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- VAST backend connection missing required fields (should fail)
+  hosts: localhost
+  gather_facts: false
+
+  pre_tasks:
+    - name: Clear any structured failure artifact from earlier scenarios
+      ansible.builtin.set_fact:
+        osac_storage_provider_failures: []
+
+  tasks:
+    - name: Run incomplete-backend-connection failure test
+      block:
+        - name: Attempt with a resolved backend connection missing a password (expected to fail)
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: default
+                protocol: nfs
+                provider: vast
+                backend_id: be-001
+            storage_provider_backend_connections:
+              be-001:
+                endpoint: vast.example.com
+                username: admin
+                password: ""
+            storage_provider_action: setup
+            tenant_name: "tenant-acme"
+            tenant_namespace: "osac-tenants"
+
+        - name: This task should not be reached -- role should have failed
+          ansible.builtin.fail:
+            msg: "Role did not fail as expected when the resolved backend connection is missing a password"
+
+      rescue:
+        - name: Verify role failed for incomplete backend connection
+          ansible.builtin.assert:
+            that:
+              - "'is missing one or more of' in (ansible_failed_result.msg | default(''))"
+            fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
+            success_msg: "Role correctly rejected an incomplete backend connection"
+
+        - name: Verify structured failure artifact was emitted for incomplete backend connection
+          ansible.builtin.assert:
+            that:
+              - osac_storage_provider_failures is defined
+              - osac_storage_provider_failures | length > 0
+              - osac_storage_provider_failures[0].reason == 'incomplete_backend_connection'
+              - "'default' in osac_storage_provider_failures[0].tiers"
+              - "'be-001' in osac_storage_provider_failures[0].backend_ids"
+              - "'is missing one or more of' in osac_storage_provider_failures[0].message"
+            fail_msg: >-
+              osac_storage_provider_failures was not set as expected:
+              {{ osac_storage_provider_failures | default('undefined') }}
+            success_msg: "Structured failure artifact correctly recorded the incomplete backend connection"
+
+# ──────────────────────────────────────────────────────────────
+# Test 19: Two tiers sharing a backend_id both have unsupported protocols -- error path
+# Expected: role fails on the loop task for both tiers simultaneously (Ansible loops evaluate
+# every item rather than stopping at the first failure), and the structured
+# osac_storage_provider_failures artifact records both tier names while deduping their shared
+# backend_id to a single entry.
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- two tiers simultaneously fail protocol validation (should fail)
+  hosts: localhost
+  gather_facts: false
+
+  pre_tasks:
+    - name: Clear any structured failure artifact from earlier scenarios
+      ansible.builtin.set_fact:
+        osac_storage_provider_failures: []
+
+  tasks:
+    - name: Run simultaneous-protocol-failure test
+      block:
+        - name: Attempt with two tiers sharing a backend_id, both using an unsupported protocol (expected to fail)
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: gold
+                protocol: ftp
+                provider: vast
+                backend_id: be-001
+              - name: silver
+                protocol: ftp
+                provider: vast
+                backend_id: be-001
+            storage_provider_action: setup
+            tenant_name: "tenant-acme"
+            tenant_namespace: "osac-tenants"
+
+        - name: This task should not be reached -- role should have failed
+          ansible.builtin.fail:
+            msg: "Role did not fail as expected when two tiers both use an unsupported protocol"
+
+      rescue:
+        - name: Verify role failed for both tiers with unsupported protocols
+          ansible.builtin.assert:
+            that:
+              - >-
+                'unsupported protocol' in (ansible_failed_result.msg | default('') | lower)
+            fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
+            success_msg: "Role correctly rejected both tiers with unsupported protocols"
+
+        - name: Verify structured failure artifact records both simultaneously-failing tiers
+          ansible.builtin.assert:
+            that:
+              - osac_storage_provider_failures is defined
+              - osac_storage_provider_failures | length > 0
+              - osac_storage_provider_failures[0].reason == 'unsupported_protocol'
+              - "'gold' in osac_storage_provider_failures[0].tiers"
+              - "'silver' in osac_storage_provider_failures[0].tiers"
+              - osac_storage_provider_failures[0].tiers | length == 2
+              - osac_storage_provider_failures[0].backend_ids == ['be-001']
+            fail_msg: >-
+              osac_storage_provider_failures did not correctly record both simultaneously-failing tiers:
+              {{ osac_storage_provider_failures | default('undefined') }}
+            success_msg: "Structured failure artifact correctly recorded both tiers and deduped the shared backend_id"
+
+# ──────────────────────────────────────────────────────────────
+# Test 20: VAST tier dispatched without a backend_id -- error path
+# Expected: role fails because VAST credential resolution requires every dispatched tier to
+# reference a backend_id, and emits a structured osac_storage_provider_failures artifact
+# consistent with its sibling backend-connection checks (OSAC-1992 follow-up).
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- VAST tier missing backend_id (should fail)
+  hosts: localhost
+  gather_facts: false
+
+  pre_tasks:
+    - name: Clear any structured failure artifact from earlier scenarios
+      ansible.builtin.set_fact:
+        osac_storage_provider_failures: []
+
+  tasks:
+    - name: Run missing-backend_id failure test
+      block:
+        - name: Attempt with a VAST tier that has no backend_id (expected to fail)
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: default
+                protocol: nfs
+                provider: vast
+            storage_provider_action: setup
+            tenant_name: "tenant-acme"
+            tenant_namespace: "osac-tenants"
+
+        - name: This task should not be reached -- role should have failed
+          ansible.builtin.fail:
+            msg: "Role did not fail as expected when the tier has no backend_id"
+
+      rescue:
+        - name: Verify role failed for missing backend_id
+          ansible.builtin.assert:
+            that:
+              - >-
+                'has no backend_id' in (ansible_failed_result.msg | default(''))
+            fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
+            success_msg: "Role correctly rejected a tier with no backend_id"
+
+        - name: Verify structured failure artifact was emitted for missing backend_id
+          ansible.builtin.assert:
+            that:
+              - osac_storage_provider_failures is defined
+              - osac_storage_provider_failures | length > 0
+              - osac_storage_provider_failures[0].reason == 'missing_backend_id'
+              - "'default' in osac_storage_provider_failures[0].tiers"
+              - "'has no backend_id' in (osac_storage_provider_failures[0].message | lower)"
+            fail_msg: >-
+              osac_storage_provider_failures was not set as expected:
+              {{ osac_storage_provider_failures | default('undefined') }}
+            success_msg: "Structured failure artifact correctly recorded the missing backend_id"
+
+# ──────────────────────────────────────────────────────────────
+# Test 21: Invalid protocol dispatched via ensure_storage_class -- error path
+# Expected: role fails with the same structured unsupported_protocol artifact as Test 4,
+# proving the closed-set protocol check (factored into _validate_tier_protocols.yaml) is
+# also enforced on the ensure_storage_class action -- the dominant action for cluster-storage
+# reconcile, which previously had no protocol validation of its own at all.
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- invalid protocol via ensure_storage_class (should fail)
+  hosts: localhost
+  gather_facts: false
+
+  pre_tasks:
+    - name: Clear any structured failure artifact from earlier scenarios
+      ansible.builtin.set_fact:
+        osac_storage_provider_failures: []
+
+  tasks:
+    - name: Run invalid-protocol-via-ensure_storage_class failure test
+      block:
+        - name: Attempt with invalid protocol 'ftp' via the ensure_storage_class action (expected to fail)
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: default
+                protocol: ftp
+                provider: vast
+            storage_provider_action: ensure_storage_class
+            tenant_name: "tenant-acme"
+            tenant_namespace: "osac-tenants"
+
+        - name: This task should not be reached -- role should have failed
+          ansible.builtin.fail:
+            msg: "Role did not fail as expected when protocol is invalid via ensure_storage_class"
+
+      rescue:
+        - name: Verify role failed for invalid protocol via ensure_storage_class
+          ansible.builtin.assert:
+            that:
+              - >-
+                'unsupported protocol' in (ansible_failed_result.msg | default('') | lower)
+            fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
+            success_msg: "Role correctly rejected invalid protocol via ensure_storage_class"
+
+        - name: Verify structured failure artifact was emitted for unsupported protocol via ensure_storage_class
+          ansible.builtin.assert:
+            that:
+              - osac_storage_provider_failures is defined
+              - osac_storage_provider_failures | length > 0
+              - osac_storage_provider_failures[0].reason == 'unsupported_protocol'
+              - "'default' in osac_storage_provider_failures[0].tiers"
+              - "'unsupported protocol' in (osac_storage_provider_failures[0].message | lower)"
+            fail_msg: >-
+              osac_storage_provider_failures was not set as expected:
+              {{ osac_storage_provider_failures | default('undefined') }}
+            success_msg: "Structured failure artifact correctly recorded the unsupported protocol via ensure_storage_class"
+
+# ──────────────────────────────────────────────────────────────
+# Test 22: Empty-string protocol (the real UNSPECIFIED shape from osac-operator) -- error path
+# Expected: role fails at the dispatcher-level required-fields check (main.yaml), NOT at the
+# unsupported_protocol structured-failure check -- proving the one bad-protocol value that can
+# actually reach AAP in production today (fulfillment-service silently accepts
+# STORAGE_PROTOCOL_UNSPECIFIED at Create and Update; osac-operator maps it to protocol: "" and
+# passes it through unconditionally) is caught cleanly before dispatch ever reaches
+# action-specific protocol validation. Dispatched via ensure_storage_class -- the action Test 21
+# proves now enforces the closed-set check -- to confirm the empty-string case is intercepted
+# even earlier than that, at the dispatcher level.
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- empty-string protocol from UNSPECIFIED (should fail)
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run empty-protocol failure test
+      block:
+        - name: Attempt with an otherwise-valid tier whose protocol is an empty string (expected to fail)
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: default
+                protocol: ""
+                provider: vast
+                backend_id: be-001
+                quota_bytes: 536870912000
+            storage_provider_action: ensure_storage_class
+            tenant_name: "tenant-acme"
+            tenant_namespace: "osac-tenants"
+
+        - name: This task should not be reached -- role should have failed
+          ansible.builtin.fail:
+            msg: "Role did not fail as expected when protocol is an empty string"
+
+      rescue:
+        - name: Verify role failed at the dispatcher-level required-fields check, not the unsupported_protocol check
+          ansible.builtin.assert:
+            that:
+              - >-
+                'must have' in (ansible_failed_result.msg | default(''))
+                or 'One or more items failed' in (ansible_failed_result.msg | default(''))
+              - "'unsupported protocol' not in (ansible_failed_result.msg | default('') | lower)"
+            fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
+            success_msg: "Role correctly rejected the empty-string protocol at the dispatcher level, not the unsupported_protocol check"

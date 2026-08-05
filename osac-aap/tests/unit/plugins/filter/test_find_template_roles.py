@@ -268,8 +268,8 @@ class TestMetadataTemplateTypes:
     def test_compute_instance_has_spec_defaults(self, roles_dir):
         metadata = _load_metadata(roles_dir, "ocp_virt_vm")
         assert metadata.spec_defaults is not None
-        assert metadata.spec_defaults.boot_disk is not None
-        assert metadata.spec_defaults.image is not None
+        assert metadata.spec_defaults["boot_disk"] is not None
+        assert metadata.spec_defaults["image"] is not None
 
     def test_network_has_capabilities(self, roles_dir):
         metadata = _load_metadata(roles_dir, "cudn_net")

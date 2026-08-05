@@ -17,6 +17,7 @@ package osac.private.v1;
 
 import "google/api/field_behavior.proto";
 import "osac/private/v1/metadata_type.proto";
+import "osac/private/v1/virtual_network_type.proto";
 
 // Represents a subdivision of a VirtualNetwork for organizing compute instances.
 //
@@ -59,19 +60,17 @@ message Subnet {
 // The spec contains user-specified parameters that define how the subnet should be configured. These fields
 // follow a declarative model where users specify the desired state and the system reconciles to match it.
 message SubnetSpec {
-  // Parent VirtualNetwork ID. Required and immutable after creation.
+  // Parent VirtualNetwork reference. Required and immutable after creation.
   //
-  // Must reference the ID of an existing VirtualNetwork in READY state. This field is required and immutable
-  // after creation. The referenced VirtualNetwork must be in the same region as this Subnet.
+  // Must reference an existing VirtualNetwork in READY state. The referenced VirtualNetwork must be
+  // in the same region as this Subnet.
   //
   // The system validates that:
   // - The VirtualNetwork exists
   // - The VirtualNetwork.status.state is READY
   // - The Subnet's CIDR blocks are subsets of the VirtualNetwork's CIDR blocks
   // - The Subnet's CIDR blocks do not overlap with other Subnets in the same VirtualNetwork
-  //
-  // Example: "vnet-abc123"
-  string virtual_network = 1 [
+  VirtualNetworkLocalReference virtual_network = 1 [
     (google.api.field_behavior) = REQUIRED,
     (google.api.field_behavior) = IMMUTABLE
   ];
@@ -187,4 +186,10 @@ enum SubnetState {
   // Manual intervention may be required to resolve the underlying issue
   // before retrying deletion.
   SUBNET_STATE_DELETE_FAILED = 5;
+}
+
+// Local reference to a Subnet resource.
+message SubnetLocalReference {
+  string id = 1;
+  string name = 2;
 }

@@ -34,7 +34,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 
-	"github.com/osac-project/fulfillment-service/internal/logging"
+	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 )
 
 // ContainerBuilder contains the data and logic needed to create a database server container. Don't create instances of

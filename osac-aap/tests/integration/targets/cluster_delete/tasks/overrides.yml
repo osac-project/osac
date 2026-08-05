@@ -22,9 +22,8 @@
 
     - name: Set test variables with all overrides
       ansible.builtin.set_fact:
-        ansible_eda:
-          event:
-            payload: "{{ test_cluster_order }}"
+        osac_job_vars:
+          resource: "{{ test_cluster_order }}"
         cluster_working_namespace: "cluster-test-cluster-work"
 
         # Override all 4 extension points

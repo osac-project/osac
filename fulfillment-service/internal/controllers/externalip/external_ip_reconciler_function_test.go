@@ -20,7 +20,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
+	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -29,10 +29,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/fulfillment-service/internal/controllers"
-	"github.com/osac-project/fulfillment-service/internal/controllers/finalizers"
-	"github.com/osac-project/fulfillment-service/internal/kubernetes/labels"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
+	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
 )
 
 // fakeExternalIPPoolsClient implements the ExternalIPPoolsClient interface for testing selectHub.
@@ -56,7 +56,7 @@ var _ = Describe("buildSpec", func() {
 			externalIP: privatev1.ExternalIP_builder{
 				Id: "eip-test-1",
 				Spec: privatev1.ExternalIPSpec_builder{
-					Pool: "pool-abc123",
+					Pool: privatev1.ExternalIPPoolReference_builder{Id: "pool-abc123"}.Build(),
 				}.Build(),
 			}.Build(),
 		}
@@ -71,7 +71,7 @@ var _ = Describe("buildSpec", func() {
 			externalIP: privatev1.ExternalIP_builder{
 				Id: "eip-test-3",
 				Spec: privatev1.ExternalIPSpec_builder{
-					Pool: "pool-abc789",
+					Pool: privatev1.ExternalIPPoolReference_builder{Id: "pool-abc789"}.Build(),
 				}.Build(),
 				Status: privatev1.ExternalIPStatus_builder{
 					State:   privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED,
@@ -542,7 +542,7 @@ var _ = Describe("selectHub", func() {
 		externalIP := privatev1.ExternalIP_builder{
 			Id: "eip-existing-hub",
 			Spec: privatev1.ExternalIPSpec_builder{
-				Pool: "pool-1",
+				Pool: privatev1.ExternalIPPoolReference_builder{Id: "pool-1"}.Build(),
 			}.Build(),
 			Status: privatev1.ExternalIPStatus_builder{
 				Hub: "hub-1",
@@ -589,7 +589,7 @@ var _ = Describe("selectHub", func() {
 		externalIP := privatev1.ExternalIP_builder{
 			Id: "eip-derive-hub",
 			Spec: privatev1.ExternalIPSpec_builder{
-				Pool: "pool-1",
+				Pool: privatev1.ExternalIPPoolReference_builder{Id: "pool-1"}.Build(),
 			}.Build(),
 		}.Build()
 
@@ -625,7 +625,7 @@ var _ = Describe("selectHub", func() {
 		externalIP := privatev1.ExternalIP_builder{
 			Id: "eip-pool-no-hub",
 			Spec: privatev1.ExternalIPSpec_builder{
-				Pool: "pool-no-hub",
+				Pool: privatev1.ExternalIPPoolReference_builder{Id: "pool-no-hub"}.Build(),
 			}.Build(),
 		}.Build()
 
@@ -652,7 +652,7 @@ var _ = Describe("selectHub", func() {
 		externalIP := privatev1.ExternalIP_builder{
 			Id: "eip-pool-error",
 			Spec: privatev1.ExternalIPSpec_builder{
-				Pool: "pool-missing",
+				Pool: privatev1.ExternalIPPoolReference_builder{Id: "pool-missing"}.Build(),
 			}.Build(),
 		}.Build()
 
@@ -730,7 +730,7 @@ var _ = Describe("hub persistence", func() {
 				Tenant:     tenantName,
 			}.Build(),
 			Spec: privatev1.ExternalIPSpec_builder{
-				Pool: poolID,
+				Pool: privatev1.ExternalIPPoolReference_builder{Id: poolID}.Build(),
 			}.Build(),
 			Status: privatev1.ExternalIPStatus_builder{
 				State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING,
@@ -781,7 +781,7 @@ var _ = Describe("hub persistence", func() {
 				Tenant:     tenantName,
 			}.Build(),
 			Spec: privatev1.ExternalIPSpec_builder{
-				Pool: poolID,
+				Pool: privatev1.ExternalIPPoolReference_builder{Id: poolID}.Build(),
 			}.Build(),
 			Status: privatev1.ExternalIPStatus_builder{
 				State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING,
@@ -832,7 +832,7 @@ var _ = Describe("hub persistence", func() {
 				Tenant:     tenantName,
 			}.Build(),
 			Spec: privatev1.ExternalIPSpec_builder{
-				Pool: poolID,
+				Pool: privatev1.ExternalIPPoolReference_builder{Id: poolID}.Build(),
 			}.Build(),
 			Status: privatev1.ExternalIPStatus_builder{
 				State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING,
@@ -897,7 +897,7 @@ var _ = Describe("hub persistence", func() {
 				Tenant:     tenantName,
 			}.Build(),
 			Spec: privatev1.ExternalIPSpec_builder{
-				Pool: poolID,
+				Pool: privatev1.ExternalIPPoolReference_builder{Id: poolID}.Build(),
 			}.Build(),
 			Status: privatev1.ExternalIPStatus_builder{
 				State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING,

@@ -6,8 +6,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/osac-project/osac-csi-driver/pkg/driver"
-	"github.com/osac-project/osac-csi-driver/pkg/fulfillment"
+	"github.com/osac-project/osac/osac-csi-driver/pkg/driver"
+	"github.com/osac-project/osac/osac-csi-driver/pkg/fulfillment"
 	"k8s.io/klog/v2"
 )
 

@@ -4,18 +4,18 @@
   gather_facts: false
 
   vars:
-    subnet: "{{ ansible_eda.event.payload }}"
-    subnet_name: "{{ ansible_eda.event.payload.metadata.name }}"
+    subnet: "{{ osac_job_vars.resource }}"
+    subnet_name: "{{ osac_job_vars.resource.metadata.name }}"
     # Implementation strategy set by osac-operator from parent VirtualNetwork spec
     implementation_strategy: >-
-      {{ ansible_eda.event.payload.metadata.annotations
+      {{ osac_job_vars.resource.metadata.annotations
          ['osac.openshift.io/implementation-strategy'] }}
     template_parameters: {}
 
   pre_tasks:
-    - name: Show EDA Event
+    - name: Show resource metadata
       ansible.builtin.debug:
-        var: ansible_eda.event.payload
+        var: osac_job_vars.resource.metadata
 
   tasks:
     - name: Display Subnet information

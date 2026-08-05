@@ -1,4 +1,4 @@
-module github.com/osac-project/osac-csi-driver
+module github.com/osac-project/osac/osac-csi-driver
 
 go 1.26.3
 

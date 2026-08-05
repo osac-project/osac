@@ -17,7 +17,7 @@ managed:
   enabled: true
   override:
   - file_option: go_package_prefix
-    value: github.com/osac-project/osac-operator/internal/api
+    value: github.com/osac-project/osac/osac-operator/internal/api
   disable:
   - module: buf.build/googleapis/googleapis
   - module: buf.build/grpc-ecosystem/grpc-gateway
@@ -25,7 +25,7 @@ managed:
 
 inputs:
 
-- module: buf.build/osac-project/private-api:v0.0.79
+- module: buf.build/osac-project/private-api:OSAC-1330-typed-refs
 
 plugins:
 

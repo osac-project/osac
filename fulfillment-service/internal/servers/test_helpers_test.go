@@ -18,8 +18,8 @@ import (
 
 	. "github.com/onsi/gomega"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/fulfillment-service/internal/database/dao"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 )
 
 func createComputeInstanceInState(
@@ -33,7 +33,7 @@ func createComputeInstanceInState(
 				Tenant: "shared",
 			}.Build(),
 			Spec: privatev1.ComputeInstanceSpec_builder{
-				Template: "general.small",
+				Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "general.small"}.Build(),
 			}.Build(),
 			Status: privatev1.ComputeInstanceStatus_builder{
 				State: state,

@@ -27,8 +27,8 @@ import (
 	. "github.com/onsi/gomega/ghttp"
 	"go.uber.org/mock/gomock"
 
-	"github.com/osac-project/fulfillment-service/internal/auth"
-	"github.com/osac-project/fulfillment-service/internal/text"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/text"
 )
 
 var _ = Describe("OAuth code flow", func() {

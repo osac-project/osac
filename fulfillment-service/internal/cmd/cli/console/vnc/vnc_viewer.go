@@ -22,7 +22,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/osac-project/fulfillment-service/internal/exit"
+	"github.com/osac-project/osac/fulfillment-service/internal/exit"
 )
 
 // viewer describes a VNC viewer binary and how to format its connection address.

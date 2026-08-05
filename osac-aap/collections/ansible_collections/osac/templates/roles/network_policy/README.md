@@ -57,7 +57,7 @@ will be selected by the `sg-web-sg` NetworkPolicy. To apply a different Security
     name: osac.templates.network_policy
     tasks_from: create_security_group
   vars:
-    security_group: "{{ ansible_eda.event.payload }}"
+    security_group: "{{ osac_job_vars.resource }}"
 ```
 
 ```yaml
@@ -66,5 +66,5 @@ will be selected by the `sg-web-sg` NetworkPolicy. To apply a different Security
     name: osac.templates.network_policy
     tasks_from: delete_security_group
   vars:
-    security_group: "{{ ansible_eda.event.payload }}"
+    security_group: "{{ osac_job_vars.resource }}"
 ```

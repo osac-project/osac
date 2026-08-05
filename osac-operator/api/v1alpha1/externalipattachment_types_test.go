@@ -21,7 +21,7 @@ import (
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/osac-project/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
 
 var _ = Describe("ExternalIPAttachmentSpec", func() {
@@ -35,6 +35,21 @@ var _ = Describe("ExternalIPAttachmentSpec", func() {
 		Expect(spec.ExternalIP).To(Equal("my-public-ip"))
 		Expect(spec.ComputeInstance).ToNot(BeNil())
 		Expect(*spec.ComputeInstance).To(Equal("my-instance"))
+	})
+
+	It("should accept a spec with baremetalInstance target", func() {
+		bmi := "my-bmi"
+		spec := v1alpha1.ExternalIPAttachmentSpec{
+			ExternalIP:       "my-public-ip",
+			BaremetalInstance: &bmi,
+		}
+
+		Expect(spec.ExternalIP).To(Equal("my-public-ip"))
+		Expect(spec.BaremetalInstance).ToNot(BeNil())
+		Expect(*spec.BaremetalInstance).To(Equal("my-bmi"))
+		Expect(spec.ComputeInstance).To(BeNil())
+		Expect(spec.Cluster).To(BeNil())
+		Expect(spec.TargetEndpoint).To(BeNil())
 	})
 
 	It("should accept a minimal spec without optional target", func() {

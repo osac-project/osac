@@ -29,7 +29,7 @@ import (
 	. "github.com/onsi/gomega"
 	"github.com/spf13/pflag"
 
-	"github.com/osac-project/fulfillment-service/internal/testing"
+	"github.com/osac-project/osac/fulfillment-service/internal/testing"
 )
 
 var _ = Describe("Listener", func() {

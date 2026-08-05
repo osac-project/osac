@@ -23,7 +23,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 )
 
 var _ = Describe("Private external IP pools server", func() {
@@ -223,7 +223,7 @@ var _ = Describe("Private external IP pools server", func() {
 			_, err = ipsServer.Create(ctx, privatev1.ExternalIPsCreateRequest_builder{
 				Object: privatev1.ExternalIP_builder{
 					Spec: privatev1.ExternalIPSpec_builder{
-						Pool: poolID,
+						Pool: privatev1.ExternalIPPoolReference_builder{Id: poolID}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())

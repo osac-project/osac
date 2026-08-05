@@ -37,8 +37,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	"github.com/osac-project/osac-operator/api/v1alpha1"
-	privatev1 "github.com/osac-project/osac-operator/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	privatev1 "github.com/osac-project/osac/osac-operator/internal/api/osac/private/v1"
 )
 
 var _ = Describe("VirtualNetworkFeedbackController", func() {
@@ -112,7 +112,7 @@ var _ = Describe("VirtualNetworkFeedbackController", func() {
 					Name: vnetName,
 				},
 				Spec: &privatev1.VirtualNetworkSpec{
-					NetworkClass: "udn-net",
+					NetworkClass: &privatev1.NetworkClassReference{Name: "udn-net"},
 					Ipv4Cidr:     &ipv4Cidr,
 				},
 				Status: &privatev1.VirtualNetworkStatus{
@@ -168,7 +168,7 @@ var _ = Describe("VirtualNetworkFeedbackController", func() {
 					Name: vnetName,
 				},
 				Spec: &privatev1.VirtualNetworkSpec{
-					NetworkClass: "udn-net",
+					NetworkClass: &privatev1.NetworkClassReference{Name: "udn-net"},
 					Ipv4Cidr:     &ipv4Cidr,
 				},
 				Status: &privatev1.VirtualNetworkStatus{
@@ -216,7 +216,7 @@ var _ = Describe("VirtualNetworkFeedbackController", func() {
 					Name: vnetName,
 				},
 				Spec: &privatev1.VirtualNetworkSpec{
-					NetworkClass: "udn-net",
+					NetworkClass: &privatev1.NetworkClassReference{Name: "udn-net"},
 					Ipv4Cidr:     &ipv4Cidr,
 				},
 				Status: &privatev1.VirtualNetworkStatus{
@@ -294,7 +294,7 @@ var _ = Describe("VirtualNetworkFeedbackController", func() {
 					Name: vnetName,
 				},
 				Spec: &privatev1.VirtualNetworkSpec{
-					NetworkClass: "udn-net",
+					NetworkClass: &privatev1.NetworkClassReference{Name: "udn-net"},
 					Ipv4Cidr:     &ipv4Cidr,
 				},
 				Status: &privatev1.VirtualNetworkStatus{
@@ -353,7 +353,7 @@ var _ = Describe("VirtualNetworkFeedbackController", func() {
 					Name: vnetName,
 				},
 				Spec: &privatev1.VirtualNetworkSpec{
-					NetworkClass: "udn-net",
+					NetworkClass: &privatev1.NetworkClassReference{Name: "udn-net"},
 					Ipv4Cidr:     &ipv4Cidr,
 				},
 				Status: &privatev1.VirtualNetworkStatus{
@@ -403,7 +403,7 @@ var _ = Describe("VirtualNetworkFeedbackController", func() {
 					Name: vnetName,
 				},
 				Spec: &privatev1.VirtualNetworkSpec{
-					NetworkClass: "udn-net",
+					NetworkClass: &privatev1.NetworkClassReference{Name: "udn-net"},
 					Ipv4Cidr:     &ipv4Cidr,
 				},
 				Status: &privatev1.VirtualNetworkStatus{
@@ -455,7 +455,7 @@ var _ = Describe("VirtualNetworkFeedbackController", func() {
 					Name: vnetName,
 				},
 				Spec: &privatev1.VirtualNetworkSpec{
-					NetworkClass: "udn-net",
+					NetworkClass: &privatev1.NetworkClassReference{Name: "udn-net"},
 					Ipv4Cidr:     &ipv4Cidr,
 				},
 				Status: &privatev1.VirtualNetworkStatus{
@@ -590,7 +590,7 @@ var _ = Describe("VirtualNetworkFeedbackController", func() {
 					Name: vnetName,
 				},
 				Spec: &privatev1.VirtualNetworkSpec{
-					NetworkClass: "udn-net",
+					NetworkClass: &privatev1.NetworkClassReference{Name: "udn-net"},
 					Ipv4Cidr:     &ipv4Cidr,
 				},
 				Status: &privatev1.VirtualNetworkStatus{

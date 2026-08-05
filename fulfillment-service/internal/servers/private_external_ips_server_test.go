@@ -23,9 +23,9 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/fulfillment-service/internal/auth"
-	"github.com/osac-project/fulfillment-service/internal/database/dao"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 )
 
 var _ = Describe("Private external IPs server", func() {
@@ -82,7 +82,7 @@ var _ = Describe("Private external IPs server", func() {
 					Tenant: auth.SharedTenant,
 				}.Build(),
 				Spec: privatev1.ExternalIPSpec_builder{
-					Pool: poolID,
+					Pool: privatev1.ExternalIPPoolReference_builder{Id: poolID}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -157,7 +157,7 @@ var _ = Describe("Private external IPs server", func() {
 			response, err := externalIPsServer.Create(ctx, privatev1.ExternalIPsCreateRequest_builder{
 				Object: privatev1.ExternalIP_builder{
 					Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
-					Spec:     privatev1.ExternalIPSpec_builder{Pool: poolID}.Build(),
+					Spec:     privatev1.ExternalIPSpec_builder{Pool: privatev1.ExternalIPPoolReference_builder{Id: poolID}.Build()}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -169,7 +169,7 @@ var _ = Describe("Private external IPs server", func() {
 			createResponse, err := externalIPsServer.Create(ctx, privatev1.ExternalIPsCreateRequest_builder{
 				Object: privatev1.ExternalIP_builder{
 					Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
-					Spec:     privatev1.ExternalIPSpec_builder{Pool: poolID}.Build(),
+					Spec:     privatev1.ExternalIPSpec_builder{Pool: privatev1.ExternalIPPoolReference_builder{Id: poolID}.Build()}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -187,7 +187,7 @@ var _ = Describe("Private external IPs server", func() {
 				_, err := externalIPsServer.Create(ctx, privatev1.ExternalIPsCreateRequest_builder{
 					Object: privatev1.ExternalIP_builder{
 						Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
-						Spec:     privatev1.ExternalIPSpec_builder{Pool: poolID}.Build(),
+						Spec:     privatev1.ExternalIPSpec_builder{Pool: privatev1.ExternalIPPoolReference_builder{Id: poolID}.Build()}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -205,7 +205,7 @@ var _ = Describe("Private external IPs server", func() {
 						Finalizers: []string{"test-finalizer"},
 						Tenant:     auth.SharedTenant,
 					}.Build(),
-					Spec: privatev1.ExternalIPSpec_builder{Pool: poolID}.Build(),
+					Spec: privatev1.ExternalIPSpec_builder{Pool: privatev1.ExternalIPPoolReference_builder{Id: poolID}.Build()}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -248,7 +248,7 @@ var _ = Describe("Private external IPs server", func() {
 			_, err := externalIPsServer.Create(ctx, privatev1.ExternalIPsCreateRequest_builder{
 				Object: privatev1.ExternalIP_builder{
 					Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
-					Spec:     privatev1.ExternalIPSpec_builder{Pool: "nonexistent-pool-id"}.Build(),
+					Spec:     privatev1.ExternalIPSpec_builder{Pool: privatev1.ExternalIPPoolReference_builder{Id: "nonexistent-pool-id"}.Build()}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).To(HaveOccurred())
@@ -274,7 +274,7 @@ var _ = Describe("Private external IPs server", func() {
 			_, err = externalIPsServer.Create(ctx, privatev1.ExternalIPsCreateRequest_builder{
 				Object: privatev1.ExternalIP_builder{
 					Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
-					Spec:     privatev1.ExternalIPSpec_builder{Pool: resp.GetObject().GetId()}.Build(),
+					Spec:     privatev1.ExternalIPSpec_builder{Pool: privatev1.ExternalIPPoolReference_builder{Id: resp.GetObject().GetId()}.Build()}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).To(HaveOccurred())
@@ -290,7 +290,7 @@ var _ = Describe("Private external IPs server", func() {
 			_, err := externalIPsServer.Create(ctx, privatev1.ExternalIPsCreateRequest_builder{
 				Object: privatev1.ExternalIP_builder{
 					Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
-					Spec:     privatev1.ExternalIPSpec_builder{Pool: exhaustedPoolID}.Build(),
+					Spec:     privatev1.ExternalIPSpec_builder{Pool: privatev1.ExternalIPPoolReference_builder{Id: exhaustedPoolID}.Build()}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).To(HaveOccurred())
@@ -337,7 +337,7 @@ var _ = Describe("Private external IPs server", func() {
 			_, err := externalIPsServer.Create(ctx, privatev1.ExternalIPsCreateRequest_builder{
 				Object: privatev1.ExternalIP_builder{
 					Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
-					Spec:     privatev1.ExternalIPSpec_builder{Pool: poolID}.Build(),
+					Spec:     privatev1.ExternalIPSpec_builder{Pool: privatev1.ExternalIPPoolReference_builder{Id: poolID}.Build()}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -355,7 +355,7 @@ var _ = Describe("Private external IPs server", func() {
 			createResponse, err := externalIPsServer.Create(ctx, privatev1.ExternalIPsCreateRequest_builder{
 				Object: privatev1.ExternalIP_builder{
 					Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
-					Spec:     privatev1.ExternalIPSpec_builder{Pool: poolID}.Build(),
+					Spec:     privatev1.ExternalIPSpec_builder{Pool: privatev1.ExternalIPPoolReference_builder{Id: poolID}.Build()}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -558,13 +558,13 @@ var _ = Describe("Private external IPs server", func() {
 			createResp, err := externalIPsServer.Create(ctx, privatev1.ExternalIPsCreateRequest_builder{
 				Object: privatev1.ExternalIP_builder{
 					Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
-					Spec:     privatev1.ExternalIPSpec_builder{Pool: poolA}.Build(),
+					Spec:     privatev1.ExternalIPSpec_builder{Pool: privatev1.ExternalIPPoolReference_builder{Id: poolA}.Build()}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			object := createResp.GetObject()
 
-			object.GetSpec().SetPool(poolB)
+			object.GetSpec().SetPool(privatev1.ExternalIPPoolReference_builder{Id: poolB}.Build())
 			_, err = externalIPsServer.Update(ctx, privatev1.ExternalIPsUpdateRequest_builder{
 				Object: object,
 			}.Build())

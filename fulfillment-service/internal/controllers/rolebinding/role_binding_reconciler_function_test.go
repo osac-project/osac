@@ -24,10 +24,10 @@ import (
 	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/fulfillment-service/internal/controllers/finalizers"
-	"github.com/osac-project/fulfillment-service/internal/idp"
-	"github.com/osac-project/fulfillment-service/internal/masks"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
+	"github.com/osac-project/osac/fulfillment-service/internal/idp"
+	"github.com/osac-project/osac/fulfillment-service/internal/masks"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -109,6 +109,14 @@ func (m *mockUsersClient) Get(
 // hasFinalizer checks if the controller finalizer is present.
 func hasFinalizer(binding *privatev1.RoleBinding) bool {
 	return slices.Contains(binding.GetMetadata().GetFinalizers(), finalizers.Controller)
+}
+
+func userRefs(ids ...string) []*privatev1.UserReference {
+	refs := make([]*privatev1.UserReference, len(ids))
+	for i, id := range ids {
+		refs[i] = privatev1.UserReference_builder{Id: id}.Build()
+	}
+	return refs
 }
 
 // newMockUsersClient creates a mock users client that returns users with Keycloak IDs.
@@ -223,8 +231,8 @@ var _ = Describe("RoleBinding Reconciler", func() {
 					Finalizers: []string{finalizers.Controller},
 				}.Build(),
 				Spec: privatev1.RoleBindingSpec_builder{
-					Role:  "custom-role",
-					Users: []string{"user-1"},
+					Role:  privatev1.RoleReference_builder{Name: "custom-role"}.Build(),
+					Users: []*privatev1.UserReference{privatev1.UserReference_builder{Id: "user-1"}.Build()},
 				}.Build(),
 				Status: privatev1.RoleBindingStatus_builder{
 					State: privatev1.RoleBindingState_ROLE_BINDING_STATE_PENDING,
@@ -273,8 +281,8 @@ var _ = Describe("RoleBinding Reconciler", func() {
 					DeletionTimestamp: deletionTime,
 				}.Build(),
 				Spec: privatev1.RoleBindingSpec_builder{
-					Role:  "custom-role",
-					Users: []string{"user-1"},
+					Role:  privatev1.RoleReference_builder{Name: "custom-role"}.Build(),
+					Users: []*privatev1.UserReference{privatev1.UserReference_builder{Id: "user-1"}.Build()},
 				}.Build(),
 				Status: privatev1.RoleBindingStatus_builder{
 					State: privatev1.RoleBindingState_ROLE_BINDING_STATE_READY,
@@ -549,8 +557,8 @@ var _ = Describe("RoleBinding Reconciler", func() {
 					Tenant: "test-org",
 				}.Build(),
 				Spec: privatev1.RoleBindingSpec_builder{
-					Role:  "custom-role",
-					Users: []string{"user-1", "user-2"},
+					Role:  privatev1.RoleReference_builder{Name: "custom-role"}.Build(),
+					Users: []*privatev1.UserReference{privatev1.UserReference_builder{Id: "user-1"}.Build(), privatev1.UserReference_builder{Id: "user-2"}.Build()},
 				}.Build(),
 				Status: privatev1.RoleBindingStatus_builder{
 					State: privatev1.RoleBindingState_ROLE_BINDING_STATE_PENDING,
@@ -569,7 +577,8 @@ var _ = Describe("RoleBinding Reconciler", func() {
 
 			Expect(err).ToNot(HaveOccurred())
 			Expect(binding.GetStatus().GetState()).To(Equal(privatev1.RoleBindingState_ROLE_BINDING_STATE_READY))
-			Expect(binding.GetStatus().GetUsers()).To(Equal([]string{"user-1", "user-2"}))
+			Expect(binding.GetStatus().GetUsers()).To(Equal(userRefs("user-1", "user-2")))
+
 			Expect(binding.GetStatus().GetMessage()).To(ContainSubstring("assigned to 2 user(s)"))
 		})
 
@@ -596,8 +605,8 @@ var _ = Describe("RoleBinding Reconciler", func() {
 					Tenant: "test-org",
 				}.Build(),
 				Spec: privatev1.RoleBindingSpec_builder{
-					Role:  "tenant-admin",
-					Users: []string{"user-1"},
+					Role:  privatev1.RoleReference_builder{Name: "tenant-admin"}.Build(),
+					Users: []*privatev1.UserReference{privatev1.UserReference_builder{Id: "user-1"}.Build()},
 				}.Build(),
 				Status: privatev1.RoleBindingStatus_builder{
 					State: privatev1.RoleBindingState_ROLE_BINDING_STATE_PENDING,
@@ -616,7 +625,7 @@ var _ = Describe("RoleBinding Reconciler", func() {
 
 			Expect(err).ToNot(HaveOccurred())
 			Expect(binding.GetStatus().GetState()).To(Equal(privatev1.RoleBindingState_ROLE_BINDING_STATE_READY))
-			Expect(binding.GetStatus().GetUsers()).To(Equal([]string{"user-1"}))
+			Expect(binding.GetStatus().GetUsers()).To(Equal(userRefs("user-1")))
 		})
 
 		It("should set FAILED state when role assignment fails", func() {
@@ -642,8 +651,8 @@ var _ = Describe("RoleBinding Reconciler", func() {
 					Tenant: "test-org",
 				}.Build(),
 				Spec: privatev1.RoleBindingSpec_builder{
-					Role:  "custom-role",
-					Users: []string{"user-1"},
+					Role:  privatev1.RoleReference_builder{Name: "custom-role"}.Build(),
+					Users: []*privatev1.UserReference{privatev1.UserReference_builder{Id: "user-1"}.Build()},
 				}.Build(),
 				Status: privatev1.RoleBindingStatus_builder{
 					State: privatev1.RoleBindingState_ROLE_BINDING_STATE_PENDING,
@@ -676,7 +685,7 @@ var _ = Describe("RoleBinding Reconciler", func() {
 			binding := privatev1.RoleBinding_builder{
 				Id: "rb-no-role",
 				Spec: privatev1.RoleBindingSpec_builder{
-					Role: "nonexistent",
+					Role: privatev1.RoleReference_builder{Name: "nonexistent"}.Build(),
 				}.Build(),
 				Status: privatev1.RoleBindingStatus_builder{
 					State: privatev1.RoleBindingState_ROLE_BINDING_STATE_PENDING,
@@ -721,12 +730,12 @@ var _ = Describe("RoleBinding Reconciler", func() {
 					Tenant: "test-org",
 				}.Build(),
 				Spec: privatev1.RoleBindingSpec_builder{
-					Role:  "custom-role",
-					Users: []string{"user-1", "user-2", "user-3"},
+					Role:  privatev1.RoleReference_builder{Name: "custom-role"}.Build(),
+					Users: []*privatev1.UserReference{privatev1.UserReference_builder{Id: "user-1"}.Build(), privatev1.UserReference_builder{Id: "user-2"}.Build(), privatev1.UserReference_builder{Id: "user-3"}.Build()},
 				}.Build(),
 				Status: privatev1.RoleBindingStatus_builder{
 					State: privatev1.RoleBindingState_ROLE_BINDING_STATE_READY,
-					Users: []string{"user-1", "user-2"},
+					Users: []*privatev1.UserReference{privatev1.UserReference_builder{Id: "user-1"}.Build(), privatev1.UserReference_builder{Id: "user-2"}.Build()},
 				}.Build(),
 			}.Build()
 
@@ -742,7 +751,7 @@ var _ = Describe("RoleBinding Reconciler", func() {
 
 			Expect(err).ToNot(HaveOccurred())
 			Expect(binding.GetStatus().GetState()).To(Equal(privatev1.RoleBindingState_ROLE_BINDING_STATE_READY))
-			Expect(binding.GetStatus().GetUsers()).To(Equal([]string{"user-1", "user-2", "user-3"}))
+			Expect(binding.GetStatus().GetUsers()).To(Equal(userRefs("user-1", "user-2", "user-3")))
 			Expect(binding.GetStatus().GetMessage()).To(ContainSubstring("added 1 user(s)"))
 		})
 
@@ -769,12 +778,12 @@ var _ = Describe("RoleBinding Reconciler", func() {
 					Tenant: "test-org",
 				}.Build(),
 				Spec: privatev1.RoleBindingSpec_builder{
-					Role:  "custom-role",
-					Users: []string{"user-1", "user-2"},
+					Role:  privatev1.RoleReference_builder{Name: "custom-role"}.Build(),
+					Users: []*privatev1.UserReference{privatev1.UserReference_builder{Id: "user-1"}.Build(), privatev1.UserReference_builder{Id: "user-2"}.Build()},
 				}.Build(),
 				Status: privatev1.RoleBindingStatus_builder{
 					State: privatev1.RoleBindingState_ROLE_BINDING_STATE_READY,
-					Users: []string{"user-1", "user-2", "user-3"},
+					Users: []*privatev1.UserReference{privatev1.UserReference_builder{Id: "user-1"}.Build(), privatev1.UserReference_builder{Id: "user-2"}.Build(), privatev1.UserReference_builder{Id: "user-3"}.Build()},
 				}.Build(),
 			}.Build()
 
@@ -790,7 +799,8 @@ var _ = Describe("RoleBinding Reconciler", func() {
 
 			Expect(err).ToNot(HaveOccurred())
 			Expect(binding.GetStatus().GetState()).To(Equal(privatev1.RoleBindingState_ROLE_BINDING_STATE_READY))
-			Expect(binding.GetStatus().GetUsers()).To(Equal([]string{"user-1", "user-2"}))
+			Expect(binding.GetStatus().GetUsers()).To(Equal(userRefs("user-1", "user-2")))
+
 			Expect(binding.GetStatus().GetMessage()).To(ContainSubstring("removed 1 user(s)"))
 		})
 
@@ -820,12 +830,12 @@ var _ = Describe("RoleBinding Reconciler", func() {
 					Tenant: "test-org",
 				}.Build(),
 				Spec: privatev1.RoleBindingSpec_builder{
-					Role:  "tenant-admin",
-					Users: []string{"user-1", "user-3"},
+					Role:  privatev1.RoleReference_builder{Name: "tenant-admin"}.Build(),
+					Users: []*privatev1.UserReference{privatev1.UserReference_builder{Id: "user-1"}.Build(), privatev1.UserReference_builder{Id: "user-3"}.Build()},
 				}.Build(),
 				Status: privatev1.RoleBindingStatus_builder{
 					State: privatev1.RoleBindingState_ROLE_BINDING_STATE_READY,
-					Users: []string{"user-1", "user-2"},
+					Users: []*privatev1.UserReference{privatev1.UserReference_builder{Id: "user-1"}.Build(), privatev1.UserReference_builder{Id: "user-2"}.Build()},
 				}.Build(),
 			}.Build()
 
@@ -841,18 +851,18 @@ var _ = Describe("RoleBinding Reconciler", func() {
 
 			Expect(err).ToNot(HaveOccurred())
 			Expect(binding.GetStatus().GetState()).To(Equal(privatev1.RoleBindingState_ROLE_BINDING_STATE_READY))
-			Expect(binding.GetStatus().GetUsers()).To(Equal([]string{"user-1", "user-3"}))
+			Expect(binding.GetStatus().GetUsers()).To(Equal(userRefs("user-1", "user-3")))
 		})
 
 		It("should do nothing when user list unchanged", func() {
 			binding := privatev1.RoleBinding_builder{
 				Id: "rb-no-change",
 				Spec: privatev1.RoleBindingSpec_builder{
-					Users: []string{"user-1", "user-2"},
+					Users: []*privatev1.UserReference{privatev1.UserReference_builder{Id: "user-1"}.Build(), privatev1.UserReference_builder{Id: "user-2"}.Build()},
 				}.Build(),
 				Status: privatev1.RoleBindingStatus_builder{
 					State: privatev1.RoleBindingState_ROLE_BINDING_STATE_READY,
-					Users: []string{"user-1", "user-2"},
+					Users: []*privatev1.UserReference{privatev1.UserReference_builder{Id: "user-1"}.Build(), privatev1.UserReference_builder{Id: "user-2"}.Build()},
 				}.Build(),
 			}.Build()
 
@@ -875,12 +885,12 @@ var _ = Describe("RoleBinding Reconciler", func() {
 			binding := privatev1.RoleBinding_builder{
 				Id: "rb-change-no-role",
 				Spec: privatev1.RoleBindingSpec_builder{
-					Role:  "nonexistent",
-					Users: []string{"user-1", "user-2"},
+					Role:  privatev1.RoleReference_builder{Name: "nonexistent"}.Build(),
+					Users: []*privatev1.UserReference{privatev1.UserReference_builder{Id: "user-1"}.Build(), privatev1.UserReference_builder{Id: "user-2"}.Build()},
 				}.Build(),
 				Status: privatev1.RoleBindingStatus_builder{
 					State: privatev1.RoleBindingState_ROLE_BINDING_STATE_READY,
-					Users: []string{"user-1"},
+					Users: []*privatev1.UserReference{privatev1.UserReference_builder{Id: "user-1"}.Build()},
 				}.Build(),
 			}.Build()
 
@@ -920,12 +930,12 @@ var _ = Describe("RoleBinding Reconciler", func() {
 					Tenant: "test-org",
 				}.Build(),
 				Spec: privatev1.RoleBindingSpec_builder{
-					Role:  "custom-role",
-					Users: []string{"user-1", "user-2"},
+					Role:  privatev1.RoleReference_builder{Name: "custom-role"}.Build(),
+					Users: []*privatev1.UserReference{privatev1.UserReference_builder{Id: "user-1"}.Build(), privatev1.UserReference_builder{Id: "user-2"}.Build()},
 				}.Build(),
 				Status: privatev1.RoleBindingStatus_builder{
 					State: privatev1.RoleBindingState_ROLE_BINDING_STATE_READY,
-					Users: []string{"user-1"},
+					Users: []*privatev1.UserReference{privatev1.UserReference_builder{Id: "user-1"}.Build()},
 				}.Build(),
 			}.Build()
 
@@ -967,12 +977,12 @@ var _ = Describe("RoleBinding Reconciler", func() {
 					Tenant: "test-org",
 				}.Build(),
 				Spec: privatev1.RoleBindingSpec_builder{
-					Role:  "custom-role",
-					Users: []string{"user-1"},
+					Role:  privatev1.RoleReference_builder{Name: "custom-role"}.Build(),
+					Users: []*privatev1.UserReference{privatev1.UserReference_builder{Id: "user-1"}.Build()},
 				}.Build(),
 				Status: privatev1.RoleBindingStatus_builder{
 					State: privatev1.RoleBindingState_ROLE_BINDING_STATE_READY,
-					Users: []string{"user-1", "user-2"},
+					Users: []*privatev1.UserReference{privatev1.UserReference_builder{Id: "user-1"}.Build(), privatev1.UserReference_builder{Id: "user-2"}.Build()},
 				}.Build(),
 			}.Build()
 
@@ -1020,8 +1030,8 @@ var _ = Describe("RoleBinding Reconciler", func() {
 					Finalizers: []string{finalizers.Controller},
 				}.Build(),
 				Spec: privatev1.RoleBindingSpec_builder{
-					Role:  "custom-role",
-					Users: []string{"user-1", "user-2"},
+					Role:  privatev1.RoleReference_builder{Name: "custom-role"}.Build(),
+					Users: []*privatev1.UserReference{privatev1.UserReference_builder{Id: "user-1"}.Build(), privatev1.UserReference_builder{Id: "user-2"}.Build()},
 				}.Build(),
 				Status: privatev1.RoleBindingStatus_builder{
 					State: privatev1.RoleBindingState_ROLE_BINDING_STATE_READY,
@@ -1076,7 +1086,7 @@ var _ = Describe("RoleBinding Reconciler", func() {
 					Finalizers: []string{finalizers.Controller},
 				}.Build(),
 				Spec: privatev1.RoleBindingSpec_builder{
-					Role: "missing-role",
+					Role: privatev1.RoleReference_builder{Name: "missing-role"}.Build(),
 				}.Build(),
 				Status: privatev1.RoleBindingStatus_builder{
 					State: privatev1.RoleBindingState_ROLE_BINDING_STATE_READY,
@@ -1122,8 +1132,8 @@ var _ = Describe("RoleBinding Reconciler", func() {
 					Finalizers: []string{finalizers.Controller},
 				}.Build(),
 				Spec: privatev1.RoleBindingSpec_builder{
-					Role:  "custom-role",
-					Users: []string{"user-1", "user-2"},
+					Role:  privatev1.RoleReference_builder{Name: "custom-role"}.Build(),
+					Users: []*privatev1.UserReference{privatev1.UserReference_builder{Id: "user-1"}.Build(), privatev1.UserReference_builder{Id: "user-2"}.Build()},
 				}.Build(),
 				Status: privatev1.RoleBindingStatus_builder{
 					State: privatev1.RoleBindingState_ROLE_BINDING_STATE_READY,
@@ -1169,11 +1179,11 @@ var _ = Describe("RoleBinding Reconciler", func() {
 					Finalizers: []string{finalizers.Controller},
 				}.Build(),
 				Spec: privatev1.RoleBindingSpec_builder{
-					Users: []string{"user-1"},
+					Users: []*privatev1.UserReference{privatev1.UserReference_builder{Id: "user-1"}.Build()},
 				}.Build(),
 				Status: privatev1.RoleBindingStatus_builder{
 					State: privatev1.RoleBindingState_ROLE_BINDING_STATE_READY,
-					Users: []string{"user-1"},
+					Users: []*privatev1.UserReference{privatev1.UserReference_builder{Id: "user-1"}.Build()},
 				}.Build(),
 			}.Build()
 

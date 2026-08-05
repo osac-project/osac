@@ -27,12 +27,13 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	v1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
+	v1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
 
 // mockProvider implements ProvisioningProvider for unit tests in the provisioning package.
 type mockProvider struct {
 	triggerProvisionFunc     func(ctx context.Context, resource client.Object) (*ProvisionResult, error)
+	getProvisionStatusFunc   func(ctx context.Context, resource client.Object, jobID string) (ProvisionStatus, error)
 	triggerDeprovisionFunc   func(ctx context.Context, resource client.Object) (*DeprovisionResult, error)
 	getDeprovisionStatusFunc func(ctx context.Context, resource client.Object, jobID string) (ProvisionStatus, error)
 }
@@ -43,7 +44,10 @@ func (m *mockProvider) TriggerProvision(ctx context.Context, resource client.Obj
 	}
 	return &ProvisionResult{JobID: "mock-job", InitialState: v1alpha1.JobStatePending}, nil
 }
-func (m *mockProvider) GetProvisionStatus(_ context.Context, _ client.Object, jobID string) (ProvisionStatus, error) {
+func (m *mockProvider) GetProvisionStatus(ctx context.Context, resource client.Object, jobID string) (ProvisionStatus, error) {
+	if m.getProvisionStatusFunc != nil {
+		return m.getProvisionStatusFunc(ctx, resource, jobID)
+	}
 	return ProvisionStatus{JobID: jobID, State: v1alpha1.JobStateSucceeded}, nil
 }
 func (m *mockProvider) TriggerDeprovision(ctx context.Context, resource client.Object, provisionJobs []v1alpha1.JobStatus) (*DeprovisionResult, error) {
@@ -274,6 +278,285 @@ var _ = ginkgo.Describe("RunProvisioningLifecycle", func() {
 	})
 })
 
+var _ = ginkgo.Describe("RunMultiTargetProvisioningLifecycle", func() {
+	noAPIServerJob := func() bool { return false }
+
+	ginkgo.It("triggers every target that needs it, tags each job with its target, and flushes status exactly once", func() {
+		fabricProvider := &mockProvider{}
+		k8sProvider := &mockProvider{}
+		resource := &v1alpha1.Subnet{}
+		jobs := []v1alpha1.JobStatus{}
+		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
+
+		flushCount := 0
+		statusFlush := func() error { flushCount++; return nil }
+
+		targets := []JobTarget{
+			{Name: "fabric", Provider: fabricProvider, CheckAPIServer: noAPIServerJob},
+			{Name: "k8s", Provider: k8sProvider, CheckAPIServer: noAPIServerJob},
+		}
+
+		result, err := RunMultiTargetProvisioningLifecycle(ctx, targets, resource, provState, 5, 30*time.Second, statusFlush)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(Equal(30 * time.Second))
+		Expect(flushCount).To(Equal(1))
+		Expect(*provState.Jobs).To(HaveLen(2))
+		Expect(FindLatestJobByTypeAndTarget(*provState.Jobs, v1alpha1.JobTypeProvision, "fabric")).NotTo(BeNil())
+		Expect(FindLatestJobByTypeAndTarget(*provState.Jobs, v1alpha1.JobTypeProvision, "k8s")).NotTo(BeNil())
+	})
+
+	ginkgo.It("only triggers the target that still needs it when the other has already reached Skip", func() {
+		fabricTriggerCalled := false
+		fabricProvider := &mockProvider{
+			triggerProvisionFunc: func(_ context.Context, _ client.Object) (*ProvisionResult, error) {
+				fabricTriggerCalled = true
+				return &ProvisionResult{JobID: "should-not-be-triggered"}, nil
+			},
+		}
+		k8sTriggerCalled := false
+		k8sProvider := &mockProvider{
+			triggerProvisionFunc: func(_ context.Context, _ client.Object) (*ProvisionResult, error) {
+				k8sTriggerCalled = true
+				return &ProvisionResult{JobID: "k8s-job"}, nil
+			},
+		}
+		resource := &v1alpha1.Subnet{}
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "fabric-1", Type: v1alpha1.JobTypeProvision, Target: "fabric", State: v1alpha1.JobStateSucceeded,
+				ConfigVersion: "v1", Timestamp: metav1.NewTime(time.Now())},
+		}
+		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
+
+		targets := []JobTarget{
+			{Name: "fabric", Provider: fabricProvider, CheckAPIServer: noAPIServerJob},
+			{Name: "k8s", Provider: k8sProvider, CheckAPIServer: noAPIServerJob},
+		}
+
+		result, err := RunMultiTargetProvisioningLifecycle(ctx, targets, resource, provState, 5, 30*time.Second, nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fabricTriggerCalled).To(BeFalse())
+		Expect(k8sTriggerCalled).To(BeTrue())
+		Expect(result.RequeueAfter).To(Equal(30 * time.Second))
+	})
+
+	ginkgo.It("returns ctrl.Result{} and does not flush when every target has already reached Skip", func() {
+		resource := &v1alpha1.Subnet{}
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "fabric-1", Type: v1alpha1.JobTypeProvision, Target: "fabric", State: v1alpha1.JobStateSucceeded,
+				ConfigVersion: "v1", Timestamp: metav1.NewTime(time.Now())},
+			{JobID: "k8s-1", Type: v1alpha1.JobTypeProvision, Target: "k8s", State: v1alpha1.JobStateSucceeded,
+				ConfigVersion: "v1", Timestamp: metav1.NewTime(time.Now())},
+		}
+		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
+
+		flushed := false
+		statusFlush := func() error { flushed = true; return nil }
+
+		targets := []JobTarget{
+			{Name: "fabric", Provider: &mockProvider{}, CheckAPIServer: noAPIServerJob},
+			{Name: "k8s", Provider: &mockProvider{}, CheckAPIServer: noAPIServerJob},
+		}
+
+		result, err := RunMultiTargetProvisioningLifecycle(ctx, targets, resource, provState, 5, 30*time.Second, statusFlush)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(Equal(ctrl.Result{}))
+		Expect(flushed).To(BeFalse())
+	})
+
+	ginkgo.It("invokes every target's provider and joins the error when one target's trigger fails, without blocking the other", func() {
+		resource := &v1alpha1.Subnet{}
+		jobs := []v1alpha1.JobStatus{}
+		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
+
+		fabricProvider := &mockProvider{
+			triggerProvisionFunc: func(_ context.Context, _ client.Object) (*ProvisionResult, error) {
+				return nil, fmt.Errorf("fabric unavailable")
+			},
+		}
+		k8sProvider := &mockProvider{}
+
+		targets := []JobTarget{
+			{Name: "fabric", Provider: fabricProvider, CheckAPIServer: noAPIServerJob},
+			{Name: "k8s", Provider: k8sProvider, CheckAPIServer: noAPIServerJob},
+		}
+
+		result, err := RunMultiTargetProvisioningLifecycle(ctx, targets, resource, provState, 5, 30*time.Second, nil)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("fabric"))
+		Expect(err.Error()).To(ContainSubstring("fabric unavailable"))
+		Expect(result.RequeueAfter).To(Equal(30 * time.Second))
+		Expect(FindLatestJobByTypeAndTarget(*provState.Jobs, v1alpha1.JobTypeProvision, "k8s")).NotTo(BeNil())
+		Expect(FindLatestJobByTypeAndTarget(*provState.Jobs, v1alpha1.JobTypeProvision, "fabric")).To(BeNil())
+	})
+
+	ginkgo.It("aggregates RequeueAfter as the minimum across a Poll target and a still-backing-off target", func() {
+		resource := &v1alpha1.Subnet{}
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "fabric-1", Type: v1alpha1.JobTypeProvision, Target: "fabric", State: v1alpha1.JobStateRunning,
+				ConfigVersion: "v1", Timestamp: metav1.NewTime(time.Now())},
+			{JobID: "k8s-1", Type: v1alpha1.JobTypeProvision, Target: "k8s", State: v1alpha1.JobStateFailed,
+				ConfigVersion: "v1", Timestamp: metav1.NewTime(time.Now())},
+		}
+		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
+
+		fabricProvider := &mockProvider{
+			getProvisionStatusFunc: func(_ context.Context, _ client.Object, jobID string) (ProvisionStatus, error) {
+				return ProvisionStatus{JobID: jobID, State: v1alpha1.JobStateRunning}, nil
+			},
+		}
+		k8sProvider := &mockProvider{}
+
+		targets := []JobTarget{
+			{Name: "fabric", Provider: fabricProvider, CheckAPIServer: noAPIServerJob},
+			{Name: "k8s", Provider: k8sProvider, CheckAPIServer: noAPIServerJob},
+		}
+
+		result, err := RunMultiTargetProvisioningLifecycle(ctx, targets, resource, provState, 5, 30*time.Second, nil)
+		Expect(err).NotTo(HaveOccurred())
+		// fabric (Poll, non-terminal) requeues at pollInterval (30s); k8s (Backoff, just
+		// failed) has ~BackoffBaseDelay (2m) remaining. The aggregate must reflect the
+		// sooner of the two, not the later one.
+		Expect(result.RequeueAfter).To(Equal(30 * time.Second))
+	})
+
+	ginkgo.It("fires each target's callbacks only for its own target's job transitions", func() {
+		resource := &v1alpha1.Subnet{}
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "fabric-1", Type: v1alpha1.JobTypeProvision, Target: "fabric", State: v1alpha1.JobStateRunning,
+				ConfigVersion: "v1", Timestamp: metav1.NewTime(time.Now())},
+			{JobID: "k8s-1", Type: v1alpha1.JobTypeProvision, Target: "k8s", State: v1alpha1.JobStateRunning,
+				ConfigVersion: "v1", Timestamp: metav1.NewTime(time.Now())},
+		}
+		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
+
+		fabricProvider := &mockProvider{
+			getProvisionStatusFunc: func(_ context.Context, _ client.Object, jobID string) (ProvisionStatus, error) {
+				return ProvisionStatus{JobID: jobID, State: v1alpha1.JobStateFailed, Message: "fabric segment creation failed"}, nil
+			},
+		}
+		k8sProvider := &mockProvider{
+			getProvisionStatusFunc: func(_ context.Context, _ client.Object, jobID string) (ProvisionStatus, error) {
+				return ProvisionStatus{JobID: jobID, State: v1alpha1.JobStateRunning}, nil
+			},
+		}
+
+		var fabricFailed, fabricSucceeded, k8sFailed, k8sSucceeded bool
+
+		targets := []JobTarget{
+			{
+				Name:     "fabric",
+				Provider: fabricProvider,
+				Callbacks: &PollCallbacks{
+					OnFailed:  func(_ string) { fabricFailed = true },
+					OnSuccess: func(_ ProvisionStatus) { fabricSucceeded = true },
+				},
+				CheckAPIServer: noAPIServerJob,
+			},
+			{
+				Name:     "k8s",
+				Provider: k8sProvider,
+				Callbacks: &PollCallbacks{
+					OnFailed:  func(_ string) { k8sFailed = true },
+					OnSuccess: func(_ ProvisionStatus) { k8sSucceeded = true },
+				},
+				CheckAPIServer: noAPIServerJob,
+			},
+		}
+
+		_, err := RunMultiTargetProvisioningLifecycle(ctx, targets, resource, provState, 5, 30*time.Second, nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fabricFailed).To(BeTrue())
+		Expect(fabricSucceeded).To(BeFalse())
+		Expect(k8sFailed).To(BeFalse())
+		Expect(k8sSucceeded).To(BeFalse())
+	})
+
+	ginkgo.It("requeues a target whose CheckAPIServer reports a non-terminal job without triggering a duplicate, leaving the other target unaffected", func() {
+		resource := &v1alpha1.Subnet{}
+		jobs := []v1alpha1.JobStatus{}
+		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
+
+		fabricTriggerCalled := false
+		fabricProvider := &mockProvider{
+			triggerProvisionFunc: func(_ context.Context, _ client.Object) (*ProvisionResult, error) {
+				fabricTriggerCalled = true
+				return &ProvisionResult{JobID: "fabric-job"}, nil
+			},
+		}
+		k8sProvider := &mockProvider{}
+
+		targets := []JobTarget{
+			{Name: "fabric", Provider: fabricProvider, CheckAPIServer: func() bool { return true }},
+			{Name: "k8s", Provider: k8sProvider, CheckAPIServer: noAPIServerJob},
+		}
+
+		result, err := RunMultiTargetProvisioningLifecycle(ctx, targets, resource, provState, 5, 30*time.Second, nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fabricTriggerCalled).To(BeFalse())
+		Expect(result.RequeueAfter).To(Equal(30 * time.Second))
+		Expect(FindLatestJobByTypeAndTarget(*provState.Jobs, v1alpha1.JobTypeProvision, "k8s")).NotTo(BeNil())
+		Expect(FindLatestJobByTypeAndTarget(*provState.Jobs, v1alpha1.JobTypeProvision, "fabric")).To(BeNil())
+	})
+
+	ginkgo.It("returns an error without panicking when targets is empty", func() {
+		resource := &v1alpha1.Subnet{}
+		jobs := []v1alpha1.JobStatus{}
+		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
+
+		_, err := RunMultiTargetProvisioningLifecycle(ctx, []JobTarget{}, resource, provState, 5, 30*time.Second, nil)
+		Expect(err).To(HaveOccurred())
+	})
+
+	ginkgo.It("returns an error when a target has an empty Name", func() {
+		resource := &v1alpha1.Subnet{}
+		jobs := []v1alpha1.JobStatus{}
+		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
+
+		targets := []JobTarget{
+			{Name: "", Provider: &mockProvider{}, CheckAPIServer: noAPIServerJob},
+		}
+		_, err := RunMultiTargetProvisioningLifecycle(ctx, targets, resource, provState, 5, 30*time.Second, nil)
+		Expect(err).To(HaveOccurred())
+	})
+
+	ginkgo.It("returns an error when a target has a nil Provider", func() {
+		resource := &v1alpha1.Subnet{}
+		jobs := []v1alpha1.JobStatus{}
+		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
+
+		targets := []JobTarget{
+			{Name: "fabric", Provider: nil, CheckAPIServer: noAPIServerJob},
+		}
+		_, err := RunMultiTargetProvisioningLifecycle(ctx, targets, resource, provState, 5, 30*time.Second, nil)
+		Expect(err).To(HaveOccurred())
+	})
+
+	ginkgo.It("returns an error when a target has a nil CheckAPIServer", func() {
+		resource := &v1alpha1.Subnet{}
+		jobs := []v1alpha1.JobStatus{}
+		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
+
+		targets := []JobTarget{
+			{Name: "fabric", Provider: &mockProvider{}, CheckAPIServer: nil},
+		}
+		_, err := RunMultiTargetProvisioningLifecycle(ctx, targets, resource, provState, 5, 30*time.Second, nil)
+		Expect(err).To(HaveOccurred())
+	})
+
+	ginkgo.It("returns an error when target Names are duplicated", func() {
+		resource := &v1alpha1.Subnet{}
+		jobs := []v1alpha1.JobStatus{}
+		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
+
+		targets := []JobTarget{
+			{Name: "fabric", Provider: &mockProvider{}, CheckAPIServer: noAPIServerJob},
+			{Name: "fabric", Provider: &mockProvider{}, CheckAPIServer: noAPIServerJob},
+		}
+		_, err := RunMultiTargetProvisioningLifecycle(ctx, targets, resource, provState, 5, 30*time.Second, nil)
+		Expect(err).To(HaveOccurred())
+	})
+})
+
 var _ = ginkgo.Describe("ComputeDesiredConfigVersion", func() {
 	ginkgo.It("produces consistent hashes for the same input", func() {
 		spec := map[string]string{"key": "value"}
@@ -440,6 +723,65 @@ var _ = ginkgo.Describe("FindLatestJobByType", func() {
 		Expect(result).NotTo(BeNil())
 		// When timestamps are equal, returns first one found
 		Expect(result.JobID).To(Equal("job1"))
+	})
+})
+
+var _ = ginkgo.Describe("FindLatestJobByTypeAndTarget", func() {
+	var baseTime time.Time
+
+	ginkgo.BeforeEach(func() {
+		baseTime = time.Now().UTC()
+	})
+
+	ginkgo.It("should return nil when jobs array is empty", func() {
+		jobs := []v1alpha1.JobStatus{}
+		result := FindLatestJobByTypeAndTarget(jobs, v1alpha1.JobTypeProvision, "fabric")
+		Expect(result).To(BeNil())
+	})
+
+	ginkgo.It("should return nil when no job matches both type and target", func() {
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "job1", Type: v1alpha1.JobTypeProvision, Target: "k8s", Timestamp: metav1.NewTime(baseTime)},
+			{JobID: "job2", Type: v1alpha1.JobTypeDeprovision, Target: "fabric", Timestamp: metav1.NewTime(baseTime)},
+		}
+		result := FindLatestJobByTypeAndTarget(jobs, v1alpha1.JobTypeProvision, "fabric")
+		Expect(result).To(BeNil())
+	})
+
+	ginkgo.It("should find the latest job for a specific target, ignoring other targets of the same type", func() {
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "fabric-1", Type: v1alpha1.JobTypeProvision, Target: "fabric", Timestamp: metav1.NewTime(baseTime.Add(-time.Hour))},
+			{JobID: "k8s-1", Type: v1alpha1.JobTypeProvision, Target: "k8s", Timestamp: metav1.NewTime(baseTime)},
+			{JobID: "fabric-2", Type: v1alpha1.JobTypeProvision, Target: "fabric", Timestamp: metav1.NewTime(baseTime.Add(-30 * time.Minute))},
+		}
+
+		fabricResult := FindLatestJobByTypeAndTarget(jobs, v1alpha1.JobTypeProvision, "fabric")
+		Expect(fabricResult).NotTo(BeNil())
+		Expect(fabricResult.JobID).To(Equal("fabric-2"))
+
+		k8sResult := FindLatestJobByTypeAndTarget(jobs, v1alpha1.JobTypeProvision, "k8s")
+		Expect(k8sResult).NotTo(BeNil())
+		Expect(k8sResult.JobID).To(Equal("k8s-1"))
+	})
+
+	ginkgo.It("target \"\" matches only untagged jobs, not target-tagged jobs of the same type", func() {
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "untagged", Type: v1alpha1.JobTypeProvision, Target: "", Timestamp: metav1.NewTime(baseTime.Add(-time.Hour))},
+			{JobID: "fabric", Type: v1alpha1.JobTypeProvision, Target: "fabric", Timestamp: metav1.NewTime(baseTime)},
+		}
+		result := FindLatestJobByTypeAndTarget(jobs, v1alpha1.JobTypeProvision, "")
+		Expect(result).NotTo(BeNil())
+		Expect(result.JobID).To(Equal("untagged"))
+	})
+
+	ginkgo.It("FindLatestJobByType is equivalent to FindLatestJobByTypeAndTarget with target \"\"", func() {
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "untagged-1", Type: v1alpha1.JobTypeProvision, Target: "", Timestamp: metav1.NewTime(baseTime.Add(-time.Hour))},
+			{JobID: "fabric", Type: v1alpha1.JobTypeProvision, Target: "fabric", Timestamp: metav1.NewTime(baseTime)},
+			{JobID: "untagged-2", Type: v1alpha1.JobTypeProvision, Target: "", Timestamp: metav1.NewTime(baseTime.Add(-30 * time.Minute))},
+		}
+		Expect(FindLatestJobByType(jobs, v1alpha1.JobTypeProvision)).To(Equal(FindLatestJobByTypeAndTarget(jobs, v1alpha1.JobTypeProvision, "")))
+		Expect(FindLatestJobByType(jobs, v1alpha1.JobTypeProvision).JobID).To(Equal("untagged-2"))
 	})
 })
 
@@ -703,6 +1045,264 @@ var _ = ginkgo.Describe("PollDeprovisionJob", func() {
 			},
 		}
 		result, done, err := PollDeprovisionJob(ctx, provider, resource, &jobs, latestJob, 10, pollInterval)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(done).To(BeTrue())
+		Expect(result).To(Equal(ctrl.Result{}))
+	})
+})
+
+var _ = ginkgo.Describe("RunMultiTargetDeprovisioningLifecycle", func() {
+	const pollInterval = 30 * time.Second
+	const maxHistory = 5
+	resource := &v1alpha1.Subnet{}
+
+	ginkgo.It("triggers every target with no deprovision job yet, tagging each with its target and requiring another pass to finish", func() {
+		fabricProvider := &mockProvider{
+			triggerDeprovisionFunc: func(_ context.Context, _ client.Object) (*DeprovisionResult, error) {
+				return &DeprovisionResult{Action: DeprovisionTriggered, JobID: "fabric-deprov"}, nil
+			},
+		}
+		k8sProvider := &mockProvider{
+			triggerDeprovisionFunc: func(_ context.Context, _ client.Object) (*DeprovisionResult, error) {
+				return &DeprovisionResult{Action: DeprovisionTriggered, JobID: "k8s-deprov"}, nil
+			},
+		}
+		jobs := []v1alpha1.JobStatus{}
+
+		targets := []DeprovisionTarget{
+			{Name: "fabric", Provider: fabricProvider},
+			{Name: "k8s", Provider: k8sProvider},
+		}
+
+		result, done, err := RunMultiTargetDeprovisioningLifecycle(ctx, targets, resource, &jobs, maxHistory, pollInterval)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(done).To(BeFalse())
+		Expect(result.RequeueAfter).To(Equal(pollInterval))
+		Expect(FindLatestJobByTypeAndTarget(jobs, v1alpha1.JobTypeDeprovision, "fabric").JobID).To(Equal("fabric-deprov"))
+		Expect(FindLatestJobByTypeAndTarget(jobs, v1alpha1.JobTypeDeprovision, "k8s").JobID).To(Equal("k8s-deprov"))
+	})
+
+	ginkgo.It("does not re-invoke an already-successful target's provider while another target is still being triggered", func() {
+		fabricStatusCalled := false
+		fabricProvider := &mockProvider{
+			getDeprovisionStatusFunc: func(_ context.Context, _ client.Object, _ string) (ProvisionStatus, error) {
+				fabricStatusCalled = true
+				return ProvisionStatus{State: v1alpha1.JobStateSucceeded}, nil
+			},
+		}
+		k8sProvider := &mockProvider{
+			triggerDeprovisionFunc: func(_ context.Context, _ client.Object) (*DeprovisionResult, error) {
+				return &DeprovisionResult{Action: DeprovisionTriggered, JobID: "k8s-deprov"}, nil
+			},
+		}
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "fabric-deprov", Type: v1alpha1.JobTypeDeprovision, Target: "fabric", State: v1alpha1.JobStateSucceeded, Timestamp: metav1.NewTime(time.Now())},
+		}
+
+		targets := []DeprovisionTarget{
+			{Name: "fabric", Provider: fabricProvider},
+			{Name: "k8s", Provider: k8sProvider},
+		}
+
+		result, done, err := RunMultiTargetDeprovisioningLifecycle(ctx, targets, resource, &jobs, maxHistory, pollInterval)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(done).To(BeFalse())
+		Expect(result.RequeueAfter).To(Equal(pollInterval))
+		Expect(fabricStatusCalled).To(BeFalse())
+		Expect(FindLatestJobByTypeAndTarget(jobs, v1alpha1.JobTypeDeprovision, "k8s")).NotTo(BeNil())
+	})
+
+	ginkgo.It("returns done=true and ctrl.Result{} once every target's deprovision job has already succeeded", func() {
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "fabric-deprov", Type: v1alpha1.JobTypeDeprovision, Target: "fabric", State: v1alpha1.JobStateSucceeded, Timestamp: metav1.NewTime(time.Now())},
+			{JobID: "k8s-deprov", Type: v1alpha1.JobTypeDeprovision, Target: "k8s", State: v1alpha1.JobStateSucceeded, Timestamp: metav1.NewTime(time.Now())},
+		}
+
+		targets := []DeprovisionTarget{
+			{Name: "fabric", Provider: &mockProvider{}},
+			{Name: "k8s", Provider: &mockProvider{}},
+		}
+
+		result, done, err := RunMultiTargetDeprovisioningLifecycle(ctx, targets, resource, &jobs, maxHistory, pollInterval)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(done).To(BeTrue())
+		Expect(result).To(Equal(ctrl.Result{}))
+	})
+
+	ginkgo.It("backs off only the failing target while a succeeded target contributes no further requeue and is not retried", func() {
+		fabricRetriggered := false
+		fabricProvider := &mockProvider{
+			triggerDeprovisionFunc: func(_ context.Context, _ client.Object) (*DeprovisionResult, error) {
+				fabricRetriggered = true
+				return &DeprovisionResult{Action: DeprovisionTriggered, JobID: "fabric-deprov-2"}, nil
+			},
+		}
+		k8sCalled := false
+		k8sProvider := &mockProvider{
+			triggerDeprovisionFunc: func(_ context.Context, _ client.Object) (*DeprovisionResult, error) {
+				k8sCalled = true
+				return nil, fmt.Errorf("should not be called")
+			},
+		}
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "fabric-deprov", Type: v1alpha1.JobTypeDeprovision, Target: "fabric", State: v1alpha1.JobStateFailed,
+				BlockDeletionOnFailure: true, Timestamp: metav1.NewTime(time.Now())},
+			{JobID: "k8s-deprov", Type: v1alpha1.JobTypeDeprovision, Target: "k8s", State: v1alpha1.JobStateSucceeded, Timestamp: metav1.NewTime(time.Now())},
+		}
+
+		targets := []DeprovisionTarget{
+			{Name: "fabric", Provider: fabricProvider},
+			{Name: "k8s", Provider: k8sProvider},
+		}
+
+		result, done, err := RunMultiTargetDeprovisioningLifecycle(ctx, targets, resource, &jobs, maxHistory, pollInterval)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(done).To(BeFalse())
+		Expect(fabricRetriggered).To(BeFalse(), "backoff has not elapsed yet, should not retrigger immediately")
+		Expect(k8sCalled).To(BeFalse(), "an already-succeeded target must not be retried")
+		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+		Expect(result.RequeueAfter).To(BeNumerically("<=", BackoffBaseDelay))
+	})
+
+	ginkgo.It("scopes ProvisionJobStatus sync from DeprovisionWaiting to only the matching target's provision job", func() {
+		fabricProvider := &mockProvider{
+			triggerDeprovisionFunc: func(_ context.Context, _ client.Object) (*DeprovisionResult, error) {
+				return &DeprovisionResult{
+					Action: DeprovisionWaiting,
+					ProvisionJobStatus: &ProvisionStatus{
+						State:   v1alpha1.JobStateFailed,
+						Message: "cancelled",
+					},
+				}, nil
+			},
+		}
+		k8sProvider := &mockProvider{
+			getDeprovisionStatusFunc: func(_ context.Context, _ client.Object, _ string) (ProvisionStatus, error) {
+				return ProvisionStatus{State: v1alpha1.JobStateRunning}, nil
+			},
+		}
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "fabric-prov", Type: v1alpha1.JobTypeProvision, Target: "fabric", State: v1alpha1.JobStateRunning, Timestamp: metav1.NewTime(time.Now())},
+			{JobID: "k8s-prov", Type: v1alpha1.JobTypeProvision, Target: "k8s", State: v1alpha1.JobStateRunning, Timestamp: metav1.NewTime(time.Now())},
+			{JobID: "k8s-deprov", Type: v1alpha1.JobTypeDeprovision, Target: "k8s", State: v1alpha1.JobStatePending, Timestamp: metav1.NewTime(time.Now())},
+		}
+
+		targets := []DeprovisionTarget{
+			{Name: "fabric", Provider: fabricProvider},
+			{Name: "k8s", Provider: k8sProvider},
+		}
+
+		_, _, err := RunMultiTargetDeprovisioningLifecycle(ctx, targets, resource, &jobs, maxHistory, pollInterval)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(FindLatestJobByTypeAndTarget(jobs, v1alpha1.JobTypeProvision, "fabric").State).To(Equal(v1alpha1.JobStateFailed))
+		Expect(FindLatestJobByTypeAndTarget(jobs, v1alpha1.JobTypeProvision, "k8s").State).To(Equal(v1alpha1.JobStateRunning))
+	})
+
+	ginkgo.It("invokes every target's provider and joins the error when one target's trigger fails, without blocking the other", func() {
+		fabricProvider := &mockProvider{
+			triggerDeprovisionFunc: func(_ context.Context, _ client.Object) (*DeprovisionResult, error) {
+				return nil, fmt.Errorf("fabric API unreachable")
+			},
+		}
+		k8sProvider := &mockProvider{
+			triggerDeprovisionFunc: func(_ context.Context, _ client.Object) (*DeprovisionResult, error) {
+				return &DeprovisionResult{Action: DeprovisionTriggered, JobID: "k8s-deprov"}, nil
+			},
+		}
+		jobs := []v1alpha1.JobStatus{}
+
+		targets := []DeprovisionTarget{
+			{Name: "fabric", Provider: fabricProvider},
+			{Name: "k8s", Provider: k8sProvider},
+		}
+
+		result, done, err := RunMultiTargetDeprovisioningLifecycle(ctx, targets, resource, &jobs, maxHistory, pollInterval)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("fabric"))
+		Expect(err.Error()).To(ContainSubstring("fabric API unreachable"))
+		Expect(done).To(BeFalse())
+		Expect(result.RequeueAfter).To(Equal(pollInterval))
+		Expect(FindLatestJobByTypeAndTarget(jobs, v1alpha1.JobTypeDeprovision, "k8s")).NotTo(BeNil())
+	})
+
+	ginkgo.It("returns an error without panicking when targets is empty", func() {
+		jobs := []v1alpha1.JobStatus{}
+		_, _, err := RunMultiTargetDeprovisioningLifecycle(ctx, []DeprovisionTarget{}, resource, &jobs, maxHistory, pollInterval)
+		Expect(err).To(HaveOccurred())
+	})
+
+	ginkgo.It("returns an error when target Names are duplicated", func() {
+		jobs := []v1alpha1.JobStatus{}
+		targets := []DeprovisionTarget{
+			{Name: "fabric", Provider: &mockProvider{}},
+			{Name: "fabric", Provider: &mockProvider{}},
+		}
+		_, _, err := RunMultiTargetDeprovisioningLifecycle(ctx, targets, resource, &jobs, maxHistory, pollInterval)
+		Expect(err).To(HaveOccurred())
+	})
+
+	ginkgo.It("returns an error when a target has a nil Provider", func() {
+		jobs := []v1alpha1.JobStatus{}
+		targets := []DeprovisionTarget{
+			{Name: "fabric", Provider: nil},
+		}
+		_, _, err := RunMultiTargetDeprovisioningLifecycle(ctx, targets, resource, &jobs, maxHistory, pollInterval)
+		Expect(err).To(HaveOccurred())
+	})
+
+	ginkgo.It("completes based on a single target alone when the other manager was never dispatched", func() {
+		// A resource whose k8s manager was never dispatched (e.g. the dispatcher's
+		// DispatchPlan omitted it) must be deprovisioned by passing only the
+		// dispatched target — RunMultiTargetDeprovisioningLifecycle has no way to
+		// know about a target that was never included in the call.
+		fabricProvider := &mockProvider{}
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "fabric-deprov", Type: v1alpha1.JobTypeDeprovision, Target: "fabric", State: v1alpha1.JobStateSucceeded, Timestamp: metav1.NewTime(time.Now())},
+		}
+
+		targets := []DeprovisionTarget{
+			{Name: "fabric", Provider: fabricProvider},
+		}
+
+		result, done, err := RunMultiTargetDeprovisioningLifecycle(ctx, targets, resource, &jobs, maxHistory, pollInterval)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(done).To(BeTrue())
+		Expect(result).To(Equal(ctrl.Result{}))
+	})
+
+	ginkgo.It("reaches done=true across two calls once every target's newly-triggered job is polled to success", func() {
+		fabricProvider := &mockProvider{
+			triggerDeprovisionFunc: func(_ context.Context, _ client.Object) (*DeprovisionResult, error) {
+				return &DeprovisionResult{Action: DeprovisionTriggered, JobID: "fabric-deprov"}, nil
+			},
+		}
+		k8sProvider := &mockProvider{
+			triggerDeprovisionFunc: func(_ context.Context, _ client.Object) (*DeprovisionResult, error) {
+				return &DeprovisionResult{Action: DeprovisionTriggered, JobID: "k8s-deprov"}, nil
+			},
+		}
+		jobs := []v1alpha1.JobStatus{}
+
+		targets := []DeprovisionTarget{
+			{Name: "fabric", Provider: fabricProvider},
+			{Name: "k8s", Provider: k8sProvider},
+		}
+
+		// First call: neither target has a job yet — both are triggered
+		// (Pending), so neither can be done in the same call.
+		result, done, err := RunMultiTargetDeprovisioningLifecycle(ctx, targets, resource, &jobs, maxHistory, pollInterval)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(done).To(BeFalse())
+		Expect(result.RequeueAfter).To(Equal(pollInterval))
+
+		// Second call: both jobs have since succeeded.
+		fabricProvider.getDeprovisionStatusFunc = func(_ context.Context, _ client.Object, _ string) (ProvisionStatus, error) {
+			return ProvisionStatus{State: v1alpha1.JobStateSucceeded}, nil
+		}
+		k8sProvider.getDeprovisionStatusFunc = func(_ context.Context, _ client.Object, _ string) (ProvisionStatus, error) {
+			return ProvisionStatus{State: v1alpha1.JobStateSucceeded}, nil
+		}
+		result, done, err = RunMultiTargetDeprovisioningLifecycle(ctx, targets, resource, &jobs, maxHistory, pollInterval)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(done).To(BeTrue())
 		Expect(result).To(Equal(ctrl.Result{}))

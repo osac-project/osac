@@ -29,7 +29,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	grpcstatus "google.golang.org/grpc/status"
 
-	testsv1 "github.com/osac-project/fulfillment-service/internal/api/osac/tests/v1"
+	testsv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/tests/v1"
 )
 
 var _ = Describe("Interceptor", func() {

@@ -31,16 +31,16 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 
-	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
+	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
-	"github.com/osac-project/fulfillment-service/internal/auth"
-	"github.com/osac-project/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/fulfillment-service/internal/events"
-	"github.com/osac-project/fulfillment-service/internal/jq"
-	"github.com/osac-project/fulfillment-service/internal/kubernetes/gvks"
-	"github.com/osac-project/fulfillment-service/internal/kubernetes/labels"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	"github.com/osac-project/osac/fulfillment-service/internal/events"
+	"github.com/osac-project/osac/fulfillment-service/internal/jq"
+	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/gvks"
+	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
 )
 
 type ClustersServerBuilder struct {

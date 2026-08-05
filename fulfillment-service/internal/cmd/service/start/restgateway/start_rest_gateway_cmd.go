@@ -32,13 +32,13 @@ import (
 	healthv1 "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/protobuf/encoding/protojson"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
-	"github.com/osac-project/fulfillment-service/internal/logging"
-	"github.com/osac-project/fulfillment-service/internal/network"
-	"github.com/osac-project/fulfillment-service/internal/servers"
-	shtdwn "github.com/osac-project/fulfillment-service/internal/shutdown"
-	"github.com/osac-project/fulfillment-service/internal/version"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/logging"
+	"github.com/osac-project/osac/fulfillment-service/internal/network"
+	"github.com/osac-project/osac/fulfillment-service/internal/servers"
+	shtdwn "github.com/osac-project/osac/fulfillment-service/internal/shutdown"
+	"github.com/osac-project/osac/fulfillment-service/internal/version"
 )
 
 // Cmd creates and returns the `start rest-gateway` command.
@@ -312,6 +312,7 @@ func (c *runnerContext) registerHandlers(ctx context.Context, mux *runtime.Serve
 		publicv1.RegisterConsoleSessionsHandler,
 		publicv1.RegisterJsonWebKeySetHandler,
 		publicv1.RegisterInstanceTypesHandler,
+		publicv1.RegisterBareMetalInstanceTypesHandler,
 
 		// Private API:
 		privatev1.RegisterCapabilitiesHandler,
@@ -342,6 +343,7 @@ func (c *runnerContext) registerHandlers(ctx context.Context, mux *runtime.Serve
 		privatev1.RegisterRolesHandler,
 		privatev1.RegisterRoleBindingsHandler,
 		privatev1.RegisterInstanceTypesHandler,
+		privatev1.RegisterBareMetalInstanceTypesHandler,
 	}
 	for _, register := range handlers {
 		if err := register(ctx, mux, c.grpcClient); err != nil {

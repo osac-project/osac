@@ -21,8 +21,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 )
 
 var _ = Describe("Bare metal instance catalog items server", func() {
@@ -74,7 +74,7 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 				Object: publicv1.BareMetalInstanceCatalogItem_builder{
 					Title:       "My BMI catalog item",
 					Description: "My description.",
-					Template:    "my-bmi-template-id",
+					Template:    publicv1.BareMetalInstanceTemplateReference_builder{Id: "my-bmi-template-id"}.Build(),
 					Published:   true,
 				}.Build(),
 			}.Build())
@@ -84,7 +84,7 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 			Expect(object).ToNot(BeNil())
 			Expect(object.GetId()).ToNot(BeEmpty())
 			Expect(object.GetTitle()).To(Equal("My BMI catalog item"))
-			Expect(object.GetTemplate()).To(Equal("my-bmi-template-id"))
+			Expect(object.GetTemplate().GetId()).To(Equal("my-bmi-template-id"))
 			Expect(object.GetPublished()).To(BeTrue())
 		})
 
@@ -102,7 +102,7 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 				_, err := server.Create(ctx, publicv1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 					Object: publicv1.BareMetalInstanceCatalogItem_builder{
 						Title:     fmt.Sprintf("Published item %d", i),
-						Template:  "my-bmi-template-id",
+						Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my-bmi-template-id"}.Build(),
 						Published: true,
 					}.Build(),
 				}.Build())
@@ -111,7 +111,7 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 			_, err := server.Create(ctx, publicv1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.BareMetalInstanceCatalogItem_builder{
 					Title:     "Unpublished item",
-					Template:  "my-bmi-template-id",
+					Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my-bmi-template-id"}.Build(),
 					Published: false,
 				}.Build(),
 			}.Build())
@@ -139,7 +139,7 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 			createResponse, err := server.Create(ctx, publicv1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.BareMetalInstanceCatalogItem_builder{
 					Title:     "Published item",
-					Template:  "my-bmi-template-id",
+					Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my-bmi-template-id"}.Build(),
 					Published: true,
 				}.Build(),
 			}.Build())
@@ -157,7 +157,7 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 			createResponse, err := server.Create(ctx, publicv1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.BareMetalInstanceCatalogItem_builder{
 					Title:     "Unpublished item",
-					Template:  "my-bmi-template-id",
+					Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my-bmi-template-id"}.Build(),
 					Published: false,
 				}.Build(),
 			}.Build())
@@ -177,7 +177,7 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 			createResponse, err := server.Create(ctx, publicv1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.BareMetalInstanceCatalogItem_builder{
 					Title:     "Original title",
-					Template:  "my-bmi-template-id",
+					Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my-bmi-template-id"}.Build(),
 					Published: true,
 				}.Build(),
 			}.Build())
@@ -188,7 +188,7 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 				Object: publicv1.BareMetalInstanceCatalogItem_builder{
 					Id:        id,
 					Title:     "Updated title",
-					Template:  "my-bmi-template-id",
+					Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my-bmi-template-id"}.Build(),
 					Published: true,
 				}.Build(),
 			}.Build())
@@ -218,7 +218,7 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 			createResponse, err := server.Create(ctx, publicv1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.BareMetalInstanceCatalogItem_builder{
 					Title:     "Item to delete",
-					Template:  "my-bmi-template-id",
+					Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my-bmi-template-id"}.Build(),
 					Published: true,
 				}.Build(),
 			}.Build())
@@ -243,7 +243,7 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 			createResponse, err := server.Create(ctx, publicv1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.BareMetalInstanceCatalogItem_builder{
 					Title:     "Referenced item",
-					Template:  "my-bmi-template-id",
+					Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my-bmi-template-id"}.Build(),
 					Published: true,
 				}.Build(),
 			}.Build())
@@ -259,7 +259,7 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 			_, err = instancesServer.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem: catalogItemID,
+						CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())

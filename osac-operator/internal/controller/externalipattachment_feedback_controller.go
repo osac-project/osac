@@ -27,9 +27,9 @@ import (
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
-	"github.com/osac-project/osac-operator/api/v1alpha1"
-	privatev1 "github.com/osac-project/osac-operator/internal/api/osac/private/v1"
-	"github.com/osac-project/osac-operator/internal/controller/feedback"
+	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	privatev1 "github.com/osac-project/osac/osac-operator/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/osac-operator/internal/controller/feedback"
 )
 
 var ErrExternalIPAttachmentNotFound = errors.New("external IP attachment not found in fulfillment service")
@@ -162,15 +162,15 @@ func syncExternalIPAttachmentState(ctx context.Context, obj *v1alpha1.ExternalIP
 }
 
 func syncExternalIPAttachmentAddress(ctx context.Context, eipClient privatev1.ExternalIPsClient, remote *privatev1.ExternalIPAttachment) {
-	externalIPID := remote.GetSpec().GetExternalIp()
-	if externalIPID == "" {
+	externalIPRef := remote.GetSpec().GetExternalIp()
+	if externalIPRef.GetId() == "" {
 		return
 	}
 	response, err := eipClient.Get(ctx, privatev1.ExternalIPsGetRequest_builder{
-		Id: externalIPID,
+		Id: externalIPRef.GetId(),
 	}.Build())
 	if err != nil {
-		ctrllog.FromContext(ctx).Error(err, "Failed to fetch parent ExternalIP for address sync", "externalIPID", externalIPID)
+		ctrllog.FromContext(ctx).Error(err, "Failed to fetch parent ExternalIP for address sync", "externalIPID", externalIPRef.GetId())
 		return
 	}
 	obj := response.GetObject()
@@ -183,17 +183,17 @@ func syncExternalIPAttachmentAddress(ctx context.Context, eipClient privatev1.Ex
 }
 
 func syncAttachedOnParentExternalIP(ctx context.Context, eipClient privatev1.ExternalIPsClient, remote *privatev1.ExternalIPAttachment, attached bool) error {
-	externalIPID := remote.GetSpec().GetExternalIp()
-	if externalIPID == "" {
+	externalIPRef := remote.GetSpec().GetExternalIp()
+	if externalIPRef.GetId() == "" {
 		return nil
 	}
 
 	response, err := eipClient.Get(ctx, privatev1.ExternalIPsGetRequest_builder{
-		Id: externalIPID,
+		Id: externalIPRef.GetId(),
 	}.Build())
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
-			ctrllog.FromContext(ctx).Info("Parent ExternalIP not found, skipping attached sync", "externalIPID", externalIPID)
+			ctrllog.FromContext(ctx).Info("Parent ExternalIP not found, skipping attached sync", "externalIPID", externalIPRef.GetId())
 			return nil
 		}
 		return err
@@ -201,7 +201,7 @@ func syncAttachedOnParentExternalIP(ctx context.Context, eipClient privatev1.Ext
 
 	externalIP := response.GetObject()
 	if externalIP == nil {
-		return fmt.Errorf("parent ExternalIP %s: response contained nil object", externalIPID)
+		return fmt.Errorf("parent ExternalIP %s: response contained nil object", externalIPRef.GetId())
 	}
 	if !externalIP.HasStatus() {
 		externalIP.SetStatus(&privatev1.ExternalIPStatus{})

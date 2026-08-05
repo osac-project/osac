@@ -17,7 +17,7 @@ limitations under the License.
 package dispatcher
 
 import (
-	"github.com/osac-project/osac-operator/pkg/networkmanager"
+	"github.com/osac-project/osac/osac-operator/pkg/networkmanager"
 )
 
 // ManagerRole identifies which manager type handles an operation.

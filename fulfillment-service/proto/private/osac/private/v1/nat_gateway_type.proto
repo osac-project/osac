@@ -17,6 +17,8 @@ package osac.private.v1;
 
 import "google/api/field_behavior.proto";
 import "osac/private/v1/metadata_type.proto";
+import "osac/private/v1/external_ip_type.proto";
+import "osac/private/v1/virtual_network_type.proto";
 
 // Represents a NAT gateway for outbound traffic (SNAT) from a VirtualNetwork.
 //
@@ -54,27 +56,22 @@ message NATGateway {
 // VirtualNetwork's egress traffic is NATted, and the external_ip provides the source address
 // for outbound connections.
 message NATGatewaySpec {
-  // Parent VirtualNetwork ID. Required and immutable after creation.
+  // Parent VirtualNetwork reference. Required and immutable after creation.
   //
-  // Must reference the ID of an existing VirtualNetwork. All outbound traffic from subnets
-  // within this VirtualNetwork will be source-NATted to the associated ExternalIP address.
-  // Only one NATGateway is allowed per VirtualNetwork.
-  //
-  // Example: "019728a4-3f5c-7def-8abc-1234567890ab"
-  string virtual_network = 1 [
+  // Must reference an existing VirtualNetwork. All outbound traffic from subnets within this
+  // VirtualNetwork will be source-NATted to the associated ExternalIP address. Only one
+  // NATGateway is allowed per VirtualNetwork.
+  VirtualNetworkLocalReference virtual_network = 1 [
     (google.api.field_behavior) = REQUIRED,
     (google.api.field_behavior) = IMMUTABLE
   ];
 
-  // ExternalIP ID to use as the SNAT source address. Required and immutable after creation.
+  // ExternalIP reference to use as the SNAT source address. Required and immutable after creation.
   //
-  // Must reference the ID of an existing ExternalIP in ALLOCATED state. The ExternalIP must
-  // not already be consumed by another NATGateway or ExternalIPAttachment. The allocated
-  // address from this ExternalIP becomes the source IP for all egress traffic from the
-  // VirtualNetwork.
-  //
-  // Example: "019728a4-4e6d-7abc-9def-abcdef012345"
-  string external_ip = 2 [
+  // Must reference an existing ExternalIP in ALLOCATED state. The ExternalIP must not already be
+  // consumed by another NATGateway or ExternalIPAttachment. The allocated address from this
+  // ExternalIP becomes the source IP for all egress traffic from the VirtualNetwork.
+  ExternalIPLocalReference external_ip = 2 [
     (google.api.field_behavior) = REQUIRED,
     (google.api.field_behavior) = IMMUTABLE
   ];

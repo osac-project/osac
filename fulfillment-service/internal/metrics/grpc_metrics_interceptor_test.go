@@ -25,7 +25,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	grpcstatus "google.golang.org/grpc/status"
 
-	. "github.com/osac-project/fulfillment-service/internal/testing"
+	. "github.com/osac-project/osac/fulfillment-service/internal/testing"
 )
 
 var _ = Describe("Create", func() {

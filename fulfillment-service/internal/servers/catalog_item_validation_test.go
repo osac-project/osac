@@ -23,7 +23,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 )
 
 var _ = Describe("applyFieldDefinitions", func() {
@@ -104,16 +104,16 @@ var _ = Describe("applyFieldDefinitions", func() {
 		spec := &privatev1.ClusterSpec{
 			SshPublicKey: &sshKey,
 		}
-		defaultRelease, err := structpb.NewValue("quay.io/ocp:4.16")
+		defaultVersion, err := structpb.NewValue("4-17-0")
 		Expect(err).ToNot(HaveOccurred())
 		fieldDefs := []*privatev1.FieldDefinition{
 			{Path: "ssh_public_key", Editable: true},
-			{Path: "release_image", Editable: false, Default: defaultRelease},
+			{Path: "version_name", Editable: false, Default: defaultVersion},
 		}
 		err = applyFieldDefinitions(spec, fieldDefs)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(spec.GetSshPublicKey()).To(Equal("ssh-ed25519 USER_KEY"))
-		Expect(spec.GetReleaseImage()).To(Equal("quay.io/ocp:4.16"))
+		Expect(spec.GetVersionName()).To(Equal("4-17-0"))
 	})
 
 	It("returns no error for empty field definitions", func() {
@@ -130,13 +130,13 @@ var _ = Describe("applyFieldDefinitions", func() {
 		spec := &privatev1.ClusterSpec{
 			SshPublicKey: &sshKey,
 		}
-		defaultRelease, err := structpb.NewValue("4.16")
+		defaultVersion, err := structpb.NewValue("4-17-0")
 		Expect(err).ToNot(HaveOccurred())
 		fieldDefs := []*privatev1.FieldDefinition{
 			{
-				Path:     "release_image",
+				Path:     "version_name",
 				Editable: true,
-				Default:  defaultRelease,
+				Default:  defaultVersion,
 			},
 			{
 				Path:     "pull_secret",
@@ -310,10 +310,10 @@ var _ = Describe("applyFieldDefinitions rejects unlisted fields", func() {
 
 	It("rejects multiple unlisted fields on ClusterSpec", func() {
 		pullSecret := "my-secret"
-		releaseImage := "quay.io/ocp:4.21"
+		versionName := "4-17-0"
 		spec := &privatev1.ClusterSpec{
-			PullSecret:   &pullSecret,
-			ReleaseImage: &releaseImage,
+			PullSecret:  &pullSecret,
+			VersionName: &versionName,
 		}
 		defaultVal, err := structpb.NewValue("ssh-ed25519 AAAA")
 		Expect(err).ToNot(HaveOccurred())
@@ -326,7 +326,7 @@ var _ = Describe("applyFieldDefinitions rejects unlisted fields", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 		Expect(err.Error()).To(ContainSubstring("pull_secret"))
-		Expect(err.Error()).To(ContainSubstring("release_image"))
+		Expect(err.Error()).To(ContainSubstring("version_name"))
 	})
 
 	It("accepts when all fields are covered by field_definitions", func() {
@@ -346,7 +346,7 @@ var _ = Describe("applyFieldDefinitions rejects unlisted fields", func() {
 
 	It("always allows catalog_item without a field_definition", func() {
 		spec := privatev1.ClusterSpec_builder{
-			CatalogItem: "cat-123",
+			CatalogItem: privatev1.ClusterCatalogItemReference_builder{Id: "cat-123"}.Build(),
 		}.Build()
 		defaultVal, err := structpb.NewValue("ssh-ed25519 AAAA")
 		Expect(err).ToNot(HaveOccurred())
@@ -361,7 +361,7 @@ var _ = Describe("applyFieldDefinitions rejects unlisted fields", func() {
 
 	It("always allows template without a field_definition", func() {
 		spec := privatev1.ClusterSpec_builder{
-			Template: "my-template",
+			Template: privatev1.ClusterTemplateReference_builder{Id: "my-template"}.Build(),
 		}.Build()
 		defaultVal, err := structpb.NewValue("ssh-ed25519 AAAA")
 		Expect(err).ToNot(HaveOccurred())
@@ -394,10 +394,10 @@ var _ = Describe("applyFieldDefinitions rejects unlisted fields", func() {
 		spec := &privatev1.ClusterSpec{
 			PullSecret: &pullSecret,
 		}
-		defaultVal, err := structpb.NewValue("admin-value")
+		defaultVal, err := structpb.NewValue("4-17-0")
 		Expect(err).ToNot(HaveOccurred())
 		fieldDefs := []*privatev1.FieldDefinition{{
-			Path:     "release_image",
+			Path:     "version_name",
 			Editable: false,
 			Default:  defaultVal,
 		}}

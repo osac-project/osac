@@ -23,10 +23,10 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/fulfillment-service/internal/auth"
-	"github.com/osac-project/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/fulfillment-service/internal/events"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	"github.com/osac-project/osac/fulfillment-service/internal/events"
 )
 
 type PrivateExternalIPAttachmentsServerBuilder struct {
@@ -179,9 +179,10 @@ func (s *PrivateExternalIPAttachmentsServer) Create(ctx context.Context,
 	}
 
 	spec := attachment.GetSpec()
-	externalIPID := spec.GetExternalIp()
+	externalIPRef := spec.GetExternalIp()
+	externalIPKey := refKey(externalIPRef)
 
-	err = s.validateExternalIPReference(ctx, externalIPID)
+	err = s.validateExternalIPReference(ctx, externalIPKey)
 	if err != nil {
 		return
 	}
@@ -192,7 +193,7 @@ func (s *PrivateExternalIPAttachmentsServer) Create(ctx context.Context,
 	}
 
 	targetID := s.getTargetID(spec)
-	err = s.validateUniqueness(ctx, externalIPID, targetID)
+	err = s.validateUniqueness(ctx, externalIPKey, targetID)
 	if err != nil {
 		return
 	}
@@ -211,7 +212,7 @@ func (s *PrivateExternalIPAttachmentsServer) Create(ctx context.Context,
 		return
 	}
 
-	err = s.updateExternalIPAttachedFlag(ctx, externalIPID, true)
+	err = s.updateExternalIPAttachedFlag(ctx, externalIPKey, true)
 	if err != nil {
 		return
 	}
@@ -264,15 +265,15 @@ func (s *PrivateExternalIPAttachmentsServer) Delete(ctx context.Context,
 		return
 	}
 
-	externalIPID := getResponse.GetObject().GetSpec().GetExternalIp()
+	externalIPRef := getResponse.GetObject().GetSpec().GetExternalIp()
 
 	err = s.generic.Delete(ctx, request, &response)
 	if err != nil {
 		return
 	}
 
-	if externalIPID != "" {
-		err = s.updateExternalIPAttachedFlag(ctx, externalIPID, false)
+	if externalIPRef != nil {
+		err = s.updateExternalIPAttachedFlag(ctx, refKey(externalIPRef), false)
 		if err != nil {
 			return
 		}
@@ -296,7 +297,7 @@ func (s *PrivateExternalIPAttachmentsServer) validateExternalIPAttachment(
 	if spec == nil {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "external IP attachment spec is mandatory")
 	}
-	if spec.GetExternalIp() == "" {
+	if spec.GetExternalIp() == nil {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'spec.external_ip' is required")
 	}
@@ -340,28 +341,28 @@ func validateImmutableFieldsExternalIPAttachment(
 	newSpec := newAttachment.GetSpec()
 	existingSpec := existingAttachment.GetSpec()
 
-	if newExternalIP := newSpec.GetExternalIp(); newExternalIP != existingSpec.GetExternalIp() {
+	if refKey(newSpec.GetExternalIp()) != refKey(existingSpec.GetExternalIp()) {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'spec.external_ip' is immutable and cannot be changed from '%s' to '%s'",
-			existingSpec.GetExternalIp(), newExternalIP)
+			refKey(existingSpec.GetExternalIp()), refKey(newSpec.GetExternalIp()))
 	}
 
-	if newSpec.GetComputeInstance() != existingSpec.GetComputeInstance() {
+	if refKey(newSpec.GetComputeInstance()) != refKey(existingSpec.GetComputeInstance()) {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'spec.compute_instance' is immutable and cannot be changed from '%s' to '%s'",
-			existingSpec.GetComputeInstance(), newSpec.GetComputeInstance())
+			refKey(existingSpec.GetComputeInstance()), refKey(newSpec.GetComputeInstance()))
 	}
 
-	if newSpec.GetCluster() != existingSpec.GetCluster() {
+	if refKey(newSpec.GetCluster()) != refKey(existingSpec.GetCluster()) {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'spec.cluster' is immutable and cannot be changed from '%s' to '%s'",
-			existingSpec.GetCluster(), newSpec.GetCluster())
+			refKey(existingSpec.GetCluster()), refKey(newSpec.GetCluster()))
 	}
 
-	if newSpec.GetBaremetalInstance() != existingSpec.GetBaremetalInstance() {
+	if refKey(newSpec.GetBaremetalInstance()) != refKey(existingSpec.GetBaremetalInstance()) {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'spec.baremetal_instance' is immutable and cannot be changed from '%s' to '%s'",
-			existingSpec.GetBaremetalInstance(), newSpec.GetBaremetalInstance())
+			refKey(existingSpec.GetBaremetalInstance()), refKey(newSpec.GetBaremetalInstance()))
 	}
 
 	if newSpec.GetTargetEndpoint() != existingSpec.GetTargetEndpoint() {
@@ -423,19 +424,20 @@ func (s *PrivateExternalIPAttachmentsServer) validateTargetReference(
 }
 
 func (s *PrivateExternalIPAttachmentsServer) validateComputeInstanceReference(
-	ctx context.Context, computeInstanceID string) error {
+	ctx context.Context, ref *privatev1.ComputeInstanceLocalReference) error {
+	key := refKey(ref)
 	_, err := s.computeInstanceDao.Get().
-		SetId(computeInstanceID).
+		SetId(key).
 		SetLock(true).
 		Do(ctx)
 	if err != nil {
 		var notFoundErr *dao.ErrNotFound
 		if errors.As(err, &notFoundErr) {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"ComputeInstance '%s' does not exist", computeInstanceID)
+				"ComputeInstance '%s' does not exist", key)
 		}
 		s.logger.ErrorContext(ctx, "Failed to query ComputeInstance",
-			slog.String("compute_instance_id", computeInstanceID),
+			slog.String("compute_instance_id", key),
 			slog.Any("error", err))
 		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate compute_instance")
 	}
@@ -443,19 +445,20 @@ func (s *PrivateExternalIPAttachmentsServer) validateComputeInstanceReference(
 }
 
 func (s *PrivateExternalIPAttachmentsServer) validateClusterReference(
-	ctx context.Context, clusterID string) error {
+	ctx context.Context, ref *privatev1.ClusterLocalReference) error {
+	key := refKey(ref)
 	_, err := s.clusterDao.Get().
-		SetId(clusterID).
+		SetId(key).
 		SetLock(true).
 		Do(ctx)
 	if err != nil {
 		var notFoundErr *dao.ErrNotFound
 		if errors.As(err, &notFoundErr) {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"Cluster '%s' does not exist", clusterID)
+				"Cluster '%s' does not exist", key)
 		}
 		s.logger.ErrorContext(ctx, "Failed to query Cluster",
-			slog.String("cluster_id", clusterID),
+			slog.String("cluster_id", key),
 			slog.Any("error", err))
 		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate cluster")
 	}
@@ -463,19 +466,20 @@ func (s *PrivateExternalIPAttachmentsServer) validateClusterReference(
 }
 
 func (s *PrivateExternalIPAttachmentsServer) validateBareMetalInstanceReference(
-	ctx context.Context, bareMetalInstanceID string) error {
+	ctx context.Context, ref *privatev1.BareMetalInstanceLocalReference) error {
+	key := refKey(ref)
 	_, err := s.bareMetalInstanceDao.Get().
-		SetId(bareMetalInstanceID).
+		SetId(key).
 		SetLock(true).
 		Do(ctx)
 	if err != nil {
 		var notFoundErr *dao.ErrNotFound
 		if errors.As(err, &notFoundErr) {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"BareMetalInstance '%s' does not exist", bareMetalInstanceID)
+				"BareMetalInstance '%s' does not exist", key)
 		}
 		s.logger.ErrorContext(ctx, "Failed to query BareMetalInstance",
-			slog.String("baremetal_instance_id", bareMetalInstanceID),
+			slog.String("baremetal_instance_id", key),
 			slog.Any("error", err))
 		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate baremetal_instance")
 	}
@@ -486,11 +490,11 @@ func (s *PrivateExternalIPAttachmentsServer) getTargetID(
 	spec *privatev1.ExternalIPAttachmentSpec) string {
 	switch {
 	case spec.HasComputeInstance():
-		return spec.GetComputeInstance()
+		return refKey(spec.GetComputeInstance())
 	case spec.HasCluster():
-		return spec.GetCluster()
+		return refKey(spec.GetCluster())
 	case spec.HasBaremetalInstance():
-		return spec.GetBaremetalInstance()
+		return refKey(spec.GetBaremetalInstance())
 	default:
 		return ""
 	}
@@ -498,7 +502,7 @@ func (s *PrivateExternalIPAttachmentsServer) getTargetID(
 
 func (s *PrivateExternalIPAttachmentsServer) validateUniqueness(
 	ctx context.Context, externalIPID string, targetID string) error {
-	eipFilter := fmt.Sprintf("this.spec.external_ip == %q", externalIPID)
+	eipFilter := fmt.Sprintf("this.spec.external_ip.id == %[1]q || this.spec.external_ip.name == %[1]q", externalIPID)
 	eipResp, err := s.externalIPAttachmentDao.List().
 		SetFilter(eipFilter).
 		SetLimit(1).

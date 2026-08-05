@@ -17,6 +17,7 @@ package osac.private.v1;
 
 import "osac/private/v1/field_definition_type.proto";
 import "osac/private/v1/metadata_type.proto";
+import "osac/private/v1/cluster_type.proto";
 
 // A cluster catalog item defines a curated infrastructure offering that references an underlying cluster template.
 // Admins control which fields users can set, enforce defaults, and validate input via JSON Schema.
@@ -32,8 +33,8 @@ message ClusterCatalogItem {
   // Human friendly long description of the catalog item, using Markdown format.
   string description = 4;
 
-  // Identifier of the underlying cluster template that this catalog item references.
-  string template = 5;
+  // Reference to the underlying cluster template that this catalog item references.
+  ClusterTemplateReference template = 5;
 
   // Whether this catalog item is visible in the public API. Only published items are returned by the public List and
   // Get endpoints (with the exception of unpublished items already referenced by an existing resource).

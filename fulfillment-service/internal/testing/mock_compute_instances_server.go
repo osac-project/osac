@@ -19,7 +19,7 @@ import (
 	"strings"
 	"sync"
 
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -58,18 +58,24 @@ func (s *MockComputeInstancesServer) Create(ctx context.Context, request *public
 	if instance == nil {
 		return nil, status.Error(codes.InvalidArgument, "object is required")
 	}
-	if instance.GetSpec() == nil || instance.GetSpec().GetTemplate() == "" {
+	if instance.GetSpec() == nil || instance.GetSpec().GetTemplate() == nil {
 		return nil, status.Error(codes.InvalidArgument, "object.spec.template is required")
 	}
+	templateRef := instance.GetSpec().GetTemplate()
 	templateFound := false
 	for _, t := range s.scenario.Templates {
-		if t.ID == instance.GetSpec().GetTemplate() {
+		if (templateRef.GetId() != "" && t.ID == templateRef.GetId()) ||
+			(templateRef.GetName() != "" && t.Name == templateRef.GetName()) {
 			templateFound = true
 			break
 		}
 	}
 	if !templateFound {
-		return nil, status.Errorf(codes.InvalidArgument, "unknown template %q", instance.GetSpec().GetTemplate())
+		refKey := templateRef.GetId()
+		if refKey == "" {
+			refKey = templateRef.GetName()
+		}
+		return nil, status.Errorf(codes.InvalidArgument, "unknown template %q", refKey)
 	}
 
 	// Generate ID if not provided

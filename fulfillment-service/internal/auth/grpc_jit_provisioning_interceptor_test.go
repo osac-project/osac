@@ -24,9 +24,9 @@ import (
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc"
 
-	"github.com/osac-project/fulfillment-service/internal/collections"
-	"github.com/osac-project/fulfillment-service/internal/testing"
-	"github.com/osac-project/fulfillment-service/internal/uuid"
+	"github.com/osac-project/osac/fulfillment-service/internal/collections"
+	"github.com/osac-project/osac/fulfillment-service/internal/testing"
+	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 )
 
 // mockUserProvisioner is a simple test double for UserProvisioner.

@@ -21,9 +21,9 @@ import (
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/fulfillment-service/internal/controllers"
-	"github.com/osac-project/fulfillment-service/internal/controllers/finalizers"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 )
 
 var _ = Describe("buildSpec", func() {
@@ -37,7 +37,7 @@ var _ = Describe("buildSpec", func() {
 			securityGroup: privatev1.SecurityGroup_builder{
 				Id: "sg-test-123",
 				Spec: privatev1.SecurityGroupSpec_builder{
-					VirtualNetwork:         "vnet-123",
+					VirtualNetwork:         privatev1.VirtualNetworkLocalReference_builder{Id: "vnet-123"}.Build(),
 					ImplementationStrategy: "network_policy",
 					Ingress: []*privatev1.SecurityRule{
 						privatev1.SecurityRule_builder{
@@ -80,7 +80,7 @@ var _ = Describe("buildSpec", func() {
 			securityGroup: privatev1.SecurityGroup_builder{
 				Id: "sg-test-456",
 				Spec: privatev1.SecurityGroupSpec_builder{
-					VirtualNetwork: "vnet-456",
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "vnet-456"}.Build(),
 				}.Build(),
 			}.Build(),
 		}
@@ -309,7 +309,7 @@ var _ = Describe("delete", func() {
 				Finalizers: []string{finalizers.Controller},
 			}.Build(),
 			Spec: privatev1.SecurityGroupSpec_builder{
-				VirtualNetwork: vnetID,
+				VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnetID}.Build(),
 			}.Build(),
 		}.Build()
 

@@ -1,4 +1,5 @@
 ---
+name: openstack
 title: OpenStack Neutron Network Implementation
 description: >
   Provisions networking resources using OpenStack Neutron

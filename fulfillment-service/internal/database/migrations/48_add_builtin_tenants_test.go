@@ -18,7 +18,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
-	"github.com/osac-project/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 )
 
 var _ = DescribeMigration("Add builtin tenants", func() {

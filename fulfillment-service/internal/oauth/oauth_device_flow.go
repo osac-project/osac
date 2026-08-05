@@ -20,7 +20,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/osac-project/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 )
 
 type deviceFlow struct {

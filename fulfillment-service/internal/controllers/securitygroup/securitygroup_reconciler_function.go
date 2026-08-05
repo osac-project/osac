@@ -26,14 +26,14 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 
-	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
+	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/fulfillment-service/internal/controllers"
-	"github.com/osac-project/fulfillment-service/internal/controllers/finalizers"
-	"github.com/osac-project/fulfillment-service/internal/kubernetes/annotations"
-	"github.com/osac-project/fulfillment-service/internal/kubernetes/labels"
-	"github.com/osac-project/fulfillment-service/internal/masks"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
+	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/annotations"
+	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
+	"github.com/osac-project/osac/fulfillment-service/internal/masks"
 )
 
 // objectPrefix is the prefix that will be used in the `generateName` field of the resources created in the hub.
@@ -247,15 +247,16 @@ func (t *task) validateTenant() error {
 }
 
 func (t *task) getParentVirtualNetwork(ctx context.Context) (*privatev1.VirtualNetwork, error) {
-	vnID := t.securityGroup.GetSpec().GetVirtualNetwork()
-	if vnID == "" {
+	vnRef := t.securityGroup.GetSpec().GetVirtualNetwork()
+	vnKey := controllers.RefKeyStr(vnRef)
+	if vnKey == "" {
 		return nil, errors.New("security group must reference a parent virtual network")
 	}
 	response, err := t.r.virtualNetworksClient.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{
-		Id: vnID,
+		Id: vnKey,
 	}.Build())
 	if err != nil {
-		return nil, fmt.Errorf("failed to get parent virtual network '%s': %w", vnID, err)
+		return nil, fmt.Errorf("failed to get parent virtual network '%s': %w", vnKey, err)
 	}
 	return response.GetObject(), nil
 }
@@ -396,7 +397,7 @@ func (t *task) removeFinalizer() {
 // security group from the database.
 func (t *task) buildSpec() osacv1alpha1.SecurityGroupSpec {
 	spec := osacv1alpha1.SecurityGroupSpec{
-		VirtualNetwork: t.securityGroup.GetSpec().GetVirtualNetwork(),
+		VirtualNetwork: controllers.RefKeyStr(t.securityGroup.GetSpec().GetVirtualNetwork()),
 	}
 
 	// Add implementation strategy if present:

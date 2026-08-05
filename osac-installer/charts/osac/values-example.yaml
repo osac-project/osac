@@ -220,8 +220,6 @@ aap:
       # AAP components to enable. Only controller is needed for OSAC.
       controller:
         disabled: false
-      eda:
-        disabled: false
       hub:
         disabled: true
       lightspeed:

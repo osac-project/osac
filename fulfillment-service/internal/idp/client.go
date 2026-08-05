@@ -26,8 +26,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/osac-project/fulfillment-service/internal/apiclient"
-	"github.com/osac-project/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/apiclient"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 )
 
 // Client is a Keycloak admin client for managing identity provider resources.

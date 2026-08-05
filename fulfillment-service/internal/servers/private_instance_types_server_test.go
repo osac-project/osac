@@ -25,9 +25,9 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
-	"github.com/osac-project/fulfillment-service/internal/database"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 )
 
 var _ = Describe("Private instance types server", func() {
@@ -857,7 +857,9 @@ var _ = Describe("Private instance types server", func() {
 					func() string {
 						data, err := json.Marshal(map[string]any{
 							"spec": map[string]any{
-								"instance_type": instanceType.GetId(),
+								"instance_type": map[string]any{
+									"id": instanceType.GetId(),
+								},
 							},
 						})
 						Expect(err).ToNot(HaveOccurred())

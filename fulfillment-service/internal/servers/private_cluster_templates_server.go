@@ -20,9 +20,10 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/fulfillment-service/internal/auth"
-	"github.com/osac-project/fulfillment-service/internal/events"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	"github.com/osac-project/osac/fulfillment-service/internal/events"
 )
 
 type PrivateClusterTemplatesServerBuilder struct {
@@ -37,8 +38,9 @@ var _ privatev1.ClusterTemplatesServer = (*PrivateClusterTemplatesServer)(nil)
 
 type PrivateClusterTemplatesServer struct {
 	privatev1.UnimplementedClusterTemplatesServer
-	logger  *slog.Logger
-	generic *GenericServer[*privatev1.ClusterTemplate]
+	logger             *slog.Logger
+	clusterVersionsDao *dao.GenericDAO[*privatev1.ClusterVersion]
+	generic            *GenericServer[*privatev1.ClusterTemplate]
 }
 
 func NewPrivateClusterTemplatesServer() *PrivateClusterTemplatesServerBuilder {
@@ -84,6 +86,16 @@ func (b *PrivateClusterTemplatesServerBuilder) Build() (result *PrivateClusterTe
 		return
 	}
 
+	// Create the cluster versions DAO:
+	clusterVersionsDao, err := dao.NewGenericDAO[*privatev1.ClusterVersion]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
 	// Create the generic server:
 	generic, err := NewGenericServer[*privatev1.ClusterTemplate]().
 		SetLogger(b.logger).
@@ -99,8 +111,9 @@ func (b *PrivateClusterTemplatesServerBuilder) Build() (result *PrivateClusterTe
 
 	// Create and populate the object:
 	result = &PrivateClusterTemplatesServer{
-		logger:  b.logger,
-		generic: generic,
+		logger:             b.logger,
+		clusterVersionsDao: clusterVersionsDao,
+		generic:            generic,
 	}
 	return
 }
@@ -119,14 +132,42 @@ func (s *PrivateClusterTemplatesServer) Get(ctx context.Context,
 
 func (s *PrivateClusterTemplatesServer) Create(ctx context.Context,
 	request *privatev1.ClusterTemplatesCreateRequest) (response *privatev1.ClusterTemplatesCreateResponse, err error) {
+	if object := request.GetObject(); object != nil {
+		if err = s.validateSpecDefaultsVersionName(ctx, object); err != nil {
+			return
+		}
+		if object.GetMetadata().GetName() == "" && object.GetId() != "" {
+			if object.GetMetadata() == nil {
+				object.SetMetadata(&privatev1.Metadata{})
+			}
+			object.GetMetadata().SetName(templateNameFromID(object.GetId()))
+		}
+	}
 	err = s.generic.Create(ctx, request, &response)
 	return
 }
 
 func (s *PrivateClusterTemplatesServer) Update(ctx context.Context,
 	request *privatev1.ClusterTemplatesUpdateRequest) (response *privatev1.ClusterTemplatesUpdateResponse, err error) {
+	if object := request.GetObject(); object != nil {
+		if updateIncludesField(request.GetUpdateMask(), "spec_defaults") {
+			if err = s.validateSpecDefaultsVersionName(ctx, object); err != nil {
+				return
+			}
+		}
+	}
 	err = s.generic.Update(ctx, request, &response)
 	return
+}
+
+func (s *PrivateClusterTemplatesServer) validateSpecDefaultsVersionName(
+	ctx context.Context, template *privatev1.ClusterTemplate,
+) error {
+	if !template.GetSpecDefaults().HasVersionName() {
+		return nil
+	}
+	name := template.GetSpecDefaults().GetVersionName()
+	return lookupAndValidateClusterVersion(ctx, s.logger, s.clusterVersionsDao, name)
 }
 
 func (s *PrivateClusterTemplatesServer) Delete(ctx context.Context,

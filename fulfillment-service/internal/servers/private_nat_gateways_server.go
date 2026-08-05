@@ -22,10 +22,10 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/fulfillment-service/internal/auth"
-	"github.com/osac-project/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/fulfillment-service/internal/events"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	"github.com/osac-project/osac/fulfillment-service/internal/events"
 )
 
 type PrivateNATGatewaysServerBuilder struct {
@@ -139,9 +139,9 @@ func (s *PrivateNATGatewaysServer) Create(ctx context.Context,
 		return
 	}
 
-	externalIPID := natGateway.GetSpec().GetExternalIp()
+	externalIPKey := refKey(natGateway.GetSpec().GetExternalIp())
 
-	err = s.validateExternalIPReference(ctx, externalIPID)
+	err = s.validateExternalIPReference(ctx, externalIPKey)
 	if err != nil {
 		return
 	}
@@ -159,7 +159,7 @@ func (s *PrivateNATGatewaysServer) Create(ctx context.Context,
 		return
 	}
 
-	err = s.updateExternalIPAttachedFlag(ctx, externalIPID, true)
+	err = s.updateExternalIPAttachedFlag(ctx, externalIPKey, true)
 	return
 }
 
@@ -209,15 +209,15 @@ func (s *PrivateNATGatewaysServer) Delete(ctx context.Context,
 		return
 	}
 
-	externalIPID := getResponse.GetObject().GetSpec().GetExternalIp()
+	externalIPRef := getResponse.GetObject().GetSpec().GetExternalIp()
 
 	err = s.generic.Delete(ctx, request, &response)
 	if err != nil {
 		return
 	}
 
-	if externalIPID != "" {
-		err = s.updateExternalIPAttachedFlag(ctx, externalIPID, false)
+	if externalIPRef != nil {
+		err = s.updateExternalIPAttachedFlag(ctx, refKey(externalIPRef), false)
 	}
 	return
 }
@@ -236,11 +236,11 @@ func (s *PrivateNATGatewaysServer) validateNATGateway(natGateway *privatev1.NATG
 	if spec == nil {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "NAT gateway spec is mandatory")
 	}
-	if spec.GetVirtualNetwork() == "" {
+	if spec.GetVirtualNetwork() == nil {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'spec.virtual_network' is required")
 	}
-	if spec.GetExternalIp() == "" {
+	if spec.GetExternalIp() == nil {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'spec.external_ip' is required")
 	}
@@ -252,16 +252,16 @@ func validateImmutableFieldsNATGateway(
 	newSpec := newGateway.GetSpec()
 	existingSpec := existingGateway.GetSpec()
 
-	if newVN := newSpec.GetVirtualNetwork(); newVN != existingSpec.GetVirtualNetwork() {
+	if newVN := refKey(newSpec.GetVirtualNetwork()); newVN != refKey(existingSpec.GetVirtualNetwork()) {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'spec.virtual_network' is immutable and cannot be changed from '%s' to '%s'",
-			existingSpec.GetVirtualNetwork(), newVN)
+			refKey(existingSpec.GetVirtualNetwork()), newVN)
 	}
 
-	if newEIP := newSpec.GetExternalIp(); newEIP != existingSpec.GetExternalIp() {
+	if newEIP := refKey(newSpec.GetExternalIp()); newEIP != refKey(existingSpec.GetExternalIp()) {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'spec.external_ip' is immutable and cannot be changed from '%s' to '%s'",
-			existingSpec.GetExternalIp(), newEIP)
+			refKey(existingSpec.GetExternalIp()), newEIP)
 	}
 
 	return nil

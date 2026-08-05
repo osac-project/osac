@@ -27,8 +27,8 @@ import (
 	"google.golang.org/grpc"
 	experiementalcredentials "google.golang.org/grpc/experimental/credentials"
 
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
-	"github.com/osac-project/fulfillment-service/internal/terminal"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 )
 
 func TestConnect(t *testing.T) {

@@ -23,8 +23,8 @@ import (
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/fulfillment-service/internal/uuid"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 )
 
 var _ = Describe("REST gateway", func() {
@@ -77,11 +77,11 @@ var _ = Describe("REST gateway", func() {
 		templateID := fmt.Sprintf("my_%s", uuid.New())
 		nodeSets := map[string]*privatev1.ClusterTemplateNodeSet{
 			"compute": privatev1.ClusterTemplateNodeSet_builder{
-				HostType: computeHostTypeID,
+				HostType: privatev1.HostTypeReference_builder{Id: computeHostTypeID}.Build(),
 				Size:     3,
 			}.Build(),
 			"gpu": privatev1.ClusterTemplateNodeSet_builder{
-				HostType: gpuHostTypeID,
+				HostType: privatev1.HostTypeReference_builder{Id: gpuHostTypeID}.Build(),
 				Size:     2,
 			}.Build(),
 		}
@@ -160,11 +160,11 @@ var _ = Describe("REST gateway", func() {
 		templateID := fmt.Sprintf("my_%s", uuid.New())
 		nodeSets := map[string]*privatev1.ClusterTemplateNodeSet{
 			"compute": privatev1.ClusterTemplateNodeSet_builder{
-				HostType: computeHostTypeID,
+				HostType: privatev1.HostTypeReference_builder{Id: computeHostTypeID}.Build(),
 				Size:     3,
 			}.Build(),
 			"gpu": privatev1.ClusterTemplateNodeSet_builder{
-				HostType: gpuHostTypeID,
+				HostType: privatev1.HostTypeReference_builder{Id: gpuHostTypeID}.Build(),
 				Size:     2,
 			}.Build(),
 		}

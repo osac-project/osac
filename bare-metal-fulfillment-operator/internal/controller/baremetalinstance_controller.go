@@ -33,12 +33,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/osac-project/bare-metal-fulfillment-operator/api/v1alpha1"
-	"github.com/osac-project/bare-metal-fulfillment-operator/internal/inventory"
-	"github.com/osac-project/bare-metal-fulfillment-operator/internal/management"
-	"github.com/osac-project/bare-metal-fulfillment-operator/internal/shared"
-	opv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac-operator/pkg/provisioning"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/inventory"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/management"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/shared"
+	opv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 )
 
 // BareMetalInstanceReconciler reconciles a BareMetalInstance object

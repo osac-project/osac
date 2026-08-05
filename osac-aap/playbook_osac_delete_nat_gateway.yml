@@ -4,15 +4,15 @@
   gather_facts: false
 
   vars:
-    nat_gateway: "{{ ansible_eda.event.payload }}"
-    nat_gateway_name: "{{ ansible_eda.event.payload.metadata.name }}"
+    nat_gateway: "{{ osac_job_vars.resource }}"
+    nat_gateway_name: "{{ osac_job_vars.resource.metadata.name }}"
     implementation_strategy: >-
-      {{ ansible_eda.event.payload.metadata.annotations['osac.openshift.io/implementation-strategy'] }}
+      {{ osac_job_vars.resource.metadata.annotations['osac.openshift.io/implementation-strategy'] }}
 
   pre_tasks:
-    - name: Show EDA Event
+    - name: Show resource metadata
       ansible.builtin.debug:
-        var: ansible_eda.event.payload
+        var: osac_job_vars.resource.metadata
 
   tasks:
     - name: Display NATGateway information

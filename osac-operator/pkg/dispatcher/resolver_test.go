@@ -27,9 +27,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	privatev1 "github.com/osac-project/osac-operator/internal/api/osac/private/v1"
-	"github.com/osac-project/osac-operator/pkg/dispatcher"
-	"github.com/osac-project/osac-operator/pkg/networkmanager"
+	privatev1 "github.com/osac-project/osac/osac-operator/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/osac-operator/pkg/dispatcher"
+	"github.com/osac-project/osac/osac-operator/pkg/networkmanager"
 	"google.golang.org/grpc"
 )
 

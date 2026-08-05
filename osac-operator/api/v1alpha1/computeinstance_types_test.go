@@ -8,7 +8,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/osac-project/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
 
 func TestV1alpha1(t *testing.T) {

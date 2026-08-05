@@ -377,16 +377,6 @@
                     }
                   }
                 },
-                "eda": {
-                  "type": "object",
-                  "properties": {
-                    "disabled": {
-                      "type": "boolean",
-                      "description": "Disable Event-Driven Ansible",
-                      "default": false
-                    }
-                  }
-                },
                 "hub": {
                   "type": "object",
                   "properties": {
@@ -468,15 +458,6 @@
                 "hostname": {
                   "type": "string",
                   "description": "AAP gateway route hostname"
-                }
-              }
-            },
-            "eda": {
-              "type": "object",
-              "properties": {
-                "hostname": {
-                  "type": "string",
-                  "description": "AAP EDA route hostname"
                 }
               }
             },
@@ -1029,6 +1010,16 @@
             "repository": { "type": "string" },
             "tag": { "type": "string" },
             "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+          }
+        },
+        "database": {
+          "type": "object",
+          "description": "Database configuration",
+          "properties": {
+            "connection": {
+              "type": "array",
+              "description": "Database connection volume sources (secret or configMap references)"
+            }
           }
         }
       }

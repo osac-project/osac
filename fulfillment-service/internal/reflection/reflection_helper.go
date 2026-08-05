@@ -31,8 +31,8 @@ import (
 
 	// This is needed to ensure that the types and services are loaded into the protocol buffers registry, otherwise
 	// they will be visible only if they are explicitly used in some part of the code.
-	_ "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	_ "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
+	_ "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	_ "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 )
 
 // Helper simplifies use of the protocol buffers reflection facility. It knows how to extract from the descriptors the

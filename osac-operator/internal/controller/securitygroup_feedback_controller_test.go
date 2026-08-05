@@ -36,8 +36,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	"github.com/osac-project/osac-operator/api/v1alpha1"
-	privatev1 "github.com/osac-project/osac-operator/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	privatev1 "github.com/osac-project/osac/osac-operator/internal/api/osac/private/v1"
 )
 
 var _ = Describe("SecurityGroupFeedbackController", func() {
@@ -110,7 +110,7 @@ var _ = Describe("SecurityGroupFeedbackController", func() {
 					Name: sgName,
 				},
 				Spec: &privatev1.SecurityGroupSpec{
-					VirtualNetwork: testVnetRef,
+					VirtualNetwork: &privatev1.VirtualNetworkLocalReference{Name: testVnetRef},
 				},
 				Status: &privatev1.SecurityGroupStatus{
 					State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_PENDING,
@@ -162,7 +162,7 @@ var _ = Describe("SecurityGroupFeedbackController", func() {
 					Name: sgName,
 				},
 				Spec: &privatev1.SecurityGroupSpec{
-					VirtualNetwork: testVnetRef,
+					VirtualNetwork: &privatev1.VirtualNetworkLocalReference{Name: testVnetRef},
 				},
 				Status: &privatev1.SecurityGroupStatus{
 					State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
@@ -206,7 +206,7 @@ var _ = Describe("SecurityGroupFeedbackController", func() {
 					Name: sgName,
 				},
 				Spec: &privatev1.SecurityGroupSpec{
-					VirtualNetwork: testVnetRef,
+					VirtualNetwork: &privatev1.VirtualNetworkLocalReference{Name: testVnetRef},
 				},
 				Status: &privatev1.SecurityGroupStatus{
 					State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_PENDING,
@@ -278,7 +278,7 @@ var _ = Describe("SecurityGroupFeedbackController", func() {
 					Name: sgName,
 				},
 				Spec: &privatev1.SecurityGroupSpec{
-					VirtualNetwork: testVnetRef,
+					VirtualNetwork: &privatev1.VirtualNetworkLocalReference{Name: testVnetRef},
 				},
 				Status: &privatev1.SecurityGroupStatus{
 					State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
@@ -333,7 +333,7 @@ var _ = Describe("SecurityGroupFeedbackController", func() {
 					Name: sgName,
 				},
 				Spec: &privatev1.SecurityGroupSpec{
-					VirtualNetwork: testVnetRef,
+					VirtualNetwork: &privatev1.VirtualNetworkLocalReference{Name: testVnetRef},
 				},
 				Status: &privatev1.SecurityGroupStatus{
 					State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
@@ -383,7 +383,7 @@ var _ = Describe("SecurityGroupFeedbackController", func() {
 					Name: sgName,
 				},
 				Spec: &privatev1.SecurityGroupSpec{
-					VirtualNetwork: testVnetRef,
+					VirtualNetwork: &privatev1.VirtualNetworkLocalReference{Name: testVnetRef},
 				},
 				Status: &privatev1.SecurityGroupStatus{
 					State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
@@ -507,7 +507,7 @@ var _ = Describe("SecurityGroupFeedbackController", func() {
 					Name: sgName,
 				},
 				Spec: &privatev1.SecurityGroupSpec{
-					VirtualNetwork: testVnetRef,
+					VirtualNetwork: &privatev1.VirtualNetworkLocalReference{Name: testVnetRef},
 				},
 				Status: &privatev1.SecurityGroupStatus{
 					State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,

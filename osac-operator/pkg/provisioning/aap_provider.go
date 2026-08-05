@@ -11,8 +11,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/osac-project/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac-operator/pkg/aap"
+	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/pkg/aap"
 )
 
 // AAPClient is the interface for AAP operations used by the provider.
@@ -330,46 +330,40 @@ func mapAAPStatusToJobState(aapStatus string) v1alpha1.JobState {
 
 // extractExtraVars extracts extra variables from a resource to pass to AAP.
 //
-// AAP templates expect the Kubernetes resource wrapped in an ansible_eda.event.payload
-// structure. Playbooks read fields such as ansible_eda.event.payload.spec and
-// ansible_eda.event.payload.metadata.
+// Playbooks read fields such as osac_job_vars.resource.spec and
+// osac_job_vars.resource.metadata.
 func extractExtraVars(ctx context.Context, resource client.Object) (map[string]any, error) {
-	// Convert the resource to map using JSON marshaling (respects JSON tags)
 	resourceMap, err := serializeResource(resource)
 	if err != nil {
 		return nil, fmt.Errorf("failed to serialize resource: %w", err)
 	}
 
-	event := map[string]any{
-		"payload": resourceMap,
+	vars := map[string]any{
+		"resource": resourceMap,
 	}
 
-	// Inject tenant storage classes if present in context (set by CI controller)
 	if scs := TenantStorageClassesFromContext(ctx); len(scs) > 0 {
 		scList := make([]map[string]string, len(scs))
 		for i, sc := range scs {
 			scList[i] = map[string]string{"name": sc.Name, "tier": sc.Tier}
 		}
-		event["tenant_storage_classes"] = scList
+		vars["tenant_storage_classes"] = scList
 	}
 
 	if kc := AdminKubeconfigFromContext(ctx); kc != "" {
-		event["admin_kubeconfig"] = kc
+		vars["admin_kubeconfig"] = kc
 	}
 
 	if tiers := StorageTierDefinitionsFromContext(ctx); len(tiers) > 0 {
-		event["storage_tier_definitions"] = tierDefinitionsToExtraVars(tiers)
+		vars["storage_tier_definitions"] = tierDefinitionsToExtraVars(tiers)
 	}
 
 	if conns := StorageBackendConnectionsFromContext(ctx); len(conns) > 0 {
-		event["storage_backend_connections"] = backendConnectionsToExtraVars(conns)
+		vars["storage_backend_connections"] = backendConnectionsToExtraVars(conns)
 	}
 
-	// Wrap in ansible_eda.event structure for AAP template compatibility.
 	return map[string]any{
-		"ansible_eda": map[string]any{
-			"event": event,
-		},
+		"osac_job_vars": vars,
 	}, nil
 }
 

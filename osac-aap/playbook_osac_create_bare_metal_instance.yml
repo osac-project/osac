@@ -4,7 +4,7 @@
   gather_facts: false
 
   vars:
-    bare_metal_instance: "{{ ansible_eda.event.payload }}"
+    bare_metal_instance: "{{ osac_job_vars.resource }}"
 
   pre_tasks:
     - name: Display bare metal instance information

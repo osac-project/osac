@@ -16,8 +16,8 @@ package dev
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/osac-project/fulfillment-service/internal/cmd/service/dev/listen"
-	"github.com/osac-project/fulfillment-service/internal/cmd/service/dev/watch"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/service/dev/listen"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/service/dev/watch"
 )
 
 func Cmd() *cobra.Command {

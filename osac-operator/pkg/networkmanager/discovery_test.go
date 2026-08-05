@@ -26,7 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	"github.com/osac-project/osac-operator/pkg/networkmanager"
+	"github.com/osac-project/osac/osac-operator/pkg/networkmanager"
 )
 
 var _ = Describe("Discovery", func() {

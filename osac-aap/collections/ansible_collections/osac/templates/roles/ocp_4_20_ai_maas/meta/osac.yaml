@@ -1,4 +1,5 @@
 ---
+name: ocp-4-20-ai-maas
 title: OpenShift AI 4.20 Cluster with MaaS
 description: >
   Builds an OpenShift 4.20 cluster with RHOAI 3.4, Models-as-a-Service (GA),
@@ -12,6 +13,10 @@ default_node_request:
   - resourceClass: g5
     numberOfNodes: 2
 allowed_resource_classes: []
+
+spec_defaults:
+  version_name: "4.20.0"
+
 parameters:
   - name: enable_maas
     title: Enable MaaS Gateway

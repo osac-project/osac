@@ -227,7 +227,7 @@ run: manifests generate fmt vet ## Run a controller from your host.
 # More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 .PHONY: image-build
 image-build: ## Build container image with manager and console-proxy.
-	$(CONTAINER_TOOL) build -t ${IMG} -f ${CONTAINERFILE} .
+	$(CONTAINER_TOOL) build -t ${IMG} -f ${CONTAINERFILE} ..
 
 .PHONY: image-push
 image-push: ## Push container image.

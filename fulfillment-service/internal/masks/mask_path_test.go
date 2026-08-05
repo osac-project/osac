@@ -23,7 +23,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
-	testsv1 "github.com/osac-project/fulfillment-service/internal/api/osac/tests/v1"
+	testsv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/tests/v1"
 )
 
 var _ = Describe("Path", func() {

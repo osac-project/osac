@@ -20,11 +20,11 @@ import (
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
 
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
-	"github.com/osac-project/fulfillment-service/internal/cmd/cli/create/netutil"
-	"github.com/osac-project/fulfillment-service/internal/config"
-	"github.com/osac-project/fulfillment-service/internal/logging"
-	"github.com/osac-project/fulfillment-service/internal/terminal"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/netutil"
+	"github.com/osac-project/osac/fulfillment-service/internal/config"
+	"github.com/osac-project/osac/fulfillment-service/internal/logging"
+	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 )
 
 func Cmd() *cobra.Command {
@@ -110,7 +110,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	enableDualStack := enableIpv4 && enableIpv6
 
 	spec := publicv1.VirtualNetworkSpec_builder{
-		NetworkClass: c.args.networkClass,
+		NetworkClass: &publicv1.NetworkClassReference{Name: c.args.networkClass},
 		Capabilities: publicv1.VirtualNetworkCapabilities_builder{
 			EnableIpv4:      enableIpv4,
 			EnableIpv6:      enableIpv6,

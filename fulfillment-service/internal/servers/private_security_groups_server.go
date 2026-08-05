@@ -22,10 +22,10 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/fulfillment-service/internal/auth"
-	"github.com/osac-project/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/fulfillment-service/internal/events"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	"github.com/osac-project/osac/fulfillment-service/internal/events"
 )
 
 const securityGroupImplementationStrategy = "network_policy"
@@ -155,7 +155,7 @@ func (s *PrivateSecurityGroupsServer) Create(ctx context.Context,
 	if securityGroup.GetMetadata().GetAnnotations() == nil {
 		securityGroup.Metadata.Annotations = make(map[string]string)
 	}
-	securityGroup.Metadata.Annotations["osac.openshift.io/owner-reference"] = securityGroup.GetSpec().GetVirtualNetwork()
+	securityGroup.Metadata.Annotations["osac.openshift.io/owner-reference"] = refKey(securityGroup.GetSpec().GetVirtualNetwork())
 
 	// Set implementation strategy (system-managed, immutable after creation)
 	securityGroup.GetSpec().SetImplementationStrategy(securityGroupImplementationStrategy)
@@ -241,7 +241,7 @@ func (s *PrivateSecurityGroupsServer) validateSecurityGroup(ctx context.Context,
 
 	// Validate parent VirtualNetwork
 	// Only validate on Create or if virtual_network changed (though it shouldn't on Update)
-	if existingSecurityGroup == nil || spec.GetVirtualNetwork() != existingSecurityGroup.GetSpec().GetVirtualNetwork() {
+	if existingSecurityGroup == nil || refKey(spec.GetVirtualNetwork()) != refKey(existingSecurityGroup.GetSpec().GetVirtualNetwork()) {
 		if err := s.validateVirtualNetworkReference(ctx, spec); err != nil {
 			return err
 		}
@@ -259,23 +259,24 @@ func (s *PrivateSecurityGroupsServer) validateSecurityGroup(ctx context.Context,
 func (s *PrivateSecurityGroupsServer) validateVirtualNetworkReference(ctx context.Context,
 	spec *privatev1.SecurityGroupSpec) error {
 
-	virtualNetworkID := spec.GetVirtualNetwork()
-	if virtualNetworkID == "" {
+	virtualNetworkRef := spec.GetVirtualNetwork()
+	if virtualNetworkRef == nil {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.virtual_network' is required")
 	}
+	virtualNetworkKey := refKey(virtualNetworkRef)
 
 	// Get parent VirtualNetwork by ID
 	getResponse, err := s.virtualNetworkDao.Get().
-		SetId(virtualNetworkID).
+		SetId(virtualNetworkKey).
 		Do(ctx)
 	if err != nil {
 		var notFoundErr *dao.ErrNotFound
 		if errors.As(err, &notFoundErr) {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"parent VirtualNetwork '%s' does not exist", virtualNetworkID)
+				"parent VirtualNetwork '%s' does not exist", virtualNetworkKey)
 		}
 		s.logger.ErrorContext(ctx, "Failed to query VirtualNetwork",
-			slog.String("virtual_network_id", virtualNetworkID),
+			slog.String("virtual_network_id", virtualNetworkKey),
 			slog.Any("error", err))
 		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate virtual_network")
 	}
@@ -286,7 +287,7 @@ func (s *PrivateSecurityGroupsServer) validateVirtualNetworkReference(ctx contex
 	if virtualNetwork.GetStatus().GetState() != privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY {
 		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
 			"parent VirtualNetwork '%s' is not in READY state (current state: %s)",
-			virtualNetworkID, virtualNetwork.GetStatus().GetState().String())
+			virtualNetworkKey, virtualNetwork.GetStatus().GetState().String())
 	}
 
 	return nil
@@ -381,10 +382,10 @@ func validateImmutableFieldsSecurityGroup(newSecurityGroup *privatev1.SecurityGr
 	existingSpec := existingSecurityGroup.GetSpec()
 
 	// Check immutable virtual_network field
-	if newSpec.GetVirtualNetwork() != existingSpec.GetVirtualNetwork() {
+	if refKey(newSpec.GetVirtualNetwork()) != refKey(existingSpec.GetVirtualNetwork()) {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'spec.virtual_network' is immutable and cannot be changed from '%s' to '%s'",
-			existingSpec.GetVirtualNetwork(), newSpec.GetVirtualNetwork())
+			refKey(existingSpec.GetVirtualNetwork()), refKey(newSpec.GetVirtualNetwork()))
 	}
 
 	// Check immutable implementation_strategy field. The field is OUTPUT_ONLY so well-behaved

@@ -25,7 +25,7 @@ import (
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 
-	"github.com/osac-project/osac-operator/test/utils"
+	"github.com/osac-project/osac/osac-operator/test/utils"
 )
 
 var _ = Describe("Networking Resources", Ordered, func() {

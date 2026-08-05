@@ -35,8 +35,9 @@ import (
 
 	"k8s.io/utils/ptr"
 
-	"github.com/osac-project/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac-operator/pkg/provisioning"
+	bmfov1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 )
 
 const (
@@ -54,16 +55,17 @@ const (
 // auto-delete the ExternalIPAttachment when the target CI is deleted.
 type ExternalIPAttachmentReconciler struct {
 	client.Client
-	APIReader                client.Reader
-	Scheme                   *runtime.Scheme
-	mgr                      mcmanager.Manager
-	NetworkingNamespace      string
-	ComputeInstanceNamespace string
-	ClusterOrderNamespace    string
-	ProvisioningProvider     provisioning.ProvisioningProvider
-	StatusPollInterval       time.Duration
-	MaxJobHistory            int
-	targetCluster            mc.ClusterName
+	APIReader                  client.Reader
+	Scheme                     *runtime.Scheme
+	mgr                        mcmanager.Manager
+	NetworkingNamespace        string
+	ComputeInstanceNamespace   string
+	ClusterOrderNamespace      string
+	BaremetalInstanceNamespace string
+	ProvisioningProvider       provisioning.ProvisioningProvider
+	StatusPollInterval         time.Duration
+	MaxJobHistory              int
+	targetCluster              mc.ClusterName
 }
 
 // NewExternalIPAttachmentReconciler creates a new reconciler for ExternalIPAttachment resources.
@@ -72,6 +74,7 @@ func NewExternalIPAttachmentReconciler(
 	networkingNamespace string,
 	computeInstanceNamespace string,
 	clusterOrderNamespace string,
+	baremetalInstanceNamespace string,
 	provisioningProvider provisioning.ProvisioningProvider,
 	statusPollInterval time.Duration,
 	maxJobHistory int,
@@ -92,18 +95,22 @@ func NewExternalIPAttachmentReconciler(
 	if clusterOrderNamespace == "" {
 		clusterOrderNamespace = defaultClusterOrderNamespace
 	}
+	if baremetalInstanceNamespace == "" {
+		baremetalInstanceNamespace = DefaultBareMetalInstanceNamespace
+	}
 	return &ExternalIPAttachmentReconciler{
-		Client:                   mgr.GetLocalManager().GetClient(),
-		APIReader:                mgr.GetLocalManager().GetAPIReader(),
-		Scheme:                   mgr.GetLocalManager().GetScheme(),
-		mgr:                      mgr,
-		NetworkingNamespace:      networkingNamespace,
-		ComputeInstanceNamespace: computeInstanceNamespace,
-		ClusterOrderNamespace:    clusterOrderNamespace,
-		ProvisioningProvider:     provisioningProvider,
-		StatusPollInterval:       statusPollInterval,
-		MaxJobHistory:            maxJobHistory,
-		targetCluster:            targetCluster,
+		Client:                     mgr.GetLocalManager().GetClient(),
+		APIReader:                  mgr.GetLocalManager().GetAPIReader(),
+		Scheme:                     mgr.GetLocalManager().GetScheme(),
+		mgr:                        mgr,
+		NetworkingNamespace:        networkingNamespace,
+		ComputeInstanceNamespace:   computeInstanceNamespace,
+		ClusterOrderNamespace:      clusterOrderNamespace,
+		BaremetalInstanceNamespace: baremetalInstanceNamespace,
+		ProvisioningProvider:       provisioningProvider,
+		StatusPollInterval:         statusPollInterval,
+		MaxJobHistory:              maxJobHistory,
+		targetCluster:              targetCluster,
 	}
 }
 
@@ -112,6 +119,8 @@ func NewExternalIPAttachmentReconciler(
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=externalipattachments/finalizers,verbs=update
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=clusterorders,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=clusterorders/finalizers,verbs=update
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=baremetalinstances,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=baremetalinstances/finalizers,verbs=update
 
 // Reconcile handles create/update/delete for a ExternalIPAttachment CR.
 func (r *ExternalIPAttachmentReconciler) Reconcile(ctx context.Context, req mcreconcile.Request) (ctrl.Result, error) {
@@ -213,39 +222,13 @@ func (r *ExternalIPAttachmentReconciler) handleUpdate(ctx context.Context, attac
 		return result, err
 	}
 
-	// Sync annotations
-	needsUpdate := false
-	if attachment.Annotations == nil {
-		attachment.Annotations = make(map[string]string)
+	// Resolve target BareMetalInstance
+	_, result, err = r.resolveBaremetalInstance(ctx, attachment)
+	if err != nil || result.RequeueAfter > 0 {
+		return result, err
 	}
 
-	if attachment.Annotations[osacImplementationStrategyAnnotation] != implementationStrategy {
-		attachment.Annotations[osacImplementationStrategyAnnotation] = implementationStrategy
-		needsUpdate = true
-	}
-	if attachment.Annotations[osacExternalIPPoolNameAnnotation] != pool.Name {
-		attachment.Annotations[osacExternalIPPoolNameAnnotation] = pool.Name
-		needsUpdate = true
-	}
-	if attachment.Annotations[osacExternalIPNameAnnotation] != externalIP.Name {
-		attachment.Annotations[osacExternalIPNameAnnotation] = externalIP.Name
-		needsUpdate = true
-	}
-	if ci != nil && ci.Status.VirtualMachineReference != nil {
-		targetNamespace := ci.Status.VirtualMachineReference.Namespace
-		if attachment.Annotations[osacExternalIPTargetNamespaceAnnotation] != targetNamespace {
-			attachment.Annotations[osacExternalIPTargetNamespaceAnnotation] = targetNamespace
-			needsUpdate = true
-		}
-	}
-	if co != nil {
-		targetIP := r.resolveClusterEndpoint(co, attachment)
-		if targetIP != "" && attachment.Annotations[osacExternalIPTargetIPAnnotation] != targetIP {
-			attachment.Annotations[osacExternalIPTargetIPAnnotation] = targetIP
-			needsUpdate = true
-		}
-	}
-
+	needsUpdate := r.syncAnnotations(attachment, pool, externalIP, implementationStrategy, ci, co)
 	if needsUpdate {
 		if err := r.Update(ctx, attachment); err != nil {
 			return ctrl.Result{}, err
@@ -278,6 +261,48 @@ func (r *ExternalIPAttachmentReconciler) handleUpdate(ctx context.Context, attac
 	}
 
 	return r.handleProvisioning(ctx, attachment, externalIP, ci)
+}
+
+func (r *ExternalIPAttachmentReconciler) syncAnnotations(
+	attachment *v1alpha1.ExternalIPAttachment,
+	pool *v1alpha1.ExternalIPPool,
+	externalIP *v1alpha1.ExternalIP,
+	implementationStrategy string,
+	ci *v1alpha1.ComputeInstance,
+	co *v1alpha1.ClusterOrder,
+) bool {
+	if attachment.Annotations == nil {
+		attachment.Annotations = make(map[string]string)
+	}
+
+	needsUpdate := false
+	if attachment.Annotations[osacImplementationStrategyAnnotation] != implementationStrategy {
+		attachment.Annotations[osacImplementationStrategyAnnotation] = implementationStrategy
+		needsUpdate = true
+	}
+	if attachment.Annotations[osacExternalIPPoolNameAnnotation] != pool.Name {
+		attachment.Annotations[osacExternalIPPoolNameAnnotation] = pool.Name
+		needsUpdate = true
+	}
+	if attachment.Annotations[osacExternalIPNameAnnotation] != externalIP.Name {
+		attachment.Annotations[osacExternalIPNameAnnotation] = externalIP.Name
+		needsUpdate = true
+	}
+	if ci != nil && ci.Status.VirtualMachineReference != nil {
+		targetNamespace := ci.Status.VirtualMachineReference.Namespace
+		if attachment.Annotations[osacExternalIPTargetNamespaceAnnotation] != targetNamespace {
+			attachment.Annotations[osacExternalIPTargetNamespaceAnnotation] = targetNamespace
+			needsUpdate = true
+		}
+	}
+	if co != nil {
+		targetIP := r.resolveClusterEndpoint(co, attachment)
+		if targetIP != "" && attachment.Annotations[osacExternalIPTargetIPAnnotation] != targetIP {
+			attachment.Annotations[osacExternalIPTargetIPAnnotation] = targetIP
+			needsUpdate = true
+		}
+	}
+	return needsUpdate
 }
 
 // resolveComputeInstance looks up the target ComputeInstance by UUID label, handles
@@ -397,6 +422,50 @@ func (r *ExternalIPAttachmentReconciler) resolveClusterEndpoint(
 	default:
 		return ""
 	}
+}
+
+// resolveBaremetalInstance looks up the target BareMetalInstance by UUID label, handles
+// auto-detach if the BMI is being deleted, and adds the detach finalizer.
+// Returns nil BMI (with no requeue) when spec.baremetalInstance is not set.
+func (r *ExternalIPAttachmentReconciler) resolveBaremetalInstance(
+	ctx context.Context,
+	attachment *v1alpha1.ExternalIPAttachment,
+) (*bmfov1alpha1.BareMetalInstance, ctrl.Result, error) {
+	if attachment.Spec.BaremetalInstance == nil {
+		return nil, ctrl.Result{}, nil
+	}
+
+	log := ctrllog.FromContext(ctx)
+
+	bmiList := &bmfov1alpha1.BareMetalInstanceList{}
+	if err := r.List(ctx, bmiList,
+		client.InNamespace(r.BaremetalInstanceNamespace),
+		client.MatchingLabels{osacBareMetalInstanceIDLabel: *attachment.Spec.BaremetalInstance},
+	); err != nil {
+		return nil, ctrl.Result{}, err
+	}
+	if len(bmiList.Items) == 0 {
+		log.Info("BareMetalInstance not found, requeueing", "baremetalInstanceUUID", *attachment.Spec.BaremetalInstance)
+		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+	}
+	bmi := &bmiList.Items[0]
+
+	if !bmi.DeletionTimestamp.IsZero() {
+		log.Info("auto-detaching: BareMetalInstance is being deleted", "baremetalInstance", bmi.Name)
+		if err := r.Delete(ctx, attachment); err != nil {
+			return nil, ctrl.Result{}, client.IgnoreNotFound(err)
+		}
+		return nil, ctrl.Result{RequeueAfter: time.Second}, nil
+	}
+
+	if controllerutil.AddFinalizer(bmi, osacExternalIPDetachFinalizer) {
+		log.Info("adding externalip-detach finalizer to BareMetalInstance", "baremetalInstance", bmi.Name)
+		if err := r.Update(ctx, bmi); err != nil {
+			return nil, ctrl.Result{}, err
+		}
+	}
+
+	return bmi, ctrl.Result{}, nil
 }
 
 func (r *ExternalIPAttachmentReconciler) handleProvisioning(
@@ -588,6 +657,14 @@ func (r *ExternalIPAttachmentReconciler) onDeprovisionSuccess(ctx context.Contex
 		}
 	}
 
+	// Remove BareMetalInstance detach finalizer
+	if attachment.Spec.BaremetalInstance != nil {
+		bmiUUID := *attachment.Spec.BaremetalInstance
+		if err := r.maybeRemoveBMIDetachFinalizer(ctx, bmiUUID, attachment.Name); err != nil {
+			return fmt.Errorf("failed to remove BareMetalInstance detach finalizer: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -681,6 +758,86 @@ func (r *ExternalIPAttachmentReconciler) maybeRemoveCODetachFinalizer(ctx contex
 		}
 		return nil
 	})
+}
+
+// maybeRemoveBMIDetachFinalizer removes the externalip-detach finalizer from the
+// BareMetalInstance if no other ExternalIPAttachments still reference it.
+func (r *ExternalIPAttachmentReconciler) maybeRemoveBMIDetachFinalizer(ctx context.Context, bmiUUID string, excludeAttachment string) error {
+	log := ctrllog.FromContext(ctx)
+
+	attachments := &v1alpha1.ExternalIPAttachmentList{}
+	if err := r.List(ctx, attachments, client.InNamespace(r.NetworkingNamespace)); err != nil {
+		return err
+	}
+	for i := range attachments.Items {
+		if attachments.Items[i].Name == excludeAttachment {
+			continue
+		}
+		if attachments.Items[i].Spec.BaremetalInstance != nil && *attachments.Items[i].Spec.BaremetalInstance == bmiUUID {
+			log.Info("other ExternalIPAttachments still reference BareMetalInstance, keeping finalizer",
+				"baremetalInstanceUUID", bmiUUID,
+				"attachment", attachments.Items[i].Name)
+			return nil
+		}
+	}
+
+	log.Info("no more references, removing BareMetalInstance detach finalizer", "baremetalInstanceUUID", bmiUUID)
+
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		bmiList := &bmfov1alpha1.BareMetalInstanceList{}
+		if err := r.List(ctx, bmiList,
+			client.InNamespace(r.BaremetalInstanceNamespace),
+			client.MatchingLabels{osacBareMetalInstanceIDLabel: bmiUUID},
+		); err != nil {
+			return err
+		}
+		if len(bmiList.Items) == 0 {
+			return nil
+		}
+		bmi := &bmiList.Items[0]
+
+		if controllerutil.RemoveFinalizer(bmi, osacExternalIPDetachFinalizer) {
+			return r.Update(ctx, bmi)
+		}
+		return nil
+	})
+}
+
+// mapBaremetalInstanceToExternalIPAttachments maps a BareMetalInstance change to all
+// ExternalIPAttachments that reference it, so the controller can react to
+// BMI deletion.
+func (r *ExternalIPAttachmentReconciler) mapBaremetalInstanceToExternalIPAttachments(ctx context.Context, obj client.Object) []reconcile.Request {
+	log := ctrllog.FromContext(ctx)
+
+	bmiUUID, exists := obj.GetLabels()[osacBareMetalInstanceIDLabel]
+	if !exists {
+		return nil
+	}
+
+	attachments := &v1alpha1.ExternalIPAttachmentList{}
+	if err := r.List(ctx, attachments, client.InNamespace(r.NetworkingNamespace)); err != nil {
+		log.Error(err, "failed to list ExternalIPAttachments for BareMetalInstance watch")
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for i := range attachments.Items {
+		if attachments.Items[i].Spec.BaremetalInstance != nil && *attachments.Items[i].Spec.BaremetalInstance == bmiUUID {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: client.ObjectKeyFromObject(&attachments.Items[i]),
+			})
+		}
+	}
+
+	if len(requests) > 0 {
+		log.Info("mapped BareMetalInstance change to ExternalIPAttachments",
+			"baremetalInstance", obj.GetName(),
+			"baremetalInstanceUUID", bmiUUID,
+			"attachmentCount", len(requests),
+		)
+	}
+
+	return requests
 }
 
 // mapClusterOrderToExternalIPAttachments maps a ClusterOrder change to all
@@ -799,6 +956,13 @@ func (r *ExternalIPAttachmentReconciler) SetupWithManager(mgr mcmanager.Manager)
 			&v1alpha1.ClusterOrder{},
 			mchandler.EnqueueRequestsFromMapFunc(r.mapClusterOrderToExternalIPAttachments),
 			mcbuilder.WithPredicates(NamespacePredicate(r.ClusterOrderNamespace)),
+			mcbuilder.WithEngageWithLocalCluster(true),
+			mcbuilder.WithEngageWithProviderClusters(false),
+		).
+		Watches(
+			&bmfov1alpha1.BareMetalInstance{},
+			mchandler.EnqueueRequestsFromMapFunc(r.mapBaremetalInstanceToExternalIPAttachments),
+			mcbuilder.WithPredicates(BareMetalInstanceNamespacePredicate(r.BaremetalInstanceNamespace)),
 			mcbuilder.WithEngageWithLocalCluster(true),
 			mcbuilder.WithEngageWithProviderClusters(false),
 		).

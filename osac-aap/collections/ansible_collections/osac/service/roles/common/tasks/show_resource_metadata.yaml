@@ -1,0 +1,49 @@
+---
+# Centralized, redacted replacement for `debug: var: osac_job_vars.resource`.
+# Use this instead of debugging the whole payload object whenever the calling
+# playbook also reads a sensitive field out of payload.spec (e.g.
+# blockEncryptionPassphrase) -- the whole-object debug prints secrets in
+# cleartext to the job log, which the runner then tails on failure.
+#
+# Always logs: payload kind, metadata.name, metadata.namespace, metadata.uid.
+#
+# Optional caller var:
+#   resource_extra_fields — dict of additional non-sensitive key/value pairs
+#                            to include. Keys are restricted to the allowlist
+#                            below, and the fixed kind/name/namespace/uid
+#                            fields always win on conflict -- this task is
+#                            the single redaction boundary for
+#                            osac_job_vars.resource, so a new field must
+#                            be deliberately added to the allowlist here, not
+#                            silently accepted from any caller. Never add a
+#                            key whose value could be sourced from
+#                            payload.spec without confirming it isn't a
+#                            secret first.
+- name: Validate resource_extra_fields keys are on the allowlist
+  ansible.builtin.fail:
+    msg: >-
+      resource_extra_fields contains a key not on the allowlist:
+      {{ (resource_extra_fields | default({}) | list) | difference(_resource_extra_fields_allowlist) }}.
+      Add it to _resource_extra_fields_allowlist in show_resource_metadata.yaml
+      first -- this task is the single redaction boundary for
+      osac_job_vars.resource, and new fields must be deliberately approved.
+  vars:
+    _resource_extra_fields_allowlist:
+      - tenant_annotation
+      - template_id
+  when: >-
+    (resource_extra_fields | default({}) | list)
+    | difference(_resource_extra_fields_allowlist) | length > 0
+
+- name: Show resource metadata
+  ansible.builtin.debug:
+    msg: >-
+      {{
+        (resource_extra_fields | default({}))
+        | combine({
+            'kind': osac_job_vars.resource.kind | default('unknown'),
+            'name': osac_job_vars.resource.metadata.name | default('unknown'),
+            'namespace': osac_job_vars.resource.metadata.namespace | default('unknown'),
+            'uid': osac_job_vars.resource.metadata.uid | default('unknown'),
+          })
+      }}

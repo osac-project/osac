@@ -33,13 +33,13 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
-	"github.com/osac-project/fulfillment-service/internal/cmd/cli/create/fieldutil"
-	"github.com/osac-project/fulfillment-service/internal/config"
-	"github.com/osac-project/fulfillment-service/internal/exit"
-	"github.com/osac-project/fulfillment-service/internal/logging"
-	"github.com/osac-project/fulfillment-service/internal/reflection"
-	"github.com/osac-project/fulfillment-service/internal/terminal"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/fieldutil"
+	"github.com/osac-project/osac/fulfillment-service/internal/config"
+	"github.com/osac-project/osac/fulfillment-service/internal/exit"
+	"github.com/osac-project/osac/fulfillment-service/internal/logging"
+	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
+	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 )
 
 //go:embed templates
@@ -715,7 +715,7 @@ func (c *runnerContext) convertTextToTemplateParameterValue(ctx context.Context,
 func (c *runnerContext) buildSpec(templateID string,
 	templateParams map[string]*anypb.Any) (*publicv1.ComputeInstanceSpec, error) {
 	spec := publicv1.ComputeInstanceSpec_builder{
-		Template:           templateID,
+		Template:           &publicv1.ComputeInstanceTemplateReference{Id: templateID},
 		TemplateParameters: templateParams,
 	}
 	if c.args.imageSourceRef != "" {
@@ -725,7 +725,7 @@ func (c *runnerContext) buildSpec(templateID string,
 		}.Build()
 	}
 	if c.args.instanceType != "" {
-		spec.InstanceType = proto.String(c.args.instanceType)
+		spec.InstanceType = &publicv1.InstanceTypeReference{Name: c.args.instanceType}
 	}
 	if c.args.sshPublicKey != "" {
 		spec.SshPublicKey = proto.String(c.args.sshPublicKey)
@@ -851,18 +851,22 @@ func parseNetworkAttachmentFlag(s string) (*publicv1.NetworkAttachment, error) {
 		return nil, err
 	}
 	if !hadGroups && !strings.Contains(s, "=") {
-		return publicv1.NetworkAttachment_builder{Subnet: s}.Build(), nil
+		return publicv1.NetworkAttachment_builder{Subnet: &publicv1.SubnetLocalReference{Id: s}}.Build(), nil
+	}
+	sgRefs := make([]*publicv1.SecurityGroupLocalReference, len(securityGroups))
+	for i, sg := range securityGroups {
+		sgRefs[i] = &publicv1.SecurityGroupLocalReference{Id: sg}
 	}
 	return publicv1.NetworkAttachment_builder{
-		Subnet:         subnet,
-		SecurityGroups: securityGroups,
+		Subnet:         &publicv1.SubnetLocalReference{Id: subnet},
+		SecurityGroups: sgRefs,
 	}.Build(), nil
 }
 
 // buildSpecFromCatalogItem builds the spec for catalog-item-based creation.
 func (c *runnerContext) buildSpecFromCatalogItem(catalogItemID string) (*publicv1.ComputeInstanceSpec, error) {
 	spec := publicv1.ComputeInstanceSpec_builder{
-		CatalogItem: catalogItemID,
+		CatalogItem: &publicv1.ComputeInstanceCatalogItemReference{Id: catalogItemID},
 	}
 	if c.args.imageSourceRef != "" {
 		spec.Image = publicv1.ComputeInstanceImage_builder{
@@ -871,7 +875,7 @@ func (c *runnerContext) buildSpecFromCatalogItem(catalogItemID string) (*publicv
 		}.Build()
 	}
 	if c.args.instanceType != "" {
-		spec.InstanceType = proto.String(c.args.instanceType)
+		spec.InstanceType = &publicv1.InstanceTypeReference{Name: c.args.instanceType}
 	}
 	if c.args.sshPublicKey != "" {
 		spec.SshPublicKey = proto.String(c.args.sshPublicKey)

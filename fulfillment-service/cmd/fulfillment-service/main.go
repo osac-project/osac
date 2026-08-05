@@ -19,8 +19,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/osac-project/fulfillment-service/internal/cmd/service"
-	"github.com/osac-project/fulfillment-service/internal/exit"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/service"
+	"github.com/osac-project/osac/fulfillment-service/internal/exit"
 )
 
 func main() {

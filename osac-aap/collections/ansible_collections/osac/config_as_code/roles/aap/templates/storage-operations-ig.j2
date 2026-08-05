@@ -31,14 +31,14 @@ spec:
       envFrom:
         - secretRef:
             name: storage-operations-ig
+            # This IG uses dedicated, isolated credentials — it must never fall
+            # back to a shared/broader-scope credential (e.g. vast-admin-credentials)
+            # if this Secret is absent. See .dev/PROJECT.md 2026-04-22 decision:
+            # "Dedicated storage-operations-ig with isolated VAST credentials."
+            optional: true
         - configMapRef:
             name: storage-operations-ig
             optional: true
-      env:
-        - name: OSAC_STORAGE_CONFIG_NAMESPACE
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.namespace
   volumes:
     - name: kube-api-access
       projected:

@@ -17,6 +17,7 @@ package osac.public.v1;
 
 import "osac/public/v1/field_definition_type.proto";
 import "osac/public/v1/metadata_type.proto";
+import "osac/public/v1/compute_instance_type.proto";
 
 // A compute instance catalog item defines a curated infrastructure offering that references an underlying compute
 // instance template.
@@ -34,8 +35,8 @@ message ComputeInstanceCatalogItem {
   // Human friendly long description of the catalog item, using Markdown format.
   string description = 4;
 
-  // Identifier of the underlying compute instance template that this catalog item references.
-  string template = 5;
+  // Reference to the underlying compute instance template that this catalog item references.
+  ComputeInstanceTemplateReference template = 5;
 
   // Whether this catalog item is published.
   bool published = 6;

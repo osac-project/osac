@@ -1,10 +1,31 @@
+name: ocp-ci-small
 title: CI OpenShift Cluster
 description: >
   OpenShift 4.17 cluster for CI testing. Uses ci.steps network backend.
   Same as ocp_small but with 1 worker of class ci-worker.
+
+template_type: cluster
 
 default_node_request:
 - resourceClass: ci-worker
   numberOfNodes: 1
 
 allowed_resource_classes: []
+
+spec_defaults:
+  version_name: "4.17.0"
+
+parameters:
+  - name: pull_secret
+    title: Pull Secret
+    description: >
+      The pull secret contains credentials for authenticating to image repositories.
+    type: string
+    required: true
+  - name: ssh_public_key
+    title: SSH Public Key
+    description: >
+      A public ssh key that will be installed into the `authorized_keys` file
+      of the `core` user on cluster worker nodes.
+    type: string
+    required: false

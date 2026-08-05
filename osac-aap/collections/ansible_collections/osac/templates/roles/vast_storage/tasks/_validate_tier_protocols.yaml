@@ -1,0 +1,46 @@
+---
+# Shared protocol validation, included by both setup.yaml and ensure_storage_class.yaml
+# so the two action entry points can't drift out of sync on which protocols are allowed.
+# Requires: _provider_tiers (set by the caller).
+
+- name: Validate tier protocols are supported by VAST provider
+  block:
+    - name: Fail if tier protocol is unsupported
+      ansible.builtin.fail:
+        msg: >-
+          Tier '{{ item.name }}' has unsupported protocol '{{ item.protocol }}'.
+          VAST provider supports: nfs, block.
+      loop: "{{ _provider_tiers }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: item.protocol not in ['nfs', 'block']
+  rescue:
+    # Ansible loops evaluate every item rather than stopping at the first failure, so
+    # ansible_failed_result.results may contain more than one failed tier here.
+    - name: Build structured failure artifact for unsupported protocol
+      ansible.builtin.set_fact:
+        osac_storage_provider_failures: >-
+          {% set _tiers = [] -%}
+          {% set _backend_ids = [] -%}
+          {% set _messages = [] -%}
+          {% for _r in (ansible_failed_result.results | default([])) -%}
+          {% if _r.failed | default(false) -%}
+          {% set _ = _tiers.append(_r.item.name) -%}
+          {% set _bid = _r.item.backend_id | default('') -%}
+          {% if (_bid | length > 0) and (_bid not in _backend_ids) -%}
+          {% set _ = _backend_ids.append(_bid) -%}
+          {% endif -%}
+          {% set _ = _messages.append(_r.msg | default('')) -%}
+          {% endif -%}
+          {% endfor -%}
+          {{ [{'reason': 'unsupported_protocol', 'tiers': _tiers, 'backend_ids': _backend_ids, 'message': _messages | join(' ')}] }}
+
+    - name: Emit structured failure artifact for unsupported protocol
+      ansible.builtin.set_stats:
+        data:
+          osac_storage_provider_failures: "{{ osac_storage_provider_failures }}"
+        aggregate: false
+
+    - name: Re-raise the original protocol validation failure
+      ansible.builtin.fail:
+        msg: "{{ osac_storage_provider_failures[0].message }}"

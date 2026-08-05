@@ -30,9 +30,9 @@ import (
 	"github.com/spf13/cobra"
 	"go.yaml.in/yaml/v2"
 
-	"github.com/osac-project/fulfillment-service/internal/cache"
-	"github.com/osac-project/fulfillment-service/internal/logging"
-	"github.com/osac-project/fulfillment-service/internal/terminal"
+	"github.com/osac-project/osac/fulfillment-service/internal/cache"
+	"github.com/osac-project/osac/fulfillment-service/internal/logging"
+	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 )
 
 //go:embed swagger_ui.html
@@ -205,7 +205,7 @@ func (c *runnerContext) generateModule(ctx context.Context, moduleDir string) er
 			"override": []any{
 				map[string]any{
 					"file_option": "go_package_prefix",
-					"value":       "github.com/osac-project/fulfillment-service/internal/api",
+					"value":       "github.com/osac-project/osac/fulfillment-service/internal/api",
 				},
 			},
 		},

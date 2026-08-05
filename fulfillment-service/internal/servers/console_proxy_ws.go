@@ -20,7 +20,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/osac-project/fulfillment-service/internal/console"
+	"github.com/osac-project/osac/fulfillment-service/internal/console"
 )
 
 // ConsoleProxyWSHandler serves WebSocket console connections.

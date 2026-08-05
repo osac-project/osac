@@ -35,26 +35,30 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
-	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac-operator/pkg/provisioning"
+	bmfov1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
+	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 )
 
 var _ = Describe("ExternalIPAttachmentReconciler", func() {
 	const (
-		testNetworkingNamespace      = "test-networking"
-		testComputeInstanceNamespace = "test-ci"
-		testClusterOrderNamespace    = "test-orders"
-		testPoolUUID                 = "pool-uuid-123"
-		testExternalIPUUID           = "pip-uuid-789"
-		testCIUUID                   = "ci-uuid-456"
-		testCIName                   = "test-ci-1"
-		testCOUUID                   = "co-uuid-789"
-		testCOName                   = "test-cluster-1"
-		testAPIEndpoint              = "10.0.0.100"
-		testIngressEndpoint          = "10.0.0.200"
-		testExternalIPName           = "test-pip"
-		testAttachmentName           = "test-attachment"
-		testVMNamespace              = "subnet-abc123"
+		testNetworkingNamespace        = "test-networking"
+		testComputeInstanceNamespace   = "test-ci"
+		testClusterOrderNamespace      = "test-orders"
+		testBaremetalInstanceNamespace = "test-bmi"
+		testPoolUUID                   = "pool-uuid-123"
+		testExternalIPUUID             = "pip-uuid-789"
+		testCIUUID                     = "ci-uuid-456"
+		testCIName                     = "test-ci-1"
+		testCOUUID                     = "co-uuid-789"
+		testCOName                     = "test-cluster-1"
+		testBMIUUID                    = "bmi-uuid-101"
+		testBMIName                    = "test-bmi-1"
+		testAPIEndpoint                = "10.0.0.100"
+		testIngressEndpoint            = "10.0.0.200"
+		testExternalIPName             = "test-pip"
+		testAttachmentName             = "test-attachment"
+		testVMNamespace                = "subnet-abc123"
 	)
 
 	var (
@@ -79,6 +83,7 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 				&osacv1alpha1.ExternalIP{},
 				&osacv1alpha1.ComputeInstance{},
 				&osacv1alpha1.ClusterOrder{},
+				&bmfov1alpha1.BareMetalInstance{},
 			).
 			Build()
 	}
@@ -87,6 +92,7 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 		testCtx = context.TODO()
 		testScheme = runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(testScheme)).To(Succeed())
+		Expect(bmfov1alpha1.AddToScheme(testScheme)).To(Succeed())
 		Expect(scheme.AddToScheme(testScheme)).To(Succeed())
 
 		pool = &osacv1alpha1.ExternalIPPool{
@@ -151,15 +157,16 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 
 	setupReconciler := func(c client.Client) {
 		reconciler = &ExternalIPAttachmentReconciler{
-			Client:                   c,
-			APIReader:                c,
-			Scheme:                   testScheme,
-			NetworkingNamespace:      testNetworkingNamespace,
-			ComputeInstanceNamespace: testComputeInstanceNamespace,
-			ClusterOrderNamespace:    testClusterOrderNamespace,
-			ProvisioningProvider:     mockProvider,
-			StatusPollInterval:       1 * time.Second,
-			MaxJobHistory:            10,
+			Client:                     c,
+			APIReader:                  c,
+			Scheme:                     testScheme,
+			NetworkingNamespace:        testNetworkingNamespace,
+			ComputeInstanceNamespace:   testComputeInstanceNamespace,
+			ClusterOrderNamespace:      testClusterOrderNamespace,
+			BaremetalInstanceNamespace: testBaremetalInstanceNamespace,
+			ProvisioningProvider:       mockProvider,
+			StatusPollInterval:         1 * time.Second,
+			MaxJobHistory:              10,
 		}
 	}
 
@@ -1226,6 +1233,196 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 			updatedPIP := &osacv1alpha1.ExternalIP{}
 			Expect(fakeClient.Get(testCtx, client.ObjectKeyFromObject(publicIP), updatedPIP)).To(Succeed())
 			Expect(updatedPIP.Status.Attached).To(BeFalse())
+		})
+	})
+
+	// --- BareMetalInstance target tests ---
+
+	Context("BareMetalInstance target resolution", func() {
+		var (
+			bmi           *bmfov1alpha1.BareMetalInstance
+			bmiAttachment *osacv1alpha1.ExternalIPAttachment
+			bmiKey        types.NamespacedName
+		)
+
+		BeforeEach(func() {
+			bmi = &bmfov1alpha1.BareMetalInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      testBMIName,
+					Namespace: testBaremetalInstanceNamespace,
+					Labels: map[string]string{
+						osacBareMetalInstanceIDLabel: testBMIUUID,
+					},
+				},
+				Spec: bmfov1alpha1.BareMetalInstanceSpec{
+					HostType:       "compute",
+					ExternalHostID: "ext-host-1",
+				},
+			}
+
+			bmiAttachment = &osacv1alpha1.ExternalIPAttachment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "bmi-attachment",
+					Namespace: testNetworkingNamespace,
+				},
+				Spec: osacv1alpha1.ExternalIPAttachmentSpec{
+					ExternalIP:        testExternalIPUUID,
+					BaremetalInstance: ptr.To(testBMIUUID),
+				},
+			}
+
+			bmiKey = types.NamespacedName{
+				Name: "bmi-attachment", Namespace: testNetworkingNamespace,
+			}
+		})
+
+		bmiReconcileOnce := func() (ctrl.Result, error) {
+			return reconciler.Reconcile(testCtx, mcreconcile.Request{
+				Request: ctrl.Request{NamespacedName: bmiKey},
+			})
+		}
+
+		It("should requeue when BareMetalInstance not found", func() {
+			fakeClient = buildClient(bmiAttachment, publicIP, pool)
+			setupReconciler(fakeClient)
+
+			_, _ = bmiReconcileOnce() // finalizer
+
+			result, err := bmiReconcileOnce()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+		})
+
+		It("should add detach finalizer to BareMetalInstance", func() {
+			fakeClient = buildClient(bmiAttachment, publicIP, pool, bmi)
+			setupReconciler(fakeClient)
+
+			mockProvider.getProvisionStatusFunc = func(
+				ctx context.Context, resource client.Object, jobID string,
+			) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{
+					JobID: jobID, State: osacv1alpha1.JobStateRunning, Message: "running",
+				}, nil
+			}
+
+			_, _ = bmiReconcileOnce() // finalizer
+			_, _ = bmiReconcileOnce() // resolve + annotations
+
+			updatedBMI := &bmfov1alpha1.BareMetalInstance{}
+			Expect(fakeClient.Get(testCtx, client.ObjectKeyFromObject(bmi), updatedBMI)).To(Succeed())
+			Expect(updatedBMI.Finalizers).To(ContainElement(osacExternalIPDetachFinalizer))
+		})
+
+		It("should trigger delete when BareMetalInstance is being deleted", func() {
+			deletingBMI := bmi.DeepCopy()
+			now := metav1.Now()
+			deletingBMI.DeletionTimestamp = &now
+			deletingBMI.Finalizers = []string{osacExternalIPDetachFinalizer}
+
+			bmiAttachment.Finalizers = []string{osacExternalIPAttachmentFinalizer}
+			fakeClient = buildClient(bmiAttachment, publicIP, pool, bmi)
+			setupReconciler(fakeClient)
+
+			fetchedBMI := &bmfov1alpha1.BareMetalInstance{}
+			Expect(fakeClient.Get(testCtx, client.ObjectKeyFromObject(bmi), fetchedBMI)).To(Succeed())
+			fetchedBMI.Finalizers = []string{osacExternalIPDetachFinalizer}
+			Expect(fakeClient.Update(testCtx, fetchedBMI)).To(Succeed())
+
+			requests := reconciler.mapBaremetalInstanceToExternalIPAttachments(testCtx, bmi)
+			Expect(requests).To(HaveLen(1))
+		})
+
+		It("should map BareMetalInstance changes to attachment reconcile requests", func() {
+			fakeClient = buildClient(bmiAttachment, publicIP, pool, bmi)
+			setupReconciler(fakeClient)
+
+			requests := reconciler.mapBaremetalInstanceToExternalIPAttachments(testCtx, bmi)
+			Expect(requests).To(HaveLen(1))
+			Expect(requests[0].NamespacedName).To(Equal(bmiKey))
+		})
+
+		It("should not map BareMetalInstance changes to unrelated attachments", func() {
+			fakeClient = buildClient(attachment, publicIP, pool, bmi)
+			setupReconciler(fakeClient)
+
+			requests := reconciler.mapBaremetalInstanceToExternalIPAttachments(testCtx, bmi)
+			Expect(requests).To(BeEmpty())
+		})
+	})
+
+	Context("BareMetalInstance detach finalizer cleanup", func() {
+		var bmi *bmfov1alpha1.BareMetalInstance
+
+		BeforeEach(func() {
+			bmi = &bmfov1alpha1.BareMetalInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      testBMIName,
+					Namespace: testBaremetalInstanceNamespace,
+					Labels: map[string]string{
+						osacBareMetalInstanceIDLabel: testBMIUUID,
+					},
+				},
+				Spec: bmfov1alpha1.BareMetalInstanceSpec{
+					HostType:       "compute",
+					ExternalHostID: "ext-host-1",
+				},
+			}
+		})
+
+		It("should remove detach finalizer when no other attachments reference the BMI", func() {
+			bmi.Finalizers = []string{osacExternalIPDetachFinalizer}
+			excluded := &osacv1alpha1.ExternalIPAttachment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "excluded-attachment",
+					Namespace: testNetworkingNamespace,
+				},
+				Spec: osacv1alpha1.ExternalIPAttachmentSpec{
+					ExternalIP:        "excluded-pip",
+					BaremetalInstance: ptr.To(testBMIUUID),
+				},
+			}
+			fakeClient = buildClient(bmi, excluded)
+			setupReconciler(fakeClient)
+
+			err := reconciler.maybeRemoveBMIDetachFinalizer(testCtx, testBMIUUID, "excluded-attachment")
+			Expect(err).NotTo(HaveOccurred())
+
+			updatedBMI := &bmfov1alpha1.BareMetalInstance{}
+			Expect(fakeClient.Get(testCtx, client.ObjectKeyFromObject(bmi), updatedBMI)).To(Succeed())
+			Expect(updatedBMI.Finalizers).NotTo(ContainElement(osacExternalIPDetachFinalizer))
+		})
+
+		It("should keep detach finalizer when other attachments reference the BMI", func() {
+			excluded := &osacv1alpha1.ExternalIPAttachment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "excluded-attachment",
+					Namespace: testNetworkingNamespace,
+				},
+				Spec: osacv1alpha1.ExternalIPAttachmentSpec{
+					ExternalIP:        "excluded-pip",
+					BaremetalInstance: ptr.To(testBMIUUID),
+				},
+			}
+			other := &osacv1alpha1.ExternalIPAttachment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "other-bmi-attachment",
+					Namespace: testNetworkingNamespace,
+				},
+				Spec: osacv1alpha1.ExternalIPAttachmentSpec{
+					ExternalIP:        "other-pip",
+					BaremetalInstance: ptr.To(testBMIUUID),
+				},
+			}
+			bmi.Finalizers = []string{osacExternalIPDetachFinalizer}
+			fakeClient = buildClient(bmi, excluded, other)
+			setupReconciler(fakeClient)
+
+			err := reconciler.maybeRemoveBMIDetachFinalizer(testCtx, testBMIUUID, "excluded-attachment")
+			Expect(err).NotTo(HaveOccurred())
+
+			updatedBMI := &bmfov1alpha1.BareMetalInstance{}
+			Expect(fakeClient.Get(testCtx, client.ObjectKeyFromObject(bmi), updatedBMI)).To(Succeed())
+			Expect(updatedBMI.Finalizers).To(ContainElement(osacExternalIPDetachFinalizer))
 		})
 	})
 })

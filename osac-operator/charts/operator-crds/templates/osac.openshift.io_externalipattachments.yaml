@@ -28,6 +28,10 @@ spec:
     - jsonPath: .spec.cluster
       name: Cluster
       type: string
+    - jsonPath: .spec.baremetalInstance
+      name: BaremetalInstance
+      priority: 1
+      type: string
     - jsonPath: .spec.targetEndpoint
       name: TargetEndpoint
       priority: 1
@@ -64,16 +68,22 @@ spec:
           spec:
             description: spec defines the desired state of ExternalIPAttachment
             properties:
+              baremetalInstance:
+                description: |-
+                  BaremetalInstance is the UUID of the BareMetalInstance to attach to.
+                  Exactly one target field (computeInstance, cluster, or baremetalInstance) must be set.
+                minLength: 1
+                type: string
               cluster:
                 description: |-
                   Cluster is the UUID of the ClusterOrder to attach to.
-                  Exactly one target field (computeInstance or cluster) must be set.
+                  Exactly one target field (computeInstance, cluster, or baremetalInstance) must be set.
                 minLength: 1
                 type: string
               computeInstance:
                 description: |-
                   ComputeInstance is the UUID of the ComputeInstance to attach to.
-                  Exactly one target field (computeInstance or cluster) must be set.
+                  Exactly one target field (computeInstance, cluster, or baremetalInstance) must be set.
                 minLength: 1
                 type: string
               externalIP:
@@ -84,7 +94,7 @@ spec:
               targetEndpoint:
                 description: |-
                   TargetEndpoint specifies which cluster endpoint receives the DNAT rule.
-                  Required when cluster is set; must not be set when computeInstance is set.
+                  Required when cluster is set; must not be set when computeInstance or baremetalInstance is set.
                 enum:
                 - API
                 - Ingress
@@ -95,13 +105,15 @@ spec:
             x-kubernetes-validations:
             - message: spec is immutable after creation
               rule: self == oldSelf
-            - message: at most one target field may be set
+            - message: exactly one target field must be set
               rule: '(has(self.computeInstance) ? 1 : 0) + (has(self.cluster) ? 1
-                : 0) <= 1'
+                : 0) + (has(self.baremetalInstance) ? 1 : 0) == 1'
             - message: targetEndpoint is required when cluster is set
               rule: '!has(self.cluster) || has(self.targetEndpoint)'
             - message: targetEndpoint must not be set when computeInstance is set
               rule: '!has(self.computeInstance) || !has(self.targetEndpoint)'
+            - message: targetEndpoint must not be set when baremetalInstance is set
+              rule: '!has(self.baremetalInstance) || !has(self.targetEndpoint)'
           status:
             description: status defines the observed state of ExternalIPAttachment
             properties:
@@ -213,6 +225,13 @@ spec:
                       - Failed
                       - Canceled
                       - Unknown
+                      type: string
+                    target:
+                      description: |-
+                        Target identifies which manager this job was dispatched to, for resources
+                        that provision through multiple managers concurrently (e.g. a Subnet
+                        dispatching to both a fabric manager and a k8s manager). Empty for
+                        resources with a single provisioning target.
                       type: string
                     timestamp:
                       description: Timestamp when this job was created/triggered

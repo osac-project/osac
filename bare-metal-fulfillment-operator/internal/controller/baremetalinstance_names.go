@@ -20,9 +20,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/osac-project/osac-operator/pkg/provisioning"
+	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 
-	"github.com/osac-project/bare-metal-fulfillment-operator/internal/shared"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/shared"
 )
 
 const (

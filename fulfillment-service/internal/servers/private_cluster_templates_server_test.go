@@ -18,10 +18,15 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 )
 
 var _ = Describe("Private cluster templates server", func() {
@@ -411,6 +416,91 @@ var _ = Describe("Private cluster templates server", func() {
 			object = getResponse.GetObject()
 			Expect(object.GetTitle()).To(Equal("Updated title"))
 			Expect(object.GetDescription()).To(Equal("Updated description."))
+		})
+
+		Describe("ClusterVersion validation on spec_defaults", func() {
+			var validatedServer *PrivateClusterTemplatesServer
+
+			BeforeEach(func() {
+				var err error
+				validatedServer, err = NewPrivateClusterTemplatesServer().
+					SetLogger(logger).
+					SetAttributionLogic(attribution).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			It("Rejects create with non-existent spec_defaults.version_name", func() {
+				_, err := validatedServer.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
+					Object: privatev1.ClusterTemplate_builder{
+						Title:       "Bad version template",
+						Description: "Template referencing a non-existent version.",
+						SpecDefaults: privatev1.ClusterTemplateSpecDefaults_builder{
+							VersionName: new("does-not-exist"),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				status, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+				Expect(status.Message()).To(ContainSubstring("cluster version 'does-not-exist' not found"))
+			})
+
+			It("Rejects update with disabled spec_defaults.version_name", func() {
+				// Seed a disabled ClusterVersion:
+				cvDao, err := dao.NewGenericDAO[*privatev1.ClusterVersion]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+				_, err = cvDao.Create().
+					SetObject(privatev1.ClusterVersion_builder{
+						Id: uuid.New(),
+						Metadata: privatev1.Metadata_builder{
+							Name:   "4-18-0-disabled",
+							Tenant: auth.SharedTenant,
+						}.Build(),
+						Spec: privatev1.ClusterVersionSpec_builder{
+							Image:   "quay.io/openshift-release-dev/ocp-release:4.18.0-multi",
+							Enabled: proto.Bool(false),
+							Version: "4.18.0",
+						}.Build(),
+					}.Build()).
+					Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+
+				// Create a template first:
+				createResponse, err := validatedServer.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
+					Object: privatev1.ClusterTemplate_builder{
+						Title:       "My template",
+						Description: "Template to update.",
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				object := createResponse.GetObject()
+
+				// Update with a disabled version_name in spec_defaults:
+				_, err = validatedServer.Update(ctx, privatev1.ClusterTemplatesUpdateRequest_builder{
+					Object: privatev1.ClusterTemplate_builder{
+						Id:          object.GetId(),
+						Title:       object.GetTitle(),
+						Description: object.GetDescription(),
+						SpecDefaults: privatev1.ClusterTemplateSpecDefaults_builder{
+							VersionName: new("4-18-0-disabled"),
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{
+						Paths: []string{"spec_defaults"},
+					},
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				status, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+				Expect(status.Message()).To(ContainSubstring("is disabled"))
+			})
 		})
 
 		It("Delete object", func() {

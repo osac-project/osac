@@ -20,7 +20,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
+	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -29,11 +29,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/fulfillment-service/internal/controllers"
-	"github.com/osac-project/fulfillment-service/internal/controllers/finalizers"
-	"github.com/osac-project/fulfillment-service/internal/kubernetes/labels"
-	"github.com/osac-project/fulfillment-service/internal/masks"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
+	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
+	"github.com/osac-project/osac/fulfillment-service/internal/masks"
 )
 
 var _ = Describe("buildSpec", func() {
@@ -49,7 +49,7 @@ var _ = Describe("buildSpec", func() {
 				Id: "vnet-test-123",
 				Spec: privatev1.VirtualNetworkSpec_builder{
 					Region:                 region,
-					NetworkClass:           networkClass,
+					NetworkClass:           privatev1.NetworkClassReference_builder{Name: networkClass}.Build(),
 					ImplementationStrategy: implementationStrategy,
 					Ipv4Cidr:               &ipv4,
 					Ipv6Cidr:               &ipv6,
@@ -82,7 +82,7 @@ var _ = Describe("buildSpec", func() {
 				Id: "vnet-test-456",
 				Spec: privatev1.VirtualNetworkSpec_builder{
 					Region:                 region,
-					NetworkClass:           networkClass,
+					NetworkClass:           privatev1.NetworkClassReference_builder{Name: networkClass}.Build(),
 					ImplementationStrategy: implementationStrategy,
 					Ipv4Cidr:               &ipv4,
 					Capabilities: privatev1.VirtualNetworkCapabilities_builder{
@@ -112,7 +112,7 @@ var _ = Describe("buildSpec", func() {
 				Id: "vnet-test-789",
 				Spec: privatev1.VirtualNetworkSpec_builder{
 					Region:                 region,
-					NetworkClass:           networkClass,
+					NetworkClass:           privatev1.NetworkClassReference_builder{Name: networkClass}.Build(),
 					ImplementationStrategy: implementationStrategy,
 					Ipv6Cidr:               &ipv6,
 					Capabilities: privatev1.VirtualNetworkCapabilities_builder{
@@ -142,7 +142,7 @@ var _ = Describe("buildSpec", func() {
 				Id: "vnet-test-no-caps",
 				Spec: privatev1.VirtualNetworkSpec_builder{
 					Region:                 region,
-					NetworkClass:           networkClass,
+					NetworkClass:           privatev1.NetworkClassReference_builder{Name: networkClass}.Build(),
 					ImplementationStrategy: implementationStrategy,
 					Ipv4Cidr:               &ipv4,
 				}.Build(),
@@ -623,7 +623,7 @@ var _ = Describe("hub persistence", func() {
 			}.Build(),
 			Spec: privatev1.VirtualNetworkSpec_builder{
 				Region:       "us-east-1",
-				NetworkClass: "cudn-net",
+				NetworkClass: privatev1.NetworkClassReference_builder{Name: "cudn-net"}.Build(),
 			}.Build(),
 			Status: privatev1.VirtualNetworkStatus_builder{
 				State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING,
@@ -674,7 +674,7 @@ var _ = Describe("hub persistence", func() {
 			}.Build(),
 			Spec: privatev1.VirtualNetworkSpec_builder{
 				Region:       "us-east-1",
-				NetworkClass: "cudn-net",
+				NetworkClass: privatev1.NetworkClassReference_builder{Name: "cudn-net"}.Build(),
 			}.Build(),
 			Status: privatev1.VirtualNetworkStatus_builder{
 				State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING,
@@ -730,7 +730,7 @@ var _ = Describe("hub persistence", func() {
 			}.Build(),
 			Spec: privatev1.VirtualNetworkSpec_builder{
 				Region:       "us-east-1",
-				NetworkClass: "cudn-net",
+				NetworkClass: privatev1.NetworkClassReference_builder{Name: "cudn-net"}.Build(),
 			}.Build(),
 			Status: privatev1.VirtualNetworkStatus_builder{
 				State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING,
@@ -790,7 +790,7 @@ var _ = Describe("hub persistence", func() {
 			}.Build(),
 			Spec: privatev1.VirtualNetworkSpec_builder{
 				Region:       "us-east-1",
-				NetworkClass: "cudn-net",
+				NetworkClass: privatev1.NetworkClassReference_builder{Name: "cudn-net"}.Build(),
 			}.Build(),
 			Status: privatev1.VirtualNetworkStatus_builder{
 				State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING,

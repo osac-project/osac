@@ -1,4 +1,4 @@
-module github.com/osac-project/osac-operator
+module github.com/osac-project/osac/osac-operator
 
 go 1.26.3
 
@@ -8,8 +8,8 @@ require (
 	github.com/onsi/ginkgo/v2 v2.32.0
 	github.com/onsi/gomega v1.42.1
 	github.com/openshift/hypershift/api v0.0.0-20250331235933-616a2fae81ae
-	github.com/osac-project/bare-metal-fulfillment-operator v0.0.10
-	github.com/osac-project/osac-operator/api v0.0.7
+	github.com/osac-project/osac/bare-metal-fulfillment-operator v0.0.0-00010101000000-000000000000
+	github.com/osac-project/osac/osac-operator/api v0.0.7
 	github.com/ovn-org/ovn-kubernetes/go-controller v0.0.0-20251211123925-6d83b2b6e183
 	github.com/stoewer/go-strcase v1.3.1
 	golang.org/x/oauth2 v0.36.0
@@ -21,7 +21,7 @@ require (
 	k8s.io/apimachinery v0.36.3
 	k8s.io/apiserver v0.36.2
 	k8s.io/client-go v0.36.3
-	k8s.io/utils v0.0.0-20260210185600-b8788abfbbc2
+	k8s.io/utils v0.0.0-20260319190234-28399d86e0b5
 	kubevirt.io/api v1.8.4
 	sigs.k8s.io/controller-runtime v0.24.1
 	sigs.k8s.io/multicluster-runtime v0.24.1
@@ -112,4 +112,7 @@ require (
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
 
-replace github.com/osac-project/osac-operator/api => ./api
+replace (
+	github.com/osac-project/osac/bare-metal-fulfillment-operator => ../bare-metal-fulfillment-operator
+	github.com/osac-project/osac/osac-operator/api => ./api
+)

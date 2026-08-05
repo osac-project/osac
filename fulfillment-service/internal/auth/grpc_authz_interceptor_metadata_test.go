@@ -21,8 +21,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
-	. "github.com/osac-project/fulfillment-service/internal/testing"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	. "github.com/osac-project/osac/fulfillment-service/internal/testing"
 )
 
 var _ = Describe("GrpcExternalAuthInterceptor project metadata authorization", func() {

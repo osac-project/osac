@@ -1,24 +1,30 @@
-# First stage is to build the image that contains the image with all the development tools needed to build the binary.
+# Build context: mono-repo root (not fulfillment-service/ alone).
+# Invoke with: podman build -f fulfillment-service/Containerfile .
 FROM registry.access.redhat.com/ubi10/go-toolset:1.26 AS builder
 
-# Set this to 'true' to build the binary with debugging symbols and disabling optimizations.
 ARG DEBUG=false
 
-# Copy only the 'go.mod' and 'go.sum' files and try to download the required modules, so that hopefully this will be
-# in a layer that can be cached reused for builds that don't change the dependencies.
+# Copy go.work and all workspace go.mod/go.sum files for dependency caching.
 WORKDIR /opt/app-root/src
-COPY go.mod go.sum /opt/app-root/src/
+COPY --chown=1001:1001 go.work go.work.sum ./
+COPY --chown=1001:1001 fulfillment-service/go.mod fulfillment-service/go.sum fulfillment-service/
+COPY --chown=1001:1001 bare-metal-fulfillment-operator/go.mod bare-metal-fulfillment-operator/go.sum bare-metal-fulfillment-operator/
+COPY --chown=1001:1001 osac-operator/go.mod osac-operator/go.sum osac-operator/
+COPY --chown=1001:1001 osac-operator/api/go.mod osac-operator/api/go.sum osac-operator/api/
+COPY --chown=1001:1001 osac-csi-driver/go.mod osac-csi-driver/go.sum osac-csi-driver/
+COPY --chown=1001:1001 osac-metering/metering-service/go.mod osac-metering/metering-service/go.sum osac-metering/metering-service/
 RUN \
   set -e; \
-  go mod download
+  cd fulfillment-service && go mod download
 
-# Version can be passed as a build arg to avoid requiring git inside the container.
-# This is necessary when building from a git worktree, where the .git reference
-# cannot be resolved inside the container context.
 ARG VERSION=""
 
-# Copy the rest of the source and build the binary:
-COPY --chown=1001:1001 . /opt/app-root/src/
+# Copy source for fulfillment-service and its workspace dependencies.
+COPY --chown=1001:1001 fulfillment-service/ fulfillment-service/
+COPY --chown=1001:1001 bare-metal-fulfillment-operator/ bare-metal-fulfillment-operator/
+COPY --chown=1001:1001 osac-operator/api/ osac-operator/api/
+
+WORKDIR /opt/app-root/src/fulfillment-service
 RUN \
   set -e; \
   version="${VERSION}"; \
@@ -26,7 +32,7 @@ RUN \
     version=$(git describe --tags --always 2>/dev/null || echo "dev"); \
   fi; \
   gcflags=""; \
-  ldflags="-X github.com/osac-project/fulfillment-service/internal/version.id=${version}"; \
+  ldflags="-X github.com/osac-project/osac/fulfillment-service/internal/version.id=${version}"; \
   if [[ "${DEBUG}" == "true" ]]; then \
     gcflags="all=-N -l"; \
   fi; \
@@ -38,7 +44,7 @@ RUN go install github.com/go-delve/delve/cmd/dlv@latest
 
 # Common runtime base with the service binary.
 FROM registry.access.redhat.com/ubi10-minimal:10.2 AS runtime-base
-COPY --from=builder /opt/app-root/src/fulfillment-service /usr/local/bin
+COPY --from=builder /opt/app-root/src/fulfillment-service/fulfillment-service /usr/local/bin
 USER 1001
 
 # Debug variant — adds dlv on top of the base; build with: podman build --target runtime-debug .

@@ -20,10 +20,10 @@ columns:
   value: "has(this.metadata.name)? this.metadata.name: '-'"
 
 - header: EXTERNAL-IP
-  value: this.spec.external_ip
+  value: this.spec.external_ip.id
 
 - header: TARGET
-  value: "has(this.spec.compute_instance)? this.spec.compute_instance: has(this.spec.cluster)? this.spec.cluster: has(this.spec.baremetal_instance)? this.spec.baremetal_instance: '-'"
+  value: "has(this.spec.compute_instance)? this.spec.compute_instance.id: has(this.spec.cluster)? this.spec.cluster.id: has(this.spec.baremetal_instance)? this.spec.baremetal_instance.id: '-'"
 
 - header: TARGET-TYPE
   value: "has(this.spec.compute_instance)? 'ComputeInstance': has(this.spec.cluster)? 'Cluster': has(this.spec.baremetal_instance)? 'BaremetalInstance': '-'"

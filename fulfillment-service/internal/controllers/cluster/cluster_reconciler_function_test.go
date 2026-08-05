@@ -15,6 +15,7 @@ package cluster
 
 import (
 	"context"
+	"fmt"
 	"slices"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -25,12 +26,12 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/fulfillment-service/internal/controllers"
-	"github.com/osac-project/fulfillment-service/internal/controllers/finalizers"
-	"github.com/osac-project/fulfillment-service/internal/kubernetes/annotations"
-	"github.com/osac-project/fulfillment-service/internal/kubernetes/labels"
-	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
+	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/annotations"
+	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
+	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
 
 var _ = Describe("validateTenant", func() {
@@ -118,7 +119,7 @@ var _ = Describe("update tenant annotation", func() {
 				Tenant:     tenantName,
 			}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
-				Template: "test-template",
+				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
 			}.Build(),
 			Status: privatev1.ClusterStatus_builder{
 				State: privatev1.ClusterState_CLUSTER_STATE_PROGRESSING,
@@ -197,10 +198,10 @@ var _ = Describe("update tenant annotation", func() {
 				Tenant:     tenantName,
 			}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
-				Template: "test-template",
+				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
 					"gpu.gb200": privatev1.ClusterNodeSet_builder{
-						HostType: "gpu.gb200",
+						HostType: &privatev1.HostTypeReference{Name: "gpu.gb200"},
 						Size:     5,
 					}.Build(),
 				},
@@ -283,10 +284,10 @@ var _ = Describe("update tenant annotation", func() {
 				Tenant:     tenantName,
 			}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
-				Template: "test-template",
+				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
 					"gpu.gb200": privatev1.ClusterNodeSet_builder{
-						HostType: "gpu.gb200",
+						HostType: &privatev1.HostTypeReference{Name: "gpu.gb200"},
 						Size:     5,
 					}.Build(),
 				},
@@ -363,10 +364,10 @@ var _ = Describe("update tenant annotation", func() {
 				Tenant:     tenantName,
 			}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
-				Template: "test-template",
+				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
 					"gpu.gb200": privatev1.ClusterNodeSet_builder{
-						HostType: "gpu.gb200",
+						HostType: &privatev1.HostTypeReference{Name: "gpu.gb200"},
 						Size:     5,
 					}.Build(),
 				},
@@ -418,9 +419,25 @@ var _ = Describe("update tenant annotation", func() {
 
 		pullSecret := "my-pull-secret"
 		sshKey := "ssh-ed25519 AAAA..."
-		releaseImage := "quay.io/openshift-release-dev/ocp-release:4.17.0-multi"
+		versionName := "4-17-0"
+		resolvedImage := "quay.io/openshift-release-dev/ocp-release:4.17.0-multi"
 		podCIDR := "10.128.0.0/14"
 		serviceCIDR := "172.30.0.0/16"
+
+		clusterVersionsClient := NewMockClusterVersionsClient(ctrl)
+		clusterVersionsClient.EXPECT().
+			List(gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(privatev1.ClusterVersionsListResponse_builder{
+				Total: 1,
+				Size:  1,
+				Items: []*privatev1.ClusterVersion{
+					privatev1.ClusterVersion_builder{
+						Spec: privatev1.ClusterVersionSpec_builder{
+							Image: resolvedImage,
+						}.Build(),
+					}.Build(),
+				},
+			}.Build(), nil)
 
 		cluster := privatev1.Cluster_builder{
 			Id: clusterID,
@@ -429,10 +446,10 @@ var _ = Describe("update tenant annotation", func() {
 				Tenant:     tenantName,
 			}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
-				Template:     "test-template",
+				Template:     &privatev1.ClusterTemplateReference{Name: "test-template"},
 				PullSecret:   &pullSecret,
 				SshPublicKey: &sshKey,
-				ReleaseImage: &releaseImage,
+				VersionName:  &versionName,
 				Network: privatev1.ClusterNetwork_builder{
 					PodCidr:     &podCIDR,
 					ServiceCidr: &serviceCIDR,
@@ -446,9 +463,10 @@ var _ = Describe("update tenant annotation", func() {
 
 		t := &task{
 			r: &function{
-				logger:         logger,
-				hubCache:       hubCache,
-				maskCalculator: nil,
+				logger:                logger,
+				hubCache:              hubCache,
+				clusterVersionsClient: clusterVersionsClient,
+				maskCalculator:        nil,
 			},
 			cluster: cluster,
 		}
@@ -465,10 +483,359 @@ var _ = Describe("update tenant annotation", func() {
 		createdCR := list.Items[0]
 		Expect(createdCR.Spec.PullSecret).To(Equal(pullSecret))
 		Expect(createdCR.Spec.SSHPublicKey).To(Equal(sshKey))
-		Expect(createdCR.Spec.ReleaseImage).To(Equal(releaseImage))
+		Expect(createdCR.Spec.ReleaseImage).To(Equal(resolvedImage))
 		Expect(createdCR.Spec.Network).ToNot(BeNil())
 		Expect(createdCR.Spec.Network.PodCIDR).To(Equal(podCIDR))
 		Expect(createdCR.Spec.Network.ServiceCIDR).To(Equal(serviceCIDR))
+	})
+
+	It("should resolve ReleaseImage via ClusterVersion on every reconcile", func() {
+		resolvedImage := "quay.io/openshift-release-dev/ocp-release:4.17.0-multi"
+		versionName := "4-17-0"
+
+		// Existing ClusterOrder has size 3 and a previously resolved ReleaseImage:
+		existingOrder := &osacv1alpha1.ClusterOrder{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "order-abc",
+				Namespace: hubNamespace,
+				Labels: map[string]string{
+					labels.ClusterOrderUuid: clusterID,
+				},
+				Annotations: map[string]string{
+					annotations.Tenant: tenantName,
+				},
+			},
+			Spec: osacv1alpha1.ClusterOrderSpec{
+				TemplateID:   "test-template",
+				ReleaseImage: resolvedImage,
+				NodeRequests: []osacv1alpha1.NodeRequest{
+					{
+						ResourceClass: "gpu.gb200",
+						NumberOfNodes: 3,
+					},
+				},
+			},
+		}
+
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(existingOrder).
+			Build()
+
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), hubID).
+			Return(&controllers.HubEntry{
+				Namespace: hubNamespace,
+				Client:    fakeClient,
+			}, nil)
+
+		clusterVersionsClient := NewMockClusterVersionsClient(ctrl)
+		clusterVersionsClient.EXPECT().
+			List(gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(privatev1.ClusterVersionsListResponse_builder{
+				Total: 1,
+				Size:  1,
+				Items: []*privatev1.ClusterVersion{
+					privatev1.ClusterVersion_builder{
+						Spec: privatev1.ClusterVersionSpec_builder{
+							Image: resolvedImage,
+						}.Build(),
+					}.Build(),
+				},
+			}.Build(), nil)
+
+		// Cluster spec has updated node-set size (5), simulating a resize:
+		cluster := privatev1.Cluster_builder{
+			Id: clusterID,
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     tenantName,
+			}.Build(),
+			Spec: privatev1.ClusterSpec_builder{
+				Template:    &privatev1.ClusterTemplateReference{Name: "test-template"},
+				VersionName: &versionName,
+				NodeSets: map[string]*privatev1.ClusterNodeSet{
+					"gpu.gb200": privatev1.ClusterNodeSet_builder{
+						HostType: &privatev1.HostTypeReference{Name: "gpu.gb200"},
+						Size:     5,
+					}.Build(),
+				},
+			}.Build(),
+			Status: privatev1.ClusterStatus_builder{
+				State: privatev1.ClusterState_CLUSTER_STATE_PROGRESSING,
+				Hub:   hubID,
+			}.Build(),
+		}.Build()
+
+		t := &task{
+			r: &function{
+				logger:                logger,
+				hubCache:              hubCache,
+				clusterVersionsClient: clusterVersionsClient,
+				maskCalculator:        nil,
+			},
+			cluster: cluster,
+		}
+
+		err := t.update(ctx)
+		Expect(err).ToNot(HaveOccurred())
+
+		list := &osacv1alpha1.ClusterOrderList{}
+		err = fakeClient.List(ctx, list)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(list.Items).To(HaveLen(1))
+
+		patchedCR := list.Items[0]
+		Expect(patchedCR.Spec.ReleaseImage).To(Equal(resolvedImage))
+		Expect(patchedCR.Spec.NodeRequests).To(HaveLen(1))
+		Expect(patchedCR.Spec.NodeRequests[0].NumberOfNodes).To(Equal(5))
+	})
+
+	It("should update ReleaseImage when version_name changes", func() {
+		oldImage := "quay.io/openshift-release-dev/ocp-release:4.17.0-multi"
+		newImage := "quay.io/openshift-release-dev/ocp-release:4.18.0-multi"
+		newVersionName := "4-18-0"
+
+		// Existing ClusterOrder was created with the old version:
+		existingOrder := &osacv1alpha1.ClusterOrder{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "order-abc",
+				Namespace: hubNamespace,
+				Labels: map[string]string{
+					labels.ClusterOrderUuid: clusterID,
+				},
+				Annotations: map[string]string{
+					annotations.Tenant: tenantName,
+				},
+			},
+			Spec: osacv1alpha1.ClusterOrderSpec{
+				TemplateID:   "test-template",
+				ReleaseImage: oldImage,
+				NodeRequests: []osacv1alpha1.NodeRequest{
+					{
+						ResourceClass: "gpu.gb200",
+						NumberOfNodes: 3,
+					},
+				},
+			},
+		}
+
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(existingOrder).
+			Build()
+
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), hubID).
+			Return(&controllers.HubEntry{
+				Namespace: hubNamespace,
+				Client:    fakeClient,
+			}, nil)
+
+		// Mock returns the new version's image:
+		clusterVersionsClient := NewMockClusterVersionsClient(ctrl)
+		clusterVersionsClient.EXPECT().
+			List(gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(privatev1.ClusterVersionsListResponse_builder{
+				Total: 1,
+				Size:  1,
+				Items: []*privatev1.ClusterVersion{
+					privatev1.ClusterVersion_builder{
+						Spec: privatev1.ClusterVersionSpec_builder{
+							Image: newImage,
+						}.Build(),
+					}.Build(),
+				},
+			}.Build(), nil)
+
+		// Cluster spec now references the new version:
+		cluster := privatev1.Cluster_builder{
+			Id: clusterID,
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     tenantName,
+			}.Build(),
+			Spec: privatev1.ClusterSpec_builder{
+				Template:    &privatev1.ClusterTemplateReference{Name: "test-template"},
+				VersionName: &newVersionName,
+				NodeSets: map[string]*privatev1.ClusterNodeSet{
+					"gpu.gb200": privatev1.ClusterNodeSet_builder{
+						HostType: &privatev1.HostTypeReference{Name: "gpu.gb200"},
+						Size:     3,
+					}.Build(),
+				},
+			}.Build(),
+			Status: privatev1.ClusterStatus_builder{
+				State: privatev1.ClusterState_CLUSTER_STATE_PROGRESSING,
+				Hub:   hubID,
+			}.Build(),
+		}.Build()
+
+		t := &task{
+			r: &function{
+				logger:                logger,
+				hubCache:              hubCache,
+				clusterVersionsClient: clusterVersionsClient,
+				maskCalculator:        nil,
+			},
+			cluster: cluster,
+		}
+
+		err := t.update(ctx)
+		Expect(err).ToNot(HaveOccurred())
+
+		list := &osacv1alpha1.ClusterOrderList{}
+		err = fakeClient.List(ctx, list)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(list.Items).To(HaveLen(1))
+
+		patchedCR := list.Items[0]
+		Expect(patchedCR.Spec.ReleaseImage).To(Equal(newImage))
+	})
+})
+
+var _ = Describe("resolveVersionImage", func() {
+	var (
+		ctx  context.Context
+		ctrl *gomock.Controller
+	)
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		ctrl = gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+	})
+
+	It("should return error when gRPC List fails", func() {
+		clusterVersionsClient := NewMockClusterVersionsClient(ctrl)
+		clusterVersionsClient.EXPECT().
+			List(gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(nil, fmt.Errorf("connection refused"))
+
+		t := &task{
+			r: &function{
+				clusterVersionsClient: clusterVersionsClient,
+			},
+		}
+
+		_, err := t.resolveVersionImage(ctx, "4-17-0")
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("failed to look up cluster version '4-17-0'"))
+	})
+
+	It("should return error when version is not found", func() {
+		clusterVersionsClient := NewMockClusterVersionsClient(ctrl)
+		clusterVersionsClient.EXPECT().
+			List(gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(privatev1.ClusterVersionsListResponse_builder{}.Build(), nil)
+
+		t := &task{
+			r: &function{
+				clusterVersionsClient: clusterVersionsClient,
+			},
+		}
+
+		_, err := t.resolveVersionImage(ctx, "nonexistent")
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("cluster version not found: 'nonexistent'"))
+	})
+})
+
+var _ = Describe("update version resolution failure", func() {
+	const (
+		clusterID    = "test-cluster-id"
+		tenantName   = "my-tenant"
+		hubID        = "test-hub"
+		hubNamespace = "test-ns"
+	)
+
+	var (
+		ctx  context.Context
+		ctrl *gomock.Controller
+	)
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		ctrl = gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+	})
+
+	It("should set ResourcesUnavailable condition when cluster version is not found", func() {
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			Build()
+
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), hubID).
+			Return(&controllers.HubEntry{Namespace: hubNamespace, Client: fakeClient}, nil)
+
+		clusterVersionsClient := NewMockClusterVersionsClient(ctrl)
+		clusterVersionsClient.EXPECT().
+			List(gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(privatev1.ClusterVersionsListResponse_builder{}.Build(), nil)
+
+		var updateReq *privatev1.ClustersUpdateRequest
+		clustersClient := NewMockClustersClient(ctrl)
+		clustersClient.EXPECT().
+			Update(gomock.Any(), gomock.Any(), gomock.Any()).
+			DoAndReturn(func(ctx context.Context, req *privatev1.ClustersUpdateRequest, opts ...grpc.CallOption) (*privatev1.ClustersUpdateResponse, error) {
+				updateReq = req
+				return &privatev1.ClustersUpdateResponse{Object: req.GetObject()}, nil
+			}).
+			Times(1)
+
+		versionName := "nonexistent-version"
+		cluster := privatev1.Cluster_builder{
+			Id: clusterID,
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     tenantName,
+			}.Build(),
+			Spec: privatev1.ClusterSpec_builder{
+				Template:    &privatev1.ClusterTemplateReference{Name: "test-template"},
+				VersionName: &versionName,
+			}.Build(),
+			Status: privatev1.ClusterStatus_builder{
+				State: privatev1.ClusterState_CLUSTER_STATE_PROGRESSING,
+				Hub:   hubID,
+			}.Build(),
+		}.Build()
+
+		f := &function{
+			logger:                logger,
+			hubCache:              hubCache,
+			clustersClient:        clustersClient,
+			clusterVersionsClient: clusterVersionsClient,
+			maskCalculator:        nil,
+		}
+
+		err := f.run(ctx, cluster)
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(updateReq).ToNot(BeNil(), "Update should have been called")
+		conditions := updateReq.GetObject().GetStatus().GetConditions()
+		found := false
+		for _, c := range conditions {
+			if c.GetType() == privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_PROGRESSING {
+				Expect(c.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+				Expect(c.GetReason()).To(Equal("ResourcesUnavailable"))
+				Expect(c.GetMessage()).To(ContainSubstring("cluster version not found"))
+				found = true
+			}
+		}
+		Expect(found).To(BeTrue(), "should have set ResourcesUnavailable condition")
 	})
 })
 
@@ -597,7 +964,7 @@ var _ = Describe("hub persistence", func() {
 				Tenant:     tenantName,
 			}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
-				Template: "test-template",
+				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
 			}.Build(),
 			Status: privatev1.ClusterStatus_builder{
 				State: privatev1.ClusterState_CLUSTER_STATE_PROGRESSING,
@@ -659,7 +1026,7 @@ var _ = Describe("hub persistence", func() {
 				Tenant:     tenantName,
 			}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
-				Template: "test-template",
+				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
 			}.Build(),
 			Status: privatev1.ClusterStatus_builder{
 				State: privatev1.ClusterState_CLUSTER_STATE_PROGRESSING,
@@ -734,7 +1101,7 @@ var _ = Describe("hub persistence", func() {
 				Tenant:     tenantName,
 			}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
-				Template: "test-template",
+				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
 			}.Build(),
 			Status: privatev1.ClusterStatus_builder{
 				State: privatev1.ClusterState_CLUSTER_STATE_PROGRESSING,
@@ -758,7 +1125,7 @@ var _ = Describe("hub persistence", func() {
 				Tenant:     tenantName,
 			}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
-				Template: "test-template",
+				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
 			}.Build(),
 			Status: privatev1.ClusterStatus_builder{
 				State: privatev1.ClusterState_CLUSTER_STATE_PROGRESSING,
@@ -809,7 +1176,7 @@ var _ = Describe("hub persistence", func() {
 				Tenant:     tenantName,
 			}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
-				Template: "test-template",
+				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
 			}.Build(),
 			Status: privatev1.ClusterStatus_builder{
 				State: privatev1.ClusterState_CLUSTER_STATE_PROGRESSING,
@@ -875,7 +1242,7 @@ var _ = Describe("hub persistence", func() {
 				Tenant:     tenantName,
 			}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
-				Template: "test-template",
+				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
 			}.Build(),
 			// No Status field — run() must initialize it without panicking
 		}.Build()

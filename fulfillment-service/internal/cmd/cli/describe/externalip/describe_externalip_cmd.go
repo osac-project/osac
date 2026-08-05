@@ -23,11 +23,11 @@ import (
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
 
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
-	"github.com/osac-project/fulfillment-service/internal/cmd/cli/lookup"
-	"github.com/osac-project/fulfillment-service/internal/config"
-	"github.com/osac-project/fulfillment-service/internal/logging"
-	"github.com/osac-project/fulfillment-service/internal/terminal"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/lookup"
+	"github.com/osac-project/osac/fulfillment-service/internal/config"
+	"github.com/osac-project/osac/fulfillment-service/internal/logging"
+	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 )
 
 func Cmd() *cobra.Command {
@@ -98,8 +98,8 @@ func RenderExternalIP(w io.Writer, eip *publicv1.ExternalIP) {
 	}
 
 	pool := "-"
-	if v := eip.GetSpec().GetPool(); v != "" {
-		pool = v
+	if v := eip.GetSpec().GetPool(); v != nil {
+		pool = v.GetName()
 	}
 
 	attached := "false"

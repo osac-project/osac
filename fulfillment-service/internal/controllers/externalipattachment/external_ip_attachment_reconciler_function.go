@@ -25,14 +25,14 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 
-	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
+	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/fulfillment-service/internal/controllers"
-	"github.com/osac-project/fulfillment-service/internal/controllers/finalizers"
-	"github.com/osac-project/fulfillment-service/internal/kubernetes/annotations"
-	"github.com/osac-project/fulfillment-service/internal/kubernetes/labels"
-	"github.com/osac-project/fulfillment-service/internal/masks"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
+	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/annotations"
+	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
+	"github.com/osac-project/osac/fulfillment-service/internal/masks"
 )
 
 const objectPrefix = "externalipattachment-"
@@ -274,8 +274,9 @@ func (t *task) delete(ctx context.Context) (err error) {
 func (t *task) selectHub(ctx context.Context) error {
 	t.hubId = t.externalIPAttachment.GetStatus().GetHub()
 	if t.hubId == "" {
+		eipKey := controllers.RefKeyStr(t.externalIPAttachment.GetSpec().GetExternalIp())
 		eipResponse, err := t.r.externalIPsClient.Get(ctx, privatev1.ExternalIPsGetRequest_builder{
-			Id: t.externalIPAttachment.GetSpec().GetExternalIp(),
+			Id: eipKey,
 		}.Build())
 		if err != nil {
 			return err
@@ -284,7 +285,7 @@ func (t *task) selectHub(ctx context.Context) error {
 		if eipHub == "" {
 			return fmt.Errorf(
 				"external IP %s has no hub assigned yet, skipping",
-				t.externalIPAttachment.GetSpec().GetExternalIp(),
+				eipKey,
 			)
 		}
 		t.hubId = eipHub
@@ -369,11 +370,35 @@ func (t *task) removeFinalizer() {
 
 func (t *task) buildSpec() osacv1alpha1.ExternalIPAttachmentSpec {
 	spec := osacv1alpha1.ExternalIPAttachmentSpec{
-		ExternalIP: t.externalIPAttachment.GetSpec().GetExternalIp(),
+		ExternalIP: controllers.RefKeyStr(t.externalIPAttachment.GetSpec().GetExternalIp()),
 	}
 	if t.externalIPAttachment.GetSpec().HasComputeInstance() {
-		ci := t.externalIPAttachment.GetSpec().GetComputeInstance()
+		ci := controllers.RefKeyStr(t.externalIPAttachment.GetSpec().GetComputeInstance())
 		spec.ComputeInstance = &ci
 	}
+	if t.externalIPAttachment.GetSpec().HasCluster() {
+		cl := controllers.RefKeyStr(t.externalIPAttachment.GetSpec().GetCluster())
+		spec.Cluster = &cl
+		endpoint := mapTargetEndpoint(t.externalIPAttachment.GetSpec().GetTargetEndpoint())
+		if endpoint != "" {
+			te := osacv1alpha1.ExternalIPAttachmentTargetEndpoint(endpoint)
+			spec.TargetEndpoint = &te
+		}
+	}
+	if t.externalIPAttachment.GetSpec().HasBaremetalInstance() {
+		bmi := controllers.RefKeyStr(t.externalIPAttachment.GetSpec().GetBaremetalInstance())
+		spec.BaremetalInstance = &bmi
+	}
 	return spec
+}
+
+func mapTargetEndpoint(endpoint privatev1.ExternalIPAttachmentEndpoint) string {
+	switch endpoint {
+	case privatev1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_API:
+		return string(osacv1alpha1.ExternalIPAttachmentTargetEndpointAPI)
+	case privatev1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_INGRESS:
+		return string(osacv1alpha1.ExternalIPAttachmentTargetEndpointIngress)
+	default:
+		return ""
+	}
 }

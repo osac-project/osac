@@ -21,13 +21,13 @@ import (
 	. "github.com/onsi/gomega"
 	"github.com/spf13/cobra"
 
-	"github.com/osac-project/fulfillment-service/internal/cmd/cli/describe/cluster"
-	"github.com/osac-project/fulfillment-service/internal/cmd/cli/describe/clusterversion"
-	"github.com/osac-project/fulfillment-service/internal/cmd/cli/describe/computeinstance"
-	"github.com/osac-project/fulfillment-service/internal/cmd/cli/describe/networkclass"
-	"github.com/osac-project/fulfillment-service/internal/cmd/cli/describe/securitygroup"
-	"github.com/osac-project/fulfillment-service/internal/cmd/cli/describe/subnet"
-	"github.com/osac-project/fulfillment-service/internal/cmd/cli/describe/virtualnetwork"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/cluster"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/clusterversion"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/computeinstance"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/networkclass"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/securitygroup"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/subnet"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/virtualnetwork"
 )
 
 var _ = Describe("Describe command", func() {

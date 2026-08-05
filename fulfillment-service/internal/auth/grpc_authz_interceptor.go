@@ -33,8 +33,8 @@ import (
 	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/util/validation"
 
-	"github.com/osac-project/fulfillment-service/internal/collections"
-	k8sfiles "github.com/osac-project/fulfillment-service/internal/kubernetes/files"
+	"github.com/osac-project/osac/fulfillment-service/internal/collections"
+	k8sfiles "github.com/osac-project/osac/fulfillment-service/internal/kubernetes/files"
 )
 
 //go:embed policies/authz.rego

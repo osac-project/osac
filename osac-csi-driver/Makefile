@@ -73,7 +73,7 @@ clean: ## Remove build artifacts.
 
 .PHONY: image-build
 image-build: ## Build the container image.
-	$(CONTAINER_TOOL) build -f $(CONTAINERFILE) -t $(IMG) --build-arg VERSION=$(VERSION) --build-arg GIT_COMMIT=$(GIT_COMMIT) .
+	$(CONTAINER_TOOL) build -f $(CONTAINERFILE) -t $(IMG) --build-arg VERSION=$(VERSION) --build-arg GIT_COMMIT=$(GIT_COMMIT) ..
 
 .PHONY: image-push
 image-push: ## Push the container image.

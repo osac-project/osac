@@ -29,8 +29,8 @@ import (
 	. "github.com/onsi/gomega/gmeasure"
 	"go.uber.org/mock/gomock"
 
-	. "github.com/osac-project/fulfillment-service/internal/testing"
-	"github.com/osac-project/fulfillment-service/internal/uuid"
+	. "github.com/osac-project/osac/fulfillment-service/internal/testing"
+	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 )
 
 var _ = Describe("JWT token validator creation", func() {

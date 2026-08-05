@@ -16,8 +16,8 @@ package version
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/osac-project/fulfillment-service/internal/terminal"
-	"github.com/osac-project/fulfillment-service/internal/version"
+	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
+	"github.com/osac-project/osac/fulfillment-service/internal/version"
 )
 
 func Cmd() *cobra.Command {

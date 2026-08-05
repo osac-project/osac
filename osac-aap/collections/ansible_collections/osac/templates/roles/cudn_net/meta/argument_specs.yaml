@@ -5,7 +5,7 @@ argument_specs:
       subnet:
         type: dict
         required: true
-        description: Subnet CR from fulfillment-api via EDA payload
+        description: Subnet CR from fulfillment-api via osac_job_vars
       subnet_name:
         type: str
         required: true
@@ -21,7 +21,7 @@ argument_specs:
       subnet:
         type: dict
         required: true
-        description: Subnet CR from fulfillment-api via EDA payload
+        description: Subnet CR from fulfillment-api via osac_job_vars
       subnet_name:
         type: str
         required: true
@@ -32,7 +32,7 @@ argument_specs:
       virtual_network:
         type: dict
         required: true
-        description: VirtualNetwork CR from fulfillment-api via EDA payload
+        description: VirtualNetwork CR from fulfillment-api via osac_job_vars
       virtual_network_name:
         type: str
         required: true
@@ -48,7 +48,7 @@ argument_specs:
       virtual_network:
         type: dict
         required: true
-        description: VirtualNetwork CR from fulfillment-api via EDA payload
+        description: VirtualNetwork CR from fulfillment-api via osac_job_vars
       virtual_network_name:
         type: str
         required: true

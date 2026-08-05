@@ -32,11 +32,11 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/fulfillment-service/internal/auth"
-	"github.com/osac-project/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/fulfillment-service/internal/events"
-	"github.com/osac-project/fulfillment-service/internal/utils"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	"github.com/osac-project/osac/fulfillment-service/internal/events"
+	"github.com/osac-project/osac/fulfillment-service/internal/utils"
 )
 
 type PrivateClustersServerBuilder struct {
@@ -51,11 +51,12 @@ var _ privatev1.ClustersServer = (*PrivateClustersServer)(nil)
 
 type PrivateClustersServer struct {
 	privatev1.UnimplementedClustersServer
-	logger          *slog.Logger
-	templatesDao    *dao.GenericDAO[*privatev1.ClusterTemplate]
-	catalogItemsDao *dao.GenericDAO[*privatev1.ClusterCatalogItem]
-	hostTypesDao    *dao.GenericDAO[*privatev1.HostType]
-	generic         *GenericServer[*privatev1.Cluster]
+	logger             *slog.Logger
+	templatesDao       *dao.GenericDAO[*privatev1.ClusterTemplate]
+	catalogItemsDao    *dao.GenericDAO[*privatev1.ClusterCatalogItem]
+	hostTypesDao       *dao.GenericDAO[*privatev1.HostType]
+	clusterVersionsDao *dao.GenericDAO[*privatev1.ClusterVersion]
+	generic            *GenericServer[*privatev1.Cluster]
 }
 
 func NewPrivateClustersServer() *PrivateClustersServerBuilder {
@@ -99,7 +100,6 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 		err = errors.New("tenancy logic is mandatory")
 		return
 	}
-
 	// Create the templates DAO:
 	templatesDao, err := dao.NewGenericDAO[*privatev1.ClusterTemplate]().
 		SetLogger(b.logger).
@@ -130,6 +130,16 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 		return
 	}
 
+	// Create the cluster versions DAO:
+	clusterVersionsDao, err := dao.NewGenericDAO[*privatev1.ClusterVersion]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
 	// Create the generic server:
 	generic, err := NewGenericServer[*privatev1.Cluster]().
 		SetLogger(b.logger).
@@ -145,11 +155,12 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 
 	// Create and populate the object:
 	result = &PrivateClustersServer{
-		logger:          b.logger,
-		templatesDao:    templatesDao,
-		catalogItemsDao: catalogItemsDao,
-		hostTypesDao:    hostTypesDao,
-		generic:         generic,
+		logger:             b.logger,
+		templatesDao:       templatesDao,
+		catalogItemsDao:    catalogItemsDao,
+		hostTypesDao:       hostTypesDao,
+		clusterVersionsDao: clusterVersionsDao,
+		generic:            generic,
 	}
 	return
 }
@@ -178,11 +189,15 @@ func (s *PrivateClustersServer) Create(ctx context.Context,
 	// identifiers, so we need to look them up:
 	for _, nodeSet := range spec.GetNodeSets() {
 		var hostType *privatev1.HostType
-		hostType, err = s.lookupHostType(ctx, nodeSet.GetHostType())
+		hostType, err = s.lookupHostType(ctx, refKey(nodeSet.GetHostType()))
 		if err != nil {
 			return
 		}
-		nodeSet.SetHostType(hostType.GetId())
+		if hostType != nil {
+			hostTypeRef := &privatev1.HostTypeReference{}
+			hostTypeRef.SetId(hostType.GetId())
+			nodeSet.SetHostType(hostTypeRef)
+		}
 	}
 
 	// Validate duplicate conditions first:
@@ -194,12 +209,12 @@ func (s *PrivateClustersServer) Create(ctx context.Context,
 	// Dispatch between catalog item and template paths:
 	catalogItemRef := spec.GetCatalogItem()
 	templateRef := spec.GetTemplate()
-	if catalogItemRef != "" && templateRef != "" {
+	if catalogItemRef != nil && templateRef != nil {
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"catalog_item and template are mutually exclusive")
 		return
 	}
-	if catalogItemRef != "" {
+	if catalogItemRef != nil {
 		err = s.validateAndTransformCatalogItem(ctx, request.GetObject())
 		if err != nil {
 			return
@@ -222,6 +237,10 @@ func (s *PrivateClustersServer) Update(ctx context.Context,
 		return
 	}
 	err = s.validateTemplateImmutability(ctx, request)
+	if err != nil {
+		return
+	}
+	err = s.validateVersionNameUpdate(ctx, request)
 	if err != nil {
 		return
 	}
@@ -331,6 +350,21 @@ func (s *PrivateClustersServer) lookupHostType(ctx context.Context,
 	return
 }
 
+// ensureClusterVersion makes sure the cluster spec has a usable version_name: if the user didn't provide one, it
+// resolves the system default. Either way, it validates that the resulting ClusterVersion isn't deleted, disabled,
+// or obsolete.
+func (s *PrivateClustersServer) ensureClusterVersion(ctx context.Context, cluster *privatev1.Cluster) error {
+	if cluster.GetSpec().HasVersionName() && cluster.GetSpec().GetVersionName() != "" {
+		return lookupAndValidateClusterVersion(ctx, s.logger, s.clusterVersionsDao, cluster.GetSpec().GetVersionName())
+	}
+	versionName, err := resolveDefaultClusterVersionName(ctx, s.logger, s.clusterVersionsDao)
+	if err != nil {
+		return err
+	}
+	cluster.GetSpec().SetVersionName(versionName)
+	return nil
+}
+
 func (s *PrivateClustersServer) validateNoDuplicateConditions(object *privatev1.Cluster) error {
 	conditions := object.GetStatus().GetConditions()
 	if conditions == nil {
@@ -414,24 +448,7 @@ func (s *PrivateClustersServer) getExistingCluster(ctx context.Context,
 
 // updateAffectsNodeSets checks if the update mask indicates that node_sets are being modified.
 func (s *PrivateClustersServer) updateAffectsNodeSets(updateMask *fieldmaskpb.FieldMask) bool {
-	if updateMask == nil {
-		// No mask means no updates to node sets
-		return false
-	}
-	return s.isFieldInMask(updateMask, "spec.node_sets")
-}
-
-// isFieldInMask checks if a field path is in the update mask.
-func (s *PrivateClustersServer) isFieldInMask(updateMask *fieldmaskpb.FieldMask, fieldPath string) bool {
-	if updateMask == nil {
-		return false
-	}
-	for _, path := range updateMask.GetPaths() {
-		if path == fieldPath || strings.HasPrefix(path, fieldPath+".") {
-			return true
-		}
-	}
-	return false
+	return updateIncludesField(updateMask, "spec.node_sets")
 }
 
 // isUpdatingOnlySizes checks if the update mask is only modifying size fields of node sets.
@@ -470,13 +487,13 @@ func (s *PrivateClustersServer) validateNodeSetHostTypeImmutability(
 		}
 		existingHostType := existingNodeSet.GetHostType()
 		newHostType := newNodeSet.GetHostType()
-		if existingHostType != newHostType {
+		if refKey(existingHostType) != refKey(newHostType) {
 			return grpcstatus.Errorf(
 				grpccodes.InvalidArgument,
 				"cannot change host_type for node set '%s' from '%s' to '%s': host_type is immutable",
 				nodeSetName,
-				existingHostType,
-				newHostType,
+				refKey(existingHostType),
+				refKey(newHostType),
 			)
 		}
 	}
@@ -489,9 +506,9 @@ func (s *PrivateClustersServer) validateTemplateImmutability(ctx context.Context
 	request *privatev1.ClustersUpdateRequest) error {
 	// Check if template, template_parameters, or catalog_item are being updated:
 	updateMask := request.GetUpdateMask()
-	updatingTemplate := s.isFieldInMask(updateMask, "spec.template")
-	updatingTemplateParams := s.isFieldInMask(updateMask, "spec.template_parameters")
-	updatingCatalogItem := s.isFieldInMask(updateMask, "spec.catalog_item")
+	updatingTemplate := updateIncludesField(updateMask, "spec.template")
+	updatingTemplateParams := updateIncludesField(updateMask, "spec.template_parameters")
+	updatingCatalogItem := updateIncludesField(updateMask, "spec.catalog_item")
 
 	// If none of the immutable fields are being updated, no validation needed:
 	if !updatingTemplate && !updatingTemplateParams && !updatingCatalogItem {
@@ -511,13 +528,34 @@ func (s *PrivateClustersServer) validateTemplateImmutability(ctx context.Context
 	existingSpec := existingCluster.GetSpec()
 	newSpec := request.GetObject().GetSpec()
 
-	// Check if template has changed:
-	if updatingTemplate && existingSpec.GetTemplate() != newSpec.GetTemplate() {
+	// Sparse updates can reach private validation with spec omitted entirely.
+	// Without a spec message, this validator has no immutable spec fields to compare.
+	if newSpec == nil {
+		return nil
+	}
+
+	// These immutable non-optional proto3 fields have no presence tracking, so a
+	// zero value is ambiguous. Treat zero as absent and normalize to the existing
+	// value before comparing.
+	if updatingTemplate && newSpec.GetTemplate().GetId() == "" && newSpec.GetTemplate().GetName() == "" {
+		newSpec.SetTemplate(existingSpec.GetTemplate())
+	}
+	if updatingTemplateParams && len(newSpec.GetTemplateParameters()) == 0 {
+		newSpec.SetTemplateParameters(existingSpec.GetTemplateParameters())
+	}
+	if updatingCatalogItem && newSpec.GetCatalogItem().GetId() == "" && newSpec.GetCatalogItem().GetName() == "" {
+		newSpec.SetCatalogItem(existingSpec.GetCatalogItem())
+	}
+
+	// Check if template has changed. Compare by refKey (Id) rather than proto.Equal because
+	// validateAndTransformCluster normalizes the stored reference to Id-only, while the
+	// reference validator interceptor may backfill Name on incoming requests.
+	if updatingTemplate && refKey(existingSpec.GetTemplate()) != refKey(newSpec.GetTemplate()) {
 		return grpcstatus.Errorf(
 			grpccodes.InvalidArgument,
 			"cannot change spec.template from '%s' to '%s': template is immutable",
-			existingSpec.GetTemplate(),
-			newSpec.GetTemplate(),
+			refKey(existingSpec.GetTemplate()),
+			refKey(newSpec.GetTemplate()),
 		)
 	}
 
@@ -534,16 +572,44 @@ func (s *PrivateClustersServer) validateTemplateImmutability(ctx context.Context
 		}
 	}
 
-	if updatingCatalogItem && existingSpec.GetCatalogItem() != newSpec.GetCatalogItem() {
+	if updatingCatalogItem && refKey(existingSpec.GetCatalogItem()) != refKey(newSpec.GetCatalogItem()) {
 		return grpcstatus.Errorf(
 			grpccodes.InvalidArgument,
 			"cannot change spec.catalog_item from '%s' to '%s': catalog item is immutable",
-			existingSpec.GetCatalogItem(),
-			newSpec.GetCatalogItem(),
+			refKey(existingSpec.GetCatalogItem()),
+			refKey(newSpec.GetCatalogItem()),
 		)
 	}
 
 	return nil
+}
+
+// validateVersionNameUpdate ensures version_name stays valid on update. Absent
+// version_name is normalized to the existing value (cannot be cleared once set).
+// Changed values are validated the same way as Create via ensureClusterVersion.
+func (s *PrivateClustersServer) validateVersionNameUpdate(ctx context.Context,
+	request *privatev1.ClustersUpdateRequest) error {
+	if !updateIncludesField(request.GetUpdateMask(), "spec.version_name") {
+		return nil
+	}
+	newSpec := request.GetObject().GetSpec()
+	if newSpec == nil {
+		return nil
+	}
+	existing, found, err := s.getExistingCluster(ctx, request)
+	if err != nil || !found {
+		return err
+	}
+	if !newSpec.HasVersionName() || newSpec.GetVersionName() == "" {
+		if existing.GetSpec().HasVersionName() {
+			newSpec.SetVersionName(existing.GetSpec().GetVersionName())
+		}
+		return nil
+	}
+	if newSpec.GetVersionName() == existing.GetSpec().GetVersionName() {
+		return nil
+	}
+	return s.ensureClusterVersion(ctx, request.GetObject())
 }
 
 // validateNetworkAttachmentImmutability ensures that the subnet field within
@@ -552,16 +618,7 @@ func (s *PrivateClustersServer) validateNetworkAttachmentImmutability(ctx contex
 	request *privatev1.ClustersUpdateRequest) error {
 	updateMask := request.GetUpdateMask()
 
-	subnetMayChange := false
-	if updateMask != nil {
-		for _, path := range updateMask.GetPaths() {
-			if path == "spec.network_attachment" || path == "spec.network_attachment.subnet" {
-				subnetMayChange = true
-				break
-			}
-		}
-	}
-	if !subnetMayChange {
+	if !updateIncludesField(updateMask, "spec.network_attachment.subnet") {
 		return nil
 	}
 
@@ -576,11 +633,11 @@ func (s *PrivateClustersServer) validateNetworkAttachmentImmutability(ctx contex
 	existingSubnet := existingCluster.GetSpec().GetNetworkAttachment().GetSubnet()
 	newSubnet := request.GetObject().GetSpec().GetNetworkAttachment().GetSubnet()
 
-	if existingSubnet != newSubnet {
+	if refKey(existingSubnet) != refKey(newSubnet) {
 		return grpcstatus.Errorf(
 			grpccodes.InvalidArgument,
 			"cannot change spec.network_attachment.subnet from '%s' to '%s': subnet is immutable",
-			existingSubnet, newSubnet,
+			refKey(existingSubnet), refKey(newSubnet),
 		)
 	}
 
@@ -594,19 +651,24 @@ func (s *PrivateClustersServer) validateAndTransformCluster(ctx context.Context,
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "object is mandatory")
 	}
 	templateRef := cluster.GetSpec().GetTemplate()
-	if templateRef == "" {
+	if templateRef == nil {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "template is mandatory")
 	}
-	template, err := s.lookupTemplate(ctx, templateRef)
+	templateRefStr := refKey(templateRef)
+	template, err := s.lookupTemplate(ctx, templateRefStr)
 	if err != nil {
 		return err
 	}
 	if template.GetMetadata().HasDeletionTimestamp() {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, "template '%s' has been deleted", templateRef)
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "template '%s' has been deleted", templateRefStr)
 	}
 
 	// Apply spec defaults from the template (user values take precedence):
 	utils.ApplyClusterSpecDefaults(cluster.GetSpec(), template.GetSpecDefaults())
+
+	if err = s.ensureClusterVersion(ctx, cluster); err != nil {
+		return err
+	}
 
 	// Validate cluster spec fields (CIDR format, etc.) after defaults have been applied:
 	if err = utils.ValidateClusterSpecFields(cluster.GetSpec()); err != nil {
@@ -623,7 +685,7 @@ func (s *PrivateClustersServer) validateAndTransformCluster(ctx context.Context,
 	// Validate node sets against the template:
 	templateNodeSets := template.GetNodeSets()
 	clusterNodeSets := cluster.GetSpec().GetNodeSets()
-	if err = s.validateNodeSets(clusterNodeSets, templateNodeSets, hostTypes, templateRef); err != nil {
+	if err = s.validateNodeSets(clusterNodeSets, templateNodeSets, hostTypes, templateRefStr); err != nil {
 		return err
 	}
 
@@ -646,11 +708,16 @@ func (s *PrivateClustersServer) validateAndTransformCluster(ctx context.Context,
 
 	// Make sure that the template and the host types of the node sets are referenced by their identifiers, as
 	// that is what we want to save to the database.
-	cluster.GetSpec().SetTemplate(template.GetId())
+	resolvedTemplateRef := &privatev1.ClusterTemplateReference{}
+	resolvedTemplateRef.SetId(template.GetId())
+	cluster.GetSpec().SetTemplate(resolvedTemplateRef)
 	for _, clusterNodeSet := range cluster.GetSpec().GetNodeSets() {
-		hostTypeRef := clusterNodeSet.GetHostType()
-		hostType := hostTypes[hostTypeRef]
-		clusterNodeSet.SetHostType(hostType.GetId())
+		hostType := hostTypes[refKey(clusterNodeSet.GetHostType())]
+		if hostType != nil {
+			resolvedHostTypeRef := &privatev1.HostTypeReference{}
+			resolvedHostTypeRef.SetId(hostType.GetId())
+			clusterNodeSet.SetHostType(resolvedHostTypeRef)
+		}
 	}
 
 	return nil
@@ -664,10 +731,10 @@ func (s *PrivateClustersServer) lookupAndIndexHostTypes(
 	hostTypes := map[string]*privatev1.HostType{}
 	for _, nodeSet := range template.GetNodeSets() {
 		hostTypeRef := nodeSet.GetHostType()
-		if hostTypeRef == "" {
+		if hostTypeRef == nil {
 			continue
 		}
-		hostType, err := s.lookupHostType(ctx, hostTypeRef)
+		hostType, err := s.lookupHostType(ctx, refKey(hostTypeRef))
 		if err != nil {
 			return nil, err
 		}
@@ -709,16 +776,17 @@ func (s *PrivateClustersServer) validateNodeSets(
 	// template:
 	for clusterNodeSetKey, clusterNodeSet := range clusterNodeSets {
 		clusterHostTypeRef := clusterNodeSet.GetHostType()
-		if clusterHostTypeRef == "" {
+		clusterHostTypeKey := refKey(clusterHostTypeRef)
+		if clusterHostTypeKey == "" {
 			continue
 		}
 		templateNodeSet := templateNodeSets[clusterNodeSetKey]
 		templateHostTypeRef := templateNodeSet.GetHostType()
-		templateHostType := hostTypes[templateHostTypeRef]
+		templateHostType := hostTypes[refKey(templateHostTypeRef)]
 		templateHostTypeId := templateHostType.GetId()
 		templateHostTypeName := templateHostType.GetMetadata().GetName()
 		if templateHostTypeName != "" {
-			if clusterHostTypeRef != templateHostTypeId && clusterHostTypeRef != templateHostTypeName {
+			if clusterHostTypeKey != templateHostTypeId && clusterHostTypeKey != templateHostTypeName {
 				return grpcstatus.Errorf(
 					grpccodes.InvalidArgument,
 					"host type for node set '%s' should be empty, '%s' or '%s', like in template '%s', "+
@@ -727,11 +795,11 @@ func (s *PrivateClustersServer) validateNodeSets(
 					templateHostTypeName,
 					templateHostTypeId,
 					templateRef,
-					clusterHostTypeRef,
+					clusterHostTypeKey,
 				)
 			}
 		} else {
-			if clusterHostTypeRef != templateHostTypeId {
+			if clusterHostTypeKey != templateHostTypeId {
 				return grpcstatus.Errorf(
 					grpccodes.InvalidArgument,
 					"host type for node set '%s' should be empty or '%s', like in template '%s', "+
@@ -739,7 +807,7 @@ func (s *PrivateClustersServer) validateNodeSets(
 					clusterNodeSetKey,
 					templateHostTypeId,
 					templateRef,
-					clusterHostTypeRef,
+					clusterHostTypeKey,
 				)
 			}
 		}
@@ -789,22 +857,23 @@ func (s *PrivateClustersServer) validateAndTransformCatalogItem(ctx context.Cont
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "object is mandatory")
 	}
 	catalogItemRef := cluster.GetSpec().GetCatalogItem()
-	if catalogItemRef == "" {
+	if catalogItemRef == nil {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "catalog_item is mandatory")
 	}
+	catalogItemRefStr := refKey(catalogItemRef)
 
-	catalogItem, err := s.lookupCatalogItem(ctx, catalogItemRef)
+	catalogItem, err := s.lookupCatalogItem(ctx, catalogItemRefStr)
 	if err != nil {
 		return err
 	}
 
-	if err := validateCatalogItemAccess(catalogItem, catalogItemRef); err != nil {
+	if err := validateCatalogItemAccess(catalogItem, catalogItemRefStr); err != nil {
 		return err
 	}
 
 	templateRef := catalogItem.GetTemplate()
-	if templateRef == "" {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, "catalog item '%s' has no template", catalogItemRef)
+	if templateRef == nil {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "catalog item '%s' has no template", catalogItemRefStr)
 	}
 	cluster.GetSpec().SetTemplate(templateRef)
 
@@ -813,15 +882,23 @@ func (s *PrivateClustersServer) validateAndTransformCatalogItem(ctx context.Cont
 	}
 
 	// Look up the template to apply spec defaults, node sets, and parameter validation:
-	template, err := s.lookupTemplate(ctx, templateRef)
+	templateRefStr := refKey(templateRef)
+	template, err := s.lookupTemplate(ctx, templateRefStr)
 	if err != nil {
 		return err
 	}
 	if template.GetMetadata().HasDeletionTimestamp() {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, "template '%s' has been deleted", templateRef)
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "template '%s' has been deleted", templateRefStr)
 	}
 
+	// Apply spec defaults from the template (user and field_definition values take precedence):
 	utils.ApplyClusterSpecDefaults(cluster.GetSpec(), template.GetSpecDefaults())
+
+	// Version resolution (catalog-item path):
+	// user input > field_definition default > template spec_defaults > system default.
+	if err := s.ensureClusterVersion(ctx, cluster); err != nil {
+		return err
+	}
 
 	if err := utils.ValidateClusterSpecFields(cluster.GetSpec()); err != nil {
 		return err
@@ -834,7 +911,7 @@ func (s *PrivateClustersServer) validateAndTransformCatalogItem(ctx context.Cont
 
 	templateNodeSets := template.GetNodeSets()
 	clusterNodeSets := cluster.GetSpec().GetNodeSets()
-	if err := s.validateNodeSets(clusterNodeSets, templateNodeSets, hostTypes, templateRef); err != nil {
+	if err := s.validateNodeSets(clusterNodeSets, templateNodeSets, hostTypes, templateRefStr); err != nil {
 		return err
 	}
 
@@ -852,9 +929,12 @@ func (s *PrivateClustersServer) validateAndTransformCatalogItem(ctx context.Cont
 	cluster.GetSpec().SetTemplateParameters(actualClusterParameters)
 
 	for _, clusterNodeSet := range cluster.GetSpec().GetNodeSets() {
-		hostTypeRef := clusterNodeSet.GetHostType()
-		hostType := hostTypes[hostTypeRef]
-		clusterNodeSet.SetHostType(hostType.GetId())
+		hostType := hostTypes[refKey(clusterNodeSet.GetHostType())]
+		if hostType != nil {
+			resolvedHostTypeRef := &privatev1.HostTypeReference{}
+			resolvedHostTypeRef.SetId(hostType.GetId())
+			clusterNodeSet.SetHostType(resolvedHostTypeRef)
+		}
 	}
 
 	return nil

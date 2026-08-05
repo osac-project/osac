@@ -35,27 +35,20 @@
     fail_msg: "Tier names must be unique."
     quiet: true
 
-- name: Validate tier protocols are supported by VAST provider
-  ansible.builtin.fail:
-    msg: >-
-      Tier '{{ item.name }}' has unsupported protocol '{{ item.protocol }}'.
-      VAST provider supports: nfs, block.
-  loop: "{{ _provider_tiers }}"
-  loop_control:
-    label: "{{ item.name }}"
-  when: item.protocol not in ['nfs', 'block']
+- name: Include shared tier protocol validation
+  ansible.builtin.include_tasks: _validate_tier_protocols.yaml
 
 - name: Validate tier quotas (when specified)
   ansible.builtin.fail:
     msg: >-
-      Tier '{{ item.name }}' has an invalid quota: '{{ item.quota }}'.
-      Quota must be a positive number (bytes).
+      Tier '{{ item.name }}' has an invalid quota_bytes: '{{ item.quota_bytes }}'.
+      quota_bytes must be a positive number (bytes).
   loop: "{{ _provider_tiers }}"
   loop_control:
     label: "{{ item.name }}"
   when:
-    - item.quota is defined
-    - (item.quota | int) <= 0
+    - item.quota_bytes is defined
+    - (item.quota_bytes | int) <= 0
 
 - name: Compute unique protocols from tiers
   ansible.builtin.set_fact:
@@ -63,7 +56,7 @@
 
 - name: Provision VAST resources for tenant
   block:
-    - name: Resolve VAST admin credentials from env vars
+    - name: Resolve VAST admin credentials from storage_backend_connections
       ansible.builtin.include_tasks: read_credentials.yaml
 
     - name: Build VAST VMS connection dict

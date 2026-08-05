@@ -30,15 +30,15 @@ import (
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	bmfov1alpha1 "github.com/osac-project/bare-metal-fulfillment-operator/api/v1alpha1"
+	bmfov1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/fulfillment-service/internal/controllers"
-	"github.com/osac-project/fulfillment-service/internal/controllers/finalizers"
-	"github.com/osac-project/fulfillment-service/internal/kubernetes/annotations"
-	"github.com/osac-project/fulfillment-service/internal/kubernetes/labels"
-	"github.com/osac-project/fulfillment-service/internal/masks"
-	"github.com/osac-project/fulfillment-service/internal/utils"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
+	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/annotations"
+	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
+	"github.com/osac-project/osac/fulfillment-service/internal/masks"
+	"github.com/osac-project/osac/fulfillment-service/internal/utils"
 )
 
 const objectPrefix = "bmi-"
@@ -568,14 +568,14 @@ func (t *task) mutateBMI(ctx context.Context, object *bmfov1alpha1.BareMetalInst
 
 	catalogItemID := t.bareMetalInstance.GetSpec().GetCatalogItem()
 	catalogItemResp, err := t.r.bareMetalInstanceCatalogItemsClient.Get(ctx, privatev1.BareMetalInstanceCatalogItemsGetRequest_builder{
-		Id: catalogItemID,
+		Id: catalogItemID.GetId(),
 	}.Build())
 	if err != nil {
 		return fmt.Errorf("failed to get catalog item '%s': %w", catalogItemID, err)
 	}
 
 	object.Spec.HostType = defaultHostType
-	object.Spec.TemplateID = catalogItemResp.GetObject().GetTemplate()
+	object.Spec.TemplateID = catalogItemResp.GetObject().GetTemplate().GetId()
 	object.Spec.TemplateParameters = ""
 	object.Spec.RunStrategy = bmfov1alpha1.RunStrategyUnspecified
 	object.Spec.RestartTrigger = t.bareMetalInstance.GetSpec().GetRestartTrigger()
@@ -617,6 +617,24 @@ func (t *task) mutateBMI(ctx context.Context, object *bmfov1alpha1.BareMetalInst
 		case privatev1.BareMetalInstanceRunStrategy_BARE_METAL_INSTANCE_RUN_STRATEGY_HALTED:
 			object.Spec.RunStrategy = bmfov1alpha1.RunStrategyHalted
 		}
+	}
+
+	protoAttachments := t.bareMetalInstance.GetSpec().GetNetworkAttachments()
+	if len(protoAttachments) > 0 {
+		networkAttachments := make([]bmfov1alpha1.BareMetalNetworkAttachment, 0, len(protoAttachments))
+		for _, att := range protoAttachments {
+			secGroupRefs := make([]string, 0, len(att.GetSecurityGroups()))
+			for _, sg := range att.GetSecurityGroups() {
+				secGroupRefs = append(secGroupRefs, controllers.RefKeyStr(sg))
+			}
+			networkAttachments = append(networkAttachments, bmfov1alpha1.BareMetalNetworkAttachment{
+				SubnetRef:         controllers.RefKeyStr(att.GetSubnet()),
+				SecurityGroupRefs: secGroupRefs,
+				Interface:         att.GetInterface(),
+				Primary:           att.GetPrimary(),
+			})
+		}
+		object.Spec.NetworkAttachments = networkAttachments
 	}
 
 	return nil

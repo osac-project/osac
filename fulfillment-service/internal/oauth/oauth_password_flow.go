@@ -17,7 +17,7 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/osac-project/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 )
 
 type passwordFlow struct {

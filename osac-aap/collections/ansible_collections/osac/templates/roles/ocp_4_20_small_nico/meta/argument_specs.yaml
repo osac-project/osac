@@ -17,33 +17,3 @@ argument_specs:
           resourceClass:
             type: str
             required: true
-      template_parameters:
-        type: dict
-        options:
-          pull_secret:
-            description: >
-              The pull secret contains credentials for authenticating to image repositories.
-            type: str
-            required: true
-          ssh_public_key:
-            description: >
-              A public ssh key that will be installed into the `authorized_keys` file
-              of the `core` user on cluster worker nodes.
-            type: str
-          ip_block_id:
-            description: >
-              NICo IP block ID for VPC prefix allocation.
-            type: str
-            required: true
-          vpc_id:
-            description: >
-              Use an existing VPC instead of creating a new one.
-            type: str
-          vpc_prefix_id:
-            description: >
-              Use an existing VPC prefix instead of creating a new one.
-            type: str
-          ssh_key_group_id:
-            description: >
-              Override SSH key group for this cluster.
-            type: str

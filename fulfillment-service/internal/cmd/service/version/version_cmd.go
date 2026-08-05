@@ -16,8 +16,8 @@ package version
 import (
 	"log/slog"
 
-	"github.com/osac-project/fulfillment-service/internal/logging"
-	"github.com/osac-project/fulfillment-service/internal/version"
+	"github.com/osac-project/osac/fulfillment-service/internal/logging"
+	"github.com/osac-project/osac/fulfillment-service/internal/version"
 	"github.com/spf13/cobra"
 )
 

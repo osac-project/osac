@@ -10,6 +10,10 @@
   hosts: localhost
   gather_facts: false
 
+  vars:
+    mock_tenant_manager_password: "test-csi-password"
+    mock_csi_token: "test-api-token-for-csi"
+
   tasks:
     - name: Reset mock VMS server (sequential execution — safe to reset)
       ansible.builtin.uri:
@@ -89,7 +93,7 @@
             storage_provider_type: "vast"
             tenant_manager_name: "osac-test-teardown"
             tenant_manager_username: "osac-test-teardown"
-            tenant_manager_password: "test-csi-password"
+            tenant_manager_password: "{{ mock_tenant_manager_password }}"
             tenant_manager_id: "7"
             tenant_role_id: "8"
 
@@ -150,7 +154,7 @@
               osac.openshift.io/tenant: "test-teardown"
           type: Opaque
           stringData:
-            token: "test-api-token-for-csi"
+            token: "{{ mock_csi_token }}"
             endpoint: "127.0.0.1:18443"
 
     - name: Check if VolumeSnapshotClass CRD exists
@@ -211,9 +215,6 @@
   gather_facts: false
 
   environment:
-    VAST_ENDPOINT: "127.0.0.1:18443"
-    VAST_USERNAME: "admin"
-    VAST_PASSWORD: "admin"
     OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
 
   vars:
@@ -223,6 +224,12 @@
       - name: default
         protocol: nfs
         provider: vast
+        backend_id: be-test
+    storage_provider_backend_connections:
+      be-test:
+        endpoint: "127.0.0.1:18443"
+        username: "admin"
+        password: "mock-admin-password"
     storage_provider_provisioning_target: vmaas
     vast_storage_validate_certs: false
 

@@ -29,8 +29,8 @@ import (
 	. "github.com/onsi/gomega"
 	"github.com/zalando/go-keyring"
 
-	"github.com/osac-project/fulfillment-service/internal/auth"
-	"github.com/osac-project/fulfillment-service/internal/oauth"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/oauth"
 )
 
 var _ = Describe("Settings", func() {

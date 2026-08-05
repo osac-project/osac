@@ -22,10 +22,10 @@ import (
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
 
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
-	"github.com/osac-project/fulfillment-service/internal/cmd/cli/lookup"
-	"github.com/osac-project/fulfillment-service/internal/config"
-	"github.com/osac-project/fulfillment-service/internal/terminal"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/lookup"
+	"github.com/osac-project/osac/fulfillment-service/internal/config"
+	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 )
 
 // Cmd creates the command to describe a cluster.
@@ -90,8 +90,12 @@ func renderCluster(w io.Writer, cluster *publicv1.Cluster) {
 	writer := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	catalogItem := "-"
 	if cluster.Spec != nil {
-		if catalogItemID := cluster.Spec.GetCatalogItem(); catalogItemID != "" {
-			catalogItem = catalogItemID
+		if ref := cluster.Spec.GetCatalogItem(); ref != nil {
+			if ref.GetName() != "" {
+				catalogItem = ref.GetName()
+			} else if ref.GetId() != "" {
+				catalogItem = ref.GetId()
+			}
 		}
 	}
 	state := "-"

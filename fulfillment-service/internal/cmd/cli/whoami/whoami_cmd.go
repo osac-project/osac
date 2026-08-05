@@ -20,11 +20,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/osac-project/fulfillment-service/internal/auth"
-	"github.com/osac-project/fulfillment-service/internal/cmd/cli/tokenutil"
-	"github.com/osac-project/fulfillment-service/internal/config"
-	"github.com/osac-project/fulfillment-service/internal/exit"
-	"github.com/osac-project/fulfillment-service/internal/terminal"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/tokenutil"
+	"github.com/osac-project/osac/fulfillment-service/internal/config"
+	"github.com/osac-project/osac/fulfillment-service/internal/exit"
+	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 )
 
 func Cmd() *cobra.Command {

@@ -44,7 +44,7 @@ Add custom logic at the very beginning or end of workflows:
 - name: Cluster creation with monitoring hooks
   ansible.builtin.import_playbook: osac.workflows.cluster.create
   vars:
-    cluster_order: "{{ ansible_eda.event.payload }}"
+    cluster_order: "{{ osac_job_vars.resource }}"
 
     # Hook at workflow start for initialization
     hook_workflow_start:
@@ -73,7 +73,7 @@ Modify Kubernetes resource definitions before they're applied:
 - name: Cluster with custom labels
   ansible.builtin.import_playbook: osac.workflows.cluster.create
   vars:
-    cluster_order: "{{ ansible_eda.event.payload }}"
+    cluster_order: "{{ osac_job_vars.resource }}"
 
     # Modify HostedCluster YAML
     hosted_cluster_modify_definition_hook:
@@ -101,7 +101,7 @@ Replace entire workflow phases:
 - name: Cluster with custom namespace logic
   ansible.builtin.import_playbook: osac.workflows.cluster.create
   vars:
-    cluster_order: "{{ ansible_eda.event.payload }}"
+    cluster_order: "{{ osac_job_vars.resource }}"
 
     # Replace namespace determination
     step_determine_namespace_override:
@@ -218,7 +218,7 @@ osac-aap-moc/
 - name: MOC Cluster Creation with ESI
   ansible.builtin.import_playbook: osac.workflows.cluster.create
   vars:
-    cluster_order: "{{ ansible_eda.event.payload }}"
+    cluster_order: "{{ osac_job_vars.resource }}"
 
     # Use MOC template
     template_id_override: osac.templates.ocp_small

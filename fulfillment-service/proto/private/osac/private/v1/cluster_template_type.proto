@@ -18,6 +18,7 @@ package osac.private.v1;
 import "google/protobuf/any.proto";
 import "osac/private/v1/cluster_type.proto";
 import "osac/private/v1/metadata_type.proto";
+import "osac/private/v1/host_type_type.proto";
 
 // buf:lint:ignore OSAC_OBJECT_SHAPE
 message ClusterTemplate {
@@ -46,7 +47,7 @@ message ClusterTemplateParameterDefinition {
 }
 
 message ClusterTemplateNodeSet {
-  string host_type = 1;
+  HostTypeReference host_type = 1;
   int32 size = 2;
 }
 
@@ -58,9 +59,9 @@ message ClusterTemplateSpecDefaults {
   // Default SSH public key installed on cluster worker nodes.
   optional string ssh_public_key = 2;
 
-  // Default OCP release image URL.
-  optional string release_image = 3;
-
   // Default cluster networking configuration.
   optional ClusterNetwork network = 4;
+
+  // Default ClusterVersion name for clusters created with this template.
+  optional string version_name = 5;
 }

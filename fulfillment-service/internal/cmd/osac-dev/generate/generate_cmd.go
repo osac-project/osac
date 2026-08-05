@@ -16,7 +16,7 @@ package generate
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/osac-project/fulfillment-service/internal/cmd/osac-dev/generate/openapi"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/osac-dev/generate/openapi"
 )
 
 func Cmd() *cobra.Command {

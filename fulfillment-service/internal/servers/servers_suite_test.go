@@ -24,9 +24,9 @@ import (
 	"go.uber.org/mock/gomock"
 	grpcmetadata "google.golang.org/grpc/metadata"
 
-	"github.com/osac-project/fulfillment-service/internal/auth"
-	"github.com/osac-project/fulfillment-service/internal/database"
-	"github.com/osac-project/fulfillment-service/internal/logging"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
+	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 )
 
 func TestServers(t *testing.T) {

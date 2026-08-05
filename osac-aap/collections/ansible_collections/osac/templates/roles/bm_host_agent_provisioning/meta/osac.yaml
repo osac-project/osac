@@ -1,4 +1,5 @@
 # Define the display name and description of the template
+name: bm-host-agent-provisioning
 title: Bare Metal Host Agent Provisioning
 description: >
   Provisions bare metal hosts with agent-based images using OpenStack Ironic.

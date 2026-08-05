@@ -812,7 +812,7 @@ deploy_osac() {
   fi
 
   log "Building umbrella chart dependencies..."
-  helm dependency build "${chart_dir}" 2>&1 | tail -3
+  helm dependency update "${chart_dir}" 2>&1 | tail -3
 
   log "Deploying OSAC via umbrella chart..."
   local helm_args=(

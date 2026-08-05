@@ -19,7 +19,7 @@ import (
 	"log/slog"
 	"slices"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 )
 
 // PrivateCapabilitiesServerBuilder contains the data and logic needed to create a new private capabilities server.

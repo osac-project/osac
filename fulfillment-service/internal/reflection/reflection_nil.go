@@ -13,7 +13,7 @@ language governing permissions and limitations under the License.
 
 package reflection
 
-import "github.com/osac-project/fulfillment-service/internal/util"
+import "github.com/osac-project/osac/fulfillment-service/internal/util"
 
 // NormalizeNil returns a true nil when the interface holds a nil pointer, preventing typed-nil values from bypassing
 // nil checks and causing panics on method calls.

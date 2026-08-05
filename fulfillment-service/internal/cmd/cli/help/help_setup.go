@@ -27,7 +27,7 @@ import (
 	"github.com/spf13/pflag"
 	"golang.org/x/term"
 
-	"github.com/osac-project/fulfillment-service/internal/templating"
+	"github.com/osac-project/osac/fulfillment-service/internal/templating"
 )
 
 //go:embed templates
@@ -50,43 +50,19 @@ func Setup(cmd *cobra.Command) {
 		return
 	}
 
-	// Select the style according to the terminal color scheme:
-	var style ansi.StyleConfig
-	if lipgloss.HasDarkBackground(os.Stdin, os.Stdout) {
-		style = styles.DarkStyleConfig
-	} else {
-		style = styles.LightStyleConfig
-	}
-
-	// Regardless of the style, we want to remove the default document margin and leading newline, so the output is
-	// flush with the left edge of the terminal.
-	zero := new(uint)
-	style.Document.Margin = zero
-	style.Document.BlockPrefix = ""
-
-	// We don't want to display the heading prefixes:
-	style.H2.Prefix = ""
-	style.H3.Prefix = ""
-	style.H4.Prefix = ""
-	style.H5.Prefix = ""
-	style.H6.Prefix = ""
-
-	// For code inside paragraphs, we don't want to change the background color or add prefixes and suffixes:
-	style.Code.BackgroundColor = nil
-	style.Code.Prefix = ""
-	style.Code.Suffix = ""
-
 	// Set the help function for the command and all its subcommands. The renderer is created each time the
-	// help is displayed, so that it can adapt to the current terminal width.
+	// help is displayed, so that it can adapt to the current terminal width and color capabilities.
 	cmd.SetHelpFunc(func(c *cobra.Command, args []string) {
-		// If the output is a terminal, we want to adjust the width of the terminal, but never more than the
-		// maximun width that we consider readable:
 		out := c.OutOrStdout()
+
+		// Determine if the output is a terminal and get its size:
 		var width int
+		isTTY := false
 		file, ok := out.(*os.File)
 		if ok {
 			fd := int(file.Fd())
 			if term.IsTerminal(fd) {
+				isTTY = true
 				width, _, err = term.GetSize(fd)
 				if err != nil {
 					c.PrintErrln("Error getting terminal size:", err)
@@ -95,6 +71,39 @@ func Setup(cmd *cobra.Command) {
 			}
 		}
 		width = min(width, maxReadableWidth)
+
+		// Select the style based on terminal capabilities. Use colored styles only when the output is
+		// a terminal and the NO_COLOR environment variable is not set (https://no-color.org/).
+		_, noColor := os.LookupEnv("NO_COLOR")
+		var style ansi.StyleConfig
+		if isTTY && !noColor {
+			if lipgloss.HasDarkBackground(os.Stdin, os.Stdout) {
+				style = styles.DarkStyleConfig
+			} else {
+				style = styles.LightStyleConfig
+			}
+		} else {
+			style = styles.NoTTYStyleConfig
+		}
+
+		// Regardless of the style, we want to remove the default document margin and leading newline,
+		// so the output is flush with the left edge of the terminal.
+		zero := new(uint)
+		style.Document.Margin = zero
+		style.Document.BlockPrefix = ""
+
+		// We don't want to display the heading prefixes:
+		style.H2.Prefix = ""
+		style.H3.Prefix = ""
+		style.H4.Prefix = ""
+		style.H5.Prefix = ""
+		style.H6.Prefix = ""
+
+		// For code inside paragraphs, we don't want to change the background color or add prefixes
+		// and suffixes:
+		style.Code.BackgroundColor = nil
+		style.Code.Prefix = ""
+		style.Code.Suffix = ""
 
 		// Render the help output:
 		var buffer bytes.Buffer

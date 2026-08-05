@@ -24,9 +24,9 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
-	"github.com/osac-project/fulfillment-service/internal/uuid"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 )
 
 var _ = Describe("Version", func() {
@@ -67,7 +67,7 @@ var _ = Describe("Version", func() {
 				Description: "My template.",
 				NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
 					"my-node-set": privatev1.ClusterTemplateNodeSet_builder{
-						HostType: hostTypeId,
+						HostType: privatev1.HostTypeReference_builder{Id: hostTypeId}.Build(),
 						Size:     3,
 					}.Build(),
 				},
@@ -86,7 +86,7 @@ var _ = Describe("Version", func() {
 		response, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
 				Spec: publicv1.ClusterSpec_builder{
-					Template: templateId,
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -148,7 +148,7 @@ var _ = Describe("Version", func() {
 					},
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: templateId,
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -171,7 +171,7 @@ var _ = Describe("Version", func() {
 					},
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: templateId,
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -243,7 +243,7 @@ var _ = Describe("Version", func() {
 						},
 					}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
-						Template: templateId,
+						Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 					}.Build(),
 				}.Build(),
 				Lock: true,
@@ -279,7 +279,7 @@ var _ = Describe("Version", func() {
 						},
 					}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
-						Template: templateId,
+						Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())

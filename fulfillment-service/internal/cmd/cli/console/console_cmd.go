@@ -16,8 +16,8 @@ package console
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/osac-project/fulfillment-service/internal/cmd/cli/console/serial"
-	"github.com/osac-project/fulfillment-service/internal/cmd/cli/console/vnc"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/console/serial"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/console/vnc"
 )
 
 // Cmd returns the `console` command.

@@ -21,10 +21,10 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
-	"github.com/osac-project/fulfillment-service/internal/auth"
-	"github.com/osac-project/fulfillment-service/internal/database/dao"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 )
 
 var _ = Describe("External IP attachments server", func() {
@@ -147,8 +147,8 @@ var _ = Describe("External IP attachments server", func() {
 				publicv1.ExternalIPAttachmentsCreateRequest_builder{
 					Object: publicv1.ExternalIPAttachment_builder{
 						Spec: publicv1.ExternalIPAttachmentSpec_builder{
-							ExternalIp:      eip.GetId(),
-							ComputeInstance: new(ci.GetId()),
+							ExternalIp:      publicv1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+							ComputeInstance: publicv1.ComputeInstanceLocalReference_builder{Id: ci.GetId()}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build())
@@ -161,8 +161,8 @@ var _ = Describe("External IP attachments server", func() {
 			object := createAttachment()
 			Expect(object).ToNot(BeNil())
 			Expect(object.GetId()).ToNot(BeEmpty())
-			Expect(object.GetSpec().GetExternalIp()).ToNot(BeEmpty())
-			Expect(object.GetSpec().GetComputeInstance()).ToNot(BeEmpty())
+			Expect(object.GetSpec().GetExternalIp().GetId()).ToNot(BeEmpty())
+			Expect(object.GetSpec().GetComputeInstance().GetId()).ToNot(BeEmpty())
 		})
 
 		It("Creates and gets object with Cluster target", func() {
@@ -174,14 +174,14 @@ var _ = Describe("External IP attachments server", func() {
 				publicv1.ExternalIPAttachmentsCreateRequest_builder{
 					Object: publicv1.ExternalIPAttachment_builder{
 						Spec: publicv1.ExternalIPAttachmentSpec_builder{
-							ExternalIp:     eip.GetId(),
-							Cluster:        new(cluster.GetId()),
+							ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+							Cluster:        publicv1.ClusterLocalReference_builder{Id: cluster.GetId()}.Build(),
 							TargetEndpoint: publicv1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_API,
 						}.Build(),
 					}.Build(),
 				}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(createResponse.GetObject().GetSpec().GetCluster()).To(Equal(cluster.GetId()))
+			Expect(createResponse.GetObject().GetSpec().GetCluster().GetId()).To(Equal(cluster.GetId()))
 			Expect(createResponse.GetObject().GetSpec().GetTargetEndpoint()).To(
 				Equal(publicv1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_API))
 
@@ -190,7 +190,7 @@ var _ = Describe("External IP attachments server", func() {
 					Id: createResponse.GetObject().GetId(),
 				}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(getResponse.GetObject().GetSpec().GetCluster()).To(Equal(cluster.GetId()))
+			Expect(getResponse.GetObject().GetSpec().GetCluster().GetId()).To(Equal(cluster.GetId()))
 			Expect(getResponse.GetObject().GetSpec().GetTargetEndpoint()).To(
 				Equal(publicv1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_API))
 		})
@@ -204,20 +204,20 @@ var _ = Describe("External IP attachments server", func() {
 				publicv1.ExternalIPAttachmentsCreateRequest_builder{
 					Object: publicv1.ExternalIPAttachment_builder{
 						Spec: publicv1.ExternalIPAttachmentSpec_builder{
-							ExternalIp:        eip.GetId(),
-							BaremetalInstance: new(bmi.GetId()),
+							ExternalIp:        publicv1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+							BaremetalInstance: publicv1.BareMetalInstanceLocalReference_builder{Id: bmi.GetId()}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(createResponse.GetObject().GetSpec().GetBaremetalInstance()).To(Equal(bmi.GetId()))
+			Expect(createResponse.GetObject().GetSpec().GetBaremetalInstance().GetId()).To(Equal(bmi.GetId()))
 
 			getResponse, err := externalIPAttachmentsServer.Get(ctx,
 				publicv1.ExternalIPAttachmentsGetRequest_builder{
 					Id: createResponse.GetObject().GetId(),
 				}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(getResponse.GetObject().GetSpec().GetBaremetalInstance()).To(Equal(bmi.GetId()))
+			Expect(getResponse.GetObject().GetSpec().GetBaremetalInstance().GetId()).To(Equal(bmi.GetId()))
 		})
 
 		It("List objects", func() {
@@ -338,7 +338,7 @@ var _ = Describe("External IP attachments server", func() {
 					Object: publicv1.ExternalIPAttachment_builder{
 						Id: created.GetId(),
 						Spec: publicv1.ExternalIPAttachmentSpec_builder{
-							ExternalIp: "different-ip-id",
+							ExternalIp: publicv1.ExternalIPLocalReference_builder{Id: "different-ip-id"}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build())

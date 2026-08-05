@@ -20,7 +20,7 @@ columns:
   value: "has(this.metadata.name)? this.metadata.name: '-'"
 
 - header: CATALOG ITEM
-  value: this.spec.catalog_item
+  value: this.spec.catalog_item.id
   type: osac.private.v1.BareMetalInstanceCatalogItem
   lookup: true
 

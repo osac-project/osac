@@ -16,6 +16,7 @@ syntax = "proto3";
 package osac.private.v1;
 
 import "buf/validate/validate.proto";
+import "google/protobuf/timestamp.proto";
 import "osac/private/v1/condition_status_type.proto";
 import "osac/private/v1/metadata_type.proto";
 import "osac/private/v1/break_glass_credentials_type.proto";
@@ -120,11 +121,14 @@ message TenantCondition {
   // Status of the condition (True, False, or Unknown).
   ConditionStatus status = 2;
 
+  // LastTransitionTime is the last time the condition transitioned from one status to another.
+  google.protobuf.Timestamp last_transition_time = 3;
+
   // Machine-readable reason for the condition's last transition.
-  optional string reason = 3;
+  optional string reason = 4;
 
   // Human-readable message providing details about the condition.
-  optional string message = 4;
+  optional string message = 5;
 }
 
 // Types of conditions that can be reported for a Tenant.

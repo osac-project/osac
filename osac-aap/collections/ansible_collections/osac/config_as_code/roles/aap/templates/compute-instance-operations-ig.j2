@@ -44,10 +44,6 @@ spec:
             name: storage-operations-ig
             optional: true
       env:
-        - name: OSAC_STORAGE_CONFIG_NAMESPACE
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.namespace
         - name: OSAC_COMPUTE_INSTANCE_OPERATIONS_NAMESPACE_DEFAULT
           valueFrom:
             fieldRef:

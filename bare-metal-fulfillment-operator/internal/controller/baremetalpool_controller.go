@@ -35,11 +35,11 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
-	"github.com/osac-project/bare-metal-fulfillment-operator/api/v1alpha1"
-	"github.com/osac-project/bare-metal-fulfillment-operator/internal/profile"
-	"github.com/osac-project/bare-metal-fulfillment-operator/internal/shared"
-	opv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac-operator/pkg/provisioning"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/profile"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/shared"
+	opv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 )
 
 // BareMetalPoolReconciler reconciles a BareMetalPool object

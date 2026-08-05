@@ -23,12 +23,12 @@ columns:
   value: "has(this.metadata.name)? this.metadata.name: '-'"
 
 - header: VIRTUAL-NETWORK
-  value: this.spec.virtual_network
+  value: this.spec.virtual_network.id
   type: osac.private.v1.VirtualNetwork
   lookup: true
 
 - header: EXTERNAL-IP
-  value: this.spec.external_ip
+  value: this.spec.external_ip.id
   type: osac.private.v1.ExternalIP
   lookup: true
 

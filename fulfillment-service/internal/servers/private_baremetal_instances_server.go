@@ -27,11 +27,11 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/fulfillment-service/internal/auth"
-	"github.com/osac-project/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/fulfillment-service/internal/events"
-	"github.com/osac-project/fulfillment-service/internal/utils"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	"github.com/osac-project/osac/fulfillment-service/internal/events"
+	"github.com/osac-project/osac/fulfillment-service/internal/utils"
 )
 
 const bareMetalInstanceUserDataMaxBytes = 64 * 1024
@@ -240,18 +240,19 @@ func (s *PrivateBareMetalInstancesServer) validateAndApplyCatalogItem(ctx contex
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "bare metal instance is mandatory")
 	}
 	ref := bmi.GetSpec().GetCatalogItem()
-	if ref == "" {
+	if ref == nil {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "spec.catalog_item is mandatory")
 	}
+	refStr := refKey(ref)
 
 	response, err := s.catalogItemsDao.Get().
-		SetId(ref).
+		SetId(refStr).
 		Do(ctx)
 	if err != nil {
 		var notFoundErr *dao.ErrNotFound
 		if errors.As(err, &notFoundErr) {
 			return grpcstatus.Errorf(grpccodes.NotFound,
-				"catalog item '%s' not found", ref)
+				"catalog item '%s' not found", refStr)
 		}
 		s.logger.ErrorContext(ctx, "Failed to lookup bare metal instance catalog item",
 			slog.Any("error", err))
@@ -259,7 +260,7 @@ func (s *PrivateBareMetalInstancesServer) validateAndApplyCatalogItem(ctx contex
 	}
 	item := response.GetObject()
 
-	if err := validateCatalogItemAccess(item, ref); err != nil {
+	if err := validateCatalogItemAccess(item, refStr); err != nil {
 		return err
 	}
 
@@ -267,7 +268,7 @@ func (s *PrivateBareMetalInstancesServer) validateAndApplyCatalogItem(ctx contex
 		return err
 	}
 
-	return s.validateAndApplyTemplateParameters(ctx, bmi, item.GetTemplate())
+	return s.validateAndApplyTemplateParameters(ctx, bmi, refKey(item.GetTemplate()))
 }
 
 // validateAndApplyTemplateParameters fetches the template referenced by the catalog item,
@@ -362,10 +363,10 @@ func (s *PrivateBareMetalInstancesServer) validateImmutability(ctx context.Conte
 		return grpcstatus.Errorf(grpccodes.Internal, "stored bare metal instance is missing spec")
 	}
 
-	if updatingCatalogItem && existingSpec.GetCatalogItem() != newSpec.GetCatalogItem() {
+	if updatingCatalogItem && refKey(existingSpec.GetCatalogItem()) != refKey(newSpec.GetCatalogItem()) {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"cannot change spec.catalog_item from '%s' to '%s': catalog_item is immutable",
-			existingSpec.GetCatalogItem(), newSpec.GetCatalogItem())
+			refKey(existingSpec.GetCatalogItem()), refKey(newSpec.GetCatalogItem()))
 	}
 
 	if updatingSshKey && existingSpec.GetSshPublicKey() != newSpec.GetSshPublicKey() {
@@ -414,10 +415,10 @@ func compareNetworkAttachmentsImmutability(existing, updated []*privatev1.BareMe
 			len(existing), len(updated))
 	}
 	for i := range existing {
-		if existing[i].GetSubnet() != updated[i].GetSubnet() {
+		if refKey(existing[i].GetSubnet()) != refKey(updated[i].GetSubnet()) {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"cannot change network_attachments[%d].subnet from '%s' to '%s': subnet is immutable",
-				i, existing[i].GetSubnet(), updated[i].GetSubnet())
+				i, refKey(existing[i].GetSubnet()), refKey(updated[i].GetSubnet()))
 		}
 		if existing[i].GetInterface() != updated[i].GetInterface() {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
@@ -472,20 +473,22 @@ func (s *PrivateBareMetalInstancesServer) validateNetworkAttachments(ctx context
 
 	// Interface-against-HostType validation (only when template has host_type).
 	catalogItemRef := bmi.GetSpec().GetCatalogItem()
-	if catalogItemRef == "" {
+	catalogItemID := catalogItemRef.GetId()
+	if catalogItemID == "" {
 		return nil
 	}
-	catResp, err := s.catalogItemsDao.Get().SetId(catalogItemRef).Do(ctx)
+	catResp, err := s.catalogItemsDao.Get().SetId(catalogItemID).Do(ctx)
 	if err != nil {
 		var notFoundErr *dao.ErrNotFound
 		if errors.As(err, &notFoundErr) {
 			return nil
 		}
 		s.logger.ErrorContext(ctx, "Failed to lookup catalog item for interface validation",
-			slog.String("catalog_item", catalogItemRef), slog.Any("error", err))
+			slog.String("catalog_item", catalogItemID), slog.Any("error", err))
 		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate network attachments")
 	}
-	templateID := catResp.GetObject().GetTemplate()
+	templateRef := catResp.GetObject().GetTemplate()
+	templateID := templateRef.GetId()
 	if templateID == "" {
 		return nil
 	}

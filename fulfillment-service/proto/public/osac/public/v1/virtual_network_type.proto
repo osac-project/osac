@@ -60,7 +60,7 @@ message VirtualNetworkSpec {
   //
   // If omitted on creation and a default NetworkClass is configured, the default is used;
   // otherwise creation fails. Once set, this field is immutable.
-  string network_class = 2 [
+  NetworkClassReference network_class = 2 [
     (google.api.field_behavior) = OPTIONAL,
     (google.api.field_behavior) = IMMUTABLE
   ];
@@ -168,4 +168,18 @@ enum VirtualNetworkState {
   // The status.message field will contain specific error details. Failed networks typically require deletion
   // and recreation with corrected parameters.
   VIRTUAL_NETWORK_STATE_FAILED = 3;
+}
+
+// Local reference to a VirtualNetwork resource.
+message VirtualNetworkLocalReference {
+  string id = 1;
+  string name = 2;
+}
+
+// Reference to a NetworkClass resource.
+message NetworkClassReference {
+  string id = 1;
+  string name = 2;
+  string project = 3;
+  bool shared = 4;
 }

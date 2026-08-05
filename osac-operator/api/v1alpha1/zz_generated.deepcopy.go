@@ -455,6 +455,11 @@ func (in *ExternalIPAttachmentSpec) DeepCopyInto(out *ExternalIPAttachmentSpec) 
 		*out = new(string)
 		**out = **in
 	}
+	if in.BaremetalInstance != nil {
+		in, out := &in.BaremetalInstance, &out.BaremetalInstance
+		*out = new(string)
+		**out = **in
+	}
 	if in.TargetEndpoint != nil {
 		in, out := &in.TargetEndpoint, &out.TargetEndpoint
 		*out = new(ExternalIPAttachmentTargetEndpoint)

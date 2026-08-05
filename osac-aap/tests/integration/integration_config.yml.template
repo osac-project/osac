@@ -1,20 +1,53 @@
 # VAST VMS credentials for live API integration tests (Tier 3)
-# Copy to integration_config.yml and fill in values, or render from CI:
-#   envsubst < integration_config.yml.template > integration_config.yml
+# Copy to integration_config.yml and fill in values, or render from CI.
+#
+# Rendering notes (deliberately described in prose below, with no dollar-brace
+# examples inline, since envsubst treats this whole file as flat text and would
+# substitute a literal example the same as it substitutes the real fields):
+#
+# 1. envsubst (GNU gettext) only expands bare dollar-brace variable references.
+#    It does NOT support bash's colon-dash fallback syntax -- a variable
+#    reference with a fallback baked in is left completely untouched by
+#    envsubst, even when the variable is already set, because the colon breaks
+#    its identifier matching. Resolve every fallback below by exporting the
+#    real VAST_* variable first, then run envsubst.
+#
+# 2. When exporting a fallback yourself, do not reuse bash's own colon-dash
+#    form for the tier-definitions variable: bash's own "${VAR:-default}"
+#    stops at the FIRST unescaped closing brace inside default, so a
+#    JSON-object default silently truncates. Guard that one with a plain
+#    if-unset check and a separate export instead.
+#
+# 3. Render with envsubst restricted to exactly this file's VAST_* variable
+#    names, not bare envsubst on the whole file -- unrestricted envsubst would
+#    also expand any other dollar-prefixed variable that happens to be set in
+#    the calling shell or CI environment.
 #
 # WARNING: NEVER commit integration_config.yml with real credentials.
-vast_endpoint: "${VAST_ENDPOINT}"
-vast_username: "${VAST_USERNAME}"
-vast_password: "${VAST_PASSWORD}"
+#
+# NOTE: No automated target in tests/integration/targets/ currently loads this file --
+# there is no live Tier 3 test wired up yet. Keys below are named to match the
+# storage_provider role's extra_vars directly (storage_provider_backend_connections/
+# storage_provider_tiers) so a future live-VMS target can pass this file's parsed
+# content straight through as vars, with no key remapping step.
+storage_provider_backend_connections:
+  ${VAST_BACKEND_ID}:
+    endpoint: "${VAST_BACKEND_ENDPOINT}"
+    username: "${VAST_BACKEND_USERNAME}"
+    password: "${VAST_BACKEND_PASSWORD}"
 vast_tenant_prefix: "osac-test-"
 # TLS validation — set to false for mock server or self-signed cert testing
-vast_validate_certs: ${VAST_VALIDATE_CERTS:-true}
+vast_validate_certs: ${VAST_VALIDATE_CERTS}
 
 # Shared VIP pool configuration
-vast_vip_pool_name: "${VAST_VIP_POOL_NAME:-osac-shared}"
-vast_vip_pool_ip_ranges: '${VAST_VIP_POOL_IP_RANGES:-[["10.0.100.10","10.0.100.50"]]}'
-vast_vip_pool_subnet_cidr: ${VAST_VIP_POOL_SUBNET_CIDR:-24}
+vast_vip_pool_name: "${VAST_VIP_POOL_NAME}"
+vast_vip_pool_ip_ranges: '${VAST_VIP_POOL_IP_RANGES}'
+vast_vip_pool_subnet_cidr: ${VAST_VIP_POOL_SUBNET_CIDR}
 
-# Storage tier definition — JSON array with per-tier provider selection.
-# Used by test playbooks to exercise the multi-tier storage provider interface.
-storage_tiers: '${STORAGE_TIERS}'
+# Storage tier definitions — JSON array with per-tier provider selection and backend_id,
+# matching the storage_provider_tiers/osac_job_vars.storage_tier_definitions shape.
+# Used by test playbooks to exercise the multi-tier storage provider interface. Left
+# unquoted (unlike vast_vip_pool_ip_ranges above) so it parses as a native YAML list --
+# the storage_provider role's own validation requires storage_provider_tiers to be a
+# sequence, not a JSON-shaped string requiring a separate from_json step.
+storage_provider_tiers: ${VAST_STORAGE_TIERS}

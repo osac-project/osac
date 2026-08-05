@@ -38,6 +38,35 @@ Key fields in a catalog item:
 - **`field_definitions`**: Definitions of the fields that users can set when creating a cluster,
   including which fields are required, their types, and default values.
 
+## Manage Cluster Versions
+
+Cluster versions define which OpenShift releases are available for provisioning. Each cluster
+version maps a version string (e.g., `4.17.0`) to an OCI release image. Cluster versions are
+managed by platform admins through the private API.
+
+Create a cluster version:
+
+```bash
+osac create clusterversion \
+  --version "4.17.0" \
+  --image "quay.io/openshift-release-dev/ocp-release:4.17.0-multi" \
+  --name "4-17-0" \
+  --default
+```
+
+The `--default` flag marks this version as the system default — at most one version can be the
+default at a time.
+
+List available versions:
+
+```bash
+osac get clusterversions
+```
+
+Cluster versions follow a lifecycle: **Active** (available for new clusters), **Deprecated**
+(a newer version should be preferred), and **Obsolete** (blocked for new clusters). The `version`
+and `image` fields are immutable after creation.
+
 ## Create a Cluster
 
 Create a cluster using a catalog item:
@@ -47,9 +76,22 @@ osac create cluster \
   --catalog-item hosted_cluster_offering
 ```
 
+To specify an OpenShift version explicitly:
+
+```bash
+osac create cluster \
+  --catalog-item hosted_cluster_offering \
+  --version "4.17.0"
+```
+
 Optional flags:
 
 - `-n, --name <name>` - Human-readable name for the cluster
+- `--version <version>` - ClusterVersion `metadata.name` or `spec.version` string. Version is
+  resolved with the following precedence:
+  1. Explicit `--version` provided by the user.
+  2. Template or catalog item default (`spec_defaults.version_name` or field definition default).
+  3. System default ClusterVersion (`is_default = true`).
 
 The command outputs the cluster ID upon successful creation.
 

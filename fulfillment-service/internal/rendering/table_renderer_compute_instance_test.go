@@ -23,9 +23,9 @@ import (
 	"go.uber.org/mock/gomock"
 	"google.golang.org/protobuf/proto"
 
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
-	"github.com/osac-project/fulfillment-service/internal/reflection"
-	"github.com/osac-project/fulfillment-service/internal/uuid"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
+	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 )
 
 var _ = Describe("Compute instance table rendering", func() {
@@ -87,7 +87,7 @@ var _ = Describe("Compute instance table rendering", func() {
 					Name: "my-instance",
 				}.Build(),
 				Spec: publicv1.ComputeInstanceSpec_builder{
-					Template: "my-template",
+					Template: publicv1.ComputeInstanceTemplateReference_builder{Id: "my-template"}.Build(),
 				}.Build(),
 			}.Build()
 

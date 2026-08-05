@@ -30,8 +30,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	v1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac-operator/pkg/provisioning"
+	v1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 )
 
 var _ = Describe("ClusterOrder Controller", func() {
@@ -512,6 +512,130 @@ var _ = Describe("ClusterOrder Controller", func() {
 		})
 	})
 
+	Context("handleNodePool", func() {
+		var reconciler *ClusterOrderReconciler
+
+		BeforeEach(func() {
+			reconciler = &ClusterOrderReconciler{
+				Client:               k8sClient,
+				apiReader:            k8sClient,
+				Scheme:               k8sClient.Scheme(),
+				ProvisioningProvider: noopProvisioningProvider{},
+			}
+		})
+
+		ctx := context.Background()
+
+		It("should write observed node count to status, not spec", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{ResourceClass: "m1.large", NumberOfNodes: 3},
+					},
+				},
+			}
+
+			nodePool := &hypershiftv1beta1.NodePool{
+				Status: hypershiftv1beta1.NodePoolStatus{
+					Replicas: 5,
+				},
+			}
+
+			err := reconciler.handleNodePool(ctx, instance, nodePool)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(instance.Spec.NodeRequests).To(HaveLen(1),
+				"spec.nodeRequests must not be mutated by observed state")
+			Expect(instance.Spec.NodeRequests[0].NumberOfNodes).To(Equal(3),
+				"spec.nodeRequests[0].numberOfNodes must remain unchanged")
+
+			Expect(instance.Status.NodeRequests).To(HaveLen(1),
+				"status.nodeRequests should have exactly one entry")
+			Expect(instance.Status.NodeRequests[0].ResourceClass).To(Equal("m1.large"))
+			Expect(instance.Status.NodeRequests[0].NumberOfNodes).To(Equal(5),
+				"status.nodeRequests[0].numberOfNodes should reflect observed replicas")
+		})
+
+		It("should update existing status entry instead of appending", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{ResourceClass: "m1.large", NumberOfNodes: 3},
+					},
+				},
+				Status: v1alpha1.ClusterOrderStatus{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{ResourceClass: "m1.large", NumberOfNodes: 2},
+					},
+				},
+			}
+
+			nodePool := &hypershiftv1beta1.NodePool{
+				Status: hypershiftv1beta1.NodePoolStatus{
+					Replicas: 5,
+				},
+			}
+
+			err := reconciler.handleNodePool(ctx, instance, nodePool)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(instance.Status.NodeRequests).To(HaveLen(1))
+			Expect(instance.Status.NodeRequests[0].NumberOfNodes).To(Equal(5))
+			Expect(instance.Spec.NodeRequests).To(HaveLen(1),
+				"spec must not be modified")
+		})
+
+		It("should skip when spec has more than one node request", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{ResourceClass: "m1.large", NumberOfNodes: 3},
+						{ResourceClass: "m1.small", NumberOfNodes: 1},
+					},
+				},
+			}
+
+			nodePool := &hypershiftv1beta1.NodePool{
+				Status: hypershiftv1beta1.NodePoolStatus{
+					Replicas: 5,
+				},
+			}
+
+			err := reconciler.handleNodePool(ctx, instance, nodePool)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(instance.Status.NodeRequests).To(BeEmpty(),
+				"status.nodeRequests should not be touched when spec has multiple node requests")
+		})
+
+		It("should not modify status when replicas already match", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{ResourceClass: "m1.large", NumberOfNodes: 3},
+					},
+				},
+				Status: v1alpha1.ClusterOrderStatus{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{ResourceClass: "m1.large", NumberOfNodes: 5},
+					},
+				},
+			}
+
+			nodePool := &hypershiftv1beta1.NodePool{
+				Status: hypershiftv1beta1.NodePoolStatus{
+					Replicas: 5,
+				},
+			}
+
+			err := reconciler.handleNodePool(ctx, instance, nodePool)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(instance.Status.NodeRequests).To(HaveLen(1))
+			Expect(instance.Status.NodeRequests[0].NumberOfNodes).To(Equal(5))
+		})
+	})
+
 	Context("provisioning callbacks", func() {
 		DescribeTable("OnFailed phase and condition based on ClusterReference state",
 			func(setup func(*v1alpha1.ClusterOrder), expectedPhase v1alpha1.ClusterOrderPhaseType) {
@@ -610,6 +734,130 @@ var _ = Describe("ClusterOrder Controller", func() {
 			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
 			Expect(cond.Reason).To(Equal(v1alpha1.ReasonAsExpected))
 			Expect(cond.Message).To(BeEmpty())
+		})
+	})
+
+	Context("handleNodePool", func() {
+		var reconciler *ClusterOrderReconciler
+
+		BeforeEach(func() {
+			reconciler = &ClusterOrderReconciler{
+				Client:               k8sClient,
+				apiReader:            k8sClient,
+				Scheme:               k8sClient.Scheme(),
+				ProvisioningProvider: noopProvisioningProvider{},
+			}
+		})
+
+		ctx := context.Background()
+
+		It("should write observed node count to status, not spec", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{ResourceClass: "m1.large", NumberOfNodes: 3},
+					},
+				},
+			}
+
+			nodePool := &hypershiftv1beta1.NodePool{
+				Status: hypershiftv1beta1.NodePoolStatus{
+					Replicas: 5,
+				},
+			}
+
+			err := reconciler.handleNodePool(ctx, instance, nodePool)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(instance.Spec.NodeRequests).To(HaveLen(1),
+				"spec.nodeRequests must not be mutated by observed state")
+			Expect(instance.Spec.NodeRequests[0].NumberOfNodes).To(Equal(3),
+				"spec.nodeRequests[0].numberOfNodes must remain unchanged")
+
+			Expect(instance.Status.NodeRequests).To(HaveLen(1),
+				"status.nodeRequests should have exactly one entry")
+			Expect(instance.Status.NodeRequests[0].ResourceClass).To(Equal("m1.large"))
+			Expect(instance.Status.NodeRequests[0].NumberOfNodes).To(Equal(5),
+				"status.nodeRequests[0].numberOfNodes should reflect observed replicas")
+		})
+
+		It("should update existing status entry instead of appending", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{ResourceClass: "m1.large", NumberOfNodes: 3},
+					},
+				},
+				Status: v1alpha1.ClusterOrderStatus{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{ResourceClass: "m1.large", NumberOfNodes: 2},
+					},
+				},
+			}
+
+			nodePool := &hypershiftv1beta1.NodePool{
+				Status: hypershiftv1beta1.NodePoolStatus{
+					Replicas: 5,
+				},
+			}
+
+			err := reconciler.handleNodePool(ctx, instance, nodePool)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(instance.Status.NodeRequests).To(HaveLen(1))
+			Expect(instance.Status.NodeRequests[0].NumberOfNodes).To(Equal(5))
+			Expect(instance.Spec.NodeRequests).To(HaveLen(1),
+				"spec must not be modified")
+		})
+
+		It("should skip when spec has more than one node request", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{ResourceClass: "m1.large", NumberOfNodes: 3},
+						{ResourceClass: "m1.small", NumberOfNodes: 1},
+					},
+				},
+			}
+
+			nodePool := &hypershiftv1beta1.NodePool{
+				Status: hypershiftv1beta1.NodePoolStatus{
+					Replicas: 5,
+				},
+			}
+
+			err := reconciler.handleNodePool(ctx, instance, nodePool)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(instance.Status.NodeRequests).To(BeEmpty(),
+				"status.nodeRequests should not be touched when spec has multiple node requests")
+		})
+
+		It("should not modify status when replicas already match", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{ResourceClass: "m1.large", NumberOfNodes: 3},
+					},
+				},
+				Status: v1alpha1.ClusterOrderStatus{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{ResourceClass: "m1.large", NumberOfNodes: 5},
+					},
+				},
+			}
+
+			nodePool := &hypershiftv1beta1.NodePool{
+				Status: hypershiftv1beta1.NodePoolStatus{
+					Replicas: 5,
+				},
+			}
+
+			err := reconciler.handleNodePool(ctx, instance, nodePool)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(instance.Status.NodeRequests).To(HaveLen(1))
+			Expect(instance.Status.NodeRequests[0].NumberOfNodes).To(Equal(5))
 		})
 	})
 

@@ -19,7 +19,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 )
 
 // EventScenario represents a test scenario with a sequence of events

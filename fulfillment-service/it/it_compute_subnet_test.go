@@ -22,9 +22,9 @@ import (
 	. "github.com/onsi/gomega"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
-	"github.com/osac-project/fulfillment-service/internal/uuid"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 )
 
 var _ = Describe("ComputeInstance with Subnet attachment", func() {
@@ -83,8 +83,10 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 		Expect(err).ToNot(HaveOccurred())
 
 		// Create NetworkClass
+		ncName := fmt.Sprintf("cudn-subnet-%s", uuid.New())
 		ncResp, err := networkClassesClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 			Object: privatev1.NetworkClass_builder{
+				Metadata:               privatev1.Metadata_builder{Name: ncName}.Build(),
 				Title:                  "Test CUDN Network Class",
 				ImplementationStrategy: "cudn",
 				FabricManager:          "netris",
@@ -99,7 +101,7 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 			Object: privatev1.VirtualNetwork_builder{
 				Id: virtualNetworkId,
 				Spec: privatev1.VirtualNetworkSpec_builder{
-					NetworkClass: networkClassId,
+					NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClassId}.Build(),
 					Region:       "us-east-1",
 					Ipv4Cidr:     new("10.100.0.0/16"),
 				}.Build(),
@@ -140,7 +142,7 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 			Object: privatev1.Subnet_builder{
 				Id: subnetId,
 				Spec: privatev1.SubnetSpec_builder{
-					VirtualNetwork: virtualNetworkId,
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkId}.Build(),
 					Ipv4Cidr:       new("10.100.1.0/24"),
 				}.Build(),
 			}.Build(),
@@ -226,8 +228,8 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 			Object: publicv1.ComputeInstance_builder{
 				Id: computeInstanceId,
 				Spec: publicv1.ComputeInstanceSpec_builder{
-					Template:     computeInstanceTemplateId,
-					InstanceType: new(instanceTypeId),
+					Template:     publicv1.ComputeInstanceTemplateReference_builder{Id: computeInstanceTemplateId}.Build(),
+					InstanceType: publicv1.InstanceTypeReference_builder{Name: instanceTypeId}.Build(),
 					RunStrategy:  new("Always"),
 					BootDisk: publicv1.ComputeInstanceDisk_builder{
 						SizeGib: 20,
@@ -238,7 +240,7 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 					}.Build(),
 					NetworkAttachments: []*publicv1.NetworkAttachment{
 						publicv1.NetworkAttachment_builder{
-							Subnet: subnetId,
+							Subnet: publicv1.SubnetLocalReference_builder{Id: subnetId}.Build(),
 						}.Build(),
 					},
 				}.Build(),
@@ -253,7 +255,7 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(getResp.GetObject().GetSpec().GetNetworkAttachments()).To(HaveLen(1))
-		Expect(getResp.GetObject().GetSpec().GetNetworkAttachments()[0].GetSubnet()).To(Equal(subnetId),
+		Expect(getResp.GetObject().GetSpec().GetNetworkAttachments()[0].GetSubnet().GetId()).To(Equal(subnetId),
 			"ComputeInstance should persist network attachment with subnet reference")
 	})
 
@@ -263,8 +265,8 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 			Object: publicv1.ComputeInstance_builder{
 				Id: computeInstanceId,
 				Spec: publicv1.ComputeInstanceSpec_builder{
-					Template:     computeInstanceTemplateId,
-					InstanceType: new(instanceTypeId),
+					Template:     publicv1.ComputeInstanceTemplateReference_builder{Id: computeInstanceTemplateId}.Build(),
+					InstanceType: publicv1.InstanceTypeReference_builder{Name: instanceTypeId}.Build(),
 					RunStrategy:  new("Always"),
 					BootDisk: publicv1.ComputeInstanceDisk_builder{
 						SizeGib: 20,
@@ -275,7 +277,7 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 					}.Build(),
 					NetworkAttachments: []*publicv1.NetworkAttachment{
 						publicv1.NetworkAttachment_builder{
-							Subnet: "non-existent-subnet",
+							Subnet: publicv1.SubnetLocalReference_builder{Name: "non-existent-subnet"}.Build(),
 						}.Build(),
 					},
 				}.Build(),

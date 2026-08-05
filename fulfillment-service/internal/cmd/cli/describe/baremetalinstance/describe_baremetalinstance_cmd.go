@@ -22,10 +22,10 @@ import (
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
 
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
-	"github.com/osac-project/fulfillment-service/internal/cmd/cli/lookup"
-	"github.com/osac-project/fulfillment-service/internal/config"
-	"github.com/osac-project/fulfillment-service/internal/terminal"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/lookup"
+	"github.com/osac-project/osac/fulfillment-service/internal/config"
+	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 )
 
 func Cmd() *cobra.Command {
@@ -81,8 +81,8 @@ func renderBareMetalInstance(w io.Writer, bmi *publicv1.BareMetalInstance) {
 	writer := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	catalogItem := "-"
 	if bmi.Spec != nil {
-		if id := bmi.Spec.GetCatalogItem(); id != "" {
-			catalogItem = id
+		if id := bmi.Spec.GetCatalogItem(); id != nil {
+			catalogItem = id.GetName()
 		}
 	}
 	state := "-"

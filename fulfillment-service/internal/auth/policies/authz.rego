@@ -179,6 +179,8 @@ allow if {
     "/osac.public.v1.BareMetalInstanceCatalogItems/List",
     "/osac.public.v1.BareMetalInstanceTemplates/Get",
     "/osac.public.v1.BareMetalInstanceTemplates/List",
+    "/osac.public.v1.BareMetalInstanceTypes/Get",
+    "/osac.public.v1.BareMetalInstanceTypes/List",
     "/osac.public.v1.BareMetalInstances/Create",
     "/osac.public.v1.BareMetalInstances/Delete",
     "/osac.public.v1.BareMetalInstances/Get",

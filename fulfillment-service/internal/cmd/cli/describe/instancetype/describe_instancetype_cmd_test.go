@@ -21,7 +21,7 @@ import (
 	. "github.com/onsi/gomega"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 )
 
 func formatInstanceType(it *publicv1.InstanceType) string {
@@ -86,7 +86,7 @@ var _ = Describe("Rendering tests", func() {
 				MemoryGib: 16,
 				State:     publicv1.InstanceTypeState_INSTANCE_TYPE_STATE_DEPRECATED,
 				Deprecation: publicv1.InstanceTypeDeprecation_builder{
-					Replacement:           "standard-8-32",
+					Replacement:           publicv1.InstanceTypeLocalReference_builder{Id: "standard-8-32"}.Build(),
 					DeprecationTimestamp:  timestamppb.New(depTime),
 					ObsolescenceTimestamp: timestamppb.New(obsTime),
 				}.Build(),

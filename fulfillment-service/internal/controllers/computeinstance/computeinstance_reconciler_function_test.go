@@ -22,7 +22,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
+	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/anypb"
@@ -36,11 +36,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/fulfillment-service/internal/controllers"
-	"github.com/osac-project/fulfillment-service/internal/controllers/finalizers"
-	"github.com/osac-project/fulfillment-service/internal/kubernetes/gvks"
-	"github.com/osac-project/fulfillment-service/internal/kubernetes/labels"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
+	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/gvks"
+	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
 )
 
 var _ = Describe("buildSpec", func() {
@@ -91,15 +91,15 @@ var _ = Describe("buildSpec", func() {
 				computeInstance: privatev1.ComputeInstance_builder{
 					Id: "test-instance-123",
 					Spec: privatev1.ComputeInstanceSpec_builder{
-						Template:     template,
-						InstanceType: new("test-type"),
+						Template:     &privatev1.ComputeInstanceTemplateReference{Name: template},
+						InstanceType: &privatev1.InstanceTypeReference{Name: "test-type"},
 						TemplateParameters: map[string]*anypb.Any{
 							"cpu_cores": cpuCores,
 							"memory":    memory,
 						},
 						RestartRequestedAt: timestamppb.New(requestedAt),
 						NetworkAttachments: []*privatev1.NetworkAttachment{
-							privatev1.NetworkAttachment_builder{Subnet: subnetID}.Build(),
+							privatev1.NetworkAttachment_builder{Subnet: &privatev1.SubnetLocalReference{Id: subnetID}}.Build(),
 						},
 					}.Build(),
 				}.Build(),
@@ -165,8 +165,8 @@ var _ = Describe("buildSpec", func() {
 				computeInstance: privatev1.ComputeInstance_builder{
 					Id: "test-explicit-fields",
 					Spec: privatev1.ComputeInstanceSpec_builder{
-						Template:     template,
-						InstanceType: new("standard-4-8"),
+						Template:     &privatev1.ComputeInstanceTemplateReference{Name: template},
+						InstanceType: &privatev1.InstanceTypeReference{Name: "standard-4-8"},
 						RunStrategy:  new("Always"),
 						SshPublicKey: new("ssh-rsa AAAA..."),
 						Image: privatev1.ComputeInstanceImage_builder{
@@ -185,7 +185,7 @@ var _ = Describe("buildSpec", func() {
 							}.Build(),
 						},
 						NetworkAttachments: []*privatev1.NetworkAttachment{
-							privatev1.NetworkAttachment_builder{Subnet: subnetID}.Build(),
+							privatev1.NetworkAttachment_builder{Subnet: &privatev1.SubnetLocalReference{Id: subnetID}}.Build(),
 						},
 					}.Build(),
 				}.Build(),
@@ -259,11 +259,11 @@ var _ = Describe("buildSpec", func() {
 					computeInstance: privatev1.ComputeInstance_builder{
 						Id: "test-windows-vm",
 						Spec: privatev1.ComputeInstanceSpec_builder{
-							Template:     template,
-							InstanceType: new("test-type"),
+							Template:     &privatev1.ComputeInstanceTemplateReference{Name: template},
+							InstanceType: &privatev1.InstanceTypeReference{Name: "test-type"},
 							IsWindows:    &isWindows,
 							NetworkAttachments: []*privatev1.NetworkAttachment{
-								privatev1.NetworkAttachment_builder{Subnet: subnetID}.Build(),
+								privatev1.NetworkAttachment_builder{Subnet: &privatev1.SubnetLocalReference{Id: subnetID}}.Build(),
 							},
 						}.Build(),
 					}.Build(),
@@ -319,11 +319,11 @@ var _ = Describe("buildSpec", func() {
 					computeInstance: privatev1.ComputeInstance_builder{
 						Id: "test-linux-vm",
 						Spec: privatev1.ComputeInstanceSpec_builder{
-							Template:     template,
-							InstanceType: new("test-type"),
+							Template:     &privatev1.ComputeInstanceTemplateReference{Name: template},
+							InstanceType: &privatev1.InstanceTypeReference{Name: "test-type"},
 							IsWindows:    &isWindows,
 							NetworkAttachments: []*privatev1.NetworkAttachment{
-								privatev1.NetworkAttachment_builder{Subnet: subnetID}.Build(),
+								privatev1.NetworkAttachment_builder{Subnet: &privatev1.SubnetLocalReference{Id: subnetID}}.Build(),
 							},
 						}.Build(),
 					}.Build(),
@@ -378,11 +378,11 @@ var _ = Describe("buildSpec", func() {
 					computeInstance: privatev1.ComputeInstance_builder{
 						Id: "test-default-linux-vm",
 						Spec: privatev1.ComputeInstanceSpec_builder{
-							Template:     template,
-							InstanceType: new("test-type"),
+							Template:     &privatev1.ComputeInstanceTemplateReference{Name: template},
+							InstanceType: &privatev1.InstanceTypeReference{Name: "test-type"},
 							// IsWindows is NOT set - omitted
 							NetworkAttachments: []*privatev1.NetworkAttachment{
-								privatev1.NetworkAttachment_builder{Subnet: subnetID}.Build(),
+								privatev1.NetworkAttachment_builder{Subnet: &privatev1.SubnetLocalReference{Id: subnetID}}.Build(),
 							},
 						}.Build(),
 					}.Build(),
@@ -437,10 +437,10 @@ var _ = Describe("buildSpec", func() {
 				computeInstance: privatev1.ComputeInstance_builder{
 					Id: "test-no-explicit-fields",
 					Spec: privatev1.ComputeInstanceSpec_builder{
-						Template:     template,
-						InstanceType: new("test-type"),
+						Template:     &privatev1.ComputeInstanceTemplateReference{Name: template},
+						InstanceType: &privatev1.InstanceTypeReference{Name: "test-type"},
 						NetworkAttachments: []*privatev1.NetworkAttachment{
-							privatev1.NetworkAttachment_builder{Subnet: subnetID}.Build(),
+							privatev1.NetworkAttachment_builder{Subnet: &privatev1.SubnetLocalReference{Id: subnetID}}.Build(),
 						},
 					}.Build(),
 				}.Build(),
@@ -506,14 +506,14 @@ var _ = Describe("buildSpec", func() {
 				computeInstance: privatev1.ComputeInstance_builder{
 					Id: "test-instance-456",
 					Spec: privatev1.ComputeInstanceSpec_builder{
-						Template:     template,
-						InstanceType: new("test-type"),
+						Template:     &privatev1.ComputeInstanceTemplateReference{Name: template},
+						InstanceType: &privatev1.InstanceTypeReference{Name: "test-type"},
 						TemplateParameters: map[string]*anypb.Any{
 							"cpu_cores": cpuCores,
 							"memory":    memory,
 						},
 						NetworkAttachments: []*privatev1.NetworkAttachment{
-							privatev1.NetworkAttachment_builder{Subnet: subnetID}.Build(),
+							privatev1.NetworkAttachment_builder{Subnet: &privatev1.SubnetLocalReference{Id: subnetID}}.Build(),
 						},
 						// No RestartRequestedAt set
 					}.Build(),
@@ -995,10 +995,10 @@ var _ = Describe("buildSpec with subnetRef", func() {
 			computeInstance: privatev1.ComputeInstance_builder{
 				Id: "test-instance",
 				Spec: privatev1.ComputeInstanceSpec_builder{
-					Template:     template,
-					InstanceType: new("test-type"),
+					Template:     &privatev1.ComputeInstanceTemplateReference{Name: template},
+					InstanceType: &privatev1.InstanceTypeReference{Name: "test-type"},
 					NetworkAttachments: []*privatev1.NetworkAttachment{
-						privatev1.NetworkAttachment_builder{Subnet: subnetID}.Build(),
+						privatev1.NetworkAttachment_builder{Subnet: &privatev1.SubnetLocalReference{Id: subnetID}}.Build(),
 					},
 				}.Build(),
 			}.Build(),
@@ -1048,11 +1048,11 @@ var _ = Describe("buildSpec with subnetRef", func() {
 			computeInstance: privatev1.ComputeInstance_builder{
 				Id: "test-instance",
 				Spec: privatev1.ComputeInstanceSpec_builder{
-					Template:     template,
-					InstanceType: new("test-type"),
+					Template:     &privatev1.ComputeInstanceTemplateReference{Name: template},
+					InstanceType: &privatev1.InstanceTypeReference{Name: "test-type"},
 					NetworkAttachments: []*privatev1.NetworkAttachment{
-						privatev1.NetworkAttachment_builder{Subnet: sid1}.Build(),
-						privatev1.NetworkAttachment_builder{Subnet: sid2}.Build(),
+						privatev1.NetworkAttachment_builder{Subnet: &privatev1.SubnetLocalReference{Id: sid1}}.Build(),
+						privatev1.NetworkAttachment_builder{Subnet: &privatev1.SubnetLocalReference{Id: sid2}}.Build(),
 					},
 				}.Build(),
 			}.Build(),
@@ -1103,12 +1103,12 @@ var _ = Describe("buildSpec with subnetRef", func() {
 			computeInstance: privatev1.ComputeInstance_builder{
 				Id: "test-instance",
 				Spec: privatev1.ComputeInstanceSpec_builder{
-					Template:     template,
-					InstanceType: new("test-type"),
+					Template:     &privatev1.ComputeInstanceTemplateReference{Name: template},
+					InstanceType: &privatev1.InstanceTypeReference{Name: "test-type"},
 					NetworkAttachments: []*privatev1.NetworkAttachment{
 						privatev1.NetworkAttachment_builder{
-							Subnet:         sid,
-							SecurityGroups: []string{sgid},
+							Subnet:         &privatev1.SubnetLocalReference{Id: sid},
+							SecurityGroups: []*privatev1.SecurityGroupLocalReference{{Id: sgid}},
 						}.Build(),
 					},
 				}.Build(),
@@ -1161,12 +1161,12 @@ var _ = Describe("buildSpec with subnetRef", func() {
 			computeInstance: privatev1.ComputeInstance_builder{
 				Id: "test-instance",
 				Spec: privatev1.ComputeInstanceSpec_builder{
-					Template:     template,
-					InstanceType: new("test-type"),
+					Template:     &privatev1.ComputeInstanceTemplateReference{Name: template},
+					InstanceType: &privatev1.InstanceTypeReference{Name: "test-type"},
 					NetworkAttachments: []*privatev1.NetworkAttachment{
 						privatev1.NetworkAttachment_builder{
-							Subnet:         "subnet-id",
-							SecurityGroups: []string{"sg-id"},
+							Subnet:         &privatev1.SubnetLocalReference{Id: "subnet-id"},
+							SecurityGroups: []*privatev1.SecurityGroupLocalReference{{Id: "sg-id"}},
 						}.Build(),
 					},
 				}.Build(),
@@ -1208,12 +1208,12 @@ var _ = Describe("buildSpec with subnetRef", func() {
 			computeInstance: privatev1.ComputeInstance_builder{
 				Id: "test-instance",
 				Spec: privatev1.ComputeInstanceSpec_builder{
-					Template:     template,
-					InstanceType: new("test-type"),
+					Template:     &privatev1.ComputeInstanceTemplateReference{Name: template},
+					InstanceType: &privatev1.InstanceTypeReference{Name: "test-type"},
 					NetworkAttachments: []*privatev1.NetworkAttachment{
 						privatev1.NetworkAttachment_builder{
-							Subnet:         "subnet-id",
-							SecurityGroups: []string{"missing-sg"},
+							Subnet:         &privatev1.SubnetLocalReference{Id: "subnet-id"},
+							SecurityGroups: []*privatev1.SecurityGroupLocalReference{{Id: "missing-sg"}},
 						}.Build(),
 					},
 				}.Build(),
@@ -1712,7 +1712,7 @@ var _ = Describe("hub persistence", func() {
 				Tenant:     tenantName,
 			}.Build(),
 			Spec: privatev1.ComputeInstanceSpec_builder{
-				InstanceType: new("test-type"),
+				InstanceType: &privatev1.InstanceTypeReference{Name: "test-type"},
 			}.Build(),
 			Status: privatev1.ComputeInstanceStatus_builder{
 				State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
@@ -1793,7 +1793,7 @@ var _ = Describe("hub persistence", func() {
 				Tenant:     tenantName,
 			}.Build(),
 			Spec: privatev1.ComputeInstanceSpec_builder{
-				InstanceType: new("test-type"),
+				InstanceType: &privatev1.InstanceTypeReference{Name: "test-type"},
 			}.Build(),
 			Status: privatev1.ComputeInstanceStatus_builder{
 				State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
@@ -1889,10 +1889,10 @@ var _ = Describe("instance_type resolution in reconciler", func() {
 			computeInstance: privatev1.ComputeInstance_builder{
 				Id: "test-instance-it",
 				Spec: privatev1.ComputeInstanceSpec_builder{
-					Template:     "osac.templates.ocp_virt_vm",
-					InstanceType: new("test-type"),
+					Template:     &privatev1.ComputeInstanceTemplateReference{Name: "osac.templates.ocp_virt_vm"},
+					InstanceType: &privatev1.InstanceTypeReference{Name: "test-type"},
 					NetworkAttachments: []*privatev1.NetworkAttachment{
-						privatev1.NetworkAttachment_builder{Subnet: subnetID}.Build(),
+						privatev1.NetworkAttachment_builder{Subnet: &privatev1.SubnetLocalReference{Id: subnetID}}.Build(),
 					},
 				}.Build(),
 			}.Build(),
@@ -1914,9 +1914,9 @@ var _ = Describe("instance_type resolution in reconciler", func() {
 			computeInstance: privatev1.ComputeInstance_builder{
 				Id: "test-empty-it",
 				Spec: privatev1.ComputeInstanceSpec_builder{
-					Template: "osac.templates.ocp_virt_vm",
+					Template: &privatev1.ComputeInstanceTemplateReference{Name: "osac.templates.ocp_virt_vm"},
 					NetworkAttachments: []*privatev1.NetworkAttachment{
-						privatev1.NetworkAttachment_builder{Subnet: subnetID}.Build(),
+						privatev1.NetworkAttachment_builder{Subnet: &privatev1.SubnetLocalReference{Id: subnetID}}.Build(),
 					},
 				}.Build(),
 			}.Build(),
@@ -1969,10 +1969,10 @@ var _ = Describe("instance_type resolution in reconciler", func() {
 				Tenant:     "test-tenant",
 			}.Build(),
 			Spec: privatev1.ComputeInstanceSpec_builder{
-				Template:     "osac.templates.ocp_virt_vm",
-				InstanceType: new("test-type"),
+				Template:     &privatev1.ComputeInstanceTemplateReference{Name: "osac.templates.ocp_virt_vm"},
+				InstanceType: &privatev1.InstanceTypeReference{Name: "test-type"},
 				NetworkAttachments: []*privatev1.NetworkAttachment{
-					privatev1.NetworkAttachment_builder{Subnet: subnetID}.Build(),
+					privatev1.NetworkAttachment_builder{Subnet: &privatev1.SubnetLocalReference{Id: subnetID}}.Build(),
 				},
 			}.Build(),
 			Status: privatev1.ComputeInstanceStatus_builder{
@@ -2015,10 +2015,10 @@ var _ = Describe("instance_type resolution in reconciler", func() {
 			computeInstance: privatev1.ComputeInstance_builder{
 				Id: "test-instance-fail",
 				Spec: privatev1.ComputeInstanceSpec_builder{
-					Template:     "osac.templates.ocp_virt_vm",
-					InstanceType: new("failing-type"),
+					Template:     &privatev1.ComputeInstanceTemplateReference{Name: "osac.templates.ocp_virt_vm"},
+					InstanceType: &privatev1.InstanceTypeReference{Name: "failing-type"},
 					NetworkAttachments: []*privatev1.NetworkAttachment{
-						privatev1.NetworkAttachment_builder{Subnet: subnetID}.Build(),
+						privatev1.NetworkAttachment_builder{Subnet: &privatev1.SubnetLocalReference{Id: subnetID}}.Build(),
 					},
 				}.Build(),
 			}.Build(),

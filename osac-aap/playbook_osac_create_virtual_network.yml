@@ -4,16 +4,16 @@
   gather_facts: false
 
   vars:
-    virtual_network: "{{ ansible_eda.event.payload }}"
-    virtual_network_name: "{{ ansible_eda.event.payload.metadata.name }}"
+    virtual_network: "{{ osac_job_vars.resource }}"
+    virtual_network_name: "{{ osac_job_vars.resource.metadata.name }}"
     # Implementation strategy set by fulfillment-service in VirtualNetwork spec
-    implementation_strategy: "{{ ansible_eda.event.payload.spec.implementationStrategy }}"
+    implementation_strategy: "{{ osac_job_vars.resource.spec.implementationStrategy }}"
     template_parameters: {}
 
   pre_tasks:
-    - name: Show EDA Event
+    - name: Show resource metadata
       ansible.builtin.debug:
-        var: ansible_eda.event.payload
+        var: osac_job_vars.resource.metadata
 
   tasks:
     - name: Display VirtualNetwork information

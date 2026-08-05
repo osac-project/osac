@@ -13,7 +13,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/osac-project/osac-operator/pkg/aap"
+	"github.com/osac-project/osac/osac-operator/pkg/aap"
 )
 
 func TestAAP(t *testing.T) {

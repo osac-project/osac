@@ -24,9 +24,9 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/fulfillment-service/internal/controllers/finalizers"
-	"github.com/osac-project/fulfillment-service/internal/uuid"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
+	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 )
 
 var _ = Describe("Role binding reconciler", func() {
@@ -135,9 +135,9 @@ var _ = Describe("Role binding reconciler", func() {
 					Name: fmt.Sprintf("my-%s", uuid.New()),
 				}.Build(),
 				Spec: privatev1.RoleBindingSpec_builder{
-					Role: testRoleName,
-					Users: []string{
-						testUserID,
+					Role: privatev1.RoleReference_builder{Name: testRoleName}.Build(),
+					Users: []*privatev1.UserReference{
+						privatev1.UserReference_builder{Id: testUserID}.Build(),
 					},
 				}.Build(),
 			}.Build(),
@@ -176,9 +176,9 @@ var _ = Describe("Role binding reconciler", func() {
 					Name: fmt.Sprintf("my-%s", uuid.New()),
 				}.Build(),
 				Spec: privatev1.RoleBindingSpec_builder{
-					Role: testRoleName,
-					Users: []string{
-						testUserID,
+					Role: privatev1.RoleReference_builder{Name: testRoleName}.Build(),
+					Users: []*privatev1.UserReference{
+						privatev1.UserReference_builder{Id: testUserID}.Build(),
 					},
 				}.Build(),
 			}.Build(),

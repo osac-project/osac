@@ -30,18 +30,33 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/fulfillment-service/internal/maputil"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	"github.com/osac-project/osac/fulfillment-service/internal/maputil"
 )
 
-// catalogItem is implemented by both ClusterCatalogItem and ComputeInstanceCatalogItem.
+// catalogItem is implemented by ClusterCatalogItem, ComputeInstanceCatalogItem,
+// and BareMetalInstanceCatalogItem.
 type catalogItem interface {
 	proto.Message
 	GetPublished() bool
-	GetTemplate() string
 	GetFieldDefinitions() []*privatev1.FieldDefinition
 	GetMetadata() *privatev1.Metadata
+}
+
+// resourceRef is the common interface for typed resource reference messages.
+type resourceRef interface {
+	GetId() string
+	GetName() string
+}
+
+// refKey extracts a display/lookup key from a typed resource reference.
+// Returns the id if set, otherwise the name.
+func refKey(ref resourceRef) string {
+	if id := ref.GetId(); id != "" {
+		return id
+	}
+	return ref.GetName()
 }
 
 // validateFieldDefinitions checks that field definitions are well-formed:
@@ -347,8 +362,8 @@ func validateInstanceTypeState(
 				warning += fmt.Sprintf(" and will become obsolete on %s",
 					dep.GetObsolescenceTimestamp().AsTime().Format(time.RFC3339))
 			}
-			if dep.GetReplacement() != "" {
-				warning += fmt.Sprintf(". Consider using '%s' instead", dep.GetReplacement())
+			if dep.GetReplacement() != nil {
+				warning += fmt.Sprintf(". Consider using '%s' instead", refKey(dep.GetReplacement()))
 			}
 		}
 		warnings = append(warnings, warning)

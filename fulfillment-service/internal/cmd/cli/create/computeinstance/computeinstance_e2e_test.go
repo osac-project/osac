@@ -18,13 +18,13 @@ import (
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
-	"github.com/osac-project/fulfillment-service/internal/testing"
+	"github.com/osac-project/osac/fulfillment-service/internal/testing"
 )
 
 var _ = Describe("Compute Instance E2E", func() {
@@ -115,7 +115,7 @@ var _ = Describe("Compute Instance E2E", func() {
 					Name: "new-test-instance",
 				},
 				Spec: &publicv1.ComputeInstanceSpec{
-					Template: template.Id,
+					Template: publicv1.ComputeInstanceTemplateReference_builder{Id: template.Id}.Build(),
 				},
 			},
 		})
@@ -135,7 +135,7 @@ var _ = Describe("Compute Instance E2E", func() {
 		})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(getResp.Object.Id).To(Equal(createdID))
-		Expect(getResp.Object.Spec.Template).To(Equal(template.Id))
+		Expect(getResp.Object.GetSpec().GetTemplate().GetId()).To(Equal(template.Id))
 
 		// Step 6: Delete the created instance
 		_, err = instanceClient.Delete(ctx, &publicv1.ComputeInstancesDeleteRequest{

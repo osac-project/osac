@@ -17,6 +17,10 @@ package osac.public.v1;
 
 import "google/api/field_behavior.proto";
 import "osac/public/v1/metadata_type.proto";
+import "osac/public/v1/baremetal_instance_type.proto";
+import "osac/public/v1/cluster_type.proto";
+import "osac/public/v1/compute_instance_type.proto";
+import "osac/public/v1/external_ip_type.proto";
 
 // Represents a binding between an ExternalIP and a target resource.
 //
@@ -54,13 +58,11 @@ message ExternalIPAttachment {
 // existing ExternalIP in ALLOCATED state. The target must reference a valid resource that
 // supports external IP attachment.
 message ExternalIPAttachmentSpec {
-  // ExternalIP ID to attach. Required and immutable after creation.
+  // ExternalIP reference to attach. Required and immutable after creation.
   //
-  // Must reference the ID of an existing ExternalIP in ALLOCATED state that is not already
+  // Must reference an existing ExternalIP in ALLOCATED state that is not already
   // attached (status.attached == false). Only one ExternalIPAttachment may exist per ExternalIP.
-  //
-  // Example: "019728a4-3f5c-7def-8abc-1234567890ab"
-  string external_ip = 1 [
+  ExternalIPLocalReference external_ip = 1 [
     (google.api.field_behavior) = REQUIRED,
     (google.api.field_behavior) = IMMUTABLE
   ];
@@ -68,31 +70,25 @@ message ExternalIPAttachmentSpec {
   // Target resource to attach the external IP to. Exactly one target field must be set.
   // Required and immutable after creation.
   oneof target {
-    // ComputeInstance ID to attach this external IP to.
+    // ComputeInstance reference to attach this external IP to.
     //
-    // Must reference the ID of an existing ComputeInstance in RUNNING state. Only one
+    // Must reference an existing ComputeInstance in RUNNING state. Only one
     // ExternalIPAttachment may exist per ComputeInstance.
-    //
-    // Example: "01972f1b-a4e9-7c82-9def-abcdef123456"
-    string compute_instance = 2;
+    ComputeInstanceLocalReference compute_instance = 2;
 
-    // Cluster ID to attach this external IP to.
+    // Cluster reference to attach this external IP to.
     //
-    // Must reference the ID of an existing Cluster. The target_endpoint field is required
+    // Must reference an existing Cluster. The target_endpoint field is required
     // when targeting a cluster to specify which endpoint (API or ingress) receives the
     // external IP. The attachment can be created before the cluster is ready and will
     // activate once the cluster's VIP is available.
-    //
-    // Example: "01973a2c-b5f0-7d93-8abc-def012345678"
-    string cluster = 3;
+    ClusterLocalReference cluster = 3;
 
-    // BareMetalInstance ID to attach this external IP to.
+    // BareMetalInstance reference to attach this external IP to.
     //
-    // Must reference the ID of an existing BareMetalInstance. DNAT rules will be configured
+    // Must reference an existing BareMetalInstance. DNAT rules will be configured
     // to forward traffic from the external IP to the bare-metal instance's internal IP.
-    //
-    // Example: "01973b3d-c6e1-7ea4-9bcd-ef0123456789"
-    string baremetal_instance = 4;
+    BareMetalInstanceLocalReference baremetal_instance = 4;
   }
 
   // Cluster endpoint to attach the external IP to. Required when target is cluster.

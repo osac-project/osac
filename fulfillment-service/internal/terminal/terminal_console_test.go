@@ -19,7 +19,7 @@ import (
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
 
-	"github.com/osac-project/fulfillment-service/internal/text"
+	"github.com/osac-project/osac/fulfillment-service/internal/text"
 )
 
 var _ = Describe("Console", func() {

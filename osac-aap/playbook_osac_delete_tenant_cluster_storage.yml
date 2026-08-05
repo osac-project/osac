@@ -4,7 +4,7 @@
   gather_facts: false
 
   vars:
-    tenant_name: "{{ ansible_eda.event.payload.metadata.annotations['osac.openshift.io/tenant'] }}"
+    tenant_name: "{{ osac_job_vars.resource.metadata.annotations['osac.openshift.io/tenant'] }}"
     # This template is triggered from two different call sites in storage_controller.go,
     # sharing the same AAP job template but passing different resource kinds as payload:
     #   - handleClusterStorageDeprovisioning (hub storage) sends a Tenant object, whose own
@@ -15,27 +15,27 @@
     #     guest cluster. For that case we target the fixed OSAC system namespace on the guest
     #     cluster instead (mirrors the create playbook's routing).
     tenant_namespace: >-
-      {%- if ansible_eda.event.payload.kind == 'ClusterOrder' -%}
+      {%- if osac_job_vars.resource.kind == 'ClusterOrder' -%}
       openshift-osac-storage
       {%- else -%}
-      {{ ansible_eda.event.payload.metadata.namespace }}
+      {{ osac_job_vars.resource.metadata.namespace }}
       {%- endif -%}
     _storage_tiers_raw: "{{ lookup('env', 'STORAGE_TIERS') }}"
 
   pre_tasks:
-    - name: Show EDA Event
+    - name: Show resource metadata
       ansible.builtin.debug:
-        var: ansible_eda.event.payload
+        var: osac_job_vars.resource.metadata
 
     - name: Validate tenant payload is present
       ansible.builtin.fail:
-        msg: "tenant must be provided via ansible_eda.event.payload with metadata.name and metadata.namespace set"
+        msg: "tenant must be provided via osac_job_vars.resource with metadata.name and metadata.namespace set"
       when: >-
-        ansible_eda is not defined or
-        ansible_eda.event.payload.metadata.name is not defined or
-        ansible_eda.event.payload.metadata.name | length == 0 or
-        ansible_eda.event.payload.metadata.namespace is not defined or
-        ansible_eda.event.payload.metadata.namespace | length == 0
+        osac_job_vars is not defined or
+        osac_job_vars.resource.metadata.name is not defined or
+        osac_job_vars.resource.metadata.name | length == 0 or
+        osac_job_vars.resource.metadata.namespace is not defined or
+        osac_job_vars.resource.metadata.namespace | length == 0
 
     - name: Parse STORAGE_TIERS JSON
       when: _storage_tiers_raw | length > 0
@@ -59,10 +59,10 @@
 
     - name: Write admin_kubeconfig to temporary file when provided
       when: >-
-        ansible_eda.event.admin_kubeconfig is defined and
-        ansible_eda.event.admin_kubeconfig | length > 0
+        osac_job_vars.admin_kubeconfig is defined and
+        osac_job_vars.admin_kubeconfig | length > 0
       ansible.builtin.set_fact:
-        _remote_kubeconfig: "{{ ansible_eda.event.admin_kubeconfig | osac.service.to_temp_file(suffix='.kubeconfig') }}"
+        _remote_kubeconfig: "{{ osac_job_vars.admin_kubeconfig | osac.service.to_temp_file(suffix='.kubeconfig') }}"
         # HCP guest-cluster kubeconfigs are typically accessed via an external Route whose
         # serving cert doesn't match the CA bundled in the admin kubeconfig.
         _remote_kubeconfig_insecure: true
@@ -70,11 +70,11 @@
     - name: Fail when guest-cluster teardown is requested without admin_kubeconfig
       ansible.builtin.fail:
         msg: >-
-          admin_kubeconfig is required in the EDA event for ClusterOrder
+          admin_kubeconfig is required in the job vars for ClusterOrder
           (guest-cluster) storage teardown; without it cleanup would target
           the controller's default cluster instead of the guest cluster.
       when: >-
-        ansible_eda.event.payload.kind == 'ClusterOrder' and
+        osac_job_vars.resource.kind == 'ClusterOrder' and
         (_remote_kubeconfig is not defined or _remote_kubeconfig | length == 0)
 
   tasks:

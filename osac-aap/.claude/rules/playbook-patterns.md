@@ -22,17 +22,17 @@ AAP job templates: `osac-{action}-{resource}`
   gather_facts: false
 
   vars:
-    subnet: "{{ ansible_eda.event.payload }}"
-    subnet_name: "{{ ansible_eda.event.payload.metadata.name }}"
+    subnet: "{{ osac_job_vars.resource }}"
+    subnet_name: "{{ osac_job_vars.resource.metadata.name }}"
     implementation_strategy: >-
-      {{ ansible_eda.event.payload.metadata.annotations
+      {{ osac_job_vars.resource.metadata.annotations
          ['osac.openshift.io/implementation-strategy']
-         | default(ansible_eda.event.payload.spec.implementationStrategy, true) }}
+         | default(osac_job_vars.resource.spec.implementationStrategy, true) }}
 
   pre_tasks:
-    - name: Show EDA Event
+    - name: Show resource metadata
       ansible.builtin.debug:
-        var: ansible_eda.event.payload
+        var: osac_job_vars.resource.metadata
 
   tasks:
     - name: Call the selected implementation role
@@ -42,10 +42,37 @@ AAP job templates: `osac-{action}-{resource}`
 ```
 
 **Key pattern:**
-1. Playbook receives K8s CR as `ansible_eda.event.payload`
+1. Playbook receives K8s CR as `osac_job_vars.resource`
 2. Extracts implementation strategy from CR annotation (`osac.openshift.io/implementation-strategy`) or `spec.implementationStrategy` — annotation takes precedence when both are present
 3. Dynamically includes the appropriate role from `osac.templates`
 4. Role performs actual provisioning (creates K8s resources, updates CR)
+
+### Show Resource Metadata and Sensitive `payload.spec` Fields
+
+The bare `debug: var: osac_job_vars.resource` shown above is safe as long as
+nothing in `payload.spec` is a secret. Some CR specs are not — e.g.
+`blockEncryptionPassphrase` on Tenant/ClusterOrder/ComputeInstance CRs. Before
+adding this debug task to a new or existing playbook, inspect the CR
+schema for every field that can occur in `payload.spec`. If any field can
+contain a secret, use the shared, centralized task instead of debugging the
+whole object:
+
+```yaml
+  pre_tasks:
+    - name: Show resource metadata
+      ansible.builtin.include_role:
+        name: osac.service.common
+        tasks_from: show_resource_metadata
+      vars:
+        resource_extra_fields:
+          template_id: "{{ osac_job_vars.resource.spec.templateID | default('unknown') }}"
+```
+
+This logs `kind`/`metadata.name`/`metadata.namespace`/`metadata.uid` plus any
+additional non-sensitive fields passed via `resource_extra_fields` — never
+source an `resource_extra_fields` value from `payload.spec` without first
+confirming it isn't a secret. See
+`collections/ansible_collections/osac/service/roles/common/tasks/show_resource_metadata.yaml`.
 
 ## Template Roles
 
@@ -133,7 +160,7 @@ Namespace + ClusterUserDefinedNetwork
 
 | Variable | Purpose | Set By |
 |----------|---------|--------|
-| `ansible_eda.event.payload` | K8s CR data | AAP/EDA event |
+| `osac_job_vars.resource` | K8s CR data | osac-operator extra vars |
 | `remote_cluster_kubeconfig` | Path to remote kubeconfig | `osac.service.common` role |
 | `implementation_strategy` | Network implementation to use | Extracted from CR annotation |
 | `OSAC_AAP_URL` | AAP server URL | osac-operator config |

@@ -27,7 +27,7 @@ columns:
   value: "has(this.metadata.project)? this.metadata.project: '-'"
 
 - header: USERS
-  value: "size(this.spec.users) > 0? this.spec.users.join(', '): '-'"
+  value: "size(this.spec.users) > 0? this.spec.users.map(u, u.id).join(', '): '-'"
 
 - header: ROLE
   value: this.spec.role

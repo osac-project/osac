@@ -35,6 +35,38 @@
   loop: "{{ storage_provider_tiers }}"
   when: item.name is not defined or not (item.name | regex_search('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'))
 
+# A tier name can be a valid 1-63 char DNS label on its own yet still be unusable: tiers
+# with configured qos_limits get a derived qos_policy of '<name>-qos' below, which must
+# ALSO be a valid (<=63 char) DNS label. Caught here, at the same point as the other
+# tier-name checks, rather than surfacing later as a confusing failure on the derived
+# value. The has-QoS-limits condition itself is computed once, below, and shared with
+# the derivation step so the two can't drift out of sync.
+- name: Compute QoS-enabled tier names (single source for length-guard and derivation)
+  ansible.builtin.set_fact:
+    _qos_enabled_tier_names: >-
+      {% set _names = [] -%}
+      {% for _tier in storage_provider_tiers -%}
+      {% if _tier.qos_limits is defined and _tier.qos_limits.static_limits is defined and
+            ((_tier.qos_limits.static_limits.max_reads_bw_mbps | default(0) | int) > 0 or
+             (_tier.qos_limits.static_limits.max_writes_bw_mbps | default(0) | int) > 0) -%}
+      {% set _ = _names.append(_tier.name) -%}
+      {% endif -%}
+      {% endfor -%}
+      {{ _names }}
+
+- name: Validate QoS-enabled tier names leave room for the derived '-qos' suffix
+  ansible.builtin.fail:
+    msg: >-
+      Tier name '{{ item.name }}' is {{ item.name | length }} characters. Tiers with
+      configured qos_limits get a derived qos_policy of '{{ item.name }}-qos', which must
+      also be a valid DNS label (max 63 characters) — so tier names with QoS limits
+      configured are capped at 59 characters (63 minus the 4-character '-qos' suffix).
+  loop: "{{ storage_provider_tiers }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: >-
+    (item.name | length > 59) and (item.name in _qos_enabled_tier_names)
+
 - name: Validate tier names are unique across the entire list
   ansible.builtin.fail:
     msg: >-
@@ -61,12 +93,42 @@
   loop: "{{ storage_provider_tiers }}"
   when: item.protocol | length == 0
 
-- name: Validate qos_policy is a valid DNS label when specified
+# qos_policy is entirely system-derived — any caller-supplied value is ignored and
+# discarded, never inspected or preserved, consistent with how every other field not
+# in this role's schema is treated (storage_provider_tiers has no elements:/options:
+# schema, so unrecognized tier fields are already silently ignored rather than
+# rejected; qos_policy previously broke that pattern by preserving a caller's value
+# as-is). This is what guarantees every caller actually gets consistent naming, rather
+# than merely being true by convention as long as no caller happens to set it.
+#
+# Written to a role-internal fact, not storage_provider_tiers itself: role/include_role
+# params outrank set_fact for the lifetime of the role invocation, so reassigning
+# storage_provider_tiers here would silently keep the caller-supplied, un-derived value.
+#
+# Only derived for tiers with a configured (non-zero) qos_limits — a tier with no
+# read/write bandwidth limits is treated as "no QoS enforcement wanted" and ends up
+# with no qos_policy at all, even if the caller supplied one. The Tier API always sends
+# a qos_limits block (defaulting to zero when unconfigured), so zero-in-both-directions
+# is the only "opt out" signal available without a dedicated field on the tier definition.
+- name: Derive qos_policy for tiers with configured QoS limits, discarding any caller-supplied value
+  ansible.builtin.set_fact:
+    _storage_provider_tiers: >-
+      {% set _tiers = [] -%}
+      {% for _tier in storage_provider_tiers -%}
+      {% set _tier_without_qos_policy = _tier | dict2items | rejectattr('key', 'equalto', 'qos_policy') | items2dict -%}
+      {% set _ = _tiers.append(
+           (_tier_without_qos_policy | combine({'qos_policy': _tier.name + '-qos'})) if (_tier.name in _qos_enabled_tier_names)
+           else _tier_without_qos_policy
+         ) -%}
+      {% endfor -%}
+      {{ _tiers }}
+
+- name: Validate derived qos_policy is a valid DNS label
   ansible.builtin.fail:
     msg: >-
       Tier '{{ item.name }}' has an invalid qos_policy: '{{ item.qos_policy }}'.
       Must be a non-empty string matching DNS label rules (1-63 chars, lowercase alphanumeric and hyphens).
-  loop: "{{ storage_provider_tiers }}"
+  loop: "{{ _storage_provider_tiers }}"
   loop_control:
     label: "{{ item.name }}"
   when:
@@ -92,7 +154,7 @@
 
 - name: Extract unique providers from tier list
   ansible.builtin.set_fact:
-    _unique_providers: "{{ storage_provider_tiers | map(attribute='provider') | unique | sort | list }}"
+    _unique_providers: "{{ _storage_provider_tiers | map(attribute='provider') | unique | sort | list }}"
 
 - name: Set dispatch action
   ansible.builtin.set_fact:

@@ -20,11 +20,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/osac-project/fulfillment-service/internal/cache"
-	"github.com/osac-project/fulfillment-service/internal/cmd/cli/help"
-	"github.com/osac-project/fulfillment-service/internal/cmd/osac-dev/generate"
-	"github.com/osac-project/fulfillment-service/internal/logging"
-	"github.com/osac-project/fulfillment-service/internal/terminal"
+	"github.com/osac-project/osac/fulfillment-service/internal/cache"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/help"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/osac-dev/generate"
+	"github.com/osac-project/osac/fulfillment-service/internal/logging"
+	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 )
 
 func Root() (result *cobra.Command, err error) {

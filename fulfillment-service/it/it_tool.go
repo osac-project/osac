@@ -35,12 +35,12 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/onsi/gomega/ghttp"
-	"github.com/osac-project/fulfillment-service/internal/auth"
-	"github.com/osac-project/fulfillment-service/internal/jq"
-	"github.com/osac-project/fulfillment-service/internal/network"
-	"github.com/osac-project/fulfillment-service/internal/oauth"
-	"github.com/osac-project/fulfillment-service/internal/testing"
-	"github.com/osac-project/fulfillment-service/internal/uuid"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/jq"
+	"github.com/osac-project/osac/fulfillment-service/internal/network"
+	"github.com/osac-project/osac/fulfillment-service/internal/oauth"
+	"github.com/osac-project/osac/fulfillment-service/internal/testing"
+	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	"go.yaml.in/yaml/v2"
 	"google.golang.org/grpc"
 	grpccodes "google.golang.org/grpc/codes"
@@ -55,9 +55,9 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
-	"github.com/osac-project/fulfillment-service/internal/version"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/version"
 )
 
 var ServiceAccountTenants = map[string]string{
@@ -484,10 +484,20 @@ func (t *Tool) buildImage(ctx context.Context) (result string, err error) {
 	if t.debug {
 		buildTarget = "runtime-debug"
 	}
+	// The Containerfile expects the mono-repo root as build context so
+	// that cross-module dependencies resolve from sibling directories.
+	buildContext := t.projectDir
+	containerfile := "Containerfile"
+	monoRepoRoot := filepath.Dir(t.projectDir)
+	if _, statErr := os.Stat(filepath.Join(monoRepoRoot, "go.work")); statErr == nil {
+		buildContext = monoRepoRoot
+		containerfile = filepath.Join(filepath.Base(t.projectDir), "Containerfile")
+	}
+
 	buildCmd, err := testing.NewCommand().
 		SetLogger(t.logger).
 		SetHome(t.projectDir).
-		SetDir(t.projectDir).
+		SetDir(buildContext).
 		SetName(podmanCmd).
 		SetArgs(
 			"build",
@@ -495,7 +505,7 @@ func (t *Tool) buildImage(ctx context.Context) (result string, err error) {
 			"--build-arg", fmt.Sprintf("VERSION=%s", gitVersion),
 			"--target", buildTarget,
 			"--tag", imageRef,
-			"--file", "Containerfile",
+			"--file", containerfile,
 			".",
 		).
 		Build()

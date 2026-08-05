@@ -4,24 +4,24 @@
   gather_facts: false
 
   vars:
-    tenant_name: "{{ ansible_eda.event.payload.metadata.name }}"
-    tenant_namespace: "{{ ansible_eda.event.payload.metadata.namespace }}"
+    tenant_name: "{{ osac_job_vars.resource.metadata.name }}"
+    tenant_namespace: "{{ osac_job_vars.resource.metadata.namespace }}"
     _storage_tiers_raw: "{{ lookup('env', 'STORAGE_TIERS') }}"
 
   pre_tasks:
-    - name: Show EDA Event
+    - name: Show resource metadata
       ansible.builtin.debug:
-        var: ansible_eda.event.payload
+        var: osac_job_vars.resource.metadata
 
     - name: Validate tenant payload is present
       ansible.builtin.fail:
-        msg: "tenant must be provided via ansible_eda.event.payload with metadata.name and metadata.namespace set"
+        msg: "tenant must be provided via osac_job_vars.resource with metadata.name and metadata.namespace set"
       when: >-
-        ansible_eda is not defined or
-        ansible_eda.event.payload.metadata.name is not defined or
-        ansible_eda.event.payload.metadata.name | length == 0 or
-        ansible_eda.event.payload.metadata.namespace is not defined or
-        ansible_eda.event.payload.metadata.namespace | length == 0
+        osac_job_vars is not defined or
+        osac_job_vars.resource.metadata.name is not defined or
+        osac_job_vars.resource.metadata.name | length == 0 or
+        osac_job_vars.resource.metadata.namespace is not defined or
+        osac_job_vars.resource.metadata.namespace | length == 0
 
     - name: Parse STORAGE_TIERS JSON
       when: _storage_tiers_raw | length > 0

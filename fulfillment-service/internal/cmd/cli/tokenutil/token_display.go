@@ -21,8 +21,8 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
-	"github.com/osac-project/fulfillment-service/internal/logging"
-	"github.com/osac-project/fulfillment-service/internal/terminal"
+	"github.com/osac-project/osac/fulfillment-service/internal/logging"
+	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 )
 
 // ParseTokenClaims parses a JWT token string and returns the claims without verification.

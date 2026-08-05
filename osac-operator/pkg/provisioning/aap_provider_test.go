@@ -10,9 +10,9 @@ import (
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/osac-project/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac-operator/pkg/aap"
-	"github.com/osac-project/osac-operator/pkg/provisioning"
+	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/pkg/aap"
+	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 )
 
 // mockAAPClient is a test double for aap.Client
@@ -69,11 +69,8 @@ func (m *mockAAPClient) CancelJob(ctx context.Context, jobID string) error {
 	return nil
 }
 
-// extractEDAPayload extracts the payload from EDA event structure in extra_vars.
-// This helper function is used to verify the EDA compatibility wrapper.
-func extractEDAPayload(extraVars map[string]any) map[string]any {
-	edaEvent := extraVars["ansible_eda"].(map[string]any)
-	return edaEvent["event"].(map[string]any)["payload"].(map[string]any)
+func extractJobVarsResource(extraVars map[string]any) map[string]any {
+	return extraVars["osac_job_vars"].(map[string]any)["resource"].(map[string]any)
 }
 
 var _ = Describe("AAPProvider", func() {
@@ -97,9 +94,8 @@ var _ = Describe("AAPProvider", func() {
 				}
 				aapClient.launchJobTemplateFunc = func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
 					Expect(req.TemplateName).To(Equal("provision-job"))
-					// Verify EDA event structure for compatibility with EDA-designed templates
-					Expect(req.ExtraVars).To(HaveKey("ansible_eda"))
-					payload := extractEDAPayload(req.ExtraVars)
+					Expect(req.ExtraVars).To(HaveKey("osac_job_vars"))
+					payload := extractJobVarsResource(req.ExtraVars)
 					// Verify serialized resource contains the ObjectMeta fields under "metadata"
 					Expect(payload).To(HaveKey("metadata"))
 					metadata := payload["metadata"].(map[string]any)
@@ -132,9 +128,8 @@ var _ = Describe("AAPProvider", func() {
 				}
 				aapClient.launchWorkflowTemplateFunc = func(ctx context.Context, req aap.LaunchWorkflowTemplateRequest) (*aap.LaunchWorkflowTemplateResponse, error) {
 					Expect(req.TemplateName).To(Equal("provision-workflow"))
-					// Verify EDA event structure for compatibility with EDA-designed templates
-					Expect(req.ExtraVars).To(HaveKey("ansible_eda"))
-					payload := extractEDAPayload(req.ExtraVars)
+					Expect(req.ExtraVars).To(HaveKey("osac_job_vars"))
+					payload := extractJobVarsResource(req.ExtraVars)
 					// Verify serialized resource contains the ObjectMeta fields under "metadata"
 					Expect(payload).To(HaveKey("metadata"))
 					metadata := payload["metadata"].(map[string]any)
@@ -168,10 +163,10 @@ var _ = Describe("AAPProvider", func() {
 
 			It("should inject tenant_storage_classes into extra_vars", func() {
 				aapClient.launchJobTemplateFunc = func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
-					edaEvent := req.ExtraVars["ansible_eda"].(map[string]any)["event"].(map[string]any)
-					Expect(edaEvent).To(HaveKey("payload"))
-					Expect(edaEvent).To(HaveKey("tenant_storage_classes"))
-					scList := edaEvent["tenant_storage_classes"].([]map[string]string)
+					jobVars := req.ExtraVars["osac_job_vars"].(map[string]any)
+					Expect(jobVars).To(HaveKey("resource"))
+					Expect(jobVars).To(HaveKey("tenant_storage_classes"))
+					scList := jobVars["tenant_storage_classes"].([]map[string]string)
 					Expect(scList).To(HaveLen(2))
 					Expect(scList[0]).To(Equal(map[string]string{"name": "ceph-fast", "tier": "fast"}))
 					Expect(scList[1]).To(Equal(map[string]string{"name": "ceph-default", "tier": "default"}))
@@ -196,9 +191,9 @@ var _ = Describe("AAPProvider", func() {
 
 			It("should not inject tenant_storage_classes when context has no storage classes", func() {
 				aapClient.launchJobTemplateFunc = func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
-					edaEvent := req.ExtraVars["ansible_eda"].(map[string]any)["event"].(map[string]any)
-					Expect(edaEvent).To(HaveKey("payload"))
-					Expect(edaEvent).NotTo(HaveKey("tenant_storage_classes"))
+					jobVars := req.ExtraVars["osac_job_vars"].(map[string]any)
+					Expect(jobVars).To(HaveKey("resource"))
+					Expect(jobVars).NotTo(HaveKey("tenant_storage_classes"))
 					return &aap.LaunchJobTemplateResponse{JobID: 790}, nil
 				}
 
@@ -813,8 +808,8 @@ var _ = Describe("AAPProvider", func() {
 			ctx = provisioning.WithAdminKubeconfig(ctx, kubeconfig)
 
 			aapClient.launchJobTemplateFunc = func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
-				edaEvent := req.ExtraVars["ansible_eda"].(map[string]any)["event"].(map[string]any)
-				Expect(edaEvent).To(HaveKeyWithValue("admin_kubeconfig", kubeconfig))
+				jobVars := req.ExtraVars["osac_job_vars"].(map[string]any)
+				Expect(jobVars).To(HaveKeyWithValue("admin_kubeconfig", kubeconfig))
 				return &aap.LaunchJobTemplateResponse{JobID: 100}, nil
 			}
 
@@ -827,8 +822,8 @@ var _ = Describe("AAPProvider", func() {
 
 		It("should omit admin_kubeconfig from event when not set in context", func() {
 			aapClient.launchJobTemplateFunc = func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
-				edaEvent := req.ExtraVars["ansible_eda"].(map[string]any)["event"].(map[string]any)
-				Expect(edaEvent).NotTo(HaveKey("admin_kubeconfig"))
+				jobVars := req.ExtraVars["osac_job_vars"].(map[string]any)
+				Expect(jobVars).NotTo(HaveKey("admin_kubeconfig"))
 				return &aap.LaunchJobTemplateResponse{JobID: 101}, nil
 			}
 
@@ -861,9 +856,9 @@ var _ = Describe("AAPProvider", func() {
 			})
 
 			aapClient.launchJobTemplateFunc = func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
-				edaEvent := req.ExtraVars["ansible_eda"].(map[string]any)["event"].(map[string]any)
-				Expect(edaEvent).To(HaveKey("storage_tier_definitions"))
-				tiers := edaEvent["storage_tier_definitions"].([]map[string]any)
+				jobVars := req.ExtraVars["osac_job_vars"].(map[string]any)
+				Expect(jobVars).To(HaveKey("storage_tier_definitions"))
+				tiers := jobVars["storage_tier_definitions"].([]map[string]any)
 				Expect(tiers).To(HaveLen(1))
 				Expect(tiers[0]).To(Equal(map[string]any{
 					"name":       "fast",
@@ -891,8 +886,8 @@ var _ = Describe("AAPProvider", func() {
 
 		It("should omit storage_tier_definitions when not set in context", func() {
 			aapClient.launchJobTemplateFunc = func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
-				edaEvent := req.ExtraVars["ansible_eda"].(map[string]any)["event"].(map[string]any)
-				Expect(edaEvent).NotTo(HaveKey("storage_tier_definitions"))
+				jobVars := req.ExtraVars["osac_job_vars"].(map[string]any)
+				Expect(jobVars).NotTo(HaveKey("storage_tier_definitions"))
 				return &aap.LaunchJobTemplateResponse{JobID: 112}, nil
 			}
 
@@ -918,9 +913,9 @@ var _ = Describe("AAPProvider", func() {
 			})
 
 			aapClient.launchJobTemplateFunc = func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
-				edaEvent := req.ExtraVars["ansible_eda"].(map[string]any)["event"].(map[string]any)
-				Expect(edaEvent).To(HaveKey("storage_backend_connections"))
-				conns := edaEvent["storage_backend_connections"].(map[string]map[string]any)
+				jobVars := req.ExtraVars["osac_job_vars"].(map[string]any)
+				Expect(jobVars).To(HaveKey("storage_backend_connections"))
+				conns := jobVars["storage_backend_connections"].(map[string]map[string]any)
 				Expect(conns).To(Equal(map[string]map[string]any{
 					"backend-1": {
 						"endpoint": "https://vast.example.com",
@@ -940,8 +935,8 @@ var _ = Describe("AAPProvider", func() {
 
 		It("should omit storage_backend_connections when not set in context", func() {
 			aapClient.launchJobTemplateFunc = func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
-				edaEvent := req.ExtraVars["ansible_eda"].(map[string]any)["event"].(map[string]any)
-				Expect(edaEvent).NotTo(HaveKey("storage_backend_connections"))
+				jobVars := req.ExtraVars["osac_job_vars"].(map[string]any)
+				Expect(jobVars).NotTo(HaveKey("storage_backend_connections"))
 				return &aap.LaunchJobTemplateResponse{JobID: 122}, nil
 			}
 

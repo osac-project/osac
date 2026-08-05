@@ -11,9 +11,16 @@ vast_storage_csi_provisioner_map:
 # K8s Secret on hub cluster that stores per-tenant VAST config
 vast_storage_tenant_config_secret_prefix: "vast-tenant-config-"
 
-# Namespace for hub-cluster config secrets — set via OSAC_STORAGE_CONFIG_NAMESPACE env var
-# in the storage-operations-ig pod spec (downward API metadata.namespace).
-vast_storage_config_namespace: "{{ lookup('env', 'OSAC_STORAGE_CONFIG_NAMESPACE') | default('osac-system', true) }}"
+# Namespace for hub-cluster config secrets. Resolution order:
+#   1. OSAC_STORAGE_CONFIG_NAMESPACE env var — explicit override via the storage-operations-ig
+#      ConfigMap, only needed if the config namespace differs from the IG pod's own namespace.
+#   2. The IG pod's own namespace, read from the standard K8s-mounted service account file —
+#      always accurate for wherever the pod actually runs, no per-deployment config needed.
+#   3. "osac-system" — last-resort fallback for local/test execution outside a pod.
+vast_storage_config_namespace: >-
+  {{ lookup('env', 'OSAC_STORAGE_CONFIG_NAMESPACE')
+     | default(lookup('file', '/var/run/secrets/kubernetes.io/serviceaccount/namespace', errors='ignore'), true)
+     | default('osac-system', true) }}
 
 # TLS certificate validation for VAST VMS API calls.
 vast_storage_validate_certs: "{{ lookup('env', 'VAST_VALIDATE_CERTS') | default('true', true) | bool }}"

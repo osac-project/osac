@@ -18,7 +18,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/osac-project/fulfillment-service/internal/auth/jwe"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth/jwe"
 )
 
 const (

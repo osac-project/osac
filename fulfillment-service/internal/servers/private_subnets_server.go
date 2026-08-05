@@ -24,10 +24,10 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/fulfillment-service/internal/auth"
-	"github.com/osac-project/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/fulfillment-service/internal/events"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	"github.com/osac-project/osac/fulfillment-service/internal/events"
 )
 
 type PrivateSubnetsServerBuilder struct {
@@ -152,7 +152,7 @@ func (s *PrivateSubnetsServer) Create(ctx context.Context,
 	if subnet.GetMetadata().GetAnnotations() == nil {
 		subnet.Metadata.Annotations = make(map[string]string)
 	}
-	subnet.Metadata.Annotations["osac.openshift.io/owner-reference"] = subnet.GetSpec().GetVirtualNetwork()
+	subnet.Metadata.Annotations["osac.openshift.io/owner-reference"] = refKey(subnet.GetSpec().GetVirtualNetwork())
 
 	err = s.generic.Create(ctx, request, &response)
 	return
@@ -247,7 +247,7 @@ func (s *PrivateSubnetsServer) validateSubnet(ctx context.Context,
 	// SUB-VAL-04, SUB-VAL-05, SUB-VAL-06, SUB-VAL-07, SUB-VAL-08: Validate parent VirtualNetwork
 	// Only on Create (existingSubnet == nil) or if virtual_network differs (SUB-VAL-11 above prevents
 	// VN changes on Update, so the second branch is effectively dead but kept for safety).
-	if existingSubnet == nil || spec.GetVirtualNetwork() != existingSubnet.GetSpec().GetVirtualNetwork() {
+	if existingSubnet == nil || refKey(spec.GetVirtualNetwork()) != refKey(existingSubnet.GetSpec().GetVirtualNetwork()) {
 		if err := s.validateVirtualNetworkReference(ctx, spec); err != nil {
 			return err
 		}
@@ -297,13 +297,13 @@ func (s *PrivateSubnetsServer) validateVirtualNetworkReference(ctx context.Conte
 	spec *privatev1.SubnetSpec) error {
 
 	virtualNetworkID := spec.GetVirtualNetwork()
-	if virtualNetworkID == "" {
+	if virtualNetworkID == nil {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.virtual_network' is required")
 	}
 
 	// SUB-VAL-04: Get parent VirtualNetwork by ID
 	getResponse, err := s.virtualNetworkDao.Get().
-		SetId(virtualNetworkID).
+		SetId(refKey(virtualNetworkID)).
 		Do(ctx)
 	if err != nil {
 		var notFoundErr *dao.ErrNotFound
@@ -312,7 +312,7 @@ func (s *PrivateSubnetsServer) validateVirtualNetworkReference(ctx context.Conte
 				"parent VirtualNetwork '%s' does not exist", virtualNetworkID)
 		}
 		s.logger.ErrorContext(ctx, "Failed to query VirtualNetwork",
-			slog.String("virtual_network_id", virtualNetworkID),
+			slog.String("virtual_network_id", refKey(virtualNetworkID)),
 			slog.Any("error", err))
 		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate virtual_network")
 	}
@@ -368,7 +368,8 @@ func (s *PrivateSubnetsServer) validateNoCIDROverlap(ctx context.Context,
 	spec *privatev1.SubnetSpec) error {
 
 	// Fetch all existing subnets for the same VirtualNetwork using pagination:
-	filter := fmt.Sprintf("this.spec.virtual_network == %q", spec.GetVirtualNetwork())
+	vnKey := refKey(spec.GetVirtualNetwork())
+	filter := fmt.Sprintf("this.spec.virtual_network.id == %[1]q || this.spec.virtual_network.name == %[1]q", vnKey)
 	var allSubnets []*privatev1.Subnet
 	var offset int32
 	for {
@@ -380,7 +381,7 @@ func (s *PrivateSubnetsServer) validateNoCIDROverlap(ctx context.Context,
 			s.logger.ErrorContext(
 				ctx,
 				"Failed to list sibling subnets",
-				slog.String("virtual_network_id", spec.GetVirtualNetwork()),
+				slog.String("virtual_network_id", refKey(spec.GetVirtualNetwork())),
 				slog.Any("error", err),
 			)
 			return grpcstatus.Errorf(grpccodes.Internal, "failed to validate CIDR overlap")
@@ -454,10 +455,10 @@ func validateImmutableFieldsSubnet(newSubnet *privatev1.Subnet, existingSubnet *
 	existingSpec := existingSubnet.GetSpec()
 
 	// Check immutable virtual_network field
-	if newSpec.GetVirtualNetwork() != existingSpec.GetVirtualNetwork() {
+	if refKey(newSpec.GetVirtualNetwork()) != refKey(existingSpec.GetVirtualNetwork()) {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'spec.virtual_network' is immutable and cannot be changed from '%s' to '%s'",
-			existingSpec.GetVirtualNetwork(), newSpec.GetVirtualNetwork())
+			refKey(existingSpec.GetVirtualNetwork()), refKey(newSpec.GetVirtualNetwork()))
 	}
 
 	// SUB-VAL-14, SUB-VAL-15: Preserve and check immutable CIDR fields.

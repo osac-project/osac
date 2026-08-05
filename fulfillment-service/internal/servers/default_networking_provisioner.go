@@ -23,9 +23,9 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/fulfillment-service/internal/auth"
-	"github.com/osac-project/fulfillment-service/internal/database/dao"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 )
 
 const defaultLabel = "osac.openshift.io/default"
@@ -254,7 +254,7 @@ func (p *DefaultNetworkingProvisioner) createDefaultVirtualNetwork(
 		}.Build(),
 		Spec: privatev1.VirtualNetworkSpec_builder{
 			Region:                 "default",
-			NetworkClass:           nc.GetId(),
+			NetworkClass:           privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 			ImplementationStrategy: nc.GetImplementationStrategy(),
 		}.Build(),
 		Status: privatev1.VirtualNetworkStatus_builder{
@@ -293,7 +293,7 @@ func (p *DefaultNetworkingProvisioner) createDefaultSubnet(
 			Creator: "system",
 		}.Build(),
 		Spec: privatev1.SubnetSpec_builder{
-			VirtualNetwork: vnID,
+			VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
 		}.Build(),
 		Status: privatev1.SubnetStatus_builder{
 			State: privatev1.SubnetState_SUBNET_STATE_PENDING,
@@ -332,7 +332,7 @@ func (p *DefaultNetworkingProvisioner) createDefaultSecurityGroup(
 			Creator: "system",
 		}.Build(),
 		Spec: privatev1.SecurityGroupSpec_builder{
-			VirtualNetwork:         vnID,
+			VirtualNetwork:         privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
 			Ingress:                defaults.GetIngressRules(),
 			Egress:                 defaults.GetEgressRules(),
 			ImplementationStrategy: "network_policy",
@@ -382,26 +382,7 @@ func (p *DefaultNetworkingProvisioner) provisionNATGateway(
 }
 
 func (p *DefaultNetworkingProvisioner) findExternalIPPool(ctx context.Context) (*privatev1.ExternalIPPool, error) {
-	listResponse, err := p.externalIPPoolDao.List().Do(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query ExternalIP pools: %w", err)
-	}
-	var best *privatev1.ExternalIPPool
-	for _, pool := range listResponse.GetItems() {
-		if pool.GetStatus().GetState() != privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY {
-			continue
-		}
-		if pool.GetStatus().GetAvailable() <= 0 {
-			continue
-		}
-		if best == nil || pool.GetStatus().GetAvailable() > best.GetStatus().GetAvailable() {
-			best = pool
-		}
-	}
-	if best == nil {
-		return nil, fmt.Errorf("no ExternalIP pool with available capacity found for default NATGateway")
-	}
-	return best, nil
+	return SelectExternalIPPool(ctx, p.externalIPPoolDao, privatev1.IPFamily_IP_FAMILY_UNSPECIFIED)
 }
 
 func (p *DefaultNetworkingProvisioner) createDefaultExternalIP(
@@ -418,7 +399,7 @@ func (p *DefaultNetworkingProvisioner) createDefaultExternalIP(
 			Creator: "system",
 		}.Build(),
 		Spec: privatev1.ExternalIPSpec_builder{
-			Pool: poolID,
+			Pool: privatev1.ExternalIPPoolReference_builder{Id: poolID}.Build(),
 		}.Build(),
 		Status: privatev1.ExternalIPStatus_builder{
 			State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING,
@@ -449,8 +430,8 @@ func (p *DefaultNetworkingProvisioner) createDefaultNATGateway(
 			Creator: "system",
 		}.Build(),
 		Spec: privatev1.NATGatewaySpec_builder{
-			VirtualNetwork: vnID,
-			ExternalIp:     externalIPID,
+			VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
+			ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: externalIPID}.Build(),
 		}.Build(),
 		Status: privatev1.NATGatewayStatus_builder{
 			State: privatev1.NATGatewayState_NAT_GATEWAY_STATE_PENDING,

@@ -22,7 +22,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/osac-project/fulfillment-service/internal/maputil"
+	"github.com/osac-project/osac/fulfillment-service/internal/maputil"
 )
 
 // ApplyFields applies --set KEY=VALUE pairs to a proto.Message via JSON round-trip.

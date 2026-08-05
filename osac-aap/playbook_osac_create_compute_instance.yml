@@ -4,18 +4,18 @@
   gather_facts: false
 
   vars:
-    compute_instance: "{{ ansible_eda.event.payload }}"
-    compute_instance_name: "{{ ansible_eda.event.payload.metadata.name }}"
-    template_id: "{{ ansible_eda.event.payload.spec.templateID }}"
+    compute_instance: "{{ osac_job_vars.resource }}"
+    compute_instance_name: "{{ osac_job_vars.resource.metadata.name }}"
+    template_id: "{{ osac_job_vars.resource.spec.templateID }}"
     template_parameters: {}
-    tenant_storage_classes: "{{ ansible_eda.event.tenant_storage_classes | default([]) }}"
+    tenant_storage_classes: "{{ osac_job_vars.tenant_storage_classes | default([]) }}"
     _storage_tiers_raw: "{{ lookup('env', 'STORAGE_TIERS') }}"
     _requested_storage_tier: "{{ lookup('env', 'STORAGE_REQUESTED_TIER') | default('default', true) }}"
 
   pre_tasks:
-    - name: Show EDA Event
+    - name: Show resource metadata
       ansible.builtin.debug:
-        var: ansible_eda.event.payload
+        var: osac_job_vars.resource.metadata
 
     - name: Determine tenant target namespace
       # Brings in variables:
@@ -72,7 +72,7 @@
         storage_provider_action: ensure_storage_class
         storage_provider_tiers: "{{ _jit_storage_tiers }}"
         storage_provider_provisioning_target: vmaas
-        storage_provider_block_encryption_passphrase: "{{ ansible_eda.event.payload.spec.blockEncryptionPassphrase | default('') }}"
+        storage_provider_block_encryption_passphrase: "{{ osac_job_vars.resource.spec.blockEncryptionPassphrase | default('') }}"
         storage_provider_snapshots_enabled: "{{ lookup('env', 'STORAGE_SNAPSHOTS_ENABLED') | default('true', true) | bool }}"
 
     - name: Add JIT-provisioned StorageClasses to resolution list

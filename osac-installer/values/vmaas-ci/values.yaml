@@ -176,3 +176,19 @@ kafka:
 # --- Metering ---
 metering:
   enabled: true
+  database:
+    connection:
+    - secret:
+        name: metering-db
+        items:
+        - key: url
+          param: url
+    - secret:
+        name: postgres-client-cert-metering
+        items:
+        - key: tls.crt
+          param: sslcert
+        - key: tls.key
+          param: sslkey
+        - key: ca.crt
+          param: sslrootcert

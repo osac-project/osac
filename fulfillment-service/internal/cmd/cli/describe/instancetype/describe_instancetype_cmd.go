@@ -23,10 +23,10 @@ import (
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
 
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
-	"github.com/osac-project/fulfillment-service/internal/cmd/cli/lookup"
-	"github.com/osac-project/fulfillment-service/internal/config"
-	"github.com/osac-project/fulfillment-service/internal/terminal"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/lookup"
+	"github.com/osac-project/osac/fulfillment-service/internal/config"
+	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 )
 
 // Cmd creates the command to describe an instance type.
@@ -116,12 +116,16 @@ func renderInstanceType(w io.Writer, it *publicv1.InstanceType) {
 
 		// Conditional deprecation section (D-01):
 		if dep := spec.GetDeprecation(); dep != nil {
-			hasContent := dep.GetReplacement() != "" ||
+			hasContent := dep.GetReplacement() != nil ||
 				dep.GetDeprecationTimestamp() != nil ||
 				dep.GetObsolescenceTimestamp() != nil
 			if hasContent {
-				if dep.GetReplacement() != "" {
-					fmt.Fprintf(writer, "Replacement:\t%s\n", dep.GetReplacement())
+				if ref := dep.GetReplacement(); ref != nil {
+					if ref.GetName() != "" {
+						fmt.Fprintf(writer, "Replacement:\t%s\n", ref.GetName())
+					} else if ref.GetId() != "" {
+						fmt.Fprintf(writer, "Replacement:\t%s\n", ref.GetId())
+					}
 				}
 				if ts := dep.GetDeprecationTimestamp(); ts != nil {
 					fmt.Fprintf(writer, "Deprecated At:\t%s\n", ts.AsTime().Format(time.RFC3339))

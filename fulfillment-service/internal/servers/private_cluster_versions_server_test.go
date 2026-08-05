@@ -15,6 +15,7 @@ package servers
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -25,7 +26,7 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 )
 
 var _ = Describe("Private cluster versions server", func() {
@@ -372,6 +373,10 @@ var _ = Describe("Private cluster versions server", func() {
 				Entry("rejects invalid semver", "bad-semver", "not-a-version", "quay.io/ocp:latest", "SemVer"),
 				Entry("rejects empty version", "empty-version", "", "quay.io/ocp:latest", "spec.version"),
 				Entry("rejects empty image", "empty-image", "4.17.0", "", "spec.image"),
+				Entry("rejects image exceeding max length", "long-image", "4.17.0",
+					strings.Repeat("a", 513), "image"),
+				Entry("rejects version exceeding max length", "long-version",
+					strings.Repeat("0", 257), "quay.io/ocp:latest", "version"),
 				Entry("accepts prerelease", "prerelease", "4.17.0-rc.1", "quay.io/ocp:4.17.0-rc.1", ""),
 			)
 		})

@@ -23,12 +23,12 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
-	"github.com/osac-project/fulfillment-service/internal/auth"
-	"github.com/osac-project/fulfillment-service/internal/collections"
-	"github.com/osac-project/fulfillment-service/internal/database"
-	"github.com/osac-project/fulfillment-service/internal/database/dao"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/collections"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 )
 
 var _ = Describe("Subnets server", func() {
@@ -88,7 +88,7 @@ var _ = Describe("Subnets server", func() {
 			}.Build(),
 			Spec: privatev1.VirtualNetworkSpec_builder{
 				Region:       "us-east-1",
-				NetworkClass: "default",
+				NetworkClass: privatev1.NetworkClassReference_builder{Id: "default"}.Build(),
 				Ipv4Cidr:     new("10.0.0.0/16"),
 				Capabilities: privatev1.VirtualNetworkCapabilities_builder{
 					EnableIpv4: true,
@@ -166,7 +166,7 @@ var _ = Describe("Subnets server", func() {
 			response, err := server.Create(ctx, publicv1.SubnetsCreateRequest_builder{
 				Object: publicv1.Subnet_builder{
 					Spec: publicv1.SubnetSpec_builder{
-						VirtualNetwork: virtualNetworkID,
+						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 						Ipv4Cidr:       new("10.0.1.0/24"),
 					}.Build(),
 				}.Build(),
@@ -185,7 +185,7 @@ var _ = Describe("Subnets server", func() {
 				_, err := server.Create(ctx, publicv1.SubnetsCreateRequest_builder{
 					Object: publicv1.Subnet_builder{
 						Spec: publicv1.SubnetSpec_builder{
-							VirtualNetwork: virtualNetworkID,
+							VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 							Ipv4Cidr:       new(fmt.Sprintf("10.0.%d.0/24", i+1)),
 						}.Build(),
 					}.Build(),
@@ -208,7 +208,7 @@ var _ = Describe("Subnets server", func() {
 				_, err := server.Create(ctx, publicv1.SubnetsCreateRequest_builder{
 					Object: publicv1.Subnet_builder{
 						Spec: publicv1.SubnetSpec_builder{
-							VirtualNetwork: virtualNetworkID,
+							VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 							Ipv4Cidr:       new(fmt.Sprintf("10.0.%d.0/24", i+1)),
 						}.Build(),
 					}.Build(),
@@ -231,7 +231,7 @@ var _ = Describe("Subnets server", func() {
 				_, err := server.Create(ctx, publicv1.SubnetsCreateRequest_builder{
 					Object: publicv1.Subnet_builder{
 						Spec: publicv1.SubnetSpec_builder{
-							VirtualNetwork: virtualNetworkID,
+							VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 							Ipv4Cidr:       new(fmt.Sprintf("10.0.%d.0/24", i+1)),
 						}.Build(),
 					}.Build(),
@@ -255,7 +255,7 @@ var _ = Describe("Subnets server", func() {
 				response, err := server.Create(ctx, publicv1.SubnetsCreateRequest_builder{
 					Object: publicv1.Subnet_builder{
 						Spec: publicv1.SubnetSpec_builder{
-							VirtualNetwork: virtualNetworkID,
+							VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 							Ipv4Cidr:       new(fmt.Sprintf("10.0.%d.0/24", i+1)),
 						}.Build(),
 					}.Build(),
@@ -280,7 +280,7 @@ var _ = Describe("Subnets server", func() {
 			createResponse, err := server.Create(ctx, publicv1.SubnetsCreateRequest_builder{
 				Object: publicv1.Subnet_builder{
 					Spec: publicv1.SubnetSpec_builder{
-						VirtualNetwork: virtualNetworkID,
+						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 						Ipv4Cidr:       new("10.0.1.0/24"),
 					}.Build(),
 				}.Build(),
@@ -303,7 +303,7 @@ var _ = Describe("Subnets server", func() {
 						Name: "original-name",
 					}.Build(),
 					Spec: publicv1.SubnetSpec_builder{
-						VirtualNetwork: virtualNetworkID,
+						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 						Ipv4Cidr:       new("10.0.1.0/24"),
 					}.Build(),
 				}.Build(),
@@ -319,7 +319,7 @@ var _ = Describe("Subnets server", func() {
 						Name: "updated-name",
 					}.Build(),
 					Spec: publicv1.SubnetSpec_builder{
-						VirtualNetwork: virtualNetworkID,
+						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 						Ipv4Cidr:       new("10.0.1.0/24"),
 					}.Build(),
 				}.Build(),
@@ -340,7 +340,7 @@ var _ = Describe("Subnets server", func() {
 			createResponse, err := server.Create(ctx, publicv1.SubnetsCreateRequest_builder{
 				Object: publicv1.Subnet_builder{
 					Spec: publicv1.SubnetSpec_builder{
-						VirtualNetwork: virtualNetworkID,
+						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 						Ipv4Cidr:       new("10.0.1.0/24"),
 					}.Build(),
 				}.Build(),
@@ -356,7 +356,7 @@ var _ = Describe("Subnets server", func() {
 						Name: "renamed",
 					}.Build(),
 					Spec: publicv1.SubnetSpec_builder{
-						VirtualNetwork: virtualNetworkID,
+						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 						Ipv4Cidr:       new("10.0.1.0/24"),
 					}.Build(),
 				}.Build(),
@@ -370,7 +370,7 @@ var _ = Describe("Subnets server", func() {
 			createResponse, err := server.Create(ctx, publicv1.SubnetsCreateRequest_builder{
 				Object: publicv1.Subnet_builder{
 					Spec: publicv1.SubnetSpec_builder{
-						VirtualNetwork: virtualNetworkID,
+						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 						Ipv4Cidr:       new("10.0.2.0/24"),
 					}.Build(),
 				}.Build(),
@@ -387,7 +387,7 @@ var _ = Describe("Subnets server", func() {
 						Name: "cidr-omitted",
 					}.Build(),
 					Spec: publicv1.SubnetSpec_builder{
-						VirtualNetwork: virtualNetworkID,
+						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -400,7 +400,7 @@ var _ = Describe("Subnets server", func() {
 			createResponse, err := server.Create(ctx, publicv1.SubnetsCreateRequest_builder{
 				Object: publicv1.Subnet_builder{
 					Spec: publicv1.SubnetSpec_builder{
-						VirtualNetwork: virtualNetworkID,
+						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 						Ipv4Cidr:       new("10.0.3.0/24"),
 					}.Build(),
 				}.Build(),
@@ -413,7 +413,7 @@ var _ = Describe("Subnets server", func() {
 				Object: publicv1.Subnet_builder{
 					Id: object.GetId(),
 					Spec: publicv1.SubnetSpec_builder{
-						VirtualNetwork: virtualNetworkID,
+						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 						Ipv4Cidr:       new("10.0.4.0/24"),
 					}.Build(),
 				}.Build(),
@@ -430,7 +430,7 @@ var _ = Describe("Subnets server", func() {
 			createResponse, err := server.Create(ctx, publicv1.SubnetsCreateRequest_builder{
 				Object: publicv1.Subnet_builder{
 					Spec: publicv1.SubnetSpec_builder{
-						VirtualNetwork: virtualNetworkID,
+						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 						Ipv4Cidr:       new("10.0.5.0/24"),
 					}.Build(),
 				}.Build(),
@@ -447,7 +447,7 @@ var _ = Describe("Subnets server", func() {
 						Version: math.MaxInt32,
 					}.Build(),
 					Spec: publicv1.SubnetSpec_builder{
-						VirtualNetwork: virtualNetworkID,
+						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 						Ipv4Cidr:       new("10.0.5.0/24"),
 					}.Build(),
 				}.Build(),
@@ -464,7 +464,7 @@ var _ = Describe("Subnets server", func() {
 			createResponse, err := server.Create(ctx, publicv1.SubnetsCreateRequest_builder{
 				Object: publicv1.Subnet_builder{
 					Spec: publicv1.SubnetSpec_builder{
-						VirtualNetwork: virtualNetworkID,
+						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 						Ipv4Cidr:       new("10.0.1.0/24"),
 					}.Build(),
 				}.Build(),

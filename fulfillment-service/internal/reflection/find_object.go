@@ -19,7 +19,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	"github.com/osac-project/fulfillment-service/internal/exit"
+	"github.com/osac-project/osac/fulfillment-service/internal/exit"
 )
 
 // Renderer is a minimal interface satisfied by *terminal.Console.

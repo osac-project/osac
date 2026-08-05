@@ -7,7 +7,11 @@
 #   _dispatch_action   — task file to invoke (setup, ensure_storage_class, teardown_cluster_storage, teardown_backend)
 #
 # Uses from play scope:
-#   storage_provider_tiers              — full tier list (filtered here per provider)
+#   _storage_provider_tiers              — full tier list, qos_policy-defaulted (filtered here per provider)
+#   storage_provider_backend_connections — backend connection details keyed by backend_id,
+#                                          filtered here to only the backend_id(s) referenced
+#                                          by this provider's dispatched tiers, so a role never
+#                                          sees credentials for a backend it wasn't dispatched
 #   _cluster_name                        — optional target cluster name override (for volume
 #                                          naming); ensure_storage_class self-discovers it from
 #                                          the target cluster's Infrastructure object when unset
@@ -19,19 +23,26 @@
 - name: "Compute filtered tiers for current provider"
   ansible.builtin.set_fact:
     _computed_provider_tiers: >-
-      {{ (storage_provider_tiers | selectattr('provider', 'equalto', _current_provider) | list)
-         | selectattr('name', 'in', _requested_tiers) | list
-         if (_requested_tiers is defined and _requested_tiers | length > 0)
-         else (storage_provider_tiers | selectattr('provider', 'equalto', _current_provider) | list) }}
+      {{ _storage_provider_tiers | selectattr('provider', 'equalto', _current_provider) | list }}
 
-- name: "Fail if requested tier filter produced no matches"
-  when: >-
-    _requested_tiers is defined and _requested_tiers | length > 0 and
-    _computed_provider_tiers | length == 0
-  ansible.builtin.fail:
-    msg: >-
-      None of the requested tiers ({{ _requested_tiers | join(', ') }}) match
-      provider '{{ _current_provider }}' tiers. Check STORAGE_TIERS configuration.
+- name: "Compute filtered backend connections for current provider's dispatched tiers"
+  ansible.builtin.set_fact:
+    _computed_provider_backend_connections: >-
+      {{
+        storage_provider_backend_connections
+        | default({})
+        | dict2items
+        | selectattr(
+            'key',
+            'in',
+            (_computed_provider_tiers
+             | selectattr('backend_id', 'defined')
+             | map(attribute='backend_id')
+             | list)
+          )
+        | items2dict
+      }}
+  no_log: true
 
 - name: "Dispatch provider storage action with remote kubeconfig routing"
   module_defaults:
@@ -49,6 +60,7 @@
         public: true
       vars:
         _provider_tiers: "{{ _computed_provider_tiers }}"
+        _provider_backend_connections: "{{ _computed_provider_backend_connections }}"
 
 - name: "Accumulate tenant config after dispatch (setup only)"
   ansible.builtin.set_fact:

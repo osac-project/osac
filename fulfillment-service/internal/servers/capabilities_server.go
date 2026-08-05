@@ -19,7 +19,7 @@ import (
 	"log/slog"
 	"slices"
 
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 )
 
 // CapabilitiesServerBuilder contains the data and logic needed to create a new capabilities server.

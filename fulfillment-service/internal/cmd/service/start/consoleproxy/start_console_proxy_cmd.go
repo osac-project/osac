@@ -38,16 +38,16 @@ import (
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/reflection"
 
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 
-	"github.com/osac-project/fulfillment-service/internal/auth/jwe"
-	"github.com/osac-project/fulfillment-service/internal/console"
-	"github.com/osac-project/fulfillment-service/internal/logging"
-	"github.com/osac-project/fulfillment-service/internal/metrics"
-	"github.com/osac-project/fulfillment-service/internal/network"
-	"github.com/osac-project/fulfillment-service/internal/recovery"
-	"github.com/osac-project/fulfillment-service/internal/servers"
-	shtdwn "github.com/osac-project/fulfillment-service/internal/shutdown"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth/jwe"
+	"github.com/osac-project/osac/fulfillment-service/internal/console"
+	"github.com/osac-project/osac/fulfillment-service/internal/logging"
+	"github.com/osac-project/osac/fulfillment-service/internal/metrics"
+	"github.com/osac-project/osac/fulfillment-service/internal/network"
+	"github.com/osac-project/osac/fulfillment-service/internal/recovery"
+	"github.com/osac-project/osac/fulfillment-service/internal/servers"
+	shtdwn "github.com/osac-project/osac/fulfillment-service/internal/shutdown"
 )
 
 // Cmd creates and returns the `start console-proxy` command.

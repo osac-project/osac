@@ -28,16 +28,16 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/osac-project/fulfillment-service/internal/cmd/cli/get/externalippool"
-	"github.com/osac-project/fulfillment-service/internal/cmd/cli/get/kubeconfig"
-	"github.com/osac-project/fulfillment-service/internal/cmd/cli/get/password"
-	"github.com/osac-project/fulfillment-service/internal/cmd/cli/get/token"
-	"github.com/osac-project/fulfillment-service/internal/config"
-	"github.com/osac-project/fulfillment-service/internal/logging"
-	"github.com/osac-project/fulfillment-service/internal/packages"
-	"github.com/osac-project/fulfillment-service/internal/reflection"
-	"github.com/osac-project/fulfillment-service/internal/rendering"
-	"github.com/osac-project/fulfillment-service/internal/terminal"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/externalippool"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/kubeconfig"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/password"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/token"
+	"github.com/osac-project/osac/fulfillment-service/internal/config"
+	"github.com/osac-project/osac/fulfillment-service/internal/logging"
+	"github.com/osac-project/osac/fulfillment-service/internal/packages"
+	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
+	"github.com/osac-project/osac/fulfillment-service/internal/rendering"
+	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 )
 
 //go:embed templates
@@ -348,7 +348,7 @@ Results can be filtered using CEL expressions with the
 {{ bt 3 }}
 
 For more information about the CEL expressions supported by the server see
-https://github.com/osac-project/fulfillment-service/blob/main/docs/FILTER.md.
+https://github.com/osac-project/osac/fulfillment-service/blob/main/docs/FILTER.md.
 
 The output format can be changed with the {{ bt }}--output{{ bt }} flag. Supported formats are {{ bt }}table{{ bt }}
 (default), {{ bt }}json{{ bt }} and {{ bt }}yaml{{ bt }}:

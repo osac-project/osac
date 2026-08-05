@@ -21,9 +21,9 @@ import (
 	. "github.com/onsi/gomega"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
-	privatev1 "github.com/osac-project/fulfillment-service/internal/api/osac/private/v1"
-	publicv1 "github.com/osac-project/fulfillment-service/internal/api/osac/public/v1"
-	"github.com/osac-project/fulfillment-service/internal/uuid"
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 )
 
 var _ = Describe("Node set removal", func() {
@@ -71,11 +71,11 @@ var _ = Describe("Node set removal", func() {
 				Description: "A template with workers and storage node sets.",
 				NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
 					"workers": privatev1.ClusterTemplateNodeSet_builder{
-						HostType: workerHostTypeId,
+						HostType: privatev1.HostTypeReference_builder{Id: workerHostTypeId}.Build(),
 						Size:     3,
 					}.Build(),
 					"storage": privatev1.ClusterTemplateNodeSet_builder{
-						HostType: storageHostTypeId,
+						HostType: privatev1.HostTypeReference_builder{Id: storageHostTypeId}.Build(),
 						Size:     2,
 					}.Build(),
 				},
@@ -89,7 +89,7 @@ var _ = Describe("Node set removal", func() {
 		createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
 				Spec: publicv1.ClusterSpec_builder{
-					Template: templateId,
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())

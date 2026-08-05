@@ -83,8 +83,8 @@ This role implements the `openstack` NetworkClass strategy using OpenStack Neutr
     name: openstack
     tasks_from: create_virtual_network
   vars:
-    virtual_network: "{{ ansible_eda.event.payload }}"
-    virtual_network_name: "{{ ansible_eda.event.payload.metadata.name }}"
+    virtual_network: "{{ osac_job_vars.resource }}"
+    virtual_network_name: "{{ osac_job_vars.resource.metadata.name }}"
 ```
 
 ### Example: Subnet Provisioning
@@ -95,8 +95,8 @@ This role implements the `openstack` NetworkClass strategy using OpenStack Neutr
     name: openstack
     tasks_from: create_subnet
   vars:
-    subnet: "{{ ansible_eda.event.payload }}"
-    subnet_name: "{{ ansible_eda.event.payload.metadata.name }}"
+    subnet: "{{ osac_job_vars.resource }}"
+    subnet_name: "{{ osac_job_vars.resource.metadata.name }}"
 ```
 
 ### Example: Custom Subnet Configuration
@@ -107,8 +107,8 @@ This role implements the `openstack` NetworkClass strategy using OpenStack Neutr
     name: openstack
     tasks_from: create_subnet
   vars:
-    subnet: "{{ ansible_eda.event.payload }}"
-    subnet_name: "{{ ansible_eda.event.payload.metadata.name }}"
+    subnet: "{{ osac_job_vars.resource }}"
+    subnet_name: "{{ osac_job_vars.resource.metadata.name }}"
     default_subnet_dns_nameservers:
       - 10.0.0.10
       - 10.0.0.11

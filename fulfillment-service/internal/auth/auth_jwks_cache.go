@@ -36,7 +36,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
-	kubefiles "github.com/osac-project/fulfillment-service/internal/kubernetes/files"
+	kubefiles "github.com/osac-project/osac/fulfillment-service/internal/kubernetes/files"
 )
 
 // JwksCache is a cache that knows how to discover and load JSON web key sets.

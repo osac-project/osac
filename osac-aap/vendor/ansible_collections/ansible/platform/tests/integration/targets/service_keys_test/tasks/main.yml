@@ -1,0 +1,212 @@
+---
+- name: Generate a test ID
+  ansible.builtin.set_fact:
+    test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') }}"
+  when: test_id is not defined
+
+- name: Preset vars
+  ansible.builtin.set_fact:
+    name_prefix: "GW-Collection-Test-ServiceKeys-{{ test_id }}"
+
+- name: Get existing service clusters
+  ansible.builtin.set_fact:
+    _sc_query: "{{ query('ansible.platform.gateway_api', 'service_clusters', **connection_info) }}"
+
+- name: Fail if more than one service cluster or that cluster is not a gateway cluster
+  ansible.builtin.fail:
+    msg: "This test works with 3 service clusters: gateway, eda and hub. It appears you might already have one or more of those, failing"
+  when:
+    - _sc_query | length > 1
+    - _sc_query | length != 1 and _sc_query[0].type != 'gateway'
+
+- name: Run Test
+  module_defaults:
+    group/ansible.platform.gateway:
+      gateway_hostname: "{{ gateway_hostname }}"
+      gateway_username: "{{ gateway_username }}"
+      gateway_password: "{{ gateway_password }}"
+      gateway_validate_certs: "{{ gateway_validate_certs | bool }}"
+
+  block:
+    # <Service Clusters> ----------------------------
+    - name: Create Controller Service Cluster
+      ansible.platform.service_cluster:
+        name: "Automation Controller"
+        service_type: "controller"
+      register: controller_sc
+
+    - name: Create Hub Service Cluster
+      ansible.platform.service_cluster:
+        name: Automation Hub
+        service_type: "hub"
+      register: hub_sc
+
+    - name: "Create EDA Service Cluster"
+      ansible.platform.service_cluster:
+        name: Event Driven Automation
+        service_type: "eda"
+      register: eda_sc
+    # </Service Clusters> ----------------------------
+
+    # <Service Keys> ----------------------------
+    - name: Create Service Key 1
+      ansible.platform.service_key:
+        name: "{{ name_prefix }}-Key 1"
+        is_active: true
+        service_cluster: "{{ controller_sc.id }}"
+        algorithm: HS384
+        secret: "gateway-secret"
+        mark_previous_inactive: false
+      register: service_key1
+
+    - name: Assert that we created service key 1
+      ansible.builtin.assert:
+        that:
+          - service_key1 is changed
+
+    # We have to take out the secret because its encrypted
+    - name: Recreate Service Key 1
+      ansible.platform.service_key:
+        name: "{{ name_prefix }}-Key 1"
+        is_active: true
+        service_cluster: "{{ controller_sc.id }}"
+        algorithm: HS384
+        mark_previous_inactive: false
+      register: recreate_service_key1
+
+    - name: Assert that recreate does not change the system
+      ansible.builtin.assert:
+        that:
+          - recreate_service_key1 is not changed
+
+    - name: Create Service Key 2
+      ansible.platform.service_key:
+        name: "{{ name_prefix }}-Key 2"
+        service_cluster: "{{ hub_sc.name }}"
+        secret: "gateway-secret"
+        mark_previous_inactive: true
+      register: service_key2
+
+    - name: Assert that we created service key 2
+      ansible.builtin.assert:
+        that:
+          - service_key2 is changed
+
+    - name: Create Service Key 3
+      ansible.platform.service_key:
+        name: "{{ name_prefix }}-Key 3"
+        is_active: false
+        service_cluster: "{{ controller_sc.id }}"  # Controller
+        mark_previous_inactive: false
+      register: service_key3
+
+    - name: Assert that we created service key 3
+      ansible.builtin.assert:
+        that:
+          - service_key3 is changed
+
+    - name: Create Service Key 4
+      ansible.platform.service_key:
+        name: "{{ name_prefix }}-Key 4"
+        service_cluster: "{{ eda_sc.id }}"  # EDA
+        mark_previous_inactive: false
+      register: service_key4
+
+    - name: Assert that we created service key 4
+      ansible.builtin.assert:
+        that:
+          - service_key4 is changed
+
+    - name: Create Service Key 5
+      ansible.platform.service_key:
+        name: "{{ name_prefix }}-Key 5"
+        service_cluster: "{{ controller_sc.id }}"  # Controller, have to set others as inactive
+        mark_previous_inactive: true
+      register: service_key5
+
+    - name: Assert that we created service key 5
+      ansible.builtin.assert:
+        that:
+          - service_key5 is changed
+
+    - name: Deactivate a key
+      ansible.platform.service_key:
+        name: "{{ service_key2.name }}"
+        is_active: false
+      register: change_service_key2
+
+    - name: Assert that we changed the existing key
+      ansible.builtin.assert:
+        that:
+          - change_service_key2 is changed
+          - change_service_key2.id == change_service_key2.id
+
+    - name: See if a key exists
+      ansible.platform.service_key:
+        name: "{{ service_key3.id }}"
+        state: exists
+      register: exists_service_key3
+
+    - name: Assert that exists does not change the system
+      ansible.builtin.assert:
+        that:
+          - exists_service_key3 is not changed
+
+    - name: Rename a key
+      ansible.platform.service_key:
+        name: "{{ service_key4.id }}"
+        new_name: "{{ service_key4.id }}-New"
+      register: rename_service_key4
+
+    - name: Assert that the rename changed an existing service key
+      ansible.builtin.assert:
+        that:
+          - rename_service_key4 is changed
+          - rename_service_key4.id == service_key4.id
+
+    - name: Delete a non-existing service key
+      ansible.platform.service_key:
+        name: "{{ name_prefix }}-DNE"
+        state: absent
+      register: delete
+
+    - name: Assert that delete of non-existent dies not change the system
+      ansible.builtin.assert:
+        that:
+          - delete is not changed
+
+    - name: Delete an actual service key
+      ansible.platform.service_key:
+        name: "{{ service_key5.id }}"
+        state: absent
+      register: delete
+
+    - name: Assert that the delete changed the system
+      ansible.builtin.assert:
+        that:
+          - delete is changed
+
+  always:
+    # Always Cleanup
+    - name: Delete Service Keys
+      ansible.platform.service_key:
+        state: absent
+        name: "{{ vars[item].id }}"
+      when: "item in vars and 'id' in vars[item]"
+      loop:
+        - "service_key1"
+        - "service_key2"
+        - "service_key3"
+        - "service_key4"
+        - "service_key5"
+
+    - name: Delete Service Clusters
+      ansible.platform.service_cluster:
+        name: "{{ vars[item].id }}"
+        state: absent
+      loop:
+        - "controller_sc"
+        - "hub_sc"
+        - "eda_sc"
+      when: "item in vars and 'id' in vars[item]"
+...

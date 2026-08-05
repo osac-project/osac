@@ -1,0 +1,13 @@
+---
+cluster_order:
+  metadata:
+    name: example
+    namespace: example-orders
+  spec:
+    templateID: ocp.4-17.small
+    templateParameters:
+      base_domain: my.cluster
+
+cluster_settings_default_credentials_secret_namespace: "default"
+hosted_cluster_default_infraenv: "test"
+hosted_cluster_default_agent_namespace: "test"

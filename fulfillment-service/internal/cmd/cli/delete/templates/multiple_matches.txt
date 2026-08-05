@@ -1,0 +1,17 @@
+Name or identifier '{{ .Ref }}' is ambiguous.
+
+{{ if lt (len .Matches) .Total }}
+There are {{ .Total }} matching objects, these are the first {{ len .Matches }}:
+{{ else }}
+There are {{ .Total }} matching objects:
+{{ end }}
+
+{{ table .Matches }}
+
+{{ $first := index .Matches 0 }}
+Use the identifiers instead of the names to avoid the ambiguity. For example, to delete the object
+with identifier '{{ $first.GetId }}' use a command like this:
+
+{{ binary }} delete {{ .Object }} {{ $first.GetId }}
+
+Use the '--help' option to get more details about the command.

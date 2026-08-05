@@ -1,0 +1,13 @@
+{{- if and .Values.configAsCode.importAgentsEnabled .Values.importAgents.servers }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: import-agents-inventory
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-aap.labels" . | nindent 4 }}
+data:
+  servers.yml: |
+    servers:
+    {{- .Values.importAgents.servers | toYaml | nindent 4 }}
+{{- end }}

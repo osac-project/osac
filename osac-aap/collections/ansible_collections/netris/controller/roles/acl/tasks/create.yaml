@@ -1,0 +1,92 @@
+---
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Build ACL rule body
+  ansible.builtin.set_fact:
+    _acl_body:
+      name: "{{ acl_name }}"
+      action: "{{ acl_action }}"
+      proto: "{{ acl_proto }}"
+      vpc:
+        id: "{{ acl_vpc_id | default(1) | int }}"
+      src_prefix: "{{ acl_src_prefix | default('0.0.0.0/0') }}"
+      dst_prefix: "{{ acl_dst_prefix | default('0.0.0.0/0') }}"
+      src_port_from: "{{ acl_src_port_from | default('1') | string }}"
+      src_port_to: "{{ acl_src_port_to | default('65535') | string }}"
+      src_port_group: 0
+      dst_port_from: "{{ acl_dst_port_from | default('1') | string }}"
+      dst_port_to: "{{ acl_dst_port_to | default('65535') | string }}"
+      dst_port_group: 0
+      icmp_type: "{{ acl_icmp_type | default(1) }}"
+      established: "{{ acl_established | default(1) }}"
+      reverse: "{{ acl_reverse | default('yes') }}"
+      comment: "{{ acl_comment | default('') }}"
+      valid_until: null
+
+- name: Display ACL rule body
+  ansible.builtin.debug:
+    var: _acl_body
+
+- name: Get existing ACL rules
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/acl"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: 200
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _acl_list_resp
+  no_log: true
+
+- name: Find ACL rule by name
+  ansible.builtin.set_fact:
+    _existing_acl: "{{ (_acl_list_resp.json.data | default([])) | selectattr('name', 'equalto', acl_name) | list | first | default(none) }}"
+  when: _acl_list_resp.json is mapping
+
+- name: Set ACL facts from existing rule (skip creation)
+  ansible.builtin.set_fact:
+    acl_id: "{{ _existing_acl.id }}"
+    acl_already_existed: true
+  when: _existing_acl is defined and _existing_acl is not none
+
+- name: Create ACL rule
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/acl"
+    method: POST
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+      Content-Type: "application/json"
+    body_format: json
+    body: "{{ _acl_body }}"
+    return_content: true
+    status_code: [200, 201, 400, 500]
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _acl_create_resp
+  when: _existing_acl is not defined or _existing_acl is none
+  no_log: true
+
+- name: Display ACL creation error
+  when:
+    - _acl_create_resp is defined
+    - _acl_create_resp is not skipped
+    - (_acl_create_resp.status | default(200)) not in [200, 201]
+  ansible.builtin.fail:
+    msg: >-
+      Failed to create ACL rule '{{ acl_name }}'.
+      Netris responded with status {{ _acl_create_resp.status }}: {{ _acl_create_resp.json.message | default(_acl_create_resp.content | default('unknown error')) }}
+
+- name: Set ACL facts from create response
+  ansible.builtin.set_fact:
+    acl_id: "{{ _acl_create_resp.json.data.id | default(_acl_create_resp.json.data) }}"
+    acl_already_existed: false
+  when:
+    - _existing_acl is not defined or _existing_acl is none
+    - _acl_create_resp is not skipped
+    - _acl_create_resp is changed or (_acl_create_resp.status | default(0)) in [200, 201]
+    - _acl_create_resp.json is mapping

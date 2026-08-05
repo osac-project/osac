@@ -1,0 +1,17 @@
+---
+- name: Create a BareMetalPool resource
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    bare_metal_pool: "{{ ansible_eda.event.payload }}"
+    bare_metal_pool_name: "{{ bare_metal_pool.metadata.name }}"
+    bare_metal_pool_namespace: "{{ bare_metal_pool.metadata.namespace }}"
+    template_id: "{{ bare_metal_pool.metadata.annotations['osac.openshift.io/templateID'] }}"
+
+  tasks:
+    - name: Call the selected bare metal pool template
+      when: template_id != "" and template_id != "noop"
+      ansible.builtin.include_role:
+        name: "osac.templates.{{ template_id }}"
+        tasks_from: create

@@ -1,0 +1,55 @@
+---
+- name: Get current settings
+  ansible.builtin.set_fact:
+    current_settings: "{{ lookup('ansible.platform.gateway_api', 'settings/all', **connection_info) }}"
+
+- name: Run Tests
+  module_defaults:
+    group/ansible.platform.gateway:
+      gateway_hostname: "{{ gateway_hostname }}"
+      gateway_username: "{{ gateway_username }}"
+      gateway_password: "{{ gateway_password }}"
+      gateway_validate_certs: "{{ gateway_validate_certs | bool }}"
+
+  block:
+    - name: Change some settings
+      ansible.platform.settings:
+        settings:
+          gateway_access_token_expiration: 700
+          password_min_length: 20
+          password_min_digits: 3
+          password_min_upper: 6
+          password_min_special: 2
+      register: settings
+
+    - name: Assert that change the settings changes the system
+      ansible.builtin.assert:
+        that:
+          - settings is changed
+
+    - name: Test idempotence
+      ansible.platform.settings:
+        settings:
+          gateway_access_token_expiration: 700
+          password_min_length: 20
+          password_min_digits: 3
+          password_min_upper: 6
+          password_min_special: 2
+      register: settings
+
+    - name: Assert making the same change does not change the system
+      ansible.builtin.assert:
+        that:
+          - settings is not changed
+
+  always:
+    # Always Cleanup
+    - name: Reset Settings
+      ansible.platform.settings:
+        settings:
+          gateway_access_token_expiration: "{{ current_settings['gateway_access_token_expiration'] }}"
+          password_min_length: "{{ current_settings['password_min_length'] }}"
+          password_min_digits: "{{ current_settings['password_min_digits'] }}"
+          password_min_upper: "{{ current_settings['password_min_upper'] }}"
+          password_min_special: "{{ current_settings['password_min_special'] }}"
+...

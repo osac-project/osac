@@ -1,0 +1,178 @@
+- name: Show node requests
+  ansible.builtin.debug:
+    var: cluster_infra_node_requests
+
+- name: Build BareMetalPool hostSets
+  ansible.builtin.set_fact:
+    baremetalpool_host_sets: >-
+      {{ baremetalpool_host_sets | default([]) + [{
+        'hostType': item.resourceClass,
+        'replicas': item.numberOfNodes | int
+      }] }}
+  loop: "{{ cluster_infra_node_requests }}"
+
+# For now, we create the BareMetalPool in the POD_NAMESPACE, but
+# in the future, we hope to have it created in the cluster_working_namespace.
+# This requires updates to the bare-metal-fulfillment-operator
+
+- name: Step - Create BareMetalPool
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: osac.openshift.io/v1alpha1
+      kind: BareMetalPool
+      metadata:
+        name: "{{ cluster_infra_name }}"
+        namespace: "{{ lookup('env', 'POD_NAMESPACE') }}"
+        labels: "{{ {cluster_order_label: cluster_infra_name} }}"
+      spec:
+        hostSets: "{{ baremetalpool_host_sets }}"
+  register: baremetalpool_response
+
+- name: Set BareMetalPool UID
+  ansible.builtin.set_fact:
+    baremetalpool_uid: "{{ baremetalpool_response.result.metadata.uid }}"
+
+- name: Create cluster network
+  ansible.builtin.include_role:
+    name: osac.esi.network
+  vars:
+    network_suffix: "{{ cluster_infra_name }}"
+    network_state: present
+    network_properties:
+      instance: "{{ cluster_order.metadata.namespace }}"
+      clusterorder: "{{ cluster_infra_name }}"
+      purpose: "o-sac"
+
+- name: Set cluster_infra_network_name
+  ansible.builtin.set_fact:
+    cluster_infra_network_name: "network-{{ cluster_infra_name }}"
+
+- name: Calculate total desired nodes
+  ansible.builtin.set_fact:
+    total_desired_nodes: "{{ cluster_infra_node_requests | map(attribute='numberOfNodes') | map('int') | sum }}"
+
+- name: Wait for BareMetalInstances to be allocated
+  kubernetes.core.k8s_info:
+    api_version: osac.openshift.io/v1alpha1
+    kind: BareMetalInstance
+    namespace: "{{ lookup('env', 'POD_NAMESPACE') }}"
+  register: baremetalinstances_result
+  until: >
+    (
+      baremetalinstances_result.resources |
+      selectattr('metadata.ownerReferences', 'defined') |
+      map(attribute='metadata.ownerReferences') |
+      flatten |
+      selectattr('controller', 'defined') |
+      selectattr('controller', 'equalto', true) |
+      selectattr('uid', 'equalto', baremetalpool_uid) |
+      list | length
+    ) == (total_desired_nodes | int)
+  retries: 60
+  delay: 10
+
+- name: Initialize allocated host IDs
+  ansible.builtin.set_fact:
+    allocated_host_ids: []
+
+- name: Build allocated host IDs from BareMetalInstances
+  ansible.builtin.set_fact:
+    allocated_host_ids: "{{ allocated_host_ids + [item.spec.externalHostID] }}"
+  loop: "{{ baremetalinstances_result.resources }}"
+  when:
+    - item.metadata.ownerReferences is defined
+    - item.metadata.ownerReferences | selectattr('controller', 'defined') | selectattr('controller', 'equalto', true) | selectattr('uid', 'equalto', baremetalpool_uid) | list | length > 0
+    - item.spec.externalHostID is defined
+    - item.spec.externalHostID != ''
+
+- name: Display allocated host IDs
+  ansible.builtin.debug:
+    msg: "Allocated host IDs: {{ allocated_host_ids }}"
+
+# Handle scale down **before** scale up: detach agents not in the
+# BareMetalInstance allocation before attaching new ones.
+
+- name: Wait for the Agents to be removed from the cluster
+  ansible.builtin.include_role:
+    name: osac.service.manage_agents
+    tasks_from: wait_for_agents_to_be_removed
+  vars:
+    manage_agents_cluster_order_name: "{{ cluster_infra_name }}"
+    manage_agents_desired_count: "{{ item.replicas }}"
+    manage_agents_resource_class: "{{ item.hostType }}"
+  loop: "{{ baremetalpool_host_sets }}"
+
+- name: Detach agents from cluster
+  ansible.builtin.include_role:
+    name: osac.service.manage_agents
+    tasks_from: detach_and_unlabel_all_removed_agents
+  vars:
+    manage_agents_cluster_order_name: "{{ cluster_infra_name }}"
+
+- name: Get all agents in the namespace
+  kubernetes.core.k8s_info:
+    kind: Agent
+    api_version: agent-install.openshift.io/v1beta1
+    namespace: "{{ default_agent_namespace }}"
+  register: all_agents_result
+
+- name: Initialize agents to attach list
+  ansible.builtin.set_fact:
+    agents_to_attach: []
+
+- name: Select agents matching allocated host IDs
+  ansible.builtin.set_fact:
+    agents_to_attach: "{{ agents_to_attach + [item] }}"
+  loop: "{{ all_agents_result.resources }}"
+  when:
+    - item.metadata.annotations is defined
+    - item.metadata.annotations['osac.openshift.io/host_uuid'] is defined
+    - item.metadata.annotations['osac.openshift.io/host_uuid'] in allocated_host_ids
+  loop_control:
+    label: "Selected agent {{ item.metadata.name }}"
+
+- name: Fail if not all leased hosts resolved to agents
+  ansible.builtin.fail:
+    msg: >-
+      Resolved {{ agents_to_attach | length }} Agents for
+      {{ allocated_host_ids | length }} leased hosts.
+  when: (agents_to_attach | length) != (allocated_host_ids | length)
+
+- name: Display hosts to attach to cluster network
+  ansible.builtin.debug:
+    msg: "Hosts to attach: {{ allocated_host_ids }}"
+
+- name: Display agents to label
+  ansible.builtin.debug:
+    msg: "Agents to label: {{ agents_to_attach | map(attribute='metadata.name') | list }}"
+
+- name: Attach new agents's hosts to cluster network
+  ansible.builtin.include_role:
+    name: osac.esi.l2
+    tasks_from: set_networks_for_node
+  vars:
+    node: "{{ item }}"
+    networks:
+    - "{{ cluster_infra_network_name }}"
+  loop: "{{ allocated_host_ids }}"
+  loop_control:
+    label: "Attach host {{ item }}"
+
+- name: Label selected agents with cluster order
+  kubernetes.core.k8s_json_patch:
+    api_version: agent-install.openshift.io/v1beta1
+    kind: Agent
+    name: "{{ agent.metadata.name }}"
+    namespace: "{{ agent.metadata.namespace }}"
+    patch:
+      - op: add
+        path: /metadata/labels/{{ cluster_order_label | osac.service.json_pointer_escape }}
+        value: "{{ cluster_infra_name }}"
+      - op: add
+        path: /spec/approved
+        value: true
+  loop: "{{ agents_to_attach }}"
+  loop_control:
+    loop_var: agent
+    label: "Labeling agent {{ agent.metadata.name }}"

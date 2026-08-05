@@ -1,0 +1,18 @@
+- name: Purge port forwardings
+  ansible.builtin.command: >-
+    openstack esi port forwarding purge {{ floating_ip }} -f json
+  register: purge_port_fwd_result
+  changed_when: purge_port_fwd_result.stdout | from_json | length > 0
+
+- name: Create port forwarding  # noqa:no-changed-when
+  when: (ports | length > 0)
+  ansible.builtin.command: >-
+    openstack esi port forwarding create {{ internal_ip }} {{ floating_ip }}
+      --internal-ip-network "{{ internal_network }}"
+      {% for portarg in ports %}-p {{ portarg }} {% endfor %}
+      -d "{{ description }}" -f json
+  register: create_port_fwd_result
+
+- name: Show port forwarding result
+  ansible.builtin.debug:
+    var: create_port_fwd_result

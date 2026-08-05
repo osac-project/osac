@@ -1,0 +1,187 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/timestamp.proto";
+import "osac/private/v1/condition_status_type.proto";
+import "osac/private/v1/metadata_type.proto";
+import "osac/private/v1/break_glass_credentials_type.proto";
+
+message Tenant {
+  string id = 1;
+  Metadata metadata = 2;
+  TenantSpec spec = 3;
+  TenantStatus status = 4;
+}
+
+message TenantSpec {
+  // List of e-mail domains associated with this tenant.
+  //
+  // These are used to automatically redirect users to the correct identity provider during login. Each domain must be a
+  // valid DNS hostname with only lowercase labels, for example `example.com` or `corp.example.org`. Uppercase letters
+  // are rejected. Domains must be globally unique across all tenants.
+  //
+  // Validation rules:
+  // - Each domain must be non-empty and at most 253 characters
+  // - Must be a DNS hostname (not an IP address)
+  // - Must have at least two labels (e.g., "example.com", not just "example")
+  // - Each label must be a valid DNS label:
+  //   - Max 63 characters
+  //   - Lowercase letters (a-z), digits (0-9), and hyphens (-) only
+  //   - Must start and end with alphanumeric characters
+  // - No duplicate domains in the list
+  repeated string domains = 1 [(buf.validate.field).repeated = {
+    unique: true,
+    items: {
+      string: {
+        min_len: 1,
+        max_len: 253
+      },
+      cel: [
+        {
+          id: "not_ip_address",
+          message: "must be a DNS hostname, not an IP address",
+          expression: "!this.matches('^[0-9.]+$') && !this.matches('^[0-9a-f:]+$')"
+        },
+        {
+          id: "min_two_labels",
+          message: "must have at least two labels (e.g., 'example.com')",
+          expression: "this.contains('.')"
+        },
+        {
+          id: "valid_dns_labels",
+          message: "all labels must be valid DNS labels (lowercase a-z/0-9/hyphen, max 63 chars, alphanumeric start/end)",
+          expression: "this.split('.').all(label, label.size() > 0 && label.size() <= 63 && label.matches('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'))"
+        }
+      ]
+    }
+  }];
+}
+
+// Represents the current operational state of a Tenant.
+//
+// Status is system-provided and read-only. Users cannot modify status fields directly; the system updates them
+// based on the reconciliation with the identity provider.
+message TenantStatus {
+  // Break-glass account credentials.
+  // Only populated on successful creation. These credentials must be stored securely.
+  // This field is not persisted and will be empty when reading existing tenants.
+  BreakGlassCredentials break_glass_credentials = 1;
+
+  // Current lifecycle state of the tenant's IDP synchronization.
+  TenantState state = 2;
+
+  // Human-readable message providing additional details about the current state.
+  //
+  // For PENDING state, this might contain progress information like "Waiting for IDP sync" or
+  // "Creating tenant in identity provider".
+  //
+  // For FAILED state, this contains error details explaining what went wrong, such as "IDP connection timeout",
+  // "Tenant name already exists in IDP", or "Invalid tenant name format".
+  //
+  // For SYNCED state, this is typically empty or contains confirmation like "Tenant synced to IDP".
+  optional string message = 3;
+
+  // Name of the tenant created in the identity provider.
+  // Typically matches the tenant name but stored here for reference.
+  // This is set by the controller after successful IDP sync.
+  // Empty string when state is PENDING or FAILED.
+  string idp_tenant_name = 4;
+
+  // User ID of the break-glass account created in the identity provider.
+  // This account has limited administrative permissions for managing users and identity providers.
+  // The break-glass password is NOT stored here for security reasons - it is only returned once
+  // during tenant creation.
+  // Empty string when state is PENDING or FAILED.
+  string break_glass_user_id = 5;
+
+  // Conditions provide detailed status information about various subsystems of the tenant.
+  repeated TenantCondition conditions = 6;
+}
+
+// Represents a specific aspect of the tenant's current state.
+message TenantCondition {
+  // Type of condition.
+  TenantConditionType type = 1;
+
+  // Status of the condition (True, False, or Unknown).
+  ConditionStatus status = 2;
+
+  // LastTransitionTime is the last time the condition transitioned from one status to another.
+  google.protobuf.Timestamp last_transition_time = 3;
+
+  // Machine-readable reason for the condition's last transition.
+  optional string reason = 4;
+
+  // Human-readable message providing details about the condition.
+  optional string message = 5;
+}
+
+// Types of conditions that can be reported for a Tenant.
+enum TenantConditionType {
+  // Unspecified condition type.
+  TENANT_CONDITION_TYPE_UNSPECIFIED = 0;
+
+  // Indicates whether all default networking resources (VirtualNetwork, Subnets, SecurityGroup, NATGateway)
+  // have reached READY state.
+  //
+  // Status meanings:
+  // - True: All default networking resources are ready, or no default networking is configured
+  // - False: One or more default networking resources are pending or failed
+  TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY = 1;
+}
+
+// Lifecycle states for Tenant resources.
+//
+// State transitions typically follow: UNSPECIFIED -> PENDING -> SYNCED, with FAILED as a terminal error state
+// that may require user intervention or resource recreation.
+enum TenantState {
+  // State is unknown or has not been determined yet. This is the default state before initialization.
+  TENANT_STATE_UNSPECIFIED = 0;
+
+  // The tenant is being synchronized to the identity provider and is not ready for use yet.
+  //
+  // During this state, the system is:
+  // - Creating a tenant in the identity provider
+  // - Creating the break-glass account
+  // - Assigning IDP manager permissions
+  //
+  // Users cannot be added to tenants in PENDING state.
+  TENANT_STATE_PENDING = 1;
+
+  // The tenant has been successfully synchronized to the identity provider and is fully operational.
+  //
+  // In this state:
+  // - IDP tenant exists and is configured
+  // - Break-glass account is created and has proper permissions
+  // - Users can be added to the tenant
+  // - The tenant is ready for use
+  TENANT_STATE_SYNCED = 2;
+
+  // The tenant synchronization to the IDP has failed and the tenant is unusable.
+  //
+  // Common failure reasons include:
+  // - IDP connection timeout or network issues
+  // - Tenant name already exists in the IDP
+  // - Invalid tenant name format (doesn't meet IDP requirements)
+  // - IDP authentication or authorization failure
+  // - Break-glass account creation failure
+  //
+  // The status.message field will contain specific error details. Failed tenants typically require deletion
+  // and recreation with corrected parameters, or manual IDP cleanup.
+  TENANT_STATE_FAILED = 3;
+}

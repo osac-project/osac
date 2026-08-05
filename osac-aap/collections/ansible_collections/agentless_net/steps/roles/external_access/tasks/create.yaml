@@ -1,0 +1,283 @@
+---
+- name: Load agentless-net inventory hosts
+  ansible.builtin.include_vars:
+    file: "{{ agentless_net_inventory_file }}"
+    name: _agentless_net_inventory
+
+- name: Register net_nodes in play inventory
+  ansible.builtin.add_host:
+    name: "{{ item.key }}"
+    groups: net_nodes
+    ansible_host: "{{ item.value.ansible_host }}"
+    ansible_user: "{{ item.value.ansible_user }}"
+    ansible_password: "{{ item.value.ansible_password | default(omit) }}"
+    ansible_ssh_common_args: "{{ item.value.ansible_ssh_common_args | default(_agentless_net_inventory.all.vars.ansible_ssh_common_args | default(omit)) }}"
+  loop: "{{ _agentless_net_inventory.all.children.net_nodes.hosts | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Register switches in play inventory
+  ansible.builtin.add_host:
+    name: "{{ item.key }}"
+    groups: switches
+    ansible_host: "{{ item.value.ansible_host }}"
+    ansible_user: "{{ item.value.ansible_user }}"
+    ansible_password: "{{ item.value.ansible_password | default(omit) }}"
+    ansible_become_password: "{{ item.value.ansible_become_password | default(omit) }}"
+    ansible_network_os: "{{ item.value.ansible_network_os | default(omit) }}"
+    ansible_ssh_common_args: "{{ item.value.ansible_ssh_common_args | default(_agentless_net_inventory.all.vars.ansible_ssh_common_args | default(omit)) }}"
+    access_ports: "{{ item.value.access_ports | default({}) }}"
+  loop: "{{ _agentless_net_inventory.all.children.switches.hosts | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Set DNS names
+  ansible.builtin.set_fact:
+    external_access_api_domain: "api.{{ external_access_name }}.{{ external_access_base_domain }}"
+    external_access_api_int_domain: "api-int.{{ external_access_name }}.{{ external_access_base_domain }}"
+    external_access_ingress_domain: "apps.{{ external_access_name }}.{{ external_access_base_domain }}"
+
+- name: Get kube-apiserver service
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Service
+    namespace: "{{ external_access_namespace }}-{{ external_access_name }}"
+    name: kube-apiserver
+  register: external_access_kube_apiserver_service
+  until: >-
+    (external_access_kube_apiserver_service.resources | length > 0) and
+    (external_access_kube_apiserver_service.resources[0].status.loadBalancer.ingress | default([]) | length > 0)
+  retries: "{{ external_access_resource_wait_retries }}"
+  delay: "{{ external_access_resource_wait_delay }}"
+
+- name: Set API internal IP and port
+  ansible.builtin.set_fact:
+    external_access_api_internal_ip: "{{ external_access_kube_apiserver_service.resources[0].status.loadBalancer.ingress[0].ip }}"
+    external_access_kube_apiserver_port: "{{ external_access_kube_apiserver_service.resources[0].spec.ports[0].port }}"
+
+# --- agentless_net: allocate public IPs ---
+
+- name: Allocate public IP for API  # noqa: no-changed-when
+  environment:
+    ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
+    ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
+  ansible.builtin.command:
+    cmd: >
+      ansible-playbook
+      -i {{ agentless_net_inventory_file }}
+      -e ipam_state_file={{ agentless_net_net_node_ipam_state_file }}
+      -e ipam_pool_start={{ agentless_net_public_ip_pool_start }}
+      -e ipam_pool_end={{ agentless_net_public_ip_pool_end }}
+      -e ipam_purpose={{ external_access_state_key }}-api
+      {{ role_path }}/playbooks/ipam_allocate_ip.yaml
+
+- name: Read API public IP from state file
+  ansible.builtin.slurp:
+    src: "{{ agentless_net_net_node_ipam_state_file }}"
+  delegate_to: "{{ groups['net_nodes'][0] }}"
+  register: external_access_api_ipam_raw
+
+- name: Set API public IP
+  ansible.builtin.set_fact:
+    external_access_api_public_ip: "{{ (external_access_api_ipam_raw.content | b64decode | from_json).public_ips[external_access_state_key + '-api'][0] }}"
+
+- name: Allocate public IP for ingress  # noqa: no-changed-when
+  environment:
+    ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
+    ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
+  ansible.builtin.command:
+    cmd: >
+      ansible-playbook
+      -i {{ agentless_net_inventory_file }}
+      -e ipam_state_file={{ agentless_net_net_node_ipam_state_file }}
+      -e ipam_pool_start={{ agentless_net_public_ip_pool_start }}
+      -e ipam_pool_end={{ agentless_net_public_ip_pool_end }}
+      -e ipam_purpose={{ external_access_state_key }}-ingress
+      {{ role_path }}/playbooks/ipam_allocate_ip.yaml
+
+- name: Read ingress public IP from state file
+  ansible.builtin.slurp:
+    src: "{{ agentless_net_net_node_ipam_state_file }}"
+  delegate_to: "{{ groups['net_nodes'][0] }}"
+  register: external_access_ingress_ipam_raw
+
+- name: Set ingress public IP
+  ansible.builtin.set_fact:
+    external_access_ingress_public_ip: "{{ (external_access_ingress_ipam_raw.content | b64decode | from_json).public_ips[external_access_state_key + '-ingress'][0] }}"
+
+- name: Display allocated public IPs
+  ansible.builtin.debug:
+    msg:
+      - "API public IP: {{ external_access_api_public_ip }}"
+      - "Ingress public IP: {{ external_access_ingress_public_ip }}"
+
+- name: Store DNAT state for delete resilience  # noqa: no-changed-when
+  ansible.builtin.raw: |
+    python3 - '{{ agentless_net_net_node_ipam_state_file }}' \
+              '{{ external_access_state_key }}' \
+              '{{ external_access_api_internal_ip }}' \
+              '{{ external_access_kube_apiserver_port }}' <<'STATE_PY'
+    import fcntl, json, os, sys
+    state_file, cluster_name, api_ip, api_port = sys.argv[1:5]
+    with open(state_file, 'r+') as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        state = json.load(f)
+        state.setdefault('dnat_state', {})[cluster_name] = {
+            'api_internal_ip': api_ip,
+            'api_port': int(api_port)
+        }
+        f.seek(0)
+        f.write(json.dumps(state, indent=2))
+        f.truncate()
+        f.flush()
+        os.fsync(f.fileno())
+    STATE_PY
+  delegate_to: "{{ groups['net_nodes'][0] }}"
+
+# --- agentless_net: create DNAT for API ---
+
+- name: Create DNAT for API endpoint  # noqa: no-changed-when
+  environment:
+    ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
+    ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
+  ansible.builtin.command:
+    cmd: >
+      ansible-playbook
+      -i {{ agentless_net_inventory_file }}
+      -e dnat_router_name={{ external_access_name }}
+      -e dnat_public_ip={{ external_access_api_public_ip }}
+      -e dnat_public_port={{ external_access_kube_apiserver_port }}
+      -e dnat_internal_ip={{ external_access_api_internal_ip }}
+      -e dnat_internal_port={{ external_access_kube_apiserver_port }}
+      -e dnat_protocol=tcp
+      {{ role_path }}/playbooks/l3_create_dnat.yaml
+
+# --- DNS records ---
+
+- name: Create DNS records
+  when: >-
+    external_access_base_domain in external_access_supported_base_domains | default([])
+  ansible.builtin.include_role:
+    name: "{{ dns_class }}"
+    tasks_from: create
+  vars:
+    dns_zone: "{{ external_access_base_domain }}"
+    dns_record_name: "{{ item.name }}"
+    dns_record_type: A
+    dns_record_ttl: "{{ external_access_dns_ttl }}"
+    dns_record_value: "{{ item.addr }}"
+    dns_record_overwrite: true
+  loop:
+    - name: "{{ external_access_api_domain }}"
+      addr: "{{ external_access_api_public_ip }}"
+    - name: "{{ external_access_api_int_domain }}"
+      addr: "{{ external_access_api_public_ip }}"
+    - name: "*.{{ external_access_ingress_domain }}"
+      addr: "{{ external_access_ingress_public_ip }}"
+
+- name: Wait for DNS records
+  when: >-
+    external_access_base_domain in external_access_supported_base_domains | default([])
+  ansible.builtin.include_role:
+    name: osac.service.wait_for
+    tasks_from: wait_for_dns
+  vars:
+    wait_for_dns_record: "{{ item }}"
+  loop:
+    - "{{ external_access_api_domain }}"
+    - "{{ external_access_api_int_domain }}"
+    - "default-router.{{ external_access_ingress_domain }}"
+
+# --- Kubeconfig and cluster readiness ---
+
+- name: Get managed cluster admin kubeconfig secret
+  ansible.builtin.include_role:
+    name: osac.service.retrieve_kubeconfig
+  vars:
+    retrieve_kubeconfig_namespace: "{{ cluster_working_namespace }}"
+    retrieve_kubeconfig_cluster_name: "{{ cluster_order.metadata.name }}"
+
+- name: Wait for cluster to become ready
+  ansible.builtin.include_role:
+    name: osac.service.wait_for
+    tasks_from: wait_for_network_cluster_operator
+  vars:
+    wait_for_kubeconfig: "{{ admin_kubeconfig }}"
+
+# --- MetalLB ingress configuration ---
+
+- name: Compute MetalLB ingress IP from subnet
+  ansible.builtin.set_fact:
+    external_access_metallb_ingress_ip: "{{ agentless_net_subnet_cidr | ansible.utils.nthhost(-10) }}"
+
+- name: Configure MetalLB for ingress
+  ansible.builtin.include_role:
+    name: osac.service.metallb_ingress
+    tasks_from: configure_metallb_ingress
+  vars:
+    metallb_ingress_admin_kubeconfig: "{{ admin_kubeconfig }}"
+    metallb_ingress_ip: "{{ external_access_metallb_ingress_ip }}"
+
+# --- agentless_net: create DNAT for ingress ---
+
+- name: Create DNAT for ingress HTTP  # noqa: no-changed-when
+  environment:
+    ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
+    ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
+  ansible.builtin.command:
+    cmd: >
+      ansible-playbook
+      -i {{ agentless_net_inventory_file }}
+      -e dnat_router_name={{ external_access_name }}
+      -e dnat_public_ip={{ external_access_ingress_public_ip }}
+      -e dnat_public_port=80
+      -e dnat_internal_ip={{ external_access_metallb_ingress_ip }}
+      -e dnat_internal_port=80
+      -e dnat_protocol=tcp
+      {{ role_path }}/playbooks/l3_create_dnat.yaml
+
+- name: Create DNAT for ingress HTTPS  # noqa: no-changed-when
+  environment:
+    ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
+    ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
+  ansible.builtin.command:
+    cmd: >
+      ansible-playbook
+      -i {{ agentless_net_inventory_file }}
+      -e dnat_router_name={{ external_access_name }}
+      -e dnat_public_ip={{ external_access_ingress_public_ip }}
+      -e dnat_public_port=443
+      -e dnat_internal_ip={{ external_access_metallb_ingress_ip }}
+      -e dnat_internal_port=443
+      -e dnat_protocol=tcp
+      {{ role_path }}/playbooks/l3_create_dnat.yaml
+
+# --- agentless_net: announce PublicIP routes via BGP ---
+
+- name: Read veth namespace-side IP from state file
+  ansible.builtin.set_fact:
+    external_access_bgp_next_hop: "{{ (external_access_api_ipam_raw.content | b64decode | from_json).veth_state[external_access_state_key].ns_ip | ansible.utils.ipaddr('address') }}"
+
+- name: Announce API PublicIP route  # noqa: no-changed-when
+  environment:
+    ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
+    ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
+  ansible.builtin.command:
+    cmd: >
+      ansible-playbook
+      -i {{ agentless_net_inventory_file }}
+      -e bgp_public_ip={{ external_access_api_public_ip }}
+      -e bgp_next_hop={{ external_access_bgp_next_hop }}
+      {{ role_path }}/playbooks/bgp_announce.yaml
+
+- name: Announce ingress PublicIP route  # noqa: no-changed-when
+  environment:
+    ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
+    ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
+  ansible.builtin.command:
+    cmd: >
+      ansible-playbook
+      -i {{ agentless_net_inventory_file }}
+      -e bgp_public_ip={{ external_access_ingress_public_ip }}
+      -e bgp_next_hop={{ external_access_bgp_next_hop }}
+      {{ role_path }}/playbooks/bgp_announce.yaml

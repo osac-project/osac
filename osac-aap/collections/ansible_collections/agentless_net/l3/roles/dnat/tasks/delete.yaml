@@ -1,0 +1,32 @@
+---
+- name: Validate DNAT input variables
+  ansible.builtin.assert:
+    that:
+      - dnat_router_name is match('^[a-z0-9][a-z0-9_-]*$')
+      - dnat_public_ip | ansible.utils.ipv4 != false
+      - dnat_public_port | int > 0
+      - dnat_public_port | int <= 65535
+      - dnat_internal_ip | ansible.utils.ipv4 != false
+      - dnat_internal_port | int > 0
+      - dnat_internal_port | int <= 65535
+      - (dnat_protocol | default('tcp') | lower) in ['tcp', 'udp']
+    fail_msg: "DNAT variable validation failed. Check names, IPs, ports, and protocol."
+
+- name: Check if DNAT rule exists in namespace {{ dnat_router_name }}
+  ansible.builtin.raw: >-
+    ip netns exec {{ dnat_router_name }}
+    iptables -t nat -C PREROUTING -d {{ dnat_public_ip }}
+    -p {{ dnat_protocol | default('tcp') | lower }} --dport {{ dnat_public_port | int }}
+    -j DNAT --to-destination {{ dnat_internal_ip }}:{{ dnat_internal_port | int }} 2>/dev/null
+  register: dnat_del_check
+  changed_when: false
+  failed_when: false
+
+- name: Remove DNAT rule from namespace {{ dnat_router_name }}
+  ansible.builtin.raw: >-
+    ip netns exec {{ dnat_router_name }}
+    iptables -t nat -D PREROUTING -d {{ dnat_public_ip }}
+    -p {{ dnat_protocol | default('tcp') | lower }} --dport {{ dnat_public_port | int }}
+    -j DNAT --to-destination {{ dnat_internal_ip }}:{{ dnat_internal_port | int }}
+  when: dnat_del_check.rc == 0
+  changed_when: true

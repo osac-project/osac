@@ -1,0 +1,40 @@
+# GPU-enabled Linux Virtual Machine catalog item
+# A Linux virtual machine with one NVIDIA GPU attached.
+
+"@type": type.googleapis.com/osac.private.v1.ComputeInstanceCatalogItem
+metadata:
+  name: linux-vm-gpu
+title: Linux Virtual Machine (GPU)
+description: A Linux virtual machine with one NVIDIA GPU attached. Suitable for AI/ML workloads and GPU-accelerated computing.
+template: osac.templates.ocp_virt_vm
+published: true
+field_definitions:
+  - path: instance_type
+    display_name: Instance Type
+    editable: true
+    default: u1-large
+    validation_schema: '{"type":"string","minLength":1}'
+  - path: boot_disk.size_gib
+    display_name: Boot Disk Size (GiB)
+    editable: true
+    default: 120
+    validation_schema: '{"type":"integer","minimum":10,"maximum":1024}'
+  - path: image.source_ref
+    display_name: Container Disk Image
+    editable: true
+    default: quay.io/containerdisks/fedora:latest
+    validation_schema: '{"type":"string","pattern":"^[a-z0-9./-]+:[a-z0-9._-]+$"}'
+  - path: image.source_type
+    display_name: Image Source Type
+    editable: false
+    default: registry
+    validation_schema: '{"type":"string"}'
+  - path: run_strategy
+    display_name: Run Strategy
+    editable: true
+    default: Always
+    validation_schema: '{"type":"string","enum":["Always","Halted"]}'
+  - path: user_data
+    display_name: Cloud Init User Data
+    editable: true
+    validation_schema: '{"type":"string"}'

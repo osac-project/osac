@@ -1,0 +1,12 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: test-certificate
+  namespace: default
+spec:
+  secretName: test-secret
+  issuerRef:
+    name: test-issuer
+    kind: ClusterIssuer
+  dnsNames:
+    - example.com

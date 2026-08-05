@@ -1,0 +1,4 @@
+---
+- name: Pre-delete hook (no-op by default; override step to run custom logic before resources)
+  ansible.builtin.debug:
+    msg: "Pre-delete hook step (no-op). Override delete_step_pre_delete_hook_override to run custom logic."

@@ -1,0 +1,3 @@
+---
+- fail:
+    msg: List VLANs is not implemented for nos

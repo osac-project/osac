@@ -1,0 +1,221 @@
+---
+- name: Generate a test ID
+  ansible.builtin.set_fact:
+    test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') }}"
+  when: test_id is not defined
+
+- name: Preset vars
+  ansible.builtin.set_fact:
+    gateway_user_default_password: change-me
+    name_prefix: GW-Collection-Test-Team-{{ test_id }}
+
+- name: Run Test
+  module_defaults:
+    group/ansible.platform.gateway:
+      gateway_hostname: "{{ gateway_hostname }}"
+      gateway_username: "{{ gateway_username }}"
+      gateway_password: "{{ gateway_password }}"
+      gateway_validate_certs: "{{ gateway_validate_certs | bool }}"
+
+  block:
+    # <Organizations> -----------------------------
+    - name: Create Organization 1
+      ansible.platform.organization:
+        name: "{{ name_prefix }}-Organization-1"
+      register: org1
+
+    - name: Create Organization 2
+      ansible.platform.organization:
+        name: "{{ name_prefix }}-Organization-2"
+      register: org2
+
+    - name: Assert that we created the organizations
+      ansible.builtin.assert:
+        that:
+          - org1 is changed
+          - org2 is changed
+
+    # <Teams> -------------------------------------
+    - name: Assert you can't create a team without an org
+      ansible.platform.team:
+        name: "{{ name_prefix }}-CantBeCreated"
+      ignore_errors: true
+      register: invalid_team
+
+    - name: Assert that the previous task failed as expected
+      ansible.builtin.assert:
+        that:
+          - invalid_team is failed
+          - invalid_team.msg == 'missing required arguments: organization'
+
+    - name: Create Team 1
+      ansible.platform.team:
+        name: "{{ name_prefix }}-Team-1"
+        organization: "{{ org1.name }}" # Org by name
+        description: Team 1
+      register: team1
+
+    - name: Assert that the creation changed the system
+      ansible.builtin.assert:
+        that:
+          - team1 is changed
+
+    - name: Validate we can't change a team to a non-existent organization
+      ansible.platform.team:
+        name: "{{ team1.name }}"
+        organization: "{{ name_prefix }}-Org-DNE"
+      ignore_errors: true
+      register: invalid_team
+
+    - name: Assert that we failed as expected
+      ansible.builtin.assert:
+        that:
+          - invalid_team is failed
+          - "'Item organization does not exist:' in invalid_team.msg"
+
+    - name: Recreate Team 1
+      ansible.platform.team:
+        name: "{{ name_prefix }}-Team-1"
+        organization: "{{ org1.name }}"
+        description: Team 1
+      register: team1
+
+    - name: Assert that a recreate does not change the system
+      ansible.builtin.assert:
+        that:
+          - team1 is not changed
+
+    - name: Create Team 2
+      ansible.platform.team:
+        name: "{{ name_prefix }}-Team-2"
+        organization: "{{ org2.id }}"
+      register: team2
+
+    - name: Assert that team 2 was created
+      ansible.builtin.assert:
+        that:
+          - team2 is changed
+
+    - name: Create Team 3
+      ansible.platform.team:
+        name: "{{ name_prefix }}-Team-3"
+        organization: "{{ org2.name }}"
+        description: Team 3
+      register: team3
+
+    - name: Assert that team 3 was created
+      ansible.builtin.assert:
+        that:
+          - team3 is changed
+
+    - name: Change description of Team 1
+      ansible.platform.team:
+        name: "{{ team1.id }}"
+        organization: "{{ org1.id }}"
+        description: New Description of Team 1
+      register: new_team_1
+
+    - name: Assert that the description changed and it changed the same team
+      ansible.builtin.assert:
+        that:
+          - new_team_1 is changed
+          - new_team_1.id == team1.id
+
+    - name: Redo Team 3 with state as exists
+      ansible.platform.team:
+        name: "{{ team3.name }}" # Check existence
+        organization: "{{ org2.name }}"
+        state: exists
+      register: team3
+
+    - name: Assert that state exists work
+      ansible.builtin.assert:
+        that:
+          - team3 is not changed
+
+    - name: Validate delete of non-existent team via invalid org
+      ansible.platform.team:
+        name: "{{ team3.id }}"
+        organization: "{{ org1.name }}"
+        state: absent
+      register: non_existent_delete
+
+    - name: Assert that deleting a non-existent team does not change the system
+      ansible.builtin.assert:
+        that:
+          - non_existent_delete is not changed
+
+    - name: Validate delete of non-existing team via invalid name
+      ansible.platform.team:
+        name: "{{ team1.id }}" # Check absence by wrong name
+        organization: "{{ org2.name }}"
+        state: absent
+      register: non_existent_delete
+
+    - name: Assert that this delete did not change the system
+      ansible.builtin.assert:
+        that:
+          - non_existent_delete is not changed
+
+    - name: Rename a team
+      ansible.platform.team:
+        name: "{{ team1.id }}"
+        organization: "{{ org1.name }}"
+        new_name: "{{ test_id }}-Team1-New"
+      register: new_team1
+
+    - name: Assert that renaming a team causes a change to the existing team
+      ansible.builtin.assert:
+        that:
+          - new_team1 is changed
+          - team1.id == new_team1.id
+
+    - name: Change a teams organization
+      ansible.platform.team:
+        name: "{{ team2.name }}"
+        organization: "{{ org2.name }}"
+        new_organization: "{{ org1.name }}"
+      register: new_team2
+
+    - name: Assert that changing the org caused a change to the existing team
+      ansible.builtin.assert:
+        that:
+          - new_team2 is changed
+          - new_team2.id == team2.id
+  # </Teams> ------------------------------------
+
+  always:
+  # <Cleanup> -----------------------------------
+    - name: Delete Team1
+      ansible.platform.team:
+        state: absent
+        name: "{{ team1.id }}"
+        organization: "{{ org1.id }}"
+      when: team1 is defined and org1 is defined
+
+    - name: Delete Team2
+      ansible.platform.team:
+        state: absent
+        name: "{{ team2.id }}"
+        organization: "{{ item }}"
+      when: team2 is defined and item is defined
+      loop:
+        - "{{ org1.id }}"
+        - "{{ org2.id }}"
+
+    - name: Delete Team3
+      ansible.platform.team:
+        state: absent
+        name: "{{ team3.id }}"
+        organization: "{{ org2.id }}"
+      when: team3 is defined and org2 is defined
+
+    - name: Delete Organizations
+      ansible.platform.organization:
+        state: absent
+        name: "{{ vars[item].id }}"
+      when: item in vars and 'id' in vars[item]
+      loop:
+        - org1
+        - org2
+...

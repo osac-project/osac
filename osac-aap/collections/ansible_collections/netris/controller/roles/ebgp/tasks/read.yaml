@@ -1,0 +1,23 @@
+---
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Get E-BGP sessions
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/ebgp"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    validate_certs: "{{ netris_validate_certs }}"
+    timeout: "{{ netris_timeout }}"
+    status_code: 200
+  register: _ebgp_resp
+  no_log: true
+
+- name: Set E-BGP facts
+  ansible.builtin.set_fact:
+    netris_ebgp_sessions: "{{ _ebgp_resp.json.data }}"
+    netris_ebgp_total: "{{ _ebgp_resp.json.data | length }}"
+    netris_ebgp_established: "{{ _ebgp_resp.json.data | selectattr('bgp_state', 'defined') | selectattr('bgp_state', 'equalto', 'Established') | list | length }}"

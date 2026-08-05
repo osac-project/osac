@@ -1,0 +1,3 @@
+{{ .Error }}
+
+Use {{ bt }}--proxy-only{{ bt }} to start the proxy without a viewer.

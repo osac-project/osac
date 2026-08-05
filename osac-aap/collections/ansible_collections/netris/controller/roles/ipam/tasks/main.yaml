@@ -1,0 +1,20 @@
+---
+- name: Read IPAM for available IPs
+  ansible.builtin.include_tasks: read.yaml
+  when: ipam_state == 'read'
+
+- name: Create IPAM allocation
+  ansible.builtin.include_tasks: create_allocation.yaml
+  when: ipam_state == 'create_allocation'
+
+- name: Create IPAM subnet
+  ansible.builtin.include_tasks: create_subnet.yaml
+  when: ipam_state == 'create_subnet'
+
+- name: Delete IPAM allocation
+  ansible.builtin.include_tasks: delete_allocation.yaml
+  when: ipam_state == 'delete_allocation'
+
+- name: Delete IPAM subnet
+  ansible.builtin.include_tasks: delete_subnet.yaml
+  when: ipam_state == 'delete_subnet'

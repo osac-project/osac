@@ -1,0 +1,3 @@
+---
+- fail:
+    msg: List VLANs is not implimented for junos

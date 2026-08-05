@@ -1,0 +1,4 @@
+external_access_resource_wait_retries: 360
+external_access_resource_wait_delay: 5
+external_access_dns_ttl: 1800
+external_access_agent_namespace: "hardware-inventory"

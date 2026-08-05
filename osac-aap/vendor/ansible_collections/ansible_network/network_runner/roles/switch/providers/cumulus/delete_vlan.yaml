@@ -1,0 +1,5 @@
+---
+- name: "cumulus: delete vlan using nvue"
+  raw: |
+    nv unset bridge domain br_default vlan {{ _vlan_id }}
+    nv config apply -y

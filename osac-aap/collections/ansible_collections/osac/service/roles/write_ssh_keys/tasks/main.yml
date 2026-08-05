@@ -1,0 +1,30 @@
+---
+# Write SSH private keys from base64-encoded environment variables to files.
+# The env vars are loaded from the cluster-fulfillment-ig secret via envFrom.
+# Values must be base64-encoded (e.g. cat ~/.ssh/id_rsa | base64 -w0).
+- name: Create SSH key directory
+  ansible.builtin.file:
+    path: "{{ server_ssh_key | dirname }}"
+    state: directory
+    mode: "0700"
+
+- name: Validate SSH key env vars
+  ansible.builtin.assert:
+    that:
+      - lookup('env', 'SERVER_SSH_KEY') | length > 0
+      - lookup('env', 'SERVER_SSH_BASTION_KEY') | length > 0
+    fail_msg: "SERVER_SSH_KEY and/or SERVER_SSH_BASTION_KEY env vars are empty"
+
+- name: Write server SSH key from env var
+  ansible.builtin.copy:
+    content: "{{ lookup('env', 'SERVER_SSH_KEY') }}"
+    dest: "{{ server_ssh_key }}"
+    mode: "0400"
+  no_log: true
+
+- name: Write bastion SSH key from env var
+  ansible.builtin.copy:
+    content: "{{ lookup('env', 'SERVER_SSH_BASTION_KEY') }}"
+    dest: "{{ server_ssh_bastion_key }}"
+    mode: "0400"
+  no_log: true

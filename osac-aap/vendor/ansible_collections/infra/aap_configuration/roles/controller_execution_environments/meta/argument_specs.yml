@@ -1,0 +1,111 @@
+---
+argument_specs:
+  main:
+    short_description: An Ansible Role to create execution environment objects on Ansible Controller.
+    options:
+      controller_execution_environments:
+        description: Data structure describing your execution_environments
+        type: list
+        elements: dict
+#        options:
+#          name:
+#            required: true
+#            type: str
+#            description: Name of execution environment
+#          description:
+#            required: false
+#            type: str
+#            description: Description to use for the execution environment.
+#          image:
+#            required: true
+#            type: str
+#            description: Container image to use for the execution environment
+#          organization:
+#            required: false
+#            type: str
+#            description: The organization the execution environment belongs to.
+#          credential:
+#            required: false
+#            type: str
+#            description: Name of the credential to use for the execution environment.
+#          pull:
+#            default: missing
+#            required: false
+#            type: str
+#            choices:
+#              - always
+#              - missing
+#              - never
+#            description: Determine image pull behavior
+#          state:
+#            default: "{{ controller_state | default('present') }}"
+#            required: false
+#            type: str
+#            description: Desired state of the resource.
+
+      # Async variables
+      controller_configuration_execution_environments_async_retries:
+        default: "{{ aap_configuration_async_retries | default(50) }}"
+        required: false
+        description: This variable sets the number of retries to attempt for the role.
+      aap_configuration_async_retries:
+        default: 50
+        required: false
+        description: This variable sets number of retries across all roles as a default.
+      controller_configuration_execution_environments_async_delay:
+        default: "{{ aap_configuration_async_delay | default(1) }}"
+        required: false
+        description: This variable sets delay between retries for the role.
+      aap_configuration_async_delay:
+        default: 1
+        required: false
+        description: This variable sets delay between retries across all roles as a default.
+      aap_configuration_async_dir:
+        default: null
+        required: false
+        description: Sets the directory to write the results file for async tasks. The default value is set to `null` which uses the Ansible Default of `/root/.ansible_async/`.
+
+      # No_log variables
+      controller_configuration_execution_environments_secure_logging:
+        default: "{{ aap_configuration_secure_logging | default(false) }}"
+        required: false
+        type: bool
+        description: Whether or not to include the sensitive tasks from this role in the log. Set this value to `true` if you will be providing your sensitive values from elsewhere.
+      aap_configuration_secure_logging:
+        default: false
+        required: false
+        type: bool
+        description: This variable enables secure logging across all roles as a default.
+
+      # Generic across all roles
+      platform_state:
+        default: present
+        required: false
+        description: The state all objects will take unless overridden by object default
+        type: str
+      aap_hostname:
+        default: None
+        required: false
+        description: URL to the Ansible Automation Platform Server.
+        type: str
+      aap_validate_certs:
+        default: true
+        required: false
+        description: Whether or not to validate the Ansible Automation Platform Server's SSL certificate.
+        type: str
+      aap_username:
+        default: None
+        required: false
+        description: Admin User on the Ansible Automation Platform Server. Either username / password or oauthtoken need to be specified.
+        type: str
+      aap_password:
+        default: None
+        required: false
+        description: Platform Admin User's password on the Server.  This should be stored in an Ansible Vault at vars/platform-secrets.yml or elsewhere and called from a parent playbook.
+        type: str
+      aap_token:
+        default: None
+        required: false
+        description: Controller Admin User's token on the Ansible Automation Platform Server. This should be stored in an Ansible Vault at or elsewhere and called from a parent playbook. Either username / password or oauthtoken need to be specified.
+        type: str
+...

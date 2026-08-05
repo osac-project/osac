@@ -1,0 +1,73 @@
+aap:
+  instance:
+    enabled: true
+    name: "osac-aap"
+    controller:
+      disabled: false
+    eda:
+      disabled: true
+    hub:
+      disabled: true
+    lightspeed:
+      disabled: true
+    redisMode: standalone
+    routeTlsTerminationMechanism: Edge
+    imagePullPolicy: IfNotPresent
+
+bootstrap:
+  enabled: true
+  image: ghcr.io/osac-project/osac-aap:latest
+  cliImage: quay.io/openshift/origin-cli:4.20.0
+  backoffLimit: 15
+
+configAsCode:
+  manifestSecret: "config-as-code-manifest-ig"
+  secret: "config-as-code-ig"
+  eeImage: ""
+  # Controller's own execution_environment.pull field (always / missing /
+  # never). Left empty by default (config-as-code-secret.yaml omits the env
+  # var, Ansible side falls back to "always", preserving today's behavior
+  # for the shipped mutable :latest default); e2e sets this to "missing"
+  # alongside its own eeImage override, since that image only exists in the
+  # node's local store and was never pushed to a real registry.
+  eeImagePull: ""
+  projectGitUri: ""
+  projectGitBranch: ""
+  importAgentsEnabled: false
+  importBcmAgentsEnabled: false
+  manifest:
+    create: false
+    data: {}
+
+importAgents:
+  servers: []
+
+importBcmAgents:
+  cert: ""
+  key: ""
+
+serviceAccounts:
+  osacSa: "osac-sa"
+  templatePublisher: "template-publisher"
+
+apiToken:
+  create: true
+
+instanceGroups:
+  clusterFulfillment:
+    enabled: false
+    config: {}
+    secret: {}
+  networkFulfillment:
+    enabled: false
+    config: {}
+    secret: {}
+  storageFulfillment:
+    enabled: false
+    config: {}
+    secret: {}
+  publishTemplates:
+    enabled: false
+    config:
+      OSAC_TEMPLATE_COLLECTIONS: ""
+      OSAC_FULFILLMENT_SERVICE_URI: ""

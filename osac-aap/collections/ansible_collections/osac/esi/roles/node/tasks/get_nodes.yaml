@@ -1,0 +1,48 @@
+- name: Get node informations
+  openstack.cloud.baremetal_node_info:
+  register: node_info_result
+
+- name: Extract node info
+  when: >-
+    node_info_result.skipped is not defined or
+    not node_info_result.skipped
+  ansible.builtin.set_fact:
+    node_infos: "{{ node_info_result.baremetal_nodes }}"
+
+- name: Filter nodes by node_filter_names
+  ansible.builtin.set_fact:
+    node_infos: >-
+      {{
+        node_infos |
+        selectattr('name', 'in', node_filter_names)
+      }}
+
+- name: Get baremetal ports
+  openstack.cloud.baremetal_port_info:
+  register: port_info_result
+
+- name: Extract port info
+  when: >-
+    port_info_result.skipped is not defined or
+    not port_info_result.skipped
+  ansible.builtin.set_fact:
+    port_infos: "{{ port_info_result.ports }}"
+
+- name: Initialize node_info_list
+  ansible.builtin.set_fact:
+    node_info_list: []
+
+- name: Combine ports to each node info
+  ansible.builtin.set_fact:
+    node_info_list: >-
+      {{
+        node_info_list + [
+          node_info | combine({
+            'ports': port_infos | selectattr('node_id', 'equalto', node_info.id)
+          })
+        ]
+      }}
+  loop: "{{ node_infos }}"
+  loop_control:
+    loop_var: node_info
+    label: "{{ node_info.name }}"

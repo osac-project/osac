@@ -1,0 +1,114 @@
+---
+- name: collection_repository integration tests
+  module_defaults:
+    group/ansible.hub.hub:
+      ah_host: "{{ ah_host }}"
+      ah_username: "{{ ah_username }}"
+      ah_password: "{{ ah_password }}"
+      validate_certs: "{{ ah_verify_ssl }}"
+  block:
+    - name: Generate a test_id for the test
+      set_fact:
+        test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') | lower }}"
+      when: test_id is not defined
+
+    - name: Define variables
+      set_fact:
+        collection_repo_name: "sample_{{ test_id }}"
+        distribution: "sample_{{ test_id }}"
+
+    - name: Create a collection repository in check mode
+      ansible.hub.collection_repository:
+        name: "{{ collection_repo_name }}"
+        description: "description of the repository"
+        pulp_labels:
+          pipeline: "approved"
+        distribution:
+          name: "{{ distribution }}"
+          state: present
+        remote: community
+        wait: true
+      register: r
+      check_mode: yes
+
+    - name: Check if the collection repository is created in check mode
+      assert:
+        that:
+          - r.changed
+
+    - name: Create a collection repository
+      ansible.hub.collection_repository:
+        name: "{{ collection_repo_name }}"
+        description: "description of the repository"
+        pulp_labels:
+          pipeline: "approved"
+        distribution:
+          name: "{{ distribution }}"
+          state: present
+        remote: community
+        wait: true
+      register: r
+
+    - name: Check if the collection repository is created
+      assert:
+        that:
+          - r.changed
+
+    - name: Create a collection repository again
+      ansible.hub.collection_repository:
+        name: "{{ collection_repo_name }}"
+        description: "description of the repository"
+        pulp_labels:
+          pipeline: "approved"
+        distribution:
+          name: "{{ distribution }}"
+          state: present
+        remote: community
+        wait: true
+      register: r
+
+    - name: Check if the collection repository is not created again
+      assert:
+        that:
+          - not r.changed
+
+    - name: Delete collection repository in check mode
+      ansible.hub.collection_repository:
+        name: "{{ collection_repo_name }}"
+        state: absent
+      check_mode: yes
+      register: r
+
+    - name: Check if the collection is deleted in check mode
+      assert:
+        that:
+          - r.changed
+
+    - name: Delete collection repository
+      ansible.hub.collection_repository:
+        name: "{{ collection_repo_name }}"
+        state: absent
+      register: r
+
+    - name: Check if the collection is deleted
+      assert:
+        that:
+          - r.changed
+
+    - name: Delete collection repository again
+      ansible.hub.collection_repository:
+        name: "{{ collection_repo_name }}"
+        state: absent
+      register: r
+
+    - name: Check if the collection is not deleted again
+      assert:
+        that:
+          - not r.changed
+
+  always:
+    - name: Cleanup - Delete collection repository
+      ansible.hub.collection_repository:
+        name: "{{ collection_repo_name }}"
+        state: absent
+      ignore_errors: true

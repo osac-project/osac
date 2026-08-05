@@ -1,0 +1,42 @@
+---
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Get inventory
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/hw?showHealth=true"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    validate_certs: "{{ netris_validate_certs }}"
+    timeout: "{{ netris_timeout }}"
+    status_code: 200
+  register: _inventory_resp
+  no_log: true
+
+- name: Set inventory facts
+  ansible.builtin.set_fact:
+    netris_inventory: "{{ _inventory_resp.json.data }}"
+    netris_inventory_total: "{{ _inventory_resp.json.data | length }}"
+    netris_inventory_healthy: >-
+      {{ _inventory_resp.json.data | selectattr('health', 'defined')
+         | selectattr('health.ok', 'defined')
+         | selectattr('health.ok', 'greaterthan', 0)
+         | list | length }}
+    netris_inventory_by_type: >-
+      {%- set result = {} -%}
+      {%- for item in _inventory_resp.json.data -%}
+        {%- set t = item.type | default('unknown') -%}
+        {%- set h = item.health | default({}) -%}
+        {%- set is_ok = (h.get('ok', 0) | int > 0) if h else false -%}
+        {%- if t not in result -%}
+          {%- set _ = result.update({t: {'total': 0, 'ok': 0}}) -%}
+        {%- endif -%}
+        {%- set _ = result[t].update({'total': result[t].total + 1}) -%}
+        {%- if is_ok -%}
+          {%- set _ = result[t].update({'ok': result[t].ok + 1}) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ result }}

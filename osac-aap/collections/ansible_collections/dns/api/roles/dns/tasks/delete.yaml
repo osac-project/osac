@@ -1,0 +1,5 @@
+---
+- name: "Delete DNS record - {{ dns_class }}"
+  ansible.builtin.include_role:
+    name: "{{ dns_class }}"
+    tasks_from: delete

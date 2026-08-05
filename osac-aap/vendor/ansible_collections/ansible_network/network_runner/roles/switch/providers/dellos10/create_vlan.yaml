@@ -1,0 +1,8 @@
+---
+- name: "dellos10: create vlan"
+  dellos10_config:
+    lines:
+      - "description {{ _vlan_name }}"
+    parents:
+      - "interface vlan {{ _vlan_id }}"
+  connection: network_cli

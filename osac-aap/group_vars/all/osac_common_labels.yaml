@@ -1,0 +1,8 @@
+cluster_order_label: "osac.openshift.io/clusterorder"
+cluster_order_infrastructure_finalizer: "osac.openshift.io/infrastructure"
+
+compute_instance_label: "osac.openshift.io/computeinstance"
+compute_instance_osac_finalizer: "osac.openshift.io/computeinstance-aap"
+
+agent_resource_class_label: "osac.openshift.io/resource_class"
+agent_host_uuid_label: "osac.openshift.io/host_uuid"

@@ -1,0 +1,240 @@
+---
+# Tests for changes to the cloudwatchlogs_log_group and cloudwatchlogs_log_group_metric_filter
+
+- ignore_errors: true
+  block:
+    - name: Create cloudwatch log group for integration test
+      amazon.aws.cloudwatchlogs_log_group:
+        state: present
+        log_group_name: "{{ log_group_name }}"
+        retention: 1
+
+    - name: Check_mode set metric filter on '{{ log_group_name }}'
+      amazon.aws.cloudwatchlogs_log_group_metric_filter:
+        log_group_name: "{{ log_group_name }}"
+        filter_name: "{{ filter_name }}"
+        filter_pattern: '{ ($.value = *) && ($.hostname = "box")}'
+        state: present
+        metric_transformation:
+          metric_name: box_free_space
+          metric_namespace: fluentd_metrics
+          metric_value: $.value
+      check_mode: true
+      register: out
+
+    - name: Check_mode state must be changed
+      ansible.builtin.assert:
+        that:
+          - out is changed
+          - out.metric_filters | count == 1
+
+    - name: Set metric filter on '{{ log_group_name }}'
+      amazon.aws.cloudwatchlogs_log_group_metric_filter:
+        log_group_name: "{{ log_group_name }}"
+        filter_name: "{{ filter_name }}"
+        filter_pattern: '{ ($.value = *) && ($.hostname = "box")}'
+        state: present
+        metric_transformation:
+          metric_name: box_free_space
+          metric_namespace: fluentd_metrics
+          metric_value: $.value
+      register: out
+
+    - name: Create metric filter
+      ansible.builtin.assert:
+        that:
+          - out is changed
+          - out.metric_filters | count == 1
+
+    - name: Re-set metric filter on '{{ log_group_name }}'
+      amazon.aws.cloudwatchlogs_log_group_metric_filter:
+        log_group_name: "{{ log_group_name }}"
+        filter_name: "{{ filter_name }}"
+        filter_pattern: '{ ($.value = *) && ($.hostname = "box")}'
+        state: present
+        metric_transformation:
+          metric_name: box_free_space
+          metric_namespace: fluentd_metrics
+          metric_value: $.value
+      register: out
+
+    - name: Metric filter must not change
+      ansible.builtin.assert:
+        that:
+          - out is not changed
+
+    - name: Update metric transformation on '{{ log_group_name }}'
+      amazon.aws.cloudwatchlogs_log_group_metric_filter:
+        log_group_name: "{{ log_group_name }}"
+        filter_name: "{{ filter_name }}"
+        filter_pattern: '{ ($.value = *) && ($.hostname = "box")}'
+        state: present
+        metric_transformation:
+          metric_name: box_free_space
+          metric_namespace: made_with_ansible
+          metric_value: $.value
+          default_value: 3.1415
+      register: out
+
+    - name: Update metric filter
+      ansible.builtin.assert:
+        that:
+          - out is changed
+          - out.metric_filters[0].metric_namespace == "made_with_ansible"
+          - out.metric_filters[0].default_value == 3.1415
+
+    - name: Update filter_pattern on '{{ log_group_name }}'
+      amazon.aws.cloudwatchlogs_log_group_metric_filter:
+        log_group_name: "{{ log_group_name }}"
+        filter_name: "{{ filter_name }}"
+        filter_pattern: '{ ($.value = *) && ($.hostname = "ansible")}'
+        state: present
+        metric_transformation:
+          metric_name: box_free_space
+          metric_namespace: made_with_ansible
+          metric_value: $.value
+      register: out
+
+    - name: Update metric filter
+      ansible.builtin.assert:
+        that:
+          - out is changed
+          - out.metric_filters[0].metric_namespace == "made_with_ansible"
+
+    - name: Update metric transformation with dimensions on '{{ log_group_name }}'
+      amazon.aws.cloudwatchlogs_log_group_metric_filter:
+        log_group_name: "{{ log_group_name }}"
+        filter_name: "{{ filter_name }}"
+        filter_pattern: '{ ($.value = *) && ($.hostname = "box")}'
+        state: present
+        metric_transformation:
+          metric_name: box_free_space
+          metric_namespace: made_with_ansible
+          metric_value: $.value
+          dimensions:
+            hostname: $.hostname
+      register: out
+
+    - name: Assert that metric_filter is configured with dimensions
+      ansible.builtin.assert:
+        that:
+          - out is changed
+          - out.metric_filters[0].metric_namespace == "made_with_ansible"
+          - out.metric_filters[0].dimensions.hostname == "$.hostname"
+
+    - name: Update metric transformation with unit on '{{ log_group_name }}'
+      amazon.aws.cloudwatchlogs_log_group_metric_filter:
+        log_group_name: "{{ log_group_name }}"
+        filter_name: "{{ filter_name }}"
+        filter_pattern: '{ ($.value = *) && ($.hostname = "box")}'
+        state: present
+        metric_transformation:
+          metric_name: box_free_space
+          metric_namespace: made_with_ansible
+          metric_value: $.value
+          unit: Bytes
+          dimensions:
+            hostname: $.hostname
+      register: out
+
+    - name: Assert that metric_filter is configured with dimensions and unit
+      ansible.builtin.assert:
+        that:
+          - out is changed
+          - out.metric_filters[0].metric_namespace == "made_with_ansible"
+          - out.metric_filters[0].dimensions.hostname == "$.hostname"
+          - out.metric_filters[0].unit == "Bytes"
+
+    - name: Idempotency check on metric transformation on '{{ log_group_name }}'
+      amazon.aws.cloudwatchlogs_log_group_metric_filter:
+        log_group_name: "{{ log_group_name }}"
+        filter_name: "{{ filter_name }}"
+        filter_pattern: '{ ($.value = *) && ($.hostname = "box")}'
+        state: present
+        metric_transformation:
+          metric_name: box_free_space
+          metric_namespace: made_with_ansible
+          metric_value: $.value
+          unit: Bytes
+          dimensions:
+            hostname: $.hostname
+      register: out
+
+    - name: Assert that idempotent action with unit and dimensions does not register as changed
+      ansible.builtin.assert:
+        that:
+          - out is not changed
+          - out.metric_filters[0].metric_namespace == "made_with_ansible"
+          - out.metric_filters[0].unit == "Bytes"
+          - out.metric_filters[0].dimensions.hostname == "$.hostname"
+
+    - name: Update metric transformation with default_value and dimensions on '{{ log_group_name }}'
+      amazon.aws.cloudwatchlogs_log_group_metric_filter:
+        log_group_name: "{{ log_group_name }}"
+        filter_name: "{{ filter_name }}"
+        filter_pattern: '{ ($.value = *) && ($.hostname = "box")}'
+        state: present
+        metric_transformation:
+          metric_name: box_free_space
+          metric_namespace: made_with_ansible
+          metric_value: $.value
+          default_value: 3.1415
+          dimensions:
+            hostname: $.hostname
+      register: out
+      ignore_errors: true
+
+    - name: Update metric transformation with default_value and dimensions must fail
+      ansible.builtin.assert:
+        that:
+          - out is failed
+          - out.msg == "default_value and dimensions are mutually exclusive."
+
+    - name: Checkmode delete metric filter on '{{ log_group_name }}'
+      amazon.aws.cloudwatchlogs_log_group_metric_filter:
+        log_group_name: "{{ log_group_name }}"
+        filter_name: "{{ filter_name }}"
+        state: absent
+      check_mode: true
+      register: out
+
+    - name: Check_mode state must be changed
+      ansible.builtin.assert:
+        that:
+          - out is changed
+
+    - name: Delete metric filter on '{{ log_group_name }}'
+      amazon.aws.cloudwatchlogs_log_group_metric_filter:
+        log_group_name: "{{ log_group_name }}"
+        filter_name: "{{ filter_name }}"
+        state: absent
+      register: out
+
+    - name: Delete metric filter
+      ansible.builtin.assert:
+        that:
+          - out is changed
+
+    - name: Delete metric filter on group which doesn't exist any more
+      amazon.aws.cloudwatchlogs_log_group_metric_filter:
+        log_group_name: "{{ log_group_name }}"
+        filter_name: "{{ filter_name }}"
+        state: absent
+      register: out
+
+    - name: Delete metric filter
+      ansible.builtin.assert:
+        that:
+          - out is not changed
+
+  always:
+    - name: Delete metric filter
+      amazon.aws.cloudwatchlogs_log_group_metric_filter:
+        log_group_name: "{{ log_group_name }}"
+        filter_name: "{{ filter_name }}"
+        state: absent
+
+    - name: Delete cloudwatch log group for integration test
+      amazon.aws.cloudwatchlogs_log_group:
+        state: absent
+        log_group_name: "{{ log_group_name }}"

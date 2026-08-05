@@ -1,0 +1,27 @@
+OSAC prerequisites configured for release {{ .Release.Name }}.
+
+Components:
+{{- if .Values.certManager.enabled }}
+  - CertManager CR
+{{- end }}
+{{- if .Values.trustManager.enabled }}
+  - trust-manager certificates
+{{- end }}
+{{- if .Values.caIssuer.enabled }}
+  - CA issuer and certificates
+{{- end }}
+{{- if .Values.keycloak.enabled }}
+  - Keycloak identity provider
+{{- end }}
+{{- if .Values.lvms.enabled }}
+  - LVMS configuration
+{{- end }}
+{{- if .Values.metallb.enabled }}
+  - MetalLB configuration
+{{- end }}
+{{- if .Values.cnv.enabled }}
+  - OpenShift Virtualization configuration
+{{- end }}
+{{- if .Values.mce.enabled }}
+  - MultiCluster Engine configuration
+{{- end }}

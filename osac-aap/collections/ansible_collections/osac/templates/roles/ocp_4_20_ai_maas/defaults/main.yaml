@@ -1,0 +1,149 @@
+---
+# OCP release image
+ocp_4_20_ai_maas_ocp_release_image: quay.io/openshift-release-dev/ocp-release:4.20.0-multi
+
+# Feature flags
+ocp_4_20_ai_maas_enable_maas: true
+ocp_4_20_ai_maas_enable_keycloak: true
+ocp_4_20_ai_maas_oidc_issuer: ""
+ocp_4_20_ai_maas_oidc_client_id: ""
+ocp_4_20_ai_maas_enable_observability: true
+ocp_4_20_ai_maas_enable_dashboard: true
+ocp_4_20_ai_maas_run_verify: true
+
+# Hardware profiles (empty = no profiles created; override per environment)
+ocp_4_20_ai_maas_hardware_profiles: []
+
+# External models (cross-cluster access via ExternalModel CRD)
+ocp_4_20_ai_maas_external_models: []
+ocp_4_20_ai_maas_proxy_image: "quay.io/mpaulgreen/maas-proxy:latest"
+ocp_4_20_ai_maas_proxy_namespace: "maas-proxies"
+ocp_4_20_ai_maas_external_model_namespace: "external-models"
+
+# --- Platform Operators ---
+
+# cert-manager
+ocp_4_20_ai_maas_cert_manager_channel: stable-v1.18
+ocp_4_20_ai_maas_cert_manager_source: redhat-operators
+
+# Service Mesh (must install BEFORE RHCL)
+ocp_4_20_ai_maas_sm_channel: stable-3.2
+ocp_4_20_ai_maas_sm_starting_csv: servicemeshoperator3.v3.2.7
+ocp_4_20_ai_maas_sm_source: redhat-operators
+
+# RHCL sub-operators (pre-create to prevent OLM auto-upgrade to v1.4.0)
+ocp_4_20_ai_maas_authorino_starting_csv: authorino-operator.v1.3.2
+ocp_4_20_ai_maas_limitador_starting_csv: limitador-operator.v1.3.1
+ocp_4_20_ai_maas_dns_starting_csv: dns-operator.v1.3.1
+
+# RHCL operator
+ocp_4_20_ai_maas_rhcl_starting_csv: rhcl-operator.v1.3.5
+ocp_4_20_ai_maas_rhcl_source: redhat-operators
+
+# Version to reject/accept in install plans
+ocp_4_20_ai_maas_reject_version: "v1.4.0"
+ocp_4_20_ai_maas_accept_version: "v1.3"
+
+# Observability operators (COO + OTel, installed in isolated namespaces)
+ocp_4_20_ai_maas_coo_starting_csv: cluster-observability-operator.v1.4.0
+ocp_4_20_ai_maas_coo_source: redhat-operators
+ocp_4_20_ai_maas_otel_package: opentelemetry-product
+ocp_4_20_ai_maas_otel_source: redhat-operators
+ocp_4_20_ai_maas_dsci_metrics_replicas: 1
+ocp_4_20_ai_maas_dsci_metrics_retention: 7d
+ocp_4_20_ai_maas_dsci_metrics_storage: 10Gi
+
+# Leader Worker Set
+ocp_4_20_ai_maas_lws_channel: stable-v1.0
+ocp_4_20_ai_maas_lws_source: redhat-operators
+
+# RHOAI
+ocp_4_20_ai_maas_rhoai_channel: stable-3.4
+ocp_4_20_ai_maas_rhoai_source: redhat-operators
+
+# --- DSC ---
+
+ocp_4_20_ai_maas_dsc_components:
+  codeflare: Removed
+  dashboard: Managed
+  datasciencepipelines: Removed
+  kserve: Managed
+  kueue: Removed
+  modelmeshserving: Removed
+  ray: Removed
+  trainingoperator: Removed
+  trustyai: Removed
+  workbenches: Removed
+
+# --- MaaS Configuration ---
+
+# Gateway
+ocp_4_20_ai_maas_gateway_hostname: maas
+ocp_4_20_ai_maas_gateway_memory_limit: 2Gi
+ocp_4_20_ai_maas_gateway_cert_name: router-certs
+
+# PostgreSQL
+ocp_4_20_ai_maas_db_image: registry.redhat.io/rhel9/postgresql-16:latest
+ocp_4_20_ai_maas_db_user: maas
+# DEV ONLY — override all credential defaults in production deployments
+ocp_4_20_ai_maas_db_password: maas-db-password
+ocp_4_20_ai_maas_db_name: maas
+ocp_4_20_ai_maas_db_storage: 5Gi
+
+# Keycloak
+ocp_4_20_ai_maas_keycloak_namespace: keycloak-maas
+ocp_4_20_ai_maas_keycloak_channel: stable-v26.4
+ocp_4_20_ai_maas_keycloak_instances: 1
+ocp_4_20_ai_maas_keycloak_db_password: keycloak-db-password
+ocp_4_20_ai_maas_keycloak_db_storage: 5Gi
+ocp_4_20_ai_maas_keycloak_realm: maas
+ocp_4_20_ai_maas_keycloak_client_id: maas-client
+ocp_4_20_ai_maas_keycloak_client_secret: maas-client-secret-value
+ocp_4_20_ai_maas_keycloak_test_password: password123
+
+# Tenant
+ocp_4_20_ai_maas_tenant_name: default-tenant
+ocp_4_20_ai_maas_api_key_max_expiration_days: 90
+
+# Tenant telemetry (captureUser defaults to true for Usage tab; privacy-sensitive)
+ocp_4_20_ai_maas_telemetry_enabled: true
+ocp_4_20_ai_maas_telemetry_capture_user: true
+ocp_4_20_ai_maas_telemetry_capture_group: true
+ocp_4_20_ai_maas_telemetry_capture_organization: true
+ocp_4_20_ai_maas_telemetry_capture_model_usage: true
+
+# Model
+ocp_4_20_ai_maas_model_name: facebook-opt-125m-simulated
+ocp_4_20_ai_maas_model_id: facebook/opt-125m
+ocp_4_20_ai_maas_model_namespace: llm
+ocp_4_20_ai_maas_model_replicas: 1
+ocp_4_20_ai_maas_model_image: ghcr.io/llm-d/llm-d-inference-sim:v0.7.1
+ocp_4_20_ai_maas_model_uri: hf://sshleifer/tiny-gpt2
+
+# Subscription tiers
+ocp_4_20_ai_maas_tiers:
+  - name: free-subscription
+    group: tier-free-users
+    token_limit: 100
+    window: 1m
+    priority: 0
+  - name: premium-subscription
+    group: tier-premium-users
+    token_limit: 50000
+    window: 1m
+    priority: 1
+  - name: enterprise-subscription
+    group: tier-enterprise-users
+    token_limit: 100000
+    window: 1m
+    priority: 2
+
+# Monitoring
+ocp_4_20_ai_maas_monitoring_retention: 24h
+
+# --- Timeouts ---
+
+ocp_4_20_ai_maas_operator_retries: 50
+ocp_4_20_ai_maas_operator_delay: 10
+ocp_4_20_ai_maas_long_retries: 60
+ocp_4_20_ai_maas_dsc_retries: 90

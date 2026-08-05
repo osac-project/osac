@@ -1,0 +1,17 @@
+apiVersion: osac.openshift.io/v1alpha1
+kind: SecurityGroup
+metadata:
+  labels:
+    app.kubernetes.io/name: osac-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: securitygroup-sample
+spec:
+  virtualNetwork: 00000000-0000-0000-0000-000000000000
+  ingressRules:
+  - protocol: tcp
+    portFrom: 443
+    portTo: 443
+    sourceCidr: "0.0.0.0/0"
+  egressRules:
+  - protocol: all
+    destinationCidr: "0.0.0.0/0"

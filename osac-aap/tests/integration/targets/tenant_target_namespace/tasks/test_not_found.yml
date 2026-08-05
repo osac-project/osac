@@ -1,0 +1,31 @@
+---
+- name: "TenantTargetNamespace - Test tenant not found (should fail)"
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+
+  tasks:
+    - name: Run not-found failure test
+      block:
+        - name: Run role with nonexistent tenant reference
+          ansible.builtin.include_role:
+            name: osac.service.tenant_target_namespace
+          vars:
+            compute_instance:
+              status:
+                tenantReference:
+                  name: nonexistent-tenant
+                  namespace: osac-system
+
+        - name: This should not be reached
+          ansible.builtin.fail:
+            msg: "Role did not fail when tenant was not found"
+
+      rescue:
+        - name: Verify role failed with expected message
+          ansible.builtin.assert:
+            that:
+              - "'exactly 1 was expected' in ansible_failed_result.msg"
+            fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg }}"
+            success_msg: "Tenant not found failure: passed"

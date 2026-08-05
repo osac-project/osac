@@ -1,0 +1,5 @@
+---
+- name: include and run device provider specific tasks
+  include_tasks: run.yaml
+  vars:
+    network_action: delete_trunk_vlan

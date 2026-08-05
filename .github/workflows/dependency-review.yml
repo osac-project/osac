@@ -1,0 +1,32 @@
+---
+name: Dependency Review
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  dependency-review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      # Fails the check when a newly-introduced dependency carries a known
+      # vulnerability (SCA gate). Pin this SHA when actions/dependency-review-action
+      # needs to be bumped.
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294  # v5.0.0
+        with:
+          # Pre-existing stale indirect dependencies in
+          # bare-metal-fulfillment-operator/go.mod, never caught because that
+          # repo's own CI never ran this check -- not introduced by merging it
+          # in. Real fixes are tracked separately rather than mixed into a
+          # code-relocation PR. Remove each entry once its fix lands.
+          #  - GHSA-hrxh-6v49-42gf: google.golang.org/grpc v1.81.1 (fix: >=1.82.1)
+          #  - GHSA-gcjh-h69q-9w9g: github.com/google/cel-go v0.26.0 (fix: >=0.29.0)
+          #    -- note: osac-operator also has this exact vulnerable version
+          #    already on main, pre-dating this PR entirely; not something this
+          #    carve-out newly permits into the repo, just a hole this PR's own
+          #    scan happens to surface.
+          allow-ghsas: "GHSA-hrxh-6v49-42gf, GHSA-gcjh-h69q-9w9g"

@@ -1,0 +1,22 @@
+---
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Get license status
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/license"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    validate_certs: "{{ netris_validate_certs }}"
+    timeout: "{{ netris_timeout }}"
+    status_code: [200, 400, 404]
+  register: _license_resp
+  no_log: true
+
+- name: Set license facts
+  ansible.builtin.set_fact:
+    netris_license_valid: "{{ _license_resp.json.isSuccess | default(false) }}"
+    netris_license_message: "{{ _license_resp.json.message | default('No license') }}"

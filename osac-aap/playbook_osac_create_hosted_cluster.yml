@@ -1,0 +1,81 @@
+---
+- name: Create a hosted control plane cluster from a ClusterOrder
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    cluster_order: "{{ ansible_eda.event.payload }}"
+
+  pre_tasks:
+    - name: Write SSH keys from env vars to files
+      ansible.builtin.include_role:
+        name: osac.service.write_ssh_keys
+      when:
+        - network_class | default('') == 'netris'
+        - lookup('env', 'SERVER_SSH_KEY') | length > 0
+
+    - name: Set cluster order name
+      ansible.builtin.set_fact:
+        cluster_order_name: "{{ cluster_order.metadata.name }}"
+
+    - name: Set lock holder identity
+      ansible.builtin.set_fact:
+        cluster_order_holder_id: >-
+          {{ cluster_order_name }}-{{ awx_job_id | default("unknown") }}-{{
+            lookup('community.general.random_string', special=false, numbers=false, upper=false)
+          }}
+
+    - name: Apply default settings
+      ansible.builtin.include_role:
+        name: osac.service.cluster_settings
+
+    - name: Extract template info
+      ansible.builtin.include_role:
+        name: osac.service.extract_template_info
+
+    - name: Determine working namespace
+      ansible.builtin.include_role:
+        name: osac.service.cluster_working_namespace
+      vars:
+        cluster_working_namespace_cluster_order_name: "{{ cluster_order_name }}"
+
+  tasks:
+    - name: Acquire cluster lock
+      ansible.builtin.include_role:
+        name: osac.service.lease
+      vars:
+        lease_state: present
+        lease_holder: "{{ cluster_order_holder_id }}"
+        lease_name: "cluster-{{ cluster_order_name }}-lock"
+
+    - name: Add infrastructure finalizer
+      ansible.builtin.include_role:
+        name: osac.service.finalizer
+      vars:
+        finalizer_state: present
+        finalizer_name: "{{ cluster_order_infrastructure_finalizer }}"
+        finalizer_target:
+          api_version: "{{ item.api_version }}"
+          kind: "{{ item.kind }}"
+          namespace: "{{ item.namespace | default(omit) }}"
+          name: "{{ item.name }}"
+      loop:
+        - api_version: osac.openshift.io/v1alpha1
+          kind: ClusterOrder
+          namespace: "{{ lookup('env', 'POD_NAMESPACE') }}"
+          name: "{{ cluster_order.metadata.name }}"
+        - api_version: v1
+          kind: Namespace
+          name: "{{ cluster_working_namespace }}"
+
+    - name: Display cluster order information
+      ansible.builtin.debug:
+        msg:
+          - "Cluster order: {{ cluster_order.metadata.name }}"
+          - "Cluster working namespace: {{ cluster_working_namespace }}"
+          - "Template ID: {{ template_id }}"
+
+    - name: Call the selected template
+      ansible.builtin.include_role:
+        name: "{{ template_id }}"
+        tasks_from: "install"

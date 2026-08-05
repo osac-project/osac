@@ -1,0 +1,31 @@
+---
+- name: Create a Subnet resource
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    subnet: "{{ ansible_eda.event.payload }}"
+    subnet_name: "{{ ansible_eda.event.payload.metadata.name }}"
+    # Implementation strategy set by osac-operator from parent VirtualNetwork spec
+    implementation_strategy: >-
+      {{ ansible_eda.event.payload.metadata.annotations
+         ['osac.openshift.io/implementation-strategy'] }}
+    template_parameters: {}
+
+  pre_tasks:
+    - name: Show EDA Event
+      ansible.builtin.debug:
+        var: ansible_eda.event.payload
+
+  tasks:
+    - name: Display Subnet information
+      ansible.builtin.debug:
+        msg:
+          - "Subnet name: {{ subnet_name }}"
+          - "Implementation strategy: {{ implementation_strategy }}"
+          - "Template parameters: {{ template_parameters }}"
+
+    - name: Call the selected Subnet role
+      ansible.builtin.include_role:
+        name: "osac.templates.{{ implementation_strategy }}"
+        tasks_from: create_subnet

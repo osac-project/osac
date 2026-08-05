@@ -1,0 +1,120 @@
+//
+// Copyright (c) 2025 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.public.v1;
+
+import "google/api/annotations.proto";
+import "google/protobuf/field_mask.proto";
+import "osac/public/v1/compute_instance_catalog_item_type.proto";
+
+message ComputeInstanceCatalogItemsListRequest {
+  // Index of the first result. If not specified the default value will be zero.
+  optional int32 offset = 1;
+
+  // Maximum number of results to be returned by the server.
+  optional int32 limit = 2;
+
+  // Filter criteria using CEL expressions.
+  optional string filter = 3;
+
+  // Order criteria, similar to SQL ORDER BY syntax.
+  optional string order = 4;
+}
+
+message ComputeInstanceCatalogItemsListResponse {
+  int32 size = 1;
+  int32 total = 2;
+  repeated ComputeInstanceCatalogItem items = 3;
+}
+
+message ComputeInstanceCatalogItemsGetRequest {
+  string id = 1;
+}
+
+message ComputeInstanceCatalogItemsGetResponse {
+  ComputeInstanceCatalogItem object = 1;
+}
+
+message ComputeInstanceCatalogItemsCreateRequest {
+  ComputeInstanceCatalogItem object = 1;
+}
+
+message ComputeInstanceCatalogItemsCreateResponse {
+  ComputeInstanceCatalogItem object = 1;
+
+  // Deprecation or validation warnings (e.g. deprecated instance type in field_definitions).
+  repeated string warnings = 2;
+}
+
+message ComputeInstanceCatalogItemsUpdateRequest {
+  ComputeInstanceCatalogItem object = 1;
+  google.protobuf.FieldMask update_mask = 2;
+
+  // Lock enables optimistic locking. When set to true, the server verifies that the current version of the object
+  // matches the value of the metadata.version field of the submitted object. If they differ the update will be
+  // rejected. This is useful to prevent lost updates when multiple clients are modifying the same object concurrently.
+  bool lock = 3;
+}
+
+message ComputeInstanceCatalogItemsUpdateResponse {
+  ComputeInstanceCatalogItem object = 1;
+
+  // Deprecation or validation warnings (e.g. deprecated instance type in field_definitions).
+  repeated string warnings = 2;
+}
+
+message ComputeInstanceCatalogItemsDeleteRequest {
+  string id = 1;
+}
+
+message ComputeInstanceCatalogItemsDeleteResponse {}
+
+service ComputeInstanceCatalogItems {
+  // Retrieves the list of compute instance catalog items.
+  rpc List(ComputeInstanceCatalogItemsListRequest) returns (ComputeInstanceCatalogItemsListResponse) {
+    option (google.api.http) = {get: "/api/fulfillment/v1/compute_instance_catalog_items"};
+  }
+
+  // Retrieves the details of one specific compute instance catalog item.
+  rpc Get(ComputeInstanceCatalogItemsGetRequest) returns (ComputeInstanceCatalogItemsGetResponse) {
+    option (google.api.http) = {
+      get: "/api/fulfillment/v1/compute_instance_catalog_items/{id}"
+      response_body: "object"
+    };
+  }
+
+  // Creates a new compute instance catalog item.
+  rpc Create(ComputeInstanceCatalogItemsCreateRequest) returns (ComputeInstanceCatalogItemsCreateResponse) {
+    option (google.api.http) = {
+      post: "/api/fulfillment/v1/compute_instance_catalog_items"
+      body: "object"
+      response_body: "object"
+    };
+  }
+
+  // Updates an existing compute instance catalog item.
+  rpc Update(ComputeInstanceCatalogItemsUpdateRequest) returns (ComputeInstanceCatalogItemsUpdateResponse) {
+    option (google.api.http) = {
+      patch: "/api/fulfillment/v1/compute_instance_catalog_items/{object.id}"
+      body: "object"
+      response_body: "object"
+    };
+  }
+
+  // Deletes a compute instance catalog item.
+  rpc Delete(ComputeInstanceCatalogItemsDeleteRequest) returns (ComputeInstanceCatalogItemsDeleteResponse) {
+    option (google.api.http) = {delete: "/api/fulfillment/v1/compute_instance_catalog_items/{id}"};
+  }
+}

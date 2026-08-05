@@ -1,0 +1,153 @@
+---
+# Test playbook for osac.service.tenant_storage_class role.
+# Each play is guarded by a `when` condition -- only the play whose controlling
+# variable is defined will run. Pass exactly one variable per invocation.
+#
+# The role receives a pre-resolved storageClasses list (injected via extra_vars
+# by the ComputeInstance controller) and selects a StorageClass by tier.
+# No K8s API calls are made.
+#
+#   Test 1 (happy path -- resolve "fast" tier):
+#     ansible-playbook ... -e test_happy_path=true
+#
+#   Test 2 (requested tier not available):
+#     ansible-playbook ... -e test_tier_not_available=true
+#
+#   Test 3 (empty storageClasses list):
+#     ansible-playbook ... -e test_empty_list=true
+#
+#   Test 4 (duplicate tiers -- first-match semantics):
+#     ansible-playbook ... -e test_duplicate_tier=true
+
+# ──────────────────────────────────────────────────────────────
+# Test 1: Resolve requested tier (happy path)
+# Expected: role succeeds, tenant_storage_class_name set
+# ──────────────────────────────────────────────────────────────
+- name: Test tenant_storage_class role -- resolve tier (happy path)
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Discover StorageClass for requested tier
+      ansible.builtin.include_role:
+        name: osac.service.tenant_storage_class
+      vars:
+        tenant_storage_class_tenant_name: "tenant-acme"
+        tenant_storage_class_storage_classes:
+          - name: "ceph-acme-default"
+            tier: "default"
+          - name: "ceph-acme-fast"
+            tier: "fast"
+        tenant_storage_class_storage_tier: "fast"
+      when: test_happy_path | default(false) | bool
+
+    - name: Verify discovered StorageClass name is set
+      ansible.builtin.assert:
+        that:
+          - tenant_storage_class_name is defined
+          - tenant_storage_class_name == "ceph-acme-fast"
+        fail_msg: "Expected 'ceph-acme-fast' but got '{{ tenant_storage_class_name | default('undefined') }}'"
+        success_msg: "Discovered StorageClass: {{ tenant_storage_class_name }}"
+      when: test_happy_path | default(false) | bool
+
+# ──────────────────────────────────────────────────────────────
+# Test 2: Requested tier not available -- error path
+# Expected: role fails with message listing available tiers and tenant name
+# ──────────────────────────────────────────────────────────────
+- name: Test tenant_storage_class role -- tier not available (should fail)
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run tier-not-available failure test
+      when: test_tier_not_available | default(false) | bool
+      block:
+        - name: Attempt to discover StorageClass for unavailable tier (expected to fail)
+          ansible.builtin.include_role:
+            name: osac.service.tenant_storage_class
+          vars:
+            tenant_storage_class_tenant_name: "tenant-acme"
+            tenant_storage_class_storage_classes:
+              - name: "ceph-acme-default"
+                tier: "default"
+              - name: "ceph-acme-standard"
+                tier: "standard"
+            tenant_storage_class_storage_tier: "gpu"
+
+        - name: This task should not be reached -- role should have failed
+          ansible.builtin.fail:
+            msg: "Role did not fail as expected when tier is not available"
+
+      rescue:
+        - name: Verify role failed with expected tier-not-available message
+          ansible.builtin.assert:
+            that:
+              - "'is not available' in ansible_failed_result.msg"
+              - "'tenant-acme' in ansible_failed_result.msg"
+              - "'Available tiers' in ansible_failed_result.msg"
+            fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg }}"
+            success_msg: "Role failed as expected: {{ ansible_failed_result.msg }}"
+
+# ──────────────────────────────────────────────────────────────
+# Test 3: Empty storageClasses list -- error path
+# Expected: role fails with "empty" message including tenant name
+# ──────────────────────────────────────────────────────────────
+- name: Test tenant_storage_class role -- empty storageClasses (should fail)
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run empty-storageClasses failure test
+      when: test_empty_list | default(false) | bool
+      block:
+        - name: Attempt to discover StorageClass when storageClasses is empty (expected to fail)
+          ansible.builtin.include_role:
+            name: osac.service.tenant_storage_class
+          vars:
+            tenant_storage_class_tenant_name: "tenant-acme"
+            tenant_storage_class_storage_classes: []
+            tenant_storage_class_storage_tier: "default"
+
+        - name: This task should not be reached -- role should have failed
+          ansible.builtin.fail:
+            msg: "Role did not fail as expected when storageClasses is empty"
+
+      rescue:
+        - name: Verify role failed with expected empty message
+          ansible.builtin.assert:
+            that:
+              - "'empty' in ansible_failed_result.msg"
+              - "'tenant-acme' in ansible_failed_result.msg"
+            fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg }}"
+            success_msg: "Role failed as expected: {{ ansible_failed_result.msg }}"
+
+# ──────────────────────────────────────────────────────────────
+# Test 4: Duplicate tiers in list -- first-match semantics
+# Expected: role returns the first matching entry
+# ──────────────────────────────────────────────────────────────
+- name: Test tenant_storage_class role -- duplicate tiers (first-match)
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Resolve StorageClass when duplicate tiers exist
+      ansible.builtin.include_role:
+        name: osac.service.tenant_storage_class
+      vars:
+        tenant_storage_class_tenant_name: "tenant-acme"
+        tenant_storage_class_storage_classes:
+          - name: "ceph-fast-primary"
+            tier: "fast"
+          - name: "ceph-fast-secondary"
+            tier: "fast"
+        tenant_storage_class_storage_tier: "fast"
+      when: test_duplicate_tier | default(false) | bool
+
+    - name: Verify first match is returned
+      ansible.builtin.assert:
+        that:
+          - tenant_storage_class_name is defined
+          - tenant_storage_class_name == "ceph-fast-primary"
+        fail_msg: "Expected 'ceph-fast-primary' but got '{{ tenant_storage_class_name | default('undefined') }}'"
+        success_msg: "First-match semantics confirmed: {{ tenant_storage_class_name }}"
+      when: test_duplicate_tier | default(false) | bool

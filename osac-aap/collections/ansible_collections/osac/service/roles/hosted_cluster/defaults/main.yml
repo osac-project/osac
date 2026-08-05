@@ -1,0 +1,10 @@
+---
+hosted_cluster_base_domain: box.massopen.cloud
+hosted_cluster_default_agent_namespace: "hardware-inventory"
+hosted_cluster_default_cluster_order_label: "{{ {cluster_order_label: hosted_cluster_name} }}"
+hosted_cluster_node_requests: []
+hosted_cluster_controller_availability_policy: HighlyAvailable
+hosted_cluster_infrastructure_availability_policy: HighlyAvailable
+# Default networking CIDRs - can be overridden via cluster_settings_pod_cidr / cluster_settings_service_cidr
+hosted_cluster_pod_cidr: "{{ cluster_settings_pod_cidr | default('10.132.0.0/14') }}"
+hosted_cluster_service_cidr: "{{ cluster_settings_service_cidr | default('172.31.0.0/16') }}"

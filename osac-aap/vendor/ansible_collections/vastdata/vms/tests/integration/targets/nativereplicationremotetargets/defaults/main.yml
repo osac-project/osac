@@ -1,0 +1,37 @@
+---
+# Default variables for nativereplicationremotetargets integration tests
+# Override these in tests/integration/integration_config.yml
+
+# VAST system connection details
+# Leave empty to skip tests gracefully
+vast_vms: ""
+vast_username: ""
+vast_password: ""
+vast_vms_2: ""
+
+vms_auth:
+  host: "{{ vast_vms }}"
+  username: "{{ vast_username }}"
+  password: "{{ vast_password }}"
+  validate_certs: false
+  debug: true
+
+# Native replication remote target test configuration
+test_nativereplication_name: "ansible-test-replication-target"
+test_nativereplication_renamed: "ansible-test-replication-renamed"
+
+# Test REPLICATION VIP pool configuration (created if none exists)
+test_replication_vippool_name: "ansible-test-replication-vippool"
+test_replication_vippool_subnet_cidr: 16
+test_replication_vippool_ip_ranges:
+  - ["18.18.0.100", "18.18.0.110"]
+
+# Test REPLICATION VIP pool configuration (created if none exists) on cluster 2
+test_replication_vippool_name_cluster2: "ansible-test-replication-vippool-cluster2"
+test_replication_vippool_subnet_cidr_cluster2: 16
+test_replication_vippool_ip_ranges_cluster2:
+  - ["18.18.0.120", "18.18.0.130"]
+
+# Replication settings
+test_nativereplication_secure_mode: "NONE"
+test_nativereplication_transport_mode: "TCP"

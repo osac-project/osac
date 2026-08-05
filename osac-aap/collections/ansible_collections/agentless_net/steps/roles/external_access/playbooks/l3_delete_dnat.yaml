@@ -1,0 +1,9 @@
+---
+- name: Delete DNAT rule from router namespace
+  hosts: net_nodes
+  gather_facts: false
+  tasks:
+    - name: Delete DNAT
+      ansible.builtin.include_role:
+        name: agentless_net.l3.dnat
+        tasks_from: delete

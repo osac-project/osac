@@ -1,0 +1,63 @@
+---
+- name: Create storage backend resources for a tenant (Stage 1)
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: "{{ ansible_eda.event.payload.metadata.name }}"
+    tenant_namespace: "{{ ansible_eda.event.payload.metadata.namespace }}"
+    tenant_uid: "{{ ansible_eda.event.payload.metadata.uid }}"
+    _storage_tiers_raw: "{{ lookup('env', 'STORAGE_TIERS') }}"
+
+  pre_tasks:
+    - name: Show EDA Event
+      ansible.builtin.debug:
+        var: ansible_eda.event.payload
+
+    - name: Validate tenant payload is present
+      ansible.builtin.fail:
+        msg: "tenant must be provided via ansible_eda.event.payload with metadata.name, metadata.namespace, and metadata.uid set"
+      when: >-
+        ansible_eda is not defined or
+        ansible_eda.event.payload.metadata.name is not defined or
+        ansible_eda.event.payload.metadata.name | length == 0 or
+        ansible_eda.event.payload.metadata.namespace is not defined or
+        ansible_eda.event.payload.metadata.namespace | length == 0 or
+        ansible_eda.event.payload.metadata.uid is not defined or
+        ansible_eda.event.payload.metadata.uid | length == 0
+
+    - name: Validate STORAGE_TIERS env var is configured
+      ansible.builtin.fail:
+        msg: >-
+          STORAGE_TIERS env var must be set at deployment time as a JSON array.
+          Example: [{"name":"default","protocol":"nfs","provider":"vast"}]
+      when: _storage_tiers_raw | length == 0
+
+    - name: Parse STORAGE_TIERS JSON
+      block:
+        - name: Parse tier list from env var
+          ansible.builtin.set_fact:
+            _storage_tiers: "{{ _storage_tiers_raw | from_json }}"
+        - name: Validate STORAGE_TIERS is a JSON array
+          ansible.builtin.assert:
+            that:
+              - _storage_tiers | type_debug == 'list'
+            fail_msg: >-
+              STORAGE_TIERS must be a JSON array of tier objects.
+      rescue:
+        - name: Fail on malformed STORAGE_TIERS JSON
+          ansible.builtin.fail:
+            msg: >-
+              STORAGE_TIERS env var contains invalid JSON.
+              Value: '{{ _storage_tiers_raw }}'.
+              Expected a JSON array of tier objects with name, protocol, and provider fields.
+
+  tasks:
+    - name: Configure tenant storage backend
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: setup
+        storage_provider_tiers: "{{ _storage_tiers }}"
+        storage_provider_block_encryption_passphrase: "{{ ansible_eda.event.payload.spec.blockEncryptionPassphrase | default('') }}"
+        storage_provider_snapshots_enabled: "{{ lookup('env', 'STORAGE_SNAPSHOTS_ENABLED') | default('true', true) | bool }}"

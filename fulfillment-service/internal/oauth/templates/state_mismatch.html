@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Authentication failed</title>
+    {{ execute "styles.html" . }}
+</head>
+<body>
+    <div class="auth-container">
+        <div class="pf-v6-c-alert pf-m-danger pf-m-inline" aria-label="Danger alert">
+            <div class="pf-v6-c-alert__icon">
+                <i class="fas fa-exclamation-circle" aria-hidden="true"></i>
+            </div>
+            <div class="pf-v6-c-alert__title">
+                <h2 class="pf-v6-c-alert__title-text">Security validation failed</h2>
+            </div>
+            <div class="pf-v6-c-alert__description">
+                <p>The authentication request could not be validated. This may indicate a potential security issue or that the authentication session has expired.</p>
+                <p>You can close this window and initiate a new authentication request.</p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

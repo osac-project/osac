@@ -1,0 +1,10 @@
+---
+- name: Announce PublicIP route via BGP
+  hosts: net_nodes[0]
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Announce route
+      ansible.builtin.include_role:
+        name: agentless_net.l3.bgp
+        tasks_from: announce

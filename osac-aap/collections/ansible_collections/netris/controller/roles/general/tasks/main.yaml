@@ -1,0 +1,4 @@
+---
+- name: Read general settings
+  ansible.builtin.include_tasks: read.yaml
+  when: general_state == 'read'

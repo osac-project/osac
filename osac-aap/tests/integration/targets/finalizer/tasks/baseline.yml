@@ -1,0 +1,277 @@
+---
+# Integration test for osac.service.finalizer role.
+# Runs all scenarios sequentially: add, remove, idempotent add, remove nonexistent.
+
+# ── Test 1: Add a finalizer ──
+- name: "Finalizer - Test add finalizer"
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+
+  tasks:
+    - name: Test add finalizer
+      block:
+        - name: Create test ConfigMap
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: finalizer-test-add
+                namespace: default
+              data:
+                test: "true"
+
+        - name: Add finalizer to ConfigMap
+          ansible.builtin.include_role:
+            name: osac.service.finalizer
+          vars:
+            finalizer_state: present
+            finalizer_name: "osac.openshift.io/test-finalizer"
+            finalizer_target:
+              api_version: v1
+              kind: ConfigMap
+              namespace: default
+              name: finalizer-test-add
+
+        - name: Verify finalizer was added
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: ConfigMap
+            namespace: default
+            name: finalizer-test-add
+          register: result
+
+        - name: Assert finalizer present
+          ansible.builtin.assert:
+            that:
+              - result.resources | length == 1
+              - "'osac.openshift.io/test-finalizer' in result.resources[0].metadata.finalizers"
+            fail_msg: "Finalizer not found"
+            success_msg: "Add finalizer: passed"
+
+      always:
+        - name: Cleanup -- remove finalizer
+          kubernetes.core.k8s_json_patch:
+            api_version: v1
+            kind: ConfigMap
+            namespace: default
+            name: finalizer-test-add
+            patch:
+              - op: replace
+                path: /metadata/finalizers
+                value: []
+          failed_when: false
+
+        - name: Cleanup -- delete ConfigMap
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: ConfigMap
+            namespace: default
+            name: finalizer-test-add
+
+# ── Test 2: Remove a finalizer ──
+- name: "Finalizer - Test remove finalizer"
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+
+  tasks:
+    - name: Test remove finalizer
+      block:
+        - name: Create test ConfigMap with finalizer
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: finalizer-test-remove
+                namespace: default
+                finalizers:
+                  - "osac.openshift.io/test-finalizer"
+              data:
+                test: "true"
+
+        - name: Remove finalizer from ConfigMap
+          ansible.builtin.include_role:
+            name: osac.service.finalizer
+          vars:
+            finalizer_state: absent
+            finalizer_name: "osac.openshift.io/test-finalizer"
+            finalizer_target:
+              api_version: v1
+              kind: ConfigMap
+              namespace: default
+              name: finalizer-test-remove
+
+        - name: Verify finalizer was removed
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: ConfigMap
+            namespace: default
+            name: finalizer-test-remove
+          register: result
+
+        - name: Assert finalizer absent
+          ansible.builtin.assert:
+            that:
+              - result.resources | length == 1
+              - "'osac.openshift.io/test-finalizer' not in (result.resources[0].metadata.finalizers | default([]))"
+            fail_msg: "Finalizer still present"
+            success_msg: "Remove finalizer: passed"
+
+      always:
+        - name: Cleanup -- remove any remaining finalizers
+          kubernetes.core.k8s_json_patch:
+            api_version: v1
+            kind: ConfigMap
+            namespace: default
+            name: finalizer-test-remove
+            patch:
+              - op: replace
+                path: /metadata/finalizers
+                value: []
+          failed_when: false
+
+        - name: Cleanup -- delete ConfigMap
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: ConfigMap
+            namespace: default
+            name: finalizer-test-remove
+
+# ── Test 3: Add is idempotent ──
+- name: "Finalizer - Test idempotent add"
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+
+  tasks:
+    - name: Test idempotent add
+      block:
+        - name: Create test ConfigMap with existing finalizer
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: finalizer-test-idempotent
+                namespace: default
+                finalizers:
+                  - "osac.openshift.io/test-finalizer"
+              data:
+                test: "true"
+
+        - name: Add same finalizer again
+          ansible.builtin.include_role:
+            name: osac.service.finalizer
+          vars:
+            finalizer_state: present
+            finalizer_name: "osac.openshift.io/test-finalizer"
+            finalizer_target:
+              api_version: v1
+              kind: ConfigMap
+              namespace: default
+              name: finalizer-test-idempotent
+
+        - name: Verify finalizer appears only once
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: ConfigMap
+            namespace: default
+            name: finalizer-test-idempotent
+          register: result
+
+        - name: Assert no duplicate finalizers
+          ansible.builtin.assert:
+            that:
+              - result.resources[0].metadata.finalizers | select('equalto', 'osac.openshift.io/test-finalizer') | list | length == 1
+            fail_msg: "Duplicate finalizers found"
+            success_msg: "Idempotent add: passed"
+
+      always:
+        - name: Cleanup -- remove finalizer
+          kubernetes.core.k8s_json_patch:
+            api_version: v1
+            kind: ConfigMap
+            namespace: default
+            name: finalizer-test-idempotent
+            patch:
+              - op: replace
+                path: /metadata/finalizers
+                value: []
+          failed_when: false
+
+        - name: Cleanup -- delete ConfigMap
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: ConfigMap
+            namespace: default
+            name: finalizer-test-idempotent
+
+# ── Test 4: Remove nonexistent finalizer ──
+- name: "Finalizer - Test remove nonexistent"
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+
+  tasks:
+    - name: Test remove nonexistent
+      block:
+        - name: Create test ConfigMap without finalizers
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: finalizer-test-noop
+                namespace: default
+              data:
+                test: "true"
+
+        - name: Remove nonexistent finalizer (should not error)
+          ansible.builtin.include_role:
+            name: osac.service.finalizer
+          vars:
+            finalizer_state: absent
+            finalizer_name: "osac.openshift.io/does-not-exist"
+            finalizer_target:
+              api_version: v1
+              kind: ConfigMap
+              namespace: default
+              name: finalizer-test-noop
+
+        - name: Verify ConfigMap still has no finalizers
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: ConfigMap
+            namespace: default
+            name: finalizer-test-noop
+          register: result
+
+        - name: Assert no finalizers
+          ansible.builtin.assert:
+            that:
+              - result.resources[0].metadata.finalizers | default([]) | length == 0
+            fail_msg: "Unexpected finalizers found"
+            success_msg: "Remove nonexistent: passed"
+
+      always:
+        - name: Cleanup -- delete ConfigMap
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: ConfigMap
+            namespace: default
+            name: finalizer-test-noop

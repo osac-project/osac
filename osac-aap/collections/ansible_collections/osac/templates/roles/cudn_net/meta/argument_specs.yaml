@@ -1,0 +1,55 @@
+---
+argument_specs:
+  create_subnet:
+    options:
+      subnet:
+        type: dict
+        required: true
+        description: Subnet CR from fulfillment-api via EDA payload
+      subnet_name:
+        type: str
+        required: true
+        description: Name of the Subnet resource
+      template_parameters:
+        type: dict
+        description: Template-specific parameters (reserved for future use)
+        options: {}
+        default: {}
+
+  delete_subnet:
+    options:
+      subnet:
+        type: dict
+        required: true
+        description: Subnet CR from fulfillment-api via EDA payload
+      subnet_name:
+        type: str
+        required: true
+        description: Name of the Subnet resource
+
+  create_virtual_network:
+    options:
+      virtual_network:
+        type: dict
+        required: true
+        description: VirtualNetwork CR from fulfillment-api via EDA payload
+      virtual_network_name:
+        type: str
+        required: true
+        description: Name of the VirtualNetwork resource
+      template_parameters:
+        type: dict
+        description: Template-specific parameters (reserved for future use)
+        options: {}
+        default: {}
+
+  delete_virtual_network:
+    options:
+      virtual_network:
+        type: dict
+        required: true
+        description: VirtualNetwork CR from fulfillment-api via EDA payload
+      virtual_network_name:
+        type: str
+        required: true
+        description: Name of the VirtualNetwork resource

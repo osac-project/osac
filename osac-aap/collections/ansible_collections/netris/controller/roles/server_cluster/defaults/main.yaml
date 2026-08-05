@@ -1,0 +1,4 @@
+---
+server_cluster_state: present
+server_cluster_servers: []  # list of dicts with id and/or name, e.g. [{"id": 1}, {"name": "server1"}]
+server_cluster_shared: false

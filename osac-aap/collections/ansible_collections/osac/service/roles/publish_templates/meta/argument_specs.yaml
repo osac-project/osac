@@ -1,0 +1,30 @@
+argument_specs:
+  main:
+    options:
+      osac_cluster_templates:
+        type: list
+        description: Cluster templates to publish to the cluster_templates endpoint
+      osac_compute_instance_templates:
+        type: list
+        description: ComputeInstance templates
+      osac_fulfillment_service_uri:
+        type: str
+        required: true
+      osac_fulfillment_service_token:
+        type: str
+        required: true
+      publish_templates_cluster_api_endpoint:
+        type: str
+        description: API endpoint for cluster templates
+        default: "{{ osac_fulfillment_service_uri }}/api/private/v1/cluster_templates"
+      publish_templates_compute_instance_api_endpoint:
+        type: str
+        description: API endpoint for ComputeInstance templates
+        default: "{{ osac_fulfillment_service_uri }}/api/private/v1/compute_instance_templates"
+      osac_network_classes:
+        type: list
+        description: NetworkClass definitions to publish to the network_classes endpoint
+      publish_templates_network_class_api_endpoint:
+        type: str
+        description: API endpoint for NetworkClass resources
+        default: "{{ osac_fulfillment_service_uri }}/api/private/v1/network_classes"

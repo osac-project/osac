@@ -1,0 +1,23 @@
+---
+- name: Validate BGP announce input variables
+  ansible.builtin.assert:
+    that:
+      - bgp_public_ip | ansible.utils.ipv4 != false
+      - bgp_next_hop | ansible.utils.ipv4 != false
+    fail_msg: "BGP announce variable validation failed. Check IPs."
+
+- name: Check if static route already exists
+  ansible.builtin.raw: >-
+    vtysh -c "show ip route {{ bgp_public_ip }}/32" 2>/dev/null
+    | grep -qw "{{ bgp_next_hop }}"
+  register: bgp_route_check
+  changed_when: false
+  failed_when: false
+
+- name: Add static route for BGP announcement
+  ansible.builtin.raw: >-
+    vtysh -c "configure terminal"
+    -c "ip route {{ bgp_public_ip }}/32 {{ bgp_next_hop }}"
+    -c "end"
+  when: bgp_route_check.rc != 0
+  changed_when: true

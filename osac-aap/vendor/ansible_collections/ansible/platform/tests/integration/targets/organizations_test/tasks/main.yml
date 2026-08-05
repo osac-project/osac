@@ -1,0 +1,98 @@
+---
+- name: Generate a test ID
+  ansible.builtin.set_fact:
+    test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') }}"
+  when: test_id is not defined
+
+- name: Preset vars
+  ansible.builtin.set_fact:
+    organization_name: "GW-Collection-Test-Organization-{{ test_id }}"
+
+- name: Run Tests
+  module_defaults:
+    group/ansible.platform.gateway:
+      gateway_hostname: "{{ gateway_hostname }}"
+      gateway_username: "{{ gateway_username }}"
+      gateway_password: "{{ gateway_password }}"
+      gateway_validate_certs: "{{ gateway_validate_certs | bool }}"
+
+  block:
+    # <Organizations> -------------------
+    - name: Create Organizations
+      ansible.platform.organization:
+        name: "{{ organization_name }}"
+      register: org
+
+    - name: Assert a creation changes the system
+      ansible.builtin.assert:
+        that:
+          - org is changed
+
+    - name: Recreate an organization
+      ansible.platform.organization:
+        name: "{{ organization_name }}"
+        state: exists
+      register: recreate_org
+
+    - name: Assert that a recreate does not change the system
+      ansible.builtin.assert:
+        that:
+          - recreate_org is not changed
+
+    - name: Alter an existing organization by ID
+      ansible.platform.organization:
+        name: "{{ org.id }}"
+        description: "Some Organization"
+      register: org_change
+
+    - name: Assert that an org change changes the system
+      ansible.builtin.assert:
+        that:
+          - org_change is changed
+
+    - name: Rename an organization
+      ansible.platform.organization:
+        name: "{{ organization_name }}"
+        new_name: "new-{{ organization_name }}"
+      register: rename_org
+
+    - name: Assert the rename of an org changes the existing item
+      ansible.builtin.assert:
+        that:
+          - rename_org is changed
+          - org.id == rename_org.id
+
+    - name: Delete a non-existent organization
+      ansible.platform.organization:
+        name: "{{ organization_name }}"
+        state: absent
+      register: org_delete
+
+    - name: Assert that the deletion of a non-existent org does not fail or change the system
+      ansible.builtin.assert:
+        that:
+          org_delete is not changed
+
+    - name: Delete an org
+      ansible.platform.organization:
+        name: "{{ org.id }}"
+        state: absent
+      register: org_delete
+
+    - name: Assert that the deletion of a valid or changes the system
+      ansible.builtin.assert:
+        that:
+          - org_delete is changed
+
+    # </Organizations> ------------------
+
+  # <Cleanup>
+  always:
+    - name: Delete Organizations
+      ansible.platform.organization:
+        name: "{{ item }}"
+        state: absent
+      when: "item in vars and 'id' in vars[item]"
+      loop:
+        - "org"
+...

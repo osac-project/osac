@@ -1,0 +1,46 @@
+---
+# Apply nmstate config on live agents via SSH.
+# Reads IP assignments from NMStateConfig CR annotations for stability.
+
+- name: Parse gateway CIDR for IP calculation
+  ansible.builtin.set_fact:
+    _nmstate_apply_gateway_ip: "{{ nmstate_config_gateway_cidr | ansible.utils.ipaddr('address') }}"
+    _nmstate_apply_prefix: "{{ nmstate_config_gateway_cidr | ansible.utils.ipaddr('prefix') }}"
+
+- name: List NMStateConfig CRs for IP offset assignments
+  kubernetes.core.k8s_info:
+    api_version: agent-install.openshift.io/v1beta1
+    kind: NMStateConfig
+    namespace: "{{ nmstate_config_namespace }}"
+    label_selectors:
+      - "{{ cluster_order_label }}={{ nmstate_config_cluster_name }}"
+  register: _nmstate_apply_existing_crs
+
+- name: Build IP offset map from NMStateConfig annotations
+  ansible.builtin.set_fact:
+    _nmstate_apply_offset_map: >-
+      {%- set result = {} -%}
+      {%- for cr in _nmstate_apply_existing_crs.resources -%}
+        {%- if cr.metadata.annotations is defined and 'osac.openshift.io/ip-offset' in cr.metadata.annotations -%}
+          {%- set agent_name = cr.metadata.name | regex_replace('^' ~ nmstate_config_cluster_name ~ '-', '') -%}
+          {%- set _ = result.update({agent_name: cr.metadata.annotations['osac.openshift.io/ip-offset'] | int}) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ result }}
+
+- name: Build agent apply assignments from NMStateConfig offsets
+  ansible.builtin.set_fact:
+    _nmstate_apply_assignments: >-
+      {%- set assignments = [] -%}
+      {%- for agent in nmstate_config_agents -%}
+        {%- if agent.metadata.name in _nmstate_apply_offset_map -%}
+          {%- set _ = assignments.append({'agent': agent, 'offset': _nmstate_apply_offset_map[agent.metadata.name]}) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ assignments }}
+
+- name: Apply nmstate config on each agent
+  ansible.builtin.include_tasks: apply_single.yaml
+  loop: "{{ _nmstate_apply_assignments }}"
+  loop_control:
+    loop_var: _nmstate_apply_assignment

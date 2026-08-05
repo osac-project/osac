@@ -1,0 +1,57 @@
+---
+# VirtualNetwork maps to a Netris VPC + IPAM allocation
+# Creates a VPC (routing domain) and an IPAM allocation for the VN's CIDR
+
+- name: Extract VirtualNetwork configuration
+  ansible.builtin.set_fact:
+    vn_name: "{{ virtual_network.metadata.name }}"
+    vn_ipv4_cidr: "{{ virtual_network.spec.ipv4Cidr | default('') }}"
+    vn_region: "{{ virtual_network.spec.region }}"
+    vn_tenant_id: "{{ virtual_network.metadata.annotations['osac.openshift.io/tenant'] | default('') }}"
+
+- name: Resolve region to Netris site ID
+  ansible.builtin.set_fact:
+    vn_site_id: "{{ netris_region_site_map[vn_region] | default(netris_site_id) }}"
+
+- name: Display VirtualNetwork information
+  ansible.builtin.debug:
+    msg:
+      - "Creating Netris VPC + IPAM allocation for VirtualNetwork '{{ vn_name }}'"
+      - "Region: {{ vn_region }}"
+      - "Site ID: {{ vn_site_id }}"
+      - "IPv4 CIDR: {{ vn_ipv4_cidr | default('not configured') }}"
+
+- name: Create VPC in Netris controller
+  ansible.builtin.include_role:
+    name: netris.controller.vpc
+    tasks_from: create
+  vars:
+    vpc_name: "{{ vn_name }}"
+    vpc_site_id: "{{ vn_site_id }}"
+    vpc_tenant_id: "{{ netris_tenant_id }}"
+
+- name: Display VPC creation result
+  ansible.builtin.debug:
+    msg: >-
+      VPC '{{ vn_name }}' {{ (vpc_already_existed | default(false)) | ternary('already exists', 'created successfully') }}
+      (ID: {{ vpc_id | default('unknown') }})
+
+- name: Create IPAM allocation for VirtualNetwork CIDR
+  ansible.builtin.include_role:
+    name: netris.controller.ipam
+    tasks_from: create_allocation
+  vars:
+    ipam_name: "{{ vn_name }}"
+    ipam_cidr: "{{ vn_ipv4_cidr }}"
+    ipam_purpose: "common"
+    ipam_site_id: "{{ vn_site_id }}"
+    ipam_tenant_id: "{{ netris_tenant_id }}"
+    ipam_vpc_id: "{{ vpc_id }}"
+  when: vn_ipv4_cidr | length > 0
+
+- name: Display IPAM allocation result
+  ansible.builtin.debug:
+    msg: >-
+      IPAM allocation '{{ vn_name }}' {{ (ipam_already_existed | default(false)) | ternary('already exists', 'created successfully') }}
+      (ID: {{ ipam_subnet_id | default('unknown') }})
+  when: vn_ipv4_cidr | length > 0

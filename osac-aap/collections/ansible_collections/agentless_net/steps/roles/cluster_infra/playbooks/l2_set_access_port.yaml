@@ -1,0 +1,9 @@
+---
+- name: Set switch access port to VLAN
+  hosts: switches
+  gather_facts: false
+  tasks:
+    - name: Set access port
+      ansible.builtin.include_role:
+        name: agentless_net.l2.port
+        tasks_from: set_access_port

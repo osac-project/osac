@@ -1,0 +1,97 @@
+//
+// Copyright (c) 2025 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.public.v1;
+
+import "google/api/annotations.proto";
+import "google/api/field_behavior.proto";
+import "google/protobuf/timestamp.proto";
+
+// Type of resource to connect a console to.
+enum ConsoleResourceType {
+  CONSOLE_RESOURCE_TYPE_UNSPECIFIED = 0;
+  CONSOLE_RESOURCE_TYPE_COMPUTE_INSTANCE = 1;
+  CONSOLE_RESOURCE_TYPE_HOST = 2;
+}
+
+// Type of console connection.
+enum ConsoleType {
+  CONSOLE_TYPE_UNSPECIFIED = 0;
+  CONSOLE_TYPE_SERIAL = 1;
+  CONSOLE_TYPE_VNC = 2;
+}
+
+// State of the console connection.
+enum ConsoleConnectionState {
+  CONSOLE_CONNECTION_STATE_UNSPECIFIED = 0;
+  CONSOLE_CONNECTION_STATE_CONNECTING = 1;
+  CONSOLE_CONNECTION_STATE_CONNECTED = 2;
+  CONSOLE_CONNECTION_STATE_DISCONNECTED = 3;
+  CONSOLE_CONNECTION_STATE_ERROR = 4;
+}
+
+// Terminal input data from the client.
+message ConsoleInput {
+  bytes data = 1;
+}
+
+// Terminal output data from the compute instance.
+message ConsoleOutput {
+  bytes data = 1;
+}
+
+// Status update from the server about the console connection.
+message ConsoleStatus {
+  ConsoleConnectionState state = 1;
+  string message = 2;
+}
+
+// ConsoleSession represents a single-use console access ticket. The ticket
+// authorizes one connection to a resource's console via the console-proxy.
+message ConsoleSession {
+  ConsoleResourceType resource_type = 1;
+  string resource_id = 2;
+  ConsoleType type = 3;
+  // Stable identifier for the CLI process. When a new connection arrives with
+  // a client_id matching an existing session from the same user, the server
+  // evicts the stale session and admits the new one. Empty means no eviction.
+  string client_id = 4;
+  // Opaque encrypted ticket (nested JWE+JWS). Do not parse or log --
+  // it grants console access without further authentication.
+  string ticket = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
+  // Authoritative expiry time for the ticket.
+  google.protobuf.Timestamp expires_at = 6 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+message ConsoleSessionsCreateRequest {
+  ConsoleSession object = 1;
+}
+
+message ConsoleSessionsCreateResponse {
+  ConsoleSession object = 1;
+}
+
+// Service for console session ticket management.
+service ConsoleSessions {
+  // Create a console session ticket. The ticket is an opaque encrypted token
+  // that authorizes a single console connection via the console-proxy service.
+  rpc Create(ConsoleSessionsCreateRequest) returns (ConsoleSessionsCreateResponse) {
+    option (google.api.http) = {
+      post: "/api/fulfillment/v1/console_sessions"
+      body: "object"
+      response_body: "object"
+    };
+  }
+}

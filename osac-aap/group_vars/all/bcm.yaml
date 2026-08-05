@@ -1,0 +1,39 @@
+---
+# NVIDIA Base Command Manager (BCM) Configuration
+# =================================================
+# These settings configure the BCM inventory integration for importing
+# bare metal servers as Assisted Installer agents.
+#
+# Sensitive values (client cert/key) should be provided via:
+#   1. Kubernetes secrets mounted into the AAP pod (recommended)
+#   2. Environment variables pointing to file paths
+#
+# NEVER commit actual certificates or keys to this file!
+
+# API Connection Settings
+# -----------------------
+bcm_api_url: "{{ lookup('env', 'BCM_API_URL') | default('', true) }}"
+bcm_cert_path: "{{ lookup('env', 'BCM_CERT_PATH') | default('/var/secrets/bcm-certs/tls.crt', true) }}"
+bcm_key_path: "{{ lookup('env', 'BCM_KEY_PATH') | default('/var/secrets/bcm-certs/tls.key', true) }}"
+bcm_validate_certs: "{{ lookup('env', 'BCM_VALIDATE_CERTS') | default('true', true) | bool }}"
+
+# Agent Namespace and InfraEnv
+# ----------------------------
+bcm_agent_namespace: "{{ default_agent_namespace }}"
+bcm_infraenv_name: "{{ hosted_cluster_default_infraenv }}"
+bcm_pull_secret_name: "pull-secret"
+
+# Resource Tracking
+# -----------------
+bcm_managed_by_label: "osac.openshift.io/managed-by=import-bcm-agents"
+bcm_managed_by_value: "import-bcm-agents"
+
+# Agent Labels
+# ------------
+bcm_agent_resource_class_label: "osac.openshift.io/resource_class"
+bcm_agent_rack_label: "osac.openshift.io/rack"
+
+# BMC Configuration
+# -----------------
+# Set to true to skip BMC TLS verification (lab/debug only)
+bcm_disable_bmc_cert_verification: "{{ lookup('env', 'BCM_DISABLE_BMC_CERT_VERIFICATION') | default('false', true) | bool }}"

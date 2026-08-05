@@ -1,0 +1,25 @@
+---
+- name: Look up private network for BareMetalPool
+  openstack.cloud.networks_info:
+    name: "network-{{ bare_metal_pool.metadata.name }}"
+  register: pool_network_info
+
+- name: Wait for all node VIFs to be detached before deleting network
+  when: pool_network_info.networks | length > 0
+  block:
+    - name: Wait for node VIF ports to be removed from network
+      openstack.cloud.port_info:
+        filters:
+          network_id: "{{ pool_network_info.networks[0].id }}"
+          device_owner: "baremetal:none"
+      register: vif_ports
+      until: vif_ports.ports | length == 0
+      retries: 30
+      delay: 10
+
+- name: Delete OpenStack network for BareMetalPool
+  ansible.builtin.include_role:
+    name: osac.esi.network
+  vars:
+    network_state: absent
+    network_suffix: "{{ bare_metal_pool.metadata.name }}"

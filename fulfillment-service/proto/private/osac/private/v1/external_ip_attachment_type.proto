@@ -1,0 +1,187 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "google/api/field_behavior.proto";
+import "osac/private/v1/metadata_type.proto";
+
+// Represents a binding between an ExternalIP and a target resource.
+//
+// An ExternalIPAttachment is a first-class resource that manages the attach/detach lifecycle
+// independently from the ExternalIP allocation lifecycle. Creating an ExternalIPAttachment triggers
+// the attach workflow; deleting it triggers the detach workflow.
+//
+// The binding is immutable: to change the target, delete the attachment and create a new one.
+// The oneof target field supports ComputeInstance, Cluster, and BareMetalInstance targets.
+//
+// For cluster targets, the target_endpoint field specifies which cluster endpoint receives the
+// external IP (API server or ingress). An ExternalIPAttachment can be created before the cluster
+// is ready and will activate automatically once the cluster's VIP is available.
+//
+// Lifecycle: PENDING (attach in progress) -> READY (attached and routing traffic) -> DELETING
+// (detach in progress). FAILED is a terminal error state that retries via the standard
+// provisioning lifecycle with exponential backoff.
+message ExternalIPAttachment {
+  // Unique identifier of the external IP attachment.
+  string id = 1;
+
+  // Metadata of the external IP attachment, including name, labels, and timestamps.
+  Metadata metadata = 2;
+
+  // Desired configuration of the external IP attachment (user-specified).
+  ExternalIPAttachmentSpec spec = 3;
+
+  // Current state of the external IP attachment (system-provided, read-only).
+  ExternalIPAttachmentStatus status = 4;
+}
+
+// Defines the desired configuration for an ExternalIPAttachment.
+//
+// All fields are required and immutable after creation. The external_ip must reference an
+// existing ExternalIP in ALLOCATED state. The target must reference a valid resource that
+// supports external IP attachment.
+message ExternalIPAttachmentSpec {
+  // ExternalIP ID to attach. Required and immutable after creation.
+  //
+  // Must reference the ID of an existing ExternalIP in ALLOCATED state that is not already
+  // attached (status.attached == false). Only one ExternalIPAttachment may exist per ExternalIP.
+  //
+  // Example: "019728a4-3f5c-7def-8abc-1234567890ab"
+  string external_ip = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE
+  ];
+
+  // Target resource to attach the external IP to. Exactly one target field must be set.
+  // Required and immutable after creation.
+  oneof target {
+    // ComputeInstance ID to attach this external IP to.
+    //
+    // Must reference the ID of an existing ComputeInstance in RUNNING state. Only one
+    // ExternalIPAttachment may exist per ComputeInstance.
+    //
+    // Example: "01972f1b-a4e9-7c82-9def-abcdef123456"
+    string compute_instance = 2;
+
+    // Cluster ID to attach this external IP to.
+    //
+    // Must reference the ID of an existing Cluster. The target_endpoint field is required
+    // when targeting a cluster to specify which endpoint (API or ingress) receives the
+    // external IP. The attachment can be created before the cluster is ready and will
+    // activate once the cluster's VIP is available.
+    //
+    // Example: "01973a2c-b5f0-7d93-8abc-def012345678"
+    string cluster = 3;
+
+    // BareMetalInstance ID to attach this external IP to.
+    //
+    // Must reference the ID of an existing BareMetalInstance. DNAT rules will be configured
+    // to forward traffic from the external IP to the bare-metal instance's internal IP.
+    //
+    // Example: "01973b3d-c6e1-7ea4-9bcd-ef0123456789"
+    string baremetal_instance = 4;
+  }
+
+  // Cluster endpoint to attach the external IP to. Required when target is cluster.
+  //
+  // Specifies whether the external IP should be routed to the cluster's API server endpoint
+  // or its ingress endpoint. Ignored for non-cluster targets. Immutable after creation.
+  ExternalIPAttachmentEndpoint target_endpoint = 5 [
+    (google.api.field_behavior) = IMMUTABLE
+  ];
+}
+
+// Endpoint type for cluster-targeted ExternalIPAttachments.
+//
+// When attaching an external IP to a cluster, this enum specifies which cluster endpoint
+// receives the DNAT rule.
+enum ExternalIPAttachmentEndpoint {
+  // Endpoint is unknown or has not been specified.
+  EXTERNAL_IP_ATTACHMENT_ENDPOINT_UNSPECIFIED = 0;
+
+  // The cluster's API server endpoint.
+  //
+  // The external IP will be routed to the cluster's Kubernetes API server VIP, making the
+  // cluster API reachable from outside the VirtualNetwork.
+  EXTERNAL_IP_ATTACHMENT_ENDPOINT_API = 1;
+
+  // The cluster's ingress endpoint.
+  //
+  // The external IP will be routed to the cluster's ingress controller VIP, making
+  // applications hosted on the cluster reachable from outside the VirtualNetwork.
+  EXTERNAL_IP_ATTACHMENT_ENDPOINT_INGRESS = 2;
+}
+
+// Represents the current operational state of an ExternalIPAttachment.
+//
+// Status is system-provided and read-only. Users cannot modify status fields directly; the
+// system updates them based on reconciliation of the spec and feedback from the cluster
+// controller.
+message ExternalIPAttachmentStatus {
+  // Current lifecycle state of the external IP attachment.
+  ExternalIPAttachmentState state = 1 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // Allocated IP address from the parent ExternalIP.
+  //
+  // Populated for convenience once the attachment reaches READY state. Mirrors the address
+  // field from the referenced ExternalIP's status.
+  string external_ip_address = 2 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // Human-readable message providing additional details about the current state.
+  //
+  // For PENDING state, may contain progress information. For FAILED state, contains the
+  // error details. Typically empty for READY state.
+  optional string message = 3 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // Identifier of the hub cluster that this external IP attachment is deployed to.
+  //
+  // Set by the fulfillment-service controller when reconciling the attachment to a
+  // Kubernetes CR on the target hub cluster.
+  string hub = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// Lifecycle states for ExternalIPAttachment resources.
+//
+// State transitions: UNSPECIFIED -> PENDING -> READY. On deletion: any state -> DELETING.
+// FAILED can occur from PENDING and retries automatically via the provisioning lifecycle.
+enum ExternalIPAttachmentState {
+  // State is unknown or has not been determined yet.
+  EXTERNAL_IP_ATTACHMENT_STATE_UNSPECIFIED = 0;
+
+  // The attachment is being provisioned (attach workflow in progress).
+  //
+  // The system is binding the ExternalIP's allocated address to the target resource. This
+  // involves creating DNAT rules or MetalLB LoadBalancer Services depending on the target type.
+  EXTERNAL_IP_ATTACHMENT_STATE_PENDING = 1;
+
+  // The attachment is active and the target is reachable via the external IP address.
+  //
+  // The ExternalIP's allocated address is bound to the target resource and actively routing
+  // traffic. The parent ExternalIP's status.attached is set to true.
+  EXTERNAL_IP_ATTACHMENT_STATE_READY = 2;
+
+  // The attachment failed. Check status.message for error details.
+  //
+  // The provisioning lifecycle retries automatically with exponential backoff.
+  EXTERNAL_IP_ATTACHMENT_STATE_FAILED = 3;
+
+  // The attachment is being deprovisioned (detach workflow in progress).
+  //
+  // Triggered by deletion of the ExternalIPAttachment resource. The system unbinds the
+  // address from the target and cleans up DNAT rules or MetalLB Services.
+  // On completion, the parent ExternalIP's status.attached is set to false.
+  EXTERNAL_IP_ATTACHMENT_STATE_DELETING = 4;
+}

@@ -1,0 +1,30 @@
+---
+# Default variables for globalsnapstreams integration tests
+# Override these in tests/integration/integration_config.yml
+
+# VAST system connection details
+# Leave empty to skip tests gracefully
+vast_vms: ""
+vast_username: ""
+vast_password: ""
+
+vms_auth:
+  host: "{{ vast_vms }}"
+  username: "{{ vast_username }}"
+  password: "{{ vast_password }}"
+  validate_certs: false
+  debug: true
+
+# Test globalsnapstream configuration
+test_globalsnapstream_name: "ansible-test-globalsnapstream"
+
+# Test view configuration for snapshot source
+test_view_path: "/ansible-test-snapstream-view"
+test_view_policy_id: 1
+
+# Test clone destination path
+test_clone_destination_path: "/ansible-test-snapstream-clone"
+test_clone_destination_path_delcheck: "/ansible-test-snapstream-clone-delcheck"
+
+# Test snapshot configuration
+test_snapshot_name: "ansible-test-snapshot"

@@ -1,0 +1,42 @@
+#
+# Copyright (c) 2025 Red Hat Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+# in compliance with the License. You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software distributed under the License
+# is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+# or implied. See the License for the specific language governing permissions and limitations under
+# the License.
+#
+
+# This workflow publishes the protocol buffers specification to the buf schema registry.
+
+name: Publish proto
+
+on:
+  push:
+    tags:
+    - 'fulfillment-service/v*'
+
+jobs:
+
+  publish-proto:
+    name: Publish proto
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      with:
+        persist-credentials: false
+    - uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3  # v1
+      with:
+        setup_only: true
+        token: ${{ secrets.BUF_TOKEN }}
+        version: 1.71.0
+    - working-directory: fulfillment-service
+      run: |
+        # Strip this component's tag prefix (see the `tags:` trigger above) so the
+        # label reads as a plain version, not the full scoped git tag.
+        buf push --label "${GITHUB_REF_NAME#fulfillment-service/}"

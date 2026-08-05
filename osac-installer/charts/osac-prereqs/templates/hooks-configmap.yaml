@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: osac-prereqs-hook-scripts
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-prereqs.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation
+data:
+  {{- range $path, $_ := .Files.Glob "files/hooks/*.sh" }}
+  {{ $path | base }}: |
+{{ $.Files.Get $path | indent 4 }}
+  {{- end }}

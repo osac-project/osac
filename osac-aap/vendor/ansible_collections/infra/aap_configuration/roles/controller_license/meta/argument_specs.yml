@@ -1,0 +1,93 @@
+---
+argument_specs:
+  main:
+    short_description: An Ansible Role to deploy a license on Ansible Controller.
+
+    options:
+      controller_license:
+        description: Data structure describing your license for Controller
+        type: dict
+        options:
+          manifest_file:
+            required: false
+            type: str
+            description: File path to a Red Hat subscription manifest (a .zip file)
+          manifest_url:
+            required: false
+            type: str
+            description: URL containing a Red Hat subscription manifest (a .zip file)
+          manifest_content:
+            required: false
+            type: str
+            description: Base64 encoded content of Red Hat subscription manifest
+          manifest:
+            required: false
+            type: str
+            description: DEPRECATED - changed to `manifest_file` (still works as an alias)
+          subscription_id:
+            required: false
+            type: str
+            description: Red Hat or Red Hat Satellite subscription_id to attach to
+          force:
+            default: false
+            required: false
+            type: bool
+            description: By default, the license manifest will only be applied if controller is currently unlicensed or trial licensed. When force=true, the license is always applied.
+
+      # Variables used for Liscense lookup
+      redhat_subscription_username:
+        default: None
+        required: false
+        type: str
+        description: Red Hat or Red Hat Satellite username to get available subscriptions.
+      redhat_subscription_password:
+        default: None
+        required: false
+        type: str
+        description: Red Hat or Red Hat Satellite password to get available subscriptions.
+
+      # No_log variables
+      controller_configuration_labels_secure_logging:
+        default: "{{ aap_configuration_secure_logging | default(false) }}"
+        required: false
+        type: bool
+        description: Whether or not to include the sensitive tasks from this role in the log. Set this value to `true` if you will be providing your sensitive values
+          from elsewhere.
+      aap_configuration_secure_logging:
+        default: false
+        required: false
+        type: bool
+        description: This variable enables secure logging across all roles as a default.
+
+      # Generic across all roles
+      platform_state:
+        default: present
+        required: false
+        description: The state all objects will take unless overridden by object default
+        type: str
+      aap_hostname:
+        default: None
+        required: false
+        description: URL to the Ansible Automation Platform Server.
+        type: str
+      aap_validate_certs:
+        default: true
+        required: false
+        description: Whether or not to validate the Ansible Automation Platform Server's SSL certificate.
+        type: str
+      aap_username:
+        default: None
+        required: false
+        description: Admin User on the Ansible Automation Platform Server. Either username / password or oauthtoken need to be specified.
+        type: str
+      aap_password:
+        default: None
+        required: false
+        description: Platform Admin User's password on the Server.  This should be stored in an Ansible Vault at vars/platform-secrets.yml or elsewhere and called from a parent playbook.
+        type: str
+      aap_token:
+        default: None
+        required: false
+        description: Controller Admin User's token on the Ansible Automation Platform Server. This should be stored in an Ansible Vault at or elsewhere and called from a parent playbook. Either username / password or oauthtoken need to be specified.
+        type: str
+...

@@ -1,0 +1,9 @@
+---
+- name: Remove VLAN configuration from switch port
+  hosts: switches
+  gather_facts: false
+  tasks:
+    - name: Remove VLAN configuration
+      ansible.builtin.include_role:
+        name: agentless_net.l2.port
+        tasks_from: reset_port

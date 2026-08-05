@@ -1,0 +1,47 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-fulfillment-ig
+data:
+  # -- External access --
+  EXTERNAL_ACCESS_BASE_DOMAIN: "box.massopen.cloud"
+  EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS: "box.massopen.cloud"
+  EXTERNAL_ACCESS_API_INTERNAL_NETWORK: "hypershift"
+
+  # -- Hosted cluster --
+  HOSTED_CLUSTER_BASE_DOMAIN: "box.massopen.cloud"
+  HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY: "HighlyAvailable"
+  HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: "HighlyAvailable"
+
+  # -- Network class --
+  # Which network backend to use (netris / esi). Templates like
+  # ocp_hosted_netris override this automatically.
+  NETWORK_CLASS: "esi"
+  NETWORK_STEPS_COLLECTION: "osac.steps"
+
+  # -- Netris controller connection --
+  NETRIS_CONTROLLER_URL: "https://redhat-ctl.netris.io"
+  NETRIS_USERNAME: "netris"
+
+  # -- Netris site and tenant --
+  NETRIS_SITE_ID: "5"
+  NETRIS_TENANT_ID: "1"
+  NETRIS_TENANT_NAME: "Admin"
+
+  # -- Netris management VPC --
+  NETRIS_MGMT_VPC_ID: "4"
+  NETRIS_MGMT_VPC_NAME: "RH-Infra"
+
+  # -- Per-resource-class configuration (JSON) --
+  # Each key is a resource class; value has server_cluster_template_id,
+  # mgmt_interface, and vpc_interfaces.
+  NETRIS_RESOURCE_CLASS_MAP: '{"fc430": {"server_cluster_template_id": 89, "mgmt_interface": "ens4", "vpc_interfaces": ["ens13"]}}'
+
+  # -- Management network routing --
+  SERVER_MGMT_ROUTE_DESTINATION: "10.8.0.0/30"
+  SERVER_MGMT_ROUTE_GATEWAY: "192.168.16.1"
+
+  # -- SSH bastion (non-secret parts) --
+  SERVER_SSH_BASTION_HOST: "redhat-ctl.netris.io"
+  SERVER_SSH_BASTION_USER: "ubuntu"
+  SERVER_SSH_USER: "core"

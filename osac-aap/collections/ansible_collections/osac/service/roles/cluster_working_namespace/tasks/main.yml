@@ -1,0 +1,19 @@
+---
+- name: Retrieve working cluster namespace unless it is already set
+  when: cluster_working_namespace is not defined
+  block:
+  - name: Retrieve working cluster namespace from ClusterOrder name and namespace
+    kubernetes.core.k8s_info:
+      kind: Namespace
+      label_selectors:
+        - "{{ cluster_order_label }}={{ cluster_working_namespace_cluster_order_name }}"
+    register: cluster_working_namespace_list
+
+  - name: Check if the working cluster namespace is found
+    ansible.builtin.fail:
+      msg: "Working cluster namespace was not found."
+    when: cluster_working_namespace_list.resources | length != 1
+
+  - name: Set working cluster namespace as result
+    ansible.builtin.set_fact:
+      cluster_working_namespace: "{{ cluster_working_namespace_list.resources[0].metadata.name }}"

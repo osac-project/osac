@@ -1,0 +1,9 @@
+---
+- name: "nxos: remove port VLAN configuration"
+  nxos_config:
+    lines:
+      - "no switchport mode"
+      - "no switchport access vlan"
+      - "no switchport trunk allowed vlan"
+    parents: ["interface {{ port_name }}"]
+  connection: network_cli

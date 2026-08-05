@@ -1,0 +1,49 @@
+- name: Grab current network configuration for node  # noqa:no-changed-when
+  ansible.builtin.command: >-
+    openstack esi node network list --node {{ node }} --long
+      -f json
+  register: nnl_cmd_raw
+
+- name: Unmarshal output from JSON and filter for attached networks
+  ansible.builtin.set_fact:
+    nnl_result: "{{ nnl_cmd_raw.stdout | from_json | rejectattr('Network UUID', 'equalto', None) }}"
+
+- name: Get all networks
+  openstack.cloud.networks_info:
+  register: all_networks
+
+- name: Filter networks and get their UUIDs
+  ansible.builtin.set_fact:
+    network_uuids: >
+      {{
+        (
+          (all_networks.networks | selectattr('name', 'in', networks)) +
+          (all_networks.networks | selectattr('id', 'in', networks))
+        ) | map(attribute='id') | unique
+      }}
+
+- name: Check if configured networks are different from desired networks
+  ansible.builtin.set_fact:
+    network_differences: "{{ network_uuids | difference(nnl_result | map(attribute='Network UUID')) + nnl_result | map(attribute='Network UUID') | difference(network_uuids) }}"
+
+- name: Detach networks from node  # noqa:no-changed-when
+  when: network_differences | length > 0 and nnl_result | length > 0
+  ansible.builtin.command: >-
+    openstack esi node network detach --all {{ node }}
+
+- name: Delete Neutron ports
+  when: network_differences | length > 0
+  loop: "{{ nnl_result }}"
+  loop_control:
+    loop_var: network_info
+  openstack.cloud.port:
+    state: "absent"
+    name: "{{ network_info['Network Port UUID'] }}"
+
+- name: Attach networks to node  # noqa:no-changed-when
+  when: network_differences | length > 0
+  loop: "{{ network_uuids }}"
+  loop_control:
+    loop_var: network_uuid
+  ansible.builtin.command: >-
+    openstack esi node network attach --network {{ network_uuid }} {{ node }}

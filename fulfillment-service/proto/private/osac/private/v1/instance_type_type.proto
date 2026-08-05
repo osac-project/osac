@@ -1,0 +1,118 @@
+//
+// Copyright (c) 2025 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/timestamp.proto";
+import "osac/private/v1/metadata_type.proto";
+
+// Lifecycle states for InstanceType resources.
+enum InstanceTypeState {
+  // State is unknown or has not been determined yet.
+  INSTANCE_TYPE_STATE_UNSPECIFIED = 0;
+
+  // The instance type is fully available for new VM creation.
+  INSTANCE_TYPE_STATE_ACTIVE = 1;
+
+  // The instance type is available with warnings; migration to a replacement is recommended.
+  INSTANCE_TYPE_STATE_DEPRECATED = 2;
+
+  // The instance type is not available for new VMs; visible for lookups only.
+  INSTANCE_TYPE_STATE_OBSOLETE = 3;
+}
+
+// Contains deprecation details for an instance type.
+//
+// This message is only meaningful when the parent InstanceType state is DEPRECATED or OBSOLETE.
+// The state field mirrors the parent InstanceType spec state, making this message self-contained
+// when serialized independently.
+message InstanceTypeDeprecation {
+  // Current deprecation state (DEPRECATED or OBSOLETE). Mirrors the spec-level state.
+  InstanceTypeState state = 1;
+
+  // Suggested replacement instance type name (e.g., "standard-8-32").
+  string replacement = 2;
+
+  // When deprecation was announced. Auto-set on transition to DEPRECATED.
+  google.protobuf.Timestamp deprecation_timestamp = 3;
+
+  // When the instance type becomes or became obsolete. Admin-specified or auto-set on transition to OBSOLETE.
+  google.protobuf.Timestamp obsolescence_timestamp = 4;
+}
+
+// Contains the details about the instance type that are available only for the system.
+//
+// Instance types are admin-managed catalog resources that define pre-configured compute bundles
+// (cores, memory) referenced by name when creating VMs. Cloud Provider Admins control the available
+// configurations through lifecycle-managed instance types.
+//
+// The `spec` contains the desired configuration, and may be modified by the admin. The `status` contains the
+// current state of the instance type, is provided by the system and can't be modified by the user.
+message InstanceType {
+  // Unique identifier of the instance type.
+  string id = 1;
+
+  // Metadata of the instance type, including name, labels, tenant, and timestamps.
+  Metadata metadata = 2;
+
+  // Desired configuration of the instance type (admin-modifiable).
+  InstanceTypeSpec spec = 3;
+
+  // Current state of the instance type (system-provided, read-only).
+  InstanceTypeStatus status = 4;
+}
+
+// Hardware specification for GPU devices attached to compute instances provisioned with this instance type.
+message GpuSpec {
+  // PCI device selector identifying the GPU hardware (e.g., "10DE:20B0").
+  string pci_device_selector = 1 [(buf.validate.field).string.min_len = 1];
+
+  // Kubernetes device plugin resource name (e.g., "nvidia.com/A100").
+  string resource_name = 2 [(buf.validate.field).string.min_len = 1];
+
+  // Number of GPU devices of this type.
+  int32 count = 3 [(buf.validate.field).int32 = {gte: 1, lte: 16}];
+}
+
+// Defines the desired configuration for an InstanceType.
+//
+// The spec contains admin-specified parameters that define the compute bundle. The `cores` and `memory_gib`
+// fields are immutable after creation. The `description`, `state`, and `deprecation` fields may be updated
+// to manage the instance type lifecycle.
+message InstanceTypeSpec {
+  // Number of CPU cores. Immutable after creation.
+  int32 cores = 1;
+
+  // Amount of memory in GiB. Immutable after creation.
+  int32 memory_gib = 2;
+
+  // Human friendly description of the instance type, using Markdown format.
+  string description = 3;
+
+  // Current lifecycle state of the instance type.
+  InstanceTypeState state = 4;
+
+  // Deprecation details. Only meaningful when state is DEPRECATED or OBSOLETE.
+  InstanceTypeDeprecation deprecation = 5;
+
+  // GPU configuration. Omit for non-GPU instance types. Immutable after creation.
+  optional GpuSpec gpu = 6;
+}
+
+// Contains the system-provided status of an InstanceType.
+//
+// Currently empty. Reserved for future reconciliation state.
+message InstanceTypeStatus {}

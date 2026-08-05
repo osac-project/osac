@@ -1,0 +1,137 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "google/api/field_behavior.proto";
+import "osac/private/v1/metadata_type.proto";
+
+// Represents a NAT gateway for outbound traffic (SNAT) from a VirtualNetwork.
+//
+// A NATGateway provides a dedicated egress identity for all resources within a VirtualNetwork.
+// All outbound traffic from the VirtualNetwork's CIDR is source-NATted to the associated
+// ExternalIP address. This gives tenants a known, stable source IP for egress traffic —
+// useful for allowlisting, auditing, and compliance.
+//
+// NATGateway handles outbound traffic only (SNAT). Inbound traffic (DNAT) is handled by
+// ExternalIPAttachment. An ExternalIP can only be used by one consumer — either a NATGateway
+// or an ExternalIPAttachment, not both.
+//
+// One NATGateway is allowed per VirtualNetwork. Creating a second NATGateway for the same
+// VirtualNetwork is rejected. All spec fields are immutable after creation.
+//
+// The lifecycle follows: PENDING (SNAT rule being configured) -> READY (egress active).
+// FAILED is a terminal error state. DELETING is set during deprovisioning.
+message NATGateway {
+  // Unique identifier of the NAT gateway.
+  string id = 1;
+
+  // Metadata of the NAT gateway, including name, labels, and timestamps.
+  Metadata metadata = 2;
+
+  // Desired configuration of the NAT gateway (user-specified).
+  NATGatewaySpec spec = 3;
+
+  // Current state of the NAT gateway (system-provided, read-only).
+  NATGatewayStatus status = 4;
+}
+
+// Defines the desired configuration for a NATGateway.
+//
+// Both fields are required and immutable after creation. The virtual_network identifies which
+// VirtualNetwork's egress traffic is NATted, and the external_ip provides the source address
+// for outbound connections.
+message NATGatewaySpec {
+  // Parent VirtualNetwork ID. Required and immutable after creation.
+  //
+  // Must reference the ID of an existing VirtualNetwork. All outbound traffic from subnets
+  // within this VirtualNetwork will be source-NATted to the associated ExternalIP address.
+  // Only one NATGateway is allowed per VirtualNetwork.
+  //
+  // Example: "019728a4-3f5c-7def-8abc-1234567890ab"
+  string virtual_network = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE
+  ];
+
+  // ExternalIP ID to use as the SNAT source address. Required and immutable after creation.
+  //
+  // Must reference the ID of an existing ExternalIP in ALLOCATED state. The ExternalIP must
+  // not already be consumed by another NATGateway or ExternalIPAttachment. The allocated
+  // address from this ExternalIP becomes the source IP for all egress traffic from the
+  // VirtualNetwork.
+  //
+  // Example: "019728a4-4e6d-7abc-9def-abcdef012345"
+  string external_ip = 2 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE
+  ];
+}
+
+// Represents the current operational state of a NATGateway.
+//
+// Status is system-provided and read-only. Users cannot modify status fields directly; the system
+// updates them based on reconciliation of the spec and feedback from the cluster controller.
+message NATGatewayStatus {
+  // Current lifecycle state of the NAT gateway.
+  NATGatewayState state = 1 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // Human-readable message providing additional details about the current state.
+  //
+  // For PENDING state, may contain progress information like "Configuring SNAT rule".
+  // For FAILED state, contains the error details. Typically empty for READY state.
+  optional string message = 2 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // Identifier of the hub cluster that this NAT gateway is deployed to.
+  //
+  // Set by the fulfillment-service controller when reconciling the NAT gateway to a Kubernetes CR
+  // on the target hub cluster. Used for tracking which cluster the networking resources reside on.
+  string hub = 3 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// Lifecycle states for NATGateway resources.
+//
+// State transitions: UNSPECIFIED -> PENDING -> READY. On deletion: READY -> DELETING.
+// FAILED is a terminal error state for provisioning failures.
+enum NATGatewayState {
+  // State is unknown or has not been determined yet. Default state before initialization.
+  NAT_GATEWAY_STATE_UNSPECIFIED = 0;
+
+  // The NAT gateway is being provisioned.
+  //
+  // During this state, the system is configuring the SNAT rule on the fabric manager
+  // for the VirtualNetwork's CIDR, using the associated ExternalIP as the source address.
+  NAT_GATEWAY_STATE_PENDING = 1;
+
+  // The NAT gateway is active and egress traffic is being NATted.
+  //
+  // The SNAT rule is configured and all outbound traffic from the VirtualNetwork's CIDR
+  // is source-NATted to the associated ExternalIP address. The NAT gateway applies to
+  // all resources in the VirtualNetwork — VMs, BM servers, and cluster nodes.
+  NAT_GATEWAY_STATE_READY = 2;
+
+  // Provisioning failed. Check status.message for error details.
+  //
+  // This is a terminal error state. The NATGateway may require manual intervention
+  // (e.g., deleting and recreating) or a Signal RPC to retry the operation.
+  NAT_GATEWAY_STATE_FAILED = 3;
+
+  // The NAT gateway is being deprovisioned and will be removed.
+  //
+  // On deletion of a NATGateway, the system removes the SNAT rule from the fabric manager.
+  // The associated ExternalIP is released for use by other resources. The resource remains
+  // visible in this state until fully cleaned up.
+  NAT_GATEWAY_STATE_DELETING = 4;
+}

@@ -1,0 +1,31 @@
+---
+- name: Create a SecurityGroup resource
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    security_group: "{{ ansible_eda.event.payload }}"
+    security_group_name: "{{ ansible_eda.event.payload.metadata.name }}"
+    # Implementation strategy set by osac-operator from parent VirtualNetwork spec
+    implementation_strategy: >-
+      {{ ansible_eda.event.payload.metadata.annotations
+         ['osac.openshift.io/implementation-strategy'] }}
+    template_parameters: {}
+
+  pre_tasks:
+    - name: Show EDA Event
+      ansible.builtin.debug:
+        var: ansible_eda.event.payload
+
+  tasks:
+    - name: Display SecurityGroup information
+      ansible.builtin.debug:
+        msg:
+          - "SecurityGroup name: {{ security_group_name }}"
+          - "Implementation strategy: {{ implementation_strategy }}"
+          - "Template parameters: {{ template_parameters }}"
+
+    - name: Call the selected SecurityGroup role
+      ansible.builtin.include_role:
+        name: "osac.templates.{{ implementation_strategy }}"
+        tasks_from: create_security_group

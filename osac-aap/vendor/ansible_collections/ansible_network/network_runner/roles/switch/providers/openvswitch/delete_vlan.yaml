@@ -1,0 +1,4 @@
+---
+- name: noop
+  debug:
+    msg: No action required for openvswitch provider

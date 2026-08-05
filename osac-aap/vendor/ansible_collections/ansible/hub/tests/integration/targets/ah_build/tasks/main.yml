@@ -1,0 +1,62 @@
+---
+- name: ah_build integration tests
+  block:
+    - name: Generate a test_id for the test
+      set_fact:
+        test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') | lower }}"
+      when: test_id is not defined
+
+    - name: Define variables
+      set_fact:
+        namespace: "sample"
+        company: "my_company_{{ test_id }}"
+        collection_name: "sample"
+        build_path: "{{ playbook_dir }}/targets/ah_build/files"
+
+    - name: Build Ansible Collection from the directory
+      ansible.hub.ah_build:
+        path: "{{ build_path }}/sample/sample"
+        output_path: "{{ build_path }}/"
+      register: r
+
+    - name: Check if the file exists
+      ansible.builtin.stat:
+        path: "{{ build_path }}/sample-sample-1.0.0.tar.gz"
+      register: build_stat
+
+    - name: Check if the build is successful
+      assert:
+        that:
+          - r.changed
+          - build_stat.stat.exists
+
+    - name: Build Ansible Collection from the directory again
+      ansible.hub.ah_build:
+        path: "{{ build_path }}/sample/sample"
+        output_path: "{{ build_path }}/"
+      register: r
+      ignore_errors: true
+
+    - name: Check if re-building the collection without force fails
+      assert:
+        that:
+          - r.failed
+          - "'ERROR' in r.msg"
+
+    - name: Build Ansible Collection from the directory again
+      ansible.hub.ah_build:
+        path: "{{ build_path }}/sample/sample"
+        output_path: "{{ build_path }}/"
+        force: true
+      register: r
+
+    - name: Check if re-building the collection with force works
+      assert:
+        that:
+          - r.changed
+  always:
+    - name: Remove built collection
+      ansible.builtin.file:
+        path: "{{ build_path }}/sample-sample-1.0.0.tar.gz"
+        state: absent
+      ignore_errors: true

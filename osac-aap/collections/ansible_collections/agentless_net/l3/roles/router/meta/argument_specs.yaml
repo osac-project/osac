@@ -1,0 +1,41 @@
+argument_specs:
+  create:
+    options:
+      router_name:
+        description: "Namespace name for the tenant router."
+        type: "str"
+        required: true
+      router_vlan_id:
+        description: "VLAN ID for the internal leg."
+        type: "int"
+        required: true
+      router_internal_subnet:
+        description: "Tenant subnet CIDR (e.g., 10.100.0.0/24)."
+        type: "str"
+        required: true
+      router_internal_gateway:
+        description: "Gateway IP for the tenant (e.g., 10.100.0.1)."
+        type: "str"
+        required: true
+      router_trunk_interface:
+        description: "Physical trunk NIC on the net-node (e.g., eth1)."
+        type: "str"
+        required: true
+      router_external_ip:
+        description: "IP with prefix for the namespace-side veth (e.g., 10.254.0.2/30)."
+        type: "str"
+        required: true
+      router_external_peer_ip:
+        description: "IP with prefix for the host-side veth (e.g., 10.254.0.1/30)."
+        type: "str"
+        required: true
+      router_external_gateway:
+        description: "Default route inside the namespace (e.g., 10.254.0.1)."
+        type: "str"
+        required: true
+  delete:
+    options:
+      router_name:
+        description: "Namespace name of the tenant router to delete."
+        type: "str"
+        required: true

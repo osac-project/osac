@@ -1,0 +1,7 @@
+- name: Create a new network
+  when: network_state == 'present'
+  ansible.builtin.include_tasks: create_network.yaml
+
+- name: Destroy a network
+  when: network_state == 'absent'
+  ansible.builtin.include_tasks: destroy_network.yaml

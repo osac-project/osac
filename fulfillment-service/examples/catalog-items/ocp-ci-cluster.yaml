@@ -1,0 +1,21 @@
+# CI OpenShift Cluster catalog item
+# A minimal OpenShift 4.17 cluster for CI testing.
+
+"@type": type.googleapis.com/osac.private.v1.ClusterCatalogItem
+metadata:
+  name: ocp-ci-cluster
+title: CI OpenShift Cluster
+description: A minimal OpenShift 4.17 cluster for CI testing with 1 worker node.
+template: osac.templates.ocp_ci_small
+published: false
+field_definitions:
+  - path: network.pod_cidr
+    display_name: Pod CIDR
+    default: 10.128.0.0/14
+    editable: true
+    validation_schema: '{"type":"string","pattern":"^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$"}'
+  - path: network.service_cidr
+    display_name: Service CIDR
+    default: 172.30.0.0/16
+    editable: true
+    validation_schema: '{"type":"string","pattern":"^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$"}'

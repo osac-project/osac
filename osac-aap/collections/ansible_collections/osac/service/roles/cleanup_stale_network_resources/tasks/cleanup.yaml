@@ -1,0 +1,166 @@
+---
+- name: Get all existing ClusterOrders from specified namespace
+  kubernetes.core.k8s_info:
+    api_version: osac.openshift.io/v1alpha1
+    kind: ClusterOrder
+    namespace: "{{ cleanup_stale_network_resources_namespace }}"
+  register: cluster_orders
+  failed_when: false
+
+- name: Set cluster order names
+  ansible.builtin.set_fact:
+    existing_cluster_order_names: "{{ [prefix] | product(cluster_names) | map('join') }}"
+  vars:
+    prefix: "clusterorder_"
+    cluster_names: "{{ cluster_orders.resources | map(attribute='metadata.name') }}"
+
+- name: Display existing cluster names
+  ansible.builtin.debug:
+    msg: |
+      Found existing ClusterOrders: {{ existing_cluster_order_names }}
+
+# Networks
+- name: Get all networks with purpose_o-sac and instance tags
+  ansible.builtin.include_role:
+    name: osac.esi.l2
+    tasks_from: list_networks
+  vars:
+    l2_network_properties:
+      purpose: "o-sac"
+      instance: "{{ cleanup_stale_network_resources_namespace }}"
+
+- name: Get stale networks
+  ansible.builtin.set_fact:
+    cleanup_stale_network_resources_stale_networks: "{{ cleanup_stale_network_resources_stale_networks + [item] }}"
+  loop: "{{ list_networks_result | default([]) }}"
+  when:
+    - item.Tags is defined
+    - ((item.Tags | default([])) | intersect(existing_cluster_order_names)) | length == 0
+
+# Floating IPs
+- name: Get all floating IPs with o-sac and instance tags
+  ansible.builtin.include_role:
+    name: osac.esi.floating_ip
+    tasks_from: list_floating_ips
+  vars:
+    floating_ip_properties:
+      purpose: "o-sac"
+      instance: "{{ cleanup_stale_network_resources_namespace }}"
+
+- name: Get stale floating IPs
+  ansible.builtin.set_fact:
+    cleanup_stale_network_resources_stale_floating_ips: "{{ cleanup_stale_network_resources_stale_floating_ips + [item] }}"
+  loop: "{{ list_floating_ips_result | default([]) }}"
+  when:
+    - item.Tags is defined
+    - ((item.Tags | default([])) | intersect(existing_cluster_order_names)) | length == 0
+
+# Routers
+- name: Get all routers with o-sac and instance tags
+  ansible.builtin.include_role:
+    name: osac.esi.l3
+    tasks_from: list_routers
+  vars:
+    l3_network_properties:
+      purpose: "o-sac"
+      instance: "{{ cleanup_stale_network_resources_namespace }}"
+
+- name: Get stale routers
+  ansible.builtin.set_fact:
+    cleanup_stale_network_resources_stale_routers: "{{ cleanup_stale_network_resources_stale_routers + [item] }}"
+  loop: "{{ list_routers_result | default([]) }}"
+  when:
+    - item.Tags is defined
+    - ((item.Tags | default([])) | intersect(existing_cluster_order_names)) | length == 0
+
+# Subnets
+- name: Get all subnets with o-sac and instance tags
+  ansible.builtin.include_role:
+    name: osac.esi.l3
+    tasks_from: list_subnets
+  vars:
+    l3_network_properties:
+      purpose: "o-sac"
+      instance: "{{ cleanup_stale_network_resources_namespace }}"
+
+- name: Get stale subnets
+  ansible.builtin.set_fact:
+    cleanup_stale_network_resources_stale_subnets: "{{ cleanup_stale_network_resources_stale_subnets + [item] }}"
+  loop: "{{ list_subnets_result | default([]) }}"
+  when:
+    - item.Tags is defined
+    - ((item.Tags | default([])) | intersect(existing_cluster_order_names)) | length == 0
+
+# Display summary
+- name: Display stale resources found
+  ansible.builtin.debug:
+    msg: |
+      Found stale resources:
+      - Networks: {{ cleanup_stale_network_resources_stale_networks | length }}
+      - Floating IPs: {{ cleanup_stale_network_resources_stale_floating_ips | length }}
+      - Routers: {{ cleanup_stale_network_resources_stale_routers | length }}
+      - Subnets: {{ cleanup_stale_network_resources_stale_subnets | length }}
+
+- name: Display stale network names
+  ansible.builtin.debug:
+    msg: "Stale network: {{ item.Name }}"
+  loop: "{{ cleanup_stale_network_resources_stale_networks }}"
+  when: cleanup_stale_network_resources_stale_networks | length > 0
+
+- name: Display stale floating IP addresses
+  ansible.builtin.debug:
+    msg: "Stale floating IP: {{ item['Floating IP Address'] }}"
+  loop: "{{ cleanup_stale_network_resources_stale_floating_ips }}"
+  when: cleanup_stale_network_resources_stale_floating_ips | length > 0
+
+- name: Display stale router names
+  ansible.builtin.debug:
+    msg: "Stale router: {{ item.Name }}"
+  loop: "{{ cleanup_stale_network_resources_stale_routers }}"
+  when: cleanup_stale_network_resources_stale_routers | length > 0
+
+- name: Display stale subnet names
+  ansible.builtin.debug:
+    msg: "Stale subnet: {{ item.Name }}"
+  loop: "{{ cleanup_stale_network_resources_stale_subnets }}"
+  when: cleanup_stale_network_resources_stale_subnets | length > 0
+
+- name: Delete stale routers
+  ansible.builtin.include_role:
+    name: osac.esi.l3
+    tasks_from: destroy_router
+  vars:
+    router_name: "{{ item.Name }}"
+  loop: "{{ cleanup_stale_network_resources_stale_routers }}"
+  loop_control:
+    label: "Router {{ item.Name }}"
+
+- name: Delete stale subnets
+  ansible.builtin.include_role:
+    name: osac.esi.l3
+    tasks_from: destroy_subnet
+  vars:
+    subnet_name: "{{ item.Name }}"
+  loop: "{{ cleanup_stale_network_resources_stale_subnets }}"
+  loop_control:
+    label: "Subnet {{ item.Name }}"
+
+- name: Delete stale networks
+  ansible.builtin.include_role:
+    name: osac.esi.l2
+    tasks_from: destroy_network
+  vars:
+    network_name: "{{ item.Name }}"
+  loop: "{{ cleanup_stale_network_resources_stale_networks }}"
+  loop_control:
+    label: "Network {{ item.Name }}"
+
+- name: Delete stale floating IPs
+  ansible.builtin.include_role:
+    name: osac.esi.floating_ip
+    tasks_from: destroy_floating_ip
+  vars:
+    floating_ip_name: "{{ item.Description }}"
+  loop: "{{ cleanup_stale_network_resources_stale_floating_ips }}"
+  loop_control:
+    label: "Floating IP {{ item.Description }}"

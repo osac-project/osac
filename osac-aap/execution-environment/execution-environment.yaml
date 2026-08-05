@@ -1,0 +1,46 @@
+version: 3
+
+images:
+  base_image:
+    name: registry.access.redhat.com/ubi10:10.2
+
+dependencies:
+  galaxy: ../collections/requirements.yml
+  python: requirements.txt
+  ansible_core:
+    package_pip: ansible-core
+  ansible_runner:
+    package_pip: ansible-runner
+  python_interpreter:
+    package_system: "python3.12"
+    python_path: "/usr/bin/python3.12"
+  system:
+    - systemd-libs
+    - systemd-devel
+    - gcc
+    - python3.12-devel
+    - git-core
+    - bind-utils
+    - krb5-devel
+
+options:
+  package_manager_path: /usr/bin/dnf
+
+additional_build_files:
+  - src: ../collections
+    dest: collections
+  - src: ../vendor
+    dest: vendor
+
+additional_build_steps:
+  prepend_base:
+    # Workaround: UBI 10 repos have glibc-devel 2.39-126 but the base image
+    # ships glibc 2.39-124. Update glibc before system packages are installed.
+    - RUN dnf update -y --allowerasing glibc glibc-minimal-langpack && dnf clean all
+  prepend_galaxy:
+    - COPY _build/collections /usr/share/ansible/collections
+    - COPY _build/vendor /usr/share/ansible/collections
+    - RUN dnf install -y git  # required to pull non-versioned git collections specified in collections/requirements.yaml
+  append_final:
+    - COPY --from=quay.io/openshift/origin-cli:4.19 /usr/bin/oc /usr/local/bin/
+    - COPY --from=quay.io/openshift/origin-cli:4.19 /usr/bin/kubectl /usr/local/bin/

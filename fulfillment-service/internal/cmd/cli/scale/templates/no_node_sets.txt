@@ -1,0 +1,1 @@
+Cluster '{{ .ClusterId }}' has no node sets. The scale command only supports CaaS clusters.

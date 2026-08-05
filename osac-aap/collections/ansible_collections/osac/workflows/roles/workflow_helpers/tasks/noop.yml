@@ -1,0 +1,7 @@
+---
+# No-op task for override hook points
+# This task does nothing - it's a placeholder for customer overrides
+- name: No-op hook point
+  ansible.builtin.debug:
+    msg: "Hook point - override this step to add custom logic"
+    verbosity: 1

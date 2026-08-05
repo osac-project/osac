@@ -1,0 +1,7 @@
+---
+- name: Unbind agents before HostedCluster deletion (non-BMH/libvirt only)
+  ansible.builtin.include_role:
+    name: osac.service.manage_agents
+    tasks_from: unbind_agents_for_reclaim
+  vars:
+    manage_agents_cluster_order_name: "{{ cluster_order.metadata.name }}"

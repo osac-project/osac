@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "csi-driver.fullname" . }}-controller
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "csi-driver.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+spec:
+  replicas: {{ .Values.controller.replicas }}
+  selector:
+    matchLabels:
+      {{- include "csi-driver.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: controller
+  template:
+    metadata:
+      labels:
+        {{- include "csi-driver.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: controller
+    spec:
+      serviceAccountName: {{ include "csi-driver.controllerServiceAccountName" . }}
+      containers:
+        - name: osac-csi-driver
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - "--csi-endpoint=unix:///csi/osac/csi.sock"
+            - "--node-id=controller"
+            {{- if .Values.controller.fulfillmentEndpoint }}
+            - "--fulfillment-endpoint={{ .Values.controller.fulfillmentEndpoint }}"
+            {{- end }}
+            {{- if .Values.controller.vendorSockets }}
+            - "--vendor-sockets={{ .Values.controller.vendorSockets }}"
+            {{- end }}
+            - "--v=2"
+          volumeMounts:
+            - name: osac-socket-dir
+              mountPath: /csi/osac
+          resources:
+            {{- toYaml .Values.controller.resources | nindent 12 }}
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+
+        - name: csi-provisioner
+          image: "{{ .Values.sidecars.provisioner.image.repository }}:{{ .Values.sidecars.provisioner.image.tag }}"
+          args:
+            - "--csi-address=/csi/osac/csi.sock"
+            - "--leader-election={{ .Values.controller.leaderElection }}"
+            - "--extra-create-metadata"
+            - "--timeout=120s"
+            - "--v=2"
+          volumeMounts:
+            - name: osac-socket-dir
+              mountPath: /csi/osac
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+
+        - name: csi-attacher
+          image: "{{ .Values.sidecars.attacher.image.repository }}:{{ .Values.sidecars.attacher.image.tag }}"
+          args:
+            - "--csi-address=/csi/osac/csi.sock"
+            - "--leader-election={{ .Values.controller.leaderElection }}"
+            - "--v=2"
+          volumeMounts:
+            - name: osac-socket-dir
+              mountPath: /csi/osac
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+
+      volumes:
+        - name: osac-socket-dir
+          emptyDir: {}

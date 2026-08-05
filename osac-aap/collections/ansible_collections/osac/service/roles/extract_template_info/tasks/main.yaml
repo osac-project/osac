@@ -1,0 +1,23 @@
+- name: Extract template id
+  when: >-
+    template_id is not defined
+  ansible.builtin.set_fact:
+    template_id: "{{ cluster_order.spec.templateID }}"
+
+- name: Handle unqualfied template ids
+  when: >-
+    "." not in template_id
+  ansible.builtin.set_fact:
+    template_id: "osac.templates.{{ template_id }}"
+
+- name: Extract template parameters
+  when: >-
+    template_parameters is not defined
+  ansible.builtin.set_fact:
+    template_parameters: "{{ cluster_order.spec.templateParameters | from_json }}"
+
+- name: Extract node requests
+  when: >-
+    node_requests is not defined
+  ansible.builtin.set_fact:
+    node_requests: "{{ cluster_order.spec.nodeRequests }}"

@@ -1,0 +1,120 @@
+---
+- module_defaults:
+    group/aws:
+      access_key: "{{ aws_access_key }}"
+      secret_key: "{{ aws_secret_key }}"
+      session_token: "{{ security_token | default(omit) }}"
+      region: "{{ aws_region }}"
+  block:
+    - name: Create an AWS Backup Vault so we have something to tag
+      amazon.aws.backup_vault:
+        backup_vault_name: "{{ backup_vault_name }}"
+      register: backup_vault_create_result
+
+    - ansible.builtin.set_fact:
+        vault_arn: "{{ backup_vault_create_result.vault.backup_vault_arn }}"
+
+    - name: List tags on a backup vault
+      amazon.aws.backup_tag_info:
+        resource: "{{ vault_arn }}"
+      register: current_tags
+
+    - ansible.builtin.assert:
+        that:
+          - '"tags" in current_tags'
+          - current_tags.tags | length == 0
+
+    - name: Add tags on backup_vault
+      amazon.aws.backup_tag:
+        resource: "{{ vault_arn }}"
+        state: present
+        tags:
+          CamelCaseKey: CamelCaseValue
+          pascalCaseKey: pascalCaseValue
+          snake_case_key: snake_case_value
+          test_tag_key_1: tag_tag_value_1
+          test_tag_key_2: tag_tag_value_2
+      register: add_tags_result
+
+    - ansible.builtin.assert:
+        that:
+          - add_tags_result is changed
+          - add_tags_result.tags | length == 5
+          - add_tags_result.added_tags | length == 5
+          - add_tags_result.tags.CamelCaseKey == 'CamelCaseValue'
+          - add_tags_result.tags.pascalCaseKey == 'pascalCaseValue'
+          - add_tags_result.tags.snake_case_key == 'snake_case_value'
+          - add_tags_result.tags.test_tag_key_1 == 'tag_tag_value_1'
+          - add_tags_result.tags.test_tag_key_2  == 'tag_tag_value_2'
+
+    - name: Remove only specified tags on backup vault
+      amazon.aws.backup_tag:
+        resource: "{{ vault_arn }}"
+        state: absent
+        tags:
+          CamelCaseKey: CamelCaseValue
+      register: remove_specified_result
+
+    - ansible.builtin.assert:
+        that:
+          - remove_specified_result is changed
+          - remove_specified_result.tags | length == 4
+          - remove_specified_result.removed_tags | length == 1
+          - remove_specified_result.tags.pascalCaseKey == 'pascalCaseValue'
+          - remove_specified_result.tags.snake_case_key == 'snake_case_value'
+          - remove_specified_result.tags.test_tag_key_1 == 'tag_tag_value_1'
+          - remove_specified_result.tags.test_tag_key_2  == 'tag_tag_value_2'
+
+    - name: Remove all except specified tags on backup vault
+      amazon.aws.backup_tag:
+        resource: "{{ vault_arn }}"
+        state: absent
+        tags:
+          test_tag_key_1: tag_tag_value_1
+          test_tag_key_2: tag_tag_value_2
+        purge_tags: true
+      register: remove_except_specified_result
+
+    - ansible.builtin.assert:
+        that:
+          - remove_except_specified_result is changed
+          - remove_except_specified_result.tags | length == 2
+          - remove_except_specified_result.removed_tags | length == 2
+          - remove_except_specified_result.tags.test_tag_key_1 == 'tag_tag_value_1'
+          - remove_except_specified_result.tags.test_tag_key_2  == 'tag_tag_value_2'
+
+    - name: Update value of tag key on backup vault
+      amazon.aws.backup_tag:
+        resource: "{{ vault_arn }}"
+        state: present
+        tags:
+          test_tag_key_1: test_tag_NEW_VALUE_1
+      register: update_specified_result
+
+    - ansible.builtin.assert:
+        that:
+          - update_specified_result is changed
+          - update_specified_result.tags | length == 2
+          - update_specified_result.tags.test_tag_key_1 == 'test_tag_NEW_VALUE_1'
+          - update_specified_result.tags.test_tag_key_2 == 'tag_tag_value_2'
+
+    - name: Remove all tags on backup vault
+      amazon.aws.backup_tag:
+        resource: "{{ vault_arn }}"
+        state: absent
+        tags: {}
+        purge_tags: true
+      register: remove_all_tags_result
+
+    - ansible.builtin.assert:
+        that:
+          - '"tags" in remove_all_tags_result'
+          - remove_all_tags_result.tags | length == 0
+          - remove_all_tags_result.removed_tags | length == 2
+
+  always:
+    - name: Delete AWS Backup Vault created during this test
+      amazon.aws.backup_vault:
+        backup_vault_name: "{{ backup_vault_name }}"
+        state: absent
+      ignore_errors: true

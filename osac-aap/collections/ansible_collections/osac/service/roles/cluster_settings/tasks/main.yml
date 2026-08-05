@@ -1,0 +1,117 @@
+---
+- name: Get template parameters from cluster order
+  ansible.builtin.set_fact:
+    cluster_settings_template_parameters: "{{ cluster_order.spec.templateParameters | default('{}') | from_json }}"
+
+# Resolve pull_secret: explicit CR field > templateParameters > provider default Secret
+# The second argument (true) ensures empty strings and nulls also fall through.
+- name: Resolve pull_secret from explicit field or template parameters
+  ansible.builtin.set_fact:
+    cluster_settings_pull_secret: >-
+      {{ cluster_order.spec.pullSecret
+         | default(cluster_settings_template_parameters.pull_secret | default('', true), true) }}
+  no_log: true
+
+# Resolve ssh_public_key: explicit CR field > templateParameters > provider default Secret
+- name: Resolve ssh_public_key from explicit field or template parameters
+  ansible.builtin.set_fact:
+    cluster_settings_ssh_public_key: >-
+      {{ cluster_order.spec.sshPublicKey
+         | default(cluster_settings_template_parameters.ssh_public_key | default('', true), true) }}
+
+# Resolve release_image: explicit CR field > templateParameters > template default
+- name: Resolve release_image from explicit field or template parameters
+  when: >-
+    (cluster_order.spec.releaseImage | default('', true) | length > 0)
+    or (cluster_settings_template_parameters.release_image | default('', true) | length > 0)
+  ansible.builtin.set_fact:
+    ocp_release_image: >-
+      {{ cluster_order.spec.releaseImage
+         | default(cluster_settings_template_parameters.release_image | default('', true), true) }}
+
+# Resolve networking CIDRs: explicit CR field > role defaults
+- name: Resolve pod_cidr from explicit field
+  when: ((cluster_order.spec.network | default({}, true)).podCIDR | default('') | length > 0)
+  ansible.builtin.set_fact:
+    cluster_settings_pod_cidr: "{{ cluster_order.spec.network.podCIDR }}"
+
+- name: Resolve service_cidr from explicit field
+  when: ((cluster_order.spec.network | default({}, true)).serviceCIDR | default('') | length > 0)
+  ansible.builtin.set_fact:
+    cluster_settings_service_cidr: "{{ cluster_order.spec.network.serviceCIDR }}"
+
+# Fall back to provider default Secret if pull_secret or ssh_public_key still empty
+- name: Get default pull-secret and ssh-key from provider Secret
+  when: >-
+    not cluster_settings_pull_secret
+    or not cluster_settings_ssh_public_key
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: "{{ cluster_settings_default_credentials_secret_name }}"
+    namespace: "{{ cluster_settings_default_credentials_secret_namespace }}"
+  failed_when: false
+  register: default_cluster_credentials
+
+- name: Apply provider defaults for missing credentials
+  when: (default_cluster_credentials.resources | default([]) | length > 0)
+  block:
+    - name: Set pull_secret from provider default
+      when: not cluster_settings_pull_secret
+      ansible.builtin.set_fact:
+        cluster_settings_pull_secret: "{{ default_cluster_credentials.resources[0].data.pull_secret | b64decode }}"
+      no_log: true
+
+    - name: Set ssh_public_key from provider default
+      when: not cluster_settings_ssh_public_key
+      ansible.builtin.set_fact:
+        cluster_settings_ssh_public_key: "{{ default_cluster_credentials.resources[0].data.ssh_public_key | b64decode }}"
+
+- name: Fail if pull_secret could not be resolved
+  ansible.builtin.fail:
+    msg: >-
+      pull_secret is empty after checking all sources
+      (spec.pullSecret, templateParameters, and the provider default Secret
+      '{{ cluster_settings_default_credentials_secret_name }}'
+      in namespace '{{ cluster_settings_default_credentials_secret_namespace }}').
+      Supply a pull secret via --pull-secret-file, spec.pullSecret, or configure
+      the provider default Secret.
+  when: not cluster_settings_pull_secret
+
+# Write resolved values back into template_parameters for backward compatibility
+- name: Merge resolved credentials into template parameters
+  ansible.builtin.set_fact:
+    cluster_settings_template_parameters: >-
+      {{ cluster_settings_template_parameters | combine({
+        'pull_secret': cluster_settings_pull_secret,
+        'ssh_public_key': cluster_settings_ssh_public_key
+      }) }}
+  no_log: true
+
+- name: Update template parameters in cluster order
+  ansible.builtin.set_fact:
+    cluster_order: >-
+      {{
+      cluster_order | combine({
+        "spec": {
+          "templateParameters": cluster_settings_template_parameters | to_json,
+        }
+      }, recursive=true)
+      }}
+  no_log: true
+
+- name: Set default nodeRequests
+  when: >-
+    not cluster_order.spec.nodeRequests|default([])
+  ansible.builtin.set_fact:
+    cluster_order: >-
+      {{
+      cluster_order | combine({
+        "spec": {
+          "nodeRequests": [
+            {"numberOfNodes": 2, "resourceClass": "fc430"}
+          ]
+        }
+      }, recursive=true)
+      }}
+  no_log: true

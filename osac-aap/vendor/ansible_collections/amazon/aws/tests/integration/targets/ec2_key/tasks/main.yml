@@ -1,0 +1,664 @@
+---
+# TODO - name: test 'validate_certs' parameter
+# =============================================================
+
+- name: Run ec2_key tests with credentials set
+  module_defaults:
+    group/aws:
+      region: "{{ aws_region }}"
+      access_key: "{{ aws_access_key }}"
+      secret_key: "{{ aws_secret_key }}"
+      session_token: "{{ security_token | default(omit) }}"
+  block:
+    - name: Create temporary directory
+      ansible.builtin.tempfile:
+        suffix: .private_key
+        state: directory
+      register: _tmpdir
+
+    - name: Define file name where to save private key
+      ansible.builtin.set_fact:
+        priv_key_file_name: "{{ _tmpdir.path }}/aws_ssh_rsa"
+
+    # ============================================================
+    - name: Test with no parameters
+      amazon.aws.ec2_key:
+      register: result
+      ignore_errors: true
+
+    - name: Assert failure when called with no parameters
+      ansible.builtin.assert:
+        that:
+          - result.failed
+          - 'result.msg == "missing required arguments: name"'
+
+    # ============================================================
+    - name: Test removing a non-existent key pair (check mode)
+      amazon.aws.ec2_key:
+        name: "{{ ec2_key_name }}"
+        state: absent
+      register: result
+      check_mode: true
+
+    - name: Assert removing a non-existent key pair
+      ansible.builtin.assert:
+        that:
+          - not result.changed
+
+    - name: Test removing a non-existent key pair
+      amazon.aws.ec2_key:
+        name: "{{ ec2_key_name }}"
+        state: absent
+      register: result
+
+    - name: Assert removing a non-existent key pair
+      ansible.builtin.assert:
+        that:
+          - not result.changed
+
+    # ============================================================
+    # Test: create new key by AWS (key_material not provided)
+    # ============================================================
+    - name: Test creating a new key pair (check_mode)
+      amazon.aws.ec2_key:
+        name: "{{ ec2_key_name }}"
+        state: present
+        tags:
+          snake_case: a_snake_case_value
+          CamelCase: CamelCaseValue
+          spaced key: Spaced value
+      register: result
+      check_mode: true
+
+    - name: Assert creating a new key pair
+      ansible.builtin.assert:
+        that:
+          - result is changed
+
+    - name: Assert that key pair was not created
+      amazon.aws.ec2_key_info:
+        names:
+          - "{{ ec2_key_name }}"
+      register: aws_keypair
+      failed_when: aws_keypair.keypairs | length > 0
+
+    - name: Test creating a new key pair
+      amazon.aws.ec2_key:
+        name: "{{ ec2_key_name }}"
+        state: present
+        tags:
+          snake_case: a_snake_case_value
+          CamelCase: CamelCaseValue
+          spaced key: Spaced value
+      register: result
+
+    - name: Assert creating a new key pair
+      ansible.builtin.assert:
+        that:
+          - result is changed
+          - '"key" in result'
+          - '"name" in result.key'
+          - '"fingerprint" in result.key'
+          - '"private_key" in result.key'
+          - '"id" in result.key'
+          - '"tags" in result.key'
+          - result.key.name == ec2_key_name
+          - result.key.id.startswith('key-')
+          - '"snake_case" in result.key.tags'
+          - result.key.tags['snake_case'] == 'a_snake_case_value'
+          - '"CamelCase" in result.key.tags'
+          - result.key.tags['CamelCase'] == 'CamelCaseValue'
+          - '"spaced key" in result.key.tags'
+          - result.key.tags['spaced key'] == 'Spaced value'
+
+    - name: Assert that key pair was created
+      amazon.aws.ec2_key_info:
+        names:
+          - "{{ ec2_key_name }}"
+      register: aws_keypair
+      failed_when: aws_keypair.keypairs | length == 0
+
+    - name: Gather info about the key pair
+      amazon.aws.ec2_key_info:
+        names: "{{ ec2_key_name }}"
+      register: key_info
+
+    - name: Assert the gathered key info
+      ansible.builtin.assert:
+        that:
+          - key_info.keypairs[0].key_name == ec2_key_name
+          - key_info.keypairs[0].key_pair_id.startswith('key-')
+          - '"snake_case" in key_info.keypairs[0].tags'
+          - key_info.keypairs[0].tags['snake_case'] == 'a_snake_case_value'
+          - '"CamelCase" in key_info.keypairs[0].tags'
+          - key_info.keypairs[0].tags['CamelCase'] == 'CamelCaseValue'
+          - '"spaced key" in key_info.keypairs[0].tags'
+          - key_info.keypairs[0].tags['spaced key'] == 'Spaced value'
+
+    - ansible.builtin.set_fact:
+        key_id_1: "{{ result.key.id }}"
+
+    - name: Test re-"creating" the same key (check_mode)
+      amazon.aws.ec2_key:
+        name: "{{ ec2_key_name }}"
+        state: present
+        tags:
+          snake_case: a_snake_case_value
+          CamelCase: CamelCaseValue
+          spaced key: Spaced value
+      register: result
+      check_mode: true
+
+    - name: Assert re-creating the same key
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+
+    - name: Test re-"creating" the same key
+      amazon.aws.ec2_key:
+        name: "{{ ec2_key_name }}"
+        state: present
+        tags:
+          snake_case: a_snake_case_value
+          CamelCase: CamelCaseValue
+          spaced key: Spaced value
+      register: result
+
+    - name: Assert re-creating the same key
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+
+    # ============================================================
+    # Test: create new key by AWS (key_material not provided)
+    # and save private_key into file name
+    # ============================================================
+    - name: Delete existing file name
+      ansible.builtin.file:
+        state: absent
+        path: "{{ priv_key_file_name }}"
+
+    - name: Test creating a new key pair (check_mode)
+      amazon.aws.ec2_key:
+        name: "{{ ec2_key_name_rsa }}"
+        state: present
+        file_name: "{{ priv_key_file_name }}"
+        tags:
+          snake_case: a_snake_case_value
+          CamelCase: CamelCaseValue
+          spaced key: Spaced value
+      register: result
+      check_mode: true
+      no_log: true
+
+    - name: Assert creating a new key pair
+      ansible.builtin.assert:
+        that:
+          - result is changed
+
+    - name: Assert that key pair was not created
+      amazon.aws.ec2_key_info:
+        names:
+          - "{{ ec2_key_name_rsa }}"
+      register: aws_keypair
+      failed_when: aws_keypair.keypairs | length > 0
+
+    - name: Assert that private key was not saved
+      ansible.builtin.stat:
+        path: "{{ priv_key_file_name }}"
+      register: result
+      failed_when: result.stat.exists
+
+    - name: Test creating a new key pair
+      amazon.aws.ec2_key:
+        name: "{{ ec2_key_name_rsa }}"
+        state: present
+        file_name: "{{ priv_key_file_name }}"
+        tags:
+          snake_case: a_snake_case_value
+          CamelCase: CamelCaseValue
+          spaced key: Spaced value
+      register: result
+
+    - name: Assert creating a new key pair
+      ansible.builtin.assert:
+        that:
+          - result is changed
+          - '"key" in result'
+          - '"name" in result.key'
+          - '"fingerprint" in result.key'
+          - '"private_key" not in result.key'
+          - '"id" in result.key'
+          - '"tags" in result.key'
+          - result.key.name == ec2_key_name_rsa
+          - result.key.id.startswith('key-')
+          - '"snake_case" in result.key.tags'
+          - result.key.tags['snake_case'] == 'a_snake_case_value'
+          - '"CamelCase" in result.key.tags'
+          - result.key.tags['CamelCase'] == 'CamelCaseValue'
+          - '"spaced key" in result.key.tags'
+          - result.key.tags['spaced key'] == 'Spaced value'
+
+    - name: Assert that key pair was created
+      amazon.aws.ec2_key_info:
+        names:
+          - "{{ ec2_key_name_rsa }}"
+      register: aws_keypair
+      failed_when: aws_keypair.keypairs | length == 0
+
+    - name: Assert that private key was saved into file
+      ansible.builtin.stat:
+        path: "{{ priv_key_file_name }}"
+      register: result
+      failed_when: (not result.stat.exists) or (result.stat.size == 0)
+
+    - name: Test re-"creating" the same key (check_mode)
+      amazon.aws.ec2_key:
+        name: "{{ ec2_key_name_rsa }}"
+        state: present
+        file_name: "{{ priv_key_file_name }}"
+        tags:
+          snake_case: a_snake_case_value
+          CamelCase: CamelCaseValue
+          spaced key: Spaced value
+      register: result
+      check_mode: true
+
+    - name: Assert re-creating the same key
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+
+    - name: Test re-"creating" the same key
+      amazon.aws.ec2_key:
+        name: "{{ ec2_key_name_rsa }}"
+        state: present
+        file_name: "{{ priv_key_file_name }}"
+        tags:
+          snake_case: a_snake_case_value
+          CamelCase: CamelCaseValue
+          spaced key: Spaced value
+      register: result
+
+    - name: Assert re-creating the same key
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+
+    # ============================================================
+    - name: Test updating tags without purge (check mode)
+      amazon.aws.ec2_key:
+        name: "{{ ec2_key_name }}"
+        state: present
+        tags:
+          newKey: Another value
+        purge_tags: false
+      register: result
+      check_mode: true
+
+    - name: Assert updated tags
+      ansible.builtin.assert:
+        that:
+          - result is changed
+
+    - name: Test updating tags without purge
+      amazon.aws.ec2_key:
+        name: "{{ ec2_key_name }}"
+        state: present
+        tags:
+          newKey: Another value
+        purge_tags: false
+      register: result
+
+    - name: Assert updated tags
+      ansible.builtin.assert:
+        that:
+          - result is changed
+          - '"key" in result'
+          - '"name" in result.key'
+          - '"fingerprint" in result.key'
+          - '"private_key" not in result.key'
+          - '"id" in result.key'
+          - result.key.id == key_id_1
+          - '"tags" in result.key'
+          - result.key.name == ec2_key_name
+          - '"snake_case" in result.key.tags'
+          - result.key.tags['snake_case'] == 'a_snake_case_value'
+          - '"CamelCase" in result.key.tags'
+          - result.key.tags['CamelCase'] == 'CamelCaseValue'
+          - '"spaced key" in result.key.tags'
+          - result.key.tags['spaced key'] == 'Spaced value'
+          - '"newKey" in result.key.tags'
+          - result.key.tags['newKey'] == 'Another value'
+
+    - name: Gather info about the updated tags
+      amazon.aws.ec2_key_info:
+        names: "{{ ec2_key_name }}"
+      register: key_info
+
+    - name: Assert the gathered key info
+      ansible.builtin.assert:
+        that:
+          - key_info.keypairs[0].key_name == ec2_key_name
+          - key_info.keypairs[0].key_pair_id == key_id_1
+          - '"snake_case" in key_info.keypairs[0].tags'
+          - key_info.keypairs[0].tags['snake_case'] == 'a_snake_case_value'
+          - '"CamelCase" in key_info.keypairs[0].tags'
+          - key_info.keypairs[0].tags['CamelCase'] == 'CamelCaseValue'
+          - '"spaced key" in key_info.keypairs[0].tags'
+          - key_info.keypairs[0].tags['spaced key'] == 'Spaced value'
+          - '"newKey" in key_info.keypairs[0].tags'
+          - key_info.keypairs[0].tags['newKey'] == 'Another value'
+
+    - name: Test updating tags without purge - idempotency (check mode)
+      amazon.aws.ec2_key:
+        name: "{{ ec2_key_name }}"
+        state: present
+        tags:
+          newKey: Another value
+        purge_tags: false
+      register: result
+      check_mode: true
+
+    - name: Assert updated tags
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+
+    - name: Test updating tags without purge - idempotency
+      amazon.aws.ec2_key:
+        name: "{{ ec2_key_name }}"
+        state: present
+        tags:
+          newKey: Another value
+        purge_tags: false
+      register: result
+
+    - name: Assert updated tags
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+          - '"key" in result'
+          - '"name" in result.key'
+          - '"fingerprint" in result.key'
+          - '"private_key" not in result.key'
+          - '"id" in result.key'
+          - '"tags" in result.key'
+          - result.key.name == ec2_key_name
+          - result.key.id == key_id_1
+          - '"snake_case" in result.key.tags'
+          - result.key.tags['snake_case'] == 'a_snake_case_value'
+          - '"CamelCase" in result.key.tags'
+          - result.key.tags['CamelCase'] == 'CamelCaseValue'
+          - '"spaced key" in result.key.tags'
+          - result.key.tags['spaced key'] == 'Spaced value'
+          - '"newKey" in result.key.tags'
+          - result.key.tags['newKey'] == 'Another value'
+
+    # ============================================================
+    - name: Test updating tags with purge (check mode)
+      amazon.aws.ec2_key:
+        name: "{{ ec2_key_name }}"
+        state: present
+        tags:
+          newKey: Another value
+        purge_tags: true
+      register: result
+      check_mode: true
+
+    - name: Assert updated tags
+      ansible.builtin.assert:
+        that:
+          - result is changed
+
+    - name: Test updating tags with purge
+      amazon.aws.ec2_key:
+        name: "{{ ec2_key_name }}"
+        state: present
+        tags:
+          newKey: Another value
+        purge_tags: true
+      register: result
+
+    - name: Assert updated tags
+      ansible.builtin.assert:
+        that:
+          - result is changed
+          - '"key" in result'
+          - '"name" in result.key'
+          - '"fingerprint" in result.key'
+          - '"private_key" not in result.key'
+          - '"id" in result.key'
+          - result.key.id == key_id_1
+          - '"tags" in result.key'
+          - result.key.name == ec2_key_name
+          - '"snake_case" not in result.key.tags'
+          - '"CamelCase" not in result.key.tags'
+          - '"spaced key" not in result.key.tags'
+          - '"newKey" in result.key.tags'
+          - result.key.tags['newKey'] == 'Another value'
+
+    - name: Test updating tags with purge - idempotency (check mode)
+      amazon.aws.ec2_key:
+        name: "{{ ec2_key_name }}"
+        state: present
+        tags:
+          newKey: Another value
+        purge_tags: true
+      register: result
+      check_mode: true
+
+    - name: Assert updated tags
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+
+    - name: Test updating tags with purge - idempotency
+      amazon.aws.ec2_key:
+        name: "{{ ec2_key_name }}"
+        state: present
+        tags:
+          newKey: Another value
+        purge_tags: true
+      register: result
+
+    - name: Assert updated tags
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+          - '"key" in result'
+          - '"name" in result.key'
+          - '"fingerprint" in result.key'
+          - '"private_key" not in result.key'
+          - '"id" in result.key'
+          - '"tags" in result.key'
+          - result.key.name == ec2_key_name
+          - result.key.id == key_id_1
+          - '"snake_case" not in result.key.tags'
+          - '"CamelCase" not in result.key.tags'
+          - '"spaced key" not in result.key.tags'
+          - '"newKey" in result.key.tags'
+          - result.key.tags['newKey'] == 'Another value'
+
+    # ============================================================
+    - name: Test removing an existent key (check mode)
+      amazon.aws.ec2_key:
+        name: "{{ ec2_key_name }}"
+        state: absent
+      register: result
+      check_mode: true
+
+    - name: Assert removing an existent key
+      ansible.builtin.assert:
+        that:
+          - result is changed
+
+    - name: Assert using check_mode did not removed key pair
+      amazon.aws.ec2_key_info:
+        names:
+          - "{{ ec2_key_name }}"
+      register: keys
+      failed_when: keys.keypairs | length == 0
+
+    - name: Test removing an existent key
+      amazon.aws.ec2_key:
+        name: "{{ ec2_key_name }}"
+        state: absent
+      register: result
+
+    - name: Assert removing an existent key
+      ansible.builtin.assert:
+        that:
+          - result is changed
+          - '"key" in result'
+          - result.key == None
+
+    - name: Assert that key pair was removed
+      amazon.aws.ec2_key_info:
+        names:
+          - "{{ ec2_key_name }}"
+      register: keys
+      failed_when: keys.keypairs | length > 0
+
+    # ============================================================
+    - name: Test state=present with key_material
+      amazon.aws.ec2_key:
+        name: "{{ ec2_key_name }}"
+        key_material: "{{ key_material }}"
+        state: present
+      register: result
+
+    - name: Assert state=present with key_material
+      ansible.builtin.assert:
+        that:
+          - result.changed == True
+          - '"key" in result'
+          - '"name" in result.key'
+          - '"fingerprint" in result.key'
+          - '"private_key" not in result.key'
+          - '"id" in result.key'
+          - '"tags" in result.key'
+          - result.key.name == ec2_key_name
+          - result.key.fingerprint == fingerprint
+
+    - name: Gather key info with fingerprint
+      amazon.aws.ec2_key_info:
+        filters:
+          fingerprint: "{{ fingerprint }}"
+      register: key_info
+
+    - name: Assert gathered key info
+      ansible.builtin.assert:
+        that:
+          - '"key_fingerprint" in key_info.keypairs[0]'
+          - '"private_key" not in key_info.keypairs[0]'
+          - '"key_pair_id" in key_info.keypairs[0]'
+          - '"tags" in key_info.keypairs[0]'
+          - key_info.keypairs[0].key_name == ec2_key_name
+          - key_info.keypairs[0].key_fingerprint == fingerprint
+    # ============================================================
+    - name: Test state=present with key_material (idempotency)
+      amazon.aws.ec2_key:
+        name: "{{ ec2_key_name }}"
+        key_material: "{{ key_material }}"
+        state: present
+      register: result
+
+    - name: Assert state=present with key_material
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+          - '"key" in result'
+          - '"name" in result.key'
+          - '"fingerprint" in result.key'
+          - '"private_key" not in result.key'
+          - '"id" in result.key'
+          - '"tags" in result.key'
+          - result.key.name == ec2_key_name
+          - result.key.fingerprint == fingerprint
+          - result.msg == "key pair already exists"
+
+    # ============================================================
+
+    - name: Test force=no with another_key_material (expect changed=false)
+      amazon.aws.ec2_key:
+        name: "{{ ec2_key_name }}"
+        key_material: "{{ another_key_material }}"
+        force: false
+      register: result
+
+    - name: Assert force=no with another_key_material (expect changed=false)
+      ansible.builtin.assert:
+        that:
+          - not result.changed
+          - result.key.fingerprint == fingerprint
+
+    # ============================================================
+
+    - name: Test updating a key pair using another_key_material (expect changed=True)
+      amazon.aws.ec2_key:
+        name: "{{ ec2_key_name }}"
+        key_material: "{{ another_key_material }}"
+      register: result
+
+    - name: Assert updating a key pair using another_key_material (expect changed=True)
+      ansible.builtin.assert:
+        that:
+          - result.changed
+          - result.key.fingerprint != fingerprint
+          - result.key.fingerprint == another_fingerprint
+
+    # ============================================================
+    - name: Test state=absent (expect changed=true)
+      amazon.aws.ec2_key:
+        name: "{{ ec2_key_name }}"
+        state: absent
+      register: result
+
+    - name: Assert state=absent with key_material (expect changed=true)
+      ansible.builtin.assert:
+        that:
+          - result.changed
+          - '"key" in result'
+          - result.key == None
+
+    # ============================================================
+    - name: Test create ED25519 key pair type
+      amazon.aws.ec2_key:
+        name: "{{ ec2_key_name }}"
+        key_type: ed25519
+      register: result
+
+    - name: Assert that task succeed
+      ansible.builtin.assert:
+        that:
+          - result.changed
+          - result.key.type == "ed25519"
+
+    - name: Update key pair type from ED25519 to RSA
+      amazon.aws.ec2_key:
+        name: "{{ ec2_key_name }}"
+        key_type: rsa
+      register: result
+
+    - name: Assert that task succeed
+      ansible.builtin.assert:
+        that:
+          - result.changed
+          - result.key.type == "rsa"
+
+  always:
+    # ============================================================
+    - name: Always delete the key we might create
+      amazon.aws.ec2_key:
+        name: "{{ item }}"
+        state: absent
+      with_items:
+        - "{{ ec2_key_name }}"
+        - "{{ ec2_key_name_rsa }}"
+
+    - name: Delete the temporary directory
+      ansible.builtin.file:
+        path: "{{ _tmpdir.path }}"
+        state: absent
+      ignore_errors: true

@@ -1,0 +1,142 @@
+---
+- name: Resolve StorageClass for this template's storage tier
+  ansible.builtin.include_role:
+    name: osac.service.tenant_storage_class
+  vars:
+    tenant_storage_class_storage_tier: "{{ _requested_storage_tier | default('default') }}"
+
+- name: Set storage_class from tenant StorageClass
+  ansible.builtin.set_fact:
+    storage_class: "{{ tenant_storage_class_name }}"
+
+- name: Using tenant storage_class
+  ansible.builtin.debug:
+    var: storage_class
+
+- name: Create DataVolume for VM root disk
+  kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    apply: true
+    definition:
+      apiVersion: cdi.kubevirt.io/v1beta1
+      kind: DataVolume
+      metadata:
+        name: "{{ compute_instance_name }}-root-disk"
+        labels: "{{ default_vm_labels }}"
+        namespace: "{{ compute_instance_target_namespace }}"
+      spec:
+        source:
+          registry:
+            url: "docker://{{ vm_image_source }}"
+        pvc:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: "{{ vm_boot_disk_size }}"
+          storageClassName: "{{ storage_class }}"
+    state: present
+
+- name: Create DataVolumes for additional disks
+  kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    apply: true
+    definition:
+      apiVersion: cdi.kubevirt.io/v1beta1
+      kind: DataVolume
+      metadata:
+        name: "{{ compute_instance_name }}-disk-{{ idx + 1 }}"
+        labels: "{{ default_vm_labels }}"
+        namespace: "{{ compute_instance_target_namespace }}"
+      spec:
+        source:
+          blank: {}
+        pvc:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: "{{ item.sizeGiB }}Gi"
+          storageClassName: "{{ storage_class }}"
+    state: present
+  loop: "{{ vm_additional_disks }}"
+  loop_control:
+    index_var: idx
+  when: vm_additional_disks | length > 0
+
+- name: Add additional disks to template spec
+  ansible.builtin.set_fact:
+    vm_template_spec: "{{ vm_template_spec | combine(additional_disk_patch, recursive=True, list_merge='append') }}"
+  vars:
+    additional_disk_patch:
+      domain:
+        devices:
+          disks:
+            - name: "additional-disk-{{ idx + 1 }}"
+              disk:
+                bus: virtio
+      volumes:
+        - name: "additional-disk-{{ idx + 1 }}"
+          dataVolume:
+            name: "{{ compute_instance_name }}-disk-{{ idx + 1 }}"
+  loop: "{{ vm_additional_disks }}"
+  loop_control:
+    index_var: idx
+  when: vm_additional_disks | length > 0
+
+- name: Create VirtualMachine
+  kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    apply: true
+    definition:
+      apiVersion: kubevirt.io/v1
+      kind: VirtualMachine
+      metadata:
+        name: "{{ compute_instance_name }}"
+        namespace: "{{ compute_instance_target_namespace }}"
+        labels: "{{ default_vm_labels }}"
+      spec:
+        runStrategy: "{{ vm_run_strategy }}"
+        template:
+          metadata:
+            labels: "{{ default_vm_labels }}"
+          spec: "{{ vm_template_spec }}"
+    state: present
+
+- name: Check if restart is requested
+  ansible.builtin.set_fact:
+    restart_requested: >-
+      {{
+        (compute_instance.spec.restartRequestedAt | default('') | string | length > 0)
+        and
+        (
+          (compute_instance.status.lastRestartedAt | default('') | string | length == 0)
+          or
+          (compute_instance.spec.restartRequestedAt | string > compute_instance.status.lastRestartedAt | default('1970-01-01T00:00:00Z') | string)
+        )
+      }}
+
+- name: Delete VirtualMachineInstance to trigger restart
+  kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: kubevirt.io/v1
+    kind: VirtualMachineInstance
+    name: "{{ compute_instance_name }}"
+    namespace: "{{ compute_instance_target_namespace }}"
+    state: absent
+  when: restart_requested | bool
+
+- name: Wait for VMI to be recreated after restart
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: kubevirt.io/v1
+    kind: VirtualMachineInstance
+    name: "{{ compute_instance_name }}"
+    namespace: "{{ compute_instance_target_namespace }}"
+  register: vmi_info
+  until:
+    - vmi_info.resources | length > 0
+    - vmi_info.resources[0].metadata.creationTimestamp | string > compute_instance.spec.restartRequestedAt | string
+  retries: 60
+  delay: 5
+  when: restart_requested | bool

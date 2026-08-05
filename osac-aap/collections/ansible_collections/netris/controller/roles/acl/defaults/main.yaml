@@ -1,0 +1,4 @@
+---
+acl_state: present
+acl_action: permit
+acl_proto: all

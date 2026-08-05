@@ -1,0 +1,161 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - namespaces
+  - serviceaccounts
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - services
+  verbs:
+  - get
+- apiGroups:
+  - events.k8s.io
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - hypershift.openshift.io
+  resources:
+  - hostedclusters
+  - nodepools
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - hypershift.openshift.io
+  resources:
+  - hostedcontrolplanes
+  verbs:
+  - get
+- apiGroups:
+  - k8s.ovn.org
+  resources:
+  - userdefinednetworks
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - kubevirt.io
+  resources:
+  - virtualmachineinstances
+  - virtualmachines
+  verbs:
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - baremetalinstances
+  verbs:
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - baremetalinstances/finalizers
+  - clusterorders/finalizers
+  - computeinstances/finalizers
+  - externalipattachments/finalizers
+  - externalippools/finalizers
+  - externalips/finalizers
+  - natgateways/finalizers
+  - securitygroups/finalizers
+  - subnets/finalizers
+  - tenants/finalizers
+  - virtualnetworks/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - clusterorders
+  - computeinstances
+  - externalipattachments
+  - externalippools
+  - externalips
+  - natgateways
+  - securitygroups
+  - subnets
+  - tenants
+  - virtualnetworks
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - clusterorders/status
+  - computeinstances/status
+  - externalipattachments/status
+  - externalippools/status
+  - externalips/status
+  - natgateways/status
+  - securitygroups/status
+  - subnets/status
+  - tenants/status
+  - virtualnetworks/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - rolebindings
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - storage.k8s.io
+  resources:
+  - storageclasses
+  verbs:
+  - get
+  - list
+  - watch

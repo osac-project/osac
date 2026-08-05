@@ -1,0 +1,120 @@
+---
+# Deletes the per-tenant VMS Manager and CSI role during teardown.
+# Uses ansible.builtin.uri because vastdata.vms has no modules for managers/roles.
+# ignore_errors throughout — best-effort cleanup, resources may already be deleted.
+#
+# Requires in scope (set by teardown.yaml before calling this file):
+#   vast_endpoint              — VMS API hostname
+#   vast_username / vast_password — admin credentials
+#   vast_storage_validate_certs — TLS validation flag
+#   vast_storage_api_timeout   — API timeout (seconds)
+#   tenant_name                — play-level var
+
+- name: Authenticate to VAST VMS as admin for manager cleanup
+  ansible.builtin.uri:
+    url: "https://{{ vast_endpoint }}/api/token/"
+    method: POST
+    body_format: json
+    body:
+      username: "{{ vast_username }}"
+      password: "{{ vast_password }}"
+    validate_certs: "{{ vast_storage_validate_certs }}"
+    timeout: "{{ vast_storage_api_timeout | int }}"
+    status_code: [200, 201]
+  register: _vast_admin_auth
+  ignore_errors: true
+  no_log: true
+
+- name: Skip manager cleanup if admin auth failed
+  when: _vast_admin_auth is failed
+  block:
+    - name: Set manager deletion failed flag (auth failure)
+      ansible.builtin.set_fact:
+        _vast_manager_delete_failed: true
+
+    - name: Log admin auth failure
+      ansible.builtin.debug:
+        msg: "Cannot clean up VMS manager 'osac-{{ tenant_name }}' — admin auth failed (ignored)"
+
+- name: Clean up VMS manager resources
+  when: _vast_admin_auth is not failed
+  block:
+    # Look up manager to get its ID
+    - name: Look up tenant manager in VMS
+      ansible.builtin.uri:
+        url: "https://{{ vast_endpoint }}/api/managers/?username=osac-{{ tenant_name }}"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ _vast_admin_auth.json.access }}"
+        validate_certs: "{{ vast_storage_validate_certs }}"
+        timeout: "{{ vast_storage_api_timeout | int }}"
+        status_code: [200]
+      register: _vast_manager_lookup
+      ignore_errors: true
+      no_log: true
+
+    # Delete the manager
+    - name: Delete tenant manager
+      when:
+        - _vast_manager_lookup is not failed
+        - _vast_manager_lookup.json | length > 0
+      ansible.builtin.uri:
+        url: "https://{{ vast_endpoint }}/api/managers/{{ _vast_manager_lookup.json[0].id }}/"
+        method: DELETE
+        headers:
+          Authorization: "Bearer {{ _vast_admin_auth.json.access }}"
+        validate_certs: "{{ vast_storage_validate_certs }}"
+        timeout: "{{ vast_storage_api_timeout | int }}"
+        status_code: [200, 204, 404]
+      register: _vast_manager_delete_result
+      ignore_errors: true
+      no_log: true
+
+    # Delete the CSI role
+    - name: Look up tenant CSI role
+      ansible.builtin.uri:
+        url: "https://{{ vast_endpoint }}/api/roles/?name=osac-csi-{{ tenant_name }}"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ _vast_admin_auth.json.access }}"
+        validate_certs: "{{ vast_storage_validate_certs }}"
+        timeout: "{{ vast_storage_api_timeout | int }}"
+        status_code: [200]
+      register: _vast_role_lookup
+      ignore_errors: true
+      no_log: true
+
+    - name: Delete tenant CSI role
+      when:
+        - _vast_role_lookup is not failed
+        - _vast_role_lookup.json | length > 0
+      ansible.builtin.uri:
+        url: "https://{{ vast_endpoint }}/api/roles/{{ _vast_role_lookup.json[0].id }}/"
+        method: DELETE
+        headers:
+          Authorization: "Bearer {{ _vast_admin_auth.json.access }}"
+        validate_certs: "{{ vast_storage_validate_certs }}"
+        timeout: "{{ vast_storage_api_timeout | int }}"
+        status_code: [200, 204, 404]
+      register: _vast_role_delete_result
+      ignore_errors: true
+      no_log: true
+
+    - name: Set manager deletion result fact for caller
+      ansible.builtin.set_fact:
+        _vast_manager_delete_failed: >-
+          {{ (_vast_manager_delete_result is defined and _vast_manager_delete_result is failed)
+             or (_vast_manager_lookup is failed) }}
+
+    - name: Clear auth facts
+      ansible.builtin.set_fact:
+        _vast_admin_auth: {}
+        _vast_manager_lookup: {}
+        _vast_role_lookup: {}
+      no_log: true
+
+- name: Log tenant manager deletion outcome
+  ansible.builtin.debug:
+    msg: >-
+      VMS manager 'osac-{{ tenant_name }}' deletion result:
+      {{ 'succeeded' if not (_vast_manager_delete_failed | default(false) | bool) else 'failed (ignored)' }}

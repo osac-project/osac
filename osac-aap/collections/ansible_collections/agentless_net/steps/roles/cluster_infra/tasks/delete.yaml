@@ -1,0 +1,195 @@
+---
+- name: Load agentless-net inventory hosts
+  ansible.builtin.include_vars:
+    file: "{{ agentless_net_inventory_file }}"
+    name: _agentless_net_inventory
+
+- name: Register net_nodes in play inventory
+  ansible.builtin.add_host:
+    name: "{{ item.key }}"
+    groups: net_nodes
+    ansible_host: "{{ item.value.ansible_host }}"
+    ansible_user: "{{ item.value.ansible_user }}"
+    ansible_password: "{{ item.value.ansible_password | default(omit) }}"
+    ansible_ssh_common_args: "{{ item.value.ansible_ssh_common_args | default(_agentless_net_inventory.all.vars.ansible_ssh_common_args | default(omit)) }}"
+  loop: "{{ _agentless_net_inventory.all.children.net_nodes.hosts | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Register switches in play inventory
+  ansible.builtin.add_host:
+    name: "{{ item.key }}"
+    groups: switches
+    ansible_host: "{{ item.value.ansible_host }}"
+    ansible_user: "{{ item.value.ansible_user }}"
+    ansible_password: "{{ item.value.ansible_password | default(omit) }}"
+    ansible_become_password: "{{ item.value.ansible_become_password | default(omit) }}"
+    ansible_network_os: "{{ item.value.ansible_network_os | default(omit) }}"
+    ansible_ssh_common_args: "{{ item.value.ansible_ssh_common_args | default(_agentless_net_inventory.all.vars.ansible_ssh_common_args | default(omit)) }}"
+    access_ports: "{{ item.value.access_ports | default({}) }}"
+  loop: "{{ _agentless_net_inventory.all.children.switches.hosts | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Detach agents from cluster
+  ansible.builtin.include_role:
+    name: osac.service.manage_agents
+    tasks_from: detach_and_unlabel_all_removed_agents
+  vars:
+    manage_agents_cluster_order_name: "{{ cluster_infra_name }}"
+
+# --- Read VLAN ID from IPAM state ---
+
+- name: Read VLAN ID from IPAM state
+  block:
+    - name: Slurp IPAM state file
+      ansible.builtin.slurp:
+        src: "{{ agentless_net_net_node_ipam_state_file }}"
+      delegate_to: "{{ groups['net_nodes'][0] }}"
+      register: cluster_infra_ipam_state_raw
+
+    - name: Parse cluster state from state file
+      ansible.builtin.set_fact:
+        cluster_infra_vlan_id: "{{ (cluster_infra_ipam_state_raw.content | b64decode | from_json).vlans[cluster_infra_state_key] | default('') }}"
+        cluster_infra_allocated_host_ids: "{{ (cluster_infra_ipam_state_raw.content | b64decode | from_json).host_allocations[cluster_infra_state_key] | default([]) }}"
+        cluster_infra_external_peer_ip: "{{ (cluster_infra_ipam_state_raw.content | b64decode | from_json).veth_state[cluster_infra_state_key].host_ip | default('') }}"
+  rescue:
+    - name: Default to empty state on missing or corrupt file
+      ansible.builtin.set_fact:
+        cluster_infra_vlan_id: ""
+        cluster_infra_allocated_host_ids: []
+        cluster_infra_external_peer_ip: ""
+
+- name: Skip network cleanup if no VLAN allocated
+  ansible.builtin.debug:
+    msg: "No VLAN allocation found for {{ cluster_infra_name }}, skipping network cleanup"
+  when: cluster_infra_vlan_id | string | length == 0
+
+# --- agentless_net: delete SNAT ---
+
+- name: Compute veth namespace-side interface name
+  ansible.builtin.set_fact:
+    cluster_infra_snat_veth_ns: "v{{ cluster_infra_name | hash('md5') | truncate(11, True, '') }}i"
+  when: cluster_infra_vlan_id | string | length > 0
+
+- name: Delete SNAT rules  # noqa: no-changed-when
+  environment:
+    ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
+    ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
+  ansible.builtin.command:
+    cmd: >
+      ansible-playbook
+      -i {{ agentless_net_inventory_file }}
+      -e snat_router_name={{ cluster_infra_name }}
+      -e snat_source_subnet={{ agentless_net_subnet_cidr }}
+      -e snat_veth_interface={{ cluster_infra_snat_veth_ns }}
+      -e snat_external_subnet={{ cluster_infra_external_peer_ip | ansible.utils.ipaddr('network/prefix') }}
+      -e snat_external_interface={{ agentless_net_external_interface }}
+      {{ role_path }}/playbooks/l3_delete_snat.yaml
+  when: cluster_infra_vlan_id | string | length > 0
+
+# --- agentless_net: delete L3 router namespace ---
+
+- name: Delete L3 router namespace  # noqa: no-changed-when
+  environment:
+    ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
+    ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
+  ansible.builtin.command:
+    cmd: >
+      ansible-playbook
+      -i {{ agentless_net_inventory_file }}
+      -e router_name={{ cluster_infra_name }}
+      {{ role_path }}/playbooks/l3_delete_router.yaml
+  when: cluster_infra_vlan_id | string | length > 0
+
+# --- agentless_net: reset access ports ---
+
+- name: Collect access port entries from switch inventory
+  ansible.builtin.set_fact:
+    cluster_infra_switch_port_entries: >-
+      {{ cluster_infra_switch_port_entries | default([]) +
+         (hostvars[item].access_ports | default({}) | dict2items
+          | map('combine', {'switch': item}) | list) }}
+  loop: "{{ groups['switches'] }}"
+  when: cluster_infra_vlan_id | string | length > 0 and cluster_infra_allocated_host_ids | length > 0
+
+- name: Build host-to-port mapping
+  ansible.builtin.set_fact:
+    cluster_infra_host_port_map: >-
+      {{ cluster_infra_host_port_map | default({}) | combine({
+        item.value: {'switch': item.switch, 'port': item.key}
+      }) }}
+  loop: "{{ cluster_infra_switch_port_entries | default([]) }}"
+  loop_control:
+    label: "{{ item.switch }}:{{ item.key }} -> {{ item.value }}"
+  when: cluster_infra_vlan_id | string | length > 0 and cluster_infra_allocated_host_ids | length > 0
+
+- name: Reset access ports for this cluster's hosts  # noqa: no-changed-when
+  environment:
+    ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
+    ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
+  ansible.builtin.command:
+    cmd: >
+      ansible-playbook
+      -i {{ agentless_net_inventory_file }}
+      -e port_name={{ cluster_infra_host_port_map[item].port }}
+      -l {{ cluster_infra_host_port_map[item].switch }}
+      {{ role_path }}/playbooks/l2_reset_port.yaml
+  loop: "{{ cluster_infra_allocated_host_ids }}"
+  loop_control:
+    label: "Reset {{ cluster_infra_host_port_map[item].switch }}:{{ cluster_infra_host_port_map[item].port }} (host {{ item }})"
+  when:
+    - cluster_infra_vlan_id | string | length > 0
+    - cluster_infra_allocated_host_ids | length > 0
+    - item in cluster_infra_host_port_map
+
+# --- agentless_net: delete VLAN from switches ---
+
+- name: Delete VLAN from switches  # noqa: no-changed-when
+  environment:
+    ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
+    ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
+  ansible.builtin.command:
+    cmd: >
+      ansible-playbook
+      -i {{ agentless_net_inventory_file }}
+      -e vlan_id={{ cluster_infra_vlan_id }}
+      {{ role_path }}/playbooks/l2_delete_vlan.yaml
+  when: cluster_infra_vlan_id | string | length > 0
+
+# --- agentless_net: release VLAN allocation ---
+
+- name: Release VLAN allocation  # noqa: no-changed-when
+  environment:
+    ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
+    ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
+  ansible.builtin.command:
+    cmd: >
+      ansible-playbook
+      -i {{ agentless_net_inventory_file }}
+      -e ipam_state_file={{ agentless_net_net_node_ipam_state_file }}
+      -e ipam_purpose={{ cluster_infra_state_key }}
+      {{ role_path }}/playbooks/ipam_release_vlan.yaml
+  when: cluster_infra_vlan_id | string | length > 0
+
+# --- Clean up cluster state ---
+
+- name: Remove cluster state from network state  # noqa: no-changed-when
+  ansible.builtin.raw: |
+    python3 - '{{ agentless_net_net_node_ipam_state_file }}' \
+              '{{ cluster_infra_state_key }}' <<'STATE_PY'
+    import fcntl, json, os, sys
+    state_file, cluster_name = sys.argv[1:3]
+    with open(state_file, 'r+') as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        state = json.load(f)
+        state.get('host_allocations', {}).pop(cluster_name, None)
+        state.get('veth_state', {}).pop(cluster_name, None)
+        f.seek(0)
+        f.write(json.dumps(state, indent=2))
+        f.truncate()
+        f.flush()
+        os.fsync(f.fileno())
+    STATE_PY
+  delegate_to: "{{ groups['net_nodes'][0] }}"
+  when: cluster_infra_vlan_id | string | length > 0

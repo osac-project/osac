@@ -1,0 +1,5 @@
+---
+- name: Include network-class-specific delete tasks
+  ansible.builtin.include_role:
+    name: "{{ network_steps_collection }}.external_access"
+    tasks_from: delete.yaml

@@ -1,0 +1,21 @@
+- name: Wait until network operator is available
+  kubernetes.core.k8s_info:
+    api_version: config.openshift.io/v1
+    kind: ClusterOperator
+    name: network
+    kubeconfig: "{{ wait_for_kubeconfig }}"
+    wait_timeout: "{{ wait_for_request_timeout | default(30) }}"
+  register: network_cluster_operator_results
+  until: condition.status == "True"
+  retries: "{{ wait_for_cluster_retries }}"
+  delay: "{{ wait_for_cluster_delay }}"
+  vars:
+    network_cluster_operator: >-
+      {{ network_cluster_operator_results.resources[0] | default({}) }}
+    condition: >-
+      {{
+        (
+        network_cluster_operator|json_query("status.conditions[?type=='Available']")|
+        default([{"status": "False"}], true)
+        )|first
+      }}

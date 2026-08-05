@@ -1,0 +1,277 @@
+---
+# Generic network attachment — adds a server port to a V-Net.
+# If the port is already on another V-Net (e.g. parking network for
+# CaaS agents), removes it first, then adds to the target V-Net.
+
+- name: Extract network attachment configuration
+  ansible.builtin.set_fact:
+    na_host_name: "{{ network_attachment.host_name }}"
+    na_logical_interface: "{{ network_attachment.logical_interface_name }}"
+    na_subnet_ref: "{{ network_attachment.subnet_ref }}"
+
+- name: Look up Subnet CR by UUID label
+  kubernetes.core.k8s_info:
+    api_version: osac.openshift.io/v1alpha1
+    kind: Subnet
+    label_selectors:
+      - "osac.openshift.io/subnet-uuid={{ na_subnet_ref }}"
+  register: _subnet_lookup
+
+- name: Fail if Subnet CR not found
+  ansible.builtin.fail:
+    msg: >-
+      Subnet with UUID '{{ na_subnet_ref }}' not found.
+      Ensure the Subnet has been created before creating a network attachment.
+  when: _subnet_lookup.resources | length == 0
+
+- name: Set subnet name (used as V-Net name in Netris)
+  ansible.builtin.set_fact:
+    na_subnet_name: "{{ _subnet_lookup.resources[0].metadata.name }}"
+
+- name: Display network attachment information
+  ansible.builtin.debug:
+    msg:
+      - "Creating Netris network attachment for host '{{ na_host_name }}'"
+      - "Logical interface: {{ na_logical_interface }}"
+      - "Subnet: {{ na_subnet_name }} (UUID: {{ na_subnet_ref }})"
+
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Get existing V-Nets
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/vnet"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: 200
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _vnet_list_resp
+  no_log: true
+
+- name: Find V-Net ID by subnet name
+  ansible.builtin.set_fact:
+    _target_vnet_summary: >-
+      {{ (_vnet_list_resp.json.data | default([]))
+         | selectattr('name', 'equalto', na_subnet_name)
+         | list | first | default(none) }}
+  when: _vnet_list_resp.json is mapping
+
+- name: Fail if V-Net not found
+  ansible.builtin.fail:
+    msg: >-
+      V-Net '{{ na_subnet_name }}' not found in Netris controller.
+      Ensure the Subnet has been provisioned before creating a network attachment.
+  when: _target_vnet_summary is not defined or _target_vnet_summary is none
+
+- name: Fetch target V-Net details (includes ports)
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/vnet/{{ _target_vnet_summary.id }}"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: 200
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _target_vnet_resp
+  no_log: true
+
+- name: Set target V-Net with full port data
+  ansible.builtin.set_fact:
+    _target_vnet: "{{ _target_vnet_resp.json.data }}"
+
+- name: Get Netris inventory servers
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/hw?type=server"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: 200
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _server_list_resp
+  no_log: true
+
+- name: Find server by host_name
+  ansible.builtin.set_fact:
+    _target_server: >-
+      {{ (_server_list_resp.json.data | default([]))
+         | selectattr('name', 'equalto', na_host_name)
+         | list | first | default(none) }}
+  when: _server_list_resp.json is mapping
+
+- name: Fail if server not found
+  ansible.builtin.fail:
+    msg: >-
+      Server '{{ na_host_name }}' not found in Netris inventory.
+      Ensure the bare-metal host is registered in Netris before creating a network attachment.
+  when: _target_server is not defined or _target_server is none
+
+- name: Get server ports
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/hw/ports?switchID={{ _target_server.id }}"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: 200
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _ports_resp
+  no_log: true
+
+- name: Extract ports list from response
+  ansible.builtin.set_fact:
+    _server_ports: >-
+      {{ (_ports_resp.json.data.data | default(_ports_resp.json.data))
+         | default([]) }}
+
+- name: Find port matching interface name
+  ansible.builtin.set_fact:
+    _target_port: >-
+      {{ _server_ports
+         | selectattr('port', 'equalto', na_logical_interface)
+         | list | first | default(none) }}
+
+- name: Fail if port not found
+  ansible.builtin.fail:
+    msg: >-
+      Port '{{ na_logical_interface }}' not found on server '{{ na_host_name }}'.
+      Available ports: {{ _server_ports | map(attribute='port') | list }}.
+  when: _target_port is none
+
+- name: Initialize current V-Net lookup
+  ansible.builtin.set_fact:
+    _current_vnet: ~
+
+# Netris has no port-level endpoint to query which V-Net owns a port.
+# We must fetch details for every V-Net with ports to find the current owner.
+# Filtered to portsCount > 0 to bound the fan-out.
+- name: Collect V-Net IDs that have ports attached
+  ansible.builtin.set_fact:
+    _vnets_with_ports: >-
+      {{ (_vnet_list_resp.json.data | default([]))
+         | selectattr('portsCount', 'defined')
+         | selectattr('portsCount', 'gt', 0)
+         | map(attribute='id') | list }}
+
+- name: Fetch details for V-Nets with ports
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/vnet/{{ item }}"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: 200
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _vnet_detail_results
+  loop: "{{ _vnets_with_ports }}"
+  loop_control:
+    label: "vnet-{{ item }}"
+  no_log: true
+  when: _vnets_with_ports | length > 0
+
+- name: Find V-Net that currently owns this port
+  ansible.builtin.set_fact:
+    _current_vnet: "{{ item.json.data }}"
+  loop: "{{ _vnet_detail_results.results | default([]) }}"
+  when:
+    - item.json is defined
+    - (item.json.data.ports | default([]))
+      | selectattr('id', 'equalto', _target_port.id)
+      | list | length > 0
+  loop_control:
+    label: "{{ item.json.data.name | default(item.item) }}"
+  no_log: true
+
+# Between remove-from-previous and add-to-target, the port is temporarily
+# detached from any V-Net. If the playbook fails between the two PUTs,
+# re-running recovers correctly (create is idempotent).
+- name: Remove port from existing V-Net before attaching to target
+  when:
+    - _current_vnet is defined
+    - _current_vnet is not none
+    - _current_vnet is mapping
+    - _current_vnet.id != _target_vnet.id
+  block:
+    - name: Display parking V-Net removal
+      ansible.builtin.debug:
+        msg: >-
+          Port '{{ na_logical_interface }}' (ID: {{ _target_port.id }}) is currently on
+          V-Net '{{ _current_vnet.name }}' (ID: {{ _current_vnet.id }}) —
+          removing before attaching to '{{ na_subnet_name }}'
+
+    - name: Build ports list without the target port
+      ansible.builtin.set_fact:
+        _prev_vnet_ports: >-
+          {{ (_current_vnet.ports | default([]))
+             | rejectattr('id', 'equalto', _target_port.id)
+             | list }}
+
+    # Netris V-Net PUT currently accepts partial bodies (PATCH semantics),
+    # but this is undocumented — send the full object to be safe.
+    - name: Remove port from previous V-Net
+      ansible.builtin.uri:
+        url: "{{ netris_controller_url }}/api/v2/vnet/{{ _current_vnet.id }}"
+        method: PUT
+        headers:
+          Cookie: "connect.sid={{ netris_session_cookie }}"
+          Content-Type: "application/json"
+        body_format: json
+        body: "{{ _current_vnet | combine({'ports': _prev_vnet_ports}) }}"
+        return_content: true
+        status_code: [200, 201]
+        timeout: "{{ netris_timeout | default(30) }}"
+        validate_certs: "{{ netris_validate_certs | default(true) }}"
+      no_log: true
+
+- name: Check if port is already on target V-Net
+  ansible.builtin.set_fact:
+    _port_already_on_vnet: >-
+      {{ (_current_vnet is defined
+          and _current_vnet is not none
+          and _current_vnet is mapping
+          and _current_vnet.id == _target_vnet.id) | bool }}
+
+- name: Set already existed flag
+  ansible.builtin.set_fact:
+    network_attachment_already_existed: "{{ _port_already_on_vnet }}"
+
+- name: Build updated ports list
+  ansible.builtin.set_fact:
+    _updated_ports: >-
+      {{ (_target_vnet.ports | default([]))
+         + [{'id': _target_port.id, 'state': 'active', 'accessMode': true}] }}
+  when: not _port_already_on_vnet
+
+- name: Add port to V-Net
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/vnet/{{ _target_vnet.id }}"
+    method: PUT
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+      Content-Type: "application/json"
+    body_format: json
+    body: "{{ _target_vnet | combine({'ports': _updated_ports}) }}"
+    return_content: true
+    status_code: [200, 201]
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _vnet_update_resp
+  when: not _port_already_on_vnet
+  no_log: true
+
+- name: Display network attachment result
+  ansible.builtin.debug:
+    msg: >-
+      Network attachment for host '{{ na_host_name }}' interface '{{ na_logical_interface }}'
+      on V-Net '{{ na_subnet_name }}'
+      {{ (_port_already_on_vnet | bool) | ternary('already exists', 'created successfully') }}
+      (port ID: {{ _target_port.id }}, V-Net ID: {{ _target_vnet.id }})

@@ -1,0 +1,123 @@
+---
+# Build root disk volume definition (dataVolume)
+- name: Build root disk volume (dataVolume)
+  ansible.builtin.set_fact:
+    root_disk_volume:
+      - name: root-disk
+        dataVolume:
+          name: "{{ compute_instance_name }}-root-disk"
+
+- name: Build template spec base (Linux)
+  ansible.builtin.set_fact:
+    vm_template_spec:
+      domain:
+        cpu:
+          cores: "{{ vm_cpu_cores }}"
+        memory:
+          guest: "{{ vm_memory }}"
+        resources:
+          requests:
+            memory: "{{ vm_memory }}"
+        devices:
+          disks:
+            - name: root-disk
+              disk:
+                bus: virtio
+          interfaces:
+            - name: default
+              binding:
+                name: l2bridge
+          # USB tablet provides absolute cursor positioning for VNC
+          inputs:
+            - name: tablet
+              type: tablet
+              bus: usb
+        features:
+          smm:
+            enabled: true
+          acpi: {}
+          apic: {}
+          hyperv:
+            relaxed: {}
+            vapic: {}
+            spinlocks:
+              spinlocks: 8191
+      networks:
+        - name: default
+          pod: {}
+      volumes: "{{ root_disk_volume }}"
+  when: guest_os_family != 'windows'
+
+- name: Build template spec base (Windows)
+  ansible.builtin.set_fact:
+    vm_template_spec:
+      domain:
+        cpu:
+          cores: "{{ vm_cpu_cores }}"
+          sockets: 1
+          threads: 1
+        memory:
+          guest: "{{ vm_memory }}"
+        resources:
+          requests:
+            memory: "{{ vm_memory }}"
+        firmware:
+          bootloader:
+            efi:
+              secureBoot: true
+        clock:
+          utc: {}
+          timer:
+            hpet:
+              present: false
+            pit:
+              tickPolicy: delay
+            rtc:
+              tickPolicy: catchup
+            hyperv: {}
+        devices:
+          disks:
+            - name: root-disk
+              disk:
+                bus: virtio
+          interfaces:
+            - name: default
+              binding:
+                name: l2bridge
+          # USB tablet provides absolute cursor positioning for VNC
+          inputs:
+            - name: tablet
+              type: tablet
+              bus: usb
+          tpm: {}
+          rng: {}
+        features:
+          smm:
+            enabled: true
+          acpi: {}
+          apic: {}
+          hyperv:
+            relaxed: {}
+            vapic: {}
+            spinlocks:
+              spinlocks: 8192
+      networks:
+        - name: default
+          pod: {}
+      volumes: "{{ root_disk_volume }}"
+  when: guest_os_family == 'windows'
+
+- name: Add GPU passthrough devices to template spec
+  ansible.builtin.set_fact:
+    vm_template_spec: "{{ vm_template_spec | combine(gpu_patch, recursive=True, list_merge='append') }}"
+  vars:
+    gpu_patch:
+      domain:
+        devices:
+          hostDevices:
+            - name: "gpu-{{ idx }}"
+              deviceName: "{{ item.resource_name }}"
+  loop: "{{ gpu_devices | default([]) }}"
+  loop_control:
+    index_var: idx
+  when: gpu_devices | default([]) | length > 0

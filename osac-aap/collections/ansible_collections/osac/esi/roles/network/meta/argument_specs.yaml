@@ -1,0 +1,71 @@
+argument_specs:
+  main:
+    options:
+      network_state:
+        type: "str"
+        choices:
+        - present
+        - absent
+        required: true
+      network_suffix:
+        description: |
+          Suffix of network components to be created or deleted
+        type: "str"
+        required: true
+      network_l2_network_mtu:
+        description: |
+          MTU of desired network.
+        type: "int"
+        required: false
+      network_l3_subnet_cidr:
+        description: |
+          CIDR for associated subnet.
+        type: "str"
+        required: false
+      network_l3_subnet_gateway_ip:
+        description: |
+          Gateway IP for associated subnet.
+        type: "str"
+        required: false
+      network_l3_subnet_allocation_pool_start:
+        description: |
+          Allocation pool start for associated subnet.
+        type: "str"
+        required: false
+      network_l3_subnet_allocation_pool_end:
+        description: |
+          Allocation pool end for associated subnet.
+        type: "str"
+        required: false
+      network_l3_subnet_dns_nameservers:
+        description: |
+          List of DNS nameservers for the subnet.
+        type: "list"
+        required: false
+      network_l3_router_external_network:
+        description: |
+          External network used for the router.
+        type: "list"
+        required: false
+      network_tags:
+        description: |
+          List of tags to apply to all network resources (network, subnet, router).
+        type: "list"
+        required: false
+      network_properties:
+        description: |
+          Dictionary of properties to convert to tags for network resources
+        type: "dict"
+        required: false
+  get_node_network_info:
+    options:
+      node:
+        description: |
+          Name or UUID of node
+        type: "str"
+        required: true
+      network:
+        description: |
+          Name or UUID of network
+        type: "str"
+        required: true

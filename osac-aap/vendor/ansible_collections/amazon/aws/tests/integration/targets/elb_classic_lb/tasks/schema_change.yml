@@ -1,0 +1,186 @@
+---
+- block:
+    # For creation test some basic behaviour
+    - module_defaults:
+        amazon.aws.elb_classic_lb:
+          zones: ["{{ availability_zone_a }}", "{{ availability_zone_b }}"]
+          listeners: "{{ default_listeners }}"
+          wait: true
+          scheme: internet-facing
+          # subnets: ['{{ subnet_a }}', '{{ subnet_b }}']
+      block:
+        - name: Create ELB
+          amazon.aws.elb_classic_lb:
+            name: "{{ elb_name }}"
+            state: present
+          register: result
+
+        - ansible.builtin.assert:
+            that:
+              - result is changed
+              - result.elb.status == 'created'
+              - result.elb.scheme == 'internet-facing'
+
+    - module_defaults:
+        amazon.aws.elb_classic_lb:
+          # zones: ['{{ availability_zone_a }}', '{{ availability_zone_b }}']
+          listeners: "{{ default_listeners }}"
+          wait: true
+          scheme: internal
+          subnets: ["{{ subnet_a }}", "{{ subnet_b }}"]
+      block:
+        - name: Change Schema to internal (check_mode)
+          amazon.aws.elb_classic_lb:
+            name: "{{ elb_name }}"
+            state: present
+          register: result
+          check_mode: true
+
+        - ansible.builtin.assert:
+            that:
+              - result is changed
+
+        - name: Change Schema to internal
+          amazon.aws.elb_classic_lb:
+            name: "{{ elb_name }}"
+            state: present
+          register: result
+
+        - ansible.builtin.assert:
+            that:
+              - result is changed
+              - result.elb.scheme == 'internal'
+
+        - name: Change Schema to internal idempotency (check_mode)
+          amazon.aws.elb_classic_lb:
+            name: "{{ elb_name }}"
+            state: present
+          register: result
+          check_mode: true
+
+        - ansible.builtin.assert:
+            that:
+              - result is not changed
+
+        - name: Change Schema to internal idempotency
+          amazon.aws.elb_classic_lb:
+            name: "{{ elb_name }}"
+            state: present
+          register: result
+
+        - ansible.builtin.assert:
+            that:
+              - result is not changed
+              - result.elb.scheme == 'internal'
+
+        - name: No schema specified (check_mode)
+          amazon.aws.elb_classic_lb:
+            name: "{{ elb_name }}"
+            state: present
+            schema: "{{ omit }}"
+          register: result
+          check_mode: true
+
+        - ansible.builtin.assert:
+            that:
+              - result is not changed
+
+        - name: No schema specified
+          amazon.aws.elb_classic_lb:
+            name: "{{ elb_name }}"
+            state: present
+            schema: "{{ omit }}"
+          register: result
+
+        - ansible.builtin.assert:
+            that:
+              - result is not changed
+              - result.elb.scheme == 'internal'
+
+    # For creation test some basic behaviour
+    - module_defaults:
+        amazon.aws.elb_classic_lb:
+          zones: ["{{ availability_zone_a }}", "{{ availability_zone_b }}"]
+          listeners: "{{ default_listeners }}"
+          health_check: "{{ default_health_check }}"
+          wait: true
+          scheme: internet-facing
+          # subnets: ['{{ subnet_a }}', '{{ subnet_b }}']
+      block:
+        - name: Change schema to internet-facing (check_mode)
+          amazon.aws.elb_classic_lb:
+            name: "{{ elb_name }}"
+            state: present
+          register: result
+          check_mode: true
+
+        - ansible.builtin.assert:
+            that:
+              - result is changed
+
+        - name: Change schema to internet-facing
+          amazon.aws.elb_classic_lb:
+            name: "{{ elb_name }}"
+            state: present
+          register: result
+
+        - ansible.builtin.assert:
+            that:
+              - result is changed
+              - result.elb.scheme == 'internet-facing'
+
+        - name: Change schema to internet-facing idempotency (check_mode)
+          amazon.aws.elb_classic_lb:
+            name: "{{ elb_name }}"
+            state: present
+          register: result
+          check_mode: true
+
+        - ansible.builtin.assert:
+            that:
+              - result is not changed
+
+        - name: Change schema to internet-facing idempotency
+          amazon.aws.elb_classic_lb:
+            name: "{{ elb_name }}"
+            state: present
+          register: result
+
+        - ansible.builtin.assert:
+            that:
+              - result is not changed
+              - result.elb.scheme == 'internet-facing'
+
+        - name: No schema specified (check_mode)
+          amazon.aws.elb_classic_lb:
+            name: "{{ elb_name }}"
+            state: present
+            schema: "{{ omit }}"
+          register: result
+          check_mode: true
+
+        - ansible.builtin.assert:
+            that:
+              - result is not changed
+
+        - name: No schema specified
+          amazon.aws.elb_classic_lb:
+            name: "{{ elb_name }}"
+            state: present
+            schema: "{{ omit }}"
+          register: result
+
+        - ansible.builtin.assert:
+            that:
+              - result is not changed
+              - result.elb.scheme == 'internet-facing'
+
+  always:
+    # ============================================================
+    - name: Remove the test load balancer
+      amazon.aws.elb_classic_lb:
+        name: "{{ elb_name }}"
+        state: absent
+        wait: true
+      register: result
+      ignore_errors: true

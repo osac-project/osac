@@ -1,0 +1,106 @@
+{{/*
+Copyright (c) 2025 Red Hat Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+the License. You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+*/}}
+
+{{- $caBundleConfigMap := required "certs.caBundle.configMap is required" .Values.certs.caBundle.configMap }}
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: fulfillment-rest-gateway
+spec:
+  selector:
+    matchLabels:
+      app: fulfillment-rest-gateway
+  replicas: 1
+  strategy:
+    type: {{ if .Values.debug }}Recreate{{ else }}RollingUpdate{{ end }}
+  template:
+    metadata:
+      labels:
+        app: fulfillment-rest-gateway
+    spec:
+      volumes:
+      - name: cas
+        configMap:
+          name: {{ $caBundleConfigMap }}
+      - name: tls
+        secret:
+          secretName: fulfillment-rest-gateway-tls
+      containers:
+      - name: rest-gateway
+        image: {{ .Values.images.service }}
+        volumeMounts:
+        - name: cas
+          mountPath: /etc/fulfillment-rest-gateway/tls/cas
+        - name: tls
+          mountPath: /etc/fulfillment-rest-gateway/tls
+        command:
+        {{ if .Values.debug }}
+        - dlv
+        - exec
+        - /usr/local/bin/fulfillment-service
+        - --headless
+        - --api-version=2
+        - --listen=:30002
+        - --accept-multiclient
+        - --continue
+        - --
+        {{ else}}
+        - /usr/local/bin/fulfillment-service
+        {{ end }}
+        - start
+        - rest-gateway
+        - --log-level={{ .Values.log.level }}
+        - --log-headers={{ .Values.log.headers }}
+        - --log-bodies={{ .Values.log.bodies }}
+        - --ca-file=/etc/fulfillment-rest-gateway/tls/cas
+        - --http-listener-address=0.0.0.0:8000
+        - --http-listener-tls-crt=/etc/fulfillment-rest-gateway/tls/tls.crt
+        - --http-listener-tls-key=/etc/fulfillment-rest-gateway/tls/tls.key
+        - --grpc-server-address=fulfillment-internal-api:8001
+        - --grpc-keep-alive=5m
+        - --metrics-listener-address=0.0.0.0:8002
+        ports:
+        - name: api
+          containerPort: 8000
+          protocol: TCP
+        - name: metrics
+          containerPort: 8002
+          protocol: TCP
+        {{ if .Values.debug }}
+        - name: debug
+          containerPort: 30002
+          hostPort: 30002
+          protocol: TCP
+        {{ end }}
+        {{ if not .Values.debug }}
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8000
+            scheme: HTTPS
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 5
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8000
+            scheme: HTTPS
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 5
+        {{ end }}

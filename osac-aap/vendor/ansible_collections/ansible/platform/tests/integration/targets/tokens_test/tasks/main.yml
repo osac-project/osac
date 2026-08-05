@@ -1,0 +1,139 @@
+---
+- name: Generate a test ID
+  ansible.builtin.set_fact:
+    test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') }}"
+  when: test_id is not defined
+
+- name: Preset vars
+  ansible.builtin.set_fact:
+    name_prefix: "GW-Collection-Test-Applications-{{ test_id }}"
+
+- name: Run Test
+  module_defaults:
+    group/ansible.platform.gateway:
+      gateway_hostname: "{{ gateway_hostname }}"
+      gateway_username: "{{ gateway_username }}"
+      gateway_password: "{{ gateway_password }}"
+      gateway_validate_certs: "{{ gateway_validate_certs | bool }}"
+
+  block:
+    # <Organizations> -----------------------------
+    - name: Create Organization 1
+      ansible.platform.organization:
+        name: "{{ name_prefix }}-Organization-1"
+      register: org1
+
+    - name: Create Organization 2
+      ansible.platform.organization:
+        name: "{{ name_prefix }}-Organization-2"
+      register: org2
+    # </Organizations> ----------------------------
+
+    # </Applications> --------------------------
+    - name: Create Application 1 Org 1
+      ansible.platform.application:
+        name: "{{ name_prefix }}-app1"
+        organization: "{{ org1.id }}"
+        authorization_grant_type: password
+        client_type: public
+      register: app1
+
+    - name: Create Application 1 Org 2
+      ansible.platform.application:
+        name: "{{ name_prefix }}-app1"
+        organization: "{{ org2.id }}"
+        authorization_grant_type: password
+        client_type: public
+      register: app2
+
+    - name: Create a user token
+      ansible.platform.token:
+        description: "{{ name_prefix }}-test-token"
+        scope: read
+      register: user_token
+
+    - name: Assert that the token was created
+      ansible.builtin.assert:
+        that:
+          - user_token is changed
+
+    - name: Assert that the token created returned the token
+      ansible.builtin.assert:
+        that:
+          - "'token' in aap_token"
+
+    - name: Create a second token (they can not be recreated or retrieved)
+      ansible.platform.token:
+        description: "{{ name_prefix }}-test-token"
+        scope: read
+      register: user_token_two
+
+    - name: Assert that the new token is different from the old token
+      ansible.builtin.assert:
+        that:
+          - "'token' in aap_token"
+          - aap_token != user_token.ansible_facts.aap_token
+          - aap_token.token != user_token.ansible_facts.aap_token.token
+
+    - name: Fail to create an app token w/o clarification of which org we are using
+      ansible.platform.token:
+        application: "{{ name_prefix }}-app1"
+        scope: read
+      register: failed_token
+      ignore_errors: true
+
+    - name: Confirm we failed
+      ansible.builtin.assert:
+        that:
+          - failed_token is failed
+
+    - name: Build an application token with an org
+      ansible.platform.token:
+        application: "{{ name_prefix }}-app1"
+        scope: write
+        organization: "{{ org1.id }}"
+      register: app_token
+
+    - name: Assert that we created a token
+      ansible.builtin.assert:
+        that:
+          - app_token is changed
+
+  always:
+    - name: Delete user_token
+      ansible.platform.token:
+        state: absent
+        existing_token: "{{ vars[item].ansible_facts.aap_token }}"
+      loop:
+        - "user_token"
+        - "user_token_two"
+        - "app_token"
+      when: item in vars
+
+    - name: Delete app1
+      ansible.platform.application:
+        name: "{{ vars[item].id }}"
+        organization: "{{ org1.id }}"
+        state: absent
+      loop:
+        - "app1"
+      when: "item in vars and 'id' in vars[item]"
+
+    - name: Delete Applications in Org2
+      ansible.platform.application:
+        name: "{{ vars[item].id }}"
+        organization: "{{ org2.id }}"
+        state: absent
+      loop:
+        - "app2"
+      when: "item in vars and 'id' in vars[item]"
+
+    - name: Delete Organizations
+      ansible.platform.organization:
+        name: "{{ vars[item].id }}"
+        state: absent
+      when: "item in vars and 'id' in vars[item]"
+      loop:
+        - "org1"
+        - "org2"
+...

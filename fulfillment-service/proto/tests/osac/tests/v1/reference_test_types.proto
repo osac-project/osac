@@ -1,0 +1,86 @@
+//
+// Copyright (c) 2025 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.tests.v1;
+
+import "osac/tests/v1/object_type.proto";
+
+// Full reference for cross-tenant/project lookups.
+message TestTargetReference {
+  string id = 1;
+  string name = 2;
+  string project = 3;
+  bool shared = 4;
+}
+
+// Local reference for same-tenant/project lookups.
+message TestTargetLocalReference {
+  string id = 1;
+  string name = 2;
+}
+
+// Second local reference type for repeated and oneof testing.
+message TestOtherTargetLocalReference {
+  string id = 1;
+  string name = 2;
+}
+
+// Nested message containing reference fields (mirrors NetworkAttachment).
+message TestRefAttachment {
+  TestTargetLocalReference subnet = 1;
+  repeated TestOtherTargetLocalReference security_groups = 2;
+}
+
+// Spec with various reference field patterns.
+message TestRefSpec {
+  TestTargetReference target = 1;
+  TestTargetLocalReference local_target = 2;
+  TestRefAttachment attachment = 3;
+  repeated TestOtherTargetLocalReference other_targets = 4;
+}
+
+// Spec with oneof containing reference fields.
+message TestRefOneofSpec {
+  oneof target {
+    TestTargetLocalReference compute_instance = 1;
+    TestOtherTargetLocalReference cluster = 2;
+  }
+}
+
+// buf:lint:ignore OSAC_OBJECT_SHAPE
+message TestResourceWithRefs {
+  string id = 1;
+  Metadata metadata = 2;
+  TestRefSpec spec = 3;
+}
+
+// buf:lint:ignore OSAC_OBJECT_SHAPE
+message TestResourceWithOneof {
+  string id = 1;
+  Metadata metadata = 2;
+  TestRefOneofSpec spec = 3;
+}
+
+message CreateTestResourceWithRefsRequest {
+  TestResourceWithRefs object = 1;
+}
+
+message UpdateTestResourceWithRefsRequest {
+  TestResourceWithRefs object = 1;
+}
+
+message CreateTestResourceWithOneofRequest {
+  TestResourceWithOneof object = 1;
+}

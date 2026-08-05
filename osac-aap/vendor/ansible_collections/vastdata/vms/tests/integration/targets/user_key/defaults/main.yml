@@ -1,0 +1,27 @@
+---
+# Default variables for user_key integration tests
+# Override in tests/integration/integration_config.yml
+
+vast_vms: ""
+vast_username: ""
+vast_password: ""
+
+# Test user configuration
+test_user_name: ansible-test-user-key
+test_user_uid: 19997
+test_user_gid: 19997
+
+# Tenant for access key generation
+test_tenant_id: 1
+
+test_regression_tenant_name: ansible-test-user-key-tenant
+test_regression_user_name: ansible-test-user-key-regression-user
+test_regression_user_uid: 19998
+
+# Reusable connection dict
+vms_auth:
+  host: "{{ vast_vms }}"
+  username: "{{ vast_username }}"
+  password: "{{ vast_password }}"
+  validate_certs: false
+  debug: true

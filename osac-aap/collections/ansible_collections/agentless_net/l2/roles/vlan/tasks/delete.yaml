@@ -1,0 +1,5 @@
+---
+- name: Delete VLAN from switch {{ vlan_id }}
+  ansible.builtin.include_role:
+    name: ansible_network.network_runner.switch
+    tasks_from: delete_vlan

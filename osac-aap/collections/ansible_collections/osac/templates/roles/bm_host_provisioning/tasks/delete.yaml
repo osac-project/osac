@@ -1,0 +1,6 @@
+---
+- name: Validate host class
+  ansible.builtin.include_tasks: validate_host_class.yaml
+
+- name: Deprovision bare metal host using host class implementation
+  ansible.builtin.include_tasks: "delete_{{ host_class }}.yaml"

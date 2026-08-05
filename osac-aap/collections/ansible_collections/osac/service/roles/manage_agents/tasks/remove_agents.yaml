@@ -1,0 +1,51 @@
+- name: Display node names that will be removed from being agents
+  ansible.builtin.debug:
+    var: manage_agents_node_names
+
+- name: Get agents
+  kubernetes.core.k8s_info:
+    kind: Agent
+    api_version: agent-install.openshift.io/v1beta1
+    namespace: "{{ manage_agents_namespace }}"
+  register: agents_result
+
+- name: Extract agents
+  ansible.builtin.set_fact:
+    initial_agents: "{{ agents_result.resources }}"
+
+- name: Get node list for removal
+  ansible.builtin.include_role:
+    name: osac.esi.node
+    tasks_from: get_nodes
+  vars:
+    node_filter_names: "{{ manage_agents_node_names }}"
+# set_fact: node_info_list
+
+- name: Delete agents for each node
+  kubernetes.core.k8s:
+    kind: Agent
+    api_version: agent-install.openshift.io/v1beta1
+    namespace: "{{ manage_agents_namespace }}"
+    name: >-
+      {{
+        node_info.ports |
+        map(attribute='address') |
+        osac.service.mac_to_agent_name(initial_agents)
+      }}
+    state: absent
+  loop: "{{ node_info_list }}"
+  loop_control:
+    loop_var: node_info
+    label: "{{ node_info.name }}"
+
+- name: Clean nodes
+  ansible.builtin.include_role:
+    name: osac.esi.node
+    tasks_from: clean_node
+  vars:
+    node_name: "{{ node_info.name }}"
+    node_clean_wait: true
+  loop: "{{ node_info_list }}"
+  loop_control:
+    loop_var: node_info
+    label: "{{ node_info.name }}"

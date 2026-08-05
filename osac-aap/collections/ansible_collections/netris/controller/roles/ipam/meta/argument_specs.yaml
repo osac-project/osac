@@ -1,0 +1,58 @@
+---
+argument_specs:
+  main:
+    options:
+      ipam_state:
+        type: str
+        choices: [read, create, delete]
+        default: read
+        description: "IPAM operation to perform."
+
+  read:
+    options:
+      ipam_purpose:
+        type: str
+        required: true
+        description: "Subnet purpose to filter by."
+        choices: [nat, load-balancer, common]
+      ipam_count:
+        type: int
+        default: 1
+        description: "Number of IPs to allocate. Must be >= 1."
+      ipam_site_id:
+        type: int
+        description: "Netris site ID to filter subnets by."
+
+  create:
+    options:
+      ipam_name:
+        type: str
+        required: true
+        description: "Name of the IPAM subnet."
+      ipam_cidr:
+        type: str
+        required: true
+        description: "CIDR prefix for the subnet (e.g. 198.51.100.0/28)."
+      ipam_purpose:
+        type: str
+        required: true
+        description: "Subnet purpose."
+        choices: [nat, load-balancer, common]
+      ipam_site_id:
+        type: int
+        required: true
+        description: "Netris site ID."
+      ipam_tenant_id:
+        type: int
+        required: true
+        description: "Netris tenant ID."
+      ipam_vpc_id:
+        type: int
+        description: "Netris VPC ID. Added to request body when defined."
+
+  delete:
+    options:
+      ipam_name:
+        type: str
+        required: true
+        description: "Name of the IPAM subnet to delete."

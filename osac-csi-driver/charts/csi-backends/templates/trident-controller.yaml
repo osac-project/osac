@@ -1,0 +1,137 @@
+{{- if .Values.trident.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: trident-vendor-sa
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "csi-backends.labels" . | nindent 4 }}
+    app.kubernetes.io/name: trident-csi-controller
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trident-csi-controller
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "csi-backends.labels" . | nindent 4 }}
+    app.kubernetes.io/name: trident-csi-controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: trident-csi-controller
+  template:
+    metadata:
+      labels:
+        {{- include "csi-backends.labels" . | nindent 8 }}
+        app.kubernetes.io/name: trident-csi-controller
+    spec:
+      serviceAccountName: trident-vendor-sa
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: trident-main
+          image: "{{ .Values.trident.image.repository }}:{{ .Values.trident.image.tag }}"
+          command: ["/trident_orchestrator"]
+          args:
+            - "--crd_persistence"
+            - "--https_rest"
+            - "--https_port=8443"
+            - "--csi_node_name=$(KUBE_NODE_NAME)"
+            - "--csi_endpoint=$(CSI_ENDPOINT)"
+            - "--csi_role=controller"
+            - "--log_format=text"
+            - "--log_level=info"
+            - "--disable_audit_log=true"
+            - "--address=127.0.0.1"
+            - "--http_request_timeout=90s"
+          env:
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: CSI_ENDPOINT
+              value: "tcp://0.0.0.0:{{ .Values.trident.service.port }}"
+            - name: TRIDENT_SERVER
+              value: "127.0.0.1:8000"
+          securityContext:
+            runAsNonRoot: false
+            capabilities:
+              drop: ["all"]
+          ports:
+            - containerPort: {{ .Values.trident.service.port }}
+              name: csi-grpc
+              protocol: TCP
+          {{- if .Values.trident.config.certsSecret }}
+          volumeMounts:
+            - name: trident-certs
+              mountPath: /certs
+              readOnly: true
+      volumes:
+        - name: trident-certs
+          projected:
+            sources:
+              - secret:
+                  name: {{ .Values.trident.config.certsSecret }}
+          {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "csi-backends.fullname" . }}-trident
+  labels:
+    {{- include "csi-backends.labels" . | nindent 4 }}
+    app.kubernetes.io/name: trident-csi-controller
+rules:
+  - apiGroups: ["trident.netapp.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["nodes", "persistentvolumes", "persistentvolumeclaims", "events", "secrets", "pods"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses", "csinodes", "volumeattachments"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "csi-backends.fullname" . }}-trident
+  labels:
+    {{- include "csi-backends.labels" . | nindent 4 }}
+    app.kubernetes.io/name: trident-csi-controller
+subjects:
+  - kind: ServiceAccount
+    name: trident-vendor-sa
+    namespace: {{ .Values.namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ include "csi-backends.fullname" . }}-trident
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: trident-csi-controller
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "csi-backends.labels" . | nindent 4 }}
+    app.kubernetes.io/name: trident-csi-controller
+spec:
+  selector:
+    app.kubernetes.io/name: trident-csi-controller
+  ports:
+    - name: csi-grpc
+      port: {{ .Values.trident.service.port }}
+      targetPort: {{ .Values.trident.service.port }}
+      protocol: TCP
+{{- end }}

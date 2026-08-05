@@ -1,0 +1,28 @@
+---
+# Subnet deletion - removes V-Net first, then IPAM subnet
+
+- name: Extract Subnet name
+  ansible.builtin.set_fact:
+    subnet_name: "{{ subnet.metadata.name }}"
+
+- name: Display deletion information
+  ansible.builtin.debug:
+    msg: "Deleting Netris V-Net + IPAM subnet for Subnet '{{ subnet_name }}'"
+
+- name: Delete V-Net from Netris controller
+  ansible.builtin.include_role:
+    name: netris.controller.vnet
+    tasks_from: delete
+  vars:
+    vnet_name: "{{ subnet_name }}"
+
+- name: Delete IPAM subnet from Netris controller
+  ansible.builtin.include_role:
+    name: netris.controller.ipam
+    tasks_from: delete_subnet
+  vars:
+    ipam_name: "{{ subnet_name }}"
+
+- name: Display deletion result
+  ansible.builtin.debug:
+    msg: "V-Net + IPAM subnet '{{ subnet_name }}' deletion completed"

@@ -1,0 +1,40 @@
+# By using service_side_apply and using a unique field manager, we ensure that
+# future attempts to create/modify this lock will fail (because of the conflict
+# setting spec.holderIdentity).
+- name: "Acquire lock {{ lease_name }}"
+  when: lease_state == "present"
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    server_side_apply:
+      field_manager: "{{ lease_holder }}"
+    definition:
+      apiVersion: coordination.k8s.io/v1
+      kind: Lease
+      metadata:
+        name: "{{ lease_name }}"
+        namespace: "{{ lookup('env', 'POD_NAMESPACE') }}"
+        ownerReferences:
+          - apiVersion: v1
+            kind: Pod
+            name: "{{ lookup('env', 'POD_NAME') }}"
+            uid: "{{ lookup('env', 'POD_UID') }}"
+        labels:
+          osac.openshift.io/aap-job-id: "job-{{ awx_job_id | default('unknown') }}"
+      spec:
+        holderIdentity: "{{ lease_holder }}"
+  register: lease_object
+  until: lease_object is successful
+  retries: "{{ lease_retries | default(0) }}"
+  delay: "{{ lease_delay | default(1) }}"
+
+- name: "Delete lock {{ lease_name }}"
+  when: lease_state == "absent"
+  kubernetes.core.k8s:
+    state: absent
+    definition:
+      apiVersion: coordination.k8s.io/v1
+      kind: Lease
+      metadata:
+        name: "{{ lease_name }}"
+        namespace: "{{ lookup('env', 'POD_NAMESPACE') }}"

@@ -1,0 +1,6 @@
+---
+- name: Log maintenance step execution
+  ansible.builtin.lineinfile:
+    path: /tmp/osac_test_overrides.log
+    line: "{{ ansible_date_time.iso8601 }} | maintenance | performed custom maintenance"
+    create: true

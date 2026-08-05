@@ -1,0 +1,32 @@
+---
+argument_specs:
+  configure_metallb_ingress:
+    options:
+      metallb_ingress_admin_kubeconfig:
+        type: str
+        required: true
+        description: Kubeconfig for hosted cluster (where MetalLB resources are created)
+      metallb_ingress_ip:
+        type: str
+        required: true
+        description: Pre-allocated IP address for MetalLB ingress
+      worker_bgp_params:
+        type: list
+        elements: dict
+        required: false
+        description: BGP parameters per worker node (hostname, gateway, peer_asn). When provided, BGP mode is used instead of L2.
+      local_asn:
+        type: str
+        required: false
+        description: Local ASN for MetalLB BGP speaker (required when worker_bgp_params is provided)
+  delete_bgp_peers:
+    options:
+      admin_kubeconfig:
+        type: raw
+        required: false
+        description: Kubeconfig for hosted cluster (skips cleanup if not provided)
+      removed_agent_hostnames:
+        type: list
+        elements: str
+        required: false
+        description: List of hostnames whose BGPPeer resources should be deleted

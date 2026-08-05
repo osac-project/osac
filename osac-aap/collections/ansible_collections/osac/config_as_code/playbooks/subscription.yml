@@ -1,0 +1,16 @@
+---
+- name: Setup subscription
+  hosts: localhost
+  connection: local
+
+  vars_files:
+    - vars/config.yml
+
+  tasks:
+    - name: Enable AAP license
+      ansible.controller.license:
+        controller_host: "{{ aap_hostname }}"
+        controller_username: "{{ aap_username }}"
+        controller_password: "{{ aap_password }}"
+        validate_certs: "{{ aap_validate_certs }}"
+        manifest: "{{ license_manifest_path }}"

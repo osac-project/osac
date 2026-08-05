@@ -1,0 +1,127 @@
+---
+# IP Allocation for MetalLB Ingress
+#
+# This task allocates a unique /32 IP address from a shared CIDR range
+# for MetalLB ingress configuration. IP allocations are tracked in a
+# ConfigMap registry to prevent collisions across multiple hosted clusters.
+#
+# The allocation is idempotent: re-running with the same cluster_name
+# will return the same IP address if already allocated.
+#
+# Concurrent allocations are handled by a read-allocate-write-verify
+# retry loop. If another cluster takes our IP between read and write,
+# we re-read and pick a new one.
+
+- name: Allocate ingress IP with retry
+  block:
+    - name: Read IP registry ConfigMap
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: ConfigMap
+        namespace: "{{ nico_ip_registry_namespace }}"
+        name: nico-ip-registry
+        kubeconfig: "{{ hub_kubeconfig | default(omit) }}"
+      register: ip_registry_info
+      retries: "{{ nico_ip_allocation_retries }}"
+      delay: "{{ nico_ip_allocation_delay }}"
+      until: ip_registry_info is successful
+
+    - name: Extract allocated IPs from registry
+      ansible.builtin.set_fact:
+        allocated_ips: "{{ ip_registry_info.resources[0].data | default({}) }}"
+      when: ip_registry_info.resources | length > 0
+
+    - name: Initialize empty registry if ConfigMap doesn't exist
+      ansible.builtin.set_fact:
+        allocated_ips: {}
+      when: ip_registry_info.resources | length == 0
+
+    - name: Reset nico_ingress_ip for fresh allocation attempt
+      ansible.builtin.set_fact:
+        nico_ingress_ip: null
+
+    - name: Check for existing IP allocation for this cluster
+      ansible.builtin.set_fact:
+        nico_ingress_ip: "{{ item.key }}"
+      loop: "{{ allocated_ips | dict2items }}"
+      when: item.value == cluster_name
+      loop_control:
+        label: "{{ item.key }}"
+
+    - name: Log existing IP allocation
+      ansible.builtin.debug:
+        msg: "IP already allocated for cluster {{ cluster_name }}: {{ nico_ingress_ip }}"
+      when: nico_ingress_ip is not none and nico_ingress_ip | length > 0
+
+    - name: Find first available IP in CIDR range
+      ansible.builtin.set_fact:
+        nico_ingress_ip: "{{ ingress_cidr_range | osac.service.next_available_ip(allocated_ips) }}"
+      when: nico_ingress_ip is none or nico_ingress_ip | length == 0
+
+    - name: Validate allocated IP
+      ansible.builtin.assert:
+        that:
+          - nico_ingress_ip is defined
+          - nico_ingress_ip | ansible.utils.ipaddr | length > 0
+        fail_msg: "IP allocation failed for {{ ingress_cidr_range }}. Got: {{ nico_ingress_ip | default('undefined') }}"
+
+    - name: Update IP registry ConfigMap with new allocation
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ hub_kubeconfig | default(omit) }}"
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: nico-ip-registry
+            namespace: "{{ nico_ip_registry_namespace }}"
+          data: "{{ allocated_ips | combine({nico_ingress_ip: cluster_name}) }}"
+      register: registry_update_result
+      retries: "{{ nico_ip_allocation_retries }}"
+      delay: "{{ nico_ip_allocation_delay }}"
+      until: registry_update_result is successful
+      when: allocated_ips.get(nico_ingress_ip, '') != cluster_name
+
+    - name: Verify allocation by re-reading ConfigMap
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: ConfigMap
+        namespace: "{{ nico_ip_registry_namespace }}"
+        name: nico-ip-registry
+        kubeconfig: "{{ hub_kubeconfig | default(omit) }}"
+      register: validation_result
+      retries: "{{ nico_ip_allocation_retries }}"
+      delay: "{{ nico_ip_allocation_delay }}"
+      until: validation_result is successful
+
+    - name: Verify IP is registered to this cluster
+      ansible.builtin.assert:
+        that:
+          - validation_result.resources | length > 0
+          - validation_result.resources[0].data[nico_ingress_ip] is defined
+          - validation_result.resources[0].data[nico_ingress_ip] == cluster_name
+        fail_msg: >
+          IP allocation conflict detected: {{ nico_ingress_ip }} was claimed by another cluster.
+          Retrying allocation.
+        success_msg: "IP allocation validated: {{ nico_ingress_ip }} -> {{ cluster_name }}"
+
+  rescue:
+    - name: Log allocation conflict and retry
+      ansible.builtin.debug:
+        msg: "IP allocation conflict for {{ nico_ingress_ip | default('unknown') }}, retrying..."
+
+    - name: Increment retry counter
+      ansible.builtin.set_fact:
+        nico_ip_alloc_retry_count: "{{ (nico_ip_alloc_retry_count | default(0) | int) + 1 }}"
+
+    - name: Fail if max retries exceeded
+      ansible.builtin.fail:
+        msg: "IP allocation failed after {{ nico_ip_alloc_retry_count }} retries due to concurrent conflicts"
+      when: nico_ip_alloc_retry_count | int > 3
+
+    - name: Retry allocation
+      ansible.builtin.include_tasks: allocate_ip.yml
+
+- name: Log successful IP allocation
+  ansible.builtin.debug:
+    msg: "Allocated IP {{ nico_ingress_ip }} for cluster {{ cluster_name }}"

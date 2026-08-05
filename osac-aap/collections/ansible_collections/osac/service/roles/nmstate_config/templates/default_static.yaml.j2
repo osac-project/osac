@@ -1,0 +1,45 @@
+interfaces:
+  - name: {{ nmstate_mgmt_interface }}
+    type: ethernet
+    state: up
+    ipv4:
+      enabled: true
+      dhcp: true
+      auto-gateway: true
+      auto-dns: true
+      auto-routes: true
+      auto-route-metric: {{ nmstate_mgmt_route_metric }}
+    ipv6:
+      enabled: false
+{% for nic in nmstate_interfaces %}
+  - name: {{ nic }}
+    type: ethernet
+    state: up
+{% if loop.first %}
+    ipv4:
+      enabled: true
+      dhcp: false
+      address:
+        - ip: {{ nmstate_ip }}
+          prefix-length: {{ nmstate_prefix }}
+    ipv6:
+      enabled: false
+{% else %}
+    ipv4:
+      enabled: false
+    ipv6:
+      enabled: false
+{% endif %}
+{% endfor %}
+routes:
+  config:
+    - destination: 0.0.0.0/0
+      next-hop-address: {{ nmstate_gateway }}
+      next-hop-interface: {{ nmstate_interfaces[0] }}
+      table-id: 254
+      metric: {{ nmstate_vpc_route_metric }}
+    - destination: {{ nmstate_mgmt_route_destination }}
+      next-hop-address: {{ nmstate_mgmt_route_gateway }}
+      next-hop-interface: {{ nmstate_mgmt_interface }}
+      table-id: 254
+      metric: {{ nmstate_mgmt_route_metric }}

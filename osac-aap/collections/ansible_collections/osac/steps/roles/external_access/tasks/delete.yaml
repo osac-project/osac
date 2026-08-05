@@ -1,0 +1,24 @@
+- name: Destroy floating ips
+  ansible.builtin.include_role:
+    name: osac.esi.floating_ip
+    tasks_from: destroy_floating_ip.yaml
+  vars:
+    floating_ip_name: "{{ item }}"
+  loop:
+    - "{{ external_access_name }}-api"
+    - "{{ external_access_name }}-ingress"
+
+- name: Delete dns records
+  when: >-
+    external_access_base_domain in external_access_supported_base_domains | default([])
+  ansible.builtin.include_role:
+    name: dns.api.dns
+    tasks_from: delete
+  vars:
+    dns_zone: "{{ lookup('env', 'DNS_ZONE') | default(external_access_base_domain, true) }}"
+    dns_record_name: "{{ item }}"
+    dns_record_type: A
+  loop:
+    - "api.{{ external_access_name }}.{{ external_access_base_domain }}"
+    - "api-int.{{ external_access_name }}.{{ external_access_base_domain }}"
+    - "*.apps.{{ external_access_name }}.{{ external_access_base_domain }}"

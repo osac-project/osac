@@ -1,0 +1,48 @@
+# Delete flow: each step is overridable via delete_step_*_override (default: delete_step_*_default).
+# Override points: pre_delete_hook, resources, post_delete_hook
+# Variables: compute_instance, compute_instance_name, tenant_target_namespace,
+# template_id, compute_instance_target_namespace.
+---
+- name: Include get remote cluster kubeconfig
+  ansible.builtin.include_role:
+    name: osac.service.common
+    tasks_from: get_remote_cluster_kubeconfig
+
+- name: Extract guest OS family from ComputeInstance spec
+  ansible.builtin.set_fact:
+    guest_os_family: "{{ (compute_instance.spec.guestOSFamily | default(guest_os_family)) | lower }}"
+
+- name: Determine target namespace for VM resources
+  ansible.builtin.set_fact:
+    compute_instance_target_namespace: "{{ (compute_instance.metadata.annotations | default({})).get('osac.openshift.io/subnet-target-namespace', tenant_target_namespace) }}"
+
+- name: Log namespace selection
+  ansible.builtin.debug:
+    msg: "VM will be deleted from namespace: {{ compute_instance_target_namespace }} (tenant namespace: {{ tenant_target_namespace }})"
+
+- name: Set delete step defaults
+  ansible.builtin.set_fact:
+    delete_step_pre_delete_hook_default:
+      name: osac.templates.ocp_virt_vm
+      tasks_from: delete_pre_delete_hook.yaml
+    delete_step_resources_default:
+      name: osac.templates.ocp_virt_vm
+      tasks_from: delete_resources.yaml
+    delete_step_post_delete_hook_default:
+      name: osac.templates.ocp_virt_vm
+      tasks_from: delete_post_delete_hook.yaml
+
+- name: Step - Pre-delete hook (no-op by default)
+  ansible.builtin.include_role:
+    name: "{{ (delete_step_pre_delete_hook_override | default(delete_step_pre_delete_hook_default)).name }}"
+    tasks_from: "{{ (delete_step_pre_delete_hook_override | default(delete_step_pre_delete_hook_default)).tasks_from }}"
+
+- name: Step - Delete resources (VirtualMachine, DataVolumes, Secrets)
+  ansible.builtin.include_role:
+    name: "{{ (delete_step_resources_override | default(delete_step_resources_default)).name }}"
+    tasks_from: "{{ (delete_step_resources_override | default(delete_step_resources_default)).tasks_from }}"
+
+- name: Step - Post-delete hook (no-op by default)
+  ansible.builtin.include_role:
+    name: "{{ (delete_step_post_delete_hook_override | default(delete_step_post_delete_hook_default)).name }}"
+    tasks_from: "{{ (delete_step_post_delete_hook_override | default(delete_step_post_delete_hook_default)).tasks_from }}"

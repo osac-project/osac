@@ -1,0 +1,110 @@
+//
+// Copyright (c) 2025 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "google/api/annotations.proto";
+import "google/protobuf/field_mask.proto";
+import "osac/private/v1/compute_instance_type.proto";
+
+message ComputeInstancesListRequest {
+  optional int32 offset = 1;
+  optional int32 limit = 2;
+  optional string filter = 3;
+}
+
+message ComputeInstancesListResponse {
+  int32 size = 1;
+  int32 total = 2;
+  repeated ComputeInstance items = 3;
+}
+
+message ComputeInstancesGetRequest {
+  string id = 1;
+}
+
+message ComputeInstancesGetResponse {
+  ComputeInstance object = 1;
+}
+
+message ComputeInstancesCreateRequest {
+  ComputeInstance object = 1;
+}
+
+message ComputeInstancesCreateResponse {
+  ComputeInstance object = 1;
+
+  // Deprecation notices returned when the compute instance references a DEPRECATED instance type
+  // or uses the legacy cores/memory_gib fields directly.
+  repeated string warnings = 2;
+}
+
+message ComputeInstancesDeleteRequest {
+  string id = 1;
+}
+
+message ComputeInstancesDeleteResponse {}
+
+message ComputeInstancesUpdateRequest {
+  ComputeInstance object = 1;
+  google.protobuf.FieldMask update_mask = 2;
+
+  // Lock enables optimistic locking. When set to true, the server verifies that the current version of the object
+  // matches the value of the metadata.version field of the submitted object. If they differ the update will be
+  // rejected. This is useful to prevent lost updates when multiple clients are modifying the same object concurrently.
+  bool lock = 3;
+}
+
+message ComputeInstancesUpdateResponse {
+  ComputeInstance object = 1;
+}
+
+message ComputeInstancesSignalRequest {
+  string id = 1;
+}
+
+message ComputeInstancesSignalResponse {}
+
+service ComputeInstances {
+  rpc List(ComputeInstancesListRequest) returns (ComputeInstancesListResponse) {
+    option (google.api.http) = {get: "/api/private/v1/compute_instances"};
+  }
+  rpc Get(ComputeInstancesGetRequest) returns (ComputeInstancesGetResponse) {
+    option (google.api.http) = {
+      get: "/api/private/v1/compute_instances/{id}"
+      response_body: "object"
+    };
+  }
+  rpc Create(ComputeInstancesCreateRequest) returns (ComputeInstancesCreateResponse) {
+    option (google.api.http) = {
+      post: "/api/private/v1/compute_instances"
+      body: "object"
+      response_body: "object"
+    };
+  }
+  rpc Delete(ComputeInstancesDeleteRequest) returns (ComputeInstancesDeleteResponse) {
+    option (google.api.http) = {delete: "/api/private/v1/compute_instances/{id}"};
+  }
+  rpc Update(ComputeInstancesUpdateRequest) returns (ComputeInstancesUpdateResponse) {
+    option (google.api.http) = {
+      patch: "/api/private/v1/compute_instances/{object.id}"
+      body: "object"
+      response_body: "object"
+    };
+  }
+
+  // Indicates that something changed in the object or the system that may require reconciling the object.
+  rpc Signal(ComputeInstancesSignalRequest) returns (ComputeInstancesSignalResponse) {}
+}

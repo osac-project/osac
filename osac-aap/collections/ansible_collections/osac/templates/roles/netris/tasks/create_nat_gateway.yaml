@@ -1,0 +1,83 @@
+---
+# NATGateway maps to a Netris SNAT rule
+# Creates an SNAT rule on the SoftGate: VN CIDR -> ExternalIP address
+# All egress from the VirtualNetwork is source-NATted to the ExternalIP
+
+- name: Validate NATGateway annotations
+  ansible.builtin.assert:
+    that:
+      - nat_gateway.metadata is defined
+      - nat_gateway.metadata.annotations is defined
+      - "'osac.openshift.io/externalip-name' in nat_gateway.metadata.annotations"
+      - "'osac.openshift.io/vn-ipv4-cidr' in nat_gateway.metadata.annotations"
+    fail_msg: >-
+      NATGateway requires annotations
+      'osac.openshift.io/externalip-name' (ExternalIP CR name) and
+      'osac.openshift.io/vn-ipv4-cidr' (VirtualNetwork IPv4 CIDR).
+
+- name: Extract NATGateway configuration
+  ansible.builtin.set_fact:
+    natgw_name: "{{ nat_gateway.metadata.name }}"
+    natgw_namespace: "{{ nat_gateway.metadata.namespace }}"
+    natgw_externalip_name: >-
+      {{ nat_gateway.metadata.annotations['osac.openshift.io/externalip-name'] }}
+    natgw_vn_ipv4_cidr: >-
+      {{ nat_gateway.metadata.annotations['osac.openshift.io/vn-ipv4-cidr'] }}
+
+- name: Look up ExternalIP CR to get allocated address
+  kubernetes.core.k8s_info:
+    api_version: osac.openshift.io/v1alpha1
+    kind: ExternalIP
+    name: "{{ natgw_externalip_name }}"
+    namespace: "{{ natgw_namespace }}"
+  register: _natgw_eip_lookup
+
+- name: Validate ExternalIP CR found with allocated address
+  ansible.builtin.assert:
+    that:
+      - _natgw_eip_lookup.resources | length > 0
+      - _natgw_eip_lookup.resources[0].metadata.annotations['osac.openshift.io/allocated-address'] is defined
+    fail_msg: >-
+      ExternalIP '{{ natgw_externalip_name }}' not found or missing
+      'osac.openshift.io/allocated-address' annotation. The ExternalIP must
+      be allocated before creating a NATGateway.
+
+- name: Extract allocated external IP address
+  ansible.builtin.set_fact:
+    natgw_snat_ip: >-
+      {{ _natgw_eip_lookup.resources[0].metadata.annotations['osac.openshift.io/allocated-address'] }}
+
+- name: Display NATGateway information
+  ansible.builtin.debug:
+    msg:
+      - "Creating Netris SNAT rule for NATGateway '{{ natgw_name }}'"
+      - "VN CIDR (source): {{ natgw_vn_ipv4_cidr }}"
+      - "ExternalIP (SNAT to): {{ natgw_snat_ip }} (from ExternalIP '{{ natgw_externalip_name }}')"
+
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Create SNAT rule for NATGateway
+  ansible.builtin.include_role:
+    name: netris.controller.nat
+    tasks_from: create
+  vars:
+    nat_name: "{{ natgw_name }}-snat"
+    nat_site_id: "{{ netris_site_id }}"
+    nat_vpc_id: "{{ netris_mgmt_vpc_id }}"
+    nat_vpc_name: "{{ netris_mgmt_vpc_name | default('') }}"
+    nat_action: snat
+    nat_protocol: all
+    nat_source_address: "{{ natgw_vn_ipv4_cidr }}"
+    nat_snat_to_ip: "{{ natgw_snat_ip }}/32"
+    nat_comment: "OSAC NATGateway {{ natgw_name }}"
+
+- name: Display SNAT rule creation result
+  ansible.builtin.debug:
+    msg: >-
+      SNAT rule '{{ natgw_name }}-snat'
+      {{ (nat_already_existed | default(false)) | ternary('already exists', 'created successfully') }}
+      (ID: {{ nat_id | default('unknown') }})
+      — {{ natgw_vn_ipv4_cidr }} -> {{ natgw_snat_ip }}

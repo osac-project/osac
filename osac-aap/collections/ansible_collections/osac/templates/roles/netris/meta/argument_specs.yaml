@@ -1,0 +1,124 @@
+---
+argument_specs:
+  create_virtual_network:
+    options:
+      virtual_network:
+        type: dict
+        required: true
+        description: VirtualNetwork CR from fulfillment-api via EDA payload
+      template_parameters:
+        type: dict
+        description: Template-specific parameters (reserved for future use)
+        options: {}
+        default: {}
+
+  delete_virtual_network:
+    options:
+      virtual_network:
+        type: dict
+        required: true
+        description: VirtualNetwork CR from fulfillment-api via EDA payload
+
+  create_subnet:
+    options:
+      subnet:
+        type: dict
+        required: true
+        description: Subnet CR from fulfillment-api via EDA payload
+      template_parameters:
+        type: dict
+        description: Template-specific parameters (reserved for future use)
+        options: {}
+        default: {}
+
+  delete_subnet:
+    options:
+      subnet:
+        type: dict
+        required: true
+        description: Subnet CR from fulfillment-api via EDA payload
+
+  create_security_group:
+    options:
+      security_group:
+        type: dict
+        required: true
+        description: SecurityGroup CR from fulfillment-api via EDA payload
+      template_parameters:
+        type: dict
+        description: Template-specific parameters (reserved for future use)
+        options: {}
+        default: {}
+
+  delete_security_group:
+    options:
+      security_group:
+        type: dict
+        required: true
+        description: SecurityGroup CR from fulfillment-api via EDA payload
+
+  create_external_ip:
+    options:
+      external_ip:
+        type: dict
+        required: true
+        description: ExternalIP CR from fulfillment-api via EDA payload
+      template_parameters:
+        type: dict
+        description: Template-specific parameters (reserved for future use)
+        options: {}
+        default: {}
+
+  delete_external_ip:
+    options:
+      external_ip:
+        type: dict
+        required: true
+        description: ExternalIP CR from fulfillment-api via EDA payload
+
+  create_nat_gateway:
+    options:
+      nat_gateway:
+        type: dict
+        required: true
+        description: NATGateway CR from fulfillment-api via EDA payload
+      template_parameters:
+        type: dict
+        description: Template-specific parameters (reserved for future use)
+        options: {}
+        default: {}
+
+  delete_nat_gateway:
+    options:
+      nat_gateway:
+        type: dict
+        required: true
+        description: NATGateway CR from fulfillment-api via EDA payload
+
+  create_network_attachment:
+    options:
+      network_attachment:
+        type: dict
+        required: true
+        description: >-
+          Network attachment parameters from dispatcher. Contains host_name
+          (Netris server name), logical_interface_name (Netris port name),
+          and subnet_ref (OSAC Subnet UUID). If the port is already on
+          another V-Net (e.g. parking network), it is removed first.
+      template_parameters:
+        type: dict
+        description: Template-specific parameters (reserved for future use)
+        options: {}
+        default: {}
+
+  delete_network_attachment:
+    options:
+      network_attachment:
+        type: dict
+        required: true
+        description: >-
+          Network attachment parameters from dispatcher. Contains host_name
+          (Netris server name), logical_interface_name (Netris port name),
+          subnet_ref (OSAC Subnet UUID), and optional parking_vnet_name
+          (V-Net to return port to after removal — used by CaaS; omit for
+          BMaaS to leave port detached).

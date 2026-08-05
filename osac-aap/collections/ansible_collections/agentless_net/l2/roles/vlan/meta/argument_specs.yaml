@@ -1,0 +1,13 @@
+argument_specs:
+  create:
+    options:
+      vlan_id:
+        description: "VLAN ID to create on the switch."
+        type: "int"
+        required: true
+  delete:
+    options:
+      vlan_id:
+        description: "VLAN ID to delete from the switch."
+        type: "int"
+        required: true

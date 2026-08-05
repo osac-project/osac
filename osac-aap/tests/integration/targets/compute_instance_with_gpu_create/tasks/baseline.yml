@@ -1,0 +1,84 @@
+---
+- name: Compute Instance Create GPU - Baseline Test
+  hosts: localhost
+  gather_facts: true
+  vars_files:
+    - ../../../common_vars.yml
+
+  tasks:
+    - name: Read ComputeInstance GPU fixture
+      ansible.builtin.set_fact:
+        test_compute_instance: "{{ lookup('file', '../../../fixtures/computeinstance-with-gpu-test.yaml') | from_yaml }}"
+
+    - name: Set test variables for baseline workflow
+      ansible.builtin.set_fact:
+        ansible_eda:
+          event:
+            payload: "{{ test_compute_instance }}"
+        tenant_target_namespace: "computeinstance-test-vm-gpu-work"
+        tenant_storage_class_name: "test-storage-class"
+        create_step_resources_override:
+          name: osac.workflows.workflow_helpers
+          tasks_from: noop.yml
+        create_step_wait_annotate_override:
+          name: osac.workflows.workflow_helpers
+          tasks_from: noop.yml
+
+- name: Import compute instance create workflow (baseline with GPU)
+  ansible.builtin.import_playbook: osac.workflows.compute_instance.create
+
+- name: Verify baseline results with GPU
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+
+  tasks:
+    - name: Verify GPU host devices are present in VM template spec
+      ansible.builtin.assert:
+        that:
+          - vm_template_spec is defined
+          - vm_template_spec.domain.devices.hostDevices is defined
+          - vm_template_spec.domain.devices.hostDevices | length == 1
+          - vm_template_spec.domain.devices.hostDevices[0].name == 'gpu-0'
+          - vm_template_spec.domain.devices.hostDevices[0].deviceName == 'nvidia.com/GB100'
+        fail_msg: "GPU devices not found in VM template spec: {{ vm_template_spec }}"
+
+    - name: Read HyperConverged CR
+      kubernetes.core.k8s_info:
+        api_version: hco.kubevirt.io/v1
+        kind: HyperConverged
+        name: kubevirt-hyperconverged
+        namespace: openshift-cnv
+      register: hc_cr
+
+    - name: Ensure HyperConverged CR exists
+      ansible.builtin.assert:
+        that:
+          - hc_cr.resources | length == 1
+        fail_msg: "Expected exactly one HyperConverged CR, got: {{ hc_cr.resources | default([]) | length }}"
+
+    - name: Resolve pciHostDevices from HyperConverged CR
+      ansible.builtin.set_fact:
+        hc_pci_host_devices: >-
+          {{
+            (hc_cr.resources[0].spec.virtualization.permittedHostDevices.pciHostDevices | default([]))
+            if hc_cr.resources[0].spec.virtualization is defined
+            else (hc_cr.resources[0].spec.permittedHostDevices.pciHostDevices | default([]))
+          }}
+
+    - name: Find matching GPU host device entries
+      ansible.builtin.set_fact:
+        hc_matching_gpu_devices: >-
+          {{
+            hc_pci_host_devices
+            | selectattr('pciDeviceSelector', 'equalto', '10DE:2901')
+            | selectattr('resourceName', 'equalto', 'nvidia.com/GB100')
+            | list
+          }}
+
+    - name: Verify GPU device was registered in HyperConverged CR
+      ansible.builtin.assert:
+        that:
+          - hc_matching_gpu_devices | length == 1
+        fail_msg: "GPU device not registered in HyperConverged CR: {{ hc_cr.resources }}"

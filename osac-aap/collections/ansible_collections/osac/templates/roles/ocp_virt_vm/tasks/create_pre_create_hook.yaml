@@ -1,0 +1,4 @@
+---
+- name: Pre-create hook (no-op by default; override step to run custom logic before resources)
+  ansible.builtin.debug:
+    msg: "Pre-create hook step (no-op). Override create_step_pre_create_hook_override to run custom logic."

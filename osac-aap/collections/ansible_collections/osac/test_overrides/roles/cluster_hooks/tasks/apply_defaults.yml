@@ -1,0 +1,11 @@
+---
+- name: Log cluster defaults override
+  ansible.builtin.lineinfile:
+    path: /tmp/osac_test_overrides.log
+    line: "{{ ansible_date_time.iso8601 }} | cluster_apply_defaults | {{ cluster_order.metadata.name }}"
+    create: true
+
+# Delegate to original defaults role
+- name: Include original defaults
+  ansible.builtin.include_role:
+    name: osac.service.cluster_settings

@@ -1,0 +1,128 @@
+{{- if .Values.vendors.pure.enabled }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "csi-driver.fullname" . }}-pure-node
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "csi-driver.labels" . | nindent 4 }}
+    app.kubernetes.io/name: pure-csi-node
+    app.kubernetes.io/component: node
+spec:
+  selector:
+    matchLabels:
+      {{- include "csi-driver.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/name: pure-csi-node
+  template:
+    metadata:
+      labels:
+        {{- include "csi-driver.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/name: pure-csi-node
+        app.kubernetes.io/component: node
+    spec:
+      serviceAccountName: {{ include "csi-driver.nodeServiceAccountName" . }}
+      containers:
+        - name: pure-csi-node
+          image: "{{ .Values.vendors.pure.image.repository }}:{{ .Values.vendors.pure.image.tag }}"
+          args:
+            - "--plugin=node"
+            - "--endpoint=$(CSI_ENDPOINT)"
+          env:
+            - name: CSI_ENDPOINT
+              value: "unix://{{ .Values.vendors.pure.node.socketPath }}/csi.sock"
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: CSI_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: CLUSTER_UUID
+              value: {{ .Values.vendors.pure.config.clusterUuid | quote }}
+            - name: PURE_FLASHARRAY_SAN_TYPE
+              value: {{ .Values.vendors.pure.node.sanType | quote }}
+            - name: PURE_DISCOVERY_CONF
+              value: "/config/pure.json"
+            {{- if .Values.vendors.pure.node.clusterName }}
+            - name: CLUSTER_NAME
+              value: {{ .Values.vendors.pure.node.clusterName | quote }}
+            {{- end }}
+          securityContext:
+            privileged: {{ .Values.node.privileged }}
+          volumeMounts:
+            - name: pure-socket-dir
+              mountPath: {{ .Values.vendors.pure.node.socketPath }}
+            - name: kubelet-dir
+              mountPath: /var/lib/kubelet
+              mountPropagation: Bidirectional
+            {{- if .Values.vendors.pure.config.credentialsSecret }}
+            - name: pure-config
+              mountPath: /config
+              readOnly: true
+            {{- end }}
+            - name: dev-dir
+              mountPath: /dev
+            - name: sys-dir
+              mountPath: /sys
+            - name: multipath-conf
+              mountPath: /etc/multipath.conf
+              readOnly: true
+            - name: iscsi-dir
+              mountPath: /etc/iscsi
+              readOnly: true
+            - name: host-sbin
+              mountPath: /usr/sbin
+            - name: host-lib
+              mountPath: /usr/lib64
+              readOnly: true
+            - name: host-run
+              mountPath: /run
+      volumes:
+        - name: pure-socket-dir
+          hostPath:
+            path: {{ .Values.vendors.pure.node.socketPath }}
+            type: DirectoryOrCreate
+        - name: kubelet-dir
+          hostPath:
+            path: /var/lib/kubelet
+            type: Directory
+        {{- if .Values.vendors.pure.config.credentialsSecret }}
+        - name: pure-config
+          secret:
+            secretName: {{ .Values.vendors.pure.config.credentialsSecret }}
+            items:
+              - key: pure.json
+                path: pure.json
+        {{- end }}
+        - name: dev-dir
+          hostPath:
+            path: /dev
+        - name: sys-dir
+          hostPath:
+            path: /sys
+        - name: multipath-conf
+          hostPath:
+            path: /etc/multipath.conf
+            type: FileOrCreate
+        - name: iscsi-dir
+          hostPath:
+            path: /etc/iscsi
+            type: DirectoryOrCreate
+        - name: host-sbin
+          hostPath:
+            path: /usr/sbin
+            type: Directory
+        - name: host-lib
+          hostPath:
+            path: /usr/lib64
+            type: Directory
+        - name: host-run
+          hostPath:
+            path: /run
+            type: Directory
+{{- end }}

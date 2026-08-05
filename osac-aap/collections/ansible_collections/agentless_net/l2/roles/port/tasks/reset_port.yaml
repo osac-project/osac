@@ -1,0 +1,5 @@
+---
+- name: Reset port  # noqa: name[casing]
+  ansible.builtin.include_role:
+    name: ansible_network.network_runner.switch
+    tasks_from: delete_port

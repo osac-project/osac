@@ -1,0 +1,177 @@
+{{/*
+Copyright (c) 2025 Red Hat Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+the License. You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+*/}}
+
+{{- $caBundleConfigMap := required "certs.caBundle.configMap is required" .Values.certs.caBundle.configMap }}
+{{- $authIssuerUrl := required "auth.issuerUrl is required" .Values.auth.issuerUrl }}
+{{- $authControllerCredentials := required "auth.controllerCredentials is required" .Values.auth.controllerCredentials }}
+{{- $idpUrl := required "idp.url is required" .Values.idp.url }}
+{{- $idpCredentials := required "idp.credentials is required" .Values.idp.credentials }}
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: fulfillment-controller
+spec:
+  selector:
+    matchLabels:
+      app: fulfillment-controller
+  replicas: 1
+  strategy:
+    type: {{ if .Values.debug }}Recreate{{ else }}RollingUpdate{{ end }}
+  template:
+    metadata:
+      labels:
+        app: fulfillment-controller
+    spec:
+      volumes:
+      - name: cas
+        configMap:
+          name: {{ $caBundleConfigMap }}
+      - name: tls
+        secret:
+          secretName: fulfillment-controller-tls
+      - name: credentials
+        projected:
+          sources:
+          {{ range $authControllerCredentials }}
+          {{ if .configMap }}
+          - configMap:
+              name: {{ .configMap.name }}
+              items:
+              {{ range .configMap.items }}
+              - key: {{ .key }}
+                path: {{ .param }}
+              {{ end }}
+          {{ end }}
+          {{ if .secret }}
+          - secret:
+              name: {{ .secret.name }}
+              items:
+              {{ range .secret.items }}
+              - key: {{ .key }}
+                path: {{ .param }}
+              {{ end }}
+          {{ end }}
+          {{ end }}
+      - name: idp-credentials
+        projected:
+          sources:
+          {{- range $idpCredentials }}
+          {{- if .configMap }}
+          - configMap:
+              name: {{ .configMap.name }}
+              items:
+              {{- range .configMap.items }}
+              - key: {{ .key }}
+                path: {{ .param }}
+              {{- end }}
+          {{- end }}
+          {{- if .secret }}
+          - secret:
+              name: {{ .secret.name }}
+              items:
+              {{- range .secret.items }}
+              - key: {{ .key }}
+                path: {{ .param }}
+              {{- end }}
+          {{- end }}
+          {{- end }}
+      containers:
+      - name: controller
+        image: {{ .Values.images.service }}
+        volumeMounts:
+        - name: cas
+          mountPath: /etc/fulfillment-controller/tls/cas
+        - name: tls
+          mountPath: /etc/fulfillment-controller/tls
+        - name: credentials
+          mountPath: /etc/fulfillment-controller/credentials
+          readOnly: true
+        - name: idp-credentials
+          mountPath: /etc/fulfillment-controller/idp
+          readOnly: true
+        command:
+        {{ if .Values.debug }}
+        - dlv
+        - exec
+        - /usr/local/bin/fulfillment-service
+        - --headless
+        - --api-version=2
+        - --listen=:30003
+        - --accept-multiclient
+        - --continue
+        - --
+        {{ else }}
+        - /usr/local/bin/fulfillment-service
+        {{ end }}
+        - start
+        - controller
+        - --log-level={{ .Values.log.level }}
+        - --log-headers={{ .Values.log.headers }}
+        - --log-bodies={{ .Values.log.bodies }}
+        - --ca-file=/etc/fulfillment-controller/tls/cas
+        - --auth-issuer-url={{ $authIssuerUrl }}
+        - --auth-client-id-file=/etc/fulfillment-controller/credentials/client-id
+        - --auth-client-secret-file=/etc/fulfillment-controller/credentials/client-secret
+        - --idp-provider={{ .Values.idp.provider }}
+        - --idp-url={{ $idpUrl }}
+        - --idp-client-id-file=/etc/fulfillment-controller/idp/client-id
+        - --idp-client-secret-file=/etc/fulfillment-controller/idp/client-secret
+        - --grpc-server-address=fulfillment-internal-api:8001
+        - --grpc-keep-alive=5m
+        - --grpc-listener-address=0.0.0.0:8000
+        - --grpc-listener-tls-crt=/etc/fulfillment-controller/tls/tls.crt
+        - --grpc-listener-tls-key=/etc/fulfillment-controller/tls/tls.key
+        - --metrics-listener-address=0.0.0.0:8002
+        ports:
+        - name: grpc
+          containerPort: 8000
+          protocol: TCP
+        - name: metrics
+          containerPort: 8002
+          protocol: TCP
+        {{ if .Values.debug }}
+        - name: debug
+          containerPort: 30003
+          hostPort: 30003
+          protocol: TCP
+        {{ end }}
+        {{ if not .Values.debug }}
+        livenessProbe:
+          exec:
+            command:
+            - /usr/local/bin/fulfillment-service
+            - probe
+            - grpc-server
+            - --ca-file=/etc/fulfillment-controller/tls/ca.crt
+            - --grpc-server-address=localhost:8000
+            - --grpc-server-timeout=1s
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 5
+        readinessProbe:
+          exec:
+            command:
+            - /usr/local/bin/fulfillment-service
+            - probe
+            - grpc-server
+            - --ca-file=/etc/fulfillment-controller/tls/ca.crt
+            - --grpc-server-address=localhost:8000
+            - --grpc-server-timeout=1s
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 5
+        {{ end }}

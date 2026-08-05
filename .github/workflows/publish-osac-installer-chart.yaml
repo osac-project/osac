@@ -1,0 +1,241 @@
+name: Publish OSAC Umbrella Chart
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Umbrella chart version (without v prefix, e.g. 0.0.1). Defaults to git tag.'
+        required: false
+      ui_version:
+        description: 'osac-ui chart version (e.g. 0.0.1) -- osac-ui keeps its own independent release cadence'
+        required: true
+
+concurrency:
+  group: publish-osac-installer-chart-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  CHARTS_REPO: ${{ github.repository_owner }}/charts
+
+jobs:
+  publish-osac-chart:
+    name: Publish osac umbrella chart
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      packages: write
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v6
+      with:
+        submodules: recursive
+        persist-credentials: false
+
+    - name: Set up Helm
+      uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+      with:
+        version: v3.17.0
+
+    - name: Log in to GHCR
+      run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+
+    - name: Resolve versions
+      id: versions
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_UI_VERSION: ${{ inputs.ui_version }}
+      run: |
+        # Full semver.org grammar (adapted to POSIX ERE for bash's =~): rejects
+        # leading-zero numeric identifiers (e.g. "01.2.3", "1.2.3-01") and
+        # malformed dot-separated prerelease/build identifiers that the prior
+        # permissive `[a-zA-Z0-9.]+` charset let through.
+        SEMVER_RE='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*)(\.(0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*))*)?(\+[0-9a-zA-Z-]+(\.[0-9a-zA-Z-]+)*)?$'
+
+        # Umbrella chart version: from input, or from the osac/vX.Y.Z tag
+        # this run was dispatched against. This workflow is workflow_dispatch
+        # -only (no push: tags: trigger), but workflow_dispatch still lets a
+        # caller pick any ref -- including one of this chart's own release
+        # tags -- via the "Use workflow from" ref selector. A branch ref
+        # (e.g. "main") can't yield a version on its own, so require the
+        # input explicitly rather than feeding a branch name into the semver
+        # check and failing with a confusing error two lines down.
+        if [ -n "${INPUT_VERSION}" ]; then
+          version="${INPUT_VERSION}"
+        elif [[ "${GITHUB_REF_NAME}" == osac/v* ]]; then
+          version="${GITHUB_REF_NAME#osac/v}"
+        else
+          echo "::error::version input is required when dispatching against a non-release ref (${GITHUB_REF_NAME})"
+          exit 1
+        fi
+
+        if ! [[ "${version}" =~ ${SEMVER_RE} ]]; then
+          echo "::error::Invalid semver for umbrella version: ${version}"
+          exit 1
+        fi
+
+        # osac-operator(-crds), fulfillment-service, osac-aap, and
+        # bare-metal-fulfillment-operator(-crds) are mono-repo-resident --
+        # each one's own tag-scoped release pipeline is triggered by a
+        # same-named "<component>/v<version>" tag on this repo, so a single
+        # osac release cut always shares the same version across all of
+        # them and the umbrella. Only osac-ui remains an independently
+        # versioned external chart/image dependency with its own release
+        # cadence, so it keeps its own input.
+        ui_ver="${INPUT_UI_VERSION}"
+        if ! [[ "${ui_ver}" =~ ${SEMVER_RE} ]]; then
+          echo "::error::Invalid semver for osac-ui: ${ui_ver}"
+          exit 1
+        fi
+
+        echo "version=${version}" >> "$GITHUB_OUTPUT"
+        echo "ui_ver=${ui_ver}" >> "$GITHUB_OUTPUT"
+
+        echo "--- Resolved versions ---"
+        echo "Umbrella (and osac-operator/fulfillment-service/osac-aap/bare-metal-fulfillment-operator): ${version}"
+        echo "osac-ui: ${ui_ver}"
+
+    - name: Rewrite osac-ui dependency to the requested OCI version
+      env:
+        UI_VER: ${{ steps.versions.outputs.ui_ver }}
+      run: |
+        cd osac-installer/charts/osac
+        OCI_REPO="oci://${{ env.REGISTRY }}/${{ env.CHARTS_REPO }}"
+
+        # osac-operator(-crds), fulfillment-service, osac-aap,
+        # bare-metal-fulfillment-operator(-crds), and csi-driver/csi-backends
+        # stay on their committed file:// dependencies -- they're
+        # mono-repo-resident (or a submodule checked out alongside this
+        # chart), so `helm dependency build` resolves them straight from
+        # this checkout with no rewrite needed. Only osac-ui is a real
+        # external OCI chart dependency this workflow re-pins per release.
+        yq -i "
+          (.dependencies[] | select(.name == \"osac-ui\")) .repository = \"${OCI_REPO}\" |
+          (.dependencies[] | select(.name == \"osac-ui\")) .version = \"${UI_VER}\"
+        " Chart.yaml
+
+        # Remove stale Chart.lock so helm pulls the newly-pinned osac-ui version
+        rm -f Chart.lock
+
+        echo "--- Updated Chart.yaml ---"
+        cat Chart.yaml
+
+    - name: Build chart dependencies
+      run: helm dependency build osac-installer/charts/osac/
+
+    - name: Update image tags in values.yaml
+      env:
+        VERSION: ${{ steps.versions.outputs.version }}
+        UI_VER: ${{ steps.versions.outputs.ui_ver }}
+      run: |
+        yq -i "
+          .operator.image.tag = \"v${VERSION}\" |
+          .bmf.image.tag = \"v${VERSION}\" |
+          .service.images.service = \"ghcr.io/osac-project/fulfillment-service:v${VERSION}\" |
+          .aap.bootstrap.image = \"ghcr.io/osac-project/osac-aap:v${VERSION}\" |
+          .aap.configAsCode.eeImage = \"ghcr.io/osac-project/osac-aap:v${VERSION}\" |
+          .ui.images.ui = \"ghcr.io/osac-project/osac-ui:v${UI_VER}\" |
+          .dbMigrate.image = \"ghcr.io/osac-project/fulfillment-service:v${VERSION}\"
+        " osac-installer/charts/osac/values.yaml
+
+        echo "--- Updated values.yaml image references ---"
+        grep -E "tag:|image:" osac-installer/charts/osac/values.yaml
+
+    - name: Validate chart
+      working-directory: osac-installer
+      run: |
+        set -euo pipefail
+        # Mirrors helm-lint.yaml's own two loops (ci/*-values.yaml need no
+        # extra overrides, they're self-contained; values/*/values.yaml
+        # leave hostnames blank for a real cluster to fill in) -- this step
+        # is checking the just-rewritten Chart.yaml/values.yaml render
+        # cleanly across every overlay this chart actually ships, not just
+        # re-verifying the image tags set above.
+        for f in charts/osac/ci/*-values.yaml; do
+          echo "--- helm lint/template with $(basename "$f") ---"
+          helm lint charts/osac/ --values "$f"
+          helm template osac charts/osac/ --values "$f" > /dev/null
+        done
+        for f in values/*/values.yaml; do
+          echo "--- helm lint/template with $(dirname "$f" | xargs basename) ---"
+          helm lint charts/osac/ --values "$f" \
+            --set service.externalHostname=fulfillment-api.example.com \
+            --set service.internalHostname=fulfillment-internal-api.example.com
+          helm template osac charts/osac/ --values "$f" \
+            --set service.externalHostname=fulfillment-api.example.com \
+            --set service.internalHostname=fulfillment-internal-api.example.com \
+            > /dev/null
+        done
+
+    - name: Package chart
+      env:
+        VERSION: ${{ steps.versions.outputs.version }}
+      run: |
+        helm package osac-installer/charts/osac/ \
+          --version "${VERSION}" \
+          --app-version "${VERSION}"
+
+    - name: Push chart to GHCR
+      env:
+        VERSION: ${{ steps.versions.outputs.version }}
+      run: |
+        helm push "osac-${VERSION}.tgz" \
+          oci://${{ env.REGISTRY }}/${{ env.CHARTS_REPO }}
+
+    - name: Create GitHub Release
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        VERSION: ${{ steps.versions.outputs.version }}
+        UI_VER: ${{ steps.versions.outputs.ui_ver }}
+      run: |
+        BODY=$(mktemp)
+        cat > "$BODY" <<EOF
+        ## Component versions
+
+        osac-operator, osac-operator-crds, fulfillment-service, osac-aap,
+        bare-metal-fulfillment-operator, and bare-metal-fulfillment-operator-crds
+        are all part of this mono-repo's own release, so they all share this
+        release's version (${VERSION}). osac-ui is released independently.
+
+        | Component | Version | Chart | Release |
+        |-----------|---------|-------|---------|
+        | fulfillment-service | ${VERSION} | oci://ghcr.io/osac-project/charts/fulfillment-service | [v${VERSION}](https://github.com/osac-project/osac/releases/tag/fulfillment-service/v${VERSION}) |
+        | osac-operator | ${VERSION} | oci://ghcr.io/osac-project/charts/osac-operator | [v${VERSION}](https://github.com/osac-project/osac/releases/tag/osac-operator/v${VERSION}) |
+        | osac-operator-crds | ${VERSION} | oci://ghcr.io/osac-project/charts/osac-operator-crds | [v${VERSION}](https://github.com/osac-project/osac/releases/tag/osac-operator/v${VERSION}) |
+        | osac-aap | ${VERSION} | oci://ghcr.io/osac-project/charts/osac-aap | [v${VERSION}](https://github.com/osac-project/osac/releases/tag/osac-aap/v${VERSION}) |
+        | bare-metal-fulfillment-operator | ${VERSION} | oci://ghcr.io/osac-project/charts/bare-metal-fulfillment-operator | [v${VERSION}](https://github.com/osac-project/osac/releases/tag/bare-metal-fulfillment-operator/v${VERSION}) |
+        | bare-metal-fulfillment-operator-crds | ${VERSION} | oci://ghcr.io/osac-project/charts/bare-metal-fulfillment-operator-crds | [v${VERSION}](https://github.com/osac-project/osac/releases/tag/bare-metal-fulfillment-operator/v${VERSION}) |
+        | osac-ui | ${UI_VER} | oci://ghcr.io/osac-project/charts/osac-ui | [v${UI_VER}](https://github.com/osac-project/osac-ui/releases/tag/v${UI_VER}) |
+
+        ## Install
+
+        \`\`\`bash
+        helm install osac oci://ghcr.io/osac-project/charts/osac --version ${VERSION}
+        \`\`\`
+        EOF
+        # Strip leading whitespace from heredoc (indented for YAML readability)
+        sed -i 's/^        //' "$BODY"
+
+        # Scoped "osac/vX.Y.Z" (not a bare vX.Y.Z) so this umbrella chart's
+        # own release tag can't collide with -- or be mistaken by
+        # resolve_release_tag's git-describe search for -- an unrelated
+        # component's tag history (e.g. fulfillment-service tagged bare
+        # vX.Y.Z releases before OSAC-3529 moved it to a scoped prefix).
+        #
+        # --target "$GITHUB_SHA": without it, `gh release create` on a
+        # not-yet-existing tag points the new tag at the default branch's
+        # current tip, not the commit this run actually checked out,
+        # built, and packaged -- which can differ if this was dispatched
+        # against a non-default ref, or if the default branch moved during
+        # the run.
+        gh release create "osac/v${VERSION}" \
+          --repo "${{ github.repository }}" \
+          --title "OSAC v${VERSION}" \
+          --target "$GITHUB_SHA" \
+          --notes-file "$BODY" \
+        || gh release edit "osac/v${VERSION}" \
+          --repo "${{ github.repository }}" \
+          --target "$GITHUB_SHA" \
+          --notes-file "$BODY"
+        rm -f "$BODY"

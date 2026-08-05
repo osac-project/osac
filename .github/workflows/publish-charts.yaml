@@ -1,0 +1,706 @@
+#
+# Copyright (c) 2025 Red Hat Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+# in compliance with the License. You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software distributed under the License
+# is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+# or implied. See the License for the specific language governing permissions and limitations under
+# the License.
+#
+
+name: Publish charts
+
+on:
+  workflow_run:
+    # workflow_run only fires for workflows explicitly listed here -- the
+    # guard condition and publish-*-chart jobs alone aren't enough to trigger
+    # this workflow at all without each component's build workflow name also
+    # present in this list (missed once for osac-aap, see OSAC-3511/#49 --
+    # don't repeat that).
+    workflows: ["Container image", "Build container image", "Build execution environment", "Build bare-metal-fulfillment-operator image", "Build osac-csi-driver image"]
+    types: [completed]
+
+env:
+  REGISTRY: ghcr.io
+  CHARTS_REPO: ${{ github.repository_owner }}/charts
+
+jobs:
+
+  # Shared guard: validates the triggering tag/build regardless of which
+  # component's image-build workflow fired. Each publish job below then
+  # gates on github.event.workflow_run.name to only publish its own
+  # component's chart -- the image-build workflows themselves stay separate
+  # per component (see build-image.yaml/publish-image.yaml/execution-environment.yml),
+  # so this is the one place their otherwise-independent tag-triggered
+  # releases converge.
+  guard:
+    name: Verify image build succeeded
+    runs-on: ubuntu-latest
+    # Read-only job: only inspects workflow_run event metadata, no repo/API access needed.
+    permissions: {}
+    if: >
+      github.event.workflow_run.event == 'push' &&
+      (startsWith(github.event.workflow_run.head_branch, 'fulfillment-service/v') ||
+       startsWith(github.event.workflow_run.head_branch, 'osac-operator/v') ||
+       startsWith(github.event.workflow_run.head_branch, 'osac-aap/v') ||
+       startsWith(github.event.workflow_run.head_branch, 'bare-metal-fulfillment-operator/v') ||
+       startsWith(github.event.workflow_run.head_branch, 'osac-csi-driver/v'))
+    outputs:
+      tag: ${{ github.event.workflow_run.head_branch }}
+      version: ${{ steps.check.outputs.version }}
+      sha: ${{ github.event.workflow_run.head_sha }}
+    steps:
+    - name: Check image build result
+      id: check
+      env:
+        CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+      run: |
+        # Each component owns a scoped tag prefix (see publish-image.yaml/build-image.yaml/
+        # execution-environment.yml's own `tags:` triggers) so a single tag push can't fire
+        # every component's release chain at once; strip it here to recover the bare vX.Y.Z
+        # used for artifact versions.
+        case "$HEAD_BRANCH" in
+          fulfillment-service/v*) VERSION="${HEAD_BRANCH#fulfillment-service/}" ;;
+          osac-operator/v*) VERSION="${HEAD_BRANCH#osac-operator/}" ;;
+          osac-aap/v*) VERSION="${HEAD_BRANCH#osac-aap/}" ;;
+          bare-metal-fulfillment-operator/v*) VERSION="${HEAD_BRANCH#bare-metal-fulfillment-operator/}" ;;
+          osac-csi-driver/v*) VERSION="${HEAD_BRANCH#osac-csi-driver/}" ;;
+          *) echo "::error::Tag '$HEAD_BRANCH' does not match a known component prefix"; exit 1 ;;
+        esac
+
+        # No build-metadata (+...) suffix allowed: this version is used verbatim as a
+        # container image tag downstream, and Docker/OCI tags cannot contain '+'.
+        semver_re='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\.((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?$'
+        if ! [[ "$VERSION" =~ $semver_re ]]; then
+          echo "::error::Tag '$HEAD_BRANCH' is not a valid semver release tag"
+          exit 1
+        fi
+        if [[ "$CONCLUSION" != "success" ]]; then
+          echo "::error::Image build for tag $HEAD_BRANCH did not succeed (conclusion: $CONCLUSION). Refusing to publish chart."
+          exit 1
+        fi
+        echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+        echo "Image build succeeded for tag $HEAD_BRANCH"
+
+  publish-service-chart:
+    name: Publish service chart
+    needs: guard
+    if: success() && github.event.workflow_run.name == 'Container image'
+    runs-on: ubuntu-latest
+    # contents: read to checkout; packages: write to push the chart to GHCR.
+    permissions:
+      contents: read
+      packages: write
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      with:
+        ref: ${{ needs.guard.outputs.sha }}
+        fetch-depth: 0
+        persist-credentials: false
+    - id: run
+      working-directory: fulfillment-service
+      env:
+        VERSION: ${{ needs.guard.outputs.version }}
+        REGISTRY_USERNAME: ${{ github.actor }}
+        REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        # Hardcoded rather than github.repository: that now resolves to
+        # osac-project/osac post-merge, which would inject a reference to an
+        # image that doesn't exist there -- the real image only ever gets
+        # published to osac-project/fulfillment-service (see build-image.yaml/
+        # publish-image.yaml's own IMAGE_NAME). Only used below to build the
+        # image reference written into the chart, nothing else in this job
+        # needs it to be the actual triggering repo.
+        REPO: osac-project/fulfillment-service
+      run: |
+        # Login to the registry:
+        export registry="ghcr.io"
+        echo "${REGISTRY_PASSWORD}" | helm registry login --username "${REGISTRY_USERNAME}" --password-stdin "${registry}"
+
+        # Get the bare version from the tag that triggered the image build (the
+        # component-scoped prefix was already stripped by the guard job):
+        export git_version="${VERSION}"
+
+        # Update the image reference in the chart:
+        export app_version="${git_version}"
+        export app_image="${registry}/${REPO}:${app_version}"
+        yq -i '.images.service = strenv(app_image)' charts/service/values.yaml
+
+        # Package the chart:
+        export chart_version="${git_version#v}"
+        helm package charts/service --version "${chart_version}" --app-version "${app_version}"
+
+        # Push the chart to the registry:
+        export chart_name="$(yq -r '.name' charts/service/Chart.yaml)"
+        export chart_file="${chart_name}-${chart_version}.tgz"
+        helm push "${chart_file}" "oci://${registry}/${{ github.repository_owner }}/charts"
+
+  publish-operator-crds-chart:
+    name: Publish osac-operator-crds chart
+    needs: guard
+    if: success() && github.event.workflow_run.name == 'Build container image'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      with:
+        ref: ${{ needs.guard.outputs.sha }}
+        persist-credentials: false
+
+    - name: Verify tag still points at the guarded commit
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG: ${{ needs.guard.outputs.tag }}
+        GUARDED_SHA: ${{ needs.guard.outputs.sha }}
+        REPO: ${{ github.repository }}
+      run: .github/scripts/osac-operator-verify-tag-matches-sha.sh
+
+    - name: Set up Helm
+      uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+      with:
+        version: v3.17.0
+
+    - name: Log in to GHCR
+      env:
+        REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        REGISTRY_USERNAME: ${{ github.actor }}
+      run: echo "${REGISTRY_PASSWORD}" | helm registry login "${REGISTRY}" -u "${REGISTRY_USERNAME}" --password-stdin
+
+    - name: Extract version from tag
+      id: version
+      run: echo "version=${VERSION#v}" >> "$GITHUB_OUTPUT"
+      env:
+        VERSION: ${{ needs.guard.outputs.version }}
+
+    - name: Package chart
+      working-directory: osac-operator
+      run: |
+        helm package charts/operator-crds/ \
+          --version "${{ steps.version.outputs.version }}" \
+          --app-version "${{ steps.version.outputs.version }}"
+
+    - name: Push chart to GHCR
+      working-directory: osac-operator
+      run: |
+        helm push osac-operator-crds-${{ steps.version.outputs.version }}.tgz \
+          oci://${{ env.REGISTRY }}/${{ env.CHARTS_REPO }}
+
+  publish-operator-chart:
+    name: Publish osac-operator chart
+    needs: guard
+    if: success() && github.event.workflow_run.name == 'Build container image'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      with:
+        ref: ${{ needs.guard.outputs.sha }}
+        persist-credentials: false
+
+    - name: Verify tag still points at the guarded commit
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG: ${{ needs.guard.outputs.tag }}
+        GUARDED_SHA: ${{ needs.guard.outputs.sha }}
+        REPO: ${{ github.repository }}
+      run: .github/scripts/osac-operator-verify-tag-matches-sha.sh
+
+    - name: Set up Helm
+      uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+      with:
+        version: v3.17.0
+
+    - name: Log in to GHCR
+      env:
+        REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        REGISTRY_USERNAME: ${{ github.actor }}
+      run: echo "${REGISTRY_PASSWORD}" | helm registry login "${REGISTRY}" -u "${REGISTRY_USERNAME}" --password-stdin
+
+    - name: Extract version from tag
+      id: version
+      run: echo "version=${VERSION#v}" >> "$GITHUB_OUTPUT"
+      env:
+        VERSION: ${{ needs.guard.outputs.version }}
+
+    - name: Update image tag in values.yaml
+      working-directory: osac-operator
+      run: |
+        sed -i "s/tag: latest/tag: v${{ steps.version.outputs.version }}/" charts/operator/values.yaml
+
+    - name: Package chart
+      working-directory: osac-operator
+      run: |
+        helm package charts/operator/ \
+          --version "${{ steps.version.outputs.version }}" \
+          --app-version "${{ steps.version.outputs.version }}"
+
+    - name: Push chart to GHCR
+      working-directory: osac-operator
+      run: |
+        helm push osac-operator-${{ steps.version.outputs.version }}.tgz \
+          oci://${{ env.REGISTRY }}/${{ env.CHARTS_REPO }}
+
+  create-operator-release:
+    name: Create GitHub Release (osac-operator)
+    runs-on: ubuntu-latest
+    needs: [guard, publish-operator-crds-chart, publish-operator-chart]
+    if: success() && github.event.workflow_run.name == 'Build container image'
+    permissions:
+      contents: write
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      with:
+        ref: ${{ needs.guard.outputs.sha }}
+        persist-credentials: false
+
+    - name: Verify tag still points at the guarded commit
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG: ${{ needs.guard.outputs.tag }}
+        GUARDED_SHA: ${{ needs.guard.outputs.sha }}
+        REPO: ${{ github.repository }}
+      run: .github/scripts/osac-operator-verify-tag-matches-sha.sh
+
+    - name: Create GitHub Release
+      run: |
+        gh release create "${TAG}" \
+          --repo "${REPO}" \
+          --title "osac-operator ${VERSION}" \
+          --generate-notes \
+          --verify-tag \
+        || gh release edit "${TAG}" \
+          --repo "${REPO}" \
+          --title "osac-operator ${VERSION}"
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG: ${{ needs.guard.outputs.tag }}
+        VERSION: ${{ needs.guard.outputs.version }}
+        REPO: ${{ github.repository }}
+
+  # Single job, unlike osac-operator's chart-publish/release split: osac-aap
+  # has only one chart, so there's no multi-chart parallelism to justify
+  # separating release creation into its own job -- this mirrors the old
+  # standalone osac-aap repo's own publish-aap-chart job, including its
+  # double tag-race check (once before packaging, again right before the
+  # release, since real wall-clock time passes between the two).
+  publish-osac-aap-chart:
+    name: Publish osac-aap chart
+    needs: guard
+    if: success() && github.event.workflow_run.name == 'Build execution environment'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      with:
+        ref: ${{ needs.guard.outputs.sha }}
+        persist-credentials: false
+
+    - name: Verify tag still points at the guarded commit
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG: ${{ needs.guard.outputs.tag }}
+        GUARDED_SHA: ${{ needs.guard.outputs.sha }}
+        REPO: ${{ github.repository }}
+      run: .github/scripts/osac-aap-verify-tag-matches-sha.sh
+
+    - name: Set up Helm
+      uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+      with:
+        version: v3.17.0
+
+    - name: Log in to GHCR
+      env:
+        REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        REGISTRY_USERNAME: ${{ github.actor }}
+      run: echo "${REGISTRY_PASSWORD}" | helm registry login "${REGISTRY}" -u "${REGISTRY_USERNAME}" --password-stdin
+
+    - name: Extract version from tag
+      id: version
+      run: echo "version=${VERSION#v}" >> "$GITHUB_OUTPUT"
+      env:
+        VERSION: ${{ needs.guard.outputs.version }}
+
+    - name: Update image tag in values.yaml
+      working-directory: osac-aap
+      env:
+        VERSION: ${{ steps.version.outputs.version }}
+      run: |
+        if [[ ! "$VERSION" =~ ^[0-9A-Za-z._-]+$ ]]; then
+          echo "Invalid release version: $VERSION" >&2
+          exit 1
+        fi
+
+        # sed exits 0 even when a pattern matches zero lines, so a future values.yaml
+        # format change could silently leave a placeholder unpinned. Verify the expected
+        # replacement actually landed and fail the release instead of packaging stale values.
+        replace_and_verify() {
+          local old="$1" new="$2"
+          sed -i "s|${old}|${new}|" charts/aap/values.yaml
+          if ! grep -qF -- "${new}" charts/aap/values.yaml; then
+            echo "::error::Expected '${new}' not found in charts/aap/values.yaml after substitution (placeholder '${old}' may be missing or already changed)" >&2
+            exit 1
+          fi
+        }
+
+        replace_and_verify "image: ghcr.io/osac-project/osac-aap:latest" "image: ghcr.io/osac-project/osac-aap:v${VERSION}"
+        replace_and_verify "eeImage: \"\"" "eeImage: \"ghcr.io/osac-project/osac-aap:v${VERSION}\""
+        replace_and_verify "projectGitBranch: \"\"" "projectGitBranch: \"v${VERSION}\""
+
+    - name: Package chart
+      working-directory: osac-aap
+      run: |
+        helm package charts/aap/ \
+          --version "${{ steps.version.outputs.version }}" \
+          --app-version "${{ steps.version.outputs.version }}"
+
+    - name: Push chart to GHCR
+      working-directory: osac-aap
+      run: |
+        helm push osac-aap-${{ steps.version.outputs.version }}.tgz \
+          oci://${{ env.REGISTRY }}/${{ env.CHARTS_REPO }}
+
+    - name: Verify tag still points at the guarded commit
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG: ${{ needs.guard.outputs.tag }}
+        GUARDED_SHA: ${{ needs.guard.outputs.sha }}
+        REPO: ${{ github.repository }}
+      run: .github/scripts/osac-aap-verify-tag-matches-sha.sh
+
+    - name: Create GitHub Release
+      run: |
+        gh release create "${TAG}" \
+          --repo "${REPO}" \
+          --title "osac-aap ${VERSION}" \
+          --generate-notes \
+          --verify-tag \
+        || gh release edit "${TAG}" \
+          --repo "${REPO}" \
+          --title "osac-aap ${VERSION}"
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG: ${{ needs.guard.outputs.tag }}
+        VERSION: ${{ needs.guard.outputs.version }}
+        REPO: ${{ github.repository }}
+
+  publish-bmf-crds-chart:
+    name: Publish bare-metal-fulfillment-operator-crds chart
+    needs: guard
+    if: success() && github.event.workflow_run.name == 'Build bare-metal-fulfillment-operator image'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      with:
+        ref: ${{ needs.guard.outputs.sha }}
+        persist-credentials: false
+
+    - name: Verify tag still points at the guarded commit
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG: ${{ needs.guard.outputs.tag }}
+        GUARDED_SHA: ${{ needs.guard.outputs.sha }}
+        REPO: ${{ github.repository }}
+      run: .github/scripts/bare-metal-fulfillment-operator-verify-tag-matches-sha.sh
+
+    - name: Set up Helm
+      uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+      with:
+        version: v3.17.0
+
+    - name: Log in to GHCR
+      env:
+        REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        REGISTRY_USERNAME: ${{ github.actor }}
+      run: echo "${REGISTRY_PASSWORD}" | helm registry login "${REGISTRY}" -u "${REGISTRY_USERNAME}" --password-stdin
+
+    - name: Extract version from tag
+      id: version
+      run: echo "version=${VERSION#v}" >> "$GITHUB_OUTPUT"
+      env:
+        VERSION: ${{ needs.guard.outputs.version }}
+
+    - name: Package chart
+      working-directory: bare-metal-fulfillment-operator
+      run: |
+        helm package charts/operator-crds/ \
+          --version "${{ steps.version.outputs.version }}" \
+          --app-version "${{ steps.version.outputs.version }}"
+
+    - name: Push chart to GHCR
+      working-directory: bare-metal-fulfillment-operator
+      run: |
+        helm push bare-metal-fulfillment-operator-crds-${{ steps.version.outputs.version }}.tgz \
+          oci://${{ env.REGISTRY }}/${{ env.CHARTS_REPO }}
+
+  publish-bmf-chart:
+    name: Publish bare-metal-fulfillment-operator chart
+    needs: guard
+    if: success() && github.event.workflow_run.name == 'Build bare-metal-fulfillment-operator image'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      with:
+        ref: ${{ needs.guard.outputs.sha }}
+        persist-credentials: false
+
+    - name: Verify tag still points at the guarded commit
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG: ${{ needs.guard.outputs.tag }}
+        GUARDED_SHA: ${{ needs.guard.outputs.sha }}
+        REPO: ${{ github.repository }}
+      run: .github/scripts/bare-metal-fulfillment-operator-verify-tag-matches-sha.sh
+
+    - name: Set up Helm
+      uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+      with:
+        version: v3.17.0
+
+    - name: Log in to GHCR
+      env:
+        REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        REGISTRY_USERNAME: ${{ github.actor }}
+      run: echo "${REGISTRY_PASSWORD}" | helm registry login "${REGISTRY}" -u "${REGISTRY_USERNAME}" --password-stdin
+
+    - name: Extract version from tag
+      id: version
+      run: echo "version=${VERSION#v}" >> "$GITHUB_OUTPUT"
+      env:
+        VERSION: ${{ needs.guard.outputs.version }}
+
+    - name: Update image tag in values.yaml
+      working-directory: bare-metal-fulfillment-operator
+      run: |
+        sed -i "s/tag: latest/tag: v${{ steps.version.outputs.version }}/" charts/operator/values.yaml
+
+    - name: Package chart
+      working-directory: bare-metal-fulfillment-operator
+      run: |
+        helm package charts/operator/ \
+          --version "${{ steps.version.outputs.version }}" \
+          --app-version "${{ steps.version.outputs.version }}"
+
+    - name: Push chart to GHCR
+      working-directory: bare-metal-fulfillment-operator
+      run: |
+        helm push bare-metal-fulfillment-operator-${{ steps.version.outputs.version }}.tgz \
+          oci://${{ env.REGISTRY }}/${{ env.CHARTS_REPO }}
+
+  create-bmf-release:
+    name: Create GitHub Release (bare-metal-fulfillment-operator)
+    runs-on: ubuntu-latest
+    needs: [guard, publish-bmf-crds-chart, publish-bmf-chart]
+    if: success() && github.event.workflow_run.name == 'Build bare-metal-fulfillment-operator image'
+    permissions:
+      contents: write
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      with:
+        ref: ${{ needs.guard.outputs.sha }}
+        persist-credentials: false
+
+    - name: Verify tag still points at the guarded commit
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG: ${{ needs.guard.outputs.tag }}
+        GUARDED_SHA: ${{ needs.guard.outputs.sha }}
+        REPO: ${{ github.repository }}
+      run: .github/scripts/bare-metal-fulfillment-operator-verify-tag-matches-sha.sh
+
+    - name: Create GitHub Release
+      run: |
+        gh release create "${TAG}" \
+          --repo "${REPO}" \
+          --title "bare-metal-fulfillment-operator ${VERSION}" \
+          --generate-notes \
+          --verify-tag \
+        || gh release edit "${TAG}" \
+          --repo "${REPO}" \
+          --title "bare-metal-fulfillment-operator ${VERSION}"
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG: ${{ needs.guard.outputs.tag }}
+        VERSION: ${{ needs.guard.outputs.version }}
+        REPO: ${{ github.repository }}
+
+  publish-csi-driver-chart:
+    name: Publish csi-driver chart
+    needs: guard
+    if: success() && github.event.workflow_run.name == 'Build osac-csi-driver image'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      with:
+        ref: ${{ needs.guard.outputs.sha }}
+        persist-credentials: false
+
+    - name: Verify tag still points at the guarded commit
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG: ${{ needs.guard.outputs.tag }}
+        GUARDED_SHA: ${{ needs.guard.outputs.sha }}
+        REPO: ${{ github.repository }}
+      run: .github/scripts/osac-csi-driver-verify-tag-matches-sha.sh
+
+    - name: Set up Helm
+      uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+      with:
+        version: v3.17.0
+
+    - name: Log in to GHCR
+      env:
+        REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        REGISTRY_USERNAME: ${{ github.actor }}
+      run: echo "${REGISTRY_PASSWORD}" | helm registry login "${REGISTRY}" -u "${REGISTRY_USERNAME}" --password-stdin
+
+    - name: Extract version from tag
+      id: version
+      run: echo "version=${VERSION#v}" >> "$GITHUB_OUTPUT"
+      env:
+        VERSION: ${{ needs.guard.outputs.version }}
+
+    - name: Update image tag in values.yaml
+      working-directory: osac-csi-driver
+      # sed exits 0 even when a pattern matches zero lines, so a future values.yaml
+      # format change could silently leave the placeholder unpinned. Verify the
+      # expected replacement actually landed and fail the release instead of
+      # packaging stale values (same pattern as publish-osac-aap-chart above).
+      run: |
+        OLD="tag: main  # PLACEHOLDER -- overwritten at release time"
+        NEW="tag: v${{ steps.version.outputs.version }}"
+        sed -i "s|${OLD}|${NEW}|" charts/csi-driver/values.yaml
+        if ! grep -qF -- "${NEW}" charts/csi-driver/values.yaml; then
+          echo "::error::Expected '${NEW}' not found in charts/csi-driver/values.yaml after substitution (placeholder may be missing or already changed)" >&2
+          exit 1
+        fi
+
+    - name: Package chart
+      working-directory: osac-csi-driver
+      run: |
+        helm package charts/csi-driver/ \
+          --version "${{ steps.version.outputs.version }}" \
+          --app-version "${{ steps.version.outputs.version }}"
+
+    - name: Push chart to GHCR
+      working-directory: osac-csi-driver
+      run: |
+        helm push csi-driver-${{ steps.version.outputs.version }}.tgz \
+          oci://${{ env.REGISTRY }}/${{ env.CHARTS_REPO }}
+
+  publish-csi-backends-chart:
+    name: Publish csi-backends chart
+    needs: guard
+    if: success() && github.event.workflow_run.name == 'Build osac-csi-driver image'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      with:
+        ref: ${{ needs.guard.outputs.sha }}
+        persist-credentials: false
+
+    - name: Verify tag still points at the guarded commit
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG: ${{ needs.guard.outputs.tag }}
+        GUARDED_SHA: ${{ needs.guard.outputs.sha }}
+        REPO: ${{ github.repository }}
+      run: .github/scripts/osac-csi-driver-verify-tag-matches-sha.sh
+
+    - name: Set up Helm
+      uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+      with:
+        version: v3.17.0
+
+    - name: Log in to GHCR
+      env:
+        REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        REGISTRY_USERNAME: ${{ github.actor }}
+      run: echo "${REGISTRY_PASSWORD}" | helm registry login "${REGISTRY}" -u "${REGISTRY_USERNAME}" --password-stdin
+
+    - name: Extract version from tag
+      id: version
+      run: echo "version=${VERSION#v}" >> "$GITHUB_OUTPUT"
+      env:
+        VERSION: ${{ needs.guard.outputs.version }}
+
+    - name: Package chart
+      working-directory: osac-csi-driver
+      run: |
+        helm package charts/csi-backends/ \
+          --version "${{ steps.version.outputs.version }}" \
+          --app-version "${{ steps.version.outputs.version }}"
+
+    - name: Push chart to GHCR
+      working-directory: osac-csi-driver
+      run: |
+        helm push csi-backends-${{ steps.version.outputs.version }}.tgz \
+          oci://${{ env.REGISTRY }}/${{ env.CHARTS_REPO }}
+
+  create-osac-csi-driver-release:
+    name: Create GitHub Release (osac-csi-driver)
+    runs-on: ubuntu-latest
+    needs: [guard, publish-csi-driver-chart, publish-csi-backends-chart]
+    if: success() && github.event.workflow_run.name == 'Build osac-csi-driver image'
+    permissions:
+      contents: write
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      with:
+        ref: ${{ needs.guard.outputs.sha }}
+        persist-credentials: false
+
+    - name: Verify tag still points at the guarded commit
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG: ${{ needs.guard.outputs.tag }}
+        GUARDED_SHA: ${{ needs.guard.outputs.sha }}
+        REPO: ${{ github.repository }}
+      run: .github/scripts/osac-csi-driver-verify-tag-matches-sha.sh
+
+    - name: Create GitHub Release
+      run: |
+        gh release create "${TAG}" \
+          --repo "${REPO}" \
+          --title "osac-csi-driver ${VERSION}" \
+          --generate-notes \
+          --verify-tag \
+        || gh release edit "${TAG}" \
+          --repo "${REPO}" \
+          --title "osac-csi-driver ${VERSION}"
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG: ${{ needs.guard.outputs.tag }}
+        VERSION: ${{ needs.guard.outputs.version }}
+        REPO: ${{ github.repository }}

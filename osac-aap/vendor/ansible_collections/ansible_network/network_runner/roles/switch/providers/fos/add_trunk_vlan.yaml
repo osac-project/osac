@@ -1,0 +1,7 @@
+---
+- name: "fos: add VLAN to trunk port"
+  fos_config:
+    lines:
+      - switchport trunk allowed vlan add {{ _vlan_id }}
+    parents: interface {{ port_name }}
+  connection: network_cli

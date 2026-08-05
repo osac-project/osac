@@ -1,0 +1,45 @@
+download_url: https://console.redhat.com/api/automation-hub/v3/plugin/ansible/content/published/collections/artifacts/ansible-utils-5.1.2.tar.gz
+format_version: 1.0.0
+name: utils
+namespace: ansible
+server: https://console.redhat.com/api/automation-hub/content/published/
+signatures:
+- pubkey_fingerprint: 39B5D759361A97464C564A8FE1A4BD708A828AAD
+  pulp_created: '2024-09-30T07:40:17.416157Z'
+  signature: '-----BEGIN PGP SIGNATURE-----
+
+    Version: GnuPG v1
+
+
+    iQIcBAABCAAGBQJm+lXQAAoJEOGkvXCKgoqt+BUP/iEuekRlqXTDQsYI2iMbEuCd
+
+    A6YFEIeUSiQ4HF9wS7kKdHjKvBf9xgihWQ7/WrjUX1oci7beDp46aHmEihtUr8KX
+
+    vtIhBCLUAMef7UAIUVp7iQYxivdtE53m/pDyoH6RLVXOcjOtGCHQSF2xDMEXfysz
+
+    coA5elM5OmrHZS5xzXfJLmHf206ni9uzEXhAcqaqMA1lhkqD7SLe+oMglVDhSwqz
+
+    oBOHGv5OqdvViMjINYO7phLuwKkBL06tS2CAOL4OeVX1DDqWjtKu9yiPuMvhcIPR
+
+    IlrMTgcc5z4rpcrOAAjN/dvYVVNr5dEAO1mJTFBQlao546z+DQUaAF+5InLDPjz3
+
+    nWHDJMBvvuciiJ6Z/rny/KR6Shny/Xk+qUg9nzXPfdYnCDcEMnxD5di5a3AgIEn7
+
+    ZTlGjmfyk0D6qCk3Ou/QK9lQ2DYdGdHDntblv8s+xXo8BjVPoUd4Gd5f3cdMIY1E
+
+    SvnmLc8QKsjNgosngP5uG3QRKzWEwhwXVdP3V6ZBAs05cOzm4qYW3qJjTGp3TmNh
+
+    4/VCEXh0C54Ym6DJGqAQoiFFg77tRkRa46ifJlfNNkd67Dl2w1ZqtqnBSiTtwqnq
+
+    uF30dKCT3EA78YNA+G4VYgRQViGg6wuvGs4EKYZZBrptJQJegZ+y3ksnQlc0Ol6I
+
+    J9zfr6xJVWOnTQZGdsTz
+
+    =6DcF
+
+    -----END PGP SIGNATURE-----
+
+    '
+  signing_service: null
+version: 5.1.2
+version_url: /api/automation-hub/content/published/v3/plugin/ansible/content/published/collections/index/ansible/utils/versions/5.1.2/

@@ -1,0 +1,6 @@
+---
+- name: "fos: get port conf"
+  fos_command:
+    commands:
+      - show running-config interface {{ port_name }}
+  connection: network_cli

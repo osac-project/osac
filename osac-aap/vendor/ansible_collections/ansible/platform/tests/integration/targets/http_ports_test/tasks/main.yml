@@ -1,0 +1,178 @@
+---
+- name: Generate a test ID
+  ansible.builtin.set_fact:
+    test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') }}"
+  when: test_id is not defined
+
+- name: Run Test
+  module_defaults:
+    group/ansible.platform.gateway:
+      gateway_hostname: "{{ gateway_hostname }}"
+      gateway_username: "{{ gateway_username }}"
+      gateway_password: "{{ gateway_password }}"
+      gateway_validate_certs: "{{ gateway_validate_certs | bool }}"
+
+  block:
+    - name: Create http port 1
+      ansible.platform.http_port:
+        name: "{{ test_id }}-Port-65530"
+        number: 65530
+        use_https: false
+      register: http_port1
+
+    - name: Validate we created the port
+      ansible.builtin.assert:
+        that:
+          - http_port1 is changed
+
+    - name: Recreate http port 1
+      ansible.platform.http_port:
+        name: "{{ test_id }}-Port-65530"
+        number: 65530
+        use_https: false
+      register: recreate_http_port1
+
+    - name: Validate we created the port
+      ansible.builtin.assert:
+        that:
+          - recreate_http_port1 is not changed
+
+    - name: Create http port 2
+      ansible.platform.http_port:
+        name: "{{ test_id }}-Port-65531"
+        number: 65531
+        state: present
+      register: http_port2
+
+    - name: Validate we created the port
+      ansible.builtin.assert:
+        that:
+          - http_port2 is changed
+
+    - name: Create http port 3
+      ansible.platform.http_port:
+        name: "{{ test_id }}-Port-65532"
+        number: 65532
+        use_https: true
+      register: http_port3
+
+    - name: Validate we created the port
+      ansible.builtin.assert:
+        that:
+          - http_port3 is changed
+
+    - name: Create http port 4
+      ansible.platform.http_port:
+        name: "{{ test_id }}-Port-65533"
+        number: 65533
+      register: http_port4
+
+    - name: Validate we created the port
+      ansible.builtin.assert:
+        that:
+          - http_port4 is changed
+
+    - name: Check existence of a port
+      ansible.platform.http_port:
+        name: "{{  http_port2.name }}"
+        state: exists
+      register: exists_http_port2
+
+    - name: Validate that exists does not change the system
+      ansible.builtin.assert:
+        that:
+          - exists_http_port2 is not changed
+
+    - name: Change a port
+      ansible.platform.http_port:
+        name: "{{ http_port3.id }}"
+        use_https: false
+      register: change_http_port3
+
+    - name: Validate that we did change an existing port
+      ansible.builtin.assert:
+        that:
+          - change_http_port3 is changed
+          - change_http_port3.id == http_port3.id
+
+    - name: Rename a port
+      ansible.platform.http_port:
+        name: "{{ http_port4.id }}"
+        new_name: "{{ http_port4.name }}-New"
+      register: rename_http_port4
+
+    - name: Validate that a rename changed an existing http port
+      ansible.builtin.assert:
+        that:
+          - rename_http_port4 is changed
+          - rename_http_port4.id == http_port4.id
+
+    - name: Delete a non-existent port
+      ansible.platform.http_port:
+        name: "{{ test_id }}-Port-DNE"
+        state: absent
+      register: delete
+
+    - name: Assert that delete of non-existent port does not change the system
+      ansible.builtin.assert:
+        that:
+          - delete is not changed
+
+    - name: Delete an existing http port
+      ansible.platform.http_port:
+        name: "{{ http_port1.id }}"
+        state: absent
+      register: delete
+
+    - name: Assert delete of existing http_port changes the system
+      ansible.builtin.assert:
+        that:
+          - delete is changed
+
+    - name: Add API http port
+      ansible.platform.http_port:
+        name: "Port 44301"
+        number: 44301
+        use_https: true
+        is_api_port: true
+        state: present
+      register: http_port5
+
+    - name: Remove API http port
+      ansible.platform.http_port:
+        name: "Port 44301"
+        state: absent
+      ignore_errors: true
+      register: http_port5_remove_result
+
+    - name: Try to make it not an API port
+      ansible.platform.http_port:
+        name: "Port 44301"
+        is_api_port: false
+      ignore_errors: true
+      register: http_port5_not_api_result
+
+    - name: API Port assertions
+      ansible.builtin.assert:
+        that:
+          - http_port5 is changed
+          - http_port5_remove_result is failed
+          - http_port5_not_api_result is failed
+
+  always:
+    # Always Cleanup
+    - name: Delete http ports
+      ansible.platform.http_port:
+        state: absent
+        name: "{{ vars[item].id }}"
+      when: "item in vars and 'id' in vars[item]"
+      loop:
+        - "http_port1"
+        - "http_port2"
+        - "http_port3"
+        - "http_port4"
+        # API port cannot be deleted via API, so we leave it.
+        # If this ever becomes a problem in the future, add a task here to
+        # delete it using manage.py.
+        # - "http_port5"
+...

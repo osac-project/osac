@@ -1,0 +1,36 @@
+---
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Get existing V-Nets
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/vnet"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: 200
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _vnet_list_resp
+  no_log: true
+
+- name: Find V-Net by name
+  ansible.builtin.set_fact:
+    _existing_vnet: >-
+      {{ (_vnet_list_resp.json.data | default([]))
+         | selectattr('name', 'equalto', vnet_name)
+         | list | first | default(none) }}
+  when: _vnet_list_resp.json is mapping
+
+- name: Delete V-Net
+  when: _existing_vnet is defined and _existing_vnet is not none
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/vnet/{{ _existing_vnet.id }}"
+    method: DELETE
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    status_code: [200, 204]
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  no_log: true

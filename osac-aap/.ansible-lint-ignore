@@ -1,0 +1,40 @@
+playbook_osac_delete_hosted_cluster.yml var-naming[no-role-prefix]
+playbook_osac_create_hosted_cluster.yml var-naming[no-role-prefix]
+collections/ansible_collections/osac/config_as_code/roles/aap/vars/aap.yml var-naming[no-role-prefix]
+collections/ansible_collections/osac/config_as_code/roles/aap/vars/controller.yml var-naming[no-role-prefix]
+collections/ansible_collections/osac/config_as_code/roles/aap/vars/eda.yml var-naming[no-role-prefix]
+# Test collection metadata issues (not a real collection, just for testing)
+collections/ansible_collections/osac/test_overrides/galaxy.yml schema[galaxy]
+collections/ansible_collections/osac/test_overrides/galaxy.yml galaxy[tags]
+collections/ansible_collections/osac/test_overrides/galaxy.yml galaxy[no-changelog]
+collections/ansible_collections/osac/test_overrides/galaxy.yml galaxy[no-runtime]
+# Test collection uses lineinfile for logging
+collections/ansible_collections/osac/test_overrides/roles/cluster_hooks/tasks/apply_defaults.yml risky-file-permissions
+collections/ansible_collections/osac/test_overrides/roles/cluster_hooks/tasks/modify_hosted_cluster.yml risky-file-permissions
+collections/ansible_collections/osac/test_overrides/roles/cluster_hooks/tasks/modify_nodepool.yml risky-file-permissions
+collections/ansible_collections/osac/test_overrides/roles/test_template/tasks/delete.yml risky-file-permissions
+collections/ansible_collections/osac/test_overrides/roles/test_template/tasks/install.yml risky-file-permissions
+collections/ansible_collections/osac/test_overrides/roles/test_template/tasks/post_install.yml risky-file-permissions
+collections/ansible_collections/osac/test_overrides/roles/vm_create_hooks/tasks/modify_vm_spec.yml risky-file-permissions
+collections/ansible_collections/osac/test_overrides/roles/vm_create_hooks/tasks/post_create_hook.yml risky-file-permissions
+collections/ansible_collections/osac/test_overrides/roles/vm_create_hooks/tasks/pre_create_hook.yml risky-file-permissions
+collections/ansible_collections/osac/test_overrides/roles/vm_create_hooks/tasks/resources.yml risky-file-permissions
+collections/ansible_collections/osac/test_overrides/roles/vm_create_hooks/tasks/secrets.yml risky-file-permissions
+collections/ansible_collections/osac/test_overrides/roles/vm_create_hooks/tasks/wait_annotate.yml risky-file-permissions
+collections/ansible_collections/osac/test_overrides/roles/vm_delete_hooks/tasks/post_delete_hook.yml risky-file-permissions
+collections/ansible_collections/osac/test_overrides/roles/vm_delete_hooks/tasks/pre_delete_hook.yml risky-file-permissions
+collections/ansible_collections/osac/test_overrides/roles/vm_delete_hooks/tasks/resources.yml risky-file-permissions
+collections/ansible_collections/osac/test_overrides/roles/vm_create_hooks/tasks/validate.yml risky-file-permissions
+collections/ansible_collections/osac/test_overrides/roles/workflow_hooks/tasks/maintenance.yml risky-file-permissions
+collections/ansible_collections/osac/test_overrides/roles/workflow_hooks/tasks/workflow_complete.yml risky-file-permissions
+collections/ansible_collections/osac/test_overrides/roles/workflow_hooks/tasks/workflow_start.yml risky-file-permissions
+# Workflows collection missing metadata (will be added when published)
+collections/ansible_collections/osac/workflows/galaxy.yml galaxy[no-changelog]
+collections/ansible_collections/osac/workflows/galaxy.yml galaxy[no-runtime]
+# Integration test override files use lineinfile for logging
+tests/integration/targets/cluster_create/tasks/overrides.yml risky-file-permissions
+tests/integration/targets/cluster_delete/tasks/overrides.yml risky-file-permissions
+tests/integration/targets/cluster_post_install/tasks/overrides.yml risky-file-permissions
+tests/integration/targets/cluster_status_reporting/tasks/overrides.yml risky-file-permissions
+tests/integration/targets/compute_instance_create/tasks/overrides.yml risky-file-permissions
+tests/integration/targets/compute_instance_delete/tasks/overrides.yml risky-file-permissions

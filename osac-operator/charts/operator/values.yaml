@@ -1,0 +1,79 @@
+image:
+  repository: ghcr.io/osac-project/osac-operator
+  tag: latest  # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
+  pullPolicy: Always
+
+replicaCount: 1
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 128Mi
+  requests:
+    cpu: 10m
+    memory: 64Mi
+
+aap:
+  url: ""
+  token: ""
+  insecureSkipVerify: "true"
+  statusPollInterval: "30s"
+  templatePrefix: "osac"
+
+fulfillment:
+  serverAddress: ""
+  tokenFile: ""
+
+controllers:
+  clusterOrder: true
+  computeInstance: true
+  tenant: true
+  networking: true
+  bareMetalInstance: true
+  storage: true
+
+configSecret:
+  name: "osac-config"
+  optional: true
+
+serviceAccount:
+  create: true
+  name: ""
+
+consoleProxy:
+  vmClusterMode: auto
+  resources:
+    limits:
+      cpu: 500m
+      memory: 128Mi
+    requests:
+      cpu: 10m
+      memory: 64Mi
+
+certs:
+  issuerRef:
+    kind: ClusterIssuer
+    name: default-ca
+
+bootstrap:
+  cliImage: quay.io/openshift/origin-cli:4.20.0
+
+hubAccess:
+  enabled: false
+
+tenants: []
+
+# --- Network Manager Registration ---
+# ConfigMaps that register networking managers for the two-manager model.
+# The operator discovers managers by selecting ConfigMaps with labels
+# osac.openshift.io/network/fabric-manager or osac.openshift.io/network/k8s-manager.
+networkManagers:
+  enabled: false
+  fabricManagers:
+    netris:
+      enabled: false
+      description: >-
+        Netris SDN controller for physical fabric management.
+        Manages VLAN/VxLAN segments, ACLs, public IP allocation, and NAT gateways.
+      capabilities: "ipv4"
+  k8sManagers: {}

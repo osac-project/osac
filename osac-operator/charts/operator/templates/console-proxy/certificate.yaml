@@ -1,0 +1,19 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "osac-operator.fullname" . }}-console-proxy
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-operator.consoleProxy.labels" . | nindent 4 }}
+spec:
+  issuerRef:
+    kind: {{ .Values.certs.issuerRef.kind }}
+    name: {{ required "certs.issuerRef.name is required" .Values.certs.issuerRef.name }}
+  dnsNames:
+  - {{ include "osac-operator.fullname" . }}-console-proxy
+  - {{ include "osac-operator.fullname" . }}-console-proxy.{{ .Release.Namespace }}
+  - {{ include "osac-operator.fullname" . }}-console-proxy.{{ .Release.Namespace }}.svc
+  - {{ include "osac-operator.fullname" . }}-console-proxy.{{ .Release.Namespace }}.svc.cluster.local
+  secretName: {{ include "osac-operator.fullname" . }}-console-proxy-tls
+  privateKey:
+    rotationPolicy: Always

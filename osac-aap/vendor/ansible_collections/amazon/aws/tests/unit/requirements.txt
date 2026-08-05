@@ -1,0 +1,5 @@
+# Our code is based on the AWS SDKs
+botocore
+boto3
+
+placebo

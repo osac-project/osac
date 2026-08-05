@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: osac-console-proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: osac-console-proxy
+  template:
+    metadata:
+      labels:
+        app: osac-console-proxy
+    spec:
+      serviceAccountName: osac-console-proxy
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+      containers:
+      - name: console-proxy
+        image: console-proxy
+        imagePullPolicy: Always
+        command:
+        - /usr/local/bin/console-proxy
+        args:
+        - --port=8443
+        - --health-probe-bind-address=:8081
+        - --tls-cert-file=/etc/tls/tls.crt
+        - --tls-key-file=/etc/tls/tls.key
+        ports:
+        - name: https
+          containerPort: 8443
+          protocol: TCP
+        - name: health
+          containerPort: 8081
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: health
+            scheme: HTTP
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /livez
+            port: health
+            scheme: HTTP
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+        resources:
+          limits:
+            cpu: 200m
+            memory: 64Mi
+          requests:
+            cpu: 10m
+            memory: 32Mi
+        volumeMounts:
+        - name: tls
+          mountPath: /etc/tls
+          readOnly: true
+      volumes:
+      - name: tls
+        secret:
+          secretName: osac-console-proxy-tls
+      terminationGracePeriodSeconds: 10

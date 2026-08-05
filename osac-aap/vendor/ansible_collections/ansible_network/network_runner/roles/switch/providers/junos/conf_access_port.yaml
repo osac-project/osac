@@ -1,0 +1,14 @@
+---
+- name: "junos: configure access port"
+  junos_command:
+    commands:
+      - config
+      - "delete interfaces {{ port_name }}"
+      - "set interfaces {{ port_name }} unit 0 family ethernet-switching interface-mode access"
+      - "set interfaces {{ port_name }} unit 0 family ethernet-switching vlan members {{ _vlan_id }}"
+      - commit
+  register: result
+  retries: 10
+  delay: 5
+  until: result.msg is not defined or result.msg.find(junos_retries_msg) == -1
+  connection: network_cli

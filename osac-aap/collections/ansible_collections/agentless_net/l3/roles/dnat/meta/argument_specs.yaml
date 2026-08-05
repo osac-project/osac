@@ -1,0 +1,55 @@
+argument_specs:
+  create:
+    options:
+      dnat_router_name:
+        description: "Namespace name (e.g., tenant-alpha)."
+        type: "str"
+        required: true
+      dnat_public_ip:
+        description: "IP to receive traffic (e.g., 10.254.0.2)."
+        type: "str"
+        required: true
+      dnat_public_port:
+        description: "External port (e.g., 6443)."
+        type: "int"
+        required: true
+      dnat_internal_ip:
+        description: "Target service IP (e.g., 10.100.0.10)."
+        type: "str"
+        required: true
+      dnat_internal_port:
+        description: "Target service port (e.g., 6443)."
+        type: "int"
+        required: true
+      dnat_protocol:
+        description: "IP protocol."
+        type: "str"
+        required: false
+        default: "tcp"
+  delete:
+    options:
+      dnat_router_name:
+        description: "Namespace name."
+        type: "str"
+        required: true
+      dnat_public_ip:
+        description: "IP receiving traffic."
+        type: "str"
+        required: true
+      dnat_public_port:
+        description: "External port."
+        type: "int"
+        required: true
+      dnat_internal_ip:
+        description: "Target service IP."
+        type: "str"
+        required: true
+      dnat_internal_port:
+        description: "Target service port."
+        type: "int"
+        required: true
+      dnat_protocol:
+        description: "IP protocol."
+        type: "str"
+        required: false
+        default: "tcp"

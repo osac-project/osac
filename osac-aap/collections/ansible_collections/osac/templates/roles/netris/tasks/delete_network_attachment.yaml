@@ -1,0 +1,272 @@
+---
+# Generic network attachment deletion — removes port from tenant V-Net
+# and returns it to parking V-Net (CaaS) or leaves detached (BMaaS).
+
+- name: Extract network attachment configuration
+  ansible.builtin.set_fact:
+    na_host_name: "{{ network_attachment.host_name }}"
+    na_logical_interface: "{{ network_attachment.logical_interface_name }}"
+    na_subnet_ref: "{{ network_attachment.subnet_ref }}"
+    na_parking_vnet_name: "{{ network_attachment.parking_vnet_name | default('') }}"
+
+- name: Look up Subnet CR by UUID label
+  kubernetes.core.k8s_info:
+    api_version: osac.openshift.io/v1alpha1
+    kind: Subnet
+    label_selectors:
+      - "osac.openshift.io/subnet-uuid={{ na_subnet_ref }}"
+  register: _subnet_lookup
+
+- name: Fail if Subnet CR not found
+  ansible.builtin.fail:
+    msg: >-
+      Subnet with UUID '{{ na_subnet_ref }}' not found.
+  when: _subnet_lookup.resources | length == 0
+
+- name: Set subnet name (used as V-Net name in Netris)
+  ansible.builtin.set_fact:
+    na_subnet_name: "{{ _subnet_lookup.resources[0].metadata.name }}"
+
+- name: Display network attachment deletion info
+  ansible.builtin.debug:
+    msg:
+      - "Deleting Netris network attachment for host '{{ na_host_name }}'"
+      - "Interface: {{ na_logical_interface }}"
+      - "Subnet: {{ na_subnet_name }} (UUID: {{ na_subnet_ref }})"
+
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Get existing V-Nets
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/vnet"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: 200
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _vnet_list_resp
+  no_log: true
+
+- name: Find V-Net ID by subnet name
+  ansible.builtin.set_fact:
+    _target_vnet_summary: >-
+      {{ (_vnet_list_resp.json.data | default([]))
+         | selectattr('name', 'equalto', na_subnet_name)
+         | list | first | default(none) }}
+  when: _vnet_list_resp.json is mapping
+
+- name: Skip deletion if V-Net not found
+  ansible.builtin.debug:
+    msg: >-
+      V-Net '{{ na_subnet_name }}' not found in Netris controller — nothing to delete.
+  when: _target_vnet_summary is not defined or _target_vnet_summary is none
+
+- name: Fetch target V-Net details (includes ports)
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/vnet/{{ _target_vnet_summary.id }}"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: 200
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _target_vnet_resp
+  when: _target_vnet_summary is defined and _target_vnet_summary is not none
+  no_log: true
+
+- name: Set target V-Net with full port data
+  ansible.builtin.set_fact:
+    _target_vnet: "{{ _target_vnet_resp.json.data }}"
+  when: _target_vnet_summary is defined and _target_vnet_summary is not none
+
+- name: Get Netris inventory servers
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/hw?type=server"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: 200
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _server_list_resp
+  when: _target_vnet is defined and _target_vnet is not none
+  no_log: true
+
+- name: Find server by host_name
+  ansible.builtin.set_fact:
+    _target_server: >-
+      {{ (_server_list_resp.json.data | default([]))
+         | selectattr('name', 'equalto', na_host_name)
+         | list | first | default(none) }}
+  when:
+    - _target_vnet is defined and _target_vnet is not none
+    - _server_list_resp.json is mapping
+
+- name: Skip deletion if server not found
+  ansible.builtin.debug:
+    msg: >-
+      Server '{{ na_host_name }}' not found in Netris inventory — nothing to delete.
+  when:
+    - _target_vnet is defined and _target_vnet is not none
+    - (_target_server is not defined or _target_server is none)
+
+- name: Get server ports
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/hw/ports?switchID={{ _target_server.id }}"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: 200
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _ports_resp
+  when:
+    - _target_vnet is defined and _target_vnet is not none
+    - _target_server is defined and _target_server is not none
+  no_log: true
+
+- name: Extract ports list from response
+  ansible.builtin.set_fact:
+    _server_ports: >-
+      {{ (_ports_resp.json.data.data | default(_ports_resp.json.data))
+         | default([]) }}
+  when:
+    - _target_vnet is defined and _target_vnet is not none
+    - _target_server is defined and _target_server is not none
+
+- name: Find port matching interface name
+  ansible.builtin.set_fact:
+    _target_port: >-
+      {{ _server_ports
+         | selectattr('port', 'equalto', na_logical_interface)
+         | list | first | default(none) }}
+  when:
+    - _target_vnet is defined and _target_vnet is not none
+    - _target_server is defined and _target_server is not none
+
+- name: Skip deletion if port not found
+  ansible.builtin.debug:
+    msg: >-
+      Port '{{ na_logical_interface }}' not found on server '{{ na_host_name }}' — nothing to delete.
+  when:
+    - _target_vnet is defined and _target_vnet is not none
+    - _target_server is defined and _target_server is not none
+    - (_target_port is not defined or _target_port is none)
+
+- name: Build updated ports list without the target port
+  ansible.builtin.set_fact:
+    _updated_ports: >-
+      {{ (_target_vnet.ports | default([]))
+         | rejectattr('id', 'equalto', _target_port.id)
+         | list }}
+  when:
+    - _target_vnet is defined and _target_vnet is not none
+    - _target_port is defined and _target_port is not none
+
+- name: Remove port from V-Net
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/vnet/{{ _target_vnet.id }}"
+    method: PUT
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+      Content-Type: "application/json"
+    body_format: json
+    body: "{{ _target_vnet | combine({'ports': _updated_ports}) }}"
+    return_content: true
+    status_code: [200, 201]
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  when:
+    - _target_vnet is defined and _target_vnet is not none
+    - _target_port is defined and _target_port is not none
+    - _updated_ports is defined
+  no_log: true
+
+- name: Return port to parking V-Net
+  when:
+    - na_parking_vnet_name | length > 0
+    - _target_port is defined and _target_port is not none
+  block:
+    - name: Find parking V-Net ID by name
+      ansible.builtin.set_fact:
+        _parking_vnet_summary: >-
+          {{ (_vnet_list_resp.json.data | default([]))
+             | selectattr('name', 'equalto', na_parking_vnet_name)
+             | list | first | default(none) }}
+
+    - name: Fail if parking V-Net not found
+      ansible.builtin.fail:
+        msg: >-
+          Parking V-Net '{{ na_parking_vnet_name }}' not found in Netris controller.
+      when: _parking_vnet_summary is none
+
+    - name: Fetch parking V-Net details (includes ports)
+      ansible.builtin.uri:
+        url: "{{ netris_controller_url }}/api/v2/vnet/{{ _parking_vnet_summary.id }}"
+        method: GET
+        headers:
+          Cookie: "connect.sid={{ netris_session_cookie }}"
+        return_content: true
+        status_code: 200
+        timeout: "{{ netris_timeout | default(30) }}"
+        validate_certs: "{{ netris_validate_certs | default(true) }}"
+      register: _parking_vnet_resp
+      no_log: true
+
+    - name: Set parking V-Net with full port data
+      ansible.builtin.set_fact:
+        _parking_vnet: "{{ _parking_vnet_resp.json.data }}"
+
+    - name: Check if port is already on parking V-Net
+      ansible.builtin.set_fact:
+        _port_on_parking: >-
+          {{ (_parking_vnet.ports | default([]))
+             | selectattr('id', 'equalto', _target_port.id)
+             | list | length > 0 }}
+
+    - name: Build parking V-Net ports list with returned port
+      ansible.builtin.set_fact:
+        _parking_ports: >-
+          {{ (_parking_vnet.ports | default([]))
+             + [{'id': _target_port.id, 'state': 'active', 'accessMode': true}] }}
+      when: not (_port_on_parking | bool)
+
+    - name: Add port to parking V-Net
+      ansible.builtin.uri:
+        url: "{{ netris_controller_url }}/api/v2/vnet/{{ _parking_vnet.id }}"
+        method: PUT
+        headers:
+          Cookie: "connect.sid={{ netris_session_cookie }}"
+          Content-Type: "application/json"
+        body_format: json
+        body: "{{ _parking_vnet | combine({'ports': _parking_ports}) }}"
+        return_content: true
+        status_code: [200, 201]
+        timeout: "{{ netris_timeout | default(30) }}"
+        validate_certs: "{{ netris_validate_certs | default(true) }}"
+      when: not (_port_on_parking | bool)
+      no_log: true
+
+    - name: Display parking V-Net return result
+      ansible.builtin.debug:
+        msg: >-
+          Port '{{ na_logical_interface }}' returned to parking V-Net
+          '{{ na_parking_vnet_name }}'
+
+- name: Display deletion result
+  ansible.builtin.debug:
+    msg: >-
+      Network attachment deletion for host '{{ na_host_name }}' interface '{{ na_logical_interface }}'
+      on V-Net '{{ na_subnet_name }}'
+      {{ (_target_port is defined and _target_port is not none)
+         | ternary('completed', 'skipped (nothing to remove)') }}
+      {{ (na_parking_vnet_name | length > 0)
+         | ternary('(returned to parking: ' ~ na_parking_vnet_name ~ ')', '(left detached)') }}

@@ -1,0 +1,29 @@
+---
+- name: Fail if host class is not openstack
+  ansible.builtin.fail:
+    msg: "bm_host_agent_deprovisioning requires hostClass 'openstack', got '{{ bare_metal_instance.spec.hostClass | default('') }}'"
+  when: bare_metal_instance.spec.hostClass | default('') != "openstack"
+
+- name: Fail if network class is not openstack
+  ansible.builtin.fail:
+    msg: "bm_host_agent_deprovisioning requires networkClass 'openstack', got '{{ bare_metal_instance.spec.networkClass | default('') }}'"
+  when: bare_metal_instance.spec.networkClass | default('') != "openstack"
+
+- name: Detach all networks and delete neutron ports
+  ansible.builtin.include_role:
+    name: osac.esi.l2
+    tasks_from: set_networks_for_node
+  vars:
+    node: "{{ bare_metal_instance.spec.externalHostID }}"
+    networks: []
+
+- name: Undeploy bare metal node
+  openstack.cloud.baremetal_node_action:
+    name: "{{ bare_metal_instance.spec.externalHostID }}"
+    state: absent
+    deploy: false
+    wait: true
+
+- name: Image deprovisioning initiated
+  ansible.builtin.debug:
+    msg: "Image deprovisioning initiated for node {{ bare_metal_instance.spec.externalHostID }}"

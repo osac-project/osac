@@ -1,0 +1,8 @@
+---
+# Default labels for CUDN resources
+default_subnet_labels:
+  osac.openshift.io/managed-by: osac-fulfillment
+
+# Layer2 defaults
+default_layer2_role: Primary
+default_ipam_lifecycle: Persistent

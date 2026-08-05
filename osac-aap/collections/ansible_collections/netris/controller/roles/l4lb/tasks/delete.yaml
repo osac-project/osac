@@ -1,0 +1,37 @@
+---
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Get existing L4LBs
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/l4lb?filterBySites={{ l4lb_site_id }}"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: 200
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _l4lb_list_resp
+  no_log: true
+
+- name: Clear previous L4LB lookup result
+  ansible.builtin.set_fact:
+    _existing_l4lb: null
+
+- name: Find L4LB by name
+  ansible.builtin.set_fact:
+    _existing_l4lb: "{{ (_l4lb_list_resp.json.data | default([])) | selectattr('name', 'equalto', l4lb_name) | list | first | default(none) }}"
+  when: _l4lb_list_resp.json is mapping
+
+- name: Delete L4LB
+  when: _existing_l4lb is defined and _existing_l4lb is not none
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/l4lb/{{ _existing_l4lb.id }}"
+    method: DELETE
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    status_code: [200, 204]
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  no_log: true

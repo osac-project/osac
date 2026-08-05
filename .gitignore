@@ -1,0 +1,184 @@
+# AI workflows and skills (installed by tools/bootstrap.sh)
+skills/
+.ai-workflows/
+.claude/skills
+.claude/commands
+.claude/agents
+.cursor/
+.gemini/
+
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+__debug_bin*
+
+# Logs and diffs
+*.log
+*.orig
+*.patch
+*.rej
+
+# Go coverage tool output (e.g. LiteIDE)
+*.out
+
+# editor and IDE paraphernalia
+.idea
+.vscode
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Backup files
+*.bak
+*.backup
+
+# Sensitive files
+*.secret
+*.key
+*.pem
+*.crt
+
+# Local dev artifacts
+.artifacts
+.artifacts/
+__pycache__
+
+# fulfillment-service
+/fulfillment-service/bin
+/fulfillment-service/dev.yaml
+/fulfillment-service/dist
+/fulfillment-service/fulfillment-service
+/fulfillment-service/logs
+/fulfillment-service/osac
+/fulfillment-service/osac-dev
+
+# osac-operator
+/osac-operator/bin/*
+/osac-operator/main
+/osac-operator/Containerfile.cross
+/osac-operator/Dockerfile.manifests
+/osac-operator/dist/
+/osac-operator/MEMORY.md
+/osac-operator/charts/*/charts/
+/osac-operator/charts/*/Chart.lock
+
+# Kubernetes Generated files - skip generated files, except for vendored files
+!/osac-operator/vendor/**/zz_generated.*
+
+# bare-metal-fulfillment-operator
+/bare-metal-fulfillment-operator/bin/*
+/bare-metal-fulfillment-operator/main
+/bare-metal-fulfillment-operator/Containerfile.cross
+/bare-metal-fulfillment-operator/Dockerfile.manifests
+/bare-metal-fulfillment-operator/dist/
+/bare-metal-fulfillment-operator/MEMORY.md
+/bare-metal-fulfillment-operator/charts/*/charts/
+/bare-metal-fulfillment-operator/charts/*/Chart.lock
+
+# osac-csi-driver
+/osac-csi-driver/bin/*
+/osac-csi-driver/main
+/osac-csi-driver/dist/
+/osac-csi-driver/go.work
+/osac-csi-driver/MEMORY.md
+/osac-csi-driver/charts/*/charts/
+/osac-csi-driver/charts/*/Chart.lock
+
+# osac-aap
+.logs/*
+*.retry
+*.vault
+/osac-aap/.ansible
+/osac-aap/context/
+.plugin-cache.yaml
+/osac-aap/charts/*/charts/
+/osac-aap/charts/*/Chart.lock
+/osac-aap/tests/integration/kubeconfig-*
+/osac-aap/tests/integration/integration_config.yml
+/osac-aap/tests/integration/.mock_vms_pid
+/osac-aap/tests/integration/.storage_env
+/osac-aap/tests/vast_vms_smoke_test.yml
+
+# osac-aap Python (uv) tooling
+*.py[cod]
+*$py.class
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+/osac-aap/docs/_build/
+.pybuilder/
+target/
+.ipynb_checkpoints
+profile_default/
+ipython_config.py
+.pdm.toml
+__pypackages__/
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+/site
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+cython_debug/
+*.iml
+
+# osac-installer
+/osac-installer/kustomization-build/
+/osac-installer/dist/
+/osac-installer/local/
+/osac-installer/*.local.yaml
+/osac-installer/kubeconfig.hub-access
+/osac-installer/charts/*/charts/*.tgz
+/osac-installer/charts/*/Chart.lock
+/osac-installer/chart-versions.txt
+/osac-installer/images.txt
+/osac-installer/images-raw.txt
+
+# osac-installer secrets (values dirs, e.g. values/<env>/)
+**/dockerconfig.json
+**/*pull-secret.json
+[lL]icense.zip
+**/osac-aap-secrets.env
+**/server-ssh-key
+**/server-ssh-bastion-key

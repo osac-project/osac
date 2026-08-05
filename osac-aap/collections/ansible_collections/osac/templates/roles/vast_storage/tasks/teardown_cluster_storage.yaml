@@ -1,0 +1,82 @@
+---
+# VAST cleanup: remove cluster-side K8s resources only.
+# Deletes StorageClasses, VolumeSnapshotClasses, and CSI Secret by label selector.
+# Does NOT delete VAST VMS resources, hub Secret, or CSI operator.
+# Used when a cluster is deleted but the tenant stays (resources may be
+# needed on other clusters).
+
+- name: Validate tenant_name is a valid DNS label
+  ansible.builtin.fail:
+    msg: "tenant_name '{{ tenant_name }}' is not a valid DNS label."
+  when: tenant_name is not regex('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+
+- name: Clean up cluster-side K8s resources
+  block:
+    - name: Find all tenant StorageClasses by label
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        label_selectors:
+          - "osac.openshift.io/tenant={{ tenant_name }}"
+          - "app.kubernetes.io/managed-by=osac-aap"
+      register: _vast_cleanup_sc_list
+
+    - name: Delete tenant StorageClasses
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "{{ item.metadata.name }}"
+      loop: "{{ _vast_cleanup_sc_list.resources | default([]) }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      ignore_errors: true  # noqa: ignore-errors
+
+    - name: Find all tenant VolumeSnapshotClasses by label
+      kubernetes.core.k8s_info:
+        api_version: snapshot.storage.k8s.io/v1
+        kind: VolumeSnapshotClass
+        label_selectors:
+          - "osac.openshift.io/tenant={{ tenant_name }}"
+          - "app.kubernetes.io/managed-by=osac-aap"
+      register: _vast_cleanup_vsc_list
+      ignore_errors: true  # noqa: ignore-errors
+
+    - name: Delete tenant VolumeSnapshotClasses
+      when: _vast_cleanup_vsc_list.resources is defined
+      kubernetes.core.k8s:
+        state: absent
+        api_version: snapshot.storage.k8s.io/v1
+        kind: VolumeSnapshotClass
+        name: "{{ item.metadata.name }}"
+      loop: "{{ _vast_cleanup_vsc_list.resources | default([]) }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      ignore_errors: true  # noqa: ignore-errors
+
+    - name: Delete CSI Secret in tenant namespace
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "vast-csi-{{ tenant_name }}"
+        namespace: "{{ tenant_namespace }}"
+      ignore_errors: true  # noqa: ignore-errors
+      no_log: true
+
+    - name: Report teardown_cluster_storage summary
+      ansible.builtin.debug:
+        msg: >-
+          Teardown of cluster-side resources for tenant '{{ tenant_name }}' complete.
+          {{ (_vast_cleanup_sc_list.resources | default([]) | length) }} StorageClasses,
+          {{ (_vast_cleanup_vsc_list.resources | default([]) | length) }} VolumeSnapshotClasses,
+          1 CSI Secret removed from target cluster.
+          Backend resources and hub Secret untouched.
+
+  rescue:
+    - name: Warn about teardown_cluster_storage failure (target cluster may be unreachable)
+      ansible.builtin.debug:
+        msg: >-
+          Teardown of cluster-side resources failed for tenant '{{ tenant_name }}'.
+          This may be expected if the target cluster is being destroyed.
+          Error: {{ ansible_failed_result.msg | default('unknown') }}

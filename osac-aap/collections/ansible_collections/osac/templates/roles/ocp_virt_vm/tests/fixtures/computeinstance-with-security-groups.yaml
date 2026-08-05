@@ -1,0 +1,20 @@
+---
+apiVersion: osac.openshift.io/v1alpha1
+kind: ComputeInstance
+metadata:
+  name: test-vm-sgs
+  namespace: osac-system
+spec:
+  templateID: osac.templates.ocp_virt_vm
+  cores: 2
+  memoryGiB: 2
+  networkAttachments:
+    - subnetRef: test-subnet
+      securityGroupRefs:
+        - securitygroup-web01
+        - securitygroup-db01
+    - subnetRef: monitoring-subnet
+      securityGroupRefs:
+        - securitygroup-mon01
+status:
+  desiredConfigVersion: "1"

@@ -1,0 +1,36 @@
+---
+- name: ah_user integration tests
+  module_defaults:
+    group/ansible.hub.hub:
+      ah_host: "{{ ah_host }}"
+      ah_username: "{{ ah_username }}"
+      ah_password: "{{ ah_password }}"
+      validate_certs: "{{ ah_verify_ssl }}"
+  block:
+    - name: Generate a test_id for the test
+      set_fact:
+        test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') | lower }}"
+      when: test_id is not defined
+
+    - name: Ensure the user exists
+      ansible.hub.ah_user:
+        username: "user_{{ test_id }}"
+        first_name: "first_{{ test_id }}"
+        last_name: "last_{{ test_id }}"
+        email: "user_{{ test_id }}@example.com"
+        password: vs9mrD55NP
+        state: present
+      register: r
+
+    - name: Check if the user is created
+      assert:
+        that:
+          - r.changed
+
+  always:
+    - name: Remove user
+      ansible.hub.ah_user:
+        username: "user_{{ test_id }}"
+        state: absent
+      register: r
+      ignore_errors: true

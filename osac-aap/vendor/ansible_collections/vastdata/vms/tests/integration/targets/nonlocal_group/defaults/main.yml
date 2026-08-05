@@ -1,0 +1,30 @@
+---
+# Default variables for nonlocalgroups integration tests
+# Override these in tests/integration/integration_config.yml
+
+# VAST system connection details
+# Leave empty to skip tests gracefully
+vast_vms: ""
+vast_username: ""
+vast_password: ""
+
+# LDAP configuration (required for nonlocal group queries)
+test_ldap_urls: []
+test_ldap_port: 389
+test_ldap_method: "simple"
+test_ldap_use_tls: false
+
+# Test nonlocal group to query via LDAP
+# Must be a valid group that exists in the configured LDAP directory
+test_nonlocal_groupname: "vast_ansible_group"
+test_nonlocal_gid: 4288448013
+# A known LDAP user to add as a group member so VAST can discover the group
+test_nonlocal_username: "vast_ansible_user"
+
+# Reusable connection dict — reference as ``vms: "{{ vms_auth }}"`` in tasks
+vms_auth:
+  host: "{{ vast_vms }}"
+  username: "{{ vast_username }}"
+  password: "{{ vast_password }}"
+  validate_certs: false
+  debug: true

@@ -1,0 +1,7 @@
+---
+- name: "fos: create vlan"
+  fos_vlan:
+    commands:
+      - vlan {{ _vlan_id }}
+      - vlan name {{ _vlan_id }} {{ _vlan_name }}
+  connection: network_cli

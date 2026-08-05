@@ -1,0 +1,47 @@
+---
+# __Test Info__
+# Create a self signed cert and upload it to AWS
+# http://www.akadia.com/services/ssh_test_certificate.html
+# http://docs.aws.amazon.com/ElasticLoadBalancing/latest/DeveloperGuide/ssl-server-cert.html
+
+# __Test Outline__
+#
+# __elb_classic_lb__
+# create test elb with listeners and certificate
+# change AZ's
+# change listeners
+# remove listeners
+# remove elb
+
+- module_defaults:
+    group/aws:
+      region: "{{ aws_region }}"
+      access_key: "{{ aws_access_key }}"
+      secret_key: "{{ aws_secret_key }}"
+      session_token: "{{ security_token | default(omit) }}"
+  block:
+    - ansible.builtin.include_tasks: missing_params.yml
+    - ansible.builtin.include_tasks: describe_region.yml
+    - ansible.builtin.include_tasks: setup_vpc.yml
+    - ansible.builtin.include_tasks: setup_instances.yml
+    - ansible.builtin.include_tasks: setup_s3.yml
+    - ansible.builtin.include_tasks: basic_public.yml
+    - ansible.builtin.include_tasks: basic_internal.yml
+    - ansible.builtin.include_tasks: schema_change.yml
+    - ansible.builtin.include_tasks: https_listeners.yml
+    - ansible.builtin.include_tasks: simple_changes.yml
+    - ansible.builtin.include_tasks: complex_changes.yml
+  always:
+    # ============================================================
+    # ELB should already be gone, but double-check
+    - name: Remove the test load balancer
+      amazon.aws.elb_classic_lb:
+        name: "{{ elb_name }}"
+        state: absent
+        wait: true
+      register: result
+      ignore_errors: true
+
+    - ansible.builtin.include_tasks: cleanup_s3.yml
+    - ansible.builtin.include_tasks: cleanup_instances.yml
+    - ansible.builtin.include_tasks: cleanup_vpc.yml

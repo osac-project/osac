@@ -1,0 +1,157 @@
+//
+// Copyright (c) 2025 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "buf/validate/validate.proto";
+import "osac/private/v1/metadata_type.proto";
+
+// Contains the details about the bare metal instance type that are available only for the system.
+//
+// BareMetalInstanceTypes are admin-managed catalog resources that define pre-configured bare metal
+// hardware types referenced by name when provisioning bare metal instances. Cloud Provider Admins
+// control the available configurations through this private API.
+//
+// The `spec` contains the hardware specifications and host label selector. The `status` contains
+// the current state of the bare metal instance type, is provided by the system and can't be
+// modified by the user.
+message BareMetalInstanceType {
+  // Unique identifier of the bare metal instance type.
+  string id = 1;
+
+  Metadata metadata = 2;
+  BareMetalInstanceTypeSpec spec = 3 [(buf.validate.field).required = true];
+  BareMetalInstanceTypeStatus status = 4;
+}
+
+// Defines the hardware specifications and host label selector for a BareMetalInstanceType.
+message BareMetalInstanceTypeSpec {
+  // Hardware specifications for this bare metal instance type.
+  BareMetalHardwareSpec hardware = 1 [(buf.validate.field).required = true];
+
+  // Label selector for matching inventory hosts. Required.
+  // Labels are passed directly to the inventory backend using backend-native naming conventions.
+  BareMetalLabelSelector host_label_selector = 2 [(buf.validate.field).required = true];
+
+  // Human-readable description of the bare metal instance type.
+  string description = 3;
+}
+
+// Contains the system-provided status of a BareMetalInstanceType.
+message BareMetalInstanceTypeStatus {}
+
+// Kubernetes-style label selector for matching inventory hosts.
+message BareMetalLabelSelector {
+  // Simple key-value label matches. At least one pair is required.
+  // Labels are passed directly to the inventory backend using backend-native naming conventions.
+  map<string, string> match_labels = 1 [(buf.validate.field).map.min_pairs = 1];
+}
+
+// Describes the hardware specifications of a bare metal instance type.
+message BareMetalHardwareSpec {
+  option (buf.validate.message).cel = {
+    id: "hardware_spec.network_ports_unique_names"
+    message: "network port names must be unique"
+    expression: "this.network_ports.map(p, p.name).unique()"
+  };
+
+  // CPU specifications.
+  BareMetalCPUSpec cpu = 1 [(buf.validate.field).required = true];
+
+  // Memory specifications.
+  BareMetalMemorySpec memory = 2 [(buf.validate.field).required = true];
+
+  // Local disk specifications. Optional — not all types have local storage.
+  repeated BareMetalDiskSpec disks = 3;
+
+  // Accelerator devices (GPUs, FPGAs, TPUs).
+  repeated BareMetalAcceleratorSpec accelerators = 4;
+
+  // Network port specifications.
+  repeated BareMetalNetworkPortSpec network_ports = 5;
+
+  // Freeform capability tags for additional hardware metadata.
+  map<string, string> capabilities = 6;
+}
+
+// Describes the CPU specifications of a bare metal instance type.
+message BareMetalCPUSpec {
+  // Number of CPU cores.
+  int32 cores = 1 [(buf.validate.field).int32.gt = 0];
+
+  // CPU architecture (e.g. x86_64, aarch64).
+  string architecture = 2 [(buf.validate.field).string.min_len = 1];
+
+  // CPU model. Optional — may be unknown.
+  string model = 3;
+
+  // Number of threads per core.
+  int32 threads_per_core = 4 [(buf.validate.field).int32.gt = 0];
+}
+
+// Describes the memory specifications of a bare metal instance type.
+message BareMetalMemorySpec {
+  // Total memory in gigabytes.
+  int64 total_gb = 1 [(buf.validate.field).int64.gt = 0];
+
+  // Memory type (e.g. DDR4, DDR5). Optional.
+  string type = 2;
+}
+
+// Describes an individual disk in a bare metal instance type.
+message BareMetalDiskSpec {
+  // Disk type (e.g. SSD, NVMe, HDD).
+  string type = 1 [(buf.validate.field).string.min_len = 1];
+
+  // Disk capacity in gigabytes.
+  int64 capacity_gb = 2 [(buf.validate.field).int64.gt = 0];
+
+  // Disk interface (e.g. SATA, NVMe, SAS).
+  string interface = 3 [(buf.validate.field).string.min_len = 1];
+}
+
+// Describes an accelerator device in a bare metal instance type.
+message BareMetalAcceleratorSpec {
+  // Accelerator type (e.g. GPU, FPGA, TPU).
+  string type = 1 [(buf.validate.field).string.min_len = 1];
+
+  // Accelerator model (e.g. A100, H100).
+  string model = 2 [(buf.validate.field).string.min_len = 1];
+
+  // Accelerator vendor (e.g. NVIDIA, AMD, Intel).
+  optional string vendor = 3;
+
+  // Accelerator memory in gigabytes.
+  optional int32 memory_gb = 4 [(buf.validate.field).int32.gt = 0];
+}
+
+// Describes a network port in a bare metal instance type.
+//
+// Port roles: fabric (tenant data traffic), management (control plane),
+// storage (storage fabric), lifecycle (BMC/PXE, not tenant-attachable).
+// Ports are ordered; the first port with a given role is the default for that role.
+message BareMetalNetworkPortSpec {
+  // Port name, unique within the type (e.g. data-0, mgmt-0).
+  string name = 1 [(buf.validate.field).string.min_len = 1];
+
+  // Port role (e.g. fabric, management, storage, lifecycle).
+  string role = 2 [(buf.validate.field).string.min_len = 1];
+
+  // Port type (e.g. Ethernet, InfiniBand).
+  string type = 3 [(buf.validate.field).string.min_len = 1];
+
+  // Port speed (e.g. 1Gbps, 10Gbps, 100Gbps).
+  string speed = 4 [(buf.validate.field).string.min_len = 1];
+}

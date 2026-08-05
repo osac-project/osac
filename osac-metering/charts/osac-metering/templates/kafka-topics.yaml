@@ -1,0 +1,27 @@
+{{- $ns := include "osac-metering.kafkaClusterNamespace" . -}}
+{{- $cluster := include "osac-metering.kafkaClusterName" . -}}
+{{- $replicas := include "osac-metering.kafkaReplicas" . | int -}}
+{{- $minIsr := min $replicas 2 -}}
+{{- range list
+  (dict "name" "osac.metering.lifecycle"    "partitions" 3 "retentionDays" 30)
+  (dict "name" "osac.metering.heartbeat"    "partitions" 3 "retentionDays" 30)
+  (dict "name" "osac.metering.inference"    "partitions" 3 "retentionDays" 30)
+  (dict "name" "osac.metering.corrections"  "partitions" 3 "retentionDays" 30)
+  (dict "name" "osac.metering.dlq"          "partitions" 1 "retentionDays" 90)
+}}
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: {{ .name }}
+  namespace: {{ $ns }}
+  labels:
+    strimzi.io/cluster: {{ $cluster }}
+spec:
+  partitions: {{ .partitions }}
+  replicas: {{ $replicas }}
+  config:
+    retention.ms: "{{ mul .retentionDays 86400000 }}"
+    min.insync.replicas: "{{ $minIsr }}"
+    cleanup.policy: delete
+---
+{{- end }}

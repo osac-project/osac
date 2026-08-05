@@ -1,0 +1,12 @@
+---
+- name: Apply templates for clusters
+  ansible.builtin.include_tasks: clusters.yaml
+
+- name: Apply templates for compute instances
+  ansible.builtin.import_tasks: compute_instances.yaml
+
+- name: Apply templates for bare metal instances
+  ansible.builtin.import_tasks: bare_metal_instances.yaml
+
+- name: Apply network classes
+  ansible.builtin.import_tasks: network_classes.yaml

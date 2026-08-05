@@ -1,0 +1,244 @@
+{{- if .Values.bundledPostgres.enabled }}
+{{- if not (regexMatch "^[a-zA-Z_][a-zA-Z0-9_]*$" .Values.bundledPostgres.database.user) }}
+{{- fail "bundledPostgres.database.user must be a valid PostgreSQL identifier" }}
+{{- end }}
+{{- if not (regexMatch "^[a-zA-Z_][a-zA-Z0-9_]*$" .Values.bundledPostgres.database.name) }}
+{{- fail "bundledPostgres.database.name must be a valid PostgreSQL identifier" }}
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: fulfillment-db
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  url: "postgres://{{ .Values.bundledPostgres.database.user }}@postgres:5432/{{ .Values.bundledPostgres.database.name }}?sslmode=verify-full&sslrootcert=/etc/fulfillment-grpc-server/db/sslrootcert&sslcert=/etc/fulfillment-grpc-server/db/sslcert&sslkey=/etc/fulfillment-grpc-server/db/sslkey"
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: postgres-client-service
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+spec:
+  issuerRef:
+    kind: {{ .Values.service.certs.issuerRef.kind }}
+    name: {{ .Values.service.certs.issuerRef.name }}
+  commonName: {{ .Values.bundledPostgres.database.user | quote }}
+  usages:
+  - client auth
+  secretName: postgres-client-cert-service
+  privateKey:
+    rotationPolicy: Always
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: postgres-server
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+spec:
+  issuerRef:
+    kind: {{ .Values.service.certs.issuerRef.kind }}
+    name: {{ .Values.service.certs.issuerRef.name }}
+  dnsNames:
+  - localhost
+  - postgres
+  - postgres.{{ .Release.Namespace }}
+  - postgres.{{ .Release.Namespace }}.svc.cluster.local
+  secretName: postgres-server-cert
+  privateKey:
+    rotationPolicy: Always
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+data:
+  server.conf: |
+    ssl = on
+    {{- if .Values.service.certs.caBundle.configMap }}
+    ssl_ca_file = '/config/ca/bundle.pem'
+    {{- else }}
+    ssl_ca_file = '/secrets/cert/ca.crt'
+    {{- end }}
+    ssl_cert_file = '/secrets/cert/tls.crt'
+    ssl_key_file = '/secrets/cert/tls.key'
+    hba_file = '/config/access/access.conf'
+    fsync = off
+    full_page_writes = off
+  access.conf: |
+    local all all peer
+    hostssl all all 0.0.0.0/0 cert
+    hostssl all all ::0/0 cert
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-init
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+stringData:
+  init.sh: |
+    #!/bin/bash
+    psql <<'.'
+    create user {{ .Values.bundledPostgres.database.user }};
+    create database {{ .Values.bundledPostgres.database.name }} owner {{ .Values.bundledPostgres.database.user }};
+    .
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: postgres
+  ports:
+  - name: postgres
+    port: 5432
+    targetPort: postgres
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: postgres
+    {{- include "osac.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  # emptyDir-backed data, and only one replica is ever wanted -- Recreate
+  # avoids two postgres pods briefly coexisting (and racing on the same
+  # Service) during a rollout, which RollingUpdate would otherwise allow.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+        {{- include "osac.labels" . | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+      volumes:
+      - name: server-cert
+        secret:
+          secretName: postgres-server-cert
+          defaultMode: 0440
+      - name: config
+        configMap:
+          name: postgres-config
+      {{- if .Values.service.certs.caBundle.configMap }}
+      - name: ca-bundle
+        configMap:
+          name: {{ .Values.service.certs.caBundle.configMap }}
+      {{- end }}
+      - name: init
+        secret:
+          secretName: postgres-init
+      - name: data
+        emptyDir: {}
+      - name: tmp
+        emptyDir: {}
+      - name: run
+        emptyDir: {}
+      # The run emptyDir starts out completely empty -- nothing creates the
+      # postgresql/ subdirectory the server needs for its lock file and
+      # socket before it starts. Confirmed live: without this, postgres
+      # fails outright with 'could not create lock file
+      # "/var/run/postgresql/.s.PGSQL.5432.lock": No such file or directory'.
+      initContainers:
+      - name: init-run-dir
+        image: {{ .Values.bundledPostgres.image | default "quay.io/sclorg/postgresql-18-c10s@sha256:6be2c9d855f06fb665257a6b0911676a38d740be7022cc61acee1c99a832b1b2" }}
+        imagePullPolicy: IfNotPresent
+        command:
+        - sh
+        - -c
+        - mkdir -p /run/postgresql
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: run
+          mountPath: /run
+      containers:
+      - name: server
+        image: {{ .Values.bundledPostgres.image | default "quay.io/sclorg/postgresql-18-c10s@sha256:6be2c9d855f06fb665257a6b0911676a38d740be7022cc61acee1c99a832b1b2" }}
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        resources:
+          {{- toYaml .Values.bundledPostgres.resources | nindent 10 }}
+        env:
+        - name: POSTGRESQL_USER
+          value: "default"
+        - name: POSTGRESQL_PASSWORD
+          value: ""
+        - name: POSTGRESQL_DATABASE
+          value: "default"
+        volumeMounts:
+        - name: data
+          # Mounted at the whole home dir, not just .../data -- the sclorg
+          # entrypoint (common.sh) also writes an nss_wrapper passwd file
+          # directly under /var/lib/pgsql (for the container's arbitrary
+          # OpenShift-assigned UID) before ever touching the data subdir.
+          # Confirmed live: with the mount scoped to .../data only, the
+          # container CrashLoopBackOff'd on
+          # "/var/lib/pgsql/passwd: Read-only file system".
+          mountPath: /var/lib/pgsql
+        - name: tmp
+          mountPath: /tmp
+        - name: run
+          mountPath: /run
+        - name: server-cert
+          mountPath: /secrets/cert
+        {{- if .Values.service.certs.caBundle.configMap }}
+        - name: ca-bundle
+          mountPath: /config/ca
+        {{- end }}
+        - name: config
+          mountPath: /opt/app-root/src/postgresql-cfg/server.conf
+          subPath: server.conf
+        - name: config
+          mountPath: /config/access/access.conf
+          subPath: access.conf
+        - name: init
+          mountPath: /opt/app-root/src/postgresql-init/init.sh
+          subPath: init.sh
+        ports:
+        - name: postgres
+          protocol: TCP
+          containerPort: 5432
+        livenessProbe:
+          tcpSocket:
+            port: postgres
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          tcpSocket:
+            port: postgres
+          initialDelaySeconds: 5
+          periodSeconds: 5
+{{- end }}

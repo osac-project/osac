@@ -1,0 +1,57 @@
+- name: Delete Secret resource containing pull-secret
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: secret
+    namespace: "{{ hosted_cluster_namespace }}"
+    name: "pullscret-cluster-{{ hosted_cluster_name }}"
+
+- name: Delete Secret resource containing ssh-key
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: secret
+    namespace: "{{ hosted_cluster_namespace }}"
+    name: "sshkey-cluster-{{ hosted_cluster_name }}"
+
+# Delete ManagedCluster resource; ideally this should be automatically deleted when
+# we remove the HostedCluster, as we do not create the ManagedCluster.
+- name: Delete ManagedCluster resource
+  kubernetes.core.k8s:
+    state: absent
+    api_version: cluster.open-cluster-management.io/v1
+    kind: ManagedCluster
+    name: "{{ hosted_cluster_name }}"
+
+- name: Delete HostedCluster resource
+  kubernetes.core.k8s:
+    state: absent
+    api_version: hypershift.openshift.io/v1beta1
+    kind: HostedCluster
+    namespace: "{{ hosted_cluster_namespace }}"
+    name: "{{ hosted_cluster_name }}"
+
+- name: Delete NodePool resources
+  kubernetes.core.k8s:
+    state: absent
+    api_version: hypershift.openshift.io/v1beta1
+    kind: NodePool
+    namespace: "{{ hosted_cluster_namespace }}"
+    name: "nodepool-{{ hosted_cluster_name }}-{{ item.resourceClass }}"
+  loop: "{{ hosted_cluster_node_requests }}"
+  loop_control:
+    label: "Delete NodePool nodepool-{{ hosted_cluster_name }}-{{ item.resourceClass }}"
+
+# Wait for the HostedCluster to delete before we proceed; this ensures that we
+# don't prematurely destroy infrastructure resources required for the clean
+# teardown of the hosted cluster.
+- name: Wait for HostedCluster to finish deleting
+  kubernetes.core.k8s_info:
+    api_version: hypershift.openshift.io/v1beta1
+    kind: HostedCluster
+    namespace: "{{ hosted_cluster_namespace }}"
+    name: "{{ hosted_cluster_name }}"
+  register: hosted_cluster_status
+  until: (hosted_cluster_status.resources | length == 0)
+  retries: 720
+  delay: 10

@@ -1,0 +1,40 @@
+---
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Get existing ACL rules
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/acl"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: 200
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _acl_list_resp
+  no_log: true
+
+- name: Find ACL rule by name
+  ansible.builtin.set_fact:
+    _existing_acl: "{{ (_acl_list_resp.json.data | default([])) | selectattr('name', 'equalto', acl_name) | list | first | default(none) }}"
+  when: _acl_list_resp.json is mapping
+
+- name: Delete ACL rule
+  when: _existing_acl is defined and _existing_acl is not none
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/acl"
+    method: DELETE
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      id:
+        - "{{ _existing_acl.id }}"
+    status_code: [200, 204]
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  no_log: true

@@ -1,0 +1,6 @@
+---
+# Maximum number of retries to wait for kubeconfig secret
+retrieve_kubeconfig_wait_retries: 60
+
+# Delay between retries in seconds (10 seconds)
+retrieve_kubeconfig_wait_delay: 10

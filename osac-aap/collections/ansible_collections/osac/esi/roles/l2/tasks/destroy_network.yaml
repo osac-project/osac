@@ -1,0 +1,13 @@
+- name: Check that exactly one network matching the ident exists  # noqa:no-changed-when
+  ansible.builtin.command: >-
+    openstack network show {{ network_name }} -f json
+  register: network_show_cmd_raw
+
+- name: Unmarshal output from JSON
+  ansible.builtin.set_fact:
+    network_show_cmd_result: "{{ network_show_cmd_raw.stdout | from_json }}"
+
+- name: Destroy network  # noqa:no-changed-when
+  openstack.cloud.network:
+    state: "absent"
+    name: "{{ network_show_cmd_result.id }}"

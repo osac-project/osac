@@ -1,0 +1,6 @@
+- name: Delete cluster
+  ansible.builtin.include_role:
+    name: osac.templates.ocp_small
+    tasks_from: "delete"
+  vars:
+    ocp_release_image: "{{ nico_ocp_release_image }}"

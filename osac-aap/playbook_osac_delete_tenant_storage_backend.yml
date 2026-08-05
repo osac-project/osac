@@ -1,0 +1,52 @@
+---
+- name: Delete storage backend resources for a tenant
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: "{{ ansible_eda.event.payload.metadata.name }}"
+    tenant_namespace: "{{ ansible_eda.event.payload.metadata.namespace }}"
+    _storage_tiers_raw: "{{ lookup('env', 'STORAGE_TIERS') }}"
+
+  pre_tasks:
+    - name: Show EDA Event
+      ansible.builtin.debug:
+        var: ansible_eda.event.payload
+
+    - name: Validate tenant payload is present
+      ansible.builtin.fail:
+        msg: "tenant must be provided via ansible_eda.event.payload with metadata.name and metadata.namespace set"
+      when: >-
+        ansible_eda is not defined or
+        ansible_eda.event.payload.metadata.name is not defined or
+        ansible_eda.event.payload.metadata.name | length == 0 or
+        ansible_eda.event.payload.metadata.namespace is not defined or
+        ansible_eda.event.payload.metadata.namespace | length == 0
+
+    - name: Parse STORAGE_TIERS JSON
+      when: _storage_tiers_raw | length > 0
+      block:
+        - name: Parse tier list from env var
+          ansible.builtin.set_fact:
+            _storage_tiers: "{{ _storage_tiers_raw | from_json }}"
+      rescue:
+        - name: Fail on malformed STORAGE_TIERS JSON
+          ansible.builtin.fail:
+            msg: >-
+              STORAGE_TIERS env var contains invalid JSON.
+              Value: '{{ _storage_tiers_raw }}'.
+              Expected a JSON array of tier objects with name, protocol, and provider fields.
+
+  tasks:
+    - name: Skip teardown when STORAGE_TIERS is not configured
+      when: _storage_tiers_raw | length == 0
+      ansible.builtin.debug:
+        msg: "STORAGE_TIERS env var is not set — nothing to tear down."
+
+    - name: Delete tenant storage backend
+      when: _storage_tiers_raw | length > 0
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: teardown_backend
+        storage_provider_tiers: "{{ _storage_tiers }}"

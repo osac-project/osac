@@ -1,0 +1,7 @@
+---
+- name: "DNS record creation skipped (noop) - {{ dns_record_name }}"
+  ansible.builtin.debug:
+    msg: >-
+      Skipping DNS {{ dns_record_type }} record creation:
+      {{ dns_record_name }}.
+      Ensure this record exists in your DNS before the cluster will be reachable.

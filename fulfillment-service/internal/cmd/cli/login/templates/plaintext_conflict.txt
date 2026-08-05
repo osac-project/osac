@@ -1,0 +1,14 @@
+There is a conflict between the '--plaintext' flag and the server address format.
+
+The address '{{ .Address }}' indicates that {{ if .Plaintext }}plaintext {{ else }}TLS {{ end }} should be used, but the
+'--plaintext' flag is set to '{{ not .Plaintext }}'.
+
+To resolve this conflict, you can either:
+
+1. Remove the '--plaintext' flag and let the address determine the connection type.
+
+{{ if .Plaintext }}
+2. Use 'https://...' to enable TLS.
+{{ else }}
+2. Use 'http://...' to disable TLS.
+{{ end }}

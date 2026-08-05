@@ -1,0 +1,96 @@
+---
+- name: Generate a test ID
+  ansible.builtin.set_fact:
+    test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') }}"
+  when: test_id is not defined
+
+- name: Preset vars
+  ansible.builtin.set_fact:
+    username: "GW-Collection-Test-RoleUserAssignments-{{ test_id }}"
+    organization_name: "GW-Collection-Test-Organization-{{ test_id }}"
+
+- name: Run Tests
+  module_defaults:
+    group/ansible.platform.gateway:
+      gateway_hostname: "{{ gateway_hostname }}"
+      gateway_username: "{{ gateway_username }}"
+      gateway_password: "{{ gateway_password }}"
+      gateway_validate_certs: "{{ gateway_validate_certs | bool }}"
+
+  block:
+    # <Users> -------------------
+    - name: Create Users
+      ansible.platform.user:
+        username: "{{ username }}--User-1"
+      register: user
+
+    - name: Assert a creation changes the system
+      ansible.builtin.assert:
+        that:
+          - user is changed
+    # </Users> -------------------
+
+    # <Organizations> -------------------
+    - name: Create Organizations
+      ansible.platform.organization:
+        name: "{{ organization_name }}"
+      register: org
+
+    - name: Assert a creation changes the system
+      ansible.builtin.assert:
+        that:
+          - org is changed
+    # </Organizations> -------------------
+
+    # # <Role User Assignments> -------------------
+    - name: Assign Admins by Role User Assignments
+      ansible.platform.role_user_assignment:
+        object_id: "{{ org.id }}"
+        role_definition: Organization Admin
+        user: "{{ user.id }}"
+      register: org_admin_role_assignment
+
+    - name: Assert that adding user as org admin worked
+      ansible.builtin.assert:
+        that:
+          - org_admin_role_assignment is changed
+
+    - name: Check Existence of Role User Assignments
+      ansible.platform.role_user_assignment:
+        object_id: "{{ org.id }}"
+        role_definition: Organization Admin
+        user: "{{ user.id }}"
+
+    - name: Check absence of Role User Assignments
+      ansible.platform.role_user_assignment:
+        object_id: "{{ org.id }}"
+        role_definition: Organization Member
+        user: "{{ user.id }}"
+        state: absent
+      register: role_definition
+
+    - name: Assert absence of Role User Assignments
+      ansible.builtin.assert:
+        that:
+          - role_definition is not changed
+
+    # </Role User Assignments> ------------------
+
+  # # <Cleanup>
+  always:
+  # Always Cleanup
+    - name: Delete user
+      ansible.platform.user:
+        username: "{{ username }}"
+        state: absent
+      register: delete
+      ignore_errors: true
+
+    - name: Delete Organizations
+      ansible.platform.organization:
+        name: "{{ item }}"
+        state: absent
+      when: "item in vars and 'id' in vars[item]"
+      loop:
+        - "org"
+...

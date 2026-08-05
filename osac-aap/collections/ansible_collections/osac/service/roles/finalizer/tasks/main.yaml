@@ -1,0 +1,42 @@
+- name: Look up finalizer target
+  kubernetes.core.k8s_info:
+    api_version: "{{ finalizer_target.api_version }}"
+    kind: "{{ finalizer_target.kind }}"
+    namespace: "{{ finalizer_target.namespace | default(omit) }}"
+    name: "{{ finalizer_target.name }}"
+  register: finalizer_resources
+
+- name: Set finalizer_target_resource variable
+  ansible.builtin.set_fact:
+    finalizer_target_resource: "{{ (finalizer_resources.resources | first) if (finalizer_resources.resources | length > 0) else None }}"
+
+- name: "Skip finalizer update — target resource not found" # noqa: name[template]
+  ansible.builtin.debug:
+    msg: "{{ finalizer_target.kind }}/{{ finalizer_target.name }} not found, skipping finalizer {{ finalizer_state }}"
+  when: finalizer_resources.resources | length == 0
+
+- name: "Add finalizer to {{ finalizer_target.kind }}/{{ finalizer_target.name }}" # noqa: name[template]
+  when: finalizer_state == "present" and finalizer_target_resource is not none
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: "{{ finalizer_target.api_version }}"
+      kind: "{{ finalizer_target.kind }}"
+      metadata:
+        namespace: "{{ finalizer_target.namespace | default(omit) }}"
+        name: "{{ finalizer_target.name }}"
+        finalizers: "{{ (finalizer_target_resource.metadata.finalizers | default([])) | union([finalizer_name]) }}"
+
+- name: "Remove finalizer from {{ finalizer_target.kind }}/{{ finalizer_target.name }}" # noqa: name[template]
+  when: finalizer_state == "absent" and finalizer_target_resource is not none
+  kubernetes.core.k8s_json_patch:
+    api_version: "{{ finalizer_target.api_version }}"
+    kind: "{{ finalizer_target.kind }}"
+    namespace: "{{ finalizer_target.namespace | default(omit) }}"
+    name: "{{ finalizer_target.name }}"
+    patch:
+      - op: replace
+        path: /metadata/finalizers
+        value: "{{ finalizer_list | default([]) }}"
+  vars:
+    finalizer_list: "{{ (finalizer_target_resource.metadata.finalizers | default([])) | difference([finalizer_name]) }}"

@@ -1,0 +1,119 @@
+---
+# SecurityGroup role creates NetworkPolicy resources for traffic enforcement
+# 1. Looks up target namespaces based on VirtualNetwork label
+# 2. Translates SecurityGroup ingress/egress rules to NetworkPolicy spec
+# 3. Creates NetworkPolicy in each target namespace
+
+- name: Include get remote cluster kubeconfig
+  ansible.builtin.include_role:
+    name: osac.service.common
+    tasks_from: get_remote_cluster_kubeconfig
+
+- name: Extract SecurityGroup configuration
+  ansible.builtin.set_fact:
+    sg_name: "{{ security_group.metadata.name }}"
+    sg_namespace: "{{ security_group.metadata.namespace }}"
+    sg_virtual_network: "{{ security_group.spec.virtualNetwork | default('') }}"
+    ingress_rules: "{{ security_group.spec.ingressRules | default([]) }}"
+    egress_rules: "{{ security_group.spec.egressRules | default([]) }}"
+
+- name: Look up target namespaces for VirtualNetwork
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: v1
+    kind: Namespace
+    label_selectors:
+      - "osac.openshift.io/virtual-network={{ sg_virtual_network }}"
+  register: namespace_lookup
+  when: sg_virtual_network | length > 0
+
+- name: Extract target namespace names
+  ansible.builtin.set_fact:
+    target_namespaces: "{{ namespace_lookup.resources | default([]) | map(attribute='metadata.name') | list }}"
+  when: sg_virtual_network | length > 0
+
+- name: Display SecurityGroup information
+  ansible.builtin.debug:
+    msg:
+      - "Creating NetworkPolicy for SecurityGroup '{{ sg_name }}'"
+      - "VirtualNetwork: {{ sg_virtual_network }}"
+      - "Target namespaces: {{ target_namespaces | default([]) }}"
+      - "Ingress rules count: {{ ingress_rules | length }}"
+      - "Egress rules count: {{ egress_rules | length }}"
+
+- name: Initialize ingress and egress policy rule arrays
+  ansible.builtin.set_fact:
+    ingress_policy_rules: []
+    egress_policy_rules: []
+
+- name: Build ingress rules for NetworkPolicy
+  ansible.builtin.set_fact:
+    ingress_policy_rules: "{{ ingress_policy_rules + [_rule] }}"
+  vars:
+    _has_cidr: "{{ item.sourceCidr is defined and item.sourceCidr | length > 0 }}"
+    _has_port: "{{ item.protocol not in ['icmp', 'all'] and item.portFrom is defined }}"
+    _from_part: "{{ (_has_cidr | bool) | ternary({'from': [{'ipBlock': {'cidr': item.sourceCidr}}]}, {}) }}"
+    _port_base: "{{ {'protocol': item.protocol | upper, 'port': item.portFrom | default(0)} }}"
+    _port_range: "{{ (item.portTo is defined and item.portTo != item.portFrom | default(0)) | ternary({'endPort': item.portTo | default(0)}, {}) }}"
+    _ports_part: "{{ (_has_port | bool) | ternary({'ports': [_port_base | combine(_port_range)]}, {}) }}"
+    _rule: "{{ _from_part | combine(_ports_part) }}"
+  loop: "{{ ingress_rules }}"
+
+- name: Build egress rules for NetworkPolicy
+  ansible.builtin.set_fact:
+    egress_policy_rules: "{{ egress_policy_rules + [_rule] }}"
+  vars:
+    _has_cidr: "{{ item.sourceCidr is defined and item.sourceCidr | length > 0 }}"
+    _has_port: "{{ item.protocol not in ['icmp', 'all'] and item.portFrom is defined }}"
+    _to_part: "{{ (_has_cidr | bool) | ternary({'to': [{'ipBlock': {'cidr': item.sourceCidr}}]}, {}) }}"
+    _port_base: "{{ {'protocol': item.protocol | upper, 'port': item.portFrom | default(0)} }}"
+    _port_range: "{{ (item.portTo is defined and item.portTo != item.portFrom | default(0)) | ternary({'endPort': item.portTo | default(0)}, {}) }}"
+    _ports_part: "{{ (_has_port | bool) | ternary({'ports': [_port_base | combine(_port_range)]}, {}) }}"
+    _rule: "{{ _to_part | combine(_ports_part) }}"
+  loop: "{{ egress_rules }}"
+
+- name: Build policyTypes array
+  ansible.builtin.set_fact:
+    policy_types: >-
+      {{
+        ([] +
+         ((ingress_rules | length > 0) | ternary(['Ingress'], [])) +
+         ((egress_rules | length > 0) | ternary(['Egress'], []))
+        )
+      }}
+
+- name: Build pod selector label for NetworkPolicy
+  ansible.builtin.set_fact:
+    sg_pod_selector_labels: "{{ {'osac.openshift.io/' ~ sg_name: ''} }}"
+
+- name: Create NetworkPolicy in target namespaces
+  when: target_namespaces | default([]) | length > 0
+  block:
+    - name: Build and apply NetworkPolicy for each namespace
+      kubernetes.core.k8s:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+        state: present
+        definition:
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: "sg-{{ sg_name }}"
+            namespace: "{{ item }}"
+            labels:
+              osac.openshift.io/managed-by: osac-fulfillment
+              osac.openshift.io/securitygroup: "{{ sg_name }}"
+              osac.openshift.io/virtual-network: "{{ sg_virtual_network }}"
+          spec:
+            podSelector:
+              matchLabels: "{{ sg_pod_selector_labels }}"
+            policyTypes: "{{ policy_types }}"
+            ingress: "{{ ingress_policy_rules }}"
+            egress: "{{ egress_policy_rules }}"
+      loop: "{{ target_namespaces }}"
+
+- name: Warn if no target namespaces found
+  ansible.builtin.debug:
+    msg:
+      - "WARNING: No namespaces found for VirtualNetwork '{{ sg_virtual_network }}'"
+      - "SecurityGroup '{{ sg_name }}' NetworkPolicy will not be created until Subnets exist"
+  when: target_namespaces | default([]) | length == 0

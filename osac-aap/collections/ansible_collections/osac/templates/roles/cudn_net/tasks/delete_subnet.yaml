@@ -1,0 +1,61 @@
+---
+# Delete ClusterUserDefinedNetwork and Namespace for Subnet
+# 1. Deletes CUDN first (must be removed before namespace)
+# 2. Deletes namespace
+# Handles "not found" errors gracefully for both resources
+
+- name: Include get remote cluster kubeconfig
+  ansible.builtin.include_role:
+    name: osac.service.common
+    tasks_from: get_remote_cluster_kubeconfig
+
+- name: Extract Subnet configuration
+  ansible.builtin.set_fact:
+    subnet_name: "{{ subnet.metadata.name }}"
+    subnet_id: "{{ subnet.metadata.labels['osac.openshift.io/subnet-uuid'] | default(subnet.metadata.name) }}"
+
+- name: Display deletion information
+  ansible.builtin.debug:
+    msg:
+      - "Deleting CUDN and Namespace for Subnet '{{ subnet_name }}'"
+      - "Subnet ID: {{ subnet_id }}"
+
+- name: Delete ClusterUserDefinedNetwork
+  kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    state: absent
+    api_version: k8s.ovn.org/v1
+    kind: ClusterUserDefinedNetwork
+    name: "{{ subnet_name }}"
+    wait: true
+    wait_timeout: 300
+  register: cudn_delete_result
+  failed_when:
+    - cudn_delete_result.failed | default(false)
+    - "'NotFound' not in (cudn_delete_result.msg | default(''))"
+
+- name: Display CUDN deletion result
+  ansible.builtin.debug:
+    msg:
+      - "CUDN '{{ subnet_name }}' deletion completed"
+      - "Changed: {{ cudn_delete_result.changed | default(false) }}"
+
+- name: Delete Namespace
+  kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    state: absent
+    api_version: v1
+    kind: Namespace
+    name: "{{ subnet_name }}"
+    wait: true
+    wait_timeout: 300
+  register: namespace_delete_result
+  failed_when:
+    - namespace_delete_result.failed | default(false)
+    - "'NotFound' not in (namespace_delete_result.msg | default(''))"
+
+- name: Display Namespace deletion result
+  ansible.builtin.debug:
+    msg:
+      - "Namespace '{{ subnet_name }}' deletion completed"
+      - "Changed: {{ namespace_delete_result.changed | default(false) }}"

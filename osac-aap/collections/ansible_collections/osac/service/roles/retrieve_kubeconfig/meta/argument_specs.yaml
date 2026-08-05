@@ -1,0 +1,19 @@
+argument_specs:
+  main:
+    options:
+      retrieve_kubeconfig_cluster_name:
+        type: str
+        required: true
+        description: "Name of the HostedCluster to retrieve kubeconfig for"
+      retrieve_kubeconfig_namespace:
+        type: str
+        required: true
+        description: "Namespace where the HostedCluster and admin kubeconfig secret are located"
+      retrieve_kubeconfig_wait_retries:
+        type: int
+        required: false
+        description: "Maximum number of retries to wait for kubeconfig secret"
+      retrieve_kubeconfig_wait_delay:
+        type: int
+        required: false
+        description: "Delay between retries in seconds"

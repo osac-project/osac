@@ -1,0 +1,219 @@
+---
+- name: Set dns names
+  ansible.builtin.set_fact:
+    external_access_api_domain: "api.{{ external_access_name }}.{{ external_access_base_domain }}"
+    external_access_api_int_domain: "api-int.{{ external_access_name }}.{{ external_access_base_domain }}"
+    external_access_ingress_domain: "apps.{{ external_access_name }}.{{ external_access_base_domain }}"
+
+- name: Get kube-apiserver service
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Service
+    namespace: "{{ external_access_namespace }}-{{ external_access_name }}"
+    name: kube-apiserver
+  register: kube_apiserver_service
+
+  # wait until the service exists and has a loadbalancer ip
+  until:
+    - kube_apiserver_service.resources | length > 0
+    - kube_apiserver_service.resources[0].status.loadBalancer.ingress | default([]) | length > 0
+  retries: "{{ external_access_resource_wait_retries }}"
+  delay: "{{ external_access_resource_wait_delay }}"
+
+- name: Set api_internal_ip
+  ansible.builtin.set_fact:
+    external_access_api_internal_ip: "{{ kube_apiserver_service.resources[0].status.loadBalancer.ingress[0].ip }}"
+    external_access_kube_apiserver_port: "{{ kube_apiserver_service.resources[0].spec.ports[0].port }}"
+
+- name: Validate INGRESS_CIDR
+  ansible.builtin.assert:
+    that:
+      - nico_ingress_cidr is defined
+      - nico_ingress_cidr | length > 0
+      - nico_ingress_cidr | ansible.utils.ipaddr | length > 0
+    fail_msg: "nico_ingress_cidr is not defined or not a valid CIDR"
+
+# Allocate a /32 IP from the CIDR range before DNS records are created
+- name: Allocate ingress IP from CIDR range
+  ansible.builtin.include_tasks: allocate_ip.yml
+  vars:
+    ingress_cidr_range: "{{ nico_ingress_cidr }}"
+    cluster_name: "{{ external_access_name }}"
+
+# For NICo, API is reached directly via internal IP (no floating IP)
+# nico_ingress_ip is set by allocate_ip above
+- name: Set shared IP variables for DNS
+  ansible.builtin.set_fact:
+    external_access_api_ip: "{{ external_access_api_internal_ip }}"
+    external_access_ingress_ip: "{{ nico_ingress_ip }}"
+
+- name: Create dns records
+  when: >-
+    external_access_base_domain in external_access_supported_base_domains|default([])
+  ansible.builtin.include_role:
+    name: dns.api.dns
+    tasks_from: create
+  vars:
+    dns_zone: "{{ external_access_base_domain }}"
+    dns_record_name: "{{ item.name }}"
+    dns_record_type: A
+    dns_record_ttl: "{{ external_access_dns_ttl }}"
+    dns_record_value: "{{ item.addr }}"
+    dns_record_overwrite: true
+  loop:
+    - name: "{{ external_access_api_domain }}"
+      addr: "{{ external_access_api_ip }}"
+    - name: "{{ external_access_api_int_domain }}"
+      addr: "{{ external_access_api_ip }}"
+    - name: "*.{{ external_access_ingress_domain }}"
+      addr: "{{ external_access_ingress_ip }}"
+
+- name: Wait for DNS records
+  when: >-
+    external_access_base_domain in external_access_supported_base_domains | default([])
+  ansible.builtin.include_role:
+    name: osac.service.wait_for
+    tasks_from: wait_for_dns
+  vars:
+    wait_for_dns_record: "{{ item }}"
+  loop:
+    - "{{ external_access_api_domain }}"
+    - "{{ external_access_api_int_domain }}"
+    - "default-router.{{ external_access_ingress_domain }}"
+
+- name: Get managed cluster admin kubeconfig secret
+  ansible.builtin.include_role:
+    name: osac.service.retrieve_kubeconfig
+  vars:
+    retrieve_kubeconfig_namespace: "{{ cluster_working_namespace }}"
+    retrieve_kubeconfig_cluster_name: "{{ cluster_order.metadata.name }}"
+
+- name: Wait for cluster to become ready
+  ansible.builtin.include_role:
+    name: osac.service.wait_for
+    tasks_from: wait_for_network_cluster_operator
+  vars:
+    wait_for_kubeconfig: "{{ admin_kubeconfig }}"
+
+# =============================================================================
+# Scale-down: clean up BGPPeers for removed agents (requires kubeconfig)
+# nico_removed_agent_hostnames is set by cluster_infra during scale-down
+# =============================================================================
+
+- name: Clean up BGPPeers for removed agents
+  when:
+    - nico_removed_agent_hostnames is defined
+    - nico_removed_agent_hostnames | length > 0
+  ansible.builtin.include_role:
+    name: osac.service.metallb_ingress
+    tasks_from: delete_bgp_peers
+  vars:
+    removed_agent_hostnames: "{{ nico_removed_agent_hostnames }}"
+
+# =============================================================================
+# NICo: Tenant BGP ASN lookup
+# =============================================================================
+
+- name: Set cluster order namespace for lookups
+  ansible.builtin.set_fact:
+    nico_cluster_order_namespace: "{{ lookup('env', 'POD_NAMESPACE') | default(cluster_order.metadata.namespace, true) }}"
+
+- name: Fetch live ClusterOrder for tenant annotation
+  kubernetes.core.k8s_info:
+    api_version: osac.openshift.io/v1alpha1
+    kind: ClusterOrder
+    name: "{{ cluster_order.metadata.name }}"
+    namespace: "{{ nico_cluster_order_namespace }}"
+  register: live_cluster_order
+
+- name: Validate live ClusterOrder was found
+  ansible.builtin.assert:
+    that:
+      - live_cluster_order.resources | length > 0
+      - live_cluster_order.resources[0].metadata.annotations is defined
+      - "'osac.openshift.io/tenant' in live_cluster_order.resources[0].metadata.annotations"
+    fail_msg: >
+      ClusterOrder '{{ cluster_order.metadata.name }}' not found or missing
+      osac.openshift.io/tenant annotation in namespace '{{ nico_cluster_order_namespace }}'
+
+- name: Extract tenant name from ClusterOrder annotation
+  ansible.builtin.set_fact:
+    tenant_name: "{{ live_cluster_order.resources[0].metadata.annotations['osac.openshift.io/tenant'] }}"
+
+- name: Look up Tenant CR to get BGP ASN
+  kubernetes.core.k8s_info:
+    api_version: osac.openshift.io/v1alpha1
+    kind: Tenant
+    name: "{{ tenant_name }}"
+    namespace: "{{ nico_cluster_order_namespace }}"
+  register: tenant_cr_result
+
+- name: Extract BGP ASN from Tenant annotation
+  ansible.builtin.set_fact:
+    nico_local_asn: "{{ tenant_cr_result.resources[0].metadata.annotations['osac.openshift.io/bgp-asn'] }}"
+  when:
+    - tenant_cr_result.resources | length > 0
+    - tenant_cr_result.resources[0].metadata.annotations is defined
+    - "'osac.openshift.io/bgp-asn' in tenant_cr_result.resources[0].metadata.annotations"
+
+- name: Validate BGP ASN was found
+  ansible.builtin.assert:
+    that:
+      - nico_local_asn is defined
+      - nico_local_asn | int >= 1
+    fail_msg: >
+      BGP ASN not found on Tenant CR '{{ tenant_name }}'
+      in namespace '{{ lookup('env', 'POD_NAMESPACE') }}'.
+      Set the osac.openshift.io/bgp-asn annotation on the Tenant resource.
+
+- name: Compute total expected worker count
+  ansible.builtin.set_fact:
+    nico_expected_worker_count: >-
+      {{ cluster_order.spec.nodeRequests | map(attribute='numberOfNodes') | map('int') | sum }}
+
+# =============================================================================
+# NICo: MetalLB and BGP configuration
+# =============================================================================
+
+- name: Configure metallb for ingress with BGP
+  block:
+    - name: Discover BGP parameters from worker nodes
+      ansible.builtin.include_tasks: discover_bgp_params.yml
+      vars:
+        nico_admin_kubeconfig: "{{ admin_kubeconfig }}"
+
+    - name: Configure metallb
+      ansible.builtin.include_role:
+        name: osac.service.metallb_ingress
+        tasks_from: configure_metallb_ingress
+      vars:
+        metallb_ingress_admin_kubeconfig: "{{ admin_kubeconfig }}"
+        metallb_ingress_ip: "{{ nico_ingress_ip }}"
+        local_asn: "{{ nico_local_asn }}"
+
+  rescue:
+    - name: Read IP registry ConfigMap for cleanup
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: ConfigMap
+        name: nico-ip-registry
+        namespace: "{{ nico_ip_registry_namespace | default('hardware-inventory') }}"
+      register: cleanup_registry
+
+    - name: Remove cluster IP from registry on failure
+      kubernetes.core.k8s:
+        state: present
+        force: true
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: nico-ip-registry
+            namespace: "{{ nico_ip_registry_namespace | default('hardware-inventory') }}"
+          data: "{{ cleanup_registry.resources[0].data | dict2items | rejectattr('value', 'equalto', external_access_name) | items2dict }}"
+      when: cleanup_registry.resources | length > 0
+      failed_when: false
+
+    - name: Fail with MetalLB configuration error
+      ansible.builtin.fail:
+        msg: "MetalLB ingress configuration failed after IP cleanup. See errors above."

@@ -1,0 +1,53 @@
+name: Mirror Envoy Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Envoy version to mirror (e.g. v1.33.0)'
+        required: true
+  # Weekly re-push of DEFAULT_VERSION to keep the GHCR copy fresh.
+  # To mirror a new version, use workflow_dispatch with the version input.
+  schedule:
+    - cron: '0 6 * * 1'  # Monday 6am UTC
+
+env:
+  SOURCE: docker.io/envoyproxy/envoy
+  TARGET: ghcr.io/osac-project/envoy
+  DEFAULT_VERSION: v1.33.0
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+    - name: Log in to GHCR
+      uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0  # v4.4.0
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Install skopeo
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq skopeo
+
+    - name: Mirror image (all architectures)
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+      run: |
+        VERSION="${INPUT_VERSION:-${DEFAULT_VERSION}}"
+        echo "Mirroring ${SOURCE}:${VERSION} -> ${TARGET}:${VERSION}"
+        skopeo copy --all \
+          "docker://${SOURCE}:${VERSION}" \
+          "docker://${TARGET}:${VERSION}"
+
+    - name: Verify mirrored image
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+      run: |
+        VERSION="${INPUT_VERSION:-${DEFAULT_VERSION}}"
+        skopeo inspect "docker://${TARGET}:${VERSION}" > /dev/null
+        echo "Verified ${TARGET}:${VERSION} is pullable"

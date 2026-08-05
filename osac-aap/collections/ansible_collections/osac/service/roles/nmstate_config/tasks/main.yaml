@@ -1,0 +1,14 @@
+---
+- name: Include create tasks
+  ansible.builtin.include_tasks: create.yaml
+  when: nmstate_config_state == "present"
+
+- name: Apply nmstate config on live agents
+  ansible.builtin.include_tasks: apply.yaml
+  when:
+    - nmstate_config_state == "present"
+    - nmstate_config_apply_live | default(true) | bool
+
+- name: Include delete tasks
+  ansible.builtin.include_tasks: delete.yaml
+  when: nmstate_config_state == "absent"

@@ -1,0 +1,48 @@
+# Gateway with both TLS (passthrough) and HTTP listeners
+# The HTTP listener is needed for AWX which uses plain HTTP internally
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: default
+  namespace: envoy-gateway
+spec:
+  gatewayClassName: default
+  listeners:
+    - name: tls
+      protocol: TLS
+      port: 443
+      tls:
+        mode: Passthrough
+      allowedRoutes:
+        namespaces:
+          from: All
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: All
+---
+# EnvoyProxy with both HTTPS and HTTP NodePort mappings
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: default
+  namespace: envoy-gateway
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyService:
+        type: NodePort
+        patch:
+          type: StrategicMerge
+          value:
+            spec:
+              ports:
+                - name: https
+                  port: 443
+                  nodePort: 30443
+                - name: http
+                  port: 80
+                  nodePort: 30080

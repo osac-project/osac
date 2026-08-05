@@ -1,0 +1,3 @@
+---
+- name: Default workflow_helpers entrypoint
+  ansible.builtin.import_tasks: noop.yml

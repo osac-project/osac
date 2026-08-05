@@ -1,0 +1,9 @@
+No tenant is currently set.
+
+To list available tenants:
+
+  {{ binary }} get tenants
+
+To set a tenant:
+
+  {{ binary }} tenant <name>

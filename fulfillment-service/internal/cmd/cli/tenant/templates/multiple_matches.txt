@@ -1,0 +1,14 @@
+Name '{{ .Ref }}' is ambiguous.
+
+{{ if lt (len .Matches) .Total }}
+There are {{ .Total }} matching tenants, these are the first {{ len .Matches }}:
+{{ else }}
+There are {{ .Total }} matching tenants:
+{{ end }}
+
+{{ table .Matches }}
+
+{{ $first := index .Matches 0 }}
+Use the identifier instead of the name to avoid ambiguity:
+
+  {{ binary }} tenant {{ $first.GetId }}

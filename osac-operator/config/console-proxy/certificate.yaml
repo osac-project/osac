@@ -1,0 +1,19 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: osac-console-proxy
+spec:
+  issuerRef:
+    kind: ClusterIssuer
+    name: default-ca
+  # These FQDNs contain a hardcoded namespace. Kustomize does not update
+  # embedded namespace references in dnsNames; the installer's overlay-level
+  # replacements propagate the actual namespace into these fields.
+  dnsNames:
+  - osac-console-proxy
+  - osac-console-proxy.osac
+  - osac-console-proxy.osac.svc
+  - osac-console-proxy.osac.svc.cluster.local
+  secretName: osac-console-proxy-tls
+  privateKey:
+    rotationPolicy: Always

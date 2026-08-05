@@ -1,0 +1,13 @@
+---
+- name: Validate server is up with a URI call
+  ansible.builtin.uri:
+    url: "{{ gateway_hostname }}/api/gateway/v1/settings/"
+    force_basic_auth: true
+    url_username: "{{ gateway_username }}"
+    url_password: "{{ gateway_password }}"
+    validate_certs: "{{ gateway_validate_certs }}"
+  register: server_ping
+  until: server_ping is not failed
+  retries: 30
+  delay: 2
+...

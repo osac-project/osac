@@ -1,0 +1,54 @@
+---
+- name: "TenantTargetNamespace - Test tenant found"
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+
+  tasks:
+    - name: Test tenant found
+      block:
+        - name: Create test Tenant
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: Tenant
+              metadata:
+                name: ttn-test-tenant
+                namespace: osac-system
+
+        - name: Patch Tenant status via status subresource
+          ansible.builtin.command:
+            cmd: >-
+              kubectl patch tenant ttn-test-tenant -n osac-system
+              --type=merge --subresource=status
+              -p '{"status":{"namespace":"ttn-test-vm-work","phase":"Ready"}}'
+          changed_when: true
+
+        - name: Run tenant_target_namespace role
+          ansible.builtin.include_role:
+            name: osac.service.tenant_target_namespace
+          vars:
+            compute_instance:
+              status:
+                tenantReference:
+                  name: ttn-test-tenant
+                  namespace: osac-system
+
+        - name: Verify namespace resolved from tenant
+          ansible.builtin.assert:
+            that:
+              - tenant_target_namespace is defined
+              - tenant_target_namespace == "ttn-test-vm-work"
+            fail_msg: "Expected 'ttn-test-vm-work', got '{{ tenant_target_namespace | default('undefined') }}'"
+            success_msg: "Tenant found: passed"
+
+      always:
+        - name: Cleanup -- delete test Tenant
+          kubernetes.core.k8s:
+            state: absent
+            api_version: osac.openshift.io/v1alpha1
+            kind: Tenant
+            namespace: osac-system
+            name: ttn-test-tenant

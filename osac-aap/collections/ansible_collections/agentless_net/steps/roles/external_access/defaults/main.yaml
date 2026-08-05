@@ -1,0 +1,3 @@
+---
+# Defaults are defined in group_vars/all/agentless_net.yaml
+external_access_state_key: "{{ external_access_namespace }}-{{ external_access_name }}"

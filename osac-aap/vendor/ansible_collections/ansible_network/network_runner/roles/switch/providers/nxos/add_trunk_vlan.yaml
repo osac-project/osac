@@ -1,0 +1,3 @@
+---
+- fail:
+    msg: Add Trunk VLAN is not implimented for nxos

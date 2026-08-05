@@ -1,0 +1,531 @@
+---
+# Integration tests for groups module
+# These tests run against a real VAST system
+#
+# Configuration:
+# Set values in tests/integration/integration_config.yml
+
+# ====================
+# Setup
+# ====================
+
+- name: Check if credentials are available
+  ansible.builtin.set_fact:
+    has_credentials: "{{ (vast_vms | default('') | length > 0) and (vast_username | default('') | length > 0) and (vast_password | default('') | length > 0) }}"
+
+- name: Set test conditions
+  ansible.builtin.set_fact:
+    can_run_tests: "{{ has_credentials }}"
+
+- name: Get default tenant to obtain local_provider_id
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "default"
+    state: present
+  register: tenant_result
+  when: can_run_tests | bool
+
+- name: Set local_provider_id from default tenant
+  ansible.builtin.set_fact:
+    test_local_provider_id: "{{ tenant_result.tenants.local_provider_id }}"
+  when: can_run_tests | bool
+
+# ====================
+# Cleanup - Remove existing test group if present
+# ====================
+
+- name: Clean up - ensure test group doesn't exist before starting
+  vastdata.vms.groups:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_group_name }}"
+    state: absent
+  register: cleanup_result
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# Create Tests
+# ====================
+
+- name: Test creating a group
+  vastdata.vms.groups:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_group_name }}"
+    gid: "{{ test_group_gid }}"
+    local_provider_id: "{{ test_local_provider_id }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify group was created
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.groups is defined
+      - result.groups.name == test_group_name
+      - result.groups.gid == test_group_gid
+      - result.diff is defined
+      - result.diff.before == {}
+      - result.diff.after is defined
+  when: result is not skipped
+
+# ====================
+# Idempotency Tests - Create
+# ====================
+
+- name: Test idempotency - create same group again
+  vastdata.vms.groups:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_group_name }}"
+    gid: "{{ test_group_gid }}"
+    local_provider_id: "{{ test_local_provider_id }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify idempotency (resource unchanged after second run)
+  ansible.builtin.assert:
+    that:
+      - result.groups is defined
+      - result.groups.name == test_group_name
+      - result.groups.gid == test_group_gid
+  when: result is not skipped
+
+# ====================
+# Update Tests
+# ====================
+
+- name: Test updating group - change name (keeping gid + local_provider_id)
+  vastdata.vms.groups:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_group_name }}-updated"
+    gid: "{{ test_group_gid }}"
+    local_provider_id: "{{ test_local_provider_id }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify group name was updated
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.groups is defined
+      - result.groups.name == test_group_name + '-updated'
+      - result.groups.gid == test_group_gid
+      - result.diff is defined
+      - result.diff.before is defined
+      - result.diff.after is defined
+  when: result is not skipped
+
+- name: Test update idempotency
+  vastdata.vms.groups:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_group_name }}-updated"
+    gid: "{{ test_group_gid }}"
+    local_provider_id: "{{ test_local_provider_id }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify update idempotency (resource unchanged after second update run)
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+      - result.groups is defined
+      - result.groups.name == test_group_name + '-updated'
+      - result.groups.gid == test_group_gid
+  when: result is not skipped
+
+- name: Change name back to original for subsequent tests
+  vastdata.vms.groups:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_group_name }}"
+    gid: "{{ test_group_gid }}"
+    local_provider_id: "{{ test_local_provider_id }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+# ====================
+# Check Mode Tests - Update
+# ====================
+
+- name: Test check mode - update name
+  vastdata.vms.groups:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_group_name }}-checkmode-test"
+    gid: "{{ test_group_gid }}"
+    local_provider_id: "{{ test_local_provider_id }}"
+    state: present
+  check_mode: true
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify check mode reported changes
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.groups is defined
+  when: result is not skipped
+
+- name: Verify check mode didn't actually make changes
+  vastdata.vms.groups:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_group_name }}"
+    gid: "{{ test_group_gid }}"
+    local_provider_id: "{{ test_local_provider_id }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify name is still original (unchanged by check mode)
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+      - result.groups.name == test_group_name
+  when: result is not skipped
+
+# ====================
+# Check Mode Tests - Create
+# ====================
+
+- name: Test check mode - create new group
+  vastdata.vms.groups:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_group_name }}-checkmode"
+    gid: 7776
+    state: present
+  check_mode: true
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify check mode create reported changes
+  ansible.builtin.assert:
+    that:
+      - result is changed
+  when: result is not skipped
+
+- name: Verify check mode didn't actually create the group
+  vastdata.vms.groups:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_group_name }}-checkmode"
+    state: absent
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify group was never created
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: result is not skipped
+
+# ====================
+# Delete Tests
+# ====================
+
+- name: Test deleting group
+  vastdata.vms.groups:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_group_name }}"
+    state: absent
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify group was deleted
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.diff is defined
+      - result.diff.before is defined
+      - result.diff.after == {}
+  when: result is not skipped
+
+# ====================
+# Idempotency Tests - Delete
+# ====================
+
+- name: Test delete idempotency - delete again
+  vastdata.vms.groups:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_group_name }}"
+    state: absent
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify delete idempotency
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: result is not skipped
+
+# ====================
+# Check Mode Delete Test
+# ====================
+
+- name: Create group for check mode delete test
+  vastdata.vms.groups:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_group_name }}-delcheck"
+    gid: 7775
+    local_provider_id: "{{ test_local_provider_id }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Test check mode - delete
+  vastdata.vms.groups:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_group_name }}-delcheck"
+    state: absent
+  check_mode: true
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify check mode reported deletion
+  ansible.builtin.assert:
+    that:
+      - result is changed
+  when: result is not skipped
+
+- name: Verify check mode didn't actually delete
+  vastdata.vms.groups:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_group_name }}-delcheck"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Check that group still exists
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+      - result.groups is defined
+  when: result is not skipped
+
+- name: Clean up check mode delete test group
+  vastdata.vms.groups:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_group_name }}-delcheck"
+    state: absent
+  when: can_run_tests | bool
+
+# ====================
+# Error Handling Tests
+# ====================
+
+- name: Test error handling - invalid state
+  vastdata.vms.groups:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_group_name }}"
+    state: invalid
+  register: result
+  when: can_run_tests | bool
+  ignore_errors: true
+
+- name: Verify error was caught
+  ansible.builtin.assert:
+    that:
+      - result is failed
+  when: result is not skipped
+
+# ====================
+# Idempotency local_provider_id test
+# ====================
+
+- name: Clean up - ensure local_provider_id idempotency test group doesn't exist
+  vastdata.vms.groups:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_group_name }}-lp-idempotency"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Create local provider for local_provider_id idempotency test
+  vastdata.vms.localproviders:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_group_name }}-lp"
+    state: present
+  register: lp_idempotency
+  when: can_run_tests | bool
+
+- name: Set local_provider_id from created local provider
+  ansible.builtin.set_fact:
+    lp_idempotency_provider_id: "{{ lp_idempotency.localproviders.id }}"
+  when: can_run_tests | bool
+
+- name: Create group with local_provider_id (first run - should change)
+  vastdata.vms.groups:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_group_name }}-lp-idempotency"
+    gid: 99902
+    local_provider_id: "{{ lp_idempotency_provider_id }}"
+    state: present
+  register: lp_idempotency_result
+  when: can_run_tests | bool
+
+- name: Verify group was created (changed=1)
+  ansible.builtin.assert:
+    that:
+      - lp_idempotency_result is changed
+      - lp_idempotency_result.groups is defined
+      - lp_idempotency_result.groups.name == test_group_name + '-lp-idempotency'
+  when: lp_idempotency_result is not skipped
+
+- name: Run same create again - idempotency (second run - should NOT change)
+  vastdata.vms.groups:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_group_name }}-lp-idempotency"
+    gid: 99902
+    local_provider_id: "{{ lp_idempotency_provider_id }}"
+    state: present
+  register: lp_idempotency_result2
+  when: can_run_tests | bool
+
+- name: Verify idempotency - second run must report changed=0
+  ansible.builtin.assert:
+    that:
+      - not lp_idempotency_result2.changed
+    fail_msg: "Second run with local_provider_id incorrectly reported changed=1. API may not return local_provider in GET response."
+  when: lp_idempotency_result2 is not skipped
+
+- name: Clean up local_provider_id idempotency test group
+  vastdata.vms.groups:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_group_name }}-lp-idempotency"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Clean up local provider from idempotency test
+  vastdata.vms.localproviders:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_group_name }}-lp"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Clean up - ensure rename test group doesn't exist
+  vastdata.vms.groups:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_group_name }}-rename-original"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Clean up - ensure renamed test group doesn't exist
+  vastdata.vms.groups:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_group_name }}-rename-new"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Create group for rename test
+  vastdata.vms.groups:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_group_name }}-rename-original"
+    gid: 12345
+    local_provider_id: "{{ test_local_provider_id }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify group was created
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.groups is defined
+      - result.groups.name == test_group_name + '-rename-original'
+      - result.groups.gid == 12345
+  when: result is not skipped
+
+- name: Rename group by changing name while keeping gid and local_provider_id
+  vastdata.vms.groups:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_group_name }}-rename-new"
+    gid: 12345
+    local_provider_id: "{{ test_local_provider_id }}"
+    state: present
+  register: rename_result
+  when: can_run_tests | bool
+
+- name: Verify group was renamed (not created as new)
+  ansible.builtin.assert:
+    that:
+      - rename_result is changed
+      - rename_result.groups is defined
+      - rename_result.groups.name == test_group_name + '-rename-new'
+      - rename_result.groups.gid == 12345
+      - rename_result.diff is defined
+      - rename_result.diff.before.name == test_group_name + '-rename-original'
+      - rename_result.diff.after.name == test_group_name + '-rename-new'
+    fail_msg: "Cannot rename group. Module should update existing group by gid+local_provider_id, not create new one."
+  when: rename_result is not skipped
+
+- name: Verify old group name no longer exists
+  vastdata.vms.groups:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_group_name }}-rename-original"
+    state: absent
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify old name is gone (no change should be needed)
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+    fail_msg: "Old group name still exists, indicating a new group was created instead of renaming."
+  when: result is not skipped
+
+- name: Test rename idempotency - run same rename again
+  vastdata.vms.groups:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_group_name }}-rename-new"
+    gid: 12345
+    local_provider_id: "{{ test_local_provider_id }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify rename idempotency
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+      - result.groups.name == test_group_name + '-rename-new'
+  when: result is not skipped
+
+- name: Clean up renamed group
+  vastdata.vms.groups:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_group_name }}-rename-new"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# Cleanup
+# ====================
+
+- name: Final cleanup - remove test group if it exists
+  vastdata.vms.groups:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_group_name }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Skip message when no credentials
+  ansible.builtin.debug:
+    msg: |
+      Skipping groups integration tests - credentials not configured.
+
+      To enable integration tests, set credentials in:
+        tests/integration/integration_config.yml
+
+      Example:
+        vast_vms: "vast-vms.example.com"
+        vast_username: "admin"
+        vast_password: "password"
+
+      Then run: ansible-test integration groups -v
+  when: not (can_run_tests | bool)

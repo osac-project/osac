@@ -1,0 +1,18 @@
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  name: v1alpha1.console.osac.openshift.io
+  annotations:
+    # Hardcoded namespace: kustomize's namespace transformer does not update
+    # embedded references in annotations or spec fields. The installer's
+    # overlay-level replacements propagate the actual namespace into both
+    # this annotation and spec.service.namespace.
+    cert-manager.io/inject-ca-from: osac/osac-console-proxy
+spec:
+  group: console.osac.openshift.io
+  version: v1alpha1
+  service:
+    name: osac-console-proxy
+    namespace: osac
+  groupPriorityMinimum: 1000
+  versionPriority: 15

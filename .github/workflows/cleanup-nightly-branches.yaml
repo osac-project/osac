@@ -1,0 +1,49 @@
+name: Cleanup nightly branches
+
+on:
+  schedule:
+    # Run daily at 04:00 UTC (after the nightly build)
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+    inputs:
+      ttl-days:
+        description: 'Delete nightly/* branches older than this many days'
+        required: false
+        default: '7'
+
+permissions: {}
+
+jobs:
+  cleanup:
+    name: Delete stale nightly/* branches
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TTL_DAYS: ${{ inputs.ttl-days || '7' }}
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v6
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+        persist-credentials: true
+
+    - name: Delete stale nightly branches
+      run: |
+        set -euo pipefail
+        CUTOFF=$(date -u -d "${TTL_DAYS} days ago" +%s)
+
+        git fetch origin 'refs/heads/nightly/*:refs/remotes/origin/nightly/*' --prune
+
+        git for-each-ref --format='%(refname:short) %(committerdate:unix)' 'refs/remotes/origin/nightly/*' \
+        | while read -r branch commit_date; do
+            name="${branch#origin/}"
+            if [[ "${commit_date}" -lt "${CUTOFF}" ]]; then
+              echo "Deleting stale branch: ${name} (committed $(date -u -d "@${commit_date}" +%F))"
+              git push origin --delete "${name}" || true
+            else
+              echo "Keeping: ${name} (committed $(date -u -d "@${commit_date}" +%F))"
+            fi
+          done

@@ -1,0 +1,39 @@
+{{- if .Values.trustManager.enabled }}
+# Source: trust-manager/templates/certificate.yaml
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: trust-manager
+  namespace: cert-manager
+  labels:
+    app.kubernetes.io/name: trust-manager
+    helm.sh/chart: trust-manager-v0.20.0
+    app.kubernetes.io/instance: trust-manager
+    app.kubernetes.io/version: "v0.20.0"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  commonName: "trust-manager.cert-manager.svc"
+  dnsNames:
+    - "trust-manager.cert-manager.svc"
+  secretName: trust-manager-tls
+  revisionHistoryLimit: 1
+  issuerRef:
+    name: trust-manager
+    kind: Issuer
+    group: cert-manager.io
+---
+# Source: trust-manager/templates/certificate.yaml
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: trust-manager
+  namespace: cert-manager
+  labels:
+    app.kubernetes.io/name: trust-manager
+    helm.sh/chart: trust-manager-v0.20.0
+    app.kubernetes.io/instance: trust-manager
+    app.kubernetes.io/version: "v0.20.0"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  selfSigned: {}
+{{- end }}

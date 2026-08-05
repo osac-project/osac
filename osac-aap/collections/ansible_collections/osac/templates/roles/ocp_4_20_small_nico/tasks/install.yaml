@@ -1,0 +1,6 @@
+- name: Create cluster
+  ansible.builtin.include_role:
+    name: osac.templates.ocp_small
+    tasks_from: "install"
+  vars:
+    ocp_release_image: "{{ nico_ocp_release_image }}"

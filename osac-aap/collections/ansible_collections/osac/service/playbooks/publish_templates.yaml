@@ -1,0 +1,50 @@
+- name: Discover and publish templates to fulfillment service
+  hosts: localhost
+  gather_facts: false
+  vars:
+    publish_templates_namespace_default: "{{ lookup('env', 'OSAC_PUBLISH_TEMPLATES_NAMESPACE_DEFAULT') }}"
+    publish_templates_namespace: "{{ lookup('env', 'OSAC_PUBLISH_TEMPLATES_NAMESPACE') | default(publish_templates_namespace_default, true) }}"
+    publish_templates_service_account: "{{ lookup('env', 'OSAC_PUBLISH_TEMPLATES_SERVICE_ACCOUNT', default='template-publisher') }}"
+    osac_fulfillment_service_uri: "{{ lookup('env', 'OSAC_FULFILLMENT_SERVICE_URI', default='https://fulfillment-api:8000') }}"
+    osac_template_collections: "{{ lookup('env', 'OSAC_TEMPLATE_COLLECTIONS') | default('osac.templates', true) | split(',') }}"
+  tasks:
+    - name: Display configuration values
+      ansible.builtin.debug:
+        msg:
+          - "publish_templates_namespace: {{ publish_templates_namespace }}"
+          - "publish_templates_service_account: {{ publish_templates_service_account }}"
+          - "osac_fulfillment_service_uri: {{ osac_fulfillment_service_uri }}"
+          - "osac_template_collections: {{ osac_template_collections }}"
+
+    - name: Get client token
+      osac.service.client_token:
+        service_account: "{{ publish_templates_service_account }}"
+        namespace: "{{ publish_templates_namespace }}"
+        duration: 10m
+      register: fulfillment_service_client_token
+
+    - name: Discover templates
+      ansible.builtin.include_role:
+        name: osac.service.enumerate_templates
+
+    - name: Print cluster templates found.
+      ansible.builtin.debug:
+        var: osac_cluster_templates
+
+    - name: Print ComputeInstance templates found.
+      ansible.builtin.debug:
+        var: osac_compute_instance_templates
+
+    - name: Print BareMetalInstance templates found.
+      ansible.builtin.debug:
+        var: osac_bare_metal_instance_templates
+
+    - name: Print NetworkClass definitions found.
+      ansible.builtin.debug:
+        var: osac_network_classes
+
+    - name: Publish templates
+      ansible.builtin.include_role:
+        name: osac.service.publish_templates
+      vars:
+        osac_fulfillment_service_token: "{{ fulfillment_service_client_token.token }}"

@@ -1,0 +1,98 @@
+---
+- name: Skip deprovisioning if externalHostID is not set
+  when: bare_metal_instance.spec.externalHostID | default('', true) | length == 0
+  ansible.builtin.debug:
+    msg: "No externalHostID set, nothing to deprovision"
+
+- name: Deprovision bare metal host
+  when: bare_metal_instance.spec.externalHostID | default('', true) | length > 0
+  block:
+    - name: Parse externalHostID into namespace and name
+      ansible.builtin.set_fact:
+        bmh_namespace: "{{ bare_metal_instance.spec.externalHostID.split('/')[0] }}"
+        bmh_name: "{{ bare_metal_instance.spec.externalHostID.split('/')[1] }}"
+
+    - name: Get BareMetalHost
+      kubernetes.core.k8s_info:
+        api_version: metal3.io/v1alpha1
+        kind: BareMetalHost
+        namespace: "{{ bmh_namespace }}"
+        name: "{{ bmh_name }}"
+      register: bmh_result
+
+    - name: Skip deprovisioning if BareMetalHost not found
+      when: bmh_result.resources | length == 0
+      ansible.builtin.debug:
+        msg: "BareMetalHost '{{ bmh_namespace }}/{{ bmh_name }}' not found, skipping deprovisioning"
+
+    - name: Deprovision BMH
+      when: bmh_result.resources | length > 0
+      block:
+        - name: Extract BMH info
+          ansible.builtin.set_fact:
+            bmh_info: "{{ bmh_result.resources[0] }}"
+
+        - name: Check if BMH has an image set
+          ansible.builtin.set_fact:
+            bmh_has_image: "{{ bmh_info.spec.image is defined and bmh_info.spec.image.url is defined and bmh_info.spec.image.url | length > 0 }}"
+
+        - name: Skip deprovisioning when no image is set
+          when: not (bmh_has_image | bool)
+          ansible.builtin.debug:
+            msg: "BMH {{ bmh_namespace }}/{{ bmh_name }} has no image set, skipping deprovisioning"
+
+        - name: Remove image and networkData from BMH
+          when: bmh_has_image | bool
+          block:
+            - name: Patch BareMetalHost to remove image, networkData, userData, and metaData
+              kubernetes.core.k8s:
+                api_version: metal3.io/v1alpha1
+                kind: BareMetalHost
+                namespace: "{{ bmh_namespace }}"
+                name: "{{ bmh_name }}"
+                state: present
+                definition:
+                  spec:
+                    image: null
+                    networkData: null
+                    userData: null
+                    metaData: null
+
+            - name: Wait for BMH to reach available or ready state
+              kubernetes.core.k8s_info:
+                api_version: metal3.io/v1alpha1
+                kind: BareMetalHost
+                namespace: "{{ bmh_namespace }}"
+                name: "{{ bmh_name }}"
+              register: bmh_deprovision_status
+              until: bmh_deprovision_status.resources[0].status.provisioning.state | default('') in ["available", "ready"]
+              retries: 120
+              delay: 30
+
+        - name: Delete networkData Secret
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Secret
+            namespace: "{{ bmh_namespace }}"
+            name: "{{ bmh_name }}-network-data"
+            state: absent
+
+        - name: Delete userData Secret
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Secret
+            namespace: "{{ bmh_namespace }}"
+            name: "{{ bmh_name }}-user-data"
+            state: absent
+
+        - name: Delete metaData Secret
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Secret
+            namespace: "{{ bmh_namespace }}"
+            name: "{{ bmh_name }}-meta-data"
+            state: absent
+
+    - name: Metal3 deprovisioning completed
+      ansible.builtin.debug:
+        msg: "Metal3 deprovisioning completed for BMH {{ bmh_namespace }}/{{ bmh_name }}"

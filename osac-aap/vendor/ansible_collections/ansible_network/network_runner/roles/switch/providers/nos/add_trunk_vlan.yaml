@@ -1,0 +1,8 @@
+---
+- name: "nos: Add a vlan to a trunk port"
+  community.network.nos_config:
+    lines:
+      - "switchport trunk allowed vlan add {{ _vlan_id }}"
+    parents:
+      - "interface {{ port_name }}"
+  connection: network_cli

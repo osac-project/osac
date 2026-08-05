@@ -1,0 +1,37 @@
+---
+# Default variables for vippools integration tests
+# Override these in tests/integration/integration_config.yml
+
+# VAST system connection details
+# Leave empty to skip tests gracefully
+vast_vms: ""
+vast_username: ""
+vast_password: ""
+
+# Test VIP pool configuration - IPv6
+test_vippool_name: ansible-test-vippool-ipv6
+test_vippool_renamed: ansible-test-vippool-renamed-ipv6
+test_vippool_subnet_cidr_ipv6: 64
+test_vippool_ip_ranges:
+  - ["fec0:10::a", "fec0:10::14"]
+
+# Test VIP pool configuration - IPv4
+test_vippool_name_ipv4: ansible-test-vippool-ipv4
+test_vippool_renamed_ipv4: ansible-test-vippool-renamed-ipv4
+test_vippool_subnet_cidr: 24
+test_vippool_ip_ranges_ipv4:
+  - ["192.168.100.10", "192.168.100.20"]
+
+# Test VIP pool configuration - Dual Stack (IPv4 + IPv6)
+test_vippool_name_dual: ansible-test-vippool-dual
+test_vippool_renamed_dual: ansible-test-vippool-renamed-dual
+
+test_role: "PROTOCOLS"
+
+# Reusable connection dict — reference as ``vms: "{{ vms_auth }}"`` in tasks
+vms_auth:
+  host: "{{ vast_vms }}"
+  username: "{{ vast_username }}"
+  password: "{{ vast_password }}"
+  validate_certs: false
+  debug: true

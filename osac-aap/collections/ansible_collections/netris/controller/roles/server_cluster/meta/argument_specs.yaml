@@ -1,0 +1,56 @@
+---
+argument_specs:
+  main:
+    options:
+      server_cluster_state:
+        type: str
+        choices: [present, absent]
+        default: present
+        description: "Whether to create or delete the server cluster."
+
+  create:
+    options:
+      server_cluster_name:
+        type: str
+        required: true
+        description: "Name of the server cluster."
+      server_cluster_site_id:
+        type: int
+        required: true
+        description: "Netris site ID."
+      server_cluster_tenant_id:
+        type: int
+        default: 0
+        description: "Netris tenant ID."
+      server_cluster_template_id:
+        type: int
+        description: "Server cluster template ID."
+      server_cluster_servers:
+        type: list
+        default: []
+        description: "List of server names (strings) or server dicts (with name or id). Names are resolved to full server objects from Netris inventory."
+      server_cluster_tags:
+        type: list
+        elements: str
+        default: []
+        description: "Tags to apply to the server cluster."
+      server_cluster_admin_id:
+        type: int
+        description: "Admin tenant ID."
+      server_cluster_admin_name:
+        type: str
+        description: "Admin tenant name."
+      server_cluster_vpc_id:
+        type: int
+        description: "VPC id. Use 0 for 'Create New' (creates server cluster in a new VPC)."
+
+  delete:
+    options:
+      server_cluster_name:
+        type: str
+        required: true
+        description: "Name of the server cluster to delete."
+      server_cluster_site_id:
+        type: int
+        required: true
+        description: "Netris site ID."

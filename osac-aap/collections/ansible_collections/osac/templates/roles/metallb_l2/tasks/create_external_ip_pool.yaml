@@ -1,0 +1,80 @@
+---
+# Create MetalLB IPAddressPool and L2Advertisement for ExternalIPPool
+# 1. Creates IPAddressPool with autoAssign: false, avoidBuggyIPs: true, and addresses from CR spec.cidrs
+# 2. Creates L2Advertisement referencing the IPAddressPool by name
+
+- name: Include get remote cluster kubeconfig
+  ansible.builtin.include_role:
+    name: osac.service.common
+    tasks_from: get_remote_cluster_kubeconfig
+
+- name: Extract ExternalIPPool configuration
+  ansible.builtin.set_fact:
+    pool_name: "{{ external_ip_pool.metadata.name }}"
+    pool_cidrs: "{{ external_ip_pool.spec.cidrs }}"
+
+- name: Display ExternalIPPool information
+  ansible.builtin.debug:
+    msg:
+      - "Creating MetalLB resources for ExternalIPPool '{{ pool_name }}'"
+      - "CIDRs: {{ pool_cidrs }}"
+
+- name: Create IPAddressPool
+  kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    state: present
+    definition:
+      apiVersion: metallb.io/v1beta1
+      kind: IPAddressPool
+      metadata:
+        name: "{{ pool_name }}"
+        namespace: metallb-system
+        labels:
+          osac.openshift.io/externalippool: "{{ pool_name }}"
+          osac.openshift.io/managed-by: osac-fulfillment
+      spec:
+        autoAssign: false
+        avoidBuggyIPs: true  # skip .0 and .255
+        addresses: "{{ pool_cidrs }}"
+  register: ipaddresspool_result
+
+  # MetalLB webhook may not be ready yet after operator install
+  # Retry once every 10 seconds for 10 minutes
+  retries: 60
+  delay: 10
+  until: ipaddresspool_result is successful
+
+- name: Display IPAddressPool creation result
+  ansible.builtin.debug:
+    msg:
+      - "IPAddressPool '{{ pool_name }}' created successfully"
+      - "Changed: {{ ipaddresspool_result.changed | default(false) }}"
+
+- name: Create L2Advertisement
+  kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    state: present
+    definition:
+      apiVersion: metallb.io/v1beta1
+      kind: L2Advertisement
+      metadata:
+        name: "{{ pool_name }}-l2adv"
+        namespace: metallb-system
+        labels:
+          osac.openshift.io/externalippool: "{{ pool_name }}"
+          osac.openshift.io/managed-by: osac-fulfillment
+      spec:
+        ipAddressPools:
+          - "{{ pool_name }}"
+  register: l2advertisement_result
+
+  # MetalLB webhook may not be ready yet after operator install
+  retries: 60
+  delay: 10
+  until: l2advertisement_result is successful
+
+- name: Display L2Advertisement creation result
+  ansible.builtin.debug:
+    msg:
+      - "L2Advertisement '{{ pool_name }}-l2adv' created successfully"
+      - "Changed: {{ l2advertisement_result.changed | default(false) }}"

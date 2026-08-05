@@ -1,0 +1,181 @@
+---
+# Unit tests for osac.service.extract_template_info role.
+# Each play is guarded by a `when` condition -- only the play whose controlling
+# variable is defined will run. Pass exactly one variable per invocation.
+#
+# No cluster or external service required -- the role uses only set_fact and
+# from_json on in-memory variables.
+#
+#   Test 1 (happy path -- fully qualified template ID):
+#     ansible-playbook ... -e test_qualified_id=true
+#
+#   Test 2 (unqualified template ID -- gets osac.templates. prefix):
+#     ansible-playbook ... -e test_unqualified_id=true
+#
+#   Test 3 (pre-defined template_id -- role skips extraction):
+#     ansible-playbook ... -e test_predefined_id=true
+#
+#   Test 4 (empty template parameters -- valid JSON empty object):
+#     ansible-playbook ... -e test_empty_params=true
+
+# ──────────────────────────────────────────────────────────────
+# Test 1: Fully qualified template ID with parameters
+# Expected: extracts template_id, template_parameters, node_requests
+# ──────────────────────────────────────────────────────────────
+- name: "Test extract_template_info -- fully qualified template ID"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Set up ClusterOrder fixture
+      ansible.builtin.set_fact:
+        cluster_order:
+          spec:
+            templateID: "osac.templates.ocp_small"
+            templateParameters: '{"pull_secret": "test-secret", "ssh_public_key": "ssh-rsa AAAA"}'
+            nodeRequests:
+              - resourceClass: fc430
+                numberOfNodes: 2
+      when: test_qualified_id | default(false) | bool
+
+    - name: Run extract_template_info role
+      ansible.builtin.include_role:
+        name: osac.service.extract_template_info
+      when: test_qualified_id | default(false) | bool
+
+    - name: Verify template_id extracted correctly
+      ansible.builtin.assert:
+        that:
+          - template_id is defined
+          - template_id == "osac.templates.ocp_small"
+        fail_msg: "template_id should be 'osac.templates.ocp_small', got '{{ template_id | default('undefined') }}'"
+        success_msg: "template_id extracted: {{ template_id }}"
+      when: test_qualified_id | default(false) | bool
+
+    - name: Verify template_parameters parsed from JSON
+      ansible.builtin.assert:
+        that:
+          - template_parameters is defined
+          - template_parameters is mapping
+          - template_parameters.pull_secret == "test-secret"
+          - template_parameters.ssh_public_key == "ssh-rsa AAAA"
+        fail_msg: "template_parameters not parsed correctly: {{ template_parameters | default('undefined') }}"
+        success_msg: "template_parameters parsed: {{ template_parameters | length }} key(s)"
+      when: test_qualified_id | default(false) | bool
+
+    - name: Verify node_requests extracted
+      ansible.builtin.assert:
+        that:
+          - node_requests is defined
+          - node_requests | length == 1
+          - node_requests[0].resourceClass == "fc430"
+          - node_requests[0].numberOfNodes == 2
+        fail_msg: "node_requests not extracted correctly: {{ node_requests | default('undefined') }}"
+        success_msg: "node_requests extracted: {{ node_requests | length }} request(s)"
+      when: test_qualified_id | default(false) | bool
+
+# ──────────────────────────────────────────────────────────────
+# Test 2: Unqualified template ID -- gets osac.templates. prefix
+# Expected: template_id prefixed with "osac.templates."
+# ──────────────────────────────────────────────────────────────
+- name: "Test extract_template_info -- unqualified template ID"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Set up ClusterOrder with unqualified template ID
+      ansible.builtin.set_fact:
+        cluster_order:
+          spec:
+            templateID: "ocp_small"
+            templateParameters: '{}'
+            nodeRequests: []
+      when: test_unqualified_id | default(false) | bool
+
+    - name: Run extract_template_info role
+      ansible.builtin.include_role:
+        name: osac.service.extract_template_info
+      when: test_unqualified_id | default(false) | bool
+
+    - name: Verify template_id was prefixed
+      ansible.builtin.assert:
+        that:
+          - template_id is defined
+          - template_id == "osac.templates.ocp_small"
+        fail_msg: "Expected 'osac.templates.ocp_small', got '{{ template_id | default('undefined') }}'"
+        success_msg: "Unqualified ID correctly prefixed: {{ template_id }}"
+      when: test_unqualified_id | default(false) | bool
+
+# ──────────────────────────────────────────────────────────────
+# Test 3: Pre-defined template_id -- role skips extraction
+# Expected: template_id not overwritten by role
+# ──────────────────────────────────────────────────────────────
+- name: "Test extract_template_info -- pre-defined template_id preserved"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Pre-define template_id and set up ClusterOrder
+      ansible.builtin.set_fact:
+        template_id: "custom.collection.my_template"
+        cluster_order:
+          spec:
+            templateID: "osac.templates.ocp_small"
+            templateParameters: '{}'
+            nodeRequests: []
+      when: test_predefined_id | default(false) | bool
+
+    - name: Run extract_template_info role
+      ansible.builtin.include_role:
+        name: osac.service.extract_template_info
+      when: test_predefined_id | default(false) | bool
+
+    - name: Verify pre-defined template_id was preserved
+      ansible.builtin.assert:
+        that:
+          - template_id == "custom.collection.my_template"
+        fail_msg: "Pre-defined template_id was overwritten: '{{ template_id }}'"
+        success_msg: "Pre-defined template_id preserved: {{ template_id }}"
+      when: test_predefined_id | default(false) | bool
+
+# ──────────────────────────────────────────────────────────────
+# Test 4: Empty template parameters -- valid JSON empty object
+# Expected: template_parameters is an empty dict
+# ──────────────────────────────────────────────────────────────
+- name: "Test extract_template_info -- empty template parameters"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Set up ClusterOrder with empty parameters
+      ansible.builtin.set_fact:
+        cluster_order:
+          spec:
+            templateID: "osac.templates.ocp_virt_vm"
+            templateParameters: '{}'
+            nodeRequests: []
+      when: test_empty_params | default(false) | bool
+
+    - name: Run extract_template_info role
+      ansible.builtin.include_role:
+        name: osac.service.extract_template_info
+      when: test_empty_params | default(false) | bool
+
+    - name: Verify empty parameters parsed correctly
+      ansible.builtin.assert:
+        that:
+          - template_parameters is defined
+          - template_parameters is mapping
+          - template_parameters | length == 0
+        fail_msg: "Empty parameters not handled: {{ template_parameters | default('undefined') }}"
+        success_msg: "Empty parameters parsed as empty dict"
+      when: test_empty_params | default(false) | bool
+
+    - name: Verify empty node_requests
+      ansible.builtin.assert:
+        that:
+          - node_requests is defined
+          - node_requests | length == 0
+        fail_msg: "Empty node_requests not handled"
+        success_msg: "Empty node_requests handled correctly"
+      when: test_empty_params | default(false) | bool

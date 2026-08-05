@@ -1,0 +1,7 @@
+---
+- name: "DNS record deletion skipped (noop) - {{ dns_record_name }}"
+  ansible.builtin.debug:
+    msg: >-
+      Skipping DNS {{ dns_record_type }} record deletion:
+      {{ dns_record_name }}.
+      Remove this record manually if no longer needed.

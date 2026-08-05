@@ -1,0 +1,12 @@
+---
+- name: "junos: create vlan"
+  junos_command:
+    commands:
+      - config
+      - "set vlans {{ _vlan_name }} vlan-id {{ _vlan_id }}"
+      - commit
+  register: result
+  retries: "{{ _retries }}"
+  delay: "{{ _delay }}"
+  until: result.msg is not defined or result.msg.find(junos_retries_msg) == -1
+  connection: network_cli

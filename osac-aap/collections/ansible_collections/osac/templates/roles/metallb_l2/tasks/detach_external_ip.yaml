@@ -1,0 +1,273 @@
+---
+- name: Include get remote cluster kubeconfig
+  ansible.builtin.include_role:
+    name: osac.service.common
+    tasks_from: get_remote_cluster_kubeconfig
+
+- name: Validate ExternalIPAttachment fields and annotations
+  ansible.builtin.assert:
+    that:
+      - external_ip_attachment.metadata is defined
+      - external_ip_attachment.metadata.name is defined
+      - external_ip_attachment.metadata.name | length > 0
+      - external_ip_attachment.metadata.namespace is defined
+      - external_ip_attachment.metadata.namespace | length > 0
+      - external_ip_attachment.metadata.annotations is defined
+      - "'osac.openshift.io/externalippool-name' in external_ip_attachment.metadata.annotations"
+      - external_ip_attachment.metadata.annotations['osac.openshift.io/externalippool-name'] | length > 0
+      - "'osac.openshift.io/externalip-target-namespace' in external_ip_attachment.metadata.annotations"
+      - external_ip_attachment.metadata.annotations['osac.openshift.io/externalip-target-namespace'] | length > 0
+    fail_msg: >-
+      ExternalIPAttachment is missing required fields/annotations:
+      metadata.name and metadata.namespace must be set,
+      and annotations osac.openshift.io/externalippool-name and
+      osac.openshift.io/externalip-target-namespace must both be present and non-empty.
+
+- name: Extract ExternalIPAttachment detach configuration
+  ansible.builtin.set_fact:
+    external_ip_name: >-
+      {{ external_ip_attachment.metadata.annotations['osac.openshift.io/externalip-name']
+         | default(external_ip_attachment.metadata.name) }}
+    detach_vm_namespace: >-
+      {{ external_ip_attachment.metadata.annotations['osac.openshift.io/externalip-target-namespace'] }}
+    detach_pool_name: >-
+      {{ external_ip_attachment.metadata.annotations['osac.openshift.io/externalippool-name'] }}
+    detach_compute_instance_uuid: >-
+      {{ ((external_ip_attachment.spec | default({})).computeInstance | default('')) | trim }}
+
+- name: Fetch ComputeInstance CR
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: osac.openshift.io/v1alpha1
+    kind: ComputeInstance
+    namespace: "{{ external_ip_attachment.metadata.namespace }}"
+    label_selectors:
+      - "osac.openshift.io/computeinstance-uuid={{ detach_compute_instance_uuid }}"
+  register: detach_ci_lookup
+  when: detach_compute_instance_uuid | length > 0
+
+- name: Fail if ComputeInstance lookup is ambiguous
+  ansible.builtin.fail:
+    msg: >-
+      Multiple ComputeInstance resources matched uuid
+      '{{ detach_compute_instance_uuid }}' in namespace
+      '{{ external_ip_attachment.metadata.namespace }}'; expected exactly one.
+  when:
+    - detach_ci_lookup is not skipped
+    - detach_ci_lookup.resources | default([]) | length > 1
+
+- name: Extract ComputeInstance name from fetched CR
+  ansible.builtin.set_fact:
+    detach_compute_instance_name: "{{ detach_ci_lookup.resources[0].metadata.name }}"
+  when:
+    - detach_ci_lookup is not skipped
+    - detach_ci_lookup.resources | default([]) | length == 1
+
+# Read the IP from the VM namespace LB Service before deleting it.
+- name: Read IP from VM namespace LoadBalancer Service
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: v1
+    kind: Service
+    name: "osac-eip-{{ external_ip_name }}-ingress"
+    namespace: "{{ detach_vm_namespace }}"
+  register: lb_service_info
+
+- name: Set detach_already_done when LB Service is already gone (redelivery)
+  ansible.builtin.set_fact:
+    detach_already_done: true
+  when: >-
+    lb_service_info.resources | length == 0 or
+    lb_service_info.resources[0].status.loadBalancer.ingress | default([]) | length == 0
+
+- name: Set detach_already_done to false when LB Service exists
+  ansible.builtin.set_fact:
+    detach_already_done: false
+  when: detach_already_done is not defined
+
+- name: Display detach already completed (redelivery)
+  ansible.builtin.debug:
+    msg: >-
+      LoadBalancer Service 'osac-eip-{{ external_ip_name }}-ingress' not found in '{{ detach_vm_namespace }}'.
+      Detach already completed (idempotent redelivery).
+  when: detach_already_done
+
+- name: Extract IP address and VM name from VM namespace LB Service
+  ansible.builtin.set_fact:
+    detach_ip_address: "{{ lb_service_info.resources[0].status.loadBalancer.ingress[0].ip }}"
+    detach_vm_name_from_svc: >-
+      {{ (lb_service_info.resources[0].spec.selector | default({}))['vm.kubevirt.io/name'] | default('') }}
+  when: not detach_already_done
+
+- name: Set ComputeInstance name from LB Service selector if not already known
+  ansible.builtin.set_fact:
+    detach_compute_instance_name: "{{ detach_vm_name_from_svc }}"
+  when:
+    - not detach_already_done
+    - detach_compute_instance_name is not defined
+    - detach_vm_name_from_svc | length > 0
+
+- name: Display ExternalIPAttachment detach information
+  ansible.builtin.debug:
+    msg:
+      - "Deleting ExternalIPAttachment '{{ external_ip_name }}'"
+      - "IP address: {{ detach_ip_address }} (read from VM namespace LB Service)"
+      - "Pool: {{ detach_pool_name }}"
+      - "VM namespace: {{ detach_vm_namespace }}"
+      - "ComputeInstance: {{ detach_compute_instance_name | default('not available') }}"
+  when: not detach_already_done
+
+# Delete the LB Service, clear the annotation, and restore the placeholder atomically.
+# The rescue restores the LB Service if placeholder re-creation fails so the IP
+# is never left unparked without a reservation in metallb-system.
+- name: Detach ExternalIP - remove LB Service, clear annotation, restore placeholder
+  when: not detach_already_done
+  block:
+    - name: Delete LoadBalancer Service from VM namespace
+      kubernetes.core.k8s:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+        state: absent
+        api_version: v1
+        kind: Service
+        name: "osac-eip-{{ external_ip_name }}-ingress"
+        namespace: "{{ detach_vm_namespace }}"
+        wait: true
+        wait_timeout: 60
+      register: lb_service_delete_result
+      retries: 3
+      delay: 5
+      until: lb_service_delete_result is successful
+      failed_when:
+        - lb_service_delete_result.failed | default(false)
+        - "'NotFound' not in (lb_service_delete_result.msg | default(''))"
+
+    - name: Display LB Service deletion result
+      ansible.builtin.debug:
+        msg:
+          - "LoadBalancer Service 'osac-eip-{{ external_ip_name }}-ingress' deleted from '{{ detach_vm_namespace }}'"
+          - "Changed: {{ lb_service_delete_result.changed | default(false) }}"
+
+    - name: Re-create placeholder Service in metallb-system
+      kubernetes.core.k8s:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+        state: present
+        apply: true
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: "osac-eip-{{ external_ip_name }}"
+            namespace: metallb-system
+            labels:
+              osac.openshift.io/externalip: "{{ external_ip_name }}"
+              osac.openshift.io/managed-by: osac-fulfillment
+            annotations:
+              metallb.universe.tf/address-pool: "{{ detach_pool_name }}"
+              metallb.universe.tf/loadBalancerIPs: "{{ detach_ip_address }}"
+          spec:
+            type: LoadBalancer
+            selector: {}
+            ports:
+              - name: placeholder
+                protocol: TCP
+                port: 65535
+                targetPort: 65535
+      register: placeholder_service_result
+      retries: 60
+      delay: 10
+      until: placeholder_service_result is successful
+
+    - name: Display placeholder Service creation result
+      ansible.builtin.debug:
+        msg:
+          - "Placeholder Service 'osac-eip-{{ external_ip_name }}' re-created in metallb-system"
+          - "IP preserved: {{ detach_ip_address }}"
+          - "Changed: {{ placeholder_service_result.changed | default(false) }}"
+
+  rescue:
+    - name: Restore LoadBalancer Service in VM namespace after failed placeholder re-creation
+      kubernetes.core.k8s:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+        state: present
+        apply: true
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: "osac-eip-{{ external_ip_name }}-ingress"
+            namespace: "{{ detach_vm_namespace }}"
+            labels:
+              osac.openshift.io/externalip: "{{ external_ip_name }}"
+              osac.openshift.io/managed-by: osac-fulfillment
+            annotations:
+              metallb.universe.tf/address-pool: "{{ detach_pool_name }}"
+              metallb.universe.tf/loadBalancerIPs: "{{ detach_ip_address }}"
+          spec:
+            type: LoadBalancer
+            selector:
+              vm.kubevirt.io/name: "{{ detach_compute_instance_name }}"
+            ports:
+              - name: ssh
+                port: 22
+                targetPort: 22
+                protocol: TCP
+      when:
+        - lb_service_delete_result.changed | default(false)
+        - detach_compute_instance_name is defined
+      register: rescue_lb_result
+      retries: 3
+      delay: 5
+      until: rescue_lb_result is successful
+
+    - name: Fail after attempted rollback of detach operation
+      ansible.builtin.fail:
+        msg: >-
+          Detach of ExternalIP '{{ external_ip_name }}' failed; the LoadBalancer Service
+          'osac-eip-{{ external_ip_name }}-ingress' in '{{ detach_vm_namespace }}' has been restored
+          if it had been deleted. Check the preceding error for details.
+
+# Remove the external-ip-address annotation from the ComputeInstance CR.
+- name: Fetch ComputeInstance to inspect annotations
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: osac.openshift.io/v1alpha1
+    kind: ComputeInstance
+    name: "{{ detach_compute_instance_name }}"
+    namespace: "{{ external_ip_attachment.metadata.namespace }}"
+  register: ci_info
+  when: detach_compute_instance_name is defined
+
+- name: Remove external-ip-address annotation from ComputeInstance CR
+  kubernetes.core.k8s_json_patch:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: osac.openshift.io/v1alpha1
+    kind: ComputeInstance
+    name: "{{ detach_compute_instance_name }}"
+    namespace: "{{ external_ip_attachment.metadata.namespace }}"
+    patch:
+      - op: remove
+        path: /metadata/annotations/osac.openshift.io~1external-ip-address
+  register: ci_patch_result
+  when:
+    - detach_compute_instance_name is defined
+    - ci_info is not skipped
+    - ci_info.resources | length > 0
+    - (ci_info.resources[0].metadata.annotations | default({}))
+      ['osac.openshift.io/external-ip-address'] is defined
+
+- name: Display ComputeInstance annotation removal result
+  ansible.builtin.debug:
+    msg:
+      - "ComputeInstance '{{ detach_compute_instance_name }}': external-ip-address annotation removed"
+      - "Changed: {{ ci_patch_result.changed | default(false) }}"
+  when:
+    - detach_compute_instance_name is defined
+    - ci_patch_result is defined
+    - ci_patch_result is not skipped
+
+- name: Display ComputeInstance annotation cleanup skipped
+  ansible.builtin.debug:
+    msg: >-
+      ComputeInstance annotation cleanup skipped
+      (spec.computeInstance was not available during detach)
+  when: detach_compute_instance_name is not defined

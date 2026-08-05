@@ -1,0 +1,628 @@
+---
+# Integration tests for protectedpaths module
+# These tests run against a real VAST system
+#
+# Configuration:
+# Set values in tests/integration/integration_config.yml
+
+# ====================
+# Setup
+# ====================
+
+- name: Check if credentials are available
+  ansible.builtin.set_fact:
+    has_credentials: "{{ (vast_vms | default('') | length > 0) and (vast_username | default('') | length > 0) and (vast_password | default('') | length > 0) }}"
+
+- name: Set test conditions
+  ansible.builtin.set_fact:
+    can_run_tests: "{{ has_credentials }}"
+
+- name: Generate unique protectedpath names for this test run
+  ansible.builtin.set_fact:
+    test_protectedpath_name_unique: "{{ test_protectedpath_name }}-{{ ansible_date_time.epoch }}"
+    test_protectedpath_name_updated_unique: "{{ test_protectedpath_name_updated }}-{{ ansible_date_time.epoch }}"
+  when: can_run_tests | bool
+
+# ====================
+# Setup - Create Prerequisites
+# ====================
+
+- name: Get default tenant for testing
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "default"
+    state: present
+  register: tenant_result
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Set default tenant ID from result
+  ansible.builtin.set_fact:
+    test_tenant_id: "{{ tenant_result.tenants.id }}"
+  when: can_run_tests | bool and tenant_result.tenants is defined
+
+- name: Create test protection policy for protectedpath testing
+  vastdata.vms.protectionpolicies:
+    vms: "{{ vms_auth }}"
+    name: "ansible-test-protection-policy-{{ ansible_date_time.epoch }}"
+    prefix: "snap-{{ ansible_date_time.epoch }}"
+    clone_type: "LOCAL"
+    frames:
+      - every: "1h"
+        keep-local: "1h"
+    indestructible: false
+    state: present
+  register: test_policy_result
+  when: can_run_tests | bool and (test_protection_policy_id is not defined or test_protection_policy_id == '')
+  failed_when: false
+
+- name: Set test protection policy ID from created policy
+  ansible.builtin.set_fact:
+    test_protection_policy_id: "{{ test_policy_result.protectionpolicies.id }}"
+  when: test_policy_result is not skipped and test_policy_result.protectionpolicies is defined
+
+- name: Skip tests if no protection policy could be created or found
+  ansible.builtin.set_fact:
+    can_run_tests: false
+  when: can_run_tests | bool and (test_protection_policy_id is not defined or test_protection_policy_id == '')
+
+- name: Debug protection policy status
+  ansible.builtin.debug:
+    msg: "Using protection policy ID: {{ test_protection_policy_id }}"
+  when: can_run_tests | bool and test_protection_policy_id is defined
+
+- name: Create test view for source directory
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_source_dir }}"
+    policy_id: "{{ test_view_policy_id }}"
+    protocols: ["NFS"]
+    create_dir: true
+    state: present
+  register: test_view
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Get view ID for protectedpath creation
+  ansible.builtin.set_fact:
+    test_view_id: "{{ test_view.views.id }}"
+  when: test_view is not skipped and test_view.views is defined
+
+# ====================
+# Cleanup - Remove existing test protectedpaths if present
+# ====================
+
+- name: Clean up - ensure test protectedpath doesn't exist before starting
+  vastdata.vms.protectedpaths:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectedpath_name_unique }}"
+    state: absent
+  register: cleanup_result
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Clean up - ensure updated test protectedpath doesn't exist
+  vastdata.vms.protectedpaths:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectedpath_name_updated_unique }}"
+    state: absent
+  register: cleanup_result
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Clean up - ensure delcheck test protectedpath doesn't exist
+  vastdata.vms.protectedpaths:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectedpath_name_unique }}-delcheck"
+    state: absent
+  register: cleanup_result
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Wait for cleanup to complete (async delete)
+  ansible.builtin.pause:
+    seconds: 5
+  when: can_run_tests | bool and cleanup_result is changed
+
+# ====================
+# Create Tests
+# ====================
+
+- name: Test creating a protectedpath
+  vastdata.vms.protectedpaths:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectedpath_name_unique }}"
+    source_dir: "{{ test_source_dir }}"
+    target_exported_dir: "{{ test_target_exported_dir }}"
+    tenant_id: "{{ test_tenant_id }}"
+    capabilities: "{{ test_capabilities }}"
+    protection_policy_id: "{{ test_protection_policy_id }}" # Add this line
+    enabled: true
+    state: present
+  register: result
+  when: can_run_tests | bool and test_tenant_id is defined
+
+- name: Verify protectedpath was created
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.protectedpaths is defined
+      - result.protectedpaths.name == test_protectedpath_name_unique
+      - result.protectedpaths.id is defined
+      - result.diff is defined
+      - result.diff.before == {}
+      - result.diff.after is defined
+  when: result is not skipped
+
+- name: Save protectedpath ID for later tests
+  ansible.builtin.set_fact:
+    test_protectedpath_id: "{{ result.protectedpaths.id }}"
+  when: result is not skipped
+
+# ====================
+# Idempotency Tests - Create
+# ====================
+
+- name: Test idempotency - create same protectedpath again
+  vastdata.vms.protectedpaths:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectedpath_name_unique }}"
+    source_dir: "{{ test_source_dir }}"
+    target_exported_dir: "{{ test_target_exported_dir }}"
+    tenant_id: "{{ test_tenant_id }}"
+    capabilities: "{{ test_capabilities }}"
+    enabled: true
+    state: present
+  register: result
+  when: can_run_tests | bool and test_protectedpath_id is defined
+
+- name: Verify idempotency (should not change)
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: result is not skipped
+
+- name: Test idempotency - rerun exact same playbook with immutable fields
+  vastdata.vms.protectedpaths:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectedpath_name_unique }}"
+    source_dir: "{{ test_source_dir }}"
+    target_exported_dir: "{{ test_target_exported_dir }}"
+    tenant_id: "{{ test_tenant_id }}"
+    capabilities: "{{ test_capabilities }}"
+    protection_policy_id: "{{ test_protection_policy_id }}"
+    enabled: true
+    state: present
+  register: result
+  when: can_run_tests | bool and test_protectedpath_id is defined
+
+- name: Verify idempotency with immutable fields (should not change)
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+    fail_msg: "Idempotency failed when re-running with immutable fields (protection_policy_id, target_exported_dir)"
+  when: result is not skipped
+
+# ====================
+# Update Tests - Enable/Disable
+# ====================
+
+- name: Test updating protectedpath - disable
+  vastdata.vms.protectedpaths:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectedpath_name_unique }}"
+    enabled: false
+    state: present
+  register: result
+  when: can_run_tests | bool and test_protectedpath_id is defined
+
+- name: Verify protectedpath was disabled
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.protectedpaths is defined
+      - result.diff is defined
+      - result.diff.before is defined
+      - result.diff.after is defined
+  when: result is not skipped
+
+- name: Test update idempotency - disable
+  vastdata.vms.protectedpaths:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectedpath_name_unique }}"
+    enabled: false
+    state: present
+  register: result
+  when: can_run_tests | bool and test_protectedpath_id is defined
+
+- name: Verify update idempotency
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: result is not skipped
+
+- name: Test updating protectedpath - re-enable
+  vastdata.vms.protectedpaths:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectedpath_name_unique }}"
+    enabled: true
+    state: present
+  register: result
+  when: can_run_tests | bool and test_protectedpath_id is defined
+
+- name: Verify protectedpath was re-enabled
+  ansible.builtin.assert:
+    that:
+      - result is changed
+  when: result is not skipped
+
+# ====================
+# Update Tests - Lease Expiry Time
+# ====================
+
+- name: Test updating protectedpath - set lease expiry time
+  vastdata.vms.protectedpaths:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectedpath_name_unique }}"
+    lease_expiry_time: "{{ test_lease_expiry_time }}"
+    state: present
+  register: result
+  when: can_run_tests | bool and test_protectedpath_id is defined
+
+- name: Verify lease expiry time was updated
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.protectedpaths is defined
+      - result.diff is defined
+  when: result is not skipped
+
+- name: Test update idempotency - lease expiry time
+  vastdata.vms.protectedpaths:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectedpath_name_unique }}"
+    lease_expiry_time: "{{ test_lease_expiry_time }}"
+    state: present
+  register: result
+  when: can_run_tests | bool and test_protectedpath_id is defined
+
+- name: Verify update idempotency
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: result is not skipped
+
+# ====================
+# Lookup by ID Tests
+# ====================
+
+- name: Test lookup by ID
+  vastdata.vms.protectedpaths:
+    vms: "{{ vms_auth }}"
+    id: "{{ test_protectedpath_id }}"
+    state: present
+  register: result
+  when: can_run_tests | bool and test_protectedpath_id is defined
+
+- name: Verify lookup by ID works
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+      - result.protectedpaths is defined
+      - result.protectedpaths.id == test_protectedpath_id
+      - result.protectedpaths.name == test_protectedpath_name_unique
+  when: result is not skipped
+
+# ====================
+# Check Mode Tests - Create
+# ====================
+
+- name: Test check mode - create new protectedpath
+  vastdata.vms.protectedpaths:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectedpath_name_unique }}-checkmode"
+    source_dir: "{{ test_source_dir }}"
+    target_exported_dir: "{{ test_target_exported_dir }}"
+    tenant_id: "{{ test_tenant_id }}"
+    capabilities: "{{ test_capabilities }}"
+    state: present
+  check_mode: true
+  register: result
+  when: can_run_tests | bool and test_tenant_id is defined
+
+- name: Verify check mode create reported changes
+  ansible.builtin.assert:
+    that:
+      - result is changed
+  when: result is not skipped
+
+- name: Verify check mode didn't actually create the protectedpath
+  vastdata.vms.protectedpaths:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectedpath_name_unique }}-checkmode"
+    state: absent
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify protectedpath was never created
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: result is not skipped
+
+# ====================
+# Check Mode Tests - Update
+# ====================
+
+- name: Test check mode - update existing protectedpath
+  vastdata.vms.protectedpaths:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectedpath_name_unique }}"
+    enabled: false
+    state: present
+  check_mode: true
+  register: result
+  when: can_run_tests | bool and test_protectedpath_id is defined
+
+- name: Verify check mode update reported changes
+  ansible.builtin.assert:
+    that:
+      - result is changed
+  when: result is not skipped
+
+- name: Verify check mode didn't actually update
+  vastdata.vms.protectedpaths:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectedpath_name_unique }}"
+    state: present
+  register: result
+  when: can_run_tests | bool and test_protectedpath_id is defined
+
+- name: Verify protectedpath was not updated by check mode
+  ansible.builtin.assert:
+    that:
+      - result.protectedpaths.enabled == true
+  when: result is not skipped
+
+# ====================
+# Check Mode Tests - Lookup
+# ====================
+
+- name: Test check mode - lookup existing resource
+  vastdata.vms.protectedpaths:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectedpath_name_unique }}"
+    state: present
+  check_mode: true
+  register: result
+  when: can_run_tests | bool and test_protectedpath_id is defined
+
+- name: Verify check mode lookup works
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+      - result.protectedpaths is defined
+  when: result is not skipped
+
+# ====================
+# Delete Tests
+# ====================
+
+- name: Test deleting protectedpath
+  vastdata.vms.protectedpaths:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectedpath_name_unique }}"
+    state: absent
+  register: result
+  when: can_run_tests | bool and test_protectedpath_id is defined
+
+- name: Verify protectedpath was deleted
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.diff is defined
+      - result.diff.before is defined
+      - result.diff.after == {}
+  when: result is not skipped
+
+# ====================
+# Idempotency Tests - Delete
+# ====================
+
+- name: Test delete idempotency - delete again
+  vastdata.vms.protectedpaths:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectedpath_name_unique }}"
+    state: absent
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify delete idempotency
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: result is not skipped
+
+# ====================
+# Check Mode Delete Test
+# ====================
+
+- name: Create protectedpath for check mode delete test
+  vastdata.vms.protectedpaths:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectedpath_name_unique }}-delcheck"
+    source_dir: "{{ test_source_dir }}"
+    target_exported_dir: "{{ test_target_exported_dir }}"
+    tenant_id: "{{ test_tenant_id }}"
+    capabilities: "{{ test_capabilities }}"
+    protection_policy_id: "{{ test_protection_policy_id }}"
+    state: present
+  register: result
+  when: can_run_tests | bool and test_tenant_id is defined
+
+- name: Test check mode - delete
+  vastdata.vms.protectedpaths:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectedpath_name_unique }}-delcheck"
+    state: absent
+  check_mode: true
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify check mode reported deletion
+  ansible.builtin.assert:
+    that:
+      - result is changed
+  when: result is not skipped
+
+- name: Verify check mode didn't actually delete
+  vastdata.vms.protectedpaths:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectedpath_name_unique }}-delcheck"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Check that protectedpath still exists
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+      - result.protectedpaths is defined
+  when: result is not skipped
+
+- name: Clean up check mode delete test protectedpath
+  vastdata.vms.protectedpaths:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectedpath_name_unique }}-delcheck"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# Error Handling Tests
+# ====================
+
+- name: Test error handling - missing name and ID
+  vastdata.vms.protectedpaths:
+    vms: "{{ vms_auth }}"
+    source_dir: "{{ test_source_dir }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+  ignore_errors: true
+
+- name: Verify error was caught
+  ansible.builtin.assert:
+    that:
+      - result is failed
+  when: result is not skipped
+
+- name: Test error handling - invalid state
+  vastdata.vms.protectedpaths:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectedpath_name_unique }}"
+    state: invalid
+  register: result
+  when: can_run_tests | bool
+  ignore_errors: true
+
+- name: Verify error was caught
+  ansible.builtin.assert:
+    that:
+      - result is failed
+  when: result is not skipped
+
+- name: Test error handling - missing required fields on create
+  vastdata.vms.protectedpaths:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectedpath_name_unique }}-nofields"
+    state: present
+  register: result
+  when: can_run_tests | bool
+  ignore_errors: true
+
+- name: Verify error was caught for missing fields
+  ansible.builtin.assert:
+    that:
+      - result is failed
+  when: result is not skipped
+
+# ====================
+# Cleanup Prerequisites
+# ====================
+
+- name: Clean up test view
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_source_dir }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# Final Cleanup
+# ====================
+
+- name: Final cleanup - remove test protectedpath if it exists
+  vastdata.vms.protectedpaths:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectedpath_name_unique }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Final cleanup - remove updated test protectedpath if it exists
+  vastdata.vms.protectedpaths:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectedpath_name_updated_unique }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Final cleanup - remove delcheck test protectedpath if it exists
+  vastdata.vms.protectedpaths:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectedpath_name_unique }}-delcheck"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Final cleanup - remove checkmode test protectedpath if it exists
+  vastdata.vms.protectedpaths:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectedpath_name_unique }}-checkmode"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Final cleanup - remove test view if it exists
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_source_dir }}"
+    state: absent
+  when: test_view is defined and test_view is changed
+  failed_when: false
+
+- name: Final cleanup - remove test protection policy if it was created
+  vastdata.vms.protectionpolicies:
+    vms: "{{ vms_auth }}"
+    name: "ansible-test-protection-policy-{{ ansible_date_time.epoch }}"
+    state: absent
+  when: test_policy_result is defined and test_policy_result is changed
+  failed_when: false
+
+- name: Skip message when no credentials
+  ansible.builtin.debug:
+    msg: |
+      Skipping protectedpaths integration tests - credentials not configured.
+
+      To enable integration tests, set credentials in:
+        tests/integration/integration_config.yml
+
+      Example:
+        vast_vms: "vast-vms.example.com"
+        vast_username: "admin"
+        vast_password: "password"
+
+      Then run: ansible-test integration protectedpaths -v
+  when: not (can_run_tests | bool)

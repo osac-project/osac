@@ -1,0 +1,4 @@
+---
+- name: Read server cluster template
+  when: server_cluster_template_state == 'read'
+  ansible.builtin.include_tasks: read.yaml

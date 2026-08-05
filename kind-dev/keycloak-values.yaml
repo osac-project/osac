@@ -1,0 +1,185 @@
+hostname: keycloak.osac.localhost
+
+admin:
+  username: admin
+  password: password
+
+certs:
+  issuerRef:
+    kind: ClusterIssuer
+    name: default-ca
+  caBundle:
+    configMap: ca-bundle
+
+database:
+  connection:
+    - configMap:
+        name: keycloak-database-config
+        items:
+          - key: url
+            param: url
+          - key: user
+            param: user
+          - key: password
+            param: password
+          - key: sslmode
+            param: sslmode
+    - secret:
+        name: keycloak-database-client-cert
+        items:
+          - key: tls.crt
+            param: sslcert
+          - key: key.der
+            param: sslkey
+          - key: ca.crt
+            param: sslrootcert
+
+groups:
+  - name: admins
+    path: /admins
+  - name: users
+    path: /users
+  - name: engineering
+    path: /engineering
+  - name: sales
+    path: /sales
+
+users:
+  - username: admin
+    enabled: true
+    firstName: "Ms."
+    lastName: "Admin"
+    email: admin@example.com
+    emailVerified: true
+    groups:
+      - /admins
+    credentials:
+      - type: password
+        value: password
+        temporary: false
+  - username: user
+    enabled: true
+    firstName: "Mr."
+    lastName: "User"
+    email: user@example.com
+    emailVerified: true
+    groups:
+      - /users
+    credentials:
+      - type: password
+        value: password
+        temporary: false
+  - username: adam
+    enabled: true
+    firstName: adam
+    lastName: adam
+    email: adam@example.com
+    emailVerified: true
+    groups:
+      - /engineering
+    credentials:
+      - type: password
+        value: password
+        temporary: false
+  - username: ben
+    enabled: true
+    firstName: ben
+    lastName: ben
+    email: ben@example.com
+    emailVerified: true
+    groups:
+      - /engineering
+      - /sales
+    credentials:
+      - type: password
+        value: password
+        temporary: false
+  - username: charles
+    enabled: true
+    firstName: charles
+    lastName: charles
+    email: charles@example.com
+    emailVerified: true
+    groups:
+      - /sales
+    credentials:
+      - type: password
+        value: password
+        temporary: false
+  # Service account users
+  - username: service-account-osac-admin
+    enabled: true
+    serviceAccountClientId: osac-admin
+  - username: service-account-osac-controller
+    enabled: true
+    serviceAccountClientId: osac-controller
+    clientRoles:
+      realm-management:
+        - manage-realm
+        - manage-users
+        - view-realm
+        - view-users
+        - manage-identity-providers
+        - view-identity-providers
+
+clients:
+  - name: OSAC administrator
+    description: Service account for the OSAC administrator
+    clientId: osac-admin
+    enabled: true
+    clientAuthenticatorType: client-secret
+    secret: password
+    serviceAccountsEnabled: true
+    publicClient: false
+    standardFlowEnabled: false
+    implicitFlowEnabled: false
+    directAccessGrantsEnabled: false
+    protocol: openid-connect
+    fullScopeAllowed: true
+    defaultClientScopes:
+      - basic
+      - username
+      - groups
+      - fulfillment
+  - name: OSAC controller
+    description: Service account for the OSAC controller
+    clientId: osac-controller
+    enabled: true
+    clientAuthenticatorType: client-secret
+    secret: password
+    serviceAccountsEnabled: true
+    publicClient: false
+    standardFlowEnabled: false
+    implicitFlowEnabled: false
+    directAccessGrantsEnabled: false
+    protocol: openid-connect
+    fullScopeAllowed: true
+    defaultClientScopes:
+      - basic
+      - username
+      - groups
+      - fulfillment
+  - name: OSAC UI
+    description: Public OIDC client for the OSAC web console
+    clientId: osac-ui
+    enabled: true
+    publicClient: true
+    standardFlowEnabled: true
+    implicitFlowEnabled: false
+    directAccessGrantsEnabled: false
+    serviceAccountsEnabled: false
+    protocol: openid-connect
+    fullScopeAllowed: true
+    rootUrl: http://ui.osac.localhost:8080
+    redirectUris:
+      - http://ui.osac.localhost:8080/*
+      - http://localhost:*/*
+    webOrigins:
+      - http://ui.osac.localhost:8080
+      - http://localhost:*
+    defaultClientScopes:
+      - basic
+      - username
+      - groups
+      - email
+      - profile

@@ -1,0 +1,138 @@
+---
+# Workflow: Create Hosted Cluster
+# This workflow creates a hosted control plane cluster from a ClusterOrder CRD.
+# Major workflow phases can be overridden, and hooks allow customization at workflow boundaries.
+#
+# Usage:
+#   - name: Create cluster
+#     ansible.builtin.import_playbook: osac.workflows.cluster.create
+#     vars:
+#       cluster_order: "{{ ansible_eda.event.payload }}"
+#
+# Hook example:
+#   - name: Create cluster with custom hooks
+#     ansible.builtin.import_playbook: osac.workflows.cluster.create
+#     vars:
+#       cluster_order: "{{ ansible_eda.event.payload }}"
+#       hook_workflow_start:
+#         name: my_custom_hooks
+#         tasks_from: initialize.yml
+#       hosted_cluster_modify_definition_hook:
+#         name: my_custom_hooks
+#         tasks_from: modify_cluster.yml
+
+- name: Create hosted cluster workflow
+  hosts: localhost
+  gather_facts: false
+
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ lookup('env', 'K8S_AUTH_KUBECONFIG') | default(lookup('env', 'KUBECONFIG'), true) | default(lookup('env', 'HOME') + '/.kube/config', true) }}"
+
+  vars:
+    cluster_order: "{{ ansible_eda.event.payload }}"
+
+    # GENERIC HOOKS - Default to noop
+    hook_workflow_start_default:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+
+    hook_workflow_complete_default:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+
+    # PHASE OVERRIDE - Only defaults application is overrideable
+    step_apply_defaults_default:
+      name: osac.service.cluster_settings
+      tasks_from: main.yml
+
+  collections:
+    - osac.workflows
+    - osac.service
+
+  pre_tasks:
+    # HOOK: Workflow start
+    - name: Hook - Workflow start
+      ansible.builtin.include_role:
+        name: "{{ (hook_workflow_start | default(hook_workflow_start_default)).name }}"
+        tasks_from: "{{ (hook_workflow_start | default(hook_workflow_start_default)).tasks_from }}"
+
+    # CRITICAL: Extract cluster order name (NOT overrideable)
+    - name: Set cluster order name
+      ansible.builtin.set_fact:
+        cluster_order_name: "{{ cluster_order.metadata.name }}"
+
+    # CRITICAL: Generate lock holder ID (NOT overrideable)
+    - name: Set lock holder identity
+      ansible.builtin.set_fact:
+        cluster_order_holder_id: >-
+          {{ cluster_order_name }}-{{ awx_job_id | default("unknown") }}-{{
+            lookup('community.general.random_string', special=false, numbers=false, upper=false)
+          }}
+
+    # PHASE: Apply defaults (overrideable for custom default logic)
+    - name: Step - Apply default settings
+      ansible.builtin.include_role:
+        name: "{{ (step_apply_defaults_override | default(step_apply_defaults_default)).name }}"
+        tasks_from: "{{ (step_apply_defaults_override | default(step_apply_defaults_default)).tasks_from }}"
+
+    # CRITICAL: Extract template info (NOT overrideable)
+    - name: Extract template info
+      ansible.builtin.include_role:
+        name: osac.service.extract_template_info
+
+    # CRITICAL: Determine namespace (NOT overrideable)
+    - name: Determine working namespace
+      ansible.builtin.include_role:
+        name: osac.service.cluster_working_namespace
+      vars:
+        cluster_working_namespace_cluster_order_name: "{{ cluster_order_name }}"
+
+  tasks:
+    # CRITICAL: Acquire lock (NOT overrideable)
+    - name: Acquire cluster lock
+      ansible.builtin.include_role:
+        name: osac.service.lease
+      vars:
+        lease_state: present
+        lease_holder: "{{ cluster_order_holder_id }}"
+        lease_name: "cluster-{{ cluster_order_name }}-lock"
+
+    # CRITICAL: Add finalizers (NOT overrideable)
+    - name: Add infrastructure finalizer
+      ansible.builtin.include_role:
+        name: osac.service.finalizer
+      vars:
+        finalizer_state: present
+        finalizer_name: "{{ cluster_order_infrastructure_finalizer }}"
+        finalizer_target:
+          api_version: "{{ item.api_version }}"
+          kind: "{{ item.kind }}"
+          namespace: "{{ item.namespace | default(omit) }}"
+          name: "{{ item.name }}"
+      loop:
+        - api_version: osac.openshift.io/v1alpha1
+          kind: ClusterOrder
+          namespace: "{{ lookup('env', 'POD_NAMESPACE') | default(cluster_order.metadata.namespace, true) }}"
+          name: "{{ cluster_order.metadata.name }}"
+        - api_version: v1
+          kind: Namespace
+          name: "{{ cluster_working_namespace }}"
+
+    - name: Display cluster order information
+      ansible.builtin.debug:
+        msg:
+          - "Cluster order: {{ cluster_order.metadata.name }}"
+          - "Cluster working namespace: {{ cluster_working_namespace }}"
+          - "Template ID: {{ template_id_override | default(template_id) }}"
+
+    # CRITICAL: Call template (NOT overrideable, but template has internal override points)
+    - name: Call selected template
+      ansible.builtin.include_role:
+        name: "{{ template_id_override | default(template_id) }}"
+        tasks_from: install
+
+    # HOOK: Workflow complete
+    - name: Hook - Workflow complete
+      ansible.builtin.include_role:
+        name: "{{ (hook_workflow_complete | default(hook_workflow_complete_default)).name }}"
+        tasks_from: "{{ (hook_workflow_complete | default(hook_workflow_complete_default)).tasks_from }}"

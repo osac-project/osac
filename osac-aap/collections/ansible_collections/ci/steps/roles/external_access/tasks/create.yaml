@@ -1,0 +1,105 @@
+---
+- name: Set DNS names
+  ansible.builtin.set_fact:
+    external_access_api_domain: "api.{{ external_access_name }}.{{ external_access_base_domain }}"
+    external_access_api_int_domain: "api-int.{{ external_access_name }}.{{ external_access_base_domain }}"
+    external_access_ingress_domain: "apps.{{ external_access_name }}.{{ external_access_base_domain }}"
+
+- name: Get kube-apiserver service
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Service
+    namespace: "{{ external_access_namespace }}-{{ external_access_name }}"
+    name: kube-apiserver
+  register: external_access_kube_apiserver_service
+  until:
+    - external_access_kube_apiserver_service.resources | length > 0
+    - external_access_kube_apiserver_service.resources[0].status.loadBalancer.ingress | default([]) | length > 0
+    - external_access_kube_apiserver_service.resources[0].status.loadBalancer.ingress[0].ip is defined
+  retries: "{{ external_access_resource_wait_retries }}"
+  delay: "{{ external_access_resource_wait_delay }}"
+
+- name: Set API IP
+  ansible.builtin.set_fact:
+    external_access_api_ip: "{{ external_access_kube_apiserver_service.resources[0].status.loadBalancer.ingress[0].ip }}"
+
+- name: Get agents assigned to this cluster
+  kubernetes.core.k8s_info:
+    api_version: agent-install.openshift.io/v1beta1
+    kind: Agent
+    namespace: "{{ external_access_agent_namespace }}"
+    label_selectors:
+      - "{{ cluster_order_label }}={{ external_access_name }}"
+  register: external_access_ci_agents
+  until:
+    - external_access_ci_agents.resources | length > 0
+    - external_access_ci_agents.resources[0].status.inventory.interfaces | default([]) | length > 0
+    - >-
+      external_access_ci_agents.resources[0].status.inventory.interfaces
+      | default([])
+      | selectattr('ipV4Addresses', 'defined')
+      | map(attribute='ipV4Addresses')
+      | flatten
+      | reject('match', '^127\.')
+      | list | length > 0
+  retries: "{{ external_access_resource_wait_retries }}"
+  delay: "{{ external_access_resource_wait_delay }}"
+
+- name: Set ingress IP from first agent
+  ansible.builtin.set_fact:
+    external_access_ingress_ip: >-
+      {{ external_access_ci_agents.resources[0].status.inventory.interfaces
+         | selectattr('ipV4Addresses', 'defined')
+         | map(attribute='ipV4Addresses')
+         | flatten
+         | reject('match', '^127\.')
+         | first
+         | ansible.utils.ipaddr('address') }}
+
+- name: Create DNS records
+  when: >-
+    external_access_base_domain in external_access_supported_base_domains | default([])
+  ansible.builtin.include_role:
+    name: "{{ dns_class }}"
+    tasks_from: create
+  vars:
+    dns_zone: "{{ lookup('env', 'DNS_ZONE') | default(external_access_base_domain, true) }}"
+    dns_record_name: "{{ item.name }}"
+    dns_record_type: A
+    dns_record_ttl: "{{ external_access_dns_ttl }}"
+    dns_record_value: "{{ item.addr }}"
+    dns_record_overwrite: true
+  loop:
+    - name: "{{ external_access_api_domain }}"
+      addr: "{{ external_access_api_ip }}"
+    - name: "{{ external_access_api_int_domain }}"
+      addr: "{{ external_access_api_ip }}"
+    - name: "*.{{ external_access_ingress_domain }}"
+      addr: "{{ external_access_ingress_ip }}"
+
+- name: Wait for DNS records
+  when: >-
+    external_access_base_domain in external_access_supported_base_domains | default([])
+  ansible.builtin.include_role:
+    name: osac.service.wait_for
+    tasks_from: wait_for_dns
+  vars:
+    wait_for_dns_record: "{{ item }}"
+  loop:
+    - "{{ external_access_api_domain }}"
+    - "{{ external_access_api_int_domain }}"
+    - "default-router.{{ external_access_ingress_domain }}"
+
+- name: Get managed cluster admin kubeconfig secret
+  ansible.builtin.include_role:
+    name: osac.service.retrieve_kubeconfig
+  vars:
+    retrieve_kubeconfig_namespace: "{{ cluster_working_namespace }}"
+    retrieve_kubeconfig_cluster_name: "{{ cluster_order.metadata.name }}"
+
+- name: Wait for cluster to become ready
+  ansible.builtin.include_role:
+    name: osac.service.wait_for
+    tasks_from: wait_for_network_cluster_operator
+  vars:
+    wait_for_kubeconfig: "{{ admin_kubeconfig }}"

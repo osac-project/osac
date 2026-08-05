@@ -1,0 +1,14 @@
+---
+argument_specs:
+  main:
+    options:
+      netris_controller_url:
+        type: str
+        required: true
+      netris_username:
+        type: str
+        required: true
+      netris_password:
+        type: str
+        required: true
+        no_log: true

@@ -1,0 +1,34 @@
+---
+# Delete BGPPeer resources from hosted cluster for removed worker nodes
+# Called by cluster_infra workflow during scale-down operations
+
+- name: Delete BGPPeer resources for removed workers
+  when:
+    - removed_agent_hostnames is defined
+    - removed_agent_hostnames | length > 0
+    - admin_kubeconfig is defined
+  kubernetes.core.k8s:
+    state: absent
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: metallb.io/v1beta2
+    kind: BGPPeer
+    namespace: "{{ metallb_namespace | default('metallb-system') }}"
+    name: "peer-{{ hostname }}"
+  loop: "{{ removed_agent_hostnames }}"
+  loop_control:
+    loop_var: hostname
+    label: "Deleting BGPPeer peer-{{ hostname }}"
+  failed_when: false  # BGPPeer may not exist if scale-down happens before BGP was configured
+
+- name: Skip BGPPeer cleanup when kubeconfig unavailable
+  when: admin_kubeconfig is not defined
+  ansible.builtin.debug:
+    msg: "Skipping BGPPeer cleanup - admin_kubeconfig not available (cluster may not be fully provisioned)"
+
+- name: Display BGPPeer cleanup summary
+  when:
+    - removed_agent_hostnames is defined
+    - removed_agent_hostnames | length > 0
+    - admin_kubeconfig is defined
+  ansible.builtin.debug:
+    msg: "Deleted BGPPeer resources for {{ removed_agent_hostnames | length }} removed worker nodes"

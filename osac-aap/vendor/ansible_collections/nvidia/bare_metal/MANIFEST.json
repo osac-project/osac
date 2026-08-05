@@ -1,0 +1,34 @@
+{
+ "collection_info": {
+  "namespace": "nvidia",
+  "name": "bare_metal",
+  "version": "1.3.0",
+  "authors": [
+   "NVIDIA Bare Metal Manager Dev Team"
+  ],
+  "readme": "README.md",
+  "tags": [
+   "nvidia",
+   "bare_metal",
+   "infrastructure"
+  ],
+  "description": "Ansible collection for managing NVIDIA Bare Metal Manager resources",
+  "license": [
+   "Apache-2.0"
+  ],
+  "license_file": null,
+  "dependencies": {},
+  "repository": "https://github.com/fabiendupont/nvidia-bare-metal-manager-ansible",
+  "documentation": null,
+  "homepage": null,
+  "issues": null
+ },
+ "file_manifest_file": {
+  "name": "FILES.json",
+  "ftype": "file",
+  "chksum_type": "sha256",
+  "chksum_sha256": "67665f57704218b1158aad131294f091554bf868696da854ee87b51f65a07dcf",
+  "format": 1
+ },
+ "format": 1
+}

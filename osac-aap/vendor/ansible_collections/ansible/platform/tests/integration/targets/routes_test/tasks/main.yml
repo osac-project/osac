@@ -1,0 +1,292 @@
+---
+- name: Generate a test ID
+  ansible.builtin.set_fact:
+    test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') }}"
+  when: test_id is not defined
+
+- name: Route Module Tests
+  module_defaults:
+    group/ansible.platform.gateway:
+      gateway_hostname:         "{{ gateway_hostname | default(omit, true) }}"
+      gateway_username:         "{{ gateway_username | default(omit, true) }}"
+      gateway_password:         "{{ gateway_password | default(omit, true) }}"
+      gateway_token:            "{{ gateway_oauthtoken | default(omit, true) }}"
+      gateway_request_timeout:  "{{ gateway_request_timeout | default(omit, 10) }}"
+      gateway_validate_certs:   "{{ gateway_validate_certs | default(omit) }}"
+
+  block:
+    ### Create Http Port ###
+    - name: Create Http Ports
+      ansible.platform.http_port:
+        name: "{{ item.name }}"
+        number: "{{ item.number }}"
+
+        state: present
+      loop: "{{ gateway_http_ports }}"
+      vars:
+        gateway_http_ports:
+          - name: "{{ test_id }}Port 9082"
+            number: 9082
+          - name: "{{ test_id }}Port 8050"
+            number: 8050
+      register: __http_port_create_result
+
+    - name: Assert Created Http Port
+      ansible.builtin.assert:
+        that:
+          - __http_port_create_result.results[0] is changed
+          - __http_port_create_result.results[1] is changed
+
+    ### Create Service Clusters ###
+    - name: Create Service Clusters if necessary
+      ansible.platform.service_cluster:
+        name: "{{ item.name }}"
+        service_type: "{{ item.service_type }}"
+        state: present
+      loop: "{{ gateway_service_clusters }}"
+      vars:
+        gateway_service_clusters:
+          - name: "{{ test_id }}gateway"
+            service_type: "gateway"
+          - name: "{{ test_id }}hub"
+            service_type: "hub"
+          - name: "{{ test_id }}controller"
+            service_type: "controller"
+
+    ### Create Routes ###
+    - name: Create Routes
+      ansible.platform.route:
+        name:                     "{{ item.name | mandatory }}"
+        new_name:                 "{{ item.new_name | default(omit) }}"
+        description:              "{{ item.description | default(omit) }}"
+        gateway_path:             "{{ item.gateway_path | default(omit) }}"
+        http_port:                "{{ item.http_port | default(omit) }}"
+        service_cluster:          "{{ item.service_cluster | default(omit) }}"
+        is_service_https:         "{{ item.is_service_https | default(omit) }}"
+        enable_gateway_auth:      "{{ item.enable_gateway_auth | default(omit) }}"
+        service_path:             "{{ item.service_path | default(omit) }}"
+        service_port:             "{{ item.service_port | default(omit) }}"
+        node_tags:                "{{ item.node_tags | default(omit) }}"
+        state: present
+      loop: "{{ gateway_routes }}"
+      vars:
+        gateway_routes:
+          - name: "{{ test_id }}Gateway Svc Route"
+            description: Gateway Service Route
+            gateway_path: '/gw-svc-1/v1/'
+            http_port: "{{ test_id }}Port 9082"
+            enable_gateway_auth: false
+            service_cluster: "{{ test_id }}gateway"
+            service_path: '/aaa/v1/'
+            service_port: 1234
+          - name: "{{ test_id }}Gateway Svc Route 2"
+            gateway_path: '/gw-svc-2/v1/'
+            http_port: "{{ __http_port_create_result.results[0].id }}"  # Port 9082
+            service_cluster: "{{ test_id }}gateway"
+            is_service_https: true
+            service_path: '/bbb/v2/'
+            service_port: 2345
+          - name: "{{ test_id }}Hub Svc Route"
+            gateway_path: '/hub-svc-1/'
+            http_port: "{{ test_id }}Port 8050"
+            service_cluster: "{{ test_id }}hub"
+            service_path: '/ccc/v1/'
+            service_port: 1111
+      register: __routes_result
+
+    - name: Assert Create Routes tests passed
+      ansible.builtin.assert:
+        that:
+          - __routes_result.results[0] is changed
+          - __routes_result.results[1] is changed
+          - __routes_result.results[2] is changed
+
+    ### 2nd run for Routes ###
+    - name: Check Routes Idempotency
+      ansible.platform.route:
+        name:                     "{{ item.name | mandatory }}"
+        new_name:                 "{{ item.new_name | default(omit) }}"
+        description:              "{{ item.description | default(omit) }}"
+        gateway_path:             "{{ item.gateway_path | default(omit) }}"
+        http_port:                "{{ item.http_port | default(omit) }}"
+        service_cluster:          "{{ item.service_cluster | default(omit) }}"
+        is_service_https:         "{{ item.is_service_https | default(omit) }}"
+        enable_gateway_auth:      "{{ item.enable_gateway_auth | default(omit) }}"
+        service_path:             "{{ item.service_path | default(omit) }}"
+        service_port:             "{{ item.service_port | default(omit) }}"
+        node_tags:                "{{ item.node_tags | default(omit) }}"
+        state:                    "{{ item.state | default('present') }}"
+      loop: "{{ gateway_routes }}"
+      vars:
+        gateway_routes:
+          # No change
+          - name: "{{ test_id }}Gateway Svc Route"
+            description: Gateway Service Route
+            gateway_path: '/gw-svc-1/v1/'
+            http_port: "{{ test_id }}Port 9082"
+            service_cluster: "{{ test_id }}gateway"
+            service_path: '/aaa/v1/'
+            service_port: 1234
+          # Update
+          - name: "{{ test_id }}Gateway Svc Route 2"
+            gateway_path: '/gw-svc-2/v1/'
+            http_port: "{{ test_id }}Port 9082"
+            service_cluster: "{{ test_id }}gateway"
+            is_service_https: false  # Changed
+          # Check for existence, no changes
+          - name: "{{ test_id }}Hub Svc Route"
+            gateway_path: '/hub-svc-1/'
+            http_port: "{{ test_id }}Port 8050"
+            state: exists
+          # Check for existence, no changes
+          - name: "{{ test_id }}Hub Svc Route"
+            state: exists
+          # Change cluster
+          - name: "{{ test_id }}Hub Svc Route"
+            gateway_path: '/hub-svc-1/'
+            http_port: "{{ test_id }}Port 8050"
+            service_cluster: "{{ test_id }}controller"
+            service_path: '/ccc/v1/'
+            service_port: 1111
+          # Check for existence
+          - name: "{{ test_id }}Hub Svc Route"
+            state: exists
+          # Non-existing cluster
+          - name: "{{ test_id }}Wrong cluster"
+            gateway_path: '/xxx/'
+            http_port: "{{ test_id }}Port 8050"
+            service_cluster: "{{ test_id }}eda"
+            state: absent
+          # Non-existing port
+          - name: "{{ test_id }}Wrong Port"
+            gateway_path: '/yyy/'
+            http_port: Port 1234
+            service_cluster: "{{ test_id }}controller"
+            state: absent
+          # Non-existing port and cluster
+          - name: "{{ test_id }}Wrong Port and Cluster"
+            gateway_path: '/zzz/'
+            http_port: 1234
+            service_cluster: "{{ test_id }}eda"
+            state: absent
+          # Existing port and cluster, non-existing route
+          - name: "{{ test_id }}Wrong Route"
+            gateway_path: '/non-existing/'
+            http_port: Port 9082
+            service_cluster: "{{ test_id }}gateway"
+            state: absent
+      register: __routes_result
+
+    - name: Assert Check Routes tests passed
+      ansible.builtin.assert:
+        that:
+          - __routes_result.results[0] is not changed
+          - __routes_result.results[1] is changed
+          - __routes_result.results[2] is not changed
+          - __routes_result.results[3] is not changed
+          - __routes_result.results[4] is changed
+          - __routes_result.results[5] is not changed
+          - __routes_result.results[6] is not changed
+          - __routes_result.results[7] is not changed
+          - __routes_result.results[8] is not changed
+          - __routes_result.results[9] is not changed
+
+    - name: Rename Route
+      ansible.platform.route:
+        name: "{{ test_id }}Gateway Svc Route"
+        new_name: "{{ test_id }}Gateway Config Route"
+      register: __route_rename_result
+
+    - name: Assert Rename Routes tests passed
+      ansible.builtin.assert:
+        that:
+          - __route_rename_result is changed
+
+    - name: Check Rename Routes
+      ansible.platform.route:
+        name:                     "{{ item.name | mandatory }}"
+        new_name:                 "{{ item.new_name | default(omit) }}"
+        description:              "{{ item.description | default(omit) }}"
+        gateway_path:             "{{ item.gateway_path | default(omit) }}"
+        http_port:                "{{ item.http_port | default(omit) }}"
+        service_cluster:          "{{ item.service_cluster | default(omit) }}"
+        is_service_https:         "{{ item.is_service_https | default(omit) }}"
+        enable_gateway_auth:      "{{ item.enable_gateway_auth | default(omit) }}"
+        service_path:             "{{ item.service_path | default(omit) }}"
+        service_port:             "{{ item.service_port | default(omit) }}"
+        node_tags:                "{{ item.node_tags | default(omit) }}"
+        state:                    "{{ item.state | default('present') }}"
+      loop: "{{ gateway_routes }}"
+      vars:
+        gateway_routes:
+          - name: "{{ test_id }}Gateway Svc Route"
+            state: absent
+          - name: "{{ test_id }}Gateway Config Route"
+            state: exists
+      register: __route_rename_result
+
+    - name: Assert Check Rename Routes tests passed
+      ansible.builtin.assert:
+        that:
+          - __route_rename_result.results[0] is not changed
+          - __route_rename_result.results[1] is not changed
+  always:
+    ### Delete Routes ###
+    - name: Delete Routes
+      ansible.platform.route:
+        name:                     "{{ item.name | mandatory }}"
+        new_name:                 "{{ item.new_name | default(omit) }}"
+        description:              "{{ item.description | default(omit) }}"
+        gateway_path:             "{{ item.gateway_path | default(omit) }}"
+        http_port:                "{{ item.http_port | default(omit) }}"
+        service_cluster:          "{{ item.service_cluster | default(omit) }}"
+        is_service_https:         "{{ item.is_service_https | default(omit) }}"
+        enable_gateway_auth:      "{{ item.enable_gateway_auth | default(omit) }}"
+        service_path:             "{{ item.service_path | default(omit) }}"
+        service_port:             "{{ item.service_port | default(omit) }}"
+        node_tags:                "{{ item.node_tags | default(omit) }}"
+        state: absent
+      loop: "{{ gateway_routes }}"
+      vars:
+        gateway_routes:
+          # Does not exist
+          - name: "{{ test_id }}Gateway Svc Route"
+          # Exists
+          - name: "{{ test_id }}Gateway Config Route"
+          # Exists
+          - name: "{{ test_id }}Gateway Svc Route 2"
+          # Exists
+          - name: "{{ test_id }}Hub Svc Route"
+          # Does not exist
+          - name: "{{ test_id }}Wrong cluster"
+          # Does not exist
+          - name: "{{ test_id }}Wrong Port"
+          # Does not exist
+          - name: "{{ test_id }}Wrong Port and Cluster"
+          # Does not exist
+          - name: "{{ test_id }}Wrong Route"
+
+    ### Delete Clusters ###
+    - name: Delete Service Clusters
+      ansible.platform.service_cluster:
+        name: "{{ item.name }}"
+        state: absent
+      loop: "{{ gateway_service_clusters }}"
+      vars:
+        gateway_service_clusters:
+          - name: "{{ test_id }}gateway"
+          - name: "{{ test_id }}controller"
+          - name: "{{ test_id }}hub"
+
+    ### Delete Ports ###
+    - name: Delete Http Ports
+      ansible.platform.http_port:
+        name: "{{ item.name }}"
+        state: absent
+      loop: "{{ gateway_http_ports }}"
+      vars:
+        gateway_http_ports:
+          - name: "{{ test_id }}Port 9082"
+          - name: "{{ test_id }}Port 8050"
+      register: __http_port_create_result
+...

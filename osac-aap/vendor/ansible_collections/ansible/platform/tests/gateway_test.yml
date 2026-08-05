@@ -1,0 +1,42 @@
+---
+- name: Playbook to do development tests for automation platform gateway
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars:
+    gateway_hostname: "{{ gateway_host | default('https://localhost:8000/') }}"
+    gateway_username: "{{ gateway_admin_user | default('admin') }}"
+    gateway_password: "{{ gateway_admin_password | default('admin') }}"
+    gateway_validate_certs: false
+
+  tasks:
+    - name: Include role for settings
+      ansible.builtin.include_vars:
+        file: integration/targets/setup_gateway/defaults/main.yml
+
+    - name: Add settings
+      ansible.platform.settings:
+        settings:
+          gateway_access_token_expiration: 700
+        gateway_hostname: "{{ gateway_hostname }}"
+        gateway_username: "{{ gateway_username }}"
+        gateway_password: "{{ gateway_password }}"
+        gateway_validate_certs: false
+
+#    - include_tasks: integration/targets/settings_test/tasks/main.yml
+#    - include_tasks: integration/targets/users_test/tasks/main.yml
+#    - include_tasks: integration/targets/organizations_test/tasks/main.yml
+#    - include_tasks: integration/targets/teams_test/tasks/main.yml
+#    - include_tasks: integration/targets/authenticators_test/tasks/main.yml
+#    - include_tasks: integration/targets/authenticator_maps_test/tasks/main.yml
+#    - include_tasks: integration/targets/applications_test/tasks/main.yml
+#    - include_tasks: integration/targets/service_clusters_test/tasks/main.yml
+#    - include_tasks: integration/targets/service_nodes_test/tasks/main.yml
+#    - include_tasks: integration/targets/service_keys_test/tasks/main.yml
+#    - include_tasks: integration/targets/http_ports_test/tasks/main.yml
+#    - include_tasks: integration/targets/services_test/tasks/main.yml
+#    - include_tasks: integration/targets/routes_test/tasks/main.yml
+#    - include_tasks: integration/targets/role_user_assignments_test/tasks/main.yml
+#    - include_tasks: integration/targets/lookup_test/tasks/main.yml
+#    - include_tasks: integration/targets/tokens_test/tasks/main.yml
+...

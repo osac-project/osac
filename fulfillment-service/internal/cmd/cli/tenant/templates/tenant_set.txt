@@ -1,0 +1,1 @@
+Tenant '{{ .Tenant }}' saved. It will be used as the default for subsequent commands.

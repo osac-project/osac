@@ -1,0 +1,45 @@
+# Define the display name and description of the template
+title: Virtual Machine Template (Linux and Windows)
+description: >
+  Virtual machine template for OpenShift Virtualization supporting both Linux and Windows guest operating systems.
+  Linux is the default; Windows is selected via annotation, image path heuristic, or explicit role variable.
+  Windows requires user-provided container disk image.
+
+# Specify this is a ComputeInstance template (not a cluster template)
+template_type: compute_instance
+
+spec_defaults:
+  boot_disk:
+    size_gib: 10
+  image:
+    source_type: registry
+    source_ref: "quay.io/containerdisks/fedora:latest"
+  run_strategy: "Always"
+
+parameters:
+  - name: exposed_ports
+    title: Exposed Ports
+    description: >
+      Ports to expose on the VM for ingress traffic.
+      The syntax is a comma-separated list of `<port>/<protocol>` pairs,
+      where `<protocol>` is either `tcp` or `udp`.
+      For example, `22/tcp,80/tcp` will expose tcp ports 22 and 80 on the VM.
+      Default is OS-dependent: "22/tcp" for Linux, "3389/tcp" for Windows.
+    type: string
+    required: false
+    default: "22/tcp"
+    validation:
+      pattern: '^([0-9]+/(tcp|udp))(,[0-9]+/(tcp|udp))*$'
+  - name: guest_os_family
+    title: Guest OS Family
+    description: >
+      Operating system family for the guest VM: 'linux' or 'windows'.
+      Defaults to 'linux'. The role automatically infers OS family from
+      ComputeInstance annotation (osac.openshift.io/guest-os-family) or
+      image path containing 'containerdisks/windows'. This parameter allows
+      explicit override when set before role execution.
+    type: string
+    required: false
+    default: "linux"
+    validation:
+      pattern: '^(linux|windows)$'

@@ -1,0 +1,5 @@
+Node set '{{ .NodeSet }}' not found in cluster '{{ .ClusterId }}'.
+
+Available node sets:
+{{ range $name, $ns := .NodeSets }}  {{ $name }} (size: {{ $ns.GetSize }})
+{{ end }}

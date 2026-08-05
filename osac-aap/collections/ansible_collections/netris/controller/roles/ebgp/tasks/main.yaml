@@ -1,0 +1,4 @@
+---
+- name: Read E-BGP sessions
+  ansible.builtin.include_tasks: read.yaml
+  when: ebgp_state == 'read'

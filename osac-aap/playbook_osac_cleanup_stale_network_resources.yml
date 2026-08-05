@@ -1,0 +1,11 @@
+---
+- name: Cleanup stale ESI network resources
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Cleanup stale network resources
+      ansible.builtin.include_role:
+        name: osac.service.cleanup_stale_network_resources
+      vars:
+        cleanup_stale_network_resources_namespace: " {{ lookup('env', 'POD_NAMESPACE') }} "

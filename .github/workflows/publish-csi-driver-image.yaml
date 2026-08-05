@@ -1,0 +1,113 @@
+name: Build osac-csi-driver image
+
+on:
+  pull_request:
+    paths:
+      - 'osac-csi-driver/**'
+      - '!osac-csi-driver/OWNERS'
+      - '!osac-csi-driver/LICENSE'
+      - '!osac-csi-driver/**/*.md'
+      - '!osac-csi-driver/docs/**'
+      - '!osac-csi-driver/charts/**'
+  push:
+    branches:
+      - main
+    tags:
+      - 'osac-csi-driver/v*'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}-image
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  # Hardcoded rather than github.repository: that now resolves to
+  # osac-project/osac for every component's build workflow post-merge,
+  # colliding on mutable tags with other components' images. Keeping this
+  # component's pre-merge image identity stable instead, same as
+  # osac-operator's build-image.yaml and osac-aap's execution-environment.yml do.
+  IMAGE_NAME: osac-project/osac-csi-driver
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Log into registry ${{ env.REGISTRY }}
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Component-scoped tags (see the `tags:` trigger above) can't be used verbatim
+      # as image tags -- Docker/OCI tags can't contain the '/' the git tag does --
+      # so strip the prefix here to recover the bare vX.Y.Z for the actual image tags.
+      - name: Compute release version
+        if: startsWith(github.ref, 'refs/tags/osac-csi-driver/')
+        run: |
+          version="${GITHUB_REF_NAME#osac-csi-driver/}"
+          # Same SemVer rule as publish-charts.yaml's guard job -- rejects build
+          # metadata (+...) and validates the core/prerelease shape before it's
+          # trusted as an image tag.
+          semver_re='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\.((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?$'
+          if ! [[ "${version}" =~ ${semver_re} ]]; then
+            echo "::error::Tag '${GITHUB_REF_NAME}' is not a valid semver release tag"
+            exit 1
+          fi
+          # Prerelease identifiers can themselves contain dots (e.g. v1.2.3-beta.1),
+          # so derive major/minor from the prerelease-stripped core version --
+          # otherwise a dotted prerelease would corrupt the major.minor alias.
+          core="${version%%-*}"
+          echo "RELEASE_VERSION=${version}" >> "$GITHUB_ENV"
+          if [ "${version}" = "${core}" ]; then
+            # No prerelease suffix -- safe to move the stable major/minor
+            # aliases to this release.
+            echo "RELEASE_MAJOR_MINOR=${core%.*}" >> "$GITHUB_ENV"
+            echo "RELEASE_MAJOR=${core%%.*}" >> "$GITHUB_ENV"
+          else
+            # Prerelease (e.g. v1.2.3-rc.1) -- leave the stable v1.2/v1 aliases
+            # untouched instead of overwriting them with a prerelease image.
+            echo "RELEASE_MAJOR_MINOR=" >> "$GITHUB_ENV"
+            echo "RELEASE_MAJOR=" >> "$GITHUB_ENV"
+          fi
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302  # v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # No `type=ref,event=tag` here: the `tags:` trigger above only ever
+          # matches this component's own scoped prefix, so the tag-triggered
+          # case is always covered by the three raw entries below already --
+          # keeping it would just add a redundant, slash-sanitized duplicate
+          # tag (e.g. "osac-csi-driver-v1.2.3").
+          tags: |
+            type=raw,value=${{ env.RELEASE_VERSION }},enable=${{ env.RELEASE_VERSION != '' }}
+            type=raw,value=${{ env.RELEASE_MAJOR_MINOR }},enable=${{ env.RELEASE_MAJOR_MINOR != '' }}
+            type=raw,value=${{ env.RELEASE_MAJOR }},enable=${{ env.RELEASE_MAJOR != '' }}
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7
+        with:
+          context: osac-csi-driver
+          file: osac-csi-driver/Containerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.version'] }}
+            GIT_COMMIT=${{ github.sha }}

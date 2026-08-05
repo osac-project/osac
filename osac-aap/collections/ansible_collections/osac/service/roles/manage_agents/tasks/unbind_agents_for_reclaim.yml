@@ -1,0 +1,80 @@
+---
+# Unbind agents BEFORE deleting the HostedCluster so the assisted-service software
+# reclaim can run while the spoke API is still alive.
+#
+# Problem: when a HostedCluster is deleted, the spoke API goes down. The assisted-service
+# agent controller then tries to reclaim non-BMH agents (libvirt VMs) by deploying a
+# DaemonSet on the spoke — but the spoke is gone, so reclaim fails silently. The agent
+# gets stuck in unbinding-pending-user-action permanently (it needs to kexec back into
+# the discovery environment, but the reclaim DaemonSet that does this was never deployed).
+#
+# Fix: clear spec.clusterDeploymentName before the HostedCluster is deleted. This triggers
+# the agent controller's unbind flow while the spoke is alive. runReclaimAgent deploys the
+# reclaim DaemonSet on the spoke, the agent kexec-reboots into the discovery environment,
+# and re-registers as known-unbound.
+#
+# This task should only be called from templates that use non-BMH agents (e.g. ocp_ci_small).
+# BMH agents are handled by Ironic via BMC and do not need this.
+
+- name: List all agents in namespace
+  kubernetes.core.k8s_info:
+    kind: Agent
+    api_version: agent-install.openshift.io/v1beta1
+    namespace: "{{ default_agent_namespace }}"
+  register: _all_agents
+
+- name: Find agents bound to this cluster order
+  ansible.builtin.set_fact:
+    manage_agents_reclaim_list:
+      resources: >-
+        {{ _all_agents.resources
+           | selectattr('spec.clusterDeploymentName', 'defined')
+           | selectattr('spec.clusterDeploymentName', 'equalto', manage_agents_cluster_order_name)
+           | list }}
+
+- name: Unbind agents to trigger software reclaim
+  when: manage_agents_reclaim_list.resources | length > 0
+  block:
+    - name: Clear clusterDeploymentName on each agent
+      kubernetes.core.k8s_json_patch:
+        api_version: agent-install.openshift.io/v1beta1
+        kind: Agent
+        name: "{{ agent.metadata.name }}"
+        namespace: "{{ default_agent_namespace }}"
+        patch:
+          - op: remove
+            path: /spec/clusterDeploymentName
+      register: _unbind_patch_result
+      loop: "{{ manage_agents_reclaim_list.resources }}"
+      loop_control:
+        loop_var: agent
+        label: "Unbind agent {{ agent.metadata.name }}"
+      failed_when: false
+
+    - name: Report unbind failures
+      ansible.builtin.debug:
+        msg: "Failed to unbind agent {{ item.agent.metadata.name }}: {{ item.msg | default('unknown error') }}"
+      loop: "{{ _unbind_patch_result.results | selectattr('failed', 'defined') | selectattr('failed') | list }}"
+      loop_control:
+        label: "{{ item.agent.metadata.name }}"
+      when: _unbind_patch_result.results | selectattr('failed', 'defined') | selectattr('failed') | list | length > 0
+
+    - name: Wait for agents to return to available state
+      kubernetes.core.k8s_info:
+        kind: Agent
+        api_version: agent-install.openshift.io/v1beta1
+        namespace: "{{ default_agent_namespace }}"
+        field_selectors:
+          - "metadata.name={{ agent.metadata.name }}"
+      register: manage_agents_reclaim_status
+      until: >-
+        manage_agents_reclaim_status.resources | length == 0
+        or (manage_agents_reclaim_status.resources[0].status.debugInfo.state | default(''))
+           in ['known-unbound', 'known', 'discovering-unbound']
+      retries: 60
+      delay: 10
+      failed_when: false
+      loop: "{{ manage_agents_reclaim_list.resources }}"
+      loop_control:
+        loop_var: agent
+        label: "Wait for agent {{ agent.metadata.name }}"

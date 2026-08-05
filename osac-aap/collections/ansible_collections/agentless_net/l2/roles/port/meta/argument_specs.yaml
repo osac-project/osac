@@ -1,0 +1,17 @@
+argument_specs:
+  set_access_port:
+    options:
+      port_name:
+        description: "Switch port name (e.g., swp2)."
+        type: "str"
+        required: true
+      vlan_id:
+        description: "VLAN ID to assign to the port."
+        type: "int"
+        required: true
+  reset_port:
+    options:
+      port_name:
+        description: "Switch port name to reset."
+        type: "str"
+        required: true

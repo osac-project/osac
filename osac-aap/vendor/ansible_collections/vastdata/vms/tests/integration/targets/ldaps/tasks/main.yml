@@ -1,0 +1,511 @@
+---
+# Integration tests for ldaps module
+# These tests run against a real VAST system
+#
+# Configuration:
+# Set values in tests/integration/integration_config.yml
+# Requires: LDAP server configured and accessible from VAST system
+
+# ====================
+# Setup
+# ====================
+
+- name: Check if VAST credentials are available
+  ansible.builtin.set_fact:
+    has_vast_credentials: >-
+      {{
+        (vast_vms | default('') | length > 0) and
+        (vast_username | default('') | length > 0) and
+        (vast_password | default('') | length > 0)
+      }}
+
+- name: Check if LDAP configuration is available
+  ansible.builtin.set_fact:
+    has_ldap_config: >-
+      {{
+        (test_ldap_domain | default('') | length > 0) and
+        (test_ldap_urls | default([]) | length > 0)
+      }}
+
+- name: Set test conditions
+  ansible.builtin.set_fact:
+    can_run_tests: "{{ has_vast_credentials and has_ldap_config }}"
+
+- name: Display test configuration
+  ansible.builtin.debug:
+    msg: |
+      ╔════════════════════════════════════════════════════════════════╗
+      ║  Test Configuration                                            ║
+      ╚════════════════════════════════════════════════════════════════╝
+
+      VAST Connection:
+        VMS:            {{ vast_vms | default('not set') }}
+        Username:       {{ vast_username | default('not set') }}
+        Password:       {{ '***set***' if vast_password else 'not set' }}
+
+      LDAP Configuration:
+        Domain:         {{ test_ldap_domain | default('not set') }}
+        URLs:           {{ test_ldap_urls | default([]) | join(', ') }}
+        Type:           {{ test_ldap_type | default('not set') }}
+        Use TLS:        {{ test_ldap_use_tls | default('not set') }}
+        Port:           {{ test_ldap_port | default(389) }}
+        Method:         {{ test_ldap_method | default('simple') }}
+        Search Base:    {{ test_ldap_searchbase | default('not set') }}
+        Group Search:   {{ test_ldap_group_searchbase | default('not set') }}
+        Bind DN:        {{ test_ldap_binddn | default('not set') }}
+        Bind Password:  {{ '***set***' if test_ldap_bindpw else 'not set' }}
+  when: can_run_tests
+
+# ====================
+# Cleanup - Remove existing test LDAP if present
+# ====================
+
+- name: Clean up - ensure test LDAP doesn't exist before starting
+  vastdata.vms.ldaps:
+    vms: "{{ vms_auth }}"
+    name: "test-ldap-{{ test_ldap_domain }}"
+    state: absent
+  register: cleanup_result
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# Create Tests
+# ====================
+
+- name: Test creating LDAP configuration
+  vastdata.vms.ldaps:
+    vms: "{{ vms_auth }}"
+    name: "test-ldap-{{ test_ldap_domain }}"
+    domain_name: "{{ test_ldap_domain }}"
+    urls: "{{ test_ldap_urls }}"
+    searchbase: "{{ test_ldap_searchbase }}"
+    binddn: "{{ test_ldap_binddn }}"
+    bindpw: "{{ test_ldap_bindpw }}"
+    port: "{{ test_ldap_port }}"
+    method: "{{ test_ldap_method }}"
+    use_tls: "{{ test_ldap_use_tls | default(false) }}"
+    use_ldaps: false
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+# Pass when we just created (changed) or when LDAP already existed (e.g. clean-up could not delete due to tenants attached).
+- name: Verify LDAP was created
+  ansible.builtin.assert:
+    that:
+      - result.ldaps is defined
+      - result.ldaps.id is defined
+      - result.ldaps.name is defined
+      - result.ldaps.port == test_ldap_port | int
+      - result.ldaps.method == test_ldap_method
+      - (result is changed and result.diff is defined and result.diff.before == {} and result.diff.after is defined) or (result is not changed)
+    fail_msg: "LDAP creation verification failed"
+    success_msg: "LDAP configuration created and verified successfully"
+  when: result is not skipped
+  # Note: Cannot verify exact name value due to API masking sensitive fields
+
+# ====================
+# Idempotency Tests - Create
+# ====================
+
+- name: Test idempotency - create same LDAP again
+  vastdata.vms.ldaps:
+    vms: "{{ vms_auth }}"
+    name: "test-ldap-{{ test_ldap_domain }}"
+    domain_name: "{{ test_ldap_domain }}"
+    urls: "{{ test_ldap_urls }}"
+    searchbase: "{{ test_ldap_searchbase }}"
+    binddn: "{{ test_ldap_binddn }}"
+    bindpw: "{{ test_ldap_bindpw }}"
+    port: "{{ test_ldap_port }}"
+    method: "{{ test_ldap_method }}"
+    use_tls: "{{ test_ldap_use_tls | default(false) }}"
+    use_ldaps: false
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify idempotency (should not change)
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+      - result.ldaps is defined
+  when: result is not skipped
+
+# ====================
+# Update Tests
+# ====================
+
+- name: Test updating LDAP - change monitor action
+  vastdata.vms.ldaps:
+    vms: "{{ vms_auth }}"
+    name: "test-ldap-{{ test_ldap_domain }}"
+    monitor_action: "BIND"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify LDAP was updated
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.ldaps is defined
+      - result.ldaps.monitor_action == "BIND"
+      - result.diff is defined
+      - result.diff.before is defined
+      - result.diff.after is defined
+  when: result is not skipped
+
+- name: Test update idempotency
+  vastdata.vms.ldaps:
+    vms: "{{ vms_auth }}"
+    name: "test-ldap-{{ test_ldap_domain }}"
+    monitor_action: "BIND"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify update idempotency
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: result is not skipped
+
+# ====================
+# Update Authentication Settings
+# ====================
+
+- name: Test updating LDAP - change method
+  vastdata.vms.ldaps:
+    vms: "{{ vms_auth }}"
+    name: "test-ldap-{{ test_ldap_domain }}"
+    method: "anonymous"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify authentication method was updated
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.ldaps is defined
+      - result.ldaps.method == "anonymous"
+  when: result is not skipped
+
+# ====================
+# Check Mode Tests
+# ====================
+
+- name: Test check mode - change monitor action back to PING
+  vastdata.vms.ldaps:
+    vms: "{{ vms_auth }}"
+    name: "test-ldap-{{ test_ldap_domain }}"
+    monitor_action: "PING"
+    state: present
+  check_mode: true
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify check mode reported changes
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.ldaps is defined
+  when: result is not skipped
+
+- name: Verify check mode didn't actually make changes
+  vastdata.vms.ldaps:
+    vms: "{{ vms_auth }}"
+    name: "test-ldap-{{ test_ldap_domain }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Check that monitor_action is still BIND (not PING)
+  ansible.builtin.assert:
+    that:
+      - result.ldaps.monitor_action == "BIND"
+  when: result is not skipped
+
+# ====================
+# VMS Authentication Tests
+# ====================
+
+- name: Test enabling VMS authentication
+  vastdata.vms.ldaps:
+    vms: "{{ vms_auth }}"
+    name: "test-ldap-{{ test_ldap_domain }}"
+    is_vms_auth_provider: true
+    state: present
+  register: enable_vms_result
+  when: can_run_tests | bool
+
+- name: Verify VMS authentication was enabled
+  ansible.builtin.assert:
+    that:
+      - enable_vms_result is changed
+      - enable_vms_result.ldaps is defined
+      - enable_vms_result.ldaps.is_vms_auth_provider == true
+  when: enable_vms_result is not skipped
+
+# ====================
+# Set POSIX Primary Tests (via dedicated ldap_set_posix_primary module)
+# ====================
+
+- name: Lookup LDAP ID for set_posix_primary test
+  vastdata.vms.ldaps:
+    vms: "{{ vms_auth }}"
+    name: "test-ldap-{{ test_ldap_domain }}"
+    state: present
+  register: ldap_lookup
+  when: can_run_tests | bool
+
+- name: Test set_posix_primary via dedicated module (check mode)
+  vastdata.vms.ldap_set_posix_primary:
+    vms: "{{ vms_auth }}"
+    ldap_id: "{{ ldap_lookup.ldaps.id }}"
+  check_mode: true
+  register: result_check_posix
+  when: can_run_tests | bool and ldap_lookup is not skipped
+  failed_when: false
+
+- name: Verify set_posix_primary check mode reported change or multi-tenant skip
+  ansible.builtin.assert:
+    that:
+      - (result_check_posix is changed) or ('multiple tenants' in (result_check_posix.msg | default('') | lower))
+    fail_msg: "Check mode for set_posix_primary failed unexpectedly (not the known multi-tenant 400)"
+  when: result_check_posix is not skipped
+
+# ====================
+# Multi-tenant: POSIX primary via tenants API (happy path when ldaps set_posix_primary returns 400)
+# ====================
+- name: Set fact when cluster is multi-tenant (ldap_set_posix_primary returned 400)
+  ansible.builtin.set_fact:
+    ldap_posix_multi_tenant: "{{ 'multiple tenants' in (result_check_posix.msg | default('') | lower) }}"
+  when: result_check_posix is not skipped
+
+# ====================
+# Check Mode Delete Test
+# ====================
+
+- name: Test check mode - delete (should report change but not actually delete)
+  vastdata.vms.ldaps:
+    vms: "{{ vms_auth }}"
+    name: "test-ldap-{{ test_ldap_domain }}"
+    state: absent
+  check_mode: true
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify check mode reported deletion would happen
+  ansible.builtin.assert:
+    that:
+      - result is changed
+  when: result is not skipped
+
+- name: Verify check mode didn't actually delete (LDAP should still exist)
+  vastdata.vms.ldaps:
+    vms: "{{ vms_auth }}"
+    name: "test-ldap-{{ test_ldap_domain }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Check that LDAP still exists after check mode
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+      - result.ldaps is defined
+      - result.ldaps.name is defined
+  when: result is not skipped
+
+# ====================
+# Delete Tests
+# ====================
+
+- name: Test deleting LDAP configuration
+  vastdata.vms.ldaps:
+    vms: "{{ vms_auth }}"
+    name: "test-ldap-{{ test_ldap_domain }}"
+    state: absent
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify LDAP was deleted
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.diff is defined
+      - result.diff.before is defined
+      - result.diff.after == {}
+  when: result is not skipped
+
+# ====================
+# Idempotency Tests - Delete
+# ====================
+
+- name: Test delete idempotency - delete again
+  vastdata.vms.ldaps:
+    vms: "{{ vms_auth }}"
+    name: "test-ldap-{{ test_ldap_domain }}"
+    state: absent
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify delete idempotency
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: result is not skipped
+
+# ====================
+# Cleanup
+# ====================
+
+- name: Final cleanup - remove test LDAP if it exists
+  vastdata.vms.ldaps:
+    vms: "{{ vms_auth }}"
+    name: "test-ldap-{{ test_ldap_domain }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# Test name parameter without domain_name
+# ====================
+
+- name: Clean up - ensure test LDAP by name doesn't exist
+  vastdata.vms.ldaps:
+    vms: "{{ vms_auth }}"
+    name: "test-ldap-name-only"
+    state: absent
+  register: cleanup_name_result
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Create LDAP with name parameter (without domain_name)
+  vastdata.vms.ldaps:
+    vms: "{{ vms_auth }}"
+    name: "test-ldap-name-only"
+    urls: ["ldap://10.27.252.30"]
+    binddn: "cn=admin,dc=qa,dc=vastdata,dc=com"
+    searchbase: "dc=qa,dc=vastdata,dc=com"
+    bindpw: "vastdata"
+    port: 389
+    method: "simple"
+    state: present
+  register: create_name_result
+  when: can_run_tests | bool
+
+- name: Verify LDAP was created with name
+  ansible.builtin.assert:
+    that:
+      - create_name_result is changed
+      - create_name_result.ldaps is defined
+      - create_name_result.ldaps.id is defined
+      - create_name_result.diff is defined
+      - create_name_result.diff.before == {}
+      - create_name_result.diff.after is defined
+    fail_msg: "LDAP creation with name parameter failed"
+    success_msg: "LDAP configuration created with name successfully"
+  when: create_name_result is not skipped
+
+- name: Test idempotency - create same LDAP by name again
+  vastdata.vms.ldaps:
+    vms: "{{ vms_auth }}"
+    name: "test-ldap-name-only"
+    urls: ["ldap://10.27.252.30"]
+    binddn: "cn=admin,dc=qa,dc=vastdata,dc=com"
+    searchbase: "dc=qa,dc=vastdata,dc=com"
+    bindpw: "vastdata"
+    port: 389
+    method: "simple"
+    state: present
+  register: idempotency_name_result
+  when: can_run_tests | bool
+
+- name: Verify idempotency with name (should not report changed)
+  ansible.builtin.assert:
+    that:
+      - idempotency_name_result is not changed
+      - idempotency_name_result.ldaps is defined
+    fail_msg: "name breaks idempotency - ldap reported as changed when it shouldn't be"
+  when: idempotency_name_result is not skipped
+
+- name: Update LDAP by name - change monitor action
+  vastdata.vms.ldaps:
+    vms: "{{ vms_auth }}"
+    name: "test-ldap-name-only"
+    monitor_action: "BIND"
+    state: present
+  register: update_name_result
+  when: can_run_tests | bool
+
+- name: Verify LDAP was updated by name
+  ansible.builtin.assert:
+    that:
+      - update_name_result is changed
+      - update_name_result.ldaps is defined
+      - update_name_result.ldaps.monitor_action == "BIND"
+      - update_name_result.diff is defined
+  when: update_name_result is not skipped
+
+- name: Delete LDAP by name
+  vastdata.vms.ldaps:
+    vms: "{{ vms_auth }}"
+    name: "test-ldap-name-only"
+    state: absent
+  register: delete_name_result
+  when: can_run_tests | bool
+
+- name: Verify LDAP was deleted by name
+  ansible.builtin.assert:
+    that:
+      - delete_name_result is changed
+      - delete_name_result.diff is defined
+      - delete_name_result.diff.before is defined
+      - delete_name_result.diff.after == {}
+  when: delete_name_result is not skipped
+
+- name: Test delete idempotency by name
+  vastdata.vms.ldaps:
+    vms: "{{ vms_auth }}"
+    name: "test-ldap-name-only"
+    state: absent
+  register: delete_idempotency_name_result
+  when: can_run_tests | bool
+
+- name: Verify delete idempotency by name
+  ansible.builtin.assert:
+    that:
+      - delete_idempotency_name_result is not changed
+  when: delete_idempotency_name_result is not skipped
+
+# ====================
+# Final Cleanup
+# ====================
+
+- name: Final cleanup - remove test LDAP by name if it exists
+  vastdata.vms.ldaps:
+    vms: "{{ vms_auth }}"
+    name: "test-ldap-name-only"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Skip message when no credentials
+  ansible.builtin.debug:
+    msg: |
+      Skipping ldaps integration tests - credentials not configured.
+
+      To enable integration tests, set credentials in:
+        tests/integration/integration_config.yml
+
+      Example:
+        vast_vms: "vast-vms.example.com"
+        vast_username: "admin"
+        vast_password: "password"
+
+      Then run: ansible-test integration ldaps -v
+  when: not (can_run_tests | bool)

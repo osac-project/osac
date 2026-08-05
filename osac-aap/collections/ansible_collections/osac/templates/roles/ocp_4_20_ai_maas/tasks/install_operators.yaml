@@ -1,0 +1,1051 @@
+---
+# BOM Phase 2: Install platform operators with RHCL 1.3.x version pinning.
+# Critical ordering: cert-manager → SM 3.2 → sub-operators → RHCL → LWS → RHOAI → DSC
+# SM must be installed BEFORE RHCL subscriptions exist to prevent OLM bundling v1.4.0 upgrades.
+
+- name: Validate enable_keycloak requires enable_maas
+  ansible.builtin.assert:
+    that:
+      - ocp_4_20_ai_maas_enable_maas | bool
+    fail_msg: >-
+      enable_keycloak=true requires enable_maas=true. Keycloak without MaaS
+      has no gateway to authenticate against.
+  when:
+    - ocp_4_20_ai_maas_enable_keycloak | bool
+
+- name: Validate BYOIDP parameters before operator installation
+  ansible.builtin.assert:
+    that:
+      - ocp_4_20_ai_maas_oidc_issuer is defined
+      - ocp_4_20_ai_maas_oidc_issuer | length > 0
+      - ocp_4_20_ai_maas_oidc_client_id is defined
+      - ocp_4_20_ai_maas_oidc_client_id | length > 0
+    fail_msg: >-
+      oidc_issuer and oidc_client_id are required when enable_maas=true and
+      enable_keycloak=false. Provide the OIDC issuer URL and client ID of
+      your external identity provider.
+  when:
+    - ocp_4_20_ai_maas_enable_maas | bool
+    - not (ocp_4_20_ai_maas_enable_keycloak | bool)
+
+- name: Validate shell-interpolated variables (prevent injection)
+  ansible.builtin.assert:
+    that:
+      - ocp_4_20_ai_maas_reject_version is regex('^v[\d.]+$')
+      - ocp_4_20_ai_maas_accept_version is regex('^v[\d.]+$')
+      - ocp_4_20_ai_maas_authorino_starting_csv is regex('^[\w.\-]+$')
+      - ocp_4_20_ai_maas_limitador_starting_csv is regex('^[\w.\-]+$')
+      - ocp_4_20_ai_maas_dns_starting_csv is regex('^[\w.\-]+$')
+      - ocp_4_20_ai_maas_rhcl_starting_csv is regex('^[\w.\-]+$')
+      - ocp_4_20_ai_maas_sm_starting_csv is regex('^[\w.\-]+$')
+      - ocp_4_20_ai_maas_coo_starting_csv is regex('^[\w.\-]+$')
+    fail_msg: "Shell-interpolated variables contain invalid characters"
+
+- name: Validate external models require MaaS
+  ansible.builtin.assert:
+    that:
+      - ocp_4_20_ai_maas_enable_maas | bool
+    fail_msg: >-
+      external_models is configured but enable_maas=false. ExternalModel CRs
+      route through maas-default-gateway which only exists when MaaS is enabled.
+  when: ocp_4_20_ai_maas_external_models | length > 0
+
+- name: Validate external model entries have required fields
+  ansible.builtin.assert:
+    that:
+      - item.name is defined
+      - item.secured is defined
+      - item.upstream_endpoint is defined
+      - item.upstream_credential is defined
+      - item.upstream_model_ns is defined
+      - item.upstream_model_name is defined
+      - item.model_id is defined
+      - item.token_limit is defined
+      - item.window is defined
+      - item.priority is defined
+    fail_msg: >-
+      External model '{{ item.name | default("unnamed") }}' is missing required fields.
+      Required: name, secured, upstream_endpoint, upstream_credential, upstream_model_ns,
+      upstream_model_name, model_id, token_limit, window, priority.
+  loop: "{{ ocp_4_20_ai_maas_external_models }}"
+  loop_control:
+    label: "{{ item.name | default('unnamed') }}"
+  no_log: true
+  when: ocp_4_20_ai_maas_external_models | length > 0
+
+- name: Validate external model credentials are not empty
+  ansible.builtin.assert:
+    that:
+      - item.upstream_credential | length > 0
+    fail_msg: >-
+      External model '{{ item.name }}' has empty upstream_credential.
+      MaaS rejects empty api-key. Use a valid credential or 'dummy-not-used' for unsecured.
+  loop: "{{ ocp_4_20_ai_maas_external_models }}"
+  loop_control:
+    label: "{{ item.name | default('unnamed') }}"
+  no_log: true
+  when: ocp_4_20_ai_maas_external_models | length > 0
+
+- name: Validate hardware profile entries have required fields
+  ansible.builtin.assert:
+    that:
+      - item.name is defined
+      - item.cpu_default is defined
+      - item.cpu_min is defined
+      - item.cpu_max is defined
+      - item.memory_default is defined
+      - item.memory_min is defined
+      - item.memory_max is defined
+    fail_msg: >-
+      Hardware profile '{{ item.name | default("unnamed") }}' is missing required fields.
+      Required: name, cpu_default, cpu_min, cpu_max, memory_default, memory_min, memory_max.
+  loop: "{{ ocp_4_20_ai_maas_hardware_profiles }}"
+  loop_control:
+    label: "{{ item.name | default('unnamed') }}"
+  when: ocp_4_20_ai_maas_hardware_profiles | length > 0
+
+# --- Step 1: cert-manager ---
+# RHCL 1.3 requires cert-manager 1.18 per https://access.redhat.com/articles/7092611
+# Parent template may already install cert-manager; skip if found.
+
+- name: Check if cert-manager is already installed
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: operators.coreos.com/v1alpha1
+    kind: ClusterServiceVersion
+    namespace: cert-manager-operator
+    label_selectors:
+      - "operators.coreos.com/openshift-cert-manager-operator.cert-manager-operator"
+  register: _cert_manager_csv
+  ignore_errors: true
+
+- name: Install cert-manager
+  when: (_cert_manager_csv.resources | default([])) | length == 0
+  block:
+    - name: Create cert-manager namespace
+      kubernetes.core.k8s:
+        kubeconfig: "{{ admin_kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: cert-manager-operator
+      register: _r
+      retries: 5
+      delay: 10
+      until: _r is not failed
+
+    - name: Create cert-manager OperatorGroup
+      kubernetes.core.k8s:
+        kubeconfig: "{{ admin_kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: operators.coreos.com/v1
+          kind: OperatorGroup
+          metadata:
+            name: cert-manager-operator
+            namespace: cert-manager-operator
+          spec: {}
+      register: _r
+      retries: 5
+      delay: 10
+      until: _r is not failed
+
+    - name: Create cert-manager Subscription
+      kubernetes.core.k8s:
+        kubeconfig: "{{ admin_kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: operators.coreos.com/v1alpha1
+          kind: Subscription
+          metadata:
+            name: openshift-cert-manager-operator
+            namespace: cert-manager-operator
+          spec:
+            channel: "{{ ocp_4_20_ai_maas_cert_manager_channel }}"
+            installPlanApproval: Automatic
+            name: openshift-cert-manager-operator
+            source: "{{ ocp_4_20_ai_maas_cert_manager_source }}"
+            sourceNamespace: openshift-marketplace
+      register: _r
+      retries: 5
+      delay: 10
+      until: _r is not failed
+
+    - name: Wait for cert-manager CSV
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ admin_kubeconfig }}"
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        name: openshift-cert-manager-operator
+        namespace: cert-manager-operator
+      register: _cert_manager_sub
+      retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+      delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+      until:
+        - _cert_manager_sub.resources | length > 0
+        - _cert_manager_sub.resources[0].status.installedCSV is defined
+
+# --- Guard: clean stale sailoperator CRDs ---
+- name: Clean stale sailoperator CRDs (prevents SM install plan failure)
+  environment:
+    KUBECONFIG: "{{ admin_kubeconfig }}"
+  ansible.builtin.shell: |
+    export KUBECONFIG="{{ admin_kubeconfig | expanduser }}"
+    SM_OK=$(oc get csv -n openshift-operators -o jsonpath='{.items[*].metadata.name}' 2>/dev/null | tr ' ' '\n' | grep servicemeshoperator3 | head -1)
+    if [ -n "$SM_OK" ]; then
+      # SM CSV exists (any state) — CRDs are actively needed, don't delete.
+      # On retry, Ingress Operator may have overwritten the subscription so
+      # CSV can be Pending/Installing/Replacing — deleting CRDs would make
+      # SM unrecoverable (install plans already Complete, won't recreate).
+      exit 0
+    fi
+    for crd in $(oc get crd -o jsonpath='{.items[*].metadata.name}' 2>/dev/null | tr ' ' '\n' | grep sailoperator); do
+      oc delete crd "$crd" --timeout=15s 2>/dev/null || true
+    done
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+# --- Steps 2-4: MaaS gateway operators (SM, sub-operators, RHCL) ---
+# Only installed when enable_maas is true. For inference-only clusters, SM 3
+# auto-installs via RHOAI DSC — no version pinning or sub-operators needed.
+- name: Install MaaS gateway operators (SM, RHCL, sub-operators)
+  when: ocp_4_20_ai_maas_enable_maas | bool
+  block:
+    # Delete stale subscriptions, CSVs, and install plans from prior runs.
+    # state:present updates spec but NOT status.installedCSV — stale installedCSV
+    # from prior runs makes OLM think operators are already installed → generates
+    # upgrade plans instead of install plans → UpgradePending.
+    # Already-approved v1.4.0 install plans also survive and cause immediate
+    # v1.4.0 installation before hold-until-clean can reject.
+    - name: Delete stale subscriptions, CSVs, and install plans in openshift-operators
+      environment:
+        KUBECONFIG: "{{ admin_kubeconfig }}"
+        ACCEPT: "{{ ocp_4_20_ai_maas_accept_version }}"
+      ansible.builtin.shell: |
+        export KUBECONFIG="{{ admin_kubeconfig | expanduser }}"
+        # Skip cleanup if all operators have a v1.3.x CSV Succeeded
+        ALL_OK=true
+        for op in authorino-operator limitador-operator dns-operator rhcl-operator; do
+          phase=$(oc get csv -n openshift-operators --no-headers 2>/dev/null | \
+            grep "${op}.*${ACCEPT}" | head -1 | awk '{print $NF}')
+          [ "$phase" != "Succeeded" ] && ALL_OK=false && break
+        done
+        [ "$ALL_OK" = "true" ] && echo "All operators at v1.3.x, skipping cleanup" && exit 0
+
+        # Stale state detected — clean subscriptions, CSVs, and install plans
+        for sub in authorino-operator limitador-operator dns-operator rhcl-operator; do
+          oc delete sub "$sub" -n openshift-operators --ignore-not-found 2>/dev/null || true
+        done
+        for csv in $(oc get csv -n openshift-operators --no-headers \
+          -o custom-columns=NAME:.metadata.name 2>/dev/null | \
+          grep -E 'authorino|limitador|dns-operator|rhcl'); do
+          oc delete csv "$csv" -n openshift-operators --ignore-not-found 2>/dev/null || true
+        done
+        for plan in $(oc get installplan -n openshift-operators --no-headers \
+          -o custom-columns=NAME:.metadata.name,CSVS:.spec.clusterServiceVersionNames 2>/dev/null | \
+          grep -E 'authorino|limitador|dns-operator|rhcl' | awk '{print $1}'); do
+          oc delete installplan "$plan" -n openshift-operators --ignore-not-found 2>/dev/null || true
+        done
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    # --- Step 2: Service Mesh 3.2 (MUST be before RHCL) ---
+    # TEMPORARY WORKAROUND: OCP Ingress Operator's gatewayclass_controller actively
+    # watches and overwrites the SM subscription (channel → stable, startingCSV → v3.1.0)
+    # on every reconciliation (~3s). CVO restores the Ingress Operator if scaled down.
+    # Solution: single atomic shell task that races the Ingress Operator — scale down,
+    # delete+create subscription, approve install plan, all in one shot with inner retry.
+    # Once SM CSV is Succeeded, the Ingress Operator can overwrite the subscription
+    # freely — the CSV is already installed and OLM won't downgrade.
+    # Remove once RHCL v1.4.0 compatibility with SM is resolved.
+    # See: https://access.redhat.com/solutions/7097633
+    - name: Install SM with Ingress Operator race protection
+      environment:
+        KUBECONFIG: "{{ admin_kubeconfig | expanduser }}"
+        SM_CSV: "{{ ocp_4_20_ai_maas_sm_starting_csv }}"
+        SM_CHANNEL: "{{ ocp_4_20_ai_maas_sm_channel }}"
+        SM_SOURCE: "{{ ocp_4_20_ai_maas_sm_source }}"
+        REJECT: "{{ ocp_4_20_ai_maas_reject_version }}"
+      ansible.builtin.shell: |
+        PHASE=$(oc get csv "$SM_CSV" -n openshift-operators \
+          -o jsonpath='{.status.phase}' 2>/dev/null)
+        [ "$PHASE" = "Succeeded" ] && exit 0
+
+        if [ -z "$PHASE" ]; then
+          for csv in $(oc get csv -n openshift-operators --no-headers \
+            -o custom-columns=NAME:.metadata.name 2>/dev/null | grep servicemeshoperator3); do
+            oc delete csv "$csv" -n openshift-operators --ignore-not-found 2>/dev/null || true
+          done
+        fi
+
+        oc scale deployment ingress-operator -n openshift-ingress-operator \
+          --replicas=0 --timeout=15s 2>/dev/null || true
+        sleep 3
+
+        for attempt in $(seq 1 10); do
+          CHANNEL=$(oc get sub servicemeshoperator3 -n openshift-operators \
+            -o jsonpath='{.spec.channel}' 2>/dev/null)
+
+          if [ -z "$CHANNEL" ]; then
+            echo "Attempt $attempt: subscription missing, creating..."
+            echo "{\"apiVersion\":\"operators.coreos.com/v1alpha1\",\"kind\":\"Subscription\",\"metadata\":{\"name\":\"servicemeshoperator3\",\"namespace\":\"openshift-operators\"},\"spec\":{\"channel\":\"${SM_CHANNEL}\",\"installPlanApproval\":\"Manual\",\"name\":\"servicemeshoperator3\",\"source\":\"${SM_SOURCE}\",\"sourceNamespace\":\"openshift-marketplace\",\"startingCSV\":\"${SM_CSV}\"}}" | oc apply -f - 2>/dev/null
+            sleep 3
+            continue
+          elif [ "$CHANNEL" != "$SM_CHANNEL" ]; then
+            echo "Attempt $attempt: channel=$CHANNEL (wrong), deleting+recreating..."
+            oc delete sub servicemeshoperator3 -n openshift-operators \
+              --ignore-not-found 2>/dev/null || true
+            sleep 2
+            echo "{\"apiVersion\":\"operators.coreos.com/v1alpha1\",\"kind\":\"Subscription\",\"metadata\":{\"name\":\"servicemeshoperator3\",\"namespace\":\"openshift-operators\"},\"spec\":{\"channel\":\"${SM_CHANNEL}\",\"installPlanApproval\":\"Manual\",\"name\":\"servicemeshoperator3\",\"source\":\"${SM_SOURCE}\",\"sourceNamespace\":\"openshift-marketplace\",\"startingCSV\":\"${SM_CSV}\"}}" | oc apply -f - 2>/dev/null
+            sleep 2
+            continue
+          fi
+
+          CSV_EXISTS=$(oc get csv "$SM_CSV" -n openshift-operators \
+            -o jsonpath='{.metadata.name}' 2>/dev/null)
+          if [ -z "$CSV_EXISTS" ]; then
+            INSTALLED_CSV=$(oc get sub servicemeshoperator3 -n openshift-operators \
+              -o jsonpath='{.status.installedCSV}' 2>/dev/null)
+            if [ -n "$INSTALLED_CSV" ]; then
+              echo "Attempt $attempt: stale installedCSV=$INSTALLED_CSV but CSV gone, recreating..."
+              oc delete sub servicemeshoperator3 -n openshift-operators \
+                --ignore-not-found 2>/dev/null || true
+              sleep 2
+              echo "{\"apiVersion\":\"operators.coreos.com/v1alpha1\",\"kind\":\"Subscription\",\"metadata\":{\"name\":\"servicemeshoperator3\",\"namespace\":\"openshift-operators\"},\"spec\":{\"channel\":\"${SM_CHANNEL}\",\"installPlanApproval\":\"Manual\",\"name\":\"servicemeshoperator3\",\"source\":\"${SM_SOURCE}\",\"sourceNamespace\":\"openshift-marketplace\",\"startingCSV\":\"${SM_CSV}\"}}" | oc apply -f - 2>/dev/null
+              sleep 3
+              continue
+            fi
+          fi
+
+          for plan in $(oc get installplan -n openshift-operators \
+            -o jsonpath='{range .items[?(@.spec.approved==false)]}{.metadata.name}{" "}{end}' 2>/dev/null); do
+            csvs=$(oc get installplan "$plan" -n openshift-operators \
+              -o jsonpath='{.spec.clusterServiceVersionNames}' 2>/dev/null)
+            if ! echo "$csvs" | grep -q "$REJECT"; then
+              oc patch installplan "$plan" -n openshift-operators \
+                --type merge -p '{"spec":{"approved":true}}' 2>/dev/null || true
+            fi
+          done
+
+          PHASE=$(oc get csv "$SM_CSV" -n openshift-operators \
+            -o jsonpath='{.status.phase}' 2>/dev/null)
+          [ "$PHASE" = "Succeeded" ] && exit 0
+          echo "Attempt $attempt: channel=OK, CSV phase=$PHASE, waiting..."
+          sleep 5
+        done
+        exit 1
+      args:
+        executable: /bin/bash
+      register: _sm_result
+      retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+      delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+      until: _sm_result.rc == 0
+      changed_when: false
+
+    # --- Step 3: Pre-create sub-operator subscriptions (v1.3.x, Manual) ---
+    # TEMPORARY WORKAROUND (continued): Pre-creating sub-operator subscriptions with
+    # Manual approval and startingCSV pins them to v1.3.1 before RHCL creates its own.
+    # Remove once RHCL v1.4.0 compatibility is resolved.
+
+    - name: Pre-create Authorino Subscription (v1.3.1, Manual)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ admin_kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: operators.coreos.com/v1alpha1
+          kind: Subscription
+          metadata:
+            name: authorino-operator
+            namespace: openshift-operators
+          spec:
+            channel: stable
+            installPlanApproval: Manual
+            name: authorino-operator
+            source: "{{ ocp_4_20_ai_maas_rhcl_source }}"
+            sourceNamespace: openshift-marketplace
+            startingCSV: "{{ ocp_4_20_ai_maas_authorino_starting_csv }}"
+      register: _r
+      retries: 5
+      delay: 10
+      until: _r is not failed
+
+    - name: Pre-create Limitador Subscription (v1.3.1, Manual)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ admin_kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: operators.coreos.com/v1alpha1
+          kind: Subscription
+          metadata:
+            name: limitador-operator
+            namespace: openshift-operators
+          spec:
+            channel: stable
+            installPlanApproval: Manual
+            name: limitador-operator
+            source: "{{ ocp_4_20_ai_maas_rhcl_source }}"
+            sourceNamespace: openshift-marketplace
+            startingCSV: "{{ ocp_4_20_ai_maas_limitador_starting_csv }}"
+      register: _r
+      retries: 5
+      delay: 10
+      until: _r is not failed
+
+    - name: Pre-create DNS Subscription (v1.3.1, Manual)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ admin_kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: operators.coreos.com/v1alpha1
+          kind: Subscription
+          metadata:
+            name: dns-operator
+            namespace: openshift-operators
+          spec:
+            channel: stable
+            installPlanApproval: Manual
+            name: dns-operator
+            source: "{{ ocp_4_20_ai_maas_rhcl_source }}"
+            sourceNamespace: openshift-marketplace
+            startingCSV: "{{ ocp_4_20_ai_maas_dns_starting_csv }}"
+      register: _r
+      retries: 5
+      delay: 10
+      until: _r is not failed
+
+    # TEMPORARY WORKAROUND (continued): Hold-until-clean install plan approval.
+    # Wait for all three subs to have install plans. Only approve when NONE contain
+    # v1.4.0. Approving a partial plan (2 of 3) causes the third to always bundle
+    # v1.4.0 upgrades, leading to an infinite loop or stuck Replacing CSVs.
+    - name: Approve install plans and wait for sub-operator CSVs
+      environment:
+        KUBECONFIG: "{{ admin_kubeconfig }}"
+        REJECT: "{{ ocp_4_20_ai_maas_reject_version }}"
+        ACCEPT: "{{ ocp_4_20_ai_maas_accept_version }}"
+      ansible.builtin.shell: |
+        export KUBECONFIG="{{ admin_kubeconfig | expanduser }}"
+
+        # Early exit if all three have a v1.3.x CSV Succeeded
+        ALL_OK=true
+        for op in authorino-operator limitador-operator dns-operator; do
+          phase=$(oc get csv -n openshift-operators --no-headers 2>/dev/null | \
+            grep "${op}.*${ACCEPT}" | head -1 | awk '{print $NF}')
+          [ "$phase" != "Succeeded" ] && ALL_OK=false
+        done
+        [ "$ALL_OK" = "true" ] && exit 0
+
+        # Wait until all three subs have an installPlanRef
+        PLANS=""
+        for sub in authorino-operator limitador-operator dns-operator; do
+          plan=$(oc get sub "$sub" -n openshift-operators \
+            -o jsonpath='{.status.installPlanRef.name}' 2>/dev/null)
+          [ -z "$plan" ] && exit 1
+          PLANS="$PLANS $plan"
+        done
+        PLANS=$(echo "$PLANS" | tr ' ' '\n' | sort -u | grep -v '^$')
+
+        # If any referenced plan contains v1.4.0, delete it and retry
+        HAS_REJECT=false
+        for plan in $PLANS; do
+          csvs=$(oc get installplan "$plan" -n openshift-operators \
+            -o jsonpath='{.spec.clusterServiceVersionNames}' 2>/dev/null)
+          if echo "$csvs" | grep -q "$REJECT"; then
+            HAS_REJECT=true
+            oc delete installplan "$plan" -n openshift-operators 2>/dev/null || true
+          fi
+        done
+        [ "$HAS_REJECT" = "true" ] && exit 1
+
+        # All plans are clean — approve them all
+        for plan in $PLANS; do
+          oc patch installplan "$plan" -n openshift-operators \
+            --type merge -p '{"spec":{"approved":true}}' 2>/dev/null || true
+        done
+
+        # Wait for all v1.3.x CSVs to be Succeeded
+        for op in authorino-operator limitador-operator dns-operator; do
+          phase=$(oc get csv -n openshift-operators --no-headers 2>/dev/null | \
+            grep "${op}.*${ACCEPT}" | head -1 | awk '{print $NF}')
+          [ "$phase" != "Succeeded" ] && exit 1
+        done
+      args:
+        executable: /bin/bash
+      register: _sub_op_result
+      retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+      delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+      until: _sub_op_result.rc == 0
+      changed_when: false
+
+    # --- Step 4: RHCL operator (v1.3.4, Manual) ---
+
+    - name: Create RHCL Subscription (v1.3.4, Manual)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ admin_kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: operators.coreos.com/v1alpha1
+          kind: Subscription
+          metadata:
+            name: rhcl-operator
+            namespace: openshift-operators
+          spec:
+            channel: stable
+            installPlanApproval: Manual
+            name: rhcl-operator
+            source: "{{ ocp_4_20_ai_maas_rhcl_source }}"
+            sourceNamespace: openshift-marketplace
+            startingCSV: "{{ ocp_4_20_ai_maas_rhcl_starting_csv }}"
+      register: _r
+      retries: 5
+      delay: 10
+      until: _r is not failed
+
+    # TEMPORARY WORKAROUND (continued): Final pass — approve remaining v1.3.x plans
+    # for RHCL itself. End of RHCL version pinning workaround block.
+    - name: Approve install plans and wait for RHCL CSV
+      environment:
+        KUBECONFIG: "{{ admin_kubeconfig }}"
+        REJECT: "{{ ocp_4_20_ai_maas_reject_version }}"
+        ACCEPT: "{{ ocp_4_20_ai_maas_accept_version }}"
+      ansible.builtin.shell: |
+        export KUBECONFIG="{{ admin_kubeconfig | expanduser }}"
+        for plan in $(oc get installplan -n openshift-operators \
+          -o jsonpath='{range .items[?(@.spec.approved==false)]}{.metadata.name}{" "}{end}' 2>/dev/null); do
+          csvs=$(oc get installplan "$plan" -n openshift-operators \
+            -o jsonpath='{.spec.clusterServiceVersionNames}' 2>/dev/null)
+          if ! echo "$csvs" | grep -q "$REJECT"; then
+            oc patch installplan "$plan" -n openshift-operators \
+              --type merge -p '{"spec":{"approved":true}}' 2>/dev/null || true
+          fi
+        done
+        # Check any RHCL v1.3.x CSV is Succeeded
+        oc get csv -n openshift-operators --no-headers 2>/dev/null | \
+          grep "rhcl-operator.*${ACCEPT}" | head -1 | awk '{print $NF}' | grep -q Succeeded
+      args:
+        executable: /bin/bash
+      register: _rhcl_result
+      retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+      delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+      until: _rhcl_result.rc == 0
+      changed_when: false
+
+# --- Step 5: Leader Worker Set ---
+
+- name: Create LWS namespace
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: openshift-lws-operator
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Create LWS OperatorGroup
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: operators.coreos.com/v1
+      kind: OperatorGroup
+      metadata:
+        name: openshift-lws-operator
+        namespace: openshift-lws-operator
+      spec:
+        targetNamespaces:
+          - openshift-lws-operator
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Create LWS Subscription
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: operators.coreos.com/v1alpha1
+      kind: Subscription
+      metadata:
+        name: leader-worker-set
+        namespace: openshift-lws-operator
+      spec:
+        channel: "{{ ocp_4_20_ai_maas_lws_channel }}"
+        installPlanApproval: Automatic
+        name: leader-worker-set
+        source: "{{ ocp_4_20_ai_maas_lws_source }}"
+        sourceNamespace: openshift-marketplace
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Wait for LWS CSV
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: operators.coreos.com/v1alpha1
+    kind: Subscription
+    name: leader-worker-set
+    namespace: openshift-lws-operator
+  register: _lws_sub
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  until:
+    - _lws_sub.resources | length > 0
+    - _lws_sub.resources[0].status.installedCSV is defined
+
+# --- Step 6: RHOAI 3.4 ---
+
+- name: Create RHOAI namespace
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: redhat-ods-operator
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Create RHOAI OperatorGroup
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: operators.coreos.com/v1
+      kind: OperatorGroup
+      metadata:
+        name: redhat-ods-operator
+        namespace: redhat-ods-operator
+      spec: {}
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Create RHOAI Subscription
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: operators.coreos.com/v1alpha1
+      kind: Subscription
+      metadata:
+        name: rhods-operator
+        namespace: redhat-ods-operator
+      spec:
+        channel: "{{ ocp_4_20_ai_maas_rhoai_channel }}"
+        installPlanApproval: Automatic
+        name: rhods-operator
+        source: "{{ ocp_4_20_ai_maas_rhoai_source }}"
+        sourceNamespace: openshift-marketplace
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Wait for RHOAI CSV
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: operators.coreos.com/v1alpha1
+    kind: Subscription
+    name: rhods-operator
+    namespace: redhat-ods-operator
+  register: _rhoai_sub
+  retries: "{{ ocp_4_20_ai_maas_long_retries }}"
+  delay: 10
+  until:
+    - _rhoai_sub.resources | length > 0
+    - _rhoai_sub.resources[0].status.installedCSV is defined
+
+# When MaaS is disabled, SM auto-installs via RHOAI DSC + Ingress Operator.
+# After a prior MaaS run + cleanup, the Ingress Operator's SM subscription may
+# retain Manual installPlanApproval. Approve any unapproved SM install plans.
+- name: Approve SM install plans for auto-install (inference-only)
+  environment:
+    KUBECONFIG: "{{ admin_kubeconfig }}"
+  ansible.builtin.shell: |
+    export KUBECONFIG="{{ admin_kubeconfig | expanduser }}"
+    SM_CSV=$(oc get csv -n openshift-operators --no-headers 2>/dev/null | grep servicemeshoperator3 | head -1 | awk '{print $1}')
+    if [ -n "$SM_CSV" ]; then
+      PHASE=$(oc get csv "$SM_CSV" -n openshift-operators -o jsonpath='{.status.phase}' 2>/dev/null)
+      [ "$PHASE" = "Succeeded" ] && exit 0
+      # CRD loss recovery: on retry, Ingress Operator subscription overwrite can
+      # leave SM CSV Pending with missing sailoperator CRDs. Install plans show
+      # Complete but CRDs were cascade-deleted. Clean everything and let Ingress
+      # Operator recreate from scratch.
+      if [ "$PHASE" = "Pending" ]; then
+        CRD_COUNT=$(oc get crd -o name 2>/dev/null | grep -c sailoperator || echo 0)
+        if [ "$CRD_COUNT" -eq 0 ]; then
+          oc delete sub servicemeshoperator3 -n openshift-operators --ignore-not-found 2>/dev/null || true
+          oc delete csv "$SM_CSV" -n openshift-operators --ignore-not-found 2>/dev/null || true
+          for plan in $(oc get installplan -n openshift-operators --no-headers \
+            -o custom-columns=NAME:.metadata.name,CSVS:.spec.clusterServiceVersionNames 2>/dev/null | \
+            grep servicemeshoperator3 | awk '{print $1}'); do
+            oc delete installplan "$plan" -n openshift-operators --ignore-not-found 2>/dev/null || true
+          done
+          exit 1
+        fi
+      fi
+    fi
+    for plan in $(oc get installplan -n openshift-operators --no-headers \
+      -o custom-columns=NAME:.metadata.name,CSVS:.spec.clusterServiceVersionNames,APPROVED:.spec.approved 2>/dev/null | \
+      grep servicemeshoperator3 | grep false | awk '{print $1}'); do
+      oc patch installplan "$plan" -n openshift-operators \
+        --type merge -p '{"spec":{"approved":true}}' 2>/dev/null || true
+    done
+    SM_CSV=$(oc get csv -n openshift-operators --no-headers 2>/dev/null | grep servicemeshoperator3 | head -1 | awk '{print $1}')
+    [ -n "$SM_CSV" ] && oc get csv "$SM_CSV" -n openshift-operators \
+      -o jsonpath='{.status.phase}' 2>/dev/null | grep -q Succeeded
+  args:
+    executable: /bin/bash
+  register: _sm_auto_result
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  until: _sm_auto_result.rc == 0
+  changed_when: false
+  when: not (ocp_4_20_ai_maas_enable_maas | bool)
+
+# --- Step 6a: OpenTelemetry Operator (isolated namespace, before DSC) ---
+# Required by RHOAI Monitoring controller — fails without OpenTelemetryCollector CRD.
+# Installed in isolated namespace to prevent OLM bundling with RHCL v1.4.0 plans.
+
+- name: Create OTel namespace
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: openshift-opentelemetry-operator
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+  when: ocp_4_20_ai_maas_enable_observability | default(false) | bool
+
+- name: Create OTel OperatorGroup
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: operators.coreos.com/v1
+      kind: OperatorGroup
+      metadata:
+        name: opentelemetry-operator
+        namespace: openshift-opentelemetry-operator
+      spec: {}
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+  when: ocp_4_20_ai_maas_enable_observability | default(false) | bool
+
+- name: Create OTel Subscription
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: operators.coreos.com/v1alpha1
+      kind: Subscription
+      metadata:
+        name: "{{ ocp_4_20_ai_maas_otel_package }}"
+        namespace: openshift-opentelemetry-operator
+      spec:
+        channel: stable
+        installPlanApproval: Automatic
+        name: "{{ ocp_4_20_ai_maas_otel_package }}"
+        source: "{{ ocp_4_20_ai_maas_otel_source }}"
+        sourceNamespace: openshift-marketplace
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+  when: ocp_4_20_ai_maas_enable_observability | default(false) | bool
+
+- name: Wait for OTel CSV
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: operators.coreos.com/v1alpha1
+    kind: Subscription
+    name: "{{ ocp_4_20_ai_maas_otel_package }}"
+    namespace: openshift-opentelemetry-operator
+  register: _otel_sub
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  ignore_errors: true
+  until:
+    - _otel_sub.resources is defined
+    - _otel_sub.resources | length > 0
+    - _otel_sub.resources[0].status.installedCSV is defined
+  when: ocp_4_20_ai_maas_enable_observability | default(false) | bool
+
+# --- Step 6b: Cluster Observability Operator v1.4.0 (isolated namespace, before DSC) ---
+# TEMPORARY WORKAROUND: Pin COO to v1.4.0 — v1.5 breaks RHOAI 3.4 observability
+# (CEL validation on caCert + Perses image flag mismatch). See: RHOAIENG-69180
+
+- name: Create COO namespace
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: openshift-cluster-observability-operator
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+  when: ocp_4_20_ai_maas_enable_observability | default(false) | bool
+
+- name: Create COO OperatorGroup
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: operators.coreos.com/v1
+      kind: OperatorGroup
+      metadata:
+        name: cluster-observability-operator
+        namespace: openshift-cluster-observability-operator
+      spec: {}
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+  when: ocp_4_20_ai_maas_enable_observability | default(false) | bool
+
+- name: Delete stale COO subscription, CSVs, and install plans
+  environment:
+    KUBECONFIG: "{{ admin_kubeconfig }}"
+    COO_CSV: "{{ ocp_4_20_ai_maas_coo_starting_csv }}"
+  ansible.builtin.shell: |
+    export KUBECONFIG="{{ admin_kubeconfig | expanduser }}"
+    # Skip if COO already at target version
+    phase=$(oc get csv "$COO_CSV" -n openshift-cluster-observability-operator \
+      -o jsonpath='{.status.phase}' 2>/dev/null)
+    [ "$phase" = "Succeeded" ] && echo "COO at target version, skipping cleanup" && exit 0
+
+    oc delete sub cluster-observability-operator \
+      -n openshift-cluster-observability-operator --ignore-not-found 2>/dev/null || true
+    oc delete csv --all -n openshift-cluster-observability-operator \
+      --ignore-not-found 2>/dev/null || true
+    oc delete installplan --all -n openshift-cluster-observability-operator \
+      --ignore-not-found 2>/dev/null || true
+  args:
+    executable: /bin/bash
+  changed_when: false
+  when: ocp_4_20_ai_maas_enable_observability | default(false) | bool
+
+- name: Create COO Subscription (Manual approval, pinned to v1.4.0)
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: operators.coreos.com/v1alpha1
+      kind: Subscription
+      metadata:
+        name: cluster-observability-operator
+        namespace: openshift-cluster-observability-operator
+      spec:
+        channel: stable
+        installPlanApproval: Manual
+        name: cluster-observability-operator
+        source: "{{ ocp_4_20_ai_maas_coo_source }}"
+        sourceNamespace: openshift-marketplace
+        startingCSV: "{{ ocp_4_20_ai_maas_coo_starting_csv }}"
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+  when: ocp_4_20_ai_maas_enable_observability | default(false) | bool
+
+- name: Approve COO v1.4.0 install plan
+  environment:
+    KUBECONFIG: "{{ admin_kubeconfig }}"
+    COO_CSV: "{{ ocp_4_20_ai_maas_coo_starting_csv }}"
+  ansible.builtin.shell: |
+    export KUBECONFIG="{{ admin_kubeconfig | expanduser }}"
+    for plan in $(oc get installplan -n openshift-cluster-observability-operator \
+      -o jsonpath='{range .items[?(@.spec.approved==false)]}{.metadata.name}{" "}{end}' 2>/dev/null); do
+      csvs=$(oc get installplan "$plan" -n openshift-cluster-observability-operator \
+        -o jsonpath='{.spec.clusterServiceVersionNames}' 2>/dev/null)
+      if echo "$csvs" | grep -q "$COO_CSV"; then
+        oc patch installplan "$plan" -n openshift-cluster-observability-operator \
+          --type merge -p '{"spec":{"approved":true}}' 2>/dev/null || true
+      fi
+    done
+    oc get csv "$COO_CSV" -n openshift-cluster-observability-operator \
+      -o jsonpath='{.status.phase}' 2>/dev/null | grep -q Succeeded
+  args:
+    executable: /bin/bash
+  register: _coo_result
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  until: _coo_result.rc == 0
+  changed_when: false
+  when: ocp_4_20_ai_maas_enable_observability | default(false) | bool
+
+# --- Step 7: DSCInitialization + DataScienceCluster ---
+
+- name: Wait for DSCInitialization to be ready
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: dscinitialization.opendatahub.io/v1
+    kind: DSCInitialization
+    name: default-dsci
+  register: _dsci
+  retries: "{{ ocp_4_20_ai_maas_long_retries }}"
+  delay: 10
+  ignore_errors: true
+  until:
+    - _dsci.resources is defined
+    - _dsci.resources | length > 0
+    - _dsci.resources[0].status.phase | default('') == 'Ready'
+
+- name: Fail if DSCInitialization never became ready
+  ansible.builtin.fail:
+    msg: >-
+      DSCInitialization did not become ready after {{ ocp_4_20_ai_maas_long_retries }} retries.
+      Check that the RHOAI operator is installed and running.
+  when: >-
+    _dsci.resources is not defined
+    or _dsci.resources | length == 0
+    or _dsci.resources[0].status.phase | default('') != 'Ready'
+
+# Step 6c: Patch DSCI metrics (before DSC creation so operator sees it on first reconciliation)
+- name: Patch DSCI with monitoring metrics configuration
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    merge_type: merge
+    definition:
+      apiVersion: dscinitialization.opendatahub.io/v1
+      kind: DSCInitialization
+      metadata:
+        name: default-dsci
+      spec:
+        monitoring:
+          metrics:
+            replicas: "{{ ocp_4_20_ai_maas_dsci_metrics_replicas }}"
+            storage:
+              retention: "{{ ocp_4_20_ai_maas_dsci_metrics_retention }}"
+              size: "{{ ocp_4_20_ai_maas_dsci_metrics_storage }}"
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+  when: ocp_4_20_ai_maas_enable_observability | default(false) | bool
+
+- name: Wait for RHOAI webhook endpoints ready
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: v1
+    kind: Endpoints
+    name: rhods-operator-service
+    namespace: redhat-ods-operator
+  register: _webhook_ep
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  until:
+    - _webhook_ep.resources | length > 0
+    - (_webhook_ep.resources[0].subsets | default([])) | length > 0
+
+- name: Override DSC dashboard component based on enable_dashboard
+  ansible.builtin.set_fact:
+    ocp_4_20_ai_maas_dsc_components: >-
+      {{ ocp_4_20_ai_maas_dsc_components | combine({
+        'dashboard': (ocp_4_20_ai_maas_enable_dashboard | bool) | ternary('Managed', 'Removed')
+      }) }}
+
+- name: Build DSC components spec
+  ansible.builtin.set_fact:
+    _dsc_components: >-
+      {{ dict(ocp_4_20_ai_maas_dsc_components | dict2items
+         | map(attribute='key') | list
+         | zip(ocp_4_20_ai_maas_dsc_components | dict2items
+               | map(attribute='value')
+               | map('community.general.dict_kv', 'managementState')
+               | list)) }}
+
+- name: Create DataScienceCluster
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: datasciencecluster.opendatahub.io/v1
+      kind: DataScienceCluster
+      metadata:
+        name: default-dsc
+      spec:
+        components: "{{ _dsc_components }}"
+  register: _dsc_create
+  retries: 12
+  delay: 10
+  until: _dsc_create is not failed
+
+- name: Wait for DataScienceCluster Ready
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: datasciencecluster.opendatahub.io/v1
+    kind: DataScienceCluster
+    name: default-dsc
+  register: _dsc
+  retries: "{{ ocp_4_20_ai_maas_dsc_retries }}"
+  delay: 10
+  ignore_errors: true
+  until:
+    - _dsc.resources is defined
+    - _dsc.resources | length > 0
+    - _dsc.resources[0].status.phase | default('') == 'Ready'
+
+- name: Fail if DataScienceCluster never became ready
+  ansible.builtin.fail:
+    msg: >-
+      DataScienceCluster did not become ready after {{ ocp_4_20_ai_maas_dsc_retries }} retries.
+      Check RHOAI operator logs and webhook service status.
+  when: >-
+    _dsc.resources is not defined
+    or _dsc.resources | length == 0
+    or _dsc.resources[0].status.phase | default('') != 'Ready'
+
+# TEMPORARY WORKAROUND (end): Restore Ingress Operator after version-pinned install.
+- name: Scale up Ingress Operator
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ingress-operator
+        namespace: openshift-ingress-operator
+      spec:
+        replicas: 1
+    merge_type: merge
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+  when: ocp_4_20_ai_maas_enable_maas | bool
+
+- name: Report operator installation complete
+  ansible.builtin.debug:
+    msg:
+      - "BOM Phase 2 complete — all operators installed"
+      - "SM: {{ ocp_4_20_ai_maas_sm_starting_csv }}"
+      - "RHCL: {{ ocp_4_20_ai_maas_rhcl_starting_csv }}"
+      - "DSC: Ready"

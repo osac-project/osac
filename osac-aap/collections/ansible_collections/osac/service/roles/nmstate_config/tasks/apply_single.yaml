@@ -1,0 +1,76 @@
+---
+- name: "Get management IP for agent {{ _nmstate_apply_assignment.agent.metadata.name }}"
+  ansible.builtin.set_fact:
+    _nmstate_apply_mgmt_ip: "{{ _nmstate_apply_assignment.agent | osac.service.agent_mgmt_ip(nmstate_config_mgmt_interface) }}"
+
+- name: "Fail if management IP not found for agent {{ _nmstate_apply_assignment.agent.metadata.name }}"
+  ansible.builtin.fail:
+    msg: >-
+      Could not find management IP on interface '{{ nmstate_config_mgmt_interface }}'
+      for agent {{ _nmstate_apply_assignment.agent.metadata.name }}.
+      Check that the agent has a '{{ nmstate_config_mgmt_interface }}' interface
+      with an IPv4 address in status.inventory.interfaces.
+  when: _nmstate_apply_mgmt_ip is none or _nmstate_apply_mgmt_ip == ""
+
+- name: "Calculate static IP for agent {{ _nmstate_apply_assignment.agent.metadata.name }}"
+  ansible.builtin.set_fact:
+    _nmstate_apply_host_ip: "{{ _nmstate_apply_gateway_ip | ansible.utils.ipmath(_nmstate_apply_assignment.offset) }}"
+
+- name: "Render nmstate config for agent {{ _nmstate_apply_assignment.agent.metadata.name }}"
+  ansible.builtin.set_fact:
+    _nmstate_apply_rendered_config: "{{ lookup('ansible.builtin.template', nmstate_config_template) }}"
+  vars:
+    nmstate_ip: "{{ _nmstate_apply_host_ip }}"
+    nmstate_gateway: "{{ _nmstate_apply_gateway_ip }}"
+    nmstate_prefix: "{{ _nmstate_apply_prefix }}"
+    nmstate_interfaces: "{{ nmstate_config_server_interfaces }}"
+    nmstate_macs: "{{ _nmstate_apply_assignment.agent | osac.service.agent_vpc_interfaces(nmstate_config_interface_names) }}"
+    nmstate_mgmt_interface: "{{ nmstate_config_mgmt_interface }}"
+    nmstate_mgmt_route_destination: "{{ nmstate_config_mgmt_route_destination }}"
+    nmstate_mgmt_route_gateway: "{{ nmstate_config_mgmt_route_gateway }}"
+    nmstate_mgmt_route_metric: "{{ nmstate_config_mgmt_route_metric }}"
+    nmstate_vpc_route_metric: "{{ nmstate_config_vpc_route_metric }}"
+
+- name: "Write nmstate config to temp file for agent {{ _nmstate_apply_assignment.agent.metadata.name }}"
+  ansible.builtin.copy:
+    content: "{{ _nmstate_apply_rendered_config }}"
+    dest: "/tmp/nmstate-{{ _nmstate_apply_assignment.agent.metadata.name }}.yaml"
+    mode: "0644"
+
+- name: "Disable rp_filter on agent {{ _nmstate_apply_assignment.agent.metadata.name }}"
+  ansible.builtin.shell:
+    cmd: |
+      ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 \
+        -o 'ProxyCommand=ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 -i {{ nmstate_config_ssh_bastion_key }} -W %h:%p {{ nmstate_config_ssh_bastion_user }}@{{ nmstate_config_ssh_bastion_host }}' \
+        -i {{ nmstate_config_ssh_key }} \
+        {{ nmstate_config_ssh_user }}@{{ _nmstate_apply_mgmt_ip }} \
+        'sudo sysctl -qw net.ipv4.conf.all.rp_filter=0 net.ipv4.conf.{{ nmstate_config_mgmt_interface }}.rp_filter=0'
+  changed_when: false
+  no_log: true
+
+- name: "Copy nmstate config to agent {{ _nmstate_apply_assignment.agent.metadata.name }}"
+  ansible.builtin.shell:
+    cmd: |
+      scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 \
+        -o 'ProxyCommand=ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 -i {{ nmstate_config_ssh_bastion_key }} -W %h:%p {{ nmstate_config_ssh_bastion_user }}@{{ nmstate_config_ssh_bastion_host }}' \
+        -i {{ nmstate_config_ssh_key }} \
+        /tmp/nmstate-{{ _nmstate_apply_assignment.agent.metadata.name }}.yaml \
+        {{ nmstate_config_ssh_user }}@{{ _nmstate_apply_mgmt_ip }}:/tmp/nmstate-config.yaml
+  changed_when: true
+  no_log: true
+
+- name: "Apply nmstate config on agent {{ _nmstate_apply_assignment.agent.metadata.name }}"
+  ansible.builtin.shell:
+    cmd: |
+      ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 \
+        -o 'ProxyCommand=ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 -i {{ nmstate_config_ssh_bastion_key }} -W %h:%p {{ nmstate_config_ssh_bastion_user }}@{{ nmstate_config_ssh_bastion_host }}' \
+        -i {{ nmstate_config_ssh_key }} \
+        {{ nmstate_config_ssh_user }}@{{ _nmstate_apply_mgmt_ip }} \
+        'nohup sudo nmstatectl apply /tmp/nmstate-config.yaml > /tmp/nmstate-apply.log 2>&1 &'
+  changed_when: true
+  no_log: true
+
+- name: "Clean up local temp file for agent {{ _nmstate_apply_assignment.agent.metadata.name }}"
+  ansible.builtin.file:
+    path: "/tmp/nmstate-{{ _nmstate_apply_assignment.agent.metadata.name }}.yaml"
+    state: absent

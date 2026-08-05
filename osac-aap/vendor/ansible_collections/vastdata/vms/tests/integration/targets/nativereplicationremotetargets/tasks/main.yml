@@ -1,0 +1,550 @@
+---
+# Integration tests for nativereplicationremotetargets module
+# These tests run against a real VAST system
+#
+# Configuration:
+# Set values in tests/integration/integration_config.yml
+
+# ====================
+# Setup
+# ====================
+
+- name: Check if credentials are available
+  ansible.builtin.set_fact:
+    has_credentials: "{{ (vast_vms | default('') | length > 0) and (vast_username | default('') | length > 0) and (vast_password | default('') | length > 0) }}"
+
+- name: Set test conditions
+  ansible.builtin.set_fact:
+    can_run_tests: "{{ has_credentials }}"
+    can_run_module_tests: "{{ has_credentials | bool and (test_leading_vip | default('') | length > 0) }}"
+
+# ====================
+# Setup - Discover local replication VIP pool
+# ====================
+
+- name: Get list of all VIP pools
+  ansible.builtin.uri:
+    url: "https://{{ vast_vms }}/api/latest/vippools/"
+    method: GET
+    user: "{{ vast_username }}"
+    password: "{{ vast_password }}"
+    validate_certs: false
+    force_basic_auth: true
+  register: all_vippools
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Find existing replication VIP pools
+  ansible.builtin.set_fact:
+    existing_repl_pools: "{{ all_vippools.json | default([]) | selectattr('role', 'equalto', 'REPLICATION') | list }}"
+  when: can_run_tests | bool
+
+- name: Create REPLICATION VIP pool if none exists
+  vastdata.vms.vippools:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_replication_vippool_name }}"
+    role: "REPLICATION"
+    enabled: true
+    subnet_cidr: "{{ test_replication_vippool_subnet_cidr }}"
+    ip_ranges: "{{ test_replication_vippool_ip_ranges }}"
+    state: present
+  register: created_vippool
+  when: can_run_tests | bool and existing_repl_pools | default([]) | length == 0
+
+- name: Set flag to track if we created the VIP pool
+  ansible.builtin.set_fact:
+    we_created_replication_vippool: true
+  when: created_vippool is not skipped and created_vippool is changed
+
+- name: Set local pool ID for tests (from existing pool)
+  ansible.builtin.set_fact:
+    test_pool_id: "{{ existing_repl_pools[0].id }}"
+  when: can_run_tests | bool and existing_repl_pools | default([]) | length > 0
+
+- name: Set local pool ID for tests (from newly created pool)
+  ansible.builtin.set_fact:
+    test_pool_id: "{{ created_vippool.vippools.id }}"
+  when: created_vippool is not skipped and created_vippool is changed
+
+- name: Report which replication VIP pool will be used
+  ansible.builtin.debug:
+    msg: "Using replication VIP pool ID {{ test_pool_id }} ({{ 'created' if we_created_replication_vippool | default(false) else 'existing' }})"
+  when: can_run_tests | bool and test_pool_id is defined
+
+# ====================
+# Setup - leading VIP from cluster 2
+# ====================
+
+- name: Check if second cluster is available
+  ansible.builtin.set_fact:
+    has_cluster_2: "{{ vast_vms_2 | default('') | length > 0 }}"
+  when: can_run_tests | bool
+
+- name: Parse cluster 2 connection details
+  ansible.builtin.set_fact:
+    cluster2_port: "{{ vast_vms_2.split(':')[1] if ':' in vast_vms_2 else '443' }}"
+    cluster2_needs_tunnel: "{{ ':' in vast_vms_2 and vast_vms_2.split(':')[1] != '443' }}"
+  when: can_run_tests | bool and has_cluster_2 | bool
+
+- name: Establish SSH tunnel to cluster 2
+  ansible.builtin.raw: |
+    ssh -f -N -i /vast/deploy/ssh_key.pem \
+      -L 0.0.0.0:{{ cluster2_port }}:16.0.0.2:443 \
+      centos@localhost
+  delegate_to: "{{vast_vms}}"
+  vars:
+    ansible_user: centos
+  when: can_run_tests | bool and has_cluster_2 | bool and cluster2_needs_tunnel | bool
+  register: ssh_tunnel
+  failed_when: false
+  changed_when: false
+
+- name: Wait for tunnel to be ready
+  ansible.builtin.wait_for:
+    host: "{{ vast_vms }}"
+    port: "{{ cluster2_port }}"
+    timeout: 10
+  when: can_run_tests | bool and has_cluster_2 | bool and cluster2_needs_tunnel | bool
+
+- name: Check cluster 2 is reachable and get VIP pools
+  ansible.builtin.uri:
+    url: "https://{{ vast_vms_2 }}/api/latest/vippools/"
+    method: GET
+    user: "{{ vast_username }}"
+    password: "{{ vast_password }}"
+    validate_certs: false
+    force_basic_auth: true
+  register: cluster2_vippools
+  when: can_run_tests | bool and has_cluster_2 | bool and test_leading_vip | default('') | length == 0
+  failed_when: (cluster2_vippools is not skipped) and (cluster2_vippools is failed)
+
+- name: Find existing replication VIP pools on cluster 2
+  ansible.builtin.set_fact:
+    existing_repl_pools_2: "{{ cluster2_vippools.json | default([]) | selectattr('role', 'equalto', 'REPLICATION') | list }}"
+  when: can_run_tests | bool and has_cluster_2 | bool and test_leading_vip | default('') | length == 0
+
+- name: Use first IP from existing cluster 2 VIP pool as leading VIP
+  ansible.builtin.set_fact:
+    test_leading_vip: "{{ existing_repl_pools_2[0].ip_ranges[0][0] }}"
+  when: >-
+    can_run_tests | bool and has_cluster_2 | bool and test_leading_vip | default('') | length == 0
+    and existing_repl_pools_2 | default([]) | length > 0
+
+- name: Create REPLICATION VIP pool on cluster 2 if none exists
+  vastdata.vms.vippools:
+    vms:
+      host: "{{ vast_vms_2 }}"
+      username: "{{ vast_username }}"
+      password: "{{ vast_password }}"
+      validate_certs: false
+    state: present
+    name: "{{ test_replication_vippool_name_cluster2 }}"
+    role: "REPLICATION"
+    subnet_cidr: "{{ test_replication_vippool_subnet_cidr_cluster2 }}"
+    ip_ranges: "{{ test_replication_vippool_ip_ranges_cluster2 }}"
+  register: replication_vippool_cluster2
+  when: >-
+    can_run_tests | bool and has_cluster_2 | bool and test_leading_vip | default('') | length == 0
+    and existing_repl_pools_2 | default([]) | length == 0
+  failed_when: false
+  changed_when: false
+  no_log: true
+
+- name: Set flag to track if we created the VIP pool on cluster 2
+  ansible.builtin.set_fact:
+    we_created_replication_vippool_cluster2: true
+  when: >-
+    can_run_tests | bool and has_cluster_2 | bool and test_leading_vip | default('') | length == 0
+    and existing_repl_pools_2 | default([]) | length == 0
+    and replication_vippool_cluster2 is not skipped
+    and replication_vippool_cluster2 is not failed
+
+- name: Use first IP from newly created cluster 2 VIP pool as leading VIP
+  ansible.builtin.set_fact:
+    test_leading_vip: "{{ replication_vippool_cluster2.vippools.ip_ranges[0][0] }}"
+  when: >-
+    can_run_tests | bool and has_cluster_2 | bool and test_leading_vip | default('') | length == 0
+    and we_created_replication_vippool_cluster2 | default(false)
+
+- name: Re-evaluate module test conditions after leading VIP discovery
+  ansible.builtin.set_fact:
+    can_run_module_tests: "{{ can_run_tests | bool and test_leading_vip | default('') | length > 0 }}"
+  when: can_run_tests | bool
+
+- name: Report discovered leading VIP
+  ansible.builtin.debug:
+    msg: "Auto-discovered leading VIP from cluster 2: {{ test_leading_vip }}"
+  when: can_run_tests | bool and has_cluster_2 | default(false) | bool and test_leading_vip | default('') | length > 0
+
+- name: Fail if no leading_vip available
+  ansible.builtin.fail:
+    msg: >-
+      No leading_vip available. Set test_leading_vip in integration_config.yml
+      or set vast_vms_2 to auto-discover from cluster 2.
+  when: can_run_tests | bool and not (can_run_module_tests | bool)
+
+# ====================
+# Cleanup - Remove existing test replication targets if present
+# ====================
+
+- name: Clean up - ensure test replication target doesn't exist before starting
+  vastdata.vms.nativereplicationremotetargets:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_nativereplication_name }}"
+    state: absent
+  when: can_run_module_tests | bool
+  failed_when: false
+
+- name: Clean up - ensure renamed test replication target doesn't exist
+  vastdata.vms.nativereplicationremotetargets:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_nativereplication_renamed }}"
+    state: absent
+  when: can_run_module_tests | bool
+  failed_when: false
+
+- name: Wait for cluster to finish removing replication targets before tests start
+  ansible.builtin.uri:
+    url: "https://{{ vast_vms }}/api/latest/nativereplicationremotetargets/"
+    method: GET
+    user: "{{ vast_username }}"
+    password: "{{ vast_password }}"
+    validate_certs: false
+    force_basic_auth: true
+    status_code: [200]
+  register: wait_cleanup
+  until: >-
+    wait_cleanup.json | default([]) | selectattr('name', 'in', [
+      test_nativereplication_name,
+      test_nativereplication_renamed
+    ]) | list | length == 0
+  retries: 24
+  delay: 5
+  when: can_run_module_tests | bool
+
+# ====================
+# Create Tests
+# ====================
+
+- name: Test creating a native replication remote target
+  vastdata.vms.nativereplicationremotetargets:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_nativereplication_name }}"
+    leading_vip: "{{ test_leading_vip | default('') }}"
+    pool_id: "{{ test_pool_id }}"
+    secure_mode: "{{ test_nativereplication_secure_mode }}"
+    transport_mode: "{{ test_nativereplication_transport_mode }}"
+    state: present
+  register: result
+  when: can_run_module_tests | bool
+
+- name: Verify replication target was created
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.nativereplicationremotetargets is defined
+      - result.nativereplicationremotetargets.name == test_nativereplication_name
+      - result.nativereplicationremotetargets.id is defined
+      - result.diff is defined
+      - result.diff.before == {}
+      - result.diff.after is defined
+  when: result is not skipped
+
+- name: Save replication target ID for later tests
+  ansible.builtin.set_fact:
+    test_nativereplication_id: "{{ result.nativereplicationremotetargets.id }}"
+  when: result is not skipped
+
+# ====================
+# Idempotency Tests - Create
+# ====================
+
+- name: Test idempotency - create same replication target again
+  vastdata.vms.nativereplicationremotetargets:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_nativereplication_name }}"
+    leading_vip: "{{ test_leading_vip | default('') }}"
+    pool_id: "{{ test_pool_id }}"
+    secure_mode: "{{ test_nativereplication_secure_mode }}"
+    transport_mode: "{{ test_nativereplication_transport_mode }}"
+    state: present
+  register: result
+  when: can_run_module_tests | bool
+
+- name: Verify idempotency (should not change)
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+      - result.nativereplicationremotetargets is defined
+      - result.nativereplicationremotetargets.id == test_nativereplication_id
+  when: result is not skipped
+
+# ====================
+# Update Tests
+# ====================
+
+- name: Test updating replication target - change mss
+  vastdata.vms.nativereplicationremotetargets:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_nativereplication_name }}"
+    mss: 1300
+    state: present
+  register: result
+  when: can_run_module_tests | bool
+
+- name: Verify replication target was updated
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.nativereplicationremotetargets is defined
+      - result.nativereplicationremotetargets.id == test_nativereplication_id
+      - result.diff is defined
+      - result.diff.before is defined
+      - result.diff.after is defined
+  when: result is not skipped
+
+- name: Test update idempotency
+  vastdata.vms.nativereplicationremotetargets:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_nativereplication_name }}"
+    mss: 1300
+    state: present
+  register: result
+  when: can_run_module_tests | bool
+
+- name: Verify update idempotency
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: result is not skipped
+
+# ====================
+# Rename Tests
+# ====================
+
+- name: Test renaming replication target using ID parameter
+  vastdata.vms.nativereplicationremotetargets:
+    vms: "{{ vms_auth }}"
+    id: "{{ test_nativereplication_id }}"
+    name: "{{ test_nativereplication_renamed }}"
+    state: present
+  register: result
+  when: can_run_module_tests | bool
+
+- name: Verify replication target was renamed
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.nativereplicationremotetargets is defined
+      - result.nativereplicationremotetargets.name == test_nativereplication_renamed
+      - result.nativereplicationremotetargets.id == test_nativereplication_id
+      - result.diff is defined
+      - result.diff.before.name == test_nativereplication_name
+      - result.diff.after.name == test_nativereplication_renamed
+  when: result is not skipped
+
+- name: Test rename idempotency
+  vastdata.vms.nativereplicationremotetargets:
+    vms: "{{ vms_auth }}"
+    id: "{{ test_nativereplication_id }}"
+    name: "{{ test_nativereplication_renamed }}"
+    state: present
+  register: result
+  when: can_run_module_tests | bool
+
+- name: Verify rename idempotency
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+      - result.nativereplicationremotetargets.name == test_nativereplication_renamed
+  when: result is not skipped
+
+- name: Test lookup by new name after rename
+  vastdata.vms.nativereplicationremotetargets:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_nativereplication_renamed }}"
+    state: present
+  register: result
+  when: can_run_module_tests | bool
+
+- name: Verify lookup by new name works
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+      - result.nativereplicationremotetargets is defined
+      - result.nativereplicationremotetargets.id == test_nativereplication_id
+      - result.nativereplicationremotetargets.name == test_nativereplication_renamed
+  when: result is not skipped
+
+# ====================
+# Check Mode Tests - Update
+# ====================
+
+- name: Test check mode - update mss
+  vastdata.vms.nativereplicationremotetargets:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_nativereplication_renamed }}"
+    mss: 1400
+    state: present
+  check_mode: true
+  register: result
+  when: can_run_module_tests | bool
+
+- name: Verify check mode reported changes
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.nativereplicationremotetargets is defined
+  when: result is not skipped
+
+- name: Verify check mode didn't actually make changes
+  vastdata.vms.nativereplicationremotetargets:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_nativereplication_renamed }}"
+    mss: 1300
+    state: present
+  register: result
+  when: can_run_module_tests | bool
+
+- name: Verify mss unchanged by check mode
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: result is not skipped
+
+# ====================
+# Diff Mode Tests
+# ====================
+
+- name: Update replication target with diff mode
+  vastdata.vms.nativereplicationremotetargets:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_nativereplication_renamed }}"
+    mss: 1400
+    state: present
+  diff: true
+  register: result
+  when: can_run_module_tests | bool
+
+- name: Verify update diff output
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.diff is defined
+      - result.diff.before is defined
+      - result.diff.after is defined
+  when: result is not skipped
+
+# ====================
+# Delete Tests
+# ====================
+
+- name: Test deleting replication target
+  vastdata.vms.nativereplicationremotetargets:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_nativereplication_renamed }}"
+    state: absent
+  register: result
+  when: can_run_module_tests | bool
+
+- name: Verify replication target was deleted
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.diff is defined
+      - result.diff.before is defined
+      - result.diff.after == {}
+  when: result is not skipped
+
+# ====================
+# Error Handling Tests
+# ====================
+
+- name: Test error handling - neither name nor ID provided
+  vastdata.vms.nativereplicationremotetargets:
+    vms: "{{ vms_auth }}"
+    state: present
+  register: error_result
+  when: can_run_tests | bool
+  ignore_errors: true
+
+- name: Verify error was caught
+  ansible.builtin.assert:
+    that:
+      - error_result is failed
+      - "'name' in error_result.msg or 'id' in error_result.msg"
+  when: error_result is not skipped
+
+# ====================
+# Final Cleanup
+# ====================
+- name: Delete replication VIP pool from cluster 2 if we created it
+  vastdata.vms.vippools:
+    vms:
+      host: "{{ vast_vms_2 }}"
+      username: "{{ vast_username }}"
+      password: "{{ vast_password }}"
+      validate_certs: false
+    state: absent
+    name: ansible-test-replication-vippool-cluster2
+  when: >-
+    can_run_tests | bool and has_cluster_2 | bool
+    and we_created_replication_vippool_cluster2 | default(false)
+  failed_when: false
+  changed_when: false
+  no_log: true
+
+- name: Final cleanup - remove test replication target if it exists
+  vastdata.vms.nativereplicationremotetargets:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_nativereplication_name }}"
+    state: absent
+  when: can_run_module_tests | bool
+  failed_when: false
+
+- name: Final cleanup - remove renamed test replication target if it exists
+  vastdata.vms.nativereplicationremotetargets:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_nativereplication_renamed }}"
+    state: absent
+  when: can_run_module_tests | bool
+  failed_when: false
+
+- name: Final cleanup - remove test REPLICATION VIP pool if we created it
+  vastdata.vms.vippools:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_replication_vippool_name }}"
+    state: absent
+  when: can_run_tests | bool and we_created_replication_vippool | default(false) | bool
+  failed_when: false
+
+# ====================
+# Cleanup - Close SSH tunnel
+# ====================
+
+- name: Close SSH tunnel to cluster 2
+  ansible.builtin.shell: |
+    pkill -f "ssh.*-L.*{{ cluster2_port }}:16.0.0.2:443"
+  when: can_run_tests | bool and has_cluster_2 | bool and cluster2_needs_tunnel | bool
+  failed_when: false
+  changed_when: false
+
+# ====================
+# Skip Message
+# ====================
+
+- name: Skip message when no credentials
+  ansible.builtin.debug:
+    msg: |
+      Skipping nativereplicationremotetargets integration tests - credentials not configured.
+
+      To enable integration tests, set the following in:
+        tests/integration/integration_config.yml
+
+      VAST credentials:
+        vast_vms: "vms.example.com"
+        vast_username: "admin"
+        vast_password: "password"
+
+      Then run: ansible-test integration nativereplicationremotetargets -v
+  when: not (can_run_tests | bool)

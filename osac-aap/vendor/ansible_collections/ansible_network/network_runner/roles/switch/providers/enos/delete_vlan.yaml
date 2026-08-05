@@ -1,0 +1,9 @@
+---
+- name: "enos: delete vlan"
+  enos_command:
+    commands:
+      - enable
+      - configure terminal
+      - "no vlan {{ _vlan_id }}"
+  register: result
+  connection: network_cli

@@ -1,0 +1,24 @@
+- name: Report workflow status
+  hosts: localhost
+  gather_facts: true
+  vars:
+    cluster_order: "{{ ansible_eda.event.payload }}"
+    workflow_name: unknown
+    workflow_status: unknown
+  tasks:
+    - name: Report workflow status
+      when: >-
+        workflow_status != "succeeded" or
+        cluster_order.metadata.annotations["osac.openshift.io/ansible-workflow-status"] | default("") != workflow_status
+      kubernetes.core.k8s:
+        state: patched
+        definition:
+          apiVersion: osac.openshift.io/v1alpha1
+          kind: ClusterOrder
+          metadata:
+            name: "{{ cluster_order.metadata.name }}"
+            namespace: "{{ cluster_order.metadata.namespace }}"
+            annotations:
+              osac.openshift.io/ansible-workflow-name: "{{ workflow_name }}"
+              osac.openshift.io/ansible-workflow-status: "{{ workflow_status }}"
+              osac.openshift.io/ansible-workflow-time: "{{ ansible_date_time.iso8601 }}"

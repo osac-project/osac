@@ -1,0 +1,21 @@
+argument_specs:
+  announce:
+    options:
+      bgp_public_ip:
+        description: "PublicIP to announce as a /32 route (e.g., 192.168.100.10)."
+        type: "str"
+        required: true
+      bgp_next_hop:
+        description: "Next-hop IP for the route (namespace-side veth IP, e.g., 10.254.0.2)."
+        type: "str"
+        required: true
+  withdraw:
+    options:
+      bgp_public_ip:
+        description: "PublicIP to withdraw (e.g., 192.168.100.10)."
+        type: "str"
+        required: true
+      bgp_next_hop:
+        description: "Next-hop IP to match for withdrawal (namespace-side veth IP)."
+        type: "str"
+        required: true

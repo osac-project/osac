@@ -1,0 +1,75 @@
+{{- if .Values.vendors.trident.enabled }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "csi-driver.fullname" . }}-trident-node
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "csi-driver.labels" . | nindent 4 }}
+    app.kubernetes.io/name: trident-csi-node
+    app.kubernetes.io/component: node
+spec:
+  selector:
+    matchLabels:
+      {{- include "csi-driver.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/name: trident-csi-node
+  template:
+    metadata:
+      labels:
+        {{- include "csi-driver.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/name: trident-csi-node
+        app.kubernetes.io/component: node
+    spec:
+      serviceAccountName: {{ include "csi-driver.nodeServiceAccountName" . }}
+      containers:
+        - name: trident-main
+          image: "{{ .Values.vendors.trident.image.repository }}:{{ .Values.vendors.trident.image.tag }}"
+          command: ["/trident_orchestrator"]
+          args:
+            - "--crd_persistence"
+            - "--csi_node_name=$(KUBE_NODE_NAME)"
+            - "--csi_endpoint=$(CSI_ENDPOINT)"
+            - "--csi_role=node"
+            - "--log_format=text"
+            - "--log_level=info"
+            - "--disable_audit_log=true"
+            - "--http_request_timeout=90s"
+          env:
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: CSI_ENDPOINT
+              value: "unix://{{ .Values.vendors.trident.node.socketPath }}/csi.sock"
+            - name: TRIDENT_SERVER
+              value: "127.0.0.1:8000"
+          securityContext:
+            privileged: {{ .Values.node.privileged }}
+          volumeMounts:
+            - name: trident-socket-dir
+              mountPath: {{ .Values.vendors.trident.node.socketPath }}
+            - name: kubelet-dir
+              mountPath: /var/lib/kubelet
+              mountPropagation: Bidirectional
+            {{- if .Values.vendors.trident.config.certsSecret }}
+            - name: trident-certs
+              mountPath: /certs
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: trident-socket-dir
+          hostPath:
+            path: {{ .Values.vendors.trident.node.socketPath }}
+            type: DirectoryOrCreate
+        - name: kubelet-dir
+          hostPath:
+            path: /var/lib/kubelet
+            type: Directory
+        {{- if .Values.vendors.trident.config.certsSecret }}
+        - name: trident-certs
+          projected:
+            sources:
+              - secret:
+                  name: {{ .Values.vendors.trident.config.certsSecret }}
+        {{- end }}
+{{- end }}

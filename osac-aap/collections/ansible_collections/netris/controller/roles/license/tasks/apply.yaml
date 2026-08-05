@@ -1,0 +1,45 @@
+---
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Check current license
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/license"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    validate_certs: "{{ netris_validate_certs }}"
+    timeout: "{{ netris_timeout }}"
+    status_code: [200, 400, 404]
+  register: _license_check
+  no_log: true
+
+- name: Read license key file
+  when: not (_license_check.json.isSuccess | default(false))
+  ansible.builtin.slurp:
+    src: "{{ license_key_file }}"
+  register: _license_key_raw
+  no_log: true
+
+- name: Apply license key
+  when: not (_license_check.json.isSuccess | default(false))
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/license"
+    method: PUT
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      key: "{{ _license_key_raw.content | b64decode | trim }}"
+    validate_certs: "{{ netris_validate_certs }}"
+    timeout: "{{ netris_timeout }}"
+    status_code: [200, 400]
+  register: _license_apply_resp
+  no_log: true
+
+- name: Set license facts
+  ansible.builtin.set_fact:
+    netris_license_valid: "{{ _license_apply_resp.json.isSuccess | default(_license_check.json.isSuccess | default(false)) }}"

@@ -1,0 +1,10 @@
+---
+- name: "enos: create vlan"
+  enos_command:
+    commands:
+      - enable
+      - configure terminal
+      - "vlan {{ _vlan_id }}"
+      - "name {{ _vlan_name }}"
+  register: result
+  connection: network_cli

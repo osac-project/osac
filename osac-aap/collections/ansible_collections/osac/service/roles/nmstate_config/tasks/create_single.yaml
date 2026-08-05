@@ -1,0 +1,47 @@
+---
+- name: "Calculate static IP for agent {{ _nmstate_assignment.agent.metadata.name }}"
+  ansible.builtin.set_fact:
+    _nmstate_host_ip: "{{ _nmstate_gateway_ip | ansible.utils.ipmath(_nmstate_assignment.offset) }}"
+
+- name: "Extract VPC interfaces for agent {{ _nmstate_assignment.agent.metadata.name }}"
+  ansible.builtin.set_fact:
+    _nmstate_agent_vpc_interfaces: "{{ _nmstate_assignment.agent | osac.service.agent_vpc_interfaces(nmstate_config_interface_names) }}"
+
+- name: "Extract mgmt interface for agent {{ _nmstate_assignment.agent.metadata.name }}"
+  ansible.builtin.set_fact:
+    _nmstate_agent_mgmt_interfaces: "{{ _nmstate_assignment.agent | osac.service.agent_vpc_interfaces([nmstate_config_mgmt_interface]) }}"
+
+- name: "Combine all interfaces for agent {{ _nmstate_assignment.agent.metadata.name }}"
+  ansible.builtin.set_fact:
+    _nmstate_agent_interfaces: "{{ _nmstate_agent_mgmt_interfaces + _nmstate_agent_vpc_interfaces }}"
+
+- name: "Render nmstate config for agent {{ _nmstate_assignment.agent.metadata.name }}"
+  ansible.builtin.set_fact:
+    _nmstate_rendered_config: "{{ lookup('ansible.builtin.template', nmstate_config_template) }}"
+  vars:
+    nmstate_ip: "{{ _nmstate_host_ip }}"
+    nmstate_gateway: "{{ _nmstate_gateway_ip }}"
+    nmstate_prefix: "{{ _nmstate_prefix }}"
+    nmstate_interfaces: "{{ nmstate_config_server_interfaces }}"
+    nmstate_macs: "{{ _nmstate_agent_interfaces }}"
+    nmstate_mgmt_interface: "{{ nmstate_config_mgmt_interface }}"
+    nmstate_mgmt_route_destination: "{{ nmstate_config_mgmt_route_destination }}"
+    nmstate_mgmt_route_gateway: "{{ nmstate_config_mgmt_route_gateway }}"
+    nmstate_mgmt_route_metric: "{{ nmstate_config_mgmt_route_metric }}"
+    nmstate_vpc_route_metric: "{{ nmstate_config_vpc_route_metric }}"
+
+- name: "Create NMStateConfig CR for agent {{ _nmstate_assignment.agent.metadata.name }}"
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: agent-install.openshift.io/v1beta1
+      kind: NMStateConfig
+      metadata:
+        name: "{{ nmstate_config_cluster_name }}-{{ _nmstate_assignment.agent.metadata.name }}"
+        namespace: "{{ nmstate_config_namespace }}"
+        labels: "{{ nmstate_config_labels | combine({cluster_order_label: nmstate_config_cluster_name}) }}"
+        annotations:
+          osac.openshift.io/ip-offset: "{{ _nmstate_assignment.offset | string }}"
+      spec:
+        config: "{{ _nmstate_rendered_config | from_yaml }}"
+        interfaces: "{{ _nmstate_agent_interfaces }}"

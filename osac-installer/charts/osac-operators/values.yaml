@@ -1,0 +1,32 @@
+cliImage: quay.io/openshift/origin-cli:4.20.0
+
+certManager:
+  enabled: true
+  channel: "stable-v1"
+
+trustManager:
+  enabled: true
+
+aapOperator:
+  enabled: true
+  channel: stable-2.6-cluster-scoped
+
+lvms:
+  enabled: false
+  channel: "stable-4.22"
+
+metallb:
+  enabled: false
+  channel: "stable"
+
+cnv:
+  enabled: false
+  channel: "stable"
+
+mce:
+  enabled: false
+  channel: "stable-2.17"
+
+kafka:
+  enabled: false
+  channel: "stable"

@@ -1,0 +1,4 @@
+---
+- name: Post-create hook (no-op by default; override step to run custom logic after resources)
+  ansible.builtin.debug:
+    msg: "Post-create hook step (no-op). Override create_step_post_create_hook_override to run custom logic."

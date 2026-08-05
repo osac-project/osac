@@ -1,0 +1,17 @@
+Template name '{{ .Ref }}' is ambiguous.
+
+{{ if lt (len .Matches) .Total }}
+There are {{ .Total }} matching templates, these are the first {{ len .Matches }}:
+{{ else }}
+There are {{ .Total }} matching templates:
+{{ end }}
+
+{{ table .Matches }}
+
+{{ $first := index .Matches 0 }}
+Use the identifier instead of the name to avoid the ambiguity. For example, to create the cluster
+with template '{{ $first.GetId }}' use a command like this:
+
+{{ binary }} create cluster --template {{ $first.GetId }} ...
+
+Use the '--help' option to get more details about the command.

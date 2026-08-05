@@ -1,0 +1,11 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "csi-driver.fullname" . }}-node
+  labels:
+    {{- include "csi-driver.labels" . | nindent 4 }}
+    app.kubernetes.io/component: node
+rules:
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create"]

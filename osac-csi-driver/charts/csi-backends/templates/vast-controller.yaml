@@ -1,0 +1,85 @@
+{{- if .Values.vast.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vast-vendor-sa
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "csi-backends.labels" . | nindent 4 }}
+    app.kubernetes.io/name: vast-csi-controller
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vast-csi-controller
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "csi-backends.labels" . | nindent 4 }}
+    app.kubernetes.io/name: vast-csi-controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vast-csi-controller
+  template:
+    metadata:
+      labels:
+        {{- include "csi-backends.labels" . | nindent 8 }}
+        app.kubernetes.io/name: vast-csi-controller
+    spec:
+      serviceAccountName: vast-vendor-sa
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: vast-csi
+          image: "{{ .Values.vast.image.repository }}:{{ .Values.vast.image.tag }}"
+          args: ["serve"]
+          env:
+            - name: CSI_ENDPOINT
+              value: "tcp://0.0.0.0:{{ .Values.vast.service.port }}"
+            - name: X_CSI_VMS_HOST
+              value: {{ .Values.vast.config.vmsHost | quote }}
+            - name: X_CSI_VIP_POOL_NAME
+              value: {{ .Values.vast.config.vipPoolName | quote }}
+            - name: X_CSI_NFS_EXPORT
+              value: {{ .Values.vast.config.nfsExport | quote }}
+            - name: X_CSI_VIEW_POLICY
+              value: {{ .Values.vast.config.viewPolicy | quote }}
+            - name: X_CSI_LOG_LEVEL
+              value: INFO
+            - name: X_CSI_VERIFY_SSL
+              value: {{ .Values.vast.config.verifySsl | quote }}
+          ports:
+            - containerPort: {{ .Values.vast.service.port }}
+              name: csi-grpc
+              protocol: TCP
+          {{- if .Values.vast.config.credentialsSecret }}
+          volumeMounts:
+            - name: vast-credentials
+              mountPath: /opt/vms-auth
+              readOnly: true
+      volumes:
+        - name: vast-credentials
+          secret:
+            secretName: {{ .Values.vast.config.credentialsSecret }}
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vast-csi-controller
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "csi-backends.labels" . | nindent 4 }}
+    app.kubernetes.io/name: vast-csi-controller
+spec:
+  selector:
+    app.kubernetes.io/name: vast-csi-controller
+  ports:
+    - name: csi-grpc
+      port: {{ .Values.vast.service.port }}
+      targetPort: {{ .Values.vast.service.port }}
+      protocol: TCP
+{{- end }}

@@ -1,0 +1,11 @@
+---
+apiVersion: metallb.io/v1beta1
+kind: BGPAdvertisement
+metadata:
+  name: ingress-bgp-advertisement
+  namespace: {{ metallb_namespace }}
+spec:
+  ipAddressPools:
+    - ingress-ipaddresspool
+  aggregationLength: 32
+  localPref: 100

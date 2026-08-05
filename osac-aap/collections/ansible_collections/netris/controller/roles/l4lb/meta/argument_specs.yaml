@@ -1,0 +1,74 @@
+---
+argument_specs:
+  main:
+    options:
+      l4lb_state:
+        type: str
+        choices: [present, absent]
+        default: present
+        description: "Whether to create or delete the L4 load balancer."
+
+  create:
+    options:
+      l4lb_name:
+        type: str
+        required: true
+        description: "Name of the L4 load balancer."
+      l4lb_site_id:
+        type: int
+        required: true
+        description: "Netris site ID."
+      l4lb_tenant_id:
+        type: int
+        description: "Netris tenant ID."
+      l4lb_tenant_name:
+        type: str
+        description: "Netris tenant name."
+      l4lb_vpc_id:
+        type: int
+        required: true
+        description: "Netris VPC ID for the L4LB."
+      l4lb_vpc_name:
+        type: str
+        description: "Netris VPC name (optional)."
+      l4lb_protocol:
+        type: str
+        choices: [tcp, udp]
+        default: tcp
+        description: "L4LB protocol."
+      l4lb_ip:
+        type: str
+        required: true
+        description: "Frontend (VIP) IP address, in CIDR notation (e.g. 203.0.113.1/32)."
+      l4lb_port:
+        type: int
+        required: true
+        description: "Frontend port."
+      l4lb_backend:
+        type: list
+        elements: dict
+        required: true
+        description: "Backend list: [{ip, port, maintenance}]."
+      l4lb_health_check:
+        type: str
+        default: 'None'
+        description: "Health check type (None, TCP, HTTP)."
+      l4lb_status:
+        type: str
+        default: enable
+        description: "Status: enable or disable."
+      l4lb_comment:
+        type: str
+        default: ""
+        description: "Comment for the L4LB."
+
+  delete:
+    options:
+      l4lb_name:
+        type: str
+        required: true
+        description: "Name of the L4 load balancer to delete."
+      l4lb_site_id:
+        type: int
+        required: true
+        description: "Netris site ID."

@@ -1,0 +1,26 @@
+---
+# Template: No-op cluster creation for testing
+# This template exercises all override points without actually provisioning infrastructure
+
+- name: No-op cluster creation for testing
+  ansible.builtin.debug:
+    msg: "Test mode - skipping actual cluster creation"
+
+# Template-level override points that would normally be in the real template
+- name: Hook - Modify hosted cluster definition
+  ansible.builtin.include_role:
+    name: "{{ (hosted_cluster_modify_definition_hook | default(hook_noop_default)).name }}"
+    tasks_from: "{{ (hosted_cluster_modify_definition_hook | default(hook_noop_default)).tasks_from }}"
+  vars:
+    hook_noop_default:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+
+- name: Hook - Modify nodepool definitions
+  ansible.builtin.include_role:
+    name: "{{ (nodepool_modify_definitions_hook | default(hook_noop_default)).name }}"
+    tasks_from: "{{ (nodepool_modify_definitions_hook | default(hook_noop_default)).tasks_from }}"
+  vars:
+    hook_noop_default:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml

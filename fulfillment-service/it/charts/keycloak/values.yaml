@@ -1,0 +1,148 @@
+#
+# Copyright (c) 2025 Red Hat Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+# the License. You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+# specific language governing permissions and limitations under the License.
+#
+
+# This defines the host name that Keycloak uses to refer to itself. The default is to use the host name of the
+# Kubernetes service. For example, if the application is deployed in a namespace named 'keycloak' then the default
+# host name will be 'keycloak.keycloak.svc.cluster.local'.
+hostname:
+
+# Certificate configuration:
+certs:
+
+  # This defines the cert-manager issuer that will be used for the certificates used by Keycloak. The default is to use
+  # a cluster wide issuer, but there is no default value for the name, so it must be set.
+  issuerRef:
+    kind: ClusterIssuer
+    name:
+
+  # This defines the trusted CA certificates bundle. It should be the name of a ConfigMap in the release namespace
+  # containing trusted CA certificates. All keys in the ConfigMap are picked up, so any key name is accepted as long
+  # as its value is valid PEM content. When set, Keycloak will trust connections signed by those CAs.
+  caBundle:
+    configMap:
+
+# Bootstrap admin credentials used for the initial Keycloak administrator account:
+admin:
+  username: admin
+  password: admin
+
+# Image configuration:
+images:
+  keycloak: quay.io/keycloak/keycloak:26.6.2
+
+# Database connection configuration. Keycloak expects an external PostgreSQL database to be available. The database
+# should be created before installing this chart.
+database:
+
+  # List of sources for database connection parameters. Each entry maps keys from a ConfigMap or Secret to named
+  # database connection parameters. Each item has a 'key' field that indicates the name of the key in the ConfigMap or
+  # Secret) and a 'param' field indicating the name of the connection parameter.
+  #
+  # In addition to typical PostgreSQL connection parameters the chart also supports the following parameters:
+  #
+  # - `url`      - The complete PostgreSQL connection URL.
+  # - `host`     - The host name or IP address of the database server.
+  # - `port`     - The port number of the database server.
+  # - `user`     - The PostgreSQL user name.
+  # - `password` - The PostgreSQL password.
+  # - `dbname`   - The PostgreSQL database name.
+  #
+  # For example, if the database URL is stored in a ConfigMap named `db-config` in a key named `uri` and the user name
+  # and password are stored in a Secret named `db-secret` in keys named `user` and `password`, the connection
+  # configuration would look like this:
+  #
+  #   connection:
+  #   - configMap:
+  #       name: db-config
+  #       items:
+  #       - key: uri
+  #         param: url
+  #   - secret:
+  #       name: db-secret
+  #       items:
+  #       - key: user
+  #         param: user
+  #       - key: password
+  #         param: password
+  #
+  # The keys of the ConfigMap and secret don't need to match the parameter names. In the above example the URL is in a
+  # `uri` key but the connection parameter name is `url`.
+  connection: []
+
+# Additional groups to add to the Keycloak realm. These are appended to the existing groups defined in the base realm
+# JSON file. You need to provide at least the 'name' and 'path' fields, for example:
+#
+# - name: admins
+#   path: /admins
+#
+# Refer to the Keycloak documentation for more details about the fields for groups.
+#
+# The default value is an empty list, meaning no additional groups will be added.
+groups: []
+
+# Additional users to add to the Keycloak realm. These are appended to the existing users defined in the base realm
+# JSON file. You need to provide at least the 'username' field. For more complete users you will probably want to add
+# more fields, something like this:
+#
+# - username: alice
+#   enabled: true
+#   emailVerified: true
+#   credentials:
+#   - type: password
+#     value: alice123
+#     temporary: false
+#   firstName: Alice
+#   lastName: Smith
+#   email: alice@example.com
+#   groups:
+#   - /admins
+#
+# Make sure to include 'enabled: true' for the user and 'temporary: false' for the passwords, as otherwise the password
+# grant won't work.
+#
+# Note also that the password grant only works if it is enabled in the client. The realm configuration that we use
+# contains a client named 'osac-cli' that has the password grant enabled.
+#
+# Refer to the Keycloak documentation for more details about the fields for users.
+#
+# The default value is an empty list, meaning no additional users will be added.
+users: []
+
+# Additional clients to add to the Keycloak realm. These are appended to the existing clients defined in the base realm
+# JSON file. This is useful for defining service accounts. For example:
+#
+# - clientId: my-client
+#   enabled: true
+#   clientAuthenticatorType: client-secret
+#   secret: my-secret
+#   serviceAccountsEnabled: true
+#   publicClient: false
+#   standardFlowEnabled: false
+#   implicitFlowEnabled: false
+#   directAccessGrantsEnabled: false
+#   protocol: openid-connect
+#   fullScopeAllowed: true
+#
+# When creating a service account client you will also need to add a corresponding user entry in the 'users' list with
+# the 'serviceAccountClientId' field set to the client identifier. The username must follow the convention
+# 'service-account-<clientId>'. For example:
+#
+# users:
+# - username: service-account-my-client
+#   enabled: true
+#   serviceAccountClientId: my-client
+#
+# Refer to the Keycloak documentation for more details about the fields for clients.
+#
+# The default value is an empty list, meaning no additional clients will be added.
+clients: []

@@ -1,0 +1,16 @@
+---
+title: MetalLB L2 Implementation
+description: >
+  Provisions MetalLB resources for ExternalIPPool and ExternalIP using L2 advertisement.
+  Creates IPAddressPool and L2Advertisement for pools, and LoadBalancer
+  Services for individual IP allocation on bare-metal clusters.
+
+template_type: network
+
+# ExternalIPPool registration fields
+implementation_strategy: metallb-l2
+fabric_manager: metallb_l2
+capabilities:
+  supports_ipv4: true
+  supports_ipv6: true
+  supports_dual_stack: false

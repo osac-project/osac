@@ -1,0 +1,20 @@
+---
+- name: Configure a BareMetalInstance resource
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    bare_metal_instance: "{{ ansible_eda.event.payload }}"
+
+  pre_tasks:
+    - name: Display bare metal instance information
+      ansible.builtin.debug:
+        msg:
+          - "Host: {{ bare_metal_instance.metadata.name }} ({{ bare_metal_instance.metadata.namespace }})"
+          - "External Host ID: {{ bare_metal_instance.spec.externalHostID }}"
+
+  tasks:
+    - name: Call the selected bare metal instance template
+      ansible.builtin.include_role:
+        name: "{{ bare_metal_instance.spec.templateID }}"
+        tasks_from: create

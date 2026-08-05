@@ -1,0 +1,31 @@
+---
+argument_specs:
+  main:
+    options:
+      vpc_state:
+        type: str
+        choices: [present, absent]
+        default: present
+        description: "Whether to create or delete the VPC."
+
+  create:
+    options:
+      vpc_name:
+        type: str
+        required: true
+        description: "Name of the VPC."
+      vpc_site_id:
+        type: int
+        required: true
+        description: "Netris site ID."
+      vpc_tenant_id:
+        type: int
+        required: true
+        description: "Netris tenant ID (admin)."
+
+  delete:
+    options:
+      vpc_name:
+        type: str
+        required: true
+        description: "Name of the VPC to delete."

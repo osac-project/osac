@@ -1,0 +1,20 @@
+- name: Get node information
+  openstack.cloud.baremetal_node_info:
+  register: baremetal_node_info_result
+
+- name: Filter for hosts
+  ansible.builtin.set_fact:
+    node_list: "{{ baremetal_node_info_result.baremetal_nodes | selectattr('extra.purpose', 'defined') | selectattr('extra.purpose', 'equalto', 'host') | list }}"
+
+- name: Filter by resource class
+  when: host_type is defined
+  ansible.builtin.set_fact:
+    node_list: "{{ node_list | selectattr('resource_class', 'equalto', host_type) | list }}"
+
+- name: Filter by available hosts
+  ansible.builtin.set_fact:
+    node_list: "{{ node_list | selectattr('provision_state', 'equalto', 'available') | list }}"
+
+- name: Transform Ironic node into OSAC host
+  ansible.builtin.set_fact:
+    host_list: "{{ node_list | map('osac.esi.ironic_node_to_osac_host') | list }}"

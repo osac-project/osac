@@ -1,0 +1,21 @@
+---
+# Default retry and delay values
+_retries: 10
+_delay: 7
+
+# vars required for managing VLANs
+vlan_id: null
+vlan_name: null
+
+# vars optional for managing trunk ports
+trunked_vlans: null
+
+# vars required for managing ports
+port_name: null
+port_description: null
+
+# vars optional for managing ports
+stp_edge: null
+
+# Vendor specific variables
+junos_retries_msg: 'configuration database locked by:'

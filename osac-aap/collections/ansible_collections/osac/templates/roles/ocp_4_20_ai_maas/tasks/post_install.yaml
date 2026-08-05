@@ -1,0 +1,34 @@
+---
+# Post-install hook: called by ocp_small after cluster is provisioned.
+# Orchestrates: operator installation → MaaS configuration → verification.
+# Uses admin_kubeconfig from the parent pipeline (retrieved at step 5).
+
+- name: Verify admin_kubeconfig is available
+  ansible.builtin.assert:
+    that:
+      - admin_kubeconfig is defined
+      - admin_kubeconfig | length > 0
+    fail_msg: >-
+      admin_kubeconfig is not set. In production, this is provided by the
+      ocp_small pipeline. For local testing, set KUBECONFIG env var
+      or pass admin_kubeconfig as a playbook variable.
+
+- name: Install platform operators (BOM Phase 2 + 3)
+  ansible.builtin.include_tasks: install_operators.yaml
+
+- name: Configure cluster (gateway, observability)
+  ansible.builtin.include_tasks: configure_cluster.yaml
+
+- name: Configure MaaS platform (Phases 1-5)
+  ansible.builtin.include_tasks: configure_maas.yaml
+  when: ocp_4_20_ai_maas_enable_maas | default(true) | bool
+
+- name: Run verification smoke tests
+  ansible.builtin.include_tasks: verify.yaml
+  when: ocp_4_20_ai_maas_run_verify | default(true)
+
+- name: Configure external models (Phase 6 — after verify)
+  ansible.builtin.include_tasks: configure_external_models.yaml
+  when:
+    - ocp_4_20_ai_maas_enable_maas | default(true) | bool
+    - ocp_4_20_ai_maas_external_models | default([]) | length > 0

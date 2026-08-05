@@ -1,0 +1,3 @@
+---
+default_vnet_vlan_id: auto
+default_ipam_purpose_public: nat

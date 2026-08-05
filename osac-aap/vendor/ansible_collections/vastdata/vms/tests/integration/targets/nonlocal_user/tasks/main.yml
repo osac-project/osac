@@ -1,0 +1,521 @@
+---
+# Integration tests for nonlocal_user module
+# These tests run against a real VAST system
+#
+# Configuration:
+# Set values in tests/integration/integration_config.yml
+# Requires: LDAP server configured and accessible from VAST system
+
+# ====================
+# Setup
+# ====================
+
+- name: Check if VAST credentials are available
+  ansible.builtin.set_fact:
+    has_vast_credentials: >-
+      {{
+        (vast_vms | default('') | length > 0) and
+        (vast_username | default('') | length > 0) and
+        (vast_password | default('') | length > 0)
+      }}
+
+- name: Check if LDAP configuration is available
+  ansible.builtin.set_fact:
+    has_ldap_config: >-
+      {{
+        (test_ldap_domain | default('') | length > 0) and
+        (test_ldap_urls | default([]) | length > 0)
+      }}
+
+- name: Check if a test nonlocal username is configured
+  ansible.builtin.set_fact:
+    has_nonlocal_user: "{{ test_nonlocal_username | default('') | length > 0 }}"
+
+- name: Set test conditions
+  ansible.builtin.set_fact:
+    can_run_tests: "{{ has_vast_credentials and has_ldap_config }}"
+    can_run_user_tests: "{{ has_vast_credentials and has_ldap_config and has_nonlocal_user }}"
+
+- name: Display test configuration
+  ansible.builtin.debug:
+    msg: |
+      ╔════════════════════════════════════════════════════════════════╗
+      ║  Test Configuration                                            ║
+      ╚════════════════════════════════════════════════════════════════╝
+
+      VAST Connection:
+        VMS:            {{ vast_vms | default('not set') }}
+        Username:       {{ vast_username | default('not set') }}
+        Password:       {{ '***set***' if vast_password else 'not set' }}
+
+      LDAP Configuration:
+        Domain:         {{ test_ldap_domain | default('not set') }}
+        URLs:           {{ test_ldap_urls | default([]) | join(', ') }}
+        Port:           {{ test_ldap_port | default(389) }}
+        Method:         {{ test_ldap_method | default('simple') }}
+        Use TLS:        {{ test_ldap_use_tls | default(false) }}
+        Search Base:    {{ test_ldap_searchbase | default('not set') }}
+        Bind DN:        {{ test_ldap_binddn | default('not set') }}
+        Bind Password:  {{ '***set***' if test_ldap_bindpw else 'not set' }}
+
+      Nonlocal User Test:
+        Username:       {{ test_nonlocal_username | default('not set') }}
+        UID:            {{ test_nonlocal_uid | default('not set') }}
+  when: can_run_tests
+
+# ====================
+# LDAP Setup
+# ====================
+
+- name: Ensure LDAP is configured (create if not exists, use if already configured)
+  vastdata.vms.ldaps:
+    vms: "{{ vms_auth }}"
+    domain_name: "{{ test_ldap_domain }}"
+    name: "{{ test_ldap_domain }}"
+    urls: "{{ test_ldap_urls }}"
+    searchbase: "{{ test_ldap_searchbase }}"
+    binddn: "{{ test_ldap_binddn }}"
+    bindpw: "{{ test_ldap_bindpw }}"
+    port: "{{ test_ldap_port }}"
+    method: "{{ test_ldap_method }}"
+    use_tls: "{{ test_ldap_use_tls | default(false) }}"
+    use_ldaps: false
+    state: present
+  register: ldap_setup_result
+  when: can_run_tests | bool
+
+- name: Verify LDAP was configured successfully
+  ansible.builtin.assert:
+    that:
+      - ldap_setup_result.ldaps is defined
+      - ldap_setup_result.ldaps.id is defined
+    fail_msg: "LDAP setup failed - cannot proceed with nonlocal user tests"
+    success_msg: "LDAP configured successfully"
+  when: ldap_setup_result is not skipped
+
+- name: Verify LDAP is connected (state from ldaps get, retry until CONNECTED)
+  vastdata.vms.ldaps:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_ldap_domain }}"
+    domain_name: "{{ test_ldap_domain }}"
+    state: present
+  register: ldap_status
+  when: ldap_setup_result is not skipped
+  retries: 6
+  delay: 5
+  until: ldap_status.ldaps.state == 'CONNECTED'
+
+- name: Assert LDAP reached CONNECTED state
+  ansible.builtin.assert:
+    that:
+      - ldap_status.ldaps.state == 'CONNECTED'
+    fail_msg: >-
+      LDAP is not connected. State: {{ ldap_status.ldaps.state | default('unknown') }}.
+      Expected CONNECTED. Check LDAP server reachability and credentials.
+    success_msg: "LDAP is connected and ready"
+  when: ldap_setup_result is not skipped
+
+# ====================
+# Connect default tenant to LDAP
+# ====================
+
+- name: Connect default tenant to LDAP
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "default"
+    ldap_provider_id: "{{ ldap_status.ldaps.id }}"
+    posix_primary_provider: "LDAP"
+    state: present
+  register: tenant_ldap_connect_result
+  when: ldap_setup_result is not skipped
+
+- name: Verify default tenant is connected to LDAP
+  ansible.builtin.assert:
+    that:
+      - tenant_ldap_connect_result.tenants is defined
+      - tenant_ldap_connect_result.tenants.ldap_provider_id == ldap_status.ldaps.id
+    fail_msg: "Failed to connect default tenant to LDAP"
+    success_msg: "Default tenant connected to LDAP"
+  when: ldap_setup_result is not skipped
+
+# ====================
+# Ensure test user exists in LDAP
+# ====================
+
+- name: Ensure test user exists in LDAP directory (create if not present, rc=68 means already exists)
+  ansible.builtin.command:
+    cmd: >-
+      ldapadd -x
+      -H {{ test_ldap_urls[0] }}
+      -D "{{ test_ldap_binddn }}"
+      -w "{{ test_ldap_bindpw }}"
+    stdin: |
+      dn: uid={{ test_nonlocal_username }},{{ test_ldap_searchbase }}
+      objectClass: inetOrgPerson
+      objectClass: posixAccount
+      objectClass: shadowAccount
+      cn: {{ test_nonlocal_username }}
+      sn: ansible_user
+      givenName: vast
+      uid: {{ test_nonlocal_username }}
+      uidNumber: {{ test_nonlocal_uid }}
+      gidNumber: {{ test_nonlocal_uid }}
+      homeDirectory: /home/{{ test_nonlocal_username }}
+      loginShell: /bin/bash
+      mail: {{ test_nonlocal_username }}@{{ test_ldap_domain }}
+      userPassword: {{ test_nonlocal_password }}
+  register: ldap_user_create_result
+  changed_when: ldap_user_create_result.rc == 0
+  failed_when: ldap_user_create_result.rc not in [0, 68]
+  when: can_run_user_tests | bool
+
+- name: Report whether LDAP user was created or already existed
+  ansible.builtin.debug:
+    msg: "{{ 'Created LDAP user: ' + test_nonlocal_username if ldap_user_create_result.changed else 'LDAP user already exists: ' + test_nonlocal_username }}"
+  when: ldap_user_create_result is not skipped
+
+# ====================
+# Query Tests - by username
+# ====================
+
+- name: Test querying a nonlocal user by username
+  vastdata.vms.nonlocal_user:
+    vms: "{{ vms_auth }}"
+    username: "{{ test_nonlocal_username }}"
+    tenant_id: "{{ tenant_ldap_connect_result.tenants.id }}"
+    state: present
+  register: result
+  when: can_run_user_tests | bool
+
+- name: Verify nonlocal user was returned
+  ansible.builtin.assert:
+    that:
+      - result.nonlocal_user is defined
+      - result.nonlocal_user != {}
+      - result.nonlocal_user.name is defined
+    fail_msg: "Nonlocal user query returned empty result - check that '{{ test_nonlocal_username }}' exists in LDAP"
+    success_msg: "Nonlocal user queried successfully"
+  when: result is not skipped
+
+# ====================
+# Consistency Tests - by username
+# ====================
+
+- name: Query same user again by username (consistency check)
+  vastdata.vms.nonlocal_user:
+    vms: "{{ vms_auth }}"
+    username: "{{ test_nonlocal_username }}"
+    tenant_id: "{{ tenant_ldap_connect_result.tenants.id }}"
+    state: present
+  register: result_idempotent
+  when: can_run_user_tests | bool
+
+- name: Verify consistent results across queries
+  ansible.builtin.assert:
+    that:
+      - result_idempotent.nonlocal_user is defined
+      - result_idempotent.nonlocal_user != {}
+      - result_idempotent.nonlocal_user.name == result.nonlocal_user.name
+      - result_idempotent.nonlocal_user.uid == result.nonlocal_user.uid
+    fail_msg: "Consistency check failed - second query returned different user data"
+    success_msg: "Consistency verified: both queries returned the same user"
+  when: result_idempotent is not skipped and result is not skipped
+
+# ====================
+# Query Tests - by UID
+# ====================
+
+- name: Test querying a nonlocal user by UID
+  vastdata.vms.nonlocal_user:
+    vms: "{{ vms_auth }}"
+    uid: "{{ test_nonlocal_uid }}"
+    tenant_id: "{{ tenant_ldap_connect_result.tenants.id }}"
+    state: present
+  register: result_by_uid
+  when: can_run_user_tests | bool and test_nonlocal_uid is not none and test_nonlocal_uid != ""
+
+- name: Verify nonlocal user returned by UID matches username lookup
+  ansible.builtin.assert:
+    that:
+      - result_by_uid.nonlocal_user is defined
+      - result_by_uid.nonlocal_user != {}
+      - result_by_uid.nonlocal_user.uid == test_nonlocal_uid | int
+    fail_msg: "UID-based nonlocal user query returned unexpected result"
+    success_msg: "Nonlocal user queried by UID successfully"
+  when: result_by_uid is defined and result_by_uid is not skipped
+
+# ====================
+# Consistency Tests - by UID
+# ====================
+
+- name: Query same user again by UID (consistency check)
+  vastdata.vms.nonlocal_user:
+    vms: "{{ vms_auth }}"
+    uid: "{{ test_nonlocal_uid }}"
+    tenant_id: "{{ tenant_ldap_connect_result.tenants.id }}"
+    state: present
+  register: result_by_uid_idempotent
+  when: can_run_user_tests | bool and test_nonlocal_uid is not none and test_nonlocal_uid != ""
+
+- name: Verify consistent results across UID-based queries
+  ansible.builtin.assert:
+    that:
+      - result_by_uid_idempotent.nonlocal_user is defined
+      - result_by_uid_idempotent.nonlocal_user != {}
+      - result_by_uid_idempotent.nonlocal_user.uid == result_by_uid.nonlocal_user.uid
+    fail_msg: "Consistency check failed for UID-based query - second query returned different user data"
+    success_msg: "Consistency verified for UID-based query"
+  when: result_by_uid_idempotent is defined and result_by_uid_idempotent is not skipped
+
+# ====================
+# Idempotency Tests
+# ====================
+
+- name: Test idempotency - first run with uid and tenant_id
+  vastdata.vms.nonlocal_user:
+    vms: "{{ vms_auth }}"
+    uid: "{{ test_nonlocal_uid }}"
+    tenant_id: "{{ tenant_ldap_connect_result.tenants.id }}"
+    state: present
+  register: result_idempotent_first
+  when: can_run_user_tests | bool and test_nonlocal_uid is not none and test_nonlocal_uid != ""
+
+- name: Test idempotency - second run with same uid and tenant_id (should not report changed)
+  vastdata.vms.nonlocal_user:
+    vms: "{{ vms_auth }}"
+    uid: "{{ test_nonlocal_uid }}"
+    tenant_id: "{{ tenant_ldap_connect_result.tenants.id }}"
+    state: present
+  register: result_idempotent_second
+  when: can_run_user_tests | bool and test_nonlocal_uid is not none and test_nonlocal_uid != ""
+
+- name: Verify idempotency - second run should NOT report changed
+  ansible.builtin.assert:
+    that:
+      - result_idempotent_second is not changed
+      - result_idempotent_second.nonlocal_user is defined
+      - result_idempotent_second.nonlocal_user.uid == test_nonlocal_uid | int
+    fail_msg: |
+      Second run with same uid and tenant_id reported changed=true.
+      This indicates tenant_id is being compared even though the API doesn't return it.
+      Expected: changed=false
+      Actual: changed={{ result_idempotent_second.changed }}
+    success_msg: "Idempotency verified: second run correctly reported changed=false"
+  when: result_idempotent_second is defined and result_idempotent_second is not skipped
+
+- name: Test idempotency with username - first run
+  vastdata.vms.nonlocal_user:
+    vms: "{{ vms_auth }}"
+    username: "{{ test_nonlocal_username }}"
+    tenant_id: "{{ tenant_ldap_connect_result.tenants.id }}"
+    state: present
+  register: result_idempotent_username_first
+  when: can_run_user_tests | bool
+
+- name: Test idempotency with username - second run (should not report changed)
+  vastdata.vms.nonlocal_user:
+    vms: "{{ vms_auth }}"
+    username: "{{ test_nonlocal_username }}"
+    tenant_id: "{{ tenant_ldap_connect_result.tenants.id }}"
+    state: present
+  register: result_idempotent_username_second
+  when: can_run_user_tests | bool
+
+- name: Verify idempotency with username - second run should NOT report changed
+  ansible.builtin.assert:
+    that:
+      - result_idempotent_username_second is not changed
+      - result_idempotent_username_second.nonlocal_user is defined
+    fail_msg: |
+      Second run with same username and tenant_id reported changed=true.
+      Expected: changed=false
+      Actual: changed={{ result_idempotent_username_second.changed }}
+    success_msg: "Idempotency with username verified: second run correctly reported changed=false"
+  when: result_idempotent_username_second is defined and result_idempotent_username_second is not skipped
+
+# ====================
+# Update Tests - S3 permissions
+# ====================
+
+- name: Test updating nonlocal user - enable allow_create_bucket
+  vastdata.vms.nonlocal_user:
+    vms: "{{ vms_auth }}"
+    username: "{{ test_nonlocal_username }}"
+    tenant_id: "{{ tenant_ldap_connect_result.tenants.id }}"
+    allow_create_bucket: true
+    state: present
+  register: result_patch_create
+  when: can_run_user_tests | bool
+
+- name: Verify allow_create_bucket was updated
+  ansible.builtin.assert:
+    that:
+      - result_patch_create is changed
+      - result_patch_create.nonlocal_user is defined
+    fail_msg: "PATCH allow_create_bucket failed to execute"
+    success_msg: "PATCH allow_create_bucket executed"
+  when: result_patch_create is not skipped
+
+- name: Re-query user to confirm allow_create_bucket is now true
+  vastdata.vms.nonlocal_user:
+    vms: "{{ vms_auth }}"
+    username: "{{ test_nonlocal_username }}"
+    tenant_id: "{{ tenant_ldap_connect_result.tenants.id }}"
+    state: present
+  register: result_verify_create
+  when: can_run_user_tests | bool
+
+- name: Assert allow_create_bucket is true after update
+  ansible.builtin.assert:
+    that:
+      - result_verify_create.nonlocal_user.allow_create_bucket == true
+    fail_msg: "allow_create_bucket is not true after PATCH"
+    success_msg: "allow_create_bucket confirmed true"
+  when: result_verify_create is not skipped
+
+# ====================
+# Update Tests - allow_delete_bucket
+# ====================
+
+- name: Test updating nonlocal user - enable allow_delete_bucket
+  vastdata.vms.nonlocal_user:
+    vms: "{{ vms_auth }}"
+    username: "{{ test_nonlocal_username }}"
+    tenant_id: "{{ tenant_ldap_connect_result.tenants.id }}"
+    allow_delete_bucket: true
+    state: present
+  register: result_patch_delete
+  when: can_run_user_tests | bool
+
+- name: Verify allow_delete_bucket was updated
+  ansible.builtin.assert:
+    that:
+      - result_patch_delete is changed
+      - result_patch_delete.nonlocal_user is defined
+    fail_msg: "PATCH allow_delete_bucket failed to execute"
+    success_msg: "PATCH allow_delete_bucket executed"
+  when: result_patch_delete is not skipped
+
+- name: Re-query user to confirm allow_delete_bucket is now true
+  vastdata.vms.nonlocal_user:
+    vms: "{{ vms_auth }}"
+    username: "{{ test_nonlocal_username }}"
+    tenant_id: "{{ tenant_ldap_connect_result.tenants.id }}"
+    state: present
+  register: result_verify_delete
+  when: can_run_user_tests | bool
+
+- name: Assert allow_delete_bucket is true after update
+  ansible.builtin.assert:
+    that:
+      - result_verify_delete.nonlocal_user.allow_delete_bucket == true
+    fail_msg: "allow_delete_bucket is not true after PATCH"
+    success_msg: "allow_delete_bucket confirmed true"
+  when: result_verify_delete is not skipped
+
+# ====================
+# Update Tests - s3_superuser
+# ====================
+
+- name: Test updating nonlocal user - enable s3_superuser
+  vastdata.vms.nonlocal_user:
+    vms: "{{ vms_auth }}"
+    username: "{{ test_nonlocal_username }}"
+    tenant_id: "{{ tenant_ldap_connect_result.tenants.id }}"
+    s3_superuser: true
+    state: present
+  register: result_patch_superuser
+  when: can_run_user_tests | bool
+
+- name: Verify s3_superuser was updated
+  ansible.builtin.assert:
+    that:
+      - result_patch_superuser is changed
+      - result_patch_superuser.nonlocal_user is defined
+    fail_msg: "PATCH s3_superuser failed to execute"
+    success_msg: "PATCH s3_superuser executed"
+  when: result_patch_superuser is not skipped
+
+- name: Re-query user to confirm s3_superuser is now true
+  vastdata.vms.nonlocal_user:
+    vms: "{{ vms_auth }}"
+    username: "{{ test_nonlocal_username }}"
+    tenant_id: "{{ tenant_ldap_connect_result.tenants.id }}"
+    state: present
+  register: result_verify_superuser
+  when: can_run_user_tests | bool
+
+- name: Assert s3_superuser is true after update
+  ansible.builtin.assert:
+    that:
+      - result_verify_superuser.nonlocal_user.s3_superuser == true
+    fail_msg: "s3_superuser is not true after PATCH"
+    success_msg: "s3_superuser confirmed true"
+  when: result_verify_superuser is not skipped
+
+# ====================
+# Restore Tests - reset S3 permissions
+# ====================
+
+- name: Restore S3 permissions to false
+  vastdata.vms.nonlocal_user:
+    vms: "{{ vms_auth }}"
+    username: "{{ test_nonlocal_username }}"
+    tenant_id: "{{ tenant_ldap_connect_result.tenants.id }}"
+    allow_create_bucket: false
+    allow_delete_bucket: false
+    s3_superuser: false
+    state: present
+  register: result_patch_restore
+  when: can_run_user_tests | bool
+
+- name: Verify S3 permissions restore PATCH executed
+  ansible.builtin.assert:
+    that:
+      - result_patch_restore is changed
+      - result_patch_restore.nonlocal_user is defined
+    fail_msg: "Restoring S3 permissions PATCH failed to execute"
+    success_msg: "Restore PATCH executed"
+  when: result_patch_restore is not skipped
+
+- name: Re-query user to confirm S3 permissions were restored
+  vastdata.vms.nonlocal_user:
+    vms: "{{ vms_auth }}"
+    username: "{{ test_nonlocal_username }}"
+    tenant_id: "{{ tenant_ldap_connect_result.tenants.id }}"
+    state: present
+  register: result_verify_restore
+  when: can_run_user_tests | bool
+
+- name: Assert S3 permissions are restored to false
+  ansible.builtin.assert:
+    that:
+      - result_verify_restore.nonlocal_user.allow_create_bucket == false
+      - result_verify_restore.nonlocal_user.allow_delete_bucket == false
+      - result_verify_restore.nonlocal_user.s3_superuser == false
+    fail_msg: "S3 permissions were not restored correctly"
+    success_msg: "S3 permissions restored successfully"
+  when: result_verify_restore is not skipped
+
+# ====================
+# Cleanup
+# ====================
+
+- name: Final cleanup - remove test LDAP only if we created it this run
+  vastdata.vms.ldaps:
+    vms: "{{ vms_auth }}"
+    domain_name: "{{ test_ldap_domain }}"
+    state: absent
+  when: can_run_tests | bool and ldap_setup_result is defined and ldap_setup_result.changed | default(false)
+  failed_when: false
+
+- name: Skip message when no credentials
+  ansible.builtin.debug:
+    msg: |
+      Skipping nonlocalusers integration tests - credentials or LDAP configuration not set.
+
+      To enable integration tests, set credentials and LDAP config in:
+        tests/integration/integration_config.yml
+
+      Then run: ansible-test integration nonlocalusers -v
+  when: not (can_run_tests | bool)

@@ -1,0 +1,55 @@
+# .ai-bot/config.yaml — osac monorepo
+#
+# Configuration for the jira-ai-issue-solver bot.
+# Schema reference: https://github.com/flightctl/jira-ai-issue-solver/blob/main/docs/repo-configuration.md
+#
+# The bot resolves exactly one .ai-bot/config.yaml per cloned repository,
+# at the clone's root — it has no concept of per-subdirectory config, so
+# this single file covers both fulfillment-service/ and osac-operator/.
+# Component-scoped commands are expressed by cd'ing into the component
+# directory first, the same pattern the root pre-commit config already
+# uses for its per-component local hooks.
+
+# Validation commands the AI can use. These are hints — the AI decides
+# when and how to run them, based on which component a ticket/PR touches.
+# Listed in recommended execution order, grouped by component.
+validation_commands:
+  # fulfillment-service
+  - "cd fulfillment-service && buf lint"
+  - "cd fulfillment-service && buf generate"
+  - "cd fulfillment-service && go generate ./..."
+  - "cd fulfillment-service && gofmt -s -w ."
+  - "cd fulfillment-service && go build ./cmd/fulfillment-service"
+  - "cd fulfillment-service && go build ./cmd/osac"
+  - "cd fulfillment-service && ginkgo run -r internal"
+  # osac-operator
+  - "cd osac-operator && make manifests generate"
+  - "cd osac-operator && make fmt"
+  - "cd osac-operator && make lint"
+  - "cd osac-operator && make test"
+
+# Auxiliary repositories cloned into the workspace before AI execution.
+# Both components imported this same repo to the same path; the install
+# target is "claude" since both components' `ai:` section below targets
+# Claude (osac-operator's prior standalone config omitted the target,
+# which defaults to "cursor" -- that looks like a pre-existing mismatch
+# with its own `ai.claude` section, not something introduced here).
+imports:
+  - repo: https://github.com/flightctl/ai-workflows
+    path: .ai-workflows
+    ref: main
+    install: .ai-workflows/install.sh claude
+    excludes:
+      - .artifacts/
+
+# Pull request settings.
+pr:
+  draft: false
+  title_prefix: "[AI]"
+  labels:
+    - ai-pr
+
+# AI provider settings.
+ai:
+  claude:
+    allowed_tools: "Bash Edit Read Write"

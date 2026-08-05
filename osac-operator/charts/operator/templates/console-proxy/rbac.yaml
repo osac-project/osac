@@ -1,0 +1,88 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "osac-operator.fullname" . }}-console-proxy
+  labels:
+    {{- include "osac-operator.consoleProxy.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - computeinstances
+  verbs:
+  - get
+  - list
+{{- if ne (.Values.consoleProxy.vmClusterMode | default "auto") "remote" }}
+# Used when deployed on the same cluster as KubeVirt VMs (local/auto vm-cluster-mode).
+# In remote mode the proxy authenticates via a kubeconfig Secret instead.
+- apiGroups:
+  - subresources.kubevirt.io
+  resources:
+  - virtualmachineinstances/console
+  - virtualmachineinstances/vnc
+  verbs:
+  - get
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "osac-operator.fullname" . }}-console-proxy
+  labels:
+    {{- include "osac-operator.consoleProxy.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "osac-operator.fullname" . }}-console-proxy
+subjects:
+- kind: ServiceAccount
+  name: {{ include "osac-operator.fullname" . }}-console-proxy
+  namespace: {{ .Release.Namespace }}
+---
+{{- if ne (.Values.consoleProxy.vmClusterMode | default "auto") "local" }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "osac-operator.fullname" . }}-console-proxy-secret-reader
+  labels:
+    {{- include "osac-operator.consoleProxy.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+  - list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "osac-operator.fullname" . }}-console-proxy-secret-reader
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-operator.consoleProxy.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "osac-operator.fullname" . }}-console-proxy-secret-reader
+subjects:
+- kind: ServiceAccount
+  name: {{ include "osac-operator.fullname" . }}-console-proxy
+  namespace: {{ .Release.Namespace }}
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "osac-operator.fullname" . }}-console-proxy-auth-delegator
+  labels:
+    {{- include "osac-operator.consoleProxy.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+- kind: ServiceAccount
+  name: {{ include "osac-operator.fullname" . }}-console-proxy
+  namespace: {{ .Release.Namespace }}

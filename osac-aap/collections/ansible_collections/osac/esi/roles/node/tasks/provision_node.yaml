@@ -1,0 +1,17 @@
+- name: Set node to provisioning network
+  ansible.builtin.include_role:
+    name: osac.esi.l2
+    tasks_from: set_networks_for_node
+  vars:
+    networks:
+      - "{{ node_provisioning_network_name }}"
+    node: "{{ node_name }}"
+
+- name: Set deploy interface, set boot image url, and deploy node
+  openstack.cloud.baremetal_node_action:
+    name: "{{ node_name }}"
+    instance_info:
+      deploy_interface: ramdisk
+      boot_iso: "{{ node_discovery_url }}"
+    deploy: true
+    wait: "{{ node_deploy_wait }}"

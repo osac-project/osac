@@ -1,0 +1,9 @@
+---
+- name: Release VLAN ID allocation
+  hosts: net_nodes[0]
+  gather_facts: false
+  tasks:
+    - name: Release VLAN
+      ansible.builtin.include_role:
+        name: agentless_net.ipam.vlan_id
+        tasks_from: release

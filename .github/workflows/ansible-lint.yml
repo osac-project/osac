@@ -1,0 +1,47 @@
+---
+name: "Ansible Lint"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+on:  # yamllint disable-line rule:truthy
+  pull_request:
+    branches: [main]
+    paths:
+      - 'osac-aap/**'
+      - '!osac-aap/OWNERS'
+      - '!osac-aap/LICENSE'
+      - '!osac-aap/**/*.md'
+      - '!osac-aap/docs/**'
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'
+
+jobs:
+  ansible-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: "Set up Python"
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: "osac-aap/pyproject.toml"
+
+      - name: Install the project
+        working-directory: osac-aap
+        run: uv sync --locked --all-extras --group development
+
+      - name: Run ansible-lint
+        working-directory: osac-aap
+        # Explicit "." is required: without a target path, ansible-lint
+        # discovers files via `git ls-files` against the whole repo (not
+        # CWD-scoped), which in this monorepo pulls in unrelated
+        # fulfillment-service/osac-operator YAML and produces spurious
+        # failures.
+        run: uv run ansible-lint .

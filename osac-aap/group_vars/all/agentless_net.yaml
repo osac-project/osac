@@ -1,0 +1,21 @@
+# =============================================================================
+# Agentless Network Backend (agentless_net.steps)
+# =============================================================================
+
+# Shared
+agentless_net_inventory_file: "/var/config/agentless-net/inventory.yml"
+agentless_net_collections_path: "{{ lookup('env', 'ANSIBLE_COLLECTIONS_PATH') }}"
+agentless_net_roles_path: "{{ lookup('env', 'ANSIBLE_ROLES_PATH') }}"
+agentless_net_net_node_ipam_state_file: "{{ lookup('env', 'AGENTLESS_NET_IPAM_STATE_FILE', default='/etc/osac/network_state.json') }}"
+
+# cluster_infra role
+agentless_net_vlan_pool_start: "{{ lookup('env', 'AGENTLESS_NET_VLAN_POOL_START', default='100') | int }}"
+agentless_net_vlan_pool_end: "{{ lookup('env', 'AGENTLESS_NET_VLAN_POOL_END', default='199') | int }}"
+agentless_net_trunk_interface: "{{ lookup('env', 'AGENTLESS_NET_TRUNK_INTERFACE', default='eth1') }}"
+agentless_net_external_interface: "{{ lookup('env', 'AGENTLESS_NET_EXTERNAL_INTERFACE', default='eth0') }}"
+agentless_net_external_gateway: "{{ lookup('env', 'AGENTLESS_NET_EXTERNAL_GATEWAY', default='') }}"
+agentless_net_subnet_cidr: "{{ lookup('env', 'AGENTLESS_NET_SUBNET_CIDR', default='') }}"
+
+# external_access role
+agentless_net_public_ip_pool_start: "{{ lookup('env', 'AGENTLESS_NET_PUBLIC_IP_POOL_START', default='') }}"
+agentless_net_public_ip_pool_end: "{{ lookup('env', 'AGENTLESS_NET_PUBLIC_IP_POOL_END', default='') }}"

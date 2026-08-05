@@ -1,0 +1,3 @@
+---
+- fail:
+    msg: Delete Trunk VLAN is not implimented for dellos10

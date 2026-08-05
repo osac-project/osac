@@ -1,0 +1,18 @@
+---
+- name: Transition node to available and set provisioning network
+  when: not (node_already_has_image | default(false))
+  block:
+    - name: Move node to available state
+      when: node_info.provision_state not in ['manageable', 'available']
+      openstack.cloud.baremetal_node_action:
+        name: "{{ bare_metal_instance.spec.externalHostID }}"
+        state: absent
+        wait: true
+
+    - name: Set provisioning network for node
+      ansible.builtin.include_role:
+        name: osac.esi.l2
+        tasks_from: set_networks_for_node
+      vars:
+        node: "{{ bare_metal_instance.spec.externalHostID }}"
+        networks: "{{ [template_params.provisioningNetwork | default('provisioning')] }}"

@@ -1,0 +1,98 @@
+//
+// Copyright (c) 2025 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.public.v1;
+
+import "google/api/annotations.proto";
+import "google/protobuf/field_mask.proto";
+import "osac/public/v1/baremetal_instance_template_type.proto";
+
+message BareMetalInstanceTemplatesListRequest {
+  optional int32 offset = 1;
+  optional int32 limit = 2;
+  optional string filter = 3;
+  optional string order = 4;
+}
+
+message BareMetalInstanceTemplatesListResponse {
+  int32 size = 1;
+  int32 total = 2;
+  repeated BareMetalInstanceTemplate items = 3;
+}
+
+message BareMetalInstanceTemplatesGetRequest {
+  string id = 1;
+}
+
+message BareMetalInstanceTemplatesGetResponse {
+  BareMetalInstanceTemplate object = 1;
+}
+
+message BareMetalInstanceTemplatesCreateRequest {
+  BareMetalInstanceTemplate object = 1;
+}
+
+message BareMetalInstanceTemplatesCreateResponse {
+  BareMetalInstanceTemplate object = 1;
+}
+
+message BareMetalInstanceTemplatesUpdateRequest {
+  BareMetalInstanceTemplate object = 1;
+  google.protobuf.FieldMask update_mask = 2;
+
+  // Lock enables optimistic locking. When set to true, the server verifies that the current version of the object
+  // matches the value of the metadata.version field of the submitted object. If they differ the update will be
+  // rejected.
+  bool lock = 3;
+}
+
+message BareMetalInstanceTemplatesUpdateResponse {
+  BareMetalInstanceTemplate object = 1;
+}
+
+message BareMetalInstanceTemplatesDeleteRequest {
+  string id = 1;
+}
+
+message BareMetalInstanceTemplatesDeleteResponse {}
+
+service BareMetalInstanceTemplates {
+  rpc List(BareMetalInstanceTemplatesListRequest) returns (BareMetalInstanceTemplatesListResponse) {
+    option (google.api.http) = {get: "/api/fulfillment/v1/baremetal_instance_templates"};
+  }
+  rpc Get(BareMetalInstanceTemplatesGetRequest) returns (BareMetalInstanceTemplatesGetResponse) {
+    option (google.api.http) = {
+      get: "/api/fulfillment/v1/baremetal_instance_templates/{id}"
+      response_body: "object"
+    };
+  }
+  rpc Create(BareMetalInstanceTemplatesCreateRequest) returns (BareMetalInstanceTemplatesCreateResponse) {
+    option (google.api.http) = {
+      post: "/api/fulfillment/v1/baremetal_instance_templates"
+      body: "object"
+      response_body: "object"
+    };
+  }
+  rpc Update(BareMetalInstanceTemplatesUpdateRequest) returns (BareMetalInstanceTemplatesUpdateResponse) {
+    option (google.api.http) = {
+      patch: "/api/fulfillment/v1/baremetal_instance_templates/{object.id}"
+      body: "object"
+      response_body: "object"
+    };
+  }
+  rpc Delete(BareMetalInstanceTemplatesDeleteRequest) returns (BareMetalInstanceTemplatesDeleteResponse) {
+    option (google.api.http) = {delete: "/api/fulfillment/v1/baremetal_instance_templates/{id}"};
+  }
+}

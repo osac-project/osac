@@ -1,0 +1,34 @@
+- name: Check if router exists
+  openstack.cloud.routers_info:
+    name: "{{ router_name }}"
+  register: routers
+
+- name: Set create_router_result to found router
+  when: (routers.routers | length > 0)
+  ansible.builtin.set_fact:
+    create_router_result: "{{ routers.routers[0].id }}"
+
+- name: Create a new router
+  when: (routers.routers | length == 0)
+  block:
+  - name: Create router  # noqa:no-changed-when
+    ansible.builtin.command: >-
+      openstack router create
+      --external-gateway "{{ l3_router_external_network }}"
+      {% for tag in l3_network_tags %}
+      --tag "{{ tag }}"
+      {% endfor %}
+      "{{ router_name }}"
+      -f json
+    register: router_cmd_result
+
+  - name: Set create_router_result to new router
+    ansible.builtin.set_fact:
+      create_router_result: "{{ (router_cmd_result.stdout | from_json).id }}"
+
+  - name: Add subnets to router  # noqa:no-changed-when
+    ansible.builtin.command: >-
+      openstack router add subnet "{{ router_name }}" "{{ item }}"
+    loop: "{{ router_subnets }}"
+    register: router_add_subnet_result
+    failed_when: router_add_subnet_result.rc != 0

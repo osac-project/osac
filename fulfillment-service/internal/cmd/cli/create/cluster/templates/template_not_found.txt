@@ -1,0 +1,13 @@
+Template '{{ .Ref }}' doesn't exist.
+
+{{ if .Examples }}
+The following are some of the valid templates:
+
+{{ table .Examples }}
+
+To see the complete list of templates use the following command:
+
+{{ binary }} get clustertemplates
+{{ end }}
+
+Use the '--help' option to get more details about the command.

@@ -1,0 +1,32 @@
+---
+# VirtualNetwork is a logical grouping - actual network provisioning happens in Subnet
+# This stub logs information and returns success
+
+- name: Include get remote cluster kubeconfig
+  ansible.builtin.include_role:
+    name: osac.service.common
+    tasks_from: get_remote_cluster_kubeconfig
+
+- name: Extract VirtualNetwork configuration
+  ansible.builtin.set_fact:
+    vn_name: "{{ virtual_network.metadata.name }}"
+    vn_namespace: "{{ virtual_network.metadata.namespace }}"
+    vn_ipv4_cidr: "{{ virtual_network.spec.ipv4Cidr | default('') }}"
+    vn_ipv6_cidr: "{{ virtual_network.spec.ipv6Cidr | default('') }}"
+    vn_network_class: "{{ virtual_network.spec.networkClass }}"
+    vn_region: "{{ virtual_network.spec.region }}"
+    vn_tenant_id: "{{ virtual_network.metadata.annotations['osac.openshift.io/tenant'] | default('') }}"
+
+- name: Display VirtualNetwork information
+  ansible.builtin.debug:
+    msg:
+      - "VirtualNetwork '{{ vn_name }}' processed successfully"
+      - "Namespace: {{ vn_namespace }}"
+      - "NetworkClass: {{ vn_network_class }}"
+      - "Region: {{ vn_region }}"
+      - "Tenant ID: {{ vn_tenant_id }}"
+      - "IPv4 CIDR: {{ vn_ipv4_cidr | default('not configured') }}"
+      - "IPv6 CIDR: {{ vn_ipv6_cidr | default('not configured') }}"
+      - ""
+      - "NOTE: VirtualNetwork is a logical grouping"
+      - "Actual network provisioning happens when Subnet resources are created"

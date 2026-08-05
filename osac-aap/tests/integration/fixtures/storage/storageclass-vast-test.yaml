@@ -1,0 +1,26 @@
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: vast-nfs-test-tenant-default
+  labels:
+    app.kubernetes.io/managed-by: osac-aap
+    osac.openshift.io/tenant: test-tenant
+    osac.openshift.io/storage-tier: default
+    osac.openshift.io/storage-protocol: nfs
+provisioner: csi.vastdata.com
+parameters:
+  vip_pool_name: vippool-test-tenant
+  root_export: /osac-test-tenant-abcd1234/default
+  csi.storage.k8s.io/provisioner-secret-name: vast-csi-test-tenant
+  csi.storage.k8s.io/provisioner-secret-namespace: test-tenant-ns
+  csi.storage.k8s.io/controller-publish-secret-name: vast-csi-test-tenant
+  csi.storage.k8s.io/controller-publish-secret-namespace: test-tenant-ns
+  csi.storage.k8s.io/node-publish-secret-name: vast-csi-test-tenant
+  csi.storage.k8s.io/node-publish-secret-namespace: test-tenant-ns
+  csi.storage.k8s.io/controller-expand-secret-name: vast-csi-test-tenant
+  csi.storage.k8s.io/controller-expand-secret-namespace: test-tenant-ns
+  csi.storage.k8s.io/node-expand-secret-name: vast-csi-test-tenant
+  csi.storage.k8s.io/node-expand-secret-namespace: test-tenant-ns
+reclaimPolicy: Delete
+volumeBindingMode: Immediate

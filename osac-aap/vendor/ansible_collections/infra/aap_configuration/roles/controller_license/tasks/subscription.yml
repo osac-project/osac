@@ -1,0 +1,36 @@
+---
+# tasks file for license role - Subscription
+
+- name: subscription | Get subscriptions with a filter
+  ansible.controller.subscriptions:
+    username: "{{ redhat_subscription_username }}"
+    password: "{{ redhat_subscription_password }}"
+    filters: "{{ controller_license.filters | default(_redhat_cop_license_filters) }}"
+    # Role Standard Options
+    controller_host: "{{ aap_hostname | default(omit, true) }}"
+    controller_username: "{{ aap_username | default(omit, true) }}"
+    controller_password: "{{ aap_password | default(omit, true) }}"
+    controller_oauthtoken: "{{ aap_token | default(omit, true) }}"
+    request_timeout: "{{ aap_request_timeout | default(omit, true) }}"
+    validate_certs: "{{ aap_validate_certs | default(omit) }}"
+  register: subscription
+  when:
+    - "'use_lookup' in controller_license"
+    - controller_license.use_lookup
+
+- name: subscription | Install the Controller license
+  ansible.controller.license:
+    subscription_id: "{{ controller_license.subscription_id | default(subscription.subscriptions[(controller_license.list_num | default(0))].subscription_id) }}"
+    force: "{{ controller_license.force | default(omit) }}"
+    state: "{{ controller_license.state | default(omit) }}"
+
+    # Role Standard Options
+    controller_host: "{{ aap_hostname | default(omit, true) }}"
+    controller_username: "{{ aap_username | default(omit, true) }}"
+    controller_password: "{{ aap_password | default(omit, true) }}"
+    controller_oauthtoken: "{{ aap_token | default(omit, true) }}"
+    request_timeout: "{{ aap_request_timeout | default(omit, true) }}"
+    validate_certs: "{{ aap_validate_certs | default(omit) }}"
+  no_log: "{{ controller_configuration_license_secure_logging }}"
+  when: controller_license is defined
+...

@@ -1,0 +1,34 @@
+{{- if .Values.networkManagers.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "osac-operator.fullname" . }}-network-managers
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-operator.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - list
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "osac-operator.fullname" . }}-network-managers
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "osac-operator.fullname" . }}-network-managers
+subjects:
+- kind: ServiceAccount
+  name: {{ include "osac-operator.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+{{- end }}

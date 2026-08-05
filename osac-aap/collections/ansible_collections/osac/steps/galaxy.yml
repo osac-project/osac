@@ -1,0 +1,19 @@
+namespace: osac
+name: steps
+version: 1.0.0
+readme: README.md
+authors:
+  - OSAC Project
+description: ESI-based step implementations for cluster and external access provisioning
+license:
+  - Apache-2.0
+tags:
+  - infrastructure
+  - cloud
+  - baremetal
+repository: https://github.com/osac-project/osac
+issues: https://github.com/osac-project/osac/issues
+build_ignore: []
+dependencies:
+  osac.esi: "*"
+  osac.service: "*"

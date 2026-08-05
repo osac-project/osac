@@ -1,0 +1,8 @@
+---
+- name: "eos: delete vlan using network_cli"
+  cli_config:
+    config: "{{ lookup('template', '{{ role_path }}/templates/eos/delete_vlan.j2') }}"
+  register: result
+  connection: network_cli
+  become: true
+  become_method: enable

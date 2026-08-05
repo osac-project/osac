@@ -1,0 +1,30 @@
+---
+# Dispatches setup to each unique provider in the tier list.
+# Accumulates per-provider tenant configs into a single dict keyed by provider name.
+# Credential clearing happens in the always block.
+
+- name: Initialize tenant config accumulator
+  ansible.builtin.set_fact:
+    _all_tenant_configs: {}
+
+- name: Dispatch setup to each provider
+  block:
+    - name: Run setup per provider
+      ansible.builtin.include_tasks: _dispatch_provider.yaml
+      loop: "{{ _unique_providers }}"
+      loop_control:
+        loop_var: _current_provider
+
+    - name: Set merged tenant configs output
+      ansible.builtin.set_fact:
+        storage_provider_tenant_configs: "{{ _all_tenant_configs }}"
+
+    - name: Validate each provider produced a tenant config
+      ansible.builtin.fail:
+        msg: >-
+          Provider '{{ item }}' did not set the required output fact
+          'storage_provider_tenant_config' after setup.
+      loop: "{{ _unique_providers }}"
+      loop_control:
+        loop_var: item
+      when: item not in _all_tenant_configs

@@ -1,0 +1,36 @@
+- name: Convert floating IP attributes to tags
+  ansible.builtin.set_fact:
+    floating_ip_tags: "{{ floating_ip_tags + [item.key + '_' + item.value] }}"
+  loop: "{{ floating_ip_properties | dict2items }}"
+  when: floating_ip_properties | length > 0
+
+- name: Check if floating ip exists
+  openstack.cloud.floating_ip_info:
+    description: "{{ floating_ip_name }}"
+  register: fips
+
+- name: Set allocate_floating_ip_result to found ip
+  when: (fips.floating_ips | length > 0)
+  ansible.builtin.set_fact:
+    allocate_floating_ip_result: "{{ fips.floating_ips[0].floating_ip_address }}"
+
+- name: Allocate a new floating ip
+  when: (fips.floating_ips | length == 0)
+  block:
+  - name: Allocate floating ip  # noqa:no-changed-when
+    ansible.builtin.command: >-
+      openstack floating ip create {{ floating_ip_network }}
+      --description "{{ floating_ip_name }}"
+      {% for tag in floating_ip_tags %}
+      --tag "{{ tag }}"
+      {% endfor %}
+      -f json
+    register: fip_cmd_raw
+
+  - name: Unmarshal output from JSON
+    ansible.builtin.set_fact:
+      fip_cmd_result: "{{ fip_cmd_raw.stdout | from_json }}"
+
+  - name: Set allocate_floating_ip_result to new ip
+    ansible.builtin.set_fact:
+      allocate_floating_ip_result: "{{ fip_cmd_result.floating_ip_address }}"

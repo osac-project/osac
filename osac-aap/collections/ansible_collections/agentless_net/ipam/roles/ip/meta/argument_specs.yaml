@@ -1,0 +1,34 @@
+argument_specs:
+  allocate:
+    options:
+      ipam_state_file:
+        description: "Path to JSON state file (e.g., /etc/osac/network_state.json)."
+        type: "str"
+        required: true
+      ipam_pool_start:
+        description: "First IP in pool (e.g., 203.0.113.10)."
+        type: "str"
+        required: true
+      ipam_pool_end:
+        description: "Last IP in pool (e.g., 203.0.113.50)."
+        type: "str"
+        required: true
+      ipam_purpose:
+        description: "Label for this allocation (e.g., tenant-alpha-snat)."
+        type: "str"
+        required: true
+      ipam_count:
+        description: "Number of IPs to allocate."
+        type: "int"
+        required: false
+        default: 1
+  release:
+    options:
+      ipam_state_file:
+        description: "Path to JSON state file."
+        type: "str"
+        required: true
+      ipam_purpose:
+        description: "Label of the allocation to release."
+        type: "str"
+        required: true

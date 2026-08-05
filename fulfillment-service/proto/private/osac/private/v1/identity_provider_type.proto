@@ -1,0 +1,195 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "google/protobuf/timestamp.proto";
+import "osac/private/v1/condition_status_type.proto";
+import "osac/private/v1/metadata_type.proto";
+
+// IdentityProvider represents an external identity provider configuration.
+// Identity providers enable users to authenticate using their existing corporate credentials
+// (LDAP, Active Directory, OIDC, SAML, etc.).
+message IdentityProvider {
+  // Unique identifier for this IdP. Immutable after creation.
+  string id = 1;
+
+  // Metadata contains common object metadata.
+  Metadata metadata = 2;
+
+  // Spec is the desired state of the identity provider.
+  IdentityProviderSpec spec = 3;
+
+  // Status is the observed state of the identity provider.
+  IdentityProviderStatus status = 4;
+}
+
+// IdentityProviderSpec represents the desired state of an identity provider.
+message IdentityProviderSpec {
+  // Human-friendly short title for this IdP, suitable for displaying in a single line.
+  // Example: "Corporate LDAP" or "GitHub SSO"
+  string title = 1;
+
+  // Human-friendly description explaining the purpose or scope of this IdP.
+  // Example: "Primary LDAP server for employee authentication"
+  optional string description = 2;
+
+  // Enabled indicates whether this IdP should be active and available for authentication.
+  bool enabled = 3;
+
+  // Provider-specific configuration settings.
+  // The type of identity provider is determined by which config field is set.
+  oneof config {
+    // Configuration for OpenID Connect providers.
+    OidcConfig oidc = 4;
+  }
+
+  // This field is used to trigger a health check of the identity provider.
+  // The user can write any value here; the actual value doesn't matter.
+  // The only important thing is that when it changes, the system will eventually
+  // initiate a health check and report the result in the status.
+  // The user can set this to any string (e.g., a timestamp or random value) to request a new check.
+  // Common pattern: use a timestamp or increment a counter when requesting a check.
+  optional string health_check_trigger = 6;
+}
+
+// OidcConfig contains configuration for OpenID Connect identity providers.
+message OidcConfig {
+  // Authorization endpoint URL where users are redirected to authenticate.
+  // Example: "https://accounts.google.com/o/oauth2/v2/auth"
+  string authorization_url = 1;
+
+  // Token endpoint URL used to exchange authorization codes for access tokens.
+  // Example: "https://oauth2.googleapis.com/token"
+  string token_url = 2;
+
+  // Client identifier issued by the OIDC provider.
+  // This is a public identifier for the application.
+  string client_id = 3;
+
+  // Client secret for authenticating with the OIDC provider.
+  // This field is write-only and will never be returned in API responses.
+  string client_secret = 4;
+
+  // Issuer URL that identifies the OIDC provider.
+  // Used for validating ID tokens. Must match the 'iss' claim in tokens.
+  // Example: "https://accounts.google.com"
+  string issuer = 5;
+
+  // Space-separated list of OAuth scopes to request.
+  // Common scopes: "openid profile email"
+  // Default: "openid profile email"
+  optional string default_scopes = 6;
+
+  // UserInfo endpoint URL for retrieving user profile information.
+  // If not specified, user info will be extracted from the ID token.
+  // Example: "https://openidconnect.googleapis.com/v1/userinfo"
+  optional string user_info_url = 7;
+
+  // JSON Web Key Set (JWKS) URL for obtaining public keys to verify ID token signatures.
+  // If not specified, the provider's discovery endpoint will be used.
+  // Example: "https://www.googleapis.com/oauth2/v3/certs"
+  optional string jwks_url = 8;
+
+  // Whether to validate ID token signatures using JWKS.
+  // Default: true
+  optional bool validate_signature = 9;
+
+  // Logout URL where users are redirected after logging out.
+  // Example: "https://accounts.google.com/logout"
+  optional string logout_url = 10;
+}
+
+// IdentityProviderPhase represents the current phase of an identity provider.
+enum IdentityProviderPhase {
+  // IDENTITY_PROVIDER_PHASE_UNSPECIFIED is the default value.
+  IDENTITY_PROVIDER_PHASE_UNSPECIFIED = 0;
+
+  // IDENTITY_PROVIDER_PHASE_READY indicates the IdP is ready and operational.
+  IDENTITY_PROVIDER_PHASE_READY = 1;
+
+  // IDENTITY_PROVIDER_PHASE_ERROR indicates the IdP is in an error state.
+  IDENTITY_PROVIDER_PHASE_ERROR = 2;
+
+  // IDENTITY_PROVIDER_PHASE_UNKNOWN indicates the IdP state is unknown.
+  IDENTITY_PROVIDER_PHASE_UNKNOWN = 3;
+}
+
+// IdentityProviderStatus represents the operational status of an identity provider.
+message IdentityProviderStatus {
+  // Phase represents the current phase of the identity provider.
+  IdentityProviderPhase phase = 1;
+
+  // Message provides additional context about the current status.
+  string message = 2;
+
+  // Conditions represent specific aspects of the identity provider's status.
+  repeated IdentityProviderCondition conditions = 3;
+
+  // This is used by the system to track when the spec.health_check_trigger has changed
+  // and to acknowledge that the health check process has started.
+  // The system will update it to match spec.health_check_trigger when the check begins.
+  // Users can compare this to spec.health_check_trigger to see if their check request has been acknowledged.
+  optional string health_check_trigger = 4;
+
+  // Health check results from the last health check that completed.
+  // This is populated after a health check triggered by spec.health_check_trigger completes.
+  optional IdentityProviderHealth health = 5;
+}
+
+// IdentityProviderCondition represents a specific condition of the identity provider.
+message IdentityProviderCondition {
+  // Type of condition. Examples: "Reachable", "Configured", "Authenticated"
+  string type = 1;
+
+  // Status of the condition.
+  ConditionStatus status = 2;
+
+  // Reason is a brief machine-readable explanation for the condition's status.
+  string reason = 3;
+
+  // Message is a human-readable explanation for the condition's status.
+  string message = 4;
+
+  // LastTransitionTime is the last time the condition transitioned from one status to another.
+  google.protobuf.Timestamp last_transition_time = 5;
+}
+
+// IdentityProviderHealthStatus represents the health status of an identity provider.
+enum IdentityProviderHealthStatus {
+  // IDENTITY_PROVIDER_HEALTH_STATUS_UNSPECIFIED is the default value.
+  IDENTITY_PROVIDER_HEALTH_STATUS_UNSPECIFIED = 0;
+
+  // IDENTITY_PROVIDER_HEALTH_STATUS_HEALTHY indicates the IdP is healthy.
+  IDENTITY_PROVIDER_HEALTH_STATUS_HEALTHY = 1;
+
+  // IDENTITY_PROVIDER_HEALTH_STATUS_UNHEALTHY indicates the IdP is unhealthy.
+  IDENTITY_PROVIDER_HEALTH_STATUS_UNHEALTHY = 2;
+
+  // IDENTITY_PROVIDER_HEALTH_STATUS_UNKNOWN indicates the health status is unknown.
+  IDENTITY_PROVIDER_HEALTH_STATUS_UNKNOWN = 3;
+}
+
+// IdentityProviderHealth represents the health status of an identity provider.
+message IdentityProviderHealth {
+  // Status indicates the overall health status.
+  IdentityProviderHealthStatus status = 1;
+
+  // Message provides details about the health status.
+  optional string message = 2;
+
+  // LastChecked is when the health was last checked.
+  google.protobuf.Timestamp last_checked = 3;
+}

@@ -1,0 +1,118 @@
+---
+- name: Generate a test ID
+  ansible.builtin.set_fact:
+    test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') }}"
+  when: test_id is not defined
+
+- name: Generate names
+  ansible.builtin.set_fact:
+    username: "Gateway-Collection-tests-user-user-{{ test_id }}"
+
+
+- name: Run Tests
+  module_defaults:
+    group/ansible.platform.gateway:
+      gateway_hostname: "{{ gateway_hostname }}"
+      gateway_username: "{{ gateway_username }}"
+      gateway_password: "{{ gateway_password }}"
+      gateway_validate_certs: "{{ gateway_validate_certs | bool }}"
+
+  block:
+    # Test simple creation
+    - name: Create Joe user
+      ansible.platform.user:
+        username: "{{ username }}"
+        first_name: Joe
+        password: "{{ 65535 | random | to_uuid }}"
+      register: joe
+
+    - name: Assert the creation of the user changed the system
+      ansible.builtin.assert:
+        that:
+          - joe is changed
+
+    # Check idempotency
+    - name: Recreate Joe
+      ansible.platform.user:
+        username: "{{ username }}"
+        first_name: Joe
+        state: present
+      register: joe_recreate
+
+    - name: Assert a recreation does not change anything
+      ansible.builtin.assert:
+        that:
+          - joe_recreate is not changed
+
+    # Check modification
+    - name: Give Joe superuser
+      ansible.platform.user:
+        username: "{{ username }}"
+        is_superuser: true
+      register: joe_superuser
+
+    - name: Assert that this changed the user
+      ansible.builtin.assert:
+        that:
+          - joe_superuser is changed
+
+    # Check idempotency when using a user id instead of a name
+    - name: Give Joe superuser via his id instead of username
+      ansible.platform.user:
+        username: "{{ joe.id }}"
+        is_superuser: true
+      register: joe_superuser_again
+
+    - name: Assert that changing the user a second time did not change anything
+      ansible.builtin.assert:
+        that:
+          - joe_superuser_again is not changed
+
+    # Change a user by their ID
+    - name: Change Joe to Jane via ID
+      ansible.platform.user:
+        username: "{{ joe.id }}"
+        first_name: Jane
+      register: jane
+
+    - name: Assert that the user change worked
+      ansible.builtin.assert:
+        that:
+          - jane is changed
+
+    # Delete a user
+    # Always Cleanup
+    - name: Delete user
+      ansible.platform.user:
+        username: "{{ username }}"
+        state: absent
+      register: delete
+
+    - name: Assert user deletions passed
+      ansible.builtin.assert:
+        that:
+          - delete is changed
+
+    - name: Create a user like in AAP-36722
+      ansible.platform.user:
+        username: "{{ username }}"
+        password: ansible
+        update_secrets: false
+        state: present
+
+    - name: Create the user again for AAP-36722 (this would fail before)
+      ansible.platform.user:
+        username: "{{ username }}"
+        password: ansible
+        update_secrets: false
+        state: present
+
+  always:
+    # Always Cleanup
+    - name: Delete user
+      ansible.platform.user:
+        username: "{{ username }}"
+        state: absent
+      register: delete
+      ignore_errors: true
+...

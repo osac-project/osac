@@ -1,0 +1,84 @@
+---
+argument_specs:
+  main:
+    options:
+      nat_state:
+        type: str
+        choices: [present, absent]
+        default: present
+        description: "Whether to create or delete the NAT rule."
+
+  create:
+    options:
+      nat_name:
+        type: str
+        required: true
+        description: "Name of the NAT rule."
+      nat_site_id:
+        type: int
+        required: true
+        description: "Netris site ID."
+      nat_vpc_id:
+        type: int
+        required: true
+        description: "Netris VPC ID for the NAT rule."
+      nat_vpc_name:
+        type: str
+        description: "Netris VPC name (optional)."
+      nat_action:
+        type: str
+        choices: [dnat, snat]
+        default: dnat
+        description: "NAT action type."
+      nat_protocol:
+        type: str
+        default: tcp
+        description: "API enum: all, tcp, udp, icmp."
+      nat_source_address:
+        type: str
+        default: "0.0.0.0/0"
+        description: "Source address."
+      nat_source_port:
+        type: str
+        default: "1-65535"
+        description: "Source port range."
+      nat_destination_address:
+        type: str
+        description: "External/public IP or subnet for DNAT, in CIDR notation (e.g. 203.0.113.1/32)."
+      nat_destination_port:
+        type: str
+        description: "External port (e.g. 443)."
+      nat_dnat_to_ip:
+        type: str
+        description: "Internal IP or subnet for DNAT, in CIDR notation (e.g. 10.0.0.1/32)."
+      nat_dnat_to_port:
+        type: str
+        description: "Internal port (e.g. 6443)."
+      nat_snat_to_ip:
+        type: str
+        description: "Public IP for SNAT, in CIDR notation (e.g. 203.0.113.1/32)."
+      nat_snat_to_pool:
+        type: str
+        description: "SNAT pool (optional)."
+      nat_pool:
+        type: bool
+        default: false
+        description: "Pool flag (required by API)."
+      nat_port_group:
+        type: dict
+        description: "Port group object {id, name, ports}. When not set, empty string is sent (no ACL port group)."
+      nat_comment:
+        type: str
+        default: ""
+        description: "Comment for the NAT rule."
+
+  delete:
+    options:
+      nat_name:
+        type: str
+        required: true
+        description: "Name of the NAT rule to delete."
+      nat_site_id:
+        type: int
+        required: true
+        description: "Netris site ID."

@@ -1,0 +1,147 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ ocp_4_20_ai_maas_keycloak_namespace }}
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: rhbk-operator-group
+  namespace: {{ ocp_4_20_ai_maas_keycloak_namespace }}
+spec:
+  targetNamespaces:
+  - {{ ocp_4_20_ai_maas_keycloak_namespace }}
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: rhbk-operator
+  namespace: {{ ocp_4_20_ai_maas_keycloak_namespace }}
+spec:
+  channel: "{{ ocp_4_20_ai_maas_keycloak_channel }}"
+  installPlanApproval: Automatic
+  name: rhbk-operator
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: keycloak-db-credentials
+  namespace: {{ ocp_4_20_ai_maas_keycloak_namespace }}
+type: Opaque
+stringData:
+  username: keycloak
+  password: "{{ ocp_4_20_ai_maas_keycloak_db_password }}"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak-postgres
+  namespace: {{ ocp_4_20_ai_maas_keycloak_namespace }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: keycloak-postgres
+  template:
+    metadata:
+      labels:
+        app: keycloak-postgres
+    spec:
+      containers:
+      - name: postgres
+        image: {{ ocp_4_20_ai_maas_db_image }}
+        env:
+        - name: POSTGRESQL_USER
+          value: keycloak
+        - name: POSTGRESQL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: keycloak-db-credentials
+              key: password
+        - name: POSTGRESQL_DATABASE
+          value: keycloak
+        ports:
+        - containerPort: 5432
+        volumeMounts:
+        - name: postgres-data
+          mountPath: /var/lib/pgsql/data
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+      volumes:
+      - name: postgres-data
+        persistentVolumeClaim:
+          claimName: keycloak-postgres-pvc
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: keycloak-postgres-pvc
+  namespace: {{ ocp_4_20_ai_maas_keycloak_namespace }}
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ ocp_4_20_ai_maas_keycloak_db_storage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak-postgres
+  namespace: {{ ocp_4_20_ai_maas_keycloak_namespace }}
+spec:
+  selector:
+    app: keycloak-postgres
+  ports:
+  - port: 5432
+    targetPort: 5432
+---
+apiVersion: k8s.keycloak.org/v2alpha1
+kind: Keycloak
+metadata:
+  name: {{ ocp_4_20_ai_maas_keycloak_namespace }}
+  namespace: {{ ocp_4_20_ai_maas_keycloak_namespace }}
+spec:
+  instances: {{ ocp_4_20_ai_maas_keycloak_instances }}
+  db:
+    vendor: postgres
+    host: keycloak-postgres
+    port: 5432
+    database: keycloak
+    usernameSecret:
+      name: keycloak-db-credentials
+      key: username
+    passwordSecret:
+      name: keycloak-db-credentials
+      key: password
+  http:
+    httpEnabled: true
+  hostname:
+    hostname: "{{ ocp_4_20_ai_maas_keycloak_namespace }}.{{ _cluster_domain }}"
+  proxy:
+    headers: xforwarded
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ ocp_4_20_ai_maas_keycloak_namespace }}
+  namespace: {{ ocp_4_20_ai_maas_keycloak_namespace }}
+spec:
+  host: "{{ ocp_4_20_ai_maas_keycloak_namespace }}.{{ _cluster_domain }}"
+  to:
+    kind: Service
+    name: {{ ocp_4_20_ai_maas_keycloak_namespace }}-service
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

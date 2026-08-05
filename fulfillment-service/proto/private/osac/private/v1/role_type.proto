@@ -1,0 +1,75 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "osac/private/v1/metadata_type.proto";
+
+// Represents a role that can be assigned to groups.
+//
+// Roles are predefined named entities that represent a set of permissions within the system. They are assigned to
+// groups to control what actions the members of those groups can perform. Roles themselves do not carry any data
+// beyond their identity and metadata; the actual permissions are determined by the system based on the role name.
+//
+// Examples of predefined roles include `cloud-provider-admin`, `tenant-admin`, and `tenant-reader`.
+message Role {
+  // Unique identifier of the role.
+  string id = 1;
+
+  // Metadata of the role.
+  Metadata metadata = 2;
+
+  // Desired state of the role.
+  RoleSpec spec = 3;
+
+  // Current observed state of the role.
+  RoleStatus status = 4;
+}
+
+// Desired state of a role.
+message RoleSpec {
+  // Human-friendly short description of the role, only a few words, suitable for displaying in one single line on
+  // a UI or CLI. For example: "Cloud Provider Administrator" or "Tenant Reader".
+  string title = 1;
+
+  // Human-friendly long description of the role, using Markdown format. This should explain what permissions the
+  // role grants and in what contexts it is typically used.
+  string description = 2;
+}
+
+// Current observed state of a role, reflecting its synchronization with the underlying authorization system.
+message RoleStatus {
+  // Current synchronization state of the role.
+  RoleState state = 1;
+
+  // Human-readable message providing additional details about the current state. For example, if the state is
+  // FAILED, this field may explain why the synchronization with the authorization system failed.
+  optional string message = 2;
+}
+
+// Synchronization states for Role resources with the underlying authorization system.
+enum RoleState {
+  // State is unknown or has not been determined yet.
+  ROLE_STATE_UNSPECIFIED = 0;
+
+  // The role is being created or applied to the underlying authorization system and cannot be used yet.
+  ROLE_STATE_PENDING = 1;
+
+  // The role is fully synchronized with the underlying authorization system and can be used.
+  ROLE_STATE_READY = 2;
+
+  // The role failed to be applied to the underlying authorization system.
+  ROLE_STATE_FAILED = 3;
+}

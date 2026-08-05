@@ -1,0 +1,60 @@
+{{/*
+Return a network manager ConfigMap name, failing the render if it collides with
+a name already generated for another configurable key (tracked via the "seen"
+dict passed in). Two distinct keys can normalize to the same name (e.g.
+"my-manager" and "my_manager"), which would otherwise silently overwrite one
+manager's ConfigMap with another's on apply. Kubernetes itself already rejects
+otherwise-invalid names at apply time, so that is not re-validated here.
+*/}}
+{{- define "osac-operator.networkManagerConfigMapName" -}}
+{{- $name := printf "%s-%s" .prefix (.key | replace "_" "-") -}}
+{{- if hasKey .seen $name -}}
+{{- fail (printf "networkManagers: keys %q and %q both normalize to ConfigMap name %q; rename one of them" (get .seen $name) .key $name) -}}
+{{- end -}}
+{{- $_ := set .seen $name .key -}}
+{{- $name -}}
+{{- end -}}
+
+{{- if .Values.networkManagers.enabled }}
+{{- $seenConfigMapNames := dict }}
+{{- range $name, $mgr := .Values.networkManagers.fabricManagers }}
+{{- if $mgr.enabled }}
+{{- $cmName := include "osac-operator.networkManagerConfigMapName" (dict "prefix" "osac-network-fabric-manager" "key" $name "seen" $seenConfigMapNames) }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $cmName }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "osac-operator.labels" $ | nindent 4 }}
+    osac.openshift.io/network/fabric-manager: "true"
+data:
+  name: {{ $name | quote }}
+  {{- if $mgr.description }}
+  description: {{ $mgr.description | quote }}
+  {{- end }}
+  capabilities: {{ $mgr.capabilities | quote }}
+{{- end }}
+{{- end }}
+{{- range $name, $mgr := .Values.networkManagers.k8sManagers }}
+{{- if $mgr.enabled }}
+{{- $cmName := include "osac-operator.networkManagerConfigMapName" (dict "prefix" "osac-network-k8s-manager" "key" $name "seen" $seenConfigMapNames) }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $cmName }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "osac-operator.labels" $ | nindent 4 }}
+    osac.openshift.io/network/k8s-manager: "true"
+data:
+  name: {{ $name | quote }}
+  {{- if $mgr.description }}
+  description: {{ $mgr.description | quote }}
+  {{- end }}
+  capabilities: {{ $mgr.capabilities | quote }}
+{{- end }}
+{{- end }}
+{{- end }}

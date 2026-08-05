@@ -1,0 +1,15 @@
+wait_for_dns_retries: 180
+wait_for_dns_delay: 10
+wait_for_cluster_retries: 180
+wait_for_cluster_delay: 10
+# 30 min (60 * 30s) was confirmed too tight on genuinely fresh/cold EC2
+# hardware via real CI dispatches: TimeoutError on ClusterOrder Ready with
+# last value 'Failed', recurring in ~30% of real dispatches (2 of 7 in one
+# session), while a fully warm debug-box environment completes the entire
+# cluster-creation flow (not just this step) in ~21 min. Doubled to give
+# real headroom for cold-hardware ClusterOperator payload rollout.
+wait_for_clusteroperators_retries: 120
+wait_for_clusteroperators_delay: 30
+wait_for_nodes_retries: 60
+wait_for_nodes_delay: 30
+wait_for_nodes_expected_count: 2

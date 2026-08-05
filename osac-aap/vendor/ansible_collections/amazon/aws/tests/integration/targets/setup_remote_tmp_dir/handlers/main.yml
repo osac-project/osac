@@ -1,0 +1,5 @@
+---
+- name: Delete temporary directory
+  ansible.builtin.include_tasks: default-cleanup.yml
+- name: Delete temporary directory (windows)
+  ansible.builtin.include_tasks: windows-cleanup.yml

@@ -1,0 +1,14 @@
+---
+argument_specs:
+  create:
+    options:
+      bare_metal_pool:
+        type: dict
+        required: true
+        description: BareMetalPool CR from fulfillment-api via EDA payload
+  delete:
+    options:
+      bare_metal_pool:
+        type: dict
+        required: true
+        description: BareMetalPool CR from fulfillment-api via EDA payload

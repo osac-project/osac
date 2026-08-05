@@ -1,0 +1,660 @@
+---
+# Offline tests for osac.templates.ocp_virt_vm role validation logic.
+# Each play is guarded by a `when` condition -- pass exactly one variable per invocation.
+#
+# No cluster required -- the role uses Jinja2 filter plugins that operate on
+# locally installed collection metadata.
+#
+#   Test 1 (spec defaults are merged correctly):
+#     ansible-playbook ... -e test_create_defaults=true
+#
+#   Test 2 (valid template parameters accepted):
+#     ansible-playbook ... -e test_create_validation_valid=true
+#
+#   Test 3 (invalid template parameters rejected):
+#     ansible-playbook ... -e test_create_validation_invalid=true
+#
+#   Test 4 (Windows missing image rejected):
+#     ansible-playbook ... -e test_windows_requires_image=true
+#
+#   Test 5 (Windows with explicit image accepted):
+#     ansible-playbook ... -e test_windows_with_image=true
+#
+#   Test 6 (Unknown OS value falls through to linux defaults):
+#     ansible-playbook ... -e test_unknown_os_fallback=true
+#
+#   Test 7 (security group labels propagated to VM):
+#     ansible-playbook ... -e test_create_sg_labels=true
+#
+#   Test 8 (Windows sysprep without password rejected):
+#     ansible-playbook ... -e test_windows_sysprep_requires_password=true
+#
+#   Test 9 (Windows sysprep with valid password accepted):
+#     ansible-playbook ... -e test_windows_sysprep_valid=true
+#
+#   Test 10 (Subnet reference extracted from networkAttachments):
+#     ansible-playbook ... -e test_create_subnet_ref_extracted=true
+#
+#   Test 11 (Missing networkAttachments rejected):
+#     ansible-playbook ... -e test_create_missing_subnet_fails=true
+#
+#   Test 12 (Missing spec.cores/memoryGiB rejected):
+#     ansible-playbook ... -e test_create_missing_cores_fails=true
+
+# ──────────────────────────────────────────────────────────────
+# Test 1: Verify spec defaults are merged into a minimal fixture
+# Expected: CPU/memory read from spec (resolved by osac-operator from
+# instance_type); disk=10Gi, image=fedora, runStrategy=Always still come
+# from role defaults.
+# ──────────────────────────────────────────────────────────────
+- name: "Test ocp_virt_vm -- spec defaults are merged correctly"
+  hosts: localhost
+
+  collections:
+    - osac.templates
+
+  vars:
+    compute_instance_label: "osac.openshift.io/computeinstance"
+
+  tasks:
+    - when: test_create_defaults | default(false) | bool
+      block:
+        - name: Read minimal ComputeInstance fixture (no spec fields)
+          ansible.builtin.set_fact:
+            compute_instance: "{{ lookup('file', 'fixtures/computeinstance-defaults-test.yaml') | from_yaml }}"
+
+        - name: Set compute instance name
+          ansible.builtin.set_fact:
+            compute_instance_name: "{{ compute_instance.metadata.name }}"
+
+        - name: Run create_validate to merge defaults and extract VM config
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: create_validate.yaml
+
+        - name: Verify compute instance name
+          ansible.builtin.assert:
+            that:
+              - compute_instance.metadata.name == "test-vm-defaults"
+            fail_msg: "Compute instance name not extracted correctly"
+
+        - name: Verify CPU cores read from resolved spec
+          ansible.builtin.assert:
+            that:
+              - vm_cpu_cores is defined
+              - vm_cpu_cores | int == 2
+            fail_msg: "Expected cpu cores of 2 from spec.cores, got {{ vm_cpu_cores | default('undefined') }}"
+
+        - name: Verify memory read from resolved spec
+          ansible.builtin.assert:
+            that:
+              - vm_memory is defined
+              - vm_memory == "2Gi"
+            fail_msg: "Expected memory of 2Gi from spec.memoryGiB, got {{ vm_memory | default('undefined') }}"
+
+        - name: Verify default boot disk size applied
+          ansible.builtin.assert:
+            that:
+              - vm_boot_disk_size is defined
+              - vm_boot_disk_size == "10Gi"
+            fail_msg: "Expected default boot disk size of 10Gi, got {{ vm_boot_disk_size | default('undefined') }}"
+
+        - name: Verify default image source applied
+          ansible.builtin.assert:
+            that:
+              - vm_image_source is defined
+              - vm_image_source == "quay.io/containerdisks/fedora:latest"
+            fail_msg: "Expected default image source, got {{ vm_image_source | default('undefined') }}"
+
+        - name: Verify default run strategy applied
+          ansible.builtin.assert:
+            that:
+              - vm_run_strategy is defined
+              - vm_run_strategy == "Always"
+            fail_msg: "Expected default run strategy of Always, got {{ vm_run_strategy | default('undefined') }}"
+
+# ──────────────────────────────────────────────────────────────
+# Test 2: Valid template parameters are accepted
+# Expected: exposed_ports value passes validation and is applied
+# ──────────────────────────────────────────────────────────────
+- name: "Test ocp_virt_vm -- valid template parameters accepted"
+  hosts: localhost
+
+  collections:
+    - osac.templates
+
+  vars:
+    compute_instance_label: "osac.openshift.io/computeinstance"
+
+  tasks:
+    - when: test_create_validation_valid | default(false) | bool
+      block:
+        - name: Read minimal ComputeInstance fixture
+          ansible.builtin.set_fact:
+            compute_instance: "{{ lookup('file', 'fixtures/computeinstance-defaults-test.yaml') | from_yaml }}"
+
+        - name: Set compute instance name
+          ansible.builtin.set_fact:
+            compute_instance_name: "{{ compute_instance.metadata.name }}"
+
+        - name: Set template parameters with valid exposed_ports
+          ansible.builtin.set_fact:
+            template_parameters:
+              exposed_ports: "22/tcp,80/tcp,443/tcp"
+
+        - name: Run create_validate to merge defaults and validate params
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: create_validate.yaml
+
+        - name: Verify custom exposed_ports value applied
+          ansible.builtin.assert:
+            that:
+              - params is defined
+              - params.exposed_ports == "22/tcp,80/tcp,443/tcp"
+            fail_msg: "Expected exposed_ports='22/tcp,80/tcp,443/tcp', got {{ (params | default({})).exposed_ports | default('undefined') }}"
+
+# ──────────────────────────────────────────────────────────────
+# Test 3: Invalid template parameters are rejected
+# Expected: validation fails for malformed exposed_ports value
+# ──────────────────────────────────────────────────────────────
+- name: "Test ocp_virt_vm -- invalid template parameters rejected"
+  hosts: localhost
+
+  collections:
+    - osac.templates
+
+  tasks:
+    - when: test_create_validation_invalid | default(false) | bool
+      block:
+        - name: Set role path from collection
+          ansible.builtin.set_fact:
+            ocp_virt_vm_role_path: "{{ lookup('ansible.builtin.first_found', paths=lookup('ansible.builtin.config', 'COLLECTIONS_PATHS') | map('regex_replace', '$', '/ansible_collections/osac/templates/roles/ocp_virt_vm/meta') | list, files=['osac.yaml']) | dirname | dirname }}"
+
+        - name: Validate with invalid exposed_ports pattern
+          ansible.builtin.set_fact:
+            invalid_result: "{{ {'exposed_ports': 'not-a-valid-port'} | osac.templates.template_validate_params(ocp_virt_vm_role_path) }}"
+          register: validation_result
+          ignore_errors: true
+
+        - name: Verify validation rejected invalid pattern
+          ansible.builtin.assert:
+            that:
+              - validation_result is failed
+              - "'does not match pattern' in validation_result.msg"
+            fail_msg: "Expected validation to reject 'not-a-valid-port' but it {{ 'passed' if validation_result is success else 'failed with: ' + (validation_result.msg | default('unknown error')) }}"
+
+# ──────────────────────────────────────────────────────────────
+# Test 4: Windows without spec.image.sourceRef must fail (no default disk)
+# ──────────────────────────────────────────────────────────────
+- name: "Test ocp_virt_vm -- Windows requires explicit image sourceRef"
+  hosts: localhost
+
+  collections:
+    - osac.templates
+
+  vars:
+    compute_instance_label: "osac.openshift.io/computeinstance"
+
+  tasks:
+    - when: test_windows_requires_image | default(false) | bool
+      block:
+        - name: Load ocp_virt_vm role defaults (Windows profile maps)
+          ansible.builtin.include_vars:
+            file: "{{ playbook_dir }}/../defaults/main.yaml"
+
+        - name: Load minimal ComputeInstance (no image) and Windows profile defaults
+          ansible.builtin.set_fact:
+            compute_instance: "{{ lookup('file', 'fixtures/computeinstance-defaults-test.yaml') | from_yaml }}"
+            guest_os_family: windows
+            default_spec: "{{ _guest_os_windows_default_spec }}"
+            default_arg_specs: "{{ _guest_os_windows_default_arg_specs }}"
+            template_parameters: {}
+
+        - name: Set compute instance name
+          ansible.builtin.set_fact:
+            compute_instance_name: "{{ compute_instance.metadata.name }}"
+
+        - name: Run create_validate (expect failure — no Windows container disk)
+          block:
+            - name: Include create_validate
+              ansible.builtin.include_role:
+                name: osac.templates.ocp_virt_vm
+                tasks_from: create_validate.yaml
+          rescue:
+            - name: Capture error message
+              ansible.builtin.set_fact:
+                validation_error: "{{ ansible_failed_result.msg | default('') }}"
+                windows_missing_image_failed: true
+
+            - name: Verify failure was due to missing Windows image
+              ansible.builtin.assert:
+                that:
+                  - "'spec.image.sourceRef' in validation_error or 'Windows' in validation_error"
+                fail_msg: "Validation failed for unexpected reason: {{ validation_error }}"
+
+        - name: Verify validation failed without Windows image
+          ansible.builtin.assert:
+            that:
+              - windows_missing_image_failed | default(false)
+            fail_msg: >-
+              Expected create_validate to fail when guest_os_family is windows
+              and spec.image.sourceRef is unset
+
+# ──────────────────────────────────────────────────────────────
+# Test 5: Windows with explicit image proceeds through validation
+# ──────────────────────────────────────────────────────────────
+- name: "Test ocp_virt_vm -- Windows with explicit image passes validation"
+  hosts: localhost
+
+  collections:
+    - osac.templates
+
+  vars:
+    compute_instance_label: "osac.openshift.io/computeinstance"
+
+  tasks:
+    - when: test_windows_with_image | default(false) | bool
+      block:
+        - name: Load ocp_virt_vm role defaults (Windows profile maps)
+          ansible.builtin.include_vars:
+            file: "{{ playbook_dir }}/../defaults/main.yaml"
+
+        - name: Load Windows fixture with registry image
+          ansible.builtin.set_fact:
+            compute_instance: "{{ lookup('file', 'fixtures/computeinstance-windows-with-image-test.yaml') | from_yaml }}"
+            guest_os_family: windows
+            default_spec: "{{ _guest_os_windows_default_spec }}"
+            default_arg_specs: "{{ _guest_os_windows_default_arg_specs }}"
+            template_parameters: {}
+            vm_enable_sysprep: false
+
+        - name: Set compute instance name
+          ansible.builtin.set_fact:
+            compute_instance_name: "{{ compute_instance.metadata.name }}"
+
+        - name: Run create_validate
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: create_validate.yaml
+
+        - name: Verify image source from ComputeInstance spec
+          ansible.builtin.assert:
+            that:
+              - vm_image_source == "registry.example.com/osac/windows-golden:ltsc2022"
+            fail_msg: "Expected vm_image_source from spec, got {{ vm_image_source | default('undefined') }}"
+
+# Test 6: Unknown OS value falls through to linux defaults
+# Expected: CPU/memory from spec (2/2Gi), disk=10Gi (linux default, not Windows)
+# ──────────────────────────────────────────────────────────────
+- name: "Test ocp_virt_vm -- Unknown OS value falls through to linux behavior"
+  hosts: localhost
+
+  collections:
+    - osac.templates
+
+  vars:
+    compute_instance_label: "osac.openshift.io/computeinstance"
+
+  tasks:
+    - when: test_unknown_os_fallback | default(false) | bool
+      block:
+        - name: Load ocp_virt_vm role defaults
+          ansible.builtin.include_vars:
+            file: "{{ playbook_dir }}/../defaults/main.yaml"
+
+        - name: Load unknown OS fixture with guestOSFamily freebsd
+          ansible.builtin.set_fact:
+            compute_instance: "{{ lookup('file', 'fixtures/computeinstance-unknown-os-test.yaml') | from_yaml }}"
+            template_parameters: {}
+
+        - name: Set compute instance name
+          ansible.builtin.set_fact:
+            compute_instance_name: "{{ compute_instance.metadata.name }}"
+
+        - name: Run create_validate
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: create_validate.yaml
+
+        - name: Assert CPU cores come from spec (2 cores)
+          ansible.builtin.assert:
+            that:
+              - vm_cpu_cores | int == 2
+            fail_msg: "Expected 2 cores from spec.cores, got {{ vm_cpu_cores | default('undefined') }}"
+
+        - name: Assert memory comes from spec (2Gi)
+          ansible.builtin.assert:
+            that:
+              - vm_memory == "2Gi"
+            fail_msg: "Expected 2Gi from spec.memoryGiB, got {{ vm_memory | default('undefined') }}"
+
+        - name: Assert boot disk size matches linux default not Windows
+          ansible.builtin.assert:
+            that:
+              - vm_boot_disk_size == "10Gi"
+            fail_msg: "Expected linux default (10Gi), got {{ vm_boot_disk_size | default('undefined') }}"
+
+# ──────────────────────────────────────────────────────────────
+# Test 7: Security group labels are propagated to default_vm_labels
+# Expected: default_vm_labels includes osac.openshift.io/<sg-ref>: ""
+#           for each securityGroupRef across all spec.networkAttachments
+# ──────────────────────────────────────────────────────────────
+- name: "Test ocp_virt_vm -- security group labels propagated to VM"
+  hosts: localhost
+
+  collections:
+    - osac.templates
+
+  vars:
+    compute_instance_label: "osac.openshift.io/computeinstance"
+
+  tasks:
+    - when: test_create_sg_labels | default(false) | bool
+      block:
+        - name: Read ComputeInstance fixture with security groups
+          ansible.builtin.set_fact:
+            compute_instance: "{{ lookup('file', 'fixtures/computeinstance-with-security-groups.yaml') | from_yaml }}"
+
+        - name: Set compute instance name
+          ansible.builtin.set_fact:
+            compute_instance_name: "{{ compute_instance.metadata.name }}"
+
+        - name: Run create_validate to extract VM config and build labels
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: create_validate.yaml
+
+        - name: Verify compute instance base label is present
+          ansible.builtin.assert:
+            that:
+              - default_vm_labels is defined
+              - default_vm_labels['osac.openshift.io/computeinstance'] == 'test-vm-sgs'
+            fail_msg: >-
+              Expected default_vm_labels to contain osac.openshift.io/computeinstance=test-vm-sgs,
+              got {{ default_vm_labels | default('undefined') }}
+
+        - name: Verify securitygroup-web01 label is present in VM labels
+          ansible.builtin.assert:
+            that:
+              - "'osac.openshift.io/securitygroup-web01' in default_vm_labels"
+              - default_vm_labels['osac.openshift.io/securitygroup-web01'] == ''
+            fail_msg: >-
+              Expected default_vm_labels to contain osac.openshift.io/securitygroup-web01='',
+              got {{ default_vm_labels | default('undefined') }}
+
+        - name: Verify securitygroup-db01 label is present in VM labels
+          ansible.builtin.assert:
+            that:
+              - "'osac.openshift.io/securitygroup-db01' in default_vm_labels"
+              - default_vm_labels['osac.openshift.io/securitygroup-db01'] == ''
+            fail_msg: >-
+              Expected default_vm_labels to contain osac.openshift.io/securitygroup-db01='',
+              got {{ default_vm_labels | default('undefined') }}
+
+        - name: Verify securitygroup-mon01 label is present in VM labels
+          ansible.builtin.assert:
+            that:
+              - "'osac.openshift.io/securitygroup-mon01' in default_vm_labels"
+              - default_vm_labels['osac.openshift.io/securitygroup-mon01'] == ''
+            fail_msg: >-
+              Expected default_vm_labels to contain osac.openshift.io/securitygroup-mon01='',
+              got {{ default_vm_labels | default('undefined') }}
+
+        - name: Verify exactly 4 labels are set (computeinstance + 3 SGs)
+          ansible.builtin.assert:
+            that:
+              - default_vm_labels | length == 4
+            fail_msg: >-
+              Expected 4 labels in default_vm_labels (1 base + 3 SGs),
+              got {{ default_vm_labels | length }}: {{ default_vm_labels | default('undefined') }}
+
+# ──────────────────────────────────────────────────────────────
+# Test 8: Windows sysprep enabled without password must fail
+# ──────────────────────────────────────────────────────────────
+- name: "Test ocp_virt_vm -- Windows sysprep requires admin password"
+  hosts: localhost
+
+  collections:
+    - osac.templates
+
+  vars:
+    compute_instance_label: "osac.openshift.io/computeinstance"
+
+  tasks:
+    - when: test_windows_sysprep_requires_password | default(false) | bool
+      block:
+        - name: Load ocp_virt_vm role defaults (Windows profile maps)
+          ansible.builtin.include_vars:
+            file: "{{ playbook_dir }}/../defaults/main.yaml"
+
+        - name: Load Windows fixture with sysprep enabled and no password
+          ansible.builtin.set_fact:
+            compute_instance: "{{ lookup('file', 'fixtures/computeinstance-windows-with-image-test.yaml') | from_yaml }}"
+            guest_os_family: windows
+            default_spec: "{{ _guest_os_windows_default_spec }}"
+            default_arg_specs: "{{ _guest_os_windows_default_arg_specs }}"
+            template_parameters: {}
+            vm_enable_sysprep: true
+            vm_sysprep_admin_password: ""
+
+        - name: Set compute instance name
+          ansible.builtin.set_fact:
+            compute_instance_name: "{{ compute_instance.metadata.name }}"
+
+        - name: Run create_validate (expect failure — empty sysprep password)
+          block:
+            - name: Include create_validate
+              ansible.builtin.include_role:
+                name: osac.templates.ocp_virt_vm
+                tasks_from: create_validate.yaml
+          rescue:
+            - name: Capture error message
+              ansible.builtin.set_fact:
+                validation_error: "{{ ansible_failed_result.msg | default('') }}"
+                sysprep_password_failed: true
+
+            - name: Verify failure was due to missing sysprep password
+              ansible.builtin.assert:
+                that:
+                  - "'vm_sysprep_admin_password' in validation_error"
+                fail_msg: "Validation failed for unexpected reason: {{ validation_error }}"
+
+        - name: Verify validation failed without sysprep password
+          ansible.builtin.assert:
+            that:
+              - sysprep_password_failed | default(false)
+            fail_msg: >-
+              Expected create_validate to fail when vm_enable_sysprep is true
+              and vm_sysprep_admin_password is empty
+
+# ──────────────────────────────────────────────────────────────
+# Test 9: Windows sysprep enabled with valid password passes
+# Expected: validation passes, vm_hostname truncated to 15 chars
+# ──────────────────────────────────────────────────────────────
+- name: "Test ocp_virt_vm -- Windows sysprep with valid password passes validation"
+  hosts: localhost
+
+  collections:
+    - osac.templates
+
+  vars:
+    compute_instance_label: "osac.openshift.io/computeinstance"
+
+  tasks:
+    - when: test_windows_sysprep_valid | default(false) | bool
+      block:
+        - name: Load ocp_virt_vm role defaults (Windows profile maps)
+          ansible.builtin.include_vars:
+            file: "{{ playbook_dir }}/../defaults/main.yaml"
+
+        - name: Load Windows fixture with sysprep enabled and valid password
+          ansible.builtin.set_fact:
+            compute_instance: "{{ lookup('file', 'fixtures/computeinstance-windows-with-image-test.yaml') | from_yaml }}"
+            guest_os_family: windows
+            default_spec: "{{ _guest_os_windows_default_spec }}"
+            default_arg_specs: "{{ _guest_os_windows_default_arg_specs }}"
+            template_parameters: {}
+            vm_enable_sysprep: true
+            vm_sysprep_admin_password: "{{ lookup('ansible.builtin.password', '/dev/null length=16 chars=ascii_letters,digits') }}"
+
+        - name: Set compute instance name
+          ansible.builtin.set_fact:
+            compute_instance_name: "{{ compute_instance.metadata.name }}"
+
+        - name: Run create_validate
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: create_validate.yaml
+
+        - name: Verify image source from ComputeInstance spec
+          ansible.builtin.assert:
+            that:
+              - vm_image_source == "registry.example.com/osac/windows-golden:ltsc2022"
+            fail_msg: "Expected vm_image_source from spec, got {{ vm_image_source | default('undefined') }}"
+
+        - name: Verify vm_hostname is set and truncated to 15 chars (NetBIOS limit)
+          ansible.builtin.assert:
+            that:
+              - vm_hostname is defined
+              - vm_hostname | length <= 15
+              - vm_hostname == "test-win-with-i"
+            fail_msg: "Expected vm_hostname='test-win-with-i' (truncated), got {{ vm_hostname | default('undefined') }}"
+
+# ──────────────────────────────────────────────────────────────
+# Test 10: Subnet reference extracted from networkAttachments
+# Expected: vm_subnet_ref == subnetRef from fixture
+# ──────────────────────────────────────────────────────────────
+- name: "Test ocp_virt_vm -- subnet reference extracted from networkAttachments"
+  hosts: localhost
+
+  collections:
+    - osac.templates
+
+  vars:
+    compute_instance_label: "osac.openshift.io/computeinstance"
+
+  tasks:
+    - when: test_create_subnet_ref_extracted | default(false) | bool
+      block:
+        - name: Read ComputeInstance fixture with networkAttachments
+          ansible.builtin.set_fact:
+            compute_instance: "{{ lookup('file', 'fixtures/computeinstance-with-security-groups.yaml') | from_yaml }}"
+
+        - name: Set compute instance name
+          ansible.builtin.set_fact:
+            compute_instance_name: "{{ compute_instance.metadata.name }}"
+
+        - name: Run create_validate to extract subnet reference
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: create_validate.yaml
+
+        - name: Verify vm_subnet_ref matches first subnetRef
+          ansible.builtin.assert:
+            that:
+              - vm_subnet_ref is defined
+              - vm_subnet_ref == "test-subnet"
+            fail_msg: "Expected vm_subnet_ref='test-subnet', got {{ vm_subnet_ref | default('undefined') }}"
+
+# ──────────────────────────────────────────────────────────────
+# Test 11: Missing networkAttachments must fail validation
+# Expected: validation fails with message about networkAttachments
+# ──────────────────────────────────────────────────────────────
+- name: "Test ocp_virt_vm -- missing networkAttachments rejected"
+  hosts: localhost
+
+  collections:
+    - osac.templates
+
+  vars:
+    compute_instance_label: "osac.openshift.io/computeinstance"
+
+  tasks:
+    - when: test_create_missing_subnet_fails | default(false) | bool
+      block:
+        - name: Read ComputeInstance fixture without networkAttachments
+          ansible.builtin.set_fact:
+            compute_instance: "{{ lookup('file', 'fixtures/computeinstance-no-subnet-test.yaml') | from_yaml }}"
+
+        - name: Set compute instance name
+          ansible.builtin.set_fact:
+            compute_instance_name: "{{ compute_instance.metadata.name }}"
+
+        - name: Run create_validate (expect failure — no networkAttachments)
+          block:
+            - name: Include create_validate
+              ansible.builtin.include_role:
+                name: osac.templates.ocp_virt_vm
+                tasks_from: create_validate.yaml
+          rescue:
+            - name: Capture error message
+              ansible.builtin.set_fact:
+                validation_error: "{{ ansible_failed_result.msg | default('') }}"
+                missing_subnet_failed: true
+
+            - name: Verify failure was due to missing networkAttachments
+              ansible.builtin.assert:
+                that:
+                  - "'spec.networkAttachments[0].subnetRef set' in validation_error"
+                fail_msg: "Validation failed for unexpected reason: {{ validation_error }}"
+
+        - name: Verify validation failed without networkAttachments
+          ansible.builtin.assert:
+            that:
+              - missing_subnet_failed | default(false)
+            fail_msg: >-
+              Expected create_validate to fail when spec.networkAttachments
+              is not set on the ComputeInstance
+
+# ──────────────────────────────────────────────────────────────
+# Test 12: Missing spec.cores/memoryGiB must fail validation
+# Expected: validation fails with message about spec.cores/spec.memoryGiB
+# (these are resolved by osac-operator from instance_type; there is no
+# role-level default anymore since instance_type is mandatory)
+# ──────────────────────────────────────────────────────────────
+- name: "Test ocp_virt_vm -- missing spec.cores/memoryGiB rejected"
+  hosts: localhost
+
+  collections:
+    - osac.templates
+
+  vars:
+    compute_instance_label: "osac.openshift.io/computeinstance"
+
+  tasks:
+    - when: test_create_missing_cores_fails | default(false) | bool
+      block:
+        - name: Read ComputeInstance fixture without spec.cores/memoryGiB
+          ansible.builtin.set_fact:
+            compute_instance: "{{ lookup('file', 'fixtures/computeinstance-missing-cores-test.yaml') | from_yaml }}"
+
+        - name: Set compute instance name
+          ansible.builtin.set_fact:
+            compute_instance_name: "{{ compute_instance.metadata.name }}"
+
+        - name: Run create_validate (expect failure — no spec.cores/memoryGiB)
+          block:
+            - name: Include create_validate
+              ansible.builtin.include_role:
+                name: osac.templates.ocp_virt_vm
+                tasks_from: create_validate.yaml
+          rescue:
+            - name: Capture error message
+              ansible.builtin.set_fact:
+                validation_error: "{{ ansible_failed_result.msg | default('') }}"
+                missing_cores_failed: true
+
+            - name: Verify failure was due to missing spec.cores/memoryGiB
+              ansible.builtin.assert:
+                that:
+                  - "'spec.cores and spec.memoryGiB' in validation_error"
+                fail_msg: "Validation failed for unexpected reason: {{ validation_error }}"
+
+        - name: Verify validation failed without spec.cores/memoryGiB
+          ansible.builtin.assert:
+            that:
+              - missing_cores_failed | default(false)
+            fail_msg: >-
+              Expected create_validate to fail when spec.cores/spec.memoryGiB
+              are not set on the ComputeInstance

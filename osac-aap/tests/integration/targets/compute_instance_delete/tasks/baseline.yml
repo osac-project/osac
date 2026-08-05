@@ -1,0 +1,52 @@
+---
+- name: Compute Instance Delete - Baseline Test
+  hosts: localhost
+  gather_facts: true
+  vars_files:
+    - ../../../common_vars.yml
+
+  tasks:
+    - name: Read ComputeInstance fixture
+      ansible.builtin.set_fact:
+        test_compute_instance: "{{ lookup('file', '../../../fixtures/computeinstance-test.yaml') | from_yaml }}"
+
+    - name: Set test variables for baseline workflow
+      ansible.builtin.set_fact:
+        ansible_eda:
+          event:
+            payload: "{{ test_compute_instance }}"
+        tenant_target_namespace: "computeinstance-test-vm-work"
+        # Note: delete.yaml doesn't have override hooks yet, so we use noop_template
+        # TODO: Refactor ocp_virt_vm delete.yaml to add override points
+        template_id_override: "osac.test_overrides.noop_template"
+
+- name: Import compute instance delete workflow (baseline)
+  ansible.builtin.import_playbook: osac.workflows.compute_instance.delete
+
+- name: Verify baseline results
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+
+  tasks:
+    - name: Verify compute instance name extracted
+      ansible.builtin.assert:
+        that:
+          - compute_instance_name is defined
+          - compute_instance_name == "test-vm"
+        fail_msg: "Compute instance name not extracted correctly"
+
+    - name: Verify tenant target namespace determined
+      ansible.builtin.assert:
+        that:
+          - tenant_target_namespace is defined
+          - tenant_target_namespace == "computeinstance-test-vm-work"
+        fail_msg: "Tenant target namespace not set correctly"
+
+    - name: Verify template ID extracted
+      ansible.builtin.assert:
+        that:
+          - template_id is defined
+          - template_id == "osac.templates.ocp_virt_vm"
+        fail_msg: "Template ID not extracted correctly"

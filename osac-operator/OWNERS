@@ -1,0 +1,32 @@
+filters:
+  "[^.]":
+    approvers:
+    - jhernand
+    - adriengentil
+    - tzvatot
+    - larsks
+    - tzumainn
+    - akshaynadkarni
+    - trewest
+    - eranco74
+    - danmanor
+    - rgolangh
+    - eliorerz
+    - ori-amizur
+    - vladikr
+    - rccrdpccl
+    reviewers:
+    - jhernand
+    - adriengentil
+    - tzvatot
+    - larsks
+    - tzumainn
+    - akshaynadkarni
+    - trewest
+    - eranco74
+    - danmanor
+    - rgolangh
+    - eliorerz
+    - ori-amizur
+    - vladikr
+    - rccrdpccl

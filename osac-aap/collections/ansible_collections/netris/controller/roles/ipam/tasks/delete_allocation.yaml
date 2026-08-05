@@ -1,0 +1,53 @@
+---
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Query IPAM tree
+  ansible.builtin.uri:
+    url: >-
+      {{ netris_controller_url }}/api/v2/ipam{{
+        ('?filterByVpc=' + (ipam_vpc_id | string)) if ipam_vpc_id is defined else ''
+      }}
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: [200]
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _ipam_tree_resp
+  no_log: true
+
+- name: Find allocation by name
+  ansible.builtin.set_fact:
+    _existing_ipam_alloc: >-
+      {{ (_ipam_tree_resp.json.data | default([]))
+         | selectattr('name', 'equalto', ipam_name)
+         | list | first | default(none) }}
+  when: _ipam_tree_resp.json is mapping
+
+- name: Delete IPAM allocation
+  when: _existing_ipam_alloc is defined and _existing_ipam_alloc is not none
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/ipam/allocation/{{ _existing_ipam_alloc.id }}"
+    method: DELETE
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: [200, 204, 400]
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _ipam_alloc_delete_resp
+  no_log: true
+
+- name: Fail if IPAM allocation deletion returned an error
+  when:
+    - _ipam_alloc_delete_resp is defined
+    - _ipam_alloc_delete_resp.status | default(200) == 400
+  ansible.builtin.fail:
+    msg: >-
+      Failed to delete IPAM allocation '{{ ipam_name }}' (ID: {{ _existing_ipam_alloc.id }}).
+      Netris responded with: {{ _ipam_alloc_delete_resp.json.message | default(_ipam_alloc_delete_resp.content | default('unknown error')) }}.
+      This usually means the allocation still has child subnets that must be deleted first.

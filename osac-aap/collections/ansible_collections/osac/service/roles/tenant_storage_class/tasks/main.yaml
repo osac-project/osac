@@ -1,0 +1,33 @@
+---
+# Resolve a StorageClass for a specific storage tier from the pre-resolved
+# storageClasses list injected via extra_vars by the ComputeInstance controller.
+# The Tenant controller is the single source of truth for StorageClass
+# resolution (per-tier duplicate detection, tenant vs shared Default fallback).
+# This role performs tier selection only.
+# Sets tenant_storage_class_name or fails.
+
+- name: Fail if storageClasses list is empty
+  ansible.builtin.fail:
+    msg: >-
+      No resolved storage tiers available for tenant
+      "{{ tenant_storage_class_tenant_name }}". The storageClasses list
+      injected by the ComputeInstance controller is empty. Check the
+      Tenant StorageClassReady condition.
+  when: tenant_storage_class_storage_classes | length == 0
+
+- name: Resolve StorageClass for requested tier
+  ansible.builtin.set_fact:
+    _tenant_sc_match: "{{ tenant_storage_class_storage_classes | selectattr('tier', 'equalto', tenant_storage_class_storage_tier) | list }}"
+    _tenant_sc_available_tiers: "{{ tenant_storage_class_storage_classes | map(attribute='tier') | unique | sort | join(', ') }}"
+
+- name: Fail if requested tier is not available
+  ansible.builtin.fail:
+    msg: >-
+      Storage tier "{{ tenant_storage_class_storage_tier }}" is not available
+      for tenant "{{ tenant_storage_class_tenant_name }}".
+      Available tiers: {{ _tenant_sc_available_tiers }}.
+  when: _tenant_sc_match | length == 0
+
+- name: Set StorageClass name from resolved tier
+  ansible.builtin.set_fact:
+    tenant_storage_class_name: "{{ _tenant_sc_match[0].name }}"

@@ -1,0 +1,8 @@
+---
+- name: "openvswitch: configure access port"
+  openvswitch_db:
+    table: Port
+    record: "{{ port_name }}"
+    col: tag
+    value: "{{ _vlan_id }}"
+  become: true

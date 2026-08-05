@@ -1,0 +1,61 @@
+{{- if .Values.caIssuer.enabled }}
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: selfsigned-issuer
+  namespace: cert-manager
+  labels:
+    {{- include "osac-prereqs.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: default-ca-cert
+  namespace: cert-manager
+  labels:
+    {{- include "osac-prereqs.labels" . | nindent 4 }}
+spec:
+  isCA: true
+  commonName: default-ca
+  secretName: default-ca
+  privateKey:
+    algorithm: RSA
+    size: 4096
+  issuerRef:
+    name: selfsigned-issuer
+    kind: Issuer
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: default-ca
+  labels:
+    {{- include "osac-prereqs.labels" . | nindent 4 }}
+spec:
+  ca:
+    secretName: default-ca
+---
+apiVersion: trust.cert-manager.io/v1alpha1
+kind: Bundle
+metadata:
+  name: ca-bundle
+  labels:
+    {{- include "osac-prereqs.labels" . | nindent 4 }}
+spec:
+  sources:
+  - secret:
+      name: "default-ca"
+      key: "ca.crt"
+  target:
+    configMap:
+      key: bundle.pem
+    namespaceSelector:
+      matchExpressions:
+      - key: kubernetes.io/metadata.name
+        operator: In
+        values:
+        - {{ .Values.osacNamespace }}
+{{- end }}

@@ -1,0 +1,12 @@
+namespace: netris
+name: controller
+version: 1.0.0
+description: Ansible collection for Netris controller API
+authors:
+  - Dan Manor
+readme: README.md
+license:
+  - Apache-2.0
+repository: https://github.com/osac-project/osac
+tags:
+  - networking

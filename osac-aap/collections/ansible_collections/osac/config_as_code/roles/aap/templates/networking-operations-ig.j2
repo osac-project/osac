@@ -1,0 +1,83 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    ansible_job: ''
+spec:
+  serviceAccountName: osac-sa
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: ansible_job
+                  operator: Exists
+            topologyKey: kubernetes.io/hostname
+  containers:
+    - image: >-
+        {{ aap_ee_image }}
+      name: worker
+      imagePullPolicy: Always
+      args:
+        - ansible-runner
+        - worker
+        - '--private-data-dir=/runner'
+      volumeMounts:
+        - name: kube-api-access
+          mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+          readOnly: true
+{% if remote_cluster_kubeconfig_secret_name %}
+        - name: remote-cluster-kubeconfig
+          mountPath: /etc/osac
+          readOnly: true
+{% endif %}
+      envFrom:
+        - configMapRef:
+            name: network-fulfillment-ig
+            optional: true
+        - secretRef:
+            name: network-fulfillment-ig
+      env:
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+{% if remote_cluster_kubeconfig_secret_name %}
+        - name: OSAC_REMOTE_CLUSTER_KUBECONFIG
+          value: /etc/osac/remote-cluster-kubeconfig
+{% endif %}
+  volumes:
+    - name: kube-api-access
+      projected:
+        sources:
+          - serviceAccountToken:
+              path: token
+              expirationSeconds: 3600
+          - configMap:
+              name: kube-root-ca.crt
+              items:
+                - key: ca.crt
+                  path: ca.crt
+          - downwardAPI:
+              items:
+                - path: namespace
+                  fieldRef:
+                    apiVersion: v1
+                    fieldPath: metadata.namespace
+          - configMap:
+              name: openshift-service-ca.crt
+              items:
+                - key: service-ca.crt
+                  path: service-ca.crt
+        defaultMode: 420
+{% if remote_cluster_kubeconfig_secret_name %}
+    - name: remote-cluster-kubeconfig
+      secret:
+        secretName: {{ remote_cluster_kubeconfig_secret_name }}
+        items:
+          - key: {{ remote_cluster_kubeconfig_secret_key }}
+            path: remote-cluster-kubeconfig
+        defaultMode: 420
+{% endif %}

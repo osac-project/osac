@@ -1,0 +1,11 @@
+---
+- name: Log VM create modify_vm_spec step execution
+  ansible.builtin.lineinfile:
+    path: /tmp/osac_test_overrides.log
+    line: "{{ ansible_date_time.iso8601 }} | vm_create_modify_vm_spec | {{ compute_instance_name }}"
+    create: true
+
+- name: Delegate to original modify_vm_spec role
+  ansible.builtin.include_role:
+    name: osac.templates.ocp_virt_vm
+    tasks_from: create_modify_vm_spec.yaml

@@ -1,0 +1,25 @@
+---
+- name: Integration testing for ec2_eip
+  module_defaults:
+    group/aws:
+      access_key: "{{ aws_access_key }}"
+      secret_key: "{{ aws_secret_key }}"
+      session_token: "{{ security_token | default(omit) }}"
+      region: "{{ aws_region }}"
+    amazon.aws.ec2_eip:
+      in_vpc: true
+
+  block:
+    - ansible.builtin.include_tasks: tasks/setup.yml
+    - ansible.builtin.include_tasks: tasks/allocate.yml
+    - ansible.builtin.include_tasks: tasks/reuse_with_tag.yml
+    - ansible.builtin.include_tasks: tasks/tagging.yml
+    - ansible.builtin.include_tasks: tasks/release.yml
+    - ansible.builtin.include_tasks: tasks/attach_detach_to_eni.yml
+    - ansible.builtin.include_tasks: tasks/attach_detach_to_instance.yml
+
+    # Disabled as it requires a registered domain, and corresponding hosted zone
+    # - ansible.builtin.include_tasks: tasks/update_reverse_dns_record.yml
+
+  always:
+    - ansible.builtin.include_tasks: tasks/teardown.yml

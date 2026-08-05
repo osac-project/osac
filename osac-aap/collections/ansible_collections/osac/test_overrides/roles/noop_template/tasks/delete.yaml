@@ -1,0 +1,32 @@
+---
+- name: No-op resource deletion for testing
+  ansible.builtin.debug:
+    msg: "Test mode - skipping actual resource deletion"
+
+# Template-level VM deletion hooks
+- name: Hook - VM delete pre-delete
+  ansible.builtin.include_role:
+    name: "{{ (delete_step_pre_delete_hook_override | default(hook_noop_default)).name }}"
+    tasks_from: "{{ (delete_step_pre_delete_hook_override | default(hook_noop_default)).tasks_from }}"
+  vars:
+    hook_noop_default:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+
+- name: Hook - VM delete resources
+  ansible.builtin.include_role:
+    name: "{{ (delete_step_resources_override | default(hook_noop_default)).name }}"
+    tasks_from: "{{ (delete_step_resources_override | default(hook_noop_default)).tasks_from }}"
+  vars:
+    hook_noop_default:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+
+- name: Hook - VM delete post-delete
+  ansible.builtin.include_role:
+    name: "{{ (delete_step_post_delete_hook_override | default(hook_noop_default)).name }}"
+    tasks_from: "{{ (delete_step_post_delete_hook_override | default(hook_noop_default)).tasks_from }}"
+  vars:
+    hook_noop_default:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml

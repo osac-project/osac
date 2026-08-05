@@ -1,0 +1,66 @@
+---
+argument_specs:
+  attach_and_approve_all_new_agents:
+    options:
+      manage_agents_cluster_order_name:
+        type: str
+        required: true
+      manage_agents_cluster_network:
+        type: str
+        required: true
+      manage_agents_skip_network_attach:
+        type: bool
+        default: false
+  detach_and_unlabel_all_removed_agents:
+    options:
+      manage_agents_cluster_order_name:
+        type: str
+        required: true
+      manage_agents_idle_agents_network:
+        type: str
+        required: true
+      manage_agents_skip_network_detach:
+        type: bool
+        default: false
+  select_and_label_new_agents:
+    options:
+      manage_agents_desired_count:
+        type: int
+        required: true
+      manage_agents_resource_class:
+        type: str
+        required: true
+      manage_agents_cluster_order_name:
+        type: str
+        required: true
+  wait_for_agents_to_be_removed:
+    options:
+      manage_agents_desired_count:
+        type: int
+        required: true
+      manage_agents_resource_class:
+        type: str
+        required: true
+      manage_agents_cluster_order_name:
+        type: str
+        required: true
+  unbind_agents_for_reclaim:
+    options:
+      manage_agents_cluster_order_name:
+        type: str
+        required: true
+  import_agents:
+    options:
+      manage_agents_node_names:
+        type: list
+        elements: str
+        required: true
+      manage_agents_idle_agents_network:
+        type: str
+        required: true
+  remove_agents:
+    options:
+      manage_agents_node_names:
+        type: list
+        elements: str
+        required: true

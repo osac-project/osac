@@ -1,0 +1,11 @@
+---
+controller_roles:
+  - user: admin
+    job_template: Demo Job Template
+    roles:
+      - read
+      - execute
+  - inventory: Demo Inventory
+    user: admin
+    role: read
+...

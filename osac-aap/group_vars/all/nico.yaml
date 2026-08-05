@@ -1,0 +1,20 @@
+# Infrastructure Defaults
+nico_infra_configmap_namespace: "{{ lookup('env', 'NVIDIA_BMM_CONFIGMAP_NAMESPACE') | default('hardware-inventory', true) }}"
+nico_infra_vpc_name_prefix: "{{ lookup('env', 'NVIDIA_BMM_VPC_NAME_PREFIX') | default('osac-vpc', true) }}"
+nico_infra_prefix_length: "{{ lookup('env', 'NVIDIA_BMM_DEFAULT_PREFIX_LENGTH') | default(28, true) | int }}"
+nico_infra_infraenv_namespace: "{{ lookup('env', 'NVIDIA_BMM_INFRAENV_NAMESPACE') | default('hardware-inventory', true) }}"
+nico_infra_infraenv_name: "{{ lookup('env', 'NVIDIA_BMM_INFRAENV_NAME') | default('hardware-inventory', true) }}"
+nico_infra_infraenv_retries: "{{ lookup('env', 'NVIDIA_BMM_INFRAENV_RETRIES') | default(60, true) | int }}"
+nico_infra_infraenv_delay: "{{ lookup('env', 'NVIDIA_BMM_INFRAENV_DELAY') | default(10, true) | int }}"
+nico_infra_instance_name_prefix: "{{ lookup('env', 'NVIDIA_BMM_INSTANCE_NAME_PREFIX') | default('osac-instance', true) }}"
+nico_infra_agent_registration_retries: "{{ lookup('env', 'NVIDIA_BMM_AGENT_REGISTRATION_RETRIES') | default(90, true) | int }}"
+nico_infra_agent_registration_delay: "{{ lookup('env', 'NVIDIA_BMM_AGENT_REGISTRATION_DELAY') | default(10, true) | int }}"
+nico_infra_wait: "{{ lookup('env', 'NVIDIA_BMM_WAIT') | default(true, true) | bool }}"
+nico_infra_create_timeout: "{{ lookup('env', 'NVIDIA_BMM_CREATE_TIMEOUT') | default(600, true) | int }}"
+nico_infra_delete_timeout: "{{ lookup('env', 'NVIDIA_BMM_DELETE_TIMEOUT') | default(180, true) | int }}"
+nico_infra_validate_certs: "{{ lookup('env', 'NVIDIA_BMM_VALIDATE_CERTS') | default(false, true) | bool }}"
+
+# IP Allocation
+nico_ip_registry_namespace: "{{ lookup('env', 'NVIDIA_BMM_IP_REGISTRY_NAMESPACE') | default('hardware-inventory', true) }}"
+nico_ip_allocation_retries: "{{ lookup('env', 'NVIDIA_BMM_IP_ALLOCATION_RETRIES') | default(5, true) | int }}"
+nico_ip_allocation_delay: "{{ lookup('env', 'NVIDIA_BMM_IP_ALLOCATION_DELAY') | default(2, true) | int }}"

@@ -1,0 +1,1335 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OSAC Helm Chart Values",
+  "description": "Configuration values for Open Sovereign AI Cloud deployment",
+  "type": "object",
+  "properties": {
+    "cliImage": {
+      "type": "string",
+      "description": "Default OpenShift CLI image used by hook jobs"
+    },
+    "operatorCrds": {
+      "type": "object",
+      "description": "OSAC Operator CRDs configuration",
+      "properties": {
+        "install": {
+          "type": "boolean",
+          "description": "Install OSAC CRDs",
+          "default": true
+        }
+      }
+    },
+    "operator": {
+      "type": "object",
+      "description": "OSAC Operator configuration",
+      "properties": {
+        "image": {
+          "type": "object",
+          "properties": {
+            "repository": {
+              "type": "string",
+              "description": "Operator container image repository",
+              "default": "ghcr.io/osac-project/osac-operator"
+            },
+            "tag": {
+              "type": "string",
+              "description": "Operator container image tag",
+              "default": "latest"
+            },
+            "pullPolicy": {
+              "type": "string",
+              "description": "Image pull policy",
+              "enum": [
+                "Always",
+                "IfNotPresent",
+                "Never"
+              ],
+              "default": "Always"
+            }
+          }
+        },
+        "replicaCount": {
+          "type": "integer",
+          "description": "Number of operator replicas",
+          "minimum": 1,
+          "default": 1
+        },
+        "resources": {
+          "type": "object",
+          "description": "Container resource requests and limits",
+          "properties": {
+            "limits": {
+              "type": "object",
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "description": "CPU limit"
+                },
+                "memory": {
+                  "type": "string",
+                  "description": "Memory limit"
+                }
+              }
+            },
+            "requests": {
+              "type": "object",
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "description": "CPU request"
+                },
+                "memory": {
+                  "type": "string",
+                  "description": "Memory request"
+                }
+              }
+            }
+          }
+        },
+        "aap": {
+          "type": "object",
+          "description": "AAP connection settings for the operator",
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "AAP controller URL"
+            },
+            "token": {
+              "type": "string",
+              "description": "AAP API token"
+            },
+            "insecureSkipVerify": {
+              "type": "string",
+              "description": "Skip TLS verification for AAP",
+              "default": "true"
+            },
+            "statusPollInterval": {
+              "type": "string",
+              "description": "Interval for polling AAP job status",
+              "default": "30s"
+            },
+            "templatePrefix": {
+              "type": "string",
+              "description": "Prefix for AAP job templates",
+              "default": "osac"
+            }
+          }
+        },
+        "fulfillment": {
+          "type": "object",
+          "properties": {
+            "serverAddress": {
+              "type": "string",
+              "description": "Fulfillment service gRPC address",
+              "default": "fulfillment-internal-api:8001"
+            },
+            "tokenFile": {
+              "type": "string",
+              "description": "Path to service account token file"
+            }
+          }
+        },
+        "controllers": {
+          "type": "object",
+          "description": "Enable or disable individual operator controllers",
+          "properties": {
+            "clusterOrder": {
+              "type": "boolean",
+              "description": "Enable ClusterOrder controller",
+              "default": true
+            },
+            "computeInstance": {
+              "type": "boolean",
+              "description": "Enable ComputeInstance controller",
+              "default": true
+            },
+            "tenant": {
+              "type": "boolean",
+              "description": "Enable Tenant controller",
+              "default": true
+            },
+            "networking": {
+              "type": "boolean",
+              "description": "Enable networking controllers",
+              "default": true
+            },
+            "bareMetalInstance": {
+              "type": "boolean",
+              "description": "Enable BareMetalInstance controller",
+              "default": true
+            },
+            "storage": {
+              "type": "boolean",
+              "description": "Enable Storage controller",
+              "default": true
+            }
+          }
+        },
+        "configSecret": {
+          "type": "object",
+          "description": "Optional Secret with additional operator configuration",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Name of the configuration Secret",
+              "default": "osac-config"
+            },
+            "optional": {
+              "type": "boolean",
+              "description": "Allow the Secret to be absent without failing the deployment",
+              "default": true
+            }
+          }
+        },
+        "hubAccess": {
+          "type": "object",
+          "description": "Hub access ClusterRole for the operator subchart",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Create hub-access ClusterRole (exported for fulfillment-service to bind)",
+              "default": false
+            }
+          }
+        }
+      }
+    },
+    "service": {
+      "type": "object",
+      "description": "Fulfillment Service configuration",
+      "required": [
+        "externalHostname",
+        "internalHostname",
+        "auth",
+        "certs"
+      ],
+      "properties": {
+        "externalHostname": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Hostname for the external API Route"
+        },
+        "internalHostname": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Hostname for the internal API Route"
+        },
+        "variant": {
+          "type": "string",
+          "description": "Deployment variant",
+          "enum": [
+            "openshift",
+            "kind"
+          ],
+          "default": "openshift"
+        },
+        "images": {
+          "type": "object",
+          "properties": {
+            "service": {
+              "type": "string",
+              "description": "Fulfillment service container image"
+            },
+            "envoy": {
+              "type": "string",
+              "description": "Envoy proxy container image"
+            }
+          }
+        },
+        "certs": {
+          "type": "object",
+          "description": "TLS certificate configuration",
+          "required": [
+            "issuerRef"
+          ],
+          "properties": {
+            "issuerRef": {
+              "type": "object",
+              "required": [
+                "name"
+              ],
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "description": "Issuer kind (ClusterIssuer or Issuer)",
+                  "enum": [
+                    "ClusterIssuer",
+                    "Issuer"
+                  ],
+                  "default": "ClusterIssuer"
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Name of the cert-manager ClusterIssuer or Issuer",
+                  "minLength": 1
+                }
+              }
+            },
+            "caBundle": {
+              "type": "object",
+              "properties": {
+                "configMap": {
+                  "type": "string",
+                  "description": "ConfigMap name containing the CA bundle"
+                }
+              }
+            }
+          }
+        },
+        "auth": {
+          "type": "object",
+          "description": "Authentication configuration",
+          "required": [
+            "issuerUrl"
+          ],
+          "properties": {
+            "issuerUrl": {
+              "type": "string",
+              "description": "OIDC issuer URL (e.g. Keycloak realm URL)",
+              "minLength": 1,
+              "pattern": "^https?://"
+            },
+            "controllerCredentials": {
+              "type": "array",
+              "description": "Controller credential volume sources"
+            }
+          }
+        },
+        "idp": {
+          "type": "object",
+          "description": "Identity provider configuration for user management",
+          "properties": {
+            "provider": {
+              "type": "string",
+              "description": "Identity provider type",
+              "default": "keycloak"
+            },
+            "url": {
+              "type": "string",
+              "description": "Identity provider URL"
+            },
+            "credentials": {
+              "type": "array",
+              "description": "Credential volume sources for IdP access"
+            }
+          }
+        },
+        "database": {
+          "type": "object",
+          "description": "Database configuration",
+          "properties": {
+            "connection": {
+              "type": "array",
+              "description": "Database connection volume sources (secret or configMap references)"
+            }
+          }
+        },
+        "log": {
+          "type": "object",
+          "description": "Logging configuration for the fulfillment service",
+          "properties": {
+            "level": {
+              "type": "string",
+              "description": "Log level",
+              "default": "info"
+            },
+            "headers": {
+              "type": "boolean",
+              "description": "Log request/response headers",
+              "default": false
+            },
+            "bodies": {
+              "type": "boolean",
+              "description": "Log request/response bodies",
+              "default": false
+            }
+          }
+        }
+      }
+    },
+    "aap": {
+      "type": "object",
+      "description": "AAP bootstrap and instance configuration",
+      "properties": {
+        "aap": {
+          "type": "object",
+          "properties": {
+            "instance": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "description": "Create AAP instance CR (set false if AAP is managed externally)",
+                  "default": true
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Name of the AAP instance",
+                  "default": "osac-aap"
+                },
+                "controller": {
+                  "type": "object",
+                  "properties": {
+                    "disabled": {
+                      "type": "boolean",
+                      "description": "Disable the AAP automation controller",
+                      "default": false
+                    }
+                  }
+                },
+                "eda": {
+                  "type": "object",
+                  "properties": {
+                    "disabled": {
+                      "type": "boolean",
+                      "description": "Disable Event-Driven Ansible",
+                      "default": false
+                    }
+                  }
+                },
+                "hub": {
+                  "type": "object",
+                  "properties": {
+                    "disabled": {
+                      "type": "boolean",
+                      "description": "Disable Automation Hub",
+                      "default": true
+                    }
+                  }
+                },
+                "lightspeed": {
+                  "type": "object",
+                  "properties": {
+                    "disabled": {
+                      "type": "boolean",
+                      "description": "Disable Ansible Lightspeed",
+                      "default": true
+                    }
+                  }
+                },
+                "noLog": {
+                  "type": "boolean",
+                  "description": "Suppress sensitive data in AAP logs",
+                  "default": true
+                },
+                "redisMode": {
+                  "type": "string",
+                  "description": "Redis deployment mode",
+                  "enum": [
+                    "standalone",
+                    "cluster"
+                  ],
+                  "default": "standalone"
+                },
+                "routeTlsTerminationMechanism": {
+                  "type": "string",
+                  "description": "TLS termination mechanism for AAP routes",
+                  "enum": [
+                    "Edge",
+                    "Passthrough",
+                    "Reencrypt"
+                  ],
+                  "default": "Edge"
+                },
+                "imagePullPolicy": {
+                  "type": "string",
+                  "description": "Image pull policy for AAP pods",
+                  "enum": [
+                    "Always",
+                    "IfNotPresent",
+                    "Never"
+                  ],
+                  "default": "IfNotPresent"
+                }
+              }
+            }
+          }
+        },
+        "bootstrap": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Run AAP bootstrap job after install",
+              "default": true
+            },
+            "image": {
+              "type": "string",
+              "description": "Bootstrap job container image"
+            },
+            "backoffLimit": {
+              "type": "integer",
+              "description": "Number of retries for bootstrap job",
+              "default": 15
+            },
+            "gateway": {
+              "type": "object",
+              "properties": {
+                "hostname": {
+                  "type": "string",
+                  "description": "AAP gateway route hostname"
+                }
+              }
+            },
+            "eda": {
+              "type": "object",
+              "properties": {
+                "hostname": {
+                  "type": "string",
+                  "description": "AAP EDA route hostname"
+                }
+              }
+            },
+            "controller": {
+              "type": "object",
+              "properties": {
+                "hostname": {
+                  "type": "string",
+                  "description": "AAP automation controller route hostname"
+                }
+              }
+            }
+          }
+        },
+        "configAsCode": {
+          "type": "object",
+          "properties": {
+            "manifestSecret": {
+              "type": "string",
+              "description": "Secret name for config-as-code manifest instance group"
+            },
+            "secret": {
+              "type": "string",
+              "description": "Secret name for config-as-code instance group"
+            },
+            "eeImage": {
+              "type": "string",
+              "description": "Execution environment image for config-as-code"
+            },
+            "projectGitUri": {
+              "type": "string",
+              "description": "Git repository URI for config-as-code project"
+            },
+            "projectGitBranch": {
+              "type": "string",
+              "description": "Git branch for config-as-code project"
+            },
+            "importAgentsEnabled": {
+              "type": "boolean",
+              "description": "Enable ConfigMap-based bare metal agent import. Sets OSAC_IMPORT_AGENTS_ENABLED=true in the config-as-code-ig Secret and gates the import-agents-inventory ConfigMap.",
+              "default": false
+            },
+            "importBcmAgentsEnabled": {
+              "type": "boolean",
+              "description": "Enable BCM inventory backend. Sets OSAC_IMPORT_BCM_AGENTS_ENABLED=true in the config-as-code-ig Secret and gates the bcm-certs Secret.",
+              "default": false
+            }
+          }
+        },
+        "importAgents": {
+          "type": "object",
+          "description": "Server inventory for bare metal agent import. Enable via aap.configAsCode.importAgentsEnabled.",
+          "properties": {
+            "servers": {
+              "type": "array",
+              "description": "Server inventory for bare metal agent import. Each entry provisions a BareMetalHost CR.",
+              "items": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "bmc_url",
+                  "bmc_username",
+                  "bmc_password",
+                  "boot_mac",
+                  "netris_server_name",
+                  "resource_class"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Server hostname, used as the BareMetalHost CR name"
+                  },
+                  "bmc_url": {
+                    "type": "string",
+                    "description": "Redfish BMC address for virtual media boot"
+                  },
+                  "bmc_username": {
+                    "type": "string",
+                    "description": "BMC username. The playbook creates a Kubernetes Secret named {name}-bmc-secret with these credentials."
+                  },
+                  "bmc_password": {
+                    "type": "string",
+                    "description": "BMC password. The playbook creates a Kubernetes Secret named {name}-bmc-secret with these credentials."
+                  },
+                  "boot_mac": {
+                    "type": "string",
+                    "description": "Boot NIC MAC address"
+                  },
+                  "netris_server_name": {
+                    "type": "string",
+                    "description": "Netris server name label for the Agent"
+                  },
+                  "resource_class": {
+                    "type": "string",
+                    "description": "Hardware type label for the Agent"
+                  },
+                  "disable_bmc_cert_verification": {
+                    "type": "boolean",
+                    "description": "Per-server override for BMC TLS certificate verification"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "importBcmAgents": {
+          "type": "object",
+          "description": "BCM mTLS client credentials. Enable via aap.configAsCode.importBcmAgentsEnabled.",
+          "properties": {
+            "cert": {
+              "type": "string",
+              "description": "PEM-encoded client certificate for BCM mTLS authentication"
+            },
+            "key": {
+              "type": "string",
+              "description": "PEM-encoded client private key for BCM mTLS authentication"
+            }
+          }
+        },
+        "instanceGroups": {
+          "type": "object",
+          "description": "AAP instance group configuration",
+          "properties": {
+            "clusterFulfillment": {
+              "type": "object",
+              "description": "ConfigMap and Secret for the AAP cluster-fulfillment instance group",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "description": "Create cluster-fulfillment ConfigMap and Secret",
+                  "default": false
+                },
+                "config": {
+                  "type": "object",
+                  "description": "Environment variables for the cluster-fulfillment instance group",
+                  "properties": {
+                    "NETWORK_CLASS": {
+                      "type": "string",
+                      "description": "Network implementation class",
+                      "enum": [
+                        "",
+                        "esi",
+                        "netris",
+                        "nico"
+                      ]
+                    },
+                    "NETWORK_STEPS_COLLECTION": {
+                      "type": "string",
+                      "description": "Ansible collection providing network-class-specific steps",
+                      "enum": [
+                        "",
+                        "osac.steps",
+                        "netris.steps",
+                        "ci.steps",
+                        "nico.steps",
+                        "agentless_net.steps"
+                      ]
+                    },
+                    "DNS_CLASS": {
+                      "type": "string",
+                      "description": "Fully-qualified Ansible role name of the DNS driver",
+                      "enum": [
+                        "",
+                        "dns.route53.dns"
+                      ]
+                    },
+                    "DNS_ZONE": {
+                      "type": "string",
+                      "description": "DNS zone to operate in (defaults to EXTERNAL_ACCESS_BASE_DOMAIN)"
+                    },
+                    "NETRIS_CONTROLLER_URL": {
+                      "type": "string",
+                      "description": "Netris controller API URL"
+                    },
+                    "NETRIS_USERNAME": {
+                      "type": "string",
+                      "description": "Netris controller username"
+                    },
+                    "NETRIS_SITE_ID": {
+                      "type": "string",
+                      "description": "Netris site ID"
+                    },
+                    "NETRIS_TENANT_ID": {
+                      "type": "string",
+                      "description": "Netris tenant ID"
+                    },
+                    "NETRIS_TENANT_NAME": {
+                      "type": "string",
+                      "description": "Netris tenant name"
+                    },
+                    "NETRIS_MGMT_VPC_ID": {
+                      "type": "string",
+                      "description": "Netris management VPC ID"
+                    },
+                    "NETRIS_MGMT_VPC_NAME": {
+                      "type": "string",
+                      "description": "Netris management VPC name"
+                    },
+                    "NETRIS_RESOURCE_CLASS_MAP": {
+                      "type": "string",
+                      "description": "JSON mapping of resource classes to Netris server labels"
+                    },
+                    "SERVER_SSH_BASTION_HOST": {
+                      "type": "string",
+                      "description": "SSH bastion host for server access"
+                    },
+                    "SERVER_SSH_BASTION_USER": {
+                      "type": "string",
+                      "description": "SSH bastion user"
+                    },
+                    "SERVER_SSH_USER": {
+                      "type": "string",
+                      "description": "SSH user for direct server access"
+                    },
+                    "SERVER_MGMT_ROUTE_DESTINATION": {
+                      "type": "string",
+                      "description": "Management network route destination CIDR"
+                    },
+                    "SERVER_MGMT_ROUTE_GATEWAY": {
+                      "type": "string",
+                      "description": "Management network route gateway"
+                    },
+                    "EXTERNAL_ACCESS_BASE_DOMAIN": {
+                      "type": "string",
+                      "description": "Base domain for external access DNS records"
+                    },
+                    "EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS": {
+                      "type": "string",
+                      "description": "Comma-separated list of supported base domains"
+                    },
+                    "EXTERNAL_ACCESS_API_INTERNAL_NETWORK": {
+                      "type": "string",
+                      "description": "Internal network CIDR for API access"
+                    },
+                    "HOSTED_CLUSTER_BASE_DOMAIN": {
+                      "type": "string",
+                      "description": "Base domain for hosted clusters"
+                    },
+                    "HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY": {
+                      "type": "string",
+                      "description": "Availability policy for hosted cluster control plane",
+                      "enum": [
+                        "",
+                        "HighlyAvailable",
+                        "SingleReplica"
+                      ]
+                    },
+                    "HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY": {
+                      "type": "string",
+                      "description": "Availability policy for hosted cluster infrastructure",
+                      "enum": [
+                        "",
+                        "HighlyAvailable",
+                        "SingleReplica"
+                      ]
+                    },
+                    "IMPORT_AGENTS_NAMESPACE": {
+                      "type": "string",
+                      "description": "Namespace for BareMetalHost, Agent, and InfraEnv CRs (effective default: hardware-inventory)"
+                    },
+                    "IMPORT_AGENTS_INFRAENV_NAME": {
+                      "type": "string",
+                      "description": "InfraEnv CR name for agent discovery (effective default: infraenv)"
+                    },
+                    "IMPORT_AGENTS_PULL_SECRET_NAME": {
+                      "type": "string",
+                      "description": "Pull secret name for InfraEnv discovery ISO (effective default: pull-secret)"
+                    },
+                    "IMPORT_AGENTS_DISABLE_BMC_CERT_VERIFICATION": {
+                      "type": "string",
+                      "description": "Default BMC TLS certificate verification skip (effective default: true)"
+                    },
+                    "BCM_API_URL": {
+                      "type": "string",
+                      "pattern": "^$|^https?://",
+                      "description": "BCM head node API endpoint (e.g., https://bcm-head:8081)"
+                    },
+                    "BCM_VALIDATE_CERTS": {
+                      "type": "string",
+                      "enum": [
+                        "",
+                        "true",
+                        "false"
+                      ],
+                      "description": "Verify BCM TLS certificates (effective default: true)"
+                    },
+                    "BCM_DISABLE_BMC_CERT_VERIFICATION": {
+                      "type": "string",
+                      "enum": [
+                        "",
+                        "true",
+                        "false"
+                      ],
+                      "description": "Skip BMC TLS certificate verification during BCM system discovery (effective default: false)"
+                    }
+                  }
+                },
+                "secret": {
+                  "type": "object",
+                  "description": "Secret values for the cluster-fulfillment instance group",
+                  "properties": {
+                    "NETRIS_PASSWORD": {
+                      "type": "string",
+                      "description": "Netris controller password"
+                    },
+                    "AWS_ACCESS_KEY_ID": {
+                      "type": "string",
+                      "description": "AWS access key for Route 53 DNS backend"
+                    },
+                    "AWS_SECRET_ACCESS_KEY": {
+                      "type": "string",
+                      "description": "AWS secret key for Route 53 DNS backend"
+                    },
+                    "SERVER_SSH_KEY": {
+                      "type": "string",
+                      "description": "SSH private key for server access"
+                    },
+                    "SERVER_SSH_BASTION_KEY": {
+                      "type": "string",
+                      "description": "SSH private key for bastion access"
+                    }
+                  }
+                }
+              }
+            },
+            "networkFulfillment": {
+              "type": "object",
+              "description": "ConfigMap and Secret for the AAP network-fulfillment instance group",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "description": "Create network-fulfillment ConfigMap and Secret",
+                  "default": false
+                },
+                "config": {
+                  "type": "object",
+                  "description": "Environment variables for the network-fulfillment instance group",
+                  "properties": {
+                    "NETRIS_CONTROLLER_URL": {
+                      "type": "string",
+                      "description": "Netris controller API URL"
+                    },
+                    "NETRIS_USERNAME": {
+                      "type": "string",
+                      "description": "Netris controller username"
+                    },
+                    "NETRIS_SITE_ID": {
+                      "type": "string",
+                      "description": "Netris site ID"
+                    },
+                    "NETRIS_TENANT_ID": {
+                      "type": "string",
+                      "description": "Netris tenant ID"
+                    },
+                    "NETRIS_TENANT_NAME": {
+                      "type": "string",
+                      "description": "Netris tenant name"
+                    }
+                  }
+                },
+                "secret": {
+                  "type": "object",
+                  "description": "Secret values for the network-fulfillment instance group",
+                  "properties": {
+                    "NETRIS_PASSWORD": {
+                      "type": "string",
+                      "description": "Netris controller password"
+                    }
+                  }
+                }
+              }
+            },
+            "storageFulfillment": {
+              "type": "object",
+              "description": "ConfigMap and Secret for the AAP storage-operations instance group",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "description": "Create storage-fulfillment ConfigMap and Secret",
+                  "default": false
+                },
+                "config": {
+                  "type": "object",
+                  "description": "Environment variables for the storage-operations instance group",
+                  "properties": {
+                    "STORAGE_TIERS": {
+                      "type": "string",
+                      "description": "Available storage tiers configuration"
+                    },
+                    "STORAGE_SNAPSHOTS_ENABLED": {
+                      "type": "string",
+                      "description": "Enable storage snapshots"
+                    }
+                  }
+                },
+                "secret": {
+                  "type": "object",
+                  "description": "Secret values for the storage-operations instance group",
+                  "properties": {
+                    "VAST_ENDPOINT": {
+                      "type": "string",
+                      "description": "VAST management endpoint URL"
+                    },
+                    "VAST_USERNAME": {
+                      "type": "string",
+                      "description": "VAST management username"
+                    },
+                    "VAST_PASSWORD": {
+                      "type": "string",
+                      "description": "VAST management password"
+                    }
+                  }
+                }
+              }
+            },
+            "publishTemplates": {
+              "type": "object",
+              "description": "Configuration for AAP template publishing instance group",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "description": "Create publish-templates-ig ConfigMap",
+                  "default": true
+                },
+                "config": {
+                  "type": "object",
+                  "description": "ConfigMap data for publish-templates-ig",
+                  "properties": {
+                    "OSAC_TEMPLATE_COLLECTIONS": {
+                      "type": "string",
+                      "description": "Comma-separated list of Ansible collections containing OSAC templates",
+                      "default": "osac.templates"
+                    },
+                    "OSAC_FULFILLMENT_SERVICE_URI": {
+                      "type": "string",
+                      "description": "Internal URI for the fulfillment service",
+                      "default": "https://fulfillment-internal-api:8001"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "ui": {
+      "type": "object",
+      "description": "OSAC UI web console configuration",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Deploy the OSAC UI web console",
+          "default": true
+        },
+        "externalHostname": {
+          "type": "string",
+          "description": "Hostname for the OpenShift Route (auto-assigned if empty)"
+        },
+        "api": {
+          "type": "object",
+          "description": "Backend API connection settings",
+          "properties": {
+            "fulfillment": {
+              "type": "object",
+              "properties": {
+                "url": {
+                  "type": "string",
+                  "description": "Fulfillment API URL",
+                  "default": "https://fulfillment-api:8000"
+                },
+                "certs": {
+                  "type": "object",
+                  "properties": {
+                    "caBundle": {
+                      "type": "object",
+                      "properties": {
+                        "configMap": {
+                          "type": "string",
+                          "description": "ConfigMap name containing the CA bundle for the fulfillment API"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "auth": {
+          "type": "object",
+          "description": "Authentication configuration",
+          "properties": {
+            "oidcClientId": {
+              "type": "string",
+              "description": "OIDC client ID for the UI",
+              "default": "osac-ui"
+            },
+            "certs": {
+              "type": "object",
+              "properties": {
+                "caBundle": {
+                  "type": "object",
+                  "properties": {
+                    "configMap": {
+                      "type": "string",
+                      "description": "ConfigMap name containing the CA bundle for auth"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "log": {
+          "type": "object",
+          "description": "Logging configuration",
+          "properties": {
+            "level": {
+              "type": "string",
+              "description": "Log level (debug, info, warn, error)",
+              "default": "info"
+            }
+          }
+        },
+        "images": {
+          "type": "object",
+          "properties": {
+            "ui": {
+              "type": "string",
+              "description": "UI container image",
+              "default": "ghcr.io/osac-project/osac-ui:latest"
+            }
+          }
+        }
+      }
+    },
+    "metering": {
+      "type": "object",
+      "description": "OSAC Metering Service configuration",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Deploy the OSAC Metering Service (opt-in)",
+          "default": false
+        },
+        "image": {
+          "type": "object",
+          "properties": {
+            "repository": { "type": "string" },
+            "tag": { "type": "string" },
+            "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+          }
+        }
+      }
+    },
+    "csiDriver": {
+      "type": "object",
+      "description": "OSAC CSI driver configuration",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Deploy the OSAC CSI driver (opt-in)",
+          "default": false
+        },
+        "image": {
+          "type": "object",
+          "properties": {
+            "repository": {
+              "type": "string",
+              "description": "CSI driver container image repository",
+              "default": "ghcr.io/osac-project/osac-csi-driver"
+            },
+            "tag": {
+              "type": "string",
+              "description": "CSI driver container image tag",
+              "default": "latest"
+            },
+            "pullPolicy": {
+              "type": "string",
+              "description": "Image pull policy",
+              "enum": [
+                "Always",
+                "IfNotPresent",
+                "Never"
+              ],
+              "default": "Always"
+            }
+          }
+        }
+      }
+    },
+    "csiBackends": {
+      "type": "object",
+      "description": "Vendor CSI backend configuration (deployed with csiDriver)"
+    },
+    "bmfCrds": {
+      "type": "object",
+      "description": "Bare Metal Fulfillment Operator CRDs configuration"
+    },
+    "bmf": {
+      "type": "object",
+      "description": "Bare Metal Fulfillment Operator configuration",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable or disable the BMF operator subchart",
+          "default": true
+        },
+        "image": {
+          "type": "object",
+          "properties": {
+            "repository": {
+              "type": "string",
+              "description": "Operator container image repository",
+              "default": "ghcr.io/osac-project/bare-metal-fulfillment-operator"
+            },
+            "tag": {
+              "type": "string",
+              "description": "Operator container image tag",
+              "default": "latest"
+            },
+            "pullPolicy": {
+              "type": "string",
+              "description": "Image pull policy",
+              "enum": [
+                "Always",
+                "IfNotPresent",
+                "Never"
+              ],
+              "default": "Always"
+            }
+          }
+        },
+        "replicaCount": {
+          "type": "integer",
+          "description": "Number of operator replicas",
+          "minimum": 1,
+          "default": 1
+        },
+        "resources": {
+          "type": "object",
+          "description": "Container resource requests and limits",
+          "properties": {
+            "limits": {
+              "type": "object",
+              "properties": {
+                "cpu": {
+                  "type": "string"
+                },
+                "memory": {
+                  "type": "string"
+                }
+              }
+            },
+            "requests": {
+              "type": "object",
+              "properties": {
+                "cpu": {
+                  "type": "string"
+                },
+                "memory": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "serviceAccount": {
+          "type": "object",
+          "properties": {
+            "create": {
+              "type": "boolean",
+              "description": "Create a ServiceAccount for the operator",
+              "default": true
+            },
+            "name": {
+              "type": "string",
+              "description": "Override the ServiceAccount name (uses fullname if empty)"
+            }
+          }
+        },
+        "secrets": {
+          "type": "object",
+          "description": "Names of Secrets mounted into the operator pod",
+          "properties": {
+            "inventoryConfig": {
+              "type": "string",
+              "description": "Secret name for OSAC inventory configuration",
+              "default": "osac-inventory-config"
+            },
+            "managementConfig": {
+              "type": "string",
+              "description": "Secret name for OSAC management configuration",
+              "default": "osac-management-config"
+            },
+            "osClouds": {
+              "type": "string",
+              "description": "Secret name for OpenStack clouds.yaml",
+              "default": "osac-os-clouds"
+            }
+          }
+        },
+        "configMaps": {
+          "type": "object",
+          "description": "Names of ConfigMaps mounted into the operator pod",
+          "properties": {
+            "profiles": {
+              "type": "string",
+              "description": "ConfigMap name for OSAC profiles",
+              "default": "osac-profiles"
+            }
+          }
+        },
+        "env": {
+          "type": "object",
+          "description": "Environment variable overrides for the BMF operator pod",
+          "properties": {
+            "aapInsecureSkipVerify": {
+              "type": "string",
+              "description": "Skip TLS certificate verification for AAP API calls (set to 'true' for self-signed certs)",
+              "default": ""
+            }
+          }
+        }
+      }
+    },
+    "validation": {
+      "type": "object",
+      "description": "Pre-install validation hook",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Run pre-install validation checks",
+          "default": true
+        }
+      }
+    },
+    "metallb": {
+      "type": "object",
+      "description": "MetalLB IPAddressPool and L2Advertisement for LoadBalancer services",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Create MetalLB IPAddressPool and L2Advertisement",
+          "default": false
+        },
+        "addressCIDR": {
+          "type": "string",
+          "description": "CIDR range for the MetalLB address pool",
+          "default": "192.168.40.0/24"
+        }
+      }
+    },
+    "hubAccess": {
+      "type": "object",
+      "description": "Hub access SA, RBAC, and create-hub hook (CI/dev only)",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Create hub-access resources and register local cluster as hub",
+          "default": false
+        }
+      }
+    },
+    "bundledPostgres": {
+      "type": "object",
+      "description": "Bundled PostgreSQL for CI/dev (ephemeral, not for production)",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "database": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "default": "service"
+            },
+            "user": {
+              "type": "string",
+              "default": "service"
+            }
+          }
+        },
+        "resources": {
+          "type": "object",
+          "description": "Container resource requests and limits",
+          "properties": {
+            "limits": {
+              "type": "object",
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "description": "CPU limit"
+                },
+                "memory": {
+                  "type": "string",
+                  "description": "Memory limit"
+                }
+              }
+            },
+            "requests": {
+              "type": "object",
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "description": "CPU request"
+                },
+                "memory": {
+                  "type": "string",
+                  "description": "Memory request"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "clusterVersions": {
+      "type": "object",
+      "description": "Seed ClusterVersion records in the fulfillment-service after install",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Run the seed-cluster-versions hook job",
+          "default": false
+        },
+        "versions": {
+          "type": "array",
+          "description": "ClusterVersion records to seed",
+          "items": {
+            "type": "object",
+            "required": ["version", "image"],
+            "properties": {
+              "version": {
+                "type": "string",
+                "description": "SemVer version string (e.g. 4.20.8)"
+              },
+              "image": {
+                "type": "string",
+                "description": "OCI release image pullspec"
+              },
+              "default": {
+                "type": "boolean",
+                "description": "Mark as the default cluster version",
+                "default": false
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

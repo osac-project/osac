@@ -1,0 +1,66 @@
+---
+- block:
+    - name: Set up temporary group name for tests
+      ansible.builtin.set_fact:
+        group_tmp_name: "{{ ec2_group_name }}-numbered-protos"
+
+    - name: Create a group with numbered protocol (GRE)
+      amazon.aws.ec2_security_group:
+        name: "{{ group_tmp_name }}"
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        description: "{{ ec2_group_description }}"
+        rules:
+          - proto: 47
+            to_port: -1
+            from_port: -1
+            cidr_ip: "0.0.0.0/0"
+          - proto: -1
+            ports: -1
+            cidr_ip: "0.0.0.0/0"
+        state: present
+      register: result
+
+    - name: Create a group with a quoted proto
+      amazon.aws.ec2_security_group:
+        name: "{{ group_tmp_name }}"
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        description: "{{ ec2_group_description }}"
+        rules:
+          - proto: "47"
+            to_port: -1
+            from_port: -1
+            cidr_ip: "0.0.0.0/0"
+          - proto: -1
+            ports: -1
+            cidr_ip: "0.0.0.0/0"
+        state: present
+      register: result
+    - ansible.builtin.assert:
+        that:
+          - result is not changed
+    - name: Add a tag with a numeric value
+      amazon.aws.ec2_security_group:
+        name: "{{ group_tmp_name }}"
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        description: "{{ ec2_group_description }}"
+        tags:
+          foo: 1
+    - name: Read a tag with a numeric value
+      amazon.aws.ec2_security_group:
+        name: "{{ group_tmp_name }}"
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        description: "{{ ec2_group_description }}"
+        tags:
+          foo: 1
+      register: result
+    - ansible.builtin.assert:
+        that:
+          - result is not changed
+
+  always:
+    - name: Tidy up egress rule test security group
+      amazon.aws.ec2_security_group:
+        name: "{{ group_tmp_name }}"
+        state: absent
+        vpc_id: "{{ vpc_result.vpc.id }}"
+      ignore_errors: true

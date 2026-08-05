@@ -1,0 +1,29 @@
+- name: Look for floating ip
+  openstack.cloud.floating_ip_info:
+    description: "{{ floating_ip_name }}"
+  register: fips
+
+- name: Destroy floating floating_ip_address
+  when: (fips.floating_ips | length > 0)
+  block:
+  - name: Extract ip address to destroy
+    ansible.builtin.set_fact:
+      destroy_floating_ip: "{{ fips.floating_ips[0].floating_ip_address }}"
+
+  - name: Remove port forwardings  # noqa:no-changed-when
+    ansible.builtin.command: >-
+      openstack esi port forwarding purge {{ destroy_floating_ip }} -f json
+
+  - name: Unset floating ip port  # noqa:no-changed-when
+    ansible.builtin.command: >-
+      openstack floating ip unset --port {{ destroy_floating_ip }}
+    register: floating_ip_unset_result
+    failed_when: >
+        floating_ip_unset_result.rc != 0 and "No FloatingIP found" not in floating_ip_unset_result.stderr
+
+  - name: Delete floating ip  # noqa:no-changed-when
+    ansible.builtin.command: >-
+      openstack floating ip delete {{ destroy_floating_ip }}
+    register: floating_ip_delete_result
+    failed_when: >
+        floating_ip_delete_result.rc != 0 and "No FloatingIP found" not in floating_ip_delete_result.stderr

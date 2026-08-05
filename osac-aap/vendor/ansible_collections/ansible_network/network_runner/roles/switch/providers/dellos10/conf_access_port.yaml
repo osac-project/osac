@@ -1,0 +1,17 @@
+---
+- name: "dellos10: set the switchport mode to access"
+  dellos10_config:
+    lines: "switchport mode access"
+    parents: ["interface {{ port_name }}"]
+
+- name: "dellos10: configure port settings"
+  dellos10_config:
+    lines:
+      - "description {{ port_description }}"
+      - "switchport access vlan {{ _vlan_id }}"
+    parents: ["interface {{ port_name }}"]
+
+- name: "dellos10: administratively enable the port"
+  dellos10_config:
+    lines: "no shutdown"
+    parents: ["interface {{ port_name }}"]

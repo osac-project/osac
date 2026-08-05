@@ -1,0 +1,149 @@
+{{- if .Values.apiToken.create }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "osac-aap.fullname" . }}-create-token
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-aap.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "15"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 5
+  activeDeadlineSeconds: 3600
+  template:
+    metadata:
+      labels:
+        {{- include "osac-aap.labels" . | nindent 8 }}
+    spec:
+      initContainers:
+      - name: wait-for-aap
+        image: {{ .Values.bootstrap.cliImage }}
+        command:
+          - /bin/bash
+          - -c
+          - |
+            echo "Gateway: ${AAP_GATEWAY_HOSTNAME}"
+            echo "Waiting for AAP controller to be ready..."
+            for i in {1..60}; do
+              echo "Attempt $i: Checking AAP controller readiness..."
+              curl -sf --connect-timeout 5 --max-time 15 \
+                http://${AAP_GATEWAY_HOSTNAME}/api/gateway/v1/ping/ \
+                | grep -q 'good';
+              GATEWAY=$?
+
+              curl -sf --connect-timeout 5 --max-time 15 \
+                http://${AAP_CONTROLLER_GATEWAY_HOSTNAME}/api/v2/ping/ \
+                | grep -q 'version';
+              CONTROLLER_GATEWAY=$?
+
+              auth_code=$(curl -s --connect-timeout 5 --max-time 15 \
+                -o /dev/null -w "%{http_code}" -X POST \
+                http://${AAP_GATEWAY_HOSTNAME}/api/gateway/v1/tokens/ \
+                -d "username=admin&password=dummy")
+              [ "$auth_code" != "503" ] && [ "$auth_code" != "000" ];
+              AUTH_UPSTREAM=$?
+
+              if [ $GATEWAY -eq 0 ] && [ $CONTROLLER_GATEWAY -eq 0 ] && [ $AUTH_UPSTREAM -eq 0 ];
+              then
+                echo "AAP controller is ready!"
+                exit 0
+              fi
+              echo "AAP is not ready, waiting 60 seconds..."
+              sleep 60
+            done
+            echo "Timeout waiting for AAP."
+            exit 1
+        env:
+        - name: HOME
+          value: /tmp
+        - name: AAP_GATEWAY_HOSTNAME
+          value: {{ include "osac-aap.gatewayHostname" . | quote }}
+        - name: AAP_CONTROLLER_GATEWAY_HOSTNAME
+          value: {{ include "osac-aap.controllerHostname" . | quote }}
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+      containers:
+      - name: create-token
+        image: {{ .Values.bootstrap.cliImage }}
+        command:
+          - /bin/bash
+          - -c
+          - |
+            set -euo pipefail
+            AAP_PASSWORD=$(cat /var/run/secrets/aap-admin/password)
+            echo "Creating AAP API token..."
+            TOKEN=$(curl -s --connect-timeout 5 --max-time 30 -X POST \
+              -u "admin:${AAP_PASSWORD}" \
+              -H "Content-Type: application/json" \
+              -d '{"description": "osac-operator", "scope": "write"}' \
+              "http://{{ include "osac-aap.gatewayHostname" . }}/api/gateway/v1/tokens/" \
+              | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
+            [[ -n "${TOKEN}" ]] || { echo "ERROR: Token was empty"; exit 1; }
+            echo "Storing token in secret osac-aap-api-token..."
+            cat <<YAML | oc apply -f -
+            apiVersion: v1
+            kind: Secret
+            metadata:
+              name: osac-aap-api-token
+              namespace: {{ .Release.Namespace }}
+            type: Opaque
+            stringData:
+              token: "${TOKEN}"
+            YAML
+            echo "Token created and stored."
+            echo "Restarting operator to pick up new token..."
+            oc rollout restart deploy/osac-operator -n {{ .Release.Namespace }}
+            oc rollout status deploy/osac-operator -n {{ .Release.Namespace }} --timeout=120s
+            echo "Operator restarted."
+            if oc get deploy/bmf-operator-controller-manager -n {{ .Release.Namespace }} &>/dev/null; then
+              echo "Restarting BMF operator to pick up new token..."
+              oc rollout restart deploy/bmf-operator-controller-manager -n {{ .Release.Namespace }}
+              oc rollout status deploy/bmf-operator-controller-manager -n {{ .Release.Namespace }} --timeout=120s
+              echo "BMF operator restarted."
+            fi
+        env:
+        - name: HOME
+          value: /tmp
+        volumeMounts:
+        - name: aap-admin-password
+          mountPath: /var/run/secrets/aap-admin
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+      volumes:
+      - name: aap-admin-password
+        secret:
+          secretName: {{ include "osac-aap.instanceName" . }}-admin-password
+      - name: tmp
+        emptyDir: {}
+      serviceAccountName: {{ .Values.serviceAccounts.osacSa }}
+      restartPolicy: Never
+{{- end }}

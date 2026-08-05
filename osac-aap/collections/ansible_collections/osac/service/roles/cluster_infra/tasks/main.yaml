@@ -1,0 +1,8 @@
+---
+- name: Create (or update) cluster infrastructure
+  when: cluster_infra_state == 'present'
+  ansible.builtin.include_tasks: create.yaml
+
+- name: Destroy cluster infrastructure
+  when: cluster_infra_state == 'absent'
+  ansible.builtin.include_tasks: delete.yaml

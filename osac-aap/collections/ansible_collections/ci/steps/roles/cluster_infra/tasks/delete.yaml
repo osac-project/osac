@@ -1,0 +1,12 @@
+- name: Set skip network flags for CI
+  ansible.builtin.set_fact:
+    manage_agents_skip_network_detach: true
+    manage_agents_skip_network_attach: true
+
+- name: Detach and unlabel agents
+  ansible.builtin.include_role:
+    name: osac.service.manage_agents
+    tasks_from: detach_and_unlabel_all_removed_agents
+  vars:
+    manage_agents_cluster_order_name: "{{ cluster_infra_name }}"
+    manage_agents_idle_agents_network: "unused-in-ci"

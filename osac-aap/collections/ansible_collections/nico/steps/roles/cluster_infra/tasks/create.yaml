@@ -1,0 +1,274 @@
+---
+- name: Show node requests
+  ansible.builtin.debug:
+    var: cluster_infra_node_requests
+
+# =============================================================================
+# NICo authentication
+# =============================================================================
+
+- name: Validate required NICo credentials are configured
+  ansible.builtin.assert:
+    that:
+      - nico_api_url | length > 0
+      - nico_client_id | length > 0
+      - nico_client_secret | length > 0
+      - nico_org | length > 0
+      - nico_tenant_id | length > 0
+      - nico_site_id | length > 0
+      - nico_ssa_token_url | length > 0
+      - nico_ssa_token_url is match('^https://')
+    fail_msg: >
+      NICo credentials not configured or insecure. Ensure cluster-fulfillment-ig Secret
+      contains NVIDIA_BMM_API_URL, NVIDIA_BMM_CLIENT_ID, NVIDIA_BMM_CLIENT_SECRET,
+      NVIDIA_BMM_ORG, NVIDIA_BMM_TENANT_ID, NVIDIA_BMM_SITE_ID, NVIDIA_BMM_SSA_TOKEN_URL.
+      Token URL must use https://.
+
+- name: Exchange client credentials for JWT token
+  ansible.builtin.uri:
+    url: "{{ nico_ssa_token_url }}"
+    method: POST
+    url_username: "{{ nico_client_id }}"
+    url_password: "{{ nico_client_secret }}"
+    force_basic_auth: true
+    body_format: form-urlencoded
+    body:
+      grant_type: client_credentials
+      scope: "{{ nico_oauth_scope | default('') }}"
+    status_code: 200
+  register: nico_token_response
+  no_log: true
+
+- name: Set NICo API token for subsequent requests
+  ansible.builtin.set_fact:
+    nico_api_token: "{{ nico_token_response.json.access_token }}"
+  no_log: true
+
+# =============================================================================
+# Snapshot agents before provisioning
+# =============================================================================
+
+# Snapshot agents that exist BEFORE new instances are created.  After
+# provisioning, new agents will lack clusterdeployment-namespace just like
+# agents that HyperShift detached (scale-down).  By recording which agents
+# existed before, we can tell them apart: agents in the snapshot that later
+# lack clusterdeployment-namespace were detached; agents NOT in the snapshot
+# are newly created and must not be cleaned up.
+- name: Snapshot pre-existing NICo agents
+  kubernetes.core.k8s_info:
+    kind: Agent
+    api_version: agent-install.openshift.io/v1beta1
+    namespace: "{{ default_agent_namespace }}"
+    label_selectors:
+      - "{{ cluster_order_label }}={{ cluster_infra_name }}"
+  register: pre_nico_agents
+
+- name: Store pre-existing agent names
+  ansible.builtin.set_fact:
+    pre_nico_agent_names: >-
+      {{ (pre_nico_agents.resources | default([])) | map(attribute='metadata.name') | list }}
+
+# =============================================================================
+# Create NICo infrastructure (VPC, prefix, peering, instances)
+# =============================================================================
+
+- name: Set NICo infrastructure variables from cluster_infra context
+  ansible.builtin.set_fact:
+    nico_infra_name: "{{ cluster_infra_name }}"
+    nico_infra_namespace: "{{ cluster_working_namespace }}"
+    nico_infra_node_requests: "{{ cluster_infra_node_requests }}"
+    nico_vpc_id: "{{ template_parameters.vpc_id | default('') }}"
+    nico_vpc_prefix_id: "{{ template_parameters.vpc_prefix_id | default('') }}"
+    nico_infra_ip_block_id: "{{ template_parameters.ip_block_id }}"
+    nico_infra_ssh_key_group_id: "{{ template_parameters.ssh_key_group_id | default('') }}"
+
+- name: Create NICo cluster infrastructure
+  ansible.builtin.include_tasks: create_nico_infra.yaml
+
+# Protect all agents matched to desired instances.  This covers:
+# - Initial creation / re-runs: all provisioned agents are protected
+# - Scale-up: new agents not yet claimed by HyperShift are protected
+# - Scale-down: agents for instances we want to KEEP are protected
+# Only agents NOT in this list (labeled for this cluster but not matched
+# to a desired instance) can be treated as "removed."
+- name: Compute protected agent names
+  ansible.builtin.set_fact:
+    nico_protected_agent_names: >-
+      {{ nico_matched_agents | default([]) | map(attribute='agent_name') | list }}
+
+# NICo agents connect via VPC, not ESI L2 network attachment
+- name: Set skip network detach and attach for NICo
+  ansible.builtin.set_fact:
+    manage_agents_skip_network_detach: true
+    manage_agents_skip_network_attach: true
+
+# =============================================================================
+# Scale-down handling
+# =============================================================================
+
+# Handle scale down **before** scale up: if we add new agents first,
+# they may not have spec.clusterDeployment.name set by the time
+# we run detach_and_unlabel_all_removed_agents, causing them to be
+# erroneously detached.
+
+- name: Retrieve all currently allocated node pools
+  kubernetes.core.k8s_info:
+    api_version: hypershift.openshift.io/v1beta1
+    kind: NodePool
+    namespace: "{{ cluster_working_namespace }}"
+  register: current_node_pools
+
+# Scale-down only runs when NodePools already exist.  During initial creation
+# (or re-runs of initial creation), there are no NodePools and nothing to
+# scale down.  Without this guard, agents from a previous failed attempt
+# would appear in both the pre-existing snapshot and the matched list,
+# producing an empty protection list and causing them to be deleted.
+- name: Handle scale-down of existing cluster
+  when: current_node_pools.resources | length > 0
+  block:
+    - name: Set resource classes included in the request
+      ansible.builtin.set_fact:
+        requested_resource_classes: >
+          {{ cluster_infra_node_requests | map(attribute='resourceClass') | list }}
+
+    - name: Determine which resource classes are no longer needed
+      ansible.builtin.set_fact:
+        removed_resource_classes: "{{ removed_resource_classes | default([]) + [item.metadata.labels[agent_resource_class_label]] }}"
+      with_items: "{{ current_node_pools.resources }}"
+      when:
+        - item.metadata.labels is defined
+        - agent_resource_class_label in item.metadata.labels
+        - item.metadata.labels[agent_resource_class_label] not in requested_resource_classes
+
+    - name: Display additional resource classes to be removed
+      ansible.builtin.debug:
+        msg: "The following resource classes are no longer requested: {{ removed_resource_classes | default([]) }}"
+
+    - name: Initialize updated cluster infra node requests that will include removed resource classes
+      ansible.builtin.set_fact:
+        updated_cluster_infra_node_requests: "{{ cluster_infra_node_requests }}"
+
+    - name: Add removed resource classes to updated cluster infra node requests
+      ansible.builtin.set_fact:
+        updated_cluster_infra_node_requests: "{{ updated_cluster_infra_node_requests + [{'numberOfNodes': '0', 'resourceClass': item}] }}"
+      with_items: "{{ removed_resource_classes | default([]) }}"
+
+    - name: Wait for the Agents to be removed from the cluster
+      ansible.builtin.include_role:
+        name: osac.service.manage_agents
+        tasks_from: wait_for_agents_to_be_removed
+      vars:
+        manage_agents_cluster_order_name: "{{ cluster_infra_name }}"
+        manage_agents_desired_count: "{{ item.numberOfNodes | int }}"
+        manage_agents_resource_class: "{{ item.resourceClass }}"
+      loop: "{{ updated_cluster_infra_node_requests }}"
+
+    # Capture instance IDs before detachment removes labels.
+    # Only look for removed agents when the labeled count exceeds the
+    # desired count — otherwise there is nothing to scale down and
+    # unattached agents are simply waiting to be claimed by HyperShift.
+    - name: Count agents labeled for this cluster
+      kubernetes.core.k8s_info:
+        kind: Agent
+        api_version: agent-install.openshift.io/v1beta1
+        namespace: "{{ default_agent_namespace }}"
+        label_selectors:
+          - "{{ cluster_order_label }}={{ cluster_infra_name }}"
+      register: nico_allocated_agents
+
+    - name: Compute total desired node count
+      ansible.builtin.set_fact:
+        nico_total_desired_nodes: "{{ cluster_infra_node_requests | map(attribute='numberOfNodes') | map('int') | sum }}"
+
+    - name: Capture NICo instance IDs from removed agents (before detachment)
+      when: nico_allocated_agents.resources | length > (nico_total_desired_nodes | int)
+      block:
+        - name: Filter agents removed from the cluster (pre-existing agents only)
+          ansible.builtin.set_fact:
+            nico_removed_agents: >-
+              {{ nico_allocated_agents.resources
+                 | json_query('[?metadata.labels."agent-install.openshift.io/clusterdeployment-namespace"==`null` || metadata.labels."agent-install.openshift.io/clusterdeployment-namespace"==``]')
+                 | json_query('[?contains(`' + (pre_nico_agent_names | default([]) | to_json) + '`, metadata.name)]') }}
+
+        - name: Extract instance IDs from removed agents
+          ansible.builtin.set_fact:
+            nico_removed_instance_ids: >-
+              {{
+                nico_removed_agents |
+                selectattr('metadata.labels.nico-instance-id', 'defined') |
+                map(attribute='metadata.labels.nico-instance-id') |
+                list
+              }}
+
+        - name: Extract hostnames for BGPPeer cleanup
+          ansible.builtin.set_fact:
+            nico_removed_agent_hostnames: >-
+              {{
+                nico_removed_agents |
+                selectattr('spec.hostname', 'defined') |
+                map(attribute='spec.hostname') |
+                list
+              }}
+
+        - name: Display scale-down cleanup plan
+          ansible.builtin.debug:
+            msg: "Scale-down cleanup: {{ nico_removed_instance_ids | length }} instances, {{ nico_removed_agent_hostnames | length }} BGPPeers to clean up"
+
+    # Detach removed agents and clean up instances
+    - name: Detach agents from cluster
+      ansible.builtin.include_role:
+        name: osac.service.manage_agents
+        tasks_from: detach_and_unlabel_all_removed_agents
+      vars:
+        manage_agents_cluster_order_name: "{{ cluster_infra_name }}"
+        manage_agents_protected_agents: "{{ nico_protected_agent_names | default([]) }}"
+
+    # NICo agents are ephemeral — delete the Agent CR after detachment
+    # so stale agents don't interfere with future provisioning cycles.
+    - name: Delete removed Agent resources
+      when: nico_removed_agents is defined and nico_removed_agents | length > 0
+      kubernetes.core.k8s:
+        state: absent
+        api_version: agent-install.openshift.io/v1beta1
+        kind: Agent
+        name: "{{ agent.metadata.name }}"
+        namespace: "{{ default_agent_namespace }}"
+      loop: "{{ nico_removed_agents }}"
+      loop_control:
+        loop_var: agent
+        label: "Delete agent {{ agent.metadata.name }}"
+      failed_when: false
+
+    - name: Clean up NICo instances for removed agents
+      when:
+        - nico_removed_instance_ids is defined
+        - nico_removed_instance_ids | length > 0
+      block:
+        - name: Run scale-down cleanup
+          ansible.builtin.include_tasks: scale_down_cleanup.yaml
+      rescue:
+        - name: Log scale-down cleanup failure
+          ansible.builtin.debug:
+            msg: "Scale-down cleanup failed but continuing: {{ ansible_failed_result.msg | default('unknown error') }}"
+
+# =============================================================================
+# Select and attach new agents
+# =============================================================================
+
+- name: Select and label new Agent resources
+  ansible.builtin.include_role:
+    name: osac.service.manage_agents
+    tasks_from: select_and_label_new_agents
+  vars:
+    manage_agents_cluster_order_name: "{{ cluster_infra_name }}"
+    manage_agents_desired_count: "{{ item.numberOfNodes | int }}"
+    manage_agents_resource_class: "{{ item.resourceClass }}"
+  loop: "{{ cluster_infra_node_requests }}"
+
+- name: Attach agents to cluster network and approve them
+  ansible.builtin.include_role:
+    name: osac.service.manage_agents
+    tasks_from: attach_and_approve_all_new_agents
+  vars:
+    manage_agents_cluster_order_name: "{{ cluster_infra_name }}"
+    manage_agents_cluster_network: "{{ cluster_infra_network_name | default('') }}"

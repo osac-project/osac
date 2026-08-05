@@ -1,0 +1,169 @@
+---
+# Create NICo VPC and prefix for cluster network isolation
+
+- name: Set VPC and prefix names
+  ansible.builtin.set_fact:
+    nico_vpc_name: "{{ nico_infra_vpc_name_prefix }}-{{ nico_infra_name }}"
+    nico_prefix_name: "prefix-{{ nico_infra_name }}"
+    nico_use_existing_vpc: "{{ nico_vpc_id | default('') | length > 0 }}"
+    nico_use_existing_prefix: "{{ nico_vpc_prefix_id | default('') | length > 0 }}"
+
+- name: Display VPC configuration
+  ansible.builtin.debug:
+    msg: >
+      VPC mode: {{ 'using existing VPC ' + nico_vpc_id if nico_use_existing_vpc else 'creating new VPC ' + nico_vpc_name }}
+
+# Use existing VPC if ID provided (template_parameters.vpc_id per D-05)
+- name: Use existing VPC
+  when: nico_use_existing_vpc | bool
+  ansible.builtin.set_fact:
+    nico_vpc_id: "{{ nico_vpc_id }}"
+    nico_vpc_created: false
+
+# Create new VPC if not using existing (VPC-01)
+- name: Create VPC for cluster network
+  when: not (nico_use_existing_vpc | bool)
+  block:
+    - name: Create VPC via NICo API
+      nvidia.bare_metal.vpc:
+        state: present
+        name: "{{ nico_vpc_name }}"
+        site_id: "{{ nico_site_id }}"
+        network_virtualization_type: "{{ nico_network_virtualization_type }}"
+        api_url: "{{ nico_api_url }}"
+        api_token: "{{ nico_api_token }}"
+        org: "{{ nico_org }}"
+        api_path_prefix: "{{ nico_api_path_prefix | default('forge') }}"
+      register: cluster_infra_vpc_result
+
+    - name: Store created VPC ID
+      ansible.builtin.set_fact:
+        nico_vpc_id: "{{ cluster_infra_vpc_result.resource.id }}"
+        nico_vpc_created: true
+
+# Use existing prefix if ID provided
+- name: Use existing VPC prefix
+  when: nico_use_existing_prefix | bool
+  ansible.builtin.set_fact:
+    nico_vpc_prefix_id: "{{ nico_vpc_prefix_id }}"
+    nico_prefix_created: false
+
+# Create new VPC prefix if not using existing (VPC-02)
+- name: Create VPC prefix for IP allocation
+  when: not (nico_use_existing_prefix | bool)
+  block:
+    - name: Determine IP block for prefix allocation
+      ansible.builtin.set_fact:
+        cluster_infra_effective_ip_block_id: "{{ nico_infra_ip_block_id | default(nico_default_ip_block_id | default('')) }}"
+
+    - name: Validate IP block ID is available
+      ansible.builtin.assert:
+        that:
+          - cluster_infra_effective_ip_block_id | length > 0
+        fail_msg: "IP block ID required for VPC prefix creation. Set template_parameters.ip_block_id or NVIDIA_BMM_IP_BLOCK_ID env var"
+
+    - name: Create VPC prefix via NICo API
+      nvidia.bare_metal.vpc_prefix:
+        state: present
+        name: "{{ nico_prefix_name }}"
+        vpc_id: "{{ nico_vpc_id }}"
+        ip_block_id: "{{ cluster_infra_effective_ip_block_id }}"
+        prefix_length: "{{ nico_infra_prefix_length | int }}"
+        api_url: "{{ nico_api_url }}"
+        api_token: "{{ nico_api_token }}"
+        org: "{{ nico_org }}"
+        api_path_prefix: "{{ nico_api_path_prefix | default('forge') }}"
+      register: cluster_infra_prefix_result
+
+    - name: Store created VPC prefix ID
+      ansible.builtin.set_fact:
+        nico_vpc_prefix_id: "{{ cluster_infra_prefix_result.resource.id }}"
+        nico_prefix_created: true
+
+- name: Display effective VPC and prefix IDs
+  ansible.builtin.debug:
+    msg: "Using VPC: {{ nico_vpc_id }}, Prefix: {{ nico_vpc_prefix_id }}"
+
+# Create VPC peering with management cluster so nodes can reach the control plane
+- name: Create VPC peering with management cluster
+  when:
+    - nico_mgmt_vpc_id | default('') | length > 0
+    - nico_vpc_id != nico_mgmt_vpc_id
+  nvidia.bare_metal.vpc_peering:
+    state: present
+    vpc1_id: "{{ nico_vpc_id }}"
+    vpc2_id: "{{ nico_mgmt_vpc_id }}"
+    site_id: "{{ nico_site_id }}"
+    wait: true
+    wait_timeout: 300
+    api_url: "{{ nico_api_url }}"
+    api_token: "{{ nico_api_token }}"
+    org: "{{ nico_org }}"
+    api_path_prefix: "{{ nico_api_path_prefix | default('forge') }}"
+  register: nico_vpc_peering_result
+
+- name: Display VPC peering result
+  when: nico_vpc_peering_result is defined and nico_vpc_peering_result is not skipped
+  ansible.builtin.debug:
+    var: nico_vpc_peering_result
+
+- name: Store VPC peering ID
+  when:
+    - nico_vpc_peering_result is defined
+    - nico_vpc_peering_result is not skipped
+    - nico_vpc_peering_result.resource is defined or nico_vpc_peering_result.id is defined
+  ansible.builtin.set_fact:
+    nico_vpc_peering_id: "{{ nico_vpc_peering_result.resource.id | default(nico_vpc_peering_result.id | default('')) }}"
+
+# Persist VPC/prefix state to ConfigMap immediately so deletion can
+# clean up even if instance provisioning or agent registration fails.
+# Read existing ConfigMap first to preserve instance_ids from prior runs.
+- name: Read existing infrastructure ConfigMap
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: ConfigMap
+    name: "nico-infra-{{ nico_infra_name }}"
+    namespace: "{{ nico_infra_configmap_namespace }}"
+  register: existing_nico_configmap
+
+- name: Preserve existing state from ConfigMap
+  when: existing_nico_configmap.resources | length > 0
+  ansible.builtin.set_fact:
+    nico_all_instance_ids: "{{ existing_nico_configmap.resources[0].data.instance_ids | default('[]') | from_json }}"
+    nico_vpc_created: "{{ nico_vpc_created | default(existing_nico_configmap.resources[0].data.vpc_created | default('false')) }}"
+    nico_prefix_created: "{{ nico_prefix_created | default(existing_nico_configmap.resources[0].data.prefix_created | default('false')) }}"
+    nico_vpc_peering_id: "{{ nico_vpc_peering_id | default(existing_nico_configmap.resources[0].data.vpc_peering_id | default('')) }}"
+
+- name: Create or update ConfigMap with VPC and prefix state
+  kubernetes.core.k8s:
+    state: present
+    force: true
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: "nico-infra-{{ nico_infra_name }}"
+        namespace: "{{ nico_infra_configmap_namespace }}"
+        labels:
+          managed-by: osac
+          provider: nico
+          cluster: "{{ nico_infra_name }}"
+      data:
+        vpc_id: "{{ nico_vpc_id }}"
+        vpc_name: "{{ nico_vpc_name }}"
+        vpc_prefix_id: "{{ nico_vpc_prefix_id }}"
+        vpc_created: "{{ nico_vpc_created | default(false) | string }}"
+        prefix_created: "{{ nico_prefix_created | default(false) | string }}"
+        instance_ids: "{{ nico_all_instance_ids | default([]) | to_json }}"
+        vpc_peering_id: "{{ nico_vpc_peering_id | default('') }}"
+        site_id: "{{ nico_site_id }}"
+        tenant_id: "{{ nico_tenant_id }}"
+
+# Instance provisioning (Phase 2)
+- name: Provision NICo instances into cluster VPC
+  ansible.builtin.include_tasks: create_instances.yaml
+  when: nico_infra_node_requests is defined and nico_infra_node_requests | length > 0
+
+- name: NICo infrastructure creation complete
+  ansible.builtin.debug:
+    msg: "NICo infrastructure for {{ nico_infra_name }} has been created successfully"

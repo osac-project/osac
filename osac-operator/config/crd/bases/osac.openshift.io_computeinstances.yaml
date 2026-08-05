@@ -1,0 +1,456 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.0
+  name: computeinstances.osac.openshift.io
+spec:
+  group: osac.openshift.io
+  names:
+    kind: ComputeInstance
+    listKind: ComputeInstanceList
+    plural: computeinstances
+    shortNames:
+    - ci
+    singular: computeinstance
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.templateID
+      name: Template
+      type: string
+    - jsonPath: .spec.cores
+      name: Cores
+      type: integer
+    - jsonPath: .spec.memoryGiB
+      name: Memory
+      type: integer
+    - jsonPath: .spec.guestOSFamily
+      name: OS
+      type: string
+    - jsonPath: .spec.runStrategy
+      name: RunStrategy
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.ipAddress
+      name: IP
+      type: string
+    - jsonPath: .status.externalIPAddress
+      name: ExternalIP
+      priority: 1
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: ComputeInstance is the Schema for the computeinstances API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of ComputeInstance
+            properties:
+              additionalDisks:
+                description: AdditionalDisks are supplementary disks
+                items:
+                  description: DiskSpec defines disk configuration
+                  properties:
+                    sizeGiB:
+                      description: SizeGiB is the size of the disk in gibibytes
+                      format: int32
+                      minimum: 1
+                      type: integer
+                  required:
+                  - sizeGiB
+                  type: object
+                type: array
+                x-kubernetes-validations:
+                - message: additionalDisks is immutable
+                  rule: self == oldSelf
+              bootDisk:
+                description: BootDisk is the primary boot disk
+                properties:
+                  sizeGiB:
+                    description: SizeGiB is the size of the disk in gibibytes
+                    format: int32
+                    minimum: 1
+                    type: integer
+                required:
+                - sizeGiB
+                type: object
+                x-kubernetes-validations:
+                - message: bootDisk is immutable
+                  rule: self == oldSelf
+              cores:
+                description: Cores is the number of CPU cores
+                format: int32
+                maximum: 128
+                minimum: 1
+                type: integer
+                x-kubernetes-validations:
+                - message: cores is immutable
+                  rule: self == oldSelf
+              guestOSFamily:
+                description: |-
+                  GuestOSFamily specifies the guest operating system family for the VM.
+                  To support future OS families, this field is a freeform string.
+                  Currently, any value other than "windows" will be treated as "linux".
+                  This field is immutable after creation.
+                type: string
+                x-kubernetes-validations:
+                - message: guestOSFamily is immutable
+                  rule: self == oldSelf
+              image:
+                description: Image defines the VM image configuration
+                properties:
+                  sourceRef:
+                    description: |-
+                      SourceRef is the OCI image reference for the VM
+                      Example: "quay.io/fedora/fedora-coreos:stable"
+                    minLength: 1
+                    type: string
+                  sourceType:
+                    description: SourceType specifies the type of image source (currently
+                      only "registry" supported)
+                    enum:
+                    - registry
+                    type: string
+                required:
+                - sourceRef
+                - sourceType
+                type: object
+                x-kubernetes-validations:
+                - message: image is immutable
+                  rule: self == oldSelf
+              memoryGiB:
+                description: MemoryGiB is the memory in gibibytes
+                format: int32
+                minimum: 1
+                type: integer
+                x-kubernetes-validations:
+                - message: memoryGiB is immutable
+                  rule: self == oldSelf
+              networkAttachments:
+                description: |-
+                  NetworkAttachments defines multiple NICs when more than one subnet (and optional security groups per NIC) is required.
+                  The first entry is the primary subnet for VM placement (subnet-namespace annotation).
+                  Subnet references (per NetworkAttachment) are immutable but security groups can be changed.
+
+                  Why immutability is required:
+                  Currently, ComputeInstances are created with a single NIC. The VM instance must be created in the namespace
+                  of the subnet it uses (the subnet-namespace annotation determines VM placement). This architectural constraint
+                  means that changing the subnet would require recreating the VM in a different namespace, which is not supported.
+                  Similarly, the array size cannot change because adding/removing NICs would require changing the primary subnet
+                  or the VM's namespace, both of which are immutable after VM creation.
+
+                  Immutability enforcement:
+                  - The +listType=map with +listMapKey=subnetRef markers correlate entries by subnetRef for updates
+                  - The size check below prevents adding or removing entries
+                  - The per-item subnetRef validation (self == oldSelf) prevents changing keys of existing entries
+                  Combined, these ensure only securityGroupRefs can be modified.
+
+                  MaxItems is required for CEL cost budget calculation: NetworkAttachment.SubnetRef has a CEL validation
+                  rule (self == oldSelf for immutability). Without maxItems, Kubernetes cannot bound the cost of iterating
+                  over array items to validate this rule, causing CRD installation to fail with "estimated rule cost exceeds budget".
+                items:
+                  description: 'NetworkAttachment defines one NIC: a Subnet CR on
+                    the hub plus optional SecurityGroup CR names.'
+                  properties:
+                    securityGroupRefs:
+                      description: |-
+                        SecurityGroupRefs lists SecurityGroup CR names in the same namespace as the ComputeInstance.
+                        Mutable - can be changed to add/remove security groups without recreating the VM.
+                      items:
+                        type: string
+                      type: array
+                    subnetRef:
+                      description: SubnetRef is the name of the Subnet CR in the same
+                        namespace as the ComputeInstance.
+                      maxLength: 253
+                      minLength: 1
+                      type: string
+                      x-kubernetes-validations:
+                      - message: subnetRef is immutable
+                        rule: self == oldSelf
+                  required:
+                  - subnetRef
+                  type: object
+                maxItems: 8
+                type: array
+                x-kubernetes-list-map-keys:
+                - subnetRef
+                x-kubernetes-list-type: map
+                x-kubernetes-validations:
+                - message: cannot change or add/remove network attachments after initial
+                    assignment
+                  rule: size(oldSelf) == 0 || (size(self) == size(oldSelf) && self.all(na,
+                    oldSelf.exists(old, old.subnetRef == na.subnetRef)))
+              restartRequestedAt:
+                description: |-
+                  RestartRequestedAt is a timestamp signal to request a VM restart (MUTABLE).
+
+                  Set this field to the current time (usually NOW) to request a restart.
+                  The controller will execute the restart if this timestamp is greater than
+                  status.lastRestartedAt.
+
+                  This is a declarative signal mechanism - the timestamp is a monotonically
+                  increasing value to detect new restart requests, not a scheduled time.
+                  Typically set to the current time for immediate restarts.
+
+                  External schedulers can set this field on a schedule to implement
+                  scheduled maintenance windows if needed.
+                format: date-time
+                type: string
+              runStrategy:
+                description: RunStrategy controls VM running state (MUTABLE)
+                enum:
+                - Always
+                - Halted
+                type: string
+              sshKey:
+                description: SSHKey is the SSH public key
+                type: string
+                x-kubernetes-validations:
+                - message: sshKey is immutable
+                  rule: self == oldSelf
+              templateID:
+                description: TemplateID is the unique identifier of the compute instance
+                  template to use when creating this compute instance
+                pattern: ^[a-zA-Z_][a-zA-Z0-9._]*$
+                type: string
+              templateParameters:
+                description: |-
+                  TemplateParameters allows passing additional template-specific parameters as JSON-encoded key-value pairs.
+                  This complements the explicit fields (cores, memoryGiB, etc.) and is used for:
+                  - Template-specific parameters not covered by explicit fields (e.g., exposed_ports)
+                  - Custom parameters defined by specific templates
+                type: string
+              userDataSecretRef:
+                description: UserDataSecretRef references cloud-init user data
+                properties:
+                  name:
+                    default: ""
+                    description: |-
+                      Name of the referent.
+                      This field is effectively required, but due to backwards compatibility is
+                      allowed to be empty. Instances of this type with an empty value here are
+                      almost certainly wrong.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
+                x-kubernetes-validations:
+                - message: userDataSecretRef is immutable
+                  rule: self == oldSelf
+            required:
+            - bootDisk
+            - cores
+            - image
+            - memoryGiB
+            - runStrategy
+            - templateID
+            type: object
+          status:
+            description: status defines the observed state of ComputeInstance
+            properties:
+              conditions:
+                description: Conditions holds an array of metav1.Condition that describe
+                  the state of the ComputeInstance
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              desiredConfigVersion:
+                description: DesiredConfigVersion is the version (hash) of the desired
+                  configuration of the ComputeInstance
+                type: string
+              externalIPAddress:
+                description: |-
+                  ExternalIPAddress is the external IP address attached to this instance via an ExternalIPAttachment.
+                  Populated when an ExternalIPAttachment in state "Ready" references this ComputeInstance.
+                type: string
+              ipAddress:
+                description: |-
+                  IPAddress is the primary IP address of the running instance, taken from the KubeVirt VirtualMachineInstance.
+                  Populated when the instance is ready (phase Running).
+                type: string
+              lastRestartedAt:
+                description: |-
+                  LastRestartedAt records when the last restart was initiated by the controller.
+
+                  This is set to spec.restartRequestedAt when the controller processes a restart request.
+                  It will be empty if no restart has been performed yet.
+                format: date-time
+                type: string
+              phase:
+                description: Phase provides a single-value overview of the state of
+                  the ComputeInstance
+                enum:
+                - Starting
+                - Running
+                - Failed
+                - Deleting
+                - Stopping
+                - Stopped
+                - Paused
+                type: string
+              provisioningJobs:
+                description: |-
+                  ProvisioningJobs tracks the history of provision and deprovision operations
+                  Ordered chronologically, with latest operations at the end
+                  Limited to the last N jobs (configurable via OSAC_MAX_JOB_HISTORY, default 10)
+                items:
+                  description: JobStatus represents the status of a provisioning or
+                    deprovisioning job
+                  properties:
+                    blockDeletionOnFailure:
+                      description: |-
+                        BlockDeletionOnFailure indicates whether CR deletion should be blocked if this job fails.
+                        AAP sets this to true to prevent orphaned cloud resources when deprovisioning fails.
+                      type: boolean
+                    configVersion:
+                      description: |-
+                        ConfigVersion is the DesiredConfigVersion at the time this job was triggered.
+                        Used to determine retry behavior on failure: if ConfigVersion differs from
+                        the current DesiredConfigVersion, a new job is triggered immediately.
+                        If they match, the controller retries with exponential backoff.
+                      type: string
+                    jobID:
+                      description: JobID is the AAP job identifier from the provisioning
+                        provider API response.
+                      type: string
+                    message:
+                      description: Message provides human-readable status or error
+                        information
+                      type: string
+                    state:
+                      description: State is the current state of the job
+                      enum:
+                      - Pending
+                      - Waiting
+                      - Running
+                      - Succeeded
+                      - Failed
+                      - Canceled
+                      - Unknown
+                      type: string
+                    timestamp:
+                      description: Timestamp when this job was created/triggered
+                      format: date-time
+                      type: string
+                    type:
+                      description: Type indicates the operation type
+                      enum:
+                      - provision
+                      - deprovision
+                      type: string
+                  required:
+                  - jobID
+                  - state
+                  - timestamp
+                  - type
+                  type: object
+                type: array
+              tenantReference:
+                description: Reference to the tenant that contains the ComputeInstance
+                  resources
+                properties:
+                  name:
+                    description: Name of the tenant
+                    type: string
+                  namespace:
+                    description: Namespace of the tenant
+                    type: string
+                required:
+                - name
+                - namespace
+                type: object
+              virtualMachineReference:
+                description: Reference to the KubeVirt VirtualMachine CR created by
+                  this ComputeInstance
+                properties:
+                  kubeVirtVirtualMachineName:
+                    type: string
+                  namespace:
+                    description: Namespace that contains the VirtualMachine resources
+                    type: string
+                required:
+                - kubeVirtVirtualMachineName
+                - namespace
+                type: object
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

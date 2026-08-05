@@ -1,0 +1,54 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.public.v1;
+
+import "google/api/field_behavior.proto";
+import "osac/public/v1/ip_family_type.proto";
+import "osac/public/v1/metadata_type.proto";
+
+// Represents a pool of external IP addresses available for allocation.
+//
+// ExternalIPPools are administrator-managed resources. The public API only surfaces pools that are
+// ready and have available capacity.
+// Tenants use this resource to discover available pools and select one when allocating an ExternalIP.
+message ExternalIPPool {
+  // Unique identifier of the external IP pool.
+  string id = 1;
+
+  // Metadata of the external IP pool, including name, labels, and timestamps.
+  Metadata metadata = 2;
+
+  // Configuration of the external IP pool.
+  ExternalIPPoolSpec spec = 3;
+
+  // Current capacity information for this pool (system-provided, read-only).
+  ExternalIPPoolStatus status = 4;
+}
+
+// Defines the configuration of an ExternalIPPool.
+message ExternalIPPoolSpec {
+  // Fields 1–2 are reserved for internal use.
+  reserved 2;
+
+  // IP address family for this pool. Immutable after creation.
+  IPFamily ip_family = 3 [(google.api.field_behavior) = IMMUTABLE];
+}
+
+// Capacity information for an ExternalIPPool exposed to tenants.
+message ExternalIPPoolStatus {
+  // Number of IP addresses available for new allocations from this pool.
+  int64 available = 6 [(google.api.field_behavior) = OUTPUT_ONLY];
+}

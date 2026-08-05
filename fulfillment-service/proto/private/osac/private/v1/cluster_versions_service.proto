@@ -1,0 +1,116 @@
+//
+// Copyright (c) 2025 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "google/api/annotations.proto";
+import "google/protobuf/field_mask.proto";
+import "osac/private/v1/cluster_version_type.proto";
+
+message ClusterVersionsListRequest {
+  optional int32 offset = 1;
+  optional int32 limit = 2;
+  optional string filter = 3;
+  optional string order = 4;
+}
+
+message ClusterVersionsListResponse {
+  int32 size = 1;
+  int32 total = 2;
+  repeated ClusterVersion items = 3;
+}
+
+message ClusterVersionsGetRequest {
+  string id = 1;
+}
+
+message ClusterVersionsGetResponse {
+  ClusterVersion object = 1;
+}
+
+message ClusterVersionsCreateRequest {
+  ClusterVersion object = 1;
+}
+
+message ClusterVersionsCreateResponse {
+  ClusterVersion object = 1;
+}
+
+message ClusterVersionsUpdateRequest {
+  ClusterVersion object = 1;
+  google.protobuf.FieldMask update_mask = 2;
+
+  // Lock enables optimistic locking. When set to true, the server verifies that the current version of the object
+  // matches the value of the metadata.version field of the submitted object. If they differ the update will be
+  // rejected. This is useful to prevent lost updates when multiple clients are modifying the same object concurrently.
+  bool lock = 3;
+}
+
+message ClusterVersionsUpdateResponse {
+  ClusterVersion object = 1;
+}
+
+message ClusterVersionsDeleteRequest {
+  string id = 1;
+}
+
+message ClusterVersionsDeleteResponse {}
+
+message ClusterVersionsSignalRequest {
+  string id = 1;
+}
+
+message ClusterVersionsSignalResponse {}
+
+service ClusterVersions {
+  // Retrieves the list of cluster versions. Returns active and deprecated versions by default.
+  rpc List(ClusterVersionsListRequest) returns (ClusterVersionsListResponse) {
+    option (google.api.http) = {get: "/api/private/v1/cluster_versions"};
+  }
+
+  // Retrieves the details of one specific cluster version.
+  rpc Get(ClusterVersionsGetRequest) returns (ClusterVersionsGetResponse) {
+    option (google.api.http) = {
+      get: "/api/private/v1/cluster_versions/{id}"
+      response_body: "object"
+    };
+  }
+  // Registers a new OpenShift version in the catalog. Requires `spec.version` and `spec.image`;
+  // `spec.enabled` defaults to true and `spec.state` defaults to ACTIVE.
+  rpc Create(ClusterVersionsCreateRequest) returns (ClusterVersionsCreateResponse) {
+    option (google.api.http) = {
+      post: "/api/private/v1/cluster_versions"
+      body: "object"
+      response_body: "object"
+    };
+  }
+  // Updates a cluster version. Allows modifying lifecycle state, availability, and upgrade constraints. The
+  // `spec.version` and `spec.image` fields are immutable.
+  rpc Update(ClusterVersionsUpdateRequest) returns (ClusterVersionsUpdateResponse) {
+    option (google.api.http) = {
+      patch: "/api/private/v1/cluster_versions/{object.id}"
+      body: "object"
+      response_body: "object"
+    };
+  }
+  // Removes a cluster version from the catalog. Rejected if the version is referenced by active clusters,
+  // templates, or catalog items.
+  rpc Delete(ClusterVersionsDeleteRequest) returns (ClusterVersionsDeleteResponse) {
+    option (google.api.http) = {delete: "/api/private/v1/cluster_versions/{id}"};
+  }
+
+  // Indicates that something changed in the object or the system that may require reconciling the object.
+  rpc Signal(ClusterVersionsSignalRequest) returns (ClusterVersionsSignalResponse) {}
+}

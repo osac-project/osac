@@ -1,0 +1,84 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "osac/private/v1/metadata_type.proto";
+
+// Represents a binding between a role and a set of users.
+//
+// A RoleBinding grants the permissions defined by its referenced role to the users listed in its spec. This is
+// the mechanism by which roles are assigned to users, enabling those users to perform the actions permitted by
+// the role.
+//
+// Users are referenced by their internal User object IDs.
+message RoleBinding {
+  // Unique identifier of the role binding.
+  string id = 1;
+
+  // Metadata of the role binding.
+  Metadata metadata = 2;
+
+  // Desired state of the role binding.
+  RoleBindingSpec spec = 3;
+
+  // Current observed state of the role binding.
+  RoleBindingStatus status = 4;
+}
+
+// Desired state of a role binding.
+message RoleBindingSpec {
+  // Identifier of the role that this binding refers to. This determines which permissions are granted to the
+  // users listed below.
+  string role = 1;
+
+  // Identifiers of the users that are granted the permissions defined by the role. These are user identifiers
+  // (the `id` field of User objects), not usernames or email addresses.
+  //
+  // To grant a role to a user, create a RoleBinding with the desired role and include the user's ID in this list.
+  // To revoke a role from a user, either delete the entire RoleBinding (if the user is the only subject), or
+  // update the RoleBinding to remove the user's ID from this list.
+  repeated string users = 2;
+}
+
+// Current observed state of a role binding, reflecting its synchronization with the underlying authorization system.
+message RoleBindingStatus {
+  // Current synchronization state of the role binding.
+  RoleBindingState state = 1;
+
+  // Human-readable message providing additional details about the current state. For example, if the state is
+  // FAILED, this field may explain why the synchronization with the authorization system failed.
+  optional string message = 2;
+
+  // List of user IDs that have been successfully synced to the authorization system. This tracks which users
+  // currently have the role assigned in Keycloak, allowing the controller to detect when users are added or
+  // removed from the binding.
+  repeated string users = 3;
+}
+
+// Synchronization states for RoleBinding objects with the underlying authorization system.
+enum RoleBindingState {
+  // State is unknown or has not been determined yet.
+  ROLE_BINDING_STATE_UNSPECIFIED = 0;
+
+  // The role binding is being applied to the underlying authorization system and is not yet effective.
+  ROLE_BINDING_STATE_PENDING = 1;
+
+  // The role binding is fully synchronized with the underlying authorization system and is effective.
+  ROLE_BINDING_STATE_READY = 2;
+
+  // The role binding failed to be applied to the underlying authorization system.
+  ROLE_BINDING_STATE_FAILED = 3;
+}

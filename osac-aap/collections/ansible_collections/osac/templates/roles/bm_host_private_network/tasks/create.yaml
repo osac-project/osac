@@ -1,0 +1,39 @@
+---
+- name: Fail if host class is not openstack
+  ansible.builtin.fail:
+    msg: "bm_host_private_network requires hostClass 'openstack', got '{{ bare_metal_instance.spec.hostClass | default('') }}'"
+  when: bare_metal_instance.spec.hostClass | default('') != "openstack"
+
+- name: Fail if network class is not openstack
+  ansible.builtin.fail:
+    msg: "bm_host_private_network requires networkClass 'openstack', got '{{ bare_metal_instance.spec.networkClass | default('') }}'"
+  when: bare_metal_instance.spec.networkClass | default('') != "openstack"
+
+- name: Parse template parameters
+  ansible.builtin.set_fact:
+    template_params: "{{ bare_metal_instance.spec.templateParameters | from_json }}"
+
+- name: Fail if privateNetwork is missing
+  ansible.builtin.fail:
+    msg: "templateParameters.privateNetwork is required"
+  when: template_params.privateNetwork | default('') | length == 0
+
+- name: Wait for private network to exist in OpenStack
+  openstack.cloud.networks_info:
+    name: "{{ template_params.privateNetwork }}"
+  register: private_network_check
+  until: private_network_check.networks | length > 0
+  retries: 30
+  delay: 10
+
+- name: Attach node to private network
+  ansible.builtin.include_role:
+    name: osac.esi.l2
+    tasks_from: set_networks_for_node
+  vars:
+    node: "{{ bare_metal_instance.spec.externalHostID }}"
+    networks: "{{ [template_params.privateNetwork] }}"
+
+- name: Network attachment completed
+  ansible.builtin.debug:
+    msg: "Node {{ bare_metal_instance.spec.externalHostID }} attached to network {{ template_params.privateNetwork }}"

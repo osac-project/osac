@@ -1,0 +1,66 @@
+variant: kind
+debug: false
+
+externalHostname: fulfillment-api.osac.svc.cluster.local
+internalHostname: fulfillment-internal-api.osac.svc.cluster.local
+
+log:
+  level: debug
+  headers: false
+  bodies: false
+
+images:
+  service: ghcr.io/osac-project/fulfillment-service:latest
+
+certs:
+  issuerRef:
+    kind: ClusterIssuer
+    name: default-ca
+  caBundle:
+    configMap: ca-bundle
+
+auth:
+  issuerUrl: https://keycloak.osac.localhost:8443/realms/osac
+  emergencyServiceAccounts:
+    - admin
+    - osac-operator
+    - osac-operator-controller-manager
+  controllerCredentials:
+    - secret:
+        name: fulfillment-controller-credentials
+        items:
+          - key: client-id
+            param: client-id
+          - key: client-secret
+            param: client-secret
+
+database:
+  connection:
+    - configMap:
+        name: fulfillment-database-config
+        items:
+          - key: url
+            param: url
+          - key: sslmode
+            param: sslmode
+    - secret:
+        name: fulfillment-database-client-cert
+        items:
+          - key: tls.crt
+            param: sslcert
+          - key: tls.key
+            param: sslkey
+          - key: ca.crt
+            param: sslrootcert
+
+idp:
+  provider: keycloak
+  url: https://keycloak.osac.localhost:8443
+  credentials:
+    - secret:
+        name: fulfillment-controller-credentials
+        items:
+          - key: client-id
+            param: client-id
+          - key: client-secret
+            param: client-secret

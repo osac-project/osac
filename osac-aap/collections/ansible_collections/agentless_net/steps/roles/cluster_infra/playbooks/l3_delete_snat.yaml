@@ -1,0 +1,9 @@
+---
+- name: Remove SNAT rules for tenant
+  hosts: net_nodes
+  gather_facts: false
+  tasks:
+    - name: Delete SNAT
+      ansible.builtin.include_role:
+        name: agentless_net.l3.snat
+        tasks_from: delete

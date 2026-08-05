@@ -1,0 +1,7 @@
+title: ComputeInstance with NVIDIA GB100 GPU
+description: >
+  ComputeInstance template with NVIDIA GB100 GPU passthrough. Extends the
+  base ocp_virt_vm template by configuring host-device passthrough for the
+  GB100 accelerator.
+
+template_type: compute_instance

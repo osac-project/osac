@@ -1,0 +1,27 @@
+---
+- name: "ClusterWorkingNamespace - Test not found (should fail)"
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+
+  tasks:
+    - name: Run not-found failure test
+      block:
+        - name: Run role with nonexistent order name
+          ansible.builtin.include_role:
+            name: osac.service.cluster_working_namespace
+          vars:
+            cluster_working_namespace_cluster_order_name: "nonexistent-order"
+
+        - name: This should not be reached
+          ansible.builtin.fail:
+            msg: "Role did not fail when namespace was not found"
+
+      rescue:
+        - name: Verify role failed with expected message
+          ansible.builtin.assert:
+            that:
+              - "'Working cluster namespace was not found' in ansible_failed_result.msg"
+            fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg }}"
+            success_msg: "Not found failure: passed"

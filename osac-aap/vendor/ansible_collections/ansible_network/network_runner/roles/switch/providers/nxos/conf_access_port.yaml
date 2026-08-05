@@ -1,0 +1,68 @@
+---
+- name: "nxos: get current status of the port"
+  nxos_command:
+    commands:
+      - "show interface {{ port_name }} switchport | json"
+      - "show interface {{ port_name }} | json"
+      - "show running-config"
+  register: output
+  connection: network_cli
+
+- name: "nxos: set port facts"
+  set_fact:
+    switchport: "{{ output.stdout[0].TABLE_interface.ROW_interface }}"
+    interface: "{{ output.stdout[1].TABLE_interface.ROW_interface }}"
+
+- name: "nxos: port is configured as routed"
+  block:
+    - name: "nxos: reset interface to defaults"
+      nxos_config:
+        lines: "default interface {{ port_name }}"
+      connection: network_cli
+
+    - name: "nxos: build port configuration"
+      nxos_config:
+        lines:
+          - "description {{ port_description }}"
+          - "switchport"
+          - "switchport access vlan {{ _vlan_id }}"
+          - "no shutdown"
+        parents: ["interface {{ port_name }}"]
+        running_config: "{{ output.stdout[2] }}"
+      connection: network_cli
+  when: switchport.switchport == 'Disabled'
+
+- name: "nxos: port is configured as switchport"
+  block:
+    - name: "nxos: set the switchport mode to access"
+      nxos_config:
+        lines: "switchport mode access"
+        parents: ["interface {{ port_name }}"]
+      when: switchport.oper_mode != 'access'
+      connection: network_cli
+
+    - name: "nxos: configure port settings"
+      nxos_config:
+        lines:
+          - "description {{ port_description }}"
+          - "switchport access vlan {{ _vlan_id }}"
+        parents: ["interface {{ port_name }}"]
+        running_config: "{{ output.stdout[2] }}"
+      connection: network_cli
+
+    - name: "nxos: enable STP edge"
+      nxos_config:
+        lines:
+          - "spanning-tree port type edge"
+        parents: ["interface {{ port_name }}"]
+        running_config: "{{ output.stdout[2] }}"
+      when: stp_edge
+      connection: network_cli
+
+    - name: "nxos: administratively enable the port"
+      nxos_config:
+        lines: "no shutdown"
+        parents: ["interface {{ port_name }}"]
+      when: interface.admin_state == 'down'
+      connection: network_cli
+  when: switchport.switchport == 'Enabled'

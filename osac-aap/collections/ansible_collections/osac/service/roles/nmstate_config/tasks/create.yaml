@@ -1,0 +1,56 @@
+---
+- name: Parse gateway CIDR
+  ansible.builtin.set_fact:
+    _nmstate_gateway_ip: "{{ nmstate_config_gateway_cidr | ansible.utils.ipaddr('address') }}"
+    _nmstate_prefix: "{{ nmstate_config_gateway_cidr | ansible.utils.ipaddr('prefix') }}"
+
+- name: List existing NMStateConfig CRs for this cluster
+  kubernetes.core.k8s_info:
+    api_version: agent-install.openshift.io/v1beta1
+    kind: NMStateConfig
+    namespace: "{{ nmstate_config_namespace }}"
+    label_selectors:
+      - "{{ cluster_order_label }}={{ nmstate_config_cluster_name }}"
+  register: _nmstate_existing_crs
+
+- name: Build IP offset map from existing NMStateConfig annotations
+  ansible.builtin.set_fact:
+    _nmstate_offset_map: >-
+      {%- set result = {} -%}
+      {%- for cr in _nmstate_existing_crs.resources -%}
+        {%- if cr.metadata.annotations is defined and 'osac.openshift.io/ip-offset' in cr.metadata.annotations -%}
+          {%- set agent_name = cr.metadata.name | regex_replace('^' ~ nmstate_config_cluster_name ~ '-', '') -%}
+          {%- set _ = result.update({agent_name: cr.metadata.annotations['osac.openshift.io/ip-offset'] | int}) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ result }}
+
+- name: Sort agents by name for deterministic ordering of new assignments
+  ansible.builtin.set_fact:
+    _nmstate_sorted_agents: "{{ nmstate_config_agents | sort(attribute='metadata.name') }}"
+
+- name: Compute stable IP offset for each agent
+  ansible.builtin.set_fact:
+    _nmstate_agent_assignments: >-
+      {%- set counter = {'next': nmstate_config_ip_offset} -%}
+      {%- for offset in _nmstate_offset_map.values() -%}
+        {%- if offset >= counter.next -%}
+          {%- set _ = counter.update({'next': offset + 1}) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {%- set assignments = [] -%}
+      {%- for agent in _nmstate_sorted_agents -%}
+        {%- if agent.metadata.name in _nmstate_offset_map -%}
+          {%- set _ = assignments.append({'agent': agent, 'offset': _nmstate_offset_map[agent.metadata.name]}) -%}
+        {%- else -%}
+          {%- set _ = assignments.append({'agent': agent, 'offset': counter.next}) -%}
+          {%- set _ = counter.update({'next': counter.next + 1}) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ assignments }}
+
+- name: Create NMStateConfig for each agent
+  ansible.builtin.include_tasks: create_single.yaml
+  loop: "{{ _nmstate_agent_assignments }}"
+  loop_control:
+    loop_var: _nmstate_assignment

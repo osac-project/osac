@@ -1,0 +1,19 @@
+---
+# Sample extra vars for local testing of BCM agent import.
+#
+# Usage:
+#   ansible-playbook playbook_osac_import_bcm_agents.yml \
+#     -e @samples/import_bcm_agents_extra_vars.yml
+
+bcm_api_url: "https://bcm-head:8081"
+bcm_cert_path: "/path/to/client-cert.pem"
+bcm_key_path: "/path/to/client-key.pem"
+
+# Override default namespaces for local testing
+bcm_agent_namespace: "hardware-inventory"
+bcm_infraenv_name: "infraenv"
+bcm_pull_secret_name: "pull-secret"
+
+# Uncomment for lab/debug environments with self-signed certificates:
+# bcm_validate_certs: false
+# bcm_disable_bmc_cert_verification: true

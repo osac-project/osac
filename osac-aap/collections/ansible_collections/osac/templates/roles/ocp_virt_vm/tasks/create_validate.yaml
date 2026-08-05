@@ -1,0 +1,119 @@
+---
+- name: Merge template defaults into template_parameters
+  ansible.builtin.set_fact:
+    params: "{{ default_arg_specs | combine(template_parameters | default({})) }}"
+
+- name: Require spec.cores and spec.memoryGiB from resolved instance_type
+  ansible.builtin.assert:
+    that:
+      - compute_instance.spec.cores is defined
+      - compute_instance.spec.memoryGiB is defined
+    fail_msg: >-
+      ComputeInstance must have spec.cores and spec.memoryGiB set.
+      These are resolved by osac-operator from spec.instanceType — ensure the
+      ComputeInstance (or its template) specifies a valid instance_type.
+
+- name: Extract VM configuration from ComputeInstance spec
+  ansible.builtin.set_fact:
+    vm_cpu_cores: "{{ compute_instance.spec.cores | int }}"
+    vm_memory: "{{ compute_instance.spec.memoryGiB | string + 'Gi' }}"
+    vm_boot_disk_size: "{{ (compute_instance.spec.bootDisk.sizeGiB | default(default_spec.bootDisk.sizeGiB)) | string + 'Gi' }}"
+    vm_image_source: "{{ compute_instance.spec.image.sourceRef | default(default_spec.image.sourceRef) }}"
+    vm_run_strategy: "{{ compute_instance.spec.runStrategy | default(default_spec.runStrategy) }}"
+    vm_ssh_key: "{{ compute_instance.spec.sshKey | default('') }}"
+    vm_user_data_secret_ref: "{{ (compute_instance.spec.userDataSecretRef | default({})).name | default('') }}"
+    vm_additional_disks: "{{ compute_instance.spec.additionalDisks | default([]) }}"
+    vm_security_groups: >-
+      {{
+        compute_instance.spec.networkAttachments
+        | default([])
+        | map(attribute='securityGroupRefs', default=[])
+        | flatten
+      }}
+
+- name: Require explicit Windows container disk (no vendor default image)
+  ansible.builtin.assert:
+    that:
+      - (vm_image_source | default('') | string | length) > 0
+    fail_msg: >-
+      Windows guests require spec.image.sourceRef on the ComputeInstance (or override role defaults).
+      Microsoft does not ship an official KubeVirt container disk for Windows; use a Windows image
+      from your own registry (for example a golden image built for your environment).
+  when: guest_os_family == 'windows'
+
+- name: Require vm_sysprep_admin_password when sysprep is enabled (Windows)
+  ansible.builtin.assert:
+    that:
+      - vm_sysprep_admin_password | length >= 8
+    fail_msg: >-
+      vm_sysprep_admin_password must be set to a value of at least 8 characters
+      when guest_os_family is 'windows' and vm_enable_sysprep is true.
+      No default password is provided — the caller must supply one.
+  when:
+    - guest_os_family == 'windows'
+    - vm_enable_sysprep | bool
+
+- name: Extract VM hostname from ComputeInstance metadata (Windows NetBIOS limit)
+  ansible.builtin.set_fact:
+    vm_hostname: "{{ compute_instance.metadata.name[:15] }}"
+  when: guest_os_family == 'windows'
+
+- name: Log hostname truncation warning (Windows)
+  ansible.builtin.debug:
+    msg: "WARNING: ComputeInstance name '{{ compute_instance.metadata.name }}' truncated to '{{ vm_hostname }}' for Windows hostname (15 char limit)"
+  when:
+    - guest_os_family == 'windows'
+    - compute_instance.metadata.name | length > 15
+
+- name: Validate exposed_ports format
+  ansible.builtin.assert:
+    that:
+      - params.exposed_ports is match('^([0-9]+/(tcp|udp))(,[0-9]+/(tcp|udp))*$')
+    fail_msg: >-
+      exposed_ports must be in format 'port/protocol' (e.g., '22/tcp,80/tcp' or '3389/tcp')
+      where protocol is 'tcp' or 'udp'
+
+- name: Validate port numbers are in valid range
+  ansible.builtin.assert:
+    that:
+      - item.split('/')[0] | int > 0
+      - item.split('/')[0] | int <= 65535
+    fail_msg: "Port {{ item.split('/')[0] }} is invalid. Ports must be between 1-65535"
+  loop: "{{ params.exposed_ports.split(',') }}"
+  loop_control:
+    label: "{{ item.split('/')[0] }}"
+
+- name: Initialize security group labels accumulator
+  ansible.builtin.set_fact:
+    vm_sg_labels: {}
+
+- name: Build per-SG pod labels for VM
+  ansible.builtin.set_fact:
+    vm_sg_labels: "{{ vm_sg_labels | combine({'osac.openshift.io/' ~ item: ''}) }}"
+  loop: "{{ vm_security_groups }}"
+
+- name: Merge security group labels into default VM labels
+  ansible.builtin.set_fact:
+    default_vm_labels: "{{ default_vm_labels | combine(vm_sg_labels) }}"
+
+- name: Extract primary subnet reference
+  ansible.builtin.set_fact:
+    vm_subnet_ref: >-
+      {{
+        (
+          compute_instance.spec.networkAttachments
+          | default([])
+          | first
+          | default({})
+        ).subnetRef
+        | default('')
+      }}
+
+- name: Require networkAttachments with subnetRef
+  ansible.builtin.assert:
+    that:
+      - vm_subnet_ref | length > 0
+    fail_msg: >-
+      ComputeInstance must have spec.networkAttachments[0].subnetRef set.
+      This identifies the subnet namespace where the VM will be created.
+      Ensure the ComputeInstance references a Subnet.

@@ -1,0 +1,98 @@
+//
+// Copyright (c) 2025 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.public.v1;
+
+import "google/api/annotations.proto";
+import "google/protobuf/field_mask.proto";
+import "osac/public/v1/baremetal_instance_type.proto";
+
+message BareMetalInstancesListRequest {
+  optional int32 offset = 1;
+  optional int32 limit = 2;
+  optional string filter = 3;
+  optional string order = 4;
+}
+
+message BareMetalInstancesListResponse {
+  int32 size = 1;
+  int32 total = 2;
+  repeated BareMetalInstance items = 3;
+}
+
+message BareMetalInstancesGetRequest {
+  string id = 1;
+}
+
+message BareMetalInstancesGetResponse {
+  BareMetalInstance object = 1;
+}
+
+message BareMetalInstancesCreateRequest {
+  BareMetalInstance object = 1;
+}
+
+message BareMetalInstancesCreateResponse {
+  BareMetalInstance object = 1;
+}
+
+message BareMetalInstancesUpdateRequest {
+  BareMetalInstance object = 1;
+  google.protobuf.FieldMask update_mask = 2;
+
+  // Lock enables optimistic locking. When set to true, the server verifies that the current version of the object
+  // matches the value of the metadata.version field of the submitted object. If they differ the update will be
+  // rejected.
+  bool lock = 3;
+}
+
+message BareMetalInstancesUpdateResponse {
+  BareMetalInstance object = 1;
+}
+
+message BareMetalInstancesDeleteRequest {
+  string id = 1;
+}
+
+message BareMetalInstancesDeleteResponse {}
+
+service BareMetalInstances {
+  rpc List(BareMetalInstancesListRequest) returns (BareMetalInstancesListResponse) {
+    option (google.api.http) = {get: "/api/fulfillment/v1/baremetal_instances"};
+  }
+  rpc Get(BareMetalInstancesGetRequest) returns (BareMetalInstancesGetResponse) {
+    option (google.api.http) = {
+      get: "/api/fulfillment/v1/baremetal_instances/{id}"
+      response_body: "object"
+    };
+  }
+  rpc Create(BareMetalInstancesCreateRequest) returns (BareMetalInstancesCreateResponse) {
+    option (google.api.http) = {
+      post: "/api/fulfillment/v1/baremetal_instances"
+      body: "object"
+      response_body: "object"
+    };
+  }
+  rpc Update(BareMetalInstancesUpdateRequest) returns (BareMetalInstancesUpdateResponse) {
+    option (google.api.http) = {
+      patch: "/api/fulfillment/v1/baremetal_instances/{object.id}"
+      body: "object"
+      response_body: "object"
+    };
+  }
+  rpc Delete(BareMetalInstancesDeleteRequest) returns (BareMetalInstancesDeleteResponse) {
+    option (google.api.http) = {delete: "/api/fulfillment/v1/baremetal_instances/{id}"};
+  }
+}

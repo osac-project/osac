@@ -1,0 +1,50 @@
+#
+# Copyright (c) 2026 Red Hat Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+# the License. You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+# specific language governing permissions and limitations under the License.
+#
+
+# Certificate configuration:
+certs:
+
+  # This defines the cert-manager issuer that will be used for the certificates used by the database. The default is to
+  # use a cluster wide issuer, but there is no default value for the name, so it must be set.
+  issuerRef:
+    kind: ClusterIssuer
+    name:
+
+  # This defines the trusted CA certificates bundle used to verify client certificates. It must be the name of a
+  # ConfigMap in the release namespace that contains trusted CA certificates in PEM format under the key `bundle.pem`.
+  # If not set, the CA from the server certificate secret is used instead.
+  caBundle:
+    configMap:
+
+# Image configuration:
+images:
+  postgres: quay.io/sclorg/postgresql-18-c10s@sha256:6be2c9d855f06fb665257a6b0911676a38d740be7022cc61acee1c99a832b1b2
+
+# List of databases and users to create. The default is an empty list, which means only the PostgreSQL server itself
+# is deployed without any application databases.
+#
+# Each entry must have a `name` (the database name) and a `user` (the PostgreSQL user that will own the database). A
+# separate cert-manager Certificate is created for each user, with the secret named `postgres-client-cert-<user>`.
+#
+# Each entry may optionally include a `password` field. If omitted or empty, the user will only be able to
+# authenticate using client certificates. If set, password-based authentication will also be available.
+#
+# For example, to create databases for Keycloak and the fulfillment service:
+#
+#   databases:
+#   - name: keycloak
+#     user: keycloak
+#   - name: service
+#     user: service
+#
+databases: []

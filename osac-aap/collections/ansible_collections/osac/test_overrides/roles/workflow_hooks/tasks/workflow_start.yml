@@ -1,0 +1,6 @@
+---
+- name: Log workflow start hook execution
+  ansible.builtin.lineinfile:
+    path: /tmp/osac_test_overrides.log
+    line: "{{ ansible_date_time.iso8601 }} | workflow_start | {{ workflow_name | default('unknown') }}"
+    create: true

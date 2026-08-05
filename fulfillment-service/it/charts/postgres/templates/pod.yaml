@@ -1,0 +1,82 @@
+{{/*
+Copyright (c) 2026 Red Hat Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+the License. You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+*/}}
+
+apiVersion: v1
+kind: Pod
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: postgres
+  labels:
+    app: postgres
+spec:
+  volumes:
+  - name: server-cert
+    secret:
+      secretName: postgres-server-cert
+      defaultMode: 0440
+  - name: config
+    configMap:
+      name: postgres-config
+  {{ if .Values.certs.caBundle.configMap }}
+  - name: ca-bundle
+    configMap:
+      name: {{ .Values.certs.caBundle.configMap }}
+  {{ end }}
+  - name: init
+    secret:
+      secretName: postgres-init
+  - name: data
+    emptyDir: {}
+  containers:
+  - name: server
+    image: "{{ .Values.images.postgres }}"
+    imagePullPolicy: IfNotPresent
+    env:
+    - name: POSTGRESQL_USER
+      value: "default"
+    - name: POSTGRESQL_PASSWORD
+      value: ""
+    - name: POSTGRESQL_DATABASE
+      value: "default"
+    volumeMounts:
+    - name: data
+      mountPath: /var/lib/pgsql/data
+    - name: server-cert
+      mountPath: /secrets/cert
+    {{ if .Values.certs.caBundle.configMap }}
+    - name: ca-bundle
+      mountPath: /config/ca
+    {{ end }}
+    - name: config
+      mountPath: /opt/app-root/src/postgresql-cfg/server.conf
+      subPath: server.conf
+    - name: config
+      mountPath: /config/access/access.conf
+      subPath: access.conf
+    - name: init
+      mountPath: /opt/app-root/src/postgresql-init/init.sh
+      subPath: init.sh
+    ports:
+    - name: postgres
+      protocol: TCP
+      containerPort: 5432
+    livenessProbe:
+      tcpSocket:
+        port: postgres
+      initialDelaySeconds: 10
+      periodSeconds: 10
+    readinessProbe:
+      tcpSocket:
+        port: postgres
+      initialDelaySeconds: 5
+      periodSeconds: 5

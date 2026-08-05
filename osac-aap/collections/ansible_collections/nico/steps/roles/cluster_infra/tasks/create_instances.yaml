@@ -1,0 +1,255 @@
+---
+# Provision NICo instances into cluster VPC with iPXE boot from InfraEnv
+# This file handles instance creation, MAC-based agent matching, and labeling
+
+# Fetch InfraEnv to get the iPXE boot script for the instances
+- name: Wait for InfraEnv to be ready and get iPXE script
+  block:
+    - name: Display InfraEnv lookup parameters
+      ansible.builtin.debug:
+        msg: "Looking for InfraEnv '{{ nico_infra_infraenv_name }}' in namespace '{{ nico_infra_infraenv_namespace }}'"
+
+    - name: Wait for InfraEnv resource to exist
+      kubernetes.core.k8s_info:
+        api_version: agent-install.openshift.io/v1beta1
+        kind: InfraEnv
+        namespace: "{{ nico_infra_infraenv_namespace }}"
+        name: "{{ nico_infra_infraenv_name }}"
+      register: infraenv_result
+      until:
+        - infraenv_result.resources | length > 0
+        - infraenv_result.resources[0].status is defined
+        - infraenv_result.resources[0].status.bootArtifacts is defined
+        - infraenv_result.resources[0].status.bootArtifacts.ipxeScript is defined
+      retries: "{{ nico_infra_infraenv_retries }}"
+      delay: "{{ nico_infra_infraenv_delay }}"
+
+    - name: Extract iPXE script URL from InfraEnv
+      ansible.builtin.set_fact:
+        nico_ipxe_script_url: "{{ infraenv_result.resources[0].status.bootArtifacts.ipxeScript }}"
+
+    - name: Display iPXE script URL
+      ansible.builtin.debug:
+        msg: "InfraEnv iPXE script URL: {{ nico_ipxe_script_url }}"
+
+    - name: Fetch iPXE script content from URL
+      ansible.builtin.uri:
+        url: "{{ nico_ipxe_script_url }}"
+        method: GET
+        return_content: true
+        validate_certs: "{{ nico_infra_validate_certs }}"
+      register: ipxe_script_response
+
+    - name: Store raw iPXE script content
+      ansible.builtin.set_fact:
+        nico_ipxe_script_raw: "{{ ipxe_script_response.content }}"
+
+    # Used mainly for debugging purposes in environments where we cannot control DNS
+    - name: Prepend DNS server configuration to iPXE script
+      ansible.builtin.set_fact:
+        nico_ipxe_script: >-
+          {{ nico_ipxe_script_raw | regex_replace('^(#!ipxe\n)', '\1set dns ' + nico_infra_ipxe_dns_server + '\n') }}
+      when: nico_infra_ipxe_dns_server is defined and nico_infra_ipxe_dns_server | length > 0
+
+    - name: Use iPXE script without DNS modification
+      ansible.builtin.set_fact:
+        nico_ipxe_script: "{{ nico_ipxe_script_raw }}"
+      when: nico_infra_ipxe_dns_server is not defined or nico_infra_ipxe_dns_server | length == 0
+
+    - name: Display iPXE script (first 200 chars)
+      ansible.builtin.debug:
+        msg: "iPXE script content (truncated): {{ nico_ipxe_script[:200] }}..."
+
+- name: Reset instance ID list (NICo API is source of truth, not ConfigMap)
+  ansible.builtin.set_fact:
+    nico_all_instance_ids: []
+
+- name: Calculate total instance count
+  ansible.builtin.set_fact:
+    cluster_infra_total_instances: "{{ nico_infra_node_requests | map(attribute='numberOfNodes') | map('int') | sum }}"
+
+- name: Display instance provisioning plan
+  ansible.builtin.debug:
+    msg: "Will provision {{ cluster_infra_total_instances }} total instances across {{ nico_infra_node_requests | length }} resource class(es)"
+
+# Process each resource class request
+- name: Provision instances for each resource class
+  ansible.builtin.include_tasks: create_instances_for_resource_class.yaml
+  loop: "{{ nico_infra_node_requests }}"
+  loop_control:
+    loop_var: node_request
+    label: "{{ node_request.resourceClass }}: {{ node_request.numberOfNodes }} nodes"
+
+- name: Collect all provisioned instance IDs
+  ansible.builtin.set_fact:
+    nico_all_instance_ids: "{{ nico_all_instance_ids | default([]) }}"
+
+- name: Display provisioned instances
+  ansible.builtin.debug:
+    msg: "Successfully provisioned {{ nico_all_instance_ids | length }} instances"
+
+# Persist instance IDs to ConfigMap immediately so they can be cleaned up
+# on deletion even if agent registration fails below.
+- name: Update ConfigMap with instance IDs
+  kubernetes.core.k8s:
+    state: present
+    force: true
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: "nico-infra-{{ nico_infra_name }}"
+        namespace: "{{ nico_infra_configmap_namespace }}"
+        labels:
+          managed-by: osac
+          provider: nico
+          cluster: "{{ nico_infra_name }}"
+      data:
+        vpc_id: "{{ nico_vpc_id }}"
+        vpc_name: "{{ nico_vpc_name }}"
+        vpc_prefix_id: "{{ nico_vpc_prefix_id }}"
+        vpc_created: "{{ nico_vpc_created | default(false) | string }}"
+        prefix_created: "{{ nico_prefix_created | default(false) | string }}"
+        instance_ids: "{{ nico_all_instance_ids | default([]) | to_json }}"
+        vpc_peering_id: "{{ nico_vpc_peering_id | default('') }}"
+        site_id: "{{ nico_site_id }}"
+        tenant_id: "{{ nico_tenant_id }}"
+
+# Fetch instance details to get MAC addresses for agent matching
+- name: Fetch instance details for MAC addresses
+  nvidia.bare_metal.instance_info:
+    id: "{{ instance_id }}"
+    api_url: "{{ nico_api_url }}"
+    api_token: "{{ nico_api_token }}"
+    org: "{{ nico_org }}"
+    api_path_prefix: "{{ nico_api_path_prefix | default('forge') }}"
+  loop: "{{ nico_all_instance_ids }}"
+  loop_control:
+    loop_var: instance_id
+    label: "{{ instance_id }}"
+  register: cluster_infra_instance_details
+
+- name: Initialize MAC to instance mapping
+  ansible.builtin.set_fact:
+    cluster_infra_mac_to_instance: {}
+
+- name: Build MAC to instance mapping
+  ansible.builtin.set_fact:
+    cluster_infra_mac_to_instance: >-
+      {{
+        cluster_infra_mac_to_instance |
+        combine({(item.resource.interfaces[0].mac_address | default('')) | lower: {
+          'instance_id': item.resource.id,
+          'instance_name': item.resource.name,
+          'resource_class': item.resource.labels.resource_class | default('')
+        }})
+      }}
+  loop: "{{ cluster_infra_instance_details.results }}"
+  loop_control:
+    label: "{{ item.resource.name | default(item.resource.id | default('unknown')) }}"
+  when:
+    - item.resource.interfaces is defined
+    - item.resource.interfaces | length > 0
+    - item.resource.interfaces[0].mac_address is defined
+
+- name: Display MAC to instance mapping
+  ansible.builtin.debug:
+    var: cluster_infra_mac_to_instance
+
+# Wait for agents to register - one per MAC address
+- name: Display expected agents
+  ansible.builtin.debug:
+    msg: "Waiting for {{ cluster_infra_mac_to_instance | length }} agents to register with MAC addresses: {{ cluster_infra_mac_to_instance.keys() | list }}"
+
+- name: Wait for agent with specific MAC address to register
+  kubernetes.core.k8s_info:
+    api_version: agent-install.openshift.io/v1beta1
+    kind: Agent
+    namespace: "{{ nico_infra_infraenv_namespace }}"
+  register: cluster_infra_agent_check
+  until: >-
+    cluster_infra_agent_check.resources |
+    selectattr('status.inventory.interfaces', 'defined') |
+    map(attribute='status.inventory.interfaces') |
+    flatten |
+    selectattr('macAddress', 'defined') |
+    map(attribute='macAddress') |
+    map('lower') |
+    select('equalto', mac_entry.key) |
+    list |
+    length > 0
+  retries: "{{ nico_infra_agent_registration_retries }}"
+  delay: "{{ nico_infra_agent_registration_delay }}"
+  loop: "{{ cluster_infra_mac_to_instance | dict2items }}"
+  loop_control:
+    loop_var: mac_entry
+    label: "{{ mac_entry.value.instance_name }} ({{ mac_entry.key }})"
+
+- name: Get final list of registered agents
+  kubernetes.core.k8s_info:
+    api_version: agent-install.openshift.io/v1beta1
+    kind: Agent
+    namespace: "{{ nico_infra_infraenv_namespace }}"
+  register: cluster_infra_agents_result
+
+- name: Display registered agents
+  ansible.builtin.debug:
+    msg: "{{ cluster_infra_agents_result.resources | length }} agents found in namespace"
+
+# Match agents to instances by MAC address
+- name: Match agents to provisioned instances
+  ansible.builtin.set_fact:
+    nico_matched_agents: []
+
+- name: Build matched agents list
+  ansible.builtin.set_fact:
+    nico_matched_agents: >-
+      {{
+        nico_matched_agents + [{
+          'agent_name': item.metadata.name,
+          'agent_namespace': item.metadata.namespace,
+          'mac_address': (item.status.inventory.interfaces | map(attribute='macAddress') | map('lower') | intersect(cluster_infra_mac_to_instance.keys() | list) | first),
+          'instance_info': cluster_infra_mac_to_instance[(item.status.inventory.interfaces | map(attribute='macAddress') | map('lower') | intersect(cluster_infra_mac_to_instance.keys() | list) | first)]
+        }]
+      }}
+  loop: "{{ cluster_infra_agents_result.resources }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+  when: >-
+    item.status.inventory.interfaces is defined and
+    (item.status.inventory.interfaces | map(attribute='macAddress') | map('lower') | intersect(cluster_infra_mac_to_instance.keys() | list) | length > 0)
+
+- name: Display matched agents
+  ansible.builtin.debug:
+    var: nico_matched_agents
+
+# Label and configure agents for cluster attachment
+# Labels must match what the NodePool agentLabelSelector expects
+# NOTE: Agent approval and attachment is handled by manage_agents workflow
+- name: Label agents for cluster attachment
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: agent-install.openshift.io/v1beta1
+      kind: Agent
+      metadata:
+        name: "{{ matched_agent.agent_name }}"
+        namespace: "{{ matched_agent.agent_namespace }}"
+        labels: >-
+          {{
+            {
+              cluster_order_label: nico_infra_name,
+              agent_resource_class_label: matched_agent.instance_info.resource_class,
+              'nico-instance-id': matched_agent.instance_info.instance_id
+            }
+          }}
+      spec:
+        hostname: "{{ matched_agent.instance_info.instance_name | lower }}"
+  loop: "{{ nico_matched_agents }}"
+  loop_control:
+    loop_var: matched_agent
+    label: "{{ matched_agent.agent_name }} -> {{ matched_agent.instance_info.instance_name }}"
+
+- name: Display agent configuration summary
+  ansible.builtin.debug:
+    msg: "Successfully labeled {{ nico_matched_agents | length }} agents for cluster {{ nico_infra_name }}"

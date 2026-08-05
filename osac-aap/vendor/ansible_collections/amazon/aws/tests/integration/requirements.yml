@@ -1,0 +1,6 @@
+---
+collections:
+  - ansible.windows
+  - ansible.utils # ipv6 filter
+  - amazon.cloud # used by integration tests - rds_cluster_modify
+  - community.crypto # SSL certificate generation

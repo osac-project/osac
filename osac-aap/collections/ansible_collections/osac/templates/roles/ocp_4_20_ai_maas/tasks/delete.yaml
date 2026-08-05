@@ -1,0 +1,221 @@
+---
+# Undeploy MaaS resources, then delegate cluster deletion to the parent template.
+# This only removes MaaS-specific resources (Tenant, subscriptions, model, Keycloak,
+# gateway, PostgreSQL). Operators are NOT removed — in the OSAC pipeline, the cluster
+# itself is deleted after this step, which removes everything.
+
+- name: Delete external model subscriptions
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: absent
+    api_version: maas.opendatahub.io/v1alpha1
+    kind: MaaSSubscription
+    name: "{{ item.name }}-sub"
+    namespace: models-as-a-service
+  loop: "{{ ocp_4_20_ai_maas_external_models }}"
+  loop_control:
+    label: "{{ item.name }}-sub"
+  ignore_errors: true
+  when: ocp_4_20_ai_maas_external_models | length > 0
+
+- name: Delete external model auth policies
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: absent
+    api_version: maas.opendatahub.io/v1alpha1
+    kind: MaaSAuthPolicy
+    name: "{{ item.name }}-access"
+    namespace: models-as-a-service
+  loop: "{{ ocp_4_20_ai_maas_external_models }}"
+  loop_control:
+    label: "{{ item.name }}-access"
+  ignore_errors: true
+  when: ocp_4_20_ai_maas_external_models | length > 0
+
+- name: Delete external model namespaces
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: absent
+    api_version: v1
+    kind: Namespace
+    name: "{{ item }}"
+  loop:
+    - "{{ ocp_4_20_ai_maas_external_model_namespace }}"
+    - "{{ ocp_4_20_ai_maas_proxy_namespace }}"
+  ignore_errors: true
+  when: ocp_4_20_ai_maas_external_models | length > 0
+
+- name: Delete hardware profiles
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: absent
+    api_version: infrastructure.opendatahub.io/v1
+    kind: HardwareProfile
+    name: "{{ item.name }}"
+    namespace: redhat-ods-applications
+  loop: "{{ ocp_4_20_ai_maas_hardware_profiles }}"
+  loop_control:
+    label: "{{ item.name }}"
+  ignore_errors: true
+  when: ocp_4_20_ai_maas_hardware_profiles | length > 0
+
+- name: Remove MaaS subscriptions
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: absent
+    definition: "{{ item }}"
+  loop: "{{ lookup('ansible.builtin.template', 'maas-subscriptions.yaml.j2') | from_yaml_all | list }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+  ignore_errors: true
+
+- name: Remove MaaSAuthPolicy
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: absent
+    definition: "{{ lookup('ansible.builtin.template', 'maas-auth-policy.yaml.j2') | from_yaml }}"
+  ignore_errors: true
+
+- name: Remove MaaSModelRef
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: absent
+    definition: "{{ lookup('ansible.builtin.template', 'maas-model-ref.yaml.j2') | from_yaml }}"
+  ignore_errors: true
+
+- name: Remove LLMInferenceService
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: absent
+    definition: "{{ lookup('ansible.builtin.template', 'model.yaml.j2') | from_yaml }}"
+  ignore_errors: true
+
+- name: Remove model namespace
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: absent
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ ocp_4_20_ai_maas_model_namespace }}"
+  ignore_errors: true
+
+- name: Remove Tenant CR
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: absent
+    definition:
+      apiVersion: maas.opendatahub.io/v1alpha1
+      kind: Tenant
+      metadata:
+        name: "{{ ocp_4_20_ai_maas_tenant_name }}"
+        namespace: models-as-a-service
+  ignore_errors: true
+
+- name: Disable MaaS in DSC
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: datasciencecluster.opendatahub.io/v1
+      kind: DataScienceCluster
+      metadata:
+        name: default-dsc
+      spec:
+        components:
+          kserve:
+            modelsAsService:
+              managementState: Removed
+    merge_type: merge
+  ignore_errors: true
+
+- name: Remove maas-db-config secret
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: absent
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: maas-db-config
+        namespace: redhat-ods-applications
+  ignore_errors: true
+
+- name: Remove PostgreSQL
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: absent
+    definition: "{{ item }}"
+  loop: "{{ lookup('ansible.builtin.template', 'postgres-maas.yaml.j2') | from_yaml_all | list }}"
+  loop_control:
+    label: "{{ item.kind }}/{{ item.metadata.name }}"
+  no_log: true
+  ignore_errors: true
+
+- name: Remove maas-default-gateway
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: absent
+    definition:
+      apiVersion: gateway.networking.k8s.io/v1
+      kind: Gateway
+      metadata:
+        name: maas-default-gateway
+        namespace: openshift-ingress
+  ignore_errors: true
+
+- name: Remove gateway resources
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: absent
+    definition: "{{ lookup('ansible.builtin.template', 'gateway-resources.yaml.j2') | from_yaml }}"
+  ignore_errors: true
+
+- name: Remove Kuadrant resources
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: absent
+    definition: "{{ item }}"
+  loop: "{{ lookup('ansible.builtin.file', role_path + '/files/kuadrant-instance.yaml') | from_yaml_all | list }}"
+  loop_control:
+    label: "{{ item.kind }}/{{ item.metadata.name }}"
+  ignore_errors: true
+
+- name: Remove monitoring config
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: absent
+    definition: "{{ item }}"
+  loop: "{{ lookup('ansible.builtin.template', 'user-workload-monitoring.yaml.j2') | from_yaml_all | list }}"
+  loop_control:
+    label: "{{ item.kind }}/{{ item.metadata.name }}"
+  ignore_errors: true
+
+- name: Remove Keycloak namespace
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: absent
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ ocp_4_20_ai_maas_keycloak_namespace }}"
+  ignore_errors: true
+  when: ocp_4_20_ai_maas_enable_keycloak | default(true) | bool
+
+- name: Remove models-as-a-service namespace
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: absent
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: models-as-a-service
+  ignore_errors: true
+
+- name: Delete cluster (delegate to parent)
+  ansible.builtin.include_role:
+    name: osac.templates.ocp_small
+    tasks_from: delete

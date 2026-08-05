@@ -1,0 +1,19 @@
+---
+- name: Extract Subnet configuration
+  ansible.builtin.set_fact:
+    sn_name: "{{ subnet.metadata.name }}"
+
+- name: Delete router
+  openstack.cloud.router:
+    name: "router-{{ sn_name }}"
+    state: absent
+
+- name: Delete subnet
+  openstack.cloud.subnet:
+    name: "{{ sn_name }}"
+    state: absent
+
+- name: Display deletion status
+  ansible.builtin.debug:
+    msg:
+      - "Subnet '{{ sn_name }}' deletion completed"

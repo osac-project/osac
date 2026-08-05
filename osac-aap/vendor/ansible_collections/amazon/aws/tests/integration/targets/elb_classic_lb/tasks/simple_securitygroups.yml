@@ -1,0 +1,106 @@
+---
+- name: Assign Security Groups to ELB (check_mode)
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    security_group_ids: ["{{ sg_b }}"]
+  register: result
+  check_mode: true
+
+- ansible.builtin.assert:
+    that:
+      - result is changed
+
+- name: Assign Security Groups to ELB
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    security_group_ids: ["{{ sg_b }}"]
+  register: result
+
+- ansible.builtin.assert:
+    that:
+      - result is changed
+      - sg_a not in result.elb.security_group_ids
+      - sg_b in result.elb.security_group_ids
+      - sg_c not in result.elb.security_group_ids
+
+- name: Assign Security Groups to ELB - idempotency (check_mode)
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    security_group_ids: ["{{ sg_b }}"]
+  register: result
+  check_mode: true
+
+- ansible.builtin.assert:
+    that:
+      - result is not changed
+
+- name: Assign Security Groups to ELB - idempotency
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    security_group_ids: ["{{ sg_b }}"]
+  register: result
+
+- ansible.builtin.assert:
+    that:
+      - result is not changed
+      - sg_a not in result.elb.security_group_ids
+      - sg_b in result.elb.security_group_ids
+      - sg_c not in result.elb.security_group_ids
+
+# =====================================================================
+
+- name: Assign Security Groups to ELB by name (check_mode)
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    security_group_names: ["{{ resource_prefix }}-a", "{{ resource_prefix }}-c"]
+  register: result
+  check_mode: true
+
+- ansible.builtin.assert:
+    that:
+      - result is changed
+
+- name: Assign Security Groups to ELB by name
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    security_group_names: ["{{ resource_prefix }}-a", "{{ resource_prefix }}-c"]
+  register: result
+
+- ansible.builtin.assert:
+    that:
+      - result is changed
+      - sg_a in result.elb.security_group_ids
+      - sg_b not in result.elb.security_group_ids
+      - sg_c in result.elb.security_group_ids
+
+- name: Assign Security Groups to ELB by name - idempotency (check_mode)
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    security_group_names: ["{{ resource_prefix }}-a", "{{ resource_prefix }}-c"]
+  register: result
+  check_mode: true
+
+- ansible.builtin.assert:
+    that:
+      - result is not changed
+
+- name: Assign Security Groups to ELB by name - idempotency
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    security_group_names: ["{{ resource_prefix }}-a", "{{ resource_prefix }}-c"]
+  register: result
+
+- ansible.builtin.assert:
+    that:
+      - result is not changed
+      - sg_a in result.elb.security_group_ids
+      - sg_b not in result.elb.security_group_ids
+      - sg_c in result.elb.security_group_ids

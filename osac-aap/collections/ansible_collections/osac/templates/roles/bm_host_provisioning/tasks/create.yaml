@@ -1,0 +1,10 @@
+---
+- name: Validate host class
+  ansible.builtin.include_tasks: validate_host_class.yaml
+
+- name: Parse template parameters
+  ansible.builtin.set_fact:
+    template_params: "{{ bare_metal_instance.spec.templateParameters | default('{}') | from_json }}"
+
+- name: Provision bare metal host using host class implementation
+  ansible.builtin.include_tasks: "create_{{ host_class }}.yaml"

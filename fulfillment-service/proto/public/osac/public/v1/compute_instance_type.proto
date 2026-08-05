@@ -1,0 +1,383 @@
+//
+// Copyright (c) 2025 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.public.v1;
+
+import "google/protobuf/any.proto";
+import "google/protobuf/timestamp.proto";
+import "osac/public/v1/condition_status_type.proto";
+import "osac/public/v1/metadata_type.proto";
+
+// Contains the details of the compute instance.
+//
+// The `spec` contains the desired details, and may be modified by the user. The `status` contains the current status of
+// the compute instance, is provided by the system and can't be modified by the user.
+message ComputeInstance {
+  // Unique identifier of the compute instance.
+  string id = 1;
+
+  Metadata metadata = 2;
+  ComputeInstanceSpec spec = 3;
+  ComputeInstanceStatus status = 4;
+}
+
+// Contains the image configuration for a compute instance.
+message ComputeInstanceImage {
+  // Image source type (e.g. "registry").
+  string source_type = 1;
+
+  // Image reference (e.g. OCI image URL).
+  string source_ref = 2;
+}
+
+// Contains the disk configuration for a compute instance.
+message ComputeInstanceDisk {
+  // Disk size in GiB.
+  int32 size_gib = 1;
+}
+
+// Groups one subnet with security groups for that network attachment (multi-NIC VMs).
+message NetworkAttachment {
+  // Fulfillment Subnet ID; must reference a Subnet in READY state (same tenant and region rules as ComputeInstance).
+  string subnet = 1;
+
+  // Fulfillment SecurityGroup IDs applied on this NIC; each must be READY and belong to the same VirtualNetwork as subnet.
+  repeated string security_groups = 2;
+}
+
+// The spec contains the details of a compute instance as desired by the user.
+message ComputeInstanceSpec {
+  // Reference to the compute instance template. Either `template` or `catalog_item` is required on create.
+  //
+  // Must be the value of the `id` field of one of the compute instance templates. Mutually exclusive with `catalog_item`.
+  //
+  // This can't be modified after the compute instance is created.
+  string template = 1;
+
+  // Values of the template parameters.
+  //
+  // When using the HTTP+JSON version of the API the values must be represented as documented in the (ProtoJSON format
+  // document)[https://protobuf.dev/programming-guides/json]. For example, if the template has a `cpu_count`
+  // parameter of integer type, the complete compute instance should be represented like this:
+  //
+  // ```json
+  // {
+  //   "spec": {
+  //     "template": "123",
+  //     "template_parameters": {
+  //       "cpu_count": {
+  //         "@type": "type.googleapis.com/google.protobuf.Int32Value",
+  //         "value": 4
+  //       }
+  //     }
+  //   }
+  // }
+  // ```
+  //
+  // The possible values of the `@type` are the same as those used by the `type_url` field of the `Any` type:
+  //
+  // | Type                           | Value                                             |
+  // |--------------------------------|---------------------------------------------------|
+  // | Boolean                        | `type.googleapis.com/google.protobuf.BoolValue`   |
+  // | Integer number, 32 bits        | `type.googleapis.com/google.protobuf.Int32Value`  |
+  // | Integer number, 64 bits        | `type.googleapis.com/google.protobuf.Int64Value`  |
+  // | Floating point number, 32 bits | `type.googleapis.com/google.protobuf.FloatValue`  |
+  // | Floating point number, 64 bits | `type.googleapis.com/google.protobuf.DoubleValue` |
+  // | String                         | `type.googleapis.com/google.protobuf.StringValue` |
+  // | Timestamp                      | `type.googleapis.com/google.protobuf.Timestamp`   |
+  // | Duration                       | `type.googleapis.com/google.protobuf.Duration`    |
+  // | Array of bytes                 | `type.googleapis.com/google.protobuf.BytesValue`  |
+  // | Any JSON value                 | `type.googleapis.com/google.protobuf.Value`       |
+  //
+  // These parameters can't be modified after the compute instance is created.
+  map<string, google.protobuf.Any> template_parameters = 2;
+
+  // RestartRequestedAt is a timestamp signal to request a ComputeInstance restart.
+  //
+  // Set this field to the current time (usually NOW) to request a restart.
+  // The controller will execute the restart if this timestamp is greater than
+  // `status.last_restarted_at`.
+  //
+  // This is a declarative signal mechanism - the timestamp is a monotonically
+  // increasing value to detect new restart requests, not a scheduled time.
+  // Typically set to the current time for immediate restarts.
+  //
+  // External schedulers can set this field on a schedule to implement
+  // scheduled maintenance windows if needed.
+  //
+  // Example (when converted to JSON):
+  //
+  //    {
+  //      "spec": {
+  //        "template": "123",
+  //        "restart_requested_at": "2026-01-20T14:30:00Z"
+  //      }
+  //    }
+  //
+  optional google.protobuf.Timestamp restart_requested_at = 3;
+
+  // VM image configuration.
+  optional ComputeInstanceImage image = 4;
+
+  // Reserved field numbers for removed fields (do not reuse).
+  reserved 5, 6;
+  reserved "cores", "memory_gib";
+
+  // SSH public key.
+  optional string ssh_public_key = 7;
+
+  // Boot disk configuration.
+  optional ComputeInstanceDisk boot_disk = 8;
+
+  // Additional disk configurations.
+  repeated ComputeInstanceDisk additional_disks = 9;
+
+  // Run strategy for the compute instance (e.g. "Always" or "Halted").
+  optional string run_strategy = 10;
+
+  // User data for the compute instance (e.g. cloud-init, ignition).
+  optional string user_data = 11;
+
+  // Reserved field numbers for removed fields (do not reuse).
+  reserved 12, 13;
+  reserved "subnet", "security_groups";
+
+  // Network attachments: one entry per NIC.
+  repeated NetworkAttachment network_attachments = 14;
+
+  // Reference to a compute instance catalog item. Mutually exclusive with template during the migration period.
+  // When set, the server fetches the catalog item and applies its field definitions.
+  string catalog_item = 15;
+
+  // IsWindows indicates whether this compute instance runs a Windows guest operating system.
+  //
+  // When `true`, the VM is configured for Windows. When `false` or omitted, the VM runs Linux.
+  //
+  // This field is immutable after creation - the guest OS type cannot be changed after the
+  // compute instance is provisioned.
+  //
+  // Example (when converted to JSON):
+  //
+  //    {
+  //      "spec": {
+  //        "template": "123",
+  //        "is_windows": true
+  //      }
+  //    }
+  //
+  optional bool is_windows = 16;
+
+  // Reference to an instance type by name. Specifies the compute configuration (cores, memory)
+  // for this instance. The API validates that the instance type exists and is not OBSOLETE;
+  // resolution of cores/memory_gib happens in the reconciler.
+  optional string instance_type = 17;
+}
+
+// The status contains the details of the compute instance provided by the system.
+message ComputeInstanceStatus {
+  // Indicates the overall state of the compute instance.
+  ComputeInstanceState state = 1;
+
+  // Contains a list of conditions that describe in detail the status of the compute instance.
+  //
+  // For example, a running compute instance could be represented like this (when converted to JSON):
+  //
+  //    {
+  //      "id": "123",
+  //      "spec": {
+  //      },
+  //      "status": {
+  //        "state": "COMPUTE_INSTANCE_STATE_RUNNING",
+  //        "conditions": [
+  //          {
+  //            "type": "COMPUTE_INSTANCE_CONDITION_TYPE_PROVISIONED",
+  //            "status": "CONDITION_STATUS_TRUE",
+  //            "last_transition_time": "2025-03-12 20:10:01+00:00"
+  //          },
+  //          {
+  //            "type": "COMPUTE_INSTANCE_CONDITION_TYPE_CONFIGURATION_APPLIED",
+  //            "status": "CONDITION_STATUS_TRUE",
+  //            "last_transition_time": "2025-03-12 20:14:22+00:00"
+  //          },
+  //          {
+  //            "type": "COMPUTE_INSTANCE_CONDITION_TYPE_READY",
+  //            "status": "CONDITION_STATUS_TRUE",
+  //            "last_transition_time": "2025-03-12 20:15:59+00:00"
+  //          }
+  //        ]
+  //      }
+  //    }
+  //
+  // In this example the `PROVISIONED` condition is true (infrastructure is allocated), `CONFIGURATION_APPLIED` is true
+  // (the desired configuration has been applied by the provisioning provider), and `READY` is true (the compute
+  // instance is reachable via the internal IP address in `status.internal_ip_address`).
+  //
+  // The `state` field reflects the VM power state as reported by the hypervisor. Possible states include
+  // `STARTING`, `RUNNING`, `FAILED`, `DELETING`, `STOPPING`, `STOPPED`, and `PAUSED`.
+  //
+  // Note that in this example, to make it shorter, only three conditions appear. In general all the conditions (except
+  // `UNSPECIFIED`) will appear exactly once.
+  //
+  // Check the documentation of the values of the `ComputeInstanceConditionType` enumerated type to see possible conditions and
+  // reasons.
+  repeated ComputeInstanceCondition conditions = 2;
+
+  // Internal IP address of the compute instance.
+  //
+  // This will be empty if the compute instance isn't running.
+  string internal_ip_address = 3;
+
+  // LastRestartedAt records when the last restart was initiated by the controller.
+  //
+  // This is set to `spec.restart_requested_at` when the controller processes a restart request.
+  // It will be empty if no restart has been performed yet.
+  //
+  // Example (when converted to JSON):
+  //
+  //    {
+  //      "status": {
+  //        "state": "COMPUTE_INSTANCE_STATE_RUNNING",
+  //        "last_restarted_at": "2026-01-20T14:30:00Z"
+  //      }
+  //    }
+  //
+  optional google.protobuf.Timestamp last_restarted_at = 4;
+
+  // External IP address attached to the compute instance.
+  string external_ip_address = 5;
+
+  // Records when the compute instance entered its current state, as reported by the provisioning
+  // backend. This is the authoritative timestamp of the state transition, suitable for billing
+  // interval calculations.
+  //
+  // This will be empty if no state transition has been reported yet.
+  optional google.protobuf.Timestamp state_transition_time = 6;
+}
+
+// Represents the overall state of a compute instance.
+enum ComputeInstanceState {
+  // Unspecified indicates that the state is unknown.
+  COMPUTE_INSTANCE_STATE_UNSPECIFIED = 0;
+
+  // Indicates that the compute instance is starting.
+  COMPUTE_INSTANCE_STATE_STARTING = 1;
+
+  // Indicates that the compute instance is running.
+  COMPUTE_INSTANCE_STATE_RUNNING = 2;
+
+  // Indicates that the compute instance is unusable.
+  COMPUTE_INSTANCE_STATE_FAILED = 3;
+
+  // Indicates that the compute instance is being deleted.
+  COMPUTE_INSTANCE_STATE_DELETING = 4;
+
+  // Indicates that the compute instance is in the process of being stopped.
+  COMPUTE_INSTANCE_STATE_STOPPING = 5;
+
+  // Indicates that the compute instance is stopped.
+  COMPUTE_INSTANCE_STATE_STOPPED = 6;
+
+  // Indicates that the compute instance is paused.
+  COMPUTE_INSTANCE_STATE_PAUSED = 7;
+}
+
+// Contains the details of a condition that describes the status of a compute instance.
+message ComputeInstanceCondition {
+  // Indicates the type of condition.
+  ComputeInstanceConditionType type = 1;
+
+  // Indicates the status of the condition.
+  ConditionStatus status = 2;
+
+  // This time is the last time that the condition was updated.
+  google.protobuf.Timestamp last_transition_time = 3;
+
+  // Contains a the reason of the condition in a format suitable for use by programs.
+  //
+  // The possible values will be documented in the object that contains the condition.
+  optional string reason = 4;
+
+  // Contains a text giving more details of the condition.
+  //
+  // This will usually be progress reports, or error messages, and are intended for use by humans, to debug problems.
+  optional string message = 5;
+}
+
+// Types of conditions used to describe the status of compute instance.
+enum ComputeInstanceConditionType {
+  // Unspecified indicates that the condition is unknown.
+  //
+  // This will never be appear in the `spec.conditions` field of a compute instance.
+  COMPUTE_INSTANCE_CONDITION_TYPE_UNSPECIFIED = 0;
+
+  // Indicates that the compute instance configuration has been applied by the provisioning provider.
+  //
+  // When `status` is `TRUE`, the configuration currently described by the compute instance spec
+  // has been successfully applied. This is determined by comparing `status.desiredConfigVersion`
+  // with `status.reconciledConfigVersion`.
+  //
+  // When `status` is `FALSE`, configuration is currently being applied (e.g. during initial
+  // provisioning or after a spec update).
+  COMPUTE_INSTANCE_CONDITION_TYPE_CONFIGURATION_APPLIED = 1;
+
+  // Indicates that the compute instance is ready (reachable per readiness checks).
+  //
+  // When `status` is `TRUE`, the compute instance is running and the readiness check
+  // has passed. The instance is reachable via the internal IP address in `status.internal_ip_address`.
+  //
+  // When `status` is `FALSE`, the instance is not yet reachable (e.g. it is still
+  // starting, the readiness check has not passed, or the instance is stopped/paused).
+  //
+  // Possible `reason` values:
+  // - `AsExpected`: Normal operational state.
+  COMPUTE_INSTANCE_CONDITION_TYPE_READY = 2;
+
+  // Indicates that a restart is in progress.
+  //
+  // When `status` is `TRUE`, it means a restart is currently in progress.
+  //
+  // Possible `reason` values:
+  // - `RestartRequested`: A restart has been requested via `spec.restart_requested_at`.
+  // - `RestartInProgress`: The restart has been initiated.
+  //
+  // When `status` is `FALSE`, no restart is currently in progress.
+  COMPUTE_INSTANCE_CONDITION_TYPE_RESTART_IN_PROGRESS = 3;
+
+  // Indicates that a restart request has failed.
+  //
+  // When `status` is `TRUE`, it means the restart could not be executed.
+  // The `message` field will contain details about the failure.
+  // If the issue persists, please contact your administrator.
+  //
+  // When `status` is `FALSE`, there is no restart failure.
+  COMPUTE_INSTANCE_CONDITION_TYPE_RESTART_FAILED = 4;
+
+  // Indicates that the infrastructure resources (compute, storage) have been allocated.
+  //
+  // When `status` is `TRUE`, the compute instance has been created and
+  // infrastructure resources are allocated.
+  //
+  // When `status` is `FALSE`, infrastructure provisioning is in progress.
+  COMPUTE_INSTANCE_CONDITION_TYPE_PROVISIONED = 5;
+
+  // Indicates that the compute instance requires a restart for configuration changes
+  // to take effect.
+  //
+  // When `status` is `TRUE`, configuration changes have been applied to the VM spec
+  // but require a restart to take effect (they cannot be live-propagated).
+  //
+  // When `status` is `FALSE`, no restart is required.
+  COMPUTE_INSTANCE_CONDITION_TYPE_RESTART_REQUIRED = 6;
+}

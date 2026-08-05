@@ -1,0 +1,60 @@
+---
+- name: Build base BMH patch
+  ansible.builtin.set_fact:
+    bmh_patch:
+      spec:
+        image:
+          url: "{{ template_params.imageURL }}"
+        online: true
+
+- name: Add checksum to BMH patch for non-OCI images
+  when: not template_params.imageURL.startswith('oci://')
+  ansible.builtin.set_fact:
+    bmh_patch: >-
+      {{ bmh_patch | combine({
+           'spec': bmh_patch.spec | combine({
+             'image': bmh_patch.spec.image | combine({
+               'checksum': template_params.imageChecksum,
+               'checksumType': template_params.checksumType
+             })
+           })
+         }, recursive=True) }}
+
+- name: Add networkData to BMH patch
+  when: template_params.networkData | default('') | length > 0
+  ansible.builtin.set_fact:
+    bmh_patch: >-
+      {{ bmh_patch | combine({
+           'spec': bmh_patch.spec | combine({
+             'networkData': {
+               'name': bmh_name ~ '-network-data',
+               'namespace': bmh_namespace
+             }
+           })
+         }, recursive=True) }}
+
+- name: Add userData to BMH patch
+  when: user_data_secret_ref | length > 0
+  ansible.builtin.set_fact:
+    bmh_patch: >-
+      {{ bmh_patch | combine({
+           'spec': bmh_patch.spec | combine({
+             'userData': {
+               'name': bmh_name ~ '-user-data',
+               'namespace': bmh_namespace
+             }
+           })
+         }, recursive=True) }}
+
+- name: Add metaData to BMH patch
+  when: ssh_key | length > 0
+  ansible.builtin.set_fact:
+    bmh_patch: >-
+      {{ bmh_patch | combine({
+           'spec': bmh_patch.spec | combine({
+             'metaData': {
+               'name': bmh_name ~ '-meta-data',
+               'namespace': bmh_namespace
+             }
+           })
+         }, recursive=True) }}

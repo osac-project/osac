@@ -1,0 +1,85 @@
+apiVersion: k8s.keycloak.org/v2alpha1
+kind: KeycloakRealmImport
+metadata:
+  name: maas-realm
+  namespace: {{ ocp_4_20_ai_maas_keycloak_namespace }}
+spec:
+  keycloakCRName: {{ ocp_4_20_ai_maas_keycloak_namespace }}
+  realm:
+    realm: "{{ ocp_4_20_ai_maas_keycloak_realm }}"
+    enabled: true
+
+    clientScopes:
+    - name: groups
+      description: Group membership claim
+      protocol: openid-connect
+      attributes:
+        include.in.token.scope: "false"
+        display.on.consent.screen: "true"
+      protocolMappers:
+      - name: groups
+        protocol: openid-connect
+        protocolMapper: oidc-group-membership-mapper
+        consentRequired: false
+        config:
+          full.path: "false"
+          introspection.token.claim: "true"
+          multivalued: "true"
+          userinfo.token.claim: "true"
+          id.token.claim: "true"
+          access.token.claim: "true"
+          claim.name: groups
+      - name: username
+        protocol: openid-connect
+        protocolMapper: oidc-usermodel-attribute-mapper
+        consentRequired: false
+        config:
+          user.attribute: username
+          claim.name: preferred_username
+          id.token.claim: "true"
+          access.token.claim: "true"
+          jsonType.label: String
+
+    defaultDefaultClientScopes:
+    - basic
+    - groups
+
+    clients:
+    - clientId: "{{ ocp_4_20_ai_maas_keycloak_client_id }}"
+      name: MaaS Client
+      enabled: true
+      publicClient: false
+      clientAuthenticatorType: client-secret
+      secret: "{{ ocp_4_20_ai_maas_keycloak_client_secret }}"
+      standardFlowEnabled: true
+      directAccessGrantsEnabled: true
+      serviceAccountsEnabled: false
+      protocol: openid-connect
+      defaultClientScopes:
+      - basic
+      - profile
+      - groups
+      redirectUris:
+      - http://localhost
+      - http://localhost:8080/callback
+
+    groups:
+{% for tier in ocp_4_20_ai_maas_tiers %}
+    - name: "{{ tier.group }}"
+{% endfor %}
+
+    users:
+{% for tier in ocp_4_20_ai_maas_tiers %}
+    - username: "testuser-{{ tier.name | regex_replace('-subscription$', '') }}"
+      firstName: Test
+      lastName: "{{ tier.name | regex_replace('-subscription$', '') | capitalize }}"
+      email: "testuser-{{ tier.name | regex_replace('-subscription$', '') }}@test.com"
+      emailVerified: true
+      enabled: true
+      credentials:
+      - type: password
+        value: "{{ ocp_4_20_ai_maas_keycloak_test_password }}"
+        temporary: false
+      groups:
+      - "{{ tier.group }}"
+{% endfor %}

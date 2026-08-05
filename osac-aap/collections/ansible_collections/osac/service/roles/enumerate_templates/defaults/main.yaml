@@ -1,0 +1,2 @@
+osac_template_collections:  # noqa:var-naming[no-role-prefix]
+- osac.templates

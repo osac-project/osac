@@ -1,0 +1,10 @@
+---
+- name: Withdraw PublicIP route from BGP
+  hosts: net_nodes[0]
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Withdraw route
+      ansible.builtin.include_role:
+        name: agentless_net.l3.bgp
+        tasks_from: withdraw

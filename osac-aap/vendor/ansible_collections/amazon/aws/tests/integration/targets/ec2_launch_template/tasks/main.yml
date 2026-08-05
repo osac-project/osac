@@ -1,0 +1,13 @@
+---
+- module_defaults:
+    group/aws:
+      access_key: "{{ aws_access_key }}"
+      secret_key: "{{ aws_secret_key }}"
+      session_token: "{{ security_token | default(omit) }}"
+      region: "{{ aws_region }}"
+  block:
+    - ansible.builtin.include_tasks: template_data.yml
+    - ansible.builtin.include_tasks: tagging.yml
+    - ansible.builtin.include_tasks: iam_instance_role.yml
+    - ansible.builtin.include_tasks: versions.yml
+    - ansible.builtin.include_tasks: deletion.yml

@@ -1,0 +1,107 @@
+//
+// Copyright (c) 2025 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "google/api/annotations.proto";
+import "google/protobuf/field_mask.proto";
+import "osac/private/v1/cluster_catalog_item_type.proto";
+
+message ClusterCatalogItemsListRequest {
+  optional int32 offset = 1;
+  optional int32 limit = 2;
+  optional string filter = 3;
+  optional string order = 4;
+}
+
+message ClusterCatalogItemsListResponse {
+  int32 size = 1;
+  int32 total = 2;
+  repeated ClusterCatalogItem items = 3;
+}
+
+message ClusterCatalogItemsGetRequest {
+  string id = 1;
+}
+
+message ClusterCatalogItemsGetResponse {
+  ClusterCatalogItem object = 1;
+}
+
+message ClusterCatalogItemsCreateRequest {
+  ClusterCatalogItem object = 1;
+}
+
+message ClusterCatalogItemsCreateResponse {
+  ClusterCatalogItem object = 1;
+}
+
+message ClusterCatalogItemsDeleteRequest {
+  string id = 1;
+}
+
+message ClusterCatalogItemsDeleteResponse {}
+
+message ClusterCatalogItemsUpdateRequest {
+  ClusterCatalogItem object = 1;
+  google.protobuf.FieldMask update_mask = 2;
+
+  // Lock enables optimistic locking. When set to true, the server verifies that the current version of the object
+  // matches the value of the metadata.version field of the submitted object. If they differ the update will be
+  // rejected. This is useful to prevent lost updates when multiple clients are modifying the same object concurrently.
+  bool lock = 3;
+}
+
+message ClusterCatalogItemsUpdateResponse {
+  ClusterCatalogItem object = 1;
+}
+
+message ClusterCatalogItemsSignalRequest {
+  string id = 1;
+}
+
+message ClusterCatalogItemsSignalResponse {}
+
+service ClusterCatalogItems {
+  rpc List(ClusterCatalogItemsListRequest) returns (ClusterCatalogItemsListResponse) {
+    option (google.api.http) = {get: "/api/private/v1/cluster_catalog_items"};
+  }
+  rpc Get(ClusterCatalogItemsGetRequest) returns (ClusterCatalogItemsGetResponse) {
+    option (google.api.http) = {
+      get: "/api/private/v1/cluster_catalog_items/{id}"
+      response_body: "object"
+    };
+  }
+  rpc Create(ClusterCatalogItemsCreateRequest) returns (ClusterCatalogItemsCreateResponse) {
+    option (google.api.http) = {
+      post: "/api/private/v1/cluster_catalog_items"
+      body: "object"
+      response_body: "object"
+    };
+  }
+  rpc Delete(ClusterCatalogItemsDeleteRequest) returns (ClusterCatalogItemsDeleteResponse) {
+    option (google.api.http) = {delete: "/api/private/v1/cluster_catalog_items/{id}"};
+  }
+  rpc Update(ClusterCatalogItemsUpdateRequest) returns (ClusterCatalogItemsUpdateResponse) {
+    option (google.api.http) = {
+      patch: "/api/private/v1/cluster_catalog_items/{object.id}"
+      body: "object"
+      response_body: "object"
+    };
+  }
+
+  // Indicates that something changed in the object or the system that may require reconciling the object.
+  rpc Signal(ClusterCatalogItemsSignalRequest) returns (ClusterCatalogItemsSignalResponse) {}
+}

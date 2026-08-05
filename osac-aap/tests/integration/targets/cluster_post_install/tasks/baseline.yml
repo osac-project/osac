@@ -1,0 +1,61 @@
+---
+- name: Cluster Post Install - Baseline Test
+  hosts: localhost
+  gather_facts: true
+  vars_files:
+    - ../../../common_vars.yml
+
+  tasks:
+    - name: Read ClusterOrder fixture
+      ansible.builtin.set_fact:
+        test_cluster_order: "{{ lookup('file', '../../../fixtures/clusterorder-test.yaml') | from_yaml }}"
+
+    - name: Set test variables for baseline workflow
+      ansible.builtin.set_fact:
+        ansible_eda:
+          event:
+            payload: "{{ test_cluster_order }}"
+        cluster_working_namespace: "cluster-test-cluster-work"
+        # Override template to use no-op version for testing
+        template_id_override: "osac.test_overrides.noop_template"
+        admin_kubeconfig: |
+          apiVersion: v1
+          kind: Config
+          clusters:
+          - cluster:
+              server: https://test-cluster:6443
+            name: test-cluster
+          contexts:
+          - context:
+              cluster: test-cluster
+              user: admin
+            name: test-cluster
+          current-context: test-cluster
+          users:
+          - name: admin
+            user:
+              token: test-token
+
+- name: Import cluster post_install workflow (baseline)
+  ansible.builtin.import_playbook: osac.workflows.cluster.post_install
+
+- name: Verify baseline results
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+
+  tasks:
+    - name: Verify cluster order name extracted
+      ansible.builtin.assert:
+        that:
+          - cluster_order_name is defined
+          - cluster_order_name == "test-cluster"
+        fail_msg: "Cluster order name not extracted correctly"
+
+    - name: Verify template ID extracted
+      ansible.builtin.assert:
+        that:
+          - template_id is defined
+          - template_id == "osac.templates.ocp_small"
+        fail_msg: "Template ID not extracted correctly"

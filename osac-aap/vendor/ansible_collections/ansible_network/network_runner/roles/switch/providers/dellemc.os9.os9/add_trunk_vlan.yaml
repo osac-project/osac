@@ -1,0 +1,7 @@
+---
+- name: "dellemc.os9: Add a vlan to a trunk port"
+  dellemc.os9.os9_config:
+    lines:
+      - "interface vlan {{ _vlan_id }}"
+      - "tagged {{ port_name }}"
+  connection: network_cli

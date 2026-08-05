@@ -1,0 +1,279 @@
+---
+# ============================================================
+# If we don't stop the instances they can get stuck "detaching"
+- name: Ensure test instances are stopped
+  amazon.aws.ec2_instance:
+    state: stopped
+    instance_ids:
+      - "{{ instance_id_1 }}"
+      - "{{ instance_id_2 }}"
+    wait: true
+
+- name: Attach the network interface to instance 1 (check mode)
+  amazon.aws.ec2_eni:
+    instance_id: "{{ instance_id_1 }}"
+    device_index: 1
+    private_ip_address: "{{ ip_1 }}"
+    subnet_id: "{{ vpc_subnet_result.subnet.id }}"
+    state: present
+    attached: true
+  check_mode: true
+  register: result_check_mode
+
+- ansible.builtin.assert:
+    that:
+      - result_check_mode.changed
+
+- name: Attach the network interface to instance 1
+  amazon.aws.ec2_eni:
+    instance_id: "{{ instance_id_1 }}"
+    device_index: 1
+    private_ip_address: "{{ ip_1 }}"
+    subnet_id: "{{ vpc_subnet_result.subnet.id }}"
+    state: present
+    attached: true
+  register: result
+- amazon.aws.ec2_eni_info:
+    eni_id: "{{ eni_id_1 }}"
+  register: eni_info
+
+- ansible.builtin.assert:
+    that:
+      - result.changed
+      - result.interface.attachment is defined
+      - result.interface.attachment is mapping
+      - result.interface.attachment.instance_id == instance_id_1
+      - _interface_0.attachment is defined
+      - _interface_0.attachment is mapping
+      - '"attach_time" in _interface_0.attachment'
+      - _interface_0.attachment.attach_time is string
+      - '"attachment_id" in _interface_0.attachment'
+      - _interface_0.attachment.attachment_id.startswith("eni-attach-")
+      - '"delete_on_termination" in _interface_0.attachment'
+      - _interface_0.attachment.delete_on_termination == False
+      - '"device_index" in _interface_0.attachment'
+      - _interface_0.attachment.device_index == 1
+      - '"instance_id" in _interface_0.attachment'
+      - _interface_0.attachment.instance_id == instance_id_1
+      - '"instance_owner_id" in _interface_0.attachment'
+      - _interface_0.attachment.instance_owner_id is string
+      - '"status" in _interface_0.attachment'
+      - _interface_0.attachment.status == "attached"
+  vars:
+    _interface_0: "{{ eni_info.network_interfaces[0] }}"
+
+- name: Verify the eni is attached
+  amazon.aws.ec2_eni:
+    instance_id: "{{ instance_id_1 }}"
+    device_index: 1
+    private_ip_address: "{{ ip_1 }}"
+    subnet_id: "{{ vpc_subnet_result.subnet.id }}"
+    state: present
+    attached: true
+  register: result
+- amazon.aws.ec2_eni_info:
+    eni_id: "{{ eni_id_1 }}"
+  register: eni_info
+
+- ansible.builtin.assert:
+    that:
+      - not result.changed
+      - result.interface.attachment is defined
+      - result.interface.attachment.instance_id == instance_id_1
+      - _interface_0.attachment is defined
+      - _interface_0.attachment is mapping
+      - '"attach_time" in _interface_0.attachment'
+      - _interface_0.attachment.attach_time is string
+      - '"attachment_id" in _interface_0.attachment'
+      - _interface_0.attachment.attachment_id.startswith("eni-attach-")
+      - '"delete_on_termination" in _interface_0.attachment'
+      - _interface_0.attachment.delete_on_termination == False
+      - '"device_index" in _interface_0.attachment'
+      - _interface_0.attachment.device_index == 1
+      - '"instance_id" in _interface_0.attachment'
+      - _interface_0.attachment.instance_id == instance_id_1
+      - '"instance_owner_id" in _interface_0.attachment'
+      - _interface_0.attachment.instance_owner_id is string
+      - '"status" in _interface_0.attachment'
+      - _interface_0.attachment.status == "attached"
+  vars:
+    _interface_0: "{{ eni_info.network_interfaces[0] }}"
+
+# ============================================================
+- name: Test attaching the network interface to a different instance (check mode)
+  amazon.aws.ec2_eni:
+    instance_id: "{{ instance_id_2 }}"
+    device_index: 1
+    private_ip_address: "{{ ip_1 }}"
+    subnet_id: "{{ vpc_subnet_result.subnet.id }}"
+    state: present
+    attached: true
+  check_mode: true
+  register: result_check_mode
+
+- ansible.builtin.assert:
+    that:
+      - result_check_mode.changed
+
+- name: Test attaching the network interface to a different instance
+  amazon.aws.ec2_eni:
+    instance_id: "{{ instance_id_2 }}"
+    device_index: 1
+    private_ip_address: "{{ ip_1 }}"
+    subnet_id: "{{ vpc_subnet_result.subnet.id }}"
+    state: present
+    attached: true
+  register: result
+- amazon.aws.ec2_eni_info:
+    eni_id: "{{ eni_id_1 }}"
+  register: eni_info
+
+- ansible.builtin.assert:
+    that:
+      - result.changed
+      - result.interface.attachment is defined
+      - result.interface.attachment.instance_id == instance_id_2
+      - _interface_0.attachment is defined
+      - '"instance_id" in _interface_0.attachment'
+      - _interface_0.attachment.instance_id == instance_id_2
+  vars:
+    _interface_0: "{{ eni_info.network_interfaces[0] }}"
+
+# ============================================================
+- name: Detach the network interface (check mode)
+  amazon.aws.ec2_eni:
+    instance_id: "{{ instance_id_2 }}"
+    device_index: 1
+    private_ip_address: "{{ ip_1 }}"
+    subnet_id: "{{ vpc_subnet_result.subnet.id }}"
+    state: present
+    attached: false
+  check_mode: true
+  register: result_check_mode
+
+- ansible.builtin.assert:
+    that:
+      - result_check_mode.changed
+
+- name: Detach the network interface
+  amazon.aws.ec2_eni:
+    instance_id: "{{ instance_id_2 }}"
+    device_index: 1
+    private_ip_address: "{{ ip_1 }}"
+    subnet_id: "{{ vpc_subnet_result.subnet.id }}"
+    state: present
+    attached: false
+  register: result
+- amazon.aws.ec2_eni_info:
+    eni_id: "{{ eni_id_1 }}"
+  register: eni_info
+
+- ansible.builtin.assert:
+    that:
+      - result.changed
+      - result.interface.attachment is undefined
+      - _interface_0.attachment is undefined
+  vars:
+    _interface_0: "{{ eni_info.network_interfaces[0] }}"
+
+- name: Verify the network interface was detached
+  amazon.aws.ec2_eni:
+    instance_id: "{{ instance_id_2 }}"
+    device_index: 1
+    private_ip_address: "{{ ip_1 }}"
+    subnet_id: "{{ vpc_subnet_result.subnet.id }}"
+    state: present
+    attached: false
+  register: result
+
+- ansible.builtin.assert:
+    that:
+      - not result.changed
+      - result.interface.attachment is undefined
+
+# ============================================================
+- name: Reattach the network interface to test deleting it
+  amazon.aws.ec2_eni:
+    instance_id: "{{ instance_id_2 }}"
+    device_index: 1
+    private_ip_address: "{{ ip_1 }}"
+    subnet_id: "{{ vpc_subnet_result.subnet.id }}"
+    state: present
+    attached: true
+  register: result
+
+- ansible.builtin.assert:
+    that:
+      - result.changed
+      - result.interface.attachment is defined
+      - result.interface.attachment.instance_id == instance_id_2
+
+- name: Test that deleting the network interface while attached must be intentional
+  amazon.aws.ec2_eni:
+    eni_id: "{{ eni_id_1 }}"
+    state: absent
+  register: result
+  ignore_errors: true
+
+- ansible.builtin.assert:
+    that:
+      - result.failed
+      - '"currently in use" in result.msg'
+
+# ============================================================
+- name: Ensure test instances is running (will block non-forced detachment)
+  amazon.aws.ec2_instance:
+    state: running
+    instance_ids:
+      - "{{ instance_id_2 }}"
+    wait: true
+
+- name: Delete an attached network interface with force_detach (check mode)
+  amazon.aws.ec2_eni:
+    force_detach: true
+    eni_id: "{{ eni_id_1 }}"
+    state: absent
+  check_mode: true
+  register: result_check_mode
+  ignore_errors: true
+
+- ansible.builtin.assert:
+    that:
+      - result_check_mode.changed
+
+- name: Delete an attached network interface with force_detach
+  amazon.aws.ec2_eni:
+    force_detach: true
+    eni_id: "{{ eni_id_1 }}"
+    state: absent
+  register: result
+  ignore_errors: true
+
+- ansible.builtin.assert:
+    that:
+      - result.changed
+      - result.interface.attachment is undefined
+
+- name: Test removing a network interface that does not exist
+  amazon.aws.ec2_eni:
+    force_detach: true
+    eni_id: "{{ eni_id_1 }}"
+    state: absent
+  register: result
+
+- ansible.builtin.assert:
+    that:
+      - not result.changed
+      - result.interface.attachment is undefined
+
+# ============================================================
+- name: Recreate the network interface
+  amazon.aws.ec2_eni:
+    device_index: 1
+    private_ip_address: "{{ ip_1 }}"
+    subnet_id: "{{ vpc_subnet_id }}"
+    state: present
+  register: result
+
+- ansible.builtin.set_fact:
+    eni_id_1: "{{ result.interface.id }}"

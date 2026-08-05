@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: storage-operations-ig
+data:
+  # Storage tier definitions — JSON array with per-tier provider selection.
+  # Each tier declares: name (DNS label), protocol (nfs|block), provider (vast).
+  # Optional: qos_policy (string) + qos_limits (dict) for VAST QoS policy creation.
+  # Optional: quota (int, bytes) for per-tier hard quota.
+  STORAGE_TIERS: |
+    [
+      {"name": "default", "protocol": "nfs", "provider": "vast", "qos_policy": "default-qos",
+       "qos_limits": {"static_limits": {"max_reads_bw_mbps": 100, "max_writes_bw_mbps": 100}}},
+      {"name": "high-performance", "protocol": "block", "provider": "vast", "qos_policy": "high-iops",
+       "qos_limits": {"static_limits": {"max_reads_bw_mbps": 500, "max_writes_bw_mbps": 500}}}
+    ]
+
+  # Create VolumeSnapshotClass alongside StorageClass (requires snapshot-controller CRD).
+  STORAGE_SNAPSHOTS_ENABLED: "true"
+
+  # TLS certificate validation for VAST VMS API calls.
+  # Set to "false" for self-signed certificates in dev/test environments.
+  # VAST_VALIDATE_CERTS: "true"
+
+  # Gateway IP for cross-subnet VIP routing (optional).
+  # VAST_VIP_POOL_GW_IP: ""
+  # VAST_VIP_POOL_GW_IPV6: ""
+
+  # Namespace on hub cluster where VAST config Secrets (vast-tenant-config-*) are stored.
+  # Overrides the OSAC_STORAGE_CONFIG_NAMESPACE env var injected via downward API in the pod spec.
+  # Only set this if the config namespace differs from the IG pod namespace.
+  # OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"

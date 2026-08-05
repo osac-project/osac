@@ -1,0 +1,124 @@
+{{- if .Values.cnv.enabled }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: osac-prereqs-configure-cnv
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-prereqs.hookLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation
+    "helm.sh/hook-weight": "10"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: osac-prereqs-configure-cnv
+  labels:
+    {{- include "osac-prereqs.hookLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation
+    "helm.sh/hook-weight": "10"
+rules:
+  - apiGroups: ["operators.coreos.com"]
+    resources: ["clusterserviceversions"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["cdi.kubevirt.io"]
+    resources: ["cdis"]
+    verbs: ["get", "list", "delete", "patch"]
+  - apiGroups: ["kubevirt.io"]
+    resources: ["kubevirts"]
+    verbs: ["get", "list", "delete", "patch"]
+  - apiGroups: ["ssp.kubevirt.io"]
+    resources: ["ssps"]
+    verbs: ["get", "list", "delete", "patch"]
+  - apiGroups: ["hco.kubevirt.io"]
+    resources: ["hyperconvergeds"]
+    verbs: ["get", "list", "create", "delete", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: osac-prereqs-configure-cnv
+  labels:
+    {{- include "osac-prereqs.hookLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation
+    "helm.sh/hook-weight": "10"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: osac-prereqs-configure-cnv
+subjects:
+  - kind: ServiceAccount
+    name: osac-prereqs-configure-cnv
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: osac-prereqs-configure-cnv
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-prereqs.hookLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation
+    "helm.sh/hook-weight": "10"
+spec:
+  backoffLimit: 5
+  activeDeadlineSeconds: 1800
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        {{- include "osac-prereqs.hookLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: osac-prereqs-configure-cnv
+      restartPolicy: OnFailure
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: config
+          configMap:
+            name: osac-prereqs-cnv-config
+        - name: scripts
+          configMap:
+            name: osac-prereqs-hook-scripts
+      containers:
+        - name: configure-cnv
+          image: {{ .Values.cliImage }}
+          env:
+            - name: HOME
+              value: /tmp
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: config
+              mountPath: /config
+            - name: scripts
+              mountPath: /scripts
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          command:
+            - /bin/bash
+            - /scripts/configure-cnv.sh
+{{- end }}

@@ -1,0 +1,349 @@
+name: Nightly Build
+
+on:
+  schedule:
+    # Run nightly at 03:00 UTC
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-build
+  cancel-in-progress: true
+
+permissions: {}
+
+env:
+  REGISTRY: ghcr.io
+  CHARTS_REPO: ${{ github.repository_owner }}/charts
+  VALUES_FILE: osac-installer/values/development/values.yaml
+
+jobs:
+  # -------------------------------------------------------------------
+  # Job 1: Run E2E tests against the current commit
+  # -------------------------------------------------------------------
+  # osac-operator, fulfillment-service, osac-aap,
+  # bare-metal-fulfillment-operator, and osac-installer itself are all
+  # mono-repo-resident now, sharing this repo's own commit history -- there
+  # is no separate submodule/commit to bump toward first, so this job tests
+  # HEAD directly instead of a bumped temporary branch.
+  e2e-test:
+    name: E2E validation
+    permissions:
+      contents: read
+    uses: osac-project/osac-test-infra/.github/workflows/e2e-vmaas-full-install.yml@main
+    with:
+      test-suite: vmaas
+      installer-repo: ${{ github.repository }}
+      installer-ref: ${{ github.sha }}
+      test-infra-repository: osac-project/osac-test-infra
+      test-infra-ref: main
+
+  # -------------------------------------------------------------------
+  # Job 2: Package and publish the umbrella chart (only if E2E passes)
+  # -------------------------------------------------------------------
+  publish:
+    name: Publish nightly chart
+    needs: e2e-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      # Push/pull chart OCI artifacts to GHCR
+      packages: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      base-version: ${{ steps.version.outputs.base-version }}
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v6
+      with:
+        ref: ${{ github.sha }}
+        submodules: recursive
+        fetch-depth: 0
+        persist-credentials: false
+
+    - name: Set up Helm
+      uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+      with:
+        version: v3.17.0
+
+    - name: Set up chart-testing
+      uses: helm/chart-testing-action@6ec842c01de15ebb84c8627d2744a0c2f2755c9f  # v2.8.0
+
+    - name: Log in to GHCR
+      env:
+        GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GHCR_USER: ${{ github.actor }}
+      run: printf '%s' "${GHCR_TOKEN}" | helm registry login "${{ env.REGISTRY }}" -u "${GHCR_USER}" --password-stdin
+
+    - name: Generate nightly version
+      id: version
+      working-directory: osac-installer
+      run: |
+        set -euo pipefail
+        source ./scripts/lib.sh
+        DATE=$(date -u +%Y%m%d)
+        SHORT_SHA=$(git rev-parse --short=7 HEAD)
+        # GITHUB_RUN_NUMBER/GITHUB_RUN_ATTEMPT keep a "Re-run failed jobs" of
+        # the same run from colliding with the chart version it already
+        # tried to publish (RUN_ID/RUN_NUMBER stay constant across a re-run;
+        # only RUN_ATTEMPT increments).
+        NIGHTLY_SUFFIX="nightly.${DATE}.${SHORT_SHA}.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+
+        # Use the umbrella chart's own latest real release tag (not the
+        # Chart.yaml placeholder, which is never bumped) so the nightly
+        # version reflects where this build actually sits relative to
+        # real releases.
+        BASE_TAG=$(resolve_release_tag .)
+        BASE_VERSION="${BASE_TAG#osac/v}"
+        VERSION="${BASE_VERSION}-${NIGHTLY_SUFFIX}"
+
+        echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+        echo "base-version=${BASE_VERSION}" >> "$GITHUB_OUTPUT"
+        echo "short-sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+        echo "Nightly version: ${VERSION} (base: ${BASE_VERSION})"
+
+    - name: Build umbrella chart dependencies
+      working-directory: osac-installer
+      run: helm dependency build charts/osac/
+
+    - name: Lint chart
+      working-directory: osac-installer
+      run: ct lint --all --config ct.yaml
+
+    - name: Package umbrella chart
+      working-directory: osac-installer
+      env:
+        VERSION: ${{ steps.version.outputs.version }}
+      run: |
+        helm package charts/osac/ \
+          --version "${VERSION}" \
+          --app-version "${VERSION}"
+
+    - name: Push umbrella chart to GHCR
+      working-directory: osac-installer
+      env:
+        VERSION: ${{ steps.version.outputs.version }}
+        OCI_REPO: oci://${{ env.REGISTRY }}/${{ env.CHARTS_REPO }}
+      run: |
+        helm push "osac-${VERSION}.tgz" "${OCI_REPO}"
+
+    - name: Verify umbrella chart publication
+      working-directory: osac-installer
+      env:
+        VERSION: ${{ steps.version.outputs.version }}
+        OCI_REPO: oci://${{ env.REGISTRY }}/${{ env.CHARTS_REPO }}
+      run: |
+        echo "Verifying umbrella chart was published successfully..."
+        helm show chart "${OCI_REPO}/osac" --version "${VERSION}"
+
+    - name: Generate images.txt
+      env:
+        VERSION: ${{ steps.version.outputs.version }}
+        BASE_VERSION: ${{ steps.version.outputs.base-version }}
+        SHORT_SHA: ${{ steps.version.outputs.short-sha }}
+      run: |
+        set -euo pipefail
+        # grep's own no-match exit code (1) must not poison the pipeline under
+        # pipefail -- that would abort the script right here instead of
+        # reaching the test -s check below, which is the actual diagnostic
+        # for "nothing extracted". helm template's real failures still
+        # propagate normally: they fail before grep ever runs.
+        helm template osac "osac-installer/osac-${VERSION}.tgz" \
+          --values "${VALUES_FILE}" \
+          --set service.externalHostname=placeholder.example.com \
+          --set service.internalHostname=placeholder-internal.example.com \
+        | (grep -oP 'image:\s*\K\S+' || true) \
+        | tr -d '"' \
+        | sort -u \
+        > images.txt
+
+        if ! test -s images.txt; then
+          echo "ERROR: images.txt is empty — helm template or image extraction failed"
+          exit 1
+        fi
+
+        echo "" >> images.txt
+        echo "# Chart source & version" >> images.txt
+        echo "# osac: source=v${BASE_VERSION} (${SHORT_SHA}), chart=oci://${REGISTRY}/${CHARTS_REPO}/osac:${VERSION}" >> images.txt
+
+        echo "--- images.txt ---"
+        cat images.txt
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+      with:
+        name: nightly-${{ steps.version.outputs.version }}
+        path: |
+          osac-installer/osac-${{ steps.version.outputs.version }}.tgz
+          images.txt
+        retention-days: 14
+
+  # -------------------------------------------------------------------
+  # Job 3: Tag and send success notification
+  # -------------------------------------------------------------------
+  tag-and-notify:
+    name: Tag and notify
+    needs: publish
+    runs-on: osac-ci
+    timeout-minutes: 15
+    if: success()
+    permissions:
+      # Create the nightly git tag
+      contents: write
+      # Look up the package version URL for the Slack notification
+      packages: read
+    env:
+      VERSION: ${{ needs.publish.outputs.version }}
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v6
+      with:
+        ref: ${{ github.sha }}
+        fetch-depth: 0
+
+    - name: Create nightly tag
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        TAG="osac/v${VERSION}"
+        git tag "${TAG}" -m "Nightly build ${VERSION}"
+        git push origin "${TAG}"
+        echo "Tagged: ${TAG}"
+
+    - name: Retrieve Slack webhook from Vault
+      id: vault
+      uses: ./.github/actions/vault-slack-webhook
+
+    - name: Notify Slack on success
+      env:
+        SLACK_WEBHOOK_URL: ${{ steps.vault.outputs.webhook-url }}
+        SERVER_URL: ${{ github.server_url }}
+        REPOSITORY: ${{ github.repository }}
+        RUN_ID: ${{ github.run_id }}
+        REPO_OWNER: ${{ github.repository_owner }}
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set -euo pipefail
+
+        # Package version pages are keyed by numeric version id, not the
+        # tag -- look the id up via the Packages API. Versions are returned
+        # newest-first, so the one we just pushed is always near the top of
+        # the first page. Without ?tag=, GitHub's UI shows the page titled
+        # by digest instead of the human-readable tag (tag is URL-encoded
+        # since it ends up in a query string).
+        #
+        # Best-effort only: never let a failed/empty lookup take down the
+        # whole notification -- degrade to a plain, unlinked version
+        # instead. `|| true` at each call site absorbs curl/jq failures
+        # under `set -e`.
+        chart_version_url() {
+          local version=$1
+          local encoded_version url
+          encoded_version=$(jq -rn --arg v "${version}" '$v|@uri')
+          url=$(curl -sf --max-time 15 \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/orgs/${REPO_OWNER}/packages/container/charts%2Fosac/versions?per_page=100" \
+          | jq -r --arg v "${version}" '.[] | select(.metadata.container.tags | index($v)) | .html_url' \
+          | head -1) || true
+          [ -n "${url}" ] && echo "${url}?tag=${encoded_version}"
+        }
+
+        WORKFLOW_URL="${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
+        URL=$(chart_version_url "${VERSION}" || true)
+        if [ -n "${URL}" ]; then
+          VERSION_LINE="<${URL}|${VERSION}>"
+        else
+          VERSION_LINE="${VERSION}"
+        fi
+
+        jq -n \
+          --arg version "${VERSION}" \
+          --arg summary "*Chart published:* \`osac\` ${VERSION_LINE}" \
+          --arg workflow_url "${WORKFLOW_URL}" \
+          '{
+            "blocks": [
+              {
+                "type": "header",
+                "text": {"type": "plain_text", "text": (":white_check_mark: Nightly Build " + $version + " - Published")}
+              },
+              {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": $summary}
+              },
+              {
+                "type": "actions",
+                "elements": [
+                  {"type": "button", "text": {"type": "plain_text", "text": "View Run"}, "url": $workflow_url}
+                ]
+              }
+            ]
+          }' > /tmp/slack-payload.json
+
+        curl -sf --max-time 15 -X POST "${SLACK_WEBHOOK_URL}" \
+          -H "Content-Type: application/json" \
+          -d @/tmp/slack-payload.json
+
+  # -------------------------------------------------------------------
+  # Job 4: Notify on failure
+  # -------------------------------------------------------------------
+  notify-failure:
+    name: Notify failure
+    needs: [e2e-test, publish, tag-and-notify]
+    runs-on: osac-ci
+    timeout-minutes: 10
+    if: failure()
+    permissions:
+      # Only needed for the checkout step below (resolves the local
+      # vault-slack-webhook composite action) -- least privilege.
+      contents: read
+
+    steps:
+    - name: Checkout repository
+      # Only needed to resolve the local ./.github/actions/vault-slack-webhook
+      # composite action -- no chart/script content is used in this job.
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v6
+
+    - name: Retrieve Slack webhook from Vault
+      id: vault
+      uses: ./.github/actions/vault-slack-webhook
+
+    - name: Notify Slack on failure
+      env:
+        SLACK_WEBHOOK_URL: ${{ steps.vault.outputs.webhook-url }}
+        SERVER_URL: ${{ github.server_url }}
+        REPOSITORY: ${{ github.repository }}
+        RUN_ID: ${{ github.run_id }}
+        REF_NAME: ${{ github.ref_name }}
+      run: |
+        set -euo pipefail
+        WORKFLOW_URL="${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
+
+        jq -n \
+          --arg branch "${REF_NAME}" \
+          --arg workflow_url "${WORKFLOW_URL}" \
+          '{
+            "blocks": [
+              {
+                "type": "header",
+                "text": {"type": "plain_text", "text": ":x: Nightly Build Failed"}
+              },
+              {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": ("*Branch:* `" + $branch + "`\nPlease investigate the failure.")}
+              },
+              {
+                "type": "actions",
+                "elements": [
+                  {"type": "button", "text": {"type": "plain_text", "text": "View Run"}, "url": $workflow_url}
+                ]
+              }
+            ]
+          }' > /tmp/slack-payload.json
+
+        curl -sf --max-time 15 -X POST "${SLACK_WEBHOOK_URL}" \
+          -H "Content-Type: application/json" \
+          -d @/tmp/slack-payload.json

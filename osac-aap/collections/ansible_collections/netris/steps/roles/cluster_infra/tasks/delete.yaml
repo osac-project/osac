@@ -1,0 +1,73 @@
+---
+- name: Set skip network detach for Netris
+  ansible.builtin.set_fact:
+    manage_agents_skip_network_detach: true
+
+- name: List agents allocated to this cluster for nmstate revert
+  kubernetes.core.k8s_info:
+    kind: Agent
+    api_version: agent-install.openshift.io/v1beta1
+    namespace: "{{ default_agent_namespace }}"
+    label_selectors:
+      - "{{ cluster_order_label }}={{ cluster_infra_name }}"
+  register: cluster_agents_for_nmstate_revert
+
+- name: Delete NMStateConfig for cluster agents
+  ansible.builtin.include_role:
+    name: osac.service.nmstate_config
+  vars:
+    nmstate_config_state: absent
+    nmstate_config_cluster_name: "{{ cluster_infra_name }}"
+    nmstate_config_agents: "{{ cluster_agents_for_nmstate_revert.resources }}"
+
+- name: Get InfraEnv to check nmStateConfigLabelSelector
+  kubernetes.core.k8s_info:
+    api_version: agent-install.openshift.io/v1beta1
+    kind: InfraEnv
+    name: "{{ hosted_cluster_default_infraenv }}"
+    namespace: "{{ default_agent_namespace }}"
+  register: infraenv_info
+
+- name: Remove cluster order label from InfraEnv nmStateConfigLabelSelector
+  kubernetes.core.k8s_json_patch:
+    api_version: agent-install.openshift.io/v1beta1
+    kind: InfraEnv
+    name: "{{ hosted_cluster_default_infraenv }}"
+    namespace: "{{ default_agent_namespace }}"
+    patch:
+      - op: remove
+        path: /spec/nmStateConfigLabelSelector/matchLabels/{{ cluster_order_label | osac.service.json_pointer_escape }}
+  when: >-
+    infraenv_info.resources | length > 0 and
+    cluster_order_label in
+    (infraenv_info.resources[0].spec.nmStateConfigLabelSelector.matchLabels | default({}))
+
+- name: Detach agents from cluster
+  ansible.builtin.include_role:
+    name: osac.service.manage_agents
+    tasks_from: detach_and_unlabel_all_removed_agents
+  vars:
+    manage_agents_cluster_order_name: "{{ cluster_infra_name }}"
+
+- name: Delete SNAT rule for VPC subnet
+  ansible.builtin.include_role:
+    name: netris.controller.nat
+  vars:
+    nat_name: "{{ cluster_infra_name }}-snat"
+    nat_state: absent
+    nat_site_id: "{{ netris_site_id }}"
+
+- name: Delete Netris server cluster
+  ansible.builtin.include_role:
+    name: netris.controller.server_cluster
+  vars:
+    server_cluster_name: "{{ cluster_infra_name }}"
+    server_cluster_state: absent
+    server_cluster_site_id: "{{ netris_site_id }}"
+
+- name: Delete VPC created by server cluster
+  ansible.builtin.include_role:
+    name: netris.controller.vpc
+  vars:
+    vpc_name: "{{ cluster_infra_name }}"
+    vpc_state: absent

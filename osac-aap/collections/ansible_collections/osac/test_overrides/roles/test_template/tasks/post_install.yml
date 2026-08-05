@@ -1,0 +1,21 @@
+---
+- name: Log test template post_install
+  ansible.builtin.lineinfile:
+    path: /tmp/osac_test_overrides.log
+    line: "{{ ansible_date_time.iso8601 }} | test_template_post_install | {{ cluster_order.metadata.name }}"
+    create: true
+
+# Create a post-install marker ConfigMap
+- name: Create post-install marker
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: "{{ cluster_order.metadata.name }}-post-install-marker"
+        namespace: "{{ cluster_working_namespace }}"
+      data:
+        template: test_template
+        phase: post_install
+        timestamp: "{{ ansible_date_time.iso8601 }}"

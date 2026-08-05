@@ -1,0 +1,7 @@
+---
+- name: "openvswitch: delete port"
+  openvswitch_port:
+    bridge: "{{ bridge_name }}"
+    port: "{{ port_name }}"
+    state: absent
+  become: true

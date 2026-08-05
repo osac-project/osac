@@ -1,0 +1,81 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: aap-bootstrap
+spec:
+  template:
+    spec:
+      initContainers:
+      - name: wait-for-aap
+        image: openshift-cli
+        command:
+          - /bin/bash
+          - -c
+          - |
+            echo "Gateway: ${AAP_GATEWAY_HOSTNAME}"
+            echo "Waiting for AAP controller to be ready..."
+            for i in {1..60}; do
+              echo "Attempt $i: Checking AAP controller readiness..."
+              curl -skf http://${AAP_GATEWAY_HOSTNAME}/api/gateway/v1/ping/ \
+                | grep -q 'good';
+              GATEWAY=$?
+              echo "GATEWAY exit code: $GATEWAY"
+
+              curl -skf http://${AAP_CONTROLLER_GATEWAY_HOSTNAME}/api/v2/ping/ \
+                | grep -q 'version';
+              CONTROLLER_GATEWAY=$?
+              echo "CONTROLLER_GATEWAY exit code: $CONTROLLER_GATEWAY"
+
+              auth_code=$(curl -sk -o /dev/null -w "%{http_code}" -X POST \
+                http://${AAP_GATEWAY_HOSTNAME}/api/gateway/v1/tokens/ \
+                -d "username=admin&password=dummy" 2>/dev/null)
+              [ "$auth_code" != "503" ] && [ "$auth_code" != "000" ];
+              AUTH_UPSTREAM=$?
+              echo "AUTH_UPSTREAM exit code: $AUTH_UPSTREAM (HTTP $auth_code)"
+
+              if [ $GATEWAY -eq 0 ] && [ $CONTROLLER_GATEWAY -eq 0 ] && [ $AUTH_UPSTREAM -eq 0 ];
+              then
+                echo "AAP controller is ready!"
+                exit 0
+              fi
+              echo "AAP is not ready, waiting 60 seconds..."
+              sleep 60
+            done
+            echo "Timeout waiting for AAP."
+            exit 1
+        env:
+        - name: AAP_GATEWAY_HOSTNAME
+          value: "osac-aap"
+        - name: AAP_CONTROLLER_GATEWAY_HOSTNAME
+          value: "osac-aap-controller-service"
+      containers:
+      - image: osac-aap
+        name: bootstrap
+        args:
+        - ansible-playbook
+        - osac.config_as_code.subscription
+        - osac.config_as_code.configure
+        envFrom:
+        - secretRef:
+            name: config-as-code-ig
+            optional: true
+        env:
+        - name: AAP_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: osac-aap-admin-password
+              key: password
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        volumeMounts:
+        - name: config-as-code-manifest-volume
+          mountPath: /var/secrets/config-as-code-manifest
+          readOnly: true
+      volumes:
+      - name: config-as-code-manifest-volume
+        secret:
+          secretName: config-as-code-manifest-ig
+      restartPolicy: Never
+  backoffLimit: 15

@@ -1,0 +1,20 @@
+---
+apiVersion: osac.openshift.io/v1alpha1
+kind: ComputeInstance
+metadata:
+  name: test-vm-gpu
+  namespace: osac-system
+spec:
+  templateID: osac.test_overrides.ocp_virt_vm_with_gpu
+  networkAttachments:
+    - subnetRef: test-subnet
+  cores: 2
+  memoryGiB: 4
+  bootDisk:
+    sizeGiB: 20
+  image:
+    sourceType: registry
+    sourceRef: "quay.io/containerdisks/fedora:latest"
+  runStrategy: "Always"
+status:
+  desiredConfigVersion: "1"

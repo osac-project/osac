@@ -1,0 +1,19 @@
+---
+# VirtualNetwork deletion - stub implementation
+# No resources to clean up since create.yaml doesn't create any
+
+- name: Include get remote cluster kubeconfig
+  ansible.builtin.include_role:
+    name: osac.service.common
+    tasks_from: get_remote_cluster_kubeconfig
+
+- name: Extract VirtualNetwork name
+  ansible.builtin.set_fact:
+    vn_name: "{{ virtual_network.metadata.name }}"
+
+- name: Display deletion status
+  ansible.builtin.debug:
+    msg:
+      - "VirtualNetwork '{{ vn_name }}' deletion completed"
+      - "NOTE: No resources were created during VirtualNetwork provisioning"
+      - "Subnet resources (if any) must be deleted separately"

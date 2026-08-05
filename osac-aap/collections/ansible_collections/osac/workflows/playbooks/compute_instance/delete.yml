@@ -1,0 +1,97 @@
+---
+# Workflow: Delete Compute Instance
+# This workflow deletes a virtual machine from a ComputeInstance CRD.
+# Major workflow phases can be overridden, and hooks allow customization at workflow boundaries.
+#
+# Usage:
+#   - name: Delete compute instance
+#     ansible.builtin.import_playbook: osac.workflows.compute_instance.delete
+#     vars:
+#       compute_instance: "{{ ansible_eda.event.payload }}"
+#
+# Hook example:
+#   - name: Delete compute instance with custom hooks
+#     ansible.builtin.import_playbook: osac.workflows.compute_instance.delete
+#     vars:
+#       compute_instance: "{{ ansible_eda.event.payload }}"
+#       hook_workflow_complete:
+#         name: my_custom_hooks
+#         tasks_from: cleanup_vm.yml
+
+- name: Delete compute instance workflow
+  hosts: localhost
+  gather_facts: false
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ lookup('env', 'K8S_AUTH_KUBECONFIG') | default(lookup('env', 'KUBECONFIG'), true) | default(lookup('env', 'HOME') + '/.kube/config', true) }}"
+
+
+  vars:
+    compute_instance: "{{ ansible_eda.event.payload }}"
+
+    # GENERIC HOOKS - Default to noop
+    hook_workflow_start_default:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+
+    hook_workflow_complete_default:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+
+  collections:
+    - osac.workflows
+    - osac.service
+    - osac.templates
+
+  pre_tasks:
+    # HOOK: Workflow start
+    - name: Hook - Workflow start
+      ansible.builtin.include_role:
+        name: "{{ (hook_workflow_start | default(hook_workflow_start_default)).name }}"
+        tasks_from: "{{ (hook_workflow_start | default(hook_workflow_start_default)).tasks_from }}"
+
+    # CRITICAL: Extract compute instance name and template ID (NOT overrideable)
+    - name: Set compute instance name
+      ansible.builtin.set_fact:
+        compute_instance_name: "{{ compute_instance.metadata.name }}"
+
+    - name: Set template ID
+      ansible.builtin.set_fact:
+        template_id: "{{ compute_instance.spec.templateID }}"
+
+    # CRITICAL: Determine namespace (NOT overrideable)
+    - name: Determine tenant target namespace
+      ansible.builtin.include_role:
+        name: osac.service.tenant_target_namespace
+
+  tasks:
+    - name: Display compute instance deletion information
+      ansible.builtin.debug:
+        msg:
+          - "Deleting compute instance: {{ compute_instance_name }}"
+          - "Tenant target namespace: {{ tenant_target_namespace }}"
+          - "Template ID: {{ template_id_override | default(template_id) }}"
+
+    # CRITICAL: Call template (NOT overrideable, but template has internal override points)
+    - name: Call selected template
+      ansible.builtin.include_role:
+        name: "{{ template_id_override | default(template_id) }}"
+        tasks_from: delete
+
+    # CRITICAL: Remove finalizer (NOT overrideable)
+    - name: Remove compute instance finalizer
+      ansible.builtin.include_role:
+        name: osac.service.finalizer
+      vars:
+        finalizer_state: absent
+        finalizer_name: "{{ compute_instance_osac_finalizer }}"
+        finalizer_target:
+          api_version: osac.openshift.io/v1alpha1
+          kind: ComputeInstance
+          namespace: "{{ compute_instance.metadata.namespace }}"
+          name: "{{ compute_instance_name }}"
+
+    # HOOK: Workflow complete
+    - name: Hook - Workflow complete
+      ansible.builtin.include_role:
+        name: "{{ (hook_workflow_complete | default(hook_workflow_complete_default)).name }}"
+        tasks_from: "{{ (hook_workflow_complete | default(hook_workflow_complete_default)).tasks_from }}"

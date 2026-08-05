@@ -1,0 +1,211 @@
+name: Build bare-metal-fulfillment-operator image
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'bare-metal-fulfillment-operator/**'
+      - '!bare-metal-fulfillment-operator/OWNERS'
+      - '!bare-metal-fulfillment-operator/LICENSE'
+      - '!bare-metal-fulfillment-operator/**/*.md'
+      - '!bare-metal-fulfillment-operator/docs/**'
+  push:
+    branches:
+    - main
+    tags:
+    - 'bare-metal-fulfillment-operator/v*'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Use docker.io for Docker Hub if empty
+  REGISTRY: ghcr.io
+  # Hardcoded rather than github.repository: that now resolves to
+  # osac-project/osac for every component's build workflow post-merge,
+  # colliding on mutable tags with other components' images. Keeping this
+  # component's pre-merge image identity stable instead, same as
+  # osac-operator's build-image.yaml and osac-aap's execution-environment.yml do.
+  IMAGE_NAME: osac-project/bare-metal-fulfillment-operator
+
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'bare-metal-fulfillment-operator/go.mod'
+
+      - name: Install kind
+        uses: helm/kind-action@v1
+        with:
+          install_only: true
+
+      - name: Run unit tests
+        working-directory: bare-metal-fulfillment-operator
+        run: make test
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      # Login against a Docker registry except on PR
+      # https://github.com/docker/login-action
+      - name: Log into registry ${{ env.REGISTRY }}
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Component-scoped tags (see the `tags:` trigger above) can't be used verbatim
+      # as image tags -- Docker/OCI tags can't contain the '/' the git tag does --
+      # so strip the prefix here to recover the bare vX.Y.Z for the actual image tags.
+      - name: Compute release version
+        if: startsWith(github.ref, 'refs/tags/bare-metal-fulfillment-operator/')
+        run: |
+          version="${GITHUB_REF_NAME#bare-metal-fulfillment-operator/}"
+          # Same SemVer rule as publish-charts.yaml's guard job -- rejects build
+          # metadata (+...) and validates the core/prerelease shape before it's
+          # trusted as an image tag.
+          semver_re='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(\.((0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?$'
+          if ! [[ "${version}" =~ ${semver_re} ]]; then
+            echo "::error::Tag '${GITHUB_REF_NAME}' is not a valid semver release tag"
+            exit 1
+          fi
+          # Prerelease identifiers can themselves contain dots (e.g. v1.2.3-beta.1),
+          # so derive major/minor from the prerelease-stripped core version --
+          # otherwise a dotted prerelease would corrupt the major.minor alias.
+          core="${version%%-*}"
+          echo "RELEASE_VERSION=${version}" >> "$GITHUB_ENV"
+          echo "RELEASE_MAJOR_MINOR=${core%.*}" >> "$GITHUB_ENV"
+          echo "RELEASE_MAJOR=${core%%.*}" >> "$GITHUB_ENV"
+
+      # Extract metadata (tags, labels) for Docker
+      # https://github.com/docker/metadata-action
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # No `type=ref,event=tag` here: the `tags:` trigger above only ever
+          # matches this component's own scoped prefix, so the tag-triggered
+          # case is always covered by the three raw entries below already --
+          # keeping it would just add a redundant, slash-sanitized duplicate
+          # tag (e.g. "bare-metal-fulfillment-operator-v1.2.3").
+          tags: |
+            type=raw,value=${{ env.RELEASE_VERSION }},enable=${{ env.RELEASE_VERSION != '' }}
+            type=raw,value=${{ env.RELEASE_MAJOR_MINOR }},enable=${{ env.RELEASE_VERSION != '' }}
+            type=raw,value=${{ env.RELEASE_MAJOR }},enable=${{ env.RELEASE_VERSION != '' }}
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
+
+
+      # Build and push Docker image with Buildx (don't push on PR)
+      # https://github.com/docker/build-push-action
+      - name: Build and push Docker image
+        id: build-operator
+        uses: docker/build-push-action@v7
+        with:
+          context: bare-metal-fulfillment-operator
+          file: bare-metal-fulfillment-operator/Containerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      # Extract the commit SHA tag for manifest generation
+      - name: Extract commit SHA tag
+        id: sha-tag
+        if: github.event_name != 'pull_request'
+        run: |
+          # Extract the sha tag from the metadata output
+          FULL_SHA_TAG=$(echo "${{ steps.meta.outputs.tags }}" | grep -E "sha-[0-9a-f]{7}" | head -n1)
+          SHA_TAG=$(echo "$FULL_SHA_TAG" | sed "s/.*://")
+          echo "sha-tag=$SHA_TAG" >> $GITHUB_OUTPUT
+          echo "full-sha-tag=$FULL_SHA_TAG" >> $GITHUB_OUTPUT
+          echo "manifest-tag=$SHA_TAG-manifests" >> $GITHUB_OUTPUT
+          echo "Using SHA tag: $SHA_TAG"
+          echo "Full SHA tag: $FULL_SHA_TAG"
+          echo "Manifest tag: $SHA_TAG-manifests"
+
+      # Set up Go for kustomize operations
+      - name: Set up Go for manifest generation
+        if: github.event_name != 'pull_request'
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'bare-metal-fulfillment-operator/go.mod'
+
+      # Generate manifests with kustomize pointing to the SHA-tagged image
+      - name: Generate manifests with kustomize
+        if: github.event_name != 'pull_request'
+        working-directory: bare-metal-fulfillment-operator
+        run: |
+          # Install kustomize
+          make kustomize
+
+          # Create dist directory
+          mkdir -p dist
+
+          # Set the manager image to the SHA-tagged version
+          cd config/manager && ../../bin/kustomize edit set image controller=${{ steps.sha-tag.outputs.full-sha-tag }}
+
+          # Generate the complete manifest
+          cd ../..
+          ./bin/kustomize build config/default > dist/install.yaml
+
+          echo "Generated manifest with image: ${{ steps.sha-tag.outputs.full-sha-tag }}"
+          echo "Manifest content preview:"
+          head -20 dist/install.yaml
+
+      # Create Dockerfile for manifest container
+      - name: Create manifest container Dockerfile
+        if: github.event_name != 'pull_request'
+        working-directory: bare-metal-fulfillment-operator
+        run: |
+          cat > Dockerfile.manifests << 'EOF'
+          FROM scratch
+          COPY dist/install.yaml /manifests/install.yaml
+          EOF
+
+          echo "Created Dockerfile.manifests:"
+          cat Dockerfile.manifests
+
+      # Extract metadata for manifest container
+      - name: Extract manifest container metadata
+        id: meta-manifests
+        if: github.event_name != 'pull_request'
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ steps.sha-tag.outputs.manifest-tag }}
+
+      # Build and push manifest container
+      - name: Build and push manifest container
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v7
+        with:
+          context: bare-metal-fulfillment-operator
+          file: bare-metal-fulfillment-operator/Dockerfile.manifests
+          push: true
+          tags: ${{ steps.meta-manifests.outputs.tags }}
+          labels: ${{ steps.meta-manifests.outputs.labels }}

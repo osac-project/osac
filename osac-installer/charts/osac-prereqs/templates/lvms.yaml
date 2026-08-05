@@ -1,0 +1,27 @@
+{{- if .Values.lvms.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: osac-prereqs-lvms-config
+  labels:
+    {{- include "osac-prereqs.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation
+data:
+  config.yaml: |
+    apiVersion: lvm.topolvm.io/v1alpha1
+    kind: LVMCluster
+    metadata:
+      name: lvms-cluster
+      namespace: openshift-storage
+    spec:
+      storage:
+        deviceClasses:
+          - name: vg1
+            default: true
+            thinPoolConfig:
+              name: thin-pool-1
+              sizePercent: 90
+              overprovisionRatio: 10
+{{- end }}

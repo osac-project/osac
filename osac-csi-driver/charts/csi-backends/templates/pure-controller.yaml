@@ -1,0 +1,168 @@
+{{- if .Values.pure.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pure-vendor-sa
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "csi-backends.labels" . | nindent 4 }}
+    app.kubernetes.io/name: pure-csi-controller
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pure-csi-controller
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "csi-backends.labels" . | nindent 4 }}
+    app.kubernetes.io/name: pure-csi-controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pure-csi-controller
+  template:
+    metadata:
+      labels:
+        {{- include "csi-backends.labels" . | nindent 8 }}
+        app.kubernetes.io/name: pure-csi-controller
+    spec:
+      serviceAccountName: pure-vendor-sa
+      automountServiceAccountToken: true
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: pure-csi
+          image: "{{ .Values.pure.image.repository }}:{{ .Values.pure.image.tag }}"
+          args:
+            - "--endpoint=tcp://0.0.0.0:{{ .Values.pure.service.port }}"
+            - "--plugin=controller"
+            - "--mode=standalone"
+          env:
+            - name: NAMESPACE
+              value: {{ .Values.pure.config.nodePluginNamespace | quote }}
+            - name: POD_NAMESPACE
+              value: {{ .Values.pure.config.nodePluginNamespace | quote }}
+            - name: CLUSTER_UUID
+              value: {{ .Values.pure.config.clusterUuid | quote }}
+            - name: PX_SECRETS_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          ports:
+            - containerPort: {{ .Values.pure.service.port }}
+              name: csi-grpc
+              protocol: TCP
+          {{- if .Values.pure.config.credentialsSecret }}
+          volumeMounts:
+            - name: pure-secret
+              mountPath: /pure.json
+              subPath: pure.json
+              readOnly: true
+      volumes:
+        - name: pure-secret
+          secret:
+            secretName: {{ .Values.pure.config.credentialsSecret }}
+          {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "csi-backends.fullname" . }}-pure
+  labels:
+    {{- include "csi-backends.labels" . | nindent 4 }}
+    app.kubernetes.io/name: pure-csi-controller
+rules:
+  - apiGroups: ["purestorage.com"]
+    resources: ["purevolumes", "puresnapshots", "storagenodeinitiators"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "update"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["volumeattachments"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["volumeattachments/status"]
+    verbs: ["patch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["csinodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list", "watch", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "csi-backends.fullname" . }}-pure-secrets
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "csi-backends.labels" . | nindent 4 }}
+    app.kubernetes.io/name: pure-csi-controller
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "csi-backends.fullname" . }}-pure-secrets
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "csi-backends.labels" . | nindent 4 }}
+    app.kubernetes.io/name: pure-csi-controller
+subjects:
+  - kind: ServiceAccount
+    name: pure-vendor-sa
+    namespace: {{ .Values.namespace }}
+roleRef:
+  kind: Role
+  name: {{ include "csi-backends.fullname" . }}-pure-secrets
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "csi-backends.fullname" . }}-pure
+  labels:
+    {{- include "csi-backends.labels" . | nindent 4 }}
+    app.kubernetes.io/name: pure-csi-controller
+subjects:
+  - kind: ServiceAccount
+    name: pure-vendor-sa
+    namespace: {{ .Values.namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ include "csi-backends.fullname" . }}-pure
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pure-csi-controller
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "csi-backends.labels" . | nindent 4 }}
+    app.kubernetes.io/name: pure-csi-controller
+spec:
+  selector:
+    app.kubernetes.io/name: pure-csi-controller
+  ports:
+    - name: csi-grpc
+      port: {{ .Values.pure.service.port }}
+      targetPort: {{ .Values.pure.service.port }}
+      protocol: TCP
+{{- end }}

@@ -1,0 +1,9 @@
+---
+- name: Create VLAN on switches
+  hosts: switches
+  gather_facts: false
+  tasks:
+    - name: Create VLAN
+      ansible.builtin.include_role:
+        name: agentless_net.l2.vlan
+        tasks_from: create

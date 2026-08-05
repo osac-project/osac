@@ -1,0 +1,5 @@
+---
+- name: "nxos: delete vlan"
+  nxos_config:
+    lines: "no vlan {{ _vlan_id }}"
+  connection: network_cli

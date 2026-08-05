@@ -1,0 +1,6 @@
+apiVersion: v2
+name: osac-metering
+description: OSAC Metering Service — collects metered events from OSAC tenant resource usage
+type: application
+version: 0.0.0
+appVersion: "0.0.0"

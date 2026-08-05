@@ -1,0 +1,9 @@
+---
+- name: Create DNAT rule in router namespace
+  hosts: net_nodes
+  gather_facts: false
+  tasks:
+    - name: Create DNAT
+      ansible.builtin.include_role:
+        name: agentless_net.l3.dnat
+        tasks_from: create

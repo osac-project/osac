@@ -1,0 +1,7 @@
+---
+- name: "fos: remove VLAN from trunk port"
+  fos_config:
+    lines:
+      - switchport trunk allowed vlan remove {{ _vlan_id }}
+    parents: interface {{ port_name }}
+  connection: network_cli

@@ -1,0 +1,65 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    ansible_job: ''
+spec:
+  serviceAccountName: osac-sa
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: ansible_job
+                  operator: Exists
+            topologyKey: kubernetes.io/hostname
+  containers:
+    - image: >-
+        {{ aap_ee_image }}
+      name: worker
+      imagePullPolicy: Always
+      args:
+        - ansible-runner
+        - worker
+        - '--private-data-dir=/runner'
+      volumeMounts:
+        - name: kube-api-access
+          mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+          readOnly: true
+      envFrom:
+        - secretRef:
+            name: storage-operations-ig
+        - configMapRef:
+            name: storage-operations-ig
+            optional: true
+      env:
+        - name: OSAC_STORAGE_CONFIG_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+  volumes:
+    - name: kube-api-access
+      projected:
+        sources:
+          - serviceAccountToken:
+              path: token
+              expirationSeconds: 3600
+          - configMap:
+              name: kube-root-ca.crt
+              items:
+                - key: ca.crt
+                  path: ca.crt
+          - downwardAPI:
+              items:
+                - path: namespace
+                  fieldRef:
+                    apiVersion: v1
+                    fieldPath: metadata.namespace
+          - configMap:
+              name: openshift-service-ca.crt
+              items:
+                - key: service-ca.crt
+                  path: service-ca.crt
+        defaultMode: 420

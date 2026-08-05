@@ -1,0 +1,122 @@
+//
+// Copyright (c) 2025 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.public.v1;
+
+import "google/protobuf/any.proto";
+import "osac/public/v1/compute_instance_type.proto";
+import "osac/public/v1/metadata_type.proto";
+
+// A compute instance template defines a type of compute instance that can be created by the user. Note that the user doesn't create these
+// templates: the system provides a collection of them, and the user chooses one.
+//
+// buf:lint:ignore OSAC_OBJECT_SHAPE
+message ComputeInstanceTemplate {
+  // Unique identifier of the template.
+  string id = 1;
+
+  Metadata metadata = 2;
+
+  // Human friendly short description of the template, only a few words, suitable for displaying in one single line on a
+  // UI or CLI.
+  string title = 3;
+
+  // Human friendly long description of the template, using Markdown format.
+  string description = 4;
+
+  // Definitions of the parameters that can be used to customize the template.
+  //
+  // Note that these are only the *definitions* of the parameters, not the actual values. The actual values are in the
+  // `spec.template_parameters` field of the compute instance.
+  repeated ComputeInstanceTemplateParameterDefinition parameters = 5;
+
+  // Default values for compute instance spec fields. When a user creates a
+  // compute instance without setting these fields, these values are applied.
+  //
+  // User-provided spec field values always override these defaults.
+  ComputeInstanceTemplateSpecDefaults spec_defaults = 6;
+}
+
+// Contains type and documentation of a template parameter.
+message ComputeInstanceTemplateParameterDefinition {
+  // Name of the parameter.
+  //
+  // This is the name that should be used in the `template_parameters` field of the compute instance to assign a value to the
+  // parameter.
+  string name = 1;
+
+  // Human friendly short description of the parameter, only a few words, suitable for displaying in one single line on
+  // a UI or CLI.
+  string title = 2;
+
+  // Human friendly description of the parameter, using Markdown format.
+  string description = 3;
+
+  // Indicates if this parameter is required or optional.
+  //
+  // Values for required parameters must be included when creating the compute instance, otherwise it will be rejected.
+  //
+  // Note that there may be other dependencies between parameters which may cause a compute instance to be rejected. For example,
+  // the allowed values of a parameter may depend on the value of another parameter. That kind of information will be in
+  // the `description` field.
+  bool required = 4;
+
+  // Type of the parameter.
+  //
+  // The possible values are the same as those used by the `type_url` field of the `Any` type:
+  //
+  // | Type                           | Value                                             |
+  // |--------------------------------|---------------------------------------------------|
+  // | Boolean                        | `type.googleapis.com/google.protobuf.BoolValue`   |
+  // | Integer number, 32 bits        | `type.googleapis.com/google.protobuf.Int32Value`  |
+  // | Integer number, 64 bits        | `type.googleapis.com/google.protobuf.Int64Value`  |
+  // | Floating point number, 32 bits | `type.googleapis.com/google.protobuf.FloatValue`  |
+  // | Floating point number, 64 bits | `type.googleapis.com/google.protobuf.DoubleValue` |
+  // | String                         | `type.googleapis.com/google.protobuf.StringValue` |
+  // | Timestamp                      | `type.googleapis.com/google.protobuf.Timestamp`   |
+  // | Duration                       | `type.googleapis.com/google.protobuf.Duration`    |
+  // | Array of bytes                 | `type.googleapis.com/google.protobuf.BytesValue`  |
+  // | Any JSON value                 | `type.googleapis.com/google.protobuf.Value`       |
+  //
+  // When using the HTTP+JSON version of the API the value provided in the `template_parameters` field of the compute instance
+  // must be represented as documented in the (ProtoJSON format document)[https://protobuf.dev/programming-guides/json].
+  string type = 5;
+
+  // Default value for optional parameters.
+  google.protobuf.Any default = 6;
+}
+
+// Default values for compute instance spec fields.
+message ComputeInstanceTemplateSpecDefaults {
+  // Reserved field numbers for removed fields (do not reuse).
+  reserved 1, 2;
+  reserved "cores", "memory_gib";
+
+  // Default image configuration.
+  optional ComputeInstanceImage image = 3;
+
+  // Default boot disk configuration.
+  optional ComputeInstanceDisk boot_disk = 4;
+
+  // Default run strategy.
+  optional string run_strategy = 5;
+
+  // Default instance type name. Specifies the default compute configuration for instances
+  // created from this template.
+  optional string instance_type = 6;
+
+  // Default guest OS type. When true, the VM runs Windows. When false or omitted, the VM runs Linux.
+  optional bool is_windows = 7;
+}

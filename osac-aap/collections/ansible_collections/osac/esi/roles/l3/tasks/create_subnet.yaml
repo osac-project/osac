@@ -1,0 +1,31 @@
+- name: Check if subnet exists
+  openstack.cloud.subnets_info:
+    name: "{{ subnet_name }}"
+  register: subnets
+
+- name: Set create_subnet_result to found subnet
+  when: (subnets.subnets | length > 0)
+  ansible.builtin.set_fact:
+    create_subnet_result: "{{ subnets.subnets[0].id }}"
+
+- name: Create a new subnet
+  when: (subnets.subnets | length == 0)
+  block:
+  - name: Create subnet  # noqa:no-changed-when
+    ansible.builtin.command: >-
+      openstack subnet create
+      --network "{{ network_id }}"
+      --gateway "{{ l3_subnet_gateway_ip }}"
+      --subnet-range "{{ l3_subnet_cidr }}"
+      --allocation-pool start="{{ l3_subnet_allocation_pool_start }}",end="{{ l3_subnet_allocation_pool_end }}"
+      --dns-nameserver {{ l3_subnet_dns_nameservers | join(' --dns-nameserver ') }}
+      {% for tag in l3_network_tags %}
+      --tag "{{ tag }}"
+      {% endfor %}
+      "{{ subnet_name }}"
+      -f json
+    register: subnet_cmd_result
+
+  - name: Set create_subnet_result to new subnet
+    ansible.builtin.set_fact:
+      create_subnet_result: "{{ (subnet_cmd_result.stdout | from_json).id }}"

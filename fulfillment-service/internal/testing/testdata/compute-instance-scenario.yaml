@@ -1,0 +1,18 @@
+name: default-compute-instance-scenario
+description: Default scenario with sample compute instance templates and instances
+templates:
+  - id: tpl-small-001
+    name: small-instance
+    title: Small Instance
+    description: A small compute instance with 2 CPUs and 4GB RAM
+  - id: tpl-gpu-001
+    name: gpu-instance
+    title: GPU Instance
+    description: A GPU-enabled compute instance with 8 CPUs, 32GB RAM, and 1 GPU
+instances:
+  - id: ci-mock-12345
+    name: mock-instance
+    template: tpl-small-001
+    state: COMPUTE_INSTANCE_STATE_RUNNING
+    internalIpAddress: "192.168.1.100"
+    externalIpAddress: "136.47.228.207"

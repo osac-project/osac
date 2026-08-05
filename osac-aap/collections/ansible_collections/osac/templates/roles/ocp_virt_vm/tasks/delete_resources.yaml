@@ -1,0 +1,170 @@
+---
+- name: Get VirtualMachine info for floating IP cleanup
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: kubevirt.io/v1
+    kind: VirtualMachine
+    name: "{{ compute_instance_name }}"
+    namespace: "{{ compute_instance_target_namespace }}"
+  register: vm_info
+
+- name: Check if VM instance exists
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: kubevirt.io/v1
+    kind: VirtualMachineInstance
+    name: "{{ compute_instance_name }}"
+    namespace: "{{ compute_instance_target_namespace }}"
+  register: vm_exists
+
+- name: Stop VirtualMachine
+  kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: kubevirt.io/v1
+    kind: VirtualMachine
+    name: "{{ compute_instance_name }}"
+    namespace: "{{ compute_instance_target_namespace }}"
+    state: present
+    definition:
+      spec:
+        runStrategy: Halted
+  when: vm_exists.resources | length > 0
+
+- name: Wait for VirtualMachineInstance to stop
+  # CRITICAL: Must wait for the VirtualMachineInstance (VMI) to fully disappear before
+  # deleting the VirtualMachine (VM) definition. A VM with runStrategy=Halted can report
+  # Ready=False while its VMI is still terminating, creating a race condition where
+  # KubeVirt rejects the VM delete operation with "Virtual machine is still running".
+  #
+  # KubeVirt architecture: VM (desired state) -> VMI (running instance)
+  # Per KubeVirt API design, the VMI must be absent before VM deletion succeeds.
+  # Reference: https://kubevirt.io/api-reference/v1.3.1/definitions.html#_v1_virtualmachine
+  #            https://github.com/kubevirt/kubevirt/blob/main/docs/devel/deletion.md
+  #
+  # This task polls for VMI absence (resources | length == 0) with 60 retries × 5s = 5 min timeout.
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: kubevirt.io/v1
+    kind: VirtualMachineInstance
+    name: "{{ compute_instance_name }}"
+    namespace: "{{ compute_instance_target_namespace }}"
+  register: vmi_stopped
+  until: vmi_stopped.resources | length == 0
+  retries: 60
+  delay: 5
+  when: vm_exists.resources | length > 0
+
+- name: Delete VirtualMachine
+  kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: kubevirt.io/v1
+    kind: VirtualMachine
+    name: "{{ compute_instance_name }}"
+    namespace: "{{ compute_instance_target_namespace }}"
+    state: absent
+    wait: true
+    wait_timeout: 300
+
+- name: Delete VM load balancer service
+  # This Service is created only when a post-create hook provisions a load-balancer
+  # Service for the VM. It is not created by the default create flow, so it may not
+  # exist on every delete run. The kubernetes.core.k8s module with state: absent is
+  # idempotent and handles missing resources gracefully (returns changed=false).
+  kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: v1
+    kind: Service
+    name: "{{ compute_instance_name }}-load-balancer"
+    namespace: "{{ compute_instance_target_namespace }}"
+    state: absent
+
+- name: Delete root disk DataVolume
+  kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: cdi.kubevirt.io/v1beta1
+    kind: DataVolume
+    name: "{{ compute_instance_name }}-root-disk"
+    namespace: "{{ compute_instance_target_namespace }}"
+    state: absent
+    wait: true
+    wait_timeout: 300
+
+- name: Delete additional disk DataVolumes
+  kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: cdi.kubevirt.io/v1beta1
+    kind: DataVolume
+    name: "{{ compute_instance_name }}-disk-{{ idx + 1 }}"
+    namespace: "{{ compute_instance_target_namespace }}"
+    state: absent
+    wait: true
+    wait_timeout: 300
+  loop: "{{ compute_instance.spec.additionalDisks | default([]) }}"
+  loop_control:
+    index_var: idx
+  when: (compute_instance.spec.additionalDisks | default([])) | length > 0
+
+- name: Delete user-data secret
+  kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: v1
+    kind: Secret
+    name: "{{ compute_instance_name }}-user-data"
+    namespace: "{{ compute_instance_target_namespace }}"
+    state: absent
+  register: delete_user_data_secret
+  failed_when:
+    - delete_user_data_secret.failed is defined
+    - delete_user_data_secret.failed
+    - "'not found' not in (delete_user_data_secret.msg | default(''))"
+
+- name: Delete cloud-init secret
+  kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: v1
+    kind: Secret
+    name: "{{ compute_instance_name }}-cloud-init"
+    namespace: "{{ compute_instance_target_namespace }}"
+    state: absent
+  register: delete_cloud_init_secret
+  failed_when:
+    - delete_cloud_init_secret.failed is defined
+    - delete_cloud_init_secret.failed
+    - "'not found' not in (delete_cloud_init_secret.msg | default(''))"
+
+- name: Delete ssh public key secret (Linux)
+  kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: v1
+    kind: Secret
+    name: "{{ compute_instance_name }}-ssh-public-key"
+    namespace: "{{ compute_instance_target_namespace }}"
+    state: absent
+  register: delete_ssh_secret
+  failed_when:
+    - delete_ssh_secret.failed is defined
+    - delete_ssh_secret.failed
+    - "'not found' not in (delete_ssh_secret.msg | default(''))"
+  when: guest_os_family == 'linux'
+
+- name: Delete sysprep Secret (Windows)
+  kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: v1
+    kind: Secret
+    name: "{{ compute_instance_name }}-sysprep"
+    namespace: "{{ compute_instance_target_namespace }}"
+    state: absent
+  register: delete_sysprep_secret
+  failed_when:
+    - delete_sysprep_secret.failed is defined
+    - delete_sysprep_secret.failed
+    - "'not found' not in (delete_sysprep_secret.msg | default(''))"
+  when: guest_os_family == 'windows'
+
+- name: Display deletion status
+  ansible.builtin.debug:
+    msg:
+      - "Virtual Machine '{{ compute_instance_name }}' deletion completed"
+      - "Namespace: {{ compute_instance_target_namespace }}"
+      - "All associated resources have been removed"

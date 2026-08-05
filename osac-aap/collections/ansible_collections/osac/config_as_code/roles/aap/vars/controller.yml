@@ -1,0 +1,936 @@
+---
+gateway_settings:
+  gateway_access_token_expiration: 7200
+
+# Create a project from the specified git repo. scm_url/scm_branch aren't
+# set here -- configure_project_scm.yml merges them in at runtime from
+# aap_project_git_uri/aap_project_git_branch (config.yml), which now default
+# to the mono-repo. AWX/Controller Projects clone the whole repo with no
+# native subdirectory-scoping mechanism, so every playbook: path below is
+# prefixed with osac-aap/ to stay resolvable against that mono-repo checkout.
+controller_projects: # noqa: var-naming[no-role-prefix]
+  - name: "{{ aap_prefix }}"
+    description: "{{ aap_project_name }}'s project"
+    organization: "{{ aap_organization_name }}"
+    scm_clean: true
+    scm_update_on_launch: false
+    scm_credential: ""
+    update_project: true
+    wait: true
+
+# Create cluster-fulfillment templates and a config-as-code template
+controller_templates: # noqa: var-naming[no-role-prefix]
+  - name: "{{ aap_prefix }}-create-hosted-cluster"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_create_hosted_cluster.yml"
+    inventory: "{{ aap_prefix }}-cluster-fulfillment"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-cluster-fulfillment-ig"
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    verbosity: 0
+  - name: "{{ aap_prefix }}-delete-hosted-cluster"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_delete_hosted_cluster.yml"
+    inventory: "{{ aap_prefix }}-cluster-fulfillment"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-cluster-fulfillment-ig"
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    verbosity: 0
+  - name: "{{ aap_prefix }}-config-as-code"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_config_as_code.yml"
+    inventory: "{{ aap_prefix }}-config-as-code"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-config-as-code-ig"
+    verbosity: 0
+  - name: "{{ aap_prefix }}-publish-templates"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/collections/ansible_collections/osac/service/playbooks/publish_templates.yaml"
+    inventory: "{{ aap_prefix }}-publish-templates"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-publish-templates-ig"
+    verbosity: 0
+  - name: "{{ aap_prefix }}-create-hosted-cluster-post-install"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_create_hosted_cluster_post_install.yml"
+    inventory: "{{ aap_prefix }}-cluster-fulfillment"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-create-hosted-cluster-post-install-ig"
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    verbosity: 0
+  - name: "{{ aap_prefix }}-create-compute-instance"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_create_compute_instance.yml"
+    inventory: "{{ aap_prefix }}-compute-instance-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-compute-instance-operations-ig"
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    verbosity: 0
+  - name: "{{ aap_prefix }}-delete-compute-instance"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_delete_compute_instance.yml"
+    inventory: "{{ aap_prefix }}-compute-instance-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-compute-instance-operations-ig"
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    verbosity: 0
+  - name: "{{ aap_prefix }}-report-hosted-cluster-status-success"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_report_hosted_cluster_status.yml"
+    inventory: "{{ aap_prefix }}-cluster-fulfillment"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-cluster-fulfillment-ig"
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    verbosity: 0
+    extra_vars:
+      workflow_status: succeeded
+  - name: "{{ aap_prefix }}-report-hosted-cluster-status-failure"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_report_hosted_cluster_status.yml"
+    inventory: "{{ aap_prefix }}-cluster-fulfillment"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-cluster-fulfillment-ig"
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    verbosity: 0
+    extra_vars:
+      workflow_status: failed
+  - name: "{{ aap_prefix }}-create-virtual-network"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_create_virtual_network.yml"
+    inventory: "{{ aap_prefix }}-networking-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-networking-operations-ig"
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    verbosity: 0
+  - name: "{{ aap_prefix }}-delete-virtual-network"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_delete_virtual_network.yml"
+    inventory: "{{ aap_prefix }}-networking-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-networking-operations-ig"
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    verbosity: 0
+  - name: "{{ aap_prefix }}-create-subnet"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_create_subnet.yml"
+    inventory: "{{ aap_prefix }}-networking-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-networking-operations-ig"
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    verbosity: 0
+  - name: "{{ aap_prefix }}-delete-subnet"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_delete_subnet.yml"
+    inventory: "{{ aap_prefix }}-networking-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-networking-operations-ig"
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    verbosity: 0
+  - name: "{{ aap_prefix }}-create-external-ip-pool"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_create_external_ip_pool.yml"
+    inventory: "{{ aap_prefix }}-networking-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-networking-operations-ig"
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    verbosity: 0
+  - name: "{{ aap_prefix }}-delete-external-ip-pool"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_delete_external_ip_pool.yml"
+    inventory: "{{ aap_prefix }}-networking-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-networking-operations-ig"
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    verbosity: 0
+  # IPAM allocate-from-pool is non-atomic: concurrent creates could pick
+  # the same IP. Serialized to prevent duplicate allocation.
+  - name: "{{ aap_prefix }}-create-external-ip"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_create_external_ip.yml"
+    inventory: "{{ aap_prefix }}-networking-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-networking-operations-ig"
+    allow_simultaneous: false
+    ask_variables_on_launch: true
+    verbosity: 0
+  - name: "{{ aap_prefix }}-delete-external-ip"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_delete_external_ip.yml"
+    inventory: "{{ aap_prefix }}-networking-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-networking-operations-ig"
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    verbosity: 0
+  - name: "{{ aap_prefix }}-attach-external-ip"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_attach_external_ip.yml"
+    inventory: "{{ aap_prefix }}-networking-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-networking-operations-ig"
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    verbosity: 0
+  - name: "{{ aap_prefix }}-detach-external-ip"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_detach_external_ip.yml"
+    inventory: "{{ aap_prefix }}-networking-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-networking-operations-ig"
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    verbosity: 0
+  - name: "{{ aap_prefix }}-create-security-group"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_create_security_group.yml"
+    inventory: "{{ aap_prefix }}-networking-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-networking-operations-ig"
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    verbosity: 0
+  - name: "{{ aap_prefix }}-delete-security-group"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_delete_security_group.yml"
+    inventory: "{{ aap_prefix }}-networking-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-networking-operations-ig"
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    verbosity: 0
+  - name: "{{ aap_prefix }}-import-agents"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_import_agents.yml"
+    inventory: "{{ aap_prefix }}-cluster-fulfillment"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-cluster-fulfillment-ig"
+    allow_simultaneous: false
+    ask_variables_on_launch: true
+    verbosity: 0
+  - name: "{{ aap_prefix }}-create-bare-metal-pool"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_create_bare_metal_pool.yml"
+    inventory: "{{ aap_prefix }}-bare-metal-fulfillment"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-bare-metal-fulfillment-ig"
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    verbosity: 0
+  - name: "{{ aap_prefix }}-delete-bare-metal-pool"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_delete_bare_metal_pool.yml"
+    inventory: "{{ aap_prefix }}-bare-metal-fulfillment"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-bare-metal-fulfillment-ig"
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    verbosity: 0
+  - name: "{{ aap_prefix }}-create-bare-metal-instance"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_create_bare_metal_instance.yml"
+    inventory: "{{ aap_prefix }}-bare-metal-fulfillment"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-bare-metal-fulfillment-ig"
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    verbosity: 0
+  - name: "{{ aap_prefix }}-delete-bare-metal-instance"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_delete_bare_metal_instance.yml"
+    inventory: "{{ aap_prefix }}-bare-metal-fulfillment"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-bare-metal-fulfillment-ig"
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    verbosity: 0
+  # Storage operations use allow_simultaneous: false to prevent concurrent tenant
+  # provisioning races on VAST resources. This serializes all tenant operations
+  # through a single AAP worker. Acceptable for current scale; for high-volume
+  # tenant provisioning, consider per-tenant locking instead.
+  - name: "{{ aap_prefix }}-create-tenant-storage-backend"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_create_tenant_storage_backend.yml"
+    inventory: "{{ aap_prefix }}-storage-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-storage-operations-ig"
+    allow_simultaneous: false
+    ask_variables_on_launch: true
+    verbosity: 0
+  - name: "{{ aap_prefix }}-create-tenant-cluster-storage"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_create_tenant_cluster_storage.yml"
+    inventory: "{{ aap_prefix }}-storage-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-storage-operations-ig"
+    allow_simultaneous: false
+    ask_variables_on_launch: true
+    verbosity: 0
+  - name: "{{ aap_prefix }}-delete-tenant-cluster-storage"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_delete_tenant_cluster_storage.yml"
+    inventory: "{{ aap_prefix }}-storage-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-storage-operations-ig"
+    allow_simultaneous: false
+    ask_variables_on_launch: true
+    verbosity: 0
+  - name: "{{ aap_prefix }}-delete-tenant-storage-backend"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_delete_tenant_storage_backend.yml"
+    inventory: "{{ aap_prefix }}-storage-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-storage-operations-ig"
+    allow_simultaneous: false
+    ask_variables_on_launch: true
+    verbosity: 0
+  - name: "{{ aap_prefix }}-import-bcm-agents"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_import_bcm_agents.yml"
+    inventory: "{{ aap_prefix }}-cluster-fulfillment"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-cluster-fulfillment-ig"
+    allow_simultaneous: false
+    ask_variables_on_launch: true
+    verbosity: 0
+
+controller_job_template_surveys: # noqa: var-naming[no-role-prefix]
+  - name: "{{ aap_prefix }}-create-hosted-cluster-post-install"
+    survey_enabled: true
+    survey_spec:
+      name: "Create hosted cluster post-install survey"
+      description: "Provide kubeconfig for post-install hosted cluster configuration"
+      spec:
+        - question_name: "admin_kubeconfig"
+          question_description: "Kubeconfig file content for the hosted cluster"
+          required: true
+          type: "textarea"
+          variable: "admin_kubeconfig"
+          min: 0
+          max: 65535
+          default: ""
+          new_question: true
+          secret: true
+
+# Create workflows for cluster management
+controller_workflows: # noqa: var-naming[no-role-prefix]
+  - name: "{{ aap_prefix }}-create-hosted-cluster-workflow"
+    description: "Workflow for creating hosted cluster"
+    organization: "{{ aap_organization_name }}"
+    ask_variables_on_launch: true
+    inventory: "{{ aap_prefix }}-cluster-fulfillment"
+    allow_simultaneous: true
+    extra_vars:
+      workflow_name: create-hosted-cluster
+    workflow_nodes:
+      - identifier: "create-cluster"
+        unified_job_template:
+          name: "{{ aap_prefix }}-create-hosted-cluster"
+          type: job_template
+        related:
+          success_nodes:
+            - identifier: "post-install"
+          failure_nodes:
+            - identifier: "report-hosted-cluster-status-failure"
+      - identifier: "post-install"
+        unified_job_template:
+          name: "{{ aap_prefix }}-create-hosted-cluster-post-install"
+          type: job_template
+        related:
+          success_nodes:
+            - identifier: "report-hosted-cluster-status-success"
+          failure_nodes:
+            - identifier: "report-hosted-cluster-status-failure"
+      - identifier: "report-hosted-cluster-status-success"
+        unified_job_template:
+          name: "{{ aap_prefix }}-report-hosted-cluster-status-success"
+          type: job_template
+      - identifier: "report-hosted-cluster-status-failure"
+        unified_job_template:
+          name: "{{ aap_prefix }}-report-hosted-cluster-status-failure"
+          type: job_template
+  - name: "{{ aap_prefix }}-delete-hosted-cluster-workflow"
+    description: "Workflow for deleting hosted cluster"
+    organization: "{{ aap_organization_name }}"
+    ask_variables_on_launch: true
+    inventory: "{{ aap_prefix }}-cluster-fulfillment"
+    allow_simultaneous: true
+    extra_vars:
+      workflow_name: delete-hosted-cluster
+    workflow_nodes:
+      - identifier: "delete-cluster"
+        unified_job_template:
+          name: "{{ aap_prefix }}-delete-hosted-cluster"
+          type: job_template
+        related:
+          failure_nodes:
+            - identifier: "report-hosted-cluster-status-failure"
+          success_nodes:
+            - identifier: "report-hosted-cluster-status-success"
+      - identifier: "report-hosted-cluster-status-success"
+        unified_job_template:
+          name: "{{ aap_prefix }}-report-hosted-cluster-status-success"
+          type: job_template
+      - identifier: "report-hosted-cluster-status-failure"
+        unified_job_template:
+          name: "{{ aap_prefix }}-report-hosted-cluster-status-failure"
+          type: job_template
+# Create cluster fulfillment and confg-as-code inventories. They are the same
+# for the moment, but spliting them will allow us to diverge easily in the
+# future.
+controller_inventories: # noqa: var-naming[no-role-prefix]
+  - name: "{{ aap_prefix }}-cluster-fulfillment"
+    description: "Cluster fulfilment inventory"
+    organization: "{{ aap_organization_name }}"
+  - name: "{{ aap_prefix }}-config-as-code"
+    description: "Config-as-code inventory"
+    organization: "{{ aap_organization_name }}"
+  - name: "{{ aap_prefix }}-publish-templates"
+    description: "Publish templates inventory"
+    organization: "{{ aap_organization_name }}"
+  - name: "{{ aap_prefix }}-compute-instance-operations"
+    description: "Compute Instance Operational Inventory"
+    organization: "{{ aap_organization_name }}"
+  - name: "{{ aap_prefix }}-networking-operations"
+    description: "Networking Operational Inventory"
+    organization: "{{ aap_organization_name }}"
+  - name: "{{ aap_prefix }}-bare-metal-fulfillment"
+    description: "Bare Metal Fulfillment Inventory"
+    organization: "{{ aap_organization_name }}"
+  - name: "{{ aap_prefix }}-storage-operations"
+    description: "Storage Operations Inventory"
+    organization: "{{ aap_organization_name }}"
+
+controller_inventory_sources: # noqa: var-naming[no-role-prefix]
+  - name: "{{ aap_prefix }}-cluster-fulfillment-is"
+    organization: "{{ aap_organization_name }}"
+    source: scm
+    source_project: "{{ aap_prefix }}"
+    source_path: "inventory/localhost.yml"
+    inventory: "{{ aap_prefix }}-cluster-fulfillment"
+    overwrite: true
+    overwrite_vars: true
+    update_cache_timeout: 0
+  - name: "{{ aap_prefix }}-config-as-code-is"
+    organization: "{{ aap_organization_name }}"
+    source: scm
+    source_project: "{{ aap_prefix }}"
+    source_path: "inventory/localhost.yml"
+    inventory: "{{ aap_prefix }}-config-as-code"
+    overwrite: true
+    overwrite_vars: true
+    update_cache_timeout: 0
+  - name: "{{ aap_prefix }}-publish-templates-is"
+    organization: "{{ aap_organization_name }}"
+    source: scm
+    source_project: "{{ aap_prefix }}"
+    source_path: "inventory/localhost.yml"
+    inventory: "{{ aap_prefix }}-publish-templates"
+    overwrite: true
+    overwrite_vars: true
+    update_cache_timeout: 0
+  - name: "{{ aap_prefix }}-compute-instance-operations-is"
+    organization: "{{ aap_organization_name }}"
+    source: scm
+    source_project: "{{ aap_prefix }}"
+    source_path: "inventory/localhost.yml"
+    inventory: "{{ aap_prefix }}-compute-instance-operations"
+    overwrite: true
+    overwrite_vars: true
+    update_cache_timeout: 0
+  - name: "{{ aap_prefix }}-networking-operations-is"
+    organization: "{{ aap_organization_name }}"
+    source: scm
+    source_project: "{{ aap_prefix }}"
+    source_path: "inventory/localhost.yml"
+    inventory: "{{ aap_prefix }}-networking-operations"
+    overwrite: true
+    overwrite_vars: true
+    update_cache_timeout: 0
+  - name: "{{ aap_prefix }}-bare-metal-fulfillment-is"
+    organization: "{{ aap_organization_name }}"
+    source: scm
+    source_project: "{{ aap_prefix }}"
+    source_path: "inventory/localhost.yml"
+    inventory: "{{ aap_prefix }}-bare-metal-fulfillment"
+    overwrite: true
+    overwrite_vars: true
+    update_cache_timeout: 0
+  - name: "{{ aap_prefix }}-storage-operations-is"
+    organization: "{{ aap_organization_name }}"
+    source: scm
+    source_project: "{{ aap_prefix }}"
+    source_path: "inventory/localhost.yml"
+    inventory: "{{ aap_prefix }}-storage-operations"
+    overwrite: true
+    overwrite_vars: true
+    update_cache_timeout: 0
+
+controller_schedules: # noqa: var-naming[no-role-prefix]
+  # Sync project every 10min to get the latest updates from the git repository
+  - name: "{{ aap_prefix }}-sync"
+    description: "Periodic sync job for {{ aap_project_name }} project"
+    organization: "{{ aap_organization_name }}"
+    unified_job_template: "{{ aap_prefix }}"
+    rrule: "DTSTART:20250331T144500Z RRULE:FREQ=MINUTELY;INTERVAL=10"
+  # Run config-as-code template every hour to apply new changes, if any
+  - name: "{{ aap_prefix }}-config-as-code"
+    description: "Periodic run of config-as-code"
+    organization: "{{ aap_organization_name }}"
+    unified_job_template: "{{ aap_prefix }}-config-as-code"
+    rrule: "DTSTART:20250331T144500Z RRULE:FREQ=HOURLY;INTERVAL=1"
+  - name: "{{ aap_prefix }}-publish-templates"
+    description: "Periodic run of publish-templates"
+    organization: "{{ aap_organization_name }}"
+    unified_job_template: "{{ aap_prefix }}-publish-templates"
+    rrule: "DTSTART:20250513T111500Z RRULE:FREQ=MINUTELY;INTERVAL=30"
+    enabled: "{{ osac_publish_templates_enabled }}"
+  - name: "{{ aap_prefix }}-import-agents"
+    description: "Periodic agent import reconciliation"
+    organization: "{{ aap_organization_name }}"
+    unified_job_template: "{{ aap_prefix }}-import-agents"
+    rrule: "DTSTART:20250331T144500Z RRULE:FREQ=MINUTELY;INTERVAL=10"
+    enabled: "{{ osac_import_agents_enabled }}"
+  - name: "{{ aap_prefix }}-import-bcm-agents"
+    description: "Periodic BCM agent import reconciliation"
+    organization: "{{ aap_organization_name }}"
+    unified_job_template: "{{ aap_prefix }}-import-bcm-agents"
+    rrule: "DTSTART:20250519T120000Z RRULE:FREQ=MINUTELY;INTERVAL=10"
+    enabled: "{{ osac_import_bcm_agents_enabled }}"
+
+# Create custom execution environments
+controller_execution_environments: # noqa: var-naming[no-role-prefix]
+  - name: "{{ aap_prefix }}-ee"
+    organization: "{{ aap_organization_name }}"
+    image: "{{ aap_ee_image }}"
+    pull: "{{ aap_ee_image_pull }}"
+
+# Customize pod templates in order to inject the configuration and the
+# credentials when the template are run, that way Kubernetes is the source
+# of truth for the secrets, and we don't need to sync credentials into AAP
+controller_instance_groups: # noqa: var-naming[no-role-prefix]
+  # For cluster-fulfillment use cases, we want to allow KubeAPI access to the
+  # cluster the pod works on, so we mount the credentials for the osac
+  # ServiceAccount. All other credentials (AWS, Openstack, ...) that would be
+  # required by the playbooks are expected to be specified in the
+  # (prefix)-cluster-fulfilment-ig secret.
+  - name: "{{ aap_prefix }}-cluster-fulfillment-ig"
+    is_container_group: true
+    pod_spec_override: |
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        labels:
+          ansible_job: ''
+      spec:
+        serviceAccountName: osac-sa
+        affinity:
+          podAntiAffinity:
+            preferredDuringSchedulingIgnoredDuringExecution:
+              - weight: 100
+                podAffinityTerm:
+                  labelSelector:
+                    matchExpressions:
+                      - key: ansible_job
+                        operator: Exists
+                  topologyKey: kubernetes.io/hostname
+        containers:
+          - image: >-
+              registry.redhat.io/ansible-automation-platform-25/ee-supported-rhel8@sha256:d8400a472e769d0f3d591dafaad318522009c583b08e881c23b6d57a27cc10ed
+            name: worker
+            args:
+              - ansible-runner
+              - worker
+              - '--private-data-dir=/runner'
+            volumeMounts:
+              - name: kube-api-access
+                mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+                readOnly: true
+              - name: import-agents-inventory
+                mountPath: /var/config/import-agents
+                readOnly: true
+              - name: agentless-net-inventory
+                mountPath: /var/config/agentless-net
+                readOnly: true
+              - name: bcm-certs
+                mountPath: /var/secrets/bcm-certs
+                readOnly: true
+            env:
+              - name: POD_NAMESPACE
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.namespace
+              - name: POD_NAME
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.name
+              - name: POD_UID
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.uid
+            envFrom:
+              - configMapRef:
+                  name: cluster-fulfillment-ig
+                  optional: true
+              - secretRef:
+                  name: cluster-fulfillment-ig
+        volumes:
+        - name: bcm-certs
+          secret:
+            secretName: bcm-certs
+            optional: true
+        - name: kube-api-access
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+              - downwardAPI:
+                  items:
+                    - path: namespace
+                      fieldRef:
+                        apiVersion: v1
+                        fieldPath: metadata.namespace
+              - configMap:
+                  name: openshift-service-ca.crt
+                  items:
+                    - key: service-ca.crt
+                      path: service-ca.crt
+            defaultMode: 420
+        - name: import-agents-inventory
+          configMap:
+            name: import-agents-inventory
+            optional: true
+        - name: agentless-net-inventory
+          configMap:
+            name: agentless-net-inventory
+            optional: true
+  # For config-as-code job template, we expect the configuration and the
+  # credentials to be passed in (prefix)-config-as-code-ig secret
+  - name: "{{ aap_prefix }}-config-as-code-ig"
+    is_container_group: true
+    pod_spec_override: |
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        labels:
+          ansible_job: ''
+      spec:
+        serviceAccountName: default
+        affinity:
+          podAntiAffinity:
+            preferredDuringSchedulingIgnoredDuringExecution:
+              - weight: 100
+                podAffinityTerm:
+                  labelSelector:
+                    matchExpressions:
+                      - key: ansible_job
+                        operator: Exists
+                  topologyKey: kubernetes.io/hostname
+        containers:
+          - image: >-
+              registry.redhat.io/ansible-automation-platform-25/ee-supported-rhel8@sha256:d8400a472e769d0f3d591dafaad318522009c583b08e881c23b6d57a27cc10ed
+            name: worker
+            args:
+              - ansible-runner
+              - worker
+              - '--private-data-dir=/runner'
+            envFrom:
+              - secretRef:
+                  name: config-as-code-ig
+                  optional: true
+            env:
+              - name: NAMESPACE
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.namespace
+              - name: AAP_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    name: osac-aap-admin-password
+                    key: password
+              - name: LICENSE_MANIFEST_PATH
+                value: /var/secrets/config-as-code/license.zip
+            volumeMounts:
+              - name: config-as-code-manifest-volume
+                mountPath: /var/secrets/config-as-code
+                readOnly: true
+        volumes:
+          - name: config-as-code-manifest-volume
+            secret:
+              secretName: config-as-code-manifest-ig
+  - name: "{{ aap_prefix }}-publish-templates-ig"
+    is_container_group: true
+    pod_spec_override: |
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        labels:
+          ansible_job: ''
+      spec:
+        serviceAccountName: template-publisher
+        affinity:
+          podAntiAffinity:
+            preferredDuringSchedulingIgnoredDuringExecution:
+              - weight: 100
+                podAffinityTerm:
+                  labelSelector:
+                    matchExpressions:
+                      - key: ansible_job
+                        operator: Exists
+                  topologyKey: kubernetes.io/hostname
+        containers:
+          - image: >-
+              registry.redhat.io/ansible-automation-platform-25/ee-supported-rhel8@sha256:d8400a472e769d0f3d591dafaad318522009c583b08e881c23b6d57a27cc10ed
+            name: worker
+            args:
+              - ansible-runner
+              - worker
+              - '--private-data-dir=/runner'
+            volumeMounts:
+              - name: kube-api-access
+                mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+                readOnly: true
+              - name: cas
+                mountPath: /certs
+            envFrom:
+              - configMapRef:
+                  name: publish-templates-ig
+                  optional: true
+            env:
+              - name: OSAC_PUBLISH_TEMPLATES_NAMESPACE_DEFAULT
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.namespace
+              - name: SSL_CERT_FILE
+                value: /certs/bundle.pem
+        volumes:
+          - name: kube-api-access
+            projected:
+              sources:
+                - serviceAccountToken:
+                    path: token
+                    expirationSeconds: 3600
+                - configMap:
+                    name: kube-root-ca.crt
+                    items:
+                      - key: ca.crt
+                        path: ca.crt
+                - downwardAPI:
+                    items:
+                      - path: namespace
+                        fieldRef:
+                          apiVersion: v1
+                          fieldPath: metadata.namespace
+                - configMap:
+                    name: openshift-service-ca.crt
+                    items:
+                      - key: service-ca.crt
+                        path: service-ca.crt
+              defaultMode: 420
+          - name: cas
+            configMap:
+              name: ca-bundle
+  - name: "{{ aap_prefix }}-create-hosted-cluster-post-install-ig"
+    is_container_group: true
+
+  - name: "{{ aap_prefix }}-compute-instance-operations-ig"
+    is_container_group: true
+    pod_spec_override: "{{ lookup('ansible.builtin.template', 'compute-instance-operations-ig.j2') }}"
+
+  - name: "{{ aap_prefix }}-networking-operations-ig"
+    is_container_group: true
+    pod_spec_override: "{{ lookup('ansible.builtin.template', 'networking-operations-ig.j2') }}"
+
+  - name: "{{ aap_prefix }}-bare-metal-fulfillment-ig"
+    is_container_group: true
+    pod_spec_override: |
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        labels:
+          ansible_job: ''
+      spec:
+        serviceAccountName: osac-sa
+        affinity:
+          podAntiAffinity:
+            preferredDuringSchedulingIgnoredDuringExecution:
+              - weight: 100
+                podAffinityTerm:
+                  labelSelector:
+                    matchExpressions:
+                      - key: ansible_job
+                        operator: Exists
+                  topologyKey: kubernetes.io/hostname
+        containers:
+          - image: >-
+              registry.redhat.io/ansible-automation-platform-25/ee-supported-rhel8@sha256:d8400a472e769d0f3d591dafaad318522009c583b08e881c23b6d57a27cc10ed
+            name: worker
+            args:
+              - ansible-runner
+              - worker
+              - '--private-data-dir=/runner'
+            volumeMounts:
+              - name: kube-api-access
+                mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+                readOnly: true
+              - name: os-clouds
+                mountPath: /etc/openstack
+                readOnly: true
+            env:
+              - name: POD_NAMESPACE
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.namespace
+              - name: OS_CLIENT_CONFIG_FILE
+                value: /etc/openstack/clouds.yaml
+            envFrom:
+              - secretRef:
+                  name: bare-metal-fulfillment-ig
+                  optional: true
+        volumes:
+          - name: kube-api-access
+            projected:
+              sources:
+                - serviceAccountToken:
+                    path: token
+                    expirationSeconds: 3600
+                - configMap:
+                    name: kube-root-ca.crt
+                    items:
+                      - key: ca.crt
+                        path: ca.crt
+                - downwardAPI:
+                    items:
+                      - path: namespace
+                        fieldRef:
+                          apiVersion: v1
+                          fieldPath: metadata.namespace
+                - configMap:
+                    name: openshift-service-ca.crt
+                    items:
+                      - key: service-ca.crt
+                        path: service-ca.crt
+              defaultMode: 420
+          - name: os-clouds
+            secret:
+              secretName: osac-os-clouds
+              items:
+                - key: clouds.yaml
+                  path: clouds.yaml
+              defaultMode: 420
+              optional: true
+
+  - name: "{{ aap_prefix }}-storage-operations-ig"
+    is_container_group: true
+    pod_spec_override: "{{ lookup('ansible.builtin.template', 'storage-operations-ig.j2') }}"

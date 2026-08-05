@@ -1,0 +1,114 @@
+---
+- name: ah_approval integration tests
+  module_defaults:
+    group/ansible.hub.hub:
+      ah_host: "{{ ah_host }}"
+      ah_username: "{{ ah_username }}"
+      ah_password: "{{ ah_password }}"
+      validate_certs: "{{ ah_verify_ssl }}"
+  block:
+    - name: Generate a test_id for the test
+      set_fact:
+        test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') | lower }}"
+      when: test_id is not defined
+
+    - name: Define variables
+      set_fact:
+        namespace: "sample"
+        company: "my_company_{{ test_id }}"
+        collection_name: "sample"
+        build_path: "/home/runner/collections/ansible_collections/ansible/hub/tests/integration/targets/ah_build/files"
+
+    - name: Create namespace
+      ansible.hub.ah_namespace:
+        name: "{{ namespace }}"
+        company: "{{ company }}"
+        email: "{{ test_id }}@example.com"
+        avatar_url: https://pnt.redhat.com/pnt/d-11633955/LogoRedHatHatColorRGB.png
+        description: This is the Redhat Namespace
+        links:
+          - name: "homepage"
+            url: "https://www.redhat.com"
+      register: r
+
+    - name: Check if the namespace is created
+      assert:
+        that:
+          - r.changed
+
+    - name: Build Ansible Collection from the directory
+      ansible.hub.ah_build:
+        path: "{{ build_path }}/sample/sample"
+        output_path: "{{ build_path }}/"
+      register: r
+
+    - name: Check if the file exists
+      ansible.builtin.stat:
+        path: "{{ build_path }}/sample-sample-1.0.0.tar.gz"
+      register: build_stat
+
+    - name: Check if the build is successful
+      assert:
+        that:
+          - r.changed
+          - build_stat.stat.exists
+
+    - name: Upload a collection to the given collection
+      ansible.hub.ah_collection:
+        namespace: "{{ namespace }}"
+        name: "{{ collection_name }}"
+        path: "{{ build_path }}/sample-sample-1.0.0.tar.gz"
+        auto_approve: false
+      register: r
+
+    - name: Check if the collection is uploaded successfully
+      assert:
+        that:
+          - r.changed
+
+    - name: Approve the collection
+      ansible.hub.ah_approval:
+        namespace: "{{ namespace }}"
+        name: "{{ collection_name }}"
+        version: 1.0.0
+      register: r
+
+    - name: Check if the collection is approved
+      assert:
+        that:
+          - r.changed
+
+    - name: Delete a collection to the given collection
+      ansible.hub.ah_collection:
+        namespace: "{{ namespace }}"
+        name: "{{ collection_name }}"
+        version: 1.0.0
+        state: absent
+      register: r
+
+    - name: Check if the collection is deleted successfully
+      assert:
+        that:
+          - r.changed
+          - r.deleted
+
+  always:
+    - name: Delete a collection to the given collection
+      ansible.hub.ah_collection:
+        namespace: "{{ namespace }}"
+        name: "{{ collection_name }}"
+        version: 1.0.0
+        state: absent
+      ignore_errors: true
+
+    - name: Delete namespace
+      ansible.hub.ah_namespace:
+        name: "{{ namespace }}"
+        state: absent
+      ignore_errors: true
+
+    - name: Remove built collection
+      ansible.builtin.file:
+        path: "{{ build_path }}/sample-sample-1.0.0.tar.gz"
+        state: absent
+      ignore_errors: true

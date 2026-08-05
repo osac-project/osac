@@ -1,0 +1,8 @@
+---
+- name: Create L4LB
+  when: l4lb_state == 'present'
+  ansible.builtin.include_tasks: create.yaml
+
+- name: Delete L4LB
+  when: l4lb_state == 'absent'
+  ansible.builtin.include_tasks: delete.yaml

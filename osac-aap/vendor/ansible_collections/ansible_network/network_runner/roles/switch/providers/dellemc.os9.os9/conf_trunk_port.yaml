@@ -1,0 +1,41 @@
+---
+- name: "dellemc.os9: reset interface to default"
+  dellemc.os9.os9_config:
+    lines:
+      - "default interface {{ port_name }}"
+  connection: network_cli
+
+- name: "dellemc.os9: enable switchport, hybrid portmode, and jumbo frames"
+  dellemc.os9.os9_config:
+    lines:
+      - "interface {{ port_name }}"
+      - "portmode hybrid"
+      - "switchport"
+      - "mtu 9216"
+      - "no shutdown"
+  connection: network_cli
+
+- name: "dellemc.os9: enable rstp"
+  dellemc.os9.os9_config:
+    lines:
+      - "interface {{ port_name }}"
+      - "spanning-tree rstp edge-port"
+  connection: network_cli
+  when: stp_edge
+
+- name: "dellemc.os9: set native vlan"
+  dellemc.os9.os9_config:
+    lines:
+      - "interface vlan {{ _vlan_id }}"
+      - "untagged {{ port_name }}"
+  connection: network_cli
+
+- name: "dellemc.os9: add trunk vlan(s)"
+  dellemc.os9.os9_config:
+    lines:
+      - "interface vlan {{ t_vlan }}"
+      - "tagged {{ port_name }}"
+  loop: "{{ trunked_vlans }}"
+  loop_control:
+    loop_var: t_vlan
+  connection: network_cli

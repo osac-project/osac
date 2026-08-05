@@ -1,0 +1,176 @@
+---
+- name: Generate a test ID
+  ansible.builtin.set_fact:
+    test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') }}"
+  when: test_id is not defined
+
+- name: Get existing service clusters
+  ansible.builtin.set_fact:
+    _sc_query: "{{ query('ansible.platform.gateway_api', 'service_clusters', **connection_info) }}"
+
+- name: Fail if more than one service cluster or that cluster is not a gateway cluster
+  ansible.builtin.fail:
+    msg: "This test works with 3 service clusters: gateway, eda and hub. It appears you might already have one or more of those, failing"
+  when:
+    - _sc_query | length > 1
+    - _sc_query | length == 1 and _sc_query[0].type != 'gateway'
+
+- name: Run Test
+  module_defaults:
+    group/ansible.platform.gateway:
+      gateway_hostname: "{{ gateway_hostname }}"
+      gateway_username: "{{ gateway_username }}"
+      gateway_password: "{{ gateway_password }}"
+      gateway_validate_certs: "{{ gateway_validate_certs | bool }}"
+
+  block:
+    - name: Create Controller Service Cluster
+      ansible.platform.service_cluster:
+        name: "{{ test_id }}-Automation-Controller"
+        service_type: "controller"
+        health_check_interval_seconds: 1162
+      register: controller_sc
+
+    - name: Assert that we created the controller service cluster
+      ansible.builtin.assert:
+        that:
+          - controller_sc is changed
+
+    - name: Recreate Controller Service Cluster
+      ansible.platform.service_cluster:
+        name: "{{ test_id }}-Automation-Controller"
+        service_type: "controller"
+        health_check_interval_seconds: 1162
+      register: recreate_controller_sc
+
+    - name: Assert that we a recreate does not change the system
+      ansible.builtin.assert:
+        that:
+          - recreate_controller_sc is not changed
+
+    - name: Create Automation Hub Cluster
+      ansible.platform.service_cluster:
+        name: "{{ test_id }}-Automation-Hub"
+        service_type: "hub"
+        health_check_interval_seconds: 1162
+      register: hub_sc
+
+    - name: Assert that we created the hub service cluster
+      ansible.builtin.assert:
+        that:
+          - hub_sc is changed
+
+    - name: Create gateway Service Cluster
+      ansible.platform.service_cluster:
+        name: "{{ test_id }}-AAP-gateway"
+        service_type: "eda"
+        health_check_interval_seconds: 333
+      register: eda_sc
+
+    - name: Assert that we created the eda service cluster
+      ansible.builtin.assert:
+        that:
+          - eda_sc is changed
+
+    - name: Assert that exists works
+      ansible.platform.service_cluster:
+        name: "{{  controller_sc.name }}"
+        state: exists
+      register: exists_controller_sc
+
+    - name: Assert that exists does not change the system
+      ansible.builtin.assert:
+        that:
+          - exists_controller_sc is not changed
+
+    - name: Assert exists works with parameters
+      ansible.platform.service_cluster:
+        name: "{{ hub_sc.name }}"
+        service_type: "hub"
+        state: exists
+      register: exists_hub
+
+    - name: Assert that exists does not change the system
+      ansible.builtin.assert:
+        that:
+          - exists_hub is not changed
+
+    - name: Rename a service cluster
+      ansible.platform.service_cluster:
+        name: "{{ eda_sc.id }}" # AAP gateway
+        new_name: "Event Driven Automation"
+      register: renamed_eda_sc
+
+    - name: Assert that we can rename a service cluster
+      ansible.builtin.assert:
+        that:
+          - renamed_eda_sc is changed
+          - renamed_eda_sc.id == eda_sc.id
+
+    - name: Change a health check interval
+      ansible.platform.service_cluster:
+        name: "{{ eda_sc.id }}"
+        health_check_interval_seconds: 1162
+      register: changed_eda_sc
+
+    - name: Assert that we can change a service cluster
+      ansible.builtin.assert:
+        that:
+          - changed_eda_sc is changed
+          - changed_eda_sc.id == eda_sc.id
+
+    - name: Query the server for service clusters  with specific health check interval
+      ansible.builtin.set_fact:
+        _sc_query: "{{ query('ansible.platform.gateway_api', 'service_clusters/?health_check_interval_seconds=1162', **connection_info) }}"
+
+    - name: Ensure we have 3 service clusters with health_check_interval_seconds=1162
+      ansible.builtin.assert:
+        that:
+          - _sc_query | length == 3
+
+    - name: Delete a non-existent service cluster
+      ansible.platform.service_cluster:
+        name: "{{ test_id }}-DoesNotExist"
+        state: absent
+      register: delete_dne
+
+    - name: Assert that the deletion of a non-existent does not change the system
+      ansible.builtin.assert:
+        that:
+          - delete_dne is not changed
+
+    - name: Delete a real service cluster
+      ansible.platform.service_cluster:
+        name: "{{ controller_sc.id }}"
+        state: absent
+      register: delete_controller_sc
+
+    - name: Assert that deletion of a real service cluster changes the system
+      ansible.builtin.assert:
+        that:
+          - delete_controller_sc is changed
+
+    - name: Change a service type
+      ansible.platform.service_cluster:
+        name: "{{ eda_sc.id }}"
+        service_type: "controller"
+      register: change_eda_sc
+
+    - name: Assert that we can change a cluster type
+      ansible.builtin.assert:
+        that:
+          - change_eda_sc is changed
+          - change_eda_sc.id == eda_sc.id
+
+  always:
+    # Always Cleanup
+    - name: Delete Service Clusters
+      ansible.platform.service_cluster:
+        name: "{{ vars[item].id }}"
+        state: absent
+      loop:
+        - "controller_sc"
+        - "hub_sc"
+        - "eda_sc"
+      when: "item in vars and 'id' in vars[item]"
+...

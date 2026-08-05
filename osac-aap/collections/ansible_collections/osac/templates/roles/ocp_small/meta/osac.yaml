@@ -1,0 +1,15 @@
+title: OpenShift Small Cluster
+description: >
+  Builds a minimally configured OpenShift cluster with a configurable OCP
+  version. Default version: 4.22.0.
+
+template_type: cluster
+
+default_node_request:
+- resourceClass: fc430
+  numberOfNodes: 2
+
+allowed_resource_classes: []
+
+spec_defaults:
+  release_image: "quay.io/openshift-release-dev/ocp-release:4.22.0-multi"

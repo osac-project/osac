@@ -1,0 +1,994 @@
+---
+- module_defaults:
+    group/aws:
+      access_key: "{{ aws_access_key }}"
+      secret_key: "{{ aws_secret_key }}"
+      session_token: "{{ security_token | default(omit) }}"
+      region: "{{ aws_region }}"
+
+  block:
+    - name: Create a test VPC
+      amazon.aws.ec2_vpc_net:
+        name: "{{ vpc_name }}"
+        cidr_block: "{{ vpc_cidr }}"
+        tags:
+          Name: ec2_vol testing
+          ResourcePrefix: "{{ resource_prefix }}"
+      register: testing_vpc
+
+    - name: Create a test subnet
+      amazon.aws.ec2_vpc_subnet:
+        vpc_id: "{{ testing_vpc.vpc.id }}"
+        cidr: "{{ subnet_cidr }}"
+        tags:
+          Name: ec2_vol testing
+          ResourcePrefix: "{{ resource_prefix }}"
+        az: "{{ availability_zone }}"
+      register: testing_subnet
+
+    - name: Create an ec2 instance
+      amazon.aws.ec2_instance:
+        name: "{{ instance_name }}"
+        vpc_subnet_id: "{{ testing_subnet.subnet.id }}"
+        instance_type: t3.nano
+        image_id: "{{ ec2_ami_id }}"
+        tags:
+          ResourcePrefix: "{{ resource_prefix }}"
+      register: test_instance
+
+    - name: Check task return attributes
+      ansible.builtin.assert:
+        that:
+          - test_instance.changed
+
+    - name: Create another ec2 instance
+      amazon.aws.ec2_instance:
+        name: "{{ instance_name }}-2"
+        vpc_subnet_id: "{{ testing_subnet.subnet.id }}"
+        instance_type: t3.nano
+        image_id: "{{ ec2_ami_id }}"
+        tags:
+          ResourcePrefix: "{{ resource_prefix }}"
+      register: test_instance_2
+
+    - name: Check task return attributes
+      ansible.builtin.assert:
+        that:
+          - test_instance_2.changed
+
+    - name: Create another ec2 instance
+      amazon.aws.ec2_instance:
+        name: "{{ instance_name }}-3"
+        vpc_subnet_id: "{{ testing_subnet.subnet.id }}"
+        instance_type: t3.nano
+        image_id: "{{ ec2_ami_id }}"
+        tags:
+          ResourcePrefix: "{{ resource_prefix }}"
+      register: test_instance_3
+
+    - name: Check task return attributes
+      ansible.builtin.assert:
+        that:
+          - test_instance_3.changed
+
+    # # ==== ec2_vol tests ===============================================
+
+    - name: Create a volume (validate module defaults - check_mode)
+      amazon.aws.ec2_vol:
+        volume_size: 1
+        zone: "{{ availability_zone }}"
+        tags:
+          ResourcePrefix: "{{ resource_prefix }}"
+      check_mode: true
+      register: volume1_check_mode
+
+    - ansible.builtin.assert:
+        that:
+          - volume1_check_mode is changed
+
+    - name: Create a volume (validate module defaults)
+      amazon.aws.ec2_vol:
+        volume_size: 1
+        zone: "{{ availability_zone }}"
+        tags:
+          ResourcePrefix: "{{ resource_prefix }}"
+      register: volume1
+
+    - name: Check task return attributes
+      ansible.builtin.assert:
+        that:
+          - volume1.changed
+          - "'volume' in volume1"
+          - "'volume_id' in volume1"
+          - "'volume_type' in volume1"
+          - "'device' in volume1"
+          - volume1.volume.status == 'available'
+          - volume1.volume_type == 'standard'
+          - "'attachment_set' in volume1.volume"
+          - volume1.volume.attachment_set | length == 0
+          - not ("Name" in volume1.volume.tags)
+          - not volume1.volume.encrypted
+          - volume1.volume.tags.ResourcePrefix == resource_prefix
+
+    # no idempotency check needed here
+
+    - name: Create another volume (override module defaults)
+      amazon.aws.ec2_vol:
+        encrypted: true
+        volume_size: 4
+        volume_type: io1
+        iops: 101
+        name: "{{ resource_prefix }}"
+        tags:
+          ResourcePrefix: "{{ resource_prefix }}"
+        zone: "{{ availability_zone }}"
+      register: volume2
+
+    - name: Check task return attributes
+      ansible.builtin.assert:
+        that:
+          - volume2.changed
+          - "'volume' in volume2"
+          - "'volume_id' in volume2"
+          - "'volume_type' in volume2"
+          - "'device' in volume2"
+          - volume2.volume.status == 'available'
+          - volume2.volume_type == 'io1'
+          - volume2.volume.iops == 101
+          - volume2.volume.size == 4
+          - volume2.volume.tags.Name == resource_prefix
+          - volume2.volume.encrypted
+          - volume2.volume.tags.ResourcePrefix == resource_prefix
+
+    - name: Create another volume (override module defaults) (idempotent)
+      amazon.aws.ec2_vol:
+        encrypted: true
+        volume_size: 4
+        volume_type: io1
+        iops: 101
+        name: "{{ resource_prefix }}"
+        tags:
+          ResourcePrefix: "{{ resource_prefix }}"
+        zone: "{{ availability_zone }}"
+      register: volume2_idem
+
+    - name: Check task return attributes
+      ansible.builtin.assert:
+        that:
+          - not volume2_idem.changed
+
+    - name: Create snapshot from volume
+      amazon.aws.ec2_snapshot:
+        volume_id: "{{ volume1.volume_id }}"
+        description: Resource Prefix - {{ resource_prefix }}
+        snapshot_tags:
+          ResourcePrefix: "{{ resource_prefix }}"
+      register: vol1_snapshot
+
+    - name: Check task return attributes
+      ansible.builtin.assert:
+        that:
+          - vol1_snapshot.changed
+
+    - name: Create a volume from a snapshot (check_mode)
+      amazon.aws.ec2_vol:
+        snapshot: "{{ vol1_snapshot.snapshot_id }}"
+        encrypted: true
+        volume_type: gp2
+        volume_size: 1
+        zone: "{{ availability_zone }}"
+        tags:
+          ResourcePrefix: "{{ resource_prefix }}"
+      check_mode: true
+      register: volume3_check_mode
+
+    - name: Check task return attributes
+      ansible.builtin.assert:
+        that:
+          - volume3_check_mode.changed
+
+    - name: Create a volume from a snapshot
+      amazon.aws.ec2_vol:
+        snapshot: "{{ vol1_snapshot.snapshot_id }}"
+        encrypted: true
+        volume_type: gp2
+        volume_size: 1
+        zone: "{{ availability_zone }}"
+        tags:
+          ResourcePrefix: "{{ resource_prefix }}"
+      register: volume3
+
+    - name: Check task return attributes
+      ansible.builtin.assert:
+        that:
+          - volume3.changed
+          - volume3.volume.snapshot_id ==  vol1_snapshot.snapshot_id
+
+    - name: Wait for instance to start
+      amazon.aws.ec2_instance:
+        state: running
+        instance_ids: "{{ test_instance.instance_ids }}"
+        wait: true
+
+    - name: Attach existing volume to an instance (check_mode)
+      amazon.aws.ec2_vol:
+        id: "{{ volume1.volume_id }}"
+        instance: "{{ test_instance.instance_ids[0] }}"
+        device_name: /dev/sdg
+        delete_on_termination: false
+      check_mode: true
+      register: vol_attach_result_check_mode
+
+    - ansible.builtin.assert:
+        that:
+          - vol_attach_result_check_mode is changed
+
+    - name: Attach existing volume to an instance
+      amazon.aws.ec2_vol:
+        id: "{{ volume1.volume_id }}"
+        instance: "{{ test_instance.instance_ids[0] }}"
+        device_name: /dev/sdg
+        delete_on_termination: false
+      register: vol_attach_result
+
+    - name: Check task return attributes
+      ansible.builtin.assert:
+        that:
+          - vol_attach_result.changed
+          - "'device' in vol_attach_result and vol_attach_result.device == '/dev/sdg'"
+          - "'volume' in vol_attach_result"
+
+    # There's a delay between the volume being "In Use", and the attachment being reported.  This
+    # can result in a race condition on the results.  (There's no clean waiter to use either)
+    - name: Wait for volume to report attached/attaching
+      amazon.aws.ec2_vol_info:
+        filters:
+          volume-id: "{{ volume1.volume_id }}"
+      register: vol_attach_info
+      until:
+        - vol_attach_info.volumes[0].attachment_set | length >=1
+      retries: 5
+      delay: 2
+
+    - ansible.builtin.assert:
+        that:
+          - vol_attach_info.volumes[0].attachment_set[0].status in ['attached', 'attaching']
+          - vol_attach_info.volumes[0].attachment_set[0].instance_id == test_instance.instance_ids[0]
+          - vol_attach_info.volumes[0].attachment_set[0].device == '/dev/sdg'
+          - not vol_attach_info.volumes[0].attachment_set[0].delete_on_termination
+
+    - name: Attach existing volume to an instance (idempotent - check_mode)
+      amazon.aws.ec2_vol:
+        id: "{{ volume1.volume_id }}"
+        instance: "{{ test_instance.instance_ids[0] }}"
+        device_name: /dev/sdg
+        delete_on_termination: false
+      check_mode: true
+      register: vol_attach_result_check_mode
+
+    - ansible.builtin.assert:
+        that:
+          - vol_attach_result_check_mode is not changed
+
+    - name: Attach existing volume to an instance (idempotent)
+      amazon.aws.ec2_vol:
+        id: "{{ volume1.volume_id }}"
+        instance: "{{ test_instance.instance_ids[0] }}"
+        device_name: /dev/sdg
+        delete_on_termination: false
+      register: vol_attach_result
+
+    - name: Check task return attributes
+      ansible.builtin.assert:
+        that:
+          - not vol_attach_result.changed
+          - vol_attach_result.volume.attachment_set[0].status in ['attached', 'attaching']
+
+    - name: Attach a new volume to an instance (check_mode)
+      amazon.aws.ec2_vol:
+        instance: "{{ test_instance.instance_ids[0] }}"
+        device_name: /dev/sdh
+        volume_size: 1
+        volume_type: gp2
+        name: "{{ resource_prefix }} - sdh"
+        tags:
+          lowercase spaced: hello cruel world
+          Title Case: Hello Cruel World
+          CamelCase: SimpleCamelCase
+          snake_case: simple_snake_case
+          ResourcePrefix: "{{ resource_prefix }}"
+      check_mode: true
+      register: new_vol_attach_result_check_mode
+
+    - ansible.builtin.assert:
+        that:
+          - new_vol_attach_result_check_mode is changed
+
+    - name: Attach a new volume to an instance
+      amazon.aws.ec2_vol:
+        instance: "{{ test_instance.instance_ids[0] }}"
+        device_name: /dev/sdh
+        volume_size: 1
+        volume_type: standard
+        name: "{{ resource_prefix }} - sdh"
+        tags:
+          lowercase spaced: hello cruel world
+          Title Case: Hello Cruel World
+          CamelCase: SimpleCamelCase
+          snake_case: simple_snake_case
+          ResourcePrefix: "{{ resource_prefix }}"
+      register: new_vol_attach_result
+
+    - name: Check task return attributes
+      ansible.builtin.assert:
+        that:
+          - new_vol_attach_result.changed
+          - "'device' in new_vol_attach_result and new_vol_attach_result.device == '/dev/sdh'"
+          - "'volume' in new_vol_attach_result"
+          - new_vol_attach_result.volume.attachment_set[0].status in ['attached', 'attaching']
+          - new_vol_attach_result.volume.attachment_set[0].instance_id == test_instance.instance_ids[0]
+          - new_vol_attach_result.volume.attachment_set[0].device == '/dev/sdh'
+          - new_vol_attach_result.volume.tags["lowercase spaced"] == 'hello cruel world'
+          - new_vol_attach_result.volume.tags["Title Case"] == 'Hello Cruel World'
+          - new_vol_attach_result.volume.tags["CamelCase"] == 'SimpleCamelCase'
+          - new_vol_attach_result.volume.tags["snake_case"] == 'simple_snake_case'
+          - new_vol_attach_result.volume.tags["Name"] == resource_prefix +' - sdh'
+
+    - name: Attach a new volume to an instance (idempotent - check_mode)
+      amazon.aws.ec2_vol:
+        instance: "{{ test_instance.instance_ids[0] }}"
+        device_name: /dev/sdh
+        volume_size: 1
+        volume_type: standard
+        tags:
+          ResourcePrefix: "{{ resource_prefix }}"
+      check_mode: true
+      register: new_vol_attach_result_idem_check_mode
+      ignore_errors: true
+
+    - ansible.builtin.assert:
+        that:
+          - new_vol_attach_result_idem_check_mode is not changed
+
+    - name: Attach a new volume to an instance (idempotent)
+      amazon.aws.ec2_vol:
+        instance: "{{ test_instance.instance_ids[0] }}"
+        device_name: /dev/sdh
+        volume_size: 1
+        volume_type: standard
+        tags:
+          ResourcePrefix: "{{ resource_prefix }}"
+      register: new_vol_attach_result_idem
+      ignore_errors: true
+
+    - name: Check task return attributes
+      ansible.builtin.assert:
+        that:
+          - not new_vol_attach_result_idem.changed
+          - "'Volume mapping for /dev/sdh already exists' in new_vol_attach_result_idem.msg"
+
+    - name: Change some tag values
+      amazon.aws.ec2_vol:
+        instance: "{{ test_instance.instance_ids[0] }}"
+        id: "{{ new_vol_attach_result.volume.id }}"
+        device_name: /dev/sdh
+        volume_size: 1
+        volume_type: standard
+        tags:
+          lowercase spaced: hello cruel world ❤️
+          Title Case: Hello Cruel World ❤️
+          CamelCase: SimpleCamelCase ❤️
+          snake_case: simple_snake_case ❤️
+        purge_tags: false
+      register: new_vol_attach_result
+
+    - name: Check task return attributes
+      ansible.builtin.assert:
+        that:
+          - new_vol_attach_result.changed
+          - "'volume_id' in new_vol_attach_result"
+          - new_vol_attach_result.volume_id == new_vol_attach_result.volume_id
+          - "'attachment_set' in new_vol_attach_result.volume"
+          - "'create_time' in new_vol_attach_result.volume"
+          - "'id' in new_vol_attach_result.volume"
+          - "'size' in new_vol_attach_result.volume"
+          - new_vol_attach_result.volume.size == 1
+          - "'volume_type' in new_vol_attach_result"
+          - new_vol_attach_result.volume_type == 'standard'
+          - "'tags' in new_vol_attach_result.volume"
+          - (new_vol_attach_result.volume.tags | length) == 6
+          - new_vol_attach_result.volume.tags["lowercase spaced"] == 'hello cruel world ❤️'
+          - new_vol_attach_result.volume.tags["Title Case"] == 'Hello Cruel World ❤️'
+          - new_vol_attach_result.volume.tags["CamelCase"] == 'SimpleCamelCase ❤️'
+          - new_vol_attach_result.volume.tags["snake_case"] == 'simple_snake_case ❤️'
+          - new_vol_attach_result.volume.tags["ResourcePrefix"] == resource_prefix
+          - new_vol_attach_result.volume.tags["Name"] == resource_prefix +' - sdh'
+
+    - name: Change some tag values
+      amazon.aws.ec2_vol:
+        instance: "{{ test_instance.instance_ids[0] }}"
+        id: "{{ new_vol_attach_result.volume.id }}"
+        device_name: /dev/sdh
+        volume_size: 1
+        volume_type: standard
+        tags:
+          lowercase spaced: hello cruel world ❤️
+          Title Case: Hello Cruel World ❤️
+          snake_case: simple_snake_case ❤️
+          ResourcePrefix: "{{ resource_prefix }}"
+        purge_tags: true
+      register: new_vol_attach_result
+
+    - name: Check task return attributes
+      ansible.builtin.assert:
+        that:
+          - new_vol_attach_result.changed
+          - "'volume_id' in new_vol_attach_result"
+          - new_vol_attach_result.volume_id == new_vol_attach_result.volume_id
+          - "'attachment_set' in new_vol_attach_result.volume"
+          - "'create_time' in new_vol_attach_result.volume"
+          - "'id' in new_vol_attach_result.volume"
+          - "'size' in new_vol_attach_result.volume"
+          - new_vol_attach_result.volume.size == 1
+          - "'volume_type' in new_vol_attach_result"
+          - new_vol_attach_result.volume_type == 'standard'
+          - "'tags' in new_vol_attach_result.volume"
+          - (new_vol_attach_result.volume.tags | length) == 4
+          - new_vol_attach_result.volume.tags["lowercase spaced"] == 'hello cruel world ❤️'
+          - new_vol_attach_result.volume.tags["Title Case"] == 'Hello Cruel World ❤️'
+          - new_vol_attach_result.volume.tags["snake_case"] == 'simple_snake_case ❤️'
+          - new_vol_attach_result.volume.tags["ResourcePrefix"] == resource_prefix
+
+    - name: Create a volume from a snapshot and attach to the instance (check_mode)
+      amazon.aws.ec2_vol:
+        instance: "{{ test_instance.instance_ids[0] }}"
+        device_name: /dev/sdi
+        snapshot: "{{ vol1_snapshot.snapshot_id }}"
+        tags:
+          ResourcePrefix: "{{ resource_prefix }}"
+      check_mode: true
+      register: attach_new_vol_from_snapshot_result_check_mode
+
+    - ansible.builtin.assert:
+        that:
+          - attach_new_vol_from_snapshot_result_check_mode is changed
+
+    - name: Create a volume from a snapshot and attach to the instance
+      amazon.aws.ec2_vol:
+        instance: "{{ test_instance.instance_ids[0] }}"
+        device_name: /dev/sdi
+        snapshot: "{{ vol1_snapshot.snapshot_id }}"
+        tags:
+          ResourcePrefix: "{{ resource_prefix }}"
+      register: attach_new_vol_from_snapshot_result
+
+    - name: Check task return attributes
+      ansible.builtin.assert:
+        that:
+          - attach_new_vol_from_snapshot_result.changed
+          - "'device' in attach_new_vol_from_snapshot_result and attach_new_vol_from_snapshot_result.device == '/dev/sdi'"
+          - "'volume' in attach_new_vol_from_snapshot_result"
+          - attach_new_vol_from_snapshot_result.volume.attachment_set[0].status in ['attached', 'attaching']
+          - attach_new_vol_from_snapshot_result.volume.attachment_set[0].instance_id == test_instance.instance_ids[0]
+
+    - name: Get info on ebs volumes
+      amazon.aws.ec2_vol_info:
+      register: ec2_vol_info
+
+    - name: Check task return attributes
+      ansible.builtin.assert:
+        that:
+          - not ec2_vol_info.failed
+
+    - name: Get info on ebs volumes
+      amazon.aws.ec2_vol_info:
+        filters:
+          attachment.instance-id: "{{ test_instance.instance_ids[0] }}"
+      register: ec2_vol_info
+
+    - name: Check task return attributes
+      ansible.builtin.assert:
+        that:
+          - ec2_vol_info.volumes | length == 4
+
+    - name: Must not change because of missing parameter modify_volume
+      amazon.aws.ec2_vol:
+        id: "{{ new_vol_attach_result.volume_id }}"
+        zone: "{{ availability_zone }}"
+        volume_type: gp3
+      register: changed_gp3_volume
+
+    - name: Volume must not changed
+      ansible.builtin.assert:
+        that:
+          - not changed_gp3_volume.changed
+
+    - name: Change existing volume to gp3 (check_mode)
+      amazon.aws.ec2_vol:
+        id: "{{ new_vol_attach_result.volume_id }}"
+        zone: "{{ availability_zone }}"
+        volume_type: gp3
+        modify_volume: true
+      check_mode: true
+      register: changed_gp3_volume_check_mode
+
+    - ansible.builtin.assert:
+        that:
+          - changed_gp3_volume_check_mode is changed
+
+    - name: Change existing volume to gp3
+      amazon.aws.ec2_vol:
+        id: "{{ new_vol_attach_result.volume_id }}"
+        zone: "{{ availability_zone }}"
+        volume_type: gp3
+        modify_volume: true
+      register: changed_gp3_volume
+
+    - name: Check that volume_type has changed
+      ansible.builtin.assert:
+        that:
+          - changed_gp3_volume.changed
+          - "'volume_id' in changed_gp3_volume"
+          - changed_gp3_volume.volume_id == new_vol_attach_result.volume_id
+          - "'attachment_set' in changed_gp3_volume.volume"
+          - "'create_time' in changed_gp3_volume.volume"
+          - "'id' in changed_gp3_volume.volume"
+          - "'size' in changed_gp3_volume.volume"
+          - "'volume_type' in changed_gp3_volume"
+          - changed_gp3_volume.volume_type == 'gp3'
+          - "'iops' in changed_gp3_volume.volume"
+          - changed_gp3_volume.volume.iops == 3000
+          # Ensure our tags are still here
+          - "'tags' in changed_gp3_volume.volume"
+          - (changed_gp3_volume.volume.tags | length) == 4
+          - new_vol_attach_result.volume.tags["lowercase spaced"] == 'hello cruel world ❤️'
+          - new_vol_attach_result.volume.tags["Title Case"] == 'Hello Cruel World ❤️'
+          - new_vol_attach_result.volume.tags["snake_case"] == 'simple_snake_case ❤️'
+          - new_vol_attach_result.volume.tags["ResourcePrefix"] == resource_prefix
+
+    - name: Volume must be from type gp3 (idempotent)
+      amazon.aws.ec2_vol:
+        id: "{{ new_vol_attach_result.volume_id }}"
+        zone: "{{ availability_zone }}"
+        volume_type: gp3
+        modify_volume: true
+      register: changed_gp3_volume
+      retries: 10
+      delay: 3
+      until: not changed_gp3_volume.failed
+      # retry because ebs change is to slow
+
+    - name: Must not changed (idempotent)
+      ansible.builtin.assert:
+        that:
+          - not changed_gp3_volume.changed
+          - "'volume_id' in changed_gp3_volume"
+          - changed_gp3_volume.volume_id == new_vol_attach_result.volume_id
+          - "'attachment_set' in changed_gp3_volume.volume"
+          - "'create_time' in changed_gp3_volume.volume"
+          - "'id' in changed_gp3_volume.volume"
+          - "'size' in changed_gp3_volume.volume"
+          - "'volume_type' in changed_gp3_volume"
+          - changed_gp3_volume.volume_type == 'gp3'
+          - "'iops' in changed_gp3_volume.volume"
+          - changed_gp3_volume.volume.iops == 3000
+          - "'throughput' in changed_gp3_volume.volume"
+          - "'tags' in changed_gp3_volume.volume"
+          - (changed_gp3_volume.volume.tags | length) == 4
+          - new_vol_attach_result.volume.tags["lowercase spaced"] == 'hello cruel world ❤️'
+          - new_vol_attach_result.volume.tags["Title Case"] == 'Hello Cruel World ❤️'
+          - new_vol_attach_result.volume.tags["snake_case"] == 'simple_snake_case ❤️'
+          - new_vol_attach_result.volume.tags["ResourcePrefix"] == resource_prefix
+
+    - name: Re-read volume information to validate new volume_type
+      amazon.aws.ec2_vol_info:
+        filters:
+          volume-id: "{{ changed_gp3_volume.volume_id }}"
+      register: verify_gp3_change
+
+    - name: Volume type must be gp3
+      ansible.builtin.assert:
+        that:
+          - v.type == 'gp3'
+      vars:
+        v: "{{ verify_gp3_change.volumes[0] }}"
+
+    - name: Detach volume from the instance (check_mode)
+      amazon.aws.ec2_vol:
+        id: "{{ new_vol_attach_result.volume_id }}"
+        instance: ""
+      check_mode: true
+      register: new_vol_attach_result_check_mode
+
+    - ansible.builtin.assert:
+        that:
+          - new_vol_attach_result_check_mode is changed
+
+    - name: Detach volume from the instance
+      amazon.aws.ec2_vol:
+        id: "{{ new_vol_attach_result.volume_id }}"
+        instance: ""
+      register: new_vol_attach_result
+
+    - name: Check task return attributes
+      ansible.builtin.assert:
+        that:
+          - new_vol_attach_result.changed
+          - new_vol_attach_result.volume.status == 'available'
+
+    - name: Detach volume from the instance (idempotent - check_mode)
+      amazon.aws.ec2_vol:
+        id: "{{ new_vol_attach_result.volume_id }}"
+        instance: ""
+      register: new_vol_attach_result_idem_check_mode
+
+    - name: Check task return attributes
+      ansible.builtin.assert:
+        that:
+          - not new_vol_attach_result_idem_check_mode.changed
+
+    - name: Detach volume from the instance (idempotent)
+      amazon.aws.ec2_vol:
+        id: "{{ new_vol_attach_result.volume_id }}"
+        instance: ""
+      register: new_vol_attach_result_idem
+
+    - name: Check task return attributes
+      ansible.builtin.assert:
+        that:
+          - not new_vol_attach_result_idem.changed
+
+    - name: Delete volume (check_mode)
+      amazon.aws.ec2_vol:
+        id: "{{ volume2.volume_id }}"
+        state: absent
+      check_mode: true
+      register: delete_volume_result_check_mode
+
+    - ansible.builtin.assert:
+        that:
+          - delete_volume_result_check_mode is changed
+
+    - name: Delete volume
+      amazon.aws.ec2_vol:
+        id: "{{ volume2.volume_id }}"
+        state: absent
+      register: delete_volume_result
+
+    - name: Check task return attributes
+      ansible.builtin.assert:
+        that:
+          - delete_volume_result.changed
+
+    - name: Delete volume (idempotent - check_mode)
+      amazon.aws.ec2_vol:
+        id: "{{ volume2.volume_id }}"
+        state: absent
+      check_mode: true
+      register: delete_volume_result_check_mode
+
+    - ansible.builtin.assert:
+        that:
+          - delete_volume_result_check_mode is not changed
+
+    - name: Delete volume (idempotent)
+      amazon.aws.ec2_vol:
+        id: "{{ volume2.volume_id }}"
+        state: absent
+      register: delete_volume_result_idem
+
+    - name: Check task return attributes
+      ansible.builtin.assert:
+        that:
+          - not delete_volume_result_idem.changed
+
+    # Originally from ec2_vol_info
+
+    - name: Create test volume with Destroy on Terminate
+      amazon.aws.ec2_vol:
+        instance: "{{ test_instance.instance_ids[0] }}"
+        volume_size: 4
+        name: "{{ resource_prefix }}_delete_on_terminate"
+        device_name: /dev/sdj
+        volume_type: io1
+        iops: 100
+        tags:
+          Tag Name with Space-and-dash: Tag Value with Space-and-dash
+        delete_on_termination: true
+      register: dot_volume
+
+    - name: Check task return attributes
+      ansible.builtin.assert:
+        that:
+          - dot_volume.changed
+          - "'attachment_set' in dot_volume.volume"
+          - "'delete_on_termination' in dot_volume.volume.attachment_set[0]"
+          - "'create_time' in dot_volume.volume"
+          - "'id' in dot_volume.volume"
+          - "'size' in dot_volume.volume"
+          - dot_volume.volume.size == 4
+          - "'volume_type' in dot_volume"
+          - dot_volume.volume_type == 'io1'
+          - "'iops' in dot_volume.volume"
+          - dot_volume.volume.iops == 100
+          - "'tags' in dot_volume.volume"
+          - (dot_volume.volume.tags | length ) == 2
+          - dot_volume.volume.tags["Name"] == resource_prefix+"_delete_on_terminate"
+          - dot_volume.volume.tags["Tag Name with Space-and-dash"] == 'Tag Value with Space-and-dash'
+
+    - name: Gather volume info without any filters
+      amazon.aws.ec2_vol_info:
+      register: volume_info_wo_filters
+      check_mode: false
+
+    - name: Check if info are returned without filters
+      ansible.builtin.assert:
+        that:
+          - volume_info_wo_filters.volumes is defined
+
+    - name: Gather volume info
+      amazon.aws.ec2_vol_info:
+        filters:
+          tag:Name: "{{ resource_prefix }}_delete_on_terminate"
+      register: volume_info
+      check_mode: false
+
+    - name: Format check
+      ansible.builtin.assert:
+        that:
+          - volume_info.volumes|length == 1
+          - v.attachment_set[0].attach_time is defined
+          - v.attachment_set[0].device      is defined and v.attachment_set[0].device      == dot_volume.device
+          - v.attachment_set[0].instance_id is defined and v.attachment_set[0].instance_id == test_instance.instance_ids[0]
+          - v.attachment_set[0].status      is defined and v.attachment_set[0].status      == 'attached'
+          - v.create_time                is defined
+          - v.encrypted                  is defined and v.encrypted                  == false
+          - v.id                         is defined and v.id                         == dot_volume.volume_id
+          - v.iops                       is defined and v.iops                       == 100
+          - v.region                     is defined and v.region                     == aws_region
+          - v.size                       is defined and v.size                       == 4
+          - v.snapshot_id                is defined and v.snapshot_id                == ''
+          - v.status                     is defined and v.status                     == 'in-use'
+          - v.tags.Name                  is defined and v.tags.Name                  == resource_prefix + '_delete_on_terminate'
+          - v.tags['Tag Name with Space-and-dash']                                   == 'Tag Value with Space-and-dash'
+          - v.type                       is defined and v.type                       == 'io1'
+          - v.zone                       is defined and v.zone                       == test_instance.instances[0].placement.availability_zone
+      vars:
+        v: "{{ volume_info.volumes[0] }}"
+
+    - name: New format check
+      ansible.builtin.assert:
+        that:
+          - v.attachment_set[0].delete_on_termination is defined
+      vars:
+        v: "{{ volume_info.volumes[0] }}"
+      when: ansible_version.full is version('2.7', '>=')
+
+    - name: Test create a new gp3 volume
+      amazon.aws.ec2_vol:
+        volume_size: 70
+        zone: "{{ availability_zone }}"
+        volume_type: gp3
+        throughput: 130
+        iops: 3001
+        name: GP3-TEST-{{ resource_prefix }}
+        tags:
+          ResourcePrefix: "{{ resource_prefix }}"
+      register: gp3_volume
+
+    - name: Check that volume_type is gp3
+      ansible.builtin.assert:
+        that:
+          - gp3_volume.changed
+          - "'attachment_set' in gp3_volume.volume"
+          - "'create_time' in gp3_volume.volume"
+          - "'id' in gp3_volume.volume"
+          - "'size' in gp3_volume.volume"
+          - gp3_volume.volume.size == 70
+          - "'volume_type' in gp3_volume"
+          - gp3_volume.volume_type == 'gp3'
+          - "'iops' in gp3_volume.volume"
+          - gp3_volume.volume.iops == 3001
+          - "'throughput' in gp3_volume.volume"
+          - gp3_volume.volume.throughput == 130
+          - "'tags' in gp3_volume.volume"
+          - (gp3_volume.volume.tags | length ) == 2
+          - gp3_volume.volume.tags["ResourcePrefix"] == resource_prefix
+
+    - name: Read volume information to validate throughput
+      amazon.aws.ec2_vol_info:
+        filters:
+          volume-id: "{{ gp3_volume.volume_id }}"
+      register: verify_throughput
+
+    - name: Throughput must be equal to 130
+      ansible.builtin.assert:
+        that:
+          - v.throughput == 130
+      vars:
+        v: "{{ verify_throughput.volumes[0] }}"
+
+    - name: Print out facts
+      ansible.builtin.debug:
+        var: vol_facts
+
+    - name: Read volume information to validate throughput
+      amazon.aws.ec2_vol_info:
+        filters:
+          volume-id: "{{ gp3_volume.volume_id }}"
+      register: verify_throughput
+
+    - name: Throughput must be equal to 130
+      ansible.builtin.assert:
+        that:
+          - v.throughput == 130
+      vars:
+        v: "{{ verify_throughput.volumes[0] }}"
+
+    - name: Print out facts
+      ansible.builtin.debug:
+        var: vol_facts
+
+    - name: Increase throughput
+      amazon.aws.ec2_vol:
+        volume_size: 70
+        zone: "{{ availability_zone }}"
+        volume_type: gp3
+        throughput: 131
+        modify_volume: true
+        name: GP3-TEST-{{ resource_prefix }}
+        tags:
+          ResourcePrefix: "{{ resource_prefix }}"
+      register: gp3_volume
+
+    - name: Check that throughput has changed
+      ansible.builtin.assert:
+        that:
+          - gp3_volume.changed
+          - "'create_time' in gp3_volume.volume"
+          - "'id' in gp3_volume.volume"
+          - "'size' in gp3_volume.volume"
+          - gp3_volume.volume.size == 70
+          - "'volume_type' in gp3_volume"
+          - gp3_volume.volume_type == 'gp3'
+          - "'iops' in gp3_volume.volume"
+          - gp3_volume.volume.iops == 3001
+          - "'throughput' in gp3_volume.volume"
+          - gp3_volume.volume.throughput == 131
+
+    # Multi-Attach disk
+    - name: Create disk with multi-attach enabled
+      amazon.aws.ec2_vol:
+        volume_size: 4
+        volume_type: io1
+        iops: 102
+        zone: "{{ availability_zone }}"
+        multi_attach: true
+        tags:
+          ResourcePrefix: "{{ resource_prefix }}"
+      register: multi_attach_disk
+
+    - name: Check volume creation
+      ansible.builtin.assert:
+        that:
+          - multi_attach_disk.changed
+          - "'volume' in multi_attach_disk"
+          - multi_attach_disk.volume.multi_attach_enabled
+
+    - name: Attach existing volume to an instance
+      amazon.aws.ec2_vol:
+        id: "{{ multi_attach_disk.volume_id }}"
+        instance: "{{ test_instance.instance_ids[0] }}"
+        device_name: /dev/sdk
+        delete_on_termination: false
+      register: vol_attach_result
+
+    - name: Wait for instance to start
+      amazon.aws.ec2_instance:
+        state: running
+        instance_ids: "{{ test_instance_2.instance_ids }}"
+        wait: true
+
+    - name: Attach existing volume to second instance
+      amazon.aws.ec2_vol:
+        id: "{{ multi_attach_disk.volume_id }}"
+        instance: "{{ test_instance_2.instance_ids[0] }}"
+        device_name: /dev/sdg
+        delete_on_termination: false
+      register: vol_attach_result
+
+    - name: Check task return attributes
+      ansible.builtin.assert:
+        that:
+          - vol_attach_result.changed
+          - "'volume' in vol_attach_result"
+          - vol_attach_result.volume.attachment_set | length == 2
+          - test_instance.instance_ids[0] in vol_attach_result.volume.attachment_set | map(attribute="instance_id") | list
+          - test_instance_2.instance_ids[0] in vol_attach_result.volume.attachment_set | map(attribute="instance_id") | list
+
+    - name: Create a volume without tags
+      amazon.aws.ec2_vol:
+        volume_size: 5
+        zone: "{{ availability_zone }}"
+        instance: "{{ test_instance_3.instance_ids[0] }}"
+      register: volume_without_tag
+
+    - ansible.builtin.assert:
+        that:
+          - volume_without_tag.changed
+
+    # idempotency check without tags
+    - name: Create a volume without tags (idempotency check)
+      amazon.aws.ec2_vol:
+        volume_size: 5
+        zone: "{{ availability_zone }}"
+        instance: "{{ test_instance_3.instance_ids[0] }}"
+      register: volume_without_tag
+
+    - ansible.builtin.assert:
+        that:
+          - not volume_without_tag.changed
+  # ==== Cleanup ============================================================
+
+  always:
+    - name: Describe the instance before we delete it
+      amazon.aws.ec2_instance_info:
+        instance_ids:
+          - "{{ item }}"
+      ignore_errors: true
+      with_items:
+        - "{{ test_instance.instance_ids[0] }}"
+        - "{{ test_instance_2.instance_ids[0] }}"
+        - "{{ test_instance_3.instance_ids[0] }}"
+      register: pre_delete
+
+    - ansible.builtin.debug:
+        var: pre_delete
+
+    - name: Delete test instance
+      amazon.aws.ec2_instance:
+        instance_ids:
+          - "{{ item }}"
+        state: terminated
+        wait: true
+      with_items:
+        - "{{ test_instance.instance_ids[0] }}"
+        - "{{ test_instance_2.instance_ids[0] }}"
+        - "{{ test_instance_3.instance_ids[0] }}"
+      ignore_errors: true
+
+    - name: Delete volumes
+      amazon.aws.ec2_vol:
+        id: "{{ item.volume_id }}"
+        state: absent
+      ignore_errors: true
+      with_items:
+        - "{{ volume1 }}"
+        - "{{ volume2 }}"
+        - "{{ volume3 }}"
+        - "{{ new_vol_attach_result }}"
+        - "{{ attach_new_vol_from_snapshot_result }}"
+        - "{{ dot_volume }}"
+        - "{{ gp3_volume }}"
+        - "{{ multi_attach_disk }}"
+        - "{{ volume_without_tag }}"
+
+    - name: Delete snapshot
+      amazon.aws.ec2_snapshot:
+        snapshot_id: "{{ vol1_snapshot.snapshot_id }}"
+        state: absent
+      ignore_errors: true
+
+    - name: Delete test subnet
+      amazon.aws.ec2_vpc_subnet:
+        vpc_id: "{{ testing_vpc.vpc.id }}"
+        cidr: "{{ subnet_cidr }}"
+        state: absent
+      ignore_errors: true
+
+    - name: Delete test VPC
+      amazon.aws.ec2_vpc_net:
+        name: "{{ vpc_name }}"
+        cidr_block: "{{ vpc_cidr }}"
+        state: absent
+      ignore_errors: true

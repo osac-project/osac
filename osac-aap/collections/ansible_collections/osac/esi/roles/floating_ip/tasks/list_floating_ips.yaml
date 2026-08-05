@@ -1,0 +1,21 @@
+- name: Convert floating IP properties to tags
+  ansible.builtin.set_fact:
+    tags_to_filter: "{{ tags_to_filter | default([]) + [item.key + '_' + item.value] }}"
+  loop: "{{ floating_ip_properties | dict2items }}"
+  when: floating_ip_properties | length > 0
+
+- name: List floating IPs with tags
+  block:
+  - name: List floating IPs  # noqa:no-changed-when
+    ansible.builtin.command: >-
+      openstack floating ip list
+      {% for tag in tags_to_filter %}
+      --tag "{{ tag }}"
+      {% endfor %}
+      --long
+      -f json
+    register: list_floating_ips_cmd
+
+  - name: Set list_floating_ips_result to floating IPs list
+    ansible.builtin.set_fact:
+      list_floating_ips_result: "{{ list_floating_ips_cmd.stdout | from_json }}"

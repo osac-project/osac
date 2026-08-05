@@ -1,0 +1,112 @@
+{{/*
+Copyright (c) 2025 Red Hat Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+the License. You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+*/}}
+
+{{- $caBundleConfigMap := required "certs.caBundle.configMap is required" .Values.certs.caBundle.configMap }}
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: fulfillment-console-proxy
+spec:
+  selector:
+    matchLabels:
+      app: fulfillment-console-proxy
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: fulfillment-console-proxy
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+      - name: cas
+        configMap:
+          name: {{ $caBundleConfigMap }}
+      - name: tls
+        secret:
+          secretName: fulfillment-console-proxy-tls
+      - name: token-encryption-key
+        secret:
+          secretName: fulfillment-token-encryption-keypair
+          items:
+          - key: tls.key
+            path: tls.key
+      containers:
+      - name: console-proxy
+        image: {{ .Values.images.service }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: cas
+          mountPath: /etc/fulfillment-console-proxy/tls/cas
+        - name: tls
+          mountPath: /etc/fulfillment-console-proxy/tls
+        - name: token-encryption-key
+          mountPath: /etc/fulfillment-token-encryption
+          readOnly: true
+        command:
+        - /usr/local/bin/fulfillment-service
+        - start
+        - console-proxy
+        - --log-level={{ .Values.log.level }}
+        - --ca-file=/etc/fulfillment-console-proxy/tls/cas
+        - --token-issuer={{ include "fulfillment-api.tokenIssuerUrl" . }}
+        - --token-decryption-key=/etc/fulfillment-token-encryption/tls.key
+        - --grpc-listener-address=0.0.0.0:8000
+        - --grpc-listener-tls-crt=/etc/fulfillment-console-proxy/tls/tls.crt
+        - --grpc-listener-tls-key=/etc/fulfillment-console-proxy/tls/tls.key
+        - --console-listener-address=0.0.0.0:8090
+        - --console-listener-tls-crt=/etc/fulfillment-console-proxy/tls/tls.crt
+        - --console-listener-tls-key=/etc/fulfillment-console-proxy/tls/tls.key
+        - --console-cors-allowed-origins=https://{{ include "fulfillment-api.hostname" . }}
+        - --metrics-listener-address=0.0.0.0:8002
+        ports:
+        - name: grpc
+          containerPort: 8000
+          protocol: TCP
+        - name: console
+          containerPort: 8090
+          protocol: TCP
+        - name: metrics
+          containerPort: 8002
+          protocol: TCP
+        livenessProbe:
+          tcpSocket:
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 5
+        readinessProbe:
+          exec:
+            command:
+            - /usr/local/bin/fulfillment-service
+            - probe
+            - grpc-server
+            - --ca-file=/etc/fulfillment-console-proxy/tls/cas
+            - --grpc-server-address=localhost:8000
+            - --grpc-server-timeout=1s
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 5

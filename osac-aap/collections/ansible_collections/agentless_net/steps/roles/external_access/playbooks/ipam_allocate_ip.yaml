@@ -1,0 +1,9 @@
+---
+- name: Allocate public IPs from pool
+  hosts: net_nodes[0]
+  gather_facts: false
+  tasks:
+    - name: Allocate IPs
+      ansible.builtin.include_role:
+        name: agentless_net.ipam.ip
+        tasks_from: allocate

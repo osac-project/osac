@@ -1,0 +1,102 @@
+# Environment variables override these defaults (see each value).
+# Comma-separated lists: EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS
+# JSON dict: NETRIS_RESOURCE_CLASS_MAP (required when using Netris network class)
+# external access configuration
+external_access_base_domain: "{{ lookup('env', 'EXTERNAL_ACCESS_BASE_DOMAIN', default='box.massopen.cloud') }}"
+
+external_access_supported_base_domains: >-
+  {{
+    (lookup('env', 'EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS')
+     | default('box.massopen.cloud', true))
+    .split(',')
+    | map('trim')
+    | select()
+    | list
+  }}
+
+external_access_api_internal_network: "{{ lookup('env', 'EXTERNAL_ACCESS_API_INTERNAL_NETWORK', default='hypershift') }}"
+
+# Hosted cluster configuration
+hosted_cluster_base_domain: "{{ lookup('env', 'HOSTED_CLUSTER_BASE_DOMAIN', default='box.massopen.cloud') }}"
+hosted_cluster_controller_availability_policy: "{{ lookup('env', 'HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY', default='HighlyAvailable') }}"
+hosted_cluster_infrastructure_availability_policy: "{{ lookup('env', 'HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY', default='HighlyAvailable') }}"
+
+# Network class to use (netris/esi)
+network_class: "{{ lookup('env', 'NETWORK_CLASS', default='esi') }}"
+
+# Ansible collection that provides the network-class-specific steps
+# (cluster_infra and external_access roles). Override this to use a
+# different network backend without changing osac.service.
+network_steps_collection: "{{ lookup('env', 'NETWORK_STEPS_COLLECTION', default='osac.steps') }}"
+
+# Netris controller connection
+netris_controller_url: "{{ lookup('env', 'NETRIS_CONTROLLER_URL') }}"
+netris_username: "{{ lookup('env', 'NETRIS_USERNAME') }}"
+netris_password: "{{ lookup('env', 'NETRIS_PASSWORD') | trim }}"
+
+# Site and tenant
+netris_site_id: "{{ lookup('env', 'NETRIS_SITE_ID') | default(0, true) | int }}"
+netris_tenant_id: "{{ lookup('env', 'NETRIS_TENANT_ID') | default(0, true) | int }}"
+netris_tenant_name: "{{ lookup('env', 'NETRIS_TENANT_NAME') }}"
+
+# Management VPC
+netris_mgmt_vpc_id: "{{ lookup('env', 'NETRIS_MGMT_VPC_ID') | default(0, true) | int }}"
+netris_mgmt_vpc_name: "{{ lookup('env', 'NETRIS_MGMT_VPC_NAME') }}"
+
+# Per-resource-class configuration (JSON dict).
+# Each key is a resource class name; the value is an object with:
+#   server_cluster_template_id  – Netris server cluster template ID
+#   mgmt_interface              – management NIC name as seen by the OS
+#   vpc_interfaces              – list of data-plane / VPC NIC names
+netris_resource_class_map: >-
+  {{
+    lookup('env', 'NETRIS_RESOURCE_CLASS_MAP')
+    | default('{}', true)
+    | from_json
+  }}
+
+# Management network routing (keeps bastion/controller reachable after VPC config is applied)
+server_mgmt_route_destination: "{{ lookup('env', 'SERVER_MGMT_ROUTE_DESTINATION') }}"
+server_mgmt_route_gateway: "{{ lookup('env', 'SERVER_MGMT_ROUTE_GATEWAY') }}"
+
+# SSH access to bare-metal servers (two-hop: local → bastion → server)
+# Values are loaded from the cluster-fulfillment-ig secret via env vars.
+# SSH key content is written to files by the osac.service.write_ssh_keys role.
+server_ssh_bastion_host: "{{ lookup('env', 'SERVER_SSH_BASTION_HOST') }}"
+server_ssh_bastion_user: "{{ lookup('env', 'SERVER_SSH_BASTION_USER') }}"
+
+# DNS configuration
+dns_class: "{{ lookup('env', 'DNS_CLASS', default='dns.route53.dns') }}"
+dns_zone: "{{ lookup('env', 'DNS_ZONE', default=external_access_base_domain) }}"
+
+# =============================================================================
+# NICo (NVIDIA Bare Metal Manager) Configuration
+# =============================================================================
+# All sensitive values MUST be provided via environment variables injected by
+# AAP from the cluster-fulfillment-ig Kubernetes Secret.
+
+# API Connection
+nico_api_url: "{{ lookup('env', 'NVIDIA_BMM_API_URL') | default('', true) }}"
+nico_api_path_prefix: "{{ lookup('env', 'NVIDIA_BMM_DEFAULT_API_PATH_PREFIX') | default('forge', true) }}"
+
+# OAuth2 Client Credentials
+nico_client_id: "{{ lookup('env', 'NVIDIA_BMM_CLIENT_ID') | default('', true) }}"
+nico_client_secret: "{{ lookup('env', 'NVIDIA_BMM_CLIENT_SECRET') | default('', true) }}"
+nico_ssa_token_url: "{{ lookup('env', 'NVIDIA_BMM_SSA_TOKEN_URL') | default('', true) }}"
+nico_oauth_scope: "{{ lookup('env', 'NVIDIA_BMM_DEFAULT_OAUTH_SCOPE') | default('', true) }}"
+
+# Multi-tenancy
+nico_org: "{{ lookup('env', 'NVIDIA_BMM_ORG') | default('', true) }}"
+nico_site_id: "{{ lookup('env', 'NVIDIA_BMM_SITE_ID') | default('', true) }}"
+nico_tenant_id: "{{ lookup('env', 'NVIDIA_BMM_TENANT_ID') | default('', true) }}"
+
+# Network
+nico_network_virtualization_type: "{{ lookup('env', 'NVIDIA_BMM_NETWORK_VIRTUALIZATION_TYPE') | default('FNN', true) }}"
+nico_default_ip_block_id: "{{ lookup('env', 'NVIDIA_BMM_DEFAULT_IP_BLOCK_ID') | default('', true) }}"
+nico_mgmt_vpc_id: "{{ lookup('env', 'NVIDIA_BMM_MGMT_VPC_ID') | default('', true) }}"
+nico_ingress_cidr: "{{ lookup('env', 'NVIDIA_BMM_INGRESS_CIDR') | default('', true) }}"
+
+# Instance Provisioning
+nico_default_operating_system_id: "{{ lookup('env', 'NVIDIA_BMM_DEFAULT_OS_ID') | default('', true) }}"
+nico_default_ssh_key_group_id: "{{ lookup('env', 'NVIDIA_BMM_DEFAULT_SSH_KEY_GROUP_ID') | default('', true) }}"
+nico_infra_ipxe_dns_server: "{{ lookup('env', 'NVIDIA_BMM_IPXE_DNS_SERVER') | default('', true) }}"

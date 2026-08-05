@@ -1,0 +1,5 @@
+apiVersion: v2
+name: osac-operators
+description: OLM operator subscriptions for OSAC prerequisites
+type: application
+version: 0.0.1

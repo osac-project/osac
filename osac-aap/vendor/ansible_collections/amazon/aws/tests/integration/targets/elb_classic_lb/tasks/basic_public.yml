@@ -1,0 +1,272 @@
+---
+- block:
+    # For creation test some basic behaviour
+    - module_defaults:
+        amazon.aws.elb_classic_lb:
+          zones: ["{{ availability_zone_a }}", "{{ availability_zone_b }}"]
+          listeners: "{{ default_listeners }}"
+          wait: true
+          scheme: internet-facing
+          # subnets: ['{{ subnet_a }}', '{{ subnet_b }}']
+      block:
+        # ============================================================
+        # create test elb with listeners, certificate, and health check
+
+        - name: Create public ELB (check_mode)
+          amazon.aws.elb_classic_lb:
+            name: "{{ elb_name }}"
+            state: present
+          register: result
+          check_mode: true
+
+        - ansible.builtin.assert:
+            that:
+              - result is changed
+              - result.elb.status == "created"
+
+        - name: Create public ELB
+          amazon.aws.elb_classic_lb:
+            name: "{{ elb_name }}"
+            state: present
+          register: result
+
+        - ansible.builtin.assert:
+            that:
+              - result is changed
+              - result.elb.status == "created"
+              - availability_zone_a in result.elb.zones
+              - availability_zone_b in result.elb.zones
+
+        - name: Create public ELB idempotency (check_mode)
+          amazon.aws.elb_classic_lb:
+            name: "{{ elb_name }}"
+            state: present
+          register: result
+          check_mode: true
+
+        - ansible.builtin.assert:
+            that:
+              - result is not changed
+              - result.elb.status == "exists"
+
+        - name: Create public ELB idempotency
+          amazon.aws.elb_classic_lb:
+            name: "{{ elb_name }}"
+            state: present
+          register: result
+
+        - ansible.builtin.assert:
+            that:
+              - result is not changed
+              - result.elb.status == "exists"
+              - availability_zone_a in result.elb.zones
+              - availability_zone_b in result.elb.zones
+
+        - amazon.aws.ec2_eni_info:
+            filters:
+              description: ELB {{ elb_name }}
+          register: info
+
+        - ansible.builtin.assert:
+            that:
+              - info.network_interfaces | length > 0
+
+        - amazon.aws.elb_classic_lb_info:
+            names: ["{{ elb_name }}"]
+          register: info
+
+        - ansible.builtin.assert:
+            that:
+              - info.elbs | length > 0
+
+    # ============================================================
+    # Now we're outside of the creation we drop the defaults
+    # ============================================================
+
+    - name: Add a zone - no purge (check_mode)
+      amazon.aws.elb_classic_lb:
+        name: "{{ elb_name }}"
+        state: present
+        zones: ["{{ availability_zone_c }}"]
+      register: result
+      check_mode: true
+
+    - ansible.builtin.assert:
+        that:
+          - result is changed
+          - result.elb.status == "exists"
+
+    - name: Add a zone - no purge
+      amazon.aws.elb_classic_lb:
+        name: "{{ elb_name }}"
+        state: present
+        zones: ["{{ availability_zone_c }}"]
+      register: result
+
+    - ansible.builtin.assert:
+        that:
+          - result is changed
+          - result.elb.status == "exists"
+          - availability_zone_a in result.elb.zones
+          - availability_zone_b in result.elb.zones
+          - availability_zone_c in result.elb.zones
+
+    - name: Add a zone - no purge - idempotency (check_mode)
+      amazon.aws.elb_classic_lb:
+        name: "{{ elb_name }}"
+        state: present
+        zones: ["{{ availability_zone_c }}"]
+      register: result
+      check_mode: true
+
+    - ansible.builtin.assert:
+        that:
+          - result is not changed
+          - result.elb.status == "exists"
+
+    - name: Add a zone - no purge - idempotency
+      amazon.aws.elb_classic_lb:
+        name: "{{ elb_name }}"
+        state: present
+        zones: ["{{ availability_zone_c }}"]
+      register: result
+
+    - ansible.builtin.assert:
+        that:
+          - result is not changed
+          - result.elb.status == "exists"
+          - availability_zone_a in result.elb.zones
+          - availability_zone_b in result.elb.zones
+          - availability_zone_c in result.elb.zones
+
+    # ============================================================
+
+    - name: Remove a zone - purge (check_mode)
+      amazon.aws.elb_classic_lb:
+        name: "{{ elb_name }}"
+        state: present
+        zones: ["{{ availability_zone_c }}"]
+        purge_zones: true
+      register: result
+      check_mode: true
+
+    - ansible.builtin.assert:
+        that:
+          - result is changed
+          - result.elb.status == "exists"
+
+    - name: Remove a zone - purge
+      amazon.aws.elb_classic_lb:
+        name: "{{ elb_name }}"
+        state: present
+        zones: ["{{ availability_zone_c }}"]
+        purge_zones: true
+      register: result
+
+    - ansible.builtin.assert:
+        that:
+          - result is changed
+          - result.elb.status == "exists"
+          - availability_zone_a not in result.elb.zones
+          - availability_zone_b not in result.elb.zones
+          - availability_zone_c in result.elb.zones
+
+    - name: Remove a zone - purge - idempotency (check_mode)
+      amazon.aws.elb_classic_lb:
+        name: "{{ elb_name }}"
+        state: present
+        zones: ["{{ availability_zone_c }}"]
+        purge_zones: true
+      register: result
+      check_mode: true
+
+    - ansible.builtin.assert:
+        that:
+          - result is not changed
+          - result.elb.status == "exists"
+
+    - name: Remove a zone - purge - idempotency
+      amazon.aws.elb_classic_lb:
+        name: "{{ elb_name }}"
+        state: present
+        zones: ["{{ availability_zone_c }}"]
+        purge_zones: true
+      register: result
+
+    - ansible.builtin.assert:
+        that:
+          - result is not changed
+          - result.elb.status == "exists"
+          - availability_zone_a not in result.elb.zones
+          - availability_zone_b not in result.elb.zones
+          - availability_zone_c in result.elb.zones
+
+    # ============================================================
+
+    - name: Remove the test load balancer completely (check_mode)
+      amazon.aws.elb_classic_lb:
+        name: "{{ elb_name }}"
+        state: absent
+        wait: true
+      register: result
+      check_mode: true
+
+    - name: Assert the load balancer would be removed
+      ansible.builtin.assert:
+        that:
+          - result is changed
+          - result.elb.name == elb_name
+          - result.elb.status == "deleted"
+
+    - name: Remove the test load balancer completely
+      amazon.aws.elb_classic_lb:
+        name: "{{ elb_name }}"
+        state: absent
+        wait: true
+      register: result
+
+    - name: Assert the load balancer was removed
+      ansible.builtin.assert:
+        that:
+          - result is changed
+          - result.elb.name == elb_name
+          - result.elb.status == "deleted"
+
+    - name: Remove the test load balancer completely (idempotency) (check_mode)
+      amazon.aws.elb_classic_lb:
+        name: "{{ elb_name }}"
+        state: absent
+        wait: true
+      register: result
+      check_mode: true
+
+    - name: Assert the load balancer is gone
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+          - result.elb.name == elb_name
+          - result.elb.status == "gone"
+
+    - name: Remove the test load balancer completely (idempotency)
+      amazon.aws.elb_classic_lb:
+        name: "{{ elb_name }}"
+        state: absent
+        wait: true
+      register: result
+
+    - name: Assert the load balancer is gone
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+          - result.elb.name == elb_name
+          - result.elb.status == "gone"
+
+  always:
+    # ============================================================
+    - name: Remove the test load balancer
+      amazon.aws.elb_classic_lb:
+        name: "{{ elb_name }}"
+        state: absent
+        wait: true
+      register: result
+      ignore_errors: true

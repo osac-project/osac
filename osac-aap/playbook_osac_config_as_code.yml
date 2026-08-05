@@ -1,0 +1,6 @@
+---
+- name: Set AAP license
+  ansible.builtin.import_playbook: osac.config_as_code.subscription
+
+- name: Import a playbook
+  ansible.builtin.import_playbook: osac.config_as_code.configure

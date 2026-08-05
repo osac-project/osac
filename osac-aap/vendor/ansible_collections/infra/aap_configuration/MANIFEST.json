@@ -1,0 +1,46 @@
+{
+ "collection_info": {
+  "namespace": "infra",
+  "name": "aap_configuration",
+  "version": "4.4.0",
+  "authors": [
+   "Andrew Huffman",
+   "Adebisi Oyawale @aoyawale",
+   "Kedar Kulkarni @kedark3",
+   "Tom Page @Tompage1994",
+   "Sean Sullivan @sean-m-sullivan",
+   "David Danielsson @djdanielsson"
+  ],
+  "readme": "README.md",
+  "tags": [
+   "controller",
+   "collection",
+   "controller_configuration",
+   "automation_platform",
+   "infrastructure"
+  ],
+  "description": "A collection of roles to manage Ansible Controller",
+  "license": [
+   "GPL-3.0-or-later"
+  ],
+  "license_file": null,
+  "dependencies": {
+   "ansible.platform": ">=2.5.0",
+   "ansible.hub": ">=1.0.0",
+   "ansible.controller": ">=4.6.0",
+   "ansible.eda": ">=2.5.0"
+  },
+  "repository": "https://github.com/redhat-cop/aap_configuration/",
+  "documentation": null,
+  "homepage": null,
+  "issues": "https://github.com/redhat-cop/aap_configuration/issues"
+ },
+ "file_manifest_file": {
+  "name": "FILES.json",
+  "ftype": "file",
+  "chksum_type": "sha256",
+  "chksum_sha256": "343ec9daa9f147b97eba2aa11e171059f9ed3ee3a10fbb0bc10b68cddce93df5",
+  "format": 1
+ },
+ "format": 1
+}

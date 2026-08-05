@@ -1,0 +1,38 @@
+{
+ "collection_info": {
+  "namespace": "ansible",
+  "name": "hub",
+  "version": "1.0.0",
+  "authors": [
+   "Sean Sullivan (github.com/sean-m-sullivan)",
+   "Tom Page (github.com/Tompage1994)",
+   "David Danielsson (github.com/djdanielsson)",
+   "Abhijeet Kasurde (github.com/Akasurde)"
+  ],
+  "readme": "README.md",
+  "tags": [
+   "cloud",
+   "infrastructure",
+   "galaxy",
+   "ansible",
+   "galaxy",
+   "automation"
+  ],
+  "description": "Ansible content that interacts with the Ansible Automation Hub",
+  "license": [],
+  "license_file": "LICENSE",
+  "dependencies": {},
+  "repository": "https://github.com/ansible-collections/ansible_hub",
+  "documentation": null,
+  "homepage": "https://github.com/ansible-collections/ansible_hub",
+  "issues": "https://github.com/ansible-collections/ansible_hub/issues"
+ },
+ "file_manifest_file": {
+  "name": "FILES.json",
+  "ftype": "file",
+  "chksum_type": "sha256",
+  "chksum_sha256": "c34b8bc720292a241c368199631f2d8037b8dbf3f4bde7994744db65820f4738",
+  "format": 1
+ },
+ "format": 1
+}

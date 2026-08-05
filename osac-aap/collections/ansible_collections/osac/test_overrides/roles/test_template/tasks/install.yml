@@ -1,0 +1,39 @@
+---
+- name: Log test template install
+  ansible.builtin.lineinfile:
+    path: /tmp/osac_test_overrides.log
+    line: "{{ ansible_date_time.iso8601 }} | test_template_install | {{ cluster_order.metadata.name }}"
+    create: true
+
+# Template-level override points - these allow testing of template hooks
+- name: Hook - Modify hosted cluster definition
+  ansible.builtin.include_role:
+    name: "{{ (hosted_cluster_modify_definition_hook | default(hook_noop_default)).name }}"
+    tasks_from: "{{ (hosted_cluster_modify_definition_hook | default(hook_noop_default)).tasks_from }}"
+  vars:
+    hook_noop_default:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+
+- name: Hook - Modify nodepool definitions
+  ansible.builtin.include_role:
+    name: "{{ (nodepool_modify_definitions_hook | default(hook_noop_default)).name }}"
+    tasks_from: "{{ (nodepool_modify_definitions_hook | default(hook_noop_default)).tasks_from }}"
+  vars:
+    hook_noop_default:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+
+# Create a marker ConfigMap to verify template was called
+- name: Create test marker
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: "{{ cluster_order.metadata.name }}-test-marker"
+        namespace: "{{ cluster_working_namespace }}"
+      data:
+        template: test_template
+        timestamp: "{{ ansible_date_time.iso8601 }}"

@@ -1,0 +1,20 @@
+---
+- name: List NMStateConfig CRs for this cluster
+  kubernetes.core.k8s_info:
+    api_version: agent-install.openshift.io/v1beta1
+    kind: NMStateConfig
+    namespace: "{{ nmstate_config_namespace }}"
+    label_selectors:
+      - "{{ cluster_order_label }}={{ nmstate_config_cluster_name }}"
+  register: _nmstate_existing_configs
+
+- name: Delete NMStateConfig CRs for this cluster
+  kubernetes.core.k8s:
+    state: absent
+    api_version: agent-install.openshift.io/v1beta1
+    kind: NMStateConfig
+    name: "{{ item.metadata.name }}"
+    namespace: "{{ nmstate_config_namespace }}"
+  loop: "{{ _nmstate_existing_configs.resources }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"

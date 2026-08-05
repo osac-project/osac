@@ -1,0 +1,646 @@
+---
+# MaaS deployment: Keycloak → prereqs → enable MaaS → model → subscriptions
+# Translates design-thinking/maas/README.md Phases 1-5 into Ansible tasks.
+# Cluster domain (_cluster_domain, _cert_name) set by configure_cluster.yaml.
+
+# --- Validate parameters ---
+
+- name: Validate oidc_issuer and oidc_client_id when using external IdP
+  ansible.builtin.assert:
+    that:
+      - ocp_4_20_ai_maas_oidc_issuer is defined
+      - ocp_4_20_ai_maas_oidc_issuer | length > 0
+      - ocp_4_20_ai_maas_oidc_client_id is defined
+      - ocp_4_20_ai_maas_oidc_client_id | length > 0
+    fail_msg: >-
+      oidc_issuer and oidc_client_id are required when enable_maas=true and
+      enable_keycloak=false. Provide the OIDC issuer URL and client ID of
+      your external identity provider.
+  when:
+    - ocp_4_20_ai_maas_enable_maas | bool
+    - not (ocp_4_20_ai_maas_enable_keycloak | bool)
+
+# --- Phase 1: Keycloak (conditional) ---
+
+- name: Deploy Keycloak MaaS instance
+  when: ocp_4_20_ai_maas_enable_keycloak | default(true) | bool
+  block:
+    - name: Apply Keycloak resources (namespace, RHBK, PostgreSQL, instance, route)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ admin_kubeconfig }}"
+        state: present
+        definition: "{{ item }}"
+      loop: "{{ lookup('ansible.builtin.template', 'keycloak.yaml.j2') | from_yaml_all | list }}"
+      loop_control:
+        label: "{{ item.kind }}/{{ item.metadata.name }}"
+      no_log: true
+      register: _r
+      retries: 5
+      delay: 10
+      until: _r is not failed
+
+    - name: Wait for Keycloak PostgreSQL
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ admin_kubeconfig }}"
+        api_version: apps/v1
+        kind: Deployment
+        name: keycloak-postgres
+        namespace: "{{ ocp_4_20_ai_maas_keycloak_namespace }}"
+      register: _kc_pg
+      retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+      delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+      until:
+        - _kc_pg.resources | length > 0
+        - (_kc_pg.resources[0].status.availableReplicas | default(0)) > 0
+
+    - name: Wait for Keycloak instance ready
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ admin_kubeconfig }}"
+        api_version: k8s.keycloak.org/v2alpha1
+        kind: Keycloak
+        name: "{{ ocp_4_20_ai_maas_keycloak_namespace }}"
+        namespace: "{{ ocp_4_20_ai_maas_keycloak_namespace }}"
+      register: _kc_instance
+      retries: "{{ ocp_4_20_ai_maas_long_retries }}"
+      delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+      ignore_errors: true
+      until:
+        - _kc_instance.resources is defined
+        - _kc_instance.resources | length > 0
+        - (_kc_instance.resources[0].status.conditions | default([]))
+          | selectattr('type', 'equalto', 'Ready')
+          | selectattr('status', 'equalto', 'True')
+          | list | length > 0
+
+    - name: Fail if Keycloak never became ready
+      ansible.builtin.fail:
+        msg: >-
+          Keycloak instance did not become ready after {{ ocp_4_20_ai_maas_long_retries }} retries.
+          Check that the RHBK operator is installed and the certified-operators catalog is healthy.
+      when: >-
+        _kc_instance.resources is not defined
+        or _kc_instance.resources | length == 0
+        or (_kc_instance.resources[0].status.conditions | default([])
+            | selectattr('type', 'equalto', 'Ready')
+            | selectattr('status', 'equalto', 'True')
+            | list | length) == 0
+
+    - name: Apply Keycloak realm import
+      kubernetes.core.k8s:
+        kubeconfig: "{{ admin_kubeconfig }}"
+        state: present
+        definition: "{{ lookup('ansible.builtin.template', 'keycloak-realm-maas.yaml.j2') | from_yaml }}"
+      no_log: true
+      register: _r
+      retries: 5
+      delay: 10
+      until: _r is not failed
+
+    - name: Wait for realm import
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ admin_kubeconfig }}"
+        api_version: k8s.keycloak.org/v2alpha1
+        kind: KeycloakRealmImport
+        name: maas-realm
+        namespace: "{{ ocp_4_20_ai_maas_keycloak_namespace }}"
+      register: _realm
+      retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+      delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+      ignore_errors: true
+      until:
+        - _realm.resources is defined
+        - _realm.resources | length > 0
+        - (_realm.resources[0].status.conditions | default([]))
+          | selectattr('type', 'equalto', 'Done')
+          | selectattr('status', 'equalto', 'True')
+          | list | length > 0
+
+    - name: Fail if realm import did not complete
+      ansible.builtin.fail:
+        msg: >-
+          Keycloak realm import did not complete after {{ ocp_4_20_ai_maas_operator_retries }} retries.
+          Check Keycloak operator logs in {{ ocp_4_20_ai_maas_keycloak_namespace }} namespace.
+      when: >-
+        _realm.resources is not defined
+        or _realm.resources | length == 0
+        or (_realm.resources[0].status.conditions | default([])
+            | selectattr('type', 'equalto', 'Done')
+            | selectattr('status', 'equalto', 'True')
+            | list | length) == 0
+
+# --- Phase 2: MaaS Prerequisites ---
+
+- name: Apply Kuadrant resources (namespace, service, Kuadrant, Authorino)
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition: "{{ item }}"
+  loop: "{{ lookup('ansible.builtin.file', role_path + '/files/kuadrant-instance.yaml') | from_yaml_all | list }}"
+  loop_control:
+    label: "{{ item.kind }}/{{ item.metadata.name }}"
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Wait for Kuadrant ready
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: kuadrant.io/v1beta1
+    kind: Kuadrant
+    name: kuadrant
+    namespace: kuadrant-system
+  register: _kuadrant
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  ignore_errors: true
+  until:
+    - _kuadrant.resources is defined
+    - _kuadrant.resources | length > 0
+    - (_kuadrant.resources[0].status.conditions | default([]))
+      | selectattr('type', 'equalto', 'Ready')
+      | selectattr('status', 'equalto', 'True')
+      | list | length > 0
+
+- name: Apply gateway resources ConfigMap
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition: "{{ lookup('ansible.builtin.template', 'gateway-resources.yaml.j2') | from_yaml }}"
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Apply maas-default-gateway
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition: "{{ lookup('ansible.builtin.template', 'gateway.yaml.j2') | from_yaml }}"
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Wait for gateway Programmed
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: gateway.networking.k8s.io/v1
+    kind: Gateway
+    name: maas-default-gateway
+    namespace: openshift-ingress
+  register: _gateway
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  ignore_errors: true
+  until:
+    - _gateway.resources is defined
+    - _gateway.resources | length > 0
+    - (_gateway.resources[0].status.conditions | default([]))
+      | selectattr('type', 'equalto', 'Programmed')
+      | selectattr('status', 'equalto', 'True')
+      | list | length > 0
+
+# Create maas-db namespace first — PVC creation can fail silently if namespace
+# isn't fully active (admission webhooks, quota controllers need time).
+- name: Create maas-db namespace
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: maas-db
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Create maas-postgres PVC
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: maas-postgres-pvc
+        namespace: maas-db
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: "{{ ocp_4_20_ai_maas_db_storage }}"
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Apply PostgreSQL for maas-api
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition: "{{ item }}"
+  loop: "{{ lookup('ansible.builtin.template', 'postgres-maas.yaml.j2') | from_yaml_all | list }}"
+  loop_control:
+    label: "{{ item.kind }}/{{ item.metadata.name }}"
+  no_log: true
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Wait for maas-postgres
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: apps/v1
+    kind: Deployment
+    name: maas-postgres
+    namespace: maas-db
+  register: _maas_pg
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  ignore_errors: true
+  until:
+    - _maas_pg.resources is defined
+    - _maas_pg.resources | length > 0
+    - (_maas_pg.resources[0].status.availableReplicas | default(0)) > 0
+
+- name: Create maas-db-config secret
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: maas-db-config
+        namespace: redhat-ods-applications
+      type: Opaque
+      stringData:
+        DB_CONNECTION_URL: >-
+          postgresql://{{ ocp_4_20_ai_maas_db_user }}:{{ ocp_4_20_ai_maas_db_password }}@maas-postgres.maas-db.svc.cluster.local:5432/maas?sslmode=disable
+  no_log: true
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+# --- Phase 3: Enable MaaS ---
+
+- name: Patch DSC to enable MaaS
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: datasciencecluster.opendatahub.io/v1
+      kind: DataScienceCluster
+      metadata:
+        name: default-dsc
+      spec:
+        components:
+          kserve:
+            managementState: Managed
+            modelsAsService:
+              managementState: Managed
+    merge_type: merge
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Wait for MaaS components ready
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: datasciencecluster.opendatahub.io/v1
+    kind: DataScienceCluster
+    name: default-dsc
+  register: _dsc_maas
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  ignore_errors: true
+  until:
+    - _dsc_maas.resources is defined
+    - _dsc_maas.resources | length > 0
+    - (_dsc_maas.resources[0].status.conditions | default([]))
+      | selectattr('type', 'equalto', 'ModelsAsServiceReady')
+      | selectattr('status', 'equalto', 'True')
+      | list | length > 0
+
+- name: Fail if MaaS components never became ready
+  ansible.builtin.fail:
+    msg: >-
+      MaaS components did not become ready after {{ ocp_4_20_ai_maas_operator_retries }} retries.
+      Check DSC status and RHOAI operator logs.
+  when: >-
+    _dsc_maas.resources is not defined
+    or _dsc_maas.resources | length == 0
+    or (_dsc_maas.resources[0].status.conditions | default([])
+        | selectattr('type', 'equalto', 'ModelsAsServiceReady')
+        | selectattr('status', 'equalto', 'True')
+        | list | length) == 0
+
+- name: Configure Tenant CR
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: maas.opendatahub.io/v1alpha1
+      kind: Tenant
+      metadata:
+        name: "{{ ocp_4_20_ai_maas_tenant_name }}"
+        namespace: models-as-a-service
+      spec:
+        gatewayRef:
+          namespace: openshift-ingress
+          name: maas-default-gateway
+        externalOIDC: >-
+          {{ {'issuerUrl': 'https://' + ocp_4_20_ai_maas_keycloak_namespace + '.' + _cluster_domain + '/realms/' + ocp_4_20_ai_maas_keycloak_realm,
+              'clientId': ocp_4_20_ai_maas_keycloak_client_id}
+             if ocp_4_20_ai_maas_enable_keycloak | bool
+             else {'issuerUrl': ocp_4_20_ai_maas_oidc_issuer,
+                   'clientId': ocp_4_20_ai_maas_oidc_client_id} }}
+        apiKeys:
+          maxExpirationDays: "{{ ocp_4_20_ai_maas_api_key_max_expiration_days }}"
+        telemetry:
+          enabled: "{{ ocp_4_20_ai_maas_telemetry_enabled }}"
+          metrics:
+            captureUser: "{{ ocp_4_20_ai_maas_telemetry_capture_user }}"
+            captureGroup: "{{ ocp_4_20_ai_maas_telemetry_capture_group }}"
+            captureOrganization: "{{ ocp_4_20_ai_maas_telemetry_capture_organization }}"
+            captureModelUsage: "{{ ocp_4_20_ai_maas_telemetry_capture_model_usage }}"
+    merge_type: merge
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Wait for Tenant Active
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: maas.opendatahub.io/v1alpha1
+    kind: Tenant
+    name: "{{ ocp_4_20_ai_maas_tenant_name }}"
+    namespace: models-as-a-service
+  register: _tenant
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  ignore_errors: true
+  until:
+    - _tenant.resources is defined
+    - _tenant.resources | length > 0
+    - _tenant.resources[0].status.phase | default('') == 'Active'
+
+- name: Fail if Tenant never became Active
+  ansible.builtin.fail:
+    msg: >-
+      Tenant {{ ocp_4_20_ai_maas_tenant_name }} did not become Active after
+      {{ ocp_4_20_ai_maas_operator_retries }} retries.
+  when: >-
+    _tenant.resources is not defined
+    or _tenant.resources | length == 0
+    or _tenant.resources[0].status.phase | default('') != 'Active'
+
+# --- Phase 3b: Dashboard feature flags ---
+
+- name: Patch OdhDashboardConfig with MaaS feature flags
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    merge_type: merge
+    definition:
+      apiVersion: opendatahub.io/v1alpha
+      kind: OdhDashboardConfig
+      metadata:
+        name: odh-dashboard-config
+        namespace: redhat-ods-applications
+      spec:
+        dashboardConfig:
+          modelAsService: true
+          maasAuthPolicies: true
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+  when: ocp_4_20_ai_maas_enable_dashboard | bool
+
+# --- Phase 4: Deploy Model ---
+
+- name: Create model namespace
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ ocp_4_20_ai_maas_model_namespace }}"
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Deploy LLMInferenceService
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition: "{{ lookup('ansible.builtin.template', 'model.yaml.j2') | from_yaml }}"
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Wait for LLMInferenceService Ready
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: serving.kserve.io/v1alpha2
+    kind: LLMInferenceService
+    name: "{{ ocp_4_20_ai_maas_model_name }}"
+    namespace: "{{ ocp_4_20_ai_maas_model_namespace }}"
+  register: _llm
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  ignore_errors: true
+  until:
+    - _llm.resources is defined
+    - _llm.resources | length > 0
+    - (_llm.resources[0].status.conditions | default([]))
+      | selectattr('type', 'equalto', 'Ready')
+      | selectattr('status', 'equalto', 'True')
+      | list | length > 0
+
+- name: Fail if LLMInferenceService never became Ready
+  ansible.builtin.fail:
+    msg: >-
+      LLMInferenceService {{ ocp_4_20_ai_maas_model_name }} did not become Ready.
+  when: >-
+    _llm.resources is not defined
+    or _llm.resources | length == 0
+    or (_llm.resources[0].status.conditions | default([])
+       | selectattr('type', 'equalto', 'Ready')
+       | selectattr('status', 'equalto', 'True')
+       | list | length == 0)
+
+- name: Create MaaSModelRef
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition: "{{ lookup('ansible.builtin.template', 'maas-model-ref.yaml.j2') | from_yaml }}"
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Wait for MaaSModelRef Ready
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: maas.opendatahub.io/v1alpha1
+    kind: MaaSModelRef
+    name: "{{ ocp_4_20_ai_maas_model_name }}"
+    namespace: "{{ ocp_4_20_ai_maas_model_namespace }}"
+  register: _modelref
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  ignore_errors: true
+  until:
+    - _modelref.resources is defined
+    - _modelref.resources | length > 0
+    - _modelref.resources[0].status.phase | default('') == 'Ready'
+
+- name: Fail if MaaSModelRef never became Ready
+  ansible.builtin.fail:
+    msg: >-
+      MaaSModelRef {{ ocp_4_20_ai_maas_model_name }} did not become Ready.
+  when: >-
+    _modelref.resources is not defined
+    or _modelref.resources | length == 0
+    or _modelref.resources[0].status.phase | default('') != 'Ready'
+
+# --- Phase 5: Auth Policies + Subscriptions ---
+
+- name: Create MaaSAuthPolicy
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition: "{{ lookup('ansible.builtin.template', 'maas-auth-policy.yaml.j2') | from_yaml }}"
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Create MaaSSubscriptions
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition: "{{ item }}"
+  loop: "{{ lookup('ansible.builtin.template', 'maas-subscriptions.yaml.j2') | from_yaml_all | list }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Wait for auto-generated AuthPolicy
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: kuadrant.io/v1
+    kind: AuthPolicy
+    namespace: "{{ ocp_4_20_ai_maas_model_namespace }}"
+  register: _auth_policy
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  ignore_errors: true
+  until:
+    - _auth_policy.resources is defined
+    - _auth_policy.resources | length > 0
+
+# Restart maas-controller to force fresh subscription reconciliation.
+# The controller can hit a leader election timeout during initial subscription
+# creation, reading TRLP status before Kuadrant fully accepts it. Without a
+# restart, subscriptions stay Degraded and inference returns 403.
+- name: Restart maas-controller for subscription reconciliation
+  environment:
+    KUBECONFIG: "{{ admin_kubeconfig | expanduser }}"
+  ansible.builtin.shell: |
+    oc rollout restart deployment/maas-controller -n redhat-ods-applications
+    oc rollout status deployment/maas-controller -n redhat-ods-applications --timeout=180s
+  args:
+    executable: /bin/bash
+  changed_when: true
+
+- name: Wait for all subscriptions Active
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: maas.opendatahub.io/v1alpha1
+    kind: MaaSSubscription
+    namespace: models-as-a-service
+  register: _subs
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  ignore_errors: true
+  until:
+    - _subs.resources is defined
+    - _subs.resources | length > 0
+    - >-
+      _subs.resources
+      | selectattr('status.phase', 'defined')
+      | selectattr('status.phase', 'equalto', 'Active')
+      | list | length == _subs.resources | length
+
+- name: Fail if subscriptions never became Active
+  ansible.builtin.fail:
+    msg: >-
+      Not all MaaSSubscriptions became Active after
+      {{ ocp_4_20_ai_maas_operator_retries }} retries.
+  when: >-
+    _subs.resources is not defined
+    or _subs.resources | length == 0
+    or (_subs.resources
+       | selectattr('status.phase', 'defined')
+       | selectattr('status.phase', 'equalto', 'Active')
+       | list | length != _subs.resources | length)
+
+# Wait for TokenRateLimitPolicy to fully propagate to Limitador after controller
+# restart. Without this, rate limiting verify tests fail (all 200, no 429).
+- name: Wait for TokenRateLimitPolicy enforcement
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: kuadrant.io/v1alpha1
+    kind: TokenRateLimitPolicy
+    namespace: "{{ ocp_4_20_ai_maas_model_namespace }}"
+  register: _trlp
+  retries: 12
+  delay: 10
+  ignore_errors: true
+  until:
+    - _trlp.resources is defined
+    - _trlp.resources | length > 0
+    - >-
+      _trlp.resources[0].status.conditions | default([])
+      | selectattr('type', 'equalto', 'Enforced')
+      | selectattr('status', 'equalto', 'True')
+      | list | length > 0
+
+- name: Fail if TRLP enforcement never converged
+  ansible.builtin.fail:
+    msg: >-
+      TokenRateLimitPolicy did not reach Enforced state.
+      Rate limiting may not be active.
+  when: >-
+    _trlp.resources is not defined
+    or _trlp.resources | length == 0
+    or (_trlp.resources[0].status.conditions | default([])
+       | selectattr('type', 'equalto', 'Enforced')
+       | selectattr('status', 'equalto', 'True')
+       | list | length == 0)
+
+- name: Report MaaS configuration complete
+  ansible.builtin.debug:
+    msg:
+      - "MaaS deployment complete"
+      - "Gateway: https://{{ ocp_4_20_ai_maas_gateway_hostname }}.{{ _cluster_domain }}"
+      - "Model: {{ ocp_4_20_ai_maas_model_name }}"
+      - "Tiers: {{ ocp_4_20_ai_maas_tiers | map(attribute='name') | join(', ') }}"

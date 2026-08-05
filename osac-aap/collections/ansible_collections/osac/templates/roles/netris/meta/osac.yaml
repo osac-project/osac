@@ -1,0 +1,16 @@
+---
+title: Netris Network Implementation
+description: >
+  Provisions networking resources using Netris Controller API.
+  Maps VirtualNetwork to VPC, Subnet to V-Net (L2VPN),
+  SecurityGroup to ACL.
+
+template_type: network
+
+# NetworkClass registration fields
+implementation_strategy: netris
+fabric_manager: netris
+capabilities:
+  supports_ipv4: true
+  supports_ipv6: false
+  supports_dual_stack: false

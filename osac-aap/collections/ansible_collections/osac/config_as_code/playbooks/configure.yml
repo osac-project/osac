@@ -1,0 +1,13 @@
+---
+- name: OSAC's AAP configuration
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - vars/config.yml
+
+  tasks:
+    - name: Configure AAP
+      ansible.builtin.include_role:
+        name: osac.config_as_code.aap

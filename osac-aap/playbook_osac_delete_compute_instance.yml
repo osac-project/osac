@@ -1,0 +1,39 @@
+---
+- name: Delete a compute instance from a ComputeInstance
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    compute_instance: "{{ ansible_eda.event.payload }}"
+    compute_instance_name: "{{ ansible_eda.event.payload.metadata.name }}"
+    template_id: "{{ ansible_eda.event.payload.spec.templateID }}"
+
+  pre_tasks:
+    - name: Determine tenant target namespace
+      ansible.builtin.include_role:
+        name: osac.service.tenant_target_namespace
+
+  tasks:
+    - name: Display compute instance deletion information
+      ansible.builtin.debug:
+        msg:
+          - "Deleting compute instance: {{ compute_instance_name }}"
+          - "Tenant target namespace: {{ tenant_target_namespace }}"
+          - "Template ID: {{ template_id }}"
+
+    - name: Call the selected compute instance template for deletion
+      ansible.builtin.include_role:
+        name: "{{ template_id }}"
+        tasks_from: "delete"
+
+    - name: "Remove the finalizer on the OSAC compute instance {{ compute_instance.metadata.name }}"
+      ansible.builtin.include_role:
+        name: osac.service.finalizer
+      vars:
+        finalizer_state: absent
+        finalizer_name: "{{ compute_instance_osac_finalizer }}"
+        finalizer_target:
+          api_version: osac.openshift.io/v1alpha1
+          kind: ComputeInstance
+          namespace: "{{ compute_instance.metadata.namespace }}"
+          name: "{{ compute_instance_name }}"

@@ -1,0 +1,75 @@
+---
+# Delete NetworkPolicy resources for SecurityGroup
+# 1. Looks up target namespaces based on VirtualNetwork label
+# 2. Deletes NetworkPolicy from each target namespace
+# Handles "not found" errors gracefully
+
+- name: Include get remote cluster kubeconfig
+  ansible.builtin.include_role:
+    name: osac.service.common
+    tasks_from: get_remote_cluster_kubeconfig
+
+- name: Extract SecurityGroup configuration
+  ansible.builtin.set_fact:
+    sg_name: "{{ security_group.metadata.name }}"
+    sg_namespace: "{{ security_group.metadata.namespace }}"
+    sg_virtual_network: "{{ security_group.spec.virtualNetwork | default('') }}"
+
+- name: Look up target namespaces for VirtualNetwork
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: v1
+    kind: Namespace
+    label_selectors:
+      - "osac.openshift.io/virtual-network={{ sg_virtual_network }}"
+  register: target_namespaces_info
+  when: sg_virtual_network != ''
+
+- name: Set target namespaces fact
+  ansible.builtin.set_fact:
+    target_namespaces: "{{ target_namespaces_info.resources | default([]) }}"
+  when: sg_virtual_network != ''
+
+- name: Display deletion information
+  ansible.builtin.debug:
+    msg:
+      - "Deleting NetworkPolicy for SecurityGroup '{{ sg_name }}'"
+      - "VirtualNetwork: {{ sg_virtual_network }}"
+      - "Target namespaces: {{ target_namespaces | map(attribute='metadata.name') | list }}"
+
+- name: Delete NetworkPolicy from target namespaces
+  kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    state: absent
+    api_version: networking.k8s.io/v1
+    kind: NetworkPolicy
+    name: "sg-{{ sg_name }}"
+    namespace: "{{ item.metadata.name }}"
+    wait: true
+    wait_timeout: 60
+  loop: "{{ target_namespaces }}"
+  register: networkpolicy_delete_result
+  failed_when:
+    - networkpolicy_delete_result.failed | default(false)
+    - "'NotFound' not in (networkpolicy_delete_result.msg | default(''))"
+  when:
+    - sg_virtual_network != ''
+    - target_namespaces | length > 0
+
+- name: Display deletion results
+  ansible.builtin.debug:
+    msg:
+      - "NetworkPolicy deletion completed for SecurityGroup '{{ sg_name }}'"
+      - "Deleted from {{ target_namespaces | length }} namespace(s)"
+  when:
+    - sg_virtual_network != ''
+    - target_namespaces | length > 0
+
+- name: Display warning when no namespaces found
+  ansible.builtin.debug:
+    msg:
+      - "Warning: No target namespaces found for VirtualNetwork '{{ sg_virtual_network }}'"
+      - "No NetworkPolicy resources to delete"
+  when:
+    - sg_virtual_network != ''
+    - target_namespaces | default([]) | length == 0

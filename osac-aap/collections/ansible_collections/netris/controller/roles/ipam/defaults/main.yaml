@@ -1,0 +1,4 @@
+---
+ipam_state: read
+ipam_purpose: nat
+ipam_count: 1

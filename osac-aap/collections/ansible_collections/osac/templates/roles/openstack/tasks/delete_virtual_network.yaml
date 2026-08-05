@@ -1,0 +1,14 @@
+---
+- name: Extract VirtualNetwork configuration
+  ansible.builtin.set_fact:
+    vn_name: "{{ virtual_network.metadata.name }}"
+
+- name: Delete network
+  openstack.cloud.network:
+    name: "{{ vn_name }}"
+    state: absent
+
+- name: Display deletion status
+  ansible.builtin.debug:
+    msg:
+      - "VirtualNetwork '{{ vn_name }}' deletion completed"

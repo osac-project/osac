@@ -1,0 +1,5 @@
+---
+- name: "cumulus: configure trunk port using nvue"
+  raw: |
+    nv set interface {{ port_name }} bridge domain br_default
+    nv config apply -y

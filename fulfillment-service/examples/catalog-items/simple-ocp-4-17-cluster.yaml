@@ -1,0 +1,22 @@
+# Simple OpenShift 4.17 Cluster catalog item
+# A small OpenShift 4.17 cluster with 2 worker nodes on fc430 hardware.
+# Suitable for development and testing workloads.
+
+"@type": type.googleapis.com/osac.private.v1.ClusterCatalogItem
+metadata:
+  name: simple-ocp-4-17-cluster
+title: Simple OpenShift 4.17 Cluster
+description: A small OpenShift 4.17 cluster with 2 worker nodes on fc430 hardware. Suitable for development and testing workloads.
+template: osac.templates.ocp_4_17_small
+published: true
+field_definitions:
+  - path: network.pod_cidr
+    display_name: Pod CIDR
+    default: 10.128.0.0/14
+    editable: true
+    validation_schema: '{"type":"string","pattern":"^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$"}'
+  - path: network.service_cidr
+    display_name: Service CIDR
+    default: 172.30.0.0/16
+    editable: true
+    validation_schema: '{"type":"string","pattern":"^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$"}'

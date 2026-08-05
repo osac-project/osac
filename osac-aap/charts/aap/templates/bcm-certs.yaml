@@ -1,0 +1,16 @@
+{{- if .Values.configAsCode.importBcmAgentsEnabled }}
+{{- if not (and .Values.importBcmAgents.cert .Values.importBcmAgents.key) }}
+{{- fail "importBcmAgentsEnabled is true but importBcmAgents.cert/key are not set" }}
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: bcm-certs
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-aap.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  tls.crt: {{ .Values.importBcmAgents.cert | quote }}
+  tls.key: {{ .Values.importBcmAgents.key | quote }}
+{{- end }}

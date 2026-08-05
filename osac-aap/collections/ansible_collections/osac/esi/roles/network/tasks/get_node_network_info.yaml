@@ -1,0 +1,7 @@
+- name: Get node network information  # noqa:no-changed-when
+  ansible.builtin.command: >-
+    openstack esi node network list
+    --node {{ node }}
+    --network {{ network }}
+    -f json
+  register: node_network_info

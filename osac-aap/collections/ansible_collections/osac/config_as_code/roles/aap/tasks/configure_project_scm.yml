@@ -1,0 +1,22 @@
+---
+- name: Use git scm type for controller project
+  ansible.builtin.set_fact:
+    scm_config:
+      - name: "{{ aap_prefix }}"
+        scm_type: git
+        scm_url: "{{ aap_project_git_uri }}"
+        scm_branch: "{{ aap_project_git_branch }}"
+  when: aap_project_archive_uri is not defined
+
+- name: Use archive scm type for controller project
+  ansible.builtin.set_fact:
+    scm_config:
+      - name: "{{ aap_prefix }}"
+        scm_type: archive
+        scm_url: "{{ aap_project_archive_uri }}"
+        scm_branch: ""
+  when: aap_project_archive_uri is defined
+
+- name: Merge SCM config into matching controller project
+  ansible.builtin.set_fact:
+    controller_projects: "{{ controller_projects | community.general.lists_mergeby(scm_config, 'name') }}"

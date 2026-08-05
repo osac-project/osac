@@ -1,0 +1,45 @@
+---
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Get existing VPCs
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/vpc"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: 200
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _vpc_list_resp
+  no_log: true
+
+- name: Find VPC by name
+  ansible.builtin.set_fact:
+    _existing_vpc: "{{ (_vpc_list_resp.json.data | default([])) | selectattr('name', 'equalto', vpc_name) | list | first | default(none) }}"
+  when: _vpc_list_resp.json is mapping
+
+- name: Delete VPC
+  when: _existing_vpc is defined and _existing_vpc is not none
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/vpc/{{ _existing_vpc.id }}"
+    method: DELETE
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: [200, 204, 400]
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _vpc_delete_resp
+  no_log: true
+
+- name: Fail if VPC deletion returned an error
+  when:
+    - _vpc_delete_resp is defined
+    - _vpc_delete_resp.status | default(200) == 400
+  ansible.builtin.fail:
+    msg: >-
+      Failed to delete VPC '{{ vpc_name }}' (ID: {{ _existing_vpc.id }}).
+      Netris responded with: {{ _vpc_delete_resp.json.message | default(_vpc_delete_resp.content | default('unknown error')) }}.
+      This usually means the VPC still has dependent resources (V-Nets, IPAM allocations, etc.).

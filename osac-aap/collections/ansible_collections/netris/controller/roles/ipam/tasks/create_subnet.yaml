@@ -1,0 +1,70 @@
+---
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Query existing IPAM subnets
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/ipam/subnets"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: [200]
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _ipam_subnets_resp
+  no_log: true
+
+- name: Find IPAM subnet by name
+  ansible.builtin.set_fact:
+    _existing_ipam_subnet: >-
+      {{ (_ipam_subnets_resp.json.data | default([]))
+         | selectattr('name', 'equalto', ipam_name)
+         | list | first | default(none) }}
+
+- name: Set IPAM facts from existing subnet (skip creation)
+  ansible.builtin.set_fact:
+    ipam_subnet_id: "{{ _existing_ipam_subnet.id }}"
+    ipam_already_existed: true
+  when: _existing_ipam_subnet is not none
+
+- name: Create IPAM subnet
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/ipam/subnet"
+    method: POST
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+      Content-Type: "application/json"
+    body_format: json
+    body: >-
+      {{
+        {
+          'name': ipam_name,
+          'prefix': ipam_cidr,
+          'purpose': ipam_purpose,
+          'sites': [{'id': ipam_site_id | int}],
+          'tenant': {'id': ipam_tenant_id | int}
+        }
+        | combine(
+            ({'vpc': {'id': ipam_vpc_id | int}} if ipam_vpc_id is defined else {})
+          )
+      }}
+    return_content: true
+    status_code: [200, 201]
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _ipam_create_resp
+  when: _existing_ipam_subnet is none
+  no_log: true
+
+- name: Set IPAM facts from create response
+  ansible.builtin.set_fact:
+    ipam_subnet_id: "{{ _ipam_create_resp.json.data.id | default(_ipam_create_resp.json.data) }}"
+    ipam_already_existed: false
+  when:
+    - _existing_ipam_subnet is none
+    - _ipam_create_resp is not skipped
+    - _ipam_create_resp is changed or (_ipam_create_resp.status | default(0)) in [200, 201]
+    - _ipam_create_resp.json is mapping

@@ -1,0 +1,21 @@
+name: pre-commit
+
+on:
+  pull_request:
+
+jobs:
+  pre-commit:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+    - uses: ./.github/actions/setup-python
+    - uses: ./.github/actions/setup-go
+      with:
+        working-directory: fulfillment-service
+    - uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3  # v1
+      with:
+        setup_only: true
+    - run: make -C osac-operator golangci-lint
+    - run: make -C bare-metal-fulfillment-operator golangci-lint
+    - run: make -C osac-csi-driver golangci-lint
+    - uses: pre-commit/action@v3.0.1

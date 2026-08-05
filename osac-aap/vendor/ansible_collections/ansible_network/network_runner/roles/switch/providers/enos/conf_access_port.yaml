@@ -1,0 +1,13 @@
+---
+- name: "enos: configure access port"
+  enos_command:
+    commands:
+      - enable
+      - configure terminal
+      - "terminal dont-ask"
+      - "interface port {{ port_name }}"
+      - no switchport trunk allowed vlan
+      - switchport mode access
+      - "switchport accces vlan {{ _vlan_id }}"
+  register: result
+  connection: network_cli

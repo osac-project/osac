@@ -1,0 +1,16 @@
+---
+# Example variables for testing Windows golden images
+# Copy to golden-image-vars.yml and customize
+
+# Test VM configuration
+test_vm_name: "test-golden-windows"
+test_namespace: "test-golden-images"
+
+# Golden image reference (pre-configured Windows image)
+golden_image_ref: "quay.io/jhernand/ci:latest"
+
+# Remote cluster kubeconfig (if different from $KUBECONFIG)
+# remote_cluster_kubeconfig: "/path/to/kubeconfig"
+
+# Optional: cluster context
+# remote_cluster_context: "osac-lab/api-my-sno-internal:6443/system:admin"

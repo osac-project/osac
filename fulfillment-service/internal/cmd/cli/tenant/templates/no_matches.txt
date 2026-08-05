@@ -1,0 +1,5 @@
+Tenant '{{ .Ref }}' not found.
+
+Use the 'get' command to list available tenants:
+
+  {{ binary }} get tenants

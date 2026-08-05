@@ -1,0 +1,15 @@
+Name or identifier '{{ .Ref }}' is ambiguous.
+
+{{ if lt (len .Matches) .Total }}
+There are {{ .Total }} matching objects, these are the first {{ len .Matches }}:
+{{ else }}
+There are {{ .Total }} matching objects:
+{{ end }}
+
+{{ table .Matches }}
+
+{{ $first := index .Matches 0 }}
+Use the identifiers instead of the names to avoid the ambiguity. For example, to annotate the
+object with identifier '{{ $first.GetId }}' use the following command:
+
+{{ binary }} annotate {{ .Object }} {{ $first.GetId }} my-annotation=my-value

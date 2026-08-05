@@ -1,0 +1,92 @@
+{{- if .Values.bootstrap.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "osac-aap.fullname" . }}-bootstrap
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-aap.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: {{ .Values.bootstrap.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "osac-aap.labels" . | nindent 8 }}
+    spec:
+      initContainers:
+      - name: wait-for-aap
+        image: {{ .Values.bootstrap.cliImage }}
+        command:
+          - /bin/bash
+          - -c
+          - |
+            echo "Gateway: ${AAP_GATEWAY_HOSTNAME}"
+            echo "Waiting for AAP controller to be ready..."
+            for i in {1..60}; do
+              echo "Attempt $i: Checking AAP controller readiness..."
+              curl -sf http://${AAP_GATEWAY_HOSTNAME}/api/gateway/v1/ping/ \
+                | grep -q 'good';
+              GATEWAY=$?
+              echo "GATEWAY exit code: $GATEWAY"
+
+              curl -sf http://${AAP_CONTROLLER_GATEWAY_HOSTNAME}/api/v2/ping/ \
+                | grep -q 'version';
+              CONTROLLER_GATEWAY=$?
+              echo "CONTROLLER_GATEWAY exit code: $CONTROLLER_GATEWAY"
+
+              auth_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+                http://${AAP_GATEWAY_HOSTNAME}/api/gateway/v1/tokens/ \
+                -d "username=admin&password=dummy")
+              [ "$auth_code" != "503" ] && [ "$auth_code" != "000" ];
+              AUTH_UPSTREAM=$?
+              echo "AUTH_UPSTREAM exit code: $AUTH_UPSTREAM (HTTP $auth_code)"
+
+              if [ $GATEWAY -eq 0 ] && [ $CONTROLLER_GATEWAY -eq 0 ] && [ $AUTH_UPSTREAM -eq 0 ];
+              then
+                echo "AAP controller is ready!"
+                exit 0
+              fi
+              echo "AAP is not ready, waiting 60 seconds..."
+              sleep 60
+            done
+            echo "Timeout waiting for AAP."
+            exit 1
+        env:
+        - name: AAP_GATEWAY_HOSTNAME
+          value: {{ include "osac-aap.gatewayHostname" . | quote }}
+        - name: AAP_CONTROLLER_GATEWAY_HOSTNAME
+          value: {{ include "osac-aap.controllerHostname" . | quote }}
+      containers:
+      - name: bootstrap
+        image: {{ .Values.bootstrap.image }}
+        args:
+        - ansible-playbook
+        - osac.config_as_code.subscription
+        - osac.config_as_code.configure
+        envFrom:
+        - secretRef:
+            name: {{ .Values.configAsCode.secret }}
+        env:
+        - name: AAP_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "osac-aap.instanceName" . }}-admin-password
+              key: password
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        volumeMounts:
+        - name: config-as-code-manifest-volume
+          mountPath: /var/secrets/config-as-code-manifest
+          readOnly: true
+      volumes:
+      - name: config-as-code-manifest-volume
+        secret:
+          secretName: {{ .Values.configAsCode.manifestSecret }}
+      restartPolicy: Never
+{{- end }}

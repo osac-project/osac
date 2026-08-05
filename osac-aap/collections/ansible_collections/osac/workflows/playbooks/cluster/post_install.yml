@@ -1,0 +1,94 @@
+---
+# Workflow: Post-Install Hosted Cluster
+# This workflow performs post-installation configuration on a hosted control plane cluster.
+# Major workflow phases can be overridden, and hooks allow customization at workflow boundaries.
+#
+# Usage:
+#   - name: Post-install cluster
+#     ansible.builtin.import_playbook: osac.workflows.cluster.post_install
+#     vars:
+#       cluster_order: "{{ ansible_eda.event.payload }}"
+#       admin_kubeconfig: "{{ kubeconfig_content }}"
+#
+# Hook example:
+#   - name: Post-install with custom hooks
+#     ansible.builtin.import_playbook: osac.workflows.cluster.post_install
+#     vars:
+#       cluster_order: "{{ ansible_eda.event.payload }}"
+#       admin_kubeconfig: "{{ kubeconfig_content }}"
+#       hook_workflow_start:
+#         name: my_custom_hooks
+#         tasks_from: pre_post_install.yml
+
+- name: Post-install hosted cluster workflow
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  environment:
+    # Use admin kubeconfig if provided, otherwise use default K8S auth
+    KUBECONFIG: "{{ lookup('env', 'KUBECONFIG') | default(lookup('env', 'HOME') + '/.kube/config', true) }}"
+    K8S_AUTH_KUBECONFIG: "{{ lookup('env', 'K8S_AUTH_KUBECONFIG') | default(lookup('env', 'KUBECONFIG'), true) | default(lookup('env', 'HOME') + '/.kube/config', true) }}"
+
+  vars:
+    cluster_order: "{{ ansible_eda.event.payload }}"
+
+    # GENERIC HOOKS - Default to noop
+    hook_workflow_start_default:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+
+    hook_workflow_complete_default:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+
+    # PHASE OVERRIDE - Only defaults application is overrideable
+    step_apply_defaults_default:
+      name: osac.service.cluster_settings
+      tasks_from: main.yml
+
+  collections:
+    - osac.workflows
+    - osac.service
+
+  pre_tasks:
+    # HOOK: Workflow start
+    - name: Hook - Workflow start
+      ansible.builtin.include_role:
+        name: "{{ (hook_workflow_start | default(hook_workflow_start_default)).name }}"
+        tasks_from: "{{ (hook_workflow_start | default(hook_workflow_start_default)).tasks_from }}"
+
+    # CRITICAL: Extract cluster order name (NOT overrideable)
+    - name: Set cluster order name
+      ansible.builtin.set_fact:
+        cluster_order_name: "{{ cluster_order.metadata.name }}"
+
+    # PHASE: Apply defaults (overrideable for custom default logic)
+    - name: Step - Apply default settings
+      ansible.builtin.include_role:
+        name: "{{ (step_apply_defaults_override | default(step_apply_defaults_default)).name }}"
+        tasks_from: "{{ (step_apply_defaults_override | default(step_apply_defaults_default)).tasks_from | default(omit) }}"
+
+    # CRITICAL: Extract template info (NOT overrideable)
+    - name: Extract template info
+      ansible.builtin.include_role:
+        name: osac.service.extract_template_info
+
+  tasks:
+    - name: Display post-install information
+      ansible.builtin.debug:
+        msg:
+          - "Post-installing cluster: {{ cluster_order.metadata.name }}"
+          - "Template ID: {{ template_id_override | default(template_id) }}"
+
+    # CRITICAL: Call template (NOT overrideable, but template has internal override points)
+    - name: Post-install cluster configuration
+      ansible.builtin.include_role:
+        name: "{{ template_id_override | default(template_id) }}"
+        tasks_from: post_install
+
+    # HOOK: Workflow complete
+    - name: Hook - Workflow complete
+      ansible.builtin.include_role:
+        name: "{{ (hook_workflow_complete | default(hook_workflow_complete_default)).name }}"
+        tasks_from: "{{ (hook_workflow_complete | default(hook_workflow_complete_default)).tasks_from }}"

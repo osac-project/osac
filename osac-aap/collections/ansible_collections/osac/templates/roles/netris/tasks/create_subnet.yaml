@@ -1,0 +1,109 @@
+---
+# Subnet maps to a Netris IPAM subnet + V-Net
+# Creates an IPAM subnet under the parent VN's allocation, then a V-Net with gateway
+
+- name: Extract Subnet configuration
+  ansible.builtin.set_fact:
+    subnet_name: "{{ subnet.metadata.name }}"
+    subnet_ipv4_cidr: "{{ subnet.spec.ipv4Cidr | default('') }}"
+    subnet_virtual_network_id: "{{ subnet.spec.virtualNetwork | default('') }}"
+
+- name: Look up VirtualNetwork CR by UUID label
+  kubernetes.core.k8s_info:
+    api_version: osac.openshift.io/v1alpha1
+    kind: VirtualNetwork
+    namespace: "{{ subnet.metadata.namespace }}"
+    label_selectors:
+      - "osac.openshift.io/virtualnetwork-uuid={{ subnet_virtual_network_id }}"
+  register: _vn_lookup
+
+- name: Fail if VirtualNetwork CR not found
+  ansible.builtin.fail:
+    msg: >-
+      VirtualNetwork with UUID '{{ subnet_virtual_network_id }}' not found in namespace '{{ subnet.metadata.namespace }}'.
+  when: _vn_lookup.resources | length == 0
+
+- name: Set VirtualNetwork CR name
+  ansible.builtin.set_fact:
+    subnet_virtual_network_name: "{{ _vn_lookup.resources[0].metadata.name }}"
+
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Look up parent VPC by name
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/vpc"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: 200
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _vpc_lookup_resp
+  no_log: true
+
+- name: Find parent VPC matching VirtualNetwork name
+  ansible.builtin.set_fact:
+    _parent_vpc: >-
+      {{ (_vpc_lookup_resp.json.data | default([]))
+         | selectattr('name', 'equalto', subnet_virtual_network_name)
+         | list | first | default(none) }}
+
+- name: Fail if parent VPC not found
+  ansible.builtin.fail:
+    msg: >-
+      Parent VPC '{{ subnet_virtual_network_name }}' not found in Netris controller.
+      Ensure the VirtualNetwork has been created before creating a Subnet.
+  when: _parent_vpc is none
+
+- name: Compute gateway IP from subnet CIDR
+  ansible.builtin.set_fact:
+    _gateway_cidr: >-
+      {{ subnet_ipv4_cidr | ansible.utils.ipaddr('next_usable') }}/{{ subnet_ipv4_cidr | ansible.utils.ipaddr('prefix') }}
+  when: subnet_ipv4_cidr | length > 0
+
+- name: Display Subnet information
+  ansible.builtin.debug:
+    msg:
+      - "Creating Netris IPAM subnet + V-Net for Subnet '{{ subnet_name }}'"
+      - "VirtualNetwork: {{ subnet_virtual_network_name }} (VPC ID: {{ _parent_vpc.id }})"
+      - "IPv4 CIDR: {{ subnet_ipv4_cidr }}"
+      - "Gateway: {{ _gateway_cidr | default('none') }}"
+
+- name: Create IPAM subnet in Netris controller
+  ansible.builtin.include_role:
+    name: netris.controller.ipam
+    tasks_from: create_subnet
+  vars:
+    ipam_name: "{{ subnet_name }}"
+    ipam_cidr: "{{ subnet_ipv4_cidr }}"
+    ipam_purpose: "common"
+    ipam_site_id: "{{ netris_site_id }}"
+    ipam_tenant_id: "{{ netris_tenant_id }}"
+    ipam_vpc_id: "{{ _parent_vpc.id }}"
+
+- name: Display IPAM subnet creation result
+  ansible.builtin.debug:
+    msg: >-
+      IPAM subnet '{{ subnet_name }}' {{ (ipam_already_existed | default(false)) | ternary('already exists', 'created successfully') }}
+      (ID: {{ ipam_subnet_id | default('unknown') }})
+
+- name: Create V-Net in Netris controller
+  ansible.builtin.include_role:
+    name: netris.controller.vnet
+    tasks_from: create
+  vars:
+    vnet_name: "{{ subnet_name }}"
+    vnet_vpc_id: "{{ _parent_vpc.id }}"
+    vnet_site_id: "{{ netris_site_id }}"
+    vnet_tenant_id: "{{ netris_tenant_id }}"
+    vnet_gateway: "{{ _gateway_cidr | default(omit) }}"
+
+- name: Display V-Net creation result
+  ansible.builtin.debug:
+    msg: >-
+      V-Net '{{ subnet_name }}' {{ (vnet_already_existed | default(false)) | ternary('already exists', 'created successfully') }}
+      (ID: {{ vnet_id | default('unknown') }})

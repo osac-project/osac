@@ -1,0 +1,267 @@
+---
+requires_ansible: '>=2.15.0'
+action_groups:
+  controller:
+    - ad_hoc_command
+    - ad_hoc_command_cancel
+    - ad_hoc_command_wait
+    - application
+    - bulk_job_launch
+    - bulk_host_create
+    - bulk_host_delete
+    - controller_meta
+    - credential_input_source
+    - credential
+    - credential_type
+    - execution_environment
+    - export
+    - group
+    - host
+    - import
+    - instance
+    - instance_group
+    - inventory
+    - inventory_source
+    - inventory_source_update
+    - job_cancel
+    - job_launch
+    - job_list
+    - job_template
+    - job_wait
+    - label
+    - license
+    - notification_template
+    - organization
+    - project
+    - project_update
+    - role
+    - role_definition
+    - role_team_assignment
+    - role_user_assignment
+    - schedule
+    - settings
+    - subscriptions
+    - team
+    - token
+    - user
+    - workflow_approval
+    - workflow_job_template_node
+    - workflow_job_template
+    - workflow_launch
+    - workflow_node_wait
+plugin_routing:
+  inventory:
+    tower:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* plugins have been deprecated, use ansible.controller.controller instead.
+      redirect: ansible.controller.controller
+  lookup:
+    tower_api:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* plugins have been deprecated, use ansible.controller.controller_api instead.
+      redirect: ansible.controller.controller_api
+    tower_schedule_rrule:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* plugins have been deprecated, use ansible.controller.schedule_rrule instead.
+      redirect: ansible.controller.schedule_rrule
+  modules:
+    tower_ad_hoc_command_cancel:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.ad_hoc_command_cancel instead.
+      redirect: ansible.controller.ad_hoc_command_cancel
+    tower_ad_hoc_command_wait:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.ad_hoc_command_wait instead.
+      redirect: ansible.controller.ad_hoc_command_wait
+    tower_ad_hoc_command:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.ad_hoc_command instead.
+      redirect: ansible.controller.ad_hoc_command
+    tower_application:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.application instead.
+      redirect: ansible.controller.application
+    tower_meta:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.controller_meta instead.
+      redirect: ansible.controller.controller_meta
+    tower_credential_input_source:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.credential_input_source instead.
+      redirect: ansible.controller.credential_input_source
+    tower_credential_type:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.credential_type instead.
+      redirect: ansible.controller.credential_type
+    tower_credential:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.credential instead.
+      redirect: ansible.controller.credential
+    tower_execution_environment:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.execution_environment instead.
+      redirect: ansible.controller.execution_environment
+    tower_export:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.export instead.
+      redirect: ansible.controller.export
+    tower_group:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.group instead.
+      redirect: ansible.controller.group
+    tower_host:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.host instead.
+      redirect: ansible.controller.host
+    tower_import:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.import instead.
+      redirect: ansible.controller.import
+    tower_instance_group:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.instance_group instead.
+      redirect: ansible.controller.instance_group
+    tower_inventory_source_update:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.inventory_source_update instead.
+      redirect: ansible.controller.inventory_source_update
+    tower_inventory_source:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.inventory_source instead.
+      redirect: ansible.controller.inventory_source
+    tower_inventory:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.inventory instead.
+      redirect: ansible.controller.inventory
+    tower_job_cancel:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.job_cancel instead.
+      redirect: ansible.controller.job_cancel
+    tower_job_launch:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.job_launch instead.
+      redirect: ansible.controller.job_launch
+    tower_job_list:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.job_list instead.
+      redirect: ansible.controller.job_list
+    tower_job_template:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.job_template instead.
+      redirect: ansible.controller.job_template
+    tower_job_wait:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.job_wait instead.
+      redirect: ansible.controller.job_wait
+    tower_label:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.label instead.
+      redirect: ansible.controller.label
+    tower_license:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.license instead.
+      redirect: ansible.controller.license
+    tower_notification_template:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.notification_template instead.
+      redirect: ansible.controller.notification_template
+    tower_notification:
+      redirect: ansible.controller.notification_template
+    tower_organization:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.organization instead.
+      redirect: ansible.controller.organization
+    tower_project_update:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.project_update instead.
+      redirect: ansible.controller.project_update
+    tower_project:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.project instead.
+      redirect: ansible.controller.project
+    tower_role:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.role instead.
+      redirect: ansible.controller.role
+    tower_schedule:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.schedule instead.
+      redirect: ansible.controller.schedule
+    tower_settings:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.settings instead.
+      redirect: ansible.controller.settings
+    tower_team:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.team instead.
+      redirect: ansible.controller.team
+    tower_token:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.token instead.
+      redirect: ansible.controller.token
+    tower_user:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.user instead.
+      redirect: ansible.controller.user
+    tower_workflow_approval:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.workflow_approval instead.
+      redirect: ansible.controller.workflow_approval
+    tower_workflow_job_template_node:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.workflow_job_template_node instead.
+      redirect: ansible.controller.workflow_job_template_node
+    tower_workflow_job_template:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.workflow_job_template instead.
+      redirect: ansible.controller.workflow_job_template
+    tower_workflow_launch:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.workflow_launch instead.
+      redirect: ansible.controller.workflow_launch
+    tower_workflow_node_wait:
+      deprecation:
+        removal_date: '2022-01-23'
+        warning_text: The tower_* modules have been deprecated, use ansible.controller.workflow_node_wait instead.
+      redirect: ansible.controller.workflow_node_wait

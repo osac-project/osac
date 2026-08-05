@@ -1,0 +1,33 @@
+{
+ "collection_info": {
+  "namespace": "ansible_network",
+  "name": "network_runner",
+  "version": "0.3.7",
+  "authors": [
+   "Ansible Network Team",
+   "Yoni Bettan <yonibettan@gmail.com>"
+  ],
+  "readme": "README.rst",
+  "tags": [
+   "networking",
+   "switching",
+   "vlan"
+  ],
+  "description": "Vendor-agnostic switch configuration via Ansible (VLAN, port, trunk management)",
+  "license": [],
+  "license_file": "LICENSE",
+  "dependencies": {},
+  "repository": "https://github.com/ybettan/network-runner",
+  "documentation": null,
+  "homepage": "https://github.com/ybettan/network-runner",
+  "issues": "https://github.com/ybettan/network-runner/issues"
+ },
+ "file_manifest_file": {
+  "name": "FILES.json",
+  "ftype": "file",
+  "chksum_type": "sha256",
+  "chksum_sha256": "dd8b76baaa7a15883467aea23c85a10a1e1472e4b46c50d9a524a191d9d9202e",
+  "format": 1
+ },
+ "format": 1
+}

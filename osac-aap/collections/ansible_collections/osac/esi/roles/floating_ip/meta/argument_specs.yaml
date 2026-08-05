@@ -1,0 +1,52 @@
+argument_specs:
+  main:
+    options:
+      floating_ip_state:
+        type: "str"
+        required: true
+        choices:
+        - present
+        - absent
+      floating_ip_name:
+        type: "str"
+        required: true
+      floating_ip_tags:
+        description: |
+          List of tags to apply to the floating IP
+        type: "list"
+        required: false
+      floating_ip_properties:
+        description: |
+          Dictionary of properties to convert to tags for the floating IP
+        type: "dict"
+        required: false
+  create_port_forwarding:
+    options:
+      internal_ip:
+        description: |
+          Internal IP
+        type: "str"
+        required: true
+      floating_ip:
+        description: |
+          Floating IP
+        type: "str"
+        required: true
+      internal_network:
+        description: |
+          Internal network
+        type: "str"
+        required: true
+      ports:
+        description: |
+          List of ports to forward. The syntax is `<external_port>:<internal_port>`,
+          where `<internal_port>` defaults to the value of `<external_port>`; so
+          '80' forwards external port 80 to internal port 80, while '8443:443'
+          forwards external port 8443 to internal port 443.
+        type: "list"
+        required: true
+      description:
+        description: |
+          Describes the port forwarding
+        type: "str"
+        required: true

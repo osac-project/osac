@@ -1,0 +1,83 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "osac/private/v1/metadata_type.proto";
+
+// Represents a registered storage backend in the OSAC platform.
+//
+// StorageBackend is a platform-scoped entity that stores the provider type, management endpoint, and credentials for
+// a storage array. It is managed exclusively by Cloud Provider Admins through the private API. Tenants do not have
+// direct access to storage backends; they interact with storage through StorageTier (OSAC-1110).
+//
+// StorageBackend follows the NetworkClass pattern: DB-backed with no Kubernetes CRD and no reconciler.
+message StorageBackend {
+  // Unique identifier of the storage backend.
+  string id = 1;
+
+  // Metadata of the storage backend.
+  Metadata metadata = 2;
+
+  // Desired configuration of the storage backend (user-modifiable).
+  StorageBackendSpec spec = 3;
+
+  // Current operational status of the storage backend.
+  StorageBackendStatus status = 4;
+}
+
+// Defines the desired configuration for a StorageBackend.
+message StorageBackendSpec {
+  // Storage provider identifier. For example: "vast", "ceph", "pure".
+  //
+  // This value is immutable once the StorageBackend is created.
+  string provider = 1;
+
+  // Human-readable description of the storage backend.
+  string description = 2;
+
+  // Management endpoint for the storage array. Accepts a URL or host:port format.
+  string endpoint = 3;
+
+  // Credentials for authenticating with the storage management API.
+  StorageBackendCredentials credentials = 4;
+}
+
+// Credentials for authenticating with a storage backend's management API.
+message StorageBackendCredentials {
+  // Username for storage management API authentication.
+  string username = 1;
+
+  // Password for storage management API authentication.
+  string password = 2;
+}
+
+// Represents the current operational state of a StorageBackend.
+message StorageBackendStatus {
+  // Current lifecycle state of the storage backend.
+  StorageBackendState state = 1;
+
+  // Human-readable message providing additional details about the current state.
+  optional string message = 2;
+}
+
+// Lifecycle states for StorageBackend resources.
+enum StorageBackendState {
+  // State is unknown or has not been determined yet.
+  STORAGE_BACKEND_STATE_UNSPECIFIED = 0;
+
+  // The storage backend is registered and available.
+  STORAGE_BACKEND_STATE_READY = 1;
+}

@@ -1,0 +1,6 @@
+---
+- name: "fos: delete vlan"
+  fos_vlan:
+    commands:
+      - no vlan {{ _vlan_id }}
+  connection: network_cli

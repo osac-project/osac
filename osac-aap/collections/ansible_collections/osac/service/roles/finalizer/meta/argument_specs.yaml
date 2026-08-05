@@ -1,0 +1,28 @@
+argument_specs:
+  main:
+    options:
+      finalizer_state:
+        type: str
+        required: true
+        choices:
+          - absent
+          - present
+      finalizer_name:
+        type: str
+        required: true
+      finalizer_target:
+        type: dict
+        required: true
+        options:
+          api_version:
+            type: str
+            required: true
+          kind:
+            type: str
+            required: true
+          namespace:
+            type: str
+            required: false
+          name:
+            type: str
+            required: true

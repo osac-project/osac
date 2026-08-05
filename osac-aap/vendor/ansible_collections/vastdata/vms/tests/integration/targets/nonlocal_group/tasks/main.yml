@@ -1,0 +1,445 @@
+---
+# Integration tests for nonlocal_group module
+# These tests run against a real VAST system
+#
+# Configuration:
+# Set values in tests/integration/integration_config.yml
+# Requires: LDAP server configured and accessible from VAST system
+
+# ====================
+# Setup
+# ====================
+
+- name: Check if VAST credentials are available
+  ansible.builtin.set_fact:
+    has_vast_credentials: >-
+      {{
+        (vast_vms | default('') | length > 0) and
+        (vast_username | default('') | length > 0) and
+        (vast_password | default('') | length > 0)
+      }}
+
+- name: Check if LDAP configuration is available
+  ansible.builtin.set_fact:
+    has_ldap_config: >-
+      {{
+        (test_ldap_domain | default('') | length > 0) and
+        (test_ldap_urls | default([]) | length > 0)
+      }}
+
+- name: Check if a test nonlocal group is configured
+  ansible.builtin.set_fact:
+    has_nonlocal_group: "{{ test_nonlocal_groupname | default('') | length > 0 }}"
+
+- name: Set test conditions
+  ansible.builtin.set_fact:
+    can_run_tests: "{{ has_vast_credentials and has_ldap_config }}"
+    can_run_group_tests: "{{ has_vast_credentials and has_ldap_config and has_nonlocal_group }}"
+
+- name: Display test configuration
+  ansible.builtin.debug:
+    msg: |
+      ╔════════════════════════════════════════════════════════════════╗
+      ║  Test Configuration                                            ║
+      ╚════════════════════════════════════════════════════════════════╝
+
+      VAST Connection:
+        VMS:            {{ vast_vms | default('not set') }}
+        Username:       {{ vast_username | default('not set') }}
+        Password:       {{ '***set***' if vast_password else 'not set' }}
+
+      LDAP Configuration:
+        Domain:         {{ test_ldap_domain | default('not set') }}
+        URLs:           {{ test_ldap_urls | default([]) | join(', ') }}
+        Port:           {{ test_ldap_port | default(389) }}
+        Method:         {{ test_ldap_method | default('simple') }}
+        Use TLS:        {{ test_ldap_use_tls | default(false) }}
+        Search Base:    {{ test_ldap_searchbase | default('not set') }}
+        Bind DN:        {{ test_ldap_binddn | default('not set') }}
+        Bind Password:  {{ '***set***' if test_ldap_bindpw else 'not set' }}
+
+      Nonlocal Group Test:
+        Groupname:      {{ test_nonlocal_groupname | default('not set') }}
+        GID:            {{ test_nonlocal_gid | default('not set') }}
+  when: can_run_tests
+
+# ====================
+# LDAP Setup
+# ====================
+
+- name: Ensure LDAP is configured (create if not exists, use if already configured)
+  vastdata.vms.ldaps:
+    vms: "{{ vms_auth }}"
+    domain_name: "{{ test_ldap_domain }}"
+    name: "{{ test_ldap_domain }}"
+    urls: "{{ test_ldap_urls }}"
+    searchbase: "{{ test_ldap_searchbase }}"
+    binddn: "{{ test_ldap_binddn }}"
+    bindpw: "{{ test_ldap_bindpw }}"
+    port: "{{ test_ldap_port }}"
+    method: "{{ test_ldap_method }}"
+    use_tls: "{{ test_ldap_use_tls | default(false) }}"
+    use_ldaps: false
+    state: present
+  register: ldap_setup_result
+  when: can_run_tests | bool
+
+- name: Verify LDAP was configured successfully
+  ansible.builtin.assert:
+    that:
+      - ldap_setup_result.ldaps is defined
+      - ldap_setup_result.ldaps.id is defined
+    fail_msg: "LDAP setup failed - cannot proceed with nonlocal group tests"
+    success_msg: "LDAP configured successfully"
+  when: ldap_setup_result is not skipped
+
+- name: Verify LDAP is connected (state from ldaps get, retry until CONNECTED)
+  vastdata.vms.ldaps:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_ldap_domain }}"
+    domain_name: "{{ test_ldap_domain }}"
+    state: present
+  register: ldap_status
+  when: ldap_setup_result is not skipped
+  retries: 6
+  delay: 5
+  until: ldap_status.ldaps.state == 'CONNECTED'
+
+- name: Assert LDAP reached CONNECTED state
+  ansible.builtin.assert:
+    that:
+      - ldap_status.ldaps.state == 'CONNECTED'
+    fail_msg: >-
+      LDAP is not connected. State: {{ ldap_status.ldaps.state | default('unknown') }}.
+      Expected CONNECTED. Check LDAP server reachability and credentials.
+    success_msg: "LDAP is connected and ready"
+  when: ldap_setup_result is not skipped
+
+# ====================
+# Connect default tenant to LDAP
+# ====================
+
+- name: Connect default tenant to LDAP
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "default"
+    ldap_provider_id: "{{ ldap_status.ldaps.id }}"
+    posix_primary_provider: "LDAP"
+    state: present
+  register: tenant_ldap_connect_result
+  when: ldap_setup_result is not skipped
+
+- name: Verify default tenant is connected to LDAP
+  ansible.builtin.assert:
+    that:
+      - tenant_ldap_connect_result.tenants is defined
+      - tenant_ldap_connect_result.tenants.ldap_provider_id == ldap_status.ldaps.id
+    fail_msg: "Failed to connect default tenant to LDAP"
+    success_msg: "Default tenant connected to LDAP"
+  when: ldap_setup_result is not skipped
+
+# ====================
+# Ensure test group exists in LDAP
+# ====================
+
+- name: Ensure test group exists in LDAP if not exists create it
+  ansible.builtin.command:
+    cmd: >-
+      ldapadd -x
+      -H {{ test_ldap_urls[0] }}
+      -D "{{ test_ldap_binddn }}"
+      -w "{{ test_ldap_bindpw }}"
+    stdin: |
+      dn: cn={{ test_nonlocal_groupname }},{{ test_ldap_searchbase }}
+      objectClass: posixGroup
+      objectClass: extensibleObject
+      objectClass: top
+      cn: {{ test_nonlocal_groupname }}
+      uid: {{ test_nonlocal_groupname }}
+      gidNumber: {{ test_nonlocal_gid }}
+      memberUid: {{ test_nonlocal_username }}
+  register: ldap_group_create_result
+  changed_when: ldap_group_create_result.rc == 0
+  failed_when: ldap_group_create_result.rc not in [0, 68]
+  when: can_run_group_tests | bool
+
+- name: Ensure LDAP group has required attributes for VAST discovery (extensibleObject, uid, memberUid)
+  ansible.builtin.command:
+    cmd: >-
+      ldapmodify -x -c
+      -H {{ test_ldap_urls[0] }}
+      -D "{{ test_ldap_binddn }}"
+      -w "{{ test_ldap_bindpw }}"
+    stdin: |
+      dn: cn={{ test_nonlocal_groupname }},{{ test_ldap_searchbase }}
+      changetype: modify
+      add: objectClass
+      objectClass: extensibleObject
+
+      dn: cn={{ test_nonlocal_groupname }},{{ test_ldap_searchbase }}
+      changetype: modify
+      add: uid
+      uid: {{ test_nonlocal_groupname }}
+
+      dn: cn={{ test_nonlocal_groupname }},{{ test_ldap_searchbase }}
+      changetype: modify
+      add: memberUid
+      memberUid: {{ test_nonlocal_username }}
+  register: ldap_ensure_result
+  changed_when: ldap_ensure_result.rc == 0
+  failed_when: ldap_ensure_result.rc not in [0, 20]
+  when: can_run_group_tests | bool
+
+# ====================
+# Query Tests - by groupname
+# ====================
+
+- name: Test querying a nonlocal group by groupname
+  vastdata.vms.nonlocal_group:
+    vms: "{{ vms_auth }}"
+    groupname: "{{ test_nonlocal_groupname }}"
+    tenant_id: "{{ tenant_ldap_connect_result.tenants.id }}"
+    state: present
+  register: result
+  until: result is not failed
+  when: can_run_group_tests | bool
+
+- name: Verify nonlocal group was returned
+  ansible.builtin.assert:
+    that:
+      - result.nonlocal_group is defined
+      - result.nonlocal_group != {}
+      - result.nonlocal_group.name is defined
+    fail_msg: "Nonlocal group query returned empty result - check that '{{ test_nonlocal_groupname }}' exists in LDAP"
+    success_msg: "Nonlocal group queried successfully"
+  when: result is not skipped
+
+# ====================
+# Consistency Tests - by groupname
+# ====================
+
+- name: Test consistency - query same group again by groupname
+  vastdata.vms.nonlocal_group:
+    vms: "{{ vms_auth }}"
+    groupname: "{{ test_nonlocal_groupname }}"
+    tenant_id: "{{ tenant_ldap_connect_result.tenants.id }}"
+    state: present
+  register: result_idempotent
+  when: can_run_group_tests | bool
+
+- name: Verify consistency (data must be consistent across repeated queries)
+  ansible.builtin.assert:
+    that:
+      - result_idempotent.nonlocal_group is defined
+      - result_idempotent.nonlocal_group.name == result.nonlocal_group.name
+      - result_idempotent.nonlocal_group.gid == result.nonlocal_group.gid
+    fail_msg: "Consistency check failed - repeated query returned different data"
+    success_msg: "Consistency verified: repeated query returned consistent data"
+  when: result_idempotent is not skipped and result is not skipped
+
+# ====================
+# Query Tests - by GID
+# ====================
+
+- name: Test querying a nonlocal group by GID
+  vastdata.vms.nonlocal_group:
+    vms: "{{ vms_auth }}"
+    gid: "{{ test_nonlocal_gid }}"
+    tenant_id: "{{ tenant_ldap_connect_result.tenants.id }}"
+    state: present
+  register: result_by_gid
+  when: can_run_group_tests | bool and test_nonlocal_gid is not none and test_nonlocal_gid != ""
+
+- name: Verify nonlocal group returned by GID matches groupname lookup
+  ansible.builtin.assert:
+    that:
+      - result_by_gid.nonlocal_group is defined
+      - result_by_gid.nonlocal_group != {}
+      - result_by_gid.nonlocal_group.gid == test_nonlocal_gid | int
+    fail_msg: "GID-based nonlocal group query returned unexpected result"
+    success_msg: "Nonlocal group queried by GID successfully"
+  when: result_by_gid is defined and result_by_gid is not skipped
+
+# ====================
+# Consistency Tests - by GID
+# ====================
+
+- name: Test consistency - query same group again by GID
+  vastdata.vms.nonlocal_group:
+    vms: "{{ vms_auth }}"
+    gid: "{{ test_nonlocal_gid }}"
+    tenant_id: "{{ tenant_ldap_connect_result.tenants.id }}"
+    state: present
+  register: result_by_gid_idempotent
+  when: can_run_group_tests | bool and test_nonlocal_gid is not none and test_nonlocal_gid != ""
+
+- name: Verify consistency for GID-based query (data must be consistent across repeated queries)
+  ansible.builtin.assert:
+    that:
+      - result_by_gid_idempotent.nonlocal_group is defined
+      - result_by_gid_idempotent.nonlocal_group.gid == result_by_gid.nonlocal_group.gid
+      - result_by_gid_idempotent.nonlocal_group.name == result_by_gid.nonlocal_group.name
+    fail_msg: "Consistency check failed for GID-based query - repeated query returned different data"
+    success_msg: "Consistency verified for GID-based query"
+  when: result_by_gid_idempotent is defined and result_by_gid_idempotent is not skipped
+
+# ====================
+# Idempotency Tests
+# ====================
+
+- name: Test idempotency - first run with gid and tenant_id
+  vastdata.vms.nonlocal_group:
+    vms: "{{ vms_auth }}"
+    gid: "{{ test_nonlocal_gid }}"
+    tenant_id: "{{ tenant_ldap_connect_result.tenants.id }}"
+    state: present
+  register: result_idempotent_first
+  when: can_run_group_tests | bool and test_nonlocal_gid is not none and test_nonlocal_gid != ""
+
+- name: Test idempotency - second run with same gid and tenant_id (should not report changed)
+  vastdata.vms.nonlocal_group:
+    vms: "{{ vms_auth }}"
+    gid: "{{ test_nonlocal_gid }}"
+    tenant_id: "{{ tenant_ldap_connect_result.tenants.id }}"
+    state: present
+  register: result_idempotent_second
+  when: can_run_group_tests | bool and test_nonlocal_gid is not none and test_nonlocal_gid != ""
+
+- name: Verify idempotency - second run should NOT report changed
+  ansible.builtin.assert:
+    that:
+      - result_idempotent_second is not changed
+      - result_idempotent_second.nonlocal_group is defined
+      - result_idempotent_second.nonlocal_group.gid == test_nonlocal_gid | int
+    fail_msg: |
+     Second run with same gid and tenant_id reported changed=true.
+      This indicates tenant_id is being compared even though the API doesn't return it.
+      Expected: changed=false
+      Actual: changed={{ result_idempotent_second.changed }}
+    success_msg: "Idempotency verified: second run correctly reported changed=false"
+  when: result_idempotent_second is defined and result_idempotent_second is not skipped
+
+- name: Test idempotency with groupname - first run
+  vastdata.vms.nonlocal_group:
+    vms: "{{ vms_auth }}"
+    groupname: "{{ test_nonlocal_groupname }}"
+    tenant_id: "{{ tenant_ldap_connect_result.tenants.id }}"
+    state: present
+  register: result_idempotent_groupname_first
+  when: can_run_group_tests | bool
+
+- name: Test idempotency with groupname - second run (should not report changed)
+  vastdata.vms.nonlocal_group:
+    vms: "{{ vms_auth }}"
+    groupname: "{{ test_nonlocal_groupname }}"
+    tenant_id: "{{ tenant_ldap_connect_result.tenants.id }}"
+    state: present
+  register: result_idempotent_groupname_second
+  when: can_run_group_tests | bool
+
+- name: Verify idempotency with groupname - second run should NOT report changed
+  ansible.builtin.assert:
+    that:
+      - result_idempotent_groupname_second is not changed
+      - result_idempotent_groupname_second.nonlocal_group is defined
+    fail_msg: |
+      Second run with same groupname and tenant_id reported changed=true.
+      Expected: changed=false
+      Actual: changed={{ result_idempotent_groupname_second.changed }}
+    success_msg: "Idempotency with groupname verified: second run correctly reported changed=false"
+  when: result_idempotent_groupname_second is defined and result_idempotent_groupname_second is not skipped
+
+# ====================
+# Update Tests - s3_policies_ids
+# ====================
+
+- name: Test updating nonlocal group - set s3_policies_ids to empty
+  vastdata.vms.nonlocal_group:
+    vms: "{{ vms_auth }}"
+    groupname: "{{ test_nonlocal_groupname }}"
+    tenant_id: "{{ tenant_ldap_connect_result.tenants.id }}"
+    s3_policies_ids: []
+    state: present
+  register: result_patch
+  when: can_run_group_tests | bool
+
+- name: Re-query group to verify s3_policies_ids was actually updated
+  vastdata.vms.nonlocal_group:
+    vms: "{{ vms_auth }}"
+    groupname: "{{ test_nonlocal_groupname }}"
+    tenant_id: "{{ tenant_ldap_connect_result.tenants.id }}"
+    state: present
+  register: result_patch_verify
+  when: result_patch is not skipped
+
+- name: Verify s3_policies_ids update
+  ansible.builtin.assert:
+    that:
+      - result_patch.nonlocal_group is defined
+      - result_patch_verify.nonlocal_group is defined
+      - result_patch_verify.nonlocal_group.name == test_nonlocal_groupname
+      - result_patch_verify.nonlocal_group.s3_policies_ids == []
+    fail_msg: "PATCH s3_policies_ids failed - value not updated to empty"
+    success_msg: "s3_policies_ids update verified"
+  when: result_patch is not skipped
+
+# ====================
+# Consistency Tests - Update
+# ====================
+
+- name: Test update consistency - set s3_policies_ids to empty again
+  vastdata.vms.nonlocal_group:
+    vms: "{{ vms_auth }}"
+    groupname: "{{ test_nonlocal_groupname }}"
+    tenant_id: "{{ tenant_ldap_connect_result.tenants.id }}"
+    s3_policies_ids: []
+    state: present
+  register: result_patch_idempotent
+  when: can_run_group_tests | bool
+
+- name: Re-query group to verify s3_policies_ids is still empty after repeated PATCH
+  vastdata.vms.nonlocal_group:
+    vms: "{{ vms_auth }}"
+    groupname: "{{ test_nonlocal_groupname }}"
+    tenant_id: "{{ tenant_ldap_connect_result.tenants.id }}"
+    state: present
+  register: result_patch_idempotent_verify
+  when: result_patch_idempotent is not skipped
+
+- name: Verify update consistency (repeated PATCH must return consistent data)
+  ansible.builtin.assert:
+    that:
+      - result_patch_idempotent_verify.nonlocal_group is defined
+      - result_patch_idempotent_verify.nonlocal_group.name == test_nonlocal_groupname
+      - result_patch_idempotent_verify.nonlocal_group.s3_policies_ids == []
+    fail_msg: "Update consistency check failed - repeated PATCH returned unexpected data"
+    success_msg: "Update consistency verified"
+  when: result_patch_idempotent is not skipped
+
+# ====================
+# Cleanup
+# ====================
+
+- name: Final cleanup - remove test LDAP only if we created it this run
+  vastdata.vms.ldaps:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_ldap_domain }}"
+    state: absent
+  when: can_run_tests | bool and ldap_setup_result is defined and ldap_setup_result.changed | default(false)
+  failed_when: false
+
+- name: Skip message when no credentials
+  ansible.builtin.debug:
+    msg: |
+      Skipping nonlocalgroups integration tests - credentials or LDAP configuration not set.
+
+      To enable integration tests, set credentials and LDAP config.
+      For group-specific tests, also set:
+        TEST_NONLOCAL_GROUPNAME=<ldap-groupname>   # e.g. group from ldapsearch
+        TEST_NONLOCAL_GID=<ldap-gid>               # optional, for GID-based tests
+
+      Example:
+        VAST_VMS=10.95.87.91 TEST_NONLOCAL_GROUPNAME=mygroup ./test.sh integration nonlocalgroups
+
+      Then run: ansible-test integration nonlocalgroups -v
+  when: not (can_run_tests | bool)

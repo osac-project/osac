@@ -1,0 +1,19 @@
+---
+# Create Neutron network
+
+- name: Extract VirtualNetwork configuration
+  ansible.builtin.set_fact:
+    vn_name: "{{ virtual_network.metadata.name }}"
+
+- name: Create network
+  openstack.cloud.network:
+    name: "{{ vn_name }}"
+    external: "false"
+    mtu: "{{ default_network_mtu }}"
+  register: network_result
+
+- name: Display OpenStack network creation result
+  ansible.builtin.debug:
+    msg:
+      - "OpenStack network '{{ vn_name }}' created successfully"
+      - "Resource UID: {{ network_result.id }}"

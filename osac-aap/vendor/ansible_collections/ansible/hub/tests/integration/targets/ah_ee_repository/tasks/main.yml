@@ -1,0 +1,68 @@
+---
+- name: ah_ee_repository integration tests
+  module_defaults:
+    group/ansible.hub.hub:
+      ah_host: "{{ ah_host }}"
+      ah_username: "{{ ah_username }}"
+      ah_password: "{{ ah_password }}"
+      validate_certs: "{{ ah_verify_ssl }}"
+  block:
+    - name: Generate a test_id for the test
+      set_fact:
+        test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') | lower }}"
+      when: test_id is not defined
+
+    - name: Define variables
+      set_fact:
+        registry_name: "ee_{{ test_id }}"
+        ee_repo_name: "ee_repo_{{ test_id }}"
+
+    - name: Create EE remote registry
+      ansible.hub.ah_ee_registry:
+        name: "{{ registry_name }}"
+        url: https://quay.io/my/registry
+        state: present
+      register: r
+
+    - name: Check if the remote registry EE is created
+      assert:
+        that:
+          - r.changed
+
+    - name: Add a remote repository from registry
+      ansible.hub.ah_ee_repository:
+        name: "{{ ee_repo_name }}"
+        upstream_name: "upstream_{{ ee_repo_name }}"
+        registry: "{{ registry_name }}"
+        include_tags:
+          - latest
+        state: present
+      register: r
+
+    - name: Check if the remote registry EE is created
+      assert:
+        that:
+          - r.changed
+
+    - name: Remove a remote repository
+      ansible.hub.ah_ee_repository:
+        name: "{{ ee_repo_name }}"
+        state: absent
+      register: r
+
+    - name: Check if the remote registry EE is deleted
+      assert:
+        that:
+          - r.changed
+  always:
+    - name: Remove a remote repository
+      ansible.hub.ah_ee_repository:
+        name: "{{ ee_repo_name }}"
+        state: absent
+      ignore_errors: true
+
+    - name: Remove EE remote registry
+      ansible.hub.ah_ee_registry:
+        name: "{{ registry_name }}"
+        state: absent
+      ignore_errors: true

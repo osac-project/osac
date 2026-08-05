@@ -1,0 +1,89 @@
+{{/*
+Copyright (c) 2025 Red Hat Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+the License. You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+*/}}
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: prometheus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      serviceAccountName: prometheus
+      volumes:
+      - name: config
+        configMap:
+          name: prometheus-config
+      - name: data
+        emptyDir: {}
+      - name: tls
+        secret:
+          secretName: prometheus-tls
+      {{ if .Values.certs.caBundle.configMap }}
+      - name: cas
+        configMap:
+          name: {{ .Values.certs.caBundle.configMap }}
+          items:
+          - key: {{ .Values.certs.caBundle.bundleKey }}
+            path: bundle.pem
+      {{ end }}
+      containers:
+      - name: prometheus
+        image: "{{ .Values.images.prometheus }}"
+        imagePullPolicy: IfNotPresent
+        volumeMounts:
+        - name: config
+          mountPath: /etc/prometheus
+        - name: data
+          mountPath: /var/lib/prometheus
+        - name: tls
+          mountPath: /etc/prometheus/tls
+          readOnly: true
+        {{ if .Values.certs.caBundle.configMap }}
+        - name: cas
+          mountPath: /etc/prometheus/cas
+          readOnly: true
+        {{ end }}
+        args:
+        - --config.file=/etc/prometheus/prometheus.yml
+        - --storage.tsdb.path=/var/lib/prometheus
+        - --storage.tsdb.retention.time=24h
+        - --web.console.libraries=/usr/share/prometheus/console_libraries
+        - --web.console.templates=/usr/share/prometheus/consoles
+        - --web.enable-lifecycle
+        - --web.config.file=/etc/prometheus/web.yml
+        ports:
+        - name: https
+          containerPort: 9090
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /-/ready
+            port: 9090
+            scheme: HTTPS
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /-/healthy
+            port: 9090
+            scheme: HTTPS
+          initialDelaySeconds: 10
+          periodSeconds: 30

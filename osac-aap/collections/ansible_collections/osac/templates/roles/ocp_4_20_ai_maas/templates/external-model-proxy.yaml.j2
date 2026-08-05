@@ -1,0 +1,76 @@
+{# --- Namespaces (always created when external models exist) --- #}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ ocp_4_20_ai_maas_external_model_namespace }}
+  labels:
+    opendatahub.io/generated-namespace: "true"
+    maas.opendatahub.io/gateway-access: "true"
+{# --- Proxy namespace + Deployments + Services (secured only) --- #}
+{% set secured_models = ocp_4_20_ai_maas_external_models | selectattr('secured', 'defined') | selectattr('secured') | list %}
+{% if secured_models | length > 0 %}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ ocp_4_20_ai_maas_proxy_namespace }}
+{# --- One Deployment per unique upstream endpoint --- #}
+{% set seen_endpoints = [] %}
+{% for model in secured_models %}
+{% set proxy_name = ('maas-proxy-' + model.upstream_endpoint | regex_replace('[^a-z0-9]', '-'))[:63] | regex_replace('-$', '') %}
+{% if model.upstream_endpoint not in seen_endpoints %}
+{% set _ = seen_endpoints.append(model.upstream_endpoint) %}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ proxy_name }}
+  namespace: {{ ocp_4_20_ai_maas_proxy_namespace }}
+  labels:
+    app: {{ proxy_name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ proxy_name }}
+  template:
+    metadata:
+      labels:
+        app: {{ proxy_name }}
+    spec:
+      containers:
+      - name: proxy
+        image: {{ model.proxy_image | default(ocp_4_20_ai_maas_proxy_image, true) }}
+        args:
+          - --maas-endpoint={{ model.upstream_endpoint }}
+          - --listen-port=8080
+        ports:
+        - containerPort: 8080
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            cpu: 100m
+            memory: 64Mi
+{% endif %}
+{% endfor %}
+{# --- One routing Service per secured model --- #}
+{% for model in secured_models %}
+{% set proxy_name = ('maas-proxy-' + model.upstream_endpoint | regex_replace('[^a-z0-9]', '-'))[:63] | regex_replace('-$', '') %}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ (model.upstream_model_ns + '--' + model.upstream_model_name)[:63] | regex_replace('-$', '') }}
+  namespace: {{ ocp_4_20_ai_maas_proxy_namespace }}
+  labels:
+    app: {{ proxy_name }}
+spec:
+  selector:
+    app: {{ proxy_name }}
+  ports:
+  - port: 80
+    targetPort: 8080
+{% endfor %}
+{% endif %}

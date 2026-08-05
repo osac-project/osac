@@ -1,0 +1,12 @@
+apiVersion: authorino.kuadrant.io/v1beta3
+kind: AuthConfig
+metadata:
+  name: test-authconfig
+  namespace: default
+spec:
+  hosts:
+    - example.com
+  authentication:
+    example:
+      jwt:
+        issuerUrl: https://example.com

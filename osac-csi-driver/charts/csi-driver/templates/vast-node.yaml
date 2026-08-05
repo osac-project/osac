@@ -1,0 +1,76 @@
+{{- if .Values.vendors.vast.enabled }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "csi-driver.fullname" . }}-vast-node
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "csi-driver.labels" . | nindent 4 }}
+    app.kubernetes.io/name: vast-csi-node
+    app.kubernetes.io/component: node
+spec:
+  selector:
+    matchLabels:
+      {{- include "csi-driver.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/name: vast-csi-node
+  template:
+    metadata:
+      labels:
+        {{- include "csi-driver.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/name: vast-csi-node
+        app.kubernetes.io/component: node
+    spec:
+      serviceAccountName: {{ include "csi-driver.nodeServiceAccountName" . }}
+      containers:
+        - name: vast-csi-node
+          image: "{{ .Values.vendors.vast.image.repository }}:{{ .Values.vendors.vast.image.tag }}"
+          args: ["serve"]
+          env:
+            - name: CSI_ENDPOINT
+              value: "unix://{{ .Values.vendors.vast.node.socketPath }}/csi.sock"
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: X_CSI_VMS_HOST
+              value: {{ .Values.vendors.vast.config.vmsHost | quote }}
+            - name: X_CSI_VIP_POOL_NAME
+              value: {{ .Values.vendors.vast.config.vipPoolName | quote }}
+            - name: X_CSI_NFS_EXPORT
+              value: {{ .Values.vendors.vast.config.nfsExport | quote }}
+            - name: X_CSI_VIEW_POLICY
+              value: {{ .Values.vendors.vast.config.viewPolicy | quote }}
+            - name: X_CSI_LOG_LEVEL
+              value: INFO
+            - name: X_CSI_VERIFY_SSL
+              value: {{ .Values.vendors.vast.config.verifySsl | quote }}
+            - name: X_CSI_CREDENTIALS_PATH
+              value: "/opt/vms-auth"
+          securityContext:
+            privileged: {{ .Values.node.privileged }}
+          volumeMounts:
+            - name: vast-socket-dir
+              mountPath: {{ .Values.vendors.vast.node.socketPath }}
+            - name: kubelet-dir
+              mountPath: /var/lib/kubelet
+              mountPropagation: Bidirectional
+            {{- if .Values.vendors.vast.config.credentialsSecret }}
+            - name: vast-credentials
+              mountPath: /opt/vms-auth
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: vast-socket-dir
+          hostPath:
+            path: {{ .Values.vendors.vast.node.socketPath }}
+            type: DirectoryOrCreate
+        - name: kubelet-dir
+          hostPath:
+            path: /var/lib/kubelet
+            type: Directory
+        {{- if .Values.vendors.vast.config.credentialsSecret }}
+        - name: vast-credentials
+          secret:
+            secretName: {{ .Values.vendors.vast.config.credentialsSecret }}
+        {{- end }}
+{{- end }}

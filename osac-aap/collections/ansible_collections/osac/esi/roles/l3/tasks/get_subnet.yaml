@@ -1,0 +1,9 @@
+- name: Get subnets by name
+  openstack.cloud.subnets_info:
+    name: "{{ subnet_name }}"
+  register: subnets
+
+- name: Set subnet_info to found subnet
+  when: (subnets.subnets | length > 0)
+  ansible.builtin.set_fact:
+    subnet_info: "{{ subnets.subnets[0] }}"

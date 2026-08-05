@@ -1,0 +1,21 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: osac-console-proxy
+rules:
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - computeinstances
+  verbs:
+  - get
+  - list
+# Used when deployed on the same cluster as KubeVirt VMs (local/auto vm-cluster-mode).
+# In remote mode the proxy authenticates via a kubeconfig Secret instead.
+- apiGroups:
+  - subresources.kubevirt.io
+  resources:
+  - virtualmachineinstances/console
+  - virtualmachineinstances/vnc
+  verbs:
+  - get

@@ -1,0 +1,5 @@
+---
+- name: Delegate to base VM template
+  ansible.builtin.include_role:
+    name: osac.templates.ocp_virt_vm
+    tasks_from: delete

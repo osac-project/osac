@@ -1,0 +1,43 @@
+---
+# Sample inventory for bcm_add_lite_nodes.py
+#
+# Usage:
+#   python3 scripts/bcm_add_lite_nodes.py \
+#     --url https://bcm-head:8081 \
+#     --cert /path/to/cert.pem \
+#     --key /path/to/key.pem \
+#     --inventory samples/bcm_lite_nodes_inventory.yml
+
+# BCM network name for BMC interfaces (default: internalnet)
+network: internalnet
+
+nodes:
+  - hostname: node001
+    ip: 10.141.0.10
+    mac: "52:54:00:4B:5D:71"
+    resource_class: gpu-large
+    bmc:
+      ip: 10.141.0.1
+      username: root
+      password: "<bmc-password>"
+      interface_name: rf0
+
+  - hostname: node002
+    ip: 10.141.0.11
+    mac: "52:54:00:B6:E8:33"
+    resource_class: default
+    bmc:
+      ip: 10.141.0.1
+      username: root
+      password: "<bmc-password>"
+      interface_name: rf0
+
+  - hostname: node003
+    ip: 10.141.0.12
+    mac: "52:54:00:03:76:56"
+    resource_class: gpu-large
+    bmc:
+      ip: 10.141.0.1
+      username: root
+      password: "<bmc-password>"
+      interface_name: rf0

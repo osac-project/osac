@@ -1,0 +1,106 @@
+---
+- name: "nxos: get current status of the port"
+  nxos_command:
+    commands:
+      - "show interface {{ port_name }} switchport | json"
+      - "show interface {{ port_name }} | json"
+      - "show running-config"
+  register: output
+  connection: network_cli
+
+- name: "nxos: set port facts"
+  set_fact:
+    switchport: "{{ output.stdout[0].TABLE_interface.ROW_interface }}"
+    interface: "{{ output.stdout[1].TABLE_interface.ROW_interface }}"
+    needs_reset: "{{ output.stdout[0].TABLE_interface.ROW_interface.switchport == 'Disabled' or output.stdout[0].TABLE_interface.ROW_interface.oper_mode != 'trunk' }}"
+    all_active_vlans: []
+
+- name: "nxos: Parse switch output to get list of all active vlans"
+  when: not needs_reset
+  block:
+    - name: "convert ranges to list of vlans"
+      set_fact:
+        all_active_vlans: >-
+          {{ (
+          all_active_vlans
+          + range(r[0]|int, r[1]|int+1)|list
+          )|sort }}
+      vars:
+        r: "{{ t_vlan_range.split('-') }}"
+      when: t_vlan_range.find("-") != -1
+      with_items: "{{ switchport.trunk_vlans.split(',') }}"
+      loop_control:
+        loop_var: t_vlan_range
+
+    - name: "add single vlans to the list"
+      set_fact:
+        all_active_vlans: "{{ (all_active_vlans + [t_vlan|int])|sort }}"
+      when: t_vlan.find("-") == -1
+      with_items: "{{ switchport.trunk_vlans.split(',') }}"
+      loop_control:
+        loop_var: t_vlan
+
+- name: "nxos: Configure trunk port"
+  block:
+    - name: "nxos: reset interface to defaults"
+      nxos_config:
+        lines: "default interface {{ port_name }}"
+      when: needs_reset
+
+    - name: "nxos: Set switchport oper_mode to trunk"
+      nxos_config:
+        lines:
+          - "switchport"
+          - "switchport mode trunk"
+          - "switchport trunk allowed vlan none"
+          - "description {{ port_description }}"
+        parents: ["interface {{ port_name }}"]
+        running_config: "{{ output.stdout[2] }}"
+      when: switchport.oper_mode != 'trunk'
+
+    - name: "nxos: administratively enable the port"
+      nxos_config:
+        lines: "no shutdown"
+        parents: ["interface {{ port_name }}"]
+      when: interface.admin_state == 'down'
+
+    - name: "nxos: enable STP edge"
+      nxos_config:
+        lines:
+          - "spanning-tree port type edge trunk"
+        parents: ["interface {{ port_name }}"]
+        running_config: "{{ output.stdout[2] }}"
+      when: stp_edge
+      connection: network_cli
+
+    - name: "nxos: add trunk vlan"
+      nxos_config:
+        lines:
+          - "switchport trunk allowed vlan add {{t_vlan}}"
+        parents: ["interface {{ port_name }}"]
+        running_config: "{{ output.stdout[2] }}"
+      when: t_vlan|int not in all_active_vlans
+      loop: "{{ trunked_vlans }}"
+      loop_control:
+        loop_var: t_vlan
+
+    - name: "nxos: set native vlan"
+      nxos_config:
+        lines:
+          - "switchport trunk allowed vlan add {{_vlan_id}}"
+          - "switchport trunk native vlan {{ _vlan_id }}"
+        parents: ["interface {{ port_name }}"]
+        running_config: "{{ output.stdout[2] }}"
+      when: switchport.native_vlan|int != _vlan_id|int or _vlan_id|int not in all_active_vlans
+
+    - name: "nxos: remove vlans that aren't required"
+      nxos_config:
+        lines:
+          - "switchport trunk allowed vlan remove {{ stale_vlan }}"
+        parents: ["interface {{ port_name }}"]
+        running_config: "{{ output.stdout[2] }}"
+      when: stale_vlan|int not in trunked_vlans+[_vlan_id|int] and stale_vlan != 0
+      loop: "{{ all_active_vlans }}"
+      loop_control:
+        loop_var: stale_vlan
+  connection: network_cli

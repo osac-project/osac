@@ -1,0 +1,41 @@
+//
+// Copyright (c) 2025 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "google/protobuf/struct.proto";
+
+// Defines a single field on the resource spec that a catalog item controls. Each field definition specifies whether
+// the user can set the field, what default value to apply, and optional JSON Schema validation constraints.
+message FieldDefinition {
+  // Dot-notation path referencing a field in the resource spec. For example: "spec.network.pod_cidr" or
+  // "spec.node_sets.workers.size". Wildcards are not supported.
+  string path = 1;
+
+  // Human friendly label for this field, suitable for displaying in a UI.
+  string display_name = 2;
+
+  // Whether the user is allowed to set this field. When false, the field value is always taken from the default and
+  // any user-provided value is overridden.
+  bool editable = 3;
+
+  // Default value for this field. Applied when the user does not provide a value (for editable fields) or always
+  // applied (for non-editable fields).
+  google.protobuf.Value default = 4;
+
+  // Optional JSON Schema (draft 2020-12) for validating user-provided values of editable fields. The schema is stored
+  // as a JSON string. When empty, no validation is performed beyond type checking.
+  string validation_schema = 5;
+}

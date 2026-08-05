@@ -1,0 +1,28 @@
+# Example ConfigMap: Netris fabric manager registration
+#
+# Fabric managers handle all physical networking operations for a NetworkClass:
+# virtual network segments, security groups, external IPs, and NAT gateways.
+#
+# The operator discovers fabric managers by selecting ConfigMaps with the label
+# osac.openshift.io/network/fabric-manager. The data.name value is referenced
+# by NetworkClass.fabricManager.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: osac-network-fabric-manager-netris
+  namespace: osac
+  labels:
+    osac.openshift.io/network/fabric-manager: "true"
+data:
+  # Unique identifier for this manager. Must match the fabricManager field
+  # on NetworkClass resources that use this backend.
+  name: netris
+
+  # Human-readable description of the manager.
+  description: >-
+    Netris SDN controller for physical fabric management.
+    Manages VLAN/VxLAN segments, ACLs, public IP allocation, and NAT gateways.
+
+  # Comma-separated list of capabilities this manager supports.
+  # Valid values: ipv4, ipv6, dualStack, dpuSupport
+  capabilities: "ipv4"

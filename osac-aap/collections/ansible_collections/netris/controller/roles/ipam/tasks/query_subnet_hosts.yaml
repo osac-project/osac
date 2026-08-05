@@ -1,0 +1,39 @@
+---
+- name: "Query hosts in subnet {{ _ipam_current_subnet.prefix }}"
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/ipam/hosts/{{ _ipam_current_subnet.id }}"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: [200]
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _ipam_hosts_resp
+  no_log: true
+
+- name: "Reset IP list for subnet {{ _ipam_current_subnet.prefix }}"
+  ansible.builtin.set_fact:
+    _ipam_subnet_all_ips: []
+
+- name: "Enumerate all IPs in subnet {{ _ipam_current_subnet.prefix }}"
+  ansible.builtin.set_fact:
+    _ipam_subnet_all_ips: "{{ _ipam_subnet_all_ips + [_ipam_current_subnet.subnet.prefix | ansible.utils.ipmath(item)] }}"
+  loop: "{{ range(0, 2 ** (32 - _ipam_current_subnet.subnet.length)) | list }}"
+
+- name: "Build set of allocated IPs in subnet {{ _ipam_current_subnet.prefix }}"
+  ansible.builtin.set_fact:
+    _ipam_subnet_allocated_ips: >-
+      {{ _ipam_hosts_resp.json.data | default([])
+         | map(attribute='address')
+         | list }}
+
+- name: "Extract available IPs from subnet {{ _ipam_current_subnet.prefix }}"
+  ansible.builtin.set_fact:
+    _ipam_subnet_available: >-
+      {{ _ipam_subnet_all_ips
+         | reject('in', _ipam_subnet_allocated_ips)
+         | list }}
+
+- name: "Append available IPs from subnet {{ _ipam_current_subnet.prefix }}"
+  ansible.builtin.set_fact:
+    ipam_available_ips: "{{ ipam_available_ips + _ipam_subnet_available }}"

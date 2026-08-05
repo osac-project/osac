@@ -1,0 +1,4 @@
+---
+- fail:
+    msg: List VLANs is not implimented for dellemc.os9.os9
+

@@ -1,0 +1,18 @@
+---
+apiVersion: osac.openshift.io/v1alpha1
+kind: ComputeInstance
+metadata:
+  name: test-vm-unknown-os
+  namespace: osac-system
+spec:
+  templateID: osac.templates.ocp_virt_vm
+  guestOSFamily: "freebsd"
+  cores: 2
+  memoryGiB: 2
+  networkAttachments:
+    - subnetRef: test-subnet
+  image:
+    sourceType: registry
+    sourceRef: "quay.io/containerdisks/fedora:latest"
+status:
+  desiredConfigVersion: "1"

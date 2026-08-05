@@ -1,0 +1,5 @@
+---
+- name: "cumulus: add vlan to trunk port using nvue"
+  raw: |
+    nv set interface {{ port_name }} bridge domain br_default vlan {{ _vlan_id }}
+    nv config apply -y

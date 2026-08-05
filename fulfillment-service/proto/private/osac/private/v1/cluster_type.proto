@@ -1,0 +1,147 @@
+//
+// Copyright (c) 2025 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "google/protobuf/any.proto";
+import "google/protobuf/timestamp.proto";
+import "osac/private/v1/condition_status_type.proto";
+import "osac/private/v1/metadata_type.proto";
+
+// Contains the details about the cluster that are available only for the system.
+message Cluster {
+  // Public data.
+  string id = 1;
+  Metadata metadata = 2;
+  ClusterSpec spec = 3;
+  ClusterStatus status = 4;
+}
+
+message ClusterSpec {
+  // Copies of the public fields.
+  string template = 1;
+  map<string, google.protobuf.Any> template_parameters = 2;
+  map<string, ClusterNodeSet> node_sets = 3;
+  optional string pull_secret = 4;
+  optional string ssh_public_key = 5;
+  optional string version_name = 6;
+  optional ClusterNetwork network = 7;
+
+  // Reference to a cluster catalog item. Mutually exclusive with template during the migration period.
+  // When set, the server fetches the catalog item and applies its field definitions.
+  string catalog_item = 8;
+
+  // Network attachment connecting this cluster to a tenant subnet.
+  //
+  // When provided, all node sets of the cluster will be connected to the specified subnet. Only one network attachment
+  // is supported per cluster.
+  //
+  // When not provided, the system will populate this field with the tenant's default subnet and security groups during
+  // cluster creation.
+  //
+  // The `subnet` field is immutable after creation. The `security_groups` field can be updated.
+  ClusterNetworkAttachment network_attachment = 9;
+}
+
+// Networking configuration for a cluster.
+message ClusterNetwork {
+  optional string pod_cidr = 1;
+  optional string service_cidr = 2;
+}
+
+message ClusterStatus {
+  // Copies of the public fields.
+  ClusterState state = 1;
+  repeated ClusterCondition conditions = 2;
+  string api_url = 3;
+  string console_url = 4;
+  map<string, ClusterNodeSet> node_sets = 5;
+
+  // Identifier of the hub that was selected for this cluster.
+  string hub = 6;
+
+  // Internal API server VIP allocated by MetalLB for the cluster.
+  //
+  // This is the cluster-internal address used as the DNAT target for external access. It differs from `api_url`, which
+  // is the external URL used by clients to reach the API server.
+  //
+  // This will be empty until the CaaS template discovers the MetalLB-allocated VIP during cluster provisioning.
+  string api_endpoint = 7;
+
+  // Internal ingress VIP allocated by MetalLB for the cluster.
+  //
+  // This is the cluster-internal address used as the DNAT target for external access. It differs from `console_url`,
+  // which is the external URL for the cluster console.
+  //
+  // This will be empty until the CaaS template discovers the MetalLB-allocated VIP during cluster provisioning.
+  string ingress_endpoint = 8;
+
+  // Records when the cluster entered its current state, as reported by the provisioning backend.
+  // This is the authoritative timestamp of the state transition, suitable for billing interval
+  // calculations.
+  //
+  // This will be empty if no state transition has been reported yet.
+  optional google.protobuf.Timestamp state_transition_time = 9;
+}
+
+enum ClusterState {
+  CLUSTER_STATE_UNSPECIFIED = 0;
+  CLUSTER_STATE_PROGRESSING = 1;
+  CLUSTER_STATE_READY = 2;
+  CLUSTER_STATE_FAILED = 3;
+  CLUSTER_STATE_DELETING = 4;
+  CLUSTER_STATE_DELETE_FAILED = 5;
+}
+
+message ClusterCondition {
+  ClusterConditionType type = 1;
+  ConditionStatus status = 2;
+  google.protobuf.Timestamp last_transition_time = 3;
+  optional string reason = 4;
+  optional string message = 5;
+}
+
+enum ClusterConditionType {
+  CLUSTER_CONDITION_TYPE_UNSPECIFIED = 0;
+  CLUSTER_CONDITION_TYPE_PROGRESSING = 1;
+  CLUSTER_CONDITION_TYPE_READY = 2;
+  CLUSTER_CONDITION_TYPE_FAILED = 3;
+  CLUSTER_CONDITION_TYPE_DEGRADED = 4;
+}
+
+// Defines the network attachment for a cluster, connecting it to a tenant subnet with optional security groups.
+//
+// Unlike compute instances, which support multiple network attachments (one per virtual NIC), a cluster has a single
+// network attachment shared by all node sets. The fabric interface for each node set is resolved automatically by the
+// system from the node set's host type.
+message ClusterNetworkAttachment {
+  // Identifier of the subnet to connect the cluster to.
+  //
+  // Must be the value of the `id` field of an existing subnet. The subnet must be in `READY` state at creation time.
+  //
+  // This can't be modified after the cluster is created.
+  string subnet = 1;
+
+  // Identifiers of the security groups to apply to the cluster's network attachment.
+  //
+  // Each value must be the `id` field of an existing security group. All security groups must belong to the same
+  // virtual network as the subnet.
+  repeated string security_groups = 2;
+}
+
+message ClusterNodeSet {
+  string host_type = 1;
+  int32 size = 2;
+}

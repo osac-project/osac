@@ -1,0 +1,12 @@
+---
+# delegate task to localhost to avoid starting the device connection
+- name: "check for required fact: port_name"
+  fail:
+    msg: "missing required fact: port_name"
+  when: not port_name
+  delegate_to: localhost
+
+- name: include and run device provider specific tasks
+  include_tasks: run.yaml
+  vars:
+    network_action: delete_port

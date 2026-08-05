@@ -1,0 +1,25 @@
+---
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Get server cluster template
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/server-cluster-template/{{ server_cluster_template_id }}"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: 200
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _server_cluster_template_resp
+  no_log: true
+
+- name: Set server cluster template facts
+  ansible.builtin.set_fact:
+    server_cluster_template_data: "{{ _server_cluster_template_resp.json.data }}"
+    server_cluster_template_server_nics: >-
+      {{ _server_cluster_template_resp.json.data.vnets | default([])
+         | map(attribute='serverNics') | flatten | unique | list }}
+  when: _server_cluster_template_resp.json is mapping

@@ -1,0 +1,114 @@
+{{- if .Values.aap.instanceGroups.publishTemplates.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: osac-publish-templates
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "20"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 6
+  activeDeadlineSeconds: 1300
+  template:
+    metadata:
+      labels:
+        {{- include "osac.labels" . | nindent 8 }}
+    spec:
+      initContainers:
+      {{- include "osac.waitForFulfillment" . | nindent 6 }}
+      containers:
+      - name: publish-templates
+        image: {{ .Values.cliImage }}
+        command:
+          - /bin/bash
+          - -euo
+          - pipefail
+          - -c
+          - |
+            AAP_TOKEN=$(oc get secret osac-aap-api-token -n {{ .Release.Namespace }} \
+              -o jsonpath='{.data.token}' | base64 -d)
+            [[ -n "${AAP_TOKEN}" ]] || { echo "ERROR: osac-aap-api-token secret is empty"; exit 1; }
+
+            AAP_URL="http://{{ .Values.aap.aap.instance.name }}"
+
+            echo "Looking up osac-publish-templates job template..."
+            JT_RESPONSE=$(curl -sf -H "Authorization: Bearer ${AAP_TOKEN}" \
+              "${AAP_URL}/api/controller/v2/job_templates/?name=osac-publish-templates")
+            JT_ID=$(echo "${JT_RESPONSE}" | python3 -c "
+            import sys, json
+            data = json.load(sys.stdin)
+            if data['count'] == 0:
+                print('ERROR: osac-publish-templates not found in AAP', file=sys.stderr)
+                sys.exit(1)
+            print(data['results'][0]['id'])
+            ")
+            echo "Job template ID: ${JT_ID}"
+
+            echo "Launching osac-publish-templates..."
+            LAUNCH_RESPONSE=$(curl -sf -X POST \
+              -H "Authorization: Bearer ${AAP_TOKEN}" \
+              -H "Content-Type: application/json" \
+              "${AAP_URL}/api/controller/v2/job_templates/${JT_ID}/launch/")
+            JOB_ID=$(echo "${LAUNCH_RESPONSE}" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+            [[ -n "${JOB_ID}" ]] || { echo "ERROR: Failed to launch publish-templates job"; exit 1; }
+            echo "Job ${JOB_ID} launched, polling for completion..."
+
+            for i in $(seq 1 60); do
+              HTTP_CODE=$(curl -s -o /tmp/poll-response.json -w '%{http_code}' \
+                --connect-timeout 5 --max-time 15 \
+                -H "Authorization: Bearer ${AAP_TOKEN}" \
+                "${AAP_URL}/api/controller/v2/jobs/${JOB_ID}/")
+              if [[ "${HTTP_CODE}" != "200" ]]; then
+                echo "  Poll ${i}: HTTP ${HTTP_CODE}, retrying..."
+                cat /tmp/poll-response.json
+                sleep 10
+                continue
+              fi
+              STATUS=$(python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" < /tmp/poll-response.json)
+              echo "  Poll ${i}: status=${STATUS}"
+              case "${STATUS}" in
+                successful)
+                  echo "Templates published successfully."
+                  exit 0
+                  ;;
+                failed|error|canceled)
+                  echo "ERROR: Publish job ${JOB_ID} finished with status: ${STATUS}"
+                  echo "--- Job stdout ---"
+                  curl -s --connect-timeout 5 --max-time 30 \
+                    -H "Authorization: Bearer ${AAP_TOKEN}" \
+                    "${AAP_URL}/api/controller/v2/jobs/${JOB_ID}/stdout/?format=txt" | tail -30
+                  exit 1
+                  ;;
+              esac
+              sleep 10
+            done
+            echo "ERROR: Timed out waiting for publish job ${JOB_ID} after 600s"
+            exit 1
+        env:
+        - name: HOME
+          value: /tmp
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      serviceAccountName: {{ .Values.aap.serviceAccounts.osacSa }}
+      restartPolicy: Never
+{{- end }}

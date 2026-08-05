@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "osac-operator.fullname" . }}-console-proxy
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-operator.consoleProxy.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "osac-operator.consoleProxy.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "osac-operator.consoleProxy.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "osac-operator.fullname" . }}-console-proxy
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: console-proxy
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command:
+        - /usr/local/bin/console-proxy
+        args:
+        - --port=8443
+        - --health-probe-bind-address=:8081
+        - --tls-cert-file=/etc/tls/tls.crt
+        - --tls-key-file=/etc/tls/tls.key
+        {{- with .Values.consoleProxy.vmClusterMode }}
+        - --vm-cluster-mode={{ . }}
+        {{- end }}
+        ports:
+        - name: https
+          containerPort: 8443
+          protocol: TCP
+        - name: health
+          containerPort: 8081
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: health
+            scheme: HTTP
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /livez
+            port: health
+            scheme: HTTP
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        resources:
+          {{- toYaml .Values.consoleProxy.resources | nindent 10 }}
+        volumeMounts:
+        - name: tls
+          mountPath: /etc/tls
+          readOnly: true
+      volumes:
+      - name: tls
+        secret:
+          secretName: {{ include "osac-operator.fullname" . }}-console-proxy-tls
+      terminationGracePeriodSeconds: 10

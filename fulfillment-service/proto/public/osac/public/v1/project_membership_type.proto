@@ -1,0 +1,80 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.public.v1;
+
+import "osac/public/v1/metadata_type.proto";
+
+// ProjectMembership represents a member's association with a project and their role within it.
+message ProjectMembership {
+  // Unique identifier of the project membership.
+  string id = 1;
+
+  // Object metadata.
+  Metadata metadata = 2;
+
+  // Desired state of the project membership.
+  ProjectMembershipSpec spec = 3;
+
+  // Observed state of the project membership.
+  ProjectMembershipStatus status = 4;
+}
+
+// Describes the members of a project.
+message ProjectMembershipSpec {
+  // Role of the members in the project. This indicates whether the members are viewers, managers, etc.
+  ProjectMembershipRole role = 2;
+
+  // Identifiers of the users that are members of the project. These are user identifiers (the `id` field of User
+  // objects), not usernames or email addresses.
+  repeated string users = 3;
+}
+
+// Describes the role of a member in a project.
+enum ProjectMembershipRole {
+  // Default value, should not be used.
+  PROJECT_MEMBERSHIP_ROLE_UNSPECIFIED = 0;
+
+  // The member can view the project and its resources.
+  PROJECT_MEMBERSHIP_ROLE_VIEWER = 1;
+
+  // The member can manage the project, including adding/removing other members.
+  PROJECT_MEMBERSHIP_ROLE_MANAGER = 2;
+}
+
+// Describes the observed state of a project membership.
+message ProjectMembershipStatus {
+  // Current state of the project membership.
+  ProjectMembershipState state = 1;
+
+  // Human-readable message providing additional details about the current state. For example, if the state is
+  // FAILED, this field may explain why the synchronization with the identity provider failed.
+  optional string message = 2;
+}
+
+// Describes the state of a project membership.
+enum ProjectMembershipState {
+  // Default value, should not be used.
+  PROJECT_MEMBERSHIP_STATE_UNSPECIFIED = 0;
+
+  // The project membership is pending synchronization with the identity provider.
+  PROJECT_MEMBERSHIP_STATE_PENDING = 1;
+
+  // The project membership is ready and the member has the specified permissions.
+  PROJECT_MEMBERSHIP_STATE_READY = 2;
+
+  // The project membership failed to synchronize with the identity provider.
+  PROJECT_MEMBERSHIP_STATE_FAILED = 3;
+}

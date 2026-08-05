@@ -1,0 +1,19 @@
+---
+- name: ah_token integration tests
+  module_defaults:
+    group/ansible.hub.hub:
+      ah_host: "{{ ah_host }}"
+      ah_username: "{{ ah_username }}"
+      ah_password: "{{ ah_password }}"
+      validate_certs: "{{ ah_verify_ssl }}"
+  block:
+    - name: Create a token
+      ansible.hub.ah_token:
+        state: present
+      register: r
+      no_log: true
+
+    - name: Check if the token is created
+      assert:
+        that:
+          - r.changed

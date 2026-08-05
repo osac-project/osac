@@ -1,0 +1,1 @@
+Use '{{ binary }} get {{ .Object }} {{ .Id }} --watch' to watch for changes.

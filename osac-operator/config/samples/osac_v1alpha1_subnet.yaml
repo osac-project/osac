@@ -1,0 +1,10 @@
+apiVersion: osac.openshift.io/v1alpha1
+kind: Subnet
+metadata:
+  labels:
+    app.kubernetes.io/name: osac-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: subnet-sample
+spec:
+  virtualNetwork: 00000000-0000-0000-0000-000000000000
+  ipv4Cidr: "10.0.1.0/24"

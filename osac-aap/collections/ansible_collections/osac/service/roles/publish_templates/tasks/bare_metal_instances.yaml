@@ -1,0 +1,45 @@
+- name: Get list of existing BareMetalInstance templates
+  ansible.builtin.uri:
+    url: "{{ publish_templates_bare_metal_instance_api_endpoint }}"
+    validate_certs: "{{ publish_templates_validate_certs | default(true) | bool }}"
+    headers:
+      authorization: Bearer {{ osac_fulfillment_service_token }}
+  register: bare_metal_instance_template_check
+
+- name: Create list of existing BareMetalInstance template IDs
+  ansible.builtin.set_fact:
+    bare_metal_instance_template_ids: >-
+      {{
+      bare_metal_instance_template_check | json_query("json.items[].id")
+      }}
+  when: bare_metal_instance_template_check is success and bare_metal_instance_template_check.json.get('items', []) | length > 0
+
+- name: Update existing BareMetalInstance template
+  loop: "{{ osac_bare_metal_instance_templates }}"
+  loop_control:
+    label: "{{ template.id }}"
+    loop_var: template
+  when: bare_metal_instance_template_ids is defined and template.id in bare_metal_instance_template_ids
+  ansible.builtin.uri:
+    url: "{{ publish_templates_bare_metal_instance_api_endpoint }}/{{ template.id }}"
+    validate_certs: "{{ publish_templates_validate_certs | default(true) | bool }}"
+    method: PATCH
+    headers:
+      authorization: Bearer {{ osac_fulfillment_service_token }}
+    body_format: json
+    body: "{{ template }}"
+
+- name: Create new BareMetalInstance template
+  loop: "{{ osac_bare_metal_instance_templates }}"
+  loop_control:
+    label: "{{ template.id }}"
+    loop_var: template
+  when: bare_metal_instance_template_ids is not defined or template.id not in bare_metal_instance_template_ids
+  ansible.builtin.uri:
+    url: "{{ publish_templates_bare_metal_instance_api_endpoint }}"
+    validate_certs: "{{ publish_templates_validate_certs | default(true) | bool }}"
+    method: POST
+    headers:
+      authorization: Bearer {{ osac_fulfillment_service_token }}
+    body_format: json
+    body: "{{ template }}"

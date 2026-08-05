@@ -1,0 +1,49 @@
+---
+# VAST-specific defaults — all use vast_storage_ prefix.
+
+# Protocol-to-CSI-driver map used by ensure_csi_operator and ensure_storage_class.
+# These must match the CSI driver names registered by the VAST CSI Operator
+# (same names as the Helm chart defaults: csi.vastdata.com / block.csi.vastdata.com).
+vast_storage_csi_provisioner_map:
+  nfs: "csi.vastdata.com"
+  block: "block.csi.vastdata.com"
+
+# K8s Secret on hub cluster that stores per-tenant VAST config
+vast_storage_tenant_config_secret_prefix: "vast-tenant-config-"
+
+# Namespace for hub-cluster config secrets — set via OSAC_STORAGE_CONFIG_NAMESPACE env var
+# in the storage-operations-ig pod spec (downward API metadata.namespace).
+vast_storage_config_namespace: "{{ lookup('env', 'OSAC_STORAGE_CONFIG_NAMESPACE') | default('osac-system', true) }}"
+
+# TLS certificate validation for VAST VMS API calls.
+vast_storage_validate_certs: "{{ lookup('env', 'VAST_VALIDATE_CERTS') | default('true', true) | bool }}"
+
+# API timeout (seconds) passed to the vastdata.vms modules via the vms: connection dict.
+vast_storage_api_timeout: 30
+
+# Shared VIP pool configuration — one pool for all tenants.
+# Tenant isolation relies on source-based access control, not per-pool separation.
+# The pool is created idempotently during the first tenant setup.
+vast_storage_vip_pool_name: "{{ lookup('env', 'VAST_VIP_POOL_NAME') | default('osac-shared', true) }}"
+vast_storage_vip_pool_fqdn: "{{ lookup('env', 'VAST_VIP_POOL_FQDN') | default('', true) }}"
+vast_storage_vip_pool_ip_ranges: "{{ lookup('env', 'VAST_VIP_POOL_IP_RANGES') | default('', true) }}"
+vast_storage_vip_pool_subnet_cidr: "{{ lookup('env', 'VAST_VIP_POOL_SUBNET_CIDR') | default('', true) }}"
+vast_storage_vip_pool_gw_ip: "{{ lookup('env', 'VAST_VIP_POOL_GW_IP') | default('', true) }}"
+vast_storage_vip_pool_gw_ipv6: "{{ lookup('env', 'VAST_VIP_POOL_GW_IPV6') | default('', true) }}"
+
+# Client IP ranges for tenant NFS access on shared VIP pools.
+# Required when using shared (tenant_id=null) VIP pools — VAST resolves the
+# tenant by matching the NFS client's source IP against each tenant's ranges.
+# Without this, NFS access is denied for non-default tenants.
+# Format: JSON array of [start, end] pairs, e.g. '[["10.0.0.1","10.0.0.10"]]'
+vast_storage_client_ip_ranges: "{{ lookup('env', 'VAST_CLIENT_IP_RANGES') | default('', true) }}"
+
+# Local provider naming — each tenant gets its own identity provider.
+vast_storage_local_provider_prefix: "lp-"
+
+# CSI Operator installation via OLM
+vast_storage_csi_operator_namespace: "vast-csi-system"
+vast_storage_csi_operator_channel: "stable"
+vast_storage_csi_operator_approval: "Automatic"
+vast_storage_csi_operator_catalog_source: "certified-operators"
+vast_storage_csi_operator_catalog_namespace: "openshift-marketplace"

@@ -1,0 +1,9 @@
+---
+- name: Configure SNAT for tenant outbound access
+  hosts: net_nodes
+  gather_facts: false
+  tasks:
+    - name: Create SNAT
+      ansible.builtin.include_role:
+        name: agentless_net.l3.snat
+        tasks_from: create

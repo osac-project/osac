@@ -1,0 +1,10 @@
+---
+namespace: osac
+name: test_overrides
+version: 1.0.0
+readme: README.md
+authors:
+  - OSAC Team
+description: Test override collection for validating osac.workflows extension points
+license:
+  - Apache-2.0

@@ -1,0 +1,16 @@
+---
+apiVersion: osac.openshift.io/v1alpha1
+kind: ClusterOrder
+metadata:
+  name: test-cluster
+  namespace: osac-system
+spec:
+  templateID: osac.templates.ocp_small
+  templateParameters: |
+    {
+      "pull_secret": "test-pull-secret-content",
+      "ssh_public_key": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC5VZfsNrMDcHgF+1DlN8N4FHg9T8J9x9K+wXYzrP3lL2QR6eQ1mF7yJ8T2P3qL4R5tP6sN7kM8vQ9zX5yF6tN8pR5sQ9mF7yJ8T2P3qL4R5tP6sN7kM8vQ9zX5yF6tN test@example.com"
+    }
+  nodeRequests:
+    - resourceClass: test-class
+      numberOfNodes: 1

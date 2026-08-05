@@ -1,0 +1,6 @@
+argument_specs:
+  main:
+    options:
+      osac_template_collections:
+        type: list
+        required: true

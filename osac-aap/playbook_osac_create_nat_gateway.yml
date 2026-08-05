@@ -1,0 +1,27 @@
+---
+- name: Create a NATGateway resource
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    nat_gateway: "{{ ansible_eda.event.payload }}"
+    nat_gateway_name: "{{ ansible_eda.event.payload.metadata.name }}"
+    implementation_strategy: >-
+      {{ ansible_eda.event.payload.metadata.annotations['osac.openshift.io/implementation-strategy'] }}
+
+  pre_tasks:
+    - name: Show EDA Event
+      ansible.builtin.debug:
+        var: ansible_eda.event.payload
+
+  tasks:
+    - name: Display NATGateway information
+      ansible.builtin.debug:
+        msg:
+          - "NATGateway name: {{ nat_gateway_name }}"
+          - "Implementation strategy: {{ implementation_strategy }}"
+
+    - name: Call the selected NATGateway role
+      ansible.builtin.include_role:
+        name: "{{ template_id_override | default('osac.templates.' + (implementation_strategy | replace('-', '_'))) }}"
+        tasks_from: create_nat_gateway

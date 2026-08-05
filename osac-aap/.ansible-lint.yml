@@ -1,0 +1,13 @@
+skip_list:
+  - role-name[path]
+  - parser-error  # Known false positive: multi-play test playbooks trigger "conflicting action statements"
+  - fqcn[keyword]  # Workflows use collections: keyword for proper resolution
+warn_list:
+  - risky-file-permissions  # Test code uses lineinfile for logging without mode
+exclude_paths:
+  - vendor/
+  - .github/
+  - execution-environment/  # Built artifacts, not source
+kinds:
+  # Integration test files are playbooks (multi-play), not task files
+  - playbook: "**/integration/**/tasks/*.yml"

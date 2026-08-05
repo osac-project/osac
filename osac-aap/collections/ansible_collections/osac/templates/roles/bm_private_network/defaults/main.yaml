@@ -1,0 +1,6 @@
+---
+# We define default_network_class as a temporary workaround the problem that
+# BareMetalPools have no idea what network class to use. The solution will be
+# to specify the network class in the BareMetalPool's status and that will be
+# a future change in the bare-metal-fulfillment-operator.
+default_network_class: openstack

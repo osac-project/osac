@@ -1,0 +1,68 @@
+//
+// Copyright (c) 2025 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "google/protobuf/any.proto";
+import "osac/private/v1/compute_instance_type.proto";
+import "osac/private/v1/metadata_type.proto";
+
+// buf:lint:ignore OSAC_OBJECT_SHAPE
+message ComputeInstanceTemplate {
+  // Public data.
+  string id = 1;
+  Metadata metadata = 2;
+  string title = 3;
+  string description = 4;
+  repeated ComputeInstanceTemplateParameterDefinition parameters = 5;
+
+  // Default values for compute instance spec fields. When a user creates a
+  // compute instance without setting these fields, these values are applied.
+  //
+  // User-provided spec field values always override these defaults.
+  ComputeInstanceTemplateSpecDefaults spec_defaults = 6;
+}
+
+message ComputeInstanceTemplateParameterDefinition {
+  string name = 1;
+  string title = 2;
+  string description = 3;
+  bool required = 4;
+  string type = 5;
+  google.protobuf.Any default = 6;
+}
+
+// Default values for compute instance spec fields.
+message ComputeInstanceTemplateSpecDefaults {
+  // Reserved field numbers for removed fields (do not reuse).
+  reserved 1, 2;
+  reserved "cores", "memory_gib";
+
+  // Default image configuration.
+  optional ComputeInstanceImage image = 3;
+
+  // Default boot disk configuration.
+  optional ComputeInstanceDisk boot_disk = 4;
+
+  // Default run strategy.
+  optional string run_strategy = 5;
+
+  // Default instance type name. Specifies the default compute configuration for instances
+  // created from this template.
+  optional string instance_type = 6;
+
+  // Default guest OS type. When true, the VM runs Windows. When false or omitted, the VM runs Linux.
+  optional bool is_windows = 7;
+}

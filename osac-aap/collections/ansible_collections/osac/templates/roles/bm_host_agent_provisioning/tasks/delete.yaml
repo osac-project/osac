@@ -1,0 +1,4 @@
+---
+- name: No-op for bm_host_agent_provisioning delete
+  ansible.builtin.debug:
+    msg: "bm_host_agent_provisioning does not handle deletion"

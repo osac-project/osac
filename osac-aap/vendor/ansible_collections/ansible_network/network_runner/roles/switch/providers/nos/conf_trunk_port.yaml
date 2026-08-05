@@ -1,0 +1,49 @@
+---
+- name: "nos: reset interface to default"
+  community.network.nos_config:
+    lines:
+      - "no switchport"
+      - "shutdown"
+    parents:
+      - "interface {{ port_name }}"
+  connection: network_cli
+
+- name: "nos: enable switchport in trunk mode and disable tagging of native-vlan"
+  community.network.nos_config:
+    lines:
+      - "switchport"
+      - "switchport mode trunk"
+      - "no switchport trunk tag native-vlan"
+      - "no shutdown"
+    parents:
+      - "interface {{ port_name }}"
+  connection: network_cli
+
+- name: "nos: enable rstp"
+  community.network.nos_config:
+    lines:
+      - "no spanning-tree shutdown"
+    parents:
+      - "interface {{ port_name }}"
+  connection: network_cli
+  when: stp_edge
+
+- name: "nos: set native vlan"
+  community.network.nos_config:
+    lines:
+      - "switchport trunk allowed vlan add {{ _vlan_id }}"
+      - "switchport trunk native-vlan {{ _vlan_id }}"
+    parents:
+      - "interface {{ port_name }}"
+  connection: network_cli
+
+- name: "nos: add trunk vlan(s)"
+  community.network.nos_config:
+    lines:
+      - "switchport trunk allowed vlan add {{ t_vlan }}"
+    parents:
+      - "interface {{ port_name }}"
+  loop: "{{ trunked_vlans }}"
+  loop_control:
+    loop_var: t_vlan
+  connection: network_cli

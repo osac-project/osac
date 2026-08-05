@@ -1,0 +1,9 @@
+ancestor: null
+releases:
+  1.0.0:
+    changes:
+      major_changes:
+      - first version
+    fragments:
+    - 23-first-version.yml
+    release_date: '2025-04-29'

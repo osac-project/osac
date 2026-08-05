@@ -1,0 +1,8 @@
+---
+- name: "dellemc.os9: remove port VLAN configuration"
+  dellemc.os9.os9_config:
+    lines:
+      - "no switchport"
+    parents:
+      - "interface {{ port_name }}"
+  connection: network_cli

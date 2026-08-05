@@ -1,0 +1,21 @@
+{% for tier in ocp_4_20_ai_maas_tiers %}
+{% if not loop.first %}
+---
+{% endif %}
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSSubscription
+metadata:
+  name: "{{ tier.name }}"
+  namespace: models-as-a-service
+spec:
+  owner:
+    groups:
+    - name: "{{ tier.group }}"
+  modelRefs:
+  - name: "{{ ocp_4_20_ai_maas_model_name }}"
+    namespace: "{{ ocp_4_20_ai_maas_model_namespace }}"
+    tokenRateLimits:
+    - limit: {{ tier.token_limit }}
+      window: "{{ tier.window }}"
+  priority: {{ tier.priority }}
+{% endfor %}

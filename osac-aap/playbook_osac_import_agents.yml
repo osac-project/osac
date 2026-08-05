@@ -1,0 +1,238 @@
+---
+- name: Import bare metal servers as Assisted Installer agents
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    import_agents_namespace: "{{ default_agent_namespace }}"
+    import_agents_infraenv_name: "{{ hosted_cluster_default_infraenv }}"
+    import_agents_inventory_path: "/var/config/import-agents/servers.yml"
+    import_agents_pull_secret_name: "pull-secret"
+    import_agents_managed_by_label: "osac.openshift.io/managed-by=import-agents"
+    import_agents_disable_bmc_cert_verification: true
+
+  tasks:
+    - name: Verify inventory file exists
+      ansible.builtin.stat:
+        path: "{{ import_agents_inventory_path }}"
+      register: _inventory_file
+
+    - name: Fail if inventory file is missing
+      ansible.builtin.fail:
+        msg: >-
+          Inventory file not found at {{ import_agents_inventory_path }}.
+          Ensure the import-agents-inventory ConfigMap is created and mounted.
+      when: not _inventory_file.stat.exists
+
+    - name: Load server inventory from file
+      ansible.builtin.include_vars:
+        file: "{{ import_agents_inventory_path }}"
+        name: import_agents_inventory
+
+    - name: Set server list
+      ansible.builtin.set_fact:
+        import_agents_servers: "{{ import_agents_inventory.servers }}"
+
+    - name: Display servers to import
+      ansible.builtin.debug:
+        var: import_agents_servers
+
+    - name: Create or update BMC secrets for each server
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "{{ server.name }}-bmc-secret"
+            namespace: "{{ import_agents_namespace }}"
+            labels:
+              osac.openshift.io/managed-by: import-agents
+          type: Opaque
+          stringData:
+            username: "{{ server.bmc_username }}"
+            password: "{{ server.bmc_password }}"
+      loop: "{{ import_agents_servers }}"
+      loop_control:
+        loop_var: server
+        label: "{{ server.name }}"
+      no_log: true
+
+    - name: Ensure InfraEnv exists
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: agent-install.openshift.io/v1beta1
+          kind: InfraEnv
+          metadata:
+            name: "{{ import_agents_infraenv_name }}"
+            namespace: "{{ import_agents_namespace }}"
+          spec:
+            pullSecretRef:
+              name: "{{ import_agents_pull_secret_name }}"
+
+    - name: Get existing managed BareMetalHost CRs
+      kubernetes.core.k8s_info:
+        api_version: metal3.io/v1alpha1
+        kind: BareMetalHost
+        namespace: "{{ import_agents_namespace }}"
+        label_selectors:
+          - "{{ import_agents_managed_by_label }}"
+      register: import_agents_existing_bmh
+
+    - name: Extract existing BMH names
+      ansible.builtin.set_fact:
+        import_agents_existing_bmh_names: >-
+          {{ import_agents_existing_bmh.resources | map(attribute='metadata.name') | list }}
+
+    - name: Display existing managed BMHs
+      ansible.builtin.debug:
+        var: import_agents_existing_bmh_names
+
+    - name: Reconcile BareMetalHost for each server
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: metal3.io/v1alpha1
+          kind: BareMetalHost
+          metadata:
+            name: "{{ server.name }}"
+            namespace: "{{ import_agents_namespace }}"
+            labels:
+              osac.openshift.io/managed-by: import-agents
+              infraenvs.agent-install.openshift.io: "{{ import_agents_infraenv_name }}"
+            annotations:
+              inspect.metal3.io: disabled
+              bmac.agent-install.openshift.io/hostname: "{{ server.name }}"
+          spec:
+            automatedCleaningMode: disabled
+            bmc:
+              address: "{{ server.bmc_url }}"
+              credentialsName: "{{ server.name }}-bmc-secret"
+              disableCertificateVerification: >-
+                {{ server.disable_bmc_cert_verification
+                   | default(import_agents_disable_bmc_cert_verification) }}
+            bootMACAddress: "{{ server.boot_mac }}"
+            online: true
+      loop: "{{ import_agents_servers }}"
+      loop_control:
+        loop_var: server
+        label: "{{ server.name }}"
+
+    - name: Compute stale BMH names
+      ansible.builtin.set_fact:
+        import_agents_stale_bmh_names: >-
+          {{
+            import_agents_existing_bmh_names |
+            difference(import_agents_servers | map(attribute='name') | list)
+          }}
+
+    - name: Display stale BMHs to delete
+      ansible.builtin.debug:
+        var: import_agents_stale_bmh_names
+
+    - name: Get agents linked to stale BMHs
+      kubernetes.core.k8s_info:
+        api_version: agent-install.openshift.io/v1beta1
+        kind: Agent
+        namespace: "{{ import_agents_namespace }}"
+        label_selectors:
+          - "agent-install.openshift.io/bmh={{ bmh_name }}"
+      register: import_agents_stale_agents
+      loop: "{{ import_agents_stale_bmh_names }}"
+      loop_control:
+        loop_var: bmh_name
+        label: "{{ bmh_name }}"
+
+    - name: Delete stale Agent CRs
+      kubernetes.core.k8s:
+        state: absent
+        api_version: agent-install.openshift.io/v1beta1
+        kind: Agent
+        namespace: "{{ import_agents_namespace }}"
+        name: "{{ agent.metadata.name }}"
+      loop: >-
+        {{
+          import_agents_stale_agents.results |
+          map(attribute='resources') |
+          flatten
+        }}
+      loop_control:
+        loop_var: agent
+        label: "{{ agent.metadata.name }}"
+
+    - name: Delete stale BareMetalHost CRs
+      kubernetes.core.k8s:
+        state: absent
+        api_version: metal3.io/v1alpha1
+        kind: BareMetalHost
+        namespace: "{{ import_agents_namespace }}"
+        name: "{{ bmh_name }}"
+      loop: "{{ import_agents_stale_bmh_names }}"
+      loop_control:
+        loop_var: bmh_name
+        label: "{{ bmh_name }}"
+
+    - name: Delete stale BMC secrets
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        namespace: "{{ import_agents_namespace }}"
+        name: "{{ bmh_name }}-bmc-secret"
+      loop: "{{ import_agents_stale_bmh_names }}"
+      loop_control:
+        loop_var: bmh_name
+        label: "{{ bmh_name }}"
+
+    - name: Wait for each server to register as an Agent
+      kubernetes.core.k8s_info:
+        api_version: agent-install.openshift.io/v1beta1
+        kind: Agent
+        namespace: "{{ import_agents_namespace }}"
+      register: import_agents_current_agents
+      until: >-
+        [server.boot_mac] |
+        osac.service.mac_to_agent_name(import_agents_current_agents.resources) is not none
+      retries: 90
+      delay: 10
+      loop: "{{ import_agents_servers }}"
+      loop_control:
+        loop_var: server
+        label: "{{ server.name }}"
+
+    - name: Get final agent list
+      kubernetes.core.k8s_info:
+        api_version: agent-install.openshift.io/v1beta1
+        kind: Agent
+        namespace: "{{ import_agents_namespace }}"
+      register: import_agents_final_agents
+
+    - name: Configure agent metadata
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: agent-install.openshift.io/v1beta1
+          kind: Agent
+          metadata:
+            name: >-
+              {{
+                [server.boot_mac] |
+                osac.service.mac_to_agent_name(import_agents_final_agents.resources)
+              }}
+            namespace: "{{ import_agents_namespace }}"
+            labels:
+              osac.openshift.io/resource_class: "{{ server.resource_class }}"
+              netris.server/name: "{{ server.netris_server_name }}"
+            annotations:
+              bmac.agent-install.openshift.io/hostname: "{{ server.name }}"
+          spec:
+            approved: true
+            hostname: "{{ server.name | lower }}"
+      loop: "{{ import_agents_servers }}"
+      loop_control:
+        loop_var: server
+        label: "{{ server.name }}"
+      failed_when: >-
+        [server.boot_mac] |
+        osac.service.mac_to_agent_name(import_agents_final_agents.resources) is none

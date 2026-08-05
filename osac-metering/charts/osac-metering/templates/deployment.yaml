@@ -1,0 +1,134 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "osac-metering.fullname" . }}
+  labels:
+    {{- include "osac-metering.labels" . | nindent 4 }}
+    app.kubernetes.io/component: metering
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "osac-metering.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "osac-metering.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: metering
+    spec:
+      serviceAccountName: {{ include "osac-metering.fullname" . }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: kafka-secrets
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        - name: tmp
+          emptyDir: {}
+        - name: ca-bundle
+          configMap:
+            name: {{ .Values.certs.caBundle.configMap }}
+      initContainers:
+        - name: fetch-kafka-secrets
+          image: {{ .Values.cliImage | default "quay.io/openshift/origin-cli:4.20.0" }}
+          env:
+            - name: HOME
+              value: /tmp
+            - name: SOURCE_NS
+              value: {{ include "osac-metering.kafkaClusterNamespace" . }}
+            - name: SASL_SECRET
+              value: {{ include "osac-metering.kafkaSaslSecretName" . }}
+            - name: CA_SECRET
+              value: {{ include "osac-metering.kafkaCaSecret" . }}
+          volumeMounts:
+            - name: kafka-secrets
+              mountPath: /etc/kafka-secrets
+            - name: tmp
+              mountPath: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+          command:
+            - /bin/bash
+            - -euo
+            - pipefail
+            - -c
+            - |
+              echo "Waiting for secret ${SASL_SECRET} in ${SOURCE_NS}..."
+              until oc get secret "${SASL_SECRET}" -n "${SOURCE_NS}" > /dev/null 2>&1; do
+                sleep 5
+              done
+
+              echo "Waiting for secret ${CA_SECRET} in ${SOURCE_NS}..."
+              until oc get secret "${CA_SECRET}" -n "${SOURCE_NS}" > /dev/null 2>&1; do
+                sleep 5
+              done
+
+              oc get secret "${SASL_SECRET}" -n "${SOURCE_NS}" -o jsonpath='{.data.password}' | base64 -d > /etc/kafka-secrets/password
+              oc get secret "${CA_SECRET}" -n "${SOURCE_NS}" -o jsonpath='{.data.ca\.crt}' | base64 -d > /etc/kafka-secrets/ca.crt
+              echo "Kafka secrets fetched."
+      containers:
+        - name: {{ include "osac-metering.name" . }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: FULFILLMENT_SERVER_ADDRESS
+              value: {{ ((.Values.fulfillment).address) | default (printf "fulfillment-internal-api.%s.svc.cluster.local:8001" .Release.Namespace) | quote }}
+            - name: TLS_CA_CERT
+              value: /etc/ca-bundle/bundle.pem
+            - name: KAFKA_BROKERS
+              value: {{ include "osac-metering.kafkaBrokers" . | quote }}
+            - name: KAFKA_TOPIC
+              value: {{ include "osac-metering.kafkaTopic" . | quote }}
+            - name: KAFKA_TLS_CA_CERT
+              value: /etc/kafka-secrets/ca.crt
+            - name: KAFKA_SASL_USERNAME
+              value: {{ include "osac-metering.kafkaSaslUsername" . | quote }}
+            - name: KAFKA_SASL_PASSWORD_FILE
+              value: /etc/kafka-secrets/password
+          volumeMounts:
+            - name: kafka-secrets
+              mountPath: /etc/kafka-secrets
+              readOnly: true
+            - name: ca-bundle
+              mountPath: /etc/ca-bundle
+              readOnly: true
+          ports:
+            - name: health
+              containerPort: 8080
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

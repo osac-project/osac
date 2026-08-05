@@ -1,0 +1,107 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "google/api/annotations.proto";
+import "google/protobuf/field_mask.proto";
+import "osac/private/v1/tenant_type.proto";
+
+message TenantsListRequest {
+  optional int32 offset = 1;
+  optional int32 limit = 2;
+  optional string filter = 3;
+  optional string order = 4;
+}
+
+message TenantsListResponse {
+  int32 size = 1;
+  int32 total = 2;
+  repeated Tenant items = 3;
+}
+
+message TenantsGetRequest {
+  string id = 1;
+}
+
+message TenantsGetResponse {
+  Tenant object = 1;
+}
+
+message TenantsCreateRequest {
+  Tenant object = 1;
+}
+
+message TenantsCreateResponse {
+  Tenant object = 1;
+}
+
+message TenantsDeleteRequest {
+  string id = 1;
+}
+
+message TenantsDeleteResponse {}
+
+message TenantsUpdateRequest {
+  Tenant object = 1;
+  google.protobuf.FieldMask update_mask = 2;
+
+  // Lock enables optimistic locking. When set to true, the server verifies that the current version of the object
+  // matches the value of the metadata.version field of the submitted object. If they differ the update will be
+  // rejected. This is useful to prevent lost updates when multiple clients are modifying the same object concurrently.
+  bool lock = 3;
+}
+
+message TenantsUpdateResponse {
+  Tenant object = 1;
+}
+
+message TenantsSignalRequest {
+  string id = 1;
+}
+
+message TenantsSignalResponse {}
+
+service Tenants {
+  rpc List(TenantsListRequest) returns (TenantsListResponse) {
+    option (google.api.http) = {get: "/api/private/v1/tenants"};
+  }
+  rpc Get(TenantsGetRequest) returns (TenantsGetResponse) {
+    option (google.api.http) = {
+      get: "/api/private/v1/tenants/{id}"
+      response_body: "object"
+    };
+  }
+  rpc Create(TenantsCreateRequest) returns (TenantsCreateResponse) {
+    option (google.api.http) = {
+      post: "/api/private/v1/tenants"
+      body: "object"
+      response_body: "object"
+    };
+  }
+  rpc Delete(TenantsDeleteRequest) returns (TenantsDeleteResponse) {
+    option (google.api.http) = {delete: "/api/private/v1/tenants/{id}"};
+  }
+  rpc Update(TenantsUpdateRequest) returns (TenantsUpdateResponse) {
+    option (google.api.http) = {
+      patch: "/api/private/v1/tenants/{object.id}"
+      body: "object"
+      response_body: "object"
+    };
+  }
+
+  // Indicates that something changed in the object or the system that may require reconciling the object.
+  rpc Signal(TenantsSignalRequest) returns (TenantsSignalResponse) {}
+}

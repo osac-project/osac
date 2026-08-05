@@ -1,0 +1,100 @@
+{{- if .Values.clusterVersions.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: seed-cluster-versions
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "30"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 5
+  activeDeadlineSeconds: 900
+  template:
+    metadata:
+      labels:
+        {{- include "osac.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: admin
+      initContainers:
+      {{- include "osac.waitForFulfillment" . | nindent 6 }}
+      containers:
+      - name: seed-versions
+        image: {{ .Values.cliImage }}
+        command:
+          - /bin/bash
+          - -euo
+          - pipefail
+          - -c
+          - |
+            AUTH_TOKEN=$(< /var/run/secrets/kubernetes.io/serviceaccount/token)
+            API="https://fulfillment-internal-api:8001/api/private/v1/cluster_versions"
+
+            create_version() {
+              local version="$1"
+              local payload="$2"
+              local response="/tmp/cv-response.json"
+              local code
+
+              code=$(curl -skS \
+                --connect-timeout 5 \
+                --max-time 30 \
+                -o "${response}" \
+                -w '%{http_code}' \
+                -X POST \
+                -H "Authorization: Bearer ${AUTH_TOKEN}" \
+                -H "Content-Type: application/json" \
+                --data-binary "${payload}" \
+                "${API}")
+
+              case "${code}" in
+                2??)
+                  echo "Created ClusterVersion ${version}."
+                  ;;
+                409)
+                  echo "ClusterVersion ${version} already exists, skipping."
+                  ;;
+                *)
+                  echo "ERROR: Failed to create ${version} (HTTP ${code})" >&2
+                  cat "${response}" >&2
+                  return 1
+                  ;;
+              esac
+            }
+
+            {{- range .Values.clusterVersions.versions }}
+            create_version \
+              {{ .version | quote }} \
+              {{ dict "metadata" (dict "name" (.version | replace "." "-")) "spec" (dict
+                  "version" .version
+                  "image" .image
+                  "enabled" true
+                  "is_default" (.default | default false)
+                ) | toJson | quote }}
+            {{- end }}
+        env:
+        - name: HOME
+          value: /tmp
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      restartPolicy: OnFailure
+{{- end }}

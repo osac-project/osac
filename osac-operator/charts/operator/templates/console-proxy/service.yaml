@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "osac-operator.fullname" . }}-console-proxy
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-operator.consoleProxy.labels" . | nindent 4 }}
+spec:
+  ports:
+  - name: https
+    port: 443
+    targetPort: https
+    protocol: TCP
+  selector:
+    {{- include "osac-operator.consoleProxy.selectorLabels" . | nindent 4 }}

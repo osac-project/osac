@@ -1,0 +1,388 @@
+---
+# ==============================================================
+- name: App Cookie Stickiness (check_mode)
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    stickiness: "{{ app_stickiness }}"
+  register: result
+  check_mode: true
+
+- ansible.builtin.assert:
+    that:
+      - result is changed
+
+- name: App Cookie Stickiness
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    stickiness: "{{ app_stickiness }}"
+  register: result
+
+- ansible.builtin.assert:
+    that:
+      - result is changed
+
+- name: App Cookie Stickiness - idempotency (check_mode)
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    stickiness: "{{ app_stickiness }}"
+  register: result
+  check_mode: true
+
+- ansible.builtin.assert:
+    that:
+      - result is not changed
+
+- name: App Cookie Stickiness - idempotency
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    stickiness: "{{ app_stickiness }}"
+  register: result
+
+- ansible.builtin.assert:
+    that:
+      - result is not changed
+
+# ==============================================================
+- name: Update App Cookie Stickiness (check_mode)
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    stickiness: "{{ updated_app_stickiness }}"
+  register: result
+  check_mode: true
+
+- ansible.builtin.assert:
+    that:
+      - result is changed
+
+- name: Update App Cookie Stickiness
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    stickiness: "{{ updated_app_stickiness }}"
+  register: result
+
+- ansible.builtin.assert:
+    that:
+      - result is changed
+
+- name: Update App Cookie Stickiness - idempotency (check_mode)
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    stickiness: "{{ updated_app_stickiness }}"
+  register: result
+  check_mode: true
+
+- ansible.builtin.assert:
+    that:
+      - result is not changed
+
+- name: Update App Cookie Stickiness - idempotency
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    stickiness: "{{ updated_app_stickiness }}"
+  register: result
+
+- ansible.builtin.assert:
+    that:
+      - result is not changed
+
+# ==============================================================
+
+- name: Disable Stickiness (check_mode)
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    stickiness:
+      enabled: false
+  register: result
+  check_mode: true
+
+- ansible.builtin.assert:
+    that:
+      - result is changed
+
+- name: Disable Stickiness
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    stickiness:
+      enabled: false
+  register: result
+
+- ansible.builtin.assert:
+    that:
+      - result is changed
+
+- name: Disable Stickiness - idempotency (check_mode)
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    stickiness:
+      enabled: false
+  register: result
+  check_mode: true
+
+- ansible.builtin.assert:
+    that:
+      - result is not changed
+
+- name: Disable Stickiness - idempotency
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    stickiness:
+      enabled: false
+  register: result
+
+- ansible.builtin.assert:
+    that:
+      - result is not changed
+
+# ==============================================================
+
+- name: Re-enable App Stickiness (check_mode)
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    stickiness: "{{ app_stickiness }}"
+  register: result
+  check_mode: true
+
+- ansible.builtin.assert:
+    that:
+      - result is changed
+
+- name: Re-enable App Stickiness
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    stickiness: "{{ app_stickiness }}"
+  register: result
+
+- ansible.builtin.assert:
+    that:
+      - result is changed
+
+- name: Re-enable App Stickiness (check_mode) - idempotency
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    stickiness: "{{ app_stickiness }}"
+  register: result
+  check_mode: true
+
+- ansible.builtin.assert:
+    that:
+      - result is not changed
+
+- name: Re-enable App Stickiness - idempotency
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    stickiness: "{{ app_stickiness }}"
+  register: result
+
+- ansible.builtin.assert:
+    that:
+      - result is not changed
+
+# ==============================================================
+- name: LB Stickiness (check_mode)
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    stickiness: "{{ lb_stickiness }}"
+  register: result
+  check_mode: true
+
+- ansible.builtin.assert:
+    that:
+      - result is changed
+
+- name: LB Stickiness
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    stickiness: "{{ lb_stickiness }}"
+  register: result
+
+- ansible.builtin.assert:
+    that:
+      - result is changed
+
+- name: LB Stickiness - idempotency (check_mode)
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    stickiness: "{{ lb_stickiness }}"
+  register: result
+  check_mode: true
+
+- ansible.builtin.assert:
+    that:
+      - result is not changed
+
+- name: LB Stickiness - idempotency
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    stickiness: "{{ lb_stickiness }}"
+  register: result
+
+- ansible.builtin.assert:
+    that:
+      - result is not changed
+
+# ==============================================================
+- name: Update LB Stickiness (check_mode)
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    stickiness: "{{ updated_lb_stickiness }}"
+  register: result
+  check_mode: true
+
+- ansible.builtin.assert:
+    that:
+      - result is changed
+
+- name: Update LB Stickiness
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    stickiness: "{{ updated_lb_stickiness }}"
+  register: result
+
+- ansible.builtin.assert:
+    that:
+      - result is changed
+
+- name: Update LB Stickiness - idempotency (check_mode)
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    stickiness: "{{ updated_lb_stickiness }}"
+  register: result
+  check_mode: true
+
+- ansible.builtin.assert:
+    that:
+      - result is not changed
+
+- name: Update LB Stickiness - idempotency
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    stickiness: "{{ updated_lb_stickiness }}"
+  register: result
+
+- ansible.builtin.assert:
+    that:
+      - result is not changed
+
+# ==============================================================
+
+- name: Disable Stickiness (check_mode)
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    stickiness:
+      enabled: false
+  register: result
+  check_mode: true
+
+- ansible.builtin.assert:
+    that:
+      - result is changed
+
+- name: Disable Stickiness
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    stickiness:
+      enabled: false
+  register: result
+
+- ansible.builtin.assert:
+    that:
+      - result is changed
+
+- name: Disable Stickiness - idempotency (check_mode)
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    stickiness:
+      enabled: false
+  register: result
+  check_mode: true
+
+- ansible.builtin.assert:
+    that:
+      - result is not changed
+
+- name: Disable Stickiness - idempotency
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    stickiness:
+      enabled: false
+  register: result
+
+- ansible.builtin.assert:
+    that:
+      - result is not changed
+
+# ==============================================================
+
+- name: Re-enable LB Stickiness (check_mode)
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    stickiness: "{{ updated_lb_stickiness }}"
+  register: result
+  check_mode: true
+
+- ansible.builtin.assert:
+    that:
+      - result is changed
+
+- name: Re-enable LB Stickiness
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    stickiness: "{{ updated_lb_stickiness }}"
+  register: result
+
+- ansible.builtin.assert:
+    that:
+      - result is changed
+
+- name: Re-enable LB Stickiness - idempotency (check_mode)
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    stickiness: "{{ updated_lb_stickiness }}"
+  register: result
+  check_mode: true
+
+- ansible.builtin.assert:
+    that:
+      - result is not changed
+
+- name: Re-enable LB Stickiness - idempotency
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    stickiness: "{{ updated_lb_stickiness }}"
+  register: result
+
+- ansible.builtin.assert:
+    that:
+      - result is not changed

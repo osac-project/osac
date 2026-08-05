@@ -1,0 +1,139 @@
+---
+# This rule is not used by the project bare-metal-fulfillment-operator itself.
+# It is provided to allow the cluster admin to help manage permissions for users.
+#
+# Grants permissions to create, update, and delete resources within the osac.openshift.io.
+# This role is intended for users who need to manage these resources
+# but should not control RBAC or manage permissions for others.
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    {{- include "bare-metal-fulfillment-operator.labels" . | nindent 4 }}
+    rbac.authorization.k8s.io/aggregate-to-edit: "true"
+  name: {{ include "bare-metal-fulfillment-operator.fullname" . }}-baremetalpool-editor-role
+rules:
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - baremetalpools
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - baremetalpools/status
+  verbs:
+  - get
+---
+# This rule is not used by the project bare-metal-fulfillment-operator itself.
+# It is provided to allow the cluster admin to help manage permissions for users.
+#
+# Grants read-only access to osac.openshift.io resources.
+# This role is intended for users who need visibility into these resources
+# without permissions to modify them. It is ideal for monitoring purposes and limited-access viewing.
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    {{- include "bare-metal-fulfillment-operator.labels" . | nindent 4 }}
+    rbac.authorization.k8s.io/aggregate-to-view: "true"
+  name: {{ include "bare-metal-fulfillment-operator.fullname" . }}-baremetalpool-viewer-role
+rules:
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - baremetalpools
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - baremetalpools/status
+  verbs:
+  - get
+---
+# This rule is not used by the project bare-metal-fulfillment-operator itself.
+# It is provided to allow the cluster admin to help manage permissions for users.
+#
+# Grants full permissions ('*') over osac.openshift.io.
+# This role is intended for users authorized to modify roles and bindings within the cluster,
+# enabling them to delegate specific permissions to other users or groups as needed.
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    {{- include "bare-metal-fulfillment-operator.labels" . | nindent 4 }}
+    rbac.authorization.k8s.io/aggregate-to-admin: "true"
+  name: {{ include "bare-metal-fulfillment-operator.fullname" . }}-baremetalpool-admin-role
+rules:
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - baremetalpools
+  verbs:
+  - '*'
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - baremetalpools/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "bare-metal-fulfillment-operator.fullname" . }}-metrics-auth-role
+  labels:
+    {{- include "bare-metal-fulfillment-operator.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - authentication.k8s.io
+  resources:
+  - tokenreviews
+  verbs:
+  - create
+- apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
+  verbs:
+  - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "bare-metal-fulfillment-operator.fullname" . }}-metrics-auth-rolebinding
+  labels:
+    {{- include "bare-metal-fulfillment-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "bare-metal-fulfillment-operator.fullname" . }}-metrics-auth-role
+subjects:
+- kind: ServiceAccount
+  name: {{ include "bare-metal-fulfillment-operator.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "bare-metal-fulfillment-operator.fullname" . }}-metrics-reader
+  labels:
+    {{- include "bare-metal-fulfillment-operator.labels" . | nindent 4 }}
+rules:
+- nonResourceURLs:
+  - "/metrics"
+  verbs:
+  - get

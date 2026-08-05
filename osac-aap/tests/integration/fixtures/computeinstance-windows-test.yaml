@@ -1,0 +1,22 @@
+apiVersion: osac.openshift.io/v1alpha1
+kind: ComputeInstance
+metadata:
+  name: test-windows-vm
+  namespace: osac-system
+  annotations:
+    osac.openshift.io/guest-os-family: windows
+spec:
+  templateID: osac.templates.ocp_virt_vm
+  networkAttachments:
+    - subnetRef: test-subnet
+  cores: 2
+  memoryGiB: 4
+  bootDisk:
+    sizeGiB: 40
+  image:
+    sourceType: registry
+    # Example path for tests/docs only — replace with a Windows container disk from your registry.
+    sourceRef: "registry.example.com/osac/windows-golden:ltsc2022"
+  runStrategy: "Always"
+status:
+  desiredConfigVersion: "1"

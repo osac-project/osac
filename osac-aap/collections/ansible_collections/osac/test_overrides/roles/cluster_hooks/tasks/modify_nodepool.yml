@@ -1,0 +1,12 @@
+---
+- name: Log nodepool modification
+  ansible.builtin.lineinfile:
+    path: /tmp/osac_test_overrides.log
+    line: "{{ ansible_date_time.iso8601 }} | modify_nodepool | {{ nodepool_definition.metadata.name | default(cluster_order_name + '-nodepool') }}"
+    create: true
+
+# Return unmodified definition (or passthrough if not provided in test mode)
+- name: Set modified nodepool definition
+  ansible.builtin.set_fact:
+    nodepool_definition_modified: "{{ nodepool_definition | default({}) }}"
+  when: nodepool_definition is defined

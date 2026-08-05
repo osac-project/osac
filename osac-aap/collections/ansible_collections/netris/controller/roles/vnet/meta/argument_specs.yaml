@@ -1,0 +1,45 @@
+---
+argument_specs:
+  main:
+    options:
+      vnet_state:
+        type: str
+        choices: [present, absent]
+        default: present
+        description: "Whether to create or delete the V-Net."
+
+  create:
+    options:
+      vnet_name:
+        type: str
+        required: true
+        description: "Name of the V-Net."
+      vnet_vpc_id:
+        type: int
+        required: true
+        description: "Netris VPC ID the V-Net belongs to."
+      vnet_site_id:
+        type: int
+        required: true
+        description: "Netris site ID."
+      vnet_tenant_id:
+        type: int
+        description: "Netris tenant ID."
+      vnet_gateway:
+        type: str
+        description: "Gateway prefix (e.g. 10.0.0.1/24). Added to gateways list when defined."
+      vnet_vlan_id:
+        type: str
+        default: auto
+        description: "VLAN ID or 'auto' for automatic assignment."
+      vnet_ports:
+        type: list
+        elements: dict
+        description: "List of port objects to attach to the V-Net."
+
+  delete:
+    options:
+      vnet_name:
+        type: str
+        required: true
+        description: "Name of the V-Net to delete."

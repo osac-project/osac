@@ -1,0 +1,27 @@
+---
+# NATGateway deletion — removes the SNAT rule from Netris
+
+- name: Extract NATGateway name
+  ansible.builtin.set_fact:
+    natgw_name: "{{ nat_gateway.metadata.name }}"
+
+- name: Display NATGateway deletion info
+  ansible.builtin.debug:
+    msg: "Deleting Netris SNAT rule for NATGateway '{{ natgw_name }}'"
+
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Delete SNAT rule for NATGateway
+  ansible.builtin.include_role:
+    name: netris.controller.nat
+    tasks_from: delete
+  vars:
+    nat_name: "{{ natgw_name }}-snat"
+    nat_site_id: "{{ netris_site_id }}"
+
+- name: Display deletion result
+  ansible.builtin.debug:
+    msg: "SNAT rule '{{ natgw_name }}-snat' deletion completed"

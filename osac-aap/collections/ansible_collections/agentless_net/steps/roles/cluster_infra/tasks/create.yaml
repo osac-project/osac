@@ -1,0 +1,279 @@
+---
+- name: Load agentless-net inventory hosts
+  ansible.builtin.include_vars:
+    file: "{{ agentless_net_inventory_file }}"
+    name: _agentless_net_inventory
+
+- name: Register net_nodes in play inventory
+  ansible.builtin.add_host:
+    name: "{{ item.key }}"
+    groups: net_nodes
+    ansible_host: "{{ item.value.ansible_host }}"
+    ansible_user: "{{ item.value.ansible_user }}"
+    ansible_password: "{{ item.value.ansible_password | default(omit) }}"
+    ansible_ssh_common_args: "{{ item.value.ansible_ssh_common_args | default(_agentless_net_inventory.all.vars.ansible_ssh_common_args | default(omit)) }}"
+  loop: "{{ _agentless_net_inventory.all.children.net_nodes.hosts | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Register switches in play inventory
+  ansible.builtin.add_host:
+    name: "{{ item.key }}"
+    groups: switches
+    ansible_host: "{{ item.value.ansible_host }}"
+    ansible_user: "{{ item.value.ansible_user }}"
+    ansible_password: "{{ item.value.ansible_password | default(omit) }}"
+    ansible_become_password: "{{ item.value.ansible_become_password | default(omit) }}"
+    ansible_network_os: "{{ item.value.ansible_network_os | default(omit) }}"
+    ansible_ssh_common_args: "{{ item.value.ansible_ssh_common_args | default(_agentless_net_inventory.all.vars.ansible_ssh_common_args | default(omit)) }}"
+    access_ports: "{{ item.value.access_ports | default({}) }}"
+  loop: "{{ _agentless_net_inventory.all.children.switches.hosts | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Show node requests
+  ansible.builtin.debug:
+    var: cluster_infra_node_requests
+
+# --- Select agents ---
+
+- name: Select and label agents
+  ansible.builtin.include_role:
+    name: osac.service.manage_agents
+    tasks_from: select_and_label_new_agents
+  vars:
+    manage_agents_cluster_order_name: "{{ cluster_infra_name }}"
+    manage_agents_desired_count: "{{ item.numberOfNodes | int }}"
+    manage_agents_resource_class: "{{ item.resourceClass }}"
+  loop: "{{ cluster_infra_node_requests }}"
+
+- name: Get agents allocated to this cluster
+  kubernetes.core.k8s_info:
+    kind: Agent
+    api_version: agent-install.openshift.io/v1beta1
+    namespace: "{{ default_agent_namespace }}"
+    label_selectors:
+      - "{{ cluster_order_label }}={{ cluster_infra_name }}"
+  register: cluster_infra_selected_agents
+
+- name: Build allocated host IDs from selected agents
+  ansible.builtin.set_fact:
+    cluster_infra_allocated_host_ids: >-
+      {{ cluster_infra_selected_agents.resources
+         | json_query('[].metadata.annotations."' + agent_host_uuid_label + '"') }}
+
+- name: Fail if any selected agent is missing a host UUID annotation
+  ansible.builtin.fail:
+    msg: >-
+      Expected {{ cluster_infra_selected_agents.resources | length }} host IDs
+      but got {{ cluster_infra_allocated_host_ids | length }}.
+      Some agents are missing the osac.openshift.io/host_uuid annotation.
+  when: cluster_infra_allocated_host_ids | length != cluster_infra_selected_agents.resources | length
+
+- name: Display allocated host IDs
+  ansible.builtin.debug:
+    msg: "Allocated host IDs: {{ cluster_infra_allocated_host_ids }}"
+
+# --- agentless_net: allocate VLAN and configure switches ---
+
+- name: Allocate VLAN for cluster  # noqa: no-changed-when
+  environment:
+    ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
+    ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
+  ansible.builtin.command:
+    cmd: >
+      ansible-playbook
+      -i {{ agentless_net_inventory_file }}
+      -e ipam_state_file={{ agentless_net_net_node_ipam_state_file }}
+      -e ipam_vlan_pool_start={{ agentless_net_vlan_pool_start }}
+      -e ipam_vlan_pool_end={{ agentless_net_vlan_pool_end }}
+      -e ipam_purpose={{ cluster_infra_state_key }}
+      {{ role_path }}/playbooks/ipam_allocate_vlan.yaml
+
+- name: Read allocated VLAN from state file
+  ansible.builtin.slurp:
+    src: "{{ agentless_net_net_node_ipam_state_file }}"
+  delegate_to: "{{ groups['net_nodes'][0] }}"
+  register: cluster_infra_ipam_state_raw
+
+- name: Set allocated VLAN fact
+  ansible.builtin.set_fact:
+    cluster_infra_vlan_id: "{{ (cluster_infra_ipam_state_raw.content | b64decode | from_json).vlans[cluster_infra_state_key] }}"
+
+- name: Display allocated VLAN
+  ansible.builtin.debug:
+    msg: "Allocated VLAN {{ cluster_infra_vlan_id }} for cluster {{ cluster_infra_name }}"
+
+- name: Create VLAN on switches  # noqa: no-changed-when
+  environment:
+    ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
+    ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
+  ansible.builtin.command:
+    cmd: >
+      ansible-playbook
+      -i {{ agentless_net_inventory_file }}
+      -e vlan_id={{ cluster_infra_vlan_id }}
+      {{ role_path }}/playbooks/l2_create_vlan.yaml
+
+- name: Store allocated host IDs in network state  # noqa: no-changed-when
+  ansible.builtin.raw: |
+    python3 - '{{ agentless_net_net_node_ipam_state_file }}' \
+              '{{ cluster_infra_state_key }}' \
+              '{{ cluster_infra_allocated_host_ids | to_json }}' <<'STATE_PY'
+    import fcntl, json, os, sys
+    state_file, cluster_name, host_ids_json = sys.argv[1:4]
+    host_ids = json.loads(host_ids_json)
+    with open(state_file, 'r+') as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        state = json.load(f)
+        state.setdefault('host_allocations', {})[cluster_name] = host_ids
+        f.seek(0)
+        f.write(json.dumps(state, indent=2))
+        f.truncate()
+        f.flush()
+        os.fsync(f.fileno())
+    STATE_PY
+  delegate_to: "{{ groups['net_nodes'][0] }}"
+
+# --- agentless_net: set access ports for allocated hosts ---
+
+- name: Collect access port entries from switch inventory
+  ansible.builtin.set_fact:
+    cluster_infra_switch_port_entries: >-
+      {{ cluster_infra_switch_port_entries | default([]) +
+         (hostvars[item].access_ports | default({}) | dict2items
+          | map('combine', {'switch': item}) | list) }}
+  loop: "{{ groups['switches'] }}"
+
+- name: Build host-to-port mapping
+  ansible.builtin.set_fact:
+    cluster_infra_host_port_map: >-
+      {{ cluster_infra_host_port_map | default({}) | combine({
+        item.value: {'switch': item.switch, 'port': item.key}
+      }) }}
+  loop: "{{ cluster_infra_switch_port_entries }}"
+  loop_control:
+    label: "{{ item.switch }}:{{ item.key }} -> {{ item.value }}"
+
+- name: Verify all allocated hosts have switch-port mappings
+  ansible.builtin.fail:
+    msg: >-
+      Host '{{ item }}' has no switch-port mapping in the inventory.
+      Ensure all hosts are listed in a switch's access_ports.
+  loop: "{{ cluster_infra_allocated_host_ids }}"
+  when: item not in cluster_infra_host_port_map
+
+- name: Set access ports for allocated hosts  # noqa: no-changed-when
+  environment:
+    ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
+    ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
+  ansible.builtin.command:
+    cmd: >
+      ansible-playbook
+      -i {{ agentless_net_inventory_file }}
+      -e vlan_id={{ cluster_infra_vlan_id }}
+      -e port_name={{ cluster_infra_host_port_map[item].port }}
+      -l {{ cluster_infra_host_port_map[item].switch }}
+      {{ role_path }}/playbooks/l2_set_access_port.yaml
+  loop: "{{ cluster_infra_allocated_host_ids }}"
+  loop_control:
+    label: "Host {{ item }} -> {{ cluster_infra_host_port_map[item].switch }}:{{ cluster_infra_host_port_map[item].port }}"
+
+# --- agentless_net: create L3 router namespace and SNAT ---
+
+- name: Compute veth addresses for router namespace
+  ansible.builtin.set_fact:
+    cluster_infra_veth_index: "{{ (cluster_infra_vlan_id | int - agentless_net_vlan_pool_start | int) * 4 }}"
+    cluster_infra_veth_octet3: "{{ ((cluster_infra_vlan_id | int - agentless_net_vlan_pool_start | int) * 4) // 256 }}"
+    cluster_infra_veth_octet4: "{{ ((cluster_infra_vlan_id | int - agentless_net_vlan_pool_start | int) * 4) % 256 }}"
+
+- name: Set external veth addresses
+  ansible.builtin.set_fact:
+    cluster_infra_external_peer_ip: "10.254.{{ cluster_infra_veth_octet3 }}.{{ cluster_infra_veth_octet4 | int + 1 }}/30"
+    cluster_infra_external_router_ip: "10.254.{{ cluster_infra_veth_octet3 }}.{{ cluster_infra_veth_octet4 | int + 2 }}/30"
+    cluster_infra_external_gateway: "10.254.{{ cluster_infra_veth_octet3 }}.{{ cluster_infra_veth_octet4 | int + 1 }}"
+
+- name: Compute subnet gateway
+  ansible.builtin.set_fact:
+    cluster_infra_subnet_gateway: "{{ agentless_net_subnet_cidr | ansible.utils.ipaddr('next_usable') }}"
+
+- name: Display L3 router configuration
+  ansible.builtin.debug:
+    msg:
+      - "Router: {{ cluster_infra_name }}, VLAN: {{ cluster_infra_vlan_id }}"
+      - "Subnet: {{ agentless_net_subnet_cidr }}, Gateway: {{ cluster_infra_subnet_gateway }}"
+      - "External link: {{ cluster_infra_external_router_ip }} <-> {{ cluster_infra_external_peer_ip }}"
+
+- name: Store veth IPs in network state  # noqa: no-changed-when
+  ansible.builtin.raw: |
+    python3 - '{{ agentless_net_net_node_ipam_state_file }}' \
+              '{{ cluster_infra_state_key }}' \
+              '{{ cluster_infra_external_peer_ip }}' \
+              '{{ cluster_infra_external_router_ip }}' <<'STATE_PY'
+    import fcntl, json, os, sys
+    state_file, cluster_name, host_ip, ns_ip = sys.argv[1:5]
+    with open(state_file, 'r+') as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        state = json.load(f)
+        state.setdefault('veth_state', {})[cluster_name] = {
+            'host_ip': host_ip,
+            'ns_ip': ns_ip
+        }
+        f.seek(0)
+        f.write(json.dumps(state, indent=2))
+        f.truncate()
+        f.flush()
+        os.fsync(f.fileno())
+    STATE_PY
+  delegate_to: "{{ groups['net_nodes'][0] }}"
+
+- name: Create L3 router namespace  # noqa: no-changed-when
+  environment:
+    ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
+    ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
+  ansible.builtin.command:
+    cmd: >
+      ansible-playbook
+      -i {{ agentless_net_inventory_file }}
+      -e router_name={{ cluster_infra_name }}
+      -e router_vlan_id={{ cluster_infra_vlan_id }}
+      -e router_internal_subnet={{ agentless_net_subnet_cidr }}
+      -e router_internal_gateway={{ cluster_infra_subnet_gateway }}
+      -e router_trunk_interface={{ agentless_net_trunk_interface }}
+      -e router_external_ip={{ cluster_infra_external_router_ip }}
+      -e router_external_peer_ip={{ cluster_infra_external_peer_ip }}
+      -e router_external_gateway={{ cluster_infra_external_gateway }}
+      {{ role_path }}/playbooks/l3_create_router.yaml
+
+- name: Compute veth namespace-side interface name
+  ansible.builtin.set_fact:
+    cluster_infra_snat_veth_ns: "v{{ cluster_infra_name | hash('md5') | truncate(11, True, '') }}i"
+
+- name: Configure SNAT for outbound internet access  # noqa: no-changed-when
+  environment:
+    ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
+    ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
+  ansible.builtin.command:
+    cmd: >
+      ansible-playbook
+      -i {{ agentless_net_inventory_file }}
+      -e snat_router_name={{ cluster_infra_name }}
+      -e snat_source_subnet={{ agentless_net_subnet_cidr }}
+      -e snat_veth_interface={{ cluster_infra_snat_veth_ns }}
+      -e snat_external_subnet={{ cluster_infra_external_peer_ip | ansible.utils.ipaddr('network/prefix') }}
+      -e snat_external_interface={{ agentless_net_external_interface }}
+      {{ role_path }}/playbooks/l3_create_snat.yaml
+
+# --- Approve agents and attach to cluster ---
+
+- name: Approve agents and attach to cluster
+  ansible.builtin.include_role:
+    name: osac.service.manage_agents
+    tasks_from: attach_and_approve_all_new_agents
+  vars:
+    manage_agents_cluster_order_name: "{{ cluster_infra_name }}"
+    # agentless_net handles L2 config directly — skip the ESI network attach.
+    # "unused" is a dummy value; the role requires this param but never reads
+    # it when skip_network_attach is true.
+    manage_agents_cluster_network: "unused"
+    manage_agents_skip_network_attach: true

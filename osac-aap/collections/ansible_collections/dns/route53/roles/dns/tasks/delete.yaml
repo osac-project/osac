@@ -1,0 +1,11 @@
+---
+- name: "Delete DNS record via Route 53 - {{ dns_record_name }}"
+  amazon.aws.route53:
+    state: absent
+    zone: "{{ dns_zone }}"
+    record: "{{ dns_record_name }}"
+    type: "{{ dns_record_type }}"
+    wait: true
+    access_key: "{{ lookup('env', 'AWS_ACCESS_KEY_ID') | trim }}"
+    secret_key: "{{ lookup('env', 'AWS_SECRET_ACCESS_KEY') | trim }}"
+  no_log: true

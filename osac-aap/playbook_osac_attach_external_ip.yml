@@ -1,0 +1,27 @@
+---
+- name: Attach an ExternalIP to a target resource
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    external_ip_attachment: "{{ ansible_eda.event.payload }}"
+    implementation_strategy: >-
+      {{ ansible_eda.event.payload.metadata.annotations['osac.openshift.io/implementation-strategy'] }}
+    template_parameters: {}
+
+  pre_tasks:
+    - name: Show EDA Event
+      ansible.builtin.debug:
+        var: ansible_eda.event.payload
+
+  tasks:
+    - name: Display ExternalIP attach information
+      ansible.builtin.debug:
+        msg:
+          - "ExternalIP attachment name: {{ ansible_eda.event.payload.metadata.name }}"
+          - "Implementation strategy: {{ implementation_strategy }}"
+
+    - name: Call the selected ExternalIP attach role
+      ansible.builtin.include_role:
+        name: "{{ template_id_override | default('osac.templates.' + (implementation_strategy | replace('-', '_'))) }}"
+        tasks_from: attach_external_ip

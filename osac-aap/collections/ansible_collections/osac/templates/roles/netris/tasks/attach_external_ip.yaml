@@ -1,0 +1,84 @@
+---
+# ExternalIPAttachment maps to a Netris DNAT rule
+# Creates a DNAT rule on the SoftGate: external IP -> internal target IP
+# Resolves the external IP address from the ExternalIP CR (same model as
+# ExternalIP resolving from ExternalIPPool)
+
+- name: Validate ExternalIPAttachment annotations
+  ansible.builtin.assert:
+    that:
+      - external_ip_attachment.metadata is defined
+      - external_ip_attachment.metadata.annotations is defined
+      - "'osac.openshift.io/externalip-name' in external_ip_attachment.metadata.annotations"
+      - "'osac.openshift.io/target-ip' in external_ip_attachment.metadata.annotations"
+    fail_msg: >-
+      ExternalIPAttachment requires annotations
+      'osac.openshift.io/externalip-name' (ExternalIP CR name) and
+      'osac.openshift.io/target-ip' (resolved internal IP).
+
+- name: Extract ExternalIPAttachment configuration
+  ansible.builtin.set_fact:
+    attachment_name: "{{ external_ip_attachment.metadata.name }}"
+    attachment_namespace: "{{ external_ip_attachment.metadata.namespace }}"
+    attachment_externalip_name: >-
+      {{ external_ip_attachment.metadata.annotations['osac.openshift.io/externalip-name'] }}
+    attachment_target_ip: >-
+      {{ external_ip_attachment.metadata.annotations['osac.openshift.io/target-ip'] }}
+
+- name: Look up ExternalIP CR to get allocated address
+  kubernetes.core.k8s_info:
+    api_version: osac.openshift.io/v1alpha1
+    kind: ExternalIP
+    name: "{{ attachment_externalip_name }}"
+    namespace: "{{ attachment_namespace }}"
+  register: _eip_lookup
+
+- name: Validate ExternalIP CR found with allocated address
+  ansible.builtin.assert:
+    that:
+      - _eip_lookup.resources | length > 0
+      - _eip_lookup.resources[0].metadata.annotations['osac.openshift.io/allocated-address'] is defined
+    fail_msg: >-
+      ExternalIP '{{ attachment_externalip_name }}' not found or missing
+      'osac.openshift.io/allocated-address' annotation. The ExternalIP must
+      be allocated before creating an attachment.
+
+- name: Extract allocated external IP address
+  ansible.builtin.set_fact:
+    attachment_external_ip: >-
+      {{ _eip_lookup.resources[0].metadata.annotations['osac.openshift.io/allocated-address'] }}
+
+- name: Display ExternalIPAttachment information
+  ansible.builtin.debug:
+    msg:
+      - "Creating Netris DNAT rule for ExternalIPAttachment '{{ attachment_name }}'"
+      - "External IP: {{ attachment_external_ip }} (from ExternalIP '{{ attachment_externalip_name }}')"
+      - "Target IP: {{ attachment_target_ip }}"
+
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Create DNAT rule for ExternalIPAttachment
+  ansible.builtin.include_role:
+    name: netris.controller.nat
+    tasks_from: create
+  vars:
+    nat_name: "{{ attachment_name }}-dnat"
+    nat_site_id: "{{ netris_site_id }}"
+    nat_vpc_id: "{{ netris_mgmt_vpc_id }}"
+    nat_vpc_name: "{{ netris_mgmt_vpc_name | default('') }}"
+    nat_action: dnat
+    nat_protocol: all
+    nat_destination_address: "{{ attachment_external_ip }}/32"
+    nat_dnat_to_ip: "{{ attachment_target_ip }}/32"
+    nat_comment: "OSAC ExternalIPAttachment {{ attachment_name }}"
+
+- name: Display DNAT rule creation result
+  ansible.builtin.debug:
+    msg: >-
+      DNAT rule '{{ attachment_name }}-dnat'
+      {{ (nat_already_existed | default(false)) | ternary('already exists', 'created successfully') }}
+      (ID: {{ nat_id | default('unknown') }})
+      — {{ attachment_external_ip }} -> {{ attachment_target_ip }}

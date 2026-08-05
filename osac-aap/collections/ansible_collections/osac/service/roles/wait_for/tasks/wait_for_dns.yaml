@@ -1,0 +1,8 @@
+- name: Wait for DNS record {{ wait_for_dns_record }}
+  ansible.builtin.command: >-
+      dig +noall +answer {{ wait_for_dns_record }}
+  register: wait_for_dns_info
+  changed_when: false
+  until: (wait_for_dns_info.stdout | length > 0)
+  retries: "{{ wait_for_dns_retries }}"
+  delay: "{{ wait_for_dns_delay }}"

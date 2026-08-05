@@ -1,0 +1,142 @@
+---
+# Integration test for setup rescue/rollback path.
+# Injects a failure on view creation so setup hits the rescue block,
+# which calls delete_qos_policy.yaml with _provider_tiers (not _vast_teardown_tiers).
+# Verifies the rollback completes without undefined variable errors.
+# Requires: mock VMS server on 127.0.0.1:18443, kind cluster with osac-system namespace.
+
+# ── Setup: Clean slate + inject failure ──
+- name: "Storage Provider Setup Rollback - Prepare"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Delete any pre-existing hub Secret
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "vast-tenant-config-test-rollback"
+        namespace: "osac-system"
+      failed_when: false
+
+    - name: Inject failure on manager creation (triggers rescue block)
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18443/_inject_failure"
+        validate_certs: false
+        method: POST
+        body_format: json
+        body:
+          resource: managers
+          method: POST
+          status: 500
+          body:
+            error: "injected: simulating manager creation failure"
+
+# ── Test: Setup should fail but rescue should complete cleanly ──
+- name: "Storage Provider Setup Rollback - Run setup (expect failure)"
+  hosts: localhost
+  gather_facts: false
+
+  environment:
+    VAST_ENDPOINT: "127.0.0.1:18443"
+    VAST_USERNAME: "admin"
+    VAST_PASSWORD: "admin"
+    VAST_VIP_POOL_NAME: "osac-test-pool"
+    VAST_VIP_POOL_IP_RANGES: '[["10.0.0.10","10.0.0.50"]]'
+    VAST_VIP_POOL_SUBNET_CIDR: "24"
+    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
+
+  vars:
+    tenant_name: "test-rollback"
+    tenant_namespace: "osac-system"
+    tenant_uid: "test-uid-rollback"
+    storage_provider_tiers:
+      - name: default
+        protocol: nfs
+        provider: vast
+        qos_policy: rollback-qos
+        qos_limits:
+          static_limits:
+            max_reads_bw_mbps: 100
+    storage_provider_action: setup
+    storage_provider_provisioning_target: vmaas
+    storage_provider_snapshots_enabled: false
+    vast_storage_validate_certs: false
+
+  tasks:
+    - name: Run setup and capture failure
+      block:
+        - name: Call storage_provider role with setup action (should fail)
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_action: setup
+
+        - name: Fail test if setup unexpectedly succeeded
+          ansible.builtin.fail:
+            msg: "Setup should have failed due to injected view creation error but succeeded"
+
+      rescue:
+        - name: Assert setup failed as expected (rescue block executed)
+          ansible.builtin.debug:
+            msg: "Setup failed as expected — rescue block executed: {{ ansible_failed_result.msg | default('') }}"
+
+# ── Verify: Rollback cleaned up and no undefined variable crash ──
+- name: "Storage Provider Setup Rollback - Verify cleanup"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Get mock server call log
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18443/_calls"
+        validate_certs: false
+        method: GET
+        return_content: true
+      register: _mock_calls
+
+    - name: Assert rollback queried VMS resources for cleanup
+      ansible.builtin.assert:
+        that:
+          - _mock_calls.json | selectattr('path', 'search', 'views.*tenant_id=') | selectattr('method', 'equalto', 'GET') | list | length > 0
+            or _mock_calls.json | selectattr('path', 'search', 'qospolicies.*tenant_id=') | selectattr('method', 'equalto', 'GET') | list | length > 0
+        fail_msg: "Rollback did not query VMS resources by tenant_id for cleanup"
+        success_msg: "Rollback queried VMS resources by tenant_id"
+
+    - name: Assert rollback attempted tenant deletion
+      ansible.builtin.assert:
+        that:
+          - _mock_calls.json | selectattr('path', 'search', 'tenants') | selectattr('method', 'equalto', 'DELETE') | list | length > 0
+        fail_msg: "Rollback did not attempt tenant deletion"
+        success_msg: "Rollback attempted tenant deletion"
+
+    - name: Verify hub Secret was NOT persisted (rollback should prevent it)
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "vast-tenant-config-test-rollback"
+        namespace: "osac-system"
+      register: _hub_secret_check
+
+    - name: Assert hub Secret does not exist after rollback
+      ansible.builtin.assert:
+        that:
+          - _hub_secret_check.resources | length == 0
+        fail_msg: "Hub Secret should not exist after setup rollback"
+        success_msg: "Hub Secret correctly absent after rollback"
+
+# ── Cleanup ──
+- name: "Storage Provider Setup Rollback - Cleanup"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Delete hub Secret if somehow created
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "vast-tenant-config-test-rollback"
+        namespace: "osac-system"
+      failed_when: false

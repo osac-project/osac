@@ -1,0 +1,11 @@
+---
+- name: Log VM delete post_delete_hook step execution
+  ansible.builtin.lineinfile:
+    path: /tmp/osac_test_overrides.log
+    line: "{{ ansible_date_time.iso8601 }} | vm_delete_post_delete_hook | {{ compute_instance_name }}"
+    create: true
+
+- name: Delegate to original post_delete_hook role
+  ansible.builtin.include_role:
+    name: osac.templates.ocp_virt_vm
+    tasks_from: delete_post_delete_hook.yaml

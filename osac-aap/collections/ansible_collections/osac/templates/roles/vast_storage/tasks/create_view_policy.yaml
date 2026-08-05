@@ -1,0 +1,48 @@
+---
+# Creates a per-tenant, per-protocol VAST view policy using the vendored
+# vastdata.vms.viewpolicies module.
+# The policy is named osac-{tenant_name}-{protocol} and uses NFS flavor.
+# NFS flavor is used for all protocols because VAST only supports nfs and
+# smb flavors. The VAST API requires a policy_id for all view creation
+# (including block views), but block access control uses host NQN mappings
+# — the NFS export rules in this policy are inert for block views.
+# Idempotent: the module handles create-or-update via state: present.
+#
+# Requires in scope:
+#   _vast_vms_conn      — VAST VMS connection dict
+#   _vast_tenant_id     — VAST tenant ID (from hub Secret or tenant creation result)
+#   _vast_vp_protocol   — protocol for this view policy (nfs or block)
+#   tenant_name         — play-level var
+#
+# Accumulates into:
+#   _vast_view_policy_ids         — dict mapping protocol → policy ID
+#   _vast_view_policy_names       — dict mapping protocol → policy name
+
+- name: Set view policy name for protocol
+  ansible.builtin.set_fact:
+    _vast_view_policy_name: "osac-{{ tenant_name }}-{{ _vast_vp_protocol }}"
+
+- name: Create per-tenant view policy for {{ _vast_vp_protocol }}
+  vastdata.vms.viewpolicies:
+    vms: "{{ _vast_vms_conn }}"
+    name: "{{ _vast_view_policy_name }}"
+    flavor: NFS
+    tenant_id: "{{ _vast_tenant_id }}"
+    state: present
+  register: _vast_view_policy_result
+  no_log: true
+
+- name: Set view policy ID from result
+  ansible.builtin.set_fact:
+    _vast_view_policy_id: "{{ _vast_view_policy_result.viewpolicies.id }}"
+
+- name: Accumulate view policy ID and name by protocol
+  ansible.builtin.set_fact:
+    _vast_view_policy_ids: >-
+      {{ (_vast_view_policy_ids | default({})) | combine({_vast_vp_protocol: _vast_view_policy_id | string}) }}
+    _vast_view_policy_names: >-
+      {{ (_vast_view_policy_names | default({})) | combine({_vast_vp_protocol: _vast_view_policy_name}) }}
+
+- name: Log view policy creation result
+  ansible.builtin.debug:
+    msg: "View policy '{{ _vast_view_policy_name }}' ensured for {{ _vast_vp_protocol }} (id: {{ _vast_view_policy_id }})"

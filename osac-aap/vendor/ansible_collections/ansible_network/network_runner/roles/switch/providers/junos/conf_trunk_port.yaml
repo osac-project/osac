@@ -1,0 +1,15 @@
+---
+- name: "junos: configure trunk port"
+  junos_command:
+    commands:
+      - config
+      - "delete interfaces {{ port_name }}"
+      - "set interfaces {{ port_name }} unit 0 family ethernet-switching interface-mode trunk"
+      - "set interfaces {{ port_name }} native-vlan {{ _vlan_id }}"
+      - "set interfaces {{ port_name }} unit 0 family ethernet-switching vlan members [{{ _vlan_id }}{% for vlan in trunked_vlans %} {{ vlan }}{% endfor %}]"
+      - commit
+  register: result
+  retries: "{{ _retries }}"
+  delay: "{{ _delay }}"
+  until: result.msg is not defined or result.msg.find(junos_retries_msg) == -1
+  connection: network_cli

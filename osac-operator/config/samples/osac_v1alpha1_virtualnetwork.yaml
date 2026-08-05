@@ -1,0 +1,13 @@
+apiVersion: osac.openshift.io/v1alpha1
+kind: VirtualNetwork
+metadata:
+  labels:
+    app.kubernetes.io/name: osac-operator
+    app.kubernetes.io/managed-by: kustomize
+    osac.openshift.io/virtualnetwork-uuid: 00000000-0000-0000-0000-000000000000
+  name: virtualnetwork-sample
+spec:
+  implementationStrategy: cudn_net
+  region: us-west-1
+  networkClass: cudn-net
+  ipv4Cidr: "10.0.0.0/16"

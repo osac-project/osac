@@ -1,0 +1,233 @@
+---
+# Integration test for chained setup → ensure_storage_class onboarding flow.
+# Validates the credential handoff: ensure_storage_class reads the real hub
+# Secret created by setup (no fixture injection).
+# Requires: mock VMS server on 127.0.0.1:18443, kind cluster with osac-system namespace.
+
+# ── Setup: Reset state ──
+- name: "Storage Onboarding - Reset state"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Delete pre-existing test resources (clean slate)
+      block:
+        - name: Delete hub Secret if exists
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Secret
+            name: "vast-tenant-config-test-onboard"
+            namespace: "osac-system"
+          failed_when: false
+
+        - name: Delete CSI Secret if exists
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Secret
+            name: "vast-csi-test-onboard"
+            namespace: "osac-system"
+          failed_when: false
+
+        - name: Delete StorageClass if exists
+          kubernetes.core.k8s:
+            state: absent
+            api_version: storage.k8s.io/v1
+            kind: StorageClass
+            name: "vast-nfs-test-onboard-default"
+          failed_when: false
+
+        - name: Delete VolumeSnapshotClass if exists
+          kubernetes.core.k8s:
+            state: absent
+            api_version: snapshot.storage.k8s.io/v1
+            kind: VolumeSnapshotClass
+            name: "vast-snapshot-test-onboard-default"
+          failed_when: false
+
+# ── Test: Chained setup → ensure_storage_class ──
+- name: "Storage Onboarding - Run chained setup and ensure_storage_class"
+  hosts: localhost
+  gather_facts: false
+
+  environment:
+    VAST_ENDPOINT: "127.0.0.1:18443"
+    VAST_USERNAME: "admin"
+    VAST_PASSWORD: "admin"
+    VAST_VIP_POOL_NAME: "osac-test-pool"
+    VAST_VIP_POOL_IP_RANGES: '[["10.0.0.10","10.0.0.50"]]'
+    VAST_VIP_POOL_SUBNET_CIDR: "24"
+    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
+
+  vars:
+    tenant_name: "test-onboard"
+    tenant_namespace: "osac-system"
+    tenant_uid: "test-uid-12345"
+    _cluster_name: "test-cluster"
+    storage_provider_tiers:
+      - name: default
+        protocol: nfs
+        provider: vast
+    storage_provider_snapshots_enabled: false
+    vast_storage_validate_certs: false
+
+  tasks:
+    - name: Run storage provider setup
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: setup
+
+    - name: Run ensure_storage_class (uses real hub Secret from setup)
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: ensure_storage_class
+
+# ── Verify: Both hub Secret and StorageClass exist ──
+- name: "Storage Onboarding - Verify results"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: "test-onboard"
+
+  tasks:
+    - name: Read hub Secret
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "vast-tenant-config-test-onboard"
+        namespace: "osac-system"
+      register: _hub_secret
+
+    - name: Assert hub Secret exists
+      ansible.builtin.assert:
+        that:
+          - _hub_secret.resources | length == 1
+        fail_msg: "Hub Secret 'vast-tenant-config-test-onboard' was not created by setup"
+        success_msg: "Hub Secret exists"
+
+    - name: Decode hub Secret manager credentials
+      ansible.builtin.set_fact:
+        _hub_csi_username: "{{ _hub_secret.resources[0].data.tenant_manager_username | b64decode }}"
+      no_log: true
+
+    - name: Read StorageClass
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "vast-nfs-test-onboard-default"
+      register: _sc_result
+
+    - name: Assert StorageClass exists
+      ansible.builtin.assert:
+        that:
+          - _sc_result.resources | length == 1
+        fail_msg: "StorageClass 'vast-nfs-test-onboard-default' was not created"
+        success_msg: "StorageClass exists"
+
+    - name: Assert StorageClass parameters
+      ansible.builtin.assert:
+        that:
+          - _sc_result.resources[0].parameters.vip_pool_name == "osac-test-pool"
+          - _sc_result.resources[0].parameters.root_export == "/osac-test-onboard-d0f7f176/default"
+          - "_sc_result.resources[0].parameters['csi.storage.k8s.io/provisioner-secret-name'] == 'vast-csi-test-onboard'"
+          - "_sc_result.resources[0].parameters['csi.storage.k8s.io/provisioner-secret-namespace'] == 'osac-system'"
+        fail_msg: "StorageClass parameters incorrect: {{ _sc_result.resources[0].parameters }}"
+        success_msg: "StorageClass parameters correct"
+
+    - name: Read CSI Secret
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "vast-csi-test-onboard"
+        namespace: "osac-system"
+      register: _csi_secret
+
+    - name: Assert CSI Secret exists
+      ansible.builtin.assert:
+        that:
+          - _csi_secret.resources | length == 1
+        fail_msg: "CSI Secret 'vast-csi-test-onboard' was not created"
+        success_msg: "CSI Secret exists"
+
+    - name: Assert CSI Secret uses manager credentials from hub Secret (credential handoff)
+      ansible.builtin.assert:
+        that:
+          - _csi_secret.resources[0].data.username is defined
+          - (_csi_secret.resources[0].data.username | b64decode) == _hub_csi_username
+          - _csi_secret.resources[0].data.password is defined
+          - (_csi_secret.resources[0].data.password | b64decode | length) > 0
+          - _csi_secret.resources[0].data.endpoint is defined
+        fail_msg: "CSI Secret credentials do not match hub Secret — credential handoff failed"
+        success_msg: "CSI Secret uses manager credentials from hub Secret (credential handoff validated)"
+      no_log: true
+
+    - name: Assert CSI Secret does NOT contain admin credentials
+      ansible.builtin.assert:
+        that:
+          - (_csi_secret.resources[0].data.username | b64decode) != 'admin'
+          - (_csi_secret.resources[0].data.password | b64decode) != 'admin'
+        fail_msg: "CSI Secret contains admin credentials — security boundary violated"
+        success_msg: "CSI Secret confirmed free of admin credentials"
+      no_log: true
+
+    - name: Assert StorageClass labels
+      ansible.builtin.assert:
+        that:
+          - _sc_result.resources[0].metadata.labels['app.kubernetes.io/managed-by'] == 'osac-aap'
+          - _sc_result.resources[0].metadata.labels['osac.openshift.io/tenant'] == 'test-onboard'
+          - _sc_result.resources[0].metadata.labels['osac.openshift.io/storage-tier'] == 'default'
+          - _sc_result.resources[0].metadata.labels['osac.openshift.io/storage-protocol'] == 'nfs'
+        fail_msg: "StorageClass labels incorrect"
+        success_msg: "StorageClass labels correct"
+
+# ── Cleanup ──
+- name: "Storage Onboarding - Cleanup"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Delete StorageClass
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "vast-nfs-test-onboard-default"
+      failed_when: false
+
+    - name: Delete CSI Secret
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "vast-csi-test-onboard"
+        namespace: "osac-system"
+      failed_when: false
+
+    - name: Check if VolumeSnapshotClass CRD exists for cleanup
+      kubernetes.core.k8s_info:
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: volumesnapshotclasses.snapshot.storage.k8s.io
+      register: _cleanup_vsc_crd
+
+    - name: Delete VolumeSnapshotClass
+      when: _cleanup_vsc_crd.resources | length > 0
+      kubernetes.core.k8s:
+        state: absent
+        api_version: snapshot.storage.k8s.io/v1
+        kind: VolumeSnapshotClass
+        name: "vast-snapshot-test-onboard-default"
+      failed_when: false
+
+    - name: Delete hub Secret
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "vast-tenant-config-test-onboard"
+        namespace: "osac-system"
+      failed_when: false

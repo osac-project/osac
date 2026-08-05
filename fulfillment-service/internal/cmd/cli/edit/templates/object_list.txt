@@ -1,0 +1,25 @@
+
+The following object types are available:
+
+{{ range .Helper.Names -}}
+- {{ . }}
+{{ end }}
+
+You can use the above fully qualified names, or the short names:
+
+{{ range .Helper.Singulars -}}
+- {{ . }}
+{{ end }}
+
+For example, to edit the cluster with identifier '123':
+
+  {{ binary }} edit fulfillment.v1.Cluster 123
+
+Or:
+
+  {{ binary }} edit cluster 123
+
+Note that the short names may be ambiguous if the same object type exists in different packages. In
+that case the one whose fully qualified name appears first in the list will be used.
+
+Use the '--help' option to get more details about the command.

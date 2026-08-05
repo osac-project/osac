@@ -1,0 +1,19 @@
+---
+- name: include device role specific vars
+  include_vars: "{{ item }}"
+  with_first_found:
+    - files:
+        - "defaults.yaml"
+      paths:
+        - "{{ playbook_dir }}/providers/{{ ansible_network_os }}"
+        - "/etc/ansible/network_runner/providers/{{ ansible_network_os }}"
+        - "{{ role_path }}/providers/{{ ansible_network_os }}"
+- name: include device role specific tasks
+  include_tasks: "{{ item }}"
+  with_first_found:
+    - files:
+        - "{{ network_action }}.yaml"
+      paths:
+        - "{{ playbook_dir }}/providers/{{ ansible_network_os }}"
+        - "/etc/ansible/network_runner/providers/{{ ansible_network_os }}"
+        - "{{ role_path }}/providers/{{ ansible_network_os }}"

@@ -1,0 +1,93 @@
+---
+- module_defaults:
+    group/aws:
+      access_key: "{{ aws_access_key }}"
+      secret_key: "{{ aws_secret_key }}"
+      session_token: "{{ security_token | default(omit) }}"
+      region: "{{ aws_region }}"
+  block:
+    - ansible.builtin.set_fact:
+        local_bucket_name: "{{ s3_bucket_name | hash('md5') }}e-sse"
+    # ============================================================
+
+    - name: Create a simple bucket
+      amazon.aws.s3_bucket:
+        name: "{{ local_bucket_name }}"
+        state: present
+      register: output
+
+    - name: Enable AES256 encryption
+      amazon.aws.s3_bucket:
+        name: "{{ local_bucket_name }}"
+        state: present
+        encryption: AES256
+      register: output
+
+    - ansible.builtin.assert:
+        that:
+          # SSE is now enabled by default
+          # - output.changed
+          - output.encryption != {}
+          - output.encryption.SSEAlgorithm == 'AES256'
+
+    - name: Re-enable AES256 encryption (idempotency)
+      amazon.aws.s3_bucket:
+        name: "{{ local_bucket_name }}"
+        state: present
+        encryption: AES256
+      register: output
+
+    - ansible.builtin.assert:
+        that:
+          - not output.changed
+          - output.encryption != {}
+          - output.encryption.SSEAlgorithm == 'AES256'
+
+    ## # ============================================================
+    ##
+    ## AWS S3 no longer supports disabling S3 encryption
+    ## https://docs.aws.amazon.com/AmazonS3/latest/userguide/default-encryption-faq.html
+    ##
+    ## - name: Disable encryption from bucket
+    ##   amazon.aws.s3_bucket:
+    ##     name: '{{ local_bucket_name }}'
+    ##     state: present
+    ##     encryption: "none"
+    ##   register: output
+    ##
+    ## - assert:
+    ##     that:
+    ##       - output.changed
+    ##       - not output.encryption
+    ##
+    ## - name: Disable encryption from bucket
+    ##   amazon.aws.s3_bucket:
+    ##     name: '{{ local_bucket_name }}'
+    ##     state: present
+    ##     encryption: "none"
+    ##   register: output
+    ##
+    ## - assert:
+    ##     that:
+    ##       - output is not changed
+    ##       - not output.encryption
+    ##
+    ## # ============================================================
+
+    - name: Delete encryption test s3 bucket
+      amazon.aws.s3_bucket:
+        name: "{{ local_bucket_name }}"
+        state: absent
+      register: output
+
+    - ansible.builtin.assert:
+        that:
+          - output.changed
+
+  # ============================================================
+  always:
+    - name: Ensure all buckets are deleted
+      amazon.aws.s3_bucket:
+        name: "{{ local_bucket_name }}"
+        state: absent
+      ignore_errors: true

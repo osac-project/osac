@@ -1,0 +1,36 @@
+# These objects are only needed if you don't have AAP installed.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ansible-aap
+  labels:
+    openshift.io/cluster-monitoring: "true"
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  annotations:
+    environment: development
+  labels:
+
+    environment: development
+  name: dev-ansible-automation-platform-operator
+  namespace: ansible-aap
+spec: {}
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  annotations:
+    environment: development
+  labels:
+
+    environment: development
+  name: dev-ansible-automation-platform
+  namespace: ansible-aap
+spec:
+  channel: stable-2.6-cluster-scoped
+  installPlanApproval: Automatic
+  name: ansible-automation-platform-operator
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace

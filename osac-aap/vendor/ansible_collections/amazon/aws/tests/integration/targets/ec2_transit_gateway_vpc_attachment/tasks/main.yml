@@ -1,0 +1,17 @@
+---
+- name: Ec2_transit_gateway_vpc_attachment integration tests
+  module_defaults:
+    group/aws:
+      access_key: "{{ aws_access_key }}"
+      secret_key: "{{ aws_secret_key }}"
+      session_token: "{{ security_token | default(omit) }}"
+      region: "{{ aws_region }}"
+
+  block:
+    # Prepares various resources
+    - ansible.builtin.include_tasks: setup.yml
+    - ansible.builtin.include_tasks: complex.yml
+    - ansible.builtin.include_tasks: simple.yml
+  always:
+    # Cleanup after ourselves
+    - ansible.builtin.include_tasks: cleanup.yml

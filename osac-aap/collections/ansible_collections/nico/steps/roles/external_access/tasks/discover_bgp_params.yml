@@ -1,0 +1,161 @@
+---
+# This file discovers BGP parameters (gateway IP and peer ASN) from worker nodes
+# for configuring MetalLB BGPPeer resources in NICo-backed hosted clusters.
+#
+# Gateway IP: extracted from k8s.ovn.org/l3-gateway-config node annotation
+# Peer ASN: discovered via oc debug node running curl against NICo metadata service
+
+- name: Wait for expected worker nodes to appear in hosted cluster
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Node
+    kubeconfig: "{{ nico_admin_kubeconfig }}"
+    label_selectors:
+      - "node-role.kubernetes.io/worker"
+  register: worker_nodes_info
+  until: worker_nodes_info.resources | length >= (nico_expected_worker_count | default(1) | int)
+  retries: "{{ nico_worker_wait_retries | default(60) }}"
+  delay: "{{ nico_worker_wait_delay | default(30) }}"
+
+- name: Fail if no worker nodes found
+  ansible.builtin.fail:
+    msg: "No worker nodes found in hosted cluster. Cannot configure BGP."
+  when: worker_nodes_info.resources | length == 0
+
+- name: Wait for worker nodes to be Ready
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Node
+    name: "{{ item.metadata.name }}"
+    kubeconfig: "{{ nico_admin_kubeconfig }}"
+    wait: true
+    wait_condition:
+      type: Ready
+      status: "True"
+    wait_timeout: 300
+  loop: "{{ worker_nodes_info.resources }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+
+# =============================================================================
+# Gateway discovery: extract from OVN node annotation (no exec needed)
+# =============================================================================
+
+- name: Wait for all workers to have l3-gateway-config annotation
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Node
+    kubeconfig: "{{ nico_admin_kubeconfig }}"
+    label_selectors:
+      - "node-role.kubernetes.io/worker"
+  register: worker_nodes_info
+  until: >-
+    worker_nodes_info.resources |
+    json_query('[?metadata.annotations."k8s.ovn.org/l3-gateway-config"]') |
+    length >= worker_nodes_info.resources | length
+  retries: 40
+  delay: 15
+
+- name: Extract gateway from l3-gateway-config annotation
+  ansible.builtin.set_fact:
+    worker_gateway_map: >-
+      {{
+        worker_gateway_map | default({}) | combine({
+          item.metadata.name: (item.metadata.annotations['k8s.ovn.org/l3-gateway-config'] | from_json | dict2items | first).value['next-hop']
+        })
+      }}
+  loop: "{{ worker_nodes_info.resources }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+
+- name: Display discovered gateways
+  ansible.builtin.debug:
+    msg: "Worker gateways: {{ worker_gateway_map | default({}) }}"
+
+# =============================================================================
+# Peer ASN discovery: oc debug node to curl NICo metadata service
+# =============================================================================
+
+- name: Write kubeconfig to temporary file for oc debug
+  ansible.builtin.copy:
+    content: "{{ nico_admin_kubeconfig | to_nice_yaml if nico_admin_kubeconfig is mapping else nico_admin_kubeconfig }}"
+    dest: "/tmp/metallb-bgp-kubeconfig-{{ cluster_order.metadata.name }}.yaml"
+    mode: '0600'
+  register: bgp_kubeconfig_file
+
+- name: Discover peer ASN from NICo metadata service
+  ansible.builtin.command:
+    cmd: >-
+      oc debug node/{{ item.metadata.name }}
+      --kubeconfig={{ bgp_kubeconfig_file.dest }}
+      -- chroot /host curl -s --max-time 10 http://169.254.169.254:7777/latest/meta-data/asn
+  register: asn_result
+  retries: 3
+  delay: 10
+  until: asn_result.rc == 0 and asn_result.stdout | trim | length > 0
+  loop: "{{ worker_nodes_info.resources }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+  failed_when: false
+  changed_when: false
+
+- name: Extract peer ASN from oc debug output
+  ansible.builtin.set_fact:
+    worker_asn_map: >-
+      {{
+        worker_asn_map | default({}) | combine({
+          item.item.metadata.name: (item.stdout | trim | int)
+        })
+      }}
+  loop: "{{ asn_result.results }}"
+  loop_control:
+    label: "{{ item.item.metadata.name }}"
+  when: item.rc == 0 and item.stdout | trim | length > 0
+
+- name: Clean up temporary kubeconfig file
+  ansible.builtin.file:
+    path: "{{ bgp_kubeconfig_file.dest }}"
+    state: absent
+  when: bgp_kubeconfig_file.dest is defined
+  failed_when: false
+
+# =============================================================================
+# Build final BGP parameters list
+# =============================================================================
+
+- name: Initialize worker BGP parameters list
+  ansible.builtin.set_fact:
+    worker_bgp_params: []
+
+- name: Build worker BGP parameters list
+  ansible.builtin.set_fact:
+    worker_bgp_params: >-
+      {{
+        worker_bgp_params + [{
+          'hostname': item.metadata.name,
+          'gateway': worker_gateway_map[item.metadata.name],
+          'peer_asn': worker_asn_map[item.metadata.name]
+        }]
+      }}
+  loop: "{{ worker_nodes_info.resources }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+  when:
+    - item.metadata.name in worker_gateway_map | default({})
+    - item.metadata.name in worker_asn_map | default({})
+
+- name: Validate discovered BGP parameters
+  ansible.builtin.assert:
+    that:
+      - worker_bgp_params | length == worker_nodes_info.resources | length
+      - worker_bgp_params | length > 0
+    fail_msg: >
+      BGP parameter discovery incomplete. Expected {{ worker_nodes_info.resources | length }} workers,
+      discovered {{ worker_bgp_params | length }}.
+      Gateways found: {{ worker_gateway_map | default({}) | length }}.
+      ASNs found: {{ worker_asn_map | default({}) | length }}.
+    success_msg: "Discovered BGP parameters for {{ worker_bgp_params | length }} workers."
+
+- name: Log discovered BGP parameters summary
+  ansible.builtin.debug:
+    msg: "Discovered BGP parameters for {{ worker_bgp_params | length }} workers: {{ worker_bgp_params }}"

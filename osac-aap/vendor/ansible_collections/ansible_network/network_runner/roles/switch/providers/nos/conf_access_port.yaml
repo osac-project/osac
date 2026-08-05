@@ -1,0 +1,36 @@
+---
+- name: "nos: reset interface to default"
+  community.network.nos_config:
+    lines:
+      - "no switchport"
+      - "shutdown"
+    parents:
+      - "interface {{ port_name }}"
+  connection: network_cli
+
+- name: "nos: enable switchport in access mode"
+  community.network.nos_config:
+    lines:
+      - "switchport"
+      - "switchport mode access"
+      - "no shutdown"
+    parents:
+      - "interface {{ port_name }}"
+  connection: network_cli
+
+- name: "nos: enable rstp"
+  community.network.nos_config:
+    lines:
+      - "no spanning-tree shutdown"
+    parents:
+      - "interface {{ port_name }}"
+  connection: network_cli
+  when: stp_edge
+
+- name: "nos: set access mode vlan"
+  community.network.nos_config:
+    lines:
+      - "switchport access vlan {{ _vlan_id }}"
+    parents:
+      - "interface {{ port_name }}"
+  connection: network_cli

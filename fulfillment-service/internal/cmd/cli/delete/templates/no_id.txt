@@ -1,0 +1,15 @@
+You must specify at least the identifier or name of one object to delete. For example, to delete the
+cluster with identifier '123':
+
+{{ binary }} delete cluster 123
+
+Or to delete the cluster with name 'my-cluster':
+
+{{ binary }} delete cluster my-cluster
+
+You can also specify multiple identifiers or names. For example, to delete the clusters with
+identifiers '123' and '456':
+
+{{ binary }} delete cluster 123 456
+
+Use the '--help' option to get more details about the command.

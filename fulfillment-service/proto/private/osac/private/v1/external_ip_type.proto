@@ -1,0 +1,137 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "google/api/field_behavior.proto";
+import "osac/private/v1/metadata_type.proto";
+
+// Represents an external IP address allocated from an ExternalIPPool.
+//
+// An ExternalIP is a floating IP address allocated from a parent ExternalIPPool's CIDR ranges.
+// "External" means external to the VirtualNetwork — the address may be internet-routable or
+// data-center-routable depending on the deployment topology. The pool assignment is immutable
+// after creation.
+//
+// Attachment to a target resource (e.g., ComputeInstance, Cluster, BareMetalInstance) is managed
+// by a separate ExternalIPAttachment resource. The status.attached boolean indicates whether an
+// ExternalIPAttachment currently exists for this ExternalIP.
+//
+// The lifecycle follows: PENDING (awaiting allocation) -> ALLOCATED (IP assigned).
+// FAILED is a terminal error state. DELETING is set during deprovisioning.
+message ExternalIP {
+  // Unique identifier of the external IP.
+  string id = 1;
+
+  // Metadata of the external IP, including name, labels, and timestamps.
+  Metadata metadata = 2;
+
+  // Desired configuration of the external IP (user-specified).
+  ExternalIPSpec spec = 3;
+
+  // Current state of the external IP (system-provided, read-only).
+  ExternalIPStatus status = 4;
+}
+
+// Defines the desired configuration for an ExternalIP.
+//
+// The pool field is required and immutable: once an ExternalIP is allocated from a pool, it cannot
+// be moved to a different pool.
+message ExternalIPSpec {
+  // Parent ExternalIPPool ID. Required and immutable after creation.
+  //
+  // Must reference the ID of an existing ExternalIPPool in READY state. The system allocates an
+  // available IP address from this pool's CIDR ranges during provisioning.
+  //
+  // Example: "pool-abc123"
+  string pool = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE
+  ];
+}
+
+// Represents the current operational state of an ExternalIP.
+//
+// Status is system-provided and read-only. Users cannot modify status fields directly; the system
+// updates them based on reconciliation of the spec and feedback from the cluster controller.
+message ExternalIPStatus {
+  // Current lifecycle state of the external IP.
+  ExternalIPState state = 1 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // Human-readable message providing additional details about the current state.
+  //
+  // For PENDING state, may contain progress information like "Waiting for IP allocation".
+  // Typically empty for ALLOCATED state.
+  optional string message = 2 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // Identifier of the hub cluster that this external IP is deployed to.
+  //
+  // Set by the fulfillment-service controller when reconciling the external IP to a Kubernetes CR
+  // on the target hub cluster. Used for tracking which cluster the IP resources reside on.
+  string hub = 3 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // Allocated IP address from the parent pool's CIDR range.
+  //
+  // Populated once the IP transitions to ALLOCATED state. Remains stable for the lifetime of
+  // the ExternalIP. Cleared only when the IP is deallocated.
+  string address = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // Parent ExternalIPPool ID that this IP was allocated from.
+  //
+  // Mirrors spec.pool for convenience in status queries. Populated when the IP is allocated.
+  string pool = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // Whether this ExternalIP is currently attached to a target resource via an ExternalIPAttachment.
+  //
+  // Set to true when an ExternalIPAttachment referencing this ExternalIP reaches READY state.
+  // Set to false when the ExternalIPAttachment is deleted. An ExternalIP with attached = true
+  // cannot be deleted; the ExternalIPAttachment must be deleted first.
+  bool attached = 6 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// Lifecycle states for ExternalIP resources.
+//
+// State transitions: UNSPECIFIED -> PENDING -> ALLOCATED. On deletion: ALLOCATED -> DELETING.
+// FAILED is a terminal error state for provisioning failures.
+enum ExternalIPState {
+  // State is unknown or has not been determined yet. Default state before initialization.
+  EXTERNAL_IP_STATE_UNSPECIFIED = 0;
+
+  // The external IP is being provisioned and an address has not been assigned yet.
+  //
+  // During this state, the system is creating the MetalLB LoadBalancer Service on the target
+  // cluster and waiting for an IP address to be allocated from the parent pool's CIDR range.
+  EXTERNAL_IP_STATE_PENDING = 1;
+
+  // The external IP has been assigned an address.
+  //
+  // The address is allocated and reserved. The IP can be attached to a target resource by
+  // creating an ExternalIPAttachment. The status.attached boolean indicates whether an
+  // attachment currently exists.
+  EXTERNAL_IP_STATE_ALLOCATED = 2;
+
+  // Provisioning failed. Check status.message for error details.
+  //
+  // This is a terminal error state. The ExternalIP may require manual intervention
+  // (e.g., deleting and recreating) or a Signal RPC to retry the operation.
+  EXTERNAL_IP_STATE_FAILED = 3;
+
+  // The external IP is being deprovisioned and will be removed.
+  //
+  // On deletion of an ExternalIP, the system removes the MetalLB LoadBalancer Service and
+  // returns the address to the pool. An ExternalIP cannot be deleted while attached
+  // (status.attached = true).
+  EXTERNAL_IP_STATE_DELETING = 4;
+}

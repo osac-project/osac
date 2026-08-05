@@ -1,0 +1,157 @@
+---
+# Test playbook for netris.controller.vpc role.
+#
+# Tests create and delete of Netris VPC resources:
+#   - Create VPC with idempotency check (create twice, assert same ID)
+#   - Delete VPC with not-found tolerance (delete twice, no failure)
+#
+# Requires a running Netris controller with valid credentials.
+#
+# Environment variables:
+#   NETRIS_CONTROLLER_URL  - Netris controller URL (e.g. https://netris.example.com)
+#   NETRIS_USERNAME        - Netris username
+#   NETRIS_PASSWORD        - Netris password
+#   NETRIS_SITE_ID         - Netris site ID (integer)
+#   NETRIS_TENANT_ID       - Netris tenant ID (integer)
+#
+# Usage:
+#   # Run all tests in sequence
+#   ansible-playbook test.yml -v
+#
+#   # Run only create tests
+#   ansible-playbook test.yml -e run_create=true -e run_delete=false \
+#     -e run_delete_not_found=false -v
+#
+#   # Run only delete tests (VPC must already exist)
+#   ansible-playbook test.yml -e run_create=false -e run_delete=true \
+#     -e run_delete_not_found=false -v
+
+# ──────────────────────────────────────────────────────────────
+# Pre-flight: validate required environment variables
+# ──────────────────────────────────────────────────────────────
+- name: Validate VPC test environment
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Fail if required environment variables are missing
+      ansible.builtin.fail:
+        msg: >-
+          Missing required environment variable: {{ item }}.
+          Set NETRIS_CONTROLLER_URL, NETRIS_USERNAME, NETRIS_PASSWORD,
+          NETRIS_SITE_ID, and NETRIS_TENANT_ID before running tests.
+      when: lookup('env', item) | length == 0
+      loop:
+        - NETRIS_CONTROLLER_URL
+        - NETRIS_USERNAME
+        - NETRIS_PASSWORD
+        - NETRIS_SITE_ID
+        - NETRIS_TENANT_ID
+
+# ──────────────────────────────────────────────────────────────
+# Test: Create VPC with idempotency
+# Expected: VPC created on first call, same ID returned on second
+#   call with vpc_already_existed=true.
+# ──────────────────────────────────────────────────────────────
+- name: Test netris.controller.vpc -- create VPC with idempotency
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    test_vpc_name: "test-osac-vpc"
+    netris_controller_url: "{{ lookup('env', 'NETRIS_CONTROLLER_URL') }}"
+    netris_username: "{{ lookup('env', 'NETRIS_USERNAME') }}"
+    netris_password: "{{ lookup('env', 'NETRIS_PASSWORD') }}"
+    vpc_name: "{{ test_vpc_name }}"
+    vpc_site_id: "{{ lookup('env', 'NETRIS_SITE_ID') | int }}"
+    vpc_tenant_id: "{{ lookup('env', 'NETRIS_TENANT_ID') | int }}"
+
+  tasks:
+    - name: Run create tests
+      when: run_create | default(true) | bool
+      block:
+        - name: Create VPC (first call)
+          ansible.builtin.include_role:
+            name: netris.controller.vpc
+            tasks_from: create
+
+        - name: Save VPC ID from first create
+          ansible.builtin.set_fact:
+            _first_vpc_id: "{{ vpc_id }}"
+
+        - name: Assert VPC was newly created
+          ansible.builtin.assert:
+            that:
+              - vpc_id is defined
+              - vpc_id | int > 0
+              - vpc_already_existed == false
+            fail_msg: "VPC was not created correctly on first call"
+            success_msg: "VPC '{{ test_vpc_name }}' created with ID {{ vpc_id }}"
+
+        - name: Create VPC (second call -- idempotency check)
+          ansible.builtin.include_role:
+            name: netris.controller.vpc
+            tasks_from: create
+
+        - name: Assert idempotent create returned same ID
+          ansible.builtin.assert:
+            that:
+              - vpc_id == _first_vpc_id
+              - vpc_already_existed == true
+            fail_msg: "Idempotent create returned different ID or did not detect existing VPC"
+            success_msg: "Idempotent create correctly returned existing VPC ID {{ vpc_id }}"
+
+# ──────────────────────────────────────────────────────────────
+# Test: Delete VPC
+# Expected: VPC deleted successfully.
+# ──────────────────────────────────────────────────────────────
+- name: Test netris.controller.vpc -- delete VPC
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    test_vpc_name: "test-osac-vpc"
+    netris_controller_url: "{{ lookup('env', 'NETRIS_CONTROLLER_URL') }}"
+    netris_username: "{{ lookup('env', 'NETRIS_USERNAME') }}"
+    netris_password: "{{ lookup('env', 'NETRIS_PASSWORD') }}"
+    vpc_name: "{{ test_vpc_name }}"
+
+  tasks:
+    - name: Run delete tests
+      when: run_delete | default(true) | bool
+      block:
+        - name: Delete VPC
+          ansible.builtin.include_role:
+            name: netris.controller.vpc
+            tasks_from: delete
+
+        - name: Confirm VPC deleted
+          ansible.builtin.debug:
+            msg: "VPC '{{ test_vpc_name }}' successfully deleted"
+
+# ──────────────────────────────────────────────────────────────
+# Test: Delete VPC when already gone (NotFound handling)
+# Expected: No failure. The role tolerates already-deleted VPCs.
+# ──────────────────────────────────────────────────────────────
+- name: Test netris.controller.vpc -- delete tolerates NotFound
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    test_vpc_name: "test-osac-vpc"
+    netris_controller_url: "{{ lookup('env', 'NETRIS_CONTROLLER_URL') }}"
+    netris_username: "{{ lookup('env', 'NETRIS_USERNAME') }}"
+    netris_password: "{{ lookup('env', 'NETRIS_PASSWORD') }}"
+    vpc_name: "{{ test_vpc_name }}"
+
+  tasks:
+    - name: Run delete-not-found test
+      when: run_delete_not_found | default(true) | bool
+      block:
+        - name: Delete already-gone VPC (should not fail)
+          ansible.builtin.include_role:
+            name: netris.controller.vpc
+            tasks_from: delete
+
+        - name: Confirm no failure occurred
+          ansible.builtin.debug:
+            msg: "Delete-not-found test passed: role tolerated already-deleted VPC"

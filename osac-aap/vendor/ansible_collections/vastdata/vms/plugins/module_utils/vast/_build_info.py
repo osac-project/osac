@@ -1,0 +1,2 @@
+GIT_COMMIT = "fa656c4"
+GALAXY_VERSION = "1.2.0"

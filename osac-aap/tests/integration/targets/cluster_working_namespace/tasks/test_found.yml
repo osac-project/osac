@@ -1,0 +1,42 @@
+---
+- name: "ClusterWorkingNamespace - Test namespace found by label"
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+
+  tasks:
+    - name: Test namespace found
+      block:
+        - name: Create labeled test namespace
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: cluster-cwn-test-work
+                labels:
+                  osac.openshift.io/clusterorder: "cwn-test-order"
+
+        - name: Run cluster_working_namespace role
+          ansible.builtin.include_role:
+            name: osac.service.cluster_working_namespace
+          vars:
+            cluster_working_namespace_cluster_order_name: "cwn-test-order"
+
+        - name: Verify namespace resolved
+          ansible.builtin.assert:
+            that:
+              - cluster_working_namespace is defined
+              - cluster_working_namespace == "cluster-cwn-test-work"
+            fail_msg: "Expected 'cluster-cwn-test-work', got '{{ cluster_working_namespace | default('undefined') }}'"
+            success_msg: "Namespace found by label: passed"
+
+      always:
+        - name: Cleanup -- delete test namespace
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Namespace
+            name: cluster-cwn-test-work

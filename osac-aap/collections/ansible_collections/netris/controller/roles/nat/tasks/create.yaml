@@ -1,0 +1,95 @@
+---
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Build NAT rule body
+  ansible.builtin.set_fact:
+    _nat_body:
+      name: "{{ nat_name }}"
+      site:
+        id: "{{ nat_site_id }}"
+      vpc:
+        id: "{{ nat_vpc_id }}"
+        name: "{{ nat_vpc_name | default('') }}"
+      state: "enabled"
+      action: "{{ nat_action | upper }}"
+      protocol: "{{ nat_protocol }}"
+      sourceAddress: "{{ nat_source_address | default('0.0.0.0/0') }}"
+      sourcePort: "{{ nat_source_port | default('1-65535') }}"
+      destinationAddress: "{{ nat_destination_address | default('0.0.0.0/0') }}"
+      destinationPort: "{{ nat_destination_port | default('1-65535') }}"
+      pool: "{{ (nat_pool | default(false) | to_json) | from_json }}"
+      portGroup: "{{ nat_port_group | default('') }}"
+      comment: "{{ nat_comment | default('') }}"
+
+- name: Add DNAT fields
+  ansible.builtin.set_fact:
+    _nat_body: >-
+      {{ _nat_body | combine({
+        'dnatToIP': nat_dnat_to_ip,
+        'dnatToPort': nat_dnat_to_port | default('')
+      }) }}
+  when: nat_action == 'dnat'
+
+- name: Add SNAT fields
+  ansible.builtin.set_fact:
+    _nat_body: >-
+      {{ _nat_body | combine({
+        'snatToIP': nat_snat_to_ip,
+        'snatToPool': nat_snat_to_pool | default('')
+      }) }}
+  when: nat_action == 'snat'
+
+- name: Get existing NAT rules
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/nat"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: 200
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _nat_list_resp
+  no_log: true
+
+- name: Find NAT rule by name
+  ansible.builtin.set_fact:
+    _existing_nat: "{{ (_nat_list_resp.json.data | default([])) | selectattr('name', 'equalto', nat_name) | list | first | default(none) }}"
+  when: _nat_list_resp.json is mapping
+
+- name: Set nat facts from existing rule (skip creation)
+  ansible.builtin.set_fact:
+    nat_id: "{{ _existing_nat.id }}"
+    nat_already_existed: true
+    nat_existing_rule: "{{ _existing_nat }}"
+  when: _existing_nat is defined and _existing_nat is not none
+
+- name: Create NAT rule
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/nat"
+    method: POST
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+      Content-Type: "application/json"
+    body_format: json
+    body: "{{ _nat_body }}"
+    return_content: true
+    status_code: [200, 201]
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _nat_create_resp
+  no_log: true
+  when: _existing_nat is not defined or _existing_nat is none
+
+- name: Set nat facts from create response
+  ansible.builtin.set_fact:
+    nat_id: "{{ _nat_create_resp.json.data.id | default(_nat_create_resp.json.data) }}"
+    nat_already_existed: false
+  when:
+    - _existing_nat is not defined or _existing_nat is none
+    - _nat_create_resp is not skipped
+    - _nat_create_resp is changed or (_nat_create_resp.status | default(0)) in [200, 201]
+    - _nat_create_resp.json is mapping

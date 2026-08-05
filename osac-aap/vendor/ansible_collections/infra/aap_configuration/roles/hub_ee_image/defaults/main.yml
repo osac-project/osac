@@ -1,0 +1,28 @@
+---
+
+# These are the default variables common to most ah_configuration roles
+# You shouldn't need to define them again and again but they should be defined
+# ah_username: "{{ inventory_hostname }}"
+# ah_oauthtoken: ""
+# aap_validate_certs: false
+
+# These are the default variables specific to the license role
+
+# a list of dictionaries describing the Automation Hub execution environment image
+hub_ee_images: []
+# possible fields:
+#  - name: name: ansible-automation-platform-20-early-access/ee-supported-rhel8:2.0.0-15
+#    state: present
+#    append: true
+#    tags:
+#      - v2
+#      - "2.0"
+#      - prod1
+
+hub_configuration_ee_image_secure_logging: "{{ aap_configuration_secure_logging | default(false) }}"
+hub_configuration_ee_image_async_timeout: "{{ aap_configuration_async_timeout | default(1000) }}"
+hub_configuration_ee_image_async_retries: "{{ aap_configuration_async_retries | default(50) }}"
+hub_configuration_ee_image_loop_delay: "{{ aap_configuration_loop_delay | default(0) }}"
+hub_configuration_ee_image_async_delay: "{{ aap_configuration_async_delay | default(1) }}"
+aap_configuration_async_dir:
+...

@@ -1,0 +1,39 @@
+- name: Convert network properties to tags
+  ansible.builtin.set_fact:
+    network_tags: "{{ network_tags + [item.key + '_' + item.value] }}"
+  loop: "{{ network_properties | dict2items }}"
+  when: network_properties | length > 0
+
+- name: Create network
+  ansible.builtin.include_role:
+    name: osac.esi.l2
+  vars:
+    network_state: "present"
+    network_name: "{{ 'network-' + network_suffix }}"
+    l2_network_mtu: "{{ network_l2_network_mtu }}"
+    l2_network_tags: "{{ network_tags }}"
+
+- name: Create subnet
+  ansible.builtin.include_role:
+    name: osac.esi.l3
+    tasks_from: create_subnet
+  vars:
+    subnet_name: "{{ 'subnet-' + network_suffix }}"
+    network_id: "{{ 'network-' + network_suffix }}"
+    l3_subnet_cidr: "{{ network_l3_subnet_cidr }}"
+    l3_subnet_gateway_ip: "{{ network_l3_subnet_gateway_ip }}"
+    l3_subnet_allocation_pool_start: "{{ network_l3_subnet_allocation_pool_start }}"
+    l3_subnet_allocation_pool_end: "{{ network_l3_subnet_allocation_pool_end }}"
+    l3_subnet_dns_nameservers: "{{ network_l3_subnet_dns_nameservers }}"
+    l3_network_tags: "{{ network_tags }}"
+
+- name: Create router
+  ansible.builtin.include_role:
+    name: osac.esi.l3
+    tasks_from: create_router
+  vars:
+    router_name: "{{ 'router-' + network_suffix }}"
+    router_subnets:
+      - "{{ create_subnet_result }}"
+    l3_router_external_network: "{{ network_l3_router_external_network }}"
+    l3_network_tags: "{{ network_tags }}"

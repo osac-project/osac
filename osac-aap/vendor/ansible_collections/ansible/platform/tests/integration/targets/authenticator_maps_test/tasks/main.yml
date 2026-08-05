@@ -1,0 +1,317 @@
+---
+- name: Generate a test ID
+  ansible.builtin.set_fact:
+    test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') }}"
+  when: test_id is not defined
+
+- name: Preset vars
+  ansible.builtin.set_fact:
+    name_prefix: "GW-Collection-Test-AuthenticatorMaps-{{ test_id }}"
+
+- name: Run Test
+  module_defaults:
+    group/ansible.platform.gateway:
+      gateway_hostname: "{{ gateway_hostname }}"
+      gateway_username: "{{ gateway_username }}"
+      gateway_password: "{{ gateway_password }}"
+      gateway_validate_certs: "{{ gateway_validate_certs | bool }}"
+
+  block:
+    # <Authenticators> ----------------------------
+    - name: Create Authenticator 1
+      ansible.platform.authenticator:
+        name: "{{ name_prefix }}-Authenticator-1"
+        slug: "{{ name_prefix }}-Authenticator-1"
+        type: "ansible_base.authentication.authenticator_plugins.local"
+        configuration: {}
+      register: authenticator1
+
+    - name: Assert that authenticator 1 was created
+      ansible.builtin.assert:
+        that:
+          - authenticator1 is changed
+
+    - name: Create Authenticator 2
+      ansible.platform.authenticator:
+        name: "{{ name_prefix }}-Authenticator-2"
+        slug: "{{ name_prefix }}-Authenticator-2"
+        type: "ansible_base.authentication.authenticator_plugins.local"
+        configuration: {}
+      register: authenticator2
+
+    - name: Assert that authenticator 2 was created
+      ansible.builtin.assert:
+        that:
+          - authenticator2 is changed
+    # </Authenticators> ---------------------------
+
+    # <Authenticator Maps> ------------------------
+    - name: Create Incomplete Authenticator Map
+      ansible.platform.authenticator_map:
+        name: "{{ name_prefix }}-Authenticator_Maps-1"
+        authenticator: "{{ authenticator1.id }}"
+        map_type: team
+      register: fail
+      ignore_errors: true
+
+    - name: Assert that we can't create an incomplete authenticator_map
+      ansible.builtin.assert:
+        that:
+          - fail is failed
+          - fail.msg == 'map_type is team but all of the following are missing: team, organization'
+
+    - name: Create authenticator map 1
+      ansible.platform.authenticator_map:
+        name: "{{ name_prefix }}-AMap-1"
+        authenticator: "{{ authenticator1.name }}"
+        revoke: false
+        map_type: organization
+        role: Organization Member
+        organization: "Organization 1"
+        triggers:
+          always: {}
+          never: {}
+        order: 10
+      register: authenticator_map_1
+
+    - name: Assert that we created authenticator 1
+      ansible.builtin.assert:
+        that:
+          - authenticator_map_1 is changed
+
+    - name: Rereate authenticator map 1
+      ansible.platform.authenticator_map:
+        name: "{{ authenticator_map_1.name }}"
+        authenticator: "{{ authenticator1.id }}"
+        revoke: false
+        map_type: organization
+        role: Organization Member
+        organization: "Organization 1"
+        triggers:
+          always: {}
+          never: {}
+        order: 10
+      register: recreate_authenticator_map_1
+
+    - name: Assert that a recreate does not change the system
+      ansible.builtin.assert:
+        that:
+          - recreate_authenticator_map_1 is not changed
+          - recreate_authenticator_map_1.id == authenticator_map_1.id
+
+    - name: Create authenticator map 2
+      ansible.platform.authenticator_map:
+        name: "{{ name_prefix }}-AMap-2"
+        authenticator: "{{ authenticator1.id }}"
+        revoke: true
+        map_type: team
+        role: Team Admin
+        team: "Team 2"
+        organization: "Organization 1"
+        triggers:
+          groups:
+            has_or:
+              - group1
+              - group2
+            has_and:
+              - group3
+              - group4
+        order: 2
+      register: authenticator_map_2
+
+    - name: Assert that we created authenticator 2
+      ansible.builtin.assert:
+        that:
+          - authenticator_map_2 is changed
+
+    - name: Create authenticator map 3
+      ansible.platform.authenticator_map:
+        name: "{{ name_prefix }}-AMap-3"
+        authenticator: "{{ authenticator2.name }}"
+        map_type: allow
+        triggers:
+          attributes:
+            join_condition: "or"
+            attr_1:
+              contains: "redhat"
+              matches: "ansible"
+              ends_with: "best"
+            attr_2:
+              in:
+                - ansible
+                - automation
+                - gateway
+        order: 10
+      register: authenticator_map_3
+
+    - name: Assert that we created authenticator 3
+      ansible.builtin.assert:
+        that:
+          - authenticator_map_3 is changed
+
+    - name: Test exists
+      ansible.platform.authenticator_map:
+        name: "{{ authenticator_map_1.name }}"
+        authenticator: "{{ authenticator1.name }}"
+        state: exists
+      register: authenticator_map1_exists
+
+    - name: Assert that exists does not change the system
+      ansible.builtin.assert:
+        that:
+          - authenticator_map1_exists is not changed
+
+    - name: Test exists by id
+      ansible.platform.authenticator_map:
+        name: "{{ authenticator_map_1.id }}"
+        authenticator: "{{ authenticator1.id }}"
+        state: exists
+      register: authenticator_map1_exists
+
+    - name: Assert that exists by ID works
+      ansible.builtin.assert:
+        that:
+          - authenticator_map1_exists is not changed
+
+    - name: Test exists with configuration change
+      ansible.platform.authenticator_map:
+        name: "{{ authenticator_map_1.name }}"
+        authenticator: "{{ authenticator1.name }}"
+        map_type: organization  # doesn't affect object when state=='exists'
+        organization: "Organization X" # doesn't affect object when state=='exists'
+        state: exists
+      register: authenticator_map1_exists
+
+    - name: Assert that changing configuration does not happen with exists
+      ansible.builtin.assert:
+        that:
+          - authenticator_map1_exists is not changed
+
+    - name: Change an authenticator type
+      ansible.platform.authenticator_map:
+        name: "{{ authenticator_map_2.name }}"
+        authenticator: "{{ authenticator1.id }}"
+        map_type: is_superuser
+      register: authenticator_map_2_change
+
+    - name: Assert that we can change an existing authenticator map
+      ansible.builtin.assert:
+        that:
+          - authenticator_map_2_change is changed
+          - authenticator_map_2_change.id == authenticator_map_2.id
+
+    - name: Test change map attributes
+      ansible.platform.authenticator_map:
+        name: "{{ authenticator_map_3.name }}"
+        authenticator: "{{ authenticator2.name }}"
+        triggers:
+          attributes:  # replace of attributes
+            join_condition: "and"
+            attr_2:
+              in:
+                - base
+      register: change_authenticator_map_3
+
+    - name: Assert that we can update the trigger
+      ansible.builtin.assert:
+        that:
+          - change_authenticator_map_3 is changed
+          - change_authenticator_map_3.id == authenticator_map_3.id
+
+    - name: Test delete by wrong name
+      ansible.platform.authenticator_map:
+        name: "{{ name_prefix }}-AMap-NonExisting"
+        authenticator: "{{ authenticator1.id }}"
+        state: absent
+      register: delete
+
+    - name: Assert that deletion of non-existent authenticator map does not change the system
+      ansible.builtin.assert:
+        that:
+          - delete is not changed
+
+    - name: Test delete by wrong authenticator
+      ansible.platform.authenticator_map:
+        name: "{{ authenticator_map_1.id }}"
+        authenticator: "{{ name_prefix }}-Authenticator-NonExisting"
+        state: absent
+      register: delete
+
+    - name: Assert that deleting an existing authenticator_map changes the system
+      ansible.builtin.assert:
+        that:
+          - delete is not changed
+
+    - name: Change authenticator map name
+      ansible.platform.authenticator_map:
+        name: "{{ authenticator_map_1.name }}"
+        new_name: "{{ name_prefix }}-AMap-1-New"
+        authenticator: "{{ authenticator1.id }}"
+      register: change_authenticator_map_1
+
+    - name: Assert that we can rename an existing authenticator
+      ansible.builtin.assert:
+        that:
+          - change_authenticator_map_1 is changed
+          - change_authenticator_map_1.id == authenticator_map_1.id
+
+    - name: Change an authenticator map authenticator
+      ansible.platform.authenticator_map:
+        name: "{{ authenticator_map_2.id }}"
+        authenticator: "{{ authenticator1.id }}"
+        new_authenticator: "{{ authenticator2.id }}"
+      register: change_authenticator_map_2
+
+    - name: Assert that we can change an authenticator on a map
+      ansible.builtin.assert:
+        that:
+          - change_authenticator_map_2 is changed
+          - change_authenticator_map_2.id == authenticator_map_2.id
+
+    - name: Delete an authenticator map
+      ansible.platform.authenticator_map:
+        name: "{{ authenticator_map_1.id }}"
+        authenticator: "{{ authenticator1.id }}"
+        state: absent
+      register: delete
+
+    - name: Assert that the deletion of a real authenticator works
+      ansible.builtin.assert:
+        that:
+          - delete is changed
+
+    # </Authenticator Maps> -----------------------
+
+  always:
+    # <Cleanup> -----------------------------------
+    - name: Delete Authenticator Maps from Authenticator 1
+      ansible.platform.authenticator_map:
+        name: "{{ vars[item].id }}"
+        authenticator: "{{ authenticator1.id }}"
+        state: absent
+      when: "authenticator1 is defined and item in vars and 'id' in vars[item]"
+      loop:
+        - "authenticator_map_1"
+        - "authenticator_map_2"
+        - "authenticator_map_3"
+
+    - name: Delete Authenticator Maps from Authenticator 2
+      ansible.platform.authenticator_map:
+        name: "{{ vars[item].id }}"
+        authenticator: "{{ authenticator2.id }}"
+        state: absent
+      when: "authenticator2 is defined and item in vars and 'id' in vars[item]"
+      loop:
+        - "authenticator_map_1"
+        - "authenticator_map_2"
+        - "authenticator_map_3"
+
+    - name: Delete Authenticators
+      ansible.platform.authenticator:
+        name: "{{ vars[item].id }}"
+        state: absent
+      when: "item in vars and 'id' in vars[item]"
+      loop:
+        - "authenticator1"
+        - "authenticator2"
+...

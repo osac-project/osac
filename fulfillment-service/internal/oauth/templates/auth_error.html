@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Authentication failed</title>
+    {{ execute "styles.html" . }}
+    <style>
+        .error-details {
+            margin-top: var(--pf-t--global--spacer--md);
+        }
+        .error-code {
+            font-family: var(--pf-t--global--font--family--mono);
+            background-color: var(--pf-t--global--background--color--secondary--default);
+            padding: var(--pf-t--global--spacer--sm);
+            border-radius: var(--pf-t--global--border--radius--small);
+            word-break: break-word;
+        }
+    </style>
+</head>
+<body>
+    <div class="auth-container">
+        <div class="pf-v6-c-alert pf-m-danger pf-m-inline" aria-label="Danger alert">
+            <div class="pf-v6-c-alert__icon">
+                <i class="fas fa-exclamation-circle" aria-hidden="true"></i>
+            </div>
+            <div class="pf-v6-c-alert__title">
+                <h2 class="pf-v6-c-alert__title-text">Authentication failed</h2>
+            </div>
+            <div class="pf-v6-c-alert__description">
+                <div class="error-details">
+                    <p><strong>Error:</strong> <span class="error-code">{{ .Code }}</span></p>
+                    <p><strong>Description:</strong> {{ .Description }}</p>
+                    <p>You can close this window and try again.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

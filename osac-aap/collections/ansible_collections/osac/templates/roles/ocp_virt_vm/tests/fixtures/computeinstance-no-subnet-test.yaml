@@ -1,0 +1,12 @@
+---
+apiVersion: osac.openshift.io/v1alpha1
+kind: ComputeInstance
+metadata:
+  name: test-vm-no-subnet
+  namespace: osac-system
+spec:
+  templateID: osac.templates.ocp_virt_vm
+  cores: 2
+  memoryGiB: 2
+status:
+  desiredConfigVersion: "1"

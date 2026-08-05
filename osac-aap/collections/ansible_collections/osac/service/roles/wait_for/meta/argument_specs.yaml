@@ -1,0 +1,19 @@
+argument_specs:
+  wait_for_dns:
+    options:
+      wait_for_dns_record:
+        type: str
+        required: true
+      wait_for_dns_retries:
+        type: int
+      wait_for_dns_delay:
+        type: int
+  wait_for_cluster:
+    options:
+      wait_for_kubeconfig:
+        type: str
+        required: true
+      wait_for_cluster_retries:
+        type: int
+      wait_for_cluster_delay:
+        type: int

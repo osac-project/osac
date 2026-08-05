@@ -1,0 +1,48 @@
+---
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+
+  - repo: https://github.com/ansible/ansible-lint.git
+    rev: v26.4.0
+    hooks:
+      - id: ansible-lint
+        pass_filenames: false
+        always_run: true
+        entry: ansible-lint
+        args:
+          - --profile=production
+
+  - repo: https://github.com/DavidAnson/markdownlint-cli2
+    rev: v0.22.0
+    hooks:
+      - id: markdownlint-cli2
+        exclude: ^(AGENTS.md|CLAUDE.md|.agents/*)
+
+  - repo: https://github.com/psf/black
+    rev: 26.3.1
+    hooks:
+      - id: black
+        name: black
+        entry: black
+        args: [--config=.black.cfg, --check, --diff]
+        types: [python]
+
+  - repo: https://github.com/pycqa/flake8
+    rev: 7.3.0
+    hooks:
+      - id: flake8
+        name: flake8
+        entry: flake8
+        types: [python]
+
+  - repo: https://github.com/djdanielsson/ansible-content-prek-actions
+    rev: v26.3.1
+    hooks:
+      - id: changelog
+      - id: galaxy-importer
+
+...

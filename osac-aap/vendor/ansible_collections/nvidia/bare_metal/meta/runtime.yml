@@ -1,0 +1,62 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Fabien Dupont
+# SPDX-License-Identifier: Apache-2.0
+
+requires_ansible: '>=2.14.0'
+
+action_groups:
+  all:
+    - allocation
+    - allocation_constraint
+    - allocation_constraint_info
+    - allocation_info
+    - audit_info
+    - dpu_extension_service
+    - dpu_extension_service_info
+    - expected_machine
+    - expected_machine_info
+    - infiniband_partition
+    - infiniband_partition_info
+    - infrastructure_provider_info
+    - instance
+    - instance_batch
+    - instance_info
+    - instance_type
+    - instance_type_info
+    - ip_block
+    - ip_block_info
+    - machine
+    - machine_capability_info
+    - machine_info
+    - metadata_info
+    - network_security_group
+    - network_security_group_info
+    - nvlink_logical_partition
+    - nvlink_logical_partition_info
+    - operating_system
+    - operating_system_info
+    - rack_firmware
+    - rack_info
+    - rack_power
+    - rack_validation
+    - service_account_info
+    - site
+    - site_info
+    - sku_info
+    - ssh_key
+    - ssh_key_group
+    - ssh_key_group_info
+    - ssh_key_info
+    - subnet
+    - subnet_info
+    - tenant_account
+    - tenant_account_info
+    - tenant_info
+    - tray_firmware
+    - tray_info
+    - tray_power
+    - tray_validation
+    - user_info
+    - vpc
+    - vpc_info
+    - vpc_prefix
+    - vpc_prefix_info

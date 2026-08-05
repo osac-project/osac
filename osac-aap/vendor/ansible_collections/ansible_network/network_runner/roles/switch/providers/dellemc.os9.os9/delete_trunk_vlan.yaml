@@ -1,0 +1,7 @@
+---
+- name: "dellemc.os9: delete a vlan from trunk port"
+  dellemc.os9.os9_config:
+    lines:
+      - "interface vlan {{ _vlan_id }}"
+      - "no tagged {{ port_name }}"
+  connection: network_cli

@@ -1,0 +1,21 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nfs-vm-dynamic
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "false"
+    description: "Dynamic NFS storage for VM live migration with automatic provisioning"
+provisioner: nfs-subdir-external-provisioner
+parameters:
+  archiveOnDelete: "false"
+  pathPattern: "${.PVC.namespace}-${.PVC.name}"
+allowVolumeExpansion: true
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+mountOptions:
+  - nfsvers=4.1
+  - rsize=1048576
+  - wsize=1048576
+  - hard
+  - timeo=600
+  - retrans=2

@@ -1,0 +1,35 @@
+#
+# Copyright (c) 2025 Red Hat Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+# the License. You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+# specific language governing permissions and limitations under the License.
+#
+
+# This defines the host name that Prometheus uses. The default is to use the host name of the Kubernetes service. For
+# example, if the application is deployed in a namespace named 'prometheus' then the default host name will be
+# 'prometheus.prometheus.svc.cluster.local'.
+hostname:
+
+# Certificate configuration:
+certs:
+
+  # This defines the cert-manager issuer that will be used for the certificates used by Prometheus.
+  issuerRef:
+    kind: ClusterIssuer
+    name: default-ca
+
+  # This defines the trusted CA certificates bundle. It should be the name of a configmap in the release namespace
+  # that contains trusted CA certificates in PEM format.
+  caBundle:
+    configMap: ca-bundle
+    bundleKey: bundle.pem
+
+# Image configuration:
+images:
+  prometheus: quay.io/prometheus/prometheus:v3.8.1

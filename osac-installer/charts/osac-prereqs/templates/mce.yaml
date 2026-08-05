@@ -1,0 +1,37 @@
+{{- if .Values.mce.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: osac-prereqs-mce-config
+  labels:
+    {{- include "osac-prereqs.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    apiVersion: agent-install.openshift.io/v1beta1
+    kind: AgentServiceConfig
+    metadata:
+      name: agent
+    spec:
+      databaseStorage:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 10Gi
+      filesystemStorage:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 20Gi
+      imageStorage:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 50Gi
+{{- if .Values.mce.osImages }}
+      osImages:
+{{ toYaml .Values.mce.osImages | indent 8 }}
+{{- end }}
+{{- end }}

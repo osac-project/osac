@@ -1,0 +1,34 @@
+{
+ "collection_info": {
+  "namespace": "vastdata",
+  "name": "vms",
+  "version": "1.2.0",
+  "authors": [
+   "VAST Data"
+  ],
+  "readme": "README.md",
+  "tags": [
+   "storage",
+   "vast",
+   "vms"
+  ],
+  "description": "Ansible Collection for VAST VMS (VAST Management System). Manage VAST storage views, policies, and related resources.",
+  "license": [
+   "Apache-2.0"
+  ],
+  "license_file": null,
+  "dependencies": {},
+  "repository": "https://github.com/vast-data/vast-ansible",
+  "documentation": "https://github.com/vast-data/vast-ansible/blob/main/README.md",
+  "homepage": "https://github.com/vast-data/vast-ansible",
+  "issues": "https://github.com/vast-data/vast-ansible/issues"
+ },
+ "file_manifest_file": {
+  "name": "FILES.json",
+  "ftype": "file",
+  "chksum_type": "sha256",
+  "chksum_sha256": "24a62ea846c52560c38f1b6f10bea02921bd000e505106a4545736924e535011",
+  "format": 1
+ },
+ "format": 1
+}

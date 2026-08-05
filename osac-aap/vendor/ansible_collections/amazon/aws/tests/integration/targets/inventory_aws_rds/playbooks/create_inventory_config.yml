@@ -1,0 +1,18 @@
+---
+- name: Prepare inventory config files
+  hosts: 127.0.0.1
+  connection: local
+  gather_facts: false
+
+  vars:
+    template_name: ../templates/{{ template | default('inventory.j2') }}
+
+  vars_files:
+    - vars/main.yml
+
+  tasks:
+    - name: Write inventory config file
+      ansible.builtin.copy:
+        dest: ../test.aws_rds.yml
+        content: "{{ lookup('template', template_name) }}"
+        mode: "0644"

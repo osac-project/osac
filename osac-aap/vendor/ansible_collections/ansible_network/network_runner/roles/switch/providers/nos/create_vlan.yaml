@@ -1,0 +1,8 @@
+---
+- name: "nos: create vlan"
+  community.network.nos_config:
+    lines:
+      - "name {{ _vlan_name }}"
+    parents:
+      - "interface vlan {{ _vlan_id }}"
+  connection: network_cli

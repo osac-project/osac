@@ -1,0 +1,151 @@
+- name: Set dns names
+  ansible.builtin.set_fact:
+    external_access_api_domain: "api.{{ external_access_name }}.{{ external_access_base_domain }}"
+    external_access_api_int_domain: "api-int.{{ external_access_name }}.{{ external_access_base_domain }}"
+    external_access_ingress_domain: "apps.{{ external_access_name }}.{{ external_access_base_domain }}"
+
+- name: Get kube-apiserver service
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Service
+    namespace: "{{ external_access_namespace }}-{{ external_access_name }}"
+    name: kube-apiserver
+  register: kube_apiserver_service
+
+  # wait until the service exists and has a loadbalancer ip
+  until: >-
+    (kube_apiserver_service.resources | length > 0) and
+    (kube_apiserver_service.resources[0].status.loadBalancer.ingress | default([]) | length > 0)
+  retries: "{{ external_access_resource_wait_retries }}"
+  delay: "{{ external_access_resource_wait_delay }}"
+
+- name: Set api_internal_ip
+  ansible.builtin.set_fact:
+    external_access_api_internal_ip: "{{ kube_apiserver_service.resources[0].status.loadBalancer.ingress[0].ip }}"
+    external_access_kube_apiserver_port: "{{ kube_apiserver_service.resources[0].spec.ports[0].port }}"
+
+- name: Allocate api floating ip
+  ansible.builtin.include_role:
+    name: osac.esi.floating_ip
+  vars:
+    floating_ip_state: present
+    floating_ip_name: "{{ external_access_name }}-api"  # noqa:var-naming[no-role-prefix]
+    floating_ip_properties:
+      instance: "{{ cluster_order.metadata.namespace }}"
+      clusterorder: "{{ external_access_name }}"
+      purpose: "o-sac"
+
+- name: Set api_floating_ip
+  ansible.builtin.set_fact:
+    external_access_api_floating_ip: "{{ allocate_floating_ip_result }}"
+
+- name: Create port forwarding for api endpoint  # noqa:no-changed-when
+  ansible.builtin.include_role:
+    name: osac.esi.floating_ip
+    tasks_from: create_port_forwarding
+  vars:
+    internal_ip: "{{ external_access_api_internal_ip }}"
+    floating_ip: "{{ external_access_api_floating_ip }}"
+    internal_network: "{{ external_access_api_internal_network }}"
+    ports:
+    - "{{ external_access_kube_apiserver_port }}"
+    description: "{{ external_access_name }}-api"
+
+- name: Allocate ingress floating ip
+  ansible.builtin.include_role:
+    name: osac.esi.floating_ip
+  vars:
+    floating_ip_state: present
+    floating_ip_name: "{{ external_access_name }}-ingress"  # noqa:var-naming[no-role-prefix]
+    floating_ip_properties:
+      instance: "{{ cluster_order.metadata.namespace }}"
+      clusterorder: "{{ external_access_name }}"
+      purpose: "o-sac"
+
+- name: Set external_access_ingress_floating_ip
+  ansible.builtin.set_fact:
+    external_access_ingress_floating_ip: "{{ allocate_floating_ip_result }}"
+
+- name: Create dns records
+  when: >-
+    external_access_base_domain in external_access_supported_base_domains|default([])
+  ansible.builtin.include_role:
+    name: dns.api.dns
+    tasks_from: create
+  vars:
+    dns_zone: "{{ lookup('env', 'DNS_ZONE') | default(external_access_base_domain, true) }}"
+    dns_record_name: "{{ item.name }}"
+    dns_record_type: A
+    dns_record_ttl: "{{ external_access_dns_ttl }}"
+    dns_record_value: "{{ item.addr }}"
+    dns_record_overwrite: true
+  loop:
+    - name: "{{ external_access_api_domain }}"
+      addr: "{{ external_access_api_floating_ip }}"
+    - name: "{{ external_access_api_int_domain }}"
+      addr: "{{ external_access_api_floating_ip }}"
+    - name: "*.{{ external_access_ingress_domain }}"
+      addr: "{{ external_access_ingress_floating_ip }}"
+
+- name: Wait for DNS records
+  when: >-
+    external_access_base_domain in external_access_supported_base_domains | default([])
+  ansible.builtin.include_role:
+    name: osac.service.wait_for
+    tasks_from: wait_for_dns
+  vars:
+    wait_for_dns_record: "{{ item }}"
+  loop:
+    - "{{ external_access_api_domain }}"
+    - "{{ external_access_api_int_domain }}"
+    - "default-router.{{ external_access_ingress_domain }}"
+
+- name: Get managed cluster admin kubeconfig secret
+  ansible.builtin.include_role:
+    name: osac.service.retrieve_kubeconfig
+  vars:
+    retrieve_kubeconfig_namespace: "{{ cluster_working_namespace }}"
+    retrieve_kubeconfig_cluster_name: "{{ cluster_order.metadata.name }}"
+
+- name: Wait for cluster to become ready
+  ansible.builtin.include_role:
+    name: osac.service.wait_for
+    tasks_from: wait_for_network_cluster_operator
+  vars:
+    wait_for_kubeconfig: "{{ admin_kubeconfig }}"
+
+- name: Set ingress_internal_subnet_name
+  ansible.builtin.set_fact:
+    ingress_internal_subnet_name: "subnet-{{ external_access_name }}"
+
+- name: Get ingress internal subnet
+  ansible.builtin.include_role:
+    name: osac.esi.l3
+    tasks_from: get_subnet
+  vars:
+    subnet_name: "{{ ingress_internal_subnet_name }}"
+
+- name: Set external_access_metallb_ingress_ip
+  ansible.builtin.set_fact:
+    external_access_metallb_ingress_ip: "{{ subnet_info.cidr | ansible.utils.nthhost(-10) }}"
+
+- name: Configure metallb for ingress
+  ansible.builtin.include_role:
+    name: osac.service.metallb_ingress
+    tasks_from: configure_metallb_ingress
+  vars:
+    metallb_ingress_admin_kubeconfig: "{{ admin_kubeconfig }}"
+    metallb_ingress_ip: "{{ external_access_metallb_ingress_ip }}"
+
+- name: Create port forwarding for ingress endpoint  # noqa:no-changed-when
+  ansible.builtin.include_role:
+    name: osac.esi.floating_ip
+    tasks_from: create_port_forwarding
+  vars:
+    internal_ip: "{{ external_access_metallb_ingress_ip }}"
+    floating_ip: "{{ external_access_ingress_floating_ip }}"
+    internal_network: "{{ external_access_ingress_internal_network }}"
+    ports:
+    - "80"
+    - "443"
+    description: "{{ external_access_name }}-ingress"

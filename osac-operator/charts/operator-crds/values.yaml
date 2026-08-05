@@ -1,0 +1,2 @@
+# Whether to install the CRDs
+install: true

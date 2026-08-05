@@ -1,0 +1,14 @@
+---
+- name: Extract host class from BareMetalInstance spec
+  ansible.builtin.set_fact:
+    host_class: "{{ bare_metal_instance.spec.hostClass | default('') }}"
+
+- name: Fail if host class is not set
+  ansible.builtin.fail:
+    msg: "BareMetalInstance {{ bare_metal_instance.metadata.name }} has no hostClass set"
+  when: host_class | length == 0
+
+- name: Validate host class against supported backends
+  ansible.builtin.fail:
+    msg: "Unsupported hostClass '{{ host_class }}' for {{ bare_metal_instance.metadata.name }}. Supported values: {{ supported_host_classes | join(', ') }}"
+  when: host_class not in supported_host_classes

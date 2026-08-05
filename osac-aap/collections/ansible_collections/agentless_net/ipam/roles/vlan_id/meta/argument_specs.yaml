@@ -1,0 +1,29 @@
+argument_specs:
+  allocate:
+    options:
+      ipam_state_file:
+        description: "Path to JSON state file (e.g., /etc/osac/network_state.json)."
+        type: "str"
+        required: true
+      ipam_vlan_pool_start:
+        description: "First VLAN ID in pool (e.g., 100)."
+        type: "int"
+        required: true
+      ipam_vlan_pool_end:
+        description: "Last VLAN ID in pool (e.g., 199)."
+        type: "int"
+        required: true
+      ipam_purpose:
+        description: "Label for this allocation (e.g., my-cluster)."
+        type: "str"
+        required: true
+  release:
+    options:
+      ipam_state_file:
+        description: "Path to JSON state file."
+        type: "str"
+        required: true
+      ipam_purpose:
+        description: "Label of the allocation to release."
+        type: "str"
+        required: true

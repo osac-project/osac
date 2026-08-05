@@ -1,0 +1,306 @@
+---
+- name: Include get remote cluster kubeconfig
+  ansible.builtin.include_role:
+    name: osac.service.common
+    tasks_from: get_remote_cluster_kubeconfig
+
+- name: Validate ExternalIPAttachment fields and annotations
+  ansible.builtin.assert:
+    that:
+      - external_ip_attachment.metadata is defined
+      - external_ip_attachment.metadata.name is defined
+      - external_ip_attachment.metadata.name | length > 0
+      - external_ip_attachment.metadata.namespace is defined
+      - external_ip_attachment.metadata.namespace | length > 0
+      - external_ip_attachment.metadata.annotations is defined
+      - "'osac.openshift.io/externalippool-name' in external_ip_attachment.metadata.annotations"
+      - external_ip_attachment.metadata.annotations['osac.openshift.io/externalippool-name'] | length > 0
+      - "'osac.openshift.io/externalip-target-namespace' in external_ip_attachment.metadata.annotations"
+      - external_ip_attachment.metadata.annotations['osac.openshift.io/externalip-target-namespace'] | length > 0
+      - external_ip_attachment.spec is defined
+      - external_ip_attachment.spec.computeInstance is defined
+      - external_ip_attachment.spec.computeInstance | length > 0
+    fail_msg: >-
+      ExternalIPAttachment is missing required fields/annotations:
+      metadata.name, metadata.namespace, and spec.computeInstance must be set,
+      and annotations osac.openshift.io/externalippool-name and
+      osac.openshift.io/externalip-target-namespace must both be present.
+
+- name: Extract ExternalIPAttachment configuration
+  ansible.builtin.set_fact:
+    external_ip_name: >-
+      {{ external_ip_attachment.metadata.annotations['osac.openshift.io/externalip-name']
+         | default(external_ip_attachment.metadata.name) }}
+    attach_vm_namespace: >-
+      {{ external_ip_attachment.metadata.annotations['osac.openshift.io/externalip-target-namespace'] }}
+    attach_pool_name: >-
+      {{ external_ip_attachment.metadata.annotations['osac.openshift.io/externalippool-name'] }}
+
+- name: Fetch ComputeInstance CR
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: osac.openshift.io/v1alpha1
+    kind: ComputeInstance
+    namespace: "{{ external_ip_attachment.metadata.namespace }}"
+    label_selectors:
+      - "osac.openshift.io/computeinstance-uuid={{ external_ip_attachment.spec.computeInstance }}"
+  register: attach_ci_lookup
+
+- name: Fail if ComputeInstance not found
+  ansible.builtin.fail:
+    msg: >-
+      ComputeInstance with uuid '{{ external_ip_attachment.spec.computeInstance }}' not found
+      in namespace '{{ external_ip_attachment.metadata.namespace }}'.
+  when: attach_ci_lookup.resources | length == 0
+
+- name: Fail if ComputeInstance lookup is ambiguous
+  ansible.builtin.fail:
+    msg: >-
+      Multiple ComputeInstance resources matched uuid
+      '{{ external_ip_attachment.spec.computeInstance }}' in namespace
+      '{{ external_ip_attachment.metadata.namespace }}'; expected exactly one.
+  when: attach_ci_lookup.resources | length > 1
+
+- name: Extract ComputeInstance name from fetched CR
+  ansible.builtin.set_fact:
+    attach_compute_instance_name: "{{ attach_ci_lookup.resources[0].metadata.name }}"
+
+# Check if the LB Service already exists (idempotency for EDA event redelivery).
+- name: Check if LB Service already exists in VM namespace
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: v1
+    kind: Service
+    name: "osac-eip-{{ external_ip_name }}-ingress"
+    namespace: "{{ attach_vm_namespace }}"
+  register: existing_lb_service_info
+
+- name: Extract IP from existing LB Service (redelivery)
+  ansible.builtin.set_fact:
+    attach_ip_address: "{{ existing_lb_service_info.resources[0].metadata.annotations['metallb.universe.tf/loadBalancerIPs'] }}"
+    attach_already_done: true
+  when:
+    - existing_lb_service_info.resources | length > 0
+    - existing_lb_service_info.resources[0].metadata.annotations['metallb.universe.tf/loadBalancerIPs'] | default('') | length > 0
+
+- name: Set attach_already_done to false when LB Service does not exist
+  ansible.builtin.set_fact:
+    attach_already_done: false
+  when: attach_already_done is not defined
+
+# Read the reserved IP directly from the parking Service status.
+- name: Read reserved IP from parking Service
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: v1
+    kind: Service
+    name: "osac-eip-{{ external_ip_name }}"
+    namespace: metallb-system
+  register: parking_service_info
+  when: not attach_already_done
+
+- name: Fail if parking Service not found or IP not yet assigned
+  ansible.builtin.fail:
+    msg: >-
+      Parking Service 'osac-eip-{{ external_ip_name }}' not found in metallb-system
+      or MetalLB has not yet assigned an IP. Run create_external_ip first.
+  when:
+    - not attach_already_done
+    - >-
+      parking_service_info.resources | length == 0 or
+      parking_service_info.resources[0].status.loadBalancer.ingress | default([]) | length == 0
+
+- name: Extract allocated IP from parking Service status
+  ansible.builtin.set_fact:
+    attach_ip_address: "{{ parking_service_info.resources[0].status.loadBalancer.ingress[0].ip }}"
+  when: not attach_already_done
+
+- name: Display ExternalIPAttachment information
+  ansible.builtin.debug:
+    msg:
+      - "{{ attach_already_done | ternary('ExternalIPAttachment already attached (idempotent redelivery)', 'Creating ExternalIPAttachment') }} '{{ external_ip_name }}'"
+      - "IP address: {{ attach_ip_address }}"
+      - "Pool: {{ attach_pool_name }}"
+      - "VM namespace: {{ attach_vm_namespace }}"
+      - "ComputeInstance: {{ attach_compute_instance_name }} ({{ external_ip_attachment.metadata.namespace }})"
+
+# Delete the parking Service and create the VM-namespace LB Service atomically.
+# The rescue restores the parking Service if LB Service creation fails so the IP
+# is never left unparked without a reservation in metallb-system.
+- name: Attach ExternalIP - delete parking Service and create LB Service
+  when: not attach_already_done
+  block:
+    - name: Delete parking Service from metallb-system
+      kubernetes.core.k8s:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+        state: absent
+        api_version: v1
+        kind: Service
+        name: "osac-eip-{{ external_ip_name }}"
+        namespace: metallb-system
+        wait: true
+        wait_timeout: 60
+      register: reservation_delete_result
+      retries: 3
+      delay: 5
+      until: reservation_delete_result is successful
+      failed_when:
+        - reservation_delete_result.failed | default(false)
+        - "'NotFound' not in (reservation_delete_result.msg | default(''))"
+
+    - name: Display parking Service deletion result
+      ansible.builtin.debug:
+        msg:
+          - "Parking Service 'osac-eip-{{ external_ip_name }}' deleted"
+          - "Changed: {{ reservation_delete_result.changed | default(false) }}"
+
+    # Create a LoadBalancer Service in the VM namespace.
+    - name: Create LoadBalancer Service in VM namespace
+      kubernetes.core.k8s:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+        state: present
+        apply: true
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: "osac-eip-{{ external_ip_name }}-ingress"
+            namespace: "{{ attach_vm_namespace }}"
+            labels:
+              osac.openshift.io/externalip: "{{ external_ip_name }}"
+              osac.openshift.io/managed-by: osac-fulfillment
+            annotations:
+              metallb.universe.tf/address-pool: "{{ attach_pool_name }}"
+              metallb.universe.tf/loadBalancerIPs: "{{ attach_ip_address }}"
+          spec:
+            type: LoadBalancer
+            selector:
+              vm.kubevirt.io/name: "{{ attach_compute_instance_name }}"
+            # Initial floating IP support exposes SSH only.
+            # Additional ports can be added as needed for other access patterns.
+            ports:
+              - name: ssh
+                port: 22
+                targetPort: 22
+                protocol: TCP
+      register: lb_service_result
+      retries: 6
+      delay: 10
+      until: lb_service_result is successful
+
+    - name: Display LoadBalancer Service creation result
+      ansible.builtin.debug:
+        msg:
+          - "LoadBalancer Service 'osac-eip-{{ external_ip_name }}-ingress' created in '{{ attach_vm_namespace }}'"
+          - "Changed: {{ lb_service_result.changed | default(false) }}"
+
+  rescue:
+    - name: Restore parking Service in metallb-system after failed LB Service creation
+      kubernetes.core.k8s:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+        state: present
+        apply: true
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: "osac-eip-{{ external_ip_name }}"
+            namespace: metallb-system
+            labels:
+              osac.openshift.io/externalip: "{{ external_ip_name }}"
+              osac.openshift.io/managed-by: osac-fulfillment
+            annotations:
+              metallb.universe.tf/address-pool: "{{ attach_pool_name }}"
+              metallb.universe.tf/loadBalancerIPs: "{{ attach_ip_address }}"
+          spec:
+            type: LoadBalancer
+            selector: {}
+            ports:
+              - name: placeholder
+                protocol: TCP
+                port: 65535
+                targetPort: 65535
+      when: reservation_delete_result.changed | default(false)
+      register: rescue_parking_result
+      retries: 3
+      delay: 5
+      until: rescue_parking_result is successful
+
+    - name: Fail after attempted rollback of attach operation
+      ansible.builtin.fail:
+        msg: >-
+          Attach of ExternalIP '{{ external_ip_name }}' failed; the parking Service
+          'osac-eip-{{ external_ip_name }}' in metallb-system has been restored
+          if it had been deleted. Check the preceding error for details.
+
+# Workaround for upstream OVN-Kubernetes bug: the EndpointSlice mirror
+# controller labels mirrored slices with k8s.ovn.org/service-name but omits
+# the standard kubernetes.io/service-name label that MetalLB requires.
+# Without this label MetalLB ignores the UDN EndpointSlice and routes to the
+# infrastructure-locked cluster-network IP where nothing is listening.
+- name: Check if VM namespace has primary UDN
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: v1
+    kind: Namespace
+    name: "{{ attach_vm_namespace }}"
+  register: vm_namespace_info
+
+- name: Set primary UDN flag
+  ansible.builtin.set_fact:
+    has_primary_udn: >-
+      {{ vm_namespace_info.resources | length > 0
+         and 'k8s.ovn.org/primary-user-defined-network'
+             in (vm_namespace_info.resources[0].metadata.labels | default({})) }}
+
+- name: Wait for mirrored EndpointSlice in UDN namespace
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: discovery.k8s.io/v1
+    kind: EndpointSlice
+    namespace: "{{ attach_vm_namespace }}"
+    label_selectors:
+      - "endpointslice.kubernetes.io/managed-by=endpointslice-mirror-controller.k8s.ovn.org"
+      - "k8s.ovn.org/service-name=osac-eip-{{ external_ip_name }}-ingress"
+  register: mirrored_eps
+  retries: 12
+  delay: 5
+  until: mirrored_eps.resources | length > 0
+  when: has_primary_udn | bool
+
+- name: Add standard service-name label to mirrored EndpointSlice
+  kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: discovery.k8s.io/v1
+    kind: EndpointSlice
+    name: "{{ mirrored_eps.resources[0].metadata.name }}"
+    namespace: "{{ attach_vm_namespace }}"
+    state: present
+    definition:
+      metadata:
+        labels:
+          kubernetes.io/service-name: "osac-eip-{{ external_ip_name }}-ingress"
+  when:
+    - has_primary_udn | bool
+    - mirrored_eps.resources | length > 0
+
+# Annotate the ComputeInstance CR with the assigned external IP.
+- name: Annotate ComputeInstance with external-ip-address
+  kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: osac.openshift.io/v1alpha1
+    kind: ComputeInstance
+    name: "{{ attach_compute_instance_name }}"
+    namespace: "{{ external_ip_attachment.metadata.namespace }}"
+    state: present
+    definition:
+      metadata:
+        annotations:
+          osac.openshift.io/external-ip-address: "{{ attach_ip_address }}"
+  register: ci_annotate_result
+
+- name: Display ComputeInstance annotation result
+  ansible.builtin.debug:
+    msg:
+      - "ComputeInstance '{{ attach_compute_instance_name }}' annotated with external-ip-address '{{ attach_ip_address }}'"
+      - "Changed: {{ ci_annotate_result.changed | default(false) }}"

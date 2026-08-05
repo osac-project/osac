@@ -1,0 +1,85 @@
+---
+- name: ah_ee_registry integration tests
+  module_defaults:
+    group/ansible.hub.hub:
+      ah_host: "{{ ah_host }}"
+      ah_username: "{{ ah_username }}"
+      ah_password: "{{ ah_password }}"
+      validate_certs: "{{ ah_verify_ssl }}"
+  block:
+    - name: Generate a test_id for the test
+      set_fact:
+        test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') | lower }}"
+      when: test_id is not defined
+
+    - name: Define variables for registry name
+      set_fact:
+        registry_name: "ee_{{ test_id }}"
+
+    - name: Create EE remote registry in check_mode
+      ansible.hub.ah_ee_registry:
+        name: "{{ registry_name }}"
+        url: https://quay.io/my/registry
+        state: present
+      register: r
+      check_mode: yes
+
+    - name: Check if the remote registry EE is created in check_mode
+      assert:
+        that:
+          - r.changed
+
+    - name: Create EE remote registry
+      ansible.hub.ah_ee_registry:
+        name: "{{ registry_name }}"
+        url: https://quay.io/my/registry
+        state: present
+      register: r
+
+    - name: Check if the remote registry EE is created
+      assert:
+        that:
+          - r.changed
+
+    - name: Create EE remote registry again
+      ansible.hub.ah_ee_registry:
+        name: "{{ registry_name }}"
+        url: https://quay.io/my/registry
+        state: present
+      register: r
+
+    - name: Check if the remote registry EE is not created again
+      assert:
+        that:
+          - not r.changed
+
+    - name: Delete EE remote registry
+      ansible.hub.ah_ee_registry:
+        name: "{{ registry_name }}"
+        url: https://quay.io/my/registry
+        state: absent
+      register: r
+
+    - name: Check if the remote registry EE is deleted
+      assert:
+        that:
+          - r.changed
+
+    - name: Delete EE remote registry again
+      ansible.hub.ah_ee_registry:
+        name: "{{ registry_name }}"
+        url: https://quay.io/my/registry
+        state: absent
+      register: r
+
+    - name: Check if the remote registry EE is not deleted
+      assert:
+        that:
+          - not r.changed
+
+  always:
+    - name: Delete EE remote registry
+      ansible.hub.ah_ee_registry:
+        name: "{{ registry_name }}"
+        state: absent
+      ignore_errors: true

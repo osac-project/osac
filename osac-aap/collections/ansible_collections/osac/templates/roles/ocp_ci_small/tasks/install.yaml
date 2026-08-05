@@ -1,0 +1,82 @@
+- name: Set install step defaults
+  ansible.builtin.set_fact:
+    install_step_pre_install_hook_default:
+      name: osac.templates.ocp_ci_small
+      tasks_from: noop.yaml
+    install_step_hosted_cluster_default:
+      name: osac.service.hosted_cluster
+      tasks_from: main.yaml
+    install_step_cluster_infra_default:
+      name: osac.service.cluster_infra
+      tasks_from: main.yaml
+    install_step_external_access_default:
+      name: osac.service.external_access
+      tasks_from: main.yaml
+    install_step_retrieve_kubeconfig_default:
+      name: osac.service.retrieve_kubeconfig
+      tasks_from: main.yaml
+    install_step_wait_for_cluster_operators_default:
+      name: osac.service.wait_for
+      tasks_from: wait_for_cluster_operators.yaml
+    install_step_post_install_hook_default:
+      name: osac.templates.ocp_ci_small
+      tasks_from: noop.yaml
+
+- name: Step - Pre-install hook
+  ansible.builtin.include_role:
+    name: "{{ (install_step_pre_install_hook_override | default(install_step_pre_install_hook_default)).name }}"
+    tasks_from: "{{ (install_step_pre_install_hook_override | default(install_step_pre_install_hook_default)).tasks_from }}"
+
+- name: Step - Create hosted cluster
+  ansible.builtin.include_role:
+    name: "{{ (install_step_hosted_cluster_override | default(install_step_hosted_cluster_default)).name }}"
+    tasks_from: "{{ (install_step_hosted_cluster_override | default(install_step_hosted_cluster_default)).tasks_from }}"
+  vars:
+    hosted_cluster_name: "{{ cluster_order.metadata.name }}"
+    hosted_cluster_namespace: "{{ cluster_working_namespace }}"
+    hosted_cluster_settings:
+      ocp_release_image: "{{ ocp_release_image }}"
+      pull_secret: "{{ template_parameters.pull_secret }}"
+      ssh_public_key: "{{ template_parameters.ssh_public_key }}"
+    hosted_cluster_node_requests: "{{ cluster_order.spec.nodeRequests | unique(attribute='resourceClass') }}"
+    hosted_cluster_state: present
+
+- name: Step - Create cluster infrastructure
+  ansible.builtin.include_role:
+    name: "{{ (install_step_cluster_infra_override | default(install_step_cluster_infra_default)).name }}"
+    tasks_from: "{{ (install_step_cluster_infra_override | default(install_step_cluster_infra_default)).tasks_from }}"
+  vars:
+    cluster_infra_state: present
+    cluster_infra_name: "{{ cluster_order.metadata.name }}"
+    cluster_infra_namespace: "{{ cluster_working_namespace }}"
+    cluster_infra_node_requests: "{{ cluster_order.spec.nodeRequests | unique(attribute='resourceClass') }}"
+
+- name: Step - Configure port forwarding
+  ansible.builtin.include_role:
+    name: "{{ (install_step_external_access_override | default(install_step_external_access_default)).name }}"
+    tasks_from: "{{ (install_step_external_access_override | default(install_step_external_access_default)).tasks_from }}"
+  vars:
+    external_access_name: "{{ cluster_order.metadata.name }}"
+    external_access_state: present
+    external_access_namespace: "{{ cluster_working_namespace }}"
+    external_access_ingress_internal_network: "network-{{ cluster_order.metadata.name }}"
+
+- name: Step - Retrieve kubeconfig
+  ansible.builtin.include_role:
+    name: "{{ (install_step_retrieve_kubeconfig_override | default(install_step_retrieve_kubeconfig_default)).name }}"
+    tasks_from: "{{ (install_step_retrieve_kubeconfig_override | default(install_step_retrieve_kubeconfig_default)).tasks_from }}"
+  vars:
+    retrieve_kubeconfig_cluster_name: "{{ cluster_order.metadata.name }}"
+    retrieve_kubeconfig_namespace: "{{ cluster_working_namespace }}"
+
+- name: Step - Wait for cluster operators
+  ansible.builtin.include_role:
+    name: "{{ (install_step_wait_for_cluster_operators_override | default(install_step_wait_for_cluster_operators_default)).name }}"
+    tasks_from: "{{ (install_step_wait_for_cluster_operators_override | default(install_step_wait_for_cluster_operators_default)).tasks_from }}"
+  vars:
+    wait_for_kubeconfig: "{{ admin_kubeconfig }}"
+
+- name: Step - Post-install hook
+  ansible.builtin.include_role:
+    name: "{{ (install_step_post_install_hook_override | default(install_step_post_install_hook_default)).name }}"
+    tasks_from: "{{ (install_step_post_install_hook_override | default(install_step_post_install_hook_default)).tasks_from }}"

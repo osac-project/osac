@@ -1,0 +1,12 @@
+apiVersion: trust.cert-manager.io/v1alpha1
+kind: Bundle
+metadata:
+  name: test-bundle
+spec:
+  sources:
+    - configMap:
+        name: test-configmap
+        key: ca.crt
+  target:
+    configMap:
+      key: bundle.pem

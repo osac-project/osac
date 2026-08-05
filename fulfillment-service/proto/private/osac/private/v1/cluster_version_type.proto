@@ -1,0 +1,141 @@
+//
+// Copyright (c) 2025 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "google/api/field_behavior.proto";
+import "google/protobuf/timestamp.proto";
+import "osac/private/v1/metadata_type.proto";
+
+// Lifecycle states for ClusterVersion resources.
+//
+// All transitions between states are allowed: ACTIVE <-> DEPRECATED <-> OBSOLETE, ACTIVE <-> OBSOLETE.
+// Timestamps in ClusterVersionDeprecation are managed automatically during transitions.
+enum ClusterVersionState {
+  // State is unknown or has not been determined yet.
+  CLUSTER_VERSION_STATE_UNSPECIFIED = 0;
+
+  // The cluster version is fully available for new cluster creation.
+  //
+  // This is the default state assigned on creation. Returning to ACTIVE from DEPRECATED or OBSOLETE
+  // retains the corresponding deprecation timestamps as historical record.
+  CLUSTER_VERSION_STATE_ACTIVE = 1;
+
+  // The cluster version is available with warnings; migration to a newer version is recommended.
+  //
+  // Clusters can still be created with a deprecated version, but users are encouraged to choose an
+  // active version instead. The deprecation_timestamp is set automatically on transition to this state.
+  CLUSTER_VERSION_STATE_DEPRECATED = 2;
+
+  // The cluster version is not available for new clusters; visible for lookups only.
+  //
+  // New cluster creation with this version is rejected. If the version was the default, `is_default`
+  // is auto-cleared. The obsolescence_timestamp is set automatically on transition to this state.
+  CLUSTER_VERSION_STATE_OBSOLETE = 3;
+}
+
+// Contains deprecation details for a cluster version.
+//
+// The timestamps are managed by the server during lifecycle state transitions. The deprecation_timestamp is set when
+// the version transitions to DEPRECATED, and the obsolescence_timestamp is set when it transitions to OBSOLETE.
+// Timestamps are retained as historical record when the version returns to ACTIVE.
+message ClusterVersionDeprecation {
+  // When deprecation was announced. Auto-set on transition to DEPRECATED.
+  google.protobuf.Timestamp deprecation_timestamp = 1 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // When the cluster version becomes or became obsolete. Auto-set on transition to OBSOLETE.
+  google.protobuf.Timestamp obsolescence_timestamp = 2 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// Contains the details about the cluster version that are available only for the system.
+//
+// Cluster versions are admin-managed catalog entries that define which OpenShift versions are available. Users
+// select a cluster version by name when creating clusters, either directly via Cluster `spec.version_name` or
+// through a ClusterTemplate `spec_defaults.version_name`. Cloud Provider Admins control the version catalog
+// through lifecycle-managed cluster versions.
+//
+// If `metadata.name` is omitted on creation, it is auto-generated from `spec.version` by lowercasing and
+// replacing non-alphanumeric characters with dashes (e.g., "4.17.0" becomes "4-17-0").
+//
+// Lifecycle follows: ACTIVE -> DEPRECATED -> OBSOLETE. All transitions between states are allowed.
+// Deletion is rejected if the version is referenced by active clusters, templates, or catalog items.
+//
+// The `spec` contains the desired configuration, and may be modified by the admin. The `status` contains the
+// current state of the cluster version, is provided by the system and can't be modified by the user.
+message ClusterVersion {
+  // Unique identifier of the cluster version.
+  string id = 1;
+
+  // Metadata of the cluster version, including name, labels, tenant, and timestamps.
+  Metadata metadata = 2;
+
+  // Desired configuration of the cluster version (admin-modifiable).
+  ClusterVersionSpec spec = 3;
+
+  // Current state of the cluster version (system-provided, read-only).
+  ClusterVersionStatus status = 4;
+}
+
+// Defines the desired configuration for a ClusterVersion.
+//
+// The spec contains admin-specified parameters that define the version catalog entry. The `image` and `version`
+// fields are immutable after creation. The `enabled`, `is_default`, `state`, and `deprecation` fields may be
+// updated to manage the version lifecycle.
+message ClusterVersionSpec {
+  // OCI release image pullspec for this version. Required on creation, immutable afterwards.
+  //
+  // The cluster controller resolves this image when building the ClusterOrder for provisioning.
+  //
+  // Example: "quay.io/openshift-release-dev/ocp-release:4.17.0-multi"
+  string image = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE
+  ];
+
+  // Controls whether new clusters may select this version. Defaults to true on creation.
+  //
+  // Setting to false prevents new cluster creation with this version. If the version was the default,
+  // `is_default` is auto-cleared.
+  optional bool enabled = 2 [(google.api.field_behavior) = OPTIONAL];
+
+  // At most one active ClusterVersion may be the default. Setting this to true on one version clears it on
+  // the previous default atomically. Auto-cleared when the version becomes OBSOLETE or disabled.
+  //
+  // When creating a cluster, the version is resolved with the following precedence:
+  // explicit `spec.version_name` > template `spec_defaults.version_name` > system default (`is_default=true`).
+  optional bool is_default = 3 [(google.api.field_behavior) = OPTIONAL];
+
+  // Current lifecycle state of the cluster version. Defaults to ACTIVE on creation if unspecified.
+  ClusterVersionState state = 4 [(google.api.field_behavior) = OPTIONAL];
+
+  // Deprecation details. Only meaningful when state is DEPRECATED or OBSOLETE.
+  ClusterVersionDeprecation deprecation = 5 [(google.api.field_behavior) = OPTIONAL];
+
+  // Stable semver identifier for this version. Required on creation, immutable afterwards.
+  //
+  // Must be a valid SemVer 2.0.0 string, max 256 characters. Must be unique among active (non-deleted)
+  // ClusterVersions.
+  //
+  // Example: "4.17.0", "4.17.0-rc.1"
+  string version = 6 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE
+  ];
+}
+
+// Contains the system-provided status of a ClusterVersion.
+//
+// Currently empty. Reserved for future use.
+message ClusterVersionStatus {}

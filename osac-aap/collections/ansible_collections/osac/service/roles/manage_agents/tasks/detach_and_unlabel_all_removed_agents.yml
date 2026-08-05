@@ -1,0 +1,80 @@
+---
+- name: List agents currently labeled with the cluster order label
+  kubernetes.core.k8s_info:
+    kind: Agent
+    api_version: agent-install.openshift.io/v1beta1
+    namespace: "{{ default_agent_namespace }}"
+    label_selectors:
+      - "{{ cluster_order_label }}={{ manage_agents_cluster_order_name }}"
+  register: manage_agents_allocated
+
+- name: List agents removed from the cluster
+  ansible.builtin.set_fact:
+    manage_agents_removed: >
+      {{ manage_agents_allocated.resources | json_query('[?metadata.labels."agent-install.openshift.io/clusterdeployment-namespace"==`null` || metadata.labels."agent-install.openshift.io/clusterdeployment-namespace"==``]') }}
+
+# Exclude agents that were just provisioned in this run and haven't been
+# claimed by a HostedCluster yet.  Without this filter, newly provisioned
+# agents (which lack clusterdeployment-namespace) would be incorrectly
+# treated as "removed" and have their labels stripped.
+- name: Exclude protected agents from removed list
+  when: manage_agents_protected_agents | default([]) | length > 0
+  ansible.builtin.set_fact:
+    manage_agents_removed: >-
+      {{ manage_agents_removed
+         | json_query('[?!contains(`' + (manage_agents_protected_agents | to_json) + '`, metadata.name)]') }}
+
+- name: Move agents to idle agents network
+  ansible.builtin.include_role:
+    name: osac.esi.l2
+    tasks_from: set_networks_for_node
+  vars:
+    node: "{{ agent.metadata.annotations[agent_host_uuid_label] }}"
+    networks:
+    - "{{ manage_agents_idle_agents_network }}"
+  loop: "{{ manage_agents_removed }}"
+  loop_control:
+    label: "Detach agent {{ agent.metadata.name }}"
+    loop_var: agent
+  when: not (manage_agents_skip_network_detach | default(false))
+
+- name: Determine which agents have cluster_order_label
+  ansible.builtin.set_fact:
+    agents_with_cluster_order_label: "{{ agents_with_cluster_order_label | default([]) + [item] }}"
+  with_items: "{{ manage_agents_removed }}"
+  when: cluster_order_label in item.metadata.labels
+
+- name: Remove cluster_order_label from agents
+  kubernetes.core.k8s_json_patch:
+    api_version: agent-install.openshift.io/v1beta1
+    kind: Agent
+    name: "{{ agent.metadata.name }}"
+    namespace: "{{ default_agent_namespace }}"
+    patch:
+      - op: remove
+        path: /metadata/labels/{{ cluster_order_label | osac.service.json_pointer_escape }}
+  loop: "{{ agents_with_cluster_order_label | default([]) }}"
+  loop_control:
+    loop_var: agent
+    label: "Un-label agent {{ agent.metadata.name }} with label {{ cluster_order_label }}"
+  register: manage_agents_cluster_order_label_removed_result
+
+- name: Determine which agents have agentMachineRef label
+  ansible.builtin.set_fact:
+    agents_with_agent_machine_ref_label: >
+      {{ manage_agents_removed | selectattr('metadata.labels.agentMachineRef', 'defined') }}
+
+- name: Remove agentMachineRef label from agents
+  kubernetes.core.k8s_json_patch:
+    api_version: agent-install.openshift.io/v1beta1
+    kind: Agent
+    name: "{{ agent.metadata.name }}"
+    namespace: "{{ default_agent_namespace }}"
+    patch:
+      - op: remove
+        path: /metadata/labels/agentMachineRef
+  loop: "{{ agents_with_agent_machine_ref_label }}"
+  loop_control:
+    loop_var: agent
+    label: "Un-label agent {{ agent.metadata.name }} with label agentMachineRef"
+  register: manage_agents_agent_machine_ref_label_removed_result

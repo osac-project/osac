@@ -1,0 +1,74 @@
+---
+# Contract tests for config-as-code instance group pod spec templates.
+
+- name: Compute-instance pod spec without remote kubeconfig
+  hosts: localhost
+  gather_facts: false
+  vars:
+    aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    remote_cluster_kubeconfig_secret_name: ""
+    _template_path: >-
+      {{ playbook_dir }}/../../../../../collections/ansible_collections/osac/config_as_code/roles/aap/templates/compute-instance-operations-ig.j2
+
+  tasks:
+    - name: Render compute-instance-operations pod spec
+      ansible.builtin.set_fact:
+        _pod_spec: "{{ lookup('ansible.builtin.template', _template_path) }}"
+
+    - name: Parse rendered pod spec
+      ansible.builtin.set_fact:
+        _pod: "{{ _pod_spec | from_yaml }}"
+
+    - name: Extract compute-instance secretRef from envFrom
+      ansible.builtin.set_fact:
+        _compute_secret_ref: >-
+          {{
+            _pod.spec.containers[0].envFrom
+            | selectattr('secretRef', 'defined')
+            | map(attribute='secretRef')
+            | selectattr('name', 'equalto', 'compute-instance-operations-ig')
+            | list
+            | first
+          }}
+
+    - name: Assert dedicated compute-instance secret is referenced optionally
+      ansible.builtin.assert:
+        that:
+          - _compute_secret_ref is defined
+          - _compute_secret_ref.name == 'compute-instance-operations-ig'
+          - _compute_secret_ref.optional | default(false) | bool
+        fail_msg: Expected optional compute-instance-operations-ig secretRef in pod spec
+
+    - name: Assert cluster-fulfillment secret is not referenced
+      ansible.builtin.assert:
+        that:
+          - "_pod_spec is not search('cluster-fulfillment-ig')"
+        fail_msg: Pod spec must not reference cluster-fulfillment-ig
+
+    - name: Assert storage-operations references are retained
+      ansible.builtin.assert:
+        that:
+          - "_pod_spec is search('storage-operations-ig')"
+        fail_msg: Expected storage-operations-ig references in pod spec
+
+- name: Compute-instance pod spec with remote kubeconfig
+  hosts: localhost
+  gather_facts: false
+  vars:
+    aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    remote_cluster_kubeconfig_secret_name: remote-cluster-kubeconfig
+    remote_cluster_kubeconfig_secret_key: kubeconfig
+    _template_path: >-
+      {{ playbook_dir }}/../../../../../collections/ansible_collections/osac/config_as_code/roles/aap/templates/compute-instance-operations-ig.j2
+
+  tasks:
+    - name: Render compute-instance-operations pod spec with remote cluster
+      ansible.builtin.set_fact:
+        _pod_spec_remote: "{{ lookup('ansible.builtin.template', _template_path) }}"
+
+    - name: Assert remote kubeconfig volume is present when configured
+      ansible.builtin.assert:
+        that:
+          - "_pod_spec_remote is search('remote-cluster-kubeconfig')"
+          - "_pod_spec_remote is search('OSAC_REMOTE_CLUSTER_KUBECONFIG')"
+        fail_msg: Expected remote cluster kubeconfig mount when secret name is set

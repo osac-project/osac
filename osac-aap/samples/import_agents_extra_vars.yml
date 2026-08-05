@@ -1,0 +1,23 @@
+# To run:
+# KUBECONFIG=/tmp/kc.yml ansible-playbook playbook_osac_import_agents.yml \
+#   -e @samples/import_agents_extra_vars.yml
+
+---
+default_agent_namespace: "hardware-inventory"
+hosted_cluster_default_infraenv: "infraenv"
+
+servers:
+  - name: ostest-extraworker-0
+    bmc_url: "redfish-virtualmedia+https://192.168.111.1:8000/redfish/v1/Systems/649db7d9-91f6-4604-977f-f0f5ec24e83f"
+    bmc_username: "admin"
+    bmc_password: "password"
+    boot_mac: "00:8f:09:3e:24:af"
+    netris_server_name: "extraworker-0"
+    resource_class: "x86_64"
+  - name: ostest-extraworker-1
+    bmc_url: "redfish-virtualmedia+https://192.168.111.1:8000/redfish/v1/Systems/8840f548-9591-460a-bb7c-dd5cd29fead6"
+    bmc_username: "admin"
+    bmc_password: "password"
+    boot_mac: "00:8f:09:3e:24:b1"
+    netris_server_name: "extraworker-1"
+    resource_class: "x86_64"

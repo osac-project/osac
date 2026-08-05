@@ -1,0 +1,59 @@
+---
+# Label(s) to apply to NMStateConfig CRs — must match InfraEnv's nmStateConfigLabelSelector
+nmstate_config_labels:
+  infraenv: "{{ default_agent_namespace }}"
+
+# Namespace for NMStateConfig CRs (same as agent namespace)
+nmstate_config_namespace: "{{ default_agent_namespace }}"
+
+# Actual server interface names for nmstate config (what the OS sees, e.g., "ens13")
+# Must be provided by the caller (resolved from netris_resource_class_map per resource class)
+nmstate_config_server_interfaces: []
+
+# VPC gateway in CIDR notation (from netris_template_ipv4_gateway, e.g., "192.168.101.1/24")
+nmstate_config_gateway_cidr: "{{ netris_template_ipv4_gateway }}"
+
+# Jinja2 template file for nmstate YAML (infra owner can override with custom template)
+nmstate_config_template: "default_static.yaml.j2"
+
+# IP offset for first host (gateway is .1, first host starts at gateway + offset)
+nmstate_config_ip_offset: 1
+
+# Management interface name used to reach agents via SSH.
+# The agent's mgmt IP is discovered from status.inventory.interfaces matching this name.
+# Must be provided by the caller (resolved from netris_resource_class_map per resource class)
+nmstate_config_mgmt_interface: ""
+
+# Management network route destination CIDR (e.g., bastion/controller network)
+nmstate_config_mgmt_route_destination: "{{ server_mgmt_route_destination }}"
+
+# Management network gateway (next-hop for the mgmt route)
+nmstate_config_mgmt_route_gateway: "{{ server_mgmt_route_gateway }}"
+
+# Route metric for the management interface (higher = lower priority than VPC)
+nmstate_config_mgmt_route_metric: 100
+
+# Route metric for the VPC default route (lower = higher priority)
+nmstate_config_vpc_route_metric: 50
+
+# --- SSH: local -> bastion (hop 1) ---
+
+# Bastion host (e.g., Netris controller) to proxy SSH through to reach agent mgmt IPs.
+nmstate_config_ssh_bastion_host: "{{ server_ssh_bastion_host }}"
+
+# SSH user for the bastion host
+nmstate_config_ssh_bastion_user: "{{ server_ssh_bastion_user }}"
+
+# SSH private key file for local -> bastion connection
+nmstate_config_ssh_bastion_key: "{{ server_ssh_bastion_key }}"
+
+# --- SSH: bastion -> agent server (hop 2) ---
+
+# SSH user for connecting to agents (RHCOS live ISO default is "core")
+nmstate_config_ssh_user: "{{ server_ssh_user }}"
+
+# SSH private key file for bastion -> agent connection (must exist on the bastion)
+nmstate_config_ssh_key: "{{ server_ssh_key }}"
+
+# Whether to apply nmstate config on live agents via SSH (requires mgmt access)
+nmstate_config_apply_live: true

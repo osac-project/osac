@@ -1,0 +1,66 @@
+---
+# Thin wrapper for per-provider dispatch. Called via include_tasks with loop
+# because Ansible does not support loop: on include_role directly.
+#
+# Receives from caller (via loop_var or set_fact):
+#   _current_provider  — the provider name for this iteration (e.g. 'vast')
+#   _dispatch_action   — task file to invoke (setup, ensure_storage_class, teardown_cluster_storage, teardown_backend)
+#
+# Uses from play scope:
+#   storage_provider_tiers              — full tier list (filtered here per provider)
+#   _cluster_name                        — optional target cluster name override (for volume
+#                                          naming); ensure_storage_class self-discovers it from
+#                                          the target cluster's Infrastructure object when unset
+#   _remote_kubeconfig_insecure          — set true by the caller when _remote_kubeconfig's
+#                                          serving cert can't be validated against its bundled
+#                                          CA (e.g. HCP guest clusters reached via an external
+#                                          Route); TLS verification stays on otherwise
+
+- name: "Compute filtered tiers for current provider"
+  ansible.builtin.set_fact:
+    _computed_provider_tiers: >-
+      {{ (storage_provider_tiers | selectattr('provider', 'equalto', _current_provider) | list)
+         | selectattr('name', 'in', _requested_tiers) | list
+         if (_requested_tiers is defined and _requested_tiers | length > 0)
+         else (storage_provider_tiers | selectattr('provider', 'equalto', _current_provider) | list) }}
+
+- name: "Fail if requested tier filter produced no matches"
+  when: >-
+    _requested_tiers is defined and _requested_tiers | length > 0 and
+    _computed_provider_tiers | length == 0
+  ansible.builtin.fail:
+    msg: >-
+      None of the requested tiers ({{ _requested_tiers | join(', ') }}) match
+      provider '{{ _current_provider }}' tiers. Check STORAGE_TIERS configuration.
+
+- name: "Dispatch provider storage action with remote kubeconfig routing"
+  module_defaults:
+    kubernetes.core.k8s:
+      kubeconfig: "{{ _remote_kubeconfig | default(omit) }}"
+      validate_certs: "{{ false if (_remote_kubeconfig_insecure | default(false) | bool) else omit }}"
+    kubernetes.core.k8s_info:
+      kubeconfig: "{{ _remote_kubeconfig | default(omit) }}"
+      validate_certs: "{{ false if (_remote_kubeconfig_insecure | default(false) | bool) else omit }}"
+  block:
+    - name: "Include provider storage role"
+      ansible.builtin.include_role:
+        name: "osac.templates.{{ _current_provider }}_storage"
+        tasks_from: "{{ _dispatch_action }}"
+        public: true
+      vars:
+        _provider_tiers: "{{ _computed_provider_tiers }}"
+
+- name: "Accumulate tenant config after dispatch (setup only)"
+  ansible.builtin.set_fact:
+    _all_tenant_configs: >-
+      {{ _all_tenant_configs | combine({_current_provider: storage_provider_tenant_config}) }}
+  when:
+    - _dispatch_action == 'setup'
+    - storage_provider_tenant_config is defined
+    - storage_provider_tenant_config is mapping
+
+- name: "Accumulate StorageClass names after dispatch (ensure_storage_class only)"
+  ansible.builtin.set_fact:
+    _all_sc_names: "{{ _all_sc_names + (storage_provider_storage_class_names | default([])) }}"
+  when:
+    - _dispatch_action == 'ensure_storage_class'

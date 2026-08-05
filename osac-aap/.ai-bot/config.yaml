@@ -1,0 +1,24 @@
+# .ai-bot/config.yaml — osac-aap
+#
+# Configuration for the jira-ai-issue-solver bot.
+# See docs/repo-configuration.md in the bot repo for field reference.
+
+# Auxiliary repositories cloned into the workspace before AI execution.
+imports:
+  - repo: https://github.com/flightctl/ai-workflows
+    path: .ai-workflows
+    ref: main
+    install: .ai-workflows/install.sh
+
+# Shell commands the AI can use for validation.
+# These are hints — the AI decides when and how to use them.
+validation_commands:
+  - uv run ansible-lint
+  - pre-commit run --all-files
+
+# Pull request creation settings.
+pr:
+  draft: false
+  title_prefix: "[AI]"
+  labels:
+    - ai-pr

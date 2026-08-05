@@ -1,0 +1,4 @@
+---
+- name: Modify VM spec (no-op by default; override step to customize vm_template_spec)
+  ansible.builtin.debug:
+    msg: "Modify VM spec step (no-op). Override create_step_modify_vm_spec_override to customize."

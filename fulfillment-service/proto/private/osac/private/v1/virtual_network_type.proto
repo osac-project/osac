@@ -1,0 +1,202 @@
+//
+// Copyright (c) 2025 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "google/api/field_behavior.proto";
+import "osac/private/v1/metadata_type.proto";
+
+// Represents a tenant-isolated virtual network.
+//
+// VirtualNetwork provides network isolation for compute instances within a region. Each VirtualNetwork is backed
+// by a specific NetworkClass implementation strategy (e.g., "udn-net" for User-Defined Networks, "phys-net" for
+// physical network infrastructure).
+//
+// VirtualNetworks support flexible IP addressing:
+// - IPv4-only: Set ipv4_cidr, leave ipv6_cidr empty
+// - IPv6-only: Set ipv6_cidr, leave ipv4_cidr empty
+// - Dual-stack: Set both ipv4_cidr and ipv6_cidr
+//
+// The selected NetworkClass must support the requested IP addressing mode via its capabilities.
+//
+// Tenant isolation is enforced via the standard Metadata tenant field. VirtualNetworks are scoped to
+// a single region and cannot span multiple regions.
+message VirtualNetwork {
+  // Unique identifier of the virtual network.
+  string id = 1;
+
+  // Metadata of the virtual network, including name, labels, tenant, and timestamps.
+  Metadata metadata = 2;
+
+  // Desired configuration of the virtual network (user-modifiable).
+  VirtualNetworkSpec spec = 3;
+
+  // Current state of the virtual network (system-provided, read-only).
+  VirtualNetworkStatus status = 4;
+}
+
+// Defines the desired configuration for a VirtualNetwork.
+//
+// The spec contains user-specified parameters that define how the network should be configured. These fields
+// follow a declarative model where users specify the desired state and the system reconciles to match it.
+message VirtualNetworkSpec {
+  // Region where the network is created. This is required and immutable after creation.
+  //
+  // VirtualNetworks are region-scoped resources and cannot span multiple regions. Compute instances can only
+  // attach to VirtualNetworks in the same region.
+  //
+  // Example: "us-east-1", "eu-west-2"
+  string region = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE
+  ];
+
+  // The NetworkClass for this VirtualNetwork. If omitted on creation, the default NetworkClass is used.
+  // Once set (either explicitly or via default), this field is immutable.
+  //
+  // This field stores the ID of the selected NetworkClass resource. The selected NetworkClass determines the
+  // network backend (implementation_strategy) and the available capabilities.
+  //
+  // The NetworkClass must support the requested IP addressing capabilities (IPv4, IPv6, or dual-stack) specified
+  // via the capabilities field.
+  //
+  // Example: "udn-net", "phys-net", "ovn-kubernetes"
+  string network_class = 2 [
+    (google.api.field_behavior) = OPTIONAL,
+    (google.api.field_behavior) = IMMUTABLE
+  ];
+
+  // IPv4 CIDR block for this network. Optional for IPv6-only networks. Immutable after creation.
+  //
+  // Must be valid CIDR notation. Validation enforced at service layer.
+  // The CIDR block should be appropriately sized for the expected number of compute instances.
+  //
+  // Example: "10.0.0.0/16", "192.168.0.0/24"
+  //
+  // Leave empty when creating an IPv6-only network.
+  optional string ipv4_cidr = 3 [(google.api.field_behavior) = IMMUTABLE];
+
+  // IPv6 CIDR block for this network. Optional for IPv4-only networks. Immutable after creation.
+  //
+  // Must be valid CIDR notation. Validation enforced at service layer.
+  // IPv6 addresses should follow standard allocation practices for tenant networks.
+  //
+  // Example: "2001:db8::/48", "fd00::/64"
+  //
+  // Leave empty when creating an IPv4-only network.
+  optional string ipv6_cidr = 4 [(google.api.field_behavior) = IMMUTABLE];
+
+  // Requested network capabilities for this VirtualNetwork.
+  //
+  // These capabilities must be compatible with the selected NetworkClass.capabilities. The system will validate
+  // that the NetworkClass supports the requested addressing mode before creating the network.
+  VirtualNetworkCapabilities capabilities = 5;
+
+  // Implementation strategy for provisioning this network.
+  //
+  // This determines the underlying network backend and Ansible role to use (e.g., "cudn" uses cudn_virtual_network
+  // role). The value is derived from the NetworkClass at creation time and stored here for direct access by
+  // controllers and provisioning systems.
+  //
+  // This field is set by the system based on the selected network_class and is immutable after creation.
+  //
+  // Example: "cudn", "physnet", "ovn"
+  string implementation_strategy = 6 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (google.api.field_behavior) = IMMUTABLE
+  ];
+}
+
+// Describes the IP addressing capabilities requested for a VirtualNetwork.
+//
+// These flags must be compatible with the selected NetworkClass.capabilities. For example, if enable_dual_stack
+// is true, the selected NetworkClass must have supports_dual_stack set to true.
+message VirtualNetworkCapabilities {
+  // Whether IPv4 is enabled for this network. Should be true when ipv4_cidr is set.
+  bool enable_ipv4 = 1;
+
+  // Whether IPv6 is enabled for this network. Should be true when ipv6_cidr is set.
+  bool enable_ipv6 = 2;
+
+  // Whether dual-stack mode (both IPv4 and IPv6) is enabled. Should be true when both ipv4_cidr and ipv6_cidr
+  // are set.
+  bool enable_dual_stack = 3;
+}
+
+// Represents the current operational state of a VirtualNetwork.
+//
+// Status is system-provided and read-only. Users cannot modify status fields directly; the system updates them
+// based on the reconciliation of the spec.
+message VirtualNetworkStatus {
+  // Current lifecycle state of the virtual network.
+  VirtualNetworkState state = 1;
+
+  // Human-readable message providing additional details about the current state.
+  //
+  // For PENDING state, this might contain progress information like "Allocating IP address space" or
+  // "Configuring network backend".
+  //
+  // For FAILED state, this contains error details explaining what went wrong, such as "Invalid CIDR range" or
+  // "NetworkClass does not support dual-stack".
+  //
+  // For READY state, this is typically empty or contains confirmation like "Network ready for compute instances".
+  optional string message = 2;
+
+  // Identifier of the hub that was selected for this virtual network.
+  // This is system-managed and used by the controller to track which hub cluster manages this network's resources.
+  string hub = 3;
+}
+
+// Lifecycle states for VirtualNetwork resources.
+//
+// State transitions typically follow: UNSPECIFIED -> PENDING -> READY, with FAILED as a terminal error state
+// that may require user intervention or resource recreation.
+enum VirtualNetworkState {
+  // State is unknown or has not been determined yet. This is the default state before initialization.
+  VIRTUAL_NETWORK_STATE_UNSPECIFIED = 0;
+
+  // The virtual network is being initialized and is not ready for use yet.
+  //
+  // During this state, the system is:
+  // - Validating CIDR blocks
+  // - Checking NetworkClass compatibility
+  // - Allocating IP address space
+  // - Configuring the network backend
+  //
+  // Compute instances cannot be attached to networks in PENDING state.
+  VIRTUAL_NETWORK_STATE_PENDING = 1;
+
+  // The virtual network is fully operational and ready for compute instances to attach.
+  //
+  // In this state:
+  // - CIDR blocks are allocated and configured
+  // - Network backend is ready
+  // - Compute instances can be created and attached
+  // - Network isolation and routing are active
+  VIRTUAL_NETWORK_STATE_READY = 2;
+
+  // The virtual network has encountered an error and is unusable.
+  //
+  // Common failure reasons include:
+  // - Invalid CIDR notation
+  // - CIDR block conflicts with existing networks
+  // - NetworkClass does not support requested capabilities (e.g., dual-stack not supported)
+  // - NetworkClass is not in READY state
+  // - Network backend configuration error
+  //
+  // The status.message field will contain specific error details. Failed networks typically require deletion
+  // and recreation with corrected parameters.
+  VIRTUAL_NETWORK_STATE_FAILED = 3;
+}

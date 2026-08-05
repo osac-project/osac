@@ -1,0 +1,9 @@
+---
+- name: Release public IP allocation
+  hosts: net_nodes[0]
+  gather_facts: false
+  tasks:
+    - name: Release IPs
+      ansible.builtin.include_role:
+        name: agentless_net.ipam.ip
+        tasks_from: release

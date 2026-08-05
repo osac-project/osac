@@ -1,0 +1,467 @@
+---
+argument_specs:
+  main:
+    short_description: Deploy MaaS on RHOAI 3.4 with RHCL 1.3 version pinning
+    description: >
+      Provisions an OpenShift cluster with Red Hat OpenShift AI 3.4,
+      Models-as-a-Service (GA), Keycloak SSO, and RHCL 1.3.x version
+      pinning. Extends ocp_small via post-install hook override.
+      SECURITY: All credential defaults (db_password, keycloak_db_password,
+      keycloak_client_secret, keycloak_test_password) are for development
+      and testing only. You MUST override every credential variable before
+      production use.
+    options:
+      # --- Feature Flags ---
+      ocp_4_20_ai_maas_enable_maas:
+        type: bool
+        required: false
+        default: true
+        description: Enable MaaS deployment (operators + configuration).
+      ocp_4_20_ai_maas_enable_keycloak:
+        type: bool
+        required: false
+        default: true
+        description: >
+          Deploy a dedicated Keycloak instance for MaaS OIDC authentication.
+          When false and enable_maas is true, oidc_issuer must be provided.
+      ocp_4_20_ai_maas_oidc_issuer:
+        type: str
+        required: false
+        default: ""
+        description: >
+          External OIDC issuer URL (e.g., shared OSAC Keycloak or customer IdP).
+          Kuadrant AuthPolicy auto-discovers JWKS via OIDC discovery.
+          Required when enable_maas is true and enable_keycloak is false.
+      ocp_4_20_ai_maas_oidc_client_id:
+        type: str
+        required: false
+        default: ""
+        description: >
+          OIDC client ID registered in the external identity provider.
+          Required when enable_maas is true and enable_keycloak is false.
+      ocp_4_20_ai_maas_enable_observability:
+        type: bool
+        required: false
+        default: true
+        description: >
+          Install COO v1.4 + OTel operators and configure DSCI metrics for
+          the observability dashboard (Cluster/Models/Usage tabs).
+      ocp_4_20_ai_maas_enable_dashboard:
+        type: bool
+        required: false
+        default: true
+        description: >
+          Deploy the RHOAI web console for model management and monitoring.
+          Set to false for headless inference clusters managed via API only.
+      ocp_4_20_ai_maas_run_verify:
+        type: bool
+        required: false
+        default: true
+        description: Run verification tests after deployment.
+      ocp_4_20_ai_maas_hardware_profiles:
+        type: list
+        required: false
+        default: []
+        description: >
+          List of HardwareProfile CRs to create on the cluster. Each entry
+          defines a GPU/accelerator profile with CPU, memory, and optional
+          accelerator resource constraints. A single cluster can have N
+          profiles — users select the appropriate one in the RHOAI dashboard
+          when deploying models. Empty list (default) creates no profiles.
+          See analysis/phase3/hw_profiles.md for ready-to-use definitions.
+        elements: dict
+      ocp_4_20_ai_maas_external_models:
+        type: list
+        required: false
+        default: []
+        description: >
+          List of external models to access from upstream clusters. Each entry
+          creates an ExternalModel CR with MaaS governance (AuthPolicy +
+          Subscription) on the tenant cluster. Requires enable_maas=true.
+          Empty list (default) skips external model setup.
+
+          Each entry is a dict with required fields:
+            name            - Local model name (CR names derived from this)
+            secured         - true = deploy proxy (Path B/C), false = direct Route (Path A)
+            upstream_endpoint - Gateway FQDN (secured) or Route FQDN (unsecured)
+            upstream_credential - MaaS API key (B), K8s SA token (C), or 'dummy-not-used' (A)
+            upstream_model_ns - Model namespace on upstream cluster
+            upstream_model_name - Model name on upstream cluster
+            model_id        - spec.targetModel for ExternalModel (e.g. granite-3.1-8b-instruct-fp8)
+            token_limit     - Tenant-side rate limit (tokens per window)
+            window          - Rate limit window (e.g. 1m, 1h)
+            priority        - MaaSSubscription priority (lower number = lower tier)
+
+          When secured=true, a maas-proxy Deployment is created targeting
+          upstream_endpoint. The proxy adds /<upstream_model_ns>/<upstream_model_name>/
+          path prefix. Multiple models from the same upstream share one proxy.
+          When secured=false, ExternalModel points directly to upstream_endpoint
+          (a manually created OpenShift Route FQDN).
+        elements: dict
+      ocp_4_20_ai_maas_proxy_image:
+        type: str
+        required: false
+        default: "quay.io/mpaulgreen/maas-proxy:latest"
+        description: Container image for maas-proxy Deployments (secured external models).
+      ocp_4_20_ai_maas_proxy_namespace:
+        type: str
+        required: false
+        default: "maas-proxies"
+        description: Namespace for maas-proxy Deployments and routing Services.
+      ocp_4_20_ai_maas_external_model_namespace:
+        type: str
+        required: false
+        default: "external-models"
+        description: >
+          Namespace for ExternalModel CRs and credential Secrets. Created with
+          required labels (opendatahub.io/generated-namespace, gateway-access).
+      ocp_4_20_ai_maas_ocp_release_image:
+        type: str
+        required: false
+        default: "quay.io/openshift-release-dev/ocp-release:4.20.0-multi"
+        description: OCP release image passed to the parent template.
+
+      # --- Platform Operators ---
+      ocp_4_20_ai_maas_cert_manager_channel:
+        type: str
+        required: false
+        default: "stable-v1.18"
+        description: >
+          OLM channel for cert-manager. RHCL 1.3 requires cert-manager 1.18
+          per https://access.redhat.com/articles/7092611.
+      ocp_4_20_ai_maas_cert_manager_source:
+        type: str
+        required: false
+        default: "redhat-operators"
+        description: OLM catalog source for cert-manager.
+      ocp_4_20_ai_maas_sm_channel:
+        type: str
+        required: false
+        default: "stable-3.2"
+        description: >
+          OLM channel for Service Mesh. Must match RHCL supported configuration.
+          SM 3.2 pairs with RHCL 1.3 per https://access.redhat.com/articles/7092611.
+      ocp_4_20_ai_maas_sm_starting_csv:
+        type: str
+        required: false
+        default: "servicemeshoperator3.v3.2.7"
+        description: Starting CSV for Service Mesh subscription (Manual approval).
+      ocp_4_20_ai_maas_sm_source:
+        type: str
+        required: false
+        default: "redhat-operators"
+        description: OLM catalog source for Service Mesh.
+      ocp_4_20_ai_maas_authorino_starting_csv:
+        type: str
+        required: false
+        default: "authorino-operator.v1.3.2"
+        description: Starting CSV for Authorino operator. Pre-created to prevent OLM auto-upgrade to v1.4.0.
+      ocp_4_20_ai_maas_limitador_starting_csv:
+        type: str
+        required: false
+        default: "limitador-operator.v1.3.1"
+        description: Starting CSV for Limitador operator. Pre-created to prevent OLM auto-upgrade to v1.4.0.
+      ocp_4_20_ai_maas_dns_starting_csv:
+        type: str
+        required: false
+        default: "dns-operator.v1.3.1"
+        description: Starting CSV for DNS operator. Pre-created to prevent OLM auto-upgrade to v1.4.0.
+      ocp_4_20_ai_maas_rhcl_starting_csv:
+        type: str
+        required: false
+        default: "rhcl-operator.v1.3.5"
+        description: >
+          Starting CSV for RHCL operator. Pinned to v1.3.x per
+          https://access.redhat.com/articles/7092611.
+      ocp_4_20_ai_maas_rhcl_source:
+        type: str
+        required: false
+        default: "redhat-operators"
+        description: OLM catalog source for RHCL and sub-operators.
+      ocp_4_20_ai_maas_reject_version:
+        type: str
+        required: false
+        default: "v1.4.0"
+        description: Version string to reject in OLM install plan approval (SM, RHCL steps).
+      ocp_4_20_ai_maas_accept_version:
+        type: str
+        required: false
+        default: "v1.3"
+        description: >
+          Version pattern to accept in sub-operator install plan approval. OLM may
+          bundle v1.4.0 upgrades with v1.3.x installs non-deterministically; this
+          ensures plans containing v1.3.x CSVs are approved regardless.
+      # --- Observability Operators ---
+      ocp_4_20_ai_maas_coo_starting_csv:
+        type: str
+        required: false
+        default: "cluster-observability-operator.v1.4.0"
+        description: >
+          Starting CSV for COO. Pinned to v1.4.0 — v1.5 breaks RHOAI 3.4
+          (CEL validation + Perses image incompatibility). See RHOAIENG-69180.
+      ocp_4_20_ai_maas_coo_source:
+        type: str
+        required: false
+        default: "redhat-operators"
+        description: OLM catalog source for Cluster Observability Operator.
+      ocp_4_20_ai_maas_otel_package:
+        type: str
+        required: false
+        default: "opentelemetry-product"
+        description: OLM package name for Red Hat OpenTelemetry operator.
+      ocp_4_20_ai_maas_otel_source:
+        type: str
+        required: false
+        default: "redhat-operators"
+        description: OLM catalog source for OpenTelemetry operator.
+      ocp_4_20_ai_maas_dsci_metrics_replicas:
+        type: int
+        required: false
+        default: 1
+        description: Number of Prometheus replicas for DSCI metrics collection.
+      ocp_4_20_ai_maas_dsci_metrics_retention:
+        type: str
+        required: false
+        default: "7d"
+        description: Prometheus metrics retention period for DSCI.
+      ocp_4_20_ai_maas_dsci_metrics_storage:
+        type: str
+        required: false
+        default: "10Gi"
+        description: PVC size for DSCI Prometheus metrics storage.
+
+      # --- Leader Worker Set ---
+      ocp_4_20_ai_maas_lws_channel:
+        type: str
+        required: false
+        default: "stable-v1.0"
+        description: OLM channel for Leader Worker Set operator.
+      ocp_4_20_ai_maas_lws_source:
+        type: str
+        required: false
+        default: "redhat-operators"
+        description: OLM catalog source for Leader Worker Set.
+      ocp_4_20_ai_maas_rhoai_channel:
+        type: str
+        required: false
+        default: "stable-3.4"
+        description: OLM channel for Red Hat OpenShift AI.
+      ocp_4_20_ai_maas_rhoai_source:
+        type: str
+        required: false
+        default: "redhat-operators"
+        description: OLM catalog source for RHOAI.
+
+      # --- DSC ---
+      ocp_4_20_ai_maas_dsc_components:
+        type: dict
+        required: false
+        description: >
+          DataScienceCluster component management states. Keys are component
+          names, values are Managed or Removed.
+
+      # --- Gateway ---
+      ocp_4_20_ai_maas_gateway_hostname:
+        type: str
+        required: false
+        default: "maas"
+        description: Hostname prefix for the MaaS gateway (prepended to cluster domain).
+      ocp_4_20_ai_maas_gateway_memory_limit:
+        type: str
+        required: false
+        default: "2Gi"
+        description: Memory limit for the gateway Envoy proxy. Prevents OOMKill with Wasm plugins.
+      ocp_4_20_ai_maas_gateway_cert_name:
+        type: str
+        required: false
+        default: "router-certs"
+        description: TLS certificate Secret name in openshift-ingress for the gateway.
+
+      # --- PostgreSQL ---
+      ocp_4_20_ai_maas_db_image:
+        type: str
+        required: false
+        default: "registry.redhat.io/rhel9/postgresql-16:latest"
+        description: PostgreSQL container image for maas-api and Keycloak databases.
+      ocp_4_20_ai_maas_db_user:
+        type: str
+        required: false
+        default: "maas"
+        description: PostgreSQL username for the maas-api database.
+      ocp_4_20_ai_maas_db_password:
+        type: str
+        required: false
+        default: "maas-db-password"
+        description: "DEV ONLY — PostgreSQL password for the maas-api database. Must be overridden for production."
+      ocp_4_20_ai_maas_db_name:
+        type: str
+        required: false
+        default: "maas"
+        description: PostgreSQL database name for maas-api.
+      ocp_4_20_ai_maas_db_storage:
+        type: str
+        required: false
+        default: "5Gi"
+        description: PVC storage size for the maas-api PostgreSQL database.
+
+      # --- Keycloak ---
+      ocp_4_20_ai_maas_keycloak_namespace:
+        type: str
+        required: false
+        default: "keycloak-maas"
+        description: Namespace and CR name for the Keycloak instance and its resources.
+      ocp_4_20_ai_maas_keycloak_channel:
+        type: str
+        required: false
+        default: "stable-v26.4"
+        description: OLM channel for Red Hat build of Keycloak (RHBK).
+      ocp_4_20_ai_maas_keycloak_instances:
+        type: int
+        required: false
+        default: 1
+        description: Number of Keycloak pod replicas.
+      ocp_4_20_ai_maas_keycloak_db_password:
+        type: str
+        required: false
+        default: "keycloak-db-password"
+        description: "DEV ONLY — PostgreSQL password for Keycloak database. Must be overridden for production."
+      ocp_4_20_ai_maas_keycloak_db_storage:
+        type: str
+        required: false
+        default: "5Gi"
+        description: PVC storage size for the Keycloak PostgreSQL database.
+      ocp_4_20_ai_maas_keycloak_realm:
+        type: str
+        required: false
+        default: "maas"
+        description: Keycloak realm name for MaaS OIDC authentication.
+      ocp_4_20_ai_maas_keycloak_client_id:
+        type: str
+        required: false
+        default: "maas-client"
+        description: OIDC client ID registered in Keycloak for MaaS.
+      ocp_4_20_ai_maas_keycloak_client_secret:
+        type: str
+        required: false
+        default: "maas-client-secret-value"
+        description: "DEV ONLY — OIDC client secret for MaaS. Must be overridden for production."
+      ocp_4_20_ai_maas_keycloak_test_password:
+        type: str
+        required: false
+        default: "password123"
+        description: "DEV ONLY — Password for test users in the Keycloak realm. Must be overridden for production."
+
+      # --- Tenant ---
+      ocp_4_20_ai_maas_tenant_name:
+        type: str
+        required: false
+        default: "default-tenant"
+        description: MaaS Tenant CR name.
+      ocp_4_20_ai_maas_api_key_max_expiration_days:
+        type: int
+        required: false
+        default: 90
+        description: Maximum API key expiration in days.
+
+      # --- Tenant Telemetry ---
+      ocp_4_20_ai_maas_telemetry_enabled:
+        type: bool
+        required: false
+        default: true
+        description: Enable telemetry collection in the MaaS Tenant.
+      ocp_4_20_ai_maas_telemetry_capture_user:
+        type: bool
+        required: false
+        default: true
+        description: >
+          Include user identity in Limitador metrics. Required for
+          the Usage tab to show per-user data. Privacy-sensitive —
+          set to false if user tracking is not desired.
+      ocp_4_20_ai_maas_telemetry_capture_group:
+        type: bool
+        required: false
+        default: true
+        description: >
+          Include group labels in Limitador metrics. Increases
+          metric cardinality.
+      ocp_4_20_ai_maas_telemetry_capture_organization:
+        type: bool
+        required: false
+        default: true
+        description: Include organization_id in Limitador metrics.
+      ocp_4_20_ai_maas_telemetry_capture_model_usage:
+        type: bool
+        required: false
+        default: true
+        description: Include model labels in usage metrics.
+
+      # --- Model ---
+      ocp_4_20_ai_maas_model_name:
+        type: str
+        required: false
+        default: "facebook-opt-125m-simulated"
+        description: K8s resource name for the LLMInferenceService.
+      ocp_4_20_ai_maas_model_id:
+        type: str
+        required: false
+        default: "facebook/opt-125m"
+        description: vLLM model identifier used in inference requests and container args.
+      ocp_4_20_ai_maas_model_namespace:
+        type: str
+        required: false
+        default: "llm"
+        description: Namespace where the model is deployed.
+      ocp_4_20_ai_maas_model_replicas:
+        type: int
+        required: false
+        default: 1
+        description: Number of model serving replicas.
+      ocp_4_20_ai_maas_model_image:
+        type: str
+        required: false
+        default: "ghcr.io/llm-d/llm-d-inference-sim:v0.7.1"
+        description: Container image for the model. Default is the CPU-only simulator (no GPU required).
+      ocp_4_20_ai_maas_model_uri:
+        type: str
+        required: false
+        default: "hf://sshleifer/tiny-gpt2"
+        description: Model URI. Not used by the simulator but required by LLMInferenceService spec.
+
+      # --- Subscription Tiers ---
+      ocp_4_20_ai_maas_tiers:
+        type: list
+        elements: dict
+        required: false
+        description: >
+          Subscription tiers. Each tier defines a MaaSSubscription with token
+          rate limits. Also creates Keycloak groups and test users. Each entry
+          needs name, group, token_limit, window, and priority.
+
+      # --- Monitoring ---
+      ocp_4_20_ai_maas_monitoring_retention:
+        type: str
+        required: false
+        default: "24h"
+        description: Prometheus retention period for user workload monitoring.
+
+      # --- Timeouts ---
+      ocp_4_20_ai_maas_operator_retries:
+        type: int
+        required: false
+        default: 50
+        description: Retry count for operator installation waits (at operator_delay interval).
+      ocp_4_20_ai_maas_operator_delay:
+        type: int
+        required: false
+        default: 10
+        description: Delay in seconds between operator wait retries.
+      ocp_4_20_ai_maas_long_retries:
+        type: int
+        required: false
+        default: 60
+        description: Retry count for long-running waits (RHOAI CSV, DSCI, Keycloak).
+      ocp_4_20_ai_maas_dsc_retries:
+        type: int
+        required: false
+        default: 90
+        description: Retry count for DataScienceCluster Ready wait.

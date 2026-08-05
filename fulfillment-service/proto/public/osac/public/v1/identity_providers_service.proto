@@ -1,0 +1,143 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.public.v1;
+
+import "google/api/annotations.proto";
+import "google/protobuf/field_mask.proto";
+import "osac/public/v1/identity_provider_type.proto";
+
+// Request to create an identity provider.
+message IdentityProvidersCreateRequest {
+  // The identity provider to create.
+  IdentityProvider object = 1;
+}
+
+// Response containing the created identity provider.
+message IdentityProvidersCreateResponse {
+  // The created identity provider.
+  IdentityProvider object = 1;
+}
+
+// Request to list identity providers for a tenant.
+message IdentityProvidersListRequest {
+  // Index of the first result. If not specified the default value will be zero.
+  optional int32 offset = 1;
+
+  // Maximum number of results to be returned by the server.
+  optional int32 limit = 2;
+
+  // Filter criteria. CEL expression to filter identity providers.
+  // Use metadata.tenant to scope to a specific tenant.
+  optional string filter = 3;
+}
+
+// Response containing the list of identity providers.
+message IdentityProvidersListResponse {
+  // Actual number of items returned.
+  int32 size = 1;
+
+  // Total number of items that match the search criteria.
+  int32 total = 2;
+
+  // List of identity providers.
+  repeated IdentityProvider items = 3;
+}
+
+// Request to get a tenant's identity provider by ID.
+message IdentityProvidersGetRequest {
+  // ID of the identity provider.
+  string id = 1;
+}
+
+// Response containing the identity provider.
+message IdentityProvidersGetResponse {
+  // The identity provider.
+  IdentityProvider object = 1;
+}
+
+// Request to update an identity provider.
+message IdentityProvidersUpdateRequest {
+  // The updated identity provider object.
+  IdentityProvider object = 1;
+
+  // Update mask indicating which fields to update.
+  google.protobuf.FieldMask update_mask = 2;
+
+  // Lock enables optimistic locking. When set to true, the server verifies that the current version of the object
+  // matches the value of the metadata.version field of the submitted object. If they differ the update will be
+  // rejected with a conflict error.
+  bool lock = 3;
+}
+
+// Response containing the updated identity provider.
+message IdentityProvidersUpdateResponse {
+  // The updated identity provider.
+  IdentityProvider object = 1;
+}
+
+// Request to delete an identity provider.
+message IdentityProvidersDeleteRequest {
+  // ID of the identity provider to delete.
+  string id = 1;
+}
+
+// Response for delete operation.
+message IdentityProvidersDeleteResponse {}
+
+// IdentityProviders service provides operations for managing tenant identity providers.
+// Users can only access identity providers for their tenant.
+// Identity providers enable users to authenticate using their existing corporate credentials
+// (LDAP, Active Directory, OIDC, SAML, etc.).
+service IdentityProviders {
+  // Creates a new identity provider.
+  rpc Create(IdentityProvidersCreateRequest) returns (IdentityProvidersCreateResponse) {
+    option (google.api.http) = {
+      post: "/api/fulfillment/v1/identity_providers"
+      body: "object"
+    };
+  }
+
+  // Lists identity providers assigned to a tenant.
+  // Use filter with metadata.tenant to scope to a specific tenant.
+  rpc List(IdentityProvidersListRequest) returns (IdentityProvidersListResponse) {
+    option (google.api.http) = {
+      get: "/api/fulfillment/v1/identity_providers"
+    };
+  }
+
+  // Retrieves an identity provider by ID.
+  rpc Get(IdentityProvidersGetRequest) returns (IdentityProvidersGetResponse) {
+    option (google.api.http) = {
+      get: "/api/fulfillment/v1/identity_providers/{id}"
+      response_body: "object"
+    };
+  }
+
+  // Updates an existing identity provider.
+  rpc Update(IdentityProvidersUpdateRequest) returns (IdentityProvidersUpdateResponse) {
+    option (google.api.http) = {
+      patch: "/api/fulfillment/v1/identity_providers/{object.id}"
+      body: "object"
+    };
+  }
+
+  // Deletes an identity provider.
+  rpc Delete(IdentityProvidersDeleteRequest) returns (IdentityProvidersDeleteResponse) {
+    option (google.api.http) = {
+      delete: "/api/fulfillment/v1/identity_providers/{id}"
+    };
+  }
+}

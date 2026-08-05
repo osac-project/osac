@@ -1,0 +1,106 @@
+//
+// Copyright (c) 2025 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "google/api/annotations.proto";
+import "google/protobuf/field_mask.proto";
+import "osac/private/v1/cluster_template_type.proto";
+
+message ClusterTemplatesListRequest {
+  optional int32 offset = 1;
+  optional int32 limit = 2;
+  optional string filter = 3;
+}
+
+message ClusterTemplatesListResponse {
+  int32 size = 1;
+  int32 total = 2;
+  repeated ClusterTemplate items = 3;
+}
+
+message ClusterTemplatesGetRequest {
+  string id = 1;
+}
+
+message ClusterTemplatesGetResponse {
+  ClusterTemplate object = 1;
+}
+
+message ClusterTemplatesCreateRequest {
+  ClusterTemplate object = 1;
+}
+
+message ClusterTemplatesCreateResponse {
+  ClusterTemplate object = 1;
+}
+
+message ClusterTemplatesDeleteRequest {
+  string id = 1;
+}
+
+message ClusterTemplatesDeleteResponse {}
+
+message ClusterTemplatesUpdateRequest {
+  ClusterTemplate object = 1;
+  google.protobuf.FieldMask update_mask = 2;
+
+  // Lock enables optimistic locking. When set to true, the server verifies that the current version of the object
+  // matches the value of the metadata.version field of the submitted object. If they differ the update will be
+  // rejected. This is useful to prevent lost updates when multiple clients are modifying the same object concurrently.
+  bool lock = 3;
+}
+
+message ClusterTemplatesUpdateResponse {
+  ClusterTemplate object = 1;
+}
+
+message ClusterTemplatesSignalRequest {
+  string id = 1;
+}
+
+message ClusterTemplatesSignalResponse {}
+
+service ClusterTemplates {
+  rpc List(ClusterTemplatesListRequest) returns (ClusterTemplatesListResponse) {
+    option (google.api.http) = {get: "/api/private/v1/cluster_templates"};
+  }
+  rpc Get(ClusterTemplatesGetRequest) returns (ClusterTemplatesGetResponse) {
+    option (google.api.http) = {
+      get: "/api/private/v1/cluster_templates/{id}"
+      response_body: "object"
+    };
+  }
+  rpc Create(ClusterTemplatesCreateRequest) returns (ClusterTemplatesCreateResponse) {
+    option (google.api.http) = {
+      post: "/api/private/v1/cluster_templates"
+      body: "object"
+      response_body: "object"
+    };
+  }
+  rpc Delete(ClusterTemplatesDeleteRequest) returns (ClusterTemplatesDeleteResponse) {
+    option (google.api.http) = {delete: "/api/private/v1/cluster_templates/{id}"};
+  }
+  rpc Update(ClusterTemplatesUpdateRequest) returns (ClusterTemplatesUpdateResponse) {
+    option (google.api.http) = {
+      patch: "/api/private/v1/cluster_templates/{object.id}"
+      body: "object"
+      response_body: "object"
+    };
+  }
+
+  // Indicates that something changed in the object or the system that may require reconciling the object.
+  rpc Signal(ClusterTemplatesSignalRequest) returns (ClusterTemplatesSignalResponse) {}
+}

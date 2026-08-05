@@ -1,0 +1,4 @@
+---
+- name: Post-delete hook (no-op by default; override step to run custom logic after resources)
+  ansible.builtin.debug:
+    msg: "Post-delete hook step (no-op). Override delete_step_post_delete_hook_override to run custom logic."

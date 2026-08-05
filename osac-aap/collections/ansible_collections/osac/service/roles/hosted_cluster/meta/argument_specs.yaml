@@ -1,0 +1,50 @@
+argument_specs:
+  main:
+    options:
+      hosted_cluster_state:
+        type: str
+        required: true
+        choices:
+        - present
+        - absent
+      hosted_cluster_name:
+        type: str
+        required: true
+      hosted_cluster_namespace:
+        type: str
+        required: true
+      hosted_cluster_node_requests:
+        type: list
+        elements: dict
+        options:
+          numberOfNodes:
+            type: int
+            required: true
+          resourceClass:
+            type: str
+            required: true
+      hosted_cluster_settings:
+        type: dict
+        required: true
+        options:
+          ocp_release_image:
+            type: str
+            required: true
+          pull_secret:
+            type: str
+            required: true
+          ssh_public_key:
+            type: str
+            required: false
+      hosted_cluster_controller_availability_policy:
+        type: str
+        required: false
+        choices:
+        - HighlyAvailable
+        - SingleReplica
+      hosted_cluster_infrastructure_availability_policy:
+        type: str
+        required: false
+        choices:
+        - HighlyAvailable
+        - SingleReplica

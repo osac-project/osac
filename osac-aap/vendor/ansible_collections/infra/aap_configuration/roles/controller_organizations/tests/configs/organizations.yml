@@ -1,0 +1,5 @@
+---
+aap_organizations:
+  - name: Default
+    description: Default
+...

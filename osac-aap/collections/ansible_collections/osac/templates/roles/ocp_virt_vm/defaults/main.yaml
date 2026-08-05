@@ -1,0 +1,52 @@
+---
+# guest_os_family: linux (default) or windows — drives validation, domain spec,
+# initialization (cloud-init vs sysprep), delete cleanup, and ready timeouts.
+guest_os_family: linux
+
+# vm_enable_sysprep: Controls whether to create sysprep disk for Windows VMs.
+# Set to false when using pre-configured golden images that are already sysprepped.
+# Default: true (create sysprep disk for fresh Windows installation images)
+vm_enable_sysprep: true
+
+# Windows Sysprep OOBE Configuration
+# These settings configure Windows Out-of-Box Experience (OOBE) to auto-complete setup.
+# Used when vm_enable_sysprep is true.
+vm_sysprep_timezone: "Eastern Standard Time"     # Timezone (Windows timezone name)
+vm_sysprep_admin_password: ""
+vm_sysprep_autologon_enabled: true               # Enable automatic login on first boot
+vm_sysprep_input_locale: "en-US"                 # Keyboard layout (e.g., en-US, en-GB, de-DE)
+vm_sysprep_system_locale: "en-US"                # Region/format settings
+vm_sysprep_ui_language: "en-US"                  # Display language
+vm_sysprep_user_locale: "en-US"                  # User-specific locale
+
+default_vm_internal_network: "hypershift"
+default_vm_storage_class: "nfs-client"
+default_vm_labels: "{{ {compute_instance_label: compute_instance_name} }}"
+
+# Setup the defaults described in the arg_specs (Linux profile).
+default_arg_specs:
+  exposed_ports: "22/tcp"
+
+# Defaults for ComputeInstance spec fields (Linux profile).
+# cores/memoryGiB are not defaulted here: they are resolved by osac-operator
+# from spec.instanceType (mandatory) and are always present on the CR by the
+# time this role runs.
+default_spec:
+  bootDisk:
+    sizeGiB: 10
+  image:
+    sourceRef: "quay.io/containerdisks/fedora:latest"
+  runStrategy: "Always"
+
+# Applied in create.yaml when guest_os_family is windows (overrides the maps above).
+_guest_os_windows_default_arg_specs:
+  exposed_ports: "3389/tcp"
+
+_guest_os_windows_default_spec:
+  bootDisk:
+    sizeGiB: 40
+  image:
+    # Microsoft does not publish an official KubeVirt container disk; set spec.image.sourceRef
+    # on the ComputeInstance (or override this role map) to your Windows golden / registry image.
+    sourceRef: ""
+  runStrategy: "Always"

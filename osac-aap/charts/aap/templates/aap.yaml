@@ -1,0 +1,23 @@
+{{- if .Values.aap.instance.enabled }}
+apiVersion: aap.ansible.com/v1alpha1
+kind: AnsibleAutomationPlatform
+metadata:
+  name: {{ include "osac-aap.instanceName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  controller:
+    disabled: {{ .Values.aap.instance.controller.disabled }}
+  eda:
+    disabled: {{ .Values.aap.instance.eda.disabled }}
+  hub:
+    disabled: {{ .Values.aap.instance.hub.disabled }}
+  lightspeed:
+    disabled: {{ .Values.aap.instance.lightspeed.disabled }}
+  image_pull_policy: {{ .Values.aap.instance.imagePullPolicy }}
+  no_log: true
+  redis_mode: {{ .Values.aap.instance.redisMode }}
+  route_tls_termination_mechanism: {{ .Values.aap.instance.routeTlsTerminationMechanism }}
+{{- end }}

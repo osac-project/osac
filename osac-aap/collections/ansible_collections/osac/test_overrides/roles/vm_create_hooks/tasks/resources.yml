@@ -1,0 +1,11 @@
+---
+- name: Log VM create resources step execution
+  ansible.builtin.lineinfile:
+    path: /tmp/osac_test_overrides.log
+    line: "{{ ansible_date_time.iso8601 }} | vm_create_resources | {{ compute_instance_name }}"
+    create: true
+
+# Note: Skip actual resource creation for testing
+- name: Skip actual resource creation (test mode)
+  ansible.builtin.debug:
+    msg: "Test mode - skipping actual DataVolume and VirtualMachine creation"

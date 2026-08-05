@@ -1,0 +1,101 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "osac/private/v1/metadata_type.proto";
+
+// Identifies the storage protocol used by a backend association within a storage tier.
+enum StorageProtocol {
+  // Protocol is unknown or has not been specified.
+  STORAGE_PROTOCOL_UNSPECIFIED = 0;
+
+  // NFS (Network File System) protocol for file-based storage access.
+  STORAGE_PROTOCOL_NFS = 1;
+
+  // Block storage protocol for volume-based storage access.
+  STORAGE_PROTOCOL_BLOCK = 2;
+}
+
+// Lifecycle states for StorageTier resources.
+enum StorageTierState {
+  // State is unknown or has not been determined yet.
+  STORAGE_TIER_STATE_UNSPECIFIED = 0;
+
+  // The storage tier is active and available for use by tenants.
+  STORAGE_TIER_STATE_ACTIVE = 1;
+}
+
+// Represents the association of a storage backend within a storage tier, including protocol-specific
+// configuration and quota limits.
+message BackendAssociation {
+  // Unique identifier of the associated storage backend.
+  string backend_id = 1;
+
+  // Storage protocol used for this backend association.
+  StorageProtocol protocol = 2;
+
+  // Maximum read bandwidth in megabytes per second.
+  int32 max_read_bandwidth_mbs = 3;
+
+  // Maximum write bandwidth in megabytes per second.
+  int32 max_write_bandwidth_mbs = 4;
+
+  // Storage quota in gibibytes (GiB) allocated to this backend association.
+  int64 quota_gib = 5;
+
+  // Whether data at rest is encrypted on this backend.
+  bool encryption_enabled = 6;
+}
+
+// Represents a storage tier in the OSAC platform.
+//
+// StorageTier is a platform-scoped entity that groups one or more StorageBackend associations with
+// protocol, bandwidth, quota, and encryption settings. It is managed exclusively by Cloud Provider
+// Admins through the private API. Tenants consume storage tiers indirectly when provisioning
+// storage-enabled resources.
+//
+// StorageTier follows the NetworkClass pattern: DB-backed with no Kubernetes CRD and no reconciler.
+message StorageTier {
+  // Unique identifier of the storage tier.
+  string id = 1;
+
+  // Metadata of the storage tier.
+  Metadata metadata = 2;
+
+  // Desired configuration of the storage tier (admin-modifiable).
+  StorageTierSpec spec = 3;
+
+  // Current operational status of the storage tier.
+  StorageTierStatus status = 4;
+}
+
+// Defines the desired configuration for a StorageTier.
+message StorageTierSpec {
+  // Human-readable description of the storage tier.
+  string description = 1;
+
+  // List of backend associations that compose this storage tier.
+  repeated BackendAssociation backends = 2;
+}
+
+// Represents the current operational state of a StorageTier.
+message StorageTierStatus {
+  // Current lifecycle state of the storage tier.
+  StorageTierState state = 1;
+
+  // Human-readable message providing additional details about the current state.
+  optional string message = 2;
+}

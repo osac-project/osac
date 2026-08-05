@@ -1,0 +1,71 @@
+---
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Query existing IPAM tree
+  ansible.builtin.uri:
+    url: >-
+      {{ netris_controller_url }}/api/v2/ipam{{
+        ('?filterByVpc=' + (ipam_vpc_id | string)) if ipam_vpc_id is defined else ''
+      }}
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: [200]
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _ipam_tree_resp
+  no_log: true
+
+- name: Find existing allocation by name
+  ansible.builtin.set_fact:
+    _existing_ipam_alloc: >-
+      {{ (_ipam_tree_resp.json.data | default([]))
+         | selectattr('name', 'equalto', ipam_name)
+         | list | first | default(none) }}
+  when: _ipam_tree_resp.json is mapping
+
+- name: Set IPAM facts from existing allocation (skip creation)
+  ansible.builtin.set_fact:
+    ipam_alloc_id: "{{ _existing_ipam_alloc.id }}"
+    ipam_already_existed: true
+  when: _existing_ipam_alloc is defined and _existing_ipam_alloc is not none
+
+- name: Create IPAM allocation
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/ipam/allocation"
+    method: POST
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+      Content-Type: "application/json"
+    body_format: json
+    body: >-
+      {{
+        {
+          'name': ipam_name,
+          'prefix': ipam_cidr,
+          'tenant': {'id': ipam_tenant_id | int}
+        }
+        | combine(
+            ({'vpc': {'id': ipam_vpc_id | int}} if ipam_vpc_id is defined else {})
+          )
+      }}
+    return_content: true
+    status_code: [200, 201]
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _ipam_alloc_resp
+  when: _existing_ipam_alloc is not defined or _existing_ipam_alloc is none
+  no_log: true
+
+- name: Set IPAM allocation facts from response
+  ansible.builtin.set_fact:
+    ipam_alloc_id: "{{ _ipam_alloc_resp.json.data.id }}"
+    ipam_already_existed: false
+  when:
+    - _existing_ipam_alloc is not defined or _existing_ipam_alloc is none
+    - _ipam_alloc_resp is not skipped
+    - _ipam_alloc_resp.json is mapping

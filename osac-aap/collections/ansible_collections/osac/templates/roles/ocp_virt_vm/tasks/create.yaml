@@ -1,0 +1,104 @@
+# Create flow: each step is overridable via create_step_*_override (default: create_step_*_default).
+# Override points: secrets, modify_vm_spec, pre_create_hook, resources, post_create_hook, wait_annotate
+# NOT overrideable: validate, build_spec (CRITICAL steps for correct operation)
+# Variables: compute_instance, compute_instance_name, tenant_target_namespace,
+# template_id, template_parameters, default_arg_specs, default_vm_labels, default_spec,
+# guest_os_family (from CR spec field, defaults to linux).
+---
+- name: Include get remote cluster kubeconfig
+  ansible.builtin.include_role:
+    name: osac.service.common
+    tasks_from: get_remote_cluster_kubeconfig
+
+- name: Extract guest OS family from ComputeInstance spec
+  ansible.builtin.set_fact:
+    guest_os_family: "{{ (compute_instance.spec.guestOSFamily | default(guest_os_family)) | lower }}"
+
+- name: Warn on unrecognized guest OS family
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: Unrecognized guestOSFamily '{{ guest_os_family }}'.
+      Falling back to linux defaults.
+      Supported values: linux, windows
+  when: guest_os_family not in ['linux', 'windows']
+
+- name: Determine target namespace for VM resources
+  ansible.builtin.set_fact:
+    compute_instance_target_namespace: "{{ (compute_instance.metadata.annotations | default({})).get('osac.openshift.io/subnet-target-namespace', tenant_target_namespace) }}"
+
+- name: Log namespace selection
+  ansible.builtin.debug:
+    msg: "VM will be created in namespace: {{ compute_instance_target_namespace }} (tenant namespace: {{ tenant_target_namespace }})"
+
+- name: Apply Windows default resource profile when guest_os_family is windows
+  ansible.builtin.set_fact:
+    default_arg_specs: "{{ _guest_os_windows_default_arg_specs }}"
+    default_spec: "{{ _guest_os_windows_default_spec }}"
+  when: guest_os_family == 'windows'
+
+- name: Set create step defaults
+  ansible.builtin.set_fact:
+    create_step_secrets_default:
+      name: osac.templates.ocp_virt_vm
+      tasks_from: create_secrets.yaml
+    create_step_modify_vm_spec_default:
+      name: osac.templates.ocp_virt_vm
+      tasks_from: create_modify_vm_spec.yaml
+    create_step_pre_create_hook_default:
+      name: osac.templates.ocp_virt_vm
+      tasks_from: create_pre_create_hook.yaml
+    create_step_resources_default:
+      name: osac.templates.ocp_virt_vm
+      tasks_from: create_resources.yaml
+    create_step_post_create_hook_default:
+      name: osac.templates.ocp_virt_vm
+      tasks_from: create_post_create_hook.yaml
+    create_step_wait_annotate_default:
+      name: osac.templates.ocp_virt_vm
+      tasks_from: create_wait_annotate.yaml
+
+- name: Step - Validate (params, VM config, exposed_ports)
+  ansible.builtin.include_role:
+    name: osac.templates.ocp_virt_vm
+    tasks_from: create_validate.yaml
+
+- name: Build VM template spec base
+  ansible.builtin.include_role:
+    name: osac.templates.ocp_virt_vm
+    tasks_from: create_build_spec.yaml
+
+- name: Configure CNV permitted host devices for GPU passthrough
+  ansible.builtin.include_role:
+    name: osac.templates.ocp_virt_vm
+    tasks_from: configure_permitted_host_devices.yaml
+  when: gpu_devices | default([]) | length > 0
+
+- name: Step - Create secrets (user-data, SSH) and add to spec
+  ansible.builtin.include_role:
+    name: "{{ (create_step_secrets_override | default(create_step_secrets_default)).name }}"
+    tasks_from: "{{ (create_step_secrets_override | default(create_step_secrets_default)).tasks_from }}"
+
+- name: Step - Modify VM spec hook (override to customize spec)
+  ansible.builtin.include_role:
+    name: "{{ (create_step_modify_vm_spec_override | default(create_step_modify_vm_spec_default)).name }}"
+    tasks_from: "{{ (create_step_modify_vm_spec_override | default(create_step_modify_vm_spec_default)).tasks_from }}"
+
+- name: Step - Pre-create hook (no-op by default)
+  ansible.builtin.include_role:
+    name: "{{ (create_step_pre_create_hook_override | default(create_step_pre_create_hook_default)).name }}"
+    tasks_from: "{{ (create_step_pre_create_hook_override | default(create_step_pre_create_hook_default)).tasks_from }}"
+
+- name: Step - Create resources (DataVolumes, VirtualMachine)
+  ansible.builtin.include_role:
+    name: "{{ (create_step_resources_override | default(create_step_resources_default)).name }}"
+    tasks_from: "{{ (create_step_resources_override | default(create_step_resources_default)).tasks_from }}"
+
+- name: Step - Post-create hook (no-op by default)
+  ansible.builtin.include_role:
+    name: "{{ (create_step_post_create_hook_override | default(create_step_post_create_hook_default)).name }}"
+    tasks_from: "{{ (create_step_post_create_hook_override | default(create_step_post_create_hook_default)).tasks_from }}"
+
+- name: Step - Wait for VM and annotate ComputeInstance
+  ansible.builtin.include_role:
+    name: "{{ (create_step_wait_annotate_override | default(create_step_wait_annotate_default)).name }}"
+    tasks_from: "{{ (create_step_wait_annotate_override | default(create_step_wait_annotate_default)).tasks_from }}"

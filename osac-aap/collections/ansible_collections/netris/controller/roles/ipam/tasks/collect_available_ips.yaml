@@ -1,0 +1,13 @@
+---
+# Queries hosts for each subnet in _ipam_subnet_list and collects
+# available IPs into ipam_available_ips.
+
+- name: Initialize available IPs list
+  ansible.builtin.set_fact:
+    ipam_available_ips: []
+
+- name: Query hosts for each subnet
+  ansible.builtin.include_tasks: query_subnet_hosts.yaml
+  loop: "{{ _ipam_subnet_list }}"
+  loop_control:
+    loop_var: _ipam_current_subnet

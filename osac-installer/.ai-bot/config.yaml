@@ -1,0 +1,22 @@
+# .ai-bot/config.yaml for osac-installer
+#
+# Infrastructure/deployment repo -- Helm charts, shell scripts,
+# YAML manifests. No Go code, no container builds, no unit tests.
+
+imports:
+  - repo: https://github.com/flightctl/ai-workflows
+    path: .ai-workflows
+    ref: main
+    install: .ai-workflows/install.sh
+
+validation_commands:
+  - yamllint --strict .
+  - pre-commit run --all-files
+  - helm lint charts/osac/
+  - bash -c 'for f in values/*/values.yaml; do helm template osac charts/osac/ --values "$f" > /dev/null; done'
+
+pr:
+  draft: false
+  title_prefix: "[AI]"
+  labels:
+    - ai-pr

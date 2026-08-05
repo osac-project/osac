@@ -1,0 +1,15 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "csi-driver.fullname" . }}-provisioner
+  labels:
+    {{- include "csi-driver.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "csi-driver.fullname" . }}-provisioner
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "csi-driver.controllerServiceAccountName" . }}
+    namespace: {{ .Values.namespace }}

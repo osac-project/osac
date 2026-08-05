@@ -1,0 +1,53 @@
+---
+# Queries a VAST VMS resource type by tenant_id and deletes all matches.
+# Reusable task file — called once per resource type (views, quotas, viewpolicies, qospolicies).
+#
+# Requires in scope:
+#   vast_endpoint                 — VMS API hostname
+#   vast_storage_validate_certs   — TLS validation flag
+#   vast_storage_api_timeout      — API timeout (seconds)
+#   _vast_cleanup_auth_token      — Bearer token from admin auth
+#   _vast_cleanup_tenant_id       — VAST tenant ID to filter by
+#   _vast_cleanup_resource        — API resource name (e.g., "views", "quotas")
+
+- name: "Query VAST {{ _vast_cleanup_resource }} by tenant_id"
+  ansible.builtin.uri:
+    url: "https://{{ vast_endpoint }}/api/{{ _vast_cleanup_resource }}/?tenant_id={{ _vast_cleanup_tenant_id }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _vast_cleanup_auth_token }}"
+    validate_certs: "{{ vast_storage_validate_certs }}"
+    timeout: "{{ vast_storage_api_timeout | int }}"
+    status_code: [200]
+  register: _vast_cleanup_query
+  ignore_errors: true
+  no_log: true
+
+- name: "Delete VAST {{ _vast_cleanup_resource }} by ID"
+  when:
+    - _vast_cleanup_query is not failed
+    - _vast_cleanup_query.json | default([]) | length > 0
+  ansible.builtin.uri:
+    url: "https://{{ vast_endpoint }}/api/{{ _vast_cleanup_resource }}/{{ item.id }}/"
+    method: DELETE
+    headers:
+      Authorization: "Bearer {{ _vast_cleanup_auth_token }}"
+    validate_certs: "{{ vast_storage_validate_certs }}"
+    timeout: "{{ vast_storage_api_timeout | int }}"
+    status_code: [200, 204, 404]
+  loop: "{{ _vast_cleanup_query.json | default([]) }}"
+  loop_control:
+    label: "{{ item.name | default(_vast_cleanup_resource ~ '-' ~ item.id) }}"
+  register: _vast_cleanup_delete
+  ignore_errors: true  # noqa: ignore-errors
+  no_log: true
+
+- name: "Set {{ _vast_cleanup_resource }} cleanup result"
+  ansible.builtin.set_fact:
+    _vast_cleanup_results: >-
+      {{ (_vast_cleanup_results | default({})) | combine({
+           _vast_cleanup_resource: {
+             'queried': _vast_cleanup_query.json | default([]) | length,
+             'failed': (_vast_cleanup_delete.results | default([]) | selectattr('failed', 'defined') | selectattr('failed') | list | length) > 0
+           }
+         }) }}

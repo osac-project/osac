@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|MultiEdit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "file_path=$(cat - | jq -r '.tool_input.file_path // .tool_input.filePath // empty') && case \"$file_path\" in *go.mod) cd \"$CLAUDE_PROJECT_DIR\" && go mod tidy ;; *_types.go) cd \"$CLAUDE_PROJECT_DIR\" && make manifests generate ;; esac"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cmd=$(cat - | jq -r '.tool_input.command // empty') && case \"$cmd\" in *'gh pr create'*) cd \"$CLAUDE_PROJECT_DIR\" && { BEFORE=$(git diff --name-only) && make fmt && AFTER=$(git diff --name-only) && test \"$BEFORE\" = \"$AFTER\" || { echo 'gofmt changed files — commit the formatting fixes first' >&2; exit 2; }; } && make lint && make test || exit 2 ;; esac"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,8 @@
+ancestor: null
+releases:
+  1.0.0:
+    changes:
+      release_summary: This is the major release of the ``ansible.hub`` collection.
+    fragments:
+    - release.yml
+    release_date: '2024-09-23'

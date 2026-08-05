@@ -1,0 +1,227 @@
+---
+# Phase 5: External model access (Path A/B/C).
+# Creates proxy infrastructure (secured only), ExternalModel CRs, and MaaS governance.
+# Runs after local MaaS setup (configure_maas.yaml) is complete.
+
+- name: Validate external models require MaaS
+  ansible.builtin.assert:
+    that:
+      - ocp_4_20_ai_maas_enable_maas | bool
+    fail_msg: >-
+      External models require MaaS (enable_maas=true). ExternalModel CRs route
+      through maas-default-gateway which only exists when MaaS is enabled.
+  when: ocp_4_20_ai_maas_external_models | length > 0
+
+# --- Clean up leftover resources from prior failed runs (idempotent retry support) ---
+
+- name: Clean up leftover external subscriptions
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: absent
+    api_version: maas.opendatahub.io/v1alpha1
+    kind: MaaSSubscription
+    name: "{{ item.name }}-sub"
+    namespace: models-as-a-service
+  loop: "{{ ocp_4_20_ai_maas_external_models }}"
+  loop_control:
+    label: "{{ item.name }}-sub"
+  ignore_errors: true
+  when: ocp_4_20_ai_maas_external_models | length > 0
+
+- name: Clean up leftover external auth policies
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: absent
+    api_version: maas.opendatahub.io/v1alpha1
+    kind: MaaSAuthPolicy
+    name: "{{ item.name }}-access"
+    namespace: models-as-a-service
+  loop: "{{ ocp_4_20_ai_maas_external_models }}"
+  loop_control:
+    label: "{{ item.name }}-access"
+  ignore_errors: true
+  when: ocp_4_20_ai_maas_external_models | length > 0
+
+- name: Clean up leftover external model refs
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: absent
+    api_version: maas.opendatahub.io/v1alpha1
+    kind: MaaSModelRef
+    name: "{{ item.name }}"
+    namespace: "{{ ocp_4_20_ai_maas_external_model_namespace }}"
+  loop: "{{ ocp_4_20_ai_maas_external_models }}"
+  loop_control:
+    label: "{{ item.name }}"
+  ignore_errors: true
+  when: ocp_4_20_ai_maas_external_models | length > 0
+
+- name: Clean up leftover external models
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: absent
+    api_version: maas.opendatahub.io/v1alpha1
+    kind: ExternalModel
+    name: "{{ item.name }}"
+    namespace: "{{ ocp_4_20_ai_maas_external_model_namespace }}"
+  loop: "{{ ocp_4_20_ai_maas_external_models }}"
+  loop_control:
+    label: "{{ item.name }}"
+  ignore_errors: true
+  when: ocp_4_20_ai_maas_external_models | length > 0
+
+- name: Clean up leftover Kuadrant AuthPolicies
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: absent
+    api_version: kuadrant.io/v1
+    kind: AuthPolicy
+    name: "maas-auth-{{ item.name }}"
+    namespace: "{{ ocp_4_20_ai_maas_external_model_namespace }}"
+  loop: "{{ ocp_4_20_ai_maas_external_models }}"
+  loop_control:
+    label: "maas-auth-{{ item.name }}"
+  ignore_errors: true
+  when: ocp_4_20_ai_maas_external_models | length > 0
+
+- name: Clean up leftover Kuadrant TRLPs
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: absent
+    api_version: kuadrant.io/v1alpha1
+    kind: TokenRateLimitPolicy
+    name: "maas-trlp-{{ item.name }}"
+    namespace: "{{ ocp_4_20_ai_maas_external_model_namespace }}"
+  loop: "{{ ocp_4_20_ai_maas_external_models }}"
+  loop_control:
+    label: "maas-trlp-{{ item.name }}"
+  ignore_errors: true
+  when: ocp_4_20_ai_maas_external_models | length > 0
+
+- name: Wait for controller to process cleanup
+  ansible.builtin.pause:
+    seconds: 10
+  when: ocp_4_20_ai_maas_external_models | length > 0
+
+# --- Proxy infrastructure (namespaces + Deployments + Services) ---
+
+- name: Apply proxy infrastructure
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition: "{{ item }}"
+  loop: >-
+    {{ lookup('ansible.builtin.template', 'external-model-proxy.yaml.j2')
+       | from_yaml_all | list }}
+  loop_control:
+    label: "{{ item.kind }}/{{ item.metadata.name }}"
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+  when: ocp_4_20_ai_maas_external_models | length > 0
+
+- name: Wait for proxy Deployments ready
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: apps/v1
+    kind: Deployment
+    namespace: "{{ ocp_4_20_ai_maas_proxy_namespace }}"
+  register: _proxy_deps
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  until: >-
+    _proxy_deps.resources | length == 0
+    or (_proxy_deps.resources
+        | selectattr('status.availableReplicas', 'defined')
+        | selectattr('status.availableReplicas', 'greaterthan', 0)
+        | list | length == _proxy_deps.resources | length)
+  when:
+    - ocp_4_20_ai_maas_external_models | length > 0
+    - ocp_4_20_ai_maas_external_models | selectattr('secured', 'defined') | selectattr('secured') | list | length > 0
+
+# --- MaaS resources (Secret, ExternalModel, ModelRef, AuthPolicy, Subscription) ---
+
+- name: Apply ExternalModel resources
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition: "{{ item }}"
+  loop: >-
+    {{ lookup('ansible.builtin.template', 'external-model-resources.yaml.j2')
+       | from_yaml_all | list }}
+  loop_control:
+    label: "{{ item.kind }}/{{ item.metadata.name }}"
+  no_log: "{{ item.kind == 'Secret' }}"
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+  when: ocp_4_20_ai_maas_external_models | length > 0
+
+# --- Wait for MaaSModelRef Ready ---
+
+- name: Wait for external MaaSModelRef Ready
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: maas.opendatahub.io/v1alpha1
+    kind: MaaSModelRef
+    name: "{{ item.name }}"
+    namespace: "{{ ocp_4_20_ai_maas_external_model_namespace }}"
+  register: _ext_modelref
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  until:
+    - _ext_modelref.resources is defined
+    - _ext_modelref.resources | length > 0
+    - _ext_modelref.resources[0].status.phase | default('') == 'Ready'
+  loop: "{{ ocp_4_20_ai_maas_external_models }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: ocp_4_20_ai_maas_external_models | length > 0
+
+# --- Wait for subscriptions Active ---
+# No controller restart needed — already warm from Phase 4 (configure_maas.yaml).
+
+- name: Wait for external subscriptions Active
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: maas.opendatahub.io/v1alpha1
+    kind: MaaSSubscription
+    name: "{{ item.name }}-sub"
+    namespace: models-as-a-service
+  register: _ext_sub
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  until:
+    - _ext_sub.resources is defined
+    - _ext_sub.resources | length > 0
+    - _ext_sub.resources[0].status.phase | default('') == 'Active'
+  loop: "{{ ocp_4_20_ai_maas_external_models }}"
+  loop_control:
+    label: "{{ item.name }}-sub"
+  when: ocp_4_20_ai_maas_external_models | length > 0
+
+- name: Wait for external TokenRateLimitPolicy enforcement
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: kuadrant.io/v1alpha1
+    kind: TokenRateLimitPolicy
+    namespace: "{{ ocp_4_20_ai_maas_external_model_namespace }}"
+  register: _ext_trlp
+  retries: 12
+  delay: 10
+  ignore_errors: true
+  until:
+    - _ext_trlp.resources is defined
+    - _ext_trlp.resources | length > 0
+  when: ocp_4_20_ai_maas_external_models | length > 0
+
+- name: Report external models
+  ansible.builtin.debug:
+    msg: >-
+      External models configured:
+      {{ ocp_4_20_ai_maas_external_models | map(attribute='name') | list }}
+      (secured: {{ ocp_4_20_ai_maas_external_models | selectattr('secured', 'defined') | selectattr('secured') | list | length }},
+       direct: {{ ocp_4_20_ai_maas_external_models | rejectattr('secured', 'defined') | list | length + ocp_4_20_ai_maas_external_models | selectattr('secured', 'defined') | rejectattr('secured') | list | length }})
+  when: ocp_4_20_ai_maas_external_models | length > 0

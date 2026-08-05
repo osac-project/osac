@@ -1,0 +1,76 @@
+//
+// Copyright (c) 2025 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.public.v1;
+
+import "osac/public/v1/baremetal_instance_type.proto";
+import "osac/public/v1/cluster_template_type.proto";
+import "osac/public/v1/cluster_type.proto";
+import "osac/public/v1/cluster_version_type.proto";
+import "osac/public/v1/compute_instance_template_type.proto";
+import "osac/public/v1/compute_instance_type.proto";
+import "osac/public/v1/host_type_type.proto";
+import "osac/public/v1/instance_type_type.proto";
+import "osac/public/v1/role_binding_type.proto";
+import "osac/public/v1/project_type.proto";
+import "osac/public/v1/secret_type.proto";
+import "osac/public/v1/role_type.proto";
+import "osac/public/v1/tenant_type.proto";
+
+// Represents events delivered by the server.
+message Event {
+  // Unique identifier of the event.
+  string id = 1;
+
+  // Type of event.
+  EventType type = 2;
+
+  // Payload of the event.
+  oneof payload {
+    Cluster cluster = 3;
+    ClusterTemplate cluster_template = 4;
+    HostType host_type = 5;
+    ComputeInstanceTemplate compute_instance_template = 7;
+    ComputeInstance compute_instance = 8;
+    Role role = 9;
+    RoleBinding role_binding = 10;
+    Project project = 11;
+    InstanceType instance_type = 12;
+    Tenant tenant = 13;
+    ClusterVersion cluster_version = 14;
+    BareMetalInstance bare_metal_instance = 15;
+    Secret secret = 16;
+  }
+}
+
+enum EventType {
+  // Unspecified means that the even type is unknown.
+  EVENT_TYPE_UNSPECIFIED = 0;
+
+  // Means that a new object has been created.
+  //
+  // The payload will contain the representation of the object.
+  EVENT_TYPE_OBJECT_CREATED = 1;
+
+  // Means that an existing object has been modified.
+  //
+  // The payload will contain the updated representation of the object.
+  EVENT_TYPE_OBJECT_UPDATED = 2;
+
+  // Means that an object has been deleted.
+  //
+  // The payload will contain the representation of the object right before it was deleted.
+  EVENT_TYPE_OBJECT_DELETED = 3;
+}

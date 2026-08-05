@@ -1,0 +1,6 @@
+To complete authentication, please open the following URL in your browser:
+
+  {{ .AuthorizationUri }}
+
+If the browser doesn't open automatically, open it manually and follow the instructions to
+complete authentication.

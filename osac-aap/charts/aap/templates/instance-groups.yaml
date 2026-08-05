@@ -1,0 +1,183 @@
+{{- if .Values.instanceGroups.clusterFulfillment.enabled }}
+{{- $ingress := lookup "config.openshift.io/v1" "Ingress" "" "cluster" }}
+{{- $ingressDomain := "" }}
+{{- if $ingress }}{{- $ingressDomain = $ingress.spec.domain | default "" }}{{- end }}
+{{- $baseDomain := "" }}
+{{- if $ingressDomain }}
+{{- $baseDomain = printf "hosted.%s" ($ingressDomain | trimPrefix "apps.") }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-fulfillment-ig
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-aap.labels" . | nindent 4 }}
+    osac.openshift.io/project: osac-aap
+data:
+  {{- range $key, $val := .Values.instanceGroups.clusterFulfillment.config }}
+  {{- if and $val (ne $key "HOSTED_CLUSTER_BASE_DOMAIN") }}
+  {{ $key }}: {{ $val | quote }}
+  {{- end }}
+  {{- end }}
+  HOSTED_CLUSTER_BASE_DOMAIN: {{ .Values.instanceGroups.clusterFulfillment.config.HOSTED_CLUSTER_BASE_DOMAIN | default $baseDomain | quote }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cluster-fulfillment-ig
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-aap.labels" . | nindent 4 }}
+    osac.openshift.io/project: osac-aap
+type: Opaque
+data:
+  {{- range $key, $val := .Values.instanceGroups.clusterFulfillment.secret }}
+  {{- if $val }}
+  {{ $key }}: {{ $val | b64enc | quote }}
+  {{- end }}
+  {{- end }}
+{{- else }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-fulfillment-ig
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-aap.labels" . | nindent 4 }}
+    osac.openshift.io/project: osac-aap
+data: {}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cluster-fulfillment-ig
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-aap.labels" . | nindent 4 }}
+    osac.openshift.io/project: osac-aap
+type: Opaque
+data: {}
+{{- end }}
+---
+{{- if .Values.instanceGroups.networkFulfillment.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: network-fulfillment-ig
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-aap.labels" . | nindent 4 }}
+    osac.openshift.io/project: osac-aap
+data:
+  {{- range $key, $val := .Values.instanceGroups.networkFulfillment.config }}
+  {{- if $val }}
+  {{ $key }}: {{ $val | quote }}
+  {{- end }}
+  {{- end }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: network-fulfillment-ig
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-aap.labels" . | nindent 4 }}
+    osac.openshift.io/project: osac-aap
+type: Opaque
+data:
+  {{- range $key, $val := .Values.instanceGroups.networkFulfillment.secret }}
+  {{- if $val }}
+  {{ $key }}: {{ $val | b64enc | quote }}
+  {{- end }}
+  {{- end }}
+{{- else }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: network-fulfillment-ig
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-aap.labels" . | nindent 4 }}
+    osac.openshift.io/project: osac-aap
+data: {}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: network-fulfillment-ig
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-aap.labels" . | nindent 4 }}
+    osac.openshift.io/project: osac-aap
+type: Opaque
+data: {}
+{{- end }}
+---
+{{- if .Values.instanceGroups.storageFulfillment.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: storage-operations-ig
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-aap.labels" . | nindent 4 }}
+    osac.openshift.io/project: osac-aap
+data:
+  {{- range $key, $val := .Values.instanceGroups.storageFulfillment.config }}
+  {{- if $val }}
+  {{ $key }}: {{ $val | quote }}
+  {{- end }}
+  {{- end }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: storage-operations-ig
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-aap.labels" . | nindent 4 }}
+    osac.openshift.io/project: osac-aap
+type: Opaque
+data:
+  {{- range $key, $val := .Values.instanceGroups.storageFulfillment.secret }}
+  {{- if $val }}
+  {{ $key }}: {{ $val | b64enc | quote }}
+  {{- end }}
+  {{- end }}
+{{- else }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: storage-operations-ig
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-aap.labels" . | nindent 4 }}
+    osac.openshift.io/project: osac-aap
+data: {}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: storage-operations-ig
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-aap.labels" . | nindent 4 }}
+    osac.openshift.io/project: osac-aap
+type: Opaque
+data: {}
+{{- end }}
+---
+{{- if .Values.instanceGroups.publishTemplates.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: publish-templates-ig
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-aap.labels" . | nindent 4 }}
+    osac.openshift.io/project: osac-aap
+data:
+  OSAC_TEMPLATE_COLLECTIONS: {{ .Values.instanceGroups.publishTemplates.config.OSAC_TEMPLATE_COLLECTIONS | quote }}
+  OSAC_FULFILLMENT_SERVICE_URI: {{ .Values.instanceGroups.publishTemplates.config.OSAC_FULFILLMENT_SERVICE_URI | quote }}
+{{- end }}

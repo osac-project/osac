@@ -1,0 +1,143 @@
+---
+- name: Generate a test ID
+  ansible.builtin.set_fact:
+    test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') }}"
+  when: test_id is not defined
+
+- name: Preset vars
+  ansible.builtin.set_fact:
+    gateway_user_default_password: "change-me"
+    name_prefix: "{{ name_prefix }}"
+    plugin_name: "ansible.platform.gateway_api"
+    org2_description: "{{ name_prefix }}-Org-2-Description"
+  vars:
+    name_prefix: "GW-Collection-Test-Lookup-{{ test_id }}"
+
+
+- name: Run Test
+  module_defaults:
+    group/ansible.platform.gateway:
+      gateway_hostname: "{{ gateway_hostname }}"
+      gateway_username: "{{ gateway_username }}"
+      gateway_password: "{{ gateway_password }}"
+      gateway_validate_certs: "{{ gateway_validate_certs | bool }}"
+
+  block:
+    - name: Create user 1
+      ansible.platform.user:
+        username: "{{ name_prefix }}-User-1"
+      register: user1
+
+    - name: Create user 2
+      ansible.platform.user:
+        username: "{{ name_prefix }}-User-2"
+        password: "{{ gateway_user_default_password }}"
+      register: user2
+
+    - name: Create admin user
+      ansible.platform.user:
+        username: "{{ name_prefix }}-Admin-1"
+        is_superuser: true
+      register: admin1
+
+    - name: Create org1
+      ansible.platform.organization:
+        name: "{{ name_prefix }}-Org-1"
+      register: org1
+
+    - name: Create org2
+      ansible.platform.organization:
+        name: "{{ name_prefix }}-Org-2"
+        description: "{{ org2_description }}"
+      register: org2
+
+    - name: Make user 2 admin of org1
+      ansible.platform.role_user_assignment:
+        role_definition: Organization Admin
+        user: "{{ user2.id }}"
+        object_id: "{{ org1.id }}"
+
+    - name: Make admin user admin of org1
+      ansible.platform.role_user_assignment:
+        role_definition: Organization Admin
+        user: "{{ admin1.id }}"
+        object_id: "{{ org1.id }}"
+
+    - name: Use lookup plugin to query created objects
+      ansible.builtin.set_fact:
+        _org2: "{{ lookup(plugin_name, 'organizations', query_params={'description': org2_description}, **connection_info) }}"
+        _users: "{{ query(plugin_name, 'users', query_params={ 'username__startswith': name_prefix, 'order_by': 'username' }, **connection_info) }}"
+        _admins: "{{ query(plugin_name, 'organizations/' + (org1.id|string) + '/admins/', query_params=admins_query, **connection_info) }} "
+      vars:
+        admins_query:
+          username__startswith: "{{ name_prefix }}"
+          order_by: 'username'
+
+    - name: Check Org 2
+      ansible.builtin.assert:
+        that:
+          - _org2.name == org2.name
+          - _org2.id == org2.id
+
+    - name: Check all Users
+      ansible.builtin.assert:
+        that:
+          - _users | length == 3
+          - _users[0].username == admin1.username
+          - _users[1].username == user1.username
+          - _users[2].username == user2.username
+
+    - name: Check Org-1 Admins
+      ansible.builtin.assert:
+        that:
+          - _admins | length == 2
+          - _admins[0].username == admin1.username
+          - _admins[0].password == "Password Disabled"
+          - _admins[1].username == user2.username
+          - _admins[1].password == "$encrypted$"
+
+    - name: Expect One - Get 0
+      ansible.builtin.set_fact:
+        _users: "{{ lookup(plugin_name, 'users', query_params={'username': name_prefix + '-NonExisting-1'}, expect_one=true, **connection_info)}}"
+      ignore_errors: true
+      register: expect_one
+
+    - name: Assert we failed with a proper message
+      ansible.builtin.assert:
+        that:
+          - expect_one is failed
+          - "'Expected one object from endpoint users, but obtained 0 from API' in expect_one.msg"
+
+    - name: Expect One - Get 3
+      ansible.builtin.set_fact:
+        _users: "{{ lookup(plugin_name, 'users', query_params={'username__startswith': name_prefix}, expect_one=true, **connection_info)}}"
+      ignore_errors: true
+      register: expect_one
+
+    - name: Assert we failed with a proper message
+      ansible.builtin.assert:
+        that:
+          - expect_one is failed
+          - "'Expected one object from endpoint users, but obtained 3 from API' in expect_one.msg"
+
+  always:
+    # <Cleanup>
+    - name: Delete Organizations
+      ansible.platform.organization:
+        state: absent
+        name: "{{ vars[item].id }}"
+      loop:
+        - "org1"
+        - "org2"
+      when: "item in vars and 'id' in vars[item]"
+
+    - name: Delete Users
+      ansible.platform.user:
+        state: absent
+        username: "{{ vars[item].id }}"
+      loop:
+        - "user1"
+        - "user2"
+        - "admin1"
+      when: "item in vars and 'id' in vars[item]"
+...

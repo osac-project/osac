@@ -1,0 +1,16 @@
+{{- if .Values.cnv.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: osac-prereqs-cnv-config
+  labels:
+    {{- include "osac-prereqs.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    apiVersion: hco.kubevirt.io/v1beta1
+    kind: HyperConverged
+    metadata:
+      name: kubevirt-hyperconverged
+      namespace: openshift-cnv
+    spec: {}
+{{- end }}

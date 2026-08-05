@@ -1,0 +1,23 @@
+
+The following object types are available:
+
+{{ range .Helper.Names -}}
+- {{ . }}
+{{ end }}
+
+You can use the above fully qualified names, or the short names:
+
+{{ range .Helper.Singulars -}}
+- {{ . }}
+{{ end }}
+
+For example, to label the cluster with identifier '123':
+
+  {{ binary }} label fulfillment.v1.Cluster 123 my-label=my-value
+
+Or:
+
+  {{ binary }} label cluster 123 my-label=my-value
+
+Note that the short names may be ambiguous if the same object type exists in different packages. In
+that case the one whose fully qualified name appears first in the list will be used.

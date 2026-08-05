@@ -1,0 +1,48 @@
+//
+// Copyright (c) 2025 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "osac/private/v1/field_definition_type.proto";
+import "osac/private/v1/metadata_type.proto";
+
+// A cluster catalog item defines a curated infrastructure offering that references an underlying cluster template.
+// Admins control which fields users can set, enforce defaults, and validate input via JSON Schema.
+//
+// buf:lint:ignore OSAC_OBJECT_SHAPE
+message ClusterCatalogItem {
+  string id = 1;
+  Metadata metadata = 2;
+
+  // Human friendly short description of the catalog item, suitable for displaying in one single line on a UI or CLI.
+  string title = 3;
+
+  // Human friendly long description of the catalog item, using Markdown format.
+  string description = 4;
+
+  // Identifier of the underlying cluster template that this catalog item references.
+  string template = 5;
+
+  // Whether this catalog item is visible in the public API. Only published items are returned by the public List and
+  // Get endpoints (with the exception of unpublished items already referenced by an existing resource).
+  bool published = 6;
+
+  // Tenant scope for this catalog item. An empty string means the item is global and visible to all tenants. A
+  // non-empty string scopes the item to that specific tenant.
+  string tenant = 7;
+
+  // Definitions of the fields that users can or cannot set when creating a resource from this catalog item.
+  repeated FieldDefinition field_definitions = 8;
+}

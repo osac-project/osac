@@ -1,0 +1,483 @@
+---
+# VAST setup: multi-tier resource provisioning with per-tenant user credentials.
+# Creates: VAST tenant, per-tier views, per-tier quotas, per-tenant user.
+# Persists tenant config + credentials to hub Secret.
+# Hub Secret write is INSIDE the block so rescue can clean up the user on failure.
+#
+# VIP pool: Uses a globally-shared pool (vast_storage_vip_pool_name) instead of
+# per-tenant pools. The pool is created idempotently on the first tenant setup
+# using VAST_VIP_POOL_IP_RANGES and VAST_VIP_POOL_SUBNET_CIDR from the IG ConfigMap.
+# Tenant isolation relies on source-based access control.
+# Limitation: All tenants share the same pool IP addresses. For dedicated
+# per-tenant IPs, future work could add IP range allocation from an IPAM source.
+
+- name: Assert _provider_tiers is defined and non-empty
+  ansible.builtin.assert:
+    that:
+      - _provider_tiers is defined
+      - _provider_tiers | length > 0
+    fail_msg: >-
+      _provider_tiers must be provided by the service role dispatcher.
+      This role should not be called directly — use osac.service.storage_provider.
+
+- name: Validate tenant_name is a valid DNS label
+  ansible.builtin.fail:
+    msg: >-
+      tenant_name '{{ tenant_name }}' is not a valid DNS label.
+      Must be 1-63 lowercase alphanumeric characters or hyphens,
+      cannot start or end with a hyphen.
+  when: tenant_name is not regex('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+
+- name: Validate tier names are unique
+  ansible.builtin.assert:
+    that:
+      - (_provider_tiers | map(attribute='name') | list | unique | length) == (_provider_tiers | length)
+    fail_msg: "Tier names must be unique."
+    quiet: true
+
+- name: Validate tier protocols are supported by VAST provider
+  ansible.builtin.fail:
+    msg: >-
+      Tier '{{ item.name }}' has unsupported protocol '{{ item.protocol }}'.
+      VAST provider supports: nfs, block.
+  loop: "{{ _provider_tiers }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: item.protocol not in ['nfs', 'block']
+
+- name: Validate tier quotas (when specified)
+  ansible.builtin.fail:
+    msg: >-
+      Tier '{{ item.name }}' has an invalid quota: '{{ item.quota }}'.
+      Quota must be a positive number (bytes).
+  loop: "{{ _provider_tiers }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - item.quota is defined
+    - (item.quota | int) <= 0
+
+- name: Compute unique protocols from tiers
+  ansible.builtin.set_fact:
+    _vast_required_protocols: "{{ _provider_tiers | map(attribute='protocol') | unique | sort | list }}"
+
+- name: Provision VAST resources for tenant
+  block:
+    - name: Resolve VAST admin credentials from env vars
+      ansible.builtin.include_tasks: read_credentials.yaml
+
+    - name: Build VAST VMS connection dict
+      ansible.builtin.set_fact:
+        _vast_vms_conn:
+          host: "{{ vast_endpoint }}"
+          username: "{{ vast_username }}"
+          password: "{{ vast_password }}"
+          validate_certs: "{{ vast_storage_validate_certs }}"
+          timeout: "{{ vast_storage_api_timeout }}"
+      no_log: true
+
+    - name: Validate VIP pool IP ranges are configured
+      ansible.builtin.fail:
+        msg: >-
+          VAST_VIP_POOL_IP_RANGES must be set in the storage-operations-ig ConfigMap.
+          Example: '[["10.0.100.10","10.0.100.50"]]' (JSON array of [start, end] pairs).
+      when: vast_storage_vip_pool_ip_ranges | length == 0
+
+    - name: Validate VIP pool subnet CIDR is configured
+      ansible.builtin.fail:
+        msg: >-
+          VAST_VIP_POOL_SUBNET_CIDR must be set in the storage-operations-ig ConfigMap.
+          This is the subnet prefix length (e.g., 24 for a /24 network).
+      when: vast_storage_vip_pool_subnet_cidr | string | length == 0
+
+    - name: Parse VIP pool IP ranges from JSON
+      ansible.builtin.set_fact:
+        _vast_vip_pool_ip_ranges: >-
+          {{ vast_storage_vip_pool_ip_ranges if (vast_storage_vip_pool_ip_ranges is not string)
+             else (vast_storage_vip_pool_ip_ranges | from_json) }}
+
+    - name: Look up existing VIP pools to find one matching the configured IP ranges
+      ansible.builtin.uri:
+        url: "https://{{ vast_endpoint }}/api/vippools/"
+        method: GET
+        url_username: "{{ vast_username }}"
+        url_password: "{{ vast_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ vast_storage_validate_certs }}"
+        timeout: "{{ vast_storage_api_timeout | int }}"
+        status_code: [200]
+      register: _vast_vip_pool_lookup
+      no_log: true
+
+    - name: Check if any existing pool matches the configured IP ranges
+      ansible.builtin.set_fact:
+        _vast_vip_pool_match: >-
+          {{ _vast_vip_pool_lookup.json
+             | selectattr('ip_ranges', 'equalto', _vast_vip_pool_ip_ranges)
+             | list | first | default({}) }}
+
+    - name: Use existing VIP pool when IP ranges match
+      when: _vast_vip_pool_match | length > 0
+      block:
+        - name: Override VIP pool name to match existing pool
+          ansible.builtin.set_fact:
+            vast_storage_vip_pool_name: "{{ _vast_vip_pool_match.name }}"
+
+        - name: Log existing VIP pool reuse
+          ansible.builtin.debug:
+            msg: "Found existing VIP pool '{{ vast_storage_vip_pool_name }}' (id: {{ _vast_vip_pool_match.id }}) with matching IP ranges — reusing."
+
+    - name: Create shared VIP pool when no match exists
+      when: _vast_vip_pool_match | length == 0
+      block:
+        - name: Create VIP pool with configured name and ranges
+          vastdata.vms.vippools:
+            vms:
+              host: "{{ vast_endpoint }}"
+              username: "{{ vast_username }}"
+              password: "{{ vast_password }}"
+              validate_certs: "{{ vast_storage_validate_certs }}"
+              timeout: "{{ vast_storage_api_timeout }}"
+            name: "{{ vast_storage_vip_pool_name }}"
+            ip_ranges: "{{ _vast_vip_pool_ip_ranges }}"
+            subnet_cidr: "{{ vast_storage_vip_pool_subnet_cidr | int }}"
+            gw_ip: "{{ vast_storage_vip_pool_gw_ip if (vast_storage_vip_pool_gw_ip | default('') | length > 0) else omit }}"
+            gw_ipv6: "{{ vast_storage_vip_pool_gw_ipv6 if (vast_storage_vip_pool_gw_ipv6 | default('') | length > 0) else omit }}"
+            role: PROTOCOLS
+            state: present
+          register: _vast_vip_pool_result
+          no_log: true
+
+        - name: Log VIP pool creation
+          ansible.builtin.debug:
+            msg: "Created VIP pool '{{ vast_storage_vip_pool_name }}' (id: {{ _vast_vip_pool_result.vippools.id | default('unknown') }})"
+
+    - name: Ensure VAST CSI Operator is installed
+      ansible.builtin.include_tasks: ensure_csi_operator.yaml
+
+    - name: Provision VAST VMS resources
+      block:
+        # ── Local provider: explicit lifecycle ──
+        # VAST auto-creates a local provider per tenant, but we create it
+        # explicitly for naming control and clean teardown without force_remove.
+
+        - name: Authenticate to VAST VMS as admin for local provider setup
+          ansible.builtin.uri:
+            url: "https://{{ vast_endpoint }}/api/token/"
+            method: POST
+            body_format: json
+            body:
+              username: "{{ vast_username }}"
+              password: "{{ vast_password }}"
+            validate_certs: "{{ vast_storage_validate_certs }}"
+            timeout: "{{ vast_storage_api_timeout | int }}"
+            status_code: [200, 201]
+          register: _vast_setup_auth
+          no_log: true
+
+        - name: Set local provider name
+          ansible.builtin.set_fact:
+            _vast_local_provider_name: "{{ vast_storage_local_provider_prefix }}{{ tenant_name }}"
+
+        - name: Check if local provider already exists
+          ansible.builtin.uri:
+            url: "https://{{ vast_endpoint }}/api/localproviders/?name={{ _vast_local_provider_name }}"
+            method: GET
+            headers:
+              Authorization: "Bearer {{ _vast_setup_auth.json.access }}"
+            validate_certs: "{{ vast_storage_validate_certs }}"
+            timeout: "{{ vast_storage_api_timeout | int }}"
+            status_code: [200]
+          register: _vast_lp_check
+          no_log: true
+
+        - name: Create local provider for tenant
+          when: _vast_lp_check.json | length == 0
+          ansible.builtin.uri:
+            url: "https://{{ vast_endpoint }}/api/localproviders/"
+            method: POST
+            body_format: json
+            body:
+              name: "{{ _vast_local_provider_name }}"
+            headers:
+              Authorization: "Bearer {{ _vast_setup_auth.json.access }}"
+            validate_certs: "{{ vast_storage_validate_certs }}"
+            timeout: "{{ vast_storage_api_timeout | int }}"
+            status_code: [200, 201]
+          register: _vast_lp_create_result
+          no_log: true
+
+        - name: Set local provider ID and creation flag
+          ansible.builtin.set_fact:
+            _vast_local_provider_id: >-
+              {{ (_vast_lp_create_result.json.id | string)
+                 if (_vast_lp_check.json | length == 0)
+                 else (_vast_lp_check.json[0].id | string) }}
+            _vast_local_provider_created: "{{ _vast_lp_check.json | length == 0 }}"
+
+        - name: Log local provider status
+          ansible.builtin.debug:
+            msg: >-
+              Local provider '{{ _vast_local_provider_name }}'
+              {{ 'created' if (_vast_lp_check.json | length == 0) else 'already exists' }}
+              (id: {{ _vast_local_provider_id }})
+
+        # ── Tenant creation with explicit local provider ──
+
+        - name: Check if VAST tenant already exists
+          ansible.builtin.uri:
+            url: "https://{{ vast_endpoint }}/api/tenants/?name={{ tenant_name }}"
+            method: GET
+            headers:
+              Authorization: "Bearer {{ _vast_setup_auth.json.access }}"
+            validate_certs: "{{ vast_storage_validate_certs }}"
+            timeout: "{{ vast_storage_api_timeout | int }}"
+            status_code: [200]
+          register: _vast_tenant_check
+          no_log: true
+
+        - name: Track whether tenant needs to be created
+          ansible.builtin.set_fact:
+            _vast_tenant_created: "{{ _vast_tenant_check.json | length == 0 }}"
+
+        - name: Create VAST tenant with explicit local provider
+          vastdata.vms.tenants:
+            vms: "{{ _vast_vms_conn }}"
+            name: "{{ tenant_name }}"
+            local_provider_id: "{{ _vast_local_provider_id | int }}"
+            state: present
+          register: _vast_tenant_result
+          no_log: true
+
+        - name: Fail if VAST tenant creation did not return an ID
+          ansible.builtin.fail:
+            msg: >-
+              VAST tenant creation for '{{ tenant_name }}' did not return an ID.
+              Check VAST VMS API connectivity and permissions.
+          when: >-
+            _vast_tenant_result.tenants.id is not defined
+            or _vast_tenant_result.tenants.id | string | length == 0
+
+        - name: Log VAST tenant creation result
+          ansible.builtin.debug:
+            msg: "VAST tenant '{{ tenant_name }}' provisioned with ID: {{ _vast_tenant_result.tenants.id }}, local provider: {{ _vast_local_provider_name }}"
+
+        - name: Set tenant ID for downstream tasks
+          ansible.builtin.set_fact:
+            _vast_tenant_id: "{{ _vast_tenant_result.tenants.id | string }}"
+
+        - name: Configure tenant client IP ranges for shared VIP pool NFS access
+          block:
+            - name: Parse explicit client IP ranges when provided
+              when: vast_storage_client_ip_ranges | length > 0
+              ansible.builtin.set_fact:
+                _vast_client_ip_ranges: >-
+                  {{ vast_storage_client_ip_ranges if (vast_storage_client_ip_ranges is not string)
+                     else (vast_storage_client_ip_ranges | from_json) }}
+
+            - name: Auto-detect node IPs when client IP ranges not configured
+              when: vast_storage_client_ip_ranges | length == 0
+              block:
+                - name: Get cluster node internal IPs
+                  kubernetes.core.k8s_info:
+                    api_version: v1
+                    kind: Node
+                  register: _vast_node_list
+
+                - name: Build client IP ranges from node InternalIP addresses
+                  ansible.builtin.set_fact:
+                    _vast_client_ip_ranges: >-
+                      {{ _vast_node_list.resources
+                         | map(attribute='status.addresses')
+                         | map('selectattr', 'type', 'equalto', 'InternalIP')
+                         | map('map', attribute='address')
+                         | flatten
+                         | map('regex_replace', '^(.*)$', '["\1","\1"]')
+                         | map('from_json')
+                         | list }}
+
+                - name: Log auto-detected node IPs
+                  ansible.builtin.debug:
+                    msg: "Auto-detected {{ _vast_client_ip_ranges | length }} node IP(s) for client_ip_ranges"
+
+            - name: Set client_ip_ranges on VAST tenant
+              when: _vast_client_ip_ranges | default([]) | length > 0
+              ansible.builtin.uri:
+                url: "https://{{ vast_endpoint }}/api/tenants/{{ _vast_tenant_id }}/"
+                method: PATCH
+                body_format: json
+                body:
+                  client_ip_ranges: "{{ _vast_client_ip_ranges }}"
+                headers:
+                  Authorization: "Bearer {{ _vast_setup_auth.json.access }}"
+                validate_certs: "{{ vast_storage_validate_certs }}"
+                timeout: "{{ vast_storage_api_timeout | int }}"
+                status_code: [200]
+              no_log: true
+
+            - name: Log client IP ranges configuration
+              ansible.builtin.debug:
+                msg: "Set {{ _vast_client_ip_ranges | length }} client_ip_range(s) on tenant '{{ tenant_name }}'"
+              when: _vast_client_ip_ranges | default([]) | length > 0
+
+        - name: Create per-tenant VMS manager with CSI role
+          ansible.builtin.include_tasks: create_tenant_manager.yaml
+
+        - name: Persist tenant config to K8s Secret on hub cluster
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Secret
+              metadata:
+                name: "{{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}"
+                namespace: "{{ vast_storage_config_namespace }}"
+                labels:
+                  app.kubernetes.io/managed-by: osac-aap
+                  osac.openshift.io/tenant: "{{ tenant_name }}"
+              type: Opaque
+              stringData:
+                tenant_uid_hash: "{{ (tenant_uid | hash('sha256'))[:8] }}"
+                vast_tenant_id: "{{ _vast_tenant_result.tenants.id | string }}"
+                vast_local_provider_id: "{{ _vast_local_provider_id | string }}"
+                vip_pool_name: "{{ vast_storage_vip_pool_name }}"
+                vip_pool_fqdn: "{{ vast_storage_vip_pool_fqdn | default('') }}"
+                vast_endpoint: "{{ vast_endpoint }}"
+                storage_provider_type: "vast"
+                tenant_manager_name: "{{ _vast_tenant_manager_name }}"
+                tenant_manager_username: "{{ _vast_tenant_manager_username }}"
+                tenant_manager_password: "{{ _vast_tenant_manager_password }}"
+                tenant_manager_id: "{{ _vast_tenant_manager_id | default('') | string }}"
+                tenant_role_id: "{{ _vast_tenant_role_id | default('') | string }}"
+                block_encryption_passphrase: "{{ storage_provider_block_encryption_passphrase | default('') }}"
+          no_log: true
+
+      rescue:
+        # Rollback uses live VMS queries to find and delete all tenant resources.
+        - name: Rollback - delete per-tenant VMS manager
+          ansible.builtin.include_tasks: delete_tenant_manager.yaml
+          when: _vast_tenant_manager_name is defined and _vast_tenant_manager_name | length > 0
+          ignore_errors: true  # noqa: ignore-errors
+
+        - name: Rollback - delete hub Secret
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Secret
+            name: "{{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}"
+            namespace: "{{ vast_storage_config_namespace }}"
+          ignore_errors: true  # noqa: ignore-errors
+
+        - name: Rollback - authenticate for VMS cleanup
+          when: _vast_vms_conn is defined
+          ansible.builtin.uri:
+            url: "https://{{ vast_endpoint }}/api/token/"
+            method: POST
+            body_format: json
+            body:
+              username: "{{ vast_username }}"
+              password: "{{ vast_password }}"
+            validate_certs: "{{ vast_storage_validate_certs }}"
+            timeout: "{{ vast_storage_api_timeout | int }}"
+            status_code: [200, 201]
+          register: _vast_rollback_auth
+          ignore_errors: true
+          no_log: true
+
+        - name: Rollback - clean up VMS resources via live tenant_id queries
+          when:
+            - _vast_vms_conn is defined
+            - _vast_rollback_auth is not failed
+            - _vast_tenant_result is defined
+            - _vast_tenant_result.tenants.id is defined
+          ansible.builtin.include_tasks: delete_vms_resources_by_tenant.yaml
+          loop:
+            - views
+            - quotas
+            - viewpolicies
+            - qospolicies
+          loop_control:
+            loop_var: _vast_cleanup_resource
+          vars:
+            _vast_cleanup_auth_token: "{{ _vast_rollback_auth.json.access }}"
+            _vast_cleanup_tenant_id: "{{ _vast_tenant_result.tenants.id }}"
+          ignore_errors: true  # noqa: ignore-errors
+
+        - name: Rollback - delete local provider
+          when:
+            - _vast_local_provider_created | default(false) | bool
+            - _vast_local_provider_id is defined
+            - _vast_local_provider_id | string | length > 0
+            - _vast_rollback_auth is defined
+            - _vast_rollback_auth is not failed
+          ansible.builtin.uri:
+            url: "https://{{ vast_endpoint }}/api/localproviders/{{ _vast_local_provider_id }}/"
+            method: DELETE
+            headers:
+              Authorization: "Bearer {{ _vast_rollback_auth.json.access }}"
+            validate_certs: "{{ vast_storage_validate_certs }}"
+            timeout: "{{ vast_storage_api_timeout | int }}"
+            status_code: [200, 204, 404]
+          ignore_errors: true  # noqa: ignore-errors
+          no_log: true
+
+        - name: Rollback - delete VAST tenant
+          when:
+            - _vast_vms_conn is defined
+            - _vast_tenant_created | default(false) | bool
+          vastdata.vms.tenants:
+            vms: "{{ _vast_vms_conn }}"
+            name: "{{ tenant_name }}"
+            state: absent
+          retries: 3
+          delay: 10
+          until: _vast_rollback_tenant_result is not failed
+          register: _vast_rollback_tenant_result
+          ignore_errors: true  # noqa: ignore-errors
+          no_log: true
+
+        - name: Report VAST API failure with tenant context
+          ansible.builtin.fail:
+            msg: >-
+              VAST API operation failed for tenant '{{ tenant_name }}'.
+              Failed task: {{ ansible_failed_task.name | default('unknown') }}.
+              Error: {{ ansible_failed_result.msg | default('see logs for details') }}.
+              Rollback attempted for partially-created resources.
+
+  always:
+    # Clear all credential facts from play scope.
+    # NOTE: _vast_tenant_result is intentionally NOT cleared here because the
+    # storage_provider_tenant_config output fact (set after this always block)
+    # references _vast_tenant_result.tenants.id. Clearing it would produce empty output.
+    - name: Clear all credential facts from play scope
+      ansible.builtin.set_fact:
+        vast_endpoint: ""
+        vast_username: ""
+        vast_password: ""
+        _vast_vms_conn: {}
+
+        _vast_tenant_id: ""
+        _vast_tenant_manager_name: ""
+        _vast_tenant_manager_username: ""
+        _vast_tenant_manager_password: ""
+        _vast_tenant_manager_id: ""
+        _vast_tenant_role_id: ""
+        _vast_local_provider_id: ""
+        _vast_local_provider_name: ""
+        _vast_local_provider_created: false
+        _vast_tenant_created: false
+        _vast_tenant_check: {}
+        _vast_setup_auth: {}
+        _vast_lp_check: {}
+        _vast_lp_create_result: {}
+        _vast_client_ip_ranges: []
+        _vast_node_list: {}
+        _vast_vip_pool_lookup: {}
+        _vast_vip_pool_match: {}
+      no_log: true
+
+- name: Set storage_provider_tenant_config output fact
+  ansible.builtin.set_fact:
+    storage_provider_tenant_config:
+      vast_tenant_id: "{{ _vast_tenant_result.tenants.id | string }}"
+      vip_pool_name: "{{ vast_storage_vip_pool_name }}"

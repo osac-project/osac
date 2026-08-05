@@ -1,0 +1,5 @@
+---
+# Default values for bare metal host agent provisioning
+
+# Default provisioning network
+provisioningNetwork: "provisioning"

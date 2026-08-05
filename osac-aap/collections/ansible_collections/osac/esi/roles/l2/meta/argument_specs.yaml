@@ -1,0 +1,44 @@
+argument_specs:
+  main:
+    options:
+      l2_network_mtu:
+        description: |
+          MTU of desired network.
+        type: "int"
+        required: false
+      network_state:
+        type: "str"
+        default: present
+        choices:
+        - present
+        - absent
+      network_name:
+        description: |
+          Name of the network when state is `present`.
+          Name of network to be deleted when state is `absent`; the deletion will fail if the network name is not unique.
+        type: "str"
+        required: true
+      l2_network_tags:
+        description: |
+          List of tags to apply to the network
+        type: "list"
+        required: false
+  set_networks_for_node:
+    options:
+      networks:
+        description: |
+          List of names or UUIDs of networks
+        type: "list"
+        required: true
+      node:
+        description: |
+          Name or UUID of node
+        type: "str"
+        required: true
+  list_networks:
+    options:
+      l2_network_properties:
+        description: |
+          Dictionary of properties to convert to tags for filtering networks
+        type: "dict"
+        required: false

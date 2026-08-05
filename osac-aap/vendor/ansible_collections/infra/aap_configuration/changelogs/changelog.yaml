@@ -1,0 +1,1131 @@
+ancestor: null
+releases:
+  0.1.0:
+    changes:
+      bugfixes:
+      - Fixed an issue where tower_validate_certs and validate_certs were both used
+        as vars. Now changed to tower_validate_certs
+      major_changes:
+      - Groups role - Added groups role to the collection
+      - Labels role - Added labels role to the collection
+      - Notifications role - Added many options to notifications role
+      - Workflow Job Templates role - Added many options to WJT role
+      minor_changes:
+      - GitHub Workflows - Added workflows to run automated linting and integration
+        tests against the codebase
+      - Hosts role - Added new_name and enabled options to hosts role
+      - Housekeeping - Added CONTRIBUTING guide and pull request template
+      - Inventory Sources role - Added notification_templates_started, success, and
+        error options. Also added verbosity and source_regions options.
+      - Teams role - Added new_name option to teams role
+      - Test Configs - Added full range of test objects for integration testing
+    fragments:
+    - housekeeping.yaml
+    - new_roles.yaml
+    - workflows.yaml
+    release_date: '2020-08-04'
+  0.2.0:
+    changes:
+      bugfixes:
+      - Removed defaulted objects for all roles so that they were not always run if
+        using a conditional against the variable. (see https://github.com/redhat-cop/tower_configuration/issues/68)
+      minor_changes:
+      - Added pre-commit hook for local development and automated testing purposes
+      - Standardised and corrected all READMEs
+    fragments:
+    - 72-defaults.yaml
+    - 73-readmes.yaml
+    - 77-pre-commit.yaml
+    release_date: '2020-09-09'
+  0.2.1:
+    changes:
+      minor_changes:
+      - Changelog release cycle
+    fragments:
+    - changelogs.yml
+    release_date: '2020-09-22'
+  1.0.0:
+    changes:
+      breaking_changes:
+      - Removed depreciated options in inventory sources role (source_regions, instance_filters,
+        group_by)
+      - Renamed notifications role to notification_templates role as in awx.awx:15.0.
+        The variable is not tower_notification_templates.
+      major_changes:
+      - Updated Roles to use the tower_export model from the awx command line.
+      - credential_types Updated to use the tower_export model from the awx command
+        line.
+      - credentials Updated to use the tower_export model from the awx command line.
+      - inventory Updated to use the tower_export model from the awx command line.
+      - inventory_sources Updated to use the tower_export model from the awx command
+        line.
+      - job_templates Updated to use the tower_export model from the awx command line.
+      - projects Updated to use the tower_export model from the awx command line.
+      - teams Updated to use the tower_export model from the awx command line.
+      - users Updated to use the tower_export model from the awx command line.
+      minor_changes:
+      - updated to allow vars in messages for notifications.
+      - updated tower workflows related role `workflow_job_templates` to include `survey_enabled`
+        defaulting to `false` which is a module default and `omit` the `survey_spec`
+        if not passed.
+      - updated various roles to include oauth token and tower config file.
+    fragments:
+    - 95-notification_templates.yml
+    - auth_update.yml
+    - fix_workflow_survey_defaults.yml
+    - notif_update.yml
+    - tower_export_update.yml
+    release_date: '2020-10-22'
+  1.0.2:
+    changes:
+      minor_changes:
+      - added alias option for survey to survey_spec in workflows.
+      - updated documentation on surveys for workflows and job templates
+    fragments:
+    - survey_spec.yml
+    release_date: '2021-01-26'
+  1.1.0:
+    changes:
+      breaking_changes:
+      - Removed kind from to credentials role. This will be depreciated in a few months.
+        Kind arguments are replaced by the credential_type and inputs fields.
+      - Updated to allow use of either awx.awx or ansible.tower
+      bugfixes:
+      - Corrected README for tower_validate_certs variable defaults on all roles
+      major_changes:
+      - Added the following roles - ad_hoc_command, ad_hoc_command_cancel, inventory_source_update,
+        job_launch, job_cancel, project_update, workflow_launch
+      - Updated collection to use and comply with ansible-lint v5
+      minor_changes:
+      - Fixed default filters to use true when necessary and changed a few defaults
+        to omit rather then a value or empty string.
+      - updated various Readmes to fix typos and missing information.
+    fragments:
+    - ansible_lint.yml
+    - credential_kind_deprecated.yml
+    - omit_changes.yml
+    - update_roles.yml
+    - validate_certs_readme_fix.yml
+    release_date: '2021-02-18'
+  1.2.0:
+    changes:
+      breaking_changes:
+      - removed awx.awx implicit dependency, it will now be required to manually install
+        awx.awx or ansible.tower collection
+    fragments:
+    - remove_dependency.yml
+    release_date: '2021-03-09'
+  1.3.0:
+    changes:
+      bugfixes:
+      - Fixed an issue where certain roles were not taking in tower_validate_certs
+    fragments:
+    - validate-certs.yml
+    release_date: '2021-03-15'
+  1.4.1:
+    changes:
+      bugfixes:
+      - Fix tower_templates default
+      major_changes:
+      - Added execution environments option for multiple roles.
+      - Added execution environments role.
+    fragments:
+    - exec_env.yml
+    - jt_bug_fix.yml
+    release_date: '2021-04-21'
+  1.5.0:
+    changes:
+      breaking_changes:
+      - Examples can also be found in the playbooks/tower_configs_export_model/tower_workflows.yml
+      - If you do not change the data model, change the variable 'workflow_nodes'
+        to 'simplified_workflow_nodes'.
+      - More information can be found either in the Workflow Job Template Readme or
+        on the awx.awx.tower_workflow_job_template Documentation.
+      - The Tower export model is now the default to use under workflow nodes. This
+        is documented in the workflow job templates Readme.
+      - Users using the tower export model previously, do not need to make any changes.
+      - Workflow Schemas to describe Workflow nodes have changed.
+      bugfixes:
+      - Allow tower_hostname and tower_validate_certs to not be set in favour of environment
+        variables being set as per module defaults.
+      - Changes all boolean variables to have their default values omitted rather
+        than using the value 'default(omit, true)' which prevents a falsy value being
+        supplied.
+      major_changes:
+      - Removed testing via playbook install that was removed in awx 18.0.0.
+      - Updated testing via playbook to use minikube + operator install.
+    fragments:
+    - add_workflow_schema.yml
+    - bool_omit.yml
+    - env_var.yml
+    - update_testing.yml
+    release_date: '2021-06-21'
+  2.0.0:
+    changes:
+      breaking_changes:
+      - All references to tower have been changed to Controller.
+      - Changed all module names to be in line with changes to awx.awx as of 19.2.1.
+      - Changed variable names for all objects from tower_* to controller_*.
+      - Removed depreciated module options for notification Templates.
+      minor_changes:
+      - Additional module options have been added such as instance_groups and copy_from
+        where applicable.
+      - All role tests have been converted to use one format.
+    fragments:
+    - controller.yml
+    release_date: '2021-07-15'
+  2.0.0-1:
+    changes:
+      bugfixes:
+      - Changed all references for ansible.tower to ansible.controller
+      - Fixed issue where `credential` was not working for project and instead the
+        old `scm_credential` option remained.
+      major_changes:
+      - Created awx and controller playbook that users can invoke for using the collection
+      minor_changes:
+      - Created Readme for playbook in the playbooks directory
+      - Removed the playbook configs folder, it was previously moved to the .github/playbooks
+        directory
+    fragments:
+    - bug-224.yml
+    - playbook.yml
+    release_date: '2021-09-01'
+  2.1.0:
+    changes:
+      bugfixes:
+      - Fixed readme's to point in right direction for workflows and the export model
+        in examples
+      - Moved Example playbooks to the example directory
+      - Removes json_query which is not in a RH Certified collection so does not receive
+        support and replaced with native ansible filters
+      - Updated workflow inventory option to be able to use workflows from the export
+        model.
+      - added default to organization as null on project as it is not required for
+        the module, but it is highly recommended.
+      - added when to skip inventory source update when item is absent
+      - added when to skip project update when item is absent
+      major_changes:
+      - added diff plugin and tests for diff plugin to aid in removal tasks
+      minor_changes:
+      - Added new options for adding manifest to Ansible Controller inc. from a URL
+        and from b64 encoded content
+      - added tests for the project and inventory source skips
+    fragments:
+    - doc_fix.yml
+    - license.yml
+    - removal_tasks.yml
+    - remove_json_query.yml
+    - update_fix.yml
+    release_date: '2021-12-17'
+  2.1.1:
+    changes:
+      bugfixes:
+      - warn on default if the api list fed to controller_object_diff lookup is empty
+      minor_changes:
+      - Allows for using the roles for deletion to only use required fields.
+      - Changed default to omit for several fields for notification templates and
+        inventor sources.
+      - These changes are in line with the modules required fields.
+    fragments:
+    - diff_empty_fix.yml
+    - removal_fix.yml
+    release_date: '2022-01-18'
+  2.1.3:
+    changes:
+      breaking_changes:
+      - galaxy credentials in the organization role now require assign_galaxy_organizations_to_org
+        to be true.
+      bugfixes:
+      - Fixes option of `survey_spec` on job_templates role.
+      minor_changes:
+      - Added asynchronous to {organizations,credentials,credential_types,inventories,job_templates}
+        task to speed up creation.
+      - Allow setting the organization when creating users.
+      - Update to controller_object_diff lookup plugin to better handle group, host,
+        inventory, credential, workflow_job_template_node and user objects.
+      - Update to controller_object_diff lookup plugin to better handle organizations.
+    fragments:
+    - playbook.yml
+    - survey.yml
+    - users.yml
+    release_date: '2022-03-23'
+  2.1.4:
+    changes:
+      bugfixes:
+      - Fixes async to work on default execution enviroments.
+      - Fixes inventories hardcoded 'no_log' true on the async job check task.
+    fragments:
+    - async.yml
+    - inventories.yml
+    release_date: '2022-03-31'
+  2.1.5:
+    changes:
+      bugfixes:
+      - Changed default interval for inventory_source_update, project_update and project
+        to be the value of the role's async delay value. This still defaults to 1
+        if the delay value is not set as previously.
+      major_changes:
+      - Adds dispatch role - A role to run all other roles.
+    fragments:
+    - dispatch.yml
+    - interval_delay.yaml
+    release_date: '2022-05-04'
+  2.1.6:
+    changes:
+      bugfixes:
+      - Fixed broken documentation for controller_object_diff plugin
+    fragments:
+    - object_diff_docs.yml
+    release_date: '2022-06-06'
+  2.1.7:
+    changes:
+      major_changes:
+      - Adds Configuration as Code filetree_create - A role to export and convert
+        all  Controller's objects configuration in yaml files to be consumed with
+        previous roles.
+      - Adds Configuration as Code filetree_read role - A role to load controller
+        variables (objects) from a hierarchical and scalable directory structure.
+      - Adds Configuration as Code object_diff role - A role to get differences between
+        code and controller. It will give us the lists to remove absent objects in
+        the controller which they are not in code.
+      minor_changes:
+      - Adds credential and organization options for schedule role.
+      - inventory_sources - update ``source_vars`` to parse Jinja variables using
+        the same workaround as inventories role.
+    fragments:
+    - casc_roles.yml
+    - inventory_sources.yml
+    - schedule_role.yml
+    release_date: '2022-08-30'
+  2.1.8:
+    changes:
+      bugfixes:
+      - Fixed optional lists to default to omit if the list is empty.
+      - Reduce the memory usage on the filetree_create role.
+      minor_changes:
+      - Add a way to detect which of `awx.awx` or `ansible.controller` collection
+        is installed. Added to the playbooks and examples.
+      - Add markdown linter
+      - Add the current object ID to the corresponding output yaml filename.
+      - Fix all linter reported errors
+      - Move linter configurations to root directory
+      - Organize the output in directories (one per each object type).
+      - Remove json_query and jmespath dependency from filetree_create role.
+      - Update linter versions
+    fragments:
+    - awx_awx-ansible_controller-independence.yml
+    - default_list_changes.yml
+    - reduce_memory_usage.yml
+    - remove_json_query_dependency.yml
+    - update_linting.yml
+    release_date: '2022-11-02'
+  2.1.9:
+    changes:
+      major_changes:
+      - Added instance role to add instances using the new awx.awx.instance module.
+      minor_changes:
+      - Update options on inventories, job templates, liscence, projects, schedules,
+        and workflow_job_templates roles to match latest awx.awx release
+    fragments:
+    - update_options.yml
+    release_date: '2022-11-11'
+  2.10.3:
+    changes:
+      bugfixes:
+      - Fix "approval" role permission name in object diff.
+      - Fixed missing execution environemnt while exporting the project
+      - filetree_create export extra_vars with escaping any variable brackets
+      minor_changes:
+      - Added meta role to perform dependency checks. No changes needed from a user
+        perspective.
+      - filetree_create able export proper approval role
+      - filetree_create able export proper approval role (user roles)
+      - filetree_create able to bulk export role for objects
+      - filetree_create able to create files without id values
+      - filetree_create able to export project with update_project state
+      - filetree_create able to export scm_refspec of project
+      - filetree_create able to export single worfklow with related job_templates
+        and projects
+      - filetree_create able to filter by schedule_id
+      - filetree_create able to remove $encrypted$ while exporting job template and
+        workflow
+      - filetree_create able to use defined organization for organizationless objects
+      - filetree_create is missing double quote
+      - filetree_read speed tuning
+      - fix memory leak when there are plenty of job templates
+      - fix project export while exporting related objects to job template
+    fragments:
+    - aapproval_role_name_object_diff.yml
+    - dependency_check.yml
+    - filetree_create_brackets_extra_vars_issue.yml
+    - filetree_create_default_org.yml
+    - filetree_create_extra_variables.yml
+    - filetree_create_omit_id.yml
+    - filetree_create_project_ee.yml
+    - filetree_create_related_project_export.yaml
+    - filetree_create_role_approve_bug.yml
+    - filetree_create_role_export_optimization.yml
+    - filetree_create_scm_refspec.yml
+    - filetree_create_single_schedule_export.yml
+    - filetree_create_survey_password_removal.yaml
+    - filetree_create_update_project.yml
+    - filetree_read_speed_improvement.yml
+    release_date: '2024-09-25'
+  2.11.0:
+    changes:
+      bugfixes:
+      - Fixed issue with loops that were getting always empty list of objects
+      minor_changes:
+      - Add ability to disable dependency check
+    fragments:
+    - dependency_check_control.yml
+    - filetree_create_loop_issue.yaml
+    release_date: '2024-10-02'
+  2.2.4:
+    changes:
+      breaking_changes:
+      - infra.controller_configuration 2.2.3 is broken, it is aap_utilities release.
+        We are bumping the version to minimize the issues.
+      - rewrote playbooks/controller_configure.yml and removed all other playbooks
+      minor_changes:
+      - Update release process to avoid problems that have happened and automate it.
+      - removed all examples from repo outside of readmes
+      removed_features:
+      - update_on_project_update in inventory_source as an option due to the awx module
+        no longer supports this option.
+    fragments:
+    - release_fix.yml
+    - remove_examples.yml
+    - removed_ update_on_project_update.yml
+    release_date: '2022-11-30'
+  2.2.5:
+    changes:
+      bugfixes:
+      - Enable the ability to define simple_workflow_nodes on workflow_job_templates
+        without the need to set the `state` on a workflow_job_template (https://github.com/redhat-cop/controller_configuration/issues/297).
+      minor_changes:
+      - Add max_forks, max_concurrent_jobs as options to instance_groups role
+      - Add no_log everywhere controller_api_plugin is used to avoid to expose sensitive
+        information in case of crashes.
+      - Add no_log everywhere controller_api_plugin is used to avoid to expose sensitive
+        information in case of crashes.
+      - Add or fix some variables or extra_vars exported from objects like notifications,
+        inventory, inventory_source, hosts, groups, jt or wjt.
+      - Add roles object to object_diff role and controller_object_diff lookup plugin.
+      - Fix one query with controller_password to change it and set oauth_token=controller_oauthtoken.
+      - Fixed typos in README.md.
+      - Improve template to export settings with filetree_create role. Settings will
+        be in yaml format.
+      - Renamed the field `update` to `update_project` to avoid colliding with the
+        Python dict update method
+      - Renamed variable controller_workflow_job_templates to controller_workflows
+        (the previos one was not used at all).
+      - Renamed variable controller_workflow_job_templates to controller_workflows
+        (the previos one was not used at all).
+      - 'return_all: true has been added to return the maximum of max_objects=query_controller_api_max_objects
+        objects.'
+    fragments:
+    - filetree_create.yml
+    - instance_group.yml
+    - object_diff.yml
+    - object_diff_role_and_plugin.yml
+    - project_updates.yml
+    - typos.yml
+    - workflow_job_template_state_and_nodes.yml
+    release_date: '2023-01-26'
+  2.3.0:
+    changes:
+      breaking_changes:
+      - updated object_diff role to use the infra namespace, that means to use the
+        role it requires the infra version of the collection. Previous version required
+        the redhat_cop
+      bugfixes:
+      - Fixed name of task for inventory source update
+      - Fixed variable definitions in readmes
+      - Removed master_role_example as no longer required (this wasn't a functional
+        role)
+      minor_changes:
+      - Adapt filetree_read role tests playbook config-controller-filetree.yml.
+      - 'Add new type of objects for object_diff role:  applications, execution environments,
+        instance groups, notifications and schedules'
+      - Add no_log to all tasks that populates data to avoid exposing encrypted data
+      - Add task to add Galaxy credentials and Execution Environments to Organization.
+      - Added argument_spec for all roles
+      - Set the variables to assign_galaxy_credentials_to_org and assign_default_ee_to_org
+        to false in the task to run all roles at dispatch role.
+      - avoid to create orgs during drop_diff
+      - fixed an extra blank line in schedules readme that was breaking the table
+      - removed references to redhat_cop as a collection namespace in the readme files.
+    fragments:
+    - arg_spec.yml
+    - dispatch_creds_ee_orgs_creation.yml
+    - filetree_read.yml
+    - fixing_readme.yaml
+    - i_s_u_title.yml
+    - object_diff_role_and_plugin.yml
+    - redhat_to_infra_conversion.yml
+    release_date: '2023-03-16'
+  2.3.1:
+    changes:
+      bugfixes:
+      - Added argument_spec for all roles
+      - Ensures vars get loaded properly by dispatch role
+    fragments:
+    - arg_spec.yml
+    - dispatch_fix.yml
+    release_date: '2023-03-24'
+  2.4.0:
+    changes:
+      bugfixes:
+      - Fixed defaults for values that are lists.
+      - Fixed filetree read to error when organization not defined.
+      - Fixed rrule in schedules to not be mandatory.
+      minor_changes:
+      - Added Roles bulk_host_create, bulk_job_launch.
+      - Added new_name option to the roles applications, credential_types, execution_environments,
+        inventories, projects, users.
+      - Added new_username option to user role.
+      - Added option to multiple roles to enforce defaults. This is described in each
+        of the roles readmes and will slowly be rolled out to all applicable roles.
+        This option enforces module/api defaults in order to prevent config drift.
+        This makes it so if an option is NOT specified in a configuration it enforces
+        the default value. It is not enabled by default.
+      - Added scm_branch option to inventory_sources role.
+      - Corrected various readmes.
+      - Credentials role credential type set to mandatory. This would fail in the
+        past if it was not set, this just codifies it.
+      - If someone wants to have the old behavior, or only update projects with dispatch,
+        the dispatch variable controller_configuration_dispatcher_roles can be overwritten
+        and customized.
+      - Instances role - changed default of node_type and node_state to omit, as generally
+        these cannot be changed on existing instances unless deploying new instances.
+      - Inventory role - added input_inventories option for constructed inventories.
+      - Removed project_update from dispatch. This is because with bringing update_project
+        option in line with the module options, it was running twice both in project
+        and project update. Since both roles use the same variable controller_projects.
+      - Set the default behavior of project_update to run the update as true, unless
+        the user explicitly sets the variable update_project to overide the default
+        behavior. This is because if the user is specifically calling project_update
+        it should by default update the project.
+      - Updated workflow job template options to use non depreciated names for options.
+        This should not affect any operations.
+      - added alias's for applicable roles to use the variables set by the awx cli
+        export.
+      - added get_stats.yml playbook in the playbook folder to get some basic info
+        on a Tower/Controller instance
+      - added option for using the export form of default execution environment.
+      - added option to roles role to support upcoming change to allow lists of teams
+        and users to be used in the module.
+      - added options to license role to allow use of subcription lookup or pool_id.
+    fragments:
+    - enforce_defaults.yml
+    - export_defaults.yml
+    - filetree_inventory_org.yml
+    - get_stats.yml
+    - license.yml
+    - list_default_fix.yml
+    - org_ee.yml
+    - project_update.yml
+    - role_updates.yml
+    - roles_update.yml
+    - rrule_bugfix.yml
+    release_date: '2023-06-09'
+  2.4.1:
+    changes:
+      bugfixes:
+      - Changes default value for `*_enforce_defaults` to false instead of the truthy
+        value (due to the quotes), 'false'.
+      - 'Fix addition of `state: present` when `with_present: true`'
+      - Temporarily fixed an error when installing docker-compose using pip (see https://stackoverflow.com/questions/76708329/docker-compose-no-longer-building-image-attributeerror-cython-sources
+        for more information)
+      - When exporting job templates it was failing when missing some input information.
+      - When exporting schedules, the diff_mode was not treated correctly
+      - When importing the exported notification templates, the types of some values
+        are not as expected.
+      - 'When importing the exported settings, fields like `AUTOMATION_ANALYTICS_LAST_GATHER:
+        2023-07-17T13:22:06.445818Z` caused problems with the multiple `:`.'
+      - fix 'credentials' role ignoring 'update_secrets false' and forcing to default
+        'true'
+      - fixed an the users and teams field on the roles role to be correct and not
+        singular.
+      minor_changes:
+      - Add option to change async directory, and set the default to null. /tmp/.ansible_async
+        was a workaround while the default was broken previously.
+      - Change from lookup to query in the object_diff task files
+      - add organizations tag in a dispatch task which is in charge of applying galaxy
+        credencitals in the organization.
+      - added the instance_groups filed to the roles role.
+      - added the possibility to export schedules through the filetree_create role
+      - filetree_create now allows to export objects for the specified organization
+      - remove depencency of CONTROLER_USERNAME variable for object_diff role by calling
+        the API with api/me instead of calling the api/users and filtering by username
+    fragments:
+    - 610-filetree_create-now-allows-to-export-objects-for-the-specified-organization.yml
+    - 630-enforce-defs.yml
+    - add_organizations_tag.yml
+    - add_schedules_to_filetree_create.yml
+    - async.yml
+    - change_from_lookup_to_query.yml
+    - credentials_role_bugfix.yml
+    - filetree_create_bugfix.yml
+    - remove_username_dependency_objectdiff.yml
+    - roles_bugfix.yml
+    release_date: '2023-07-26'
+  2.5.0:
+    changes:
+      bugfixes:
+      - Added more attributes to be expanded and used by the comparison
+      - Fixed lintering issues
+      minor_changes:
+      - Added roles option to roles role to allow setting multiple roles in one item
+        rather than repeating entire sections of code
+      - ansible.cfg removed from root and galaxy.yml added to enable install from
+        source
+    fragments:
+    - object_diff.yml
+    - roles.yml
+    - source_build.yml
+    release_date: '2023-08-03'
+  2.5.1:
+    changes:
+      bugfixes:
+      - Fixed issue with licence role not operating properly, when a controller never
+        had credentials provided for subscription lookup. See Role Readme for proper
+        usuage.
+      - Fixed issue with organization role not acceppting default environments option
+        correctly.
+      minor_changes:
+      - Adds request_timeout to controller_export_diff module, and roles
+      - licence role now uses a boolean of controller_license.use_looup to determine
+        whether to lookup subscriptions. A lookup is only needed to refresh the available
+        pools, or if it has never been done. See Role Readme for details.
+    fragments:
+    - add_request_timeout.yml
+    - licence_org.yml
+    release_date: '2023-08-29'
+  2.5.2:
+    changes:
+      bugfixes:
+      - Fixed issue with organization creation with instance group. Execute instance
+        and instance_group before organizations.
+      - dispatch - Fixed the order and behavior to run as a single task with options
+        for organization behavior.
+      - filetree_create - Fixed the misspelled variable name that caused exported
+        job_templates yaml files containing incorrect name.
+      - filetree_create and object_diff- Subelement filter is executed before when
+        and it was causing a failure when the list was not defined.
+    fragments:
+    - dispatch_bugfix.yml
+    - filetree_create_job_templates.yml
+    - fix_subelements_conditional.yml
+    - instancegroups_org.yml
+    release_date: '2023-10-14'
+  2.6.0:
+    changes:
+      bugfixes:
+      - Fixed an issue where the diff doesn't work correctly when explicitly setting
+        state present
+      - Fixed an issue where the usage access to instance_groups were removed
+      - Fixed member removal of teams
+      - The role 'credentials' have had the enforced defaults removed from team, user,
+        and organization options. This was causing an error with these parameters
+        were mutally exclusive.
+      - The role 'inventory_sources' will now skip when the source parameter is `constructed`.
+        These sources are auto created and not meant to be edited. However they can
+        still be synced with the inventory_source_update.
+      - The role 'workflow_job_templates' Default enforced value set for workflow
+        templates limit was 0, was corrected to be an empty string.
+      minor_changes:
+      - The role 'filetree_create' will now allow to export all the objects of one
+        kind into a single file, so it can be loaded by both ansible `group_vars`
+        syntax and `filetree_read` tool.
+      - added improvements to checkmod where it will run faster with the async tasks.
+        In addition added an additional fail check at end of dispatch that will likely
+        fail if dependencies are missing, as expected.
+      - added mandatory check to workflow launch name option
+      - filetree_create - Add the constructed inventory exportation fields from the
+        API endpoint `api/v2/constructed_inventories`
+    fragments:
+    - checkmode.yml
+    - constructed.yml
+    - credential_owner.yml
+    - diff_plugin.yml
+    - filetree_create_export_constructed_inventories.yml
+    - filtree_create_flatten_output.yml
+    - workflow_limit_default.yml
+    release_date: '2023-12-02'
+  2.7.1:
+    changes:
+      bugfixes:
+      - Constructed inventories can only be exported when AAP version is >= 4.5.0
+      - Fixed roles diff when the role is set at the organization level for an user/team
+      - Fixed roles diff when the roles are provided as a list, in a single entry
+      - Organization not defined when exporting some inventory sources from Tower
+        3.7.2
+      minor_changes:
+      - Add `assign_notification_templates_to_org` option to organization role to
+        allow conditional assigning of notification templates
+      - Updated dispatch role with `assign_notification_templates_to_org` option assigned
+        to organization as False on first run and True on second run by default.
+      - instance role - add missing arguments introduced in ansible.controller 4.5.0
+        or awx.awx 23.0.0
+    fragments:
+    - 765-notif-temp-assign.yml
+    - add_instance_arguments.yml
+    - diff_roles_fix.yml
+    - diff_roles_orga_wide.yml
+    - issue_743.yml
+    release_date: '2024-03-19'
+  2.8.0:
+    changes:
+      bugfixes:
+      - Adjusted output of boolean filetree_create fields to provide ansible-lint
+        compatible values.
+      - Avoid the groups populated by a constructed inventory to be removed during
+        object_diff.
+      - Fix "adhoc" role permission name in object diff.
+      - Fix changed_when statement in all roles to show correct state
+      - Fixed the empty credential scenario where the playbook looks for credential
+        names and fails with undefied value.
+      - fixed a bug where int values were being set to 0 it was being dropped and
+        value was not being pushed to controller
+      - fixed a bug where when verbosity was set to 0 it was being dropped and value
+        was not being pushed to controller
+      minor_changes:
+      - Add two playbooks to simplify management of Configuration as Code files
+      - Added option to not removing '$encrypted$' string in filetree_create credentials
+        output
+      - added new_name as an option to organization role
+    fragments:
+    - add_playbooks.yml
+    - adhoc_role_name_object_diff.yml
+    - check_state.yml
+    - empty-inventory-source-credential.yaml
+    - groups_constructed.yml
+    - org_new_name.yml
+    - show-encrypted.yml
+    - truthy_values_in_lowcase.yml
+    - verbosity_bug.yml
+    release_date: '2024-05-16'
+  2.8.1:
+    release_date: '2024-05-23'
+  2.9.0:
+    changes:
+      bugfixes:
+      - fixes an issue where spaces are stripped from variables applied to the inventories,
+        inventory_sources, hosts, groups, credential_types and notification_templates
+        roles
+      minor_changes:
+      - Added `controller_configuration_loop_delay` and role specific var to give
+        users the option to add a pause during the async loop to slow it down a bit
+        when they are seeing controller API overloaded.
+      - Added the option assign_instance_groups_to_org to allow skipping this when
+        creating an org if desired
+      - filetree_create able to filter by project_id, workflow_job_template_id or
+        job_template_id
+    fragments:
+    - filetree_create_filter.yml
+    - instance_group_org.yml
+    - pause_loop.yml
+    - var_spaces.yml
+    release_date: '2024-09-23'
+  3.0.0:
+    changes:
+      breaking_changes:
+      - Major overhaul to all code completed, variables have changed, role names have
+        changed, please see the Conversion guide for more details.
+      bugfixes:
+      - Controller credentials role now includes request timeout option.
+      - meta_dependency_check set to default to false. This is due to feature not
+        working on controller, or in offline environments without a hub. Set controller_dependency_check
+        to 'true' to re-enable feature.
+      major_changes:
+      - Introduction of roles for gateway
+      - Rename of collection to infra.aap_configuration
+      - Roles from infra.ah_configuration and infra.eda_configuration have migrated
+        into this collection
+      release_summary: '| Release Date: 2024-10-31
+
+        | The collection has been updated for AAP 2.5 use and has only been tested
+        against AAP 2.5, it has been updated to include the previously separated hub,
+        eda, and gateway collection roles.
+
+        | `Conversion Guide <https://github.com/redhat-cop/infra.aap_configuration/blob/devel/CONVERSION_GUIDE.md>`__
+
+        '
+      removed_features:
+      - ee_namespace role has been removed, this was removed in AAP 2.4, and was depreciated
+        then.
+    fragments:
+    - Rewrite.yml
+    - ee_namespace_removed.yml
+    release_date: '2024-11-08'
+  3.1.0:
+    changes:
+      bugfixes:
+      - updated gateway services async and no log vars to correct naming convention.
+      major_changes:
+      - renamed some more vars that got missed in the new naming convention.
+    fragments:
+    - hub_vars.yml
+    release_date: '2024-11-11'
+  3.2.0:
+    changes:
+      bugfixes:
+      - Correct README.md to indicate destroy_current_nodes is bool
+      - Fixed the object creation order for the gateway staf.
+      - Update loop label to only show name of credential type instead of entire json
+        object
+      - Update loop label to only show name of job template instead of entire json
+        object
+      - Update loop label to only show name of workflow job template instead of entire
+        json object
+      - added missing references to controller_roles in dispatcher defaults
+      - added missing references to eda_credential_types and eda_event_streams in
+        dispatcher defaults
+      major_changes:
+      - Dispatch no longer calls the controller_organizations role by default, as
+        the gateway_organizations role should be sufficient.
+      - Restucture the gateway_organizations role so that only one role needs to be
+        called to create and configure the organization. Adds the logic which existed
+        from the controller_organizations role previously.
+    fragments:
+    - controller_credential_types.yml
+    - controller_job_templates.yml
+    - controller_workflow_job_templates.yml
+    - dispatcher_controller_roles_role.yml
+    - dispatcher_eda_roles.yml
+    - dispatcher_gateway_order.yml
+    - organizations.yml
+    release_date: '2025-04-02'
+  3.3.0:
+    changes:
+      breaking_changes:
+      - In order to comply with stricter linting rules and to make the collection
+        more explicit, controller roles were chagned to be explicit with ansible.controller.
+        awx.awx was not compatible and this just codifies the change. Please transition
+        to using the certified ansible.controller collection to continue using this
+        collection.
+      minor_changes:
+      - The creation order for the workflows is 'workflow -> workflow nodes'. The
+        deletion order is the same one, but in reverse.
+      - added auto_migrate_users_to option to the gateway authenticator role.
+      - added dependencies to our galaxy.yml, the lowest version has been set to collections
+        compatible with AAP 2.5, which this collection already requires, This should
+        not be a breaking or major change for anyone, just codifies our dependencies,
+        now that a bug in console.redhat.com has been fixed.
+      - added scm_branch option to the eda_projects role, this requires ansible.eda
+        >2.8.0, and fixes
+    fragments:
+    - ah_group_doc.yml
+    - constructed_inv_examples.yml
+    - dependencies.yml
+    - fqdn_fix.yml
+    - gateway_auth_map.yml
+    - workflow_job_templates.yml
+    release_date: '2025-05-16'
+  3.4.0:
+    changes:
+      bugfixes:
+      - The 'auto_migrate_users_to' field can't be 'false' as default. Omit instead.
+      - changes the 2 places that authenticator_maps_list was used vs gateway_authenticator_maps
+      minor_changes:
+      - Defaulted the new variables 'hub_state', 'hub_path_prefix', 'hub_token' to
+        the old ones for backward compatibility.
+      - Dependent collections added to galaxy.yml
+      - Moved some docs to the docs folder
+      - Removed all references to awx.awx because we no longer support that officially
+      - Renamed 'ah_state', 'ah_path_prefix', 'ah_token' variables to 'hub_state',
+        'hub_path_prefix', 'hub_token' in hub roles.
+      - Updated links to use FQDN vs short links so they will work outside of github
+    fragments:
+    - ah_hub_rename.yml
+    - fix_gateway_authenticator_maps.yml
+    - fix_readmes_requirements.yml
+    - gateway_authenticators.yaml
+    release_date: '2025-06-04'
+  3.4.1:
+    changes:
+      bugfixes:
+      - Reverts the aap_token being applied to hub roles. Instead hub_token is now
+        used.
+    fragments:
+    - hub_token.yml
+    release_date: '2025-06-05'
+  3.5.0:
+    changes:
+      bugfixes:
+      - Corrected README for controller_credentials, API URL reference was pointed
+        to AAP 2.4 API not 2.5
+      minor_changes:
+      - Add object_ids parameter to gateway_role_user_assignments role
+      - Add the ability to collect error logs while configuring the object, instead
+        of failing on the first error.
+      - Fix variable name in dispatch role.
+      - gateway_role_user_assignments - ansible.platform.role_user_assignment as of
+        version 2.5.20250702 supports the objects_ids parameters and marks object_id
+        as deprecated. pull request
+    fragments:
+    - 1140-add-objectids-argspec.yml
+    - controller_objects.yml
+    - objects_ids.yml
+    - update_controller_credentials_readme.yml
+    release_date: '2025-09-01'
+  3.5.1:
+    changes:
+      bugfixes:
+      - Fix accidentally removed usage of '_async_delay' and '_async_retries' variables
+      - Fixes issue when adding workflow schemas where the job_id is not defined because
+        a failure state has occurred
+    fragments:
+    - 1154_retries_delay.yml
+    - workflow_schema_job_id.yml
+    release_date: '2025-09-05'
+  3.5.2:
+    changes:
+      bugfixes:
+      - fixing bug that got introduced in 3.5.1 causing no_log issues
+    fragments:
+    - no_log_fix.yml
+    release_date: '2025-09-09'
+  3.6.0:
+    changes:
+      bugfixes:
+      - changing `workflow_job_templates_secure_logging` to fit standard `controller_configuration_workflow_job_templates_secure_logging`
+      - fixing `workflow_job_templates_async_delay` to what it was supposed to be
+        `controller_configuration_workflow_async_delay`
+      - fixing `workflow_job_templates_async_retries` to what it was supposed to be
+        controller_configuration_workflow_async_retries`
+      minor_changes:
+      - added a sync option to collection_repository_sync role to allow more easily
+        skipping of specific repositories
+    fragments:
+    - collection_repo_sync.yml
+    - workflow_jt_vars.yml
+    release_date: '2025-09-15'
+  3.7.0:
+    changes:
+      bugfixes:
+      - fixing `controller_configuration_workflow_async_delay` to what it was supposed
+        to be `controller_configuration_workflow_job_templates_async_delay`
+      - fixing `controller_configuration_workflow_async_retries` to what it was supposed
+        to be `controller_configuration_workflow_job_templates_async_retries`
+      - fixing `controller_configuration_workflow_loop_delay` to what it was supposed
+        to be `controller_configuration_workflow_job_templates_loop_delay`
+      minor_changes:
+      - Set async log collection default once
+    fragments:
+    - fix_async_variable.yaml
+    - fix_workflow_variable_names.yaml
+    release_date: '2025-09-17'
+  3.8.0:
+    changes:
+      bugfixes:
+      - Add enhance async handling to the controller_settings role
+      - Added logic to better label the collect_async_status role/tasks to more easily
+        understand where automation is at any given point
+      - Fix usage of aap_configuration_collect_logs variable
+      - Update role readme files to be consistently worded for the aap_configuration_collect_logs
+        variable
+      minor_changes:
+      - Added `gateway_role_definitions` role for AAP 2.6+
+      - Added `gateway_role_team_assignments` role for AAP 2.6+
+      - Updated `gateway_role_user_assignments` role these changes will only work
+        in AAP 2.6+
+      - added include_wildcard_vars option to dispatch role.
+      - updated vars to `hub_` from `ah_` that were missed in hub_publish role
+    fragments:
+    - aap_26_additions.yml
+    - async_fixes.yml
+    - async_improved_logging.yml
+    - hub_publish.yml
+    - include_wildcard_vars.yml
+    release_date: '2025-10-06'
+  3.8.1:
+    changes:
+      bugfixes:
+      - Added `gateway_role_definitions` role to dispatch roles
+      - Added `gateway_role_team_assignments` role to dispatch roles
+      - Updated the async retries default to 50 for the roles to be consistent across
+        the collection.
+    fragments:
+    - new_dispatch_roles.yml
+    - updated_async_retries.yml
+    release_date: '2025-10-07'
+  3.8.2:
+    changes:
+      bugfixes:
+      - fixing gateway_role_definitions loop_var `__gateway_role_definition_item`
+        to `__gateway_role_definitions_item`
+      - fixing role_team_assignments var typo `__gateway_role_team_assignment_item`
+        to `__gateway_role_team_assignments_item`
+    fragments:
+    - fixing_role_def_loop.yml
+    - fixing_team_assign_loop.yml
+    - gateway_org_doc.yml
+    release_date: '2025-10-08'
+  3.8.3:
+    changes:
+      bugfixes:
+      - Unnecessary gather_facts set to false in configure_aap.yml
+    fragments:
+    - gather_face_false.yml
+    - trivial.yml
+    release_date: '2025-10-15'
+  3.8.4:
+    changes:
+      bugfixes:
+      - 'Add `kind: constructed` in controller_inventories role document'
+      - Fix missing wildcard variable tasks for gateway_http_portsgateway_role_definitions,
+        and gateway_role_team_assignments to ensure all variables defined in defaults
+        are properly handled
+      - Rename variable to fix conflict between hub_collections variable used in hub_collections
+        and hub_publish roles
+      - Updated get_stats playbook to have validate_certs be a var
+      - fixing eda roles that were missing aap_token arguments even though it was
+        shown in the arg spec
+      - fixing examples for gateway_role_definitions and gateway_role_team_assignments
+    fragments:
+    - 1223.yml
+    - fix_dispatch_wildcard_vars.yml
+    - fix_doc_inventories_kind.yml
+    - fix_examples.yml
+    - fix_hub_collections_conflict.yml
+    - get_stats.yml
+    - trivial_stuff.yml
+    release_date: '2025-11-15'
+  3.9.0:
+    changes:
+      bugfixes:
+      - Improve error handling output for collection uploads. Now displays path and
+        namespace.
+      minor_changes:
+      - added proxy option to eda_projects
+      - added the option of project sync to eda_projects
+    fragments:
+    - 1233.yml
+    - hub_collection_errors.yml
+    release_date: '2025-12-01'
+  3.9.1:
+    changes:
+      bugfixes:
+      - Fix wildcard variable handling for gateway_settings
+    fragments:
+    - fix_galaxy_settings_wildcard.yml
+    release_date: '2025-12-15'
+  4.0.0:
+    changes:
+      major_changes:
+      - Added ability to attach roles directly to projects, credentials, inventories,
+        instance groups, workflows and job_templates
+      - Adds ability to set a var to register values for each item, or as a whole
+        by setting `aap_configuration_register`.
+      minor_changes:
+      - Make it possible to exclude roles from the default list in the dispatch role
+      - Use just one task to combine wildcard variables in the dispatch role
+    fragments:
+    - dispatch_exclude_roles.yml
+    - dispatch_wildcore_one_task.yml
+    - register_values.yml
+    - role_apply.yml
+    release_date: '2026-01-07'
+  4.1.0:
+    changes:
+      minor_changes:
+      - Allow conditionally preventing object roles to be added to objects directly.
+    fragments:
+    - object_roles_conditional.yml
+    release_date: '2026-01-07'
+  4.2.0:
+    changes:
+      bugfixes:
+      - controller_license - Make controller_license role compatible with license
+        module by replacing pool_id parameter with subscription_id.
+      - controller_license - remove eula_accepted which has been deprecated and effectively
+        removed by being unusable with this collection for many versions.
+      minor_changes:
+      - Add role for creation of EDA credential input sources.
+      - Avoid duplicates in hub_configuration_dispatcher_roles and allow including
+        publish roles
+      - Correctly set task labels during workflow management
+      - Use labels where appropriate in hub_publish
+    fragments:
+    - controller_license.yml
+    - controller_license_subscription_id.yml
+    - dispatch_hub_roles.yml
+    - eda_credential_input_sources_role.yml
+    - hub_publish_labels.yml
+    - workflow_task_labels.yml
+    release_date: '2026-01-15'
+  4.2.1:
+    changes:
+      bugfixes:
+      - Fix incorrectly applied direct roles to projects
+    fragments:
+    - role_apply_project.yml
+    release_date: '2026-02-01'
+  4.3.0:
+    changes:
+      bugfixes:
+      - Fix "argument 'variables' is of type str" error on ansible 2.19+ by avoiding
+        regex_replace on non-string values.
+      - Fix EDA credentials failing when inputs is not specified by defaulting to
+        an empty dict when state is present.
+      - Fix controller_license argument_specs, re-allow parameters that should be
+        allowed
+      - Fix dispatch ordering so credential_types, credentials, and credential_input_sources
+        are processed before instance_groups.
+      - Fix gateway_users role sending default password when none specified, causing
+        failures for externally authenticated users.
+      - Fix role assignment failing when users/teams are specified as lists in job_templates,
+        inventories, and workflow_job_templates roles blocks.
+      - Fixed labels and notification_templates not being applied when defined directly
+        in user data because the Jinja2 expressions checked ``related.*`` (API-exported
+        format) before the direct user value. Reordered the fallback chain to check
+        the direct value first, matching the existing correct pattern used by ``credentials``.
+        Affected roles - controller_job_templates, controller_schedules, controller_workflow_job_templates,
+        controller_projects, controller_inventory_sources, controller_organizations,
+        gateway_organizations (https://github.com/redhat-cop/infra.aap_configuration/issues/1270).
+      - Removing enforce defaults for schedules on execution environments because
+        the it causes the api to return an error
+      - api endpoint for get_stats playbook was incorrect, fixed to match the correct
+        endpoint for users and subscription info
+      minor_changes:
+      - Add hub_repository variable to hub_publish role allowing collections to be
+        published to any repository, not just staging.
+      - Added the controller_role_definitions role; this allows AAP 2.5 compatibility
+        with creating roles
+    fragments:
+    - 1014-fix-dispatch-ordering.yml
+    - 1039-ldap-authenticator-map-examples.yml
+    - 1068-controller-license-auth-docs.yml
+    - 1216-constructed-inventory-docs.yml
+    - 1270-fix-labels-and-notification-templates-precedence.yml
+    - 1271-eda-rulebook-event-streams-docs.yml
+    - 1278-fix-eda-credentials-inputs.yml
+    - 1283-get_stats-url-fix.yml
+    - 1286-hub-publish-repository.yml
+    - 1287-fix-variables-argument-type-str.yml
+    - 1291-add_credentials-count-fix.yml
+    - 1295-fix.yml
+    - 1296-fix-role-assignment-lists.yml
+    - 1313-gateway-users-no-default-password.yml
+    - add_controller_role_definitions_role.yml
+    - fix_controller_license_argument_spec.yml
+    - pre-commit-update.yml
+    release_date: '2026-03-19'
+  4.4.0:
+    changes:
+      bugfixes:
+      - Added tag 'always' to tasks in the dispatch role for include_wildcard_vars
+        to ensure they run regardless of applied tags.
+      minor_changes:
+      - Added controller_role_user_assignments and controller_role_team_assignments
+        to support AAP 2.5 and custom role definitions.
+    fragments:
+    - 1327-readme-fix.yml
+    - add_role_to_collection.yml
+    - dispatch_tags.yml
+    - trivial.yml
+    - update_gateway_role_definitions_readme.yml
+    release_date: '2026-04-15'

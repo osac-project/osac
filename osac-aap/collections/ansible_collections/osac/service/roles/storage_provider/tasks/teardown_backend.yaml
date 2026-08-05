@@ -1,0 +1,14 @@
+---
+# Dispatches teardown_backend to each unique provider in the tier list.
+# Removes backend resources (VAST tenant, views, quotas) and hub Secret
+# without touching cluster-side K8s resources.
+# Best-effort — ignore_errors so one provider's failure doesn't block others.
+
+- name: Dispatch teardown_backend to each provider
+  block:
+    - name: Run teardown_backend per provider
+      ansible.builtin.include_tasks: _dispatch_provider.yaml
+      loop: "{{ _unique_providers }}"
+      loop_control:
+        loop_var: _current_provider
+      ignore_errors: true  # noqa: ignore-errors

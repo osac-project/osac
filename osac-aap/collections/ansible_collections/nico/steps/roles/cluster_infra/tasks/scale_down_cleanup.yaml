@@ -1,0 +1,103 @@
+---
+# Scale-down cleanup: destroy removed NICo instances and update ConfigMap
+# This file handles a SUBSET of instances (removed agents only, not all instances)
+# Called by cluster_infra workflow during scale-down operations
+
+- name: Scale-down instance cleanup
+  when: nico_removed_instance_ids is defined and nico_removed_instance_ids | length > 0
+  block:
+
+    # Re-exchange credentials for a fresh token.  The token obtained at the
+    # start of the run may have expired while waiting for agents to be removed.
+    - name: Exchange client credentials for fresh JWT token
+      ansible.builtin.uri:
+        url: "{{ nico_ssa_token_url }}"
+        method: POST
+        url_username: "{{ nico_client_id }}"
+        url_password: "{{ nico_client_secret }}"
+        force_basic_auth: true
+        body_format: form-urlencoded
+        body:
+          grant_type: client_credentials
+          scope: "{{ nico_oauth_scope | default('') }}"
+        status_code: 200
+      register: cluster_infra_cleanup_token_response
+      no_log: true
+
+    - name: Set fresh NICo API token
+      ansible.builtin.set_fact:
+        nico_api_token: "{{ cluster_infra_cleanup_token_response.json.access_token }}"
+      no_log: true
+
+    - name: Delete removed NICo instances
+      nvidia.bare_metal.instance:
+        state: absent
+        id: "{{ instance_id }}"
+        wait: true
+        wait_timeout: "{{ nico_infra_delete_timeout }}"
+        api_url: "{{ nico_api_url }}"
+        api_token: "{{ nico_api_token }}"
+        org: "{{ nico_org }}"
+        api_path_prefix: "{{ nico_api_path_prefix | default('forge') }}"
+      loop: "{{ nico_removed_instance_ids }}"
+      loop_control:
+        loop_var: instance_id
+        label: "Deleting instance {{ instance_id }}"
+      ignore_errors: true  # Tolerate already-deleted instances
+      register: instance_delete_result
+
+    - name: Read current nico-infra ConfigMap
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: ConfigMap
+        name: "nico-infra-{{ cluster_infra_name }}"
+        namespace: "{{ nico_infra_configmap_namespace | default('hardware-inventory') }}"
+      register: cluster_infra_configmap_current
+
+    - name: Determine which instances were actually deleted
+      ansible.builtin.set_fact:
+        nico_actually_deleted_ids: >-
+          {{ instance_delete_result.results |
+             selectattr('failed', 'equalto', false) |
+             map(attribute='instance_id') |
+             list }}
+
+    - name: Compute updated instance_ids
+      when: cluster_infra_configmap_current.resources | length > 0
+      ansible.builtin.set_fact:
+        cluster_infra_updated_instance_ids: >-
+          {{
+            (cluster_infra_configmap_current.resources[0].data.instance_ids | default('[]') | from_json) |
+            difference(nico_actually_deleted_ids) |
+            to_json
+          }}
+
+    - name: Write updated ConfigMap
+      when: cluster_infra_configmap_current.resources | length > 0
+      kubernetes.core.k8s:
+        state: present
+        force: true
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: "nico-infra-{{ cluster_infra_name }}"
+            namespace: "{{ nico_infra_configmap_namespace | default('hardware-inventory') }}"
+            labels:
+              managed-by: osac
+              provider: nico
+              cluster: "{{ cluster_infra_name }}"
+          data:
+            vpc_id: "{{ cluster_infra_configmap_current.resources[0].data.vpc_id }}"
+            vpc_name: "{{ cluster_infra_configmap_current.resources[0].data.vpc_name }}"
+            vpc_prefix_id: "{{ cluster_infra_configmap_current.resources[0].data.vpc_prefix_id }}"
+            vpc_created: "{{ cluster_infra_configmap_current.resources[0].data.vpc_created | string }}"
+            prefix_created: "{{ cluster_infra_configmap_current.resources[0].data.prefix_created | string }}"
+            instance_ids: "{{ cluster_infra_updated_instance_ids }}"
+            vpc_peering_id: "{{ cluster_infra_configmap_current.resources[0].data.vpc_peering_id | default('') }}"
+            site_id: "{{ cluster_infra_configmap_current.resources[0].data.site_id }}"
+            tenant_id: "{{ cluster_infra_configmap_current.resources[0].data.tenant_id }}"
+
+    - name: Display cleanup summary
+      ansible.builtin.debug:
+        msg: "Scale-down cleanup: destroyed {{ nico_removed_instance_ids | length }} instances, updated ConfigMap"

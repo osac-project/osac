@@ -1,0 +1,48 @@
+---
+- name: Teardown a hosted control plane cluster from a ClusterOrder
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    cluster_order: "{{ ansible_eda.event.payload }}"
+
+  pre_tasks:
+    - name: Apply default settings
+      ansible.builtin.include_role:
+        name: osac.service.cluster_settings
+
+    - name: Extract template info
+      ansible.builtin.include_role:
+        name: osac.service.extract_template_info
+
+    - name: Determine working namespace
+      ansible.builtin.include_role:
+        name: osac.service.cluster_working_namespace
+      vars:
+        cluster_working_namespace_cluster_order_name: "{{ cluster_order.metadata.name }}"
+
+  tasks:
+    - name: Call the selected template
+      ansible.builtin.include_role:
+        name: "{{ template_id }}"
+        tasks_from: "delete"
+
+    - name: Remove infrastructure finalizer
+      ansible.builtin.include_role:
+        name: osac.service.finalizer
+      vars:
+        finalizer_state: absent
+        finalizer_name: "{{ cluster_order_infrastructure_finalizer }}"
+        finalizer_target:
+          api_version: "{{ item.api_version }}"
+          kind: "{{ item.kind }}"
+          namespace: "{{ item.namespace | default(omit) }}"
+          name: "{{ item.name }}"
+      loop:
+        - api_version: osac.openshift.io/v1alpha1
+          kind: ClusterOrder
+          namespace: "{{ lookup('env', 'POD_NAMESPACE') }}"
+          name: "{{ cluster_order.metadata.name }}"
+        - api_version: v1
+          kind: Namespace
+          name: "{{ cluster_working_namespace }}"

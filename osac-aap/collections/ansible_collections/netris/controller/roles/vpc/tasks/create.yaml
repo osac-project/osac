@@ -1,0 +1,59 @@
+---
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Get existing VPCs
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/vpc"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: 200
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _vpc_list_resp
+  no_log: true
+
+- name: Find VPC by name
+  ansible.builtin.set_fact:
+    _existing_vpc: "{{ (_vpc_list_resp.json.data | default([])) | selectattr('name', 'equalto', vpc_name) | list | first | default(none) }}"
+  when: _vpc_list_resp.json is mapping
+
+- name: Set VPC facts from existing VPC (skip creation)
+  ansible.builtin.set_fact:
+    vpc_id: "{{ _existing_vpc.id }}"
+    vpc_already_existed: true
+  when: _existing_vpc is defined and _existing_vpc is not none
+
+- name: Create VPC
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/vpc"
+    method: POST
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ vpc_name }}"
+      adminTenant:
+        id: "{{ vpc_tenant_id }}"
+    return_content: true
+    status_code: [200, 201]
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _vpc_create_resp
+  when: _existing_vpc is not defined or _existing_vpc is none
+  no_log: true
+
+- name: Set VPC facts from create response
+  ansible.builtin.set_fact:
+    vpc_id: "{{ _vpc_create_resp.json.data.id | default(_vpc_create_resp.json.data) }}"
+    vpc_already_existed: false
+  when:
+    - _existing_vpc is not defined or _existing_vpc is none
+    - _vpc_create_resp is not skipped
+    - _vpc_create_resp is changed or (_vpc_create_resp.status | default(0)) in [200, 201]
+    - _vpc_create_resp.json is mapping

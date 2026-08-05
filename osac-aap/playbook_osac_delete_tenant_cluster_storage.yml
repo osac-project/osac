@@ -1,0 +1,92 @@
+---
+- name: Delete cluster-side storage resources for a tenant
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: "{{ ansible_eda.event.payload.metadata.annotations['osac.openshift.io/tenant'] }}"
+    # This template is triggered from two different call sites in storage_controller.go,
+    # sharing the same AAP job template but passing different resource kinds as payload:
+    #   - handleClusterStorageDeprovisioning (hub storage) sends a Tenant object, whose own
+    #     metadata.namespace is "osac-tenants" — correct as-is, matches the live
+    #     vast-csi-<tenant> Secret's actual location on the hub.
+    #   - handleCaaSDelete (CaaS/guest-cluster storage) sends a ClusterOrder object, whose
+    #     metadata.namespace ("osac-devel") is hub-side bookkeeping with no relation to the
+    #     guest cluster. For that case we target the fixed OSAC system namespace on the guest
+    #     cluster instead (mirrors the create playbook's routing).
+    tenant_namespace: >-
+      {%- if ansible_eda.event.payload.kind == 'ClusterOrder' -%}
+      openshift-osac-storage
+      {%- else -%}
+      {{ ansible_eda.event.payload.metadata.namespace }}
+      {%- endif -%}
+    _storage_tiers_raw: "{{ lookup('env', 'STORAGE_TIERS') }}"
+
+  pre_tasks:
+    - name: Show EDA Event
+      ansible.builtin.debug:
+        var: ansible_eda.event.payload
+
+    - name: Validate tenant payload is present
+      ansible.builtin.fail:
+        msg: "tenant must be provided via ansible_eda.event.payload with metadata.name and metadata.namespace set"
+      when: >-
+        ansible_eda is not defined or
+        ansible_eda.event.payload.metadata.name is not defined or
+        ansible_eda.event.payload.metadata.name | length == 0 or
+        ansible_eda.event.payload.metadata.namespace is not defined or
+        ansible_eda.event.payload.metadata.namespace | length == 0
+
+    - name: Parse STORAGE_TIERS JSON
+      when: _storage_tiers_raw | length > 0
+      block:
+        - name: Parse tier list from env var
+          ansible.builtin.set_fact:
+            _storage_tiers: "{{ _storage_tiers_raw | from_json }}"
+        - name: Validate STORAGE_TIERS is a JSON array
+          ansible.builtin.assert:
+            that:
+              - _storage_tiers | type_debug == 'list'
+            fail_msg: >-
+              STORAGE_TIERS must be a JSON array of tier objects.
+      rescue:
+        - name: Fail on malformed STORAGE_TIERS JSON
+          ansible.builtin.fail:
+            msg: >-
+              STORAGE_TIERS env var contains invalid JSON.
+              Value: '{{ _storage_tiers_raw }}'.
+              Expected a JSON array of tier objects with name, protocol, and provider fields.
+
+    - name: Write admin_kubeconfig to temporary file when provided
+      when: >-
+        ansible_eda.event.admin_kubeconfig is defined and
+        ansible_eda.event.admin_kubeconfig | length > 0
+      ansible.builtin.set_fact:
+        _remote_kubeconfig: "{{ ansible_eda.event.admin_kubeconfig | osac.service.to_temp_file(suffix='.kubeconfig') }}"
+        # HCP guest-cluster kubeconfigs are typically accessed via an external Route whose
+        # serving cert doesn't match the CA bundled in the admin kubeconfig.
+        _remote_kubeconfig_insecure: true
+
+    - name: Fail when guest-cluster teardown is requested without admin_kubeconfig
+      ansible.builtin.fail:
+        msg: >-
+          admin_kubeconfig is required in the EDA event for ClusterOrder
+          (guest-cluster) storage teardown; without it cleanup would target
+          the controller's default cluster instead of the guest cluster.
+      when: >-
+        ansible_eda.event.payload.kind == 'ClusterOrder' and
+        (_remote_kubeconfig is not defined or _remote_kubeconfig | length == 0)
+
+  tasks:
+    - name: Skip cleanup when STORAGE_TIERS is not configured
+      when: _storage_tiers_raw | length == 0
+      ansible.builtin.debug:
+        msg: "STORAGE_TIERS env var is not set — nothing to clean up."
+
+    - name: Clean up cluster-side tenant storage resources
+      when: _storage_tiers_raw | length > 0
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: teardown_cluster_storage
+        storage_provider_tiers: "{{ _storage_tiers }}"

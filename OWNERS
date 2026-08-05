@@ -1,0 +1,56 @@
+filters:
+  "[^.]":
+    approvers:
+    - jhernand
+    - adriengentil
+    - tzvatot
+    - larsks
+    - tzumainn
+    - akshaynadkarni
+    - trewest
+    - omer-vishlitzky
+    - eranco74
+    - rgolangh
+    - ygalblum
+    - eliorerz
+    - sk-ilya
+    - vladikr
+    - rccrdpccl
+    - ori-amizur
+    - danmanor
+    - CrystalChun
+    - ybettan
+    - zszabo-rh
+    - wgordon17
+    - avishayt
+    - masayag
+    - amito
+    - danielerez
+    - htayrie-rh
+    reviewers:
+    - jhernand
+    - adriengentil
+    - tzvatot
+    - larsks
+    - tzumainn
+    - akshaynadkarni
+    - trewest
+    - omer-vishlitzky
+    - eranco74
+    - rgolangh
+    - ygalblum
+    - eliorerz
+    - sk-ilya
+    - vladikr
+    - rccrdpccl
+    - ori-amizur
+    - danmanor
+    - CrystalChun
+    - ybettan
+    - zszabo-rh
+    - wgordon17
+    - avishayt
+    - masayag
+    - amito
+    - danielerez
+    - htayrie-rh

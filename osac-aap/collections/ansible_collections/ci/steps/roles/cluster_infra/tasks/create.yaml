@@ -1,0 +1,36 @@
+- name: Wait for control plane namespace
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Namespace
+    name: "{{ cluster_infra_namespace }}-{{ cluster_infra_name }}"
+  register: cp_ns
+  until: cp_ns.resources | length > 0
+  retries: 30
+  delay: 10
+
+- name: Set skip network flags for CI
+  ansible.builtin.set_fact:
+    manage_agents_skip_network_detach: true
+    manage_agents_skip_network_attach: true
+
+- name: Select and label agents
+  ansible.builtin.include_role:
+    name: osac.service.manage_agents
+    tasks_from: select_and_label_new_agents
+  vars:
+    manage_agents_cluster_order_name: "{{ cluster_infra_name }}"
+    manage_agents_desired_count: "{{ item.numberOfNodes | int }}"
+    manage_agents_resource_class: "{{ item.resourceClass }}"
+  loop: "{{ cluster_infra_node_requests }}"
+
+- name: Approve agents
+  ansible.builtin.include_role:
+    name: osac.service.manage_agents
+    tasks_from: attach_and_approve_all_new_agents
+  vars:
+    manage_agents_cluster_order_name: "{{ cluster_infra_name }}"
+    manage_agents_cluster_network: "unused-in-ci"
+
+- name: Set cluster_infra_network_name
+  ansible.builtin.set_fact:
+    cluster_infra_network_name: "network-{{ cluster_infra_name }}"

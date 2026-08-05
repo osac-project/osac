@@ -1,0 +1,9 @@
+interface {{ port_name }}
+{% include "clean_config.j2" %}
+{% if port_description %}
+description {{ port_description }}
+{% endif %}
+switchport
+switchport mode access
+switchport access vlan {{ vlan_id }}
+no shutdown

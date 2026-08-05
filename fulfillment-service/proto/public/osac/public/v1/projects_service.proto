@@ -1,0 +1,140 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.public.v1;
+
+import "google/api/annotations.proto";
+import "google/protobuf/field_mask.proto";
+import "osac/public/v1/project_type.proto";
+
+message ProjectsListRequest {
+  // Index of the first result. If not specified the default value will be zero.
+  optional int32 offset = 1;
+
+  // Maximum number of results to be returned by the server. When not specified all the results will be returned. Note
+  // that there may not be enough results to return, and that the server may decide, for performance reasons, to return
+  // less results than requested.
+  optional int32 limit = 2;
+
+  // Filter criteria.
+  //
+  // The value of this parameter is a [CEL](https://cel.dev) expression used to select which objects to return. The
+  // built-in `this` variable refers to the object being tested and `now` refers to the current date and time. If the
+  // expression evaluates to `true` the object is included in the results. For example, to retrieve only top-level
+  // projects (no parent):
+  //
+  //     this.metadata.project == ""
+  //
+  // To retrieve child projects of a specific parent by name:
+  //
+  //     this.metadata.project == "team-a"
+  //
+  // To retrieve projects with a specific label:
+  //
+  //     this.metadata.labels["env"] == "production"
+  //
+  // If this isn't provided, or if the value is empty, then all the projects that the user has permission to see will be
+  // returned. Not all CEL constructs are currently supported for implementation reasons; see the filter documentation
+  // (docs/FILTER.md) for the full details.
+  optional string filter = 3;
+
+  // Order criteria.
+  optional string order = 4;
+}
+
+message ProjectsListResponse {
+  // Actual number of items returned.
+  int32 size = 1;
+
+  // Total number of items of the collection that match the search criteria.
+  int32 total = 2;
+
+  // List of results.
+  repeated Project items = 3;
+}
+
+message ProjectsGetRequest {
+  string id = 1;
+}
+
+message ProjectsGetResponse {
+  Project object = 1;
+}
+
+message ProjectsCreateRequest {
+  Project object = 1;
+}
+
+message ProjectsCreateResponse {
+  Project object = 1;
+}
+
+message ProjectsUpdateRequest {
+  Project object = 1;
+  google.protobuf.FieldMask update_mask = 2;
+
+  // Lock enables optimistic locking. When set to true, the server verifies that the current version of the object
+  // matches the value of the metadata.version field of the submitted object. If they differ the update will be
+  // rejected. This is useful to prevent lost updates when multiple clients are modifying the same object concurrently.
+  bool lock = 3;
+}
+
+message ProjectsUpdateResponse {
+  Project object = 1;
+}
+
+message ProjectsDeleteRequest {
+  string id = 1;
+}
+
+message ProjectsDeleteResponse {}
+
+service Projects {
+  // Retrieves the list of projects.
+  rpc List(ProjectsListRequest) returns (ProjectsListResponse) {
+    option (google.api.http) = {get: "/api/fulfillment/v1/projects"};
+  }
+
+  // Retrieves the details of one specific project.
+  rpc Get(ProjectsGetRequest) returns (ProjectsGetResponse) {
+    option (google.api.http) = {
+      get: "/api/fulfillment/v1/projects/{id}"
+      response_body: "object"
+    };
+  }
+
+  // Creates a new project.
+  rpc Create(ProjectsCreateRequest) returns (ProjectsCreateResponse) {
+    option (google.api.http) = {
+      post: "/api/fulfillment/v1/projects"
+      body: "object"
+      response_body: "object"
+    };
+  }
+
+  // Updates an existing project.
+  rpc Update(ProjectsUpdateRequest) returns (ProjectsUpdateResponse) {
+    option (google.api.http) = {
+      patch: "/api/fulfillment/v1/projects/{object.id}"
+      body: "object"
+      response_body: "object"
+    };
+  }
+
+  // Deletes a project.
+  rpc Delete(ProjectsDeleteRequest) returns (ProjectsDeleteResponse) {
+    option (google.api.http) = {delete: "/api/fulfillment/v1/projects/{id}"};
+  }
+}

@@ -1,0 +1,458 @@
+# =============================================================================
+# OSAC (Open Sovereign AI Cloud) - Example Values
+# =============================================================================
+#
+# Copy this file and customize it for your environment:
+#   cp values-example.yaml my-values.yaml
+#   # Edit my-values.yaml with your settings
+#   helm install osac charts/osac/ -f my-values.yaml -n <namespace>
+#
+# Required fields are marked with [REQUIRED]. All other fields have sensible
+# defaults and can be omitted.
+#
+# Two deployment scenarios are documented:
+#   1. Production: external Postgres, external Keycloak, pinned image tags
+#   2. Development: bundled dependencies, latest images
+#
+# =============================================================================
+
+# ---------------------
+# Operator CRDs
+# ---------------------
+operatorCrds:
+  # Install OSAC CRDs (ClusterOrder, ComputeInstance, Tenant, etc.).
+  # Set to false if CRDs are managed separately (e.g., by a cluster admin).
+  install: true
+
+# ---------------------
+# OSAC Operator
+# ---------------------
+operator:
+  image:
+    repository: ghcr.io/osac-project/osac-operator
+    # Production: pin to a specific SHA or release tag.
+    # Development: use "latest".
+    tag: latest
+    # "Always" recommended for development; "IfNotPresent" for production.
+    pullPolicy: Always
+
+  replicaCount: 1
+
+  resources:
+    limits:
+      cpu: 500m
+      memory: 128Mi
+    requests:
+      cpu: 10m
+      memory: 64Mi
+
+  # AAP connection settings. The operator uses AAP to provision infrastructure
+  # resources (clusters, VMs, networks) via job templates.
+  aap:
+    # [REQUIRED for provisioning] Full URL to the AAP controller API.
+    # Typically set post-install by create-api-token Helm hook after the AAP
+    # instance is ready and its route is available.
+    # Example: https://osac-aap.osac.apps.mycluster.example.com/api/controller
+    url: ""
+
+    # [REQUIRED for provisioning] AAP API token for authentication.
+    # Created by create-api-token Helm hook from the AAP admin credentials.
+    token: ""
+
+    # Skip TLS verification for AAP connection. Set to "false" in production
+    # if using trusted certificates.
+    insecureSkipVerify: "true"
+
+    # How often the operator polls AAP for job status updates.
+    statusPollInterval: "30s"
+
+    # Prefix for AAP job template names. The operator looks for templates
+    # named "<prefix>-<action>-<resource>" (e.g., "osac-create-subnet").
+    templatePrefix: "osac"
+
+  # Fulfillment service gRPC connection. The operator reports resource state
+  # back to the fulfillment service for multi-cluster coordination.
+  fulfillment:
+    # Internal gRPC address — must use the internal Envoy listener that
+    # routes both public and private API methods.
+    serverAddress: "fulfillment-internal-api:8001"
+    # Path to the ServiceAccount token file used for authentication.
+    tokenFile: "/var/run/secrets/kubernetes.io/serviceaccount/token"
+
+  # Enable/disable individual controllers. When all are true (default),
+  # the operator manages all resource types. Set to false to disable
+  # specific controllers in split-responsibility deployments.
+  controllers:
+    clusterOrder: true
+    computeInstance: true
+    tenant: true
+    networking: true
+
+  # Secret containing operator configuration overrides. Mounted as
+  # environment variables. Created by create-api-token Helm hook.
+  configSecret:
+    name: "osac-config"
+    # When true, the operator starts even if the secret doesn't exist yet.
+    optional: true
+
+# ---------------------
+# Fulfillment Service
+# ---------------------
+service:
+  # Deployment variant: "openshift" for OCP clusters, "kind" for local dev.
+  variant: openshift
+
+  # [REQUIRED] Hostname used to access the public API from outside the cluster.
+  # This is the hostname for the OpenShift Route or Ingress that exposes the
+  # fulfillment API externally.
+  # Example: fulfillment-api-osac.apps.mycluster.example.com
+  externalHostname: ""
+
+  # [REQUIRED] Hostname used to access both the public and private APIs
+  # internally. This Route/Ingress is typically not exposed to the internet
+  # and is used by other OSAC components (operator, AAP) within the cluster.
+  # Example: fulfillment-internal-api-osac.apps.mycluster.example.com
+  internalHostname: ""
+
+  images:
+    # Production: pin to a specific SHA tag.
+    # Development: use "latest".
+    service: ghcr.io/osac-project/fulfillment-service:latest
+    envoy: ghcr.io/osac-project/envoy:v1.33.0
+
+  # TLS certificate configuration. All service components use cert-manager
+  # to generate certificates signed by this issuer.
+  certs:
+    issuerRef:
+      # "ClusterIssuer" for cluster-wide issuers, "Issuer" for namespaced.
+      kind: ClusterIssuer
+      # [REQUIRED] Name of the cert-manager issuer. Must exist in the cluster
+      # before deploying OSAC. See prerequisites in the deployment guide.
+      name: default-ca
+    caBundle:
+      # ConfigMap containing the CA bundle. Created by trust-manager's
+      # ca-bundle Bundle resource. Pods mount this to trust internal certs.
+      configMap: ca-bundle
+
+  # Authentication configuration for the fulfillment service API.
+  auth:
+    # [REQUIRED] OIDC issuer URL. Must be the Keycloak realm URL that issues
+    # tokens for OSAC API authentication.
+    # Example: https://keycloak.keycloak.svc.cluster.local/realms/osac
+    issuerUrl: https://keycloak.keycloak.svc.cluster.local/realms/osac
+
+    # Credentials for the fulfillment controller to authenticate with
+    # the OIDC provider. Mounted as projected volumes.
+    controllerCredentials:
+    - secret:
+        name: fulfillment-controller-credentials
+        items:
+        - key: client-id
+          param: client-id
+        - key: client-secret
+          param: client-secret
+
+  # Identity provider configuration for user management.
+  idp:
+    # Currently only "keycloak" is supported.
+    provider: keycloak
+    # [REQUIRED] Keycloak base URL (without /realms/...).
+    # Example: https://keycloak.keycloak.svc.cluster.local
+    url: https://keycloak.keycloak.svc.cluster.local
+    # Credentials for the fulfillment service to manage Keycloak users/roles.
+    credentials:
+    - secret:
+        name: fulfillment-controller-credentials
+        items:
+        - key: client-id
+          param: client-id
+        - key: client-secret
+          param: client-secret
+
+  # Database connection configuration for the fulfillment service.
+  # Uses projected volumes to mount connection parameters from secrets.
+  database:
+    connection:
+    # Production: external Postgres with mTLS.
+    # Provide a secret with the connection URL and client certificates.
+    - secret:
+        name: fulfillment-db
+        items:
+        - key: url
+          # Format: postgresql://<user>:<password>@<host>:5432/<dbname>?sslmode=verify-full
+          param: url
+    - secret:
+        name: postgres-client-cert-service
+        items:
+        - key: tls.crt
+          param: sslcert
+        - key: tls.key
+          param: sslkey
+        - key: ca.crt
+          param: sslrootcert
+  # Development: for non-TLS Postgres, replace the connection block above with:
+  #   connection:
+  #   - secret:
+  #       name: fulfillment-db
+  #       items:
+  #       - key: url
+  #         param: url
+
+  # Logging configuration.
+  log:
+    # Log level: debug, info, warn, error
+    level: info
+    # Log HTTP headers (useful for debugging, disable in production).
+    headers: false
+    # Log HTTP bodies (useful for debugging, disable in production).
+    bodies: false
+
+# ---------------------
+# AAP (Ansible Automation Platform)
+# ---------------------
+aap:
+  aap:
+    instance:
+      # Set to false if using an externally managed AAP instance.
+      enabled: true
+      # Name of the AAP instance CR. Used to derive route/service names.
+      name: "osac-aap"
+      # AAP components to enable. Only controller is needed for OSAC.
+      controller:
+        disabled: false
+      eda:
+        disabled: false
+      hub:
+        disabled: true
+      lightspeed:
+        disabled: true
+      # Suppress sensitive data in AAP logs.
+      noLog: true
+      # Redis mode: "standalone" for single-node, "cluster" for HA.
+      redisMode: standalone
+      # TLS termination for AAP routes: "Edge" or "Passthrough".
+      routeTlsTerminationMechanism: Edge
+      imagePullPolicy: IfNotPresent
+
+  bootstrap:
+    # Run the AAP bootstrap job after install. The job creates OSAC-specific
+    # job templates, credentials, and inventories in AAP.
+    enabled: true
+    # Bootstrap job container image.
+    image: ghcr.io/osac-project/osac-aap:latest
+    # Number of retries for the bootstrap job. AAP takes time to start,
+    # so a high backoff limit is normal.
+    backoffLimit: 15
+    # Hostnames for AAP component routes. Leave empty to auto-detect
+    # from the AAP instance CR status.
+    gateway:
+      hostname: ""
+    controller:
+      hostname: ""
+
+  configAsCode:
+    # Secret names for AAP config-as-code. These must exist before the
+    # bootstrap job runs. make install creates them automatically in
+    # Helm mode; see docs/helm-deployment-guide.md for manual creation.
+    manifestSecret: "config-as-code-manifest-ig"
+    secret: "config-as-code-ig"
+    # Enable ConfigMap-based bare metal agent import. Sets
+    # OSAC_IMPORT_AGENTS_ENABLED=true in the config-as-code-ig Secret
+    # and gates the import-agents-inventory ConfigMap.
+    importAgentsEnabled: false
+    # Enable BCM (NVIDIA Base Command Manager) inventory backend. Sets
+    # OSAC_IMPORT_BCM_AGENTS_ENABLED=true in the config-as-code-ig Secret
+    # and gates the bcm-certs Secret.
+    importBcmAgentsEnabled: false
+
+  # Server inventory for bare metal agent import.
+  # Each entry provisions a BareMetalHost CR via the import-agents playbook.
+  # The playbook auto-creates a BMC Secret named {name}-bmc-secret for each server.
+  # See osac-aap/docs/import-agents.md for the server inventory format.
+  importAgents:
+    servers: []
+    # Example:
+    # servers:
+    #   - name: node001
+    #     bmc_url: "redfish-virtualmedia+https://192.168.1.21:8000/redfish/v1/Systems/<uuid>"
+    #     bmc_username: "<BMC_USERNAME>"
+    #     bmc_password: "<BMC_PASSWORD>"
+    #     boot_mac: "AA:BB:CC:DD:EE:01"
+    #     netris_server_name: "server-01"
+    #     resource_class: "fc430"
+    #   - name: node002
+    #     bmc_url: "redfish-virtualmedia+https://192.168.1.22:8000/redfish/v1/Systems/<uuid>"
+    #     bmc_username: "<BMC_USERNAME>"
+    #     bmc_password: "<BMC_PASSWORD>"
+    #     boot_mac: "AA:BB:CC:DD:EE:02"
+    #     netris_server_name: "server-02"
+    #     resource_class: "fc430"
+    #     disable_bmc_cert_verification: false
+
+  # BCM (NVIDIA Base Command Manager) mTLS client credentials.
+  # When importBcmAgentsEnabled is true, these are written to the bcm-certs Secret.
+  # BCM API connection settings are configured in clusterFulfillment.config below.
+  # See osac-aap/docs/bcm-inventory-integration.md for setup details.
+  importBcmAgents:
+    # PEM-encoded client certificate for BCM mTLS authentication.
+    cert: ""
+    # PEM-encoded client private key for BCM mTLS authentication.
+    key: ""
+
+# ---------------------
+# Bundled PostgreSQL (dev/test)
+# ---------------------
+bundledPostgres:
+  # When true, auto-creates fulfillment-db secret and postgres-client-cert-service
+  # Certificate. Deploy in-cluster PostgreSQL via an operator per
+  # ../fulfillment-service/docs/INSTALL.md first. With bundledPostgres
+  # enabled, the chart assumes a postgres Service at postgres:5432 in the
+  # install namespace.
+  enabled: false
+  database:
+    name: service
+    user: service
+
+# ---------------------
+# Hub Access
+# ---------------------
+hubAccess:
+  # Create hub-access ServiceAccount, Secret, Role, RoleBinding, ClusterRole,
+  # and ClusterRoleBinding. Required by create-hub Helm hook to
+  # generate a kubeconfig for remote cluster management.
+  enabled: true
+
+# ---------------------
+# Publish Templates
+# ---------------------
+publishTemplates:
+  # Create the publish-templates-ig ConfigMap consumed by the AAP template
+  # publishing instance group. Controls which Ansible collections are scanned
+  # and where templates are registered.
+  enabled: true
+  # Comma-separated list of Ansible collections containing OSAC templates.
+  templateCollections: "osac.templates"
+  # Internal URI of the fulfillment service API for template registration.
+  fulfillmentServiceUri: "https://fulfillment-internal-api:8001"
+
+# ---------------------
+# Cluster Fulfillment Instance Group
+# ---------------------
+# ConfigMap and Secret for the AAP cluster-fulfillment instance group.
+# Carries network backend selection, Netris credentials, SSH config,
+# external-access domains, hosted-cluster defaults, and DNS backend config.
+#
+# The config keys become environment variables in the AAP instance group.
+# See osac-aap/group_vars/all/configuration.yaml for how they are consumed.
+clusterFulfillment:
+  enabled: false
+  config:
+    # --- Network Backend ---
+    # Network implementation class (e.g., "netris", "esi").
+    NETWORK_CLASS: ""
+    # Ansible collection providing network-class-specific steps.
+    NETWORK_STEPS_COLLECTION: ""
+
+    # --- DNS Backend ---
+    # Fully-qualified Ansible role name of the DNS driver to use.
+    # Examples: "dns.route53.dns", "dns.cloudflare.dns"
+    # Default (when empty): "dns.route53.dns"
+    DNS_CLASS: ""
+    # DNS zone to operate in (e.g., "example.com").
+    # Default (when empty): value of EXTERNAL_ACCESS_BASE_DOMAIN.
+    DNS_ZONE: ""
+
+    # --- Netris Controller ---
+    NETRIS_CONTROLLER_URL: ""
+    NETRIS_USERNAME: ""
+    NETRIS_SITE_ID: ""
+    NETRIS_TENANT_ID: ""
+    NETRIS_TENANT_NAME: ""
+    NETRIS_MGMT_VPC_ID: ""
+    NETRIS_MGMT_VPC_NAME: ""
+    NETRIS_RESOURCE_CLASS_MAP: ""
+
+    # --- SSH Access ---
+    SERVER_SSH_BASTION_HOST: ""
+    SERVER_SSH_BASTION_USER: ""
+    SERVER_SSH_USER: ""
+    SERVER_MGMT_ROUTE_DESTINATION: ""
+    SERVER_MGMT_ROUTE_GATEWAY: ""
+
+    # --- External Access ---
+    EXTERNAL_ACCESS_BASE_DOMAIN: ""
+    EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS: ""
+    EXTERNAL_ACCESS_API_INTERNAL_NETWORK: ""
+
+    # --- Hosted Cluster ---
+    HOSTED_CLUSTER_BASE_DOMAIN: ""
+    HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY: ""
+    HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: ""
+
+    # --- Import Agents ---
+    # Playbook variables for ConfigMap-based agent import.
+    # These override the playbook defaults when non-empty.
+    # Effective default: "hardware-inventory"
+    IMPORT_AGENTS_NAMESPACE: ""
+    # Effective default: "infraenv"
+    IMPORT_AGENTS_INFRAENV_NAME: ""
+    # Effective default: "pull-secret"
+    IMPORT_AGENTS_PULL_SECRET_NAME: ""
+    # Effective default: "true"
+    IMPORT_AGENTS_DISABLE_BMC_CERT_VERIFICATION: ""
+
+    # --- BCM Inventory ---
+    # Playbook variables for BCM-based agent import.
+    # These override the playbook defaults when non-empty.
+    # BCM head node API endpoint (e.g., https://bcm-head:8081).
+    BCM_API_URL: ""
+    # Verify BCM TLS certificates. Set to "false" for lab environments
+    # with self-signed certificates. Effective default: "true" (production).
+    BCM_VALIDATE_CERTS: "true"
+    # Skip BMC TLS certificate verification during system discovery.
+    # Effective default: "false".
+    BCM_DISABLE_BMC_CERT_VERIFICATION: "false"
+  secret:
+    NETRIS_PASSWORD: ""
+    # AWS credentials (used by the Route 53 DNS backend).
+    AWS_ACCESS_KEY_ID: ""
+    AWS_SECRET_ACCESS_KEY: ""
+    SERVER_SSH_KEY: ""
+    SERVER_SSH_BASTION_KEY: ""
+
+# ---------------------
+# Network Fulfillment Instance Group
+# ---------------------
+# ConfigMap and Secret for the AAP networking-operations instance group.
+# Carries Netris controller credentials for network resource lifecycle.
+networkFulfillment:
+  enabled: false
+  config:
+    NETRIS_CONTROLLER_URL: ""
+    NETRIS_USERNAME: ""
+    NETRIS_SITE_ID: ""
+    NETRIS_TENANT_ID: ""
+    NETRIS_TENANT_NAME: ""
+  secret:
+    NETRIS_PASSWORD: ""
+
+# ---------------------
+# Pre-install Validation
+# ---------------------
+validation:
+  # Run pre-install checks (cert-manager CRDs, default StorageClass).
+  # Catches missing prerequisites before deployment starts.
+  enabled: true
+
+# ---------------------
+# Database Migration
+# ---------------------
+# Runs schema migrations on helm upgrade. Currently disabled until the
+# 'migrate' subcommand is released in the fulfillment-service image.
+dbMigrate:
+  enabled: false
+  image: ghcr.io/osac-project/fulfillment-service:latest
+  # Provide either dbUrl (inline) or dbUrlFile (path to mounted file).
+  # dbUrl takes precedence if both are set.
+  dbUrl: ""
+  dbUrlFile: "/etc/fulfillment-service/db/url"

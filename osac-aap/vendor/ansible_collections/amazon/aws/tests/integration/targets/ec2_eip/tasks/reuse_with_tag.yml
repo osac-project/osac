@@ -1,0 +1,184 @@
+---
+- name: Attempt reusing using tags
+  block:
+    # ------------------------------------------------------------------------------------------
+    # Reuse with tag - No match available
+    # ------------------------------------------------------------------------------------------
+    - name: Attempt reusing an existing EIP with a tag (No match available) - check_mode
+      amazon.aws.ec2_eip:
+        state: present
+        reuse_existing_ip_allowed: true
+        tag_name: "Team-{{ resource_prefix }}"
+        tags: "{{ eip_test_tags }}"
+      register: no_tagged_eip
+      check_mode: true
+
+    - ansible.builtin.assert:
+        that:
+          - no_tagged_eip is changed
+
+    - name: Attempt reusing an existing EIP with a tag (No match available)
+      amazon.aws.ec2_eip:
+        state: present
+        reuse_existing_ip_allowed: true
+        tag_name: "Team-{{ resource_prefix }}"
+        tags: "{{ eip_test_tags }}"
+      register: no_tagged_eip
+
+    - ansible.builtin.assert:
+        that:
+          - no_tagged_eip is changed
+          - "'ec2:CreateTags' not in no_tagged_eip.resource_actions"
+          - no_tagged_eip.public_ip is defined and no_tagged_eip.public_ip is ansible.utils.ipv4_address
+          - no_tagged_eip.allocation_id is defined and no_tagged_eip.allocation_id.startswith("eipalloc-")
+
+    - name: Ensure new EIP was allocated
+      ansible.builtin.include_tasks: tasks/common.yml
+      vars:
+        has_new_eip: true
+
+    # ------------------------------------------------------------------------------------------
+    # Reuse with tag - Match available
+    # ------------------------------------------------------------------------------------------
+    - name: Tag EIP so we can try matching it
+      amazon.aws.ec2_eip:
+        state: present
+        public_ip: "{{ no_tagged_eip.public_ip }}"
+        tags: "{{ lookup('template', 'tag.yaml.j2') | from_yaml }}"
+        purge_tags: false
+      register: tag_eip
+
+    - name: Ensure no EIP was allocated
+      ansible.builtin.include_tasks: tasks/common.yml
+      vars:
+        has_no_new_eip: true
+
+    - ansible.builtin.assert:
+        that:
+          - tag_eip is changed
+          - "'ec2:CreateTags' in tag_eip.resource_actions"
+          - no_tagged_eip.public_ip == tag_eip.public_ip
+          - no_tagged_eip.allocation_id == tag_eip.allocation_id
+
+    - name: Attempt reusing an existing EIP with a tag (Match available) - check_mode
+      amazon.aws.ec2_eip:
+        state: present
+        reuse_existing_ip_allowed: true
+        tag_name: "Team-{{ resource_prefix }}"
+      register: reallocate_eip
+      check_mode: true
+
+    - ansible.builtin.assert:
+        that:
+          - reallocate_eip is not changed
+
+    - name: Ensure no EIP was allocated
+      ansible.builtin.include_tasks: tasks/common.yml
+      vars:
+        has_no_new_eip: true
+
+    - name: Attempt reusing an existing EIP with a tag (Match available)
+      amazon.aws.ec2_eip:
+        state: present
+        reuse_existing_ip_allowed: true
+        tag_name: "Team-{{ resource_prefix }}"
+      register: reallocate_eip
+
+    - ansible.builtin.assert:
+        that:
+          - reallocate_eip is not changed
+          - reallocate_eip.public_ip is defined and reallocate_eip.public_ip is ansible.utils.ipv4_address
+          - reallocate_eip.allocation_id is defined and reallocate_eip.allocation_id.startswith("eipalloc-")
+
+    - name: Ensure no EIP was allocated
+      ansible.builtin.include_tasks: tasks/common.yml
+      vars:
+        has_no_new_eip: true
+
+    # ------------------------------------------------------------------------------------------
+    # Reuse with tag and value - No match available
+    # ------------------------------------------------------------------------------------------
+    - name: Attempt reusing an existing EIP with a tag and it's value (no match available) - check_mode
+      amazon.aws.ec2_eip:
+        state: present
+        reuse_existing_ip_allowed: true
+        tag_name: "Team-{{ resource_prefix }}"
+        tag_value: Backend
+        tags: "{{ eip_test_tags }}"
+      register: backend_eip
+      check_mode: true
+
+    - ansible.builtin.assert:
+        that:
+          - backend_eip is changed
+
+    - name: Ensure no EIP was allocated
+      ansible.builtin.include_tasks: tasks/common.yml
+      vars:
+        has_no_new_eip: true
+
+    - name: Attempt reusing an existing EIP with a tag and it's value (no match available)
+      amazon.aws.ec2_eip:
+        state: present
+        reuse_existing_ip_allowed: true
+        tag_name: "Team-{{ resource_prefix }}"
+        tag_value: Backend
+        tags: "{{ eip_test_tags }}"
+      register: backend_eip
+
+    - ansible.builtin.assert:
+        that:
+          - backend_eip is changed
+          - backend_eip.public_ip is defined and backend_eip.public_ip is ansible.utils.ipv4_address
+          - backend_eip.allocation_id is defined and backend_eip.allocation_id.startswith("eipalloc-")
+
+    - name: Ensure new EIP was allocated
+      ansible.builtin.include_tasks: tasks/common.yml
+      vars:
+        has_new_eip: true
+
+    # ------------------------------------------------------------------------------------------
+    # Reuse with tag - Match available
+    # ------------------------------------------------------------------------------------------
+    - name: Attempt reusing an existing EIP with a tag and it's value (match available) - check_mode
+      amazon.aws.ec2_eip:
+        state: present
+        reuse_existing_ip_allowed: true
+        tag_name: "Team-{{ resource_prefix }}"
+        tag_value: Frontend
+      register: reallocate_eip
+      check_mode: true
+
+    - ansible.builtin.assert:
+        that:
+          - reallocate_eip is not changed
+
+    - name: Ensure no new EIP was allocated
+      ansible.builtin.include_tasks: tasks/common.yml
+      vars:
+        has_no_new_eip: true
+
+    - name: Attempt reusing an existing EIP with a tag and it's value (match available)
+      amazon.aws.ec2_eip:
+        state: present
+        reuse_existing_ip_allowed: true
+        tag_name: "Team-{{ resource_prefix }}"
+        tag_value: Frontend
+      register: reallocate_eip
+
+    - ansible.builtin.assert:
+        that:
+          - reallocate_eip is not changed
+          - reallocate_eip.public_ip is defined and reallocate_eip.public_ip != ""
+          - reallocate_eip.allocation_id is defined and reallocate_eip.allocation_id != ""
+
+    - name: Ensure no new EIP was allocated
+      ansible.builtin.include_tasks: tasks/common.yml
+      vars:
+        has_no_new_eip: true
+
+  always:
+    - name: Release EIPs
+      ansible.builtin.include_tasks: tasks/common.yml
+      vars:
+        delete_eips: true

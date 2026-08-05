@@ -1,0 +1,180 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "google/api/annotations.proto";
+import "google/protobuf/field_mask.proto";
+import "osac/private/v1/role_type.proto";
+
+// Request message for listing roles.
+message RolesListRequest {
+  // Index of the first result. If not specified the default value will be zero.
+  optional int32 offset = 1;
+
+  // Maximum number of results to be returned by the server. When not specified all the results will be returned. Note
+  // that there may not be enough results to return, and that the server may decide, for performance reasons, to return
+  // less results than requested.
+  optional int32 limit = 2;
+
+  // Filter criteria.
+  //
+  // The value of this parameter is a [CEL](https://cel.dev) expression used to select which objects to return. The
+  // built-in `this` variable refers to the object being tested and `now` refers to the current date and time. If the
+  // expression evaluates to `true` the object is included in the results. For example, to retrieve all roles with
+  // names starting with `tenant`:
+  //
+  //     this.metadata.name.startsWith("tenant")
+  //
+  // If this isn't provided, or if the value is empty, then all the roles that the user has permission to see will be
+  // returned. Not all CEL constructs are currently supported for implementation reasons; see the filter documentation
+  // (docs/FILTER.md) for the full details.
+  optional string filter = 3;
+
+  // Order criteria.
+  //
+  // The syntax of this parameter is similar to the syntax of the _order by_ clause of a SQL statement, but using the
+  // names of the attributes of the role instead of the names of the columns of a table. For example, in order to sort
+  // the roles descending by name the value should be:
+  //
+  //     metadata.name desc
+  //
+  // If the parameter isn't provided, or if the value is empty, then the order of the results is undefined.
+  optional string order = 4;
+}
+
+// Response message for listing roles.
+message RolesListResponse {
+  // Actual number of items returned. Note that this may be smaller than the value requested in the `limit` parameter
+  // of the request if there are not enough items, or if the system decides that returning that number of items isn't
+  // feasible or convenient for performance reasons.
+  int32 size = 1;
+
+  // Total number of items of the collection that match the search criteria, regardless of the number of results
+  // requested with the `limit` parameter.
+  int32 total = 2;
+
+  // List of results.
+  repeated Role items = 3;
+}
+
+// Request message for getting a single role.
+message RolesGetRequest {
+  // Unique identifier of the role to retrieve.
+  string id = 1;
+}
+
+// Response message for getting a single role.
+message RolesGetResponse {
+  // The requested role object.
+  Role object = 1;
+}
+
+// Request message for creating a new role.
+message RolesCreateRequest {
+  // The role object to create.
+  Role object = 1;
+}
+
+// Response message for creating a new role.
+message RolesCreateResponse {
+  // The created role object, including any server-generated fields.
+  Role object = 1;
+}
+
+// Request message for updating an existing role.
+message RolesUpdateRequest {
+  // The role object with updated fields.
+  Role object = 1;
+
+  // Field mask specifying which fields to update. If not provided, all fields will be updated.
+  google.protobuf.FieldMask update_mask = 2;
+
+  // Lock enables optimistic locking. When set to true, the server verifies that the current version of the object
+  // matches the value of the metadata.version field of the submitted object. If they differ the update will be
+  // rejected. This is useful to prevent lost updates when multiple clients are modifying the same object concurrently.
+  bool lock = 3;
+}
+
+// Response message for updating an existing role.
+message RolesUpdateResponse {
+  // The updated role object.
+  Role object = 1;
+}
+
+// Request message for deleting a role.
+message RolesDeleteRequest {
+  // Unique identifier of the role to delete.
+  string id = 1;
+}
+
+// Response message for deleting a role.
+message RolesDeleteResponse {}
+
+// Request message for signaling a role.
+message RolesSignalRequest {
+  // Unique identifier of the role to signal.
+  string id = 1;
+}
+
+// Response message for signaling a role.
+message RolesSignalResponse {}
+
+// Service for managing roles.
+//
+// Roles represent named permission sets that can be assigned to groups. The system comes with a set of predefined
+// roles such as `cloud-provider-admin`, `cloud-provider-reader`, `tenant-admin`, `tenant-reader`, and `tenant-user`.
+// Only administrators can create, update, or delete roles.
+service Roles {
+  // Retrieves the list of roles.
+  rpc List(RolesListRequest) returns (RolesListResponse) {
+    option (google.api.http) = {get: "/api/private/v1/roles"};
+  }
+
+  // Retrieves the details of one specific role.
+  rpc Get(RolesGetRequest) returns (RolesGetResponse) {
+    option (google.api.http) = {
+      get: "/api/private/v1/roles/{id}"
+      response_body: "object"
+    };
+  }
+
+  // Creates a new role.
+  rpc Create(RolesCreateRequest) returns (RolesCreateResponse) {
+    option (google.api.http) = {
+      post: "/api/private/v1/roles"
+      body: "object"
+      response_body: "object"
+    };
+  }
+
+  // Updates an existing role.
+  rpc Update(RolesUpdateRequest) returns (RolesUpdateResponse) {
+    option (google.api.http) = {
+      patch: "/api/private/v1/roles/{object.id}"
+      body: "object"
+      response_body: "object"
+    };
+  }
+
+  // Deletes a role.
+  rpc Delete(RolesDeleteRequest) returns (RolesDeleteResponse) {
+    option (google.api.http) = {delete: "/api/private/v1/roles/{id}"};
+  }
+
+  // Indicates that something changed in the object or the system that may require reconciling the object.
+  rpc Signal(RolesSignalRequest) returns (RolesSignalResponse) {
+  }
+}

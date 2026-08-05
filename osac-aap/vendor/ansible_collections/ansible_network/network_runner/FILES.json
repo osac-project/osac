@@ -1,0 +1,1048 @@
+{
+ "files": [
+  {
+   "name": ".",
+   "ftype": "dir",
+   "chksum_type": null,
+   "chksum_sha256": null,
+   "format": 1
+  },
+  {
+   "name": ".gitignore",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "1736c8fe9da74ddfdc57f4c877364721d0039d5baafbad5941d673f8037bddea",
+   "format": 1
+  },
+  {
+   "name": "LICENSE",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+   "format": 1
+  },
+  {
+   "name": "README.rst",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "d1218a306baec968783ce9ce8446423d34a996d881d49ecdf9bfbcc677cd629c",
+   "format": 1
+  },
+  {
+   "name": "roles",
+   "ftype": "dir",
+   "chksum_type": null,
+   "chksum_sha256": null,
+   "format": 1
+  },
+  {
+   "name": "roles/switch",
+   "ftype": "dir",
+   "chksum_type": null,
+   "chksum_sha256": null,
+   "format": 1
+  },
+  {
+   "name": "roles/switch/README.md",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "7d16553f28fc0b662b2f1e3a6179c5813cf2edd725c63c99373101a23d506da8",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/defaults",
+   "ftype": "dir",
+   "chksum_type": null,
+   "chksum_sha256": null,
+   "format": 1
+  },
+  {
+   "name": "roles/switch/defaults/main.yml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "1b0277e2da335ac14b33840e63c681d41d4dbc4fadc44f6e5262145defeb0fbc",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/handlers",
+   "ftype": "dir",
+   "chksum_type": null,
+   "chksum_sha256": null,
+   "format": 1
+  },
+  {
+   "name": "roles/switch/handlers/main.yml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "3371ebb2e943590330747624d176f5342659e7386cb562e8c5c04d771744774f",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/meta",
+   "ftype": "dir",
+   "chksum_type": null,
+   "chksum_sha256": null,
+   "format": 1
+  },
+  {
+   "name": "roles/switch/meta/main.yml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "575d109aa6e52a767012ced8cd092455dbd5d3205dd311c78be8ace70e305871",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers",
+   "ftype": "dir",
+   "chksum_type": null,
+   "chksum_sha256": null,
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/cumulus",
+   "ftype": "dir",
+   "chksum_type": null,
+   "chksum_sha256": null,
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/cumulus/add_trunk_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "e03bcd11037b15144597205e862302926d23132d4e3736a51f30696c451d1bd3",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/cumulus/conf_access_port.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "ece89df400e3c21495bfc90d53cb7465c23e8b24dbf5f0a641610479e935f8e6",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/cumulus/conf_trunk_port.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "c417a90592f2e47d7a7ae49e3673247097746d3e636517e9a4f3e6f3fcc48706",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/cumulus/create_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "39168dfe3132f90b04035deae6bb884b922b2570a4b8c62acb845534dbcae0be",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/cumulus/defaults.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "77210de871634a898af4852a0478f9cda2888d2df860b47e4f9626e309e8d36e",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/cumulus/delete_port.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "66eaf890170ba8003484a36500071de885ad37fd46cb5e14c0f1c7a0b626d814",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/cumulus/delete_trunk_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "d0c604255c1542002cd02df0f07a8669d780bc4f27d4826410f18dbd47629912",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/cumulus/delete_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "2eb759852f7395f2019ad45774c881b94693ed11650bbaa356a3406ef265d67b",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/cumulus/get_port_conf.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "b1cd7bd12aef5b8daec085d2cb2ea067546f9bd1f076e9434c1b8fd7c9299770",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/cumulus/list_vlans.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "19f7f4215adf78616a4915d295e8d245b5260b1f2b3add6703df1dd1aedab85e",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/dellemc.os9.os9",
+   "ftype": "dir",
+   "chksum_type": null,
+   "chksum_sha256": null,
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/dellemc.os9.os9/add_trunk_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "7318681eddadbfe69b306225a0eb3849ee1244156b0866e8807645f2110be5f6",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/dellemc.os9.os9/conf_access_port.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "d5db0c6589e6017b79a32bbf439f0318c67f519f616536fb59fde393db905265",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/dellemc.os9.os9/conf_trunk_port.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "034ffbfed38689b82d8e89da7082bd7d53bd53519d103b79871ec0d7b203c080",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/dellemc.os9.os9/create_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "100bb038bfe0623b8eb61d8924621ab6ad8cdc2b423e27867bdff7d9e590684c",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/dellemc.os9.os9/defaults.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "77210de871634a898af4852a0478f9cda2888d2df860b47e4f9626e309e8d36e",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/dellemc.os9.os9/delete_port.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "5436aecf51f5b30e0c9b69f384bfb6621963a53a6f099b80fa875ea60b528cfe",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/dellemc.os9.os9/delete_trunk_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "413a0721bc775d856b5d9e9fc90e12c02d46dca40491082992c03dfcea552385",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/dellemc.os9.os9/delete_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "20140b4d2b2582b06a2ce6b3b99ea6d81bb36112d0ef2e7918bdc006e9dc1bde",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/dellemc.os9.os9/get_port_conf.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "0a47e3ebec7c05bd3640cca89e6e8d25f5684110caae7041dae36de1d1778bd1",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/dellemc.os9.os9/list_vlans.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "d7d02a6527d9fb40866c285a42b30c60a2f529cc6ee7c29077b9e578a7a08c32",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/dellos10",
+   "ftype": "dir",
+   "chksum_type": null,
+   "chksum_sha256": null,
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/dellos10/add_trunk_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "0e7e99e25b1bf6bb6b26cb668b0364df4cdcfacac1327e2c70c1eb9d7251ffe1",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/dellos10/conf_access_port.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "c45acdf639622b3c520f0f58c989771a8130e769428269f027f064b2c2b975ca",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/dellos10/conf_trunk_port.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "23fafb046e7febd5475576cca786cadc55dd2a23d347ef89d1bbeaebe646c088",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/dellos10/create_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "da9e165426fa9f4b3e8c146769016c270ac850512be0d48a31f0765ccc014dc8",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/dellos10/defaults.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "77210de871634a898af4852a0478f9cda2888d2df860b47e4f9626e309e8d36e",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/dellos10/delete_port.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "8753dc548540f6430c8f76bca5f4510d8fed8d5adcef0c54350923693ca934ae",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/dellos10/delete_trunk_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "04c59a91f4eaace75205ba4c6abda216f984c66c067e625286d3f8064437c120",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/dellos10/delete_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "c3ad6e076e2cd8cdf9e63bfbdca10d868c1b119eedaa30c48fd9c5a32cf5418e",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/dellos10/get_port_conf.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "c2dea0749debbf91e7344e4445816b2ea92942097c1683ac26b4da3777183fea",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/dellos10/list_vlans.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "b7c3e2eaaf6a000c54fc680010902e3b90d012ef633cd01549872fce6806d2cf",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/enos",
+   "ftype": "dir",
+   "chksum_type": null,
+   "chksum_sha256": null,
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/enos/add_trunk_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "8c21ca14a47fba95e38cc5a61526c316d0d96e0c6b951e63feb394c03a181195",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/enos/conf_access_port.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "d3f48cf01e7bd7372109ef4bdbccbf168b9d38824eaa99f735d9bd659eff1d14",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/enos/conf_trunk_port.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "23885cc91a1c239207f85d9ae75cb908c0db4e0af0ebdef5726fe6fe506fb8d1",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/enos/create_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "2afe4ff5f8414f9d4fafbe4b81d1e1700fe45b1cef9dc95b0dfeae859cfec4a0",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/enos/defaults.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "77210de871634a898af4852a0478f9cda2888d2df860b47e4f9626e309e8d36e",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/enos/delete_port.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "f6a5dc25c3fb2af710a054ade3f2ea7cf8a21c3201dcbd55be04326d6f9a107f",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/enos/delete_trunk_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "56c633ebed7811088022db3bb81b6cdb603d55a23b9f9520e1da24f928d08008",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/enos/delete_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "8fb8e4610fbd29a991eef3b308934217f736896b8b72e5bc134b544e2fa03028",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/enos/get_port_conf.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "447754027d798528ef4ebaceada352b8187f0b3ed48455ecb65f0d3e42725618",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/enos/list_vlans.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "66384ad6309837a08d323ec76690c4a182f685d3fda0aa6199502fc6a7831d23",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/eos",
+   "ftype": "dir",
+   "chksum_type": null,
+   "chksum_sha256": null,
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/eos/add_trunk_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "2cf30eed07270c52a2d6be320c68c22df107d7855550cd5e283d2fe3e72f6bdc",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/eos/conf_access_port.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "8e1eea66d293f8105bad30a1dce904afdade1eb5b237ed2e58495246aa78836f",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/eos/conf_trunk_port.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "77f0cca4b966782fcc9f3ec4b69df0dfcc0f6a555b3d46d4bd333670d9c3c736",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/eos/create_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "000329bca20b1e868b770f2677893a8654650df56a6386ab2dbf526225ce2e1d",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/eos/defaults.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "77210de871634a898af4852a0478f9cda2888d2df860b47e4f9626e309e8d36e",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/eos/delete_port.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "e18191ea9c7db4946421c258c1d7671bad9ab488e1c62f26ab16b7ac98cdadf1",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/eos/delete_trunk_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "72607332d1c03162405d416eb6a4b69baaf353eec272ef83ff977e3291116349",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/eos/delete_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "9ee252a42262f1b59238471a7d4a9afa78ccf8cd6229079992314b646ddc2c6f",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/eos/get_port_conf.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "b2f1d7e97adbd526fb20cf7a780f8a295fbba58c9691775f8b62ae7097ba95bd",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/eos/list_vlans.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "9ec56e19e19afef8bd380fa840990ce60652774e9aacfe8037b7aec30b1f79fb",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/fos",
+   "ftype": "dir",
+   "chksum_type": null,
+   "chksum_sha256": null,
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/fos/add_trunk_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "aedb8dc0e923ed755680cf634b450185a79be79576693aaadb672520997dbdbf",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/fos/conf_access_port.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "5efa7d2b4da27d9150e6042301e5807297ad23e987fa8219fdba084981871353",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/fos/conf_trunk_port.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "f7d11351d156d86f484be9e40f9836fa2d30c798629888990f34fb939dd89a0e",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/fos/create_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "408f6cc46b465aa816d76152c276e726208a37007d3eb87e347ddf646b4cc7cd",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/fos/defaults.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "77210de871634a898af4852a0478f9cda2888d2df860b47e4f9626e309e8d36e",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/fos/delete_port.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "8406582f61843451c5d52666d0196b52517b147ccb095e4fe6a988fb54e80d3a",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/fos/delete_trunk_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "08f7bb8efd7b2dd3652ca2ae83b83f2c9cd22fe89b3e56291e8b8ee10a5587ef",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/fos/delete_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "03701a5cf8c012e61975855e8c44f1ee3e2809ecd8df259a0088ea5b63d6a624",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/fos/get_port_conf.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "20f5347705d9ce273e250081b7ef529027797176ebbe75df6f8db391492fb827",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/fos/list_vlans.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "553aaa37d7f72b9f6aaede6d41079902a92ac9e5d43a223f8c4ad727351464f3",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/junos",
+   "ftype": "dir",
+   "chksum_type": null,
+   "chksum_sha256": null,
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/junos/add_trunk_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "b34f8b2e9bf7f84608fa9e56051d9c1c94f83919021fa7d12f7a78acb1524a07",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/junos/conf_access_port.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "43b22fc804e99418961bd2294e927346fdfc6413868fc87274fd92a72a2c2d17",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/junos/conf_trunk_port.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "711999068820076027caecbd4611661bad06d5c81fa0692e3fdc80a3d697e627",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/junos/create_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "56380853262c90c1268d2c75382664f81e9ea66f68b1df8b708221a4420600a4",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/junos/defaults.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "77210de871634a898af4852a0478f9cda2888d2df860b47e4f9626e309e8d36e",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/junos/delete_port.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "22766eab2faa2c87f9c2e78fe1f28bcb85d0b55df6da3cbe70d9d021c1df0004",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/junos/delete_trunk_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "723e8da0611977161e358fb676788180524fdb20959d6e83ecb25ee240f817d7",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/junos/delete_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "aa23c41b0dd5d3e680e04937f56c5cd5e75c21c81586e28030f36633be761954",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/junos/get_port_conf.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "e5308a7b45501fd5354737ce96c199da537193edfa7df426ba0a4ff878382aeb",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/junos/list_vlans.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "3ef7c633a79009263f0f10f7e15f6b5d54434a40c76bc8bf7b798691b62b6de0",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/nos",
+   "ftype": "dir",
+   "chksum_type": null,
+   "chksum_sha256": null,
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/nos/add_trunk_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "79ac2b475038b3d5240e86ae0e2dae47531a02c3ccf068e263e38a37150f2291",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/nos/conf_access_port.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "1fa0d4a4eef1155fe1e517ef195566035484b64647d37b3ef9a1dca8b537c008",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/nos/conf_trunk_port.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "f611d602b1fe3dd7f79b2f998b70d8862dcfbb5b465cb51ad18a40b13271fca2",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/nos/create_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "4f78cef5716b9c7ddfb5897848d162006fefd2c5f26711a60196d1f3cfe371a6",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/nos/defaults.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "77210de871634a898af4852a0478f9cda2888d2df860b47e4f9626e309e8d36e",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/nos/delete_port.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "7e3b85d065b1ff1df6cc06ba8e59fdb13a93a8cb2f396fc7407b9ec6660e7b4b",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/nos/delete_trunk_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "2d1c5552eb82c3ea2bf359d4516ca727c674deb53c4487479872196f8b59ac7b",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/nos/delete_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "81109b86cfcebaed7037c847083a5e6c29cca4c628cbf4fe05432af623e86484",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/nos/get_port_conf.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "2a6a7852a3d89d0451929fd97009ae90cfb04a6ce3dfa319dae6f43106f40928",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/nos/list_vlans.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "020876fb6e816978c3d8f52a96847757ea52ea568e75bccce194883eb394a375",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/nxos",
+   "ftype": "dir",
+   "chksum_type": null,
+   "chksum_sha256": null,
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/nxos/add_trunk_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "7b865c23ffd728c3449694d64cefe6a932649e8ad32b45aa376c97e9999aa797",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/nxos/conf_access_port.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "744db4885769f6015bcc7b29039f5566b7c290a683be77b3dfa8950a3dc39fa9",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/nxos/conf_trunk_port.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "9207742e0497937fbbe203ec870a1257441a396c654602dc26b33ac8ede748c1",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/nxos/create_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "61fdcc35f6fccc9a1a64b81f5776236cde064aea3024537055d589c3d2e7ba36",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/nxos/defaults.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "77210de871634a898af4852a0478f9cda2888d2df860b47e4f9626e309e8d36e",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/nxos/delete_port.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "3be79b53d3a543a1055cdc0e725a31a70bc9e3b6b5d91000a097bf84e5ab28c2",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/nxos/delete_trunk_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "99d667c1d28d5018977c0ff04d3ea53c68c9c01e2b6e8aed9be81b77427e988c",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/nxos/delete_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "45bdc33b2e68b7b8ef31e2298dd1e777f3d570ae5906d0bb9db3117795bf19a9",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/nxos/get_port_conf.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "1324146b3f8c866bfc0bfcdcd6c1506a704d40f9d94a8e08d2e0c4ab54cd6ed0",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/nxos/list_vlans.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "4ebeb5a8e4ef5fa59cf464a5e4ad2d38609040adc70b9a29bd236adb7504ad0e",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/openvswitch",
+   "ftype": "dir",
+   "chksum_type": null,
+   "chksum_sha256": null,
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/openvswitch/add_trunk_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "b0b2df8952ad5f7d6796b24805d4fcc150a0442d8660c0158b4cb56c16f7bd0e",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/openvswitch/conf_access_port.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "c4339b1f85c44c7af4e3035453de4e999109424fffdbd1be6d1647e731d63e84",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/openvswitch/conf_trunk_port.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "7fb3bfc44b77030bb482ee2ef8d972734f21ca5c50afceb5fec176af7c20dc4b",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/openvswitch/create_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "2b352ae58cd52f1666bb73d5101e284a31ee425c9a201a40c812b459e2cecce2",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/openvswitch/defaults.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "2b3e36bd7b4fc88b641a7e49d461f639ca836341c463d554958234e10564dde1",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/openvswitch/delete_port.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "09f127e66092af99bdc93dd827fb152bb2a50f31d1eb320af2a89dc6b499c863",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/openvswitch/delete_trunk_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "243e62e8937cb6a773ac3424a9d59563d8f6999e35aa9267e4f8e38caecc31b3",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/openvswitch/delete_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "2b352ae58cd52f1666bb73d5101e284a31ee425c9a201a40c812b459e2cecce2",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/openvswitch/get_port_conf.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "9020d23ee9023a4a91dd0c1690ca1e761c27ec7040896c549663d54b248efff1",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/providers/openvswitch/list_vlans.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "7cc2807cd4b581b3ee714c406a80199d527064390855c9b4f18a585212634cef",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/tasks",
+   "ftype": "dir",
+   "chksum_type": null,
+   "chksum_sha256": null,
+   "format": 1
+  },
+  {
+   "name": "roles/switch/tasks/add_trunk_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "945f862c6eafdfc1a87e4c7dfb1584bfc38f7a5ce41dfcd795f42fa688407d3a",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/tasks/conf_access_port.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "2014f543bcfd1fe7f64e19d4b5aed97df7feb6fce07c8814bf57fcec4c210c06",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/tasks/conf_trunk_port.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "f160c8b2fedc7dcc9d56120ed144657be7ebf0c7b8123e66d23dc97b6e887b01",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/tasks/create_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "a8076806ea57136af73f69557c93f21a4c0f1c4235cb4e242b8cd5ccb530f4a7",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/tasks/delete_port.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "4224798396c4ac4f53e523ab9cfb120e377deeb88a7c5ab06c889daa19e4d9d9",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/tasks/delete_trunk_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "01e20b9b92d7da5a249582492ded0ba9204b9eb3fb176031e05c2322663bc126",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/tasks/delete_vlan.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "39df0ed1b3478cd5e9f60c07f0af0f1dd9019e3e24de3b6083709e67f89d83fb",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/tasks/get_port_conf.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "cf203382796e2b76cdb962d257090466ba010645f53bfc22a3a16796ac205e9e",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/tasks/list_vlans.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "2a5b958ea7dc1128fbc7ff2c225fe996cd536dee3ec15252badf8c2aeb976694",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/tasks/main.yml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "d368dc4ea90d8f7121d964b127279f38c17a59147308063cfa77f59df6c40b63",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/tasks/run.yaml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "c2ed4e3e27eaba40f8fa3f02c23063c286a45041f832d1e3885ecaa3d636c29c",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/templates",
+   "ftype": "dir",
+   "chksum_type": null,
+   "chksum_sha256": null,
+   "format": 1
+  },
+  {
+   "name": "roles/switch/templates/eos",
+   "ftype": "dir",
+   "chksum_type": null,
+   "chksum_sha256": null,
+   "format": 1
+  },
+  {
+   "name": "roles/switch/templates/eos/clean_config.j2",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "8d0e57eaeb0459c7829897db3477e06154852eb837915e6816a16a523683068f",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/templates/eos/conf_access_port.j2",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "f74b2ffd7c4afa4a2632e3398738cd50bc5ff8e3c29aa9cf263c6bd53234ee45",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/templates/eos/conf_trunk_port.j2",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "23326a29532c555d99c40961da4623edd13f63e0e65f5c008349cc61ce3877b8",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/templates/eos/create_vlan.j2",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "c74b61d6c2fd6f4aed7664a8b7ffd977b4cee39920be610951d3159be9b93056",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/templates/eos/delete_port.j2",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "38beea0bac84f2b6a4b0a3e7e0e41589ad7fade172892636b0cd0cee720c34d6",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/templates/eos/delete_vlan.j2",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "aafea3a4012b0061037eadba1c12cb5894f7c09fefb868e6655524781df0986e",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/tests",
+   "ftype": "dir",
+   "chksum_type": null,
+   "chksum_sha256": null,
+   "format": 1
+  },
+  {
+   "name": "roles/switch/tests/inventory",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "e02233819b1a09844410549191813f7cc7ba360f21298578f4ba1727a27d87fc",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/tests/test.yml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "779226106a55907aafc22cc34feab282a9abe6868533466423a88c64009bc7c4",
+   "format": 1
+  },
+  {
+   "name": "roles/switch/vars",
+   "ftype": "dir",
+   "chksum_type": null,
+   "chksum_sha256": null,
+   "format": 1
+  },
+  {
+   "name": "roles/switch/vars/main.yml",
+   "ftype": "file",
+   "chksum_type": "sha256",
+   "chksum_sha256": "fb4fb19d064a9c36bb64b0eb962df0317a6bae377b41032b044eaadc2f5baf2b",
+   "format": 1
+  }
+ ],
+ "format": 1
+}

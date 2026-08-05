@@ -1,0 +1,6 @@
+Unrecognized VNC viewer '{{ .Viewer }}', using plain host:port address format as a best guess.
+This may not work with all viewers.
+
+Supported viewers: {{ .Supported }}.
+
+Consider using {{ bt }}--proxy-only{{ bt }} and launching the viewer manually.

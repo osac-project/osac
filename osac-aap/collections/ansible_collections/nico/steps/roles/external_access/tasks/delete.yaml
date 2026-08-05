@@ -1,0 +1,42 @@
+---
+# =============================================================================
+# NICo: remove allocated IP from registry
+# =============================================================================
+
+- name: Read IP registry ConfigMap
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: ConfigMap
+    name: nico-ip-registry
+    namespace: "{{ nico_ip_registry_namespace | default('hardware-inventory') }}"
+  register: ip_registry_info
+
+- name: Remove cluster IP from registry
+  when:
+    - ip_registry_info.resources | length > 0
+    - ip_registry_info.resources[0].data is defined
+  kubernetes.core.k8s:
+    state: present
+    force: true
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: nico-ip-registry
+        namespace: "{{ nico_ip_registry_namespace | default('hardware-inventory') }}"
+      data: "{{ ip_registry_info.resources[0].data | dict2items | rejectattr('value', 'equalto', external_access_name) | items2dict }}"
+
+- name: Delete dns records
+  when: >-
+    external_access_base_domain in external_access_supported_base_domains | default([])
+  ansible.builtin.include_role:
+    name: dns.api.dns
+    tasks_from: delete
+  vars:
+    dns_zone: "{{ external_access_base_domain }}"
+    dns_record_name: "{{ item }}"
+    dns_record_type: A
+  loop:
+    - "api.{{ external_access_name }}.{{ external_access_base_domain }}"
+    - "api-int.{{ external_access_name }}.{{ external_access_base_domain }}"
+    - "*.apps.{{ external_access_name }}.{{ external_access_base_domain }}"

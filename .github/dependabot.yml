@@ -1,0 +1,93 @@
+# Set update schedule for GitHub Actions, Go modules, Python (uv) dependencies, and container images
+
+version: 2
+updates:
+- package-ecosystem: "github-actions"
+  directory: "/"
+  schedule:
+    # Check for updates to GitHub Actions every week
+    interval: "weekly"
+
+- package-ecosystem: "gomod"
+  directory: "/fulfillment-service"
+  schedule:
+    # Check for updates to Go modules every week
+    interval: "weekly"
+  groups:
+    fulfillment-service-go-dependencies:
+      patterns:
+        - "*"
+  commit-message:
+    prefix: "NO-ISSUE"
+
+- package-ecosystem: "gomod"
+  directories:
+    - "/osac-operator"
+    - "/osac-operator/api"
+  schedule:
+    # Check for updates to Go modules every week
+    interval: "weekly"
+  groups:
+    osac-operator-go-dependencies:
+      patterns:
+        - "*"
+  commit-message:
+    prefix: "NO-ISSUE"
+
+- package-ecosystem: "gomod"
+  directory: "/osac-csi-driver"
+  schedule:
+    # Check for updates to Go modules every week
+    interval: "weekly"
+  groups:
+    osac-csi-driver-go-dependencies:
+      patterns:
+        - "*"
+  commit-message:
+    prefix: "NO-ISSUE"
+
+- package-ecosystem: "uv"
+  directory: "/osac-aap"
+  schedule:
+    # Check for updates to Python (uv) dependencies every week
+    interval: "weekly"
+  groups:
+    osac-aap-python-dependencies:
+      patterns:
+        - "*"
+  commit-message:
+    prefix: "NO-ISSUE"
+
+- package-ecosystem: "docker"
+  directory: "/fulfillment-service"
+  schedule:
+    # Check for updates to container base images every week
+    interval: "weekly"
+  groups:
+    fulfillment-service-container-images:
+      patterns:
+        - "*"
+  ignore:
+    # go-toolset tags use the Go version (1.x); UBI-versioned tags (10.x)
+    # ship older Go and break go.mod compatibility (see OSAC-3550)
+    - dependency-name: "ubi10/go-toolset"
+      versions: [">= 2"]
+  commit-message:
+    prefix: "NO-ISSUE"
+
+- package-ecosystem: "docker"
+  directory: "/osac-operator"
+  schedule:
+    # Check for updates to container base images every week
+    interval: "weekly"
+  groups:
+    osac-operator-container-images:
+      patterns:
+        - "*"
+  ignore:
+    # go-toolset tags use the Go version (1.x); UBI-versioned tags (10.x)
+    # ship older Go and break go.mod compatibility (see OSAC-3550)
+    - dependency-name: "ubi10/go-toolset"
+      versions: [">= 2"]
+  commit-message:
+    prefix: "NO-ISSUE"

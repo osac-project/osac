@@ -1,0 +1,149 @@
+---
+- name: Test EIP allocation
+  block:
+    # ------------------------------------------------------------------------------------------
+    # Allocate EIP with no condition
+    # ------------------------------------------------------------------------------------------
+    - name: Allocate a new EIP with no conditions - check_mode
+      amazon.aws.ec2_eip:
+        state: present
+        tags: "{{ eip_test_tags }}"
+      register: eip
+      check_mode: true
+
+    - ansible.builtin.assert:
+        that:
+          - eip is changed
+
+    - name: Ensure no new EIP was created
+      ansible.builtin.include_tasks: tasks/common.yml
+      vars:
+        has_no_new_eip: true
+
+    - name: Allocate a new EIP with no conditions
+      amazon.aws.ec2_eip:
+        state: present
+        tags: "{{ eip_test_tags }}"
+      register: eip
+
+    - ansible.builtin.assert:
+        that:
+          - eip is changed
+          - "'ec2:CreateTags' not in eip.resource_actions"
+          - "'ec2:DeleteTags' not in eip.resource_actions"
+          - eip.public_ip is defined and eip.public_ip is ansible.utils.ipv4_address
+          - eip.allocation_id is defined and eip.allocation_id.startswith("eipalloc-")
+
+    - name: Ensure New EIP was created
+      ansible.builtin.include_tasks: tasks/common.yml
+      vars:
+        has_new_eip: true
+
+    - name: Get EIP info via public ip
+      amazon.aws.ec2_eip_info:
+        filters:
+          public-ip: "{{ eip.public_ip }}"
+      register: eip_info
+
+    - ansible.builtin.assert:
+        that:
+          - '"addresses" in eip_info'
+          - eip_info.addresses | length == 1
+          - eip_info.addresses[0].allocation_id == eip.allocation_id
+          - eip_info.addresses[0].domain == "vpc"
+          - eip_info.addresses[0].public_ip == eip.public_ip
+          - '"AnsibleEIPTestPrefix" in eip_info.addresses[0].tags'
+          - eip_info.addresses[0].tags['AnsibleEIPTestPrefix'] == resource_prefix
+
+    - name: Get EIP info via allocation id
+      amazon.aws.ec2_eip_info:
+        filters:
+          allocation-id: "{{ eip.allocation_id }}"
+      register: eip_info
+
+    - ansible.builtin.assert:
+        that:
+          - '"addresses" in eip_info'
+          - eip_info.addresses | length == 1
+          - eip_info.addresses[0].allocation_id == eip.allocation_id
+          - eip_info.addresses[0].domain == "vpc"
+          - eip_info.addresses[0].public_ip == eip.public_ip
+          - '"AnsibleEIPTestPrefix" in eip_info.addresses[0].tags'
+          - eip_info.addresses[0].tags['AnsibleEIPTestPrefix'] == resource_prefix
+
+    - name: Allocate a new ip (idempotence) - check_mode
+      amazon.aws.ec2_eip:
+        state: present
+        public_ip: "{{ eip.public_ip }}"
+      register: eip
+      check_mode: true
+
+    - ansible.builtin.assert:
+        that:
+          - eip is not changed
+
+    - name: Ensure EIP was not created
+      ansible.builtin.include_tasks: tasks/common.yml
+      vars:
+        has_no_new_eip: true
+
+    - name: Allocate a new ip (idempotence)
+      amazon.aws.ec2_eip:
+        state: present
+        public_ip: "{{ eip.public_ip }}"
+      register: eip
+
+    - ansible.builtin.assert:
+        that:
+          - eip is not changed
+          - eip.public_ip is defined and eip.public_ip is ansible.utils.ipv4_address
+          - eip.allocation_id is defined and eip.allocation_id.startswith("eipalloc-")
+
+    - name: Ensure EIP was not created
+      ansible.builtin.include_tasks: tasks/common.yml
+      vars:
+        has_no_new_eip: true
+
+    # ------------------------------------------------------------------------------------------
+    # Allocate EIP from a pool
+    # ------------------------------------------------------------------------------------------
+    - name: Allocate a new EIP from a pool - check_mode
+      amazon.aws.ec2_eip:
+        state: present
+        public_ipv4_pool: amazon
+        tags: "{{ eip_test_tags }}"
+      register: eip_pool
+      check_mode: true
+
+    - ansible.builtin.assert:
+        that:
+          - eip_pool is changed
+
+    - name: Ensure EIP was not created
+      ansible.builtin.include_tasks: tasks/common.yml
+      vars:
+        has_no_new_eip: true
+
+    - name: Allocate a new EIP from a pool
+      amazon.aws.ec2_eip:
+        state: present
+        public_ipv4_pool: amazon
+        tags: "{{ eip_test_tags }}"
+      register: eip_pool
+
+    - ansible.builtin.assert:
+        that:
+          - eip_pool is changed
+          - eip_pool.public_ip is defined and eip_pool.public_ip is ansible.utils.ipv4_address
+          - eip_pool.allocation_id is defined and eip_pool.allocation_id.startswith("eipalloc-")
+
+    - name: Ensure new EIP was created
+      ansible.builtin.include_tasks: tasks/common.yml
+      vars:
+        has_new_eip: true
+
+  always:
+    - name: Delete EIP
+      ansible.builtin.include_tasks: tasks/common.yml
+      vars:
+        delete_eips: true

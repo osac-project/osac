@@ -1,0 +1,102 @@
+---
+# Subnet role creates Namespace and ClusterUserDefinedNetwork (CUDN) for network provisioning
+# 1. Creates namespace with required labels for OVN primary UDN
+# 2. Creates CUDN with namespaceSelector matching the namespace
+
+- name: Include get remote cluster kubeconfig
+  ansible.builtin.include_role:
+    name: osac.service.common
+    tasks_from: get_remote_cluster_kubeconfig
+
+- name: Extract Subnet configuration
+  ansible.builtin.set_fact:
+    subnet_name: "{{ subnet.metadata.name }}"
+    subnet_namespace: "{{ subnet.metadata.namespace }}"
+    subnet_id: "{{ subnet.metadata.labels['osac.openshift.io/subnet-uuid'] | default(subnet.metadata.name) }}"
+    subnet_ipv4_cidr: "{{ subnet.spec.ipv4Cidr | default('') }}"
+    subnet_ipv6_cidr: "{{ subnet.spec.ipv6Cidr | default('') }}"
+    subnet_tenant_id: "{{ subnet.metadata.annotations['osac.openshift.io/tenant'] | default('') }}"
+    subnet_virtual_network: "{{ subnet.spec.virtualNetwork | default('') }}"
+
+- name: Build CUDN subnets array
+  ansible.builtin.set_fact:
+    cudn_subnets: >-
+      {{
+        ((subnet_ipv4_cidr | length > 0) | ternary([subnet_ipv4_cidr], []))
+        + ((subnet_ipv6_cidr | length > 0) | ternary([subnet_ipv6_cidr], []))
+      }}
+
+- name: Build namespace labels
+  ansible.builtin.set_fact:
+    # Note: k8s.ovn.org/primary-user-defined-network requires empty string value
+    # Only filter out optional osac.io labels that are truly unset
+    namespace_labels: >-
+      {{
+        default_subnet_labels | combine({
+          'k8s.ovn.org/primary-user-defined-network': ''
+        }) | combine(
+          {'osac.openshift.io/subnet-id': subnet_id} if subnet_id else {}
+        ) | combine(
+          {'osac.openshift.io/tenant': subnet_tenant_id} if subnet_tenant_id else {}
+        ) | combine(
+          {'osac.openshift.io/virtual-network': subnet_virtual_network} if subnet_virtual_network else {}
+        )
+      }}
+
+- name: Display Subnet information
+  ansible.builtin.debug:
+    msg:
+      - "Creating Namespace and CUDN for Subnet '{{ subnet_name }}'"
+      - "Subnet ID: {{ subnet_id }}"
+      - "Tenant ID: {{ subnet_tenant_id }}"
+      - "VirtualNetwork: {{ subnet_virtual_network }}"
+      - "IPv4 CIDR: {{ subnet_ipv4_cidr | default('not configured') }}"
+      - "IPv6 CIDR: {{ subnet_ipv6_cidr | default('not configured') }}"
+      - "CUDN subnets: {{ cudn_subnets }}"
+      - "Namespace labels: {{ namespace_labels }}"
+
+- name: Create Namespace for Subnet
+  kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ subnet_name }}"
+        labels: "{{ namespace_labels }}"
+  register: namespace_result
+
+- name: Display Namespace creation result
+  ansible.builtin.debug:
+    msg:
+      - "Namespace '{{ subnet_name }}' created/updated successfully"
+      - "Changed: {{ namespace_result.changed | default(false) }}"
+
+- name: Create ClusterUserDefinedNetwork
+  kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    state: present
+    definition:
+      apiVersion: k8s.ovn.org/v1
+      kind: ClusterUserDefinedNetwork
+      metadata:
+        name: "{{ subnet_name }}"
+        labels: "{{ default_subnet_labels }}"
+      spec:
+        namespaceSelector:
+          matchLabels:
+            osac.openshift.io/subnet-id: "{{ subnet_id }}"
+        network:
+          topology: "Layer2"
+          layer2:
+            role: "{{ default_layer2_role }}"
+            ipamLifecycle: "{{ default_ipam_lifecycle }}"
+            subnets: "{{ cudn_subnets }}"
+  register: cudn_result
+
+- name: Display CUDN creation result
+  ansible.builtin.debug:
+    msg:
+      - "CUDN '{{ subnet_name }}' created successfully"
+      - "Resource UID: {{ cudn_result.result.metadata.uid | default('N/A') }}"

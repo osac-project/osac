@@ -1,0 +1,29 @@
+name: Retrieve Slack webhook from Vault
+description: Read the self-hosted runner's AppRole credentials and retrieve the e2e Slack webhook URL from Vault
+outputs:
+  webhook-url:
+    description: The retrieved Slack webhook URL
+    value: ${{ steps.vault.outputs.SLACK_WEBHOOK_URL }}
+runs:
+  using: composite
+  steps:
+  - name: Read AppRole credentials
+    id: approle
+    shell: bash
+    run: |
+      APPROLE_DIR="${HOME}/.vault-server/.approle"
+      echo "role-id=$(cat "${APPROLE_DIR}/role-id")" >> "$GITHUB_OUTPUT"
+      echo "::add-mask::$(cat "${APPROLE_DIR}/secret-id")"
+      echo "secret-id=$(cat "${APPROLE_DIR}/secret-id")" >> "$GITHUB_OUTPUT"
+
+  - name: Retrieve Slack webhook from Vault
+    id: vault
+    uses: hashicorp/vault-action@892a26828f195e65540a40b4768ae4571f51ebfc  # v4
+    with:
+      url: http://127.0.0.1:8200
+      method: approle
+      roleId: ${{ steps.approle.outputs.role-id }}
+      secretId: ${{ steps.approle.outputs.secret-id }}
+      exportEnv: false
+      secrets: |
+        secret/data/osac/e2e/slack-webhook-url url | SLACK_WEBHOOK_URL

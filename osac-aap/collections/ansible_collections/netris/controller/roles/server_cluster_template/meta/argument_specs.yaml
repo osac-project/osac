@@ -1,0 +1,16 @@
+---
+argument_specs:
+  main:
+    options:
+      server_cluster_template_state:
+        type: str
+        choices: [read]
+        default: read
+        description: "Server cluster template operation to perform."
+
+  read:
+    options:
+      server_cluster_template_id:
+        type: int
+        required: true
+        description: "ID of the server cluster template to read."

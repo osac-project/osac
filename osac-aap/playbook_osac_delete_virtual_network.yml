@@ -1,0 +1,28 @@
+---
+- name: Delete a VirtualNetwork resource
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    virtual_network: "{{ ansible_eda.event.payload }}"
+    virtual_network_name: "{{ ansible_eda.event.payload.metadata.name }}"
+    # Implementation strategy set by fulfillment-service in VirtualNetwork spec
+    implementation_strategy: "{{ ansible_eda.event.payload.spec.implementationStrategy }}"
+    template_parameters: {}
+
+  pre_tasks:
+    - name: Show EDA Event
+      ansible.builtin.debug:
+        var: ansible_eda.event.payload
+
+  tasks:
+    - name: Display VirtualNetwork information
+      ansible.builtin.debug:
+        msg:
+          - "Deleting VirtualNetwork: {{ virtual_network_name }}"
+          - "Implementation strategy: {{ implementation_strategy }}"
+
+    - name: Call the selected VirtualNetwork role
+      ansible.builtin.include_role:
+        name: "osac.templates.{{ implementation_strategy }}"
+        tasks_from: delete_virtual_network

@@ -1,0 +1,173 @@
+---
+- name: Set up aws connection info
+  module_defaults:
+    group/aws:
+      access_key: "{{ aws_access_key }}"
+      secret_key: "{{ aws_secret_key }}"
+      session_token: "{{ security_token | default(omit) }}"
+      region: "{{ aws_region }}"
+  block:
+    - name: Ensure improper usage of parameters fails gracefully
+      amazon.aws.iam_user_info:
+        path: "{{ test_path }}"
+        group: "{{ test_group }}"
+      ignore_errors: true # noqa: ignore-errors
+      register: iam_user_info_path_group
+    - name: Assert friendly error
+      ansible.builtin.assert:
+        that:
+          - iam_user_info_path_group is failed
+          - iam_user_info_path_group.msg.startswith("parameters are mutually exclusive")
+
+    - name: Create test user (check mode)
+      amazon.aws.iam_user:
+        name: "{{ test_user }}"
+        state: present
+      check_mode: true
+      register: iam_user
+    - name: Assert that the user would be created
+      ansible.builtin.assert:
+        that:
+          - iam_user is changed
+
+    - name: Create test user
+      amazon.aws.iam_user:
+        name: "{{ test_user }}"
+        state: present
+      register: iam_user
+    - name: Assert that the user is created
+      ansible.builtin.assert:
+        that:
+          - iam_user is changed
+
+    - name: Ensure test user exists (no change - check mode)
+      amazon.aws.iam_user:
+        name: "{{ test_user }}"
+        state: present
+      register: iam_user
+      check_mode: true
+    - name: Assert that user would not change
+      ansible.builtin.assert:
+        that:
+          - iam_user is not changed
+
+    - name: Ensure test user exists (no change)
+      amazon.aws.iam_user:
+        name: "{{ test_user }}"
+        state: present
+      register: iam_user
+    - name: Assert that the user wasn't changed
+      ansible.builtin.assert:
+        that:
+          - iam_user is not changed
+
+    - name: Ensure the info used to validate other tests is valid
+      ansible.builtin.set_fact:
+        test_iam_user: "{{ iam_user.iam_user.user }}"
+    - name: Assert expected return values
+      ansible.builtin.assert:
+        that:
+          - test_iam_user.arn.startswith("arn:aws:iam")
+          - test_iam_user.arn.endswith("user/" + test_user )
+          - test_iam_user.create_date is not none
+          - test_iam_user.path == test_path
+          - test_iam_user.user_id is not none
+          - test_iam_user.user_name == test_user
+          - test_iam_user.tags | length == 0
+
+    - name: Get info on IAM user(s)
+      amazon.aws.iam_user_info:
+      register: iam_user_info
+    - name: Assert we got some users returned
+      ansible.builtin.assert:
+        that:
+          - iam_user_info.iam_users | length != 0
+
+    - name: Get info on IAM user(s) with name
+      amazon.aws.iam_user_info:
+        name: "{{ test_user }}"
+      register: iam_user_info
+    - name: Assert we got expected information about user
+      ansible.builtin.assert:
+        that:
+          - iam_user_info.iam_users | length == 1
+          - iam_user_info.iam_users[0].arn == test_iam_user.arn
+          - iam_user_info.iam_users[0].create_date == test_iam_user.create_date
+          - iam_user_info.iam_users[0].path == test_iam_user.path
+          - iam_user_info.iam_users[0].user_id == test_iam_user.user_id
+          - iam_user_info.iam_users[0].user_name == test_iam_user.user_name
+          - iam_user_info.iam_users[0].tags | length == 0
+
+    # ------------------------------------------------------------------------------------------
+
+    - name: Create test user with password (check mode)
+      amazon.aws.iam_user:
+        name: "{{ test_user3 }}"
+        password: "{{ test_password }}"
+        state: present
+      check_mode: true
+      register: iam_user
+    - name: Assert that the second user would be created
+      ansible.builtin.assert:
+        that:
+          - iam_user is changed
+
+    - name: Create second test user with password
+      amazon.aws.iam_user:
+        name: "{{ test_user3 }}"
+        password: "{{ test_password }}"
+        password_reset_required: true
+        state: present
+        wait: false
+      register: iam_user
+    - name: Assert that the second user is created
+      ansible.builtin.assert:
+        that:
+          - iam_user is changed
+          - iam_user.iam_user.user.password_reset_required
+
+    - name: Get info on IAM user(s) on path
+      amazon.aws.iam_user_info:
+        path: "{{ test_path }}"
+        name: "{{ test_user }}"
+      register: iam_user_info
+    - name: Assert we got expected information about user
+      ansible.builtin.assert:
+        that:
+          - iam_user_info.iam_users | length == 1
+          - iam_user_info.iam_users[0].arn == test_iam_user.arn
+          - iam_user_info.iam_users[0].create_date == test_iam_user.create_date
+          - iam_user_info.iam_users[0].path == test_iam_user.path
+          - iam_user_info.iam_users[0].user_id == test_iam_user.user_id
+          - iam_user_info.iam_users[0].user_name == test_iam_user.user_name
+          - iam_user_info.iam_users[0].tags | length == 0
+
+    # ------------------------------------------------------------------------------------------
+
+    - name: Test path parameter
+      ansible.builtin.include_tasks: path.yml
+    - name: Test boundary parameter
+      ansible.builtin.include_tasks: boundary_policy.yml
+    - name: Test tagging
+      ansible.builtin.include_tasks: tags.yml
+    - name: Test password parameters
+      ansible.builtin.include_tasks: password.yml
+    - name: Test managed_policy parameter
+      ansible.builtin.include_tasks: managed_policies.yml
+    - name: Test iam_user_info
+      ansible.builtin.include_tasks: search_group.yml
+    - name: Test deletion
+      ansible.builtin.include_tasks: deletion.yml
+  always:
+    - name: Remove group
+      amazon.aws.iam_group:
+        name: "{{ test_group }}"
+        state: absent
+      ignore_errors: true # noqa: ignore-errors
+
+    - name: Remove ansible users
+      amazon.aws.iam_user:
+        name: "{{ item }}"
+        state: absent
+      with_items: "{{ test_users }}"
+      ignore_errors: true # noqa: ignore-errors

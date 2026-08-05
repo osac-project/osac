@@ -1,0 +1,30 @@
+---
+# Entry point: creates an OpenShift cluster with RHOAI + MaaS.
+# Delegates cluster creation to ocp_small and overrides the
+# post-install hook to install operators and configure MaaS.
+
+# Bridge templateParameters (short names from OSAC pipeline) to role variables
+# (prefixed names). Only runs when called via the OSAC pipeline where
+# cluster_settings has parsed spec.templateParameters into template_parameters dict.
+# When running standalone with -e, template_parameters is not defined — skipped.
+- name: Bridge templateParameters to role variables
+  ansible.builtin.set_fact:
+    ocp_4_20_ai_maas_enable_maas: "{{ template_parameters.enable_maas | default(true) | bool }}"
+    ocp_4_20_ai_maas_enable_keycloak: "{{ (template_parameters.enable_keycloak | default(true) | bool) and (template_parameters.enable_maas | default(true) | bool) }}"
+    ocp_4_20_ai_maas_oidc_issuer: "{{ template_parameters.oidc_issuer | default('') }}"
+    ocp_4_20_ai_maas_oidc_client_id: "{{ template_parameters.oidc_client_id | default('') }}"
+    ocp_4_20_ai_maas_enable_observability: "{{ template_parameters.enable_observability | default(true) | bool }}"
+    ocp_4_20_ai_maas_enable_dashboard: "{{ template_parameters.enable_dashboard | default(true) | bool }}"
+    ocp_4_20_ai_maas_hardware_profiles: "{{ template_parameters.hardware_profiles | default(ocp_4_20_ai_maas_hardware_profiles) }}"
+    ocp_4_20_ai_maas_external_models: "{{ template_parameters.external_models | default(ocp_4_20_ai_maas_external_models) }}"
+  when: template_parameters is defined
+
+- name: Create cluster with RHOAI + MaaS post-install
+  ansible.builtin.include_role:
+    name: osac.templates.ocp_small
+    tasks_from: install
+  vars:
+    ocp_release_image: "{{ ocp_4_20_ai_maas_ocp_release_image }}"
+    install_step_post_install_hook_override:
+      name: osac.templates.ocp_4_20_ai_maas
+      tasks_from: post_install.yaml

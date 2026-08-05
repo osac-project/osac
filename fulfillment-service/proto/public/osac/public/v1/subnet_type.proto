@@ -1,0 +1,184 @@
+//
+// Copyright (c) 2025 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.public.v1;
+
+import "google/api/field_behavior.proto";
+import "osac/public/v1/metadata_type.proto";
+
+// Represents a subdivision of a VirtualNetwork for organizing compute instances.
+//
+// Subnets subdivide VirtualNetwork IP address space into smaller, manageable segments. Each Subnet belongs to exactly
+// one parent VirtualNetwork and must be in the same region. Initially, the system supports a 1:1 mapping between
+// VirtualNetwork and Subnet (one subnet per network), but the schema is designed to support multiple subnets per
+// VirtualNetwork in the future.
+//
+// Subnets support flexible IP addressing to match the parent VirtualNetwork's capabilities:
+// - IPv4-only: Set ipv4_cidr, leave ipv6_cidr empty
+// - IPv6-only: Set ipv6_cidr, leave ipv4_cidr empty
+// - Dual-stack: Set both ipv4_cidr and ipv6_cidr
+//
+// The parent VirtualNetwork relationship should be specified via metadata.annotations using the 'osac.openshift.io/owner-reference'
+// key with the VirtualNetwork ID as the value. This establishes resource hierarchy for garbage collection, ensuring
+// that Subnets are automatically cleaned up when their parent VirtualNetwork is deleted.
+//
+// CIDR blocks must be non-overlapping within the same VirtualNetwork. Each Subnet's CIDR must be a subset of the
+// parent VirtualNetwork's CIDR. Validation is enforced at the service layer.
+message Subnet {
+  // Unique identifier of the subnet.
+  string id = 1;
+
+  // Metadata of the subnet, including name, labels, tenant, and timestamps.
+  //
+  // The parent VirtualNetwork relationship should be specified via metadata.annotations using the
+  // 'osac.openshift.io/owner-reference' key with the VirtualNetwork ID as the value. This establishes resource
+  // hierarchy for garbage collection.
+  Metadata metadata = 2;
+
+  // Desired configuration of the subnet (user-modifiable).
+  SubnetSpec spec = 3;
+
+  // Current state of the subnet (system-provided, read-only).
+  SubnetStatus status = 4;
+}
+
+// Defines the desired configuration for a Subnet.
+//
+// The spec contains user-specified parameters that define how the subnet should be configured. These fields
+// follow a declarative model where users specify the desired state and the system reconciles to match it.
+message SubnetSpec {
+  // Parent VirtualNetwork ID. Required and immutable after creation.
+  //
+  // Must reference the ID of an existing VirtualNetwork in READY state. This field is required and immutable
+  // after creation. The referenced VirtualNetwork must be in the same region as this Subnet.
+  //
+  // The system validates that:
+  // - The VirtualNetwork exists
+  // - The VirtualNetwork.status.state is READY
+  // - The Subnet's CIDR blocks are subsets of the VirtualNetwork's CIDR blocks
+  // - The Subnet's CIDR blocks do not overlap with other Subnets in the same VirtualNetwork
+  //
+  // Example: "vnet-abc123"
+  string virtual_network = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE
+  ];
+
+  // IPv4 CIDR block for this subnet. Optional for IPv6-only subnets. Immutable after creation.
+  //
+  // Must be valid CIDR notation and a subset of the parent VirtualNetwork.spec.ipv4_cidr. Validation enforced
+  // at service layer. The CIDR block must not overlap with other Subnets within the same VirtualNetwork.
+  //
+  // Example: "10.0.1.0/24", "192.168.100.0/24"
+  //
+  // Leave empty for IPv6-only subnets.
+  optional string ipv4_cidr = 2 [(google.api.field_behavior) = IMMUTABLE];
+
+  // IPv6 CIDR block for this subnet. Optional for IPv4-only subnets. Immutable after creation.
+  //
+  // Must be valid CIDR notation and a subset of the parent VirtualNetwork.spec.ipv6_cidr. Validation enforced
+  // at service layer. The CIDR block must not overlap with other Subnets within the same VirtualNetwork.
+  //
+  // Example: "2001:db8::/64", "fd00:1234::/64"
+  //
+  // Leave empty for IPv4-only subnets.
+  optional string ipv6_cidr = 3 [(google.api.field_behavior) = IMMUTABLE];
+}
+
+// Represents the current operational state of a Subnet.
+//
+// Status is system-provided and read-only. Users cannot modify status fields directly; the system updates them
+// based on the reconciliation of the spec.
+message SubnetStatus {
+  // Current lifecycle state of the subnet.
+  SubnetState state = 1;
+
+  // Human-readable message providing additional details about the current state.
+  //
+  // For PENDING state, this might contain progress information like "Validating CIDR blocks" or
+  // "Configuring subnet routing".
+  //
+  // For FAILED state, contains error details like:
+  // - "CIDR overlaps with existing subnet"
+  // - "Parent VirtualNetwork not found"
+  // - "CIDR is not a subset of parent VirtualNetwork CIDR"
+  // - "Invalid CIDR notation"
+  // - "Parent VirtualNetwork not in READY state"
+  //
+  // For READY state, this is typically empty or contains confirmation like "Subnet ready for compute instances".
+  optional string message = 2;
+}
+
+// Lifecycle states for Subnet resources.
+//
+// State transitions typically follow: UNSPECIFIED -> PENDING -> READY, with FAILED as a terminal error state
+// that may require user intervention or resource recreation.
+enum SubnetState {
+  // State is unknown or has not been determined yet. This is the default state before initialization.
+  SUBNET_STATE_UNSPECIFIED = 0;
+
+  // The subnet is being initialized and is not ready for use yet.
+  //
+  // During this state, the system is:
+  // - Validating that the parent VirtualNetwork exists and is in READY state
+  // - Validating CIDR blocks (format, subset of parent, no overlaps)
+  // - Allocating IP address space within the parent VirtualNetwork
+  // - Configuring subnet routing and network policies
+  //
+  // Compute instances cannot be attached to subnets in PENDING state.
+  SUBNET_STATE_PENDING = 1;
+
+  // The subnet is fully operational and ready for compute instances to attach.
+  //
+  // In this state:
+  // - CIDR blocks are allocated and validated
+  // - Parent VirtualNetwork is in READY state
+  // - Subnet routing is configured
+  // - Compute instances can be created and attached
+  // - IP address allocation is active
+  SUBNET_STATE_READY = 2;
+
+  // The subnet has encountered an error and is unusable.
+  //
+  // Common failure reasons include:
+  // - Invalid CIDR notation
+  // - CIDR block is not a subset of parent VirtualNetwork CIDR
+  // - CIDR block overlaps with existing subnets in the same VirtualNetwork
+  // - Parent VirtualNetwork not found
+  // - Parent VirtualNetwork not in READY state
+  // - Network configuration error
+  //
+  // The status.message field will contain specific error details. Failed subnets typically require deletion
+  // and recreation with corrected parameters.
+  SUBNET_STATE_FAILED = 3;
+
+  // The subnet is being deleted.
+  //
+  // During this state, the system is:
+  // - Removing network policies and routing rules
+  // - Deallocating IP address space
+  // - Cleaning up backend network resources
+  //
+  // The subnet will be archived once deletion completes successfully.
+  SUBNET_STATE_DELETING = 4;
+
+  // The subnet deletion has failed.
+  //
+  // The deprovision operation encountered an error and could not complete.
+  // The status.message field will contain specific error details.
+  // Manual intervention may be required to resolve the underlying issue
+  // before retrying deletion.
+  SUBNET_STATE_DELETE_FAILED = 5;
+}

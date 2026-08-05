@@ -1,0 +1,21 @@
+- name: Convert subnet properties to tags
+  ansible.builtin.set_fact:
+    tags_to_filter: "{{ tags_to_filter | default([]) + [item.key + '_' + item.value] }}"
+  loop: "{{ l3_network_properties | dict2items }}"
+  when: l3_network_properties | length > 0
+
+- name: List subnets with tags
+  block:
+  - name: List subnets  # noqa:no-changed-when
+    ansible.builtin.command: >-
+      openstack subnet list
+      {% for tag in tags_to_filter %}
+      --tag "{{ tag }}"
+      {% endfor %}
+      --long
+      -f json
+    register: list_subnets_cmd
+
+  - name: Set list_subnets_result to subnets list
+    ansible.builtin.set_fact:
+      list_subnets_result: "{{ list_subnets_cmd.stdout | from_json }}"

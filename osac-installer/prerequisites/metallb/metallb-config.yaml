@@ -1,0 +1,42 @@
+#
+# Copyright (c) 2025 Red Hat Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+# the License. You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+# specific language governing permissions and limitations under the License.
+#
+
+# MetalLB instance
+apiVersion: metallb.io/v1beta1
+kind: MetalLB
+metadata:
+  name: metallb
+  namespace: metallb-system
+---
+# MetalLB IPAddressPool and L2Advertisement for CaaS LoadBalancer services.
+# Update the address range below to match your environment.
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: caas-address-pool
+  namespace: metallb-system
+spec:
+  addresses:
+    # Replace with your environment's IP range for LoadBalancer services
+    - 192.168.100.240-192.168.100.250
+  autoAssign: true
+  avoidBuggyIPs: true  # safeguard: exclude .0 and .255 if the address range is ever extended
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: caas-l2-advertisement
+  namespace: metallb-system
+spec:
+  ipAddressPools:
+    - caas-address-pool

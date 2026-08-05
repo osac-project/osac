@@ -1,0 +1,49 @@
+---
+- name: Validate SNAT input variables
+  ansible.builtin.assert:
+    that:
+      - snat_router_name is match('^[a-z0-9][a-z0-9_-]*$')
+      - snat_source_subnet | ansible.utils.ipaddr('network/prefix') != false
+      - snat_veth_interface is match('^[a-z][a-z0-9._-]*$')
+      - snat_external_subnet | ansible.utils.ipaddr('network/prefix') != false
+      - snat_external_interface is match('^[a-z][a-z0-9._-]*$')
+    fail_msg: "SNAT variable validation failed. Check names and CIDR values."
+
+- name: Check if namespace SNAT rule exists
+  ansible.builtin.raw: >-
+    ip netns exec {{ snat_router_name }}
+    iptables -t nat -C POSTROUTING -s {{ snat_source_subnet }}
+    -o {{ snat_veth_interface }} -j MASQUERADE 2>/dev/null
+  register: snat_ns_check
+  changed_when: false
+  failed_when: false
+
+- name: Add SNAT inside namespace (tenant traffic -> veth)
+  ansible.builtin.raw: >-
+    ip netns exec {{ snat_router_name }}
+    iptables -t nat -A POSTROUTING -s {{ snat_source_subnet }}
+    -o {{ snat_veth_interface }} -j MASQUERADE
+  when: snat_ns_check.rc != 0
+  changed_when: true
+
+- name: Check if host SNAT rule exists
+  ansible.builtin.raw: >-
+    iptables -t nat -C POSTROUTING -s {{ snat_external_subnet }}
+    -o {{ snat_external_interface }} -j MASQUERADE 2>/dev/null
+  register: snat_host_check
+  changed_when: false
+  failed_when: false
+
+- name: Add SNAT on host (veth traffic -> external interface)
+  ansible.builtin.raw: >-
+    iptables -t nat -A POSTROUTING -s {{ snat_external_subnet }}
+    -o {{ snat_external_interface }} -j MASQUERADE
+  when: snat_host_check.rc != 0
+  changed_when: true
+
+- name: Enable IP forwarding on host
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: '1'
+    sysctl_set: true
+    state: present

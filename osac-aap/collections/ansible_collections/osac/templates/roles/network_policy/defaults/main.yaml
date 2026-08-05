@@ -1,0 +1,4 @@
+---
+# SecurityGroup NetworkPolicy defaults
+default_security_group_labels:
+  osac.openshift.io/managed-by: osac-fulfillment

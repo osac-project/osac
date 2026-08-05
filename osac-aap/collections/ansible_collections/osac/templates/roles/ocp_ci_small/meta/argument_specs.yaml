@@ -1,0 +1,19 @@
+argument_specs:
+  main:
+    options:
+      cluster_order:
+        type: dict
+        required: true
+      cluster_working_namespace:
+        type: str
+        required: true
+      node_requests:
+        type: list
+        elements: dict
+        options:
+          numberOfNodes:
+            type: int
+            required: true
+          resourceClass:
+            type: str
+            required: true

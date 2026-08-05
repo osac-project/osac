@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "csi-driver.fullname" . }}-node
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "csi-driver.labels" . | nindent 4 }}
+    app.kubernetes.io/component: node
+spec:
+  selector:
+    matchLabels:
+      {{- include "csi-driver.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: node
+  template:
+    metadata:
+      labels:
+        {{- include "csi-driver.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: node
+    spec:
+      serviceAccountName: {{ include "csi-driver.nodeServiceAccountName" . }}
+      containers:
+        - name: osac-csi-driver
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - "--csi-endpoint=unix:///csi/osac/csi.sock"
+            - "--node-id=$(KUBE_NODE_NAME)"
+            {{- if .Values.node.vendorSockets }}
+            - "--vendor-sockets={{ .Values.node.vendorSockets }}"
+            {{- end }}
+            - "--v=2"
+          env:
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: osac-socket-dir
+              mountPath: /csi/osac
+            - name: kubelet-dir
+              mountPath: /var/lib/kubelet
+              mountPropagation: Bidirectional
+          resources:
+            {{- toYaml .Values.node.resources | nindent 12 }}
+          securityContext:
+            privileged: {{ .Values.node.privileged }}
+            runAsUser: 0
+
+        - name: csi-node-driver-registrar
+          image: "{{ .Values.sidecars.registrar.image.repository }}:{{ .Values.sidecars.registrar.image.tag }}"
+          args:
+            - "--csi-address=/csi/osac/csi.sock"
+            - "--kubelet-registration-path=/var/lib/kubelet/plugins/{{ .Values.driverName }}/csi.sock"
+            - "--v=2"
+          volumeMounts:
+            - name: osac-socket-dir
+              mountPath: /csi/osac
+            - name: registration-dir
+              mountPath: /registration
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+
+      volumes:
+        - name: osac-socket-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins/{{ .Values.driverName }}
+            type: DirectoryOrCreate
+        - name: kubelet-dir
+          hostPath:
+            path: /var/lib/kubelet
+            type: Directory
+        - name: registration-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins_registry
+            type: Directory

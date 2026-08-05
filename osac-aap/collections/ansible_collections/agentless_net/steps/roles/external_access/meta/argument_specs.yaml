@@ -1,0 +1,27 @@
+---
+argument_specs:
+  create:
+    options:
+      external_access_name:
+        type: str
+        required: true
+      external_access_namespace:
+        type: str
+        required: true
+      external_access_base_domain:
+        type: str
+        required: true
+      cluster_working_namespace:
+        type: str
+        required: true
+      cluster_order:
+        type: dict
+        required: true
+  delete:
+    options:
+      external_access_name:
+        type: str
+        required: true
+      external_access_base_domain:
+        type: str
+        required: true

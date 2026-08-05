@@ -1,0 +1,10 @@
+dns_ttl: 1800
+default_agent_namespace: "hardware-inventory"
+
+# Cluster settings credentials (used by cluster_settings role)
+cluster_settings_default_credentials_secret_namespace: "default"
+cluster_settings_default_credentials_secret_name: "cluster-credentials"
+
+# Hosted cluster defaults
+hosted_cluster_default_agent_namespace: "hardware-inventory"
+hosted_cluster_default_infraenv: "infraenv"

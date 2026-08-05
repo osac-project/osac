@@ -1,0 +1,177 @@
+---
+- block:
+    - name: Create a group with only the default rule
+      amazon.aws.ec2_security_group:
+        name: "{{ ec2_group_name }}-egress-tests"
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        description: "{{ ec2_group_description }}"
+        state: present
+      register: result
+
+    - name: Assert default rule is in place (expected changed=true)
+      ansible.builtin.assert:
+        that:
+          - result is changed
+          - result.ip_permissions|length == 0
+          - result.ip_permissions_egress|length == 1
+          - result.ip_permissions_egress[0].ip_ranges[0].cidr_ip == '0.0.0.0/0'
+
+    - name: Create a group with only the default rule
+      amazon.aws.ec2_security_group:
+        name: "{{ ec2_group_name }}-egress-tests"
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        description: "{{ ec2_group_description }}"
+        purge_rules_egress: false
+        state: present
+      register: result
+
+    - name: Assert default rule is not purged (expected changed=false)
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+          - result.ip_permissions|length == 0
+          - result.ip_permissions_egress|length == 1
+          - result.ip_permissions_egress[0].ip_ranges[0].cidr_ip == '0.0.0.0/0'
+
+    - name: Pass empty egress rules without purging, should leave default rule in place
+      amazon.aws.ec2_security_group:
+        name: "{{ ec2_group_name }}-egress-tests"
+        description: "{{ ec2_group_description }}"
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        purge_rules_egress: false
+        rules_egress: []
+        state: present
+      register: result
+
+    - name: Assert default rule is not purged (expected changed=false)
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+          - result.ip_permissions|length == 0
+          - result.ip_permissions_egress|length == 1
+          - result.ip_permissions_egress[0].ip_ranges[0].cidr_ip == '0.0.0.0/0'
+
+    - name: Purge rules, including the default
+      amazon.aws.ec2_security_group:
+        name: "{{ ec2_group_name }}-egress-tests"
+        description: "{{ ec2_group_description }}"
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        purge_rules_egress: true
+        rules_egress: []
+        state: present
+      register: result
+
+    - name: Assert default rule is not purged (expected changed=false)
+      ansible.builtin.assert:
+        that:
+          - result is changed
+          - result.ip_permissions|length == 0
+          - result.ip_permissions_egress|length == 0
+
+    - name: Add a custom egress rule
+      amazon.aws.ec2_security_group:
+        name: "{{ ec2_group_name }}-egress-tests"
+        description: "{{ ec2_group_description }}"
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        rules_egress:
+          - proto: tcp
+            ports:
+              - 1212
+            cidr_ip: 10.2.1.2/32
+        state: present
+      register: result
+
+    - name: Assert first rule is here
+      ansible.builtin.assert:
+        that:
+          - result.ip_permissions_egress|length == 1
+
+    - name: Add a second custom egress rule
+      amazon.aws.ec2_security_group:
+        name: "{{ ec2_group_name }}-egress-tests"
+        description: "{{ ec2_group_description }}"
+        purge_rules_egress: false
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        rules_egress:
+          - proto: tcp
+            ports:
+              - 2323
+            cidr_ip: 10.3.2.3/32
+        state: present
+      register: result
+
+    - name: Assert the first rule is not purged
+      ansible.builtin.assert:
+        that:
+          - result.ip_permissions_egress|length == 2
+
+    - name: Purge the second rule (CHECK MODE) (DIFF MODE)
+      amazon.aws.ec2_security_group:
+        name: "{{ ec2_group_name }}-egress-tests"
+        description: "{{ ec2_group_description }}"
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        rules_egress:
+          - proto: tcp
+            ports:
+              - 1212
+            cidr_ip: 10.2.1.2/32
+        state: present
+      register: result
+      check_mode: true
+      diff: true
+
+    - name: Assert first rule will be left
+      ansible.builtin.assert:
+        that:
+          - result.changed
+          - result.diff.0.after.ip_permissions_egress|length == 1
+          - result.diff.0.after.ip_permissions_egress[0].ip_ranges[0].cidr_ip == '10.2.1.2/32'
+
+    - name: Purge the second rule
+      amazon.aws.ec2_security_group:
+        name: "{{ ec2_group_name }}-egress-tests"
+        description: "{{ ec2_group_description }}"
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        rules_egress:
+          - proto: tcp
+            ports:
+              - 1212
+            cidr_ip: 10.2.1.2/32
+        state: present
+      register: result
+
+    - name: Assert first rule is here
+      ansible.builtin.assert:
+        that:
+          - result.ip_permissions_egress|length == 1
+          - result.ip_permissions_egress[0].ip_ranges[0].cidr_ip == '10.2.1.2/32'
+
+    - name: Add a rule for all TCP ports
+      amazon.aws.ec2_security_group:
+        name: "{{ ec2_group_name }}-egress-tests"
+        description: "{{ ec2_group_description }}"
+        rules_egress:
+          - proto: tcp
+            ports: "0-65535"
+            cidr_ip: "0.0.0.0/0"
+        state: present
+        vpc_id: "{{ vpc_result.vpc.id }}"
+      register: result
+
+    - name: Re-add the default rule
+      amazon.aws.ec2_security_group:
+        name: "{{ ec2_group_name }}-egress-tests"
+        description: "{{ ec2_group_description }}"
+        rules_egress:
+          - proto: -1
+            cidr_ip: "0.0.0.0/0"
+        state: present
+        vpc_id: "{{ vpc_result.vpc.id }}"
+      register: result
+  always:
+    - name: Tidy up egress rule test security group
+      amazon.aws.ec2_security_group:
+        name: "{{ ec2_group_name }}-egress-tests"
+        state: absent
+        vpc_id: "{{ vpc_result.vpc.id }}"
+      ignore_errors: true

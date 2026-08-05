@@ -1,0 +1,14 @@
+---
+# Dispatches teardown_cluster_storage to each unique provider in the tier list.
+# Removes cluster-side K8s resources (StorageClasses, VolumeSnapshotClasses,
+# CSI Secret) without touching backend resources or hub Secret.
+# Best-effort — ignore_errors so one provider's failure doesn't block others.
+
+- name: Dispatch teardown_cluster_storage to each provider
+  block:
+    - name: Run teardown_cluster_storage per provider
+      ansible.builtin.include_tasks: _dispatch_provider.yaml
+      loop: "{{ _unique_providers }}"
+      loop_control:
+        loop_var: _current_provider
+      ignore_errors: true  # noqa: ignore-errors

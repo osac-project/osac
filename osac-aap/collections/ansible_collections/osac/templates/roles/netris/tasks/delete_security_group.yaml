@@ -1,0 +1,41 @@
+---
+# SecurityGroup deletion - removes the corresponding Netris ACL rules
+
+- name: Extract SecurityGroup configuration
+  ansible.builtin.set_fact:
+    sg_name: "{{ security_group.metadata.name }}"
+    ingress_rules: "{{ security_group.spec.ingressRules | default([]) }}"
+    egress_rules: "{{ security_group.spec.egressRules | default([]) }}"
+
+- name: Display deletion information
+  ansible.builtin.debug:
+    msg:
+      - "Deleting Netris ACL rules for SecurityGroup '{{ sg_name }}'"
+      - "Ingress rules to delete: {{ ingress_rules | length }}"
+      - "Egress rules to delete: {{ egress_rules | length }}"
+
+- name: Delete ACL rules for ingress
+  ansible.builtin.include_role:
+    name: netris.controller.acl
+    tasks_from: delete
+  vars:
+    acl_name: "{{ sg_name }}-ingress-{{ idx }}"
+  loop: "{{ ingress_rules }}"
+  loop_control:
+    index_var: idx
+  when: ingress_rules | length > 0
+
+- name: Delete ACL rules for egress
+  ansible.builtin.include_role:
+    name: netris.controller.acl
+    tasks_from: delete
+  vars:
+    acl_name: "{{ sg_name }}-egress-{{ idx }}"
+  loop: "{{ egress_rules }}"
+  loop_control:
+    index_var: idx
+  when: egress_rules | length > 0
+
+- name: Display SecurityGroup deletion result
+  ansible.builtin.debug:
+    msg: "ACL rules deletion completed for SecurityGroup '{{ sg_name }}'"

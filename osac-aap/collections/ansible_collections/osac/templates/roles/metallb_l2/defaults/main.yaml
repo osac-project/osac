@@ -1,0 +1,3 @@
+---
+# Defaults for metallb_l2 role
+# Labels are defined inline in the task files alongside resource definitions.

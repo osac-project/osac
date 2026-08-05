@@ -1,0 +1,375 @@
+---
+# VAST ensure_storage_class: creates CSI Secret + per-tier StorageClasses.
+# CRITICAL SECURITY: CSI Secret uses per-tenant user credentials ONLY.
+# Admin credentials are loaded (via read_credentials.yaml) for VMS API calls
+# but are NEVER written into the CSI Secret or any tenant-namespace resource.
+
+- name: Assert _provider_tiers is defined and non-empty
+  ansible.builtin.assert:
+    that:
+      - _provider_tiers is defined
+      - _provider_tiers | length > 0
+    fail_msg: >-
+      _provider_tiers must be provided by the service role dispatcher.
+
+- name: Compute unique protocols from tiers
+  ansible.builtin.set_fact:
+    _vast_required_protocols: "{{ _provider_tiers | map(attribute='protocol') | unique | sort | list }}"
+
+- name: Build expected StorageClass entries per tier
+  ansible.builtin.set_fact:
+    _vast_expected_sc_entries: >-
+      {% set entries = [] -%}
+      {% for tier in _provider_tiers -%}
+      {% set _ = entries.append({'name': 'vast-' ~ tier.protocol ~ '-' ~ tenant_name ~ '-' ~ tier.name, 'tier': tier.name}) -%}
+      {% endfor -%}
+      {{ entries }}
+    _vast_expected_sc_names: >-
+      {% set names = [] -%}
+      {% for tier in _provider_tiers -%}
+      {% set _ = names.append('vast-' ~ tier.protocol ~ '-' ~ tenant_name ~ '-' ~ tier.name) -%}
+      {% endfor -%}
+      {{ names }}
+
+# Short-circuit -- check if ALL tiers' StorageClasses already exist (single API call)
+- name: Check existing tenant StorageClasses
+  kubernetes.core.k8s_info:
+    api_version: storage.k8s.io/v1
+    kind: StorageClass
+    label_selectors:
+      - "osac.openshift.io/tenant={{ tenant_name }}"
+      - "app.kubernetes.io/managed-by=osac-aap"
+  register: _vast_sc_checks
+
+- name: Determine if all StorageClasses already exist
+  ansible.builtin.set_fact:
+    _vast_all_sc_exist: >-
+      {{ (_vast_expected_sc_names | difference(
+            _vast_sc_checks.resources | map(attribute='metadata.name') | list
+          ) | length) == 0 }}
+
+- name: Set output facts and skip provisioning when all SCs exist
+  when: _vast_all_sc_exist | bool
+  block:
+    - name: Set StorageClass names output (short-circuit)
+      ansible.builtin.set_fact:
+        storage_provider_storage_class_names: "{{ _vast_expected_sc_entries }}"
+
+    - name: Log short-circuit
+      ansible.builtin.debug:
+        msg: "All {{ _vast_expected_sc_names | length }} StorageClasses already exist — skipping provisioning."
+
+# --- Full provisioning path ---
+- name: Provision StorageClasses and CSI resources
+  when: not (_vast_all_sc_exist | bool)
+  block:
+    - name: Discover cluster name from target cluster infrastructure
+      when: _cluster_name is not defined or _cluster_name | length == 0
+      block:
+        - name: Query OpenShift infrastructure object for cluster name
+          kubernetes.core.k8s_info:
+            kubeconfig: "{{ _remote_kubeconfig | default(omit) }}"
+            api_version: config.openshift.io/v1
+            kind: Infrastructure
+            name: cluster
+          register: _infra_result
+
+        - name: Set cluster name from infrastructure object
+          ansible.builtin.set_fact:
+            _cluster_name: "{{ _infra_result.resources[0].status.infrastructureName }}"
+          when: >-
+            _infra_result.resources | length > 0 and
+            _infra_result.resources[0].status.infrastructureName is defined
+
+    - name: Fail if cluster name could not be determined
+      ansible.builtin.fail:
+        msg: >-
+          Could not discover the cluster name from infrastructure.config.openshift.io/cluster
+          on the target cluster. Verify the cluster is reachable and the Infrastructure
+          CRD is available.
+      when: _cluster_name is not defined or _cluster_name | default('') | length == 0
+
+    - name: Sanitize cluster name for volume naming
+      ansible.builtin.set_fact:
+        _cluster_name: "{{ _cluster_name | lower | regex_replace('[^a-z0-9.-]', '') | truncate(63, True, '', 0) }}"
+
+    - name: Read per-tenant credentials and config from hub Secret
+      ansible.builtin.include_tasks: read_tenant_credentials.yaml
+
+    - name: Ensure VAST CSI Operator is installed
+      ansible.builtin.include_tasks: ensure_csi_operator.yaml
+
+    # ── Ensure per-tier VMS resources exist (views, quotas, QoS, view policies) ──
+    # These are created here (not just in setup) so JIT tiers get their backing
+    # VMS resources. Uses admin creds for VMS API access.
+
+    - name: Resolve VAST admin credentials from env vars
+      ansible.builtin.include_tasks: read_credentials.yaml
+
+    - name: Build VMS connection from admin credentials
+      ansible.builtin.set_fact:
+        _vast_vms_conn:
+          host: "{{ vast_endpoint }}"
+          username: "{{ vast_username }}"
+          password: "{{ vast_password }}"
+          validate_certs: "{{ vast_storage_validate_certs }}"
+          timeout: "{{ vast_storage_api_timeout }}"
+      no_log: true
+
+    - name: Initialize view policy accumulators
+      ansible.builtin.set_fact:
+        _vast_view_policy_ids: {}
+        _vast_view_policy_names: {}
+
+    - name: Ensure per-protocol view policies exist
+      ansible.builtin.include_tasks: create_view_policy.yaml
+      loop: "{{ _vast_required_protocols }}"
+      loop_control:
+        loop_var: _vast_vp_protocol
+
+    - name: Ensure VAST views exist per tier
+      ansible.builtin.include_tasks: create_views.yaml
+
+    - name: Ensure per-tier QoS policies exist
+      ansible.builtin.include_tasks: create_qos_policy.yaml
+
+    - name: Ensure VAST quotas exist per tier
+      ansible.builtin.include_tasks: create_quotas.yaml
+
+    # ── K8s resources: CSI Secret, StorageClasses, VolumeSnapshotClasses ──
+
+    - name: Ensure tenant_namespace exists on target cluster
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ tenant_namespace }}"
+
+    - name: Set CSI Secret resource name
+      ansible.builtin.set_fact:
+        _vast_csi_secret_name: "vast-csi-{{ tenant_name }}"
+
+    - name: Set block encryption passphrase from caller or persisted hub Secret
+      ansible.builtin.set_fact:
+        _vast_block_encryption_passphrase: "{{ storage_provider_block_encryption_passphrase | default(_vast_tenant_block_encryption_passphrase | default('')) }}"
+      no_log: true
+
+    # CSI Secret uses per-tenant Manager username/password — NEVER admin creds.
+    # The 'tenant' field is REQUIRED — TENANT_ADMIN users must authenticate
+    # with X-Tenant-Name, and the CSI driver sets this header from the Secret's
+    # tenant field on /api/v1/token/ login calls.
+    - name: Build CSI Secret data
+      ansible.builtin.set_fact:
+        _vast_csi_secret_data:
+          username: "{{ _vast_tenant_csi_username }}"
+          password: "{{ _vast_tenant_csi_password }}"
+          endpoint: "{{ _vast_tenant_endpoint }}"
+          tenant: "{{ tenant_name }}"
+      no_log: true
+
+    - name: Add passphrase to CSI Secret data for block encryption
+      ansible.builtin.set_fact:
+        _vast_csi_secret_data: "{{ _vast_csi_secret_data | combine({'passphrase': _vast_block_encryption_passphrase}) }}"
+      no_log: true
+      when: _vast_block_encryption_passphrase | default('') | length > 0
+
+    - name: Create CSI Secret with per-tenant manager credentials in tenant namespace
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "{{ _vast_csi_secret_name }}"
+            namespace: "{{ tenant_namespace }}"
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/tenant: "{{ tenant_name }}"
+          type: Opaque
+          stringData: "{{ _vast_csi_secret_data }}"
+      no_log: true
+
+    - name: Build CSI secret references (single source for all SC and VSC parameters)
+      ansible.builtin.set_fact:
+        _vast_csi_secret_ref:
+          name: "{{ _vast_csi_secret_name }}"
+          namespace: "{{ tenant_namespace }}"
+
+    - name: Build VIP pool parameters for StorageClass
+      ansible.builtin.set_fact:
+        _vast_sc_vip_params: >-
+          {{ {'vip_pool_fqdn': _vast_tenant_vip_pool_fqdn, 'vip_pool_fqdn_random_prefix': 'false'}
+             if (_vast_tenant_vip_pool_fqdn | default('') | length > 0)
+             else {'vip_pool_name': _vast_tenant_vip_pool} }}
+
+    - name: Build base StorageClass parameters (shared by NFS and block)
+      ansible.builtin.set_fact:
+        _vast_sc_base_params: >-
+          {{ _vast_sc_vip_params | combine({
+          'csi.storage.k8s.io/provisioner-secret-name': _vast_csi_secret_ref.name,
+          'csi.storage.k8s.io/provisioner-secret-namespace': _vast_csi_secret_ref.namespace,
+          'csi.storage.k8s.io/controller-publish-secret-name': _vast_csi_secret_ref.name,
+          'csi.storage.k8s.io/controller-publish-secret-namespace': _vast_csi_secret_ref.namespace,
+          'csi.storage.k8s.io/node-publish-secret-name': _vast_csi_secret_ref.name,
+          'csi.storage.k8s.io/node-publish-secret-namespace': _vast_csi_secret_ref.namespace,
+          'csi.storage.k8s.io/controller-expand-secret-name': _vast_csi_secret_ref.name,
+          'csi.storage.k8s.io/controller-expand-secret-namespace': _vast_csi_secret_ref.namespace,
+          'csi.storage.k8s.io/node-expand-secret-name': _vast_csi_secret_ref.name,
+          'csi.storage.k8s.io/node-expand-secret-namespace': _vast_csi_secret_ref.namespace
+          }) }}
+
+    - name: Build block host encryption JSON when passphrase is available
+      ansible.builtin.set_fact:
+        _vast_sc_block_encryption_params:
+          host_encryption: >-
+            {{ {'cipher': 'aes-xts-plain64', 'key_size': '512',
+                'hash': 'sha256', 'pbkdf_memory': '65536'} | to_json }}
+      when:
+        - _vast_block_encryption_passphrase | default('') | length > 0
+        - _vast_required_protocols | intersect(['block']) | length > 0
+
+    - name: Filter NFS tiers
+      ansible.builtin.set_fact:
+        _vast_nfs_tiers: "{{ _provider_tiers | selectattr('protocol', 'equalto', 'nfs') | list }}"
+
+    - name: Filter block tiers
+      ansible.builtin.set_fact:
+        _vast_block_tiers: "{{ _provider_tiers | selectattr('protocol', 'equalto', 'block') | list }}"
+
+    - name: Resolve per-protocol view policy names
+      ansible.builtin.set_fact:
+        _vast_nfs_view_policy: >-
+          {{ (_vast_view_policy_names['nfs'] | default(_vast_view_policy_name))
+             if _vast_view_policy_names is defined
+             else _vast_view_policy_name }}
+        _vast_block_view_policy: >-
+          {{ (_vast_view_policy_names['block'] | default(_vast_view_policy_name))
+             if _vast_view_policy_names is defined
+             else _vast_view_policy_name }}
+
+    - name: Create NFS StorageClass per tier
+      when: _vast_nfs_tiers | length > 0
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: "vast-{{ item.protocol }}-{{ tenant_name }}-{{ item.name }}"
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/tenant: "{{ tenant_name }}"
+              osac.openshift.io/storage-tier: "{{ item.name }}"
+              osac.openshift.io/storage-protocol: "{{ item.protocol }}"
+          provisioner: "{{ vast_storage_csi_provisioner_map[item.protocol] }}"
+          parameters: >-
+            {{ _vast_sc_base_params
+               | combine({'root_export': '/osac-' ~ tenant_name ~ '-' ~ _vast_tenant_uid_hash ~ '/' ~ item.name})
+               | combine({'view_policy': _vast_nfs_view_policy})
+               | combine({'volumeNameFormat': 'csi:{id}:{namespace}:{name}:' ~ _cluster_name})
+               | combine({'ephemeralVolumeNameFormat': 'eph:{id}:{namespace}:{name}:' ~ _cluster_name})
+               | combine(({'qos_policy': item.qos_policy} if item.qos_policy is defined else {})) }}
+          reclaimPolicy: Delete
+          volumeBindingMode: Immediate
+      loop: "{{ _vast_nfs_tiers }}"
+      loop_control:
+        label: "vast-{{ item.protocol }}-{{ tenant_name }}-{{ item.name }}"
+
+    - name: Create block StorageClass per tier
+      when: _vast_block_tiers | length > 0
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: "vast-{{ item.protocol }}-{{ tenant_name }}-{{ item.name }}"
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/tenant: "{{ tenant_name }}"
+              osac.openshift.io/storage-tier: "{{ item.name }}"
+              osac.openshift.io/storage-protocol: "{{ item.protocol }}"
+          provisioner: "{{ vast_storage_csi_provisioner_map[item.protocol] }}"
+          parameters: >-
+            {{ _vast_sc_base_params
+               | combine({'subsystem': 'view-' ~ tenant_name ~ '-' ~ _vast_tenant_uid_hash ~ '-' ~ item.name,
+                          'tenant_name': tenant_name})
+               | combine({'volumeGroup': _cluster_name ~ '/{namespace}'})
+               | combine({'csi.storage.k8s.io/node-stage-secret-name': _vast_csi_secret_ref.name})
+               | combine({'csi.storage.k8s.io/node-stage-secret-namespace': _vast_csi_secret_ref.namespace})
+               | combine(_vast_sc_block_encryption_params | default({})) }}
+          reclaimPolicy: Delete
+          volumeBindingMode: WaitForFirstConsumer
+      loop: "{{ _vast_block_tiers }}"
+      loop_control:
+        label: "vast-{{ item.protocol }}-{{ tenant_name }}-{{ item.name }}"
+
+    - name: Check if VolumeSnapshot CRD is installed
+      when: storage_provider_snapshots_enabled | default(true)
+      kubernetes.core.k8s_info:
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: volumesnapshotclasses.snapshot.storage.k8s.io
+      register: _vast_vsc_crd_check
+
+    - name: Create VolumeSnapshotClass per tier
+      when: >-
+        (storage_provider_snapshots_enabled | default(true)) and
+        (_vast_vsc_crd_check.resources | default([]) | length > 0)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: snapshot.storage.k8s.io/v1
+          kind: VolumeSnapshotClass
+          metadata:
+            name: "vast-snapshot-{{ tenant_name }}-{{ item.name }}"
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/tenant: "{{ tenant_name }}"
+              osac.openshift.io/storage-tier: "{{ item.name }}"
+          driver: "{{ vast_storage_csi_provisioner_map[item.protocol] }}"
+          deletionPolicy: Delete
+          parameters:
+            csi.storage.k8s.io/snapshotter-secret-name: "{{ _vast_csi_secret_ref.name }}"
+            csi.storage.k8s.io/snapshotter-secret-namespace: "{{ _vast_csi_secret_ref.namespace }}"
+      loop: "{{ _provider_tiers }}"
+      loop_control:
+        label: "vast-snapshot-{{ tenant_name }}-{{ item.name }}"
+
+    - name: Set StorageClass names output (list)
+      ansible.builtin.set_fact:
+        storage_provider_storage_class_names: "{{ _vast_expected_sc_entries }}"
+
+  always:
+    # Clear per-tenant credential facts (admin creds were never loaded)
+    - name: Clear per-tenant credential facts from play scope
+      ansible.builtin.set_fact:
+        vast_endpoint: ""
+        vast_username: ""
+        vast_password: ""
+        _vast_tenant_id: ""
+        _vast_tenant_uid_hash: ""
+        _vast_tenant_csi_username: ""
+        _vast_tenant_csi_password: ""
+        _vast_tenant_endpoint: ""
+        _vast_tenant_vip_pool: ""
+        _vast_tenant_vip_pool_fqdn: ""
+        _vast_sc_vip_params: {}
+        _vast_tenant_config_secret: {}
+        _vast_vms_conn: {}
+        _vast_block_encryption_passphrase: ""
+        _vast_csi_secret_data: {}
+        _vast_csi_secret_ref: {}
+        _vast_view_policy_name: ""
+        _vast_view_policy_names: {}
+        _vast_view_policy_names_raw: ""
+        _vast_view_policy_ids: {}
+        _vast_tenant_block_encryption_passphrase: ""
+        _vast_sc_block_encryption_params: {}
+        _vast_nfs_tiers: []
+        _vast_block_tiers: []
+        _vast_nfs_view_policy: ""
+        _vast_block_view_policy: ""
+      no_log: true

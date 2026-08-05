@@ -1,0 +1,129 @@
+---
+# Test playbook for Windows golden image boot verification
+# Usage: ansible-playbook tests/test-windows-golden-image.yml -e @tests/golden-image-vars.yml
+
+- name: Test Windows Golden Image Boot
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    # Override these in golden-image-vars.yml or via -e
+    test_vm_name: "test-golden-windows-vm"
+    test_namespace: "osac-aap-testing"
+    golden_image_ref: "quay.io/jhernand/ci:0"
+    remote_cluster_kubeconfig: "{{ lookup('env', 'KUBECONFIG') }}"
+
+    # ComputeInstance spec for golden image testing
+    compute_instance:
+      metadata:
+        name: "{{ test_vm_name }}"
+        namespace: "{{ test_namespace }}"
+        annotations:
+          osac.openshift.io/tenant: "{{ test_namespace }}"
+          osac.openshift.io/guest-os-family: "windows"
+      spec:
+        cores: 4
+        memoryGiB: 8
+        bootDisk:
+          sizeGiB: 80
+        image:
+          sourceRef: "{{ golden_image_ref }}"
+        runStrategy: "Always"
+
+  tasks:
+    - name: Provision and verify Windows golden image VM
+      block:
+        - name: Create test namespace
+          kubernetes.core.k8s:
+            kubeconfig: "{{ remote_cluster_kubeconfig | default(omit, true) }}"
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: "{{ test_namespace }}"
+
+        - name: Deploy Windows golden image VM
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: create
+          vars:
+            compute_instance_name: "{{ test_vm_name }}"
+            tenant_target_namespace: "{{ test_namespace }}"
+            tenant_storage_class_name: "lvms-vg1"
+            tenant_storage_class_storage_classes:
+              - name: "lvms-vg1"
+                tier: "default"
+            tenant_storage_class_tenant_name: "{{ test_namespace }}"
+            vm_enable_sysprep: false
+            template_parameters: {}
+            template_id: "ocp_virt_vm"
+            compute_instance_label: "osac.openshift.io/compute-instance"
+
+        - name: Wait for VM to reach Running state
+          kubernetes.core.k8s_info:
+            kubeconfig: "{{ remote_cluster_kubeconfig | default(omit, true) }}"
+            api_version: kubevirt.io/v1
+            kind: VirtualMachine
+            name: "{{ test_vm_name }}"
+            namespace: "{{ test_namespace }}"
+          register: vm_status
+          until:
+            - vm_status.resources | length > 0
+            - vm_status.resources[0].status.ready | default(false) | bool
+          retries: 30
+          delay: 10
+
+        - name: Display VM status
+          ansible.builtin.debug:
+            msg: |
+              VM Status: {{ vm_status.resources[0].status.ready }}
+
+              Next steps:
+              1. Connect to VNC console:
+                 virtctl vnc {{ test_vm_name }} -n {{ test_namespace }}
+
+              2. Verify Windows boots to desktop (not stuck at "Booting from hard disk")
+
+              3. Check VM instance status:
+                 kubectl get vmi {{ test_vm_name }} -n {{ test_namespace }} -o yaml
+
+              4. If boot still fails, check sysprep disk was NOT created:
+                 kubectl get vm {{ test_vm_name }} -n {{ test_namespace }} -o json | jq '.spec.template.spec.volumes[] | select(.name == "sysprep-disk")'
+                 (should return empty - no sysprep disk for golden images)
+
+        - name: Verify no sysprep disk attached (golden image check)
+          ansible.builtin.set_fact:
+            vm_volumes: "{{ vm_status.resources[0].spec.template.spec.volumes }}"
+
+        - name: Assert sysprep disk NOT present for golden image
+          ansible.builtin.assert:
+            that:
+              - vm_volumes | selectattr('name', 'equalto', 'sysprep-disk') | list | length == 0
+            success_msg: "✓ No sysprep disk attached - correct for golden image"
+            fail_msg: "✗ Sysprep disk found - vm_enable_sysprep flag may not be working"
+      always:
+        - name: Cleanup test VM (best effort)
+          block:
+            - name: Delete Windows golden image test VM
+              ansible.builtin.include_role:
+                name: osac.templates.ocp_virt_vm
+                tasks_from: delete
+              vars:
+                compute_instance_name: "{{ test_vm_name }}"
+                tenant_target_namespace: "{{ test_namespace }}"
+                template_parameters: {}
+                template_id: "ocp_virt_vm"
+                compute_instance_label: "osac.openshift.io/compute-instance"
+          rescue:
+            - name: Log VM deletion failure
+              ansible.builtin.debug:
+                msg: "VM deletion failed, but continuing with namespace cleanup"
+
+        - name: Delete test namespace
+          kubernetes.core.k8s:
+            kubeconfig: "{{ remote_cluster_kubeconfig | default(omit, true) }}"
+            state: absent
+            api_version: v1
+            kind: Namespace
+            name: "{{ test_namespace }}"

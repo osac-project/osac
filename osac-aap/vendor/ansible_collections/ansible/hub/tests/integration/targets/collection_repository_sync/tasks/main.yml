@@ -1,0 +1,31 @@
+---
+- name: collection_repository_sync integration tests
+  module_defaults:
+    group/ansible.hub.hub:
+      ah_host: "{{ ah_host }}"
+      ah_username: "{{ ah_username }}"
+      ah_password: "{{ ah_password }}"
+      validate_certs: "{{ ah_verify_ssl }}"
+  block:
+    - name: Sync rh-certified in check mode
+      ansible.hub.collection_repository_sync:
+        name: rh-certified
+        wait: false
+      check_mode: yes
+      register: r
+
+    - name: Check if sync is successful
+      assert:
+        that:
+          - r.changed
+
+    - name: Sync rh-certified
+      ansible.hub.collection_repository_sync:
+        name: rh-certified
+        wait: false
+      register: r
+
+    - name: Check if sync is successful
+      assert:
+        that:
+          - r.changed

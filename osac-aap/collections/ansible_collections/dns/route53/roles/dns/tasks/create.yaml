@@ -1,0 +1,14 @@
+---
+- name: "Create DNS record via Route 53 - {{ dns_record_name }}"
+  amazon.aws.route53:
+    state: present
+    zone: "{{ dns_zone }}"
+    record: "{{ dns_record_name }}"
+    type: "{{ dns_record_type }}"
+    ttl: "{{ dns_record_ttl }}"
+    value: "{{ dns_record_value }}"
+    wait: true
+    overwrite: "{{ dns_record_overwrite }}"
+    access_key: "{{ lookup('env', 'AWS_ACCESS_KEY_ID') | trim }}"
+    secret_key: "{{ lookup('env', 'AWS_SECRET_ACCESS_KEY') | trim }}"
+  no_log: true

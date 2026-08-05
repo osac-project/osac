@@ -1,0 +1,15 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "osac-operator.fullname" . }}-console-proxy-auth-reader
+  namespace: kube-system
+  labels:
+    {{- include "osac-operator.consoleProxy.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: extension-apiserver-authentication-reader
+subjects:
+- kind: ServiceAccount
+  name: {{ include "osac-operator.fullname" . }}-console-proxy
+  namespace: {{ .Release.Namespace }}

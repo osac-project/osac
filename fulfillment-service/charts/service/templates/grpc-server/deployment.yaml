@@ -1,0 +1,174 @@
+{{/*
+Copyright (c) 2025 Red Hat Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+the License. You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+*/}}
+
+{{- $caBundleConfigMap := required "certs.caBundle.configMap is required" .Values.certs.caBundle.configMap }}
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: fulfillment-grpc-server
+spec:
+  selector:
+    matchLabels:
+      app: fulfillment-grpc-server
+  replicas: 1
+  strategy:
+    type: {{ if .Values.debug }}Recreate{{ else }}RollingUpdate{{ end }}
+  template:
+    metadata:
+      labels:
+        app: fulfillment-grpc-server
+    spec:
+      volumes:
+      - name: cas
+        configMap:
+          name: {{ $caBundleConfigMap }}
+      - name: tls
+        secret:
+          secretName: fulfillment-grpc-server-tls
+      - name: token-signer
+        secret:
+          secretName: fulfillment-token-signer-keypair
+      - name: token-encryption-cert
+        secret:
+          secretName: fulfillment-token-encryption-keypair
+          items:
+          - key: tls.crt
+            path: tls.crt
+      - name: database
+        projected:
+          sources:
+          {{ if .Values.database.connection }}
+          {{ range .Values.database.connection }}
+          {{ if .configMap }}
+          - configMap:
+              name: {{ .configMap.name }}
+              items:
+              {{ range .configMap.items }}
+              - key: {{ .key }}
+                path: {{ .param }}
+              {{ end }}
+          {{ end }}
+          {{ if .secret }}
+          - secret:
+              name: {{ .secret.name }}
+              items:
+              {{ range .secret.items }}
+              - key: {{ .key }}
+                path: {{ .param }}
+              {{ end }}
+          {{ end }}
+          {{ end }}
+          {{ else }}
+          []
+          {{ end }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: grpc-server
+        image: {{ .Values.images.service }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: cas
+          mountPath: /etc/fulfillment-grpc-server/tls/cas
+        - name: database
+          mountPath: /etc/fulfillment-grpc-server/db
+          readOnly: true
+        - name: tls
+          mountPath: /etc/fulfillment-grpc-server/tls
+        - name: token-signer
+          mountPath: /etc/fulfillment-token-signer
+          readOnly: true
+        - name: token-encryption-cert
+          mountPath: /etc/fulfillment-token-encryption
+          readOnly: true
+        command:
+        {{ if .Values.debug }}
+        - dlv
+        - exec
+        - /usr/local/bin/fulfillment-service
+        - --headless
+        - --api-version=2
+        - --listen=:30001
+        - --accept-multiclient
+        - --continue
+        - --
+        {{ else }}
+        - /usr/local/bin/fulfillment-service
+        {{ end }}
+        - start
+        - grpc-server
+        - --log-level={{ .Values.log.level }}
+        - --log-headers={{ .Values.log.headers }}
+        - --log-bodies={{ .Values.log.bodies }}
+        - --ca-file=/etc/fulfillment-grpc-server/tls/cas
+        - --db-url-file=/etc/fulfillment-grpc-server/db
+        - --grpc-listener-address=0.0.0.0:8000
+        - --grpc-listener-tls-crt=/etc/fulfillment-grpc-server/tls/tls.crt
+        - --grpc-listener-tls-key=/etc/fulfillment-grpc-server/tls/tls.key
+        - --grpc-authn-trusted-token-issuers={{ required "auth.issuerUrl is required" .Values.auth.issuerUrl }}
+        - --emergency-service-accounts={{ join "," .Values.auth.emergencyServiceAccounts }}
+        - --token-signer-crt=/etc/fulfillment-token-signer/tls.crt
+        - --token-signer-key=/etc/fulfillment-token-signer/tls.key
+        - --token-encryption-crt=/etc/fulfillment-token-encryption/tls.crt
+        - --token-issuer={{ include "fulfillment-api.tokenIssuerUrl" . }}
+        - --metrics-listener-address=0.0.0.0:8002
+        ports:
+        - name: grpc
+          containerPort: 8000
+          protocol: TCP
+        - name: metrics
+          containerPort: 8002
+          protocol: TCP
+        {{ if .Values.debug }}
+        - name: debug
+          containerPort: 30001
+          hostPort: 30001
+          protocol: TCP
+        {{ end }}
+        {{ if not .Values.debug }}
+        livenessProbe:
+          exec:
+            command:
+            - /usr/local/bin/fulfillment-service
+            - probe
+            - grpc-server
+            - --ca-file=/etc/fulfillment-grpc-server/tls/ca.crt
+            - --grpc-server-address=localhost:8000
+            - --grpc-server-timeout=1s
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 5
+        readinessProbe:
+          exec:
+            command:
+            - /usr/local/bin/fulfillment-service
+            - probe
+            - grpc-server
+            - --ca-file=/etc/fulfillment-grpc-server/tls/ca.crt
+            - --grpc-server-address=localhost:8000
+            - --grpc-server-timeout=1s
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 5
+        {{ end }}

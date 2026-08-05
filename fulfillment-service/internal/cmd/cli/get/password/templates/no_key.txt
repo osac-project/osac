@@ -1,0 +1,6 @@
+You must specify the name or identifier of the cluster. For example to get the password of
+cluster '123':
+
+{{ binary }} get password 123
+
+Use the '--help' option to get more details about the command.

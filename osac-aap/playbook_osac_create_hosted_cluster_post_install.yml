@@ -1,0 +1,27 @@
+---
+- name: OSAC hosted cluster post-install configuration
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  environment:
+    KUBECONFIG: >-
+      {{ admin_kubeconfig | default("{}") | to_yaml | osac.service.to_temp_file }}
+
+  vars:
+    cluster_order: "{{ ansible_eda.event.payload }}"
+
+  pre_tasks:
+    - name: Apply default settings
+      ansible.builtin.include_role:
+        name: osac.service.cluster_settings
+
+    - name: Extract template info
+      ansible.builtin.include_role:
+        name: osac.service.extract_template_info
+
+  tasks:
+    - name: Post-install hosted cluster configuration
+      ansible.builtin.include_role:
+        name: "{{ template_id }}"
+        tasks_from: "post_install"

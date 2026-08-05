@@ -1,0 +1,40 @@
+---
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Get existing server clusters
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/server-cluster"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: 200
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: server_cluster_list_resp
+  no_log: true
+
+- name: Find existing server cluster by name
+  ansible.builtin.set_fact:
+    _existing_server_cluster: "{{ (server_cluster_list_resp.json.data | default([])) | selectattr('name', 'equalto', server_cluster_name) | list | first | default(none) }}"
+  when: server_cluster_list_resp.json is mapping
+
+- name: Delete server cluster
+  when: _existing_server_cluster is defined and _existing_server_cluster is not none
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/server-cluster/{{ _existing_server_cluster.id }}"
+    method: DELETE
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    status_code: [200, 204]
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  no_log: true
+
+- name: Set server_cluster_id (deleted)
+  ansible.builtin.set_fact:
+    server_cluster_id: "{{ _existing_server_cluster.id }}"
+    server_cluster_created: false
+    server_cluster_deleted: true
+  when: _existing_server_cluster is defined and _existing_server_cluster is not none

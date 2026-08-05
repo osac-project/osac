@@ -1,0 +1,15 @@
+{{- if .Values.configAsCode.manifest.create }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Values.configAsCode.manifestSecret }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-aap.labels" . | nindent 4 }}
+    osac.openshift.io/project: osac-aap
+type: Opaque
+data:
+  {{- range $key, $val := .Values.configAsCode.manifest.data }}
+  {{ $key }}: {{ $val | b64enc | quote }}
+  {{- end }}
+{{- end }}

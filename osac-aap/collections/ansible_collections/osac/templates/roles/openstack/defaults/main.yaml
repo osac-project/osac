@@ -1,0 +1,12 @@
+---
+# Virtual network defaults
+default_network_mtu: 1500
+
+# Subnet defaults
+default_subnet_ipv4_cidr: 192.168.50.0/24
+default_subnet_dns_nameservers:
+  - 8.8.8.8
+default_subnet_external_gateway: true
+default_subnet_external_network: external
+default_subnet_allocation_pool_start_offset: 10
+default_subnet_allocation_pool_end_offset: -10

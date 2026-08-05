@@ -1,0 +1,106 @@
+---
+# SecurityGroup maps to Netris ACL rules (v1 API)
+# Creates permit ACL rules for each ingress and egress rule in the SecurityGroup CR
+
+- name: Extract SecurityGroup configuration
+  ansible.builtin.set_fact:
+    sg_name: "{{ security_group.metadata.name }}"
+    sg_virtual_network: "{{ security_group.spec.virtualNetwork | default('') }}"
+    ingress_rules: "{{ security_group.spec.ingressRules | default([]) }}"
+    egress_rules: "{{ security_group.spec.egressRules | default([]) }}"
+
+- name: Display SecurityGroup information
+  ansible.builtin.debug:
+    msg:
+      - "Creating Netris ACL rules for SecurityGroup '{{ sg_name }}'"
+      - "VirtualNetwork: {{ sg_virtual_network }}"
+      - "Ingress rules count: {{ ingress_rules | length }}"
+      - "Egress rules count: {{ egress_rules | length }}"
+
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Look up VPC for VirtualNetwork
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/vpc"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: 200
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _sg_vpc_list_resp
+  no_log: true
+  when: sg_virtual_network | length > 0
+
+- name: Resolve VirtualNetwork UUID to VPC ID
+  when: sg_virtual_network | length > 0
+  block:
+    - name: Look up VirtualNetwork CR by UUID label
+      kubernetes.core.k8s_info:
+        api_version: osac.openshift.io/v1alpha1
+        kind: VirtualNetwork
+        namespace: "{{ security_group.metadata.namespace }}"
+        label_selectors:
+          - "osac.openshift.io/virtualnetwork-uuid={{ sg_virtual_network }}"
+      register: _sg_vn_lookup
+
+    - name: Set VPC ID and VN CIDR from VirtualNetwork
+      ansible.builtin.set_fact:
+        _sg_vpc_id: >-
+          {{ ((_sg_vpc_list_resp.json.data | default([]))
+              | selectattr('name', 'equalto', _sg_vn_lookup.resources[0].metadata.name)
+              | map(attribute='id') | list | first | default(1)) }}
+        _sg_vn_cidr: "{{ _sg_vn_lookup.resources[0].spec.ipv4Cidr | default('') }}"
+      when: _sg_vn_lookup.resources | length > 0
+
+- name: Default VPC ID and VN CIDR if not resolved
+  ansible.builtin.set_fact:
+    _sg_vpc_id: "{{ _sg_vpc_id | default(1) }}"
+    _sg_vn_cidr: "{{ _sg_vn_cidr | default('') }}"
+
+- name: Create ACL rules for ingress
+  ansible.builtin.include_role:
+    name: netris.controller.acl
+    tasks_from: create
+  vars:
+    acl_name: "{{ sg_name }}-ingress-{{ idx }}"
+    acl_action: permit
+    acl_proto: "{{ item.protocol }}"
+    acl_vpc_id: "{{ _sg_vpc_id }}"
+    acl_src_prefix: "{{ item.sourceCidr | default(item.ipv4Cidr | default('0.0.0.0/0')) }}"
+    acl_dst_prefix: "{{ item.destinationCidr | default(_sg_vn_cidr if _sg_vn_cidr | length > 0 else '0.0.0.0/0') }}"
+    acl_dst_port_from: "{{ item.portFrom | default(none) }}"
+    acl_dst_port_to: "{{ item.portTo | default(item.portFrom) | default(none) }}"
+    acl_comment: "OSAC SG {{ sg_name }} ingress rule {{ idx }}"
+  loop: "{{ ingress_rules }}"
+  loop_control:
+    index_var: idx
+  when: ingress_rules | length > 0
+
+- name: Create ACL rules for egress
+  ansible.builtin.include_role:
+    name: netris.controller.acl
+    tasks_from: create
+  vars:
+    acl_name: "{{ sg_name }}-egress-{{ idx }}"
+    acl_action: permit
+    acl_proto: "{{ item.protocol }}"
+    acl_vpc_id: "{{ _sg_vpc_id }}"
+    acl_src_prefix: "{{ _sg_vn_cidr if _sg_vn_cidr | length > 0 else '0.0.0.0/0' }}"
+    acl_dst_prefix: "{{ item.sourceCidr | default(item.ipv4Cidr | default('0.0.0.0/0')) }}"
+    acl_dst_port_from: "{{ item.portFrom | default(none) }}"
+    acl_dst_port_to: "{{ item.portTo | default(item.portFrom) | default(none) }}"
+    acl_comment: "OSAC SG {{ sg_name }} egress rule {{ idx }}"
+  loop: "{{ egress_rules }}"
+  loop_control:
+    index_var: idx
+  when: egress_rules | length > 0
+
+- name: Display SecurityGroup creation result
+  ansible.builtin.debug:
+    msg: >-
+      ACL rules created for SecurityGroup '{{ sg_name }}':
+      {{ ingress_rules | length }} ingress, {{ egress_rules | length }} egress

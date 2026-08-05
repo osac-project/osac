@@ -1,0 +1,21 @@
+---
+- name: "fos: set the switchport mode to trunk"
+  fos_config:
+    lines:
+      - switchport mode trunk
+    parents: interface {{ port_name }}
+  connection: network_cli
+
+- name: "fos: configure port settings"
+  fos_config:
+    lines:
+      - switchport trunk allowed vlan add {{ _vlan_id }}
+    parents: interface {{ port_name }}
+  connection: network_cli
+
+- name: "fos: administratively enable the port"
+  fos_config:
+    lines:
+      - no shutdown
+    parents: interface {{ port_name }}
+  connection: network_cli

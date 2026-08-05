@@ -1,0 +1,2 @@
+ocp_release_version: "4.22.0"
+ocp_release_image: "quay.io/openshift-release-dev/ocp-release:{{ ocp_release_version }}-multi"

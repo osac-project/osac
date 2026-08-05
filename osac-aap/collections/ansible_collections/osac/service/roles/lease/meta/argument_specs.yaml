@@ -1,0 +1,21 @@
+argument_specs:
+  main:
+    options:
+      lease_state:
+        type: str
+        required: true
+        choices:
+          - absent
+          - present
+      lease_name:
+        type: str
+        required: true
+      lease_holder:
+        type: str
+        required: true
+      lease_retries:
+        type: int
+        default: 0
+      lease_delay:
+        type: int
+        default: 1

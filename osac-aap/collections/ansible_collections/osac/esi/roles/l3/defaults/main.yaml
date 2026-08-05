@@ -1,0 +1,9 @@
+l3_router_external_network: external
+l3_subnet_cidr: 192.168.50.0/22
+l3_subnet_gateway_ip: 192.168.50.1
+l3_subnet_allocation_pool_start: 192.168.50.10
+l3_subnet_allocation_pool_end: 192.168.50.200
+l3_subnet_dns_nameservers:
+  - 8.8.8.8
+l3_network_tags: []
+l3_network_properties: {}

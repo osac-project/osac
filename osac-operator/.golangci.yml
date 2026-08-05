@@ -1,0 +1,69 @@
+version: "2"
+run:
+  allow-parallel-runners: true
+linters:
+  default: none
+  enable:
+    - dupl
+    - errcheck
+    - ginkgolinter
+    - goconst
+    - gocyclo
+    - govet
+    - ineffassign
+    - lll
+    - misspell
+    # nakedret
+    - prealloc
+    - revive
+    - staticcheck
+    - unconvert
+    # unparam
+    - unused
+  settings:
+    goconst:
+      ignore-tests: true
+    revive:
+      rules:
+        - name: comment-spacings
+    staticcheck:
+      checks:
+        - all
+        - "-QF1008"
+  exclusions:
+    generated: lax
+    rules:
+      - linters:
+          - dupl
+          - lll
+        path: pkg/
+      - linters:
+          - lll
+        path: api/
+      - linters:
+          - dupl
+          - lll
+        path: internal/
+      - linters:
+          - dupl
+        path: api/v1alpha1/clusterorder_clusterreference.go
+      - linters:
+          - dupl
+        path: api/v1alpha1/computeinstance_virtualmachinereference.go
+      - linters:
+          - errcheck
+        path: ".*_test.go$"
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

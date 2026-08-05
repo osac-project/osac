@@ -1,0 +1,7 @@
+---
+- name: Extract network class from BareMetalPool status
+  ansible.builtin.set_fact:
+    network_class: "{{ bare_metal_pool.status.networkClass | default(default_network_class) }}"
+
+- name: Create private network using network class implementation
+  ansible.builtin.include_tasks: "create_{{ network_class }}.yaml"

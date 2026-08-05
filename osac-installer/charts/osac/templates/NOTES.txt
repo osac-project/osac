@@ -1,0 +1,40 @@
+Open Sovereign AI Cloud (OSAC) has been installed.
+
+Release:   {{ .Release.Name }}
+Namespace: {{ .Release.Namespace }}
+
+Components deployed:
+
+  Management plane:
+    - Fulfillment Service (gRPC server, REST gateway, controller)
+
+  Hub components (per management cluster):
+    - OSAC Operator CRDs
+    - OSAC Operator Controller Manager
+{{- if .Values.aap.aap.instance.enabled }}
+    - AAP instance ({{ .Values.aap.aap.instance.name }})
+{{- end }}
+{{- if .Values.aap.bootstrap.enabled }}
+    - AAP bootstrap job (post-install hook)
+{{- end }}
+
+NOTE: This chart currently deploys both the management plane and hub
+components to the same cluster. In a multi-hub architecture, the
+fulfillment service (with its database and identity provider) would
+run separately from the hub components (operator + AAP).
+
+To check the status of the deployment:
+
+  helm status {{ .Release.Name }} -n {{ .Release.Namespace }}
+  kubectl get pods -n {{ .Release.Namespace }}
+
+{{- if .Values.aap.bootstrap.enabled }}
+
+The AAP bootstrap job runs as a post-install hook. To monitor its progress:
+
+  kubectl logs -f job/{{ .Release.Name }}-aap-bootstrap -n {{ .Release.Namespace }}
+{{- end }}
+
+To upgrade the deployment:
+
+  helm upgrade {{ .Release.Name }} <chart-path> -n {{ .Release.Namespace }} -f <values-file>

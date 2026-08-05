@@ -1,0 +1,6 @@
+---
+- name: "dellemcos9: delete vlan"
+  dellemc.os9.os9_config:
+    lines:
+      - "no interface vlan {{ _vlan_id }}"
+  connection: network_cli

@@ -1,0 +1,20 @@
+---
+- name: Retrieve tenant target namespace unless it is already set
+  when: tenant_target_namespace is not defined
+  block:
+  - name: Retrieve tenant
+    kubernetes.core.k8s_info:
+      api_version: osac.openshift.io/v1alpha1
+      kind: Tenant
+      name: "{{ compute_instance.status.tenantReference.name }}"
+      namespace: "{{ compute_instance.status.tenantReference.namespace }}"
+    register: tenant_target_namespace_tenant
+
+  - name: Check if the tenant is found
+    ansible.builtin.fail:
+      msg: "Tenant CR lookup returned {{ tenant_target_namespace_tenant.resources | length }} match(es); exactly 1 was expected."
+    when: tenant_target_namespace_tenant.resources | length != 1
+
+  - name: Set tenant target namespace as result
+    ansible.builtin.set_fact:
+      tenant_target_namespace: "{{ tenant_target_namespace_tenant.resources[0].status.namespace }}"

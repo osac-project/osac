@@ -1,0 +1,18 @@
+---
+# Default variables for eventdefinitionconfigs integration tests.
+# Override in tests/integration/integration_config.yml or via environment.
+
+vast_vms: ""
+vast_username: ""
+vast_password: ""
+
+# Global event definition config ID (typically 1; override if cluster uses another)
+eventdefinitionconfig_id: 1
+
+# Reusable connection dict — reference as ``vms: "{{ vms_auth }}"`` in tasks
+vms_auth:
+  host: "{{ vast_vms }}"
+  username: "{{ vast_username }}"
+  password: "{{ vast_password }}"
+  validate_certs: false
+  debug: true

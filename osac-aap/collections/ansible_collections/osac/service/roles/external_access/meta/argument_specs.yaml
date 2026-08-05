@@ -1,0 +1,28 @@
+---
+argument_specs:
+  main:
+    options:
+      external_access_state:
+        type: str
+        choices:
+        - present
+        - absent
+      external_access_base_domain:
+        type: str
+        required: true
+      external_access_namespace:
+        type: str
+        required: true
+      external_access_name:
+        type: str
+        required: true
+      network_steps_collection:
+        type: str
+        required: true
+        description: "Ansible collection providing network-class-specific steps (e.g. 'netris.steps', 'osac.steps')"
+      cluster_working_namespace:
+        type: str
+        required: true
+      cluster_order:
+        type: dict
+        required: true

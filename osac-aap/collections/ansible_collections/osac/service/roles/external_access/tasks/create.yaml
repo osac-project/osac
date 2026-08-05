@@ -1,0 +1,5 @@
+---
+- name: Include network-class-specific create tasks
+  ansible.builtin.include_role:
+    name: "{{ network_steps_collection }}.external_access"
+    tasks_from: create.yaml

@@ -1,0 +1,26 @@
+---
+- name: Compute safe veth interface names
+  ansible.builtin.set_fact:
+    router_veth_host: "v{{ router_name | hash('md5') | truncate(11, True, '') }}o"
+
+- name: Check if namespace exists
+  ansible.builtin.raw: ip netns list | grep -qw '{{ router_name }}'
+  register: router_ns_exists
+  changed_when: false
+  failed_when: false
+
+- name: Delete namespace {{ router_name }}
+  ansible.builtin.raw: ip netns delete {{ router_name }}
+  when: router_ns_exists.rc == 0
+  changed_when: true
+
+- name: Check if host-side veth exists
+  ansible.builtin.raw: ip link show {{ router_veth_host }} 2>/dev/null
+  register: router_veth_exists
+  changed_when: false
+  failed_when: false
+
+- name: Clean up host-side veth endpoint
+  ansible.builtin.raw: ip link delete {{ router_veth_host }}
+  when: router_veth_exists.rc == 0
+  changed_when: true

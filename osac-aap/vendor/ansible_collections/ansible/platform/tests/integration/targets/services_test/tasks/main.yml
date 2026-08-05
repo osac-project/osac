@@ -1,0 +1,216 @@
+---
+- name: Generate a test ID
+  ansible.builtin.set_fact:
+    test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') }}"
+  when: test_id is not defined
+
+- name: Preset vars
+  ansible.builtin.set_fact:
+    name_prefix: "GW-Collection-Test-Services-{{ test_id }}"
+
+- name: Get existing service clusters
+  ansible.builtin.set_fact:
+    _sc_query: "{{ query('ansible.platform.gateway_api', 'service_clusters', **connection_info) }}"
+
+- name: Fail if more than one service cluster or that cluster is not a gateway cluster
+  ansible.builtin.fail:
+    msg: "This test works with 3 service clusters: gateway, eda and hub. It appears you might already have one or more of those, failing"
+  when:
+    - _sc_query | length > 1
+    - _sc_query | length == 1 and sc_query[0].type != 'gateway'
+
+- name: See if there is an existing is_api_port
+  # We need one to create an http_port and there can only be one
+  ansible.builtin.set_fact:
+    existing_http_api_port: "{{ lookup('ansible.platform.gateway_api', 'http_ports', query_params={'is_api_port': true}, **connection_info) }}"
+
+- name: Run Test
+  module_defaults:
+    group/ansible.platform.gateway:
+      gateway_hostname: "{{ gateway_hostname }}"
+      gateway_username: "{{ gateway_username }}"
+      gateway_password: "{{ gateway_password }}"
+      gateway_validate_certs: "{{ gateway_validate_certs | bool }}"
+
+  block:
+    # <Http Ports> --------------------------------
+    - name: Create API Port
+      ansible.platform.http_port:
+        name: "{{ name_prefix }}-API Port"
+        number: 9080
+        use_https: true
+        is_api_port: true
+      when: existing_http_api_port | length == 0
+      register: new_http_api_port
+
+    - name: Get the API port id (existing or just created)
+      ansible.builtin.set_fact:
+        api_port_id: "{{ new_http_api_port.id if new_http_api_port is not skipped else existing_http_api_port.id }}"
+
+    - name: Create an HTTP Port
+      ansible.platform.http_port:
+        name: "{{ name_prefix }}-Http_Port"
+        number: 9000
+      register: port1
+    # </Http Ports> -------------------------------
+
+    # <Service Clusters> --------------------------
+    - name: Create Hub Service Cluster
+      ansible.platform.service_cluster:
+        name: "{{ name_prefix }}-Hub"
+        service_type: "hub"
+      register: hub_sc
+
+    - name: Create Controller Service Cluster
+      ansible.platform.service_cluster:
+        name: "{{ name_prefix }}-Controller"
+        service_type: "controller"
+      register: controller_sc
+    # </Service Clusters> -------------------------
+
+    # <Services> ----------------------------------
+    - name: Create Hub Service
+      ansible.platform.service:
+        name: "{{ name_prefix }}-Automation Hub API"
+        description: "Proxy to the Automation Hub"
+        http_port: "{{ api_port_id }}"
+        api_slug: hub
+        service_cluster: "{{ hub_sc.id }}"
+        service_path: '/api/hub/'
+        service_port: 5001
+        order: 1
+      register: hub_service
+
+    - name: Assert that we created a new service
+      ansible.builtin.assert:
+        that:
+          - hub_service is changed
+
+    - name: Recreate Hub Service
+      ansible.platform.service:
+        name: "{{ hub_service.name }}"
+        description: "Proxy to the Automation Hub"
+        http_port: "{{ api_port_id }}"
+        api_slug: hub
+        service_cluster: "{{ hub_sc.id }}"
+        service_path: '/api/hub/'
+        service_port: 5001
+        order: 1
+      register: recreate_hub_service
+
+    - name: Assert that we were idempotent
+      ansible.builtin.assert:
+        that:
+          - recreate_hub_service is not changed
+
+    - name: Create Controller Service
+      ansible.platform.service:
+        name: "{{ name_prefix }}-Controller API"
+        description: Proxy to the Controller
+        api_slug: controller
+        http_port: "{{ api_port_id }}"
+        service_cluster: "{{ controller_sc.name }}"
+        is_service_https: true
+        service_path: '/api/'
+        service_port: 8043
+      register: controller_service
+
+    - name: Assert that we changed the system
+      ansible.builtin.assert:
+        that:
+          - controller_service is changed
+
+    - name: Check existing does not change
+      ansible.platform.service:
+        name: "{{ hub_service.id }}"
+        order: 99
+        state: exists
+      register: exists_hub_service
+
+    - name: Assert that existing won't change the state
+      ansible.builtin.assert:
+        that:
+          - exists_hub_service is not changed
+
+    - name: Change the API version for controller
+      ansible.platform.service:
+        name: "{{ controller_service.name }}"
+        http_port: "{{ api_port_id }}"
+        service_cluster: "{{ controller_sc.id }}"
+        is_service_https: true
+        service_path: '/api/v3/'
+        service_port: 8043
+      register: change_controller_service
+
+    - name: Assert that we changed the existing service cluster
+      ansible.builtin.assert:
+        that:
+          - change_controller_service is changed
+          - change_controller_service.id == change_controller_service.id
+
+    - name: Try to delete to a non-existent service
+      ansible.platform.service:
+        name: "{{ name_prefix }}-DNE"
+        state: absent
+      register: delete
+
+    - name: Assert that we didn't change the system
+      ansible.builtin.assert:
+        that:
+          - delete is not changed
+
+    - name: Delete a service
+      ansible.platform.service:
+        name: "{{ hub_service.name }}"
+        state: absent
+      register: delete
+
+    - name: Assert that we changed the system
+      ansible.builtin.assert:
+        that:
+          - delete is changed
+
+    - name: Rename Services
+      ansible.platform.service:
+        name: "{{ controller_service.id }}"
+        new_name: "{{ controller_service.name }}-New"
+      register: rename_controller_service
+
+    - name: Assert that we changed the existing service
+      ansible.builtin.assert:
+        that:
+          - rename_controller_service is changed
+          - rename_controller_service.id == controller_service.id
+
+  always:
+    # <Cleanup> -----------------------------------
+    ### Delete Services ###
+    - name: Delete Services
+      ansible.platform.service:
+        state: absent
+        name: "{{ vars[item].id }}"
+      loop:
+        - "hub_service"
+        - "controller_service"
+      when: "item in vars and 'id' in vars[item]"
+
+    ### Delete Clusters ###
+    - name: Delete Service Clusters
+      ansible.platform.service_cluster:
+        state: absent
+        name: "{{ vars[item].id }}"
+      loop:
+        - "hub_sc"
+        - "controller_sc"
+      when: "item in vars and 'id' in vars[item]"
+
+    ### Delete Ports ###
+    - name: Delete Non-API Http Ports
+      ansible.platform.http_port:
+        name: "{{ vars[item].id }}"
+        state: absent
+      when: "item in vars and 'id' in vars[item]"
+      loop:
+        - "port1"
+        - "new_http_api_port"
+...

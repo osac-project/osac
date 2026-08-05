@@ -1,0 +1,11 @@
+---
+- name: Log VM create wait_annotate step execution
+  ansible.builtin.lineinfile:
+    path: /tmp/osac_test_overrides.log
+    line: "{{ ansible_date_time.iso8601 }} | vm_create_wait_annotate | {{ compute_instance_name }}"
+    create: true
+
+# Note: Skip waiting/annotation for testing
+- name: Skip wait and annotation (test mode)
+  ansible.builtin.debug:
+    msg: "Test mode - skipping VM wait and ComputeInstance annotation"

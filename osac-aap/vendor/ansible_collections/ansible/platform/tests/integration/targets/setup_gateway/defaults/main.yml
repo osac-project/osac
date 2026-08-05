@@ -1,0 +1,14 @@
+---
+gateway_hostname: https://localhost:8000/
+gateway_username: admin
+gateway_password: admin
+gateway_validate_certs: false
+gateway_request_timeout: 60
+
+# Used by lookup plugins
+connection_info:
+  host: "{{ gateway_hostname }}"
+  username: "{{ gateway_username }}"
+  password: "{{ gateway_password }}"
+  verify_ssl: "{{ gateway_validate_certs }}"
+...

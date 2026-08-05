@@ -1,0 +1,8 @@
+---
+hub_collection_remotes:
+  - name: community-infra
+    url: https://beta-galaxy.ansible.com/
+    requirements:
+      - name: infra.ee_utilities
+      - name: infra.aap_configuration
+...

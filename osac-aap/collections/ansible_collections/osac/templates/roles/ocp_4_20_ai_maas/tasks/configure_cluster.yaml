@@ -1,0 +1,251 @@
+---
+# Cluster-level configuration that runs regardless of MaaS.
+# Discovers cluster domain, creates inference gateway, verifies observability.
+
+# --- Discover cluster domain ---
+
+- name: Get cluster ingress domain
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: config.openshift.io/v1
+    kind: Ingress
+    name: cluster
+  register: _ingress_config
+
+- name: Set cluster domain
+  ansible.builtin.set_fact:
+    _cluster_domain: "{{ _ingress_config.resources[0].spec.domain }}"
+
+- name: Get ingress certificate name
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: operator.openshift.io/v1
+    kind: IngressController
+    name: default
+    namespace: openshift-ingress-operator
+  register: _ingress_controller
+
+- name: Set certificate name
+  ansible.builtin.set_fact:
+    _cert_name: >-
+      {{ (_ingress_controller.resources[0].spec.defaultCertificate | default({})).name
+         | default(ocp_4_20_ai_maas_gateway_cert_name) }}
+
+- name: Report cluster info
+  ansible.builtin.debug:
+    msg:
+      - "Cluster domain: {{ _cluster_domain }}"
+      - "Certificate: {{ _cert_name }}"
+
+# --- User Workload Monitoring (required for vLLM metrics scraping) ---
+
+- name: Apply User Workload Monitoring
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition: "{{ item }}"
+  loop: "{{ lookup('ansible.builtin.template', 'user-workload-monitoring.yaml.j2') | from_yaml_all | list }}"
+  loop_control:
+    label: "{{ item.kind }}/{{ item.metadata.name }}"
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+  when: ocp_4_20_ai_maas_enable_observability | bool
+
+# --- openshift-ai-inference gateway ---
+# TEMPORARY WORKAROUND: RHOAI operator does not create openshift-ai-inference
+# gateway. Dashboard-deployed LLMInferenceService models need it. See: RHOAIENG-38214
+
+- name: Create openshift-ai-inference gateway
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    template: openshift-ai-inference-gateway.yaml.j2
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Wait for openshift-ai-inference gateway Programmed
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: gateway.networking.k8s.io/v1
+    kind: Gateway
+    name: openshift-ai-inference
+    namespace: openshift-ingress
+  register: _ai_gw
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  ignore_errors: true
+  until:
+    - _ai_gw.resources is defined
+    - _ai_gw.resources | length > 0
+    - >-
+      _ai_gw.resources[0].status.conditions | default([])
+      | selectattr('type', 'equalto', 'Programmed')
+      | selectattr('status', 'equalto', 'True')
+      | list | length > 0
+
+- name: Fail if openshift-ai-inference gateway never became Programmed
+  ansible.builtin.fail:
+    msg: >-
+      openshift-ai-inference gateway did not become Programmed after
+      {{ ocp_4_20_ai_maas_operator_retries }} retries.
+  when: >-
+    _ai_gw.resources is not defined
+    or _ai_gw.resources | length == 0
+    or (_ai_gw.resources[0].status.conditions | default([])
+       | selectattr('type', 'equalto', 'Programmed')
+       | selectattr('status', 'equalto', 'True')
+       | list | length == 0)
+
+# --- Hardware Profiles ---
+
+- name: Apply hardware profiles
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition: "{{ item }}"
+  loop: >-
+    {{ lookup('ansible.builtin.template', 'hardware-profiles.yaml.j2')
+       | from_yaml_all | list }}
+  loop_control:
+    label: "HardwareProfile/{{ item.metadata.name }}"
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+  when: ocp_4_20_ai_maas_hardware_profiles | length > 0
+
+- name: Report hardware profiles
+  ansible.builtin.debug:
+    msg: >-
+      Hardware profiles created:
+      {{ ocp_4_20_ai_maas_hardware_profiles | map(attribute='name') | list }}
+  when: ocp_4_20_ai_maas_hardware_profiles | length > 0
+
+# --- Dashboard feature flags (non-MaaS) ---
+
+- name: Patch OdhDashboardConfig with observability flag
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    merge_type: merge
+    definition:
+      apiVersion: opendatahub.io/v1alpha
+      kind: OdhDashboardConfig
+      metadata:
+        name: odh-dashboard-config
+        namespace: redhat-ods-applications
+      spec:
+        dashboardConfig:
+          observabilityDashboard: true
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+  when:
+    - ocp_4_20_ai_maas_enable_observability | bool
+    - ocp_4_20_ai_maas_enable_dashboard | bool
+
+- name: Patch OdhDashboardConfig with general flags
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    merge_type: merge
+    definition:
+      apiVersion: opendatahub.io/v1alpha
+      kind: OdhDashboardConfig
+      metadata:
+        name: odh-dashboard-config
+        namespace: redhat-ods-applications
+      spec:
+        dashboardConfig:
+          deploymentWizardYAMLViewer: true
+          vLLMDeploymentOnMaaS: true
+          llmGatewayField: true
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+  when: ocp_4_20_ai_maas_enable_dashboard | bool
+
+# --- Verify observability resources (auto-created by RHOAI operator) ---
+
+- name: Wait for Monitoring CR Ready
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: services.platform.opendatahub.io/v1alpha1
+    kind: Monitoring
+    name: default-monitoring
+  register: _monitoring
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  ignore_errors: true
+  until:
+    - _monitoring.resources is defined
+    - _monitoring.resources | length > 0
+    - >-
+      _monitoring.resources[0].status.conditions | default([])
+      | selectattr('type', 'equalto', 'Ready')
+      | selectattr('status', 'equalto', 'True')
+      | list | length > 0
+  when: ocp_4_20_ai_maas_enable_observability | bool
+
+- name: Verify Perses pod running
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: v1
+    kind: Pod
+    namespace: redhat-ods-monitoring
+    label_selectors:
+      - app.kubernetes.io/name=data-science-perses
+  register: _perses_pods
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  ignore_errors: true
+  until:
+    - _perses_pods.resources is defined
+    - _perses_pods.resources | length > 0
+    - _perses_pods.resources[0].status.phase | default('') == 'Running'
+  when: ocp_4_20_ai_maas_enable_observability | bool
+
+- name: Verify PersesDatasources created
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: perses.dev/v1alpha2
+    kind: PersesDatasource
+    namespace: redhat-ods-monitoring
+  register: _datasources
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  ignore_errors: true
+  until:
+    - _datasources.resources is defined
+    - _datasources.resources | length >= 2
+  when: ocp_4_20_ai_maas_enable_observability | bool
+
+- name: Verify PersesDashboards created
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: perses.dev/v1alpha2
+    kind: PersesDashboard
+    namespace: redhat-ods-monitoring
+  register: _dashboards
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  ignore_errors: true
+  until:
+    - _dashboards.resources is defined
+    - _dashboards.resources | length >= 2
+  when:
+    - ocp_4_20_ai_maas_enable_observability | bool
+    - ocp_4_20_ai_maas_enable_dashboard | bool
+
+- name: Report observability status
+  ansible.builtin.debug:
+    msg: >-
+      Observability: Monitoring=Ready, Perses=Running,
+      Datasources={{ _datasources.resources | map(attribute='metadata.name') | list }}{{ ', Dashboards=' + (_dashboards.resources | map(attribute='metadata.name') | list | string) if (ocp_4_20_ai_maas_enable_dashboard | bool) else ' (headless — no dashboard UI)' }}
+  when: ocp_4_20_ai_maas_enable_observability | bool

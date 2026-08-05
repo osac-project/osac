@@ -1,0 +1,33 @@
+//
+// Copyright (c) 2025 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.public.v1;
+
+// Contains the information that helps client know how authentication is managed by the server.
+message AuthnCapabilities {
+  // A list of the OAuth issuers whose access tokens are accepted by the server.
+  //
+  // This means that the client can select one of this and then use the OAuth discovery endpoint to find the details of
+  // the OAuth server. For example if the value is `https://my.oauth.com` then the client can obtain the details of the
+  // authorizatoin server going to the following URL:
+  //
+  //   https://my.oauth.com/.well-known/oauth-authorization-server
+  //
+  // The discovery process is defined in [RFC 8414](https://datatracker.ietf.org/doc/html/rfc8414).
+  //
+  // Note that having an access token issued by one of this servers doesn't guarantee that the requests from the user
+  // will be accepted: it will still be subject to authorization checks that may grant or deny access.
+  repeated string trusted_token_issuers = 1;
+}

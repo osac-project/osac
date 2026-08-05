@@ -1,0 +1,15 @@
+---
+- name: Log test template delete
+  ansible.builtin.lineinfile:
+    path: /tmp/osac_test_overrides.log
+    line: "{{ ansible_date_time.iso8601 }} | test_template_delete | {{ cluster_order.metadata.name }}"
+    create: true
+
+# Delete the marker ConfigMap
+- name: Delete test marker
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: ConfigMap
+    name: "{{ cluster_order.metadata.name }}-test-marker"
+    namespace: "{{ cluster_working_namespace }}"

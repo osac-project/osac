@@ -1,0 +1,90 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.public.v1;
+
+import "google/protobuf/timestamp.proto";
+import "osac/public/v1/condition_status_type.proto";
+import "osac/public/v1/metadata_type.proto";
+
+// A user in a tenant's identity provider.
+message User {
+  // Unique identifier of the user.
+  string id = 1;
+
+  Metadata metadata = 2;
+
+  // Specification of the user.
+  UserSpec spec = 3;
+
+  // Status of the user.
+  UserStatus status = 4;
+}
+
+// UserSpec contains the desired state of the user.
+message UserSpec {
+  // Username for authentication.
+  string username = 1;
+
+  // Email address.
+  string email = 2;
+
+  // Whether the user account is enabled.
+  bool enabled = 3;
+
+  // Credentials for the user. This is write-only and will not be returned in responses.
+  optional UserCredentials credentials = 4;
+}
+
+// UserCredentials contains the authentication credentials for a user.
+message UserCredentials {
+  // Password for the user.
+  //
+  // SECURITY: This field contains sensitive data:
+  // - Only transmitted over TLS
+  // - Never returned in responses
+  // - Clear from memory after use
+  optional string password = 1;
+
+  // Whether the password is temporary and must be changed on first login. Only applicable when password is provided.
+  bool temporary_password = 2;
+}
+
+// UserStatus contains the observed state of the user.
+message UserStatus {
+  // The user's current state in the identity provider.
+  string phase = 1;
+
+  // Additional conditions about the user's state.
+  repeated UserCondition conditions = 2;
+}
+
+// UserCondition represents a condition of a user.
+message UserCondition {
+  // Type of the condition.
+  string type = 1;
+
+  // Status of the condition.
+  ConditionStatus status = 2;
+
+  // Last time the condition was updated.
+  google.protobuf.Timestamp last_transition_time = 3;
+
+  // Reason for the condition's last transition.
+  optional string reason = 4;
+
+  // Human-readable message about the transition.
+  optional string message = 5;
+}

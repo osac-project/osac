@@ -1,0 +1,53 @@
+---
+- name: ah_namespace integration tests
+  module_defaults:
+    group/ansible.hub.hub:
+      ah_host: "{{ ah_host }}"
+      ah_username: "{{ ah_username }}"
+      ah_password: "{{ ah_password }}"
+      validate_certs: "{{ ah_verify_ssl }}"
+  block:
+    - name: Generate a test_id for the test
+      set_fact:
+        test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') | lower }}"
+      when: test_id is not defined
+
+    - name: Define variables for credential and project
+      set_fact:
+        namespace: "my_namespace_{{ test_id }}"
+        company: "my_company_{{ test_id }}"
+
+    - name: Create namespace
+      ansible.hub.ah_namespace:
+        name: "{{ namespace }}"
+        company: "{{ company }}"
+        email: "{{ test_id }}@example.com"
+        avatar_url: https://pnt.redhat.com/pnt/d-11633955/LogoRedHatHatColorRGB.png
+        description: This is the Redhat Namespace
+        links:
+          - name: "homepage"
+            url: "https://www.redhat.com"
+      register: r
+
+    - name: Check if the namespace is created
+      assert:
+        that:
+          - r.changed
+
+    - name: Delete namespace
+      ansible.hub.ah_namespace:
+        name: "{{ namespace }}"
+        state: absent
+      register: r
+
+    - name: Check if the namespace is deleted
+      assert:
+        that:
+          - r.changed
+
+  always:
+    - name: Delete namespace
+      ansible.hub.ah_namespace:
+        name: "{{ namespace }}"
+        state: absent
+      ignore_errors: true

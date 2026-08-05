@@ -1,0 +1,67 @@
+---
+- name: Show VM Namespace and VM Name
+  ansible.builtin.debug:
+    msg: "Namespace {{ compute_instance_target_namespace }} - Name: {{ compute_instance_name }}"
+
+- name: Wait for VM to be ready
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: kubevirt.io/v1
+    kind: VirtualMachine
+    name: "{{ compute_instance_name }}"
+    namespace: "{{ compute_instance_target_namespace }}"
+    wait: true
+    wait_condition:
+      type: Ready
+      status: "True"
+    wait_timeout: "{{ 900 if guest_os_family == 'windows' else 600 }}"
+  when: vm_run_strategy != "Halted"
+
+- name: Annotate the reconciledConfigVerion
+  kubernetes.core.k8s:
+    api_version: osac.openshift.io/v1alpha1
+    kind: ComputeInstance
+    name: "{{ compute_instance_name }}"
+    namespace: "{{ compute_instance.metadata.namespace }}"
+    state: present
+    definition:
+      metadata:
+        annotations:
+          osac.openshift.io/reconciled-config-version: "{{ compute_instance.status.desiredConfigVersion | default('unknown') | string }}"
+
+- name: Get VM status
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: kubevirt.io/v1
+    kind: VirtualMachine
+    name: "{{ compute_instance_name }}"
+    namespace: "{{ compute_instance_target_namespace }}"
+  register: vm_status
+
+- name: Display VM information (Windows)
+  ansible.builtin.debug:
+    msg:
+      - "Virtual Machine '{{ compute_instance_name }}' created successfully"
+      - "OS: Windows"
+      - "Namespace: {{ compute_instance_target_namespace }}"
+      - "Image: {{ vm_image_source }}"
+      - "CPU Cores: {{ vm_cpu_cores }}/Memory: {{ vm_memory }}"
+      - "Root Disk Size: {{ vm_boot_disk_size }}"
+      - "Additional Disks: {{ vm_additional_disks | length }}"
+      - "RunStrategy: {{ vm_run_strategy }}"
+      - "Hostname: {{ vm_hostname }}"
+      - "Status: {{ vm_status.resources[0].status.printableStatus | default('Unknown') }}"
+  when: guest_os_family == 'windows'
+
+- name: Display VM information (Linux)
+  ansible.builtin.debug:
+    msg:
+      - "Virtual Machine '{{ compute_instance_name }}' created successfully"
+      - "Namespace: {{ compute_instance_target_namespace }}"
+      - "Image: {{ vm_image_source }}"
+      - "CPU Cores: {{ vm_cpu_cores }}/Memory: {{ vm_memory }}"
+      - "Root Disk Size: {{ vm_boot_disk_size }}"
+      - "Additional Disks: {{ vm_additional_disks | length }}"
+      - "RunStrategy: {{ vm_run_strategy }}"
+      - "Status: {{ vm_status.resources[0].status.printableStatus | default('Unknown') }}"
+  when: guest_os_family != 'windows'

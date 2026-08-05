@@ -1,0 +1,29 @@
+---
+- name: Wait for kubeconfig to be available
+  kubernetes.core.k8s_info:
+    api_version: hypershift.openshift.io/v1beta1
+    kind: HostedCluster
+    namespace: "{{ retrieve_kubeconfig_namespace }}"
+    name: "{{ retrieve_kubeconfig_cluster_name }}"
+  register: hosted_cluster_info
+  until:
+    - hosted_cluster_info.resources[0].status.kubeconfig.name is defined
+  retries: "{{ retrieve_kubeconfig_wait_retries }}"
+  delay: "{{ retrieve_kubeconfig_wait_delay }}"
+
+- name: Retrieve kubeconfig secret
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    namespace: "{{ retrieve_kubeconfig_namespace }}"
+    name: "{{ hosted_cluster_info.resources[0].status.kubeconfig.name }}"
+  register: admin_kubeconfig_secret
+
+- name: Extract and decode kubeconfig
+  ansible.builtin.set_fact:
+    admin_kubeconfig: "{{ admin_kubeconfig_secret.resources[0].data.kubeconfig | b64decode | from_yaml }}"
+
+- name: Set kubeconfig stats for access by other playbooks
+  ansible.builtin.set_stats:
+    data:
+      admin_kubeconfig: "{{ admin_kubeconfig }}"

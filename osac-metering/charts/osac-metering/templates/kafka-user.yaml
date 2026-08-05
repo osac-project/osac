@@ -1,0 +1,31 @@
+{{- /* Strimzi KafkaUser — creates SCRAM-SHA-512 credentials and a Secret
+     with the same name as the user. The metering service mounts this Secret
+     for Kafka authentication. ACLs grant producer-only access. */}}
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: {{ include "osac-metering.kafkaSaslUsername" . }}
+  namespace: {{ include "osac-metering.kafkaClusterNamespace" . }}
+  labels:
+    strimzi.io/cluster: {{ include "osac-metering.kafkaClusterName" . }}
+spec:
+  authentication:
+    type: scram-sha-512
+  authorization:
+    type: simple
+    acls:
+      - resource:
+          type: topic
+          name: osac.metering.
+          patternType: prefix
+        operations:
+          - Write
+          - Describe
+        host: "*"
+      - resource:
+          type: cluster
+          name: kafka-cluster
+          patternType: literal
+        operations:
+          - IdempotentWrite
+        host: "*"

@@ -1,0 +1,62 @@
+---
+- name: Validate IPAM VLAN allocation inputs
+  ansible.builtin.assert:
+    that:
+      - ipam_state_file is match('^[a-zA-Z0-9/_.-]+$')
+      - ipam_vlan_pool_start | int > 0
+      - ipam_vlan_pool_start | int < 4095
+      - ipam_vlan_pool_end | int > 0
+      - ipam_vlan_pool_end | int < 4095
+      - ipam_purpose is match('^[a-z0-9][a-z0-9_-]*$')
+      - ipam_vlan_pool_start | int <= ipam_vlan_pool_end | int
+    fail_msg: "IPAM VLAN allocation variable validation failed."
+
+- name: Ensure IPAM state directory exists
+  ansible.builtin.file:
+    path: "{{ ipam_state_file | dirname }}"
+    state: directory
+    mode: "0755"
+
+- name: Initialise IPAM state file
+  ansible.builtin.copy:
+    content: '{"vlans": {}, "public_ips": {}}'
+    dest: "{{ ipam_state_file }}"
+    force: false
+    mode: "0644"
+
+- name: Allocate VLAN from pool
+  ansible.builtin.raw: |
+    python3 - '{{ ipam_state_file }}' '{{ ipam_purpose }}' \
+              '{{ ipam_vlan_pool_start }}' '{{ ipam_vlan_pool_end }}' <<'IPAM_PY'
+    import fcntl, json, os, sys
+    state_file, purpose, pool_start, pool_end = sys.argv[1:5]
+    pool_start, pool_end = int(pool_start), int(pool_end)
+    with open(state_file, 'r+') as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        state = json.load(f)
+        vlans = state.setdefault('vlans', {})
+        existing = vlans.get(purpose)
+        if existing is not None:
+            print(json.dumps({"vlan": existing, "changed": False}))
+            sys.exit(0)
+        used = set(vlans.values())
+        for vid in range(pool_start, pool_end + 1):
+            if vid not in used:
+                vlans[purpose] = vid
+                payload = json.dumps(state, indent=2)
+                f.seek(0)
+                f.write(payload)
+                f.truncate()
+                f.flush()
+                os.fsync(f.fileno())
+                print(json.dumps({"vlan": vid, "changed": True}))
+                sys.exit(0)
+        print("VLAN pool exhausted", file=sys.stderr)
+        sys.exit(1)
+    IPAM_PY
+  register: vlan_id_alloc_result
+  changed_when: (vlan_id_alloc_result.stdout | trim | from_json).changed
+
+- name: Set allocated VLAN fact
+  ansible.builtin.set_fact:
+    vlan_id_allocated_vlan: "{{ (vlan_id_alloc_result.stdout | trim | from_json).vlan }}"

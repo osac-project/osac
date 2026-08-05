@@ -1,0 +1,9 @@
+---
+- name: Delete L3 router namespace
+  hosts: net_nodes
+  gather_facts: false
+  tasks:
+    - name: Delete router
+      ansible.builtin.include_role:
+        name: agentless_net.l3.router
+        tasks_from: delete

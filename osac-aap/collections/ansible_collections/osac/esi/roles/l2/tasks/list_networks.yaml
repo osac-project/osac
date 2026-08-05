@@ -1,0 +1,21 @@
+- name: Convert network properties to tags
+  ansible.builtin.set_fact:
+    tags_to_filter: "{{ tags_to_filter | default([]) + [item.key + '_' + item.value] }}"
+  loop: "{{ l2_network_properties | dict2items }}"
+  when: l2_network_properties | length > 0
+
+- name: List networks with tags
+  block:
+  - name: List networks  # noqa:no-changed-when
+    ansible.builtin.command: >-
+      openstack network list
+      {% for tag in tags_to_filter %}
+      --tag "{{ tag }}"
+      {% endfor %}
+      --long
+      -f json
+    register: list_networks_cmd
+
+  - name: Set list_networks_result to networks list
+    ansible.builtin.set_fact:
+      list_networks_result: "{{ list_networks_cmd.stdout | from_json }}"

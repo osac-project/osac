@@ -1,0 +1,50 @@
+---
+argument_specs:
+  create:
+    short_description: Create a DNS record via AWS Route 53
+    options:
+      dns_zone:
+        type: str
+        required: true
+        description: The Route 53 hosted zone name (e.g., "example.com").
+      dns_record_name:
+        type: str
+        required: true
+        description: Fully qualified domain name for the record.
+      dns_record_type:
+        type: str
+        required: false
+        default: A
+        choices: [A, AAAA]
+        description: DNS record type.
+      dns_record_value:
+        type: str
+        required: true
+        description: The value for the record.
+      dns_record_ttl:
+        type: int
+        required: false
+        default: 1800
+        description: TTL in seconds.
+      dns_record_overwrite:
+        type: bool
+        required: false
+        default: true
+        description: Whether to overwrite an existing record.
+  delete:
+    short_description: Delete a DNS record via AWS Route 53
+    options:
+      dns_zone:
+        type: str
+        required: true
+        description: The Route 53 hosted zone name (e.g., "example.com").
+      dns_record_name:
+        type: str
+        required: true
+        description: Fully qualified domain name for the record.
+      dns_record_type:
+        type: str
+        required: false
+        default: A
+        choices: [A, AAAA]
+        description: DNS record type.

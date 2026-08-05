@@ -1,0 +1,16 @@
+filters:
+  "[^.]":
+    approvers:
+    - akshaynadkarni
+    - zszabo-rh
+    - wgordon17
+    - avishayt
+    - rgolangh
+    - eliorerz
+    reviewers:
+    - akshaynadkarni
+    - zszabo-rh
+    - wgordon17
+    - avishayt
+    - rgolangh
+    - eliorerz

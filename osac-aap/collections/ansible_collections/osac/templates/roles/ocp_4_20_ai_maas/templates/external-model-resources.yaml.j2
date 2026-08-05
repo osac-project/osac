@@ -1,0 +1,82 @@
+{% for model in ocp_4_20_ai_maas_external_models %}
+{% if not loop.first %}
+---
+{% endif %}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ model.name }}-key
+  namespace: {{ ocp_4_20_ai_maas_external_model_namespace }}
+  labels:
+    inference.networking.k8s.io/bbr-managed: "true"
+type: Opaque
+stringData:
+  api-key: "{{ model.upstream_credential }}"
+---
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: ExternalModel
+metadata:
+  name: {{ model.name }}
+  namespace: {{ ocp_4_20_ai_maas_external_model_namespace }}
+  annotations:
+{% if model.secured | default(false) %}
+    maas.opendatahub.io/tls: "false"
+    maas.opendatahub.io/port: "80"
+{% else %}
+    maas.opendatahub.io/tls: "true"
+    maas.opendatahub.io/port: "443"
+{% endif %}
+spec:
+  provider: openai
+{% if model.secured | default(false) %}
+  endpoint: >-
+    {{ (model.upstream_model_ns + '--' + model.upstream_model_name)[:63] | regex_replace('-$', '') }}.{{ ocp_4_20_ai_maas_proxy_namespace }}.svc.cluster.local
+{% else %}
+  endpoint: {{ model.upstream_endpoint }}
+{% endif %}
+  targetModel: "{{ model.model_id }}"
+  credentialRef:
+    name: {{ model.name }}-key
+---
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: {{ model.name }}
+  namespace: {{ ocp_4_20_ai_maas_external_model_namespace }}
+spec:
+  modelRef:
+    kind: ExternalModel
+    name: {{ model.name }}
+---
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSAuthPolicy
+metadata:
+  name: {{ model.name }}-access
+  namespace: models-as-a-service
+spec:
+  modelRefs:
+  - name: {{ model.name }}
+    namespace: {{ ocp_4_20_ai_maas_external_model_namespace }}
+  subjects:
+    groups:
+{% for tier in ocp_4_20_ai_maas_tiers %}
+    - name: "{{ tier.group }}"
+{% endfor %}
+---
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSSubscription
+metadata:
+  name: {{ model.name }}-sub
+  namespace: models-as-a-service
+spec:
+  owner:
+    groups:
+    - name: "{{ (ocp_4_20_ai_maas_tiers | selectattr('priority', 'greaterthan', 0) | first | default(ocp_4_20_ai_maas_tiers | first)).group }}"
+  modelRefs:
+  - name: {{ model.name }}
+    namespace: {{ ocp_4_20_ai_maas_external_model_namespace }}
+    tokenRateLimits:
+    - limit: {{ model.token_limit }}
+      window: "{{ model.window }}"
+  priority: {{ model.priority }}
+{% endfor %}

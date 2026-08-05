@@ -1,0 +1,21 @@
+---
+- name: "eos: get interfaces"
+  eos_command:
+    commands: "show interfaces | json"
+  register: output
+  connection: network_cli
+  become: true
+  become_method: 'enable'
+
+- name: "eos: verify port exists"
+  fail:
+    msg: "port {{ port_name }} does not exist on this device"
+  when: port_name not in output.stdout[0].interfaces | list
+
+- name: "eos: configure access port"
+  cli_config:
+    config: "{{ lookup('template', '{{ role_path }}/templates/eos/conf_access_port.j2') }}"
+  register: result
+  connection: network_cli
+  become: true
+  become_method: enable

@@ -1,0 +1,72 @@
+---
+- name: No-op VM creation for testing
+  ansible.builtin.debug:
+    msg: "Test mode - skipping actual VM creation"
+
+# Template-level VM creation hooks
+- name: Hook - VM create validate
+  ansible.builtin.include_role:
+    name: "{{ (create_step_validate_override | default(hook_noop_default)).name }}"
+    tasks_from: "{{ (create_step_validate_override | default(hook_noop_default)).tasks_from }}"
+  vars:
+    hook_noop_default:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+
+- name: Build VM spec (not overrideable)
+  ansible.builtin.debug:
+    msg: "Test mode - skipping VM spec building"
+
+- name: Hook - VM create secrets
+  ansible.builtin.include_role:
+    name: "{{ (create_step_secrets_override | default(hook_noop_default)).name }}"
+    tasks_from: "{{ (create_step_secrets_override | default(hook_noop_default)).tasks_from }}"
+  vars:
+    hook_noop_default:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+
+- name: Hook - VM create modify spec
+  ansible.builtin.include_role:
+    name: "{{ (create_step_modify_vm_spec_override | default(hook_noop_default)).name }}"
+    tasks_from: "{{ (create_step_modify_vm_spec_override | default(hook_noop_default)).tasks_from }}"
+  vars:
+    hook_noop_default:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+
+- name: Hook - VM create pre-create
+  ansible.builtin.include_role:
+    name: "{{ (create_step_pre_create_hook_override | default(hook_noop_default)).name }}"
+    tasks_from: "{{ (create_step_pre_create_hook_override | default(hook_noop_default)).tasks_from }}"
+  vars:
+    hook_noop_default:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+
+- name: Hook - VM create resources
+  ansible.builtin.include_role:
+    name: "{{ (create_step_resources_override | default(hook_noop_default)).name }}"
+    tasks_from: "{{ (create_step_resources_override | default(hook_noop_default)).tasks_from }}"
+  vars:
+    hook_noop_default:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+
+- name: Hook - VM create post-create
+  ansible.builtin.include_role:
+    name: "{{ (create_step_post_create_hook_override | default(hook_noop_default)).name }}"
+    tasks_from: "{{ (create_step_post_create_hook_override | default(hook_noop_default)).tasks_from }}"
+  vars:
+    hook_noop_default:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+
+- name: Hook - VM create wait/annotate
+  ansible.builtin.include_role:
+    name: "{{ (create_step_wait_annotate_override | default(hook_noop_default)).name }}"
+    tasks_from: "{{ (create_step_wait_annotate_override | default(hook_noop_default)).tasks_from }}"
+  vars:
+    hook_noop_default:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml

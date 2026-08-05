@@ -1,0 +1,203 @@
+- name: Create Secret resource containing pull-secret
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: "pullsecret-cluster-{{ hosted_cluster_name }}"
+        namespace: "{{ hosted_cluster_namespace }}"
+        labels: "{{ hosted_cluster_default_cluster_order_label }}"
+      data:
+        .dockerconfigjson: "{{ hosted_cluster_settings.pull_secret | b64encode }}"
+      type: kubernetes.io/dockerconfigjson
+  no_log: true
+
+- name: Create Secret resource containing ssh public key
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: "sshkey-cluster-{{ hosted_cluster_name }}"
+        namespace: "{{ hosted_cluster_namespace }}"
+        labels: "{{ hosted_cluster_default_cluster_order_label }}"
+      data:
+        id_rsa.pub: "{{ hosted_cluster_settings.ssh_public_key | b64encode }}"
+
+- name: Build HostedCluster definition
+  ansible.builtin.set_fact:
+    hosted_cluster_definition:
+      apiVersion: hypershift.openshift.io/v1beta1
+      kind: HostedCluster
+      metadata:
+        name: "{{ hosted_cluster_name }}"
+        namespace: "{{ hosted_cluster_namespace }}"
+        labels: "{{ {'cluster.open-cluster-management.io/clusterset': 'default'} | combine(hosted_cluster_default_cluster_order_label) }}"
+      spec:
+        release:
+          image: "{{ ocp_release_image }}"
+        pullSecret:
+          name: "pullsecret-cluster-{{ hosted_cluster_name }}"
+        sshKey:
+          name: "sshkey-cluster-{{ hosted_cluster_name }}"
+        networking:
+          clusterNetwork:
+            - cidr: "{{ hosted_cluster_pod_cidr }}"
+          serviceNetwork:
+            - cidr: "{{ hosted_cluster_service_cidr }}"
+        platform:
+          type: Agent
+          agent:
+            agentNamespace: "{{ hosted_cluster_default_agent_namespace }}"
+        dns:
+          baseDomain: "{{ hosted_cluster_base_domain }}"
+        infraID: "{{ hosted_cluster_name }}"
+        services:
+          - service: APIServer
+            servicePublishingStrategy:
+              type: LoadBalancer
+              loadBalancer:
+                hostname: "api.{{ hosted_cluster_name }}.{{ hosted_cluster_base_domain }}"
+          - service: OAuthServer
+            servicePublishingStrategy:
+              type: Route
+          - service: OIDC
+            servicePublishingStrategy:
+              type: Route
+          - service: Konnectivity
+            servicePublishingStrategy:
+              type: Route
+          - service: Ignition
+            servicePublishingStrategy:
+              type: Route
+        controllerAvailabilityPolicy: "{{ hosted_cluster_controller_availability_policy }}"
+        infrastructureAvailabilityPolicy: "{{ hosted_cluster_infrastructure_availability_policy }}"
+        olmCatalogPlacement: management
+
+- name: Hook - Modify HostedCluster definition
+  ansible.builtin.include_role:
+    name: "{{ hosted_cluster_modify_definition_hook.name }}"
+    tasks_from: "{{ hosted_cluster_modify_definition_hook.tasks_from }}"
+  when: hosted_cluster_modify_definition_hook is defined
+
+- name: Create HostedCluster resource
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ hosted_cluster_definition }}"
+
+# HyperShift's Agent-platform CAPI provider requires a Role named exactly
+# "capi-provider-role" in the Agent namespace (agentNamespace above, e.g.
+# "hardware-inventory") -- hypershift-operator creates the matching
+# RoleBinding itself once this Role exists. No "secrets" access is needed:
+# HyperShift's own auto-created "capi-provider" Role in the
+# hosted-control-plane namespace already covers that. See the PR description
+# for supporting references. Centralized here (rather than per-backend under
+# cluster_infra) since every backend needs this identically, and this step
+# always runs before "Create cluster infrastructure".
+- name: Create CAPI provider Role for agent access
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: Role
+      metadata:
+        name: capi-provider-role
+        namespace: "{{ hosted_cluster_default_agent_namespace }}"
+      rules:
+        - apiGroups: ["agent-install.openshift.io"]
+          resources: ["agents"]
+          verbs: ["*"]
+
+- name: Set nodepool prefix
+  ansible.builtin.set_fact:
+    nodepool_prefix: "nodepool-{{ hosted_cluster_name }}"
+
+- name: Build NodePool definitions
+  ansible.builtin.set_fact:
+    nodepool_definitions: >-
+      {{ nodepool_definitions | default([]) + [{
+        'apiVersion': 'hypershift.openshift.io/v1beta1',
+        'kind': 'NodePool',
+        'metadata': {
+          'name': nodepool_prefix + '-' + item.resourceClass,
+          'namespace': hosted_cluster_namespace,
+          'labels': {agent_resource_class_label: item.resourceClass} | combine(hosted_cluster_default_cluster_order_label)
+        },
+        'spec': {
+          'clusterName': hosted_cluster_name,
+          'replicas': item.numberOfNodes | int,
+          'management': {
+            'autoRepair': false,
+            'upgradeType': 'InPlace'
+          },
+          'platform': {
+            'type': 'Agent',
+            'agent': {
+              'agentLabelSelector': {
+                'matchLabels': {agent_resource_class_label: item.resourceClass} | combine(hosted_cluster_default_cluster_order_label)
+              }
+            }
+          },
+          'release': {
+            'image': ocp_release_image
+          }
+        }
+      }] }}
+  loop: "{{ hosted_cluster_node_requests }}"
+
+- name: Hook - Modify NodePool definitions
+  ansible.builtin.include_role:
+    name: "{{ nodepool_modify_definitions_hook.name }}"
+    tasks_from: "{{ nodepool_modify_definitions_hook.tasks_from }}"
+  when: nodepool_modify_definitions_hook is defined
+
+- name: Create NodePool resources
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ item }}"
+  loop: "{{ nodepool_definitions }}"
+  loop_control:
+    label: "Create NodePool {{ item.metadata.name }}"
+
+- name: Remove node pools matching resource classes that are no longer requested
+  block:
+    - name: Set requested resource classes
+      ansible.builtin.set_fact:
+        hosted_cluster_requested_resource_classes: "{{ hosted_cluster_node_requests | map(attribute='resourceClass') }}"
+
+    - name: Retrieve all currently allocated nodepools
+      kubernetes.core.k8s_info:
+        api_version: hypershift.openshift.io/v1beta1
+        kind: NodePool
+        namespace: "{{ hosted_cluster_namespace }}"
+      register: hosted_cluster_nodepools
+
+    - name: Determine which resource classes are no longer needed
+      ansible.builtin.set_fact:
+        hosted_cluster_removed_resource_classes: "{{ hosted_cluster_removed_resource_classes | default([]) + [item.metadata.labels[agent_resource_class_label]] }}"
+      with_items: "{{ hosted_cluster_nodepools.resources }}"
+      when:
+        - item.metadata.labels is defined
+        - agent_resource_class_label in item.metadata.labels
+        - item.metadata.labels[agent_resource_class_label] not in hosted_cluster_requested_resource_classes
+
+    - name: Set nodepools to be removed
+      ansible.builtin.set_fact:
+        hosted_cluster_removed_nodepools: "{{ hosted_cluster_removed_resource_classes | default([]) | map('regex_replace', '^', nodepool_prefix + '-') }}"
+
+    - name: Display resource classes to be removed
+      ansible.builtin.debug:
+        msg: "The following NodePools are no longer needed and will be removed: {{ hosted_cluster_removed_nodepools }}"
+
+    - name: Delete NodePool resources
+      kubernetes.core.k8s:
+        state: absent
+        api_version: hypershift.openshift.io/v1beta1
+        kind: NodePool
+        namespace: "{{ hosted_cluster_namespace }}"
+        name: "{{ item }}"
+      loop: "{{ hosted_cluster_removed_nodepools }}"
+      loop_control:
+        label: "Delete NodePool {{ item }}"

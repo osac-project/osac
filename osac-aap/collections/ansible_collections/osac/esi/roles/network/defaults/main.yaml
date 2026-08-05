@@ -1,0 +1,10 @@
+network_l2_network_mtu: 1500
+network_l3_router_external_network: external
+network_l3_subnet_cidr: 192.168.50.0/22
+network_l3_subnet_gateway_ip: 192.168.50.1
+network_l3_subnet_allocation_pool_start: 192.168.50.10
+network_l3_subnet_allocation_pool_end: 192.168.50.200
+network_l3_subnet_dns_nameservers:
+  - 8.8.8.8
+network_tags: []
+network_properties: {}

@@ -1,0 +1,9 @@
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: "{{ ocp_4_20_ai_maas_model_name }}"
+  namespace: "{{ ocp_4_20_ai_maas_model_namespace }}"
+spec:
+  modelRef:
+    kind: LLMInferenceService
+    name: "{{ ocp_4_20_ai_maas_model_name }}"

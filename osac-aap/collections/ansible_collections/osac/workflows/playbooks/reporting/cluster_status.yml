@@ -1,0 +1,79 @@
+---
+# Workflow: Report Cluster Status
+# This workflow reports workflow status by annotating a ClusterOrder CRD.
+# Generic hooks allow customization at workflow boundaries.
+#
+# Usage:
+#   - name: Report cluster status
+#     ansible.builtin.import_playbook: osac.workflows.reporting.cluster_status
+#     vars:
+#       cluster_order: "{{ ansible_eda.event.payload }}"
+#       workflow_name: "cluster_create"
+#       workflow_status: "succeeded"
+#
+# Hook example:
+#   - name: Report with custom hooks
+#     ansible.builtin.import_playbook: osac.workflows.reporting.cluster_status
+#     vars:
+#       cluster_order: "{{ ansible_eda.event.payload }}"
+#       workflow_name: "cluster_create"
+#       workflow_status: "succeeded"
+#       hook_workflow_complete:
+#         name: my_custom_hooks
+#         tasks_from: send_metrics.yml
+
+- name: Report cluster workflow status
+  hosts: localhost
+  gather_facts: true
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ lookup('env', 'K8S_AUTH_KUBECONFIG') | default(lookup('env', 'KUBECONFIG'), true) | default(lookup('env', 'HOME') + '/.kube/config', true) }}"
+
+
+  vars:
+    cluster_order: "{{ ansible_eda.event.payload }}"
+    workflow_name: unknown
+    workflow_status: unknown
+
+    # GENERIC HOOKS - Default to noop
+    hook_workflow_start_default:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+
+    hook_workflow_complete_default:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+
+  collections:
+    - osac.workflows
+    - osac.service
+
+  tasks:
+    # HOOK: Workflow start
+    - name: Hook - Workflow start
+      ansible.builtin.include_role:
+        name: "{{ (hook_workflow_start | default(hook_workflow_start_default)).name }}"
+        tasks_from: "{{ (hook_workflow_start | default(hook_workflow_start_default)).tasks_from }}"
+
+    # CRITICAL: Report workflow status (NOT overrideable)
+    - name: Report workflow status
+      when: >-
+        workflow_status != "succeeded" or
+        cluster_order.metadata.annotations["osac.openshift.io/ansible-workflow-status"] | default("") != workflow_status
+      kubernetes.core.k8s:
+        state: patched
+        definition:
+          apiVersion: osac.openshift.io/v1alpha1
+          kind: ClusterOrder
+          metadata:
+            name: "{{ cluster_order.metadata.name }}"
+            namespace: "{{ cluster_order.metadata.namespace }}"
+            annotations:
+              osac.openshift.io/ansible-workflow-name: "{{ workflow_name }}"
+              osac.openshift.io/ansible-workflow-status: "{{ workflow_status }}"
+              osac.openshift.io/ansible-workflow-time: "{{ ansible_date_time.iso8601 }}"
+
+    # HOOK: Workflow complete
+    - name: Hook - Workflow complete
+      ansible.builtin.include_role:
+        name: "{{ (hook_workflow_complete | default(hook_workflow_complete_default)).name }}"
+        tasks_from: "{{ (hook_workflow_complete | default(hook_workflow_complete_default)).tasks_from }}"

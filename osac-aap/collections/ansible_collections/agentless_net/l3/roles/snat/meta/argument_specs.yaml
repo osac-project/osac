@@ -1,0 +1,45 @@
+argument_specs:
+  create:
+    options:
+      snat_router_name:
+        description: "Namespace name (e.g., tenant-alpha)."
+        type: "str"
+        required: true
+      snat_source_subnet:
+        description: "Tenant subnet CIDR (e.g., 10.100.0.0/24)."
+        type: "str"
+        required: true
+      snat_veth_interface:
+        description: "Namespace-side veth name (e.g., v-tenant-a-i)."
+        type: "str"
+        required: true
+      snat_external_subnet:
+        description: "Veth link subnet (e.g., 10.254.0.0/30)."
+        type: "str"
+        required: true
+      snat_external_interface:
+        description: "Host external interface (e.g., eth0)."
+        type: "str"
+        required: true
+  delete:
+    options:
+      snat_router_name:
+        description: "Namespace name."
+        type: "str"
+        required: true
+      snat_source_subnet:
+        description: "Tenant subnet CIDR."
+        type: "str"
+        required: true
+      snat_veth_interface:
+        description: "Namespace-side veth name."
+        type: "str"
+        required: true
+      snat_external_subnet:
+        description: "Veth link subnet."
+        type: "str"
+        required: true
+      snat_external_interface:
+        description: "Host external interface."
+        type: "str"
+        required: true

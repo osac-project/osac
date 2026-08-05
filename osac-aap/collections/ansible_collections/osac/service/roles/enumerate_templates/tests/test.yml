@@ -1,0 +1,218 @@
+---
+# Unit tests for osac.service.enumerate_templates role.
+# Each play is guarded by a `when` condition -- only the play whose controlling
+# variable is defined will run. Pass exactly one variable per invocation.
+#
+# No cluster or external service required -- the role uses Jinja2 filter plugins
+# that discover templates from locally installed Ansible collections.
+#
+# Required: the osac.templates collection must be available (it is, as a local
+# collection in collections/ansible_collections/osac/templates/).
+#
+#   Test 1 (happy path -- discover all template types):
+#     ansible-playbook ... -e test_discover_all=true
+#
+#   Test 2 (nonexistent collection -- graceful empty result):
+#     ansible-playbook ... -e test_nonexistent_collection=true
+#
+#   Test 3 (invalid collection name format):
+#     ansible-playbook ... -e test_invalid_collection_name=true
+#
+#   Test 4 (mixed valid and invalid collections):
+#     ansible-playbook ... -e test_mixed_collections=true
+
+# ──────────────────────────────────────────────────────────────
+# Test 1: Discover all template types from osac.templates
+# Expected: finds cluster, compute_instance, and network templates
+# ──────────────────────────────────────────────────────────────
+- name: "Test enumerate_templates -- discover all template types"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run enumerate_templates role with default collection
+      ansible.builtin.include_role:
+        name: osac.service.enumerate_templates
+      vars:
+        osac_template_collections:
+          - osac.templates
+      when: test_discover_all | default(false) | bool
+
+    - name: Verify cluster templates discovered
+      ansible.builtin.assert:
+        that:
+          - osac_cluster_templates is defined
+          - osac_cluster_templates | length >= 3
+          - osac_cluster_templates | map(attribute='id') | list is superset(['osac.templates.ocp_small', 'osac.templates.ocp_ci_small', 'osac.templates.ocp_4_20_small_nico'])
+        fail_msg: >-
+          Expected at least 3 cluster templates (ocp_small, ocp_ci_small, ocp_4_20_small_nico).
+          Got: {{ osac_cluster_templates | default([]) | map(attribute='id') | list }}
+        success_msg: "Found {{ osac_cluster_templates | length }} cluster template(s): {{ osac_cluster_templates | map(attribute='id') | list }}"
+      when: test_discover_all | default(false) | bool
+
+    - name: Verify cluster template structure
+      ansible.builtin.assert:
+        that:
+          - item.id is defined
+          - item.title is defined
+          - item.title | length > 0
+          - item.node_sets is defined
+          - item.node_sets | length > 0
+        fail_msg: "Cluster template '{{ item.id }}' missing required fields"
+        success_msg: "Cluster template '{{ item.id }}' has correct structure"
+      loop: "{{ osac_cluster_templates }}"
+      loop_control:
+        label: "{{ item.id }}"
+      when: test_discover_all | default(false) | bool
+
+    - name: Verify known templates include fc430 node set
+      ansible.builtin.assert:
+        that:
+          - "'fc430' in item.node_sets"
+        fail_msg: "Template '{{ item.id }}' expected to have fc430 node set"
+        success_msg: "Template '{{ item.id }}' has fc430 node set"
+      loop: "{{ osac_cluster_templates | selectattr('id', 'in', ['osac.templates.ocp_small']) | list }}"
+      loop_control:
+        label: "{{ item.id }}"
+      when: test_discover_all | default(false) | bool
+
+    - name: Verify compute instance templates discovered
+      ansible.builtin.assert:
+        that:
+          - osac_compute_instance_templates is defined
+          - osac_compute_instance_templates | length >= 1
+          - osac_compute_instance_templates | map(attribute='id') | list is superset(['osac.templates.ocp_virt_vm'])
+        fail_msg: >-
+          Expected at least 1 compute instance template (ocp_virt_vm).
+          Got: {{ osac_compute_instance_templates | default([]) | map(attribute='id') | list }}
+        success_msg: "Found {{ osac_compute_instance_templates | length }} compute instance template(s)"
+      when: test_discover_all | default(false) | bool
+
+    - name: Verify network classes discovered
+      ansible.builtin.assert:
+        that:
+          - osac_network_classes is defined
+          - osac_network_classes | length >= 1
+          - osac_network_classes | map(attribute='id') | list is superset(['osac.templates.cudn_net'])
+        fail_msg: >-
+          Expected at least 1 network class (cudn_net).
+          Got: {{ osac_network_classes | default([]) | map(attribute='id') | list }}
+        success_msg: "Found {{ osac_network_classes | length }} network class(es)"
+      when: test_discover_all | default(false) | bool
+
+    - name: Verify network class structure
+      ansible.builtin.assert:
+        that:
+          - item.id is defined
+          - item.title is defined
+          - item.implementation_strategy is defined
+          - item.implementation_strategy | length > 0
+          - item.fabric_manager is defined
+          - item.fabric_manager | length > 0
+          - item.capabilities is defined
+        fail_msg: "Network class '{{ item.id }}' missing required fields"
+        success_msg: "Network class '{{ item.id }}' has correct structure (strategy={{ item.implementation_strategy }}, fabric_manager={{ item.fabric_manager }})"
+      loop: "{{ osac_network_classes }}"
+      loop_control:
+        label: "{{ item.id }}"
+      when: test_discover_all | default(false) | bool
+
+# ──────────────────────────────────────────────────────────────
+# Test 2: Nonexistent collection -- should return empty lists
+# Expected: role succeeds, all lists are empty
+# ──────────────────────────────────────────────────────────────
+- name: "Test enumerate_templates -- nonexistent collection"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run enumerate_templates with nonexistent collection
+      ansible.builtin.include_role:
+        name: osac.service.enumerate_templates
+      vars:
+        osac_template_collections:
+          - nonexistent.collection
+      when: test_nonexistent_collection | default(false) | bool
+
+    - name: Verify all template lists are empty
+      ansible.builtin.assert:
+        that:
+          - osac_cluster_templates is defined
+          - osac_cluster_templates | length == 0
+          - osac_compute_instance_templates is defined
+          - osac_compute_instance_templates | length == 0
+          - osac_network_classes is defined
+          - osac_network_classes | length == 0
+        fail_msg: >-
+          Expected empty lists for nonexistent collection.
+          Clusters: {{ osac_cluster_templates | default([]) | length }},
+          CIs: {{ osac_compute_instance_templates | default([]) | length }},
+          NCs: {{ osac_network_classes | default([]) | length }}
+        success_msg: "Nonexistent collection returned empty lists as expected"
+      when: test_nonexistent_collection | default(false) | bool
+
+# ──────────────────────────────────────────────────────────────
+# Test 3: Invalid collection name format -- should not crash
+# Expected: role succeeds with empty lists (filter validates format)
+# ──────────────────────────────────────────────────────────────
+- name: "Test enumerate_templates -- invalid collection name format"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run enumerate_templates with invalid collection name
+      ansible.builtin.include_role:
+        name: osac.service.enumerate_templates
+      vars:
+        osac_template_collections:
+          - "not-a-valid-name"
+      when: test_invalid_collection_name | default(false) | bool
+
+    - name: Verify all template lists are empty
+      ansible.builtin.assert:
+        that:
+          - osac_cluster_templates is defined
+          - osac_cluster_templates | length == 0
+          - osac_compute_instance_templates is defined
+          - osac_compute_instance_templates | length == 0
+          - osac_network_classes is defined
+          - osac_network_classes | length == 0
+        fail_msg: "Expected empty lists for invalid collection name"
+        success_msg: "Invalid collection name handled gracefully"
+      when: test_invalid_collection_name | default(false) | bool
+
+# ──────────────────────────────────────────────────────────────
+# Test 4: Mixed valid and invalid -- should discover from valid only
+# Expected: finds templates from osac.templates, ignores bad entry
+# ──────────────────────────────────────────────────────────────
+- name: "Test enumerate_templates -- mixed valid and invalid collections"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run enumerate_templates with mixed collections
+      ansible.builtin.include_role:
+        name: osac.service.enumerate_templates
+      vars:
+        osac_template_collections:
+          - "bad-name"
+          - osac.templates
+          - nonexistent.collection
+      when: test_mixed_collections | default(false) | bool
+
+    - name: Verify templates found from valid collection despite invalid entries
+      ansible.builtin.assert:
+        that:
+          - osac_cluster_templates is defined
+          - osac_cluster_templates | length >= 2
+          - osac_compute_instance_templates is defined
+          - osac_compute_instance_templates | length >= 1
+          - osac_network_classes is defined
+          - osac_network_classes | length >= 1
+        fail_msg: >-
+          Expected templates from osac.templates despite invalid entries.
+          Clusters: {{ osac_cluster_templates | default([]) | length }},
+          CIs: {{ osac_compute_instance_templates | default([]) | length }},
+          NCs: {{ osac_network_classes | default([]) | length }}
+        success_msg: "Mixed collections handled correctly: valid templates discovered, invalid entries ignored"
+      when: test_mixed_collections | default(false) | bool

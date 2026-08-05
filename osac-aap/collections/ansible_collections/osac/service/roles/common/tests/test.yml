@@ -1,0 +1,67 @@
+---
+# Unit tests for osac.service.common role.
+# Each play is guarded by a `when` condition -- only the play whose controlling
+# variable is defined will run. Pass exactly one variable per invocation.
+#
+# No cluster or external service required -- the role only reads environment variables.
+#
+# Note: the common role has no tasks/main.yaml -- tasks are included directly
+# via tasks_from (e.g., get_remote_cluster_kubeconfig.yaml).
+#
+# IMPORTANT: lookup('env') reads from the controller process environment, not
+# from the play-level `environment` directive. Set env vars at shell level:
+#
+#   Test 1 (env var set -- kubeconfig path returned):
+#     OSAC_REMOTE_CLUSTER_KUBECONFIG=/tmp/test-kubeconfig \
+#       ansible-playbook ... -e test_env_set=true
+#
+#   Test 2 (env var not set -- variable not defined):
+#     unset OSAC_REMOTE_CLUSTER_KUBECONFIG && \
+#       ansible-playbook ... -e test_env_unset=true
+
+# ──────────────────────────────────────────────────────────────
+# Test 1: OSAC_REMOTE_CLUSTER_KUBECONFIG is set
+# Expected: remote_cluster_kubeconfig is set to the env value
+# ──────────────────────────────────────────────────────────────
+- name: "Test common/get_remote_cluster_kubeconfig -- env var set"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Include get_remote_cluster_kubeconfig task
+      ansible.builtin.include_role:
+        name: osac.service.common
+        tasks_from: get_remote_cluster_kubeconfig.yaml
+      when: test_env_set | default(false) | bool
+
+    - name: Verify kubeconfig path extracted
+      ansible.builtin.assert:
+        that:
+          - remote_cluster_kubeconfig is defined
+          - remote_cluster_kubeconfig | length > 0
+        fail_msg: "remote_cluster_kubeconfig should be defined when OSAC_REMOTE_CLUSTER_KUBECONFIG is set"
+        success_msg: "Remote kubeconfig path extracted: {{ remote_cluster_kubeconfig }}"
+      when: test_env_set | default(false) | bool
+
+# ──────────────────────────────────────────────────────────────
+# Test 2: OSAC_REMOTE_CLUSTER_KUBECONFIG is not set
+# Expected: remote_cluster_kubeconfig is not defined (task skipped)
+# ──────────────────────────────────────────────────────────────
+- name: "Test common/get_remote_cluster_kubeconfig -- env var not set"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Include get_remote_cluster_kubeconfig task
+      ansible.builtin.include_role:
+        name: osac.service.common
+        tasks_from: get_remote_cluster_kubeconfig.yaml
+      when: test_env_unset | default(false) | bool
+
+    - name: Verify kubeconfig variable is not defined
+      ansible.builtin.assert:
+        that:
+          - remote_cluster_kubeconfig is not defined
+        fail_msg: "remote_cluster_kubeconfig should not be defined when env var is unset"
+        success_msg: "Correctly skipped -- remote_cluster_kubeconfig not defined"
+      when: test_env_unset | default(false) | bool

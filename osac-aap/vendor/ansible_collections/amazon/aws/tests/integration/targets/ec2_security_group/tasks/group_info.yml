@@ -1,0 +1,104 @@
+---
+# file for testing the ec2_group_info module
+
+- block:
+    # ======================== Setup =====================================
+    - name: Create a group for testing group info retrieval below
+      amazon.aws.ec2_security_group:
+        name: "{{ ec2_group_name }}-info-1"
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        description: "{{ ec2_group_description }}"
+        rules:
+          - proto: tcp
+            ports:
+              - 90
+            cidr_ip: 10.2.2.2/32
+        tags:
+          test: "{{ resource_prefix }}_ec2_group_info_module"
+      register: group_info_test_setup
+
+    - name: Ensure tags were added without the additional CreateTags/RemoveTags calls
+      ansible.builtin.assert:
+        that:
+          - group_info_test_setup.tags | length == 1
+          - "'test' in group_info_test_setup.tags"
+          - group_info_test_setup.tags.test == resource_prefix+"_ec2_group_info_module"
+          - "'ec2:CreateTags' not in group_info_test_setup.resource_actions"
+          - "'ec2:DeleteTags' not in group_info_test_setup.resource_actions"
+
+    - name: Create another group for testing group info retrieval below
+      amazon.aws.ec2_security_group:
+        name: "{{ ec2_group_name }}-info-2"
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        description: "{{ ec2_group_description }}"
+        rules:
+          - proto: tcp
+            ports:
+              - 91
+            cidr_ip: 10.2.2.2/32
+
+    # ========================= ec2_group_info tests ====================
+
+    - name: Retrieve security group info based on SG name
+      amazon.aws.ec2_security_group_info:
+        filters:
+          group-name: "{{ ec2_group_name }}-info-2"
+      register: result_1
+
+    - name: Assert results found
+      ansible.builtin.assert:
+        that:
+          - result_1.security_groups is defined
+          - (result_1.security_groups|first).group_name == ec2_group_name+"-info-2"
+
+    - name: Retrieve security group info based on SG VPC
+      amazon.aws.ec2_security_group_info:
+        filters:
+          vpc-id: "{{ vpc_result.vpc.id }}"
+      register: result_2
+
+    - name: Assert results found
+      ansible.builtin.assert:
+        that:
+          - result_2.security_groups is defined
+          - (result_2.security_groups|first).vpc_id == vpc_result.vpc.id
+          - (result_2.security_groups|length) > 2
+
+    - name: Retrieve security group info based on SG tags
+      amazon.aws.ec2_security_group_info:
+        filters:
+          tag:test: "{{ resource_prefix }}_ec2_group_info_module"
+      register: result_3
+
+    - name: Assert results found
+      ansible.builtin.assert:
+        that:
+          - result_3.security_groups is defined
+          - (result_3.security_groups|first).group_id == group_info_test_setup.group_id
+
+    - name: Retrieve security group info based on SG ID
+      amazon.aws.ec2_security_group_info:
+        filters:
+          group-id: "{{ group_info_test_setup.group_id }}"
+      register: result_4
+
+    - name: Assert correct result found
+      ansible.builtin.assert:
+        that:
+          - result_4.security_groups is defined
+          - (result_4.security_groups|first).group_id == group_info_test_setup.group_id
+          - (result_4.security_groups|length) == 1
+
+  always:
+    # ========================= Cleanup =================================
+    - name: Tidy up test security group 1
+      amazon.aws.ec2_security_group:
+        name: "{{ ec2_group_name }}-info-1"
+        state: absent
+      ignore_errors: true
+
+    - name: Tidy up test security group 2
+      amazon.aws.ec2_security_group:
+        name: "{{ ec2_group_name }}-info-2"
+        state: absent
+      ignore_errors: true

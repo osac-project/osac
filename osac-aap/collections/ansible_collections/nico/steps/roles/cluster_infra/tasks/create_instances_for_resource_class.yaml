@@ -1,0 +1,131 @@
+---
+# Create instances for a specific resource class
+# This task file is included from create_instances.yaml
+
+# Resolve instance type by listing all types for the site and matching by name.
+# Per the enhancement proposal, the hostclass name in nodeRequests matches the NICo
+# instance type name — no user-maintained mapping dict needed.
+- name: "List instance types for site - {{ node_request.resourceClass }}"
+  nvidia.bare_metal.instance_type_info:
+    site_id: "{{ nico_site_id }}"
+    api_url: "{{ nico_api_url }}"
+    api_token: "{{ nico_api_token }}"
+    org: "{{ nico_org }}"
+    api_path_prefix: "{{ nico_api_path_prefix | default('forge') }}"
+  register: instance_type_list
+
+- name: "Find instance type by name - {{ node_request.resourceClass }}"
+  ansible.builtin.set_fact:
+    instance_type_match: "{{ instance_type_list.resources | selectattr('name', 'equalto', node_request.resourceClass) | list }}"
+
+- name: "Validate instance type was found - {{ node_request.resourceClass }}"
+  ansible.builtin.assert:
+    that:
+      - instance_type_match | length > 0
+    fail_msg: >
+      NICo instance type '{{ node_request.resourceClass }}' not found at site '{{ nico_site_id }}'.
+      Available instance types: {{ instance_type_list.resources | map(attribute='name') | list }}.
+      The resource class name in nodeRequests must match a NICo instance type name.
+
+- name: "Set resolved instance type ID - {{ node_request.resourceClass }}"
+  ansible.builtin.set_fact:
+    current_instance_type_id: "{{ instance_type_match[0].id }}"
+
+- name: "Display resolved instance type - {{ node_request.resourceClass }}"
+  ansible.builtin.debug:
+    msg: "Using instance type ID: {{ current_instance_type_id }}"
+
+# Determine SSH key group: use override if provided, otherwise use default
+- name: "Resolve SSH key group ID - {{ node_request.resourceClass }}"
+  ansible.builtin.set_fact:
+    nico_effective_ssh_key_group_id: "{{ nico_infra_ssh_key_group_id if (nico_infra_ssh_key_group_id is defined and nico_infra_ssh_key_group_id | length > 0) else nico_default_ssh_key_group_id }}"
+
+- name: "Display SSH key group - {{ node_request.resourceClass }}"
+  ansible.builtin.debug:
+    msg: "Using SSH key group ID: {{ nico_effective_ssh_key_group_id }}"
+
+# Count existing instances for this cluster/resource class via NICo API.
+# Uses instance labels (set during creation) rather than agent count,
+# since instances may exist without agents having registered yet.
+- name: "List existing instances for this cluster - {{ node_request.resourceClass }}"
+  nvidia.bare_metal.instance_info:
+    api_url: "{{ nico_api_url }}"
+    api_token: "{{ nico_api_token }}"
+    org: "{{ nico_org }}"
+    api_path_prefix: "{{ nico_api_path_prefix | default('forge') }}"
+  register: all_instances_result
+
+- name: "Count existing instances for this resource class - {{ node_request.resourceClass }}"
+  ansible.builtin.set_fact:
+    existing_instance_count: >-
+      {{ all_instances_result.resources |
+         selectattr('labels', 'defined') |
+         selectattr('labels.cluster', 'defined') |
+         selectattr('labels.cluster', 'equalto', nico_infra_name) |
+         selectattr('labels.resource_class', 'defined') |
+         selectattr('labels.resource_class', 'equalto', node_request.resourceClass) |
+         rejectattr('status', 'equalto', 'Terminating') |
+         list | length }}
+
+- name: "Compute instances to create - {{ node_request.resourceClass }}"
+  ansible.builtin.set_fact:
+    instances_to_create: "{{ [(node_request.numberOfNodes | int) - (existing_instance_count | int), 0] | max }}"
+
+- name: "Display provisioning plan - {{ node_request.resourceClass }}"
+  ansible.builtin.debug:
+    msg: "{{ existing_instance_count }} instances exist in NICo, {{ instances_to_create }} new instance(s) to create"
+
+- name: "Create instances - {{ node_request.resourceClass }}"
+  when: instances_to_create | int > 0
+  nvidia.bare_metal.instance:
+    state: present
+    name: "{{ nico_infra_instance_name_prefix }}-{{ nico_infra_name }}-{{ node_request.resourceClass }}-{{ lookup('pipe', 'uuidgen') | lower | truncate(8, True, '') }}"
+    tenant_id: "{{ nico_tenant_id }}"
+    instance_type_id: "{{ current_instance_type_id }}"
+    vpc_id: "{{ nico_vpc_id }}"
+    operating_system_id: "{{ nico_default_operating_system_id }}"
+    ipxe_script: "{{ nico_ipxe_script }}"
+    interfaces:
+      - vpc_prefix_id: "{{ nico_vpc_prefix_id }}"
+        is_physical: true
+    ssh_key_group_ids:
+      - "{{ nico_effective_ssh_key_group_id }}"
+    labels:
+      managed-by: osac
+      provider: nico
+      cluster: "{{ nico_infra_name }}"
+      resource_class: "{{ node_request.resourceClass }}"
+    wait: "{{ nico_infra_wait }}"
+    wait_timeout: "{{ nico_infra_create_timeout }}"
+    api_url: "{{ nico_api_url }}"
+    api_token: "{{ nico_api_token }}"
+    org: "{{ nico_org }}"
+    api_path_prefix: "{{ nico_api_path_prefix | default('forge') }}"
+  loop: "{{ range(instances_to_create | int) | list }}"
+  loop_control:
+    loop_var: instance_index
+    label: "Instance {{ instance_index + 1 }} of {{ instances_to_create }}"
+  register: instance_results
+
+- name: "Collect new instance IDs - {{ node_request.resourceClass }}"
+  when: instance_results.results is defined and instance_results.results | length > 0
+  ansible.builtin.set_fact:
+    nico_all_instance_ids: "{{ nico_all_instance_ids | default([]) + (instance_results.results | selectattr('resource', 'defined') | map(attribute='resource') | map(attribute='id') | list) }}"
+
+- name: "Collect existing instance IDs - {{ node_request.resourceClass }}"
+  ansible.builtin.set_fact:
+    nico_all_instance_ids: >-
+      {{ (nico_all_instance_ids | default([]) +
+         (all_instances_result.resources |
+          selectattr('labels', 'defined') |
+          selectattr('labels.cluster', 'defined') |
+          selectattr('labels.cluster', 'equalto', nico_infra_name) |
+          selectattr('labels.resource_class', 'defined') |
+          selectattr('labels.resource_class', 'equalto', node_request.resourceClass) |
+          rejectattr('status', 'equalto', 'Terminating') |
+          map(attribute='id') |
+          list)) | unique }}
+
+- name: "Display provisioned instance count - {{ node_request.resourceClass }}"
+  ansible.builtin.debug:
+    msg: "Provisioned {{ node_request.numberOfNodes }} instance(s) for resource class {{ node_request.resourceClass }}"

@@ -1,0 +1,24 @@
+---
+- name: "openvswitch: configure trunk port native vlan"
+  openvswitch_db:
+    table: Port
+    record: "{{ port_name }}"
+    col: tag
+    value: "{{ _vlan_id }}"
+  become: true
+
+- name: "openvswitch: configure trunk port trunks"
+  openvswitch_db:
+    table: Port
+    record: "{{ port_name }}"
+    col: trunks
+    value: "{% for vlan in trunked_vlans %}{{ vlan }},{% endfor %}"
+  become: true
+
+- name: "openvswitch: configure trunk port native untagged"
+  openvswitch_db:
+    table: Port
+    record: "{{ port_name }}"
+    col: vlan_mode
+    value: native-untagged
+  become: true

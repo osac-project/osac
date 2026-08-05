@@ -1,0 +1,8 @@
+---
+- name: Create NAT rule
+  when: nat_state == 'present'
+  ansible.builtin.include_tasks: create.yaml
+
+- name: Delete NAT rule
+  when: nat_state == 'absent'
+  ansible.builtin.include_tasks: delete.yaml

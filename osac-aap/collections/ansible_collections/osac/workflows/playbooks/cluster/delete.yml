@@ -1,0 +1,118 @@
+---
+# Workflow: Delete Hosted Cluster
+# This workflow deletes a hosted control plane cluster from a ClusterOrder CRD.
+# Major workflow phases can be overridden, and hooks allow customization at workflow boundaries.
+#
+# Usage:
+#   - name: Delete cluster
+#     ansible.builtin.import_playbook: osac.workflows.cluster.delete
+#     vars:
+#       cluster_order: "{{ ansible_eda.event.payload }}"
+#
+# Hook example:
+#   - name: Delete cluster with custom hooks
+#     ansible.builtin.import_playbook: osac.workflows.cluster.delete
+#     vars:
+#       cluster_order: "{{ ansible_eda.event.payload }}"
+#       hook_workflow_start:
+#         name: my_custom_hooks
+#         tasks_from: pre_delete.yml
+
+- name: Delete hosted cluster workflow
+  hosts: localhost
+  gather_facts: false
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ lookup('env', 'K8S_AUTH_KUBECONFIG') | default(lookup('env', 'KUBECONFIG'), true) | default(lookup('env', 'HOME') + '/.kube/config', true) }}"
+
+
+  vars:
+    cluster_order: "{{ ansible_eda.event.payload }}"
+
+    # GENERIC HOOKS - Default to noop
+    hook_workflow_start_default:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+
+    hook_workflow_complete_default:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+
+    # PHASE OVERRIDE - Only defaults application is overrideable
+    step_apply_defaults_default:
+      name: osac.service.cluster_settings
+      tasks_from: main.yml
+
+  collections:
+    - osac.workflows
+    - osac.service
+
+  pre_tasks:
+    # HOOK: Workflow start
+    - name: Hook - Workflow start
+      ansible.builtin.include_role:
+        name: "{{ (hook_workflow_start | default(hook_workflow_start_default)).name }}"
+        tasks_from: "{{ (hook_workflow_start | default(hook_workflow_start_default)).tasks_from }}"
+
+    # CRITICAL: Extract cluster order name (NOT overrideable)
+    - name: Set cluster order name
+      ansible.builtin.set_fact:
+        cluster_order_name: "{{ cluster_order.metadata.name }}"
+
+    # PHASE: Apply defaults (overrideable for custom default logic)
+    - name: Step - Apply default settings
+      ansible.builtin.include_role:
+        name: "{{ (step_apply_defaults_override | default(step_apply_defaults_default)).name }}"
+        tasks_from: "{{ (step_apply_defaults_override | default(step_apply_defaults_default)).tasks_from | default(omit) }}"
+
+    # CRITICAL: Extract template info (NOT overrideable)
+    - name: Extract template info
+      ansible.builtin.include_role:
+        name: osac.service.extract_template_info
+
+    # CRITICAL: Determine namespace (NOT overrideable)
+    - name: Determine working namespace
+      ansible.builtin.include_role:
+        name: osac.service.cluster_working_namespace
+      vars:
+        cluster_working_namespace_cluster_order_name: "{{ cluster_order_name }}"
+
+  tasks:
+    - name: Display cluster deletion information
+      ansible.builtin.debug:
+        msg:
+          - "Deleting cluster: {{ cluster_order.metadata.name }}"
+          - "Cluster working namespace: {{ cluster_working_namespace }}"
+          - "Template ID: {{ template_id_override | default(template_id) }}"
+
+    # CRITICAL: Call template (NOT overrideable, but template has internal override points)
+    - name: Call selected template
+      ansible.builtin.include_role:
+        name: "{{ template_id_override | default(template_id) }}"
+        tasks_from: delete
+
+    # CRITICAL: Remove finalizers (NOT overrideable)
+    - name: Remove infrastructure finalizer
+      ansible.builtin.include_role:
+        name: osac.service.finalizer
+      vars:
+        finalizer_state: absent
+        finalizer_name: "{{ cluster_order_infrastructure_finalizer }}"
+        finalizer_target:
+          api_version: "{{ item.api_version }}"
+          kind: "{{ item.kind }}"
+          namespace: "{{ item.namespace | default(omit) }}"
+          name: "{{ item.name }}"
+      loop:
+        - api_version: osac.openshift.io/v1alpha1
+          kind: ClusterOrder
+          namespace: "{{ lookup('env', 'POD_NAMESPACE') }}"
+          name: "{{ cluster_order.metadata.name }}"
+        - api_version: v1
+          kind: Namespace
+          name: "{{ cluster_working_namespace }}"
+
+    # HOOK: Workflow complete
+    - name: Hook - Workflow complete
+      ansible.builtin.include_role:
+        name: "{{ (hook_workflow_complete | default(hook_workflow_complete_default)).name }}"
+        tasks_from: "{{ (hook_workflow_complete | default(hook_workflow_complete_default)).tasks_from }}"

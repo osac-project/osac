@@ -1,0 +1,3 @@
+---
+# Defaults are defined in group_vars/all/agentless_net.yaml
+cluster_infra_state_key: "{{ cluster_infra_namespace }}-{{ cluster_infra_name }}"

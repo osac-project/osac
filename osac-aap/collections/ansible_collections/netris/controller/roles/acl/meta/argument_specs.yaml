@@ -1,0 +1,76 @@
+---
+argument_specs:
+  main:
+    options:
+      acl_state:
+        type: str
+        choices: [present, absent]
+        default: present
+        description: "Whether to create or delete the ACL rule."
+
+  create:
+    options:
+      acl_name:
+        type: str
+        required: true
+        description: "Name of the ACL rule."
+      acl_action:
+        type: str
+        choices: [permit, deny]
+        default: permit
+        description: "ACL action: permit or deny traffic."
+      acl_proto:
+        type: str
+        default: all
+        description: "Protocol: all, tcp, udp, icmp, ip, icmpv6."
+      acl_vpc_id:
+        type: int
+        default: 1
+        description: "VPC ID for the ACL rule."
+      acl_src_prefix:
+        type: str
+        default: "0.0.0.0/0"
+        description: "Source prefix in CIDR notation."
+      acl_dst_prefix:
+        type: str
+        default: "0.0.0.0/0"
+        description: "Destination prefix in CIDR notation."
+      acl_src_port_from:
+        type: int
+        description: "Source port range start."
+      acl_src_port_to:
+        type: int
+        description: "Source port range end."
+      acl_dst_port_from:
+        type: int
+        description: "Destination port range start."
+      acl_dst_port_to:
+        type: int
+        description: "Destination port range end."
+      acl_src_port_group:
+        type: int
+        default: 0
+        description: "Source port group ID (0 for none)."
+      acl_dst_port_group:
+        type: int
+        default: 0
+        description: "Destination port group ID (0 for none)."
+      acl_established:
+        type: int
+        default: 0
+        description: "Match established connections (0 or 1)."
+      acl_reverse:
+        type: str
+        default: "no"
+        description: "Generate reverse rule (yes/no)."
+      acl_comment:
+        type: str
+        default: ""
+        description: "Comment for the ACL rule."
+
+  delete:
+    options:
+      acl_name:
+        type: str
+        required: true
+        description: "Name of the ACL rule to delete."

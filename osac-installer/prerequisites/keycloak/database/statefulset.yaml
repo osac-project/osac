@@ -1,0 +1,83 @@
+#
+# Copyright (c) 2025 Red Hat Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+# the License. You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+# specific language governing permissions and limitations under the License.
+#
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: keycloak-database
+spec:
+  replicas: 1
+  serviceName: keycloak-database
+  selector:
+    matchLabels:
+      app: keycloak-database
+  template:
+    metadata:
+      labels:
+        app: keycloak-database
+    spec:
+      serviceAccountName: keycloak-database
+      volumes:
+      - name: server-cert
+        secret:
+          secretName: keycloak-database-server-cert
+          defaultMode: 288  # 0440 octal; decimal to satisfy yamllint's octal-values rule
+      - name: server-config
+        configMap:
+          name: keycloak-db-server-config
+      - name: access-config
+        configMap:
+          name: keycloak-db-access-config
+      - name: data
+        persistentVolumeClaim:
+          claimName: keycloak-database
+      initContainers:
+      - name: password-generator
+        image: quay.io/openshift/origin-cli:4.21
+        command:
+        - /bin/bash
+        - -c
+        - |
+          if ! oc get secret keycloak-database-password > /dev/null 2>&1; then
+              echo "generating postgresql password"
+              password=$(openssl rand -hex 20)
+              oc create secret generic keycloak-database-password \
+                --from-literal POSTGRES_PASSWORD="$password"
+          fi
+      containers:
+      - name: server
+        image: quay.io/sclorg/postgresql-18-c10s:c10s
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: POSTGRESQL_USER
+          value: keycloak
+        - name: POSTGRESQL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: keycloak-database-password
+              key: POSTGRES_PASSWORD
+        - name: POSTGRESQL_DATABASE
+          value: keycloak
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/pgsql/data
+        - name: server-cert
+          mountPath: /secrets/cert
+        - name: server-config
+          mountPath: /opt/app-root/src/postgresql-cfg
+        - name: access-config
+          mountPath: /config/access
+        ports:
+        - name: postgres
+          protocol: TCP
+          containerPort: 5432

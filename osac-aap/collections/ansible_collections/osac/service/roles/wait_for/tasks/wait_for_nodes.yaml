@@ -1,0 +1,21 @@
+---
+- name: Wait for Nodes to be Ready
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Node
+    kubeconfig: "{{ wait_for_kubeconfig }}"
+    wait_timeout: "{{ wait_for_request_timeout | default(30) }}"
+  register: _wait_nodes_results
+  until: >-
+    (_wait_nodes_results.resources | default([])
+        | json_query("[?status.conditions[?type=='Ready' && status=='True']]")
+        | length >= (wait_for_nodes_expected_count | int))
+  retries: "{{ wait_for_nodes_retries }}"
+  delay: "{{ wait_for_nodes_delay }}"
+
+- name: Report Nodes status
+  ansible.builtin.debug:
+    msg: >-
+      {{ _wait_nodes_results.resources
+         | json_query("[?status.conditions[?type=='Ready' && status=='True']]")
+         | length }} / {{ wait_for_nodes_expected_count }} Nodes are Ready.

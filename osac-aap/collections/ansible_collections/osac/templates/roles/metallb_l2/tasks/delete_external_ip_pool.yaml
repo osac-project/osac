@@ -1,0 +1,71 @@
+---
+# Delete MetalLB L2Advertisement and IPAddressPool for ExternalIPPool
+# 1. Deletes L2Advertisement first (must be removed before pool)
+# 2. Deletes IPAddressPool
+# Handles "not found" errors gracefully for both resources
+
+- name: Include get remote cluster kubeconfig
+  ansible.builtin.include_role:
+    name: osac.service.common
+    tasks_from: get_remote_cluster_kubeconfig
+
+- name: Extract ExternalIPPool configuration
+  ansible.builtin.set_fact:
+    pool_name: "{{ external_ip_pool.metadata.name }}"
+
+- name: Display deletion information
+  ansible.builtin.debug:
+    msg:
+      - "Deleting MetalLB resources for ExternalIPPool '{{ pool_name }}'"
+
+- name: Delete L2Advertisement
+  kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    state: absent
+    api_version: metallb.io/v1beta1
+    kind: L2Advertisement
+    name: "{{ pool_name }}-l2adv"
+    namespace: metallb-system
+    wait: true
+    wait_timeout: 300
+  register: l2adv_delete_result
+  retries: 3
+  delay: 10
+  until: >-
+    l2adv_delete_result is successful
+    or ('NotFound' in (l2adv_delete_result.msg | default('')))
+  failed_when:
+    - l2adv_delete_result.failed | default(false)
+    - "'NotFound' not in (l2adv_delete_result.msg | default(''))"
+
+- name: Display L2Advertisement deletion result
+  ansible.builtin.debug:
+    msg:
+      - "L2Advertisement '{{ pool_name }}-l2adv' deletion completed"
+      - "Changed: {{ l2adv_delete_result.changed | default(false) }}"
+
+- name: Delete IPAddressPool
+  kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    state: absent
+    api_version: metallb.io/v1beta1
+    kind: IPAddressPool
+    name: "{{ pool_name }}"
+    namespace: metallb-system
+    wait: true
+    wait_timeout: 300
+  register: ipaddresspool_delete_result
+  retries: 3
+  delay: 10
+  until: >-
+    ipaddresspool_delete_result is successful
+    or ('NotFound' in (ipaddresspool_delete_result.msg | default('')))
+  failed_when:
+    - ipaddresspool_delete_result.failed | default(false)
+    - "'NotFound' not in (ipaddresspool_delete_result.msg | default(''))"
+
+- name: Display IPAddressPool deletion result
+  ansible.builtin.debug:
+    msg:
+      - "IPAddressPool '{{ pool_name }}' deletion completed"
+      - "Changed: {{ ipaddresspool_delete_result.changed | default(false) }}"

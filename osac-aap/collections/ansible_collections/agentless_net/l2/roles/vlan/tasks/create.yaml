@@ -1,0 +1,5 @@
+---
+- name: Create VLAN on switch {{ vlan_id }}
+  ansible.builtin.include_role:
+    name: ansible_network.network_runner.switch
+    tasks_from: create_vlan

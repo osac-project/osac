@@ -1,0 +1,114 @@
+---
+- name: Run inventory test using SSM to suppliment inventory information
+  hosts: 127.0.0.1
+  connection: local
+  gather_facts: false
+  environment: "{{ ansible_test.environment }}"
+
+  module_defaults:
+    group/aws:
+      access_key: "{{ aws_access_key }}"
+      secret_key: "{{ aws_secret_key }}"
+      session_token: "{{ security_token | default(omit) }}"
+      region: "{{ aws_region }}"
+
+  vars:
+    instance_user_data: |
+      #!/bin/sh
+      sudo dnf install -y https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/linux_amd64/amazon-ssm-agent.rpm
+      sudo systemctl start amazon-ssm-agent
+    iam_role_name: "{{ resource_prefix }}-inventory-ssm"
+
+  tasks:
+    - block:
+        - ansible.builtin.include_role:
+            name: setup_ec2_facts
+
+        # Create VPC, subnet, security group, and find image_id to create instance
+        - ansible.builtin.include_tasks: tasks/setup.yml
+
+        - name: Ensure IAM instance role exists
+          amazon.aws.iam_role:
+            name: "{{ iam_role_name }}"
+            assume_role_policy_document: "{{ lookup('file', 'files/ec2-trust-policy.json') }}"
+            state: present
+            create_instance_profile: true
+            managed_policy:
+              - AmazonSSMManagedInstanceCore
+            wait: true
+          register: role_output
+
+        - name: Create EC2 instance
+          amazon.aws.ec2_instance:
+            instance_type: t3.micro
+            ebs_optimized: true
+            image_id: "{{ ec2_ami_id }}"
+            wait: "yes"
+            instance_role: "{{ role_output.iam_role.role_name }}"
+            name: "{{ resource_prefix }}-inventory-ssm"
+            user_data: "{{ instance_user_data }}"
+            state: running
+            tags:
+              TestPrefix: "{{ resource_prefix }}"
+          register: instance_output
+
+        - ansible.builtin.set_fact:
+            instances_ids: "{{ [instance_output.instance_ids[0]] }}"
+
+        - name: Get ssm inventory information
+          community.aws.ssm_inventory_info:
+            instance_id: "{{ instance_output.instance_ids[0] }}"
+          register: result
+          until: result.ssm_inventory != {}
+          retries: 18
+          delay: 10
+
+        - name: Validate EC2 ssm-configured instance
+          ansible.builtin.assert:
+            that:
+              - result.ssm_inventory != {}
+
+        # Create 'Standard' EC2 instance (without ssm configured)
+        - name: Create another EC2 instance without SSM configured
+          amazon.aws.ec2_instance:
+            name: "{{ resource_prefix }}-inventory-std"
+            instance_type: t3.micro
+            image_id: "{{ ec2_ami_id }}"
+            wait: true
+            state: running
+          register: _instance
+
+        - ansible.builtin.set_fact:
+            instances_ids: "{{ instances_ids + _instance.instance_ids }}"
+
+        # refresh inventory
+        - ansible.builtin.meta: refresh_inventory
+        - ansible.builtin.debug:
+            var: hostvars
+        - name: Assert hostvars was populated with ssm_inventory information
+          ansible.builtin.assert:
+            that:
+              - ssm_hostname in hostvars
+              - std_hostname in hostvars
+              - '"ssm_inventory" in hostvars[ssm_hostname]'
+              - hostvars[ssm_hostname].ssm_inventory["agent_type"] == "amazon-ssm-agent"
+              - hostvars[ssm_hostname].ssm_inventory["platform_type"] == "Linux"
+              - hostvars[ssm_hostname].ssm_inventory["platform_name"] == "Fedora Linux"
+              - '"ssm_inventory" not in hostvars[std_hostname]'
+          vars:
+            ssm_hostname: "{{ resource_prefix }}-inventory-ssm"
+            std_hostname: "{{ resource_prefix }}-inventory-std"
+
+      always:
+        - name: Delete IAM role
+          amazon.aws.iam_role:
+            name: "{{ iam_role_name }}"
+            state: absent
+            wait: true
+
+        - name: Delete EC2 instances
+          amazon.aws.ec2_instance:
+            instance_ids: "{{ instances_ids }}"
+            wait: true
+            state: absent
+          when: instances_ids is defined

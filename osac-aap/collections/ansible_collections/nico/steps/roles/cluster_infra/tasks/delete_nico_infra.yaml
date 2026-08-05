@@ -1,0 +1,148 @@
+---
+# Delete NICo VPC and prefix in reverse creation order
+# Only deletes resources that were created by this cluster (per ConfigMap flags)
+
+- name: Set expected resource names
+  ansible.builtin.set_fact:
+    nico_vpc_name: "{{ nico_infra_vpc_name_prefix }}-{{ nico_infra_name }}"
+    nico_prefix_name: "prefix-{{ nico_infra_name }}"
+
+- name: Retrieve infrastructure state from ConfigMap
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: ConfigMap
+    name: "nico-infra-{{ nico_infra_name }}"
+    namespace: "{{ nico_infra_configmap_namespace }}"
+  register: nico_infra_configmap
+  failed_when: false  # ConfigMap may not exist (manual deletion, etc.)
+
+- name: Extract VPC and prefix state if ConfigMap exists
+  when: nico_infra_configmap.resources | length > 0
+  ansible.builtin.set_fact:
+    nico_vpc_id: "{{ nico_infra_configmap.resources[0].data.vpc_id | default('') }}"
+    nico_vpc_prefix_id: "{{ nico_infra_configmap.resources[0].data.vpc_prefix_id | default('') }}"
+    cluster_infra_vpc_was_created: "{{ nico_infra_configmap.resources[0].data.vpc_created | default('false') | bool }}"
+    cluster_infra_prefix_was_created: "{{ nico_infra_configmap.resources[0].data.prefix_created | default('false') | bool }}"
+    cluster_infra_stored_instance_ids: "{{ nico_infra_configmap.resources[0].data.instance_ids | default('[]') | from_json }}"
+    nico_vpc_peering_id: "{{ nico_infra_configmap.resources[0].data.vpc_peering_id | default('') }}"
+
+- name: Set default flags if ConfigMap missing
+  when: nico_infra_configmap.resources | length == 0
+  ansible.builtin.set_fact:
+    nico_vpc_id: ""
+    nico_vpc_prefix_id: ""
+    cluster_infra_vpc_was_created: false  # Default to skip — avoid deleting resources we didn't create
+    cluster_infra_prefix_was_created: false
+    cluster_infra_stored_instance_ids: []
+    nico_vpc_peering_id: ""
+
+- name: Display deletion plan
+  ansible.builtin.debug:
+    msg: >
+      Deletion plan: Instances: {{ cluster_infra_stored_instance_ids | default([]) | length }},
+      VPC prefix: {{ 'delete' if cluster_infra_prefix_was_created else 'skip (pre-existing)' }},
+      VPC: {{ 'delete' if cluster_infra_vpc_was_created else 'skip (pre-existing)' }}
+
+# Re-exchange credentials for a fresh token before deletion.
+# The token obtained at the start of the run may have expired.
+- name: Exchange client credentials for fresh JWT token
+  ansible.builtin.uri:
+    url: "{{ nico_ssa_token_url }}"
+    method: POST
+    url_username: "{{ nico_client_id }}"
+    url_password: "{{ nico_client_secret }}"
+    force_basic_auth: true
+    body_format: form-urlencoded
+    body:
+      grant_type: client_credentials
+      scope: "{{ nico_oauth_scope | default('') }}"
+    status_code: 200
+  register: nico_delete_token_response
+  no_log: true
+
+- name: Set fresh NICo API token
+  ansible.builtin.set_fact:
+    nico_api_token: "{{ nico_delete_token_response.json.access_token }}"
+  no_log: true
+
+# Delete instances first (reverse creation order)
+- name: Delete instances
+  nvidia.bare_metal.instance:
+    state: absent
+    id: "{{ instance_id }}"
+    wait: true
+    wait_timeout: "{{ nico_infra_delete_timeout }}"
+    api_url: "{{ nico_api_url }}"
+    api_token: "{{ nico_api_token }}"
+    org: "{{ nico_org }}"
+    api_path_prefix: "{{ nico_api_path_prefix | default('forge') }}"
+  loop: "{{ cluster_infra_stored_instance_ids | default([]) }}"
+  loop_control:
+    loop_var: instance_id
+    label: "Deleting instance {{ instance_id }}"
+  failed_when: false  # Instance may have been manually deleted
+
+# Delete VPC peering before VPC/prefix (must be removed before VPC can be deleted)
+- name: Delete VPC peering with management cluster
+  when: nico_vpc_peering_id | default('') | length > 0
+  nvidia.bare_metal.vpc_peering:
+    state: absent
+    id: "{{ nico_vpc_peering_id }}"
+    api_url: "{{ nico_api_url }}"
+    api_token: "{{ nico_api_token }}"
+    org: "{{ nico_org }}"
+    api_path_prefix: "{{ nico_api_path_prefix | default('forge') }}"
+  failed_when: false  # Peering may have been manually deleted
+
+# Delete VPC prefix only if created by this cluster
+- name: Delete VPC prefix (only if created by this cluster)
+  when:
+    - cluster_infra_prefix_was_created | default(true) | bool
+    - nico_vpc_id is defined
+    - nico_vpc_id | length > 0
+  nvidia.bare_metal.vpc_prefix:
+    state: absent
+    name: "{{ nico_prefix_name }}"
+    vpc_id: "{{ nico_vpc_id }}"
+    api_url: "{{ nico_api_url }}"
+    api_token: "{{ nico_api_token }}"
+    org: "{{ nico_org }}"
+    api_path_prefix: "{{ nico_api_path_prefix | default('forge') }}"
+  failed_when: false  # Prefix may have been manually deleted
+
+- name: Skip VPC prefix deletion (using pre-existing prefix)
+  when: not (cluster_infra_prefix_was_created | default(true) | bool)
+  ansible.builtin.debug:
+    msg: "Skipping VPC prefix deletion - using pre-existing prefix per template parameters"
+
+# Delete VPC only if created by this cluster
+- name: Delete VPC (only if created by this cluster)
+  when: cluster_infra_vpc_was_created | default(true) | bool
+  nvidia.bare_metal.vpc:
+    state: absent
+    name: "{{ nico_vpc_name }}"
+    site_id: "{{ nico_site_id }}"
+    api_url: "{{ nico_api_url }}"
+    api_token: "{{ nico_api_token }}"
+    org: "{{ nico_org }}"
+    api_path_prefix: "{{ nico_api_path_prefix | default('forge') }}"
+  failed_when: false  # VPC may have been manually deleted
+
+- name: Skip VPC deletion (using pre-existing VPC)
+  when: not (cluster_infra_vpc_was_created | default(true) | bool)
+  ansible.builtin.debug:
+    msg: "Skipping VPC deletion - using pre-existing VPC per template parameters"
+
+# Delete infrastructure ConfigMap
+- name: Delete infrastructure ConfigMap
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: ConfigMap
+    name: "nico-infra-{{ nico_infra_name }}"
+    namespace: "{{ nico_infra_configmap_namespace }}"
+  failed_when: false
+
+- name: NICo infrastructure deletion complete
+  ansible.builtin.debug:
+    msg: "NICo infrastructure for {{ nico_infra_name }} has been cleaned up"

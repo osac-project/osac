@@ -1,0 +1,58 @@
+---
+# Create Neutron subnet
+
+- name: Extract Subnet configuration
+  ansible.builtin.set_fact:
+    sn_name: "{{ subnet.metadata.name }}"
+    sn_ipv4_cidr: "{{ subnet.spec.ipv4Cidr | default(default_subnet_ipv4_cidr) }}"
+    sn_virtual_network: "{{ subnet.spec.virtualNetwork }}"
+
+- name: Calculate allocation_pool_start and allocation_pool_end
+  set_fact:
+    allocation_pool_start: "{{sn_ipv4_cidr | ansible.utils.nthhost(default_subnet_allocation_pool_start_offset)}}"
+    allocation_pool_end: "{{sn_ipv4_cidr | ansible.utils.nthhost(default_subnet_allocation_pool_end_offset)}}"
+
+- name: Calculate pool size
+  set_fact:
+    allocation_pool_size: >
+      {{
+        (allocation_pool_end | ansible.utils.ipaddr('int')) - (allocation_pool_start |
+        ansible.utils.ipaddr('int')) + 1
+      }}
+
+- name: Validate pool size
+  assert:
+    that: allocation_pool_size > 0
+    msg: "Allocation pool size {{ allocation_pool_size }} is invalid for cidr {{ sn_ipv4_cidr }}"
+
+- name: Create subnet
+  openstack.cloud.subnet:
+    name: "{{ sn_name }}"
+    network: "{{ sn_virtual_network }}"
+    cidr: "{{ sn_ipv4_cidr }}"
+    dns_nameservers: "{{ default_subnet_dns_nameservers }}"
+    gateway_ip: "{{ sn_ipv4_cidr | ansible.utils.ipaddr('first_usable') }}"
+    allocation_pool_start: "{{ allocation_pool_start }}"
+    allocation_pool_end: "{{ allocation_pool_end }}"
+  register: subnet_result
+
+- name: Display OpenStack subnet creation result
+  ansible.builtin.debug:
+    msg:
+      - "OpenStack subnet '{{ sn_name }}' created successfully"
+      - "Resource UID: {{ subnet_result.id }}"
+
+- name: Create router
+  when: default_subnet_external_gateway
+  openstack.cloud.router:
+    name: "router-{{ sn_name }}"
+    network: "{{ default_subnet_external_network }}"
+    interfaces:
+      - "{{ subnet_result.id }}"
+  register: router_result
+
+- name: Display OpenStack router creation result
+  ansible.builtin.debug:
+    msg:
+      - "OpenStack router for subnet '{{ sn_name }}' created successfully"
+      - "Resource UID: {{ router_result.router.id }}"

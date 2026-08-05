@@ -1,0 +1,16 @@
+# Integration test requirements
+# ansible-core 2.19.x is the last version that supports Python 3.11
+# (2.20.x requires Python 3.12+)
+ansible-core>=2.19.0,<2.20.0
+cffi==2.0.0
+cryptography==46.0.4
+Jinja2==3.1.6
+MarkupSafe==3.0.3
+packaging==26.0
+pathspec==1.0.4
+pycparser==3.0
+PyYAML==6.0.3
+requests==2.32.5
+resolvelib==1.2.1
+urllib3==1.26.20
+yamllint==1.38.0

@@ -1,0 +1,41 @@
+---
+- name: List agents currently labeled with the cluster order label
+  kubernetes.core.k8s_info:
+    kind: Agent
+    api_version: agent-install.openshift.io/v1beta1
+    namespace: "{{ default_agent_namespace }}"
+    label_selectors:
+      - "{{ cluster_order_label }}={{ manage_agents_cluster_order_name }}"
+  register: manage_agents_allocated
+
+- name: List new agents
+  ansible.builtin.set_fact:
+    manage_agents_new: >
+      {{ manage_agents_allocated.resources | selectattr('spec.approved', 'false') }}
+
+- name: Attach new agents to cluster network
+  ansible.builtin.include_role:
+    name: osac.esi.l2
+    tasks_from: set_networks_for_node
+  vars:
+    node: "{{ item.metadata.annotations[agent_host_uuid_label] }}"
+    networks:
+    - "{{ manage_agents_cluster_network }}"
+  loop: "{{ manage_agents_new }}"
+  loop_control:
+    label: "Attach agent {{ item.metadata.name }}"
+  when: not (manage_agents_skip_network_attach | default(false))
+
+- name: Approve selected agents
+  kubernetes.core.k8s_json_patch:
+    api_version: agent-install.openshift.io/v1beta1
+    kind: Agent
+    name: "{{ item.metadata.name }}"
+    namespace: "{{ item.metadata.namespace }}"
+    patch:
+      - op: add
+        path: /spec/approved
+        value: true
+  loop: "{{ manage_agents_new }}"
+  loop_control:
+    label: "Approve agent {{ item.metadata.name }}"

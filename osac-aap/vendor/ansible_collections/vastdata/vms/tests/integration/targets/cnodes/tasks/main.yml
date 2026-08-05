@@ -1,0 +1,261 @@
+---
+# Integration tests for cnodes module
+# Full lifecycle: discover -> check_mode -> idempotency -> delete -> create -> disable -> enable -> restore
+# Runs on ALL cluster types (loopback and real multi-node)
+#
+# Configuration:
+# Set values in tests/integration/integration_config.yml
+
+# ====================
+# Setup
+# ====================
+
+- name: Check if credentials are available
+  ansible.builtin.set_fact:
+    has_credentials: "{{ (vast_vms | default('') | length > 0) and (vast_username | default('') | length > 0) and (vast_password | default('') | length > 0) }}"
+
+- name: Set test conditions
+  ansible.builtin.set_fact:
+    can_run_tests: "{{ has_credentials | bool }}"
+
+# ====================
+# Discover CNode
+# ====================
+
+- name: Fetch list of existing cnodes from API (auto-discovery)
+  ansible.builtin.uri:
+    url: "https://{{ vast_vms }}/api/cnodes/"
+    method: GET
+    user: "{{ vast_username }}"
+    password: "{{ vast_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: 200
+  register: cnodes_list
+  when: can_run_tests | bool
+
+- name: Set cnode facts from auto-discovery
+  ansible.builtin.set_fact:
+    discovered_cnode_id: "{{ cnodes_list.json[0].id }}"
+    original_cnode_enabled: "{{ cnodes_list.json[0].enabled }}"
+    discovered_cnode_cluster_id: "{{ cnodes_list.json[0].cluster_id }}"
+    discovered_cnode_ip: "{{ cnodes_list.json[0].ip }}"
+  when: can_run_tests | bool and cnodes_list.json is defined and cnodes_list.json | length > 0
+
+- name: Determine whether cnode tests can run
+  ansible.builtin.set_fact:
+    can_test_cnode: "{{ can_run_tests | bool and discovered_cnode_id is defined }}"
+
+# ====================
+# Check Mode Tests (non-destructive, run first while cluster is healthy)
+# ====================
+
+- name: Test check mode - update enabled to opposite of current state
+  vastdata.vms.cnodes:
+    vms: "{{ vms_auth }}"
+    id: "{{ discovered_cnode_id }}"
+    enabled: "{{ not (original_cnode_enabled | bool) }}"
+    state: present
+  check_mode: true
+  register: result_check
+  when: can_test_cnode | bool
+
+- name: Verify check mode reported the expected change
+  ansible.builtin.assert:
+    that:
+      - result_check is changed
+      - result_check.cnodes is defined
+  when: result_check is not skipped
+
+- name: Verify check mode did not actually apply changes
+  vastdata.vms.cnodes:
+    vms: "{{ vms_auth }}"
+    id: "{{ discovered_cnode_id }}"
+    enabled: "{{ original_cnode_enabled | bool }}"
+    state: present
+  register: result_no_change
+  when: can_test_cnode | bool
+
+- name: Verify cnode state is unchanged after check mode
+  ansible.builtin.assert:
+    that:
+      - result_no_change is not changed
+  when: result_no_change is not skipped
+
+# ====================
+# Idempotency Test (non-destructive)
+# ====================
+
+- name: Test idempotency - set enabled to same value as current
+  vastdata.vms.cnodes:
+    vms: "{{ vms_auth }}"
+    id: "{{ discovered_cnode_id }}"
+    enabled: "{{ original_cnode_enabled | bool }}"
+    state: present
+  register: result_idempotent
+  when: can_test_cnode | bool
+
+- name: Verify idempotency (should not change)
+  ansible.builtin.assert:
+    that:
+      - result_idempotent is not changed
+  when: result_idempotent is not skipped
+
+# ====================
+# Delete Test (remove cnode from cluster)
+# ====================
+
+- name: Test delete - remove the discovered cnode
+  vastdata.vms.cnodes:
+    vms: "{{ vms_auth }}"
+    id: "{{ discovered_cnode_id }}"
+    state: absent
+  register: result_delete
+  when: can_test_cnode | bool
+
+- name: Verify cnode was deleted
+  ansible.builtin.assert:
+    that:
+      - result_delete is changed
+  when: result_delete is not skipped
+
+# ====================
+# Create Test (re-add cnode by IP)
+# ====================
+
+- name: Test create - re-add the cnode by IP
+  vastdata.vms.cnodes:
+    vms: "{{ vms_auth }}"
+    ip: "{{ discovered_cnode_ip }}"
+    cluster_id: "{{ discovered_cnode_cluster_id }}"
+    state: present
+  register: result_create
+  when: can_test_cnode | bool
+
+- name: Verify cnode was created
+  ansible.builtin.assert:
+    that:
+      - result_create is changed
+      - result_create.cnodes is defined
+      - result_create.cnodes.id is defined
+  when: result_create is not skipped
+
+- name: Save re-created cnode ID
+  ansible.builtin.set_fact:
+    recreated_cnode_id: "{{ result_create.cnodes.id }}"
+  when: result_create is not skipped and result_create is not failed
+
+# ====================
+# Disable Test (enabled=false)
+# ====================
+
+- name: Test disable - set enabled to false
+  vastdata.vms.cnodes:
+    vms: "{{ vms_auth }}"
+    id: "{{ recreated_cnode_id | default(discovered_cnode_id) }}"
+    enabled: false
+    state: present
+  register: result_disable
+  when: can_test_cnode | bool
+
+- name: Verify cnode was disabled
+  ansible.builtin.assert:
+    that:
+      - result_disable is changed
+      - result_disable.cnodes is defined
+  when: result_disable is not skipped
+
+# ====================
+# Enable Test with Diff Mode (enabled=true, restore)
+# ====================
+
+- name: Test enable with diff mode - set enabled to true
+  vastdata.vms.cnodes:
+    vms: "{{ vms_auth }}"
+    id: "{{ recreated_cnode_id | default(discovered_cnode_id) }}"
+    enabled: true
+    state: present
+  diff: true
+  register: result_enable
+  when: can_test_cnode | bool
+
+- name: Verify cnode was enabled and diff data returned
+  ansible.builtin.assert:
+    that:
+      - result_enable is changed
+      - result_enable.diff is defined
+      - result_enable.diff.before is defined
+      - result_enable.diff.after is defined
+  when: result_enable is not skipped
+
+# ====================
+# Error Handling Tests
+# ====================
+
+- name: Test error handling - invalid state value
+  vastdata.vms.cnodes:
+    vms: "{{ vms_auth }}"
+    id: "{{ recreated_cnode_id | default(discovered_cnode_id) | default(1) }}"
+    state: invalid
+  register: result
+  ignore_errors: true
+  when: can_run_tests | bool
+
+- name: Verify error was caught
+  ansible.builtin.assert:
+    that:
+      - result is failed
+      - "'invalid' in result.msg"
+  when: result is not skipped
+
+# ====================
+# Safety Net
+# ====================
+# Ensure the cnode is back and enabled no matter what failed above.
+
+- name: Safety net - re-add cnode if it was deleted but not re-created
+  vastdata.vms.cnodes:
+    vms: "{{ vms_auth }}"
+    ip: "{{ discovered_cnode_ip }}"
+    cluster_id: "{{ discovered_cnode_cluster_id }}"
+    state: present
+  when: can_test_cnode | bool and recreated_cnode_id is not defined
+  failed_when: false
+
+- name: Safety net - re-enable cnode if it was disabled
+  vastdata.vms.cnodes:
+    vms: "{{ vms_auth }}"
+    id: "{{ recreated_cnode_id | default(discovered_cnode_id) }}"
+    enabled: true
+    state: present
+  when: can_test_cnode | bool
+  failed_when: false
+
+# ====================
+# Skip Messages
+# ====================
+
+- name: Skip message when no credentials
+  ansible.builtin.debug:
+    msg: |
+      Skipping cnodes integration tests - missing credentials.
+
+      To enable integration tests, set the following in:
+        tests/integration/integration_config.yml
+
+      VAST credentials:
+        vast_vms: "vms.example.com"
+        vast_username: "admin"
+        vast_password: "password"
+
+      Then run: ansible-test integration cnodes -v
+  when: not (can_run_tests | bool)
+
+- name: Skip message when no cnodes found in the cluster
+  ansible.builtin.debug:
+    msg: |
+      Skipping cnode-specific tests - no CNodes found in the cluster.
+
+      CNodes represent physical compute nodes; tests require at least
+      one existing CNode to be discovered via the API.
+  when: can_run_tests | bool and not (can_test_cnode | bool)

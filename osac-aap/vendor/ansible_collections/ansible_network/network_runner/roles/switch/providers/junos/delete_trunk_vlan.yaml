@@ -1,0 +1,12 @@
+---
+- name: "junos: delete VLAN from trunk port"
+  junos_command:
+    commands:
+      - config
+      - "delete interfaces {{ port_name }} unit 0 family ethernet-switching vlan members {{ _vlan_id }}"
+      - commit
+  register: result
+  retries: "{{ _retries }}"
+  delay: "{{ _delay }}"
+  until: result.msg is not defined or result.msg.find(junos_retries_msg) == -1
+  connection: network_cli

@@ -1,0 +1,15 @@
+- name: Enumerate cluster templates
+  ansible.builtin.set_fact:
+    osac_cluster_templates: "{{ osac_template_collections | osac.service.find_cluster_template_roles }}"
+
+- name: Enumerate ComputeInstance templates
+  ansible.builtin.set_fact:
+    osac_compute_instance_templates: "{{ osac_template_collections | osac.service.find_compute_instance_template_roles }}"
+
+- name: Enumerate BareMetalInstance templates
+  ansible.builtin.set_fact:
+    osac_bare_metal_instance_templates: "{{ osac_template_collections | osac.service.find_bare_metal_instance_template_roles }}"
+
+- name: Enumerate NetworkClass definitions
+  ansible.builtin.set_fact:
+    osac_network_classes: "{{ osac_template_collections | osac.service.find_network_class_roles }}"

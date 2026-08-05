@@ -1,0 +1,86 @@
+version: "2"
+
+formatters:
+  enable:
+    - gofmt
+
+run:
+  timeout: 10m
+
+issues:
+  uniq-by-line: true
+
+output:
+  formats:
+    text:
+      path: stdout
+      print-linter-name: true
+      print-issued-lines: true
+      colors: true
+
+linters:
+  default: standard
+  enable:
+    - depguard
+    - errorlint
+    - ginkgolinter
+    - gocyclo
+    - gosec
+    - misspell
+    - nolintlint
+  settings:
+    gosec:
+      excludes:
+        # G104 (unhandled errors) is redundant with errcheck. The std-error-handling
+        # exclusion preset already suppresses errcheck for Close/Flush/Print patterns,
+        # and the text rule below covers MarkDeprecated/MarkHidden. G104 re-flags the
+        # same lines because it doesn't share errcheck's suppression mechanisms.
+        - G104
+        # G101 (hardcoded credentials) uses a name heuristic that produces too many
+        # false positives on Go const/var names containing "Secret"/"Password"/"Token".
+        - G101
+        # G404 (weak RNG) flags math/rand/v2 which is the correct non-crypto RNG.
+        # depguard already bans math/rand (v1).
+        - G404
+    depguard:
+      rules:
+        main:
+          deny:
+            - pkg: ^math/rand$
+              desc: Use math/rand/v2 instead
+    staticcheck:
+      dot-import-whitelist:
+        - "github.com/onsi/ginkgo/v2"
+        - "github.com/onsi/ginkgo/v2/dsl/core"
+        - "github.com/onsi/gomega"
+        - "github.com/onsi/gomega/gbytes"
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - std-error-handling
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+    rules:
+      - linters:
+          - gosec
+          - errcheck
+        path: _test\.go
+      # Test infrastructure: internal/testing/ helpers, it/ integration tooling,
+      # and database_container.go (test-only DB container, lives in package database
+      # to avoid import cycles). These are not _test.go files but are only used from
+      # test suites. Security linters produce false positives here (subprocess exec,
+      # relaxed file permissions, InsecureSkipVerify, weak RNG for naming, etc.).
+      - linters:
+          - gosec
+          - errcheck
+          - gocyclo
+        path: (internal/testing/|^it/|internal/database/database_container\.go)
+      - linters:
+          - unused
+        path: _mock\.go
+      - linters:
+          - errcheck
+        text: MarkDeprecated|MarkHidden

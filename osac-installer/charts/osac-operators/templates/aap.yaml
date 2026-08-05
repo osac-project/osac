@@ -1,0 +1,32 @@
+{{- if .Values.aapOperator.enabled }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ansible-aap
+  labels:
+    openshift.io/cluster-monitoring: "true"
+    {{- include "osac-operators.labels" . | nindent 4 }}
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: dev-ansible-automation-platform-operator
+  namespace: ansible-aap
+  labels:
+    {{- include "osac-operators.labels" . | nindent 4 }}
+spec: {}
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: dev-ansible-automation-platform
+  namespace: ansible-aap
+  labels:
+    {{- include "osac-operators.labels" . | nindent 4 }}
+spec:
+  channel: {{ .Values.aapOperator.channel }}
+  installPlanApproval: Automatic
+  name: ansible-automation-platform-operator
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+{{- end }}

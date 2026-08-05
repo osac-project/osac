@@ -1,0 +1,73 @@
+{{/*
+Copyright (c) 2025 Red Hat Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+the License. You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+*/}}
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: fulfillment-ingress-proxy
+spec:
+  selector:
+    matchLabels:
+      app: fulfillment-ingress-proxy
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: fulfillment-ingress-proxy
+    spec:
+      volumes:
+      - name: config
+        configMap:
+          name: fulfillment-ingress-proxy
+      - name: tls
+        secret:
+          secretName: fulfillment-api-tls
+      containers:
+      - name: envoy
+        image: {{ .Values.images.envoy }}
+        volumeMounts:
+        - name: config
+          mountPath: /etc/envoy
+        - name: tls
+          mountPath: /etc/envoy/tls
+        command:
+        - envoy
+        - --config-path
+        - /etc/envoy/envoy.yaml
+        ports:
+        - name: external-api
+          protocol: TCP
+          containerPort: 8000
+        - name: internal-api
+          protocol: TCP
+          containerPort: 8001
+        - name: metrics
+          protocol: TCP
+          containerPort: 8002
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8002
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 5
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8002
+          initialDelaySeconds: 10
+          periodSeconds: 15
+          timeoutSeconds: 5
+          failureThreshold: 5

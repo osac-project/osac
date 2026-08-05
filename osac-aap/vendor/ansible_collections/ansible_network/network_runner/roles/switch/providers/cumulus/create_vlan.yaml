@@ -1,0 +1,5 @@
+---
+- name: "cumulus: create vlan using nvue"
+  raw: |
+    nv set bridge domain br_default vlan {{ _vlan_id }}
+    nv config apply -y

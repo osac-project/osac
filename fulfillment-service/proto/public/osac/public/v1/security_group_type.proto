@@ -1,0 +1,255 @@
+//
+// Copyright (c) 2025 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.public.v1;
+
+import "google/api/field_behavior.proto";
+import "osac/public/v1/metadata_type.proto";
+
+// Represents a virtual firewall controlling network traffic for compute instances.
+//
+// SecurityGroup acts as a stateful firewall that controls inbound (ingress) and outbound (egress) traffic for
+// compute instances within a VirtualNetwork. Rules are stateful, meaning return traffic is automatically allowed
+// for established connections.
+//
+// SecurityGroups follow a default-deny policy: if no rules match, traffic is blocked. This ensures secure-by-default
+// behavior where only explicitly allowed traffic can pass through.
+//
+// SecurityGroups are scoped to a VirtualNetwork and can be attached to multiple compute instances within that
+// network. They cannot be used across different VirtualNetworks.
+//
+// The parent VirtualNetwork relationship is established via metadata.annotations using the 'osac.openshift.io/owner-reference'
+// key with the VirtualNetwork ID as the value. This enables proper resource hierarchy for garbage collection - when
+// a VirtualNetwork is deleted, all associated SecurityGroups are automatically cleaned up.
+message SecurityGroup {
+  // Unique identifier of the security group.
+  string id = 1;
+
+  // Metadata of the security group, including name, labels, tenant, and timestamps.
+  //
+  // The parent VirtualNetwork relationship should be specified via metadata.annotations using the
+  // 'osac.openshift.io/owner-reference' key with the VirtualNetwork ID as the value. This establishes resource
+  // hierarchy for garbage collection.
+  Metadata metadata = 2;
+
+  // Desired configuration of the security group (user-modifiable).
+  SecurityGroupSpec spec = 3;
+
+  // Current state of the security group (system-provided, read-only).
+  SecurityGroupStatus status = 4;
+}
+
+// Defines the desired configuration for a SecurityGroup.
+//
+// The spec contains user-specified firewall rules that define allowed network traffic. Rules are evaluated
+// in order, and the first matching rule determines whether traffic is allowed. If no rules match, traffic
+// is denied by default.
+message SecurityGroupSpec {
+  // Parent VirtualNetwork ID for this security group.
+  //
+  // Must reference the ID of an existing VirtualNetwork in READY state. Security groups are scoped to a
+  // VirtualNetwork and can only be applied to compute instances within that network. This field is required
+  // and immutable after creation.
+  //
+  // Example: "vnet-12345abc"
+  string virtual_network = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE
+  ];
+
+  // List of rules controlling inbound traffic to compute instances.
+  //
+  // Rules are evaluated in order; first matching rule determines whether traffic is allowed. If no rules
+  // match, traffic is denied by default.
+  //
+  // Example: Allow SSH from specific CIDR, allow HTTP/HTTPS from anywhere, allow ICMP ping
+  repeated SecurityRule ingress = 2;
+
+  // List of rules controlling outbound traffic from compute instances.
+  //
+  // Rules are evaluated in order; first matching rule determines whether traffic is allowed. If no rules
+  // match, traffic is denied by default.
+  //
+  // Example: Allow all outbound traffic, or restrict to specific destinations
+  repeated SecurityRule egress = 3;
+}
+
+// Defines a single firewall rule for network traffic filtering.
+//
+// SecurityRule specifies which traffic to allow based on protocol, port ranges (for TCP/UDP), and source/
+// destination CIDR blocks. Rules are stateful - return traffic for established connections is automatically
+// allowed.
+//
+// Port ranges apply only to TCP and UDP protocols. For ICMP and ALL protocols, port fields are ignored.
+//
+// CIDR fields support IPv4-only, IPv6-only, or dual-stack configurations:
+// - IPv4-only: Set ipv4_cidr, leave ipv6_cidr empty
+// - IPv6-only: Set ipv6_cidr, leave ipv4_cidr empty
+// - Dual-stack: Set both ipv4_cidr and ipv6_cidr (creates two separate rules internally)
+message SecurityRule {
+  // Protocol to match for this rule.
+  //
+  // Use PROTOCOL_ALL to match all protocols (wildcard). Use PROTOCOL_TCP or PROTOCOL_UDP when port ranges
+  // are needed. Use PROTOCOL_ICMP for ping and other ICMP traffic.
+  Protocol protocol = 1;
+
+  // Starting port number for the rule (1-65535).
+  //
+  // Required for tcp/udp protocols, ignored for icmp/all. For single port, set port_from = port_to.
+  // Must be <= port_to. Validation enforced at service layer.
+  //
+  // Example: 22 (SSH), 80 (HTTP), 443 (HTTPS), 3306 (MySQL)
+  optional int32 port_from = 2;
+
+  // Ending port number for the rule (1-65535).
+  //
+  // Required for tcp/udp protocols, ignored for icmp/all. Must be >= port_from. For single port, set
+  // port_from = port_to. Validation enforced at service layer.
+  //
+  // Example: 22 (single port), 8000 (range 8000-9000)
+  optional int32 port_to = 3;
+
+  // IPv4 CIDR block for source (ingress) or destination (egress) addresses.
+  //
+  // Must be valid CIDR notation. Use '0.0.0.0/0' to match all IPv4 addresses. Validation enforced at
+  // service layer.
+  //
+  // Example: '192.168.1.0/24', '10.0.0.0/8', '0.0.0.0/0' (all IPv4)
+  optional string ipv4_cidr = 4;
+
+  // IPv6 CIDR block for source (ingress) or destination (egress) addresses.
+  //
+  // Must be valid CIDR notation. Use '::/0' to match all IPv6 addresses. Validation enforced at service
+  // layer.
+  //
+  // Example: '2001:db8::/32', 'fd00::/64', '::/0' (all IPv6)
+  optional string ipv6_cidr = 5;
+}
+
+// Network protocol types for SecurityRule matching.
+//
+// Determines which layer 4 protocol the rule applies to. Protocol affects whether port range fields are
+// applicable (TCP/UDP) or ignored (ICMP/ALL).
+enum Protocol {
+  // Unknown protocol (invalid). This should never be used in actual rules.
+  PROTOCOL_UNSPECIFIED = 0;
+
+  // TCP protocol. Port ranges (port_from, port_to) are required for TCP rules.
+  //
+  // Used for connection-oriented protocols like HTTP, HTTPS, SSH, database connections, etc.
+  PROTOCOL_TCP = 1;
+
+  // UDP protocol. Port ranges (port_from, port_to) are required for UDP rules.
+  //
+  // Used for connectionless protocols like DNS, NTP, DHCP, VoIP, etc.
+  PROTOCOL_UDP = 2;
+
+  // ICMP protocol (ping and other control messages). Port ranges are not applicable.
+  //
+  // Used for network diagnostics (ping), error reporting, and control messages.
+  PROTOCOL_ICMP = 3;
+
+  // All protocols (wildcard). Port ranges are not applicable.
+  //
+  // Matches any protocol. Useful for allowing all traffic from a trusted CIDR block or for egress rules
+  // that permit all outbound traffic.
+  PROTOCOL_ALL = 4;
+}
+
+// Represents the current operational state of a SecurityGroup.
+//
+// Status is system-provided and read-only. Users cannot modify status fields directly; the system updates
+// them based on the reconciliation of the spec and the state of the parent VirtualNetwork.
+message SecurityGroupStatus {
+  // Current lifecycle state of the security group.
+  SecurityGroupState state = 1;
+
+  // Human-readable message providing additional details about the current state.
+  //
+  // For PENDING state, this might contain progress information like "Validating rules" or "Configuring
+  // firewall backend".
+  //
+  // For FAILED state, this contains error details explaining what went wrong, such as:
+  // - "Invalid port range: port_from (100) > port_to (50)"
+  // - "Parent VirtualNetwork not found: vnet-12345"
+  // - "Parent VirtualNetwork not in READY state"
+  // - "Invalid IPv4 CIDR: 192.168.1.0/33"
+  // - "Protocol tcp requires port_from and port_to fields"
+  //
+  // For READY state, this is typically empty or contains confirmation like "Security group active, rules
+  // enforced".
+  optional string message = 2;
+}
+
+// Lifecycle states for SecurityGroup resources.
+//
+// State transitions typically follow: UNSPECIFIED -> PENDING -> READY, with FAILED as a terminal error state
+// that may require user intervention or resource recreation.
+enum SecurityGroupState {
+  // State is unknown or has not been determined yet. This is the default state before initialization.
+  SECURITY_GROUP_STATE_UNSPECIFIED = 0;
+
+  // The security group is being initialized and is not ready for use yet.
+  //
+  // During this state, the system is:
+  // - Validating firewall rules (port ranges, CIDR notation)
+  // - Checking parent VirtualNetwork exists and is in READY state
+  // - Configuring firewall backend
+  // - Installing rules in the network infrastructure
+  //
+  // Security groups in PENDING state cannot be attached to compute instances.
+  SECURITY_GROUP_STATE_PENDING = 1;
+
+  // The security group is fully operational and ready for compute instances to use.
+  //
+  // In this state:
+  // - All rules are validated and active
+  // - Firewall backend is configured
+  // - Security group can be attached to compute instances
+  // - Traffic filtering is enforced according to the rules
+  SECURITY_GROUP_STATE_READY = 2;
+
+  // The security group has encountered an error and is unusable.
+  //
+  // Common failure reasons include:
+  // - Invalid port range (port_from > port_to, or values outside 1-65535)
+  // - Invalid CIDR notation
+  // - Parent VirtualNetwork does not exist
+  // - Parent VirtualNetwork is not in READY state
+  // - Protocol tcp/udp missing required port fields
+  // - Firewall backend configuration error
+  //
+  // The status.message field will contain specific error details. Failed security groups typically require
+  // deletion and recreation with corrected parameters, or resolution of the parent VirtualNetwork issue.
+  SECURITY_GROUP_STATE_FAILED = 3;
+
+  // The security group is being deleted.
+  //
+  // During this state, the system is:
+  // - Removing firewall rules from the network infrastructure
+  // - Cleaning up backend security group resources
+  // - Processing deprovisioning jobs
+  //
+  // The security group will be archived once deletion completes successfully.
+  SECURITY_GROUP_STATE_DELETING = 4;
+
+  // The security group deletion has failed.
+  //
+  // The deprovision operation encountered an error and could not complete.
+  // The status.message field will contain specific error details.
+  // Manual intervention may be required to resolve the underlying issue
+  // before retrying deletion.
+  SECURITY_GROUP_STATE_DELETE_FAILED = 5;
+}

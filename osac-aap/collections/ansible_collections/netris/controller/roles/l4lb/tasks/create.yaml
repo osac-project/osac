@@ -1,0 +1,44 @@
+---
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Create L4LB
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/l4lb"
+    method: POST
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ l4lb_name }}"
+      site:
+        id: "{{ l4lb_site_id }}"
+      tenant:
+        id: "{{ l4lb_tenant_id | default(netris_tenant_id) }}"
+        name: "{{ l4lb_tenant_name | default(netris_tenant_name | default('')) }}"
+      vpc:
+        id: "{{ l4lb_vpc_id }}"
+        name: "{{ l4lb_vpc_name | default('') }}"
+      protocol: "{{ l4lb_protocol | upper }}"
+      ip: "{{ l4lb_ip }}"
+      port: "{{ l4lb_port }}"
+      status: "{{ l4lb_status | default('enable') }}"
+      backendIps: "{{ l4lb_backend }}"
+      healthCheck: "{{ l4lb_health_check | string }}"
+      automatic: "false"
+    return_content: true
+    status_code: [200, 201]
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _l4lb_create_resp
+  no_log: true
+
+- name: Set l4lb_id from create response
+  ansible.builtin.set_fact:
+    l4lb_id: "{{ _l4lb_create_resp.json.data.id | default(_l4lb_create_resp.json.data) }}"
+  when:
+    - not (_l4lb_create_resp.skipped | default(false))
+    - _l4lb_create_resp is changed or (_l4lb_create_resp.status | default(0)) in [200, 201]
+    - _l4lb_create_resp.json is mapping

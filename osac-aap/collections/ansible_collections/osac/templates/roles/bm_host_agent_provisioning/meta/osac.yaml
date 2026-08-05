@@ -1,0 +1,9 @@
+# Define the display name and description of the template
+title: Bare Metal Host Agent Provisioning
+description: >
+  Provisions bare metal hosts with agent-based images using OpenStack Ironic.
+  Requires hostClass 'openstack' and networkClass 'openstack'.
+  Supports ramdisk-based deployment with custom ISO images.
+
+# Specify this is a BareMetalInstance template
+template_type: bare_metal_instance

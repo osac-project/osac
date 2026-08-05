@@ -1,0 +1,22 @@
+---
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Get general settings
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/general"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    validate_certs: "{{ netris_validate_certs }}"
+    timeout: "{{ netris_timeout }}"
+    status_code: 200
+  register: _general_resp
+  no_log: true
+
+- name: Set general facts
+  ansible.builtin.set_fact:
+    netris_general_settings: "{{ _general_resp.json.data }}"
+    netris_auth_token: "{{ _general_resp.json.data | selectattr('name', 'equalto', 'netris_auth_token') | map(attribute='value') | first | default('') }}"

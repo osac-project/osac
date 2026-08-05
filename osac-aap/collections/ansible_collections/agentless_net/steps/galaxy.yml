@@ -1,0 +1,23 @@
+namespace: agentless_net
+name: steps
+version: 1.0.0
+readme: README.md
+authors:
+  - OSAC Project
+  - Yoni Bettan
+description: Agentless network backend step implementations for cluster and external access provisioning
+license:
+  - Apache-2.0
+tags:
+  - infrastructure
+  - cloud
+  - baremetal
+  - networking
+repository: https://github.com/osac-project/osac
+issues: https://github.com/osac-project/osac/issues
+build_ignore: []
+dependencies:
+  agentless_net.l2: "*"
+  agentless_net.l3: "*"
+  agentless_net.ipam: "*"
+  osac.service: "*"

@@ -1,0 +1,105 @@
+---
+- name: Compute Instance Create - Override Test Setup
+  hosts: localhost
+  gather_facts: true
+  vars_files:
+    - ../../../common_vars.yml
+
+  tasks:
+    - name: Read ComputeInstance fixture
+      ansible.builtin.set_fact:
+        test_compute_instance: "{{ lookup('file', '../../../fixtures/computeinstance-test.yaml') | from_yaml }}"
+
+    - name: Clear override log
+      ansible.builtin.file:
+        path: /tmp/osac_test_overrides.log
+        state: absent
+
+    - name: Create empty override log
+      ansible.builtin.file:
+        path: /tmp/osac_test_overrides.log
+        state: touch
+
+    - name: Set test variables with all overrides
+      ansible.builtin.set_fact:
+        ansible_eda:
+          event:
+            payload: "{{ test_compute_instance }}"
+        tenant_target_namespace: "computeinstance-test-vm-work"
+        tenant_storage_class_name: "test-storage-class"
+
+        # Override 3 workflow extension points
+        hook_workflow_start:
+          name: osac.test_overrides.workflow_hooks
+          tasks_from: workflow_start.yml
+
+        hook_workflow_complete:
+          name: osac.test_overrides.workflow_hooks
+          tasks_from: workflow_complete.yml
+
+        # NOTE: Using real template (osac.templates.ocp_virt_vm from fixture)
+        # We override the hooks below to test the override mechanism
+        # Note: build_spec and validate are NOT overrideable (CRITICAL steps)
+
+        # Override 6 template extension points
+        create_step_secrets_override:
+          name: osac.test_overrides.vm_create_hooks
+          tasks_from: secrets.yml
+
+        create_step_modify_vm_spec_override:
+          name: osac.test_overrides.vm_create_hooks
+          tasks_from: modify_vm_spec.yml
+
+        create_step_pre_create_hook_override:
+          name: osac.test_overrides.vm_create_hooks
+          tasks_from: pre_create_hook.yml
+
+        create_step_resources_override:
+          name: osac.test_overrides.vm_create_hooks
+          tasks_from: resources.yml
+
+        create_step_post_create_hook_override:
+          name: osac.test_overrides.vm_create_hooks
+          tasks_from: post_create_hook.yml
+
+        create_step_wait_annotate_override:
+          name: osac.test_overrides.vm_create_hooks
+          tasks_from: wait_annotate.yml
+
+        workflow_name: compute_instance_create
+
+- name: Import compute instance create workflow with overrides
+  ansible.builtin.import_playbook: osac.workflows.compute_instance.create
+
+- name: Verify override results
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+
+  tasks:
+    - name: Read override log
+      ansible.builtin.slurp:
+        path: /tmp/osac_test_overrides.log
+      register: override_log_content
+
+    - name: Parse override log
+      ansible.builtin.set_fact:
+        override_log: "{{ override_log_content.content | b64decode }}"
+
+    - name: Display override log for debugging
+      ansible.builtin.debug:
+        var: override_log
+
+    - name: Verify all overrides executed
+      ansible.builtin.assert:
+        that:
+          - "'workflow_start' in override_log"
+          - "'workflow_complete' in override_log"
+          - "'vm_create_secrets' in override_log"
+          - "'vm_create_modify_vm_spec' in override_log"
+          - "'vm_create_pre_create_hook' in override_log"
+          - "'vm_create_resources' in override_log"
+          - "'vm_create_post_create_hook' in override_log"
+          - "'vm_create_wait_annotate' in override_log"
+        fail_msg: "Not all override points were executed. Log: {{ override_log }}"

@@ -1,0 +1,246 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "osac-operator.fullname" . }}-clusterorder-editor
+  labels:
+    {{- include "osac-operator.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - clusterorders
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - clusterorders/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "osac-operator.fullname" . }}-clusterorder-viewer
+  labels:
+    {{- include "osac-operator.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - clusterorders
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - clusterorders/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "osac-operator.fullname" . }}-computeinstance-admin
+  labels:
+    {{- include "osac-operator.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - computeinstances
+  verbs:
+  - "*"
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - computeinstances/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "osac-operator.fullname" . }}-computeinstance-editor
+  labels:
+    {{- include "osac-operator.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - computeinstances
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - computeinstances/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "osac-operator.fullname" . }}-computeinstance-viewer
+  labels:
+    {{- include "osac-operator.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - computeinstances
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - computeinstances/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "osac-operator.fullname" . }}-tenant-admin
+  labels:
+    {{- include "osac-operator.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - tenants
+  verbs:
+  - "*"
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - tenants/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "osac-operator.fullname" . }}-tenant-editor
+  labels:
+    {{- include "osac-operator.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - tenants
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - tenants/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "osac-operator.fullname" . }}-tenant-viewer
+  labels:
+    {{- include "osac-operator.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - tenants
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - tenants/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "osac-operator.fullname" . }}-admin
+  labels:
+    {{- include "osac-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: admin
+subjects:
+- kind: ServiceAccount
+  name: {{ include "osac-operator.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "osac-operator.fullname" . }}-metrics-auth
+  labels:
+    {{- include "osac-operator.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - authentication.k8s.io
+  resources:
+  - tokenreviews
+  verbs:
+  - create
+- apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
+  verbs:
+  - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "osac-operator.fullname" . }}-metrics-auth
+  labels:
+    {{- include "osac-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "osac-operator.fullname" . }}-metrics-auth
+subjects:
+- kind: ServiceAccount
+  name: {{ include "osac-operator.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "osac-operator.fullname" . }}-metrics-reader
+  labels:
+    {{- include "osac-operator.labels" . | nindent 4 }}
+rules:
+- nonResourceURLs:
+  - "/metrics"
+  verbs:
+  - get

@@ -1,0 +1,26 @@
+# kind cluster configuration for OSAC development
+# Usage: kind create cluster --name osac-dev --config kind-config.yaml
+apiVersion: kind.x-k8s.io/v1alpha4
+kind: Cluster
+name: osac-dev
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      # Envoy Gateway ingress (HTTPS) — mapped to NodePort 30443
+      - containerPort: 30443
+        hostPort: 8443
+        listenAddress: 127.0.0.1
+        protocol: TCP
+      # Envoy Gateway ingress (HTTP) — mapped to NodePort 30080
+      - containerPort: 30080
+        hostPort: 8080
+        listenAddress: 127.0.0.1
+        protocol: TCP
+    kubeadmConfigPatches:
+      - |
+        kind: ClusterConfiguration
+        apiServer:
+          extraArgs:
+            # Allow TokenReview from Authorino
+            service-account-issuer: https://kubernetes.default.svc
+            service-account-signing-key-file: /etc/kubernetes/pki/sa.key

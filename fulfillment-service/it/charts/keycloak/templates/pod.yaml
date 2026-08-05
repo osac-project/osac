@@ -1,0 +1,105 @@
+{{/*
+Copyright (c) 2025 Red Hat Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+the License. You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+*/}}
+
+apiVersion: v1
+kind: Pod
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: keycloak-service
+  labels:
+    app: keycloak-service
+spec:
+  volumes:
+  - name: realm
+    secret:
+      secretName: keycloak-realm
+  - name: tls
+    secret:
+      secretName: keycloak-tls
+  {{ if .Values.certs.caBundle.configMap }}
+  - name: cas
+    configMap:
+      name: {{ .Values.certs.caBundle.configMap }}
+  {{ end }}
+  - name: db
+    projected:
+      sources:
+      {{- if .Values.database.connection }}
+      {{ range .Values.database.connection }}
+      {{ if .configMap }}
+      - configMap:
+          name: {{ .configMap.name }}
+          items:
+          {{ range .configMap.items }}
+          - key: {{ .key }}
+            path: {{ .param }}
+          {{ end }}
+      {{ end }}
+      {{ if .secret }}
+      - secret:
+          name: {{ .secret.name }}
+          items:
+          {{ range .secret.items }}
+          - key: {{ .key }}
+            path: {{ .param }}
+          {{ end }}
+      {{ end }}
+      {{ end }}
+      {{else }}
+        []
+      {{end }}
+  containers:
+  - name: server
+    image: "{{ .Values.images.keycloak }}"
+    imagePullPolicy: IfNotPresent
+    volumeMounts:
+    - name: realm
+      mountPath: /opt/keycloak/data/import
+      readOnly: true
+    - name: tls
+      mountPath: /opt/keycloak/tls
+      readOnly: true
+    {{ if .Values.certs.caBundle.configMap }}
+    - name: cas
+      mountPath: /opt/keycloak/cas
+      readOnly: true
+    {{ end }}
+    - name: db
+      mountPath: /opt/keycloak/db
+      readOnly: true
+    env:
+    - name: KC_BOOTSTRAP_ADMIN_USERNAME
+      value: {{ .Values.admin.username | quote }}
+    - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+      value: {{ .Values.admin.password | quote }}
+    command:
+    - /bin/bash
+    - -c
+    - {{ include "keycloak.start" . | quote }}
+    ports:
+    - name: https
+      containerPort: 8000
+    readinessProbe:
+      httpGet:
+        path: /realms/master
+        port: 8000
+        scheme: HTTPS
+      initialDelaySeconds: 30
+      periodSeconds: 10
+    livenessProbe:
+      httpGet:
+        path: /realms/master
+        port: 8000
+        scheme: HTTPS
+      initialDelaySeconds: 60
+      periodSeconds: 30

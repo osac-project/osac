@@ -1,0 +1,4 @@
+---
+- name: No-op cluster post-install for testing
+  ansible.builtin.debug:
+    msg: "Test mode - skipping actual cluster post-install"

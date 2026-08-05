@@ -1,0 +1,33 @@
+{{- if .Values.metallb.enabled }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: metallb-system
+  labels:
+    openshift.io/cluster-monitoring: "true"
+    {{- include "osac-operators.labels" . | nindent 4 }}
+  annotations:
+    workload.openshift.io/allowed: management
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: metallb-operator
+  namespace: metallb-system
+  labels:
+    {{- include "osac-operators.labels" . | nindent 4 }}
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: metallb-operator
+  namespace: metallb-system
+  labels:
+    {{- include "osac-operators.labels" . | nindent 4 }}
+spec:
+  channel: {{ .Values.metallb.channel }}
+  name: metallb-operator
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+  installPlanApproval: Automatic
+{{- end }}

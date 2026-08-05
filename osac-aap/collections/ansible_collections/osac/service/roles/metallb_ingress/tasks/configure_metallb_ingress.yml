@@ -1,0 +1,138 @@
+# this playbook follows the instructions detailed at https://docs.redhat.com/en/documentation/openshift_container_platform/4.19/html/hosted_control_planes/managing-hosted-control-planes#hcp-bm-ingress_hcp-manage-bm
+
+- name: Set metallb namespace
+  ansible.builtin.set_fact:
+    metallb_namespace: metallb-system
+
+- name: Create metallb namespace
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ metallb_ingress_admin_kubeconfig }}"
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ metallb_namespace }}"
+        labels:
+          openshift.io/cluster-monitoring: "true"
+        annotations:
+          workload.openshift.io/allowed: management
+
+- name: Create metallb operator group
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ metallb_ingress_admin_kubeconfig }}"
+    definition:
+      apiVersion: operators.coreos.com/v1
+      kind: OperatorGroup
+      metadata:
+        name: metallb-operator-operatorgroup
+        namespace: "{{ metallb_namespace }}"
+
+- name: Create metallb subscription
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ metallb_ingress_admin_kubeconfig }}"
+    definition:
+      apiVersion: operators.coreos.com/v1alpha1
+      kind: Subscription
+      metadata:
+        name: metallb-operator
+        namespace: "{{ metallb_namespace }}"
+      spec:
+        channel: "stable"
+        name: metallb-operator
+        source: redhat-operators
+        sourceNamespace: openshift-marketplace
+
+- name: Create metallb instance
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ metallb_ingress_admin_kubeconfig }}"
+    definition:
+      apiVersion: metallb.io/v1beta1
+      kind: MetalLB
+      metadata:
+        name: metallb
+        namespace: "{{ metallb_namespace }}"
+  register: metallb_ingress_instance
+
+  # this can fail if the operator install has not completed
+  # retry once every 10 seconds for 10 minutes
+  until: metallb_ingress_instance is successful
+  retries: 60
+  delay: 10
+
+- name: Create metallb ip address pool
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ metallb_ingress_admin_kubeconfig }}"
+    definition:
+      apiVersion: metallb.io/v1beta1
+      kind: IPAddressPool
+      metadata:
+        name: ingress-ipaddresspool
+        namespace: "{{ metallb_namespace }}"
+      spec:
+        autoAssign: false
+        addresses:
+          - "{{ metallb_ingress_ip }}-{{ metallb_ingress_ip }}"
+  register: metallb_ingress_ip_address_pool
+
+  # this can fail if the metallb webhook isn't active yet
+  # retry once every 10 seconds for 10 minutes
+  until: metallb_ingress_ip_address_pool is successful
+  retries: 60
+  delay: 10
+
+- name: Create metallb l2advertisement
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ metallb_ingress_admin_kubeconfig }}"
+    definition:
+      apiVersion: metallb.io/v1beta1
+      kind: L2Advertisement
+      metadata:
+        name: ingress-l2-advertisement
+        namespace: "{{ metallb_namespace }}"
+      spec:
+        ipAddressPools:
+          - ingress-ipaddresspool
+  register: metallb_ingress_l2advertisement
+
+  # this can fail if the metallb webhook isn't active yet
+  # retry once every 10 seconds for 10 minutes
+  until: metallb_ingress_l2advertisement is successful
+  retries: 60
+  delay: 10
+  when: worker_bgp_params is not defined
+
+- name: Configure BGP
+  ansible.builtin.include_tasks: configure_bgp.yml
+  when: worker_bgp_params is defined
+
+- name: Create metallb ingress service
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ metallb_ingress_admin_kubeconfig }}"
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        annotations:
+          metallb.universe.tf/address-pool: ingress-ipaddresspool
+        name: external-ingress
+        namespace: openshift-ingress
+      spec:
+        ports:
+          - name: http
+            protocol: TCP
+            port: 80
+            targetPort: 80
+          - name: https
+            protocol: TCP
+            port: 443
+            targetPort: 443
+        selector:
+          ingresscontroller.operator.openshift.io/deployment-ingresscontroller: default
+        type: LoadBalancer

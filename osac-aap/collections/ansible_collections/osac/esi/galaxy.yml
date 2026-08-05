@@ -1,0 +1,16 @@
+namespace: osac
+name: esi
+version: 1.0.0
+readme: README.md
+authors:
+  - OSAC Project
+description: Generic ESI bare metal API wrapper for managing servers, networks, floating IPs, and nodes
+license:
+  - Apache-2.0
+tags:
+  - infrastructure
+  - cloud
+  - baremetal
+repository: https://github.com/osac-project/osac
+issues: https://github.com/osac-project/osac/issues
+build_ignore: []

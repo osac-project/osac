@@ -1,0 +1,69 @@
+---
+- name: Cluster Status Reporting - Override Test Setup
+  hosts: localhost
+  gather_facts: true
+  vars_files:
+    - ../../../common_vars.yml
+
+  tasks:
+    - name: Read ClusterOrder fixture
+      ansible.builtin.set_fact:
+        test_cluster_order: "{{ lookup('file', '../../../fixtures/clusterorder-test.yaml') | from_yaml }}"
+
+    - name: Clear override log
+      ansible.builtin.file:
+        path: /tmp/osac_test_overrides.log
+        state: absent
+
+    - name: Create empty override log
+      ansible.builtin.file:
+        path: /tmp/osac_test_overrides.log
+        state: touch
+
+    - name: Set test variables with all overrides
+      ansible.builtin.set_fact:
+        ansible_eda:
+          event:
+            payload: "{{ test_cluster_order }}"
+        cluster_working_namespace: "cluster-test-cluster-work"
+        workflow_name: cluster_status_reporting
+        workflow_status: succeeded
+
+        # Override 2 extension points
+        hook_workflow_start:
+          name: osac.test_overrides.workflow_hooks
+          tasks_from: workflow_start.yml
+
+        hook_workflow_complete:
+          name: osac.test_overrides.workflow_hooks
+          tasks_from: workflow_complete.yml
+
+- name: Import cluster status reporting workflow with overrides
+  ansible.builtin.import_playbook: osac.workflows.reporting.cluster_status
+
+- name: Verify override results
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+
+  tasks:
+    - name: Read override log
+      ansible.builtin.slurp:
+        path: /tmp/osac_test_overrides.log
+      register: override_log_content
+
+    - name: Parse override log
+      ansible.builtin.set_fact:
+        override_log: "{{ override_log_content.content | b64decode }}"
+
+    - name: Display override log for debugging
+      ansible.builtin.debug:
+        var: override_log
+
+    - name: Verify all overrides executed
+      ansible.builtin.assert:
+        that:
+          - "'workflow_start' in override_log"
+          - "'workflow_complete' in override_log"
+        fail_msg: "Not all override points were executed. Log: {{ override_log }}"

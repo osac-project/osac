@@ -1,0 +1,53 @@
+argument_specs:
+  main:
+    options:
+      guest_os_family:
+        type: str
+        required: false
+        default: "linux"
+        description: >
+          OS family for the guest VM. Read from ComputeInstance spec.guestOSFamily field,
+          defaults to 'linux'. Unrecognized values (including typos) fall back to the 'linux'
+          profile. The 'linux' profile uses cloud-init / SSH defaults; 'windows' applies
+          Windows sizing defaults, sysprep, Hyper-V / clock domain spec, and matching
+          delete cleanup.
+      compute_instance:
+        type: dict
+        required: true
+        description: ComputeInstance configuration
+      gpu_devices:
+        type: list
+        required: false
+        default: []
+        elements: dict
+        description: |
+          List of GPU devices to pass through to the virtual machine. Each entry
+          specifies a PCI device selector and a resource name. When set, the role
+          will configure the VM with GPU passthrough via the `hostDevices` field
+          in the KubeVirt domain devices spec, and will also ensure that the
+          `HyperConverged` CR (`kubevirt-hyperconverged` in the `openshift-cnv`
+          namespace) permits these host devices under
+          `spec.virtualization.permittedHostDevices.pciHostDevices` (v1) or
+          `spec.permittedHostDevices.pciHostDevices` (v1beta1).
+
+          The PCI vendor and product ID for a given GPU can be found by running
+          `lspci -nn | grep -i nvidia` on a node that has the device.
+        options:
+          pci_device_selector:
+            type: str
+            required: true
+            description: >
+              PCI vendor and product ID in "VVVV:PPPP" format, for example
+              "10DE:1DB6" for an NVIDIA Tesla V100.
+          resource_name:
+            type: str
+            required: true
+            description: >
+              The resource name for this device, for example
+              "nvidia.com/GV100GL_Tesla_V100". Used both in the VM
+              `hostDevices` spec and in the `HyperConverged` CR
+              `permittedHostDevices` configuration.
+      template_parameters:
+        type: dict
+        required: false
+        description: Template parameters for the VM.

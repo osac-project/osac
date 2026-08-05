@@ -1,0 +1,63 @@
+---
+- name: Delete DNAT rule for ingress HTTPS
+  ansible.builtin.include_role:
+    name: netris.controller.nat
+  vars:
+    nat_name: "{{ external_access_name }}-ingress-https-dnat"
+    nat_state: absent
+    nat_site_id: "{{ netris_site_id }}"
+
+- name: Delete DNAT rule for ingress HTTP
+  ansible.builtin.include_role:
+    name: netris.controller.nat
+  vars:
+    nat_name: "{{ external_access_name }}-ingress-http-dnat"
+    nat_state: absent
+    nat_site_id: "{{ netris_site_id }}"
+
+- name: Delete DNAT rule for API
+  ansible.builtin.include_role:
+    name: netris.controller.nat
+  vars:
+    nat_name: "{{ external_access_name }}-api-dnat"
+    nat_state: absent
+    nat_site_id: "{{ netris_site_id }}"
+
+- name: Delete legacy L4LB rules (if any remain from previous deployments)
+  ansible.builtin.include_role:
+    name: netris.controller.l4lb
+  vars:
+    l4lb_name: "{{ item }}"
+    l4lb_state: absent
+    l4lb_site_id: "{{ netris_site_id }}"
+  loop:
+    - "{{ external_access_name }}-ingress-https"
+    - "{{ external_access_name }}-ingress-http"
+    - "{{ external_access_name }}-api"
+
+- name: Delete legacy DNAT rules (if any remain from previous deployments)
+  ansible.builtin.include_role:
+    name: netris.controller.nat
+  vars:
+    nat_name: "{{ item }}"
+    nat_state: absent
+    nat_site_id: "{{ netris_site_id }}"
+  loop:
+    - "{{ external_access_name }}-ingress-443"
+    - "{{ external_access_name }}-ingress"
+    - "{{ external_access_name }}-api"
+
+- name: Delete dns records
+  when: >-
+    external_access_base_domain in external_access_supported_base_domains | default([])
+  ansible.builtin.include_role:
+    name: dns.api.dns
+    tasks_from: delete
+  vars:
+    dns_zone: "{{ lookup('env', 'DNS_ZONE') | default(external_access_base_domain, true) }}"
+    dns_record_name: "{{ item }}"
+    dns_record_type: A
+  loop:
+    - "api.{{ external_access_name }}.{{ external_access_base_domain }}"
+    - "api-int.{{ external_access_name }}.{{ external_access_base_domain }}"
+    - "*.apps.{{ external_access_name }}.{{ external_access_base_domain }}"

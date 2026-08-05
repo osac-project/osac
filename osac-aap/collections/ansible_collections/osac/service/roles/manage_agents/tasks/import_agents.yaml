@@ -1,0 +1,131 @@
+- name: Display node names that will be added as agents
+  ansible.builtin.debug:
+    var: manage_agents_node_names
+
+- name: Get all agents
+  kubernetes.core.k8s_info:
+    kind: Agent
+    api_version: agent-install.openshift.io/v1beta1
+    namespace: "{{ manage_agents_namespace }}"
+  register: initial_agents_result
+
+- name: Extract initial agents
+  ansible.builtin.set_fact:
+    initial_agents: "{{ initial_agents_result.resources }}"
+
+- name: Filter non-agent node names
+  when: initial_agents | length > 0
+  ansible.builtin.set_fact:
+    manage_agents_node_names: >-
+      {{
+        manage_agents_node_names |
+        difference(initial_agents |
+          selectattr('spec.hostname', 'defined') |
+          map(attribute='spec.hostname') |
+          list
+        )
+      }}
+
+- name: Get combined node and port info
+  ansible.builtin.include_role:
+    name: osac.esi.node
+    tasks_from: get_nodes
+  vars:
+    node_filter_names: "{{ manage_agents_node_names }}"
+# set_fact: node_info_list
+
+- name: Get InfraEnv information
+  kubernetes.core.k8s_info:
+    kind: InfraEnv
+    api_version: agent-install.openshift.io/v1beta1
+    namespace: "{{ manage_agents_namespace }}"
+    name: "{{ manage_agents_infraenv_name }}"
+  register: infraenv
+
+- name: Set discovery_url
+  ansible.builtin.set_fact:
+    discovery_url: "{{ infraenv.resources[0].status.isoDownloadURL }}"
+  when: not discovery_url|default(false)
+
+- name: Provision nodes
+  when: >-
+    node_info.ports |
+    map(attribute='address') |
+    osac.service.mac_to_agent_name(initial_agents) is none
+  ansible.builtin.include_role:
+    name: osac.esi.node
+    tasks_from: provision_node
+  vars:
+    node_name: "{{ node_info.name }}"
+    node_provisioning_network_name: "{{ manage_agents_provisioning_network_name }}"
+    node_discovery_url: "{{ discovery_url }}"
+    node_agent_namespace: "{{ manage_agents_namespace }}"
+    node_deploy_wait: false
+  loop: "{{ node_info_list }}"
+  loop_control:
+    loop_var: node_info
+    label: "{{ node_info.name }}"
+
+- name: Wait for nodes to register as agents
+  kubernetes.core.k8s_info:
+    kind: Agent
+    api_version: agent-install.openshift.io/v1beta1
+    namespace: "{{ manage_agents_namespace }}"
+  register: current_agents
+  until: >
+    node_info.ports |
+    map(attribute='address') |
+    osac.service.mac_to_agent_name(current_agents.resources) is not none
+  retries: 90
+  delay: 10
+  loop: "{{ node_info_list }}"
+  loop_control:
+    loop_var: node_info
+    label: "{{ node_info.name }}"
+
+- name: Get all agents
+  kubernetes.core.k8s_info:
+    kind: Agent
+    api_version: agent-install.openshift.io/v1beta1
+    namespace: "{{ manage_agents_namespace }}"
+  register: final_agents_result
+
+- name: Extract final agents
+  ansible.builtin.set_fact:
+    final_agents: "{{ final_agents_result.resources }}"
+
+- name: Configure agent metadata for all nodes
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: agent-install.openshift.io/v1beta1
+      kind: Agent
+      metadata:
+        name: "{{ agent_metadata.name }}"
+        namespace: "{{ manage_agents_namespace }}"
+        annotations: "{{ agent_metadata.annotations }}"
+        labels: "{{ agent_metadata.labels }}"
+      spec:
+        approved: true
+        hostname: "{{ agent_metadata.hostname | lower }}"
+  loop: >-
+    {{
+      node_info_list |
+      osac.esi.get_agent_metadata(final_agents)
+    }}
+  loop_control:
+    loop_var: agent_metadata
+    label: "{{ agent_metadata.name }}"
+
+- name: Move agents to idle agents network
+  ansible.builtin.include_role:
+    name: osac.esi.l2
+    tasks_from: set_networks_for_node
+  vars:
+    node: "{{ node_info.name }}"
+    networks:
+    - "{{ manage_agents_idle_agents_network }}"
+  loop: "{{ node_info_list }}"
+  loop_control:
+    loop_var: node_info
+    label: "{{ node_info.name }} -> {{ manage_agents_idle_agents_network }}"

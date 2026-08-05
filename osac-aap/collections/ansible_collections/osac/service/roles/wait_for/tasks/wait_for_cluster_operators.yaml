@@ -1,0 +1,25 @@
+---
+# Wait for all ClusterOperators to reach Available=True.
+# Reports which operators are not yet available on each check.
+#
+# Required vars:
+#   wait_for_kubeconfig: kubeconfig for the managed cluster
+
+- name: Wait for all ClusterOperators to become available
+  kubernetes.core.k8s_info:
+    api_version: config.openshift.io/v1
+    kind: ClusterOperator
+    kubeconfig: "{{ wait_for_kubeconfig }}"
+    wait_timeout: "{{ wait_for_request_timeout | default(30) }}"
+  register: _wait_co_results
+  until: >-
+    (_wait_co_results.resources | default([]) | length > 0)
+    and (_wait_co_results.resources
+        | json_query("[?!(status.conditions[?type=='Available' && status=='True'])]")
+        | length == 0)
+  retries: "{{ wait_for_clusteroperators_retries }}"
+  delay: "{{ wait_for_clusteroperators_delay }}"
+
+- name: Report ClusterOperators status
+  ansible.builtin.debug:
+    msg: "All {{ _wait_co_results.resources | length }} ClusterOperators are available."

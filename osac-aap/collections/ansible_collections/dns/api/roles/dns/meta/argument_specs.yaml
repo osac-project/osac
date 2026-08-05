@@ -1,0 +1,70 @@
+---
+argument_specs:
+  create:
+    short_description: Create a DNS record
+    options:
+      dns_class:
+        type: str
+        required: false
+        default: dns.route53.dns
+        description: >
+          Fully-qualified Ansible role name of the DNS driver to use
+          (e.g., dns.route53.dns, dns.cloudflare.dns,
+          or a third-party role like myorg.mycollection.custom_dns).
+      dns_zone:
+        type: str
+        required: true
+        description: >
+          The DNS zone to operate in (e.g., "example.com").
+          Passed through to the backend driver.
+      dns_record_name:
+        type: str
+        required: true
+        description: Fully qualified domain name for the record.
+      dns_record_type:
+        type: str
+        required: false
+        default: A
+        choices: [A, AAAA]
+        description: DNS record type.
+      dns_record_value:
+        type: str
+        required: true
+        description: >
+          The value for the record (e.g., an IPv4 address for A records,
+          an IPv6 address for AAAA records).
+      dns_record_ttl:
+        type: int
+        required: false
+        default: 1800
+        description: TTL in seconds.
+      dns_record_overwrite:
+        type: bool
+        required: false
+        default: true
+        description: Whether to overwrite an existing record.
+  delete:
+    short_description: Delete a DNS record
+    options:
+      dns_class:
+        type: str
+        required: false
+        default: dns.route53.dns
+        description: >
+          Fully-qualified Ansible role name of the DNS driver to use.
+      dns_zone:
+        type: str
+        required: true
+        description: >
+          The DNS zone to operate in (e.g., "example.com").
+          Passed through to the backend driver.
+      dns_record_name:
+        type: str
+        required: true
+        description: Fully qualified domain name for the record.
+      dns_record_type:
+        type: str
+        required: false
+        default: A
+        choices: [A, AAAA]
+        description: DNS record type.

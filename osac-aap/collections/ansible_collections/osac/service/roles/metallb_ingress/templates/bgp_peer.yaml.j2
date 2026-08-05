@@ -1,0 +1,16 @@
+---
+apiVersion: metallb.io/v1beta2
+kind: BGPPeer
+metadata:
+  name: peer-{{ worker.hostname }}
+  namespace: {{ metallb_namespace }}
+spec:
+  myASN: {{ local_asn }}
+  peerASN: {{ worker.peer_asn }}
+  peerAddress: "{{ worker.gateway }}"
+  nodeSelectors:
+    - matchExpressions:
+        - key: kubernetes.io/hostname
+          operator: In
+          values:
+            - "{{ worker.hostname }}"

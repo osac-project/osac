@@ -1,0 +1,5 @@
+---
+title: Bare Metal Host Image Provisioning
+description: >
+  Provisions bare metal instances using an image. Template name: bm_host_provisioning.
+template_type: bare_metal_instance

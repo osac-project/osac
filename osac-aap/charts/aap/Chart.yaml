@@ -1,0 +1,5 @@
+apiVersion: v2
+name: osac-aap
+description: OSAC AAP integration - bootstrap and configuration
+type: application
+version: 0.0.0

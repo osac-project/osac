@@ -1,0 +1,427 @@
+---
+# Unit tests for osac.service.storage_provider dispatcher validation logic.
+# All 12 scenarios run in a single invocation -- no flags needed.
+# Tests verify validation ONLY; they do not dispatch to actual provider roles.
+
+# ──────────────────────────────────────────────────────────────
+# Test 1: Valid single tier passes all validation
+# Expected: role passes validation, then fails at dispatch
+#   (because the action task file won't exist in unit test context)
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- valid single tier passes validation
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run valid-single-tier test
+      block:
+        - name: Include storage_provider with valid inputs
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: default
+                protocol: nfs
+                provider: vast
+            storage_provider_action: setup
+            tenant_name: "tenant-acme"
+            tenant_namespace: "osac-tenants"
+
+        # If we get here, the dispatch step ran (validation passed).
+        # The dispatch itself may fail because the action task file
+        # requires provider roles, but that is fine -- validation passed.
+        - name: Validation passed (dispatch outcome is not under test)
+          ansible.builtin.debug:
+            msg: "Validation passed -- dispatch was attempted"
+
+      rescue:
+        - name: Verify failure is from dispatch, not validation
+          ansible.builtin.assert:
+            that:
+              # Validation errors all contain specific keywords.
+              # A dispatch failure means validation succeeded.
+              - >-
+                'must be a non-empty list' not in (ansible_failed_result.msg | default(''))
+              - >-
+                'Must be one of' not in (ansible_failed_result.msg | default(''))
+              - >-
+                'must be a non-empty string' not in (ansible_failed_result.msg | default(''))
+              - >-
+                'not a valid DNS label' not in (ansible_failed_result.msg | default(''))
+              - >-
+                'duplicate tier names' not in (ansible_failed_result.msg | default(''))
+              - >-
+                'exceeds the maximum' not in (ansible_failed_result.msg | default(''))
+            fail_msg: >-
+              Validation failed unexpectedly: {{ ansible_failed_result.msg | default('unknown error') }}
+            success_msg: "Validation passed -- dispatch failed as expected in unit test context"
+
+# ──────────────────────────────────────────────────────────────
+# Test 2: Empty tier list -- error path
+# Expected: role fails with non-empty list message
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- empty tier list (should fail)
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run empty-tiers failure test
+      block:
+        - name: Attempt with empty tiers list (expected to fail)
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers: []
+            storage_provider_action: setup
+            tenant_name: "tenant-acme"
+            tenant_namespace: "osac-tenants"
+
+        - name: This task should not be reached -- role should have failed
+          ansible.builtin.fail:
+            msg: "Role did not fail as expected when tiers list is empty"
+
+      rescue:
+        - name: Verify role failed with expected empty-list message
+          ansible.builtin.assert:
+            that:
+              - "'must be a non-empty list' in ansible_failed_result.msg"
+            fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
+            success_msg: "Role correctly rejected invalid input"
+
+# ──────────────────────────────────────────────────────────────
+# Test 3: Missing required tier fields -- error path
+# Expected: role fails with required fields message
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- missing required tier fields (should fail)
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run missing-fields failure test
+      block:
+        - name: Attempt with tier missing protocol and provider (expected to fail)
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: default
+            storage_provider_action: setup
+            tenant_name: "tenant-acme"
+            tenant_namespace: "osac-tenants"
+
+        - name: This task should not be reached -- role should have failed
+          ansible.builtin.fail:
+            msg: "Role did not fail as expected when tier is missing required fields"
+
+      rescue:
+        - name: Verify role failed with expected required-fields message
+          ansible.builtin.assert:
+            that:
+              - >-
+                'protocol' in (ansible_failed_result.msg | default(''))
+                or 'provider' in (ansible_failed_result.msg | default(''))
+                or 'One or more items failed' in (ansible_failed_result.msg | default(''))
+                or 'must have' in (ansible_failed_result.msg | default(''))
+            fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
+            success_msg: "Role correctly rejected tier with missing fields"
+
+# ──────────────────────────────────────────────────────────────
+# Test 4: Invalid protocol -- error path
+# Expected: role fails with protocol not in allowed list message
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- invalid protocol (should fail)
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run invalid-protocol failure test
+      block:
+        - name: Attempt with invalid protocol 'ftp' (expected to fail)
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: default
+                protocol: ftp
+                provider: vast
+            storage_provider_action: setup
+            tenant_name: "tenant-acme"
+            tenant_namespace: "osac-tenants"
+
+        - name: This task should not be reached -- role should have failed
+          ansible.builtin.fail:
+            msg: "Role did not fail as expected when protocol is invalid"
+
+      rescue:
+        - name: Verify role failed for invalid protocol
+          ansible.builtin.assert:
+            that:
+              - >-
+                'unsupported protocol' in (ansible_failed_result.results | default([]) | map(attribute='msg') | join(' ') | lower)
+                or 'Invalid protocol' in (ansible_failed_result.results | default([]) | map(attribute='msg') | join(' '))
+                or 'One or more items failed' in (ansible_failed_result.msg | default(''))
+            fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
+            success_msg: "Role correctly rejected invalid protocol"
+
+# ──────────────────────────────────────────────────────────────
+# Test 5: Invalid provider -- error path
+# Expected: role fails at dispatch (provider role does not exist)
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- invalid provider (should fail)
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run invalid-provider failure test
+      block:
+        - name: Attempt with invalid provider 'netapp' (expected to fail)
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: default
+                protocol: nfs
+                provider: netapp
+            storage_provider_action: setup
+            tenant_name: "tenant-acme"
+            tenant_namespace: "osac-tenants"
+
+        - name: This task should not be reached -- role should have failed
+          ansible.builtin.fail:
+            msg: "Role did not fail as expected when provider is invalid"
+
+      rescue:
+        - name: Verify role failed for invalid provider
+          ansible.builtin.assert:
+            that:
+              - >-
+                'osac.templates.netapp_storage' in (ansible_failed_result.msg | default(''))
+                or 'was not found' in (ansible_failed_result.msg | default(''))
+                or 'One or more items failed' in (ansible_failed_result.msg | default(''))
+            fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
+            success_msg: "Role correctly rejected invalid provider"
+
+# ──────────────────────────────────────────────────────────────
+# Test 6: Invalid action -- error path
+# Expected: role fails with action not in allowed list message
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- invalid action (should fail)
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run invalid-action failure test
+      block:
+        - name: Attempt with invalid action 'destroy' (expected to fail)
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: default
+                protocol: nfs
+                provider: vast
+            storage_provider_action: destroy
+            tenant_name: "tenant-acme"
+            tenant_namespace: "osac-tenants"
+
+        - name: This task should not be reached -- role should have failed
+          ansible.builtin.fail:
+            msg: "Role did not fail as expected when action is invalid"
+
+      rescue:
+        - name: Verify role failed with expected invalid-action message
+          ansible.builtin.assert:
+            that:
+              - "'destroy' in (ansible_failed_result.msg | default(''))"
+              - "'setup' in (ansible_failed_result.msg | default('')) or 'must be one of' in (ansible_failed_result.msg | default(''))"
+            fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
+            success_msg: "Role correctly rejected invalid input"
+
+# ──────────────────────────────────────────────────────────────
+# Test 7: Duplicate tier names -- error path
+# Expected: role fails with duplicate names message
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- duplicate tier names (should fail)
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run duplicate-tier-names failure test
+      block:
+        - name: Attempt with two tiers both named 'default' (expected to fail)
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: default
+                protocol: nfs
+                provider: vast
+              - name: default
+                protocol: block
+                provider: vast
+            storage_provider_action: setup
+            tenant_name: "tenant-acme"
+            tenant_namespace: "osac-tenants"
+
+        - name: This task should not be reached -- role should have failed
+          ansible.builtin.fail:
+            msg: "Role did not fail as expected when tier names are duplicated"
+
+      rescue:
+        - name: Verify role failed with expected duplicate-names message
+          ansible.builtin.assert:
+            that:
+              - "'duplicate tier names' in ansible_failed_result.msg"
+            fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
+            success_msg: "Role correctly rejected invalid input"
+
+# ──────────────────────────────────────────────────────────────
+# Test 9: Invalid DNS label tier name -- error path
+# Expected: role fails with DNS label validation message
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- invalid DNS label tier name (should fail)
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run invalid-dns-label failure test
+      block:
+        - name: Attempt with tier name containing spaces and uppercase (expected to fail)
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: "My Tier"
+                protocol: nfs
+                provider: vast
+            storage_provider_action: setup
+            tenant_name: "tenant-acme"
+            tenant_namespace: "osac-tenants"
+
+        - name: This task should not be reached -- role should have failed
+          ansible.builtin.fail:
+            msg: "Role did not fail as expected when tier name is not a valid DNS label"
+
+      rescue:
+        - name: Verify role failed with expected DNS label message
+          ansible.builtin.assert:
+            that:
+              - >-
+                'not a valid DNS label' in (ansible_failed_result.results | default([]) | map(attribute='msg') | join(' '))
+                or 'One or more items failed' in (ansible_failed_result.msg | default(''))
+            fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
+            success_msg: "Role correctly rejected invalid input"
+
+# ──────────────────────────────────────────────────────────────
+# Test 10: Tier count exceeds maximum -- error path
+# Expected: role fails with exceeds-maximum message
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- tier count exceeds max (should fail)
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run tier-count-exceeds-max failure test
+      block:
+        - name: Attempt with 3 tiers but max_tiers set to 2 (expected to fail)
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: tier-a
+                protocol: nfs
+                provider: vast
+              - name: tier-b
+                protocol: nfs
+                provider: vast
+              - name: tier-c
+                protocol: block
+                provider: vast
+            storage_provider_max_tiers: 2
+            storage_provider_action: setup
+            tenant_name: "tenant-acme"
+            tenant_namespace: "osac-tenants"
+
+        - name: This task should not be reached -- role should have failed
+          ansible.builtin.fail:
+            msg: "Role did not fail as expected when tier count exceeds maximum"
+
+      rescue:
+        - name: Verify role failed with expected exceeds-maximum message
+          ansible.builtin.assert:
+            that:
+              - "'exceeds the maximum' in ansible_failed_result.msg"
+              - "'3' in ansible_failed_result.msg"
+              - "'2' in ansible_failed_result.msg"
+            fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
+            success_msg: "Role correctly rejected invalid input"
+
+# ──────────────────────────────────────────────────────────────
+# Test 11: Missing tenant_name -- error path
+# Expected: role fails with tenant_name required message
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- missing tenant_name (should fail)
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run missing-tenant-name failure test
+      block:
+        - name: Attempt without tenant_name (expected to fail)
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: default
+                protocol: nfs
+                provider: vast
+            storage_provider_action: setup
+            tenant_namespace: "osac-tenants"
+
+        - name: This task should not be reached -- role should have failed
+          ansible.builtin.fail:
+            msg: "Role did not fail as expected when tenant_name is missing"
+
+      rescue:
+        - name: Verify role failed with expected tenant_name message
+          ansible.builtin.assert:
+            that:
+              - "'tenant_name' in ansible_failed_result.msg"
+              - "'non-empty string' in ansible_failed_result.msg"
+            fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
+            success_msg: "Role correctly rejected invalid input"
+
+# ──────────────────────────────────────────────────────────────
+# Test 12: Missing tenant_namespace -- error path
+# Expected: role fails with tenant_namespace required message
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- missing tenant_namespace (should fail)
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run missing-tenant-namespace failure test
+      block:
+        - name: Attempt without tenant_namespace (expected to fail)
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: default
+                protocol: nfs
+                provider: vast
+            storage_provider_action: setup
+            tenant_name: "tenant-acme"
+
+        - name: This task should not be reached -- role should have failed
+          ansible.builtin.fail:
+            msg: "Role did not fail as expected when tenant_namespace is missing"
+
+      rescue:
+        - name: Verify role failed with expected tenant_namespace message
+          ansible.builtin.assert:
+            that:
+              - "'tenant_namespace' in ansible_failed_result.msg"
+              - "'non-empty string' in ansible_failed_result.msg"
+            fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
+            success_msg: "Role correctly rejected invalid input"

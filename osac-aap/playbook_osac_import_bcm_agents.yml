@@ -1,0 +1,442 @@
+---
+- name: Import BCM-managed bare metal servers as Assisted Installer agents
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    bcm_api_endpoint: "{{ bcm_api_url }}/json"
+
+  tasks:
+    # =========================================================================
+    # Phase 1: Fetch inventory from BCM API
+    # =========================================================================
+
+    - name: Validate BCM API URL is configured
+      ansible.builtin.fail:
+        msg: >-
+          bcm_api_url must be set and must use HTTPS. Provide it via the
+          BCM_API_URL environment variable or as an extra var.
+      when: bcm_api_url | length == 0 or not bcm_api_url.startswith('https://')
+
+    - name: Fetch devices from BCM
+      ansible.builtin.uri:
+        url: "{{ bcm_api_endpoint }}"
+        method: POST
+        body_format: json
+        body:
+          service: cmdevice
+          call: getDevices
+          minify: true
+          args: []
+        client_cert: "{{ bcm_cert_path }}"
+        client_key: "{{ bcm_key_path }}"
+        validate_certs: "{{ bcm_validate_certs }}"
+        return_content: true
+      register: _bcm_devices_response
+
+    - name: Fetch racks from BCM
+      ansible.builtin.uri:
+        url: "{{ bcm_api_endpoint }}"
+        method: POST
+        body_format: json
+        body:
+          service: cmpart
+          call: getRacksByUuids
+          minify: true
+          args:
+            - []
+        client_cert: "{{ bcm_cert_path }}"
+        client_key: "{{ bcm_key_path }}"
+        validate_certs: "{{ bcm_validate_certs }}"
+        return_content: true
+      register: _bcm_racks_response
+
+    - name: Validate BCM devices response
+      ansible.builtin.fail:
+        msg: >-
+          BCM getDevices returned an error: {{ _bcm_devices_response.json.errormessage | default('unexpected response format') }}
+      when: _bcm_devices_response.json is not iterable or _bcm_devices_response.json is mapping
+
+    - name: Validate BCM racks response
+      ansible.builtin.fail:
+        msg: >-
+          BCM getRacksByUuids returned an error: {{ _bcm_racks_response.json.errormessage | default('unexpected response format') }}
+      when: _bcm_racks_response.json is not iterable or _bcm_racks_response.json is mapping
+
+    - name: Build rack lookup by UUID
+      ansible.builtin.set_fact:
+        _bcm_racks_by_uuid: >-
+          {{
+            dict(
+              _bcm_racks_response.json |
+              map(attribute='uuid') |
+              zip(_bcm_racks_response.json | map(attribute='name'))
+            )
+          }}
+
+    - name: Filter lite nodes from BCM devices
+      ansible.builtin.set_fact:
+        _bcm_lite_nodes: >-
+          {{
+            _bcm_devices_response.json |
+            selectattr('childType', 'equalto', 'LiteNode') |
+            list
+          }}
+
+    - name: Display discovered lite nodes
+      ansible.builtin.debug:
+        msg: "Found {{ _bcm_lite_nodes | length }} lite nodes in BCM"
+
+    - name: Build server list from BCM devices
+      ansible.builtin.set_fact:
+        _bcm_servers: >-
+          {{
+            _bcm_lite_nodes | map('osac.service.bcm_device_to_server',
+              _bcm_racks_by_uuid,
+              bcm_disable_bmc_cert_verification) |
+            list
+          }}
+
+    - name: Display servers to import
+      ansible.builtin.debug:
+        msg: "Servers: {{ _bcm_servers | map(attribute='name') | list }}"
+
+    # =========================================================================
+    # Phase 2: Discover BMC system paths
+    # =========================================================================
+
+    # --- Redfish discovery (for Redfish-compatible BMC types: redfish, drac, ilo) ---
+
+    - name: Filter Redfish-compatible servers
+      ansible.builtin.set_fact:
+        _bcm_redfish_servers: >-
+          {{ _bcm_servers | selectattr('bmc_type', 'in', [] | osac.service.bcm_redfish_compatible_types()) | list }}
+
+    - name: Query Redfish systems for each server
+      ansible.builtin.uri:
+        url: "https://{{ server.bmc_ip }}/redfish/v1/Systems/"
+        method: GET
+        user: "{{ server.bmc_username }}"
+        password: "{{ server.bmc_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ not server.disable_bmc_cert_verification }}"
+        return_content: true
+      register: _redfish_systems
+      loop: "{{ _bcm_redfish_servers }}"
+      loop_control:
+        loop_var: server
+        label: "{{ server.name }}"
+      when: server.bmc_ip | length > 0
+      ignore_errors: true
+      no_log: true
+
+    - name: Warn about failed Redfish system queries
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: Redfish query failed for {{ item.server.name }} ({{ item.server.bmc_ip }}):
+          {{ item.msg | default('unknown error') }}
+      loop: "{{ _redfish_systems.results | default([]) }}"
+      loop_control:
+        label: "{{ item.server.name | default('unknown') }}"
+      when:
+        - item is not skipped
+        - item.failed | default(false)
+
+    - name: Build flat list of Redfish systems to query
+      ansible.builtin.set_fact:
+        _redfish_system_queries: >-
+          {{ _bcm_redfish_servers | osac.service.bcm_build_redfish_queries(_redfish_systems.results | default([])) }}
+
+    - name: Fetch EthernetInterfaces collection for each Redfish system
+      ansible.builtin.uri:
+        url: "https://{{ query.bmc_ip }}{{ query.system_path }}/EthernetInterfaces"
+        method: GET
+        user: "{{ query.bmc_username }}"
+        password: "{{ query.bmc_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ not query.disable_bmc_cert_verification }}"
+        return_content: true
+      register: _redfish_eth_collections
+      loop: "{{ _redfish_system_queries }}"
+      loop_control:
+        loop_var: query
+        label: "{{ query.system_path }}"
+      ignore_errors: true
+      no_log: true
+
+    - name: Build flat list of individual EthernetInterface URLs
+      ansible.builtin.set_fact:
+        _redfish_iface_queries: >-
+          {{ _redfish_eth_collections.results | default([]) | osac.service.bcm_build_eth_iface_queries() }}
+
+    - name: Fetch individual EthernetInterface details
+      ansible.builtin.uri:
+        url: "https://{{ query.bmc_ip }}{{ query.iface_path }}"
+        method: GET
+        user: "{{ query.bmc_username }}"
+        password: "{{ query.bmc_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ not query.disable_bmc_cert_verification }}"
+        return_content: true
+      register: _redfish_ifaces
+      loop: "{{ _redfish_iface_queries }}"
+      loop_control:
+        loop_var: query
+        label: "{{ query.iface_path }}"
+      ignore_errors: true
+      no_log: true
+
+    - name: Build MAC to Redfish system path mapping
+      ansible.builtin.set_fact:
+        _mac_to_redfish: >-
+          {{ _redfish_ifaces.results | default([]) | osac.service.bcm_build_mac_to_redfish() }}
+
+    - name: Display MAC to Redfish mapping
+      ansible.builtin.debug:
+        var: _mac_to_redfish
+
+    # --- Build BMC URLs for all servers (dispatches by bmc_type) ---
+
+    - name: Build servers with BMC URLs
+      ansible.builtin.set_fact:
+        _bcm_all_servers_with_bmc: >-
+          {{
+            _bcm_servers |
+            osac.service.bcm_attach_bmc_urls(_mac_to_redfish) |
+            list
+          }}
+
+    - name: Set servers with valid BMC URLs
+      ansible.builtin.set_fact:
+        _bcm_servers_with_bmc: >-
+          {{ _bcm_all_servers_with_bmc | selectattr('bmc_url', 'ne', '') | list }}
+
+    - name: Warn about servers with no BMC URL
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: {{ item.name }} (bmc_type={{ item.bmc_type }}) has no BMC URL and will be skipped
+      loop: >-
+        {{ _bcm_all_servers_with_bmc | selectattr('bmc_url', 'equalto', '') | list }}
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Display servers with BMC URLs
+      ansible.builtin.debug:
+        msg: >-
+          {{ _bcm_servers_with_bmc | map(attribute='name') |
+             zip(_bcm_servers_with_bmc | map(attribute='bmc_type')) |
+             zip(_bcm_servers_with_bmc | map(attribute='bmc_url')) | list }}
+
+    # =========================================================================
+    # Phase 3: Reconcile Kubernetes resources
+    # =========================================================================
+
+    - name: Ensure InfraEnv exists
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: agent-install.openshift.io/v1beta1
+          kind: InfraEnv
+          metadata:
+            name: "{{ bcm_infraenv_name }}"
+            namespace: "{{ bcm_agent_namespace }}"
+          spec:
+            pullSecretRef:
+              name: "{{ bcm_pull_secret_name }}"
+
+    - name: Create or update BMC secrets for each server
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "{{ server.name }}-bmc-secret"
+            namespace: "{{ bcm_agent_namespace }}"
+            labels:
+              osac.openshift.io/managed-by: "{{ bcm_managed_by_value }}"
+          type: Opaque
+          stringData:
+            username: "{{ server.bmc_username }}"
+            password: "{{ server.bmc_password }}"
+      loop: "{{ _bcm_servers_with_bmc }}"
+      loop_control:
+        loop_var: server
+        label: "{{ server.name }}"
+      no_log: true
+
+    - name: Get existing managed BareMetalHost CRs
+      kubernetes.core.k8s_info:
+        api_version: metal3.io/v1alpha1
+        kind: BareMetalHost
+        namespace: "{{ bcm_agent_namespace }}"
+        label_selectors:
+          - "{{ bcm_managed_by_label }}"
+      register: _existing_bmh
+
+    - name: Extract existing BMH names
+      ansible.builtin.set_fact:
+        _existing_bmh_names: >-
+          {{ _existing_bmh.resources | map(attribute='metadata.name') | list }}
+
+    - name: Display existing managed BMHs
+      ansible.builtin.debug:
+        var: _existing_bmh_names
+
+    - name: Reconcile BareMetalHost for each server
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: metal3.io/v1alpha1
+          kind: BareMetalHost
+          metadata:
+            name: "{{ server.name }}"
+            namespace: "{{ bcm_agent_namespace }}"
+            labels:
+              osac.openshift.io/managed-by: "{{ bcm_managed_by_value }}"
+              infraenvs.agent-install.openshift.io: "{{ bcm_infraenv_name }}"
+            annotations:
+              inspect.metal3.io: disabled
+              bmac.agent-install.openshift.io/hostname: "{{ server.name }}"
+          spec:
+            automatedCleaningMode: disabled
+            bmc:
+              address: "{{ server.bmc_url }}"
+              credentialsName: "{{ server.name }}-bmc-secret"
+              disableCertificateVerification: "{{ server.disable_bmc_cert_verification | bool }}"
+            bootMACAddress: "{{ server.boot_mac }}"
+            online: true
+      loop: "{{ _bcm_servers_with_bmc }}"
+      loop_control:
+        loop_var: server
+        label: "{{ server.name }}"
+
+    # =========================================================================
+    # Phase 4: Clean up stale resources
+    # =========================================================================
+
+    - name: Compute stale BMH names
+      ansible.builtin.set_fact:
+        _stale_bmh_names: >-
+          {{
+            _existing_bmh_names |
+            difference(_bcm_servers | map(attribute='name') | list)
+          }}
+
+    - name: Display stale BMHs to delete
+      ansible.builtin.debug:
+        var: _stale_bmh_names
+
+    - name: Get agents linked to stale BMHs
+      kubernetes.core.k8s_info:
+        api_version: agent-install.openshift.io/v1beta1
+        kind: Agent
+        namespace: "{{ bcm_agent_namespace }}"
+        label_selectors:
+          - "agent-install.openshift.io/bmh={{ bmh_name }}"
+      register: _stale_agents
+      loop: "{{ _stale_bmh_names }}"
+      loop_control:
+        loop_var: bmh_name
+        label: "{{ bmh_name }}"
+
+    - name: Delete stale Agent CRs
+      kubernetes.core.k8s:
+        state: absent
+        api_version: agent-install.openshift.io/v1beta1
+        kind: Agent
+        namespace: "{{ bcm_agent_namespace }}"
+        name: "{{ agent.metadata.name }}"
+      loop: >-
+        {{
+          _stale_agents.results |
+          map(attribute='resources') |
+          flatten
+        }}
+      loop_control:
+        loop_var: agent
+        label: "{{ agent.metadata.name }}"
+
+    - name: Delete stale BareMetalHost CRs
+      kubernetes.core.k8s:
+        state: absent
+        api_version: metal3.io/v1alpha1
+        kind: BareMetalHost
+        namespace: "{{ bcm_agent_namespace }}"
+        name: "{{ bmh_name }}"
+      loop: "{{ _stale_bmh_names }}"
+      loop_control:
+        loop_var: bmh_name
+        label: "{{ bmh_name }}"
+
+    - name: Delete stale BMC secrets
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        namespace: "{{ bcm_agent_namespace }}"
+        name: "{{ bmh_name }}-bmc-secret"
+      loop: "{{ _stale_bmh_names }}"
+      loop_control:
+        loop_var: bmh_name
+        label: "{{ bmh_name }}"
+
+    # =========================================================================
+    # Phase 5: Wait for agent registration and label agents
+    # =========================================================================
+
+    - name: Wait for each server to register as an Agent
+      kubernetes.core.k8s_info:
+        api_version: agent-install.openshift.io/v1beta1
+        kind: Agent
+        namespace: "{{ bcm_agent_namespace }}"
+      register: _current_agents
+      until: >-
+        [server.boot_mac | lower] |
+        osac.service.mac_to_agent_name(_current_agents.resources) is not none
+      retries: 90
+      delay: 10
+      loop: "{{ _bcm_servers_with_bmc }}"
+      loop_control:
+        loop_var: server
+        label: "{{ server.name }}"
+
+    - name: Get final agent list
+      kubernetes.core.k8s_info:
+        api_version: agent-install.openshift.io/v1beta1
+        kind: Agent
+        namespace: "{{ bcm_agent_namespace }}"
+      register: _final_agents
+
+    - name: Configure agent metadata
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: agent-install.openshift.io/v1beta1
+          kind: Agent
+          metadata:
+            name: >-
+              {{
+                [server.boot_mac | lower] |
+                osac.service.mac_to_agent_name(_final_agents.resources)
+              }}
+            namespace: "{{ bcm_agent_namespace }}"
+            labels: >-
+              {{
+                {
+                  bcm_agent_resource_class_label: server.resource_class,
+                  bcm_agent_rack_label: server.rack
+                }
+              }}
+            annotations:
+              bmac.agent-install.openshift.io/hostname: "{{ server.name }}"
+          spec:
+            approved: true
+            hostname: "{{ server.name | lower }}"
+      loop: "{{ _bcm_servers_with_bmc }}"
+      loop_control:
+        loop_var: server
+        label: "{{ server.name }}"
+      failed_when: >-
+        [server.boot_mac | lower] |
+        osac.service.mac_to_agent_name(_final_agents.resources) is none

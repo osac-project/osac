@@ -1,0 +1,17 @@
+apiVersion: aap.ansible.com/v1alpha1
+kind: AnsibleAutomationPlatform
+metadata:
+  name: osac-aap
+spec:
+  controller:
+    disabled: false
+  eda:
+    disabled: true
+  hub:
+    disabled: true
+  image_pull_policy: IfNotPresent
+  lightspeed:
+    disabled: true
+  no_log: true
+  redis_mode: standalone
+  route_tls_termination_mechanism: Edge

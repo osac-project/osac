@@ -1,0 +1,4 @@
+---
+nat_state: present
+nat_protocol: tcp
+nat_action: dnat  # or snat

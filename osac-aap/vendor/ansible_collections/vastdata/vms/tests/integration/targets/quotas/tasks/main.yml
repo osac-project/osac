@@ -1,0 +1,513 @@
+---
+# Integration tests for quotas module
+# These tests run against a real VAST system
+#
+# Configuration:
+# Set values in tests/integration/integration_config.yml
+
+- name: Check if credentials are available
+  ansible.builtin.set_fact:
+    has_credentials: "{{ (vast_vms | default('') | length > 0) and (vast_username | default('') | length > 0) and (vast_password | default('') | length > 0) }}"
+
+- name: Set test conditions
+  ansible.builtin.set_fact:
+    can_run_tests: "{{ has_credentials | bool }}"
+
+# ====================
+# Cleanup - Ensure clean state
+# ====================
+
+- name: Clean up - ensure test quota doesn't exist before starting
+  vastdata.vms.quotas:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_quota_path }}"
+    state: absent
+  register: cleanup_result
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# Create Tests
+# ====================
+
+- name: Test creating a quota
+  vastdata.vms.quotas:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_quota_name }}"
+    path: "{{ test_quota_path }}"
+    hard_limit: "{{ test_quota_hard_limit }}"
+    soft_limit: "{{ test_quota_soft_limit }}"
+    grace_period: "{{ test_quota_grace_period }}"
+    create_dir: true
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify quota was created
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.quotas is defined
+      - result.quotas.name == test_quota_name
+      - result.quotas.path == test_quota_path
+  when: can_run_tests | bool
+
+# ====================
+# Idempotency Tests
+# ====================
+
+- name: Test idempotency - create same quota again
+  vastdata.vms.quotas:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_quota_name }}"
+    path: "{{ test_quota_path }}"
+    hard_limit: "{{ test_quota_hard_limit }}"
+    soft_limit: "{{ test_quota_soft_limit }}"
+    grace_period: "{{ test_quota_grace_period }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify idempotency (should not change)
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: can_run_tests | bool
+
+# ====================
+# Update Tests
+# ====================
+
+- name: Test updating quota - change hard_limit
+  vastdata.vms.quotas:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_quota_path }}"
+    hard_limit: "{{ test_quota_hard_limit_updated }}"
+    soft_limit: "{{ test_quota_soft_limit_updated }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify quota was updated
+  ansible.builtin.assert:
+    that:
+      - result is changed
+  when: can_run_tests | bool
+
+- name: Test update idempotency
+  vastdata.vms.quotas:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_quota_path }}"
+    hard_limit: "{{ test_quota_hard_limit_updated }}"
+    soft_limit: "{{ test_quota_soft_limit_updated }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify update idempotency
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: can_run_tests | bool
+
+# ====================
+# Update Enable Alarms
+# ====================
+
+- name: Test updating enable_alarms
+  vastdata.vms.quotas:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_quota_path }}"
+    enable_alarms: false
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify enable_alarms was updated
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.quotas.enable_alarms == false
+  when: can_run_tests | bool
+
+# ====================
+# Check Mode Tests
+# ====================
+
+- name: Set baseline for check mode test
+  vastdata.vms.quotas:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_quota_path }}"
+    hard_limit: "{{ test_quota_hard_limit_updated }}"
+    soft_limit: "{{ test_quota_soft_limit_updated }}"
+    enable_alarms: false
+    state: present
+  register: baseline_result
+  when: can_run_tests | bool
+
+- name: Test check mode - update hard_limit
+  vastdata.vms.quotas:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_quota_path }}"
+    hard_limit: 53687091200
+    state: present
+  register: result
+  check_mode: true
+  when: can_run_tests | bool
+
+- name: Verify check mode reported change
+  ansible.builtin.assert:
+    that:
+      - result is changed
+  when: can_run_tests | bool
+
+- name: Verify check mode didn't actually change
+  vastdata.vms.quotas:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_quota_path }}"
+    hard_limit: "{{ test_quota_hard_limit_updated }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Check that hard_limit was not changed
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: can_run_tests | bool
+
+# ====================
+# Diff Mode Tests
+# ====================
+
+- name: Test diff mode - update soft_limit
+  vastdata.vms.quotas:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_quota_path }}"
+    soft_limit: 12884901888
+    state: present
+  register: result
+  diff: true
+  when: can_run_tests | bool
+
+- name: Verify diff mode returned diff data
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.diff is defined
+      - result.diff.before is defined
+      - result.diff.after is defined
+  when: can_run_tests | bool
+
+# ====================
+# Delete Tests
+# ====================
+
+- name: Test deleting quota
+  vastdata.vms.quotas:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_quota_path }}"
+    state: absent
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify quota was deleted
+  ansible.builtin.assert:
+    that:
+      - result is changed
+  when: can_run_tests | bool
+
+# ====================
+# Delete Idempotency Test
+# ====================
+
+- name: Test delete idempotency - delete again
+  vastdata.vms.quotas:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_quota_path }}"
+    state: absent
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify delete idempotency
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: can_run_tests | bool
+
+# ====================
+# Check Mode Delete Tests
+# ====================
+
+- name: Create quota for check mode delete test
+  vastdata.vms.quotas:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_quota_name }}-delcheck"
+    path: "{{ test_quota_path }}-delcheck"
+    hard_limit: "{{ test_quota_hard_limit }}"
+    create_dir: true
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Test check mode - delete
+  vastdata.vms.quotas:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_quota_path }}-delcheck"
+    state: absent
+  register: result
+  check_mode: true
+  when: can_run_tests | bool
+
+- name: Verify check mode reported deletion
+  ansible.builtin.assert:
+    that:
+      - result is changed
+  when: can_run_tests | bool
+
+- name: Verify check mode didn't actually delete
+  vastdata.vms.quotas:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_quota_path }}-delcheck"
+    hard_limit: "{{ test_quota_hard_limit }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Check that quota still exists
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: can_run_tests | bool
+
+- name: Clean up check mode delete test quota
+  vastdata.vms.quotas:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_quota_path }}-delcheck"
+    state: absent
+  register: result
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# Error Handling Tests
+# ====================
+
+- name: Test error handling - invalid state
+  vastdata.vms.quotas:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_quota_path }}"
+    state: invalid
+  register: result
+  ignore_errors: true
+  when: can_run_tests | bool
+
+- name: Verify error was caught
+  ansible.builtin.assert:
+    that:
+      - result is failed
+      - "'invalid' in result.msg"
+  when: can_run_tests | bool
+
+# ====================
+# Idempotency Tests - user_quotas and group_quotas
+# ====================
+
+- name: Clean up - ensure user_quotas/group_quotas test quota doesn't exist
+  vastdata.vms.quotas:
+    vms: "{{ vms_auth }}"
+    path: "/ansible-test-quota-nested"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Clean up - remove previous test user if exists
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "test-user"
+    local_provider_id: 1
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Clean up - remove previous test group if exists
+  vastdata.vms.groups:
+    vms: "{{ vms_auth }}"
+    name: "test-group"
+    local_provider_id: 1
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Create test user for user_quotas test
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "test-user"
+    uid: 77777
+    local_provider_id: 1
+    state: present
+  register: test_user
+  when: can_run_tests | bool
+
+- name: Create test group for group_quotas test
+  vastdata.vms.groups:
+    vms: "{{ vms_auth }}"
+    name: "test-group"
+    gid: 77778
+    local_provider_id: 1
+    state: present
+  register: test_group
+  when: can_run_tests | bool
+
+- name: Create quota with user_quotas and group_quotas
+  vastdata.vms.quotas:
+    vms: "{{ vms_auth }}"
+    name: "test-quota-nested"
+    path: "/ansible-test-quota-nested"
+    tenant_id: 1
+    soft_limit: 100000
+    hard_limit: 100000
+    is_user_quota: true
+    enable_alarms: true
+    default_email: "user@example.com"
+    user_quotas:
+      - identifier: "test-user"
+        identifier_type: "username"
+        hard_limit: 15000
+        soft_limit: 15000
+        grace_period: "02:00:00"
+        email: "user1@example.com"
+    group_quotas:
+      - identifier: "test-group"
+        identifier_type: "groupname"
+        hard_limit: 15000
+        soft_limit: 15000
+        grace_period: "4 03:00:00"
+    default_user_quota:
+      soft_limit: 50000
+      hard_limit: 100000
+      hard_limit_inodes: 10000
+    default_group_quota:
+      soft_limit: 75000
+      hard_limit: 150000
+      hard_limit_inodes: 15000
+    create_dir: true
+    state: present
+  register: nested_quota_result
+  when: can_run_tests | bool
+
+- name: Verify quota was created with user_quotas and group_quotas
+  ansible.builtin.assert:
+    that:
+      - nested_quota_result is changed
+      - nested_quota_result.quotas is defined
+  when: nested_quota_result is not skipped
+
+- name: Test idempotency - run same task with user_quotas and group_quotas again
+  vastdata.vms.quotas:
+    vms: "{{ vms_auth }}"
+    name: "test-quota-nested"
+    path: "/ansible-test-quota-nested"
+    tenant_id: 1
+    soft_limit: 100000
+    hard_limit: 100000
+    is_user_quota: true
+    enable_alarms: true
+    default_email: "user@example.com"
+    user_quotas:
+      - identifier: "test-user"
+        identifier_type: "username"
+        hard_limit: 15000
+        soft_limit: 15000
+        grace_period: "02:00:00"
+        email: "user1@example.com"
+    group_quotas:
+      - identifier: "test-group"
+        identifier_type: "groupname"
+        hard_limit: 15000
+        soft_limit: 15000
+        grace_period: "4 03:00:00"
+    default_user_quota:
+      soft_limit: 50000
+      hard_limit: 100000
+      hard_limit_inodes: 10000
+    default_group_quota:
+      soft_limit: 75000
+      hard_limit: 150000
+      hard_limit_inodes: 15000
+    state: present
+  register: nested_quota_idempotency_result
+  when: can_run_tests | bool
+
+- name: Verify idempotency with user_quotas and group_quotas (should not report changed)
+  ansible.builtin.assert:
+    that:
+      - nested_quota_idempotency_result is not changed
+    fail_msg: "user_quotas/group_quotas breaks idempotency - quota reported as changed when it shouldn't be"
+  when: nested_quota_idempotency_result is not skipped
+
+- name: Clean up - remove quota with user_quotas and group_quotas
+  vastdata.vms.quotas:
+    vms: "{{ vms_auth }}"
+    path: "/ansible-test-quota-nested"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Clean up - remove test user
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "test-user"
+    local_provider_id: 1
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Clean up - remove test group
+  vastdata.vms.groups:
+    vms: "{{ vms_auth }}"
+    name: "test-group"
+    local_provider_id: 1
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# Final Cleanup
+# ====================
+
+- name: Final cleanup - remove test quota if it exists
+  vastdata.vms.quotas:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_quota_path }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Final cleanup - remove delcheck test quota if it exists
+  vastdata.vms.quotas:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_quota_path }}-delcheck"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# Skip Message
+# ====================
+
+- name: Skip message when no credentials
+  ansible.builtin.debug:
+    msg: |
+      Skipping quotas integration tests - missing credentials.
+
+      To enable integration tests, set the following in:
+        tests/integration/integration_config.yml
+
+      VAST credentials:
+        vast_vms: "vms.example.com"
+        vast_username: "admin"
+        vast_password: "password"
+
+      Then run: ansible-test integration quotas -v
+  when: not (can_run_tests | bool)

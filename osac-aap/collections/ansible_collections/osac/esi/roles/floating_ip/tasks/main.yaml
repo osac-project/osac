@@ -1,0 +1,7 @@
+- name: Allocate a new floating ip
+  when: floating_ip_state == 'present'
+  ansible.builtin.include_tasks: allocate_floating_ip.yaml
+
+- name: Destroy a floating ip
+  when: floating_ip_state == 'absent'
+  ansible.builtin.include_tasks: destroy_floating_ip.yaml

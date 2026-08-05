@@ -1,0 +1,48 @@
+---
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Query existing IPAM subnets
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/ipam/subnets"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: [200]
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _ipam_subnets_resp
+  no_log: true
+
+- name: Find IPAM subnet by name
+  ansible.builtin.set_fact:
+    _existing_ipam_subnet: >-
+      {{ (_ipam_subnets_resp.json.data | default([]))
+         | selectattr('name', 'equalto', ipam_name)
+         | list | first | default(none) }}
+
+- name: Delete IPAM subnet
+  when: _existing_ipam_subnet is not none
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/ipam/subnet/{{ _existing_ipam_subnet.id }}"
+    method: DELETE
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: [200, 204, 400]
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _ipam_subnet_delete_resp
+  no_log: true
+
+- name: Fail if IPAM subnet deletion returned an error
+  when:
+    - _ipam_subnet_delete_resp is defined
+    - _ipam_subnet_delete_resp.status | default(200) == 400
+  ansible.builtin.fail:
+    msg: >-
+      Failed to delete IPAM subnet '{{ ipam_name }}' (ID: {{ _existing_ipam_subnet.id }}).
+      Netris responded with: {{ _ipam_subnet_delete_resp.json.message | default(_ipam_subnet_delete_resp.content | default('unknown error')) }}.

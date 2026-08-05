@@ -1,0 +1,26 @@
+---
+- name: Release floating IP if allocated
+  ansible.builtin.include_role:
+    name: osac.esi.floating_ip
+  vars:
+    floating_ip_state: absent
+    floating_ip_name: "{{ bare_metal_instance.metadata.name }}"
+
+- name: Detach all networks and delete neutron ports
+  ansible.builtin.include_role:
+    name: osac.esi.l2
+    tasks_from: set_networks_for_node
+  vars:
+    node: "{{ bare_metal_instance.spec.externalHostID }}"
+    networks: []
+
+- name: Undeploy bare metal node
+  openstack.cloud.baremetal_node_action:
+    name: "{{ bare_metal_instance.spec.externalHostID }}"
+    state: absent
+    deploy: false
+    wait: true
+
+- name: Image deprovisioning completed
+  ansible.builtin.debug:
+    msg: "Image deprovisioning completed for node {{ bare_metal_instance.spec.externalHostID }}"

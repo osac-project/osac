@@ -1,0 +1,814 @@
+---
+# Integration tests for views module
+# These tests run against a real VAST system
+#
+# Configuration:
+# Set values in tests/integration/integration_config.yml
+
+# ====================
+# Setup
+# ====================
+
+- name: Check if credentials are available
+  ansible.builtin.set_fact:
+    has_credentials: "{{ (vast_vms | default('') | length > 0) and (vast_username | default('') | length > 0) and (vast_password | default('') | length > 0) }}"
+
+- name: Set test conditions
+  ansible.builtin.set_fact:
+    can_run_tests: "{{ has_credentials }}"
+
+- name: Get default tenant ID for testing
+  ansible.builtin.uri:
+    url: "https://{{ vast_vms }}/api/tenants/?page_size=1"
+    method: GET
+    user: "{{ vast_username }}"
+    password: "{{ vast_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    return_content: true
+  register: tenants_result
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Set default tenant ID from query result
+  ansible.builtin.set_fact:
+    test_view_tenant_id: "{{ tenants_result.json[0].id | default(1) }}"
+  when: can_run_tests | bool and tenants_result.json is defined and tenants_result.json | length > 0
+
+# ====================
+# Cleanup - Remove existing test view if present
+# ====================
+
+- name: Clean up - ensure test view doesn't exist before starting
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_view_path }}"
+    force: true
+    state: absent
+  register: cleanup_result
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Clean up - ensure tenant test view doesn't exist before starting
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_view_path }}-tenant"
+    force: true
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# Create Tests
+# ====================
+
+- name: Test creating a view
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_view_path }}"
+    policy_id: "{{ test_view_policy_id }}"
+    protocols: "{{ test_view_protocols }}"
+    create_dir: true
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify view was created
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.views is defined
+      - result.views.path == test_view_path
+      - result.diff is defined
+      - result.diff.before == {}
+      - result.diff.after is defined
+  when: result is not skipped
+
+# ====================
+# Idempotency Tests - Create
+# ====================
+
+- name: Test idempotency - create same view again
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_view_path }}"
+    policy_id: "{{ test_view_policy_id }}"
+    protocols: "{{ test_view_protocols }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify idempotency (should not change)
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+      - result.views is defined
+  when: result is not skipped
+
+# ====================
+# Update Tests
+# ====================
+
+- name: Test updating view - set alias
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_view_path }}"
+    alias: "/ansible-test-alias-updated"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify view was updated
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.views is defined
+      - result.diff is defined
+      - result.diff.before is defined
+      - result.diff.after is defined
+  when: result is not skipped
+
+- name: Test update idempotency
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_view_path }}"
+    alias: "/ansible-test-alias-updated"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify update idempotency
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: result is not skipped
+
+# ====================
+# Check Mode Tests - Update
+# ====================
+
+- name: Test check mode - update alias
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_view_path }}"
+    alias: "/ansible-check-alias"
+    state: present
+  check_mode: true
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify check mode reported changes
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.views is defined
+  when: result is not skipped
+
+- name: Verify check mode didn't actually make changes
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_view_path }}"
+    alias: "/ansible-test-alias-updated"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify alias unchanged by check mode
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: result is not skipped
+
+# ====================
+# Check Mode Tests - Create
+# ====================
+
+- name: Test check mode - create new view
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_view_path }}-checkmode"
+    policy_id: "{{ test_view_policy_id }}"
+    state: present
+  check_mode: true
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify check mode create reported changes
+  ansible.builtin.assert:
+    that:
+      - result is changed
+  when: result is not skipped
+
+- name: Verify check mode didn't actually create the view
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_view_path }}-checkmode"
+    force: true
+    state: absent
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify view was never created
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: result is not skipped
+
+# ====================
+# Diff Mode Tests
+# ====================
+
+- name: Update view with diff mode
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_view_path }}"
+    alias: "/ansible-diff-alias"
+    state: present
+  diff: true
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify update diff output
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.diff is defined
+      - result.diff.before is defined
+      - result.diff.after is defined
+  when: result is not skipped
+
+# ====================
+# Delete Tests
+# ====================
+
+- name: Test deleting view
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_view_path }}"
+    force: true
+    state: absent
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify view was deleted
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.diff is defined
+      - result.diff.before is defined
+      - result.diff.after == {}
+  when: result is not skipped
+
+# ====================
+# Idempotency Tests - Delete
+# ====================
+
+- name: Test delete idempotency - delete again
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_view_path }}"
+    force: true
+    state: absent
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify delete idempotency
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: result is not skipped
+
+# ====================
+# Check Mode Delete Test
+# ====================
+
+- name: Create view for check mode delete test
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_view_path }}-delcheck"
+    policy_id: "{{ test_view_policy_id }}"
+    create_dir: true
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Test check mode - delete
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_view_path }}-delcheck"
+    force: true
+    state: absent
+  check_mode: true
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify check mode reported deletion
+  ansible.builtin.assert:
+    that:
+      - result is changed
+  when: result is not skipped
+
+- name: Verify check mode didn't actually delete
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_view_path }}-delcheck"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Check that view still exists
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+      - result.views is defined
+  when: result is not skipped
+
+- name: Clean up check mode delete test view
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_view_path }}-delcheck"
+    force: true
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# Error Handling Tests
+# ====================
+
+- name: Test error handling - invalid state
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_view_path }}"
+    state: invalid
+  register: result
+  when: can_run_tests | bool
+  ignore_errors: true
+
+- name: Verify error was caught
+  ansible.builtin.assert:
+    that:
+      - result is failed
+  when: result is not skipped
+
+# ====================
+# Tenant ID Tests
+# ====================
+
+- name: Test creating a view with tenant_id
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_view_path }}-tenant"
+    policy_id: "{{ test_view_policy_id }}"
+    tenant_id: "{{ test_view_tenant_id }}"
+    protocols: "{{ test_view_protocols }}"
+    create_dir: true
+    state: present
+  register: result
+  when: can_run_tests | bool and test_view_tenant_id is defined
+
+- name: Verify view was created with tenant_id
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.views is defined
+      - result.views.path == test_view_path + '-tenant'
+      - result.views.tenant_id == test_view_tenant_id
+      - result.diff is defined
+  when: result is not skipped and test_view_tenant_id is defined
+
+- name: Clean up tenant_id test view
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_view_path }}-tenant"
+    force: true
+    state: absent
+  when: can_run_tests | bool and test_view_tenant_id is defined
+  failed_when: false
+
+# ====================
+# Idempotency Tests - create_dir
+# ====================
+
+- name: Clean up - ensure create_dir idempotency test view doesn't exist
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_view_path }}-create-dir-idempotency"
+    force: true
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Create view with create_dir for idempotency test
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_view_path }}-create-dir-idempotency"
+    policy_id: "{{ test_view_policy_id }}"
+    protocols: "{{ test_view_protocols }}"
+    create_dir: true
+    state: present
+  register: create_dir_idempotency_result
+  when: can_run_tests | bool
+
+- name: Verify view was created with create_dir
+  ansible.builtin.assert:
+    that:
+      - create_dir_idempotency_result is changed
+      - create_dir_idempotency_result.views is defined
+      - create_dir_idempotency_result.views.path == test_view_path + '-create-dir-idempotency'
+  when: create_dir_idempotency_result is not skipped
+
+- name: Test idempotency - run same task with create_dir on existing view
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_view_path }}-create-dir-idempotency"
+    policy_id: "{{ test_view_policy_id }}"
+    protocols: "{{ test_view_protocols }}"
+    create_dir: true
+    state: present
+  register: create_dir_idempotency_result
+  when: can_run_tests | bool
+
+- name: Verify idempotency with create_dir (ephemeral fields excluded from updates)
+  ansible.builtin.assert:
+    that:
+      - create_dir_idempotency_result is not changed
+      - create_dir_idempotency_result.views is defined
+  when: create_dir_idempotency_result is not skipped
+
+- name: Clean up create_dir idempotency test view
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_view_path }}-create-dir-idempotency"
+    force: true
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# Idempotency Tests - bucket_logging
+# ====================
+
+- name: Clean up - ensure bucket logging test source view doesn't exist
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "/ans-efficient-pitohui2"
+    force: true
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Clean up - ensure bucket logging test destination view doesn't exist
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "/ans-efficient-pitohui1"
+    force: true
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Clean up - ensure bucket logging test tenant doesn't exist
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "ans-agreeable-thrasher"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Create tenant for bucket logging test
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "ans-agreeable-thrasher"
+    client_ip_ranges:
+      - ["192.168.200.1", "192.168.200.10"]
+    state: present
+  register: tenant
+  when: can_run_tests | bool
+
+- name: Create user for bucket owner
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "ans-loving-xenops"
+    uid: 12345
+    local_provider_id: "{{ tenant.tenants.local_provider_id }}"
+    state: present
+  when: can_run_tests | bool
+
+- name: Create view policy for bucket logging test
+  vastdata.vms.viewpolicies:
+    vms: "{{ vms_auth }}"
+    name: "ans-kind-lamprey"
+    flavor: "S3_NATIVE"
+    tenant_id: "{{ tenant.tenants.id }}"
+    state: present
+  register: policy
+  when: can_run_tests | bool
+
+- name: Create destination bucket view
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "/ans-efficient-pitohui1"
+    bucket: "ans-efficient-pitohui1"
+    bucket_owner: "ans-loving-xenops"
+    policy_id: "{{ policy.viewpolicies.id }}"
+    tenant_id: "{{ tenant.tenants.id }}"
+    protocols: ["S3"]
+    create_dir: true
+    state: present
+  register: view_dest
+  when: can_run_tests | bool
+
+- name: Create source bucket view with logging
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "/ans-efficient-pitohui2"
+    bucket: "ans-efficient-pitohui2"
+    bucket_owner: "ans-loving-xenops"
+    policy_id: "{{ policy.viewpolicies.id }}"
+    tenant_id: "{{ tenant.tenants.id }}"
+    protocols: ["S3"]
+    create_dir: true
+    bucket_logging:
+      destination_id: "{{ view_dest.views.id }}"
+      prefix: "pref"
+      key_format: "SIMPLE_PREFIX"
+    state: present
+  register: bucket_logging_result
+  when: can_run_tests | bool
+
+- name: Verify view was created with bucket_logging
+  ansible.builtin.assert:
+    that:
+      - bucket_logging_result is changed
+      - bucket_logging_result.views is defined
+  when: bucket_logging_result is not skipped
+
+- name: Test idempotency - run same task with bucket_logging again
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "/ans-efficient-pitohui2"
+    bucket: "ans-efficient-pitohui2"
+    bucket_owner: "ans-loving-xenops"
+    policy_id: "{{ policy.viewpolicies.id }}"
+    tenant_id: "{{ tenant.tenants.id }}"
+    protocols: ["S3"]
+    bucket_logging:
+      destination_id: "{{ view_dest.views.id }}"
+      prefix: "pref"
+      key_format: "SIMPLE_PREFIX"
+    state: present
+  register: bucket_logging_idempotency_result
+  when: can_run_tests | bool
+
+- name: Verify idempotency with bucket_logging (should not report changed)
+  ansible.builtin.assert:
+    that:
+      - bucket_logging_idempotency_result is not changed
+      - bucket_logging_idempotency_result.views is defined
+    fail_msg: "bucket_logging breaks idempotency - view reported as changed when it shouldn't be"
+  when: bucket_logging_idempotency_result is not skipped
+
+- name: Clean up bucket logging test - remove source view
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "/ans-efficient-pitohui2"
+    force: true
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Clean up bucket logging test - remove destination view
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "/ans-efficient-pitohui1"
+    force: true
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Clean up bucket logging test - remove policy
+  vastdata.vms.viewpolicies:
+    vms: "{{ vms_auth }}"
+    name: "ans-kind-lamprey"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Clean up bucket logging test - remove user
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "ans-loving-xenops"
+    local_provider_id: "{{ tenant.tenants.local_provider_id }}"
+    state: absent
+  when: can_run_tests | bool and tenant is defined and tenant.tenants is defined
+  failed_when: false
+
+- name: Clean up bucket logging test - remove tenant
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "ans-agreeable-thrasher"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# Idempotency Tests - share_acl with fqdn normalization
+# ====================
+
+- name: Clean up - ensure share_acl test tenant doesn't exist
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "ans-inspiring-porpoise"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Create tenant for share_acl test
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "ans-inspiring-porpoise"
+    client_ip_ranges: [["192.168.205.100", "192.168.205.110"]]
+    state: present
+  register: share_acl_tenant
+  when: can_run_tests | bool
+
+- name: Create user 1 for share_acl test
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "ans-sturdy-pademelon"
+    uid: 747680
+    local_provider_id: "{{ share_acl_tenant.tenants.local_provider_id }}"
+    state: present
+  when: can_run_tests | bool
+
+- name: Create user 2 for share_acl test
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "ans-frank-vaquita"
+    uid: 677991
+    local_provider_id: "{{ share_acl_tenant.tenants.local_provider_id }}"
+    state: present
+  when: can_run_tests | bool
+
+- name: Create view policy for share_acl test
+  vastdata.vms.viewpolicies:
+    vms: "{{ vms_auth }}"
+    name: "ans-lovely-binturong"
+    flavor: "S3_NATIVE"
+    tenant_id: "{{ share_acl_tenant.tenants.id }}"
+    state: present
+  register: share_acl_policy
+  when: can_run_tests | bool
+
+- name: Create S3 view with share_acl
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "/ans-laughing-dikkop"
+    bucket: "ans-laughing-dikkop"
+    bucket_owner: "ans-sturdy-pademelon"
+    policy_id: "{{ share_acl_policy.viewpolicies.id }}"
+    tenant_id: "{{ share_acl_tenant.tenants.id }}"
+    protocols: ["S3"]
+    create_dir: true
+    share_acl:
+      enabled: true
+      acl:
+        - name: "ans-sturdy-pademelon"
+          grantee: users
+          perm: "FULL"
+          fqdn: All
+        - name: "ans-frank-vaquita"
+          grantee: users
+          perm: "READ"
+          fqdn: All
+    state: present
+  register: share_acl_result
+  when: can_run_tests | bool
+
+- name: Verify view was created with share_acl
+  ansible.builtin.assert:
+    that:
+      - share_acl_result is changed
+      - share_acl_result.views is defined
+  when: share_acl_result is not skipped
+
+- name: Test idempotency - run same task with share_acl again
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "/ans-laughing-dikkop"
+    bucket: "ans-laughing-dikkop"
+    bucket_owner: "ans-sturdy-pademelon"
+    policy_id: "{{ share_acl_policy.viewpolicies.id }}"
+    tenant_id: "{{ share_acl_tenant.tenants.id }}"
+    protocols: ["S3"]
+    share_acl:
+      enabled: true
+      acl:
+        - name: "ans-sturdy-pademelon"
+          grantee: users
+          perm: "FULL"
+          fqdn: All
+        - name: "ans-frank-vaquita"
+          grantee: users
+          perm: "READ"
+          fqdn: All
+    state: present
+  register: share_acl_idempotency_result
+  when: can_run_tests | bool
+
+- name: Verify idempotency with share_acl (should not report changed)
+  ansible.builtin.assert:
+    that:
+      - share_acl_idempotency_result is not changed
+    fail_msg: "share_acl breaks idempotency - view reported as changed when it shouldn't be"
+  when: share_acl_idempotency_result is not skipped
+
+- name: Clean up share_acl test - remove view
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "/ans-laughing-dikkop"
+    force: true
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Clean up share_acl test - remove policy
+  vastdata.vms.viewpolicies:
+    vms: "{{ vms_auth }}"
+    name: "ans-lovely-binturong"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Clean up share_acl test - remove user 1
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "ans-sturdy-pademelon"
+    local_provider_id: "{{ share_acl_tenant.tenants.local_provider_id }}"
+    state: absent
+  when: can_run_tests | bool and share_acl_tenant is defined and share_acl_tenant.tenants is defined
+  failed_when: false
+
+- name: Clean up share_acl test - remove user 2
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "ans-frank-vaquita"
+    local_provider_id: "{{ share_acl_tenant.tenants.local_provider_id }}"
+    state: absent
+  when: can_run_tests | bool and share_acl_tenant is defined and share_acl_tenant.tenants is defined
+  failed_when: false
+
+- name: Clean up share_acl test - remove tenant
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "ans-inspiring-porpoise"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# Cleanup
+# ====================
+
+- name: Final cleanup - remove test view if it exists
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_view_path }}"
+    force: true
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Final cleanup - remove delcheck test view if it exists
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_view_path }}-delcheck"
+    force: true
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Final cleanup - remove tenant test view if it exists
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_view_path }}-tenant"
+    force: true
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Skip message when no credentials
+  ansible.builtin.debug:
+    msg: |
+      Skipping views integration tests - credentials not configured.
+
+      To enable integration tests, set credentials in:
+        tests/integration/integration_config.yml
+
+      Example:
+        vast_vms: "vast-vms.example.com"
+        vast_username: "admin"
+        vast_password: "password"
+
+      Then run: ansible-test integration views -v
+  when: not (can_run_tests | bool)

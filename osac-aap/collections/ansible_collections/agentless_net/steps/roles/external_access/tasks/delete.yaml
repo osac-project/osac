@@ -1,0 +1,233 @@
+---
+- name: Load agentless-net inventory hosts
+  ansible.builtin.include_vars:
+    file: "{{ agentless_net_inventory_file }}"
+    name: _agentless_net_inventory
+
+- name: Register net_nodes in play inventory
+  ansible.builtin.add_host:
+    name: "{{ item.key }}"
+    groups: net_nodes
+    ansible_host: "{{ item.value.ansible_host }}"
+    ansible_user: "{{ item.value.ansible_user }}"
+    ansible_password: "{{ item.value.ansible_password | default(omit) }}"
+    ansible_ssh_common_args: "{{ item.value.ansible_ssh_common_args | default(_agentless_net_inventory.all.vars.ansible_ssh_common_args | default(omit)) }}"
+  loop: "{{ _agentless_net_inventory.all.children.net_nodes.hosts | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Register switches in play inventory
+  ansible.builtin.add_host:
+    name: "{{ item.key }}"
+    groups: switches
+    ansible_host: "{{ item.value.ansible_host }}"
+    ansible_user: "{{ item.value.ansible_user }}"
+    ansible_password: "{{ item.value.ansible_password | default(omit) }}"
+    ansible_become_password: "{{ item.value.ansible_become_password | default(omit) }}"
+    ansible_network_os: "{{ item.value.ansible_network_os | default(omit) }}"
+    ansible_ssh_common_args: "{{ item.value.ansible_ssh_common_args | default(_agentless_net_inventory.all.vars.ansible_ssh_common_args | default(omit)) }}"
+    access_ports: "{{ item.value.access_ports | default({}) }}"
+  loop: "{{ _agentless_net_inventory.all.children.switches.hosts | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+# --- Read public IPs from IPAM state ---
+
+- name: Read IPAM state file
+  block:
+    - name: Slurp IPAM state file
+      ansible.builtin.slurp:
+        src: "{{ agentless_net_net_node_ipam_state_file }}"
+      delegate_to: "{{ groups['net_nodes'][0] }}"
+      register: external_access_ipam_state_raw
+
+    - name: Parse public IPs for this cluster
+      ansible.builtin.set_fact:
+        external_access_api_public_ip: "{{ (external_access_ipam_state_raw.content | b64decode | from_json).public_ips[external_access_state_key + '-api'][0] | default('') }}"
+        external_access_ingress_public_ip: "{{ (external_access_ipam_state_raw.content | b64decode | from_json).public_ips[external_access_state_key + '-ingress'][0] | default('') }}"
+  rescue:
+    - name: Default to empty IPs on missing or corrupt state
+      ansible.builtin.set_fact:
+        external_access_api_public_ip: ""
+        external_access_ingress_public_ip: ""
+
+- name: Skip cleanup if no public IPs allocated
+  ansible.builtin.debug:
+    msg: "No public IP allocations found for {{ external_access_name }}, skipping cleanup"
+  when: external_access_api_public_ip | length == 0 and external_access_ingress_public_ip | length == 0
+
+# --- Read DNAT state for API rule matching ---
+
+- name: Parse API DNAT state
+  when: external_access_api_public_ip | length > 0
+  block:
+    - name: Extract API internal IP and port from state file
+      ansible.builtin.set_fact:
+        external_access_api_internal_ip: "{{ (external_access_ipam_state_raw.content | b64decode | from_json).dnat_state[external_access_state_key].api_internal_ip | default('') }}"
+        external_access_kube_apiserver_port: "{{ (external_access_ipam_state_raw.content | b64decode | from_json).dnat_state[external_access_state_key].api_port | default('') }}"
+  rescue:
+    - name: Default to empty API DNAT state
+      ansible.builtin.set_fact:
+        external_access_api_internal_ip: ""
+        external_access_kube_apiserver_port: ""
+
+- name: Compute MetalLB ingress IP for DNAT delete
+  ansible.builtin.set_fact:
+    external_access_metallb_ingress_ip: "{{ agentless_net_subnet_cidr | ansible.utils.nthhost(-10) }}"
+  when: external_access_ingress_public_ip | length > 0
+
+# --- agentless_net: withdraw BGP routes ---
+
+- name: Read veth namespace-side IP for BGP withdrawal
+  when: external_access_api_public_ip | length > 0 or external_access_ingress_public_ip | length > 0
+  block:
+    - name: Extract veth namespace-side IP from state file
+      ansible.builtin.set_fact:
+        external_access_bgp_next_hop: "{{ (external_access_ipam_state_raw.content | b64decode | from_json).veth_state[external_access_state_key].ns_ip | ansible.utils.ipaddr('address') }}"
+  rescue:
+    - name: Default to empty BGP next-hop
+      ansible.builtin.set_fact:
+        external_access_bgp_next_hop: ""
+
+- name: Withdraw API PublicIP route  # noqa: no-changed-when
+  environment:
+    ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
+    ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
+  ansible.builtin.command:
+    cmd: >
+      ansible-playbook
+      -i {{ agentless_net_inventory_file }}
+      -e bgp_public_ip={{ external_access_api_public_ip }}
+      -e bgp_next_hop={{ external_access_bgp_next_hop }}
+      {{ role_path }}/playbooks/bgp_withdraw.yaml
+  when: external_access_api_public_ip | length > 0 and external_access_bgp_next_hop | default('') | length > 0
+
+- name: Withdraw ingress PublicIP route  # noqa: no-changed-when
+  environment:
+    ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
+    ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
+  ansible.builtin.command:
+    cmd: >
+      ansible-playbook
+      -i {{ agentless_net_inventory_file }}
+      -e bgp_public_ip={{ external_access_ingress_public_ip }}
+      -e bgp_next_hop={{ external_access_bgp_next_hop }}
+      {{ role_path }}/playbooks/bgp_withdraw.yaml
+  when: external_access_ingress_public_ip | length > 0 and external_access_bgp_next_hop | default('') | length > 0
+
+# --- agentless_net: delete DNAT rules ---
+
+- name: Delete DNAT for API endpoint  # noqa: no-changed-when
+  environment:
+    ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
+    ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
+  ansible.builtin.command:
+    cmd: >
+      ansible-playbook
+      -i {{ agentless_net_inventory_file }}
+      -e dnat_router_name={{ external_access_name }}
+      -e dnat_public_ip={{ external_access_api_public_ip }}
+      -e dnat_public_port={{ external_access_kube_apiserver_port }}
+      -e dnat_internal_ip={{ external_access_api_internal_ip }}
+      -e dnat_internal_port={{ external_access_kube_apiserver_port }}
+      -e dnat_protocol=tcp
+      {{ role_path }}/playbooks/l3_delete_dnat.yaml
+  when: external_access_api_public_ip | length > 0 and external_access_api_internal_ip | default('') | length > 0
+
+- name: Delete DNAT for ingress HTTP  # noqa: no-changed-when
+  environment:
+    ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
+    ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
+  ansible.builtin.command:
+    cmd: >
+      ansible-playbook
+      -i {{ agentless_net_inventory_file }}
+      -e dnat_router_name={{ external_access_name }}
+      -e dnat_public_ip={{ external_access_ingress_public_ip }}
+      -e dnat_public_port=80
+      -e dnat_internal_ip={{ external_access_metallb_ingress_ip }}
+      -e dnat_internal_port=80
+      -e dnat_protocol=tcp
+      {{ role_path }}/playbooks/l3_delete_dnat.yaml
+  when: external_access_ingress_public_ip | length > 0 and external_access_metallb_ingress_ip is defined
+
+- name: Delete DNAT for ingress HTTPS  # noqa: no-changed-when
+  environment:
+    ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
+    ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
+  ansible.builtin.command:
+    cmd: >
+      ansible-playbook
+      -i {{ agentless_net_inventory_file }}
+      -e dnat_router_name={{ external_access_name }}
+      -e dnat_public_ip={{ external_access_ingress_public_ip }}
+      -e dnat_public_port=443
+      -e dnat_internal_ip={{ external_access_metallb_ingress_ip }}
+      -e dnat_internal_port=443
+      -e dnat_protocol=tcp
+      {{ role_path }}/playbooks/l3_delete_dnat.yaml
+  when: external_access_ingress_public_ip | length > 0 and external_access_metallb_ingress_ip is defined
+
+# --- Delete DNS records ---
+
+- name: Delete DNS records
+  when: >-
+    external_access_base_domain in external_access_supported_base_domains | default([])
+  ansible.builtin.include_role:
+    name: "{{ dns_class }}"
+    tasks_from: delete
+  vars:
+    dns_zone: "{{ external_access_base_domain }}"
+    dns_record_name: "{{ item }}"
+    dns_record_type: A
+  loop:
+    - "api.{{ external_access_name }}.{{ external_access_base_domain }}"
+    - "api-int.{{ external_access_name }}.{{ external_access_base_domain }}"
+    - "*.apps.{{ external_access_name }}.{{ external_access_base_domain }}"
+
+# --- agentless_net: release public IPs ---
+
+- name: Release API public IP  # noqa: no-changed-when
+  environment:
+    ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
+    ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
+  ansible.builtin.command:
+    cmd: >
+      ansible-playbook
+      -i {{ agentless_net_inventory_file }}
+      -e ipam_state_file={{ agentless_net_net_node_ipam_state_file }}
+      -e ipam_purpose={{ external_access_state_key }}-api
+      {{ role_path }}/playbooks/ipam_release_ip.yaml
+
+- name: Release ingress public IP  # noqa: no-changed-when
+  environment:
+    ANSIBLE_COLLECTIONS_PATH: "{{ agentless_net_collections_path }}"
+    ANSIBLE_ROLES_PATH: "{{ agentless_net_roles_path }}"
+  ansible.builtin.command:
+    cmd: >
+      ansible-playbook
+      -i {{ agentless_net_inventory_file }}
+      -e ipam_state_file={{ agentless_net_net_node_ipam_state_file }}
+      -e ipam_purpose={{ external_access_state_key }}-ingress
+      {{ role_path }}/playbooks/ipam_release_ip.yaml
+
+# --- Clean up DNAT state ---
+
+- name: Remove DNAT state from network state  # noqa: no-changed-when
+  ansible.builtin.raw: |
+    python3 - '{{ agentless_net_net_node_ipam_state_file }}' \
+              '{{ external_access_state_key }}' <<'STATE_PY'
+    import fcntl, json, os, sys
+    state_file, cluster_name = sys.argv[1:3]
+    with open(state_file, 'r+') as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        state = json.load(f)
+        state.get('dnat_state', {}).pop(cluster_name, None)
+        f.seek(0)
+        f.write(json.dumps(state, indent=2))
+        f.truncate()
+        f.flush()
+        os.fsync(f.fileno())
+    STATE_PY
+  delegate_to: "{{ groups['net_nodes'][0] }}"
+  when: external_access_api_internal_ip | default('') | length > 0

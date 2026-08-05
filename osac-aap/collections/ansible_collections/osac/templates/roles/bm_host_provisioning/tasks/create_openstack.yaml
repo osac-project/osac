@@ -1,0 +1,163 @@
+---
+- name: Get bare metal node info
+  ansible.builtin.include_role:
+    name: osac.service.openstack_bm_node
+    tasks_from: preflight
+
+- name: Undeploy active node for re-provisioning
+  when: node_info.provision_state == "active"
+  block:
+    - name: Undeploy node
+      openstack.cloud.baremetal_node_action:
+        name: "{{ bare_metal_instance.spec.externalHostID }}"
+        state: absent
+        deploy: false
+        wait: true
+
+    - name: Refresh node info after undeploy
+      openstack.cloud.baremetal_node_info:
+        name: "{{ bare_metal_instance.spec.externalHostID }}"
+      register: baremetal_node_result
+
+    - name: Update node info after undeploy
+      ansible.builtin.set_fact:
+        node_info: "{{ baremetal_node_result.nodes[0] }}"
+
+- name: Prepare node for deploy
+  ansible.builtin.include_role:
+    name: osac.service.openstack_bm_node
+    tasks_from: prepare_for_deploy
+
+- name: Deploy node with image
+  block:
+    - name: Build instance_info for disk image deploy
+      vars:
+        _checksum_type: "{{ template_params.get('checksumType', '') }}"
+        _checksum: "{{ template_params.get('imageChecksum', '') | default('auto', true) }}"
+      ansible.builtin.set_fact:
+        node_instance_info: >-
+          {{
+            {'image_source': template_params.imageURL}
+            | combine(
+                {'image_os_hash_algo': _checksum_type, 'image_os_hash_value': _checksum}
+                if (_checksum_type | length > 0 and _checksum != 'auto')
+                else {'image_checksum': _checksum}
+              )
+            | combine(
+                (template_params.get('rootGb', '') | string | length > 0)
+                | ternary(
+                    {'root_gb': template_params.rootGb | int},
+                    {}
+                  )
+              )
+          }}
+
+    - name: Read user data from Secret
+      when: template_params.get('userDataSecret', '') | length > 0
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "{{ template_params.userDataSecret }}"
+        namespace: "{{ bare_metal_instance.metadata.namespace }}"
+      register: user_data_secret_result
+
+    - name: Fail if user data Secret not found
+      when: user_data_secret_result is not skipped and user_data_secret_result.resources | length == 0
+      ansible.builtin.fail:
+        msg: "Secret '{{ template_params.userDataSecret }}' not found in namespace '{{ bare_metal_instance.metadata.namespace }}'"
+
+    - name: Fail if user data Secret is missing 'user-data' key
+      when: user_data_secret_result is not skipped and 'user-data' not in user_data_secret_result.resources[0].data
+      ansible.builtin.fail:
+        msg: "Secret '{{ template_params.userDataSecret }}' does not contain 'user-data' key"
+
+    - name: Extract user data content from Secret
+      when: user_data_secret_result is not skipped
+      ansible.builtin.set_fact:
+        _user_data_content: "{{ user_data_secret_result.resources[0].data['user-data'] | b64decode }}"
+
+    - name: Build config_drive for deploy
+      vars:
+        _ssh_keys: "{{ template_params.get('sshKeys', []) }}"
+        _user_data: "{{ _user_data_content | default('') }}"
+      ansible.builtin.set_fact:
+        node_config_drive: >-
+          {{
+            {}
+            | combine(
+                (_ssh_keys | length > 0)
+                | ternary(
+                    {'meta_data': {'public_keys': dict(range(_ssh_keys | length) | map('string') | zip(_ssh_keys))}},
+                    {}
+                  )
+              )
+            | combine(
+                (_user_data | length > 0)
+                | ternary(
+                    {'user_data': _user_data},
+                    {}
+                  )
+              )
+          }}
+
+    - name: Deploy bare metal node with image
+      openstack.cloud.baremetal_node_action:
+        name: "{{ bare_metal_instance.spec.externalHostID }}"
+        instance_info: "{{ node_instance_info }}"
+        config_drive: "{{ node_config_drive if node_config_drive | length > 0 else omit }}"
+        deploy: true
+        wait: true
+
+- name: Set private network
+  ansible.builtin.include_role:
+    name: osac.esi.l2
+    tasks_from: set_networks_for_node
+  vars:
+    node: "{{ bare_metal_instance.spec.externalHostID }}"
+    networks: "{{ [template_params.privateNetwork] }}"
+
+- name: Attach floating IP from external network
+  when: template_params.get('attachFloatingIp', false) | bool
+  block:
+    - name: Allocate floating IP
+      ansible.builtin.include_role:
+        name: osac.esi.floating_ip
+      vars:
+        floating_ip_state: present
+        floating_ip_name: "{{ bare_metal_instance.metadata.name }}"
+        floating_ip_network: "{{ bm_host_openstack_external_network }}"
+
+    - name: Get node network info for private network
+      ansible.builtin.include_role:
+        name: osac.esi.network
+        tasks_from: get_node_network_info
+      vars:
+        node: "{{ bare_metal_instance.spec.externalHostID }}"
+        network: "{{ template_params.privateNetwork }}"
+
+    - name: Fail if no port found on private network
+      when: (node_network_info.stdout | from_json) | length == 0
+      ansible.builtin.fail:
+        msg: "No port found for node '{{ bare_metal_instance.spec.externalHostID }}' on network '{{ template_params.privateNetwork }}'"
+
+    - name: Associate floating IP with node port  # noqa:no-changed-when
+      ansible.builtin.command: >-
+        openstack floating ip set
+        --port {{ (node_network_info.stdout | from_json)[0]['Port'] }}
+        {{ allocate_floating_ip_result }}
+  rescue:
+    - name: Release orphaned floating IP on failure
+      ansible.builtin.include_role:
+        name: osac.esi.floating_ip
+      vars:
+        floating_ip_state: absent
+        floating_ip_name: "{{ bare_metal_instance.metadata.name }}"
+      when: allocate_floating_ip_result is defined
+
+    - name: Re-raise floating IP association failure
+      ansible.builtin.fail:
+        msg: "Floating IP association failed and allocated IP has been released"
+
+- name: Image provisioning completed
+  ansible.builtin.debug:
+    msg: "Image provisioning completed for node {{ bare_metal_instance.spec.externalHostID }}"

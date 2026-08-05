@@ -1,0 +1,185 @@
+#
+# Copyright (c) 2025 Red Hat Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+# the License. You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+# specific language governing permissions and limitations under the License.
+#
+
+# This indicates if the chart is being deployed to an OpenShift or Kind cluster. Valid values are `openshift` and `kind`.
+variant: kind
+
+# This indicates if the debug mode is enabled. This will run the services under the control of the 'dlv' debugger
+# and is intended only for development environments.
+debug: false
+
+# Certificate configuration:
+certs:
+
+  # This defines the cert-manager issuer that will be used for the certificates used by the service. The default is to
+  # use a cluster wide issuer, but there is no default value for the name, so it must be set.
+  issuerRef:
+    kind: ClusterIssuer
+    name:
+
+  # This defines the trusted CA certificates bundle. It must be the name of a configmap in the release namespace
+  # that contains trusted CA certificates in PEM format.
+  caBundle:
+    configMap:
+
+# Hostname for the external network, which gives regular users access to the public API. This value is required because
+# the TLS certificates need to be generated with the correct host names. In a typical environment the external network
+# is publicly reachable.
+externalHostname:
+
+# Hostname for the internal network, which gives administrators access to both the public and private APIs. This value
+# is required because the TLS certificates need to be generated with the correct host names. The internal network should
+# be restricted so that only administrators can reach it. In a typical environment this would be a network confined to
+# the physical infrastructure of the cloud provider. Restricting access is not strictly required because the private API
+# is protected by authentication and authorization, but it is good practice to add network-level isolation as an
+# additional layer of defense.
+internalHostname:
+
+# Authentication and authorization configuration:
+auth:
+
+  # This defines the URL of the OAuth issuer used for authentication. This parameter is mandatory.
+  issuerUrl:
+
+  # List of sources for the OAuth client credentials used by the controller to authenticate to the fulfillment API.
+  # The controller uses the OAuth client credentials flow with the issuer URL specified in `auth.issuerUrl`.
+  #
+  # Each entry maps keys from a ConfigMap or Secret to named credential parameters. Each item has a 'key' field that
+  # indicates the name of the key in the ConfigMap (or Secret) and a 'param' field indicating the name of the
+  # credential parameter.
+  #
+  # The supported parameter names are:
+  #
+  # - `client-id`     - The OAuth client identifier.
+  # - `client-secret` - The OAuth client secret.
+  #
+  # For example, if the client identifier and secret are stored in a Secret named `controller-credentials` in keys
+  # named `id` and `secret`, the configuration would look like this:
+  #
+  #   auth:
+  #     controllerCredentials:
+  #     - secret:
+  #         name: controller-credentials
+  #         items:
+  #         - key: id
+  #           param: client-id
+  #         - key: secret
+  #           param: client-secret
+  #
+  # The keys of the ConfigMap and Secret don't need to match the parameter names. In the above example the client
+  # identifier is in an `id` key but the credential parameter name is `client-id`.
+  controllerCredentials:
+
+  # List of names of Kubernetes service accounts that are allowed to access the private API with administrator
+  # permissions. These are intended only for emergency situations, for example when the regular authentication
+  # mechanisms are not working. The service accounts are expected to be in the namespace where the service is deployed.
+  emergencyServiceAccounts:
+  - admin
+
+# Logging configuration:
+log:
+
+  # This defines the log level for all components. Valid values are 'debug', 'info', 'warn', and 'error'.
+  #
+  # Note that setting this to 'debug' will significantly increase the size of logs and may impact service performance.
+  level: info
+
+  # This controls whether HTTP/gRPC headers are logged.
+  #
+  # Note that setting this to 'true' may result in sensitive information being logged, avoid doing this in production
+  # environments.
+  headers: false
+
+  # This controls whether HTTP/gRPC request and response bodies are logged.
+  #
+  # Note that setting this to 'true' may result in sensitive information being logged, avoid doing this in production
+  # environments.
+  bodies: false
+
+# Image configuration:
+images:
+  service: ghcr.io/osac/fulfillment-service:main  # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
+  envoy: docker.io/envoyproxy/envoy:v1.37.1
+
+# Database connection configuration. The service expects an external PostgreSQL database to be available. The database
+# should be created before installing this chart.
+database:
+
+  # List of sources for database connection parameters. Each entry maps keys from a ConfigMap or Secret to named
+  # database connection parameters. Each item has a 'key' field that indicates the name of the key in the ConfigMap (or
+  # Secret) and a 'param' field indicating the name of the connection parameter.
+  #
+  # In addition to typical PostgreSQL connection parameters the chart also supports the following:
+  #
+  # - `url`      - The complete PostgreSQL connection URL.
+  # - `host`     - The host name or IP address of the database server.
+  # - `port`     - The port number of the database server.
+  # - `user`     - The PostgreSQL user name.
+  # - `password` - The PostgreSQL password.
+  # - `dbname`   - The PostgreSQL database name.
+  #
+  # For example, if the database URL is stored in a ConfigMap names `db-config` in a key named `uri` and the user name
+  # and password are stored in a Secret named `db-secret` in keys named `user` and `password`, the connection
+  # configuration would look like this:
+  #
+  #   connection:
+  #   - configMap:
+  #       name: db-config
+  #       items:
+  #       - key: uri
+  #         param: url
+  #   - secret:
+  #       name: db-secret
+  #       items:
+  #       - key: user
+  #         param: user
+  #       - key: password
+  #         param: password
+  #
+  # The keys of the ConfigMap and secret don't need to match the parameter names. In the above example the URL is in a
+  # `uri` key but the connection parameter name is `url`.
+  connection: []
+
+# Identity provider configuration. The controller uses this to manage tenants in the identity provider via the
+# tenant reconciler. This parameter is mandatory.
+idp:
+
+  # IDP provider type. Currently only 'keycloak' is supported.
+  provider: keycloak
+
+  # Base URL of the identity provider (e.g., https://keycloak.keycloak.svc.cluster.local:8000). This parameter is
+  # mandatory.
+  url:
+
+  # List of sources for the IDP OAuth client credentials. The controller uses the OAuth client credentials flow to
+  # authenticate with the identity provider's admin API. The credentials must have sufficient privileges to manage
+  # organizations and users (for Keycloak, this means the realm-management client roles: manage-realm, manage-users,
+  # view-realm, view-users).
+  #
+  # The format follows the same pattern as auth.controllerCredentials:
+  #
+  # idp:
+  #   credentials:
+  #   - secret:
+  #       name: fulfillment-controller-credentials
+  #       items:
+  #       - key: client-id
+  #         param: client-id
+  #       - key: client-secret
+  #         param: client-secret
+  #
+  # You can reuse the same credentials as auth.controllerCredentials if the osac-controller service account has both
+  # API access and IDP management permissions, or use a separate secret for separation of concerns.
+  #
+  # This parameter is mandatory.
+  credentials:

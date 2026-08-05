@@ -1,0 +1,50 @@
+---
+argument_specs:
+  create:
+    options:
+      cluster_infra_name:
+        type: str
+        required: true
+      cluster_infra_namespace:
+        type: str
+        required: true
+      cluster_infra_node_requests:
+        type: list
+        elements: dict
+        default: []
+        options:
+          resourceClass:
+            type: str
+            required: true
+          numberOfNodes:
+            type: int
+            required: true
+      cluster_working_namespace:
+        type: str
+        required: true
+      cluster_order:
+        type: dict
+        required: true
+      cluster_order_label:
+        type: str
+        required: true
+      agent_resource_class_label:
+        type: str
+        required: true
+      default_agent_namespace:
+        type: str
+        required: true
+  delete:
+    options:
+      cluster_infra_name:
+        type: str
+        required: true
+      cluster_infra_namespace:
+        type: str
+        required: true
+      cluster_order_label:
+        type: str
+        required: true
+      default_agent_namespace:
+        type: str
+        required: true

@@ -1,0 +1,8 @@
+---
+- name: Read license
+  ansible.builtin.include_tasks: read.yaml
+  when: license_state == 'read'
+
+- name: Apply license
+  ansible.builtin.include_tasks: apply.yaml
+  when: license_state == 'present'

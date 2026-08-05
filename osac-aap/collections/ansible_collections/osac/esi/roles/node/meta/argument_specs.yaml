@@ -1,0 +1,31 @@
+argument_specs:
+  get_nodes:
+    options:
+      node_filter_names:
+        type: list
+        elements: str
+  provision_node:
+    options:
+      node_name:
+        required: true
+        type: str
+      node_provisioning_network_name:
+        required: true
+        type: str
+      node_discovery_url:
+        required: true
+        type: str
+      node_agent_namespace:
+        required: true
+        type: str
+      node_deploy_wait:
+        type: bool
+        default: true
+  clean_node:
+    options:
+      node_name:
+        required: true
+        type: str
+      node_clean_wait:
+        type: bool
+        default: true

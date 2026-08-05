@@ -1,0 +1,16 @@
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  name: v1alpha1.console.osac.openshift.io
+  labels:
+    {{- include "osac-operator.consoleProxy.labels" . | nindent 4 }}
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ include "osac-operator.fullname" . }}-console-proxy
+spec:
+  group: console.osac.openshift.io
+  version: v1alpha1
+  service:
+    name: {{ include "osac-operator.fullname" . }}-console-proxy
+    namespace: {{ .Release.Namespace }}
+  groupPriorityMinimum: 1000
+  versionPriority: 15

@@ -1,0 +1,227 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "buf/validate/validate.proto";
+import "osac/private/v1/condition_status_type.proto";
+import "osac/private/v1/metadata_type.proto";
+
+// A project is a logical grouping of resources.
+//
+// Projects provide a way to organize and isolate resources, manage access controls, and track resource usage. Projects
+// can be nested to create hierarchical resource organization, allowing for flexible multi-level resource grouping.
+//
+// For nested projects, the parent is identified by the `metadata.project` field, which contains the full name of the
+// parent project. Tenant isolation is enforced via the standard `metadata.tenant` field.
+//
+// Projects support the following use cases:
+// - Organizing resources by team, department, or application
+// - Hierarchical resource isolation (e.g., prod/staging/dev as nested projects)
+// - Quota and resource allocation boundaries
+//
+// The system validates the project hierarchy during reconciliation:
+// - Circular dependencies are prevented
+message Project {
+  option (buf.validate.message).cel = {
+    id: "project_name_segments"
+    message: "project name must be empty (root project) or dot-separated DNS labels (each segment: max 63 chars, lowercase a-z/0-9/hyphen, alphanumeric start/end)"
+    expression: "this.metadata.name == '' || this.metadata.name.split('.').all(segment, segment.size() > 0 && segment.size() <= 63 && segment.matches('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?'))"
+  };
+
+  // Unique identifier of the project.
+  string id = 1;
+
+  // Metadata of the project, including name, labels, finalizers, and timestamps.
+  //
+  // Project names follow a hierarchical dot-separated DNS label format (e.g., "org.team.project").
+  // Each segment must be a valid DNS label: max 63 characters, lowercase letters (a-z), digits (0-9),
+  // and hyphens, with alphanumeric start and end. Empty name is allowed for the root project.
+  //
+  // Note: Uses (buf.validate.field).ignore = IGNORE_ALWAYS to skip standard Metadata.name pattern
+  // validation (which doesn't allow dots). Project-specific validation is handled by message-level CEL.
+  Metadata metadata = 2 [(buf.validate.field).ignore = IGNORE_ALWAYS];
+
+  // Desired configuration of the project (user-modifiable).
+  ProjectSpec spec = 3;
+
+  // Current state of the project (system-provided, read-only).
+  ProjectStatus status = 4;
+}
+
+// Defines the desired configuration for a Project.
+//
+// The spec contains user-specified parameters that define how the project should be configured. These fields
+// follow a declarative model where users specify the desired state and the system reconciles to match it.
+message ProjectSpec {
+  // Human-friendly short description of the project, only a few words, suitable for displaying in one single line on
+  // a UI or CLI. For example: "Production Environment" or "Development Workspace".
+  string title = 2;
+
+  // Human-friendly long description explaining the purpose or scope of this project. Maximum length: 1024 characters.
+  //
+  // Example: "Production environment for the customer-facing web application"
+  optional string description = 3;
+}
+
+// Represents the current operational state of a Project.
+//
+// Status is system-provided and read-only. Users cannot modify status fields directly; the system updates them
+// based on the reconciliation of the spec.
+message ProjectStatus {
+  // Current lifecycle state of the project.
+  ProjectState state = 1;
+
+  // Human-readable message providing additional details about the current state.
+  //
+  // For PENDING state, this might contain progress information like "Initializing project resources".
+  //
+  // For FAILED state, contains error details like:
+  // - "Circular dependency detected"
+  //
+  // For ACTIVE state, this is typically empty or contains confirmation like "Project ready for use".
+  //
+  // For DELETING state, this might contain progress information like "Deleting child projects" or
+  // "Cleaning up project resources".
+  //
+  // For DELETE_FAILED state, contains error details explaining what prevented deletion, such as:
+  // - "Failed to delete child projects"
+  // - "Resources still attached to project"
+  optional string message = 2;
+
+  // Detailed conditions describing the current state of various aspects of the project.
+  //
+  // Conditions provide fine-grained status information about specific aspects of project initialization,
+  // such as whether OpenShift Projects have been created across all hubs, or whether access controls
+  // have been configured in Keycloak.
+  //
+  // Each condition has a type, status (True/False/Unknown), and optional reason and message.
+  repeated ProjectCondition conditions = 3;
+
+}
+
+// Lifecycle states for Project resources.
+//
+// State transitions typically follow: UNSPECIFIED -> PENDING -> ACTIVE, with FAILED as a terminal error state
+// that may require user intervention or resource recreation. Deletion follows: ACTIVE -> DELETING -> (archived),
+// with DELETE_FAILED as a terminal error state for deletion issues.
+enum ProjectState {
+  // State is unknown or has not been determined yet. This is the default state before initialization.
+  PROJECT_STATE_UNSPECIFIED = 0;
+
+  // The project is being initialized and is not ready for use yet.
+  //
+  // During this state, the system is:
+  // - Checking for circular dependencies in the project hierarchy
+  // - Initializing project resources and access controls
+  //
+  // Resources cannot be created in projects in PENDING state.
+  PROJECT_STATE_PENDING = 1;
+
+  // The project is fully operational and ready for resources.
+  //
+  // In this state:
+  // - Project hierarchy is validated
+  // - Access controls are configured
+  // - Resources can be created and attached to the project
+  PROJECT_STATE_ACTIVE = 2;
+
+  // The project has encountered an error and is unusable.
+  //
+  // Common failure reasons include:
+  // - Circular dependency detected in project hierarchy
+  // - Access control configuration error
+  //
+  // The status.message field will contain specific error details. Failed projects typically require deletion
+  // and recreation with corrected parameters.
+  PROJECT_STATE_FAILED = 3;
+
+  // The project is being deleted.
+  //
+  // During this state, the system is:
+  // - Deleting or blocking deletion based on child projects
+  // - Cleaning up project resources
+  // - Removing access controls and permissions
+  //
+  // The project will be archived once deletion completes successfully.
+  PROJECT_STATE_DELETING = 4;
+
+  // The project deletion has failed.
+  //
+  // The deletion operation encountered an error and could not complete.
+  // Common failure reasons include:
+  // - Failed to delete child projects
+  // - Resources still attached to the project
+  // - Access control cleanup failure
+  //
+  // The status.message field will contain specific error details.
+  // Manual intervention may be required to resolve the underlying issue
+  // before retrying deletion.
+  PROJECT_STATE_DELETE_FAILED = 5;
+}
+
+// Represents a specific aspect of the project's current state.
+//
+// Conditions follow the Kubernetes condition pattern, providing detailed status information
+// about various subsystems or aspects of the project.
+message ProjectCondition {
+  // Type of condition.
+  ProjectConditionType type = 1;
+
+  // Status of the condition (True, False, or Unknown).
+  ConditionStatus status = 2;
+
+  // Machine-readable reason for the condition's last transition.
+  //
+  // This should be a brief CamelCase string that describes why the condition changed.
+  // Examples: "HubsSynced", "PartialSync", "SyncFailed"
+  optional string reason = 3;
+
+  // Human-readable message providing details about the condition.
+  //
+  // This should explain the current status in more detail, including specifics like
+  // which hubs succeeded or failed.
+  // Examples:
+  // - "OpenShift Projects created on all 5 hubs"
+  // - "OpenShift Projects created on 3/5 hubs (failed: hub-east-1, hub-west-2)"
+  // - "Failed to sync to any hubs: no hubs available"
+  optional string message = 4;
+}
+
+// Types of conditions that can be reported for a Project.
+enum ProjectConditionType {
+  // Unspecified condition type.
+  PROJECT_CONDITION_TYPE_UNSPECIFIED = 0;
+
+  // Indicates whether OpenShift Projects (namespaces) have been successfully created across all managed hubs.
+  //
+  // Status meanings:
+  // - True: OpenShift Projects exist on all hubs
+  // - False: OpenShift Projects failed to sync to one or more hubs, or no hubs available
+  // - Unknown: Hub sync has not been attempted yet
+  //
+  // This condition is set during project activation and updated if hubs are added/removed.
+  PROJECT_CONDITION_TYPE_HUB_SYNC = 1;
+
+  // Indicates whether Keycloak Authorization Resources have been configured for project-level permissions.
+  //
+  // Status meanings:
+  // - True: Keycloak Authorization Resource created successfully
+  // - False: Failed to create Keycloak Authorization Resource
+  // - Unknown: Keycloak sync has not been attempted yet
+  //
+  // This condition is set during project activation.
+  PROJECT_CONDITION_TYPE_KEYCLOAK_SYNC = 2;
+}

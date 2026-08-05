@@ -1,0 +1,237 @@
+---
+# Integration test for osac.service.storage_provider setup action.
+# Exercises the full tenant storage setup flow against a mock VMS server.
+# Requires: mock VMS server on 127.0.0.1:18443, kind cluster with osac-system namespace.
+
+# ── Test: Full tenant storage setup ──
+- name: "Storage Provider Setup - Run setup"
+  hosts: localhost
+  gather_facts: false
+
+  environment:
+    VAST_ENDPOINT: "127.0.0.1:18443"
+    VAST_USERNAME: "admin"
+    VAST_PASSWORD: "admin"
+    VAST_VIP_POOL_NAME: "osac-test-pool"
+    VAST_VIP_POOL_IP_RANGES: '[["10.0.0.10","10.0.0.50"]]'
+    VAST_VIP_POOL_SUBNET_CIDR: "24"
+    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
+
+  vars:
+    tenant_name: "test-setup"
+    tenant_namespace: "osac-system"
+    tenant_uid: "test-uid-setup"
+    storage_provider_tiers:
+      - name: default
+        protocol: nfs
+        provider: vast
+        qos_policy: test-qos
+        qos_limits:
+          static_limits:
+            max_reads_bw_mbps: 100
+            max_writes_bw_mbps: 100
+    storage_provider_action: setup
+    storage_provider_provisioning_target: vmaas
+    storage_provider_snapshots_enabled: false
+    vast_storage_validate_certs: false
+
+  tasks:
+    - name: Run storage provider setup
+      block:
+        - name: Delete any pre-existing hub Secret (clean slate)
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Secret
+            name: "vast-tenant-config-test-setup"
+            namespace: "osac-system"
+
+        - name: Call storage_provider role with setup action
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_action: setup
+
+      rescue:
+        - name: Capture setup failure details
+          ansible.builtin.set_fact:
+            _setup_test_failed: true
+            _setup_test_error: "{{ ansible_failed_result | default({}) }}"
+
+        - name: Fail with context
+          ansible.builtin.fail:
+            msg: "Storage provider setup failed: {{ _setup_test_error }}"
+
+# ── Verify: Hub Secret created correctly ──
+- name: "Storage Provider Setup - Verify results"
+  hosts: localhost
+  gather_facts: false
+
+  environment:
+    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
+
+  vars:
+    tenant_name: "test-setup"
+
+  tasks:
+    - name: Read hub Secret
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "vast-tenant-config-test-setup"
+        namespace: "osac-system"
+      register: _hub_secret
+
+    - name: Assert hub Secret exists
+      ansible.builtin.assert:
+        that:
+          - _hub_secret.resources | length == 1
+        fail_msg: "Hub Secret 'vast-tenant-config-test-setup' was not created"
+        success_msg: "Hub Secret exists"
+
+    - name: Decode hub Secret fields
+      ansible.builtin.set_fact:
+        _secret_data:
+          tenant_manager_name: "{{ _hub_secret.resources[0].data.tenant_manager_name | b64decode }}"
+          tenant_manager_username: "{{ _hub_secret.resources[0].data.tenant_manager_username | b64decode }}"
+          tenant_manager_password: "{{ _hub_secret.resources[0].data.tenant_manager_password | b64decode }}"
+          tenant_manager_id: "{{ _hub_secret.resources[0].data.tenant_manager_id | b64decode }}"
+          tenant_role_id: "{{ _hub_secret.resources[0].data.tenant_role_id | b64decode }}"
+          vast_tenant_id: "{{ _hub_secret.resources[0].data.vast_tenant_id | b64decode }}"
+          vast_local_provider_id: "{{ _hub_secret.resources[0].data.vast_local_provider_id | b64decode }}"
+          vip_pool_name: "{{ _hub_secret.resources[0].data.vip_pool_name | b64decode }}"
+          vast_endpoint: "{{ _hub_secret.resources[0].data.vast_endpoint | b64decode }}"
+          storage_provider_type: "{{ _hub_secret.resources[0].data.storage_provider_type | b64decode }}"
+          tenant_uid_hash: "{{ _hub_secret.resources[0].data.tenant_uid_hash | b64decode }}"
+
+    - name: Assert hub Secret has tenant manager name
+      ansible.builtin.assert:
+        that:
+          - _secret_data.tenant_manager_name == "osac-test-setup"
+        fail_msg: "Expected tenant_manager_name 'osac-test-setup', got '{{ _secret_data.tenant_manager_name }}'"
+        success_msg: "tenant_manager_name correct"
+
+    - name: Assert hub Secret has manager credentials (non-empty)
+      ansible.builtin.assert:
+        that:
+          - _secret_data.tenant_manager_username | length > 0
+          - _secret_data.tenant_manager_password | length > 0
+        fail_msg: "tenant_manager_username or tenant_manager_password is empty"
+        success_msg: "tenant_manager credentials present"
+
+    - name: Assert hub Secret has tenant ID (non-empty)
+      ansible.builtin.assert:
+        that:
+          - _secret_data.vast_tenant_id | string | length > 0
+          - _secret_data.vast_tenant_id | string != ""
+        fail_msg: "vast_tenant_id is empty"
+        success_msg: "vast_tenant_id present: {{ _secret_data.vast_tenant_id }}"
+
+    - name: Assert hub Secret has VIP pool name
+      ansible.builtin.assert:
+        that:
+          - _secret_data.vip_pool_name == "osac-test-pool"
+        fail_msg: "Expected vip_pool_name 'osac-test-pool', got '{{ _secret_data.vip_pool_name }}'"
+        success_msg: "vip_pool_name correct"
+
+    - name: Assert hub Secret has endpoint
+      ansible.builtin.assert:
+        that:
+          - _secret_data.vast_endpoint == "127.0.0.1:18443"
+        fail_msg: "Expected vast_endpoint '127.0.0.1:18443', got '{{ _secret_data.vast_endpoint }}'"
+        success_msg: "vast_endpoint correct"
+
+    - name: Assert hub Secret has storage provider type
+      ansible.builtin.assert:
+        that:
+          - _secret_data.storage_provider_type == "vast"
+        fail_msg: "Expected storage_provider_type 'vast', got '{{ _secret_data.storage_provider_type }}'"
+        success_msg: "storage_provider_type correct"
+
+    - name: Assert hub Secret has tenant UID hash
+      ansible.builtin.assert:
+        that:
+          - _secret_data.tenant_uid_hash == "6ee13f1b"
+        fail_msg: "Expected tenant_uid_hash '6ee13f1b', got '{{ _secret_data.tenant_uid_hash }}'"
+        success_msg: "tenant_uid_hash correct"
+
+    - name: Assert hub Secret labels
+      ansible.builtin.assert:
+        that:
+          - _hub_secret.resources[0].metadata.labels['app.kubernetes.io/managed-by'] == 'osac-aap'
+          - _hub_secret.resources[0].metadata.labels['osac.openshift.io/tenant'] == 'test-setup'
+        fail_msg: "Hub Secret labels incorrect"
+        success_msg: "Hub Secret labels correct"
+
+    - name: Assert storage_provider_tenant_configs output was set
+      ansible.builtin.assert:
+        that:
+          - storage_provider_tenant_configs is defined
+          - storage_provider_tenant_configs is mapping
+          - "'vast' in storage_provider_tenant_configs"
+          - storage_provider_tenant_configs.vast.vast_tenant_id is defined
+          - storage_provider_tenant_configs.vast.vip_pool_name == "osac-test-pool"
+        fail_msg: "storage_provider_tenant_configs output not set correctly: {{ storage_provider_tenant_configs | default('undefined') }}"
+        success_msg: "storage_provider_tenant_configs output correct"
+
+    # ── Verify mock server received expected API calls ──
+    - name: Get mock server call log
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18443/_calls"
+        validate_certs: false
+        method: GET
+        return_content: true
+      register: _mock_calls
+
+    - name: Parse mock call log
+      ansible.builtin.set_fact:
+        _call_log: "{{ _mock_calls.json }}"
+
+    - name: Extract API methods and paths from call log
+      ansible.builtin.set_fact:
+        _call_summaries: >-
+          {{ _call_log | map(attribute='method') | zip(_call_log | map(attribute='path')) | map('join', ' ') | list }}
+
+    - name: Assert VIP pool was created
+      ansible.builtin.assert:
+        that:
+          - _call_log | selectattr('path', 'search', 'vippools') | selectattr('method', 'equalto', 'POST') | list | length > 0
+            or _call_log | selectattr('path', 'search', 'vippools') | selectattr('method', 'equalto', 'GET') | list | length > 0
+        fail_msg: "No VIP pool API call found in mock call log"
+        success_msg: "VIP pool API call detected"
+
+    - name: Assert tenant was created
+      ansible.builtin.assert:
+        that:
+          - _call_log | selectattr('path', 'search', 'tenants') | list | length > 0
+        fail_msg: "No tenant creation API call found in mock call log"
+        success_msg: "Tenant creation API call detected"
+
+    - name: Assert admin auth was performed
+      ansible.builtin.assert:
+        that:
+          - _call_log | selectattr('path', 'search', 'token') | selectattr('method', 'equalto', 'POST') | list | length > 0
+        fail_msg: "No admin auth call found in mock call log"
+        success_msg: "Admin auth API call detected"
+
+    - name: Assert manager was created
+      ansible.builtin.assert:
+        that:
+          - _call_log | selectattr('path', 'search', 'managers') | list | length > 0
+        fail_msg: "No manager creation API call found in mock call log"
+        success_msg: "Manager creation API call detected"
+
+# ── Cleanup ──
+- name: "Storage Provider Setup - Cleanup"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Delete hub Secret
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "vast-tenant-config-test-setup"
+        namespace: "osac-system"
+      failed_when: false

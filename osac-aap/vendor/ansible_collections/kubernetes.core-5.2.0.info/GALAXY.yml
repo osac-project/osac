@@ -1,0 +1,45 @@
+download_url: https://console.redhat.com/api/automation-hub/v3/plugin/ansible/content/published/collections/artifacts/kubernetes-core-5.2.0.tar.gz
+format_version: 1.0.0
+name: core
+namespace: kubernetes
+server: https://console.redhat.com/api/automation-hub/content/published/
+signatures:
+- pubkey_fingerprint: 39B5D759361A97464C564A8FE1A4BD708A828AAD
+  pulp_created: '2025-03-31T23:36:20.335203Z'
+  signature: '-----BEGIN PGP SIGNATURE-----
+
+    Version: GnuPG v1
+
+
+    iQIcBAABCAAGBQJn6ybpAAoJEOGkvXCKgoqtbjkQAKckJhnkTeMODbomkO9zF8sq
+
+    AvCQ/9ILALm0Zteek4m6voI8EWeHIjxuCWNr4naJ/fc7edW9rbdRNvcKI1MF0dFe
+
+    a71m8fsDepLx6oHH+/xVlfViCZzCiQuS1qOCTnUoJJ/4G252uVyD1LBRyGdZfmpu
+
+    gmEjAt2RkCsxgTNTBr14TYoguosqysRMqVevPlQ9Gn62bZkrtqzPGLVOV7imEqTD
+
+    IFuvzB4OvaPkn3gNsOk/L8CEa/Qjp7IltY5NptagENTjJouVRLLsvHUoW0ifX4XU
+
+    e/2LUqg93N8mwpdqRaA6MluxX5U3LtNP1XF2au/gRbVrE6DHhe5uyJgeWmaGaLVz
+
+    Gl3WiLtI9kTvsC8zvsNq7PQ9b21sPd1mfkskXxy8LTTjug5BwiB8E1/Gx2eX1lM/
+
+    km0+F05oYOM0/q271EVP5zrUVNsZAFlD54mjEYSw7z58oHqJJMssL0nLyJdr8rSs
+
+    xmkPbTk66/9bGq+66raRgTYogN+ZGHmF9kVLlCgJndFn+vfoUz5j7vBVTgt3UgJe
+
+    Z9cf75M+KMoVOgZ4cFOt2f+7ymRSCQaDjh4Q2lNi4TbHmCgLPUvkborPtNnIwYmF
+
+    dDmtxMuSKFqoolIrbAKX4KYYjvwu0e49gwL0EtXairxpxI6lEBcEyUn6z09Ybu9f
+
+    ueGnJJ7HSEpMsetMDsQv
+
+    =A2hp
+
+    -----END PGP SIGNATURE-----
+
+    '
+  signing_service: null
+version: 5.2.0
+version_url: /api/automation-hub/content/published/v3/plugin/ansible/content/published/collections/index/kubernetes/core/versions/5.2.0/

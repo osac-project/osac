@@ -1,0 +1,148 @@
+---
+# ===========================================================
+
+- name: Disable connection draining on ELB (check_mode)
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    connection_draining_timeout: 0
+  register: result
+  check_mode: true
+
+- ansible.builtin.assert:
+    that:
+      - result is changed
+
+- name: Disable connection draining on ELB
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    connection_draining_timeout: 0
+  register: result
+
+- ansible.builtin.assert:
+    that:
+      - result is changed
+
+- name: Disable connection draining on ELB - idempotency (check_mode)
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    connection_draining_timeout: 0
+  register: result
+  check_mode: true
+
+- ansible.builtin.assert:
+    that:
+      - result is not changed
+
+- name: Disable connection draining on ELB - idempotency
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    connection_draining_timeout: 0
+  register: result
+
+- ansible.builtin.assert:
+    that:
+      - result is not changed
+
+# ===========================================================
+
+- name: Re-enable connection draining on ELB (check_mode)
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    connection_draining_timeout: "{{ default_drain_timeout }}"
+  register: result
+  check_mode: true
+
+- ansible.builtin.assert:
+    that:
+      - result is changed
+
+- name: Re-enable connection draining on ELB
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    connection_draining_timeout: "{{ default_drain_timeout }}"
+  register: result
+
+- ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.elb.connection_draining_timeout == default_drain_timeout
+
+- name: Re-enable connection draining on ELB - idempotency (check_mode)
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    connection_draining_timeout: "{{ default_drain_timeout }}"
+  register: result
+  check_mode: true
+
+- ansible.builtin.assert:
+    that:
+      - result is not changed
+
+- name: Re-enable connection draining on ELB - idempotency
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    connection_draining_timeout: "{{ default_drain_timeout }}"
+  register: result
+
+- ansible.builtin.assert:
+    that:
+      - result is not changed
+      - result.elb.connection_draining_timeout == default_drain_timeout
+
+# ===========================================================
+
+- name: Update connection draining timout on ELB (check_mode)
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    connection_draining_timeout: "{{ updated_drain_timeout }}"
+  register: result
+  check_mode: true
+
+- ansible.builtin.assert:
+    that:
+      - result is changed
+
+- name: Update connection draining timout on ELB
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    connection_draining_timeout: "{{ updated_drain_timeout }}"
+  register: result
+
+- ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.elb.connection_draining_timeout == updated_drain_timeout
+
+- name: Update connection draining timout on ELB - idempotency (check_mode)
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    connection_draining_timeout: "{{ updated_drain_timeout }}"
+  register: result
+  check_mode: true
+
+- ansible.builtin.assert:
+    that:
+      - result is not changed
+
+- name: Update connection draining timout on ELB - idempotency
+  amazon.aws.elb_classic_lb:
+    name: "{{ elb_name }}"
+    state: present
+    connection_draining_timeout: "{{ updated_drain_timeout }}"
+  register: result
+
+- ansible.builtin.assert:
+    that:
+      - result is not changed
+      - result.elb.connection_draining_timeout == updated_drain_timeout

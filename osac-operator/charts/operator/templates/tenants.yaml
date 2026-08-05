@@ -1,0 +1,14 @@
+{{- if and .Values.tenants .Values.controllers.storage }}
+{{- range .Values.tenants }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vast-tenant-config-{{ .name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    osac.openshift.io/tenant: {{ .name | quote }}
+type: Opaque
+data: {}
+{{- end }}
+{{- end }}

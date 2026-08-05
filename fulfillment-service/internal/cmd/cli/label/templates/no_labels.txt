@@ -1,0 +1,9 @@
+You must specify at least one label operation. For example, to set labels 'a' and 'b' on the
+cluster with identifier '123':
+
+{{ binary }} label cluster 123 my-label=my-value your-label=your-value
+
+To remove a label, use the label name followed by a '-' character. For example, to remove the
+'my-label' label:
+
+{{ binary }} label cluster 123 my-label-

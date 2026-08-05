@@ -1,0 +1,27 @@
+---
+# ExternalIPAttachment deletion — removes the DNAT rule from Netris
+
+- name: Extract ExternalIPAttachment name
+  ansible.builtin.set_fact:
+    attachment_name: "{{ external_ip_attachment.metadata.name }}"
+
+- name: Display ExternalIPAttachment deletion info
+  ansible.builtin.debug:
+    msg: "Deleting Netris DNAT rule for ExternalIPAttachment '{{ attachment_name }}'"
+
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Delete DNAT rule for ExternalIPAttachment
+  ansible.builtin.include_role:
+    name: netris.controller.nat
+    tasks_from: delete
+  vars:
+    nat_name: "{{ attachment_name }}-dnat"
+    nat_site_id: "{{ netris_site_id }}"
+
+- name: Display deletion result
+  ansible.builtin.debug:
+    msg: "DNAT rule '{{ attachment_name }}-dnat' deletion completed"

@@ -1,0 +1,93 @@
+---
+- name: List agents currently labeled with the cluster order label
+  kubernetes.core.k8s_info:
+    kind: Agent
+    api_version: agent-install.openshift.io/v1beta1
+    namespace: "{{ default_agent_namespace }}"
+    label_selectors:
+      - "{{ cluster_order_label }}={{ manage_agents_cluster_order_name }}"
+      - "{{ agent_resource_class_label }}={{ manage_agents_resource_class }}"
+  register: manage_agents_allocated
+
+- name: Add agents to the cluster
+  when: (manage_agents_desired_count | int) > (manage_agents_allocated.resources | length)
+  block:
+    # Since there is only one global pool of agents, we need to make sure that
+    # the selection of new agents is serialized by resource class
+    - name: Acquire agent lock
+      ansible.builtin.include_role:
+        name: osac.service.lease
+      vars:
+        lease_state: present
+        lease_name: "agent-{{ manage_agents_resource_class }}-lock"
+        lease_holder: "{{ cluster_order_holder_id }}"
+        lease_retries: 20
+        lease_delay: 5
+
+    - name: Retrieve the list of available agents with a matching machine resource class
+      kubernetes.core.k8s_info:
+        kind: Agent
+        api_version: agent-install.openshift.io/v1beta1
+        namespace: "{{ default_agent_namespace }}"
+        label_selectors:
+          - "!{{ cluster_order_label }}"
+          - "{{ agent_resource_class_label }}={{ manage_agents_resource_class }}"
+      register: manage_agents_available
+
+    # Agents may be picked-up outside of the fulfillment API, so we need to exclude them
+    - name: Filter out agents already allocated to a cluster
+      ansible.builtin.set_fact:
+        manage_agents_available: >
+          {{ manage_agents_available.resources
+          | json_query('[?metadata.labels."agent-install.openshift.io/clusterdeployment-namespace"==``]') }}
+
+    - name: Count the number of agents to add to the cluster
+      ansible.builtin.set_fact:
+        manage_agents_selected_count: >
+          {{ manage_agents_desired_count | int - manage_agents_allocated.resources | length }}
+
+    - name: Display agent counts (select_and_label)
+      ansible.builtin.debug:
+        msg: "We have {{ manage_agents_allocated.resources | length }} agents, we want {{ manage_agents_desired_count }}"
+
+    - name: Select agents to add to the cluster
+      ansible.builtin.set_fact:
+        manage_agents_add_to_cluster: "{{ manage_agents_available[: (manage_agents_selected_count | int)] }}"
+
+    - name: Add selected agents to the cluster
+      kubernetes.core.k8s_json_patch:
+        api_version: agent-install.openshift.io/v1beta1
+        kind: Agent
+        name: "{{ agent.metadata.name }}"
+        namespace: "{{ agent.metadata.namespace }}"
+        patch:
+          - op: add
+            path: /metadata/labels/{{ cluster_order_label | osac.service.json_pointer_escape }}
+            value: "{{ manage_agents_cluster_order_name }}"
+          - op: add
+            path: /spec/approved
+            value: false
+      loop: "{{ manage_agents_add_to_cluster | default([]) }}"
+      loop_control:
+        loop_var: agent
+        label: "Adding agent {{ agent.metadata.name }}"
+      register: manage_agents_added
+
+    - name: Added agent list
+      ansible.builtin.set_fact:
+        manage_agents_added: >
+          {{ manage_agents_added.results | selectattr('changed') | map(attribute='agent') }}
+
+    - name: Fail if not all agents were added
+      ansible.builtin.fail:
+        msg: "{{ manage_agents_added | length }} agents were added to the cluster instead of {{ manage_agents_selected_count }}. Please check agents availability."
+      when: manage_agents_added | length != manage_agents_selected_count | int
+
+  always:
+    - name: Delete agent lock
+      ansible.builtin.include_role:
+        name: osac.service.lease
+      vars:
+        lease_state: absent
+        lease_name: "agent-{{ manage_agents_resource_class }}-lock"
+        lease_holder: "{{ cluster_order_holder_id }}"

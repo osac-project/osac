@@ -1,0 +1,13 @@
+---
+- name: "enos: delete port"
+  enos_command:
+    commands:
+      - enable
+      - configure terminal
+      - "terminal dont-ask"
+      - "interface port {{ port_name }}"
+      - no switchport trunk allowed vlan
+      - switchport mode access
+      - no switchport access vlan
+  register: result
+  connection: network_cli

@@ -1,0 +1,448 @@
+---
+# Integration test for osac.service.storage_provider teardown action.
+# Tests the full teardown lifecycle: deletes StorageClasses (by label, including
+# JIT-created ones), CSI Secret, hub Secret, and verifies mock VMS server
+# received live-query delete calls.
+# Requires: mock VMS server on 127.0.0.1:18443, kind cluster with osac-system namespace.
+
+# ── Setup: Pre-create resources to be torn down ──
+- name: "Storage Provider Teardown - Setup fixtures"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Reset mock VMS server (sequential execution — safe to reset)
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18443/_reset"
+        validate_certs: false
+        method: POST
+      failed_when: false
+
+    - name: Pre-seed mock VMS with tenant resources for live-query teardown
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18443/api/{{ item.resource }}/"
+        method: POST
+        body_format: json
+        body: "{{ item.body }}"
+        validate_certs: false
+        status_code: [200, 201]
+      loop:
+        - resource: tenants
+          body:
+            name: "test-teardown"
+            local_provider_id: 1
+        - resource: views
+          body:
+            name: "view-test-teardown-default"
+            path: "/osac/test-teardown/default"
+            tenant_id: 1
+        - resource: views
+          body:
+            name: "view-test-teardown-extra"
+            path: "/osac/test-teardown/extra"
+            tenant_id: 1
+        - resource: quotas
+          body:
+            name: "quota-test-teardown-default"
+            path: "/osac/test-teardown/default"
+            tenant_id: 1
+        - resource: viewpolicies
+          body:
+            name: "osac-test-teardown-nfs"
+            flavor: "NFS"
+            tenant_id: 1
+        - resource: qospolicies
+          body:
+            name: "osac-test-teardown-default"
+            tenant_id: 1
+            mode: "STATIC"
+            static_limits:
+              max_reads_bw_mbps: 100
+        - resource: managers
+          body:
+            username: "osac-test-teardown"
+            roles: [1]
+        - resource: roles
+          body:
+            name: "osac-csi-test-teardown"
+      loop_control:
+        label: "{{ item.resource }}/{{ item.body.name | default(item.body.username | default('?')) }}"
+
+    - name: Create hub Secret fixture
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "vast-tenant-config-test-teardown"
+            namespace: "osac-system"
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/tenant: "test-teardown"
+          type: Opaque
+          stringData:
+            vast_tenant_id: "1"
+            vast_local_provider_id: "1"
+            vip_pool_name: "osac-test-pool"
+            vast_endpoint: "127.0.0.1:18443"
+            storage_provider_type: "vast"
+            tenant_manager_name: "osac-test-teardown"
+            tenant_manager_username: "osac-test-teardown"
+            tenant_manager_password: "test-csi-password"
+            tenant_manager_id: "7"
+            tenant_role_id: "8"
+
+    - name: Create StorageClass fixture (setup-created)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: "vast-nfs-test-teardown-default"
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/tenant: "test-teardown"
+              osac.openshift.io/storage-tier: "default"
+              osac.openshift.io/storage-protocol: "nfs"
+          provisioner: csi.vastdata.com
+          parameters:
+            vip_pool_name: "osac-test-pool"
+            root_export: "/osac/test-teardown/default"
+            csi.storage.k8s.io/provisioner-secret-name: "vast-csi-test-teardown"
+            csi.storage.k8s.io/provisioner-secret-namespace: "osac-system"
+          reclaimPolicy: Delete
+          volumeBindingMode: Immediate
+
+    - name: Create JIT StorageClass fixture (ensure_storage_class-created, extra tier)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: "vast-block-test-teardown-performance"
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/tenant: "test-teardown"
+              osac.openshift.io/storage-tier: "performance"
+              osac.openshift.io/storage-protocol: "block"
+          provisioner: block.csi.vastdata.com
+          parameters:
+            vip_pool_name: "osac-test-pool"
+            subsystem: "view-test-teardown-performance"
+            tenant_name: "test-teardown"
+          reclaimPolicy: Delete
+          volumeBindingMode: WaitForFirstConsumer
+
+    - name: Create CSI Secret fixture
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "vast-csi-test-teardown"
+            namespace: "osac-system"
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/tenant: "test-teardown"
+          type: Opaque
+          stringData:
+            token: "test-api-token-for-csi"
+            endpoint: "127.0.0.1:18443"
+
+    - name: Check if VolumeSnapshotClass CRD exists
+      kubernetes.core.k8s_info:
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: volumesnapshotclasses.snapshot.storage.k8s.io
+      register: _vsc_crd_check
+
+    - name: Create VolumeSnapshotClass fixture (when CRD exists)
+      when: _vsc_crd_check.resources | length > 0
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: snapshot.storage.k8s.io/v1
+          kind: VolumeSnapshotClass
+          metadata:
+            name: "vast-snapshot-test-teardown-default"
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/tenant: "test-teardown"
+              osac.openshift.io/storage-tier: "default"
+          driver: csi.vastdata.com
+          deletionPolicy: Delete
+          parameters:
+            csi.storage.k8s.io/snapshotter-secret-name: "vast-csi-test-teardown"
+            csi.storage.k8s.io/snapshotter-secret-namespace: "osac-system"
+
+    - name: Verify all fixtures created
+      block:
+        - name: Verify hub Secret exists
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Secret
+            name: "vast-tenant-config-test-teardown"
+            namespace: "osac-system"
+          register: _verify_hub
+
+        - name: Verify both StorageClasses exist (setup + JIT)
+          kubernetes.core.k8s_info:
+            api_version: storage.k8s.io/v1
+            kind: StorageClass
+            label_selectors:
+              - "osac.openshift.io/tenant=test-teardown"
+          register: _verify_scs
+
+        - name: Assert all fixtures are in place
+          ansible.builtin.assert:
+            that:
+              - _verify_hub.resources | length == 1
+              - _verify_scs.resources | length == 2
+            fail_msg: "Not all fixtures were created successfully (expected 1 hub Secret, 2 SCs)"
+            success_msg: "All fixtures created: hub Secret, 2 StorageClasses (setup + JIT), CSI Secret"
+
+# ── Test: Run teardown ──
+- name: "Storage Provider Teardown - Run teardown"
+  hosts: localhost
+  gather_facts: false
+
+  environment:
+    VAST_ENDPOINT: "127.0.0.1:18443"
+    VAST_USERNAME: "admin"
+    VAST_PASSWORD: "admin"
+    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
+
+  vars:
+    tenant_name: "test-teardown"
+    tenant_namespace: "osac-system"
+    storage_provider_tiers:
+      - name: default
+        protocol: nfs
+        provider: vast
+    storage_provider_provisioning_target: vmaas
+    vast_storage_validate_certs: false
+
+  tasks:
+    - name: Call storage_provider role with teardown_cluster_storage action
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: teardown_cluster_storage
+
+    - name: Call storage_provider role with teardown_backend action
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: teardown_backend
+
+# ── Verify: K8s resources deleted (including JIT SCs) ──
+- name: "Storage Provider Teardown - Verify K8s resource deletion"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Check all tenant StorageClasses deleted (by label)
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        label_selectors:
+          - "osac.openshift.io/tenant=test-teardown"
+      register: _td_scs
+
+    - name: Assert ALL tenant StorageClasses deleted (including JIT)
+      ansible.builtin.assert:
+        that:
+          - _td_scs.resources | length == 0
+        fail_msg: >-
+          {{ _td_scs.resources | length }} StorageClass(es) still exist:
+          {{ _td_scs.resources | map(attribute='metadata.name') | list }}
+        success_msg: "All tenant StorageClasses deleted (setup + JIT)"
+
+    - name: Check CSI Secret deleted
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "vast-csi-test-teardown"
+        namespace: "osac-system"
+      register: _td_csi
+
+    - name: Assert CSI Secret deleted
+      ansible.builtin.assert:
+        that:
+          - _td_csi.resources | length == 0
+        fail_msg: "CSI Secret 'vast-csi-test-teardown' was not deleted"
+        success_msg: "CSI Secret deleted"
+
+    - name: Check hub Secret deleted (should be deleted when cleanup succeeds)
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "vast-tenant-config-test-teardown"
+        namespace: "osac-system"
+      register: _td_hub
+
+    - name: Assert hub Secret deleted
+      ansible.builtin.assert:
+        that:
+          - _td_hub.resources | length == 0
+        fail_msg: "Hub Secret 'vast-tenant-config-test-teardown' was not deleted (cleanup may have failed)"
+        success_msg: "Hub Secret deleted"
+
+    - name: Check VolumeSnapshotClass CRD exists for verification
+      kubernetes.core.k8s_info:
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: volumesnapshotclasses.snapshot.storage.k8s.io
+      register: _td_vsc_crd
+
+    - name: Check VolumeSnapshotClass deleted (when CRD exists)
+      when: _td_vsc_crd.resources | length > 0
+      kubernetes.core.k8s_info:
+        api_version: snapshot.storage.k8s.io/v1
+        kind: VolumeSnapshotClass
+        label_selectors:
+          - "osac.openshift.io/tenant=test-teardown"
+      register: _td_vsc
+
+    - name: Assert VolumeSnapshotClass deleted (when CRD exists)
+      when: _td_vsc_crd.resources | length > 0
+      ansible.builtin.assert:
+        that:
+          - _td_vsc.resources | length == 0
+        fail_msg: "VolumeSnapshotClass(es) still exist for tenant test-teardown"
+        success_msg: "All VolumeSnapshotClasses deleted"
+
+# ── Verify: Mock server received live-query delete calls ──
+- name: "Storage Provider Teardown - Verify mock API calls"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Get mock server call log
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18443/_calls"
+        validate_certs: false
+        method: GET
+        return_content: true
+      register: _mock_calls
+
+    - name: Parse mock call log
+      ansible.builtin.set_fact:
+        _call_log: "{{ _mock_calls.json }}"
+
+    - name: Assert admin auth was performed for VMS cleanup
+      ansible.builtin.assert:
+        that:
+          - _call_log | selectattr('path', 'equalto', '/api/token/') | selectattr('method', 'equalto', 'POST') | list | length > 0
+        fail_msg: "No admin auth call found — teardown did not authenticate to VMS"
+        success_msg: "Admin auth call detected"
+
+    - name: Assert views were queried by tenant_id (live query)
+      ansible.builtin.assert:
+        that:
+          - _call_log | selectattr('path', 'search', 'views.*tenant_id=') | selectattr('method', 'equalto', 'GET') | list | length > 0
+        fail_msg: "No live view query by tenant_id found in mock call log"
+        success_msg: "Views queried by tenant_id"
+
+    - name: Assert view DELETE calls were made
+      ansible.builtin.assert:
+        that:
+          - _call_log | selectattr('path', 'search', 'views/') | selectattr('method', 'equalto', 'DELETE') | list | length > 0
+        fail_msg: "No view DELETE calls found in mock call log"
+        success_msg: "View DELETE calls detected"
+
+    - name: Assert quotas were queried by tenant_id (live query)
+      ansible.builtin.assert:
+        that:
+          - _call_log | selectattr('path', 'search', 'quotas.*tenant_id=') | selectattr('method', 'equalto', 'GET') | list | length > 0
+        fail_msg: "No live quota query by tenant_id found in mock call log"
+        success_msg: "Quotas queried by tenant_id"
+
+    - name: Assert view policies were queried by tenant_id (live query)
+      ansible.builtin.assert:
+        that:
+          - _call_log | selectattr('path', 'search', 'viewpolicies.*tenant_id=') | selectattr('method', 'equalto', 'GET') | list | length > 0
+        fail_msg: "No live view policy query by tenant_id found in mock call log"
+        success_msg: "View policies queried by tenant_id"
+
+    - name: Assert QoS policies were queried by tenant_id (live query)
+      ansible.builtin.assert:
+        that:
+          - _call_log | selectattr('path', 'search', 'qospolicies.*tenant_id=') | selectattr('method', 'equalto', 'GET') | list | length > 0
+        fail_msg: "No live QoS policy query by tenant_id found in mock call log"
+        success_msg: "QoS policies queried by tenant_id"
+
+    - name: Assert tenant deletion was attempted
+      ansible.builtin.assert:
+        that:
+          - _call_log | selectattr('path', 'search', 'tenants') | list | length > 0
+        fail_msg: "No tenant API call found in mock call log"
+        success_msg: "Tenant API call detected"
+
+    - name: Assert manager lookup was attempted
+      ansible.builtin.assert:
+        that:
+          - _call_log | selectattr('path', 'search', 'managers') | list | length > 0
+        fail_msg: "No manager API call found in mock call log"
+        success_msg: "Manager API call detected"
+
+    - name: Assert role lookup was attempted
+      ansible.builtin.assert:
+        that:
+          - _call_log | selectattr('path', 'search', 'roles') | list | length > 0
+        fail_msg: "No role API call found in mock call log"
+        success_msg: "Role API call detected"
+
+    - name: Assert local provider was deleted by ID (from hub Secret)
+      ansible.builtin.assert:
+        that:
+          - _call_log | selectattr('path', 'search', 'localproviders/') | selectattr('method', 'equalto', 'DELETE') | list | length > 0
+        fail_msg: "No local provider DELETE call found — orphaned provider not cleaned up"
+        success_msg: "Local provider deleted by ID from hub Secret"
+
+# ── Cleanup: Best-effort removal of any remaining resources ──
+- name: "Storage Provider Teardown - Final cleanup"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Delete hub Secret (safety net)
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "vast-tenant-config-test-teardown"
+        namespace: "osac-system"
+      failed_when: false
+
+    - name: Delete any remaining tenant StorageClasses (safety net)
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        label_selectors:
+          - "osac.openshift.io/tenant=test-teardown"
+      register: _cleanup_scs
+
+    - name: Remove remaining StorageClasses
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "{{ item.metadata.name }}"
+      loop: "{{ _cleanup_scs.resources | default([]) }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      failed_when: false
+
+    - name: Delete CSI Secret (safety net)
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "vast-csi-test-teardown"
+        namespace: "osac-system"
+      failed_when: false

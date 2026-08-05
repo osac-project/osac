@@ -1,0 +1,8 @@
+---
+- name: "dellemcos9: create vlan"
+  dellemc.os9.os9_config:
+    lines:
+      - "interface vlan {{ _vlan_id }}"
+      - "name {{ _vlan_name }}"
+      - "no shutdown"
+  connection: network_cli

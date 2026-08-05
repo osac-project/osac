@@ -1,0 +1,4 @@
+---
+- name: Read inventory
+  ansible.builtin.include_tasks: read.yaml
+  when: inventory_state == 'read'

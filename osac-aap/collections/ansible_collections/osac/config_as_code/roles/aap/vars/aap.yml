@@ -1,0 +1,7 @@
+---
+aap_organizations: # noqa: var-naming[no-role-prefix]
+  - name: "{{ aap_organization_name }}"
+
+aap_user_accounts: [] # noqa: var-naming[no-role-prefix]
+
+controller_roles: [] # noqa: var-naming[no-role-prefix]

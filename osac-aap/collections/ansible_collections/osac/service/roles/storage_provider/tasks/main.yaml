@@ -1,0 +1,102 @@
+---
+# Input validation fires here, before any include_tasks dispatch.
+# This is the single point of validation — provider roles must never be called
+# directly via include_role from playbooks, bypassing this dispatcher.
+# Provider and protocol validation is NOT hardcoded here — providers are discovered
+# dynamically (role must exist as osac.templates.{provider}_storage), and protocols
+# are validated by each provider role via its meta/osac.yaml capabilities.
+
+- name: Validate storage_provider_tiers is a non-empty list
+  ansible.builtin.fail:
+    msg: >-
+      storage_provider_tiers must be a non-empty list of dicts with name, protocol, and provider.
+      Got: {{ storage_provider_tiers | default('undefined') | to_json }}
+  when: >-
+    storage_provider_tiers is not defined
+    or storage_provider_tiers | length == 0
+
+- name: Validate each tier has required fields (name, protocol, provider)
+  ansible.builtin.fail:
+    msg: >-
+      Each tier in storage_provider_tiers must have 'name', 'protocol', and 'provider' fields.
+      Invalid tier: {{ item | to_json }}
+  loop: "{{ storage_provider_tiers }}"
+  when: >-
+    item.name is not defined or item.name | length == 0
+    or item.protocol is not defined or item.protocol | length == 0
+    or item.provider is not defined or item.provider | length == 0
+
+- name: Validate tier names are valid DNS labels (lowercase alphanumeric + hyphens, 1-63 chars)
+  ansible.builtin.fail:
+    msg: >-
+      Tier name '{{ item.name }}' is not a valid DNS label.
+      Must be 1-63 characters, lowercase alphanumeric and hyphens only,
+      no leading or trailing hyphens.
+  loop: "{{ storage_provider_tiers }}"
+  when: item.name is not defined or not (item.name | regex_search('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'))
+
+- name: Validate tier names are unique across the entire list
+  ansible.builtin.fail:
+    msg: >-
+      storage_provider_tiers contains duplicate tier names.
+      Names must be unique. Got: {{ storage_provider_tiers | map(attribute='name') | list | to_json }}
+  when: >-
+    (storage_provider_tiers | map(attribute='name') | list | unique | length)
+    != (storage_provider_tiers | length)
+
+- name: Validate each tier's provider name is a valid DNS label
+  ansible.builtin.fail:
+    msg: >-
+      Invalid provider '{{ item.provider }}' in tier '{{ item.name }}'.
+      Must be a valid DNS label (1-63 chars, lowercase alphanumeric and hyphens).
+  loop: "{{ storage_provider_tiers }}"
+  when: item.provider is not regex('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+
+- name: Validate each tier's protocol is a non-empty string
+  ansible.builtin.fail:
+    msg: >-
+      Invalid protocol '{{ item.protocol }}' in tier '{{ item.name }}'.
+      Must be a non-empty string. Valid protocols are provider-specific
+      (declared in each provider role's meta/osac.yaml capabilities).
+  loop: "{{ storage_provider_tiers }}"
+  when: item.protocol | length == 0
+
+- name: Validate qos_policy is a valid DNS label when specified
+  ansible.builtin.fail:
+    msg: >-
+      Tier '{{ item.name }}' has an invalid qos_policy: '{{ item.qos_policy }}'.
+      Must be a non-empty string matching DNS label rules (1-63 chars, lowercase alphanumeric and hyphens).
+  loop: "{{ storage_provider_tiers }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - item.qos_policy is defined
+    - item.qos_policy is not regex('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+
+- name: Validate tenant_name is set
+  ansible.builtin.fail:
+    msg: "tenant_name must be a non-empty string (set at play level from the Tenant CR or ComputeInstance tenant reference)."
+  when: tenant_name is not defined or tenant_name | length == 0
+
+- name: Validate tenant_namespace is set
+  ansible.builtin.fail:
+    msg: "tenant_namespace must be a non-empty string (set at play level from the Tenant CR or ComputeInstance tenant reference)."
+  when: tenant_namespace is not defined or tenant_namespace | length == 0
+
+- name: Validate storage_provider_action is supported
+  ansible.builtin.fail:
+    msg: >-
+      Invalid storage_provider_action '{{ storage_provider_action }}'. Must be one of:
+      setup, ensure_storage_class, teardown_cluster_storage, teardown_backend.
+  when: storage_provider_action not in ['setup', 'ensure_storage_class', 'teardown_cluster_storage', 'teardown_backend']
+
+- name: Extract unique providers from tier list
+  ansible.builtin.set_fact:
+    _unique_providers: "{{ storage_provider_tiers | map(attribute='provider') | unique | sort | list }}"
+
+- name: Set dispatch action
+  ansible.builtin.set_fact:
+    _dispatch_action: "{{ storage_provider_action }}"
+
+- name: Dispatch to storage action task file
+  ansible.builtin.include_tasks: "{{ storage_provider_action }}.yaml"

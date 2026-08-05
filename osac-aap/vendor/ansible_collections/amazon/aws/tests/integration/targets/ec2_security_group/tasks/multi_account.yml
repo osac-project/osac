@@ -1,0 +1,126 @@
+---
+- block:
+    - amazon.aws.aws_caller_info:
+      register: caller_facts
+    - name: Create a VPC
+      amazon.aws.ec2_vpc_net:
+        name: "{{ resource_prefix }}-vpc-2"
+        state: present
+        cidr_block: "{{ vpc_cidr }}"
+        tags:
+          Description: Created by ansible-test
+      register: vpc_result_2
+    - name: Peer the secondary-VPC to the main VPC
+      amazon.aws.ec2_vpc_peering:
+        vpc_id: "{{ vpc_result_2.vpc.id }}"
+        peer_vpc_id: "{{ vpc_result.vpc.id }}"
+        peer_owner_id: "{{ caller_facts.account }}"
+        peer_region: "{{ aws_region }}"
+      register: peer_origin
+    - name: Accept the secondary-VPC peering connection in the main VPC
+      amazon.aws.ec2_vpc_peering:
+        peer_vpc_id: "{{ vpc_result_2.vpc.id }}"
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        state: accept
+        peering_id: "{{ peer_origin.peering_id }}"
+        peer_owner_id: "{{ caller_facts.account }}"
+        peer_region: "{{ aws_region }}"
+    - name: Create group in second VPC
+      amazon.aws.ec2_security_group:
+        name: "{{ ec2_group_name }}-external"
+        description: "{{ ec2_group_description }}"
+        vpc_id: "{{ vpc_result_2.vpc.id }}"
+        state: present
+        rules:
+          - proto: tcp
+            cidr_ip: "0.0.0.0/0"
+            ports:
+              - 80
+            rule_desc: http whoo
+      register: external
+    - name: Create group in internal VPC
+      amazon.aws.ec2_security_group:
+        name: "{{ ec2_group_name }}-internal"
+        description: "{{ ec2_group_description }}"
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        state: present
+        rules:
+          - proto: tcp
+            group_id: "{{ caller_facts.account }}/{{ external.group_id }}/{{ ec2_group_name }}-external"
+            ports:
+              - 80
+    - name: Re-make same rule, expecting changed=false in internal VPC
+      amazon.aws.ec2_security_group:
+        name: "{{ ec2_group_name }}-internal"
+        description: "{{ ec2_group_description }}"
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        state: present
+        rules:
+          - proto: tcp
+            group_id: "{{ caller_facts.account }}/{{ external.group_id }}/{{ ec2_group_name }}-external"
+            ports:
+              - 80
+      register: out
+    - ansible.builtin.assert:
+        that:
+          - out is not changed
+    - name: Try again with a bad group_id group in internal VPC
+      amazon.aws.ec2_security_group:
+        name: "{{ ec2_group_name }}-internal"
+        description: "{{ ec2_group_description }}"
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        state: present
+        rules:
+          - proto: tcp
+            group_id: "{{ external.group_id }}/{{ caller_facts.account }}/{{ ec2_group_name }}-external"
+            ports:
+              - 80
+      register: out
+      ignore_errors: true
+    - ansible.builtin.assert:
+        that:
+          - out is failed
+  always:
+    - ansible.builtin.pause:
+        seconds: "5"
+    - name: Delete secondary-VPC side of peer
+      amazon.aws.ec2_vpc_peering:
+        vpc_id: "{{ vpc_result_2.vpc.id }}"
+        peer_vpc_id: "{{ vpc_result.vpc.id }}"
+        peering_id: "{{ peer_origin.peering_id }}"
+        state: absent
+        peer_owner_id: "{{ caller_facts.account }}"
+        peer_region: "{{ aws_region }}"
+      ignore_errors: true
+    - name: Delete main-VPC side of peer
+      amazon.aws.ec2_vpc_peering:
+        peer_vpc_id: "{{ vpc_result_2.vpc.id }}"
+        vpc_id: "{{ vpc_result.vpc.id }}"
+        state: absent
+        peering_id: "{{ peer_origin.peering_id }}"
+        peer_owner_id: "{{ caller_facts.account }}"
+        peer_region: "{{ aws_region }}"
+      ignore_errors: true
+    - name: Clean up group in second VPC
+      amazon.aws.ec2_security_group:
+        name: "{{ ec2_group_name }}-external"
+        description: "{{ ec2_group_description }}"
+        state: absent
+        vpc_id: "{{ vpc_result_2.vpc.id }}"
+      ignore_errors: true
+    - name: Clean up group in second VPC
+      amazon.aws.ec2_security_group:
+        name: "{{ ec2_group_name }}-internal"
+        description: "{{ ec2_group_description }}"
+        state: absent
+        vpc_id: "{{ vpc_result.vpc.id }}"
+      ignore_errors: true
+    - name: Tidy up VPC
+      amazon.aws.ec2_vpc_net:
+        name: "{{ resource_prefix }}-vpc-2"
+        state: absent
+        cidr_block: "{{ vpc_cidr }}"
+      ignore_errors: true
+      register: removed
+      retries: 10
+      until: removed is not failed

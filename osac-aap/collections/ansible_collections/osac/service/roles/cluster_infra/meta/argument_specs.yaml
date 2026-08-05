@@ -1,0 +1,36 @@
+---
+argument_specs:
+  main:
+    options:
+      cluster_infra_state:
+        type: str
+        choices: [present, absent]
+      cluster_infra_name:
+        type: str
+        required: true
+      cluster_infra_namespace:
+        type: str
+        required: true
+      cluster_infra_node_requests:
+        type: list
+        elements: dict
+        default: []
+      cluster_working_namespace:
+        type: str
+        required: true
+      cluster_order:
+        type: dict
+        required: true
+      cluster_order_label:
+        type: str
+        required: true
+      agent_resource_class_label:
+        type: str
+        required: true
+      default_agent_namespace:
+        type: str
+        required: true
+      network_steps_collection:
+        type: str
+        required: true
+        description: "Ansible collection providing network-class-specific steps (e.g. 'netris.steps', 'osac.steps')"

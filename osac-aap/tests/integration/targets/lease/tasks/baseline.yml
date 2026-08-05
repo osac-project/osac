@@ -1,0 +1,97 @@
+---
+# Integration test for osac.service.lease role.
+# Runs all scenarios sequentially: lifecycle (acquire+release), release nonexistent.
+#
+# Requires POD_NAMESPACE, POD_NAME, POD_UID env vars (set by run_tests.sh).
+# Creates a dummy Pod for ownerReference to prevent K8s GC of the Lease.
+
+# ── Test 1: Full lifecycle -- acquire then release ──
+- name: "Lease - Test full lifecycle"
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+
+  tasks:
+    - name: Test lifecycle
+      block:
+        - name: Acquire lease
+          ansible.builtin.include_role:
+            name: osac.service.lease
+          vars:
+            lease_state: present
+            lease_name: "test-lease-lifecycle"
+            lease_holder: "lifecycle-holder"
+            awx_job_id: "99999"
+
+        - name: Verify lease exists
+          kubernetes.core.k8s_info:
+            api_version: coordination.k8s.io/v1
+            kind: Lease
+            namespace: "{{ lookup('env', 'POD_NAMESPACE') }}"
+            name: "test-lease-lifecycle"
+          register: lease_after_acquire
+
+        - name: Assert lease created with correct holder and label
+          ansible.builtin.assert:
+            that:
+              - lease_after_acquire.resources | length == 1
+              - lease_after_acquire.resources[0].spec.holderIdentity == "lifecycle-holder"
+            fail_msg: "Lease not created correctly"
+            success_msg: "Lease lifecycle acquire: passed"
+
+      always:
+        - name: Release lease
+          ansible.builtin.include_role:
+            name: osac.service.lease
+          vars:
+            lease_state: absent
+            lease_name: "test-lease-lifecycle"
+            lease_holder: "lifecycle-holder"
+
+        - name: Verify lease deleted
+          kubernetes.core.k8s_info:
+            api_version: coordination.k8s.io/v1
+            kind: Lease
+            namespace: "{{ lookup('env', 'POD_NAMESPACE') }}"
+            name: "test-lease-lifecycle"
+          register: lease_after_release
+
+        - name: Assert lease gone
+          ansible.builtin.assert:
+            that:
+              - lease_after_release.resources | length == 0
+            fail_msg: "Lease still exists after release"
+            success_msg: "Lease lifecycle release: passed"
+
+
+# ── Test 2: Release nonexistent lease ──
+- name: "Lease - Test release nonexistent"
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+
+  tasks:
+    - name: Release nonexistent lease (should not error)
+      ansible.builtin.include_role:
+        name: osac.service.lease
+      vars:
+        lease_state: absent
+        lease_name: "does-not-exist-lease"
+        lease_holder: "nobody"
+
+    - name: Verify no lease was created
+      kubernetes.core.k8s_info:
+        api_version: coordination.k8s.io/v1
+        kind: Lease
+        namespace: "{{ lookup('env', 'POD_NAMESPACE') }}"
+        name: "does-not-exist-lease"
+      register: result
+
+    - name: Assert lease does not exist
+      ansible.builtin.assert:
+        that:
+          - result.resources | length == 0
+        fail_msg: "Unexpected lease found"
+        success_msg: "Release nonexistent: passed"

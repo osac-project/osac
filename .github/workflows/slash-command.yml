@@ -1,0 +1,23 @@
+---
+name: Slash Command
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+  checks: write
+
+jobs:
+  slash-command:
+    if: >-
+      github.event.issue.pull_request &&
+      (startsWith(github.event.comment.body, '/test') ||
+       startsWith(github.event.comment.body, '/retest') ||
+       startsWith(github.event.comment.body, '/cancel') ||
+       startsWith(github.event.comment.body, '/ok-to-test'))
+    uses: osac-project/osac-test-infra/.github/workflows/slash-command-handler.yml@main
+    secrets: inherit

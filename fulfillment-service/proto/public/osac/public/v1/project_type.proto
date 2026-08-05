@@ -1,0 +1,145 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.public.v1;
+
+import "osac/public/v1/metadata_type.proto";
+
+// A project is a logical grouping of resources.
+//
+// Projects provide a way to organize and isolate resources, manage access controls, and track resource usage. Projects
+// can be nested to create hierarchical resource organization, allowing for flexible multi-level resource grouping.
+//
+// For nested projects, the parent is identified by the `metadata.project` field, which contains the full name of the
+// parent project. Tenant isolation is enforced via the standard `metadata.tenant` field.
+//
+// Projects support the following use cases:
+// - Organizing resources by team, department, or application
+// - Hierarchical resource isolation (e.g., prod/staging/dev as nested projects)
+// - Quota and resource allocation boundaries
+message Project {
+  // Unique identifier of the project.
+  string id = 1;
+
+  // Metadata of the project, including name, labels, tenant, and timestamps.
+  Metadata metadata = 2;
+
+  // Desired configuration of the project (user-modifiable).
+  ProjectSpec spec = 3;
+
+  // Current state of the project (system-provided, read-only).
+  ProjectStatus status = 4;
+}
+
+// Defines the desired configuration for a Project.
+//
+// The spec contains user-specified parameters that define how the project should be configured. These fields
+// follow a declarative model where users specify the desired state and the system reconciles to match it.
+message ProjectSpec {
+  // Human-friendly short description of the project, only a few words, suitable for displaying in one single line on
+  // a UI or CLI. For example: "Production Environment" or "Development Workspace".
+  string title = 2;
+
+  // Human-friendly long description explaining the purpose or scope of this project. Maximum length: 1024 characters.
+  //
+  // Example: "Production environment for the customer-facing web application"
+  optional string description = 3;
+}
+
+// Represents the current operational state of a Project.
+//
+// Status is system-provided and read-only. Users cannot modify status fields directly; the system updates them
+// based on the reconciliation of the spec.
+message ProjectStatus {
+  // Current lifecycle state of the project.
+  ProjectState state = 1;
+
+  // Human-readable message providing additional details about the current state.
+  //
+  // For PENDING state, this might contain progress information like "Initializing project resources".
+  //
+  // For FAILED state, contains error details like:
+  // - "Circular dependency detected"
+  //
+  // For ACTIVE state, this is typically empty or contains confirmation like "Project ready for use".
+  //
+  // For DELETING state, this might contain progress information like "Deleting child projects" or
+  // "Cleaning up project resources".
+  //
+  // For DELETE_FAILED state, contains error details explaining what prevented deletion, such as:
+  // - "Failed to delete child projects"
+  // - "Resources still attached to project"
+  optional string message = 2;
+}
+
+// Lifecycle states for Project resources.
+//
+// State transitions typically follow: UNSPECIFIED -> PENDING -> ACTIVE, with FAILED as a terminal error state
+// that may require user intervention or resource recreation. Deletion follows: ACTIVE -> DELETING -> (archived),
+// with DELETE_FAILED as a terminal error state for deletion issues.
+enum ProjectState {
+  // State is unknown or has not been determined yet. This is the default state before initialization.
+  PROJECT_STATE_UNSPECIFIED = 0;
+
+  // The project is being initialized and is not ready for use yet.
+  //
+  // During this state, the system is:
+  // - Checking for circular dependencies in the project hierarchy
+  // - Initializing project resources and access controls
+  //
+  // Resources cannot be created in projects in PENDING state.
+  PROJECT_STATE_PENDING = 1;
+
+  // The project is fully operational and ready for resources.
+  //
+  // In this state:
+  // - Project hierarchy is validated
+  // - Access controls are configured
+  // - Resources can be created and attached to the project
+  PROJECT_STATE_ACTIVE = 2;
+
+  // The project has encountered an error and is unusable.
+  //
+  // Common failure reasons include:
+  // - Circular dependency detected in project hierarchy
+  // - Access control configuration error
+  //
+  // The status.message field will contain specific error details. Failed projects typically require deletion
+  // and recreation with corrected parameters.
+  PROJECT_STATE_FAILED = 3;
+
+  // The project is being deleted.
+  //
+  // During this state, the system is:
+  // - Deleting or blocking deletion based on child projects
+  // - Cleaning up project resources
+  // - Removing access controls and permissions
+  //
+  // The project will be archived once deletion completes successfully.
+  PROJECT_STATE_DELETING = 4;
+
+  // The project deletion has failed.
+  //
+  // The deletion operation encountered an error and could not complete.
+  // Common failure reasons include:
+  // - Failed to delete child projects
+  // - Resources still attached to the project
+  // - Access control cleanup failure
+  //
+  // The status.message field will contain specific error details.
+  // Manual intervention may be required to resolve the underlying issue
+  // before retrying deletion.
+  PROJECT_STATE_DELETE_FAILED = 5;
+}

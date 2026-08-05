@@ -1,0 +1,19 @@
+---
+# Dispatches ensure_storage_class to each unique provider in the tier list.
+# Accumulates StorageClass names across all providers into a single list.
+
+- name: Initialize StorageClass name accumulator
+  ansible.builtin.set_fact:
+    _all_sc_names: []
+
+- name: Dispatch ensure_storage_class to each provider
+  block:
+    - name: Run ensure_storage_class per provider
+      ansible.builtin.include_tasks: _dispatch_provider.yaml
+      loop: "{{ _unique_providers }}"
+      loop_control:
+        loop_var: _current_provider
+
+    - name: Set StorageClass names output (list)
+      ansible.builtin.set_fact:
+        storage_provider_storage_class_names: "{{ _all_sc_names }}"

@@ -1,0 +1,27 @@
+- name: Get node information
+  openstack.cloud.baremetal_node_info:
+    name: "{{ host_name }}"
+  register: baremetal_node_info_result
+
+- name: Extract node info
+  ansible.builtin.set_fact:
+    initial_node_info: "{{ baremetal_node_info_result.baremetal_nodes[0] }}"
+
+- name: Set host to manage # noqa:no-changed-when
+  when: initial_node_info.provision_state == 'available'
+  ansible.builtin.command: >-
+    openstack baremetal node manage {{ host_name }}
+
+- name: Adopt host # noqa:no-changed-when
+  when: initial_node_info.provision_state in ['manage', 'available']
+  ansible.builtin.command: >-
+    openstack baremetal node adopt {{ host_name }}
+
+- name: Attach host to network
+  ansible.builtin.include_role:
+    name: osac.esi.l2
+    tasks_from: set_networks_for_node
+  vars:
+    node: "{{ host_name }}"
+    networks:
+    - "{{ host_network }}"

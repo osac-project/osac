@@ -1,0 +1,70 @@
+---
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Validate ipam_count
+  ansible.builtin.assert:
+    that:
+      - ipam_count | int >= 1
+    fail_msg: "ipam_count must be >= 1, got {{ ipam_count }}"
+
+- name: Query all IPAM subnets
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/ipam/subnets"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: [200]
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _ipam_subnets_resp
+  no_log: true
+
+- name: Filter subnets by purpose
+  ansible.builtin.set_fact:
+    _ipam_filtered_subnets: >-
+      {{ _ipam_subnets_resp.json.data | default([])
+         | selectattr('purpose', 'equalto', ipam_purpose)
+         | selectattr('sites', 'defined')
+         | list }}
+
+- name: Filter subnets to requested site
+  ansible.builtin.set_fact:
+    _ipam_filtered_subnets: >-
+      {{ _ipam_filtered_subnets
+         | selectattr('sites', 'defined')
+         | list
+         | json_query("[?sites[?id==`" ~ ipam_site_id ~ "`]]") }}
+  when: ipam_site_id is defined
+
+- name: Query hosts for each subnet and collect available IPs
+  ansible.builtin.include_tasks: collect_available_ips.yaml
+  vars:
+    _ipam_subnet_list: "{{ _ipam_filtered_subnets }}"
+  when: _ipam_filtered_subnets | length > 0
+
+- name: Initialize empty available list when no subnets
+  ansible.builtin.set_fact:
+    ipam_available_ips: []
+  when: _ipam_filtered_subnets | length == 0
+
+- name: Display available IPs
+  ansible.builtin.debug:
+    msg: "Available {{ ipam_purpose }} IPs: {{ ipam_available_ips }}"
+
+- name: Fail if not enough IPs available
+  ansible.builtin.fail:
+    msg: >-
+      Need {{ ipam_count }} {{ ipam_purpose }} IP(s) but only {{ ipam_available_ips | length }} available.
+      Subnets checked: {{ _ipam_filtered_subnets | map(attribute='prefix') | list }}
+  when: ipam_available_ips | length < ipam_count
+
+- name: Set allocated IPs
+  ansible.builtin.set_fact:
+    ipam_allocated_ips: "{{ ipam_available_ips[:ipam_count] }}"
+
+- name: Display allocated IPs
+  ansible.builtin.debug:
+    msg: "Allocated {{ ipam_purpose }} IPs: {{ ipam_allocated_ips }}"

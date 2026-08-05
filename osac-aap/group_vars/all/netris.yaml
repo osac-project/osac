@@ -1,0 +1,8 @@
+netris_agent_server_name_label: "netris.server/name"
+
+server_ssh_bastion_key: "/tmp/.ssh/server-ssh-bastion-key"
+server_ssh_user: "core"
+server_ssh_key: "/tmp/.ssh/server-ssh-key"
+
+netris_template_ipv4_gateway: "192.168.101.1/24" # we can ge this from the given server cluster template
+netris_metallb_ingress_ip: "192.168.101.28"

@@ -1,0 +1,58 @@
+{% for profile in ocp_4_20_ai_maas_hardware_profiles %}
+{% if not loop.first %}
+---
+{% endif %}
+apiVersion: infrastructure.opendatahub.io/v1
+kind: HardwareProfile
+metadata:
+  name: "{{ profile.name }}"
+  namespace: redhat-ods-applications
+  annotations:
+    opendatahub.io/display-name: "{{ profile.display_name }}"
+    opendatahub.io/description: "{{ profile.description | default('') }}"
+    opendatahub.io/disabled: "{{ (not (profile.enabled | default(true))) | lower }}"
+spec:
+  identifiers:
+    - displayName: CPU
+      identifier: cpu
+      resourceType: CPU
+      defaultCount: {{ profile.cpu_default }}
+      minCount: {{ profile.cpu_min }}
+      maxCount: {{ profile.cpu_max }}
+    - displayName: Memory
+      identifier: memory
+      resourceType: Memory
+      defaultCount: {{ profile.memory_default }}
+      minCount: {{ profile.memory_min }}
+      maxCount: {{ profile.memory_max }}
+{% if profile.accelerator_id is defined %}
+    - displayName: "{{ profile.accelerator_name }}"
+      identifier: {{ profile.accelerator_id }}
+      resourceType: Accelerator
+      defaultCount: {{ profile.gpu_count | default(1) }}
+      minCount: {{ profile.gpu_count | default(1) }}
+      maxCount: {{ profile.gpu_max | default(1) }}
+{% endif %}
+{% if profile.node_selectors is defined or profile.tolerations is defined %}
+  scheduling:
+    type: Node
+    node:
+{% if profile.node_selectors is defined %}
+      nodeSelector:
+{% for key, value in profile.node_selectors.items() %}
+        {{ key }}: "{{ value }}"
+{% endfor %}
+{% endif %}
+{% if profile.tolerations is defined %}
+      tolerations:
+{% for tol in profile.tolerations %}
+        - key: {{ tol.key }}
+          operator: {{ tol.operator }}
+          effect: {{ tol.effect }}
+{% if tol.value is defined %}
+          value: "{{ tol.value }}"
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endif %}
+{% endfor %}

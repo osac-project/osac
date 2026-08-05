@@ -1,0 +1,12 @@
+---
+- name: Log hosted cluster modification
+  ansible.builtin.lineinfile:
+    path: /tmp/osac_test_overrides.log
+    line: "{{ ansible_date_time.iso8601 }} | modify_hosted_cluster | {{ hosted_cluster_definition.metadata.name | default(cluster_order_name) }}"
+    create: true
+
+# Return unmodified definition (or passthrough if not provided in test mode)
+- name: Set modified hosted cluster definition
+  ansible.builtin.set_fact:
+    hosted_cluster_definition_modified: "{{ hosted_cluster_definition | default({}) }}"
+  when: hosted_cluster_definition is defined

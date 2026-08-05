@@ -1,0 +1,33 @@
+---
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Get existing NAT rules
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/nat"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: 200
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _nat_list_resp
+  no_log: true
+
+- name: Find NAT rule by name
+  ansible.builtin.set_fact:
+    _existing_nat: "{{ (_nat_list_resp.json.data | default([])) | selectattr('name', 'equalto', nat_name) | list | first | default(none) }}"
+  when: _nat_list_resp.json is mapping
+
+- name: Delete NAT rule
+  when: _existing_nat is defined and _existing_nat is not none
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/nat/{{ _existing_nat.id }}"
+    method: DELETE
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    status_code: [200, 204]
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  no_log: true

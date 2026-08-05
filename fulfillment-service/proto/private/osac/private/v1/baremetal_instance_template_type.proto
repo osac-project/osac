@@ -1,0 +1,65 @@
+//
+// Copyright (c) 2025 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/any.proto";
+import "osac/private/v1/baremetal_instance_type.proto";
+import "osac/private/v1/metadata_type.proto";
+
+// A bare metal instance template defines a hardware profile (host type, OS image, network configuration)
+// that can be used to create bare metal instances via a catalog item.
+//
+// buf:lint:ignore OSAC_OBJECT_SHAPE
+message BareMetalInstanceTemplate {
+  // Unique identifier of the template. Must be a valid Ansible role name: letters, digits,
+  // underscores, and dots, starting with a letter or underscore (e.g., "osac.templates.bm_host_provisioning").
+  string id = 1 [(buf.validate.field).string = {
+    min_len: 1,
+    pattern: "^[a-zA-Z_][a-zA-Z0-9._]*$"
+  }];
+
+  Metadata metadata = 2;
+
+  // Human friendly short description of the template, suitable for displaying in one single line on a UI or CLI.
+  string title = 3;
+
+  // Human friendly long description of the template, using Markdown format.
+  string description = 4;
+
+  // Default spec values applied when creating a BareMetalInstance from this template.
+  BareMetalInstanceTemplateSpecDefaults spec_defaults = 5;
+
+  repeated BareMetalInstanceTemplateParameterDefinition parameters = 6;
+
+  // Identifier of the HostType that defines the hardware profile for instances created from this template.
+  string host_type = 7;
+}
+
+message BareMetalInstanceTemplateParameterDefinition {
+  string name = 1;
+  string title = 2;
+  string description = 3;
+  bool required = 4;
+  string type = 5;
+  google.protobuf.Any default = 6;
+}
+
+// Default values for bare metal instance spec fields.
+message BareMetalInstanceTemplateSpecDefaults {
+  // Default OS base image used when the tenant does not specify one.
+  optional BareMetalInstanceImage image = 1;
+}

@@ -1,0 +1,1154 @@
+---
+- name: Run integration tests for IAM (inline) Policy management on {{ iam_type }}
+  vars:
+    iam_object_key: "{{ iam_type }}_name"
+  block:
+  # ============================================================
+    - name: Fetch policies from resource before making changes | {{ iam_type }}
+      amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+      register: iam_policy_info
+    - name: Assert empty policy list | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - iam_policy_info is succeeded
+          - iam_policy_info.policies | length == 0
+          - iam_policy_info.all_policy_names | length == 0
+          - iam_policy_info.policy_names | length == 0
+
+    - name: Fetch policies from non-existent resource | {{ iam_type }}
+      amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}-junk"
+      register: iam_policy_info
+    - name: Assert not failed | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - iam_policy_info is succeeded
+
+    # ============================================================
+    - name: Invalid creation of policy for resource - missing required parameters | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: present
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_a }}"
+        skip_duplicates: true
+      register: result
+      ignore_errors: true
+    - name: Assert task failed with correct error message | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result.failed
+          - "'state is present but any of the following are missing: policy_json' in result.msg"
+
+    - name: Create policy using document for resource (check mode) | {{ iam_type }}
+      check_mode: true
+      amazon.aws.iam_policy:
+        state: present
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_a }}"
+        policy_json: '{{ lookup("file", "no_access.json") }}'
+        skip_duplicates: true
+      register: result
+    - name: Assert policy would be added for resource | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is changed
+
+    - name: Create policy using document for resource | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: present
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_a }}"
+        policy_json: '{{ lookup("file", "no_access.json") }}'
+        skip_duplicates: true
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+      register: iam_policy_info
+    - name: Assert policy was added for resource | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is changed
+          - result.policies | length == 1
+          - iam_policy_name_a in result.policies
+          - result[iam_object_key] == iam_name
+          - iam_policy_name_a in iam_policy_info.policy_names
+          - iam_policy_info.policy_names | length == 1
+          - iam_policy_info.policies | length == 1
+          - iam_policy_name_a in iam_policy_info.all_policy_names
+          - iam_policy_info.all_policy_names | length == 1
+          - iam_policy_info.policies[0].policy_name == iam_policy_name_a
+          - '"Id" not in iam_policy_info.policies[0].policy_document'
+
+    - name: Create policy using document for resource (idempotency - check mode) | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: present
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_a }}"
+        policy_json: '{{ lookup("file", "no_access.json") }}'
+        skip_duplicates: true
+      register: result
+      check_mode: true
+    - name: Assert no change would occur | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+
+    - name: Create policy using document for resource (idempotency) | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: present
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_a }}"
+        policy_json: '{{ lookup("file", "no_access.json") }}'
+        skip_duplicates: true
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+      register: iam_policy_info
+    - name: Assert no change | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+          - result.policies | length == 1
+          - iam_policy_name_a in result.policies
+          - result[iam_object_key] == iam_name
+          - iam_policy_info.policies | length == 1
+          - iam_policy_info.all_policy_names | length == 1
+          - iam_policy_name_a in iam_policy_info.all_policy_names
+          - iam_policy_info.policies[0].policy_name == iam_policy_name_a
+          - '"Id" not in iam_policy_info.policies[0].policy_document'
+
+    # ============================================================
+    - name: Create policy using document for resource (check mode) (skip_duplicates) | {{ iam_type }}
+      check_mode: true
+      amazon.aws.iam_policy:
+        state: present
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_b }}"
+        policy_json: '{{ lookup("file", "no_access.json") }}'
+        skip_duplicates: true
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_b }}"
+      register: iam_policy_info
+    - name: Assert policy would be added for resource | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+          - iam_policy_info.all_policy_names | length == 1
+          - '"policies" not in iam_policy_info'
+          - iam_policy_name_b not in iam_policy_info.all_policy_names
+
+    - name: Create policy using document for resource (skip_duplicates) | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: present
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_b }}"
+        policy_json: '{{ lookup("file", "no_access.json") }}'
+        skip_duplicates: true
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_b }}"
+      register: iam_policy_info
+    - name: Assert policy was not added for resource (skip_duplicates) | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+          - result.policies | length == 1
+          - iam_policy_name_b not in result.policies
+          - result[iam_object_key] == iam_name
+          - '"policies" not in iam_policy_info'
+          - '"policy_names" not in iam_policy_info'
+          - iam_policy_info.all_policy_names | length == 1
+          - iam_policy_name_b not in iam_policy_info.all_policy_names
+
+    - name: Create policy using document for resource (check mode) (skip_duplicates = no) | {{ iam_type }}
+      check_mode: true
+      amazon.aws.iam_policy:
+        state: present
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_b }}"
+        policy_json: '{{ lookup("file", "no_access.json") }}'
+        skip_duplicates: false
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_b }}"
+      register: iam_policy_info
+    - name: Assert policy would be added for resource | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result.changed == True
+          - '"policies" not in iam_policy_info'
+          - iam_policy_info.all_policy_names | length == 1
+          - iam_policy_name_a in iam_policy_info.all_policy_names
+          - iam_policy_name_b not in iam_policy_info.all_policy_names
+
+    - name: Create policy using document for resource (skip_duplicates = no) | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: present
+        skip_duplicates: false
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_b }}"
+        policy_json: '{{ lookup("file", "no_access.json") }}'
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_b }}"
+      register: iam_policy_info
+    - name: Assert policy was added for resource | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is changed
+          - result.policies | length == 2
+          - iam_policy_name_b in result.policies
+          - result[iam_object_key] == iam_name
+          - iam_policy_info.policies | length == 1
+          - iam_policy_info.all_policy_names | length == 2
+          - iam_policy_name_a in iam_policy_info.all_policy_names
+          - iam_policy_name_b in iam_policy_info.all_policy_names
+          - iam_policy_info.policies[0].policy_name == iam_policy_name_b
+          - '"Id" not in iam_policy_info.policies[0].policy_document'
+
+    - name: Create policy using document for resource (idempotency - check mode) (skip_duplicates = no) | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: present
+        skip_duplicates: false
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_b }}"
+        policy_json: '{{ lookup("file", "no_access.json") }}'
+      register: result
+      check_mode: true
+    - name: Assert no change would occur | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+
+    - name: Create policy using document for resource (idempotency) (skip_duplicates = no) | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: present
+        skip_duplicates: false
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_b }}"
+        policy_json: '{{ lookup("file", "no_access.json") }}'
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_b }}"
+      register: iam_policy_info
+    - name: Assert no change | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+          - result.policies | length == 2
+          - iam_policy_name_b in result.policies
+          - result[iam_object_key] == iam_name
+          - iam_policy_info.policies | length == 1
+          - iam_policy_name_a in iam_policy_info.all_policy_names
+          - iam_policy_name_b in iam_policy_info.all_policy_names
+          - iam_policy_info.all_policy_names | length == 2
+          - iam_policy_info.policies[0].policy_name == iam_policy_name_b
+          - '"Id" not in iam_policy_info.policies[0].policy_document'
+
+    # ============================================================
+    - name: Create policy using json for resource (check mode) | {{ iam_type }}
+      check_mode: true
+      amazon.aws.iam_policy:
+        state: present
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_c }}"
+        policy_json: '{{ lookup("file", "no_access_with_id.json") }}'
+        skip_duplicates: true
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_c }}"
+      register: iam_policy_info
+    - name: Assert policy would be added for resource | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is changed
+          - '"policies" not in iam_policy_info'
+          - iam_policy_info.all_policy_names | length == 2
+          - iam_policy_name_c not in iam_policy_info.all_policy_names
+          - iam_policy_name_a in iam_policy_info.all_policy_names
+          - iam_policy_name_b in iam_policy_info.all_policy_names
+
+    - name: Create policy using json for resource | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: present
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_c }}"
+        policy_json: '{{ lookup("file", "no_access_with_id.json") }}'
+        skip_duplicates: true
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_c }}"
+      register: iam_policy_info
+    - name: Assert policy was added for resource | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is changed
+          - result.policies | length == 3
+          - iam_policy_name_c in result.policies
+          - result[iam_object_key] == iam_name
+          - iam_policy_info.policies | length == 1
+          - iam_policy_name_a in iam_policy_info.all_policy_names
+          - iam_policy_name_b in iam_policy_info.all_policy_names
+          - iam_policy_name_c in iam_policy_info.all_policy_names
+          - iam_policy_info.all_policy_names | length == 3
+          - iam_policy_info.policies[0].policy_name == iam_policy_name_c
+          - iam_policy_info.policies[0].policy_document.Id == 'MyId'
+
+    - name: Create policy using json for resource (idempotency - check mode) | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: present
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_c }}"
+        policy_json: '{{ lookup("file", "no_access_with_id.json") }}'
+        skip_duplicates: true
+      register: result
+      check_mode: true
+    - name: Assert no change would occur | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+
+    - name: Create policy using json for resource (idempotency) | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: present
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_c }}"
+        policy_json: '{{ lookup("file", "no_access_with_id.json") }}'
+        skip_duplicates: true
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_c }}"
+      register: iam_policy_info
+    - name: Assert no change | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+          - result.policies | length == 3
+          - iam_policy_name_c in result.policies
+          - result[iam_object_key] == iam_name
+          - iam_policy_name_a in iam_policy_info.all_policy_names
+          - iam_policy_name_b in iam_policy_info.all_policy_names
+          - iam_policy_name_c in iam_policy_info.all_policy_names
+          - iam_policy_info.all_policy_names | length == 3
+          - iam_policy_info.policies[0].policy_name == iam_policy_name_c
+          - iam_policy_info.policies[0].policy_document.Id == 'MyId'
+
+    # ============================================================
+    - name: Create policy using json for resource (check mode) (skip_duplicates) | {{ iam_type }}
+      check_mode: true
+      amazon.aws.iam_policy:
+        state: present
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_d }}"
+        policy_json: '{{ lookup("file", "no_access_with_id.json") }}'
+        skip_duplicates: true
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_d }}"
+      register: iam_policy_info
+    - name: Assert policy would not be added for resource | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+          - iam_policy_name_a in iam_policy_info.all_policy_names
+          - iam_policy_name_b in iam_policy_info.all_policy_names
+          - iam_policy_name_c in iam_policy_info.all_policy_names
+          - iam_policy_name_d not in iam_policy_info.all_policy_names
+          - iam_policy_info.all_policy_names | length == 3
+          - '"policies" not in iam_policy_info'
+
+    - name: Create policy using json for resource (skip_duplicates) | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: present
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_d }}"
+        policy_json: '{{ lookup("file", "no_access_with_id.json") }}'
+        skip_duplicates: true
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_d }}"
+      register: iam_policy_info
+    - name: Assert policy was not added for resource (skip_duplicates) | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+          - result.policies | length == 3
+          - iam_policy_name_d not in result.policies
+          - result[iam_object_key] == iam_name
+          - iam_policy_name_a in iam_policy_info.all_policy_names
+          - iam_policy_name_b in iam_policy_info.all_policy_names
+          - iam_policy_name_c in iam_policy_info.all_policy_names
+          - iam_policy_name_d not in iam_policy_info.all_policy_names
+          - iam_policy_info.all_policy_names | length == 3
+          - '"policies" not in iam_policy_info'
+
+    - name: Create policy using json for resource (check mode) (skip_duplicates = no) | {{ iam_type }}
+      check_mode: true
+      amazon.aws.iam_policy:
+        state: present
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_d }}"
+        policy_json: '{{ lookup("file", "no_access_with_id.json") }}'
+        skip_duplicates: false
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_d }}"
+      register: iam_policy_info
+    - name: Assert policy would be added for resource | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result.changed == True
+
+    - name: Create policy using json for resource (skip_duplicates = no) | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: present
+        skip_duplicates: false
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_d }}"
+        policy_json: '{{ lookup("file", "no_access_with_id.json") }}'
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_d }}"
+      register: iam_policy_info
+    - name: Assert policy was added for resource | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is changed
+          - result.policies | length == 4
+          - iam_policy_name_d in result.policies
+          - result[iam_object_key] == iam_name
+          - iam_policy_name_a in iam_policy_info.all_policy_names
+          - iam_policy_name_b in iam_policy_info.all_policy_names
+          - iam_policy_name_c in iam_policy_info.all_policy_names
+          - iam_policy_name_d in iam_policy_info.all_policy_names
+          - iam_policy_name_a not in iam_policy_info.policy_names
+          - iam_policy_name_b not in iam_policy_info.policy_names
+          - iam_policy_name_c not in iam_policy_info.policy_names
+          - iam_policy_name_d in iam_policy_info.policy_names
+          - iam_policy_info.policy_names | length == 1
+          - iam_policy_info.all_policy_names | length == 4
+          - iam_policy_info.policies[0].policy_name == iam_policy_name_d
+          - iam_policy_info.policies[0].policy_document.Id == 'MyId'
+
+    - name: Create policy using json for resource (idempotency - check mode) (skip_duplicates = no) | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: present
+        skip_duplicates: false
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_d }}"
+        policy_json: '{{ lookup("file", "no_access_with_id.json") }}'
+      register: result
+      check_mode: true
+    - name: Assert no change would occur | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+
+    - name: Create policy using json for resource (idempotency) (skip_duplicates = no) | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: present
+        skip_duplicates: false
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_d }}"
+        policy_json: '{{ lookup("file", "no_access_with_id.json") }}'
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_d }}"
+      register: iam_policy_info
+    - name: Assert no change | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+          - result.policies | length == 4
+          - iam_policy_name_d in result.policies
+          - result[iam_object_key] == iam_name
+          - iam_policy_name_a in iam_policy_info.all_policy_names
+          - iam_policy_name_b in iam_policy_info.all_policy_names
+          - iam_policy_name_c in iam_policy_info.all_policy_names
+          - iam_policy_name_d in iam_policy_info.all_policy_names
+          - iam_policy_info.all_policy_names | length == 4
+          - iam_policy_info.policies[0].policy_name == iam_policy_name_d
+          - iam_policy_info.policies[0].policy_document.Id == 'MyId'
+
+    # ============================================================
+    - name: Test fetching multiple policies from resource | {{ iam_type }}
+      amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+      register: iam_policy_info
+    - name: Assert all policies returned | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - iam_policy_info is succeeded
+          - iam_policy_info.policies | length == 4
+          - iam_policy_info.all_policy_names | length == 4
+          - iam_policy_name_a in iam_policy_info.all_policy_names
+          - iam_policy_name_b in iam_policy_info.all_policy_names
+          - iam_policy_name_c in iam_policy_info.all_policy_names
+          - iam_policy_name_d in iam_policy_info.all_policy_names
+          # Quick test that the policies are the ones we expect
+          - iam_policy_info.policies | community.general.json_query('[*].policy_name') | length == 4
+          - iam_policy_info.policies | community.general.json_query('[?policy_document.Id == `MyId`].policy_name') | length == 2
+          - iam_policy_name_c in (iam_policy_info.policies | community.general.json_query('[?policy_document.Id == `MyId`].policy_name') | list)
+          - iam_policy_name_d in (iam_policy_info.policies | community.general.json_query('[?policy_document.Id == `MyId`].policy_name') | list)
+
+    # ============================================================
+    - name: Update policy using document for resource (check mode) (skip_duplicates) | {{ iam_type }}
+      check_mode: true
+      amazon.aws.iam_policy:
+        state: present
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_a }}"
+        policy_json: '{{ lookup("file", "no_access_with_id.json") }}'
+        skip_duplicates: true
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_a }}"
+      register: iam_policy_info
+    - name: Assert policy would not be added for resource | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+          - iam_policy_info.policies[0].policy_name == iam_policy_name_a
+          - '"Id" not in iam_policy_info.policies[0].policy_document'
+
+    - name: Update policy using document for resource (skip_duplicates) | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: present
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_a }}"
+        policy_json: '{{ lookup("file", "no_access_with_id.json") }}'
+        skip_duplicates: true
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_a }}"
+      register: iam_policy_info
+    - name: Assert policy was not updated for resource (skip_duplicates) | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+          - result.policies | length == 4
+          - iam_policy_name_a in result.policies
+          - result[iam_object_key] == iam_name
+          - iam_policy_info.all_policy_names | length == 4
+          - iam_policy_info.policies[0].policy_name == iam_policy_name_a
+          - '"Id" not in iam_policy_info.policies[0].policy_document'
+
+    - name: Update policy using document for resource (check mode) (skip_duplicates = no) | {{ iam_type }}
+      check_mode: true
+      amazon.aws.iam_policy:
+        state: present
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_a }}"
+        policy_json: '{{ lookup("file", "no_access_with_id.json") }}'
+        skip_duplicates: false
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_a }}"
+      register: iam_policy_info
+    - name: Assert policy would be updated for resource | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result.changed == True
+          - iam_policy_info.all_policy_names | length == 4
+          - iam_policy_info.policies[0].policy_name == iam_policy_name_a
+          - '"Id" not in iam_policy_info.policies[0].policy_document'
+
+    - name: Update policy using document for resource (skip_duplicates = no) | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: present
+        skip_duplicates: false
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_a }}"
+        policy_json: '{{ lookup("file", "no_access_with_id.json") }}'
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_a }}"
+      register: iam_policy_info
+    - name: Assert policy was updated for resource | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is changed
+          - result.policies | length == 4
+          - iam_policy_name_a in result.policies
+          - result[iam_object_key] == iam_name
+          - iam_policy_info.policies[0].policy_document.Id == 'MyId'
+
+    - name: Update policy using document for resource (idempotency - check mode) (skip_duplicates = no) | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: present
+        skip_duplicates: false
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_a }}"
+        policy_json: '{{ lookup("file", "no_access_with_id.json") }}'
+      register: result
+      check_mode: true
+    - name: Assert no change would occur | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+
+    - name: Update policy using document for resource (idempotency) (skip_duplicates = no) | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: present
+        skip_duplicates: false
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_a }}"
+        policy_json: '{{ lookup("file", "no_access_with_id.json") }}'
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_a }}"
+      register: iam_policy_info
+    - name: Assert no change | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+          - result.policies | length == 4
+          - iam_policy_name_a in result.policies
+          - result[iam_object_key] == iam_name
+          - iam_policy_info.policies[0].policy_document.Id == 'MyId'
+
+    - name: Delete policy A | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: absent
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_a }}"
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_a }}"
+      register: iam_policy_info
+    - name: Assert deleted | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is changed
+          - result.policies | length == 3
+          - iam_policy_name_a not in result.policies
+          - result[iam_object_key] == iam_name
+          - '"policies" not in iam_policy_info'
+          - iam_policy_info.all_policy_names | length == 3
+          - iam_policy_name_a not in iam_policy_info.all_policy_names
+
+    # ============================================================
+    # Update C with no_access.json
+    # Delete C
+
+    - name: Update policy using json for resource (check mode) (skip_duplicates) | {{ iam_type }}
+      check_mode: true
+      amazon.aws.iam_policy:
+        state: present
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_c }}"
+        policy_json: '{{ lookup("file", "no_access.json") }}'
+        skip_duplicates: true
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_c }}"
+      register: iam_policy_info
+    - name: Assert policy would not be added for resource | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+          - iam_policy_info.policies[0].policy_document.Id == 'MyId'
+
+    - name: Update policy using json for resource (skip_duplicates) | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: present
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_c }}"
+        policy_json: '{{ lookup("file", "no_access.json") }}'
+        skip_duplicates: true
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_c }}"
+      register: iam_policy_info
+    - name: Assert policy was not updated for resource (skip_duplicates) | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+          - result.policies | length == 3
+          - iam_policy_name_c in result.policies
+          - result[iam_object_key] == iam_name
+          - iam_policy_info.policies[0].policy_document.Id == 'MyId'
+
+    - name: Update policy using json for resource (check mode) (skip_duplicates = no) | {{ iam_type }}
+      check_mode: true
+      amazon.aws.iam_policy:
+        state: present
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_c }}"
+        policy_json: '{{ lookup("file", "no_access.json") }}'
+        skip_duplicates: false
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_c }}"
+      register: iam_policy_info
+    - name: Assert policy would be updated for resource | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result.changed == True
+          - iam_policy_info.policies[0].policy_document.Id == 'MyId'
+
+    - name: Update policy using json for resource (skip_duplicates = no) | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: present
+        skip_duplicates: false
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_c }}"
+        policy_json: '{{ lookup("file", "no_access.json") }}'
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_c }}"
+      register: iam_policy_info
+    - name: Assert policy was updated for resource | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is changed
+          - result.policies | length == 3
+          - iam_policy_name_c in result.policies
+          - result[iam_object_key] == iam_name
+          - '"Id" not in iam_policy_info.policies[0].policy_document'
+
+    - name: Update policy using json for resource (idempotency - check mode) (skip_duplicates = no) | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: present
+        skip_duplicates: false
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_c }}"
+        policy_json: '{{ lookup("file", "no_access.json") }}'
+      register: result
+      check_mode: true
+    - name: Assert no change would occur | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+
+    - name: Update policy using json for resource (idempotency) (skip_duplicates = no) | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: present
+        skip_duplicates: false
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_c }}"
+        policy_json: '{{ lookup("file", "no_access.json") }}'
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_c }}"
+      register: iam_policy_info
+    - name: Assert no change | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+          - result.policies | length == 3
+          - iam_policy_name_c in result.policies
+          - result[iam_object_key] == iam_name
+          - '"Id" not in iam_policy_info.policies[0].policy_document'
+
+    - name: Delete policy C | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: absent
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_c }}"
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_c }}"
+      register: iam_policy_info
+    - name: Assert deleted | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is changed
+          - result.policies | length == 2
+          - iam_policy_name_c not in result.policies
+          - result[iam_object_key] == iam_name
+          - '"policies" not in iam_policy_info'
+          - iam_policy_info.all_policy_names | length == 2
+          - iam_policy_name_c not in iam_policy_info.all_policy_names
+
+    # ============================================================
+    - name: Update policy using document for resource (check mode) | {{ iam_type }}
+      check_mode: true
+      amazon.aws.iam_policy:
+        state: present
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_b }}"
+        policy_json: '{{ lookup("file", "no_access_with_second_id.json") }}'
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_b }}"
+      register: iam_policy_info
+    - name: Assert policy would be updated for resource | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result.changed == True
+          - '"Id" not in iam_policy_info.policies[0].policy_document'
+
+    - name: Update policy using document for resource | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: present
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_b }}"
+        policy_json: '{{ lookup("file", "no_access_with_second_id.json") }}'
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_b }}"
+      register: iam_policy_info
+    - name: Assert policy was updated for resource | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is changed
+          - result.policies | length == 2
+          - iam_policy_name_b in result.policies
+          - result[iam_object_key] == iam_name
+          - iam_policy_info.policies[0].policy_document.Id == 'MyOtherId'
+
+    - name: Update policy using document for resource (idempotency - check mode) | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: present
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_b }}"
+        policy_json: '{{ lookup("file", "no_access_with_second_id.json") }}'
+      register: result
+      check_mode: true
+    - name: Assert no change would occur | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+
+    - name: Update policy using document for resource (idempotency) | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: present
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_b }}"
+        policy_json: '{{ lookup("file", "no_access_with_second_id.json") }}'
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_b }}"
+      register: iam_policy_info
+    - name: Assert no change | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+          - result.policies | length == 2
+          - iam_policy_name_b in result.policies
+          - result[iam_object_key] == iam_name
+          - iam_policy_info.policies[0].policy_document.Id == 'MyOtherId'
+
+    - name: Delete policy B | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: absent
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_b }}"
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_b }}"
+      register: iam_policy_info
+    - name: Assert deleted | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is changed
+          - result.policies | length == 1
+          - iam_policy_name_b not in result.policies
+          - result[iam_object_key] == iam_name
+          - '"policies" not in iam_policy_info'
+          - iam_policy_info.all_policy_names | length == 1
+          - iam_policy_name_b not in iam_policy_info.all_policy_names
+
+    # ============================================================
+    - name: Update policy using json for resource (check mode) | {{ iam_type }}
+      check_mode: true
+      amazon.aws.iam_policy:
+        state: present
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_d }}"
+        policy_json: '{{ lookup("file", "no_access_with_second_id.json") }}'
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_d }}"
+      register: iam_policy_info
+    - name: Assert policy would be updated for resource | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result.changed == True
+          - iam_policy_info.policies[0].policy_document.Id == 'MyId'
+
+    - name: Update policy using json for resource | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: present
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_d }}"
+        policy_json: '{{ lookup("file", "no_access_with_second_id.json") }}'
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_d }}"
+      register: iam_policy_info
+    - name: Assert policy was updated for resource | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is changed
+          - result.policies | length == 1
+          - iam_policy_name_d in result.policies
+          - result[iam_object_key] == iam_name
+          - iam_policy_info.policies[0].policy_document.Id == 'MyOtherId'
+
+    - name: Update policy using json for resource (idempotency - check mode) | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: present
+        skip_duplicates: false
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_d }}"
+        policy_json: '{{ lookup("file", "no_access_with_second_id.json") }}'
+      register: result
+      check_mode: true
+    - name: Assert no change would occur | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+
+    - name: Update policy using json for resource (idempotency) | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: present
+        skip_duplicates: false
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_d }}"
+        policy_json: '{{ lookup("file", "no_access_with_second_id.json") }}'
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_d }}"
+      register: iam_policy_info
+    - name: Assert no change | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+          - result.policies | length == 1
+          - iam_policy_name_d in result.policies
+          - result[iam_object_key] == iam_name
+          - iam_policy_info.policies[0].policy_document.Id == 'MyOtherId'
+
+    # ============================================================
+    - name: Delete policy D (check_mode) | {{ iam_type }}
+      check_mode: true
+      amazon.aws.iam_policy:
+        state: absent
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_d }}"
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_d }}"
+      register: iam_policy_info
+    - name: Assert not deleted | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is changed
+          - result.policies | length == 1
+          - iam_policy_name_d in result.policies
+          - result[iam_object_key] == iam_name
+          - iam_policy_info.all_policy_names | length == 1
+          - iam_policy_name_d in iam_policy_info.all_policy_names
+          - iam_policy_info.policies[0].policy_document.Id == 'MyOtherId'
+
+    - name: Delete policy D | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: absent
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_d }}"
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_d }}"
+      register: iam_policy_info
+    - name: Assert deleted | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is changed
+          - '"policies" not in iam_policy_info'
+          - iam_policy_name_d not in result.policies
+          - result[iam_object_key] == iam_name
+          - '"policies" not in iam_policy_info'
+          - iam_policy_info.all_policy_names | length == 0
+
+    - name: Delete policy D (test idempotency) | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: absent
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_d }}"
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_d }}"
+      register: iam_policy_info
+    - name: Assert deleted | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+          - '"policies" not in iam_policy_info'
+          - iam_policy_info.all_policy_names | length == 0
+
+    - name: Delete policy D (check_mode) (test idempotency) | {{ iam_type }}
+      check_mode: true
+      amazon.aws.iam_policy:
+        state: absent
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_d }}"
+      register: result
+    - amazon.aws.iam_policy_info:
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_d }}"
+      register: iam_policy_info
+    - name: Assert deleted | {{ iam_type }}
+      ansible.builtin.assert:
+        that:
+          - result is not changed
+          - '"policies" not in iam_policy_info'
+          - iam_policy_info.all_policy_names | length == 0
+
+  always:
+  # ============================================================
+    - name: Delete policy A for resource | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: absent
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_a }}"
+      ignore_errors: true
+    - name: Delete policy B for resource | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: absent
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_b }}"
+      ignore_errors: true
+    - name: Delete policy C for resource | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: absent
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_c }}"
+      ignore_errors: true
+    - name: Delete policy D for resource | {{ iam_type }}
+      amazon.aws.iam_policy:
+        state: absent
+        iam_type: "{{ iam_type }}"
+        iam_name: "{{ iam_name }}"
+        policy_name: "{{ iam_policy_name_d }}"
+      ignore_errors: true

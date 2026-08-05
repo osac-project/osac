@@ -1,0 +1,69 @@
+# osac-aap's own vendored third-party Ansible collections and Helm charts
+# aren't ours to lint/fix (test fixtures in particular use intentionally
+# invalid JSON), so exclude them from every hook, not just yamllint --
+# matching the top-level (all-hooks) scope osac-aap's own .pre-commit-config.yaml
+# used before this directory was merged in. osac-installer's own charts/ (its
+# umbrella + prereqs + operators charts) gets the same all-hooks treatment,
+# matching its own pre-merge .pre-commit-config.yaml.
+exclude: ^(osac-aap/(vendor|charts)/.*|osac-installer/charts/.*)
+
+repos:
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v5.0.0
+  hooks:
+    - id: trailing-whitespace
+    - id: check-merge-conflict
+    - id: end-of-file-fixer
+    - id: check-added-large-files
+    - id: check-case-conflict
+    - id: check-json
+    - id: check-symlinks
+    - id: detect-private-key
+
+- repo: https://github.com/adrienverge/yamllint.git
+  rev: v1.35.1
+  hooks:
+    - id: yamllint
+      files: \.(yaml|yml)$
+      types: [file, yaml]
+      entry: yamllint --strict
+      exclude: ^(fulfillment-service/(charts|it/charts)/.*/templates/|osac-operator/(charts/.*/templates/|config/)|bare-metal-fulfillment-operator/(charts/.*/templates/|config/)|osac-csi-driver/charts/.*/templates/)
+
+- repo: local
+  hooks:
+  - id: fulfillment-service-golangci-lint
+    pass_filenames: false
+    name: fulfillment-service golangci-lint
+    language: system
+    files: ^fulfillment-service/.*\.go$
+    entry: bash -c "cd fulfillment-service && uv run dev.py lint go"
+  - id: fulfillment-service-buf-lint
+    pass_filenames: false
+    name: fulfillment-service buf-lint
+    language: system
+    files: ^fulfillment-service/.*\.proto$
+    entry: bash -c "cd fulfillment-service && uv run dev.py lint proto"
+  - id: osac-operator-golangci-lint
+    pass_filenames: false
+    name: osac-operator golangci-lint
+    language: system
+    files: ^osac-operator/.*\.go$
+    entry: bash -c "cd osac-operator && bin/golangci-lint run --fix"
+  - id: bare-metal-fulfillment-operator-golangci-lint
+    pass_filenames: false
+    name: bare-metal-fulfillment-operator golangci-lint
+    language: system
+    files: ^bare-metal-fulfillment-operator/.*\.go$
+    entry: bash -c "cd bare-metal-fulfillment-operator && bin/golangci-lint run --fix"
+  - id: osac-csi-driver-golangci-lint
+    pass_filenames: false
+    name: osac-csi-driver golangci-lint
+    language: system
+    files: ^osac-csi-driver/.*\.go$
+    entry: make -C osac-csi-driver lint-fix
+  - id: osac-metering-golangci-lint
+    pass_filenames: false
+    name: osac-metering golangci-lint
+    language: system
+    files: ^osac-metering/metering-service/.*\.go$
+    entry: make -C osac-metering/metering-service lint

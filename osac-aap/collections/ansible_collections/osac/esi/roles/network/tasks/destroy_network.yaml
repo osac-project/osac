@@ -1,0 +1,43 @@
+- name: Check that exactly one network matching the ident exists  # noqa:no-changed-when
+  block:
+    - name: Run command to find network  # noqa:no-changed-when
+      ansible.builtin.command: >-
+        openstack network show {{ 'network-' + network_suffix }} -f json
+      register: network_show_cmd_raw
+  rescue:
+    - name: Exit because network does not exist
+      ansible.builtin.meta: end_role
+
+- name: Unmarshal output from JSON
+  ansible.builtin.set_fact:
+    network_show_cmd_result: "{{ network_show_cmd_raw.stdout | from_json }}"
+
+- name: Destroy related router
+  ansible.builtin.include_role:
+    name: osac.esi.l3
+    tasks_from: destroy_router
+  vars:
+    router_name: "{{ 'router-' + network_suffix }}"
+
+- name: Get related subnets
+  openstack.cloud.subnets_info:
+    filters:
+      network_id: "{{ network_show_cmd_result.id }}"
+  register: subnets
+
+- name: Destroy related subnets
+  ansible.builtin.include_role:
+    name: osac.esi.l3
+    tasks_from: destroy_subnet
+  vars:
+    subnet_name: "{{ subnet.id }}"
+  loop: "{{ subnets.subnets }}"
+  loop_control:
+    loop_var: subnet
+
+- name: Destroy network
+  ansible.builtin.include_role:
+    name: osac.esi.l2
+  vars:
+    network_state: "absent"
+    network_name: "{{ network_show_cmd_result.id }}"

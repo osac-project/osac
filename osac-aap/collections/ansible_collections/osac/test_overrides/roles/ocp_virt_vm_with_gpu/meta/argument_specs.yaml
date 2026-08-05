@@ -1,0 +1,19 @@
+argument_specs:
+  main:
+    options:
+      compute_instance:
+        type: dict
+        required: true
+        description: ComputeInstance configuration
+      template_parameters:
+        type: dict
+        description: VM configuration parameters
+        options:
+          exposed_ports:
+            description: >
+              Ports to expose on the VM for ingress traffic.
+              The syntax is a comma-separated list of `<port>/<protocol>` pairs, where `<protocol>` is either `tcp` or `udp`.
+              For example, `22/tcp,80/tcp` will expose tcp ports 22 and 80 on the VM.
+            type: str
+            required: false
+            default: "22/tcp"

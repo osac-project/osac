@@ -1,0 +1,3 @@
+---
+_vlan_id: "{{ vlan_id | default(1, True)}}"
+_vlan_name: '{{ vlan_name if vlan_name else "default" if vlan_id|string == "1" else "vlan"+vlan_id|string }}'

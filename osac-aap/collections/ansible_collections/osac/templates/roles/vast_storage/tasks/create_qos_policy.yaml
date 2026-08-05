@@ -1,0 +1,100 @@
+---
+# Creates per-tier QoS policies on VAST via REST API for tiers that define qos_policy.
+# Uses ansible.builtin.uri because the vendored collection has no QoS module.
+# NOTE: VAST 5.4.x only supports policy_type VIEW and USER — no VOLUME type.
+# Block StorageClasses must NOT reference qos_policy (the CSI driver rejects
+# VIEW-type policies on volumes). QoS for block is deferred until VAST adds
+# VOLUME-type QoS support.
+#
+# Requires in scope:
+#   _vast_vms_conn      — VAST VMS connection dict (admin or tenant manager)
+#   _vast_tenant_id     — VAST tenant ID
+#   _provider_tiers     — tier list from dispatcher
+#
+# Sets output fact:
+#   _vast_qos_policy_names — list of created QoS policy names
+
+- name: Filter NFS tiers with qos_policy defined (block QoS not supported on VAST 5.4.x)
+  ansible.builtin.set_fact:
+    _vast_qos_tiers: "{{ _provider_tiers | selectattr('qos_policy', 'defined') | rejectattr('protocol', 'equalto', 'block') | list }}"
+
+- name: Skip QoS policy creation when no tiers define qos_policy
+  when: _vast_qos_tiers | length == 0
+  block:
+    - name: Set empty QoS policy names
+      ansible.builtin.set_fact:
+        _vast_qos_policy_names: []
+
+    - name: Log QoS policy skip
+      ansible.builtin.debug:
+        msg: "No tiers define qos_policy — skipping QoS policy creation."
+
+- name: Create QoS policies for tiers that define them
+  when: _vast_qos_tiers | length > 0
+  block:
+    - name: Authenticate to VAST VMS for QoS management
+      ansible.builtin.uri:
+        url: "https://{{ _vast_vms_conn.host }}/api/token/"
+        method: POST
+        body_format: json
+        body:
+          username: "{{ _vast_vms_conn.username }}"
+          password: "{{ _vast_vms_conn.password }}"
+        validate_certs: "{{ _vast_vms_conn.validate_certs }}"
+        timeout: "{{ _vast_vms_conn.timeout | int }}"
+        status_code: [200, 201]
+      register: _vast_qos_auth
+      no_log: true
+
+    - name: Check if QoS policy already exists per tier
+      ansible.builtin.uri:
+        url: "https://{{ _vast_vms_conn.host }}/api/qospolicies/?name={{ item.qos_policy | urlencode }}"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ _vast_qos_auth.json.access }}"
+        validate_certs: "{{ _vast_vms_conn.validate_certs }}"
+        timeout: "{{ _vast_vms_conn.timeout | int }}"
+        status_code: [200]
+      loop: "{{ _vast_qos_tiers }}"
+      loop_control:
+        label: "{{ item.qos_policy }}"
+      register: _vast_qos_check_results
+      no_log: true
+
+    - name: Create QoS policies that do not yet exist
+      ansible.builtin.uri:
+        url: "https://{{ _vast_vms_conn.host }}/api/qospolicies/"
+        method: POST
+        body_format: json
+        body: >-
+          {{ {'name': item.item.qos_policy,
+              'tenant_id': _vast_tenant_id | int,
+              'mode': 'STATIC'}
+             | combine(item.item.qos_limits | default({})) }}
+        headers:
+          Authorization: "Bearer {{ _vast_qos_auth.json.access }}"
+        validate_certs: "{{ _vast_vms_conn.validate_certs }}"
+        timeout: "{{ _vast_vms_conn.timeout | int }}"
+        status_code: [200, 201]
+      loop: "{{ _vast_qos_check_results.results }}"
+      loop_control:
+        label: "{{ item.item.qos_policy }}"
+      when: item.json | length == 0
+      register: _vast_qos_create_results
+      no_log: true
+
+    - name: Set QoS policy names output fact
+      ansible.builtin.set_fact:
+        _vast_qos_policy_names: "{{ _vast_qos_tiers | map(attribute='qos_policy') | list }}"
+
+    - name: Log QoS policy creation results
+      ansible.builtin.debug:
+        msg: "QoS policies ensured: {{ _vast_qos_policy_names | to_json }}"
+
+  always:
+    - name: Clear QoS auth facts
+      ansible.builtin.set_fact:
+        _vast_qos_auth: {}
+        _vast_qos_check_results: {}
+        _vast_qos_create_results: {}
+      no_log: true

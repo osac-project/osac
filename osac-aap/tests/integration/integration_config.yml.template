@@ -1,0 +1,20 @@
+# VAST VMS credentials for live API integration tests (Tier 3)
+# Copy to integration_config.yml and fill in values, or render from CI:
+#   envsubst < integration_config.yml.template > integration_config.yml
+#
+# WARNING: NEVER commit integration_config.yml with real credentials.
+vast_endpoint: "${VAST_ENDPOINT}"
+vast_username: "${VAST_USERNAME}"
+vast_password: "${VAST_PASSWORD}"
+vast_tenant_prefix: "osac-test-"
+# TLS validation — set to false for mock server or self-signed cert testing
+vast_validate_certs: ${VAST_VALIDATE_CERTS:-true}
+
+# Shared VIP pool configuration
+vast_vip_pool_name: "${VAST_VIP_POOL_NAME:-osac-shared}"
+vast_vip_pool_ip_ranges: '${VAST_VIP_POOL_IP_RANGES:-[["10.0.100.10","10.0.100.50"]]}'
+vast_vip_pool_subnet_cidr: ${VAST_VIP_POOL_SUBNET_CIDR:-24}
+
+# Storage tier definition — JSON array with per-tier provider selection.
+# Used by test playbooks to exercise the multi-tier storage provider interface.
+storage_tiers: '${STORAGE_TIERS}'

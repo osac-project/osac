@@ -1,0 +1,74 @@
+---
+- name: Validate IPAM IP allocation inputs
+  ansible.builtin.assert:
+    that:
+      - ipam_state_file is match('^[a-zA-Z0-9/_.-]+$')
+      - ipam_pool_start | ansible.utils.ipv4 != false
+      - ipam_pool_end | ansible.utils.ipv4 != false
+      - ipam_purpose is match('^[a-z0-9][a-z0-9_-]*$')
+      - (ipam_count | default(1) | string) is match('^[1-9][0-9]*$')
+      - ipam_pool_start | ansible.utils.ipaddr('int') <= ipam_pool_end | ansible.utils.ipaddr('int')
+    fail_msg: "IPAM IP allocation variable validation failed."
+
+- name: Ensure IPAM state directory exists
+  ansible.builtin.file:
+    path: "{{ ipam_state_file | dirname }}"
+    state: directory
+    mode: "0755"
+
+- name: Initialise IPAM state file
+  ansible.builtin.copy:
+    content: '{"vlans": {}, "public_ips": {}}'
+    dest: "{{ ipam_state_file }}"
+    force: false
+    mode: "0644"
+
+- name: Allocate IPs from pool
+  ansible.builtin.raw: |
+    python3 - '{{ ipam_state_file }}' '{{ ipam_purpose }}' \
+              '{{ ipam_pool_start }}' '{{ ipam_pool_end }}' \
+              '{{ ipam_count | default(1) }}' <<'IPAM_PY'
+    import fcntl, ipaddress, json, os, sys
+    state_file, purpose, pool_start, pool_end, count = sys.argv[1:6]
+    count = int(count)
+    with open(state_file, 'r+') as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        state = json.load(f)
+        public_ips = state.setdefault('public_ips', {})
+        existing = public_ips.get(purpose)
+        if existing is not None:
+            result = existing if isinstance(existing, list) else [existing]
+            print(json.dumps({"ips": result, "changed": False}))
+            sys.exit(0)
+        used = set()
+        for v in public_ips.values():
+            if isinstance(v, list):
+                used.update(v)
+            else:
+                used.add(v)
+        start = ipaddress.IPv4Address(pool_start)
+        end = ipaddress.IPv4Address(pool_end)
+        allocated = []
+        ip = start
+        while ip <= end and len(allocated) < count:
+            if str(ip) not in used:
+                allocated.append(str(ip))
+            ip += 1
+        if len(allocated) < count:
+            print("IP pool exhausted", file=sys.stderr)
+            sys.exit(1)
+        public_ips[purpose] = allocated
+        payload = json.dumps(state, indent=2)
+        f.seek(0)
+        f.write(payload)
+        f.truncate()
+        f.flush()
+        os.fsync(f.fileno())
+        print(json.dumps({"ips": allocated, "changed": True}))
+    IPAM_PY
+  register: ip_alloc_result
+  changed_when: (ip_alloc_result.stdout | trim | from_json).changed
+
+- name: Set allocated IPs fact
+  ansible.builtin.set_fact:
+    ip_allocated_ips: "{{ (ip_alloc_result.stdout | trim | from_json).ips }}"

@@ -1,0 +1,38 @@
+---
+- name: List agents currently labeled with the cluster order label
+  kubernetes.core.k8s_info:
+    kind: Agent
+    api_version: agent-install.openshift.io/v1beta1
+    namespace: "{{ default_agent_namespace }}"
+    label_selectors:
+      - "{{ cluster_order_label }}={{ manage_agents_cluster_order_name }}"
+      - "{{ agent_resource_class_label }}={{ manage_agents_resource_class }}"
+  register: manage_agents_allocated
+
+- name: Display agent counts (wait_for_agents)
+  ansible.builtin.debug:
+    msg: "We have {{ manage_agents_allocated.resources | length }} agents; we want {{ manage_agents_desired_count }}"
+
+- name: Wait for agents to be removed form the hosted cluster
+  when: (manage_agents_desired_count | int) < (manage_agents_allocated.resources | length)
+  block:
+  - name: Number of agents being removed
+    ansible.builtin.set_fact:
+      manage_agents_removed_count: >
+        {{ manage_agents_allocated.resources | length - manage_agents_desired_count | int }}
+
+  - name: Wait for all expected agents to be removed from the cluster
+    kubernetes.core.k8s_info:
+      kind: Agent
+      api_version: agent-install.openshift.io/v1beta1
+      namespace: "{{ default_agent_namespace }}"
+      label_selectors:
+        - "{{ cluster_order_label }}={{ manage_agents_cluster_order_name }}"
+        - "{{ agent_resource_class_label }}={{ manage_agents_resource_class }}"
+    register: manage_agents_allocated
+    until: >
+      (manage_agents_allocated.resources
+      | json_query('[?metadata.labels."agent-install.openshift.io/clusterdeployment-namespace"==`null` || metadata.labels."agent-install.openshift.io/clusterdeployment-namespace"==``]')
+      | length) >= manage_agents_removed_count | int
+    retries: 40
+    delay: 30

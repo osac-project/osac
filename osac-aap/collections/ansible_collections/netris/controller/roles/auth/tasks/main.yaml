@@ -1,0 +1,20 @@
+---
+- name: Login to Netris controller
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/auth"
+    method: POST
+    body_format: json
+    body:
+      user: "{{ netris_username }}"
+      password: "{{ netris_password }}"
+      auth_scheme_id: 1
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+    timeout: "{{ netris_timeout | default(30) }}"
+    status_code: 200
+  register: _netris_auth_resp
+  no_log: true
+
+- name: Extract session cookie
+  ansible.builtin.set_fact:
+    netris_session_cookie: "{{ _netris_auth_resp.cookies['connect.sid'] }}"
+  no_log: true

@@ -1,0 +1,21 @@
+# OpenShift AI 4.20 Cluster with MaaS catalog item
+# An OpenShift 4.20 cluster with RHOAI, Models-as-a-Service, and GPU support.
+
+"@type": type.googleapis.com/osac.private.v1.ClusterCatalogItem
+metadata:
+  name: ocp-4-20-ai-maas-cluster
+title: OpenShift AI 4.20 Cluster with MaaS
+description: An OpenShift 4.20 cluster with RHOAI 3.4, Models-as-a-Service, Keycloak SSO, and GPU support. Optimized for AI/ML workloads.
+template: osac.templates.ocp_4_20_ai_maas
+published: true
+field_definitions:
+  - path: network.pod_cidr
+    display_name: Pod CIDR
+    default: 10.128.0.0/14
+    editable: true
+    validation_schema: '{"type":"string","pattern":"^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$"}'
+  - path: network.service_cidr
+    display_name: Service CIDR
+    default: 172.30.0.0/16
+    editable: true
+    validation_schema: '{"type":"string","pattern":"^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$"}'

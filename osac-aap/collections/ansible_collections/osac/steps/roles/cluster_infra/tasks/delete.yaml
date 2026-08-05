@@ -1,0 +1,13 @@
+- name: Detach agents from cluster
+  ansible.builtin.include_role:
+    name: osac.service.manage_agents
+    tasks_from: detach_and_unlabel_all_removed_agents
+  vars:
+    manage_agents_cluster_order_name: "{{ cluster_infra_name }}"
+
+- name: Delete cluster network
+  ansible.builtin.include_role:
+    name: osac.esi.network
+  vars:
+    network_suffix: "{{ cluster_infra_name }}"
+    network_state: absent

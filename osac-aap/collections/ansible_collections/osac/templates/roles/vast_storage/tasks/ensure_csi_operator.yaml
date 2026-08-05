@@ -1,0 +1,141 @@
+---
+# Ensures the VAST CSI Operator is installed via OLM and all required CSI drivers are registered.
+# Self-healing: checks CSIDriver existence per protocol first, installs only when any are absent.
+# Idempotent: OLM Subscription and VastCSIDriver CR creation are state: present.
+#
+# Requires:
+#   _vast_required_protocols      — list of unique protocols from caller (e.g. ['nfs', 'block'])
+#   vast_storage_csi_provisioner_map — from defaults ({nfs: csi.vastdata.com, block: block.csi.vastdata.com})
+#   vast_storage_csi_operator_*   — from defaults (OLM config)
+
+- name: Build list of expected CSI provisioner names from required protocols
+  ansible.builtin.set_fact:
+    _vast_required_provisioners: >-
+      {{
+        _vast_required_protocols | map('extract', vast_storage_csi_provisioner_map) | list
+      }}
+
+- name: Check which required VAST CSI drivers are already installed
+  kubernetes.core.k8s_info:
+    api_version: storage.k8s.io/v1
+    kind: CSIDriver
+    name: "{{ item | trim }}"
+  loop: "{{ _vast_required_provisioners }}"
+  register: _vast_csi_driver_checks
+
+- name: Determine if any required CSI drivers are missing
+  ansible.builtin.set_fact:
+    _vast_any_driver_missing: >-
+      {{
+        _vast_csi_driver_checks.results
+        | selectattr('resources', 'equalto', [])
+        | list
+        | length > 0
+      }}
+
+- name: Log CSI drivers already installed
+  when: not _vast_any_driver_missing
+  ansible.builtin.debug:
+    msg: "All required VAST CSI drivers are already installed: {{ _vast_required_provisioners | join(', ') }}"
+
+- name: Install VAST CSI Operator via OLM (covers all protocols with single subscription)
+  when: _vast_any_driver_missing
+  block:
+    - name: Check if OLM is available on cluster
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: CatalogSource
+        namespace: "{{ vast_storage_csi_operator_catalog_namespace }}"
+      register: _vast_olm_check
+      ignore_errors: true
+
+    - name: Fail if OLM is not available and CSI driver installation is needed
+      when: _vast_olm_check.failed | default(false)
+      ansible.builtin.fail:
+        msg: >-
+          Required VAST CSI drivers ({{ _vast_required_provisioners | join(', ') }}) are not installed
+          and OLM (Operator Lifecycle Manager) is not available on this cluster.
+          Install OLM or deploy the VAST CSI drivers manually.
+
+    - name: Warn if OLM is available but no CatalogSources found
+      when:
+        - not (_vast_olm_check.failed | default(false))
+        - _vast_olm_check.resources | length == 0
+      ansible.builtin.debug:
+        msg: >-
+          OLM API is reachable but no CatalogSources found in {{ vast_storage_csi_operator_catalog_namespace }}.
+          The VAST CSI Operator Subscription may fail to install. Ensure the
+          {{ vast_storage_csi_operator_catalog_source }} CatalogSource is available.
+
+    - name: Ensure VAST CSI Operator namespace exists
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ vast_storage_csi_operator_namespace }}"
+
+    - name: Ensure OperatorGroup exists for OwnNamespace install mode
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: operators.coreos.com/v1
+          kind: OperatorGroup
+          metadata:
+            name: vast-csi-operator-group
+            namespace: "{{ vast_storage_csi_operator_namespace }}"
+          spec:
+            targetNamespaces:
+              - "{{ vast_storage_csi_operator_namespace }}"
+
+    - name: Ensure VAST CSI Operator Subscription exists
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: operators.coreos.com/v1alpha1
+          kind: Subscription
+          metadata:
+            name: vast-csi-operator
+            namespace: "{{ vast_storage_csi_operator_namespace }}"
+          spec:
+            channel: "{{ vast_storage_csi_operator_channel }}"
+            name: vast-csi-operator
+            source: "{{ vast_storage_csi_operator_catalog_source }}"
+            sourceNamespace: "{{ vast_storage_csi_operator_catalog_namespace }}"
+            installPlanApproval: "{{ vast_storage_csi_operator_approval }}"
+
+    - name: Wait for VastCSIDriver CRD to be available
+      kubernetes.core.k8s_info:
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: vastcsidrivers.storage.vastdata.com
+      register: _vast_crd_check
+      retries: 30
+      delay: 10
+      until: _vast_crd_check.resources | length > 0
+
+    - name: Ensure VastCSIDriver CR exists for each required protocol
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: storage.vastdata.com/v1
+          kind: VastCSIDriver
+          metadata:
+            name: "{{ vast_storage_csi_provisioner_map[item] }}"
+            namespace: "{{ vast_storage_csi_operator_namespace }}"
+          spec:
+            driverType: "{{ item }}"
+            disableUsageStats: true
+      loop: "{{ _vast_required_protocols }}"
+
+    - name: Wait for all required VAST CSI drivers to be registered
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: CSIDriver
+        name: "{{ item | trim }}"
+      loop: "{{ _vast_required_provisioners }}"
+      register: _vast_csi_driver_wait
+      retries: 30
+      delay: 10
+      until: _vast_csi_driver_wait.resources | length > 0

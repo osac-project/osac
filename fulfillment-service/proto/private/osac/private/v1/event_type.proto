@@ -1,0 +1,119 @@
+//
+// Copyright (c) 2025 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "osac/private/v1/baremetal_instance_catalog_item_type.proto";
+import "osac/private/v1/baremetal_instance_template_type.proto";
+import "osac/private/v1/baremetal_instance_type.proto";
+import "osac/private/v1/cluster_catalog_item_type.proto";
+import "osac/private/v1/cluster_template_type.proto";
+import "osac/private/v1/cluster_version_type.proto";
+import "osac/private/v1/cluster_type.proto";
+import "osac/private/v1/compute_instance_catalog_item_type.proto";
+import "osac/private/v1/compute_instance_template_type.proto";
+import "osac/private/v1/compute_instance_type.proto";
+import "osac/private/v1/external_ip_attachment_type.proto";
+import "osac/private/v1/external_ip_pool_type.proto";
+import "osac/private/v1/external_ip_type.proto";
+import "osac/private/v1/host_type_type.proto";
+import "osac/private/v1/hub_type.proto";
+import "osac/private/v1/identity_provider_type.proto";
+import "osac/private/v1/instance_type_type.proto";
+import "osac/private/v1/nat_gateway_type.proto";
+import "osac/private/v1/network_class_type.proto";
+import "osac/private/v1/project_membership_type.proto";
+import "osac/private/v1/project_type.proto";
+import "osac/private/v1/tenant_type.proto";
+import "osac/private/v1/role_binding_type.proto";
+import "osac/private/v1/role_type.proto";
+import "osac/private/v1/secret_type.proto";
+import "osac/private/v1/security_group_type.proto";
+import "osac/private/v1/storage_backend_type.proto";
+import "osac/private/v1/storage_tier_type.proto";
+import "osac/private/v1/subnet_type.proto";
+import "osac/private/v1/user_type.proto";
+import "osac/private/v1/virtual_network_type.proto";
+
+// Represents events delivered by the server.
+message Event {
+  reserved 16, 17, 18, 25; // 16-17, 25: Previously PublicIP resources, renamed to ExternalIP. 18: Previously Organization, removed in favor of Tenant.
+
+  // Unique identifier of the event.
+  string id = 1;
+
+  // Type of event.
+  EventType type = 2;
+
+  // Payload of the event.
+  oneof payload {
+    Cluster cluster = 3;
+    ClusterTemplate cluster_template = 4;
+    HostType host_type = 5;
+    Hub hub = 6;
+    ComputeInstanceTemplate compute_instance_template = 7;
+    ComputeInstance compute_instance = 8;
+    NetworkClass network_class = 11;
+    Subnet subnet = 12;
+    VirtualNetwork virtual_network = 13;
+    SecurityGroup security_group = 14;
+    User user = 19;
+    Role role = 20;
+    RoleBinding role_binding = 21;
+    ClusterCatalogItem cluster_catalog_item = 22;
+    ComputeInstanceCatalogItem compute_instance_catalog_item = 23;
+    Project project = 24;
+    InstanceType instance_type = 26;
+    BareMetalInstance bare_metal_instance = 27;
+    BareMetalInstanceTemplate bare_metal_instance_template = 28;
+    BareMetalInstanceCatalogItem bare_metal_instance_catalog_item = 29;
+    StorageBackend storage_backend = 30;
+    Tenant tenant = 31;
+    IdentityProvider identity_provider = 32;
+    ProjectMembership project_membership = 33;
+    ExternalIPPool external_ip_pool = 34;
+    ExternalIP external_ip = 35;
+    ExternalIPAttachment external_ip_attachment = 36;
+    NATGateway nat_gateway = 37;
+    ClusterVersion cluster_version = 38;
+    StorageTier storage_tier = 39;
+    Secret secret = 40;
+  }
+}
+
+enum EventType {
+  // Unspecified means that the even type is unknown.
+  EVENT_TYPE_UNSPECIFIED = 0;
+
+  // Means that a new object has been created.
+  //
+  // The payload will contain the representation of the object.
+  EVENT_TYPE_OBJECT_CREATED = 1;
+
+  // Means that an existing object has been modified.
+  //
+  // The payload will contain the updated representation of the object.
+  EVENT_TYPE_OBJECT_UPDATED = 2;
+
+  // Means that an object has been deleted.
+  //
+  // The payload will contain the representation of the object right before it was deleted.
+  EVENT_TYPE_OBJECT_DELETED = 3;
+
+  // Means that something has changed that may require reconciling the state of the object.
+  //
+  // The payload will contain the current representation of the object.
+  EVENT_TYPE_OBJECT_SIGNALED = 4;
+}

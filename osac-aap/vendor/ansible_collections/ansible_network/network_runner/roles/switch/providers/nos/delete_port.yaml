@@ -1,0 +1,8 @@
+---
+- name: "nos: remove port VLAN configuration"
+  community.network.nos_config:
+    lines:
+      - "no switchport"
+    parents:
+      - "interface {{ port_name }}"
+  connection: network_cli

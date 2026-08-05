@@ -1,0 +1,21 @@
+{
+  "metadata": {
+    "name": "windows-golden-vm",
+    "namespace": "test-tenant",
+    "annotations": {
+      "osac.openshift.io/tenant": "test-tenant",
+      "osac.openshift.io/guest-os-family": "windows"
+    }
+  },
+  "spec": {
+    "cores": 4,
+    "memoryGiB": 8,
+    "bootDisk": {
+      "sizeGiB": 60
+    },
+    "image": {
+      "sourceRef": "quay.io/jhernand/ci:0"
+    },
+    "runStrategy": "Always"
+  }
+}

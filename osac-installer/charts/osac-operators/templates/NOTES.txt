@@ -1,0 +1,24 @@
+OSAC operator subscriptions installed for release {{ .Release.Name }}.
+
+Operators:
+{{- if .Values.certManager.enabled }}
+  - cert-manager operator ({{ .Values.certManager.channel }})
+{{- end }}
+{{- if .Values.trustManager.enabled }}
+  - trust-manager
+{{- end }}
+{{- if .Values.aapOperator.enabled }}
+  - Ansible Automation Platform operator ({{ .Values.aapOperator.channel }})
+{{- end }}
+{{- if .Values.lvms.enabled }}
+  - LVMS operator ({{ .Values.lvms.channel }})
+{{- end }}
+{{- if .Values.metallb.enabled }}
+  - MetalLB operator ({{ .Values.metallb.channel }})
+{{- end }}
+{{- if .Values.cnv.enabled }}
+  - OpenShift Virtualization operator ({{ .Values.cnv.channel }})
+{{- end }}
+{{- if .Values.mce.enabled }}
+  - MultiCluster Engine operator ({{ .Values.mce.channel }})
+{{- end }}

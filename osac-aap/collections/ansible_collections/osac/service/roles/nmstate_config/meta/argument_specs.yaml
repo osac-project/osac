@@ -1,0 +1,156 @@
+---
+argument_specs:
+  main:
+    options:
+      nmstate_config_state:
+        type: str
+        choices: [present, absent]
+        required: true
+        description: "Whether to create or delete NMStateConfig CRs."
+      nmstate_config_apply_live:
+        type: bool
+        default: true
+        description: "Whether to apply nmstate config on live agents via SSH."
+
+  create:
+    options:
+      nmstate_config_cluster_name:
+        type: str
+        required: true
+        description: "Name of the cluster (used for CR naming and label selectors)."
+      nmstate_config_agents:
+        type: list
+        elements: dict
+        required: true
+        description: "List of Agent resources to create NMStateConfig CRs for."
+      nmstate_config_labels:
+        type: dict
+        description: "Labels to apply to NMStateConfig CRs (must match InfraEnv nmStateConfigLabelSelector)."
+      nmstate_config_namespace:
+        type: str
+        description: "Namespace for NMStateConfig CRs."
+      nmstate_config_interface_names:
+        type: list
+        elements: str
+        description: "Logical VPC interface names in Netris (used for MAC lookup from agent inventory)."
+      nmstate_config_server_interfaces:
+        type: list
+        elements: str
+        description: "Actual server interface names for nmstate config (what the OS sees)."
+      nmstate_config_gateway_cidr:
+        type: str
+        required: true
+        description: "VPC gateway in CIDR notation (e.g. 192.168.101.1/24)."
+      nmstate_config_template:
+        type: str
+        default: "default_static.yaml.j2"
+        description: "Jinja2 template file for nmstate YAML."
+      nmstate_config_ip_offset:
+        type: int
+        default: 1
+        description: "IP offset for first host (gateway + offset)."
+      nmstate_config_mgmt_interface:
+        type: str
+        description: "Management interface name used to reach agents via SSH."
+      nmstate_config_mgmt_route_destination:
+        type: str
+        description: "Management network route destination CIDR."
+      nmstate_config_mgmt_route_gateway:
+        type: str
+        description: "Management network gateway (next-hop for the mgmt route)."
+      nmstate_config_mgmt_route_metric:
+        type: int
+        default: 100
+        description: "Route metric for the management interface."
+      nmstate_config_vpc_route_metric:
+        type: int
+        default: 50
+        description: "Route metric for the VPC default route."
+
+  apply:
+    options:
+      nmstate_config_cluster_name:
+        type: str
+        required: true
+        description: "Name of the cluster (used for looking up NMStateConfig CR annotations)."
+      nmstate_config_namespace:
+        type: str
+        description: "Namespace for NMStateConfig CRs."
+      nmstate_config_agents:
+        type: list
+        elements: dict
+        required: true
+        description: "List of Agent resources to apply nmstate config on."
+      nmstate_config_gateway_cidr:
+        type: str
+        required: true
+        description: "VPC gateway in CIDR notation (e.g. 192.168.101.1/24)."
+      nmstate_config_server_interfaces:
+        type: list
+        elements: str
+        description: "Actual server interface names for nmstate config (what the OS sees)."
+      nmstate_config_interface_names:
+        type: list
+        elements: str
+        description: "Logical VPC interface names in Netris (used for MAC lookup from agent inventory)."
+      nmstate_config_template:
+        type: str
+        default: "default_static.yaml.j2"
+        description: "Jinja2 template file for nmstate YAML."
+      nmstate_config_ip_offset:
+        type: int
+        default: 1
+        description: "IP offset for first host (gateway + offset)."
+      nmstate_config_mgmt_interface:
+        type: str
+        required: true
+        description: "Management interface name used to discover agent mgmt IPs."
+      nmstate_config_mgmt_route_destination:
+        type: str
+        description: "Management network route destination CIDR."
+      nmstate_config_mgmt_route_gateway:
+        type: str
+        description: "Management network gateway (next-hop for the mgmt route)."
+      nmstate_config_mgmt_route_metric:
+        type: int
+        default: 100
+        description: "Route metric for the management interface."
+      nmstate_config_vpc_route_metric:
+        type: int
+        default: 50
+        description: "Route metric for the VPC default route."
+      nmstate_config_ssh_bastion_host:
+        type: str
+        required: true
+        description: "Bastion host to proxy SSH through to reach agent mgmt IPs."
+      nmstate_config_ssh_bastion_user:
+        type: str
+        required: true
+        description: "SSH user for the bastion host."
+      nmstate_config_ssh_bastion_key:
+        type: str
+        required: true
+        description: "SSH private key file for local -> bastion connection."
+      nmstate_config_ssh_user:
+        type: str
+        default: core
+        description: "SSH user for connecting to agents."
+      nmstate_config_ssh_key:
+        type: str
+        required: true
+        description: "SSH private key file for bastion -> agent connection."
+
+  delete:
+    options:
+      nmstate_config_namespace:
+        type: str
+        required: true
+        description: "Namespace for NMStateConfig CRs."
+      nmstate_config_cluster_name:
+        type: str
+        required: true
+        description: "Name of the cluster (used for label selector to find CRs to delete)."
+      cluster_order_label:
+        type: str
+        required: true
+        description: "Label key used to identify NMStateConfig CRs belonging to this cluster."

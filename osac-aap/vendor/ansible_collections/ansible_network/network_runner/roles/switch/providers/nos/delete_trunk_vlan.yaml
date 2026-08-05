@@ -1,0 +1,8 @@
+---
+- name: "nos: Remove vlan from a trunk port"
+  community.network.nos_config:
+    lines:
+      - "switchport trunk allowed vlan remove {{ _vlan_id }}"
+    parents:
+      - "interface {{ port_name }}"
+  connection: network_cli

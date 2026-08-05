@@ -1,0 +1,44 @@
+---
+- name: Cluster Status Reporting - Baseline Test
+  hosts: localhost
+  gather_facts: true
+  vars_files:
+    - ../../../common_vars.yml
+
+  tasks:
+    - name: Read ClusterOrder fixture
+      ansible.builtin.set_fact:
+        test_cluster_order: "{{ lookup('file', '../../../fixtures/clusterorder-test.yaml') | from_yaml }}"
+
+    - name: Set test variables for baseline workflow
+      ansible.builtin.set_fact:
+        ansible_eda:
+          event:
+            payload: "{{ test_cluster_order }}"
+        cluster_working_namespace: "cluster-test-cluster-work"
+        workflow_name: test_workflow
+        workflow_status: succeeded
+
+- name: Import cluster status reporting workflow (baseline)
+  ansible.builtin.import_playbook: osac.workflows.reporting.cluster_status
+
+- name: Verify baseline results
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+
+  tasks:
+    - name: Verify workflow name set
+      ansible.builtin.assert:
+        that:
+          - workflow_name is defined
+          - workflow_name == "test_workflow"
+        fail_msg: "Workflow name not set correctly"
+
+    - name: Verify workflow status set
+      ansible.builtin.assert:
+        that:
+          - workflow_status is defined
+          - workflow_status == "succeeded"
+        fail_msg: "Workflow status not set correctly"

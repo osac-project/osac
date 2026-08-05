@@ -69,7 +69,7 @@ def _cleanup_pool_children(grpc: GRPCClient, k8s: K8sClient, pool_id: str) -> No
     for ip_id in grpc.list_external_ip_ids():
         try:
             ip_obj = grpc.get_external_ip(external_ip_id=ip_id)
-            if ip_obj["object"]["spec"].get("pool") == pool_id:
+            if ip_obj["object"]["spec"].get("pool", {}).get("id") == pool_id:
                 pool_ip_ids.add(ip_id)
         except subprocess.CalledProcessError:
             continue
@@ -77,7 +77,7 @@ def _cleanup_pool_children(grpc: GRPCClient, k8s: K8sClient, pool_id: str) -> No
     for att_id in grpc.list_external_ip_attachment_ids():
         try:
             att = grpc.get_external_ip_attachment(attachment_id=att_id)
-            if att["object"]["spec"].get("external_ip") in pool_ip_ids:
+            if att["object"]["spec"].get("external_ip", {}).get("id") in pool_ip_ids:
                 grpc.delete_external_ip_attachment(attachment_id=att_id)
                 att_name = k8s.get_external_ip_attachment_name(uuid=att_id, checked=False)
                 if att_name:

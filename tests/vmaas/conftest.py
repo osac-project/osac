@@ -33,12 +33,12 @@ def k8s_virt_client(namespace: str) -> K8sClient:
 
 @pytest.fixture(scope="session")
 def vm_template() -> str:
-    return env("OSAC_VM_TEMPLATE", "osac.templates.ocp_virt_vm")
+    return env("OSAC_VM_TEMPLATE", "ocp-virt-vm")
 
 
 @pytest.fixture(scope="session")
 def network_class() -> str:
-    return env("OSAC_NETWORK_CLASS", "cudn_net")
+    return env("OSAC_NETWORK_CLASS", "cudn-net")
 
 
 @pytest.fixture(scope="session")

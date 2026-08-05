@@ -74,7 +74,7 @@ def test_invalid_token_rejected(fulfillment_address: str) -> None:
 def test_jwt_virtual_network_lifecycle(jwt_grpc_tenant1: GRPCClient) -> None:
     vn_name: str = f"jwt-smoke-{uuid4().hex[:8]}"
     vn_id: str = jwt_grpc_tenant1.create_virtual_network(
-        name=vn_name, network_class="cudn_net", ipv4_cidr="10.200.0.0/16"
+        name=vn_name, network_class="cudn-net", ipv4_cidr="10.200.0.0/16"
     )
     assert vn_id in jwt_grpc_tenant1.list_virtual_network_ids()
 
@@ -87,7 +87,7 @@ def test_jwt_virtual_network_lifecycle(jwt_grpc_tenant1: GRPCClient) -> None:
 def test_jwt_security_group_lifecycle(jwt_grpc_tenant1: GRPCClient) -> None:
     vn_name: str = f"jwt-sg-vnet-{uuid4().hex[:8]}"
     vn_id: str = jwt_grpc_tenant1.create_virtual_network(
-        name=vn_name, network_class="cudn_net", ipv4_cidr="10.202.0.0/16"
+        name=vn_name, network_class="cudn-net", ipv4_cidr="10.202.0.0/16"
     )
 
     for _ in range(90):
@@ -112,7 +112,7 @@ def test_jwt_security_group_lifecycle(jwt_grpc_tenant1: GRPCClient) -> None:
 def test_jwt_tenant_isolation(jwt_grpc_tenant1: GRPCClient, jwt_grpc_tenant2: GRPCClient) -> None:
     vn_name: str = f"tenant-iso-{uuid4().hex[:8]}"
     vn_id: str = jwt_grpc_tenant1.create_virtual_network(
-        name=vn_name, network_class="cudn_net", ipv4_cidr="10.201.0.0/16"
+        name=vn_name, network_class="cudn-net", ipv4_cidr="10.201.0.0/16"
     )
 
     assert vn_id in jwt_grpc_tenant1.list_virtual_network_ids()

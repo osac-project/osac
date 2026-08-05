@@ -809,11 +809,8 @@ func (t *FilterTranslator) translateInField(key ast.Expr, value ast.SelectExpr) 
 		buffer.WriteString(")")
 		result.precedence = filterTranslatorOtherPrecedence
 	default:
-		buffer.WriteString(valueTr.sql)
-		buffer.WriteString(" @> array[")
-		buffer.WriteString(keyTr.sql)
-		buffer.WriteString("]")
-		result.precedence = filterTranslatorInPrecedence
+		err = fmt.Errorf("'in' operator isn't supported for field of kind '%s'", valueTr.kind)
+		return
 	}
 	result.sql = buffer.String()
 	return
@@ -1014,6 +1011,14 @@ func (t *FilterTranslator) translateSelectJsonField(operandSql string, msgDesc p
 		return
 	}
 	fieldDesc := msgDesc.Fields().ByName(protoreflect.Name(fieldName))
+	// Map fields are stored as JSONB objects — use -> to preserve the object structure, so that bracket-index
+	// and 'in' translate against it instead of falling into the generic message-kind case below:
+	if fieldDesc.IsMap() {
+		result.sql = fmt.Sprintf("%s->'%s'", operandSql, fieldName)
+		result.kind = filterTranslatorMapKind
+		result.precedence = filterTranslatorMaxPrecedence
+		return
+	}
 	// Repeated fields are stored as JSONB arrays — use -> to preserve the array structure:
 	if fieldDesc.IsList() {
 		result.sql = fmt.Sprintf("%s->'%s'", operandSql, fieldName)
@@ -1058,8 +1063,8 @@ func (t *FilterTranslator) translateSelectJsonField(operandSql string, msgDesc p
 		}
 	default:
 		err = fmt.Errorf(
-			"select of JSON field '%s' of operand '%s' of type '%s' of kind '%s' isn't supported",
-			fieldName, operandSql, msgDesc.FullName(), fieldKind,
+			"select of JSON field '%s' of type '%s' of kind '%s' isn't supported",
+			fieldName, msgDesc.FullName(), fieldKind,
 		)
 		return
 	}

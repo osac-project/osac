@@ -1040,6 +1040,150 @@ var _ = Describe("Private clusters server", func() {
 			Expect(updatedObject.GetSpec().GetNodeSets()["compute"].GetSize()).To(Equal(newSize))
 		})
 
+		Describe("Cluster state validation for spec updates", func() {
+			createClusterWithState := func(state privatev1.ClusterState) *privatev1.Cluster {
+				createResponse, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Spec: privatev1.ClusterSpec_builder{
+							Template: "my-template-id",
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				object := createResponse.GetObject()
+
+				_, err = server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Id: object.GetId(),
+						Status: privatev1.ClusterStatus_builder{
+							State: state,
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{
+						Paths: []string{"status.state"},
+					},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				getResponse, err := server.Get(ctx, privatev1.ClustersGetRequest_builder{
+					Id: object.GetId(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				return getResponse.GetObject()
+			}
+
+			It("Rejects spec update when cluster state is failed", func() {
+				object := createClusterWithState(privatev1.ClusterState_CLUSTER_STATE_FAILED)
+
+				_, err := server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Id: object.GetId(),
+						Spec: privatev1.ClusterSpec_builder{
+							NodeSets: map[string]*privatev1.ClusterNodeSet{
+								"compute": privatev1.ClusterNodeSet_builder{
+									Size: 5,
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{
+						Paths: []string{"spec.node_sets.compute.size"},
+					},
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				status, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+				Expect(status.Message()).To(ContainSubstring("cannot update cluster spec"))
+				Expect(status.Message()).To(ContainSubstring("CLUSTER_STATE_FAILED"))
+			})
+
+			It("Rejects spec update when cluster state is delete_failed", func() {
+				object := createClusterWithState(privatev1.ClusterState_CLUSTER_STATE_DELETE_FAILED)
+
+				_, err := server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Id: object.GetId(),
+						Spec: privatev1.ClusterSpec_builder{
+							NodeSets: map[string]*privatev1.ClusterNodeSet{
+								"compute": privatev1.ClusterNodeSet_builder{
+									Size: 5,
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{
+						Paths: []string{"spec.node_sets.compute.size"},
+					},
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				status, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+				Expect(status.Message()).To(ContainSubstring("cannot update cluster spec"))
+				Expect(status.Message()).To(ContainSubstring("CLUSTER_STATE_DELETE_FAILED"))
+			})
+
+			It("Allows status-only update when cluster state is failed", func() {
+				object := createClusterWithState(privatev1.ClusterState_CLUSTER_STATE_FAILED)
+
+				_, err := server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Id: object.GetId(),
+						Status: privatev1.ClusterStatus_builder{
+							Hub: "updated-hub",
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{
+						Paths: []string{"status.hub"},
+					},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			It("Allows spec update when cluster state is ready", func() {
+				object := createClusterWithState(privatev1.ClusterState_CLUSTER_STATE_READY)
+
+				_, err := server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Id: object.GetId(),
+						Spec: privatev1.ClusterSpec_builder{
+							NodeSets: map[string]*privatev1.ClusterNodeSet{
+								"compute": privatev1.ClusterNodeSet_builder{
+									Size: 5,
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{
+						Paths: []string{"spec.node_sets.compute.size"},
+					},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			It("Allows spec update when cluster state is progressing", func() {
+				object := createClusterWithState(privatev1.ClusterState_CLUSTER_STATE_PROGRESSING)
+
+				_, err := server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Id: object.GetId(),
+						Spec: privatev1.ClusterSpec_builder{
+							NodeSets: map[string]*privatev1.ClusterNodeSet{
+								"compute": privatev1.ClusterNodeSet_builder{
+									Size: 5,
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{
+						Paths: []string{"spec.node_sets.compute.size"},
+					},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+			})
+		})
+
 		It("Rejects changing template field", func() {
 			oldTemplate := "my-template-id"
 			newTemplate := "my-template-id-0"

@@ -232,6 +232,10 @@ func (s *PrivateClustersServer) Update(ctx context.Context,
 	if err != nil {
 		return
 	}
+	err = s.validateClusterStateForSpecUpdate(ctx, request)
+	if err != nil {
+		return
+	}
 	err = s.validateTemplateImmutability(ctx, request)
 	if err != nil {
 		return
@@ -440,6 +444,33 @@ func (s *PrivateClustersServer) getExistingCluster(ctx context.Context,
 	}
 	existingCluster := getResponse.GetObject()
 	return existingCluster, true, nil
+}
+
+// validateClusterStateForSpecUpdate rejects spec modifications when the cluster is in a
+// terminal failure state. The reconciler only processes clusters in PROGRESSING or READY
+// states, so spec changes on FAILED or DELETE_FAILED clusters would be silently ignored.
+func (s *PrivateClustersServer) validateClusterStateForSpecUpdate(ctx context.Context,
+	request *privatev1.ClustersUpdateRequest) error {
+	if !updateIncludesField(request.GetUpdateMask(), "spec") {
+		return nil
+	}
+	existingCluster, found, err := s.getExistingCluster(ctx, request)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return nil
+	}
+	state := existingCluster.GetStatus().GetState()
+	if state == privatev1.ClusterState_CLUSTER_STATE_FAILED ||
+		state == privatev1.ClusterState_CLUSTER_STATE_DELETE_FAILED {
+		return grpcstatus.Errorf(
+			grpccodes.InvalidArgument,
+			"cannot update cluster spec when cluster state is %s",
+			state,
+		)
+	}
+	return nil
 }
 
 // updateAffectsNodeSets checks if the update mask indicates that node_sets are being modified.

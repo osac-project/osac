@@ -25,7 +25,9 @@ import (
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
+	grpccodes "google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
@@ -340,5 +342,27 @@ var _ = Describe("Events server visibility", func() {
 
 		// Verify that the payload of the event is a bare metal instance:
 		Expect(collector.Events()[0].HasBareMetalInstance()).To(BeTrue())
+	})
+
+	// SECURITY: EventsServer.Watch uses its own CEL environment (createCelEnv, scoped to *publicv1.Event), entirely
+	// separate from FilterTranslator/GenericServer/GenericDAO's public-filter-oracle fix. This is the only
+	// regression coverage confirming that environment stays scoped to the public Event message.
+	It("Rejects a filter referencing the private-only hub field", func() {
+		_, client := startServer(makeTenancy(
+			collections.NewSet("tenant-a"),
+		))
+
+		// The server-streaming call returns immediately, before the server handler has run (see startWatch above),
+		// so the filter-compile failure surfaces on the first Recv, not on Watch itself:
+		watchStream, err := client.Watch(context.Background(), publicv1.EventsWatchRequest_builder{
+			Filter: new("has(event.hub)"),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		_, err = watchStream.Recv()
+		Expect(err).To(HaveOccurred())
+		status, ok := grpcstatus.FromError(err)
+		Expect(ok).To(BeTrue())
+		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 	})
 })

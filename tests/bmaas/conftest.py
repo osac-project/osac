@@ -14,7 +14,7 @@ from tests.core.runner import env
 
 @pytest.fixture(scope="session")
 def bmi_template() -> str:
-    return env("OSAC_BMI_TEMPLATE", "osac.templates.bm_host_provisioning")
+    return env("OSAC_BMI_TEMPLATE", "bm-host-provisioning")
 
 
 @pytest.fixture(scope="session")

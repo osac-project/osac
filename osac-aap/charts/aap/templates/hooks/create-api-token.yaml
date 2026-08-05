@@ -28,6 +28,18 @@ spec:
       labels:
         {{- include "osac-aap.labels" . | nindent 8 }}
     spec:
+      # osac-sa (cluster-admin, see osac-sa.yaml) resolves to the anyuid SCC on
+      # OpenShift rather than a range-constrained SCC like restricted-v2, so
+      # unlike bootstrap-job.yaml's dedicated, non-admin ServiceAccount, this
+      # pod gets no non-root UID auto-assigned. Without an explicit runAsUser,
+      # the init containers' runAsNonRoot: true (see
+      # osac-aap.waitForAapContainerSpec / osac-aap.waitForAdminSecretContainerSpec
+      # in _helpers.tpl) fails admission outright -- origin-cli has no non-root
+      # default user -- permanently blocking every backoffLimit retry instead of
+      # guarding the transient readiness race those templates target. anyuid
+      # accepts any explicit UID, so this is safe regardless of which one is used.
+      securityContext:
+        runAsUser: 1000
       initContainers:
       - name: wait-for-admin-secret
         image: {{ .Values.bootstrap.cliImage }}

@@ -60,51 +60,15 @@ AAP controller hostname
 {{- end }}
 
 {{/*
-Shared wait-for-aap readiness check script, consumed via `include` from both
-bootstrap-job.yaml and hooks/create-api-token.yaml. Takes no Go-template
-parameters — every input comes from the calling container's own env block:
-AAP_GATEWAY_HOSTNAME, AAP_CONTROLLER_GATEWAY_HOSTNAME, AAP_PASSWORD, and
-AAP_READINESS_CONSECUTIVE_SUCCESSES.
-
-Wall-clock deadline / activeDeadlineSeconds relationship: this script bounds
-itself to READINESS_DEADLINE_SECONDS=1500 (25 min) of WALL-CLOCK time via an
-absolute epoch deadline checked at the top of each loop iteration -- NOT a
-fixed iteration count. A fixed count (e.g. "300 iterations x 5s") is not a
-reliable time bound here: each iteration can run up to 4 sequential curls
-(controller ping, gateway ping, token POST, token DELETE) at --max-time 15
-each, so a single iteration can legitimately take anywhere from ~5s (fast
-failures) to ~65s (a degraded-but-technically-up AAP that's slow on every
-call). An iteration-count loop under that variance could run for hours;
-the epoch-deadline check bounds actual wall-clock time to ~1500s plus at
-most one in-flight iteration's overrun (~65s worst case), regardless of how
-each iteration resolves. The preceding wait-for-admin-secret init container
-adds its own wall-clock-bounded budget (see its docstring below), so the
-real per-pod-attempt worst case is the sum of both. This MUST stay well
-under the activeDeadlineSeconds set on the calling Job (bootstrap-job.yaml /
-hooks/create-api-token.yaml) -- activeDeadlineSeconds is a Job-level
-CUMULATIVE deadline across every backoffLimit-driven pod retry, not a
-per-pod budget. Sizing activeDeadlineSeconds to comfortably exceed one
-combined worst-case attempt ensures a stuck attempt hits this script's own
-"Timeout waiting for AAP" branch (clean exit 1, diagnosable logs,
-backoffLimit gets to retry) instead of being silently SIGKILLed by
-DeadlineExceeded. If you change either deadline, re-check
-activeDeadlineSeconds against the new combined total.
-
-Note: osac-installer's `make install-osac` target runs `helm upgrade --install
-... --timeout 40m --wait`, which is a SEPARATE, tighter timeout on the overall
-Helm operation -- it aborts the whole install/upgrade at 40 minutes regardless
-of activeDeadlineSeconds. activeDeadlineSeconds is this Job's own internal
-safety net for installs that don't go through that specific Makefile target
-(e.g. a longer/no --timeout), not a guarantee of retry budget in CI.
+Shared wait-for-aap readiness script (bootstrap-job.yaml, create-api-token.yaml).
+Wall-clock-bounded (1500s epoch deadline, not iteration count) since each
+iteration can take up to ~65s worst case -- keep activeDeadlineSeconds above this.
 */}}
 {{- define "osac-aap.waitForAapScript" -}}
 echo "Controller gateway: ${AAP_CONTROLLER_GATEWAY_HOSTNAME}"
 echo "Gateway: ${AAP_GATEWAY_HOSTNAME}"
 
-# Guard against a misconfigured threshold: with a value less than 1, the
-# ge-comparison below would be satisfied immediately -- including right after
-# an explicit auth failure resets the streak to 0 -- silently reproducing the
-# readiness race this script exists to prevent.
+# A threshold < 1 would satisfy the streak check immediately, reintroducing the race.
 case "${AAP_READINESS_CONSECUTIVE_SUCCESSES}" in
   ''|*[!0-9]*)
     echo "ERROR: AAP_READINESS_CONSECUTIVE_SUCCESSES must be a positive integer, got '${AAP_READINESS_CONSECUTIVE_SUCCESSES}'"
@@ -118,18 +82,8 @@ fi
 
 echo "Waiting for AAP to be ready (${AAP_READINESS_CONSECUTIVE_SUCCESSES} consecutive successful checks required)..."
 
-# Credentials go into a netrc file rather than curl's -u flag: -u puts the
-# password on the command line, readable by any process in this container's
-# PID namespace (/proc/<pid>/cmdline, `ps`). These auth calls stay on the
-# internal plaintext Service hostname (not a Route/TLS-terminated hostname) --
-# accepted risk: this chart has no Route resource or hostname helper for the
-# AAP Gateway (the AAP operator manages that Route, outside this chart), and
-# resolving it at runtime would reintroduce the same operator-readiness race
-# this script exists to fix. Traffic stays intra-cluster/intra-namespace.
-# Created with umask 077 so the file is never world/group-readable (no window
-# between creation and a separate chmod), and removed on every exit path via
-# the trap below -- it must not outlive this container, since /tmp is a
-# shared emptyDir also mounted by later containers in the same pod.
+# netrc avoids leaking the password via curl -u's process args; cleaned up via
+# trap since /tmp is a shared emptyDir mounted by later containers too.
 trap 'rm -f /tmp/.netrc' EXIT
 ( umask 077; printf 'machine %s\nlogin admin\npassword %s\n' "${AAP_GATEWAY_HOSTNAME}" "${AAP_PASSWORD}" > /tmp/.netrc )
 
@@ -181,10 +135,7 @@ while [ "$(date +%s)" -lt "${READINESS_DEADLINE}" ]; do
     if [ -z "${token_id}" ]; then
       consecutive_successes=0
       delete_code="skipped"
-      # Deliberately not logging auth_body here: on a 200/201 it's the token
-      # creation response, which can include the live token value itself
-      # (per AAP Gateway's token resource schema) -- logging it on a parse
-      # failure could leak a real credential into pod logs.
+      # Not logging auth_body: it may contain the live token value.
       echo "WARNING: readiness-check token created but its ID could not be parsed from the response"
     else
       delete_code=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 15 \
@@ -229,21 +180,9 @@ exit 1
 {{- end }}
 
 {{/*
-Shared wait-for-admin-secret script, consumed via `include` from both
-bootstrap-job.yaml and hooks/create-api-token.yaml. Polls for the AAP admin
-password Secret's existence before the wait-for-aap init container tries to
-mount it via secretKeyRef -- without this, a Secret that doesn't exist yet
-when the pod is scheduled (operator hasn't reconciled the
-AnsibleAutomationPlatform CR yet) blocks the whole pod in
-Init:CreateContainerConfigError with no log output at all. Takes no
-Go-template parameters -- inputs come from the calling container's own env
-block: NAMESPACE, AAP_ADMIN_SECRET_NAME.
-
-Worst-case wall-clock time: 60 iterations, each bounded to at most
-`--request-timeout=10s` (a slow/unresponsive API server) plus a 5s sleep --
-~900s (15 min) worst case, not the ~300s a naive "60 x 5s sleep" reading
-would suggest. See osac-aap.waitForAapScript's docstring above for why an
-explicit per-call timeout matters here.
+Polls for the AAP admin-password Secret before wait-for-aap mounts it via
+secretKeyRef -- otherwise a missing Secret at pod-schedule time blocks the
+whole pod in Init:CreateContainerConfigError with no log output.
 */}}
 {{- define "osac-aap.waitForAdminSecretScript" -}}
 echo "Waiting for AAP admin password Secret '${AAP_ADMIN_SECRET_NAME}' to be created by the operator..."
@@ -259,13 +198,7 @@ echo "ERROR: Timed out waiting for Secret ${AAP_ADMIN_SECRET_NAME} in namespace 
 exit 1
 {{- end }}
 
-{{/*
-Shared wait-for-aap init container env/volumeMounts/resources/securityContext,
-consumed via `include` from both bootstrap-job.yaml and
-hooks/create-api-token.yaml. The `command:`/script content lives in
-osac-aap.waitForAapScript above; this template covers everything else in the
-container spec. Takes `.` (the top-level chart context) as its argument.
-*/}}
+{{/* Shared wait-for-aap init container env/volumeMounts/resources/securityContext. */}}
 {{- define "osac-aap.waitForAapContainerSpec" -}}
 env:
 - name: HOME
@@ -299,15 +232,7 @@ securityContext:
     drop: ["ALL"]
 {{- end }}
 
-{{/*
-Shared wait-for-admin-secret init container env/volumeMounts/resources/
-securityContext, consumed via `include` from both bootstrap-job.yaml and
-hooks/create-api-token.yaml. The `command:`/script content lives in
-osac-aap.waitForAdminSecretScript above; this template covers everything else
-in the container spec, mirroring osac-aap.waitForAapContainerSpec above for
-its sibling container. Takes `.` (the top-level chart context) as its
-argument.
-*/}}
+{{/* Shared wait-for-admin-secret init container env/volumeMounts/resources/securityContext. */}}
 {{- define "osac-aap.waitForAdminSecretContainerSpec" -}}
 env:
 - name: HOME

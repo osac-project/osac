@@ -12,32 +12,18 @@ metadata:
     "helm.sh/hook-delete-policy": before-hook-creation
 spec:
   backoffLimit: 5
-  # Job-level CUMULATIVE deadline across every backoffLimit-driven pod retry
-  # (not per-pod). Must stay comfortably above the combined worst-case runtime
-  # of both init containers (wait-for-admin-secret + wait-for-aap, see
-  # osac-aap.waitForAapScript's docstring in _helpers.tpl for the math) so a
-  # stuck attempt hits the script's own clean "Timeout waiting for AAP" exit
-  # (diagnosable, lets backoffLimit retry) rather than being silently
-  # SIGKILLed by DeadlineExceeded mid-attempt. Note: osac-installer's
-  # `make install-osac` wraps this in `helm ... --timeout 40m --wait`, a
-  # separate, tighter ceiling on the overall install that this value doesn't
-  # control.
+  # Cumulative across all backoffLimit retries; must exceed both init containers'
+  # combined worst-case runtime (see _helpers.tpl) so a stuck attempt exits
+  # cleanly instead of being SIGKILLed.
   activeDeadlineSeconds: 8400
   template:
     metadata:
       labels:
         {{- include "osac-aap.labels" . | nindent 8 }}
     spec:
-      # osac-sa (cluster-admin, see osac-sa.yaml) resolves to the anyuid SCC on
-      # OpenShift rather than a range-constrained SCC like restricted-v2, so
-      # unlike bootstrap-job.yaml's dedicated, non-admin ServiceAccount, this
-      # pod gets no non-root UID auto-assigned. Without an explicit runAsUser,
-      # the init containers' runAsNonRoot: true (see
-      # osac-aap.waitForAapContainerSpec / osac-aap.waitForAdminSecretContainerSpec
-      # in _helpers.tpl) fails admission outright -- origin-cli has no non-root
-      # default user -- permanently blocking every backoffLimit retry instead of
-      # guarding the transient readiness race those templates target. anyuid
-      # accepts any explicit UID, so this is safe regardless of which one is used.
+      # osac-sa's cluster-admin binding resolves to the anyuid SCC (no auto-assigned
+      # non-root UID like bootstrap-job.yaml's SA gets), so the init containers'
+      # runAsNonRoot: true needs an explicit UID here or admission fails outright.
       securityContext:
         runAsUser: 1000
       initContainers:
@@ -66,10 +52,7 @@ spec:
           - |
             set -euo pipefail
             AAP_PASSWORD=$(cat /var/run/secrets/aap-admin/password)
-            # Credentials go into a netrc file rather than curl's -u flag: -u puts the
-            # password on the command line, readable by any process in this container's
-            # PID namespace (/proc/<pid>/cmdline, `ps`). Same pattern as the shared
-            # wait-for-aap readiness script in _helpers.tpl.
+            # netrc avoids leaking the password via curl -u's process args.
             trap 'rm -f /tmp/.netrc' EXIT
             ( umask 077; printf 'machine %s\nlogin admin\npassword %s\n' "{{ include "osac-aap.gatewayHostname" . }}" "${AAP_PASSWORD}" > /tmp/.netrc )
             echo "Creating AAP API token..."

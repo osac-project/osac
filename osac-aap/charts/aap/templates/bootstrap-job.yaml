@@ -49,16 +49,9 @@ metadata:
     "helm.sh/hook-delete-policy": before-hook-creation
 spec:
   backoffLimit: {{ .Values.bootstrap.backoffLimit }}
-  # Job-level CUMULATIVE deadline across every backoffLimit-driven pod retry
-  # (not per-pod). Must stay comfortably above the combined worst-case runtime
-  # of both init containers (wait-for-admin-secret + wait-for-aap, see
-  # osac-aap.waitForAapScript's docstring in _helpers.tpl for the math) so a
-  # stuck attempt hits the script's own clean "Timeout waiting for AAP" exit
-  # (diagnosable, lets backoffLimit retry) rather than being silently
-  # SIGKILLed by DeadlineExceeded mid-attempt. Note: osac-installer's
-  # `make install-osac` wraps this in `helm ... --timeout 40m --wait`, a
-  # separate, tighter ceiling on the overall install that this value doesn't
-  # control.
+  # Cumulative across all backoffLimit retries; must exceed both init containers'
+  # combined worst-case runtime (see _helpers.tpl) so a stuck attempt exits
+  # cleanly instead of being SIGKILLed.
   activeDeadlineSeconds: 8400
   template:
     metadata:

@@ -10,7 +10,6 @@ in compliance with the License. You may obtain a copy of the License at
 package events
 
 import (
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -18,8 +17,6 @@ import (
 
 	privatev1 "github.com/osac-project/osac-metering/internal/api/osac/private/v1"
 )
-
-var ErrSkipNonBillingTransition = errors.New("non-billing transition")
 
 const ClusterStatePrefix = "CLUSTER_STATE_"
 
@@ -85,6 +82,61 @@ func (m *clusterMapper) BillingDimensionsMap() map[string]any {
 	return ClusterBillingDimensions(m.cl)
 }
 
+// CaaS cluster state machine. Both PROGRESSING and READY are billable.
+// Transitions between billable states have no billing boundary (Skip).
+// Dimension changes (scaling) during skipped transitions are detected by
+// the Watch Consumer via DimensionsEqual; the hourly reconciler catches
+// any missed dimension drift.
+var clusterTransitions = TransitionTable{
+	// Started: first billable state (no previous)
+	{"", "PROGRESSING"}: {EventType: "osac.resource.started.v1"},
+	{"", "READY"}:       {EventType: "osac.resource.started.v1"},
+
+	// Resumed: non-billable to billable
+	{"FAILED", "PROGRESSING"}:        {EventType: "osac.resource.resumed.v1"},
+	{"FAILED", "READY"}:              {EventType: "osac.resource.resumed.v1"},
+	{"DELETING", "PROGRESSING"}:      {EventType: "osac.resource.resumed.v1"},
+	{"DELETING", "READY"}:            {EventType: "osac.resource.resumed.v1"},
+	{"DELETE_FAILED", "PROGRESSING"}: {EventType: "osac.resource.resumed.v1"},
+	{"DELETE_FAILED", "READY"}:       {EventType: "osac.resource.resumed.v1"},
+	{"UNSPECIFIED", "PROGRESSING"}:   {EventType: "osac.resource.resumed.v1"},
+	{"UNSPECIFIED", "READY"}:         {EventType: "osac.resource.resumed.v1"},
+
+	// Suspended: billable to non-billable
+	{"PROGRESSING", "FAILED"}:   {EventType: "osac.resource.suspended.v1"},
+	{"PROGRESSING", "DELETING"}: {EventType: "osac.resource.suspended.v1"},
+	{"READY", "FAILED"}:         {EventType: "osac.resource.suspended.v1"},
+	{"READY", "DELETING"}:       {EventType: "osac.resource.suspended.v1"},
+
+	// Skip: billable to billable (no billing boundary, includes same-state for scaling)
+	{"PROGRESSING", "READY"}:       {Skip: true},
+	{"READY", "PROGRESSING"}:       {Skip: true},
+	{"PROGRESSING", "PROGRESSING"}: {Skip: true},
+	{"READY", "READY"}:             {Skip: true},
+
+	// Skip: non-billable to non-billable (no billing effect, includes same-state)
+	{"FAILED", "FAILED"}:               {Skip: true},
+	{"DELETING", "DELETING"}:           {Skip: true},
+	{"DELETE_FAILED", "DELETE_FAILED"}: {Skip: true},
+	{"UNSPECIFIED", "UNSPECIFIED"}:     {Skip: true},
+	{"FAILED", "DELETING"}:             {Skip: true},
+	{"FAILED", "DELETE_FAILED"}:        {Skip: true},
+	{"DELETING", "DELETE_FAILED"}:      {Skip: true},
+	{"DELETE_FAILED", "DELETING"}:      {Skip: true},
+	{"DELETING", "FAILED"}:             {Skip: true},
+	{"DELETE_FAILED", "FAILED"}:        {Skip: true},
+	{"UNSPECIFIED", "FAILED"}:          {Skip: true},
+	{"UNSPECIFIED", "DELETING"}:        {Skip: true},
+	{"UNSPECIFIED", "DELETE_FAILED"}:   {Skip: true},
+	{"FAILED", "UNSPECIFIED"}:          {Skip: true},
+	{"DELETING", "UNSPECIFIED"}:        {Skip: true},
+	{"DELETE_FAILED", "UNSPECIFIED"}:   {Skip: true},
+	{"PROGRESSING", "UNSPECIFIED"}:     {EventType: "osac.resource.suspended.v1"},
+	{"READY", "UNSPECIFIED"}:           {EventType: "osac.resource.suspended.v1"},
+	{"READY", "DELETE_FAILED"}:         {EventType: "osac.resource.suspended.v1"},
+	{"PROGRESSING", "DELETE_FAILED"}:   {EventType: "osac.resource.suspended.v1"},
+}
+
 func (m *clusterMapper) CloudEventType(eventType privatev1.EventType, previousState string) (string, error) {
 	switch eventType {
 	case privatev1.EventType_EVENT_TYPE_OBJECT_CREATED:
@@ -92,38 +144,9 @@ func (m *clusterMapper) CloudEventType(eventType privatev1.EventType, previousSt
 	case privatev1.EventType_EVENT_TYPE_OBJECT_DELETED:
 		return "osac.resource.deleted.v1", nil
 	case privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED:
-		return m.resolveUpdatedEventType(previousState)
+		return resolveTransition(clusterTransitions, previousState, m.CurrentState())
 	default:
 		return "", fmt.Errorf("unsupported event type: %v", eventType)
-	}
-}
-
-// CaaS billing model: both PROGRESSING and READY are billable. Transitions
-// between them have no billing boundary — the interval continues. Dimension
-// changes (scaling) during such transitions are detected by the Watch Consumer
-// after receiving ErrSkipNonBillingTransition; it checks DimensionsEqual and
-// emits updated.v1 for changed components. If the consumer misses a dimension
-// change during PROGRESSING<->READY (unlikely — scaling during provisioning),
-// the hourly reconciler detects billing_dimensions_drift and emits a
-// correction event, bounding the gap to one reconciliation cycle.
-func (m *clusterMapper) resolveUpdatedEventType(previousState string) (string, error) {
-	currentState := m.CurrentState()
-	currentBillable := IsClusterBillableState(currentState)
-	previousBillable := IsClusterBillableState(previousState)
-
-	switch {
-	case currentBillable && previousState == "":
-		return "osac.resource.started.v1", nil
-	case currentBillable && !previousBillable:
-		return "osac.resource.resumed.v1", nil
-	case !currentBillable && previousBillable:
-		return "osac.resource.suspended.v1", nil
-	case currentBillable && previousBillable:
-		return "", ErrSkipNonBillingTransition
-	case !currentBillable && !previousBillable:
-		return "", ErrSkipNonBillingTransition
-	default:
-		return "", fmt.Errorf("unexpected cluster state transition: %s -> %s", previousState, currentState)
 	}
 }
 

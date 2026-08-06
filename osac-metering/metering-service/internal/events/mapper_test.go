@@ -124,8 +124,8 @@ var _ = Describe("MapWatchEvent", func() {
 			Expect(ce.Type()).To(Equal("osac.resource.suspended.v1"))
 		})
 
-		It("returns ErrTransientState for STOPPING state", func() {
-			ci.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPING
+		It("returns ErrTransientState for STARTING state", func() {
+			ci.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING
 
 			event := &privatev1.Event{
 				Id:      "evt-2",
@@ -138,11 +138,11 @@ var _ = Describe("MapWatchEvent", func() {
 			Expect(errors.Is(err, events.ErrTransientState)).To(BeTrue())
 		})
 
-		It("returns ErrTransientState for STARTING state", func() {
-			ci.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING
+		It("returns ErrTransientState for STOPPING state", func() {
+			ci.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPING
 
 			event := &privatev1.Event{
-				Id:      "evt-starting",
+				Id:      "evt-2",
 				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
 				Payload: &privatev1.Event_ComputeInstance{ComputeInstance: ci},
 			}
@@ -267,7 +267,7 @@ var _ = Describe("MapWatchEvent", func() {
 
 			_, err := mapEvent(event, &events.StateContext{})
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("unexpected compute instance state transition"))
+			Expect(err.Error()).To(ContainSubstring("unexpected state transition"))
 			Expect(errors.Is(err, events.ErrTransientState)).To(BeFalse())
 		})
 

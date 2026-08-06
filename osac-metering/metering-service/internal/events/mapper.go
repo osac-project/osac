@@ -10,10 +10,7 @@ import (
 	privatev1 "github.com/osac-project/osac-metering/internal/api/osac/private/v1"
 )
 
-var (
-	ErrDataQuality    = errors.New("data quality")
-	ErrTransientState = errors.New("transient state: update projection only, no CloudEvent")
-)
+var ErrDataQuality = errors.New("data quality")
 
 // ResourceMapper extracts metering data from a resource-specific Event payload.
 // Each OSAC resource type (ComputeInstance, ClusterOrder, etc.) implements this.

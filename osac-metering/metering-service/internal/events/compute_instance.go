@@ -10,6 +10,32 @@ import (
 
 const ComputeInstanceStatePrefix = "COMPUTE_INSTANCE_STATE_"
 
+// Compute instance state machine. The table IS the spec:
+//   - Exact (from, to) match takes priority over wildcard
+//   - Missing entry = error (fail fast)
+//   - Transient: projection-only, no CloudEvent (billing context preserved)
+var computeInstanceTransitions = TransitionTable{
+	// Resumptions: specific previous states take priority over wildcard
+	{"STOPPED", "RUNNING"}: {EventType: "osac.resource.resumed.v1"},
+	{"PAUSED", "RUNNING"}:  {EventType: "osac.resource.resumed.v1"},
+
+	// Started: any other previous state transitioning to RUNNING
+	{"*", "RUNNING"}: {EventType: "osac.resource.started.v1"},
+
+	// Suspended: billing interval closes
+	{"*", "STOPPED"}:  {EventType: "osac.resource.suspended.v1"},
+	{"*", "PAUSED"}:   {EventType: "osac.resource.suspended.v1"},
+	{"*", "FAILED"}:   {EventType: "osac.resource.suspended.v1"},
+	{"*", "DELETING"}: {EventType: "osac.resource.suspended.v1"},
+
+	// Transient: intermediate states, preserve billing context
+	{"*", "STOPPING"}: {Transient: true},
+	{"*", "STARTING"}: {Transient: true},
+
+	// Updated: no billing effect
+	{"*", "UNSPECIFIED"}: {EventType: "osac.resource.updated.v1"},
+}
+
 type computeInstanceMapper struct {
 	ci *privatev1.ComputeInstance
 }
@@ -107,28 +133,9 @@ func (m *computeInstanceMapper) CloudEventType(eventType privatev1.EventType, pr
 	case privatev1.EventType_EVENT_TYPE_OBJECT_DELETED:
 		return "osac.resource.deleted.v1", nil
 	case privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED:
-		return m.resolveUpdatedEventType(previousState)
+		return resolveTransition(computeInstanceTransitions, previousState, m.CurrentState())
 	default:
 		return "", fmt.Errorf("unsupported event type: %v", eventType)
-	}
-}
-
-func (m *computeInstanceMapper) resolveUpdatedEventType(previousState string) (string, error) {
-	currentState := m.CurrentState()
-
-	switch {
-	case currentState == "RUNNING" && (previousState == "STOPPED" || previousState == "PAUSED"):
-		return "osac.resource.resumed.v1", nil
-	case currentState == "RUNNING":
-		return "osac.resource.started.v1", nil
-	case currentState == "STOPPED" || currentState == "PAUSED" || currentState == "FAILED" || currentState == "DELETING":
-		return "osac.resource.suspended.v1", nil
-	case currentState == "STOPPING" || currentState == "STARTING":
-		return "", ErrTransientState
-	case currentState == "UNSPECIFIED":
-		return "osac.resource.updated.v1", nil
-	default:
-		return "", fmt.Errorf("unexpected compute instance state transition: %s -> %s", previousState, currentState)
 	}
 }
 

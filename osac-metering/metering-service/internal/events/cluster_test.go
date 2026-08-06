@@ -64,35 +64,109 @@ var _ = Describe("CaaS Cluster Mapper", func() {
 					Expect(ce.Type()).To(Equal(expectedType))
 				}
 			},
+			// --- Started: first billable state (no previous) ---
 			Entry("initial PROGRESSING (prev=empty) -> started.v1",
 				privatev1.ClusterState_CLUSTER_STATE_PROGRESSING, "", "osac.resource.started.v1", false),
 			Entry("initial READY (prev=empty) -> started.v1",
 				privatev1.ClusterState_CLUSTER_STATE_READY, "", "osac.resource.started.v1", false),
-			Entry("PROGRESSING -> READY -> skip (both billable)",
-				privatev1.ClusterState_CLUSTER_STATE_READY, "PROGRESSING", "", true),
-			Entry("READY -> PROGRESSING -> skip (both billable)",
-				privatev1.ClusterState_CLUSTER_STATE_PROGRESSING, "READY", "", true),
-			Entry("READY -> FAILED -> suspended.v1",
-				privatev1.ClusterState_CLUSTER_STATE_FAILED, "READY", "osac.resource.suspended.v1", false),
-			Entry("PROGRESSING -> FAILED -> suspended.v1",
-				privatev1.ClusterState_CLUSTER_STATE_FAILED, "PROGRESSING", "osac.resource.suspended.v1", false),
+
+			// --- Resumed: non-billable to billable ---
 			Entry("FAILED -> PROGRESSING -> resumed.v1",
 				privatev1.ClusterState_CLUSTER_STATE_PROGRESSING, "FAILED", "osac.resource.resumed.v1", false),
-			Entry("FAILED -> READY -> resumed.v1 (recovery direct to ready)",
+			Entry("FAILED -> READY -> resumed.v1",
 				privatev1.ClusterState_CLUSTER_STATE_READY, "FAILED", "osac.resource.resumed.v1", false),
-			Entry("READY -> DELETING -> suspended.v1",
-				privatev1.ClusterState_CLUSTER_STATE_DELETING, "READY", "osac.resource.suspended.v1", false),
+			Entry("DELETING -> PROGRESSING -> resumed.v1",
+				privatev1.ClusterState_CLUSTER_STATE_PROGRESSING, "DELETING", "osac.resource.resumed.v1", false),
+			Entry("DELETING -> READY -> resumed.v1",
+				privatev1.ClusterState_CLUSTER_STATE_READY, "DELETING", "osac.resource.resumed.v1", false),
+			Entry("DELETE_FAILED -> PROGRESSING -> resumed.v1",
+				privatev1.ClusterState_CLUSTER_STATE_PROGRESSING, "DELETE_FAILED", "osac.resource.resumed.v1", false),
+			Entry("DELETE_FAILED -> READY -> resumed.v1",
+				privatev1.ClusterState_CLUSTER_STATE_READY, "DELETE_FAILED", "osac.resource.resumed.v1", false),
+			Entry("UNSPECIFIED -> PROGRESSING -> resumed.v1",
+				privatev1.ClusterState_CLUSTER_STATE_PROGRESSING, "UNSPECIFIED", "osac.resource.resumed.v1", false),
+			Entry("UNSPECIFIED -> READY -> resumed.v1",
+				privatev1.ClusterState_CLUSTER_STATE_READY, "UNSPECIFIED", "osac.resource.resumed.v1", false),
+
+			// --- Suspended: billable to non-billable ---
+			Entry("PROGRESSING -> FAILED -> suspended.v1",
+				privatev1.ClusterState_CLUSTER_STATE_FAILED, "PROGRESSING", "osac.resource.suspended.v1", false),
 			Entry("PROGRESSING -> DELETING -> suspended.v1",
 				privatev1.ClusterState_CLUSTER_STATE_DELETING, "PROGRESSING", "osac.resource.suspended.v1", false),
-			Entry("DELETING -> DELETE_FAILED -> skip (both non-billable)",
-				privatev1.ClusterState_CLUSTER_STATE_DELETE_FAILED, "DELETING", "", true),
-			Entry("DELETE_FAILED -> DELETING -> skip (both non-billable)",
-				privatev1.ClusterState_CLUSTER_STATE_DELETING, "DELETE_FAILED", "", true),
-			Entry("FAILED -> DELETING -> skip (both non-billable)",
+			Entry("READY -> FAILED -> suspended.v1",
+				privatev1.ClusterState_CLUSTER_STATE_FAILED, "READY", "osac.resource.suspended.v1", false),
+			Entry("READY -> DELETING -> suspended.v1",
+				privatev1.ClusterState_CLUSTER_STATE_DELETING, "READY", "osac.resource.suspended.v1", false),
+			Entry("PROGRESSING -> UNSPECIFIED -> suspended.v1",
+				privatev1.ClusterState_CLUSTER_STATE_UNSPECIFIED, "PROGRESSING", "osac.resource.suspended.v1", false),
+			Entry("READY -> UNSPECIFIED -> suspended.v1",
+				privatev1.ClusterState_CLUSTER_STATE_UNSPECIFIED, "READY", "osac.resource.suspended.v1", false),
+			Entry("READY -> DELETE_FAILED -> suspended.v1",
+				privatev1.ClusterState_CLUSTER_STATE_DELETE_FAILED, "READY", "osac.resource.suspended.v1", false),
+			Entry("PROGRESSING -> DELETE_FAILED -> suspended.v1",
+				privatev1.ClusterState_CLUSTER_STATE_DELETE_FAILED, "PROGRESSING", "osac.resource.suspended.v1", false),
+
+			// --- Skip: billable to billable (no billing boundary) ---
+			Entry("PROGRESSING -> READY -> skip",
+				privatev1.ClusterState_CLUSTER_STATE_READY, "PROGRESSING", "", true),
+			Entry("READY -> PROGRESSING -> skip",
+				privatev1.ClusterState_CLUSTER_STATE_PROGRESSING, "READY", "", true),
+			Entry("PROGRESSING -> PROGRESSING -> skip (same-state)",
+				privatev1.ClusterState_CLUSTER_STATE_PROGRESSING, "PROGRESSING", "", true),
+			Entry("READY -> READY -> skip (same-state, scaling)",
+				privatev1.ClusterState_CLUSTER_STATE_READY, "READY", "", true),
+
+			// --- Skip: non-billable same-state ---
+			Entry("FAILED -> FAILED -> skip (same-state)",
+				privatev1.ClusterState_CLUSTER_STATE_FAILED, "FAILED", "", true),
+			Entry("DELETING -> DELETING -> skip (same-state)",
+				privatev1.ClusterState_CLUSTER_STATE_DELETING, "DELETING", "", true),
+			Entry("DELETE_FAILED -> DELETE_FAILED -> skip (same-state)",
+				privatev1.ClusterState_CLUSTER_STATE_DELETE_FAILED, "DELETE_FAILED", "", true),
+			Entry("UNSPECIFIED -> UNSPECIFIED -> skip (same-state)",
+				privatev1.ClusterState_CLUSTER_STATE_UNSPECIFIED, "UNSPECIFIED", "", true),
+
+			// --- Skip: non-billable to non-billable (cross-state) ---
+			Entry("FAILED -> DELETING -> skip",
 				privatev1.ClusterState_CLUSTER_STATE_DELETING, "FAILED", "", true),
-			Entry("FAILED -> DELETE_FAILED -> skip (both non-billable)",
+			Entry("FAILED -> DELETE_FAILED -> skip",
 				privatev1.ClusterState_CLUSTER_STATE_DELETE_FAILED, "FAILED", "", true),
+			Entry("DELETING -> DELETE_FAILED -> skip",
+				privatev1.ClusterState_CLUSTER_STATE_DELETE_FAILED, "DELETING", "", true),
+			Entry("DELETE_FAILED -> DELETING -> skip",
+				privatev1.ClusterState_CLUSTER_STATE_DELETING, "DELETE_FAILED", "", true),
+			Entry("DELETING -> FAILED -> skip",
+				privatev1.ClusterState_CLUSTER_STATE_FAILED, "DELETING", "", true),
+			Entry("DELETE_FAILED -> FAILED -> skip",
+				privatev1.ClusterState_CLUSTER_STATE_FAILED, "DELETE_FAILED", "", true),
+			Entry("UNSPECIFIED -> FAILED -> skip",
+				privatev1.ClusterState_CLUSTER_STATE_FAILED, "UNSPECIFIED", "", true),
+			Entry("UNSPECIFIED -> DELETING -> skip",
+				privatev1.ClusterState_CLUSTER_STATE_DELETING, "UNSPECIFIED", "", true),
+			Entry("UNSPECIFIED -> DELETE_FAILED -> skip",
+				privatev1.ClusterState_CLUSTER_STATE_DELETE_FAILED, "UNSPECIFIED", "", true),
+			Entry("FAILED -> UNSPECIFIED -> skip",
+				privatev1.ClusterState_CLUSTER_STATE_UNSPECIFIED, "FAILED", "", true),
+			Entry("DELETING -> UNSPECIFIED -> skip",
+				privatev1.ClusterState_CLUSTER_STATE_UNSPECIFIED, "DELETING", "", true),
+			Entry("DELETE_FAILED -> UNSPECIFIED -> skip",
+				privatev1.ClusterState_CLUSTER_STATE_UNSPECIFIED, "DELETE_FAILED", "", true),
 		)
+
+		It("returns error for unknown state (missing table entry)", func() {
+			cl.Status.State = privatev1.ClusterState(9999)
+
+			event := &privatev1.Event{
+				Id:      "evt-unknown",
+				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+				Payload: &privatev1.Event_Cluster{Cluster: cl},
+			}
+
+			_, err := mapEvent(event, &events.StateContext{PreviousState: "READY"})
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("unexpected state transition"))
+			Expect(errors.Is(err, events.ErrSkipNonBillingTransition)).To(BeFalse())
+		})
 
 		It("maps OBJECT_CREATED to created.v1", func() {
 			event := &privatev1.Event{

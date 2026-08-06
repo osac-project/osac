@@ -143,6 +143,7 @@ class OsacCLI:
         name: str | None = None,
         pull_secret_file: str | None = None,
         ssh_public_key_file: str | None = None,
+        version: str | None = None,
         template_parameters: dict[str, str] | None = None,
         template_parameter_files: dict[str, str] | None = None,
     ) -> str:
@@ -153,6 +154,8 @@ class OsacCLI:
             args.extend(["--pull-secret-file", pull_secret_file])
         if ssh_public_key_file is not None:
             args.extend(["--ssh-public-key-file", ssh_public_key_file])
+        if version is not None:
+            args.extend(["--version", version])
         if template_parameters is not None:
             for key, value in template_parameters.items():
                 args.extend(["-p", f"{key}={value}"])

@@ -359,6 +359,68 @@ class GRPCClient:
     def delete_instance_type(self, *, name: str) -> None:
         self.call(service=f"{PRIVATE_API}.InstanceTypes/Delete", data={"id": name})
 
+    # ClusterVersion operations (private API only)
+
+    def create_cluster_version(
+        self,
+        *,
+        version: str,
+        image: str,
+        enabled: bool = True,
+        is_default: bool = False,
+        state: str = "CLUSTER_VERSION_STATE_ACTIVE",
+    ) -> dict[str, str]:
+        response: dict[str, Any] = self.call(
+            service=f"{PRIVATE_API}.ClusterVersions/Create",
+            data={
+                "object": {
+                    "spec": {
+                        "version": version,
+                        "image": image,
+                        "enabled": enabled,
+                        "is_default": is_default,
+                        "state": state,
+                    }
+                }
+            },
+        )
+        cluster_version: dict[str, Any] = response["object"]
+        return {"id": cluster_version["id"], "name": cluster_version["metadata"]["name"]}
+
+    def get_cluster_version(self, *, version_id: str) -> dict[str, Any]:
+        return self.call(service=f"{PRIVATE_API}.ClusterVersions/Get", data={"id": version_id})
+
+    def list_cluster_version_ids(self) -> list[str]:
+        response: dict[str, Any] = self.call(service=f"{PRIVATE_API}.ClusterVersions/List")
+        return [item["id"] for item in response.get("items", [])]
+
+    def update_cluster_version(self, *, version_id: str, **fields: Any) -> dict[str, Any]:
+        if not fields:
+            raise ValueError("update_cluster_version requires at least one field to update")
+        return self.call(
+            service=f"{PRIVATE_API}.ClusterVersions/Update",
+            data={"object": {"id": version_id, "spec": dict(fields)}, "updateMask": {"paths": [f"spec.{k}" for k in fields]}},
+        )
+
+    def delete_cluster_version(self, *, version_id: str) -> None:
+        self.call(service=f"{PRIVATE_API}.ClusterVersions/Delete", data={"id": version_id})
+
+    def ensure_cluster_version(self, *, version: str, image: str) -> dict[str, str]:
+        """Create a ClusterVersion, tolerating AlreadyExists left behind by a prior failed run.
+
+        Returns {"id": ..., "name": ...} for the resolved ClusterVersion."""
+        try:
+            return self.create_cluster_version(version=version, image=image)
+        except subprocess.CalledProcessError as e:
+            output = (e.stdout or "") + (e.stderr or "")
+            if not re.search(r"Code:\s*AlreadyExists", output):
+                raise RuntimeError(f"Failed to create cluster version '{version}': {output}") from e
+        response: dict[str, Any] = self.call(service=f"{PRIVATE_API}.ClusterVersions/List")
+        for item in response.get("items", []):
+            if item.get("spec", {}).get("version") == version:
+                return {"id": item["id"], "name": item["metadata"]["name"]}
+        raise RuntimeError(f"Cluster version '{version}' reported AlreadyExists but not found in list")
+
     # BareMetalInstance operations (public API)
 
     def list_baremetal_instance_ids(self) -> list[str]:

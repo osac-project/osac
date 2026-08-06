@@ -18,11 +18,17 @@ package dispatcher
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	privatev1 "github.com/osac-project/osac/osac-operator/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/osac-operator/pkg/networkmanager"
 )
+
+// ErrFabricManagerNotSet is returned by Resolve when the NetworkClass has no
+// fabricManager set. It is wrapped in the returned error so callers can match it
+// with errors.Is to distinguish "not configured yet" from other resolution failures.
+var ErrFabricManagerNotSet = errors.New("fabricManager is required but not set")
 
 // ResolvedManagers holds the validated fabric and k8s managers extracted from a NetworkClass.
 type ResolvedManagers struct {
@@ -67,7 +73,7 @@ func (r *Resolver) Resolve(ctx context.Context, networkClassID string) (*Resolve
 
 	fabricManagerName := nc.GetFabricManager()
 	if fabricManagerName == "" {
-		return nil, fmt.Errorf("NetworkClass %q: fabricManager is required but not set", networkClassID)
+		return nil, fmt.Errorf("NetworkClass %q: %w", networkClassID, ErrFabricManagerNotSet)
 	}
 
 	fabricMgr, err := r.discovery.GetFabricManager(ctx, fabricManagerName)

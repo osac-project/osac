@@ -27,10 +27,14 @@ import (
 
 const (
 	// LabelFabricManager is the label key that identifies a ConfigMap as a fabric manager registration.
-	LabelFabricManager = "osac.openshift.io/network/fabric-manager"
+	//
+	// NOTE: a Kubernetes label key allows at most one '/' (separating an optional DNS
+	// subdomain prefix from the name segment), so "network" is hyphenated into the name
+	// segment here rather than forming a second path segment.
+	LabelFabricManager = "osac.openshift.io/network-fabric-manager"
 
 	// LabelK8sManager is the label key that identifies a ConfigMap as a k8s manager registration.
-	LabelK8sManager = "osac.openshift.io/network/k8s-manager"
+	LabelK8sManager = "osac.openshift.io/network-k8s-manager"
 
 	// DataKeyName is the ConfigMap data key for the manager's unique identifier.
 	DataKeyName = "name"

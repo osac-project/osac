@@ -8,7 +8,10 @@
         online: true
 
 - name: Add checksum to BMH patch for non-OCI images
-  when: not template_params.imageURL.startswith('oci://')
+  when: >-
+    (template_params.imageSourceType | default('') != 'registry')
+    and
+    (template_params.imageSourceType | default('') != '' or not template_params.imageURL.startswith('oci://'))
   ansible.builtin.set_fact:
     bmh_patch: >-
       {{ bmh_patch | combine({

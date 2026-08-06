@@ -20,6 +20,13 @@ Config via environment variables from a Secret (see `config/samples/osac-config-
 - `OSAC_CLUSTER_ORDER_NAMESPACE`, `OSAC_COMPUTE_INSTANCE_NAMESPACE`
 - `OSAC_TENANT_NAMESPACE`, `OSAC_NETWORKING_NAMESPACE`
 
+## Networking Managers
+
+- `OSAC_NETWORK_CLASS_SYNC_INTERVAL` — periodic full resync interval for NetworkClass
+  capabilities intersection, in addition to the immediate resync triggered by manager
+  ConfigMap changes (default: 5m). Only active when the fulfillment-service gRPC
+  connection is configured and `OSAC_NETWORKING_NAMESPACE` is non-empty.
+
 ## Controller Enable Flags
 
 - `OSAC_ENABLE_CLUSTER_CONTROLLER` / `--enable-cluster-controller`

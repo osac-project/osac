@@ -601,6 +601,11 @@ func (t *task) mutateBMI(ctx context.Context, object *bmfov1alpha1.BareMetalInst
 	}
 	if t.bareMetalInstance.GetSpec().HasImage() {
 		params["imageURL"] = t.bareMetalInstance.GetSpec().GetImage().GetSourceRef()
+		if st := t.bareMetalInstance.GetSpec().GetImage().GetSourceType(); st != "" {
+			params["imageSourceType"] = st
+		} else {
+			delete(params, "imageSourceType")
+		}
 	}
 	if len(params) > 0 {
 		paramsJSON, err := json.Marshal(params)

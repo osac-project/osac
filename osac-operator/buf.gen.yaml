@@ -25,7 +25,7 @@ managed:
 
 inputs:
 
-- module: buf.build/osac-project/private-api:OSAC-1330-typed-refs
+- module: buf.build/osac-project/private-api:v0.0.83
 
 plugins:
 

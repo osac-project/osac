@@ -28,7 +28,7 @@ metadata:
   namespace: {{ $.Release.Namespace }}
   labels:
     {{- include "osac-operator.labels" $ | nindent 4 }}
-    osac.openshift.io/network/fabric-manager: "true"
+    osac.openshift.io/network-fabric-manager: "true"
 data:
   name: {{ $name | quote }}
   {{- if $mgr.description }}
@@ -48,7 +48,7 @@ metadata:
   namespace: {{ $.Release.Namespace }}
   labels:
     {{- include "osac-operator.labels" $ | nindent 4 }}
-    osac.openshift.io/network/k8s-manager: "true"
+    osac.openshift.io/network-k8s-manager: "true"
 data:
   name: {{ $name | quote }}
   {{- if $mgr.description }}

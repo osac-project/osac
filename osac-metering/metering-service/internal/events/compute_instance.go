@@ -41,8 +41,8 @@ func ComputeInstanceBillingDimensions(ci *privatev1.ComputeInstance) map[string]
 	if spec == nil {
 		return dims
 	}
-	if spec.InstanceType != nil {
-		dims["instance_type"] = spec.GetInstanceType()
+	if it := spec.GetInstanceType(); it != nil {
+		dims["instance_type"] = it.GetName()
 	}
 	if img := spec.GetImage(); img != nil {
 		dims["image_ref"] = img.GetSourceRef()
@@ -76,14 +76,18 @@ func (m *computeInstanceMapper) ProjectID() *string {
 
 func (m *computeInstanceMapper) CatalogItemID() *string {
 	if s := m.ci.GetSpec(); s != nil {
-		return NilIfEmpty(s.GetCatalogItem())
+		if ci := s.GetCatalogItem(); ci != nil {
+			return NilIfEmpty(ci.GetName())
+		}
 	}
 	return nil
 }
 
 func (m *computeInstanceMapper) TemplateID() *string {
 	if s := m.ci.GetSpec(); s != nil {
-		return NilIfEmpty(s.GetTemplate())
+		if t := s.GetTemplate(); t != nil {
+			return NilIfEmpty(t.GetName())
+		}
 	}
 	return nil
 }
@@ -103,24 +107,28 @@ func (m *computeInstanceMapper) CloudEventType(eventType privatev1.EventType, pr
 	case privatev1.EventType_EVENT_TYPE_OBJECT_DELETED:
 		return "osac.resource.deleted.v1", nil
 	case privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED:
-		return m.resolveUpdatedEventType(previousState), nil
+		return m.resolveUpdatedEventType(previousState)
 	default:
 		return "", fmt.Errorf("unsupported event type: %v", eventType)
 	}
 }
 
-func (m *computeInstanceMapper) resolveUpdatedEventType(previousState string) string {
+func (m *computeInstanceMapper) resolveUpdatedEventType(previousState string) (string, error) {
 	currentState := m.CurrentState()
 
 	switch {
 	case currentState == "RUNNING" && (previousState == "STOPPED" || previousState == "PAUSED"):
-		return "osac.resource.resumed.v1"
+		return "osac.resource.resumed.v1", nil
 	case currentState == "RUNNING":
-		return "osac.resource.started.v1"
-	case currentState == "STOPPED" || currentState == "PAUSED" || currentState == "FAILED":
-		return "osac.resource.suspended.v1"
+		return "osac.resource.started.v1", nil
+	case currentState == "STOPPED" || currentState == "PAUSED" || currentState == "FAILED" || currentState == "DELETING":
+		return "osac.resource.suspended.v1", nil
+	case currentState == "STOPPING" || currentState == "STARTING":
+		return "", ErrTransientState
+	case currentState == "UNSPECIFIED":
+		return "osac.resource.updated.v1", nil
 	default:
-		return "osac.resource.updated.v1"
+		return "", fmt.Errorf("unexpected compute instance state transition: %s -> %s", previousState, currentState)
 	}
 }
 

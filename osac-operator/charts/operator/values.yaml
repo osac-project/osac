@@ -66,9 +66,13 @@ tenants: []
 # --- Network Manager Registration ---
 # ConfigMaps that register networking managers for the two-manager model.
 # The operator discovers managers by selecting ConfigMaps with labels
-# osac.openshift.io/network/fabric-manager or osac.openshift.io/network/k8s-manager.
+# osac.openshift.io/network-fabric-manager or osac.openshift.io/network-k8s-manager.
 networkManagers:
   enabled: false
+  # capabilitiesSyncInterval controls how often the operator recomputes NetworkClass
+  # capabilities from the fabric/k8s manager ConfigMaps (in addition to reacting
+  # immediately to ConfigMap changes).
+  capabilitiesSyncInterval: "5m"
   fabricManagers:
     netris:
       enabled: false

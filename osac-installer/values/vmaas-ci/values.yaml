@@ -176,6 +176,8 @@ kafka:
 # --- Metering ---
 metering:
   enabled: true
+  testAdapter:
+    enabled: true
   database:
     connection:
     - secret:

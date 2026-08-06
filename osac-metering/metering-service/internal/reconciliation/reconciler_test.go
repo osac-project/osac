@@ -131,7 +131,7 @@ func makeCI(id, tenant, state string, version int32) *privatev1.ComputeInstance 
 			Version: version,
 		},
 		Spec: &privatev1.ComputeInstanceSpec{
-			InstanceType: &instanceType,
+			InstanceType: &privatev1.InstanceTypeReference{Name: instanceType},
 			Image:        &privatev1.ComputeInstanceImage{SourceRef: "rhel-9"},
 			BootDisk:     &privatev1.ComputeInstanceDisk{SizeGib: 50},
 		},
@@ -389,7 +389,7 @@ var _ = Describe("Reconciler", func() {
 							Version: 2,
 						},
 						Spec: &privatev1.ComputeInstanceSpec{
-							InstanceType: &instanceType,
+							InstanceType: &privatev1.InstanceTypeReference{Name: instanceType},
 						},
 						Status: &privatev1.ComputeInstanceStatus{
 							State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
@@ -443,7 +443,7 @@ var _ = Describe("Reconciler", func() {
 							Version: 2,
 						},
 						Spec: &privatev1.ComputeInstanceSpec{
-							InstanceType: &instanceType,
+							InstanceType: &privatev1.InstanceTypeReference{Name: instanceType},
 						},
 						Status: &privatev1.ComputeInstanceStatus{
 							State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
@@ -519,7 +519,7 @@ var _ = Describe("Reconciler", func() {
 							Version: 1,
 						},
 						Spec: &privatev1.ComputeInstanceSpec{
-							InstanceType: &instanceType,
+							InstanceType: &privatev1.InstanceTypeReference{Name: instanceType},
 							Image:        &privatev1.ComputeInstanceImage{SourceRef: "rhel-9"},
 							BootDisk:     &privatev1.ComputeInstanceDisk{SizeGib: 50},
 						},

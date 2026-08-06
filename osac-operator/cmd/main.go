@@ -65,6 +65,8 @@ import (
 	"github.com/osac-project/osac/osac-operator/internal/controller"
 	"github.com/osac-project/osac/osac-operator/internal/migrations"
 	"github.com/osac-project/osac/osac-operator/pkg/aap"
+	"github.com/osac-project/osac/osac-operator/pkg/dispatcher"
+	"github.com/osac-project/osac/osac-operator/pkg/networkmanager"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 	// +kubebuilder:scaffold:imports
 )
@@ -102,6 +104,9 @@ const (
 	// Job history configuration
 	envMaxJobHistory = "OSAC_MAX_JOB_HISTORY"
 
+	// NetworkClass capabilities sync configuration
+	envNetworkClassSyncInterval = "OSAC_NETWORK_CLASS_SYNC_INTERVAL"
+
 	// Tenant configuration
 	envTenantNamespace = "OSAC_TENANT_NAMESPACE"
 
@@ -117,6 +122,12 @@ const (
 	envEnableBareMetalInstanceController = "OSAC_ENABLE_BAREMETAL_INSTANCE_CONTROLLER"
 
 	remoteClusterName = "remote"
+
+	// defaultNetworkClassSyncInterval is the fallback periodic resync interval for
+	// NetworkClass capabilities when OSAC_NETWORK_CLASS_SYNC_INTERVAL is unset or
+	// non-positive. Recommended range: 1m (avoid excessive gRPC load from an overly
+	// aggressive interval) to 1h (avoid capabilities going too stale).
+	defaultNetworkClassSyncInterval = 5 * time.Minute
 )
 
 // controllerFlags holds the enable flags for all controllers.
@@ -496,6 +507,14 @@ func setupNetworkingControllers(
 		return fmt.Errorf("externalip attachment provider: %w", err)
 	}
 
+	if grpcConn != nil && networkingNamespace != "" {
+		if err := setupNetworkClassCapabilitiesController(
+			mgr, localMgr, grpcConn, networkingNamespace,
+		); err != nil {
+			return err
+		}
+	}
+
 	if err := setupVirtualNetworkControllers(
 		mgr, localMgr, grpcConn, networkingNamespace,
 		networkingProvider, statusPollInterval, maxJobHistory, targetCluster,
@@ -540,6 +559,38 @@ func setupNetworkingControllers(
 		return err
 	}
 
+	return nil
+}
+
+// setupNetworkClassCapabilitiesController registers the NetworkClass capabilities
+// reconciler (ConfigMap-triggered) and its periodic resync runnable. Both require the
+// gRPC connection and a manager resolver built from ConfigMap-based discovery, so this
+// is only called when grpcConn is set and a networking namespace is configured.
+func setupNetworkClassCapabilitiesController(
+	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn *grpc.ClientConn, networkingNamespace string,
+) error {
+	disc, err := networkmanager.NewDiscovery(localMgr.GetClient(), networkingNamespace)
+	if err != nil {
+		return fmt.Errorf("network manager discovery: %w", err)
+	}
+	networkClassesClient := privatev1.NewNetworkClassesClient(grpcConn)
+	resolver := dispatcher.NewResolver(networkClassesClient, disc)
+
+	ncReconciler := controller.NewNetworkClassCapabilitiesReconciler(
+		networkClassesClient, resolver, networkingNamespace,
+	)
+	if err := ncReconciler.SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("networkclass capabilities controller: %w", err)
+	}
+
+	syncInterval := helpers.GetEnvWithDefault(
+		envNetworkClassSyncInterval, defaultNetworkClassSyncInterval, func(v time.Duration) bool {
+			return v > 0
+		},
+	)
+	if err := localMgr.Add(controller.NewNetworkClassCapabilitiesSyncRunnable(ncReconciler, syncInterval)); err != nil {
+		return fmt.Errorf("networkclass capabilities sync runnable: %w", err)
+	}
 	return nil
 }
 

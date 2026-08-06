@@ -807,4 +807,357 @@ var _ = Describe("Consumer", func() {
 			Expect(store.states["vm-new"].BillableSince).ToNot(BeNil())
 		})
 	})
+
+	Describe("CaaS Cluster events", func() {
+		makeCluster := func(id, tenant string, state privatev1.ClusterState, nodeSets map[string]*privatev1.ClusterNodeSet) *privatev1.Cluster {
+			releaseImage := "quay.io/ocp:4.17.0"
+			return &privatev1.Cluster{
+				Id: id,
+				Metadata: &privatev1.Metadata{
+					Tenant:            tenant,
+					Version:           2,
+					CreationTimestamp:  timestamppb.Now(),
+				},
+				Spec: &privatev1.ClusterSpec{
+					Template:     "ocp-ci-small",
+					ReleaseImage: &releaseImage,
+					NodeSets:     nodeSets,
+				},
+				Status: &privatev1.ClusterStatus{
+					State:               state,
+					StateTransitionTime: timestamppb.Now(),
+				},
+			}
+		}
+
+		defaultNodeSets := func() map[string]*privatev1.ClusterNodeSet {
+			return map[string]*privatev1.ClusterNodeSet{
+				"gpu-workers": {HostType: "gpu-h100", Size: 2},
+				"cpu-workers": {HostType: "cpu-only", Size: 3},
+			}
+		}
+
+		clusterBillingDims := func() map[string]any {
+			return map[string]any{
+				"cluster_template": "ocp-ci-small",
+				"release_image":    "quay.io/ocp:4.17.0",
+				"components": []any{
+					map[string]any{"component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
+					map[string]any{"component": "worker", "host_type": "cpu-only", "node_count": int32(3)},
+					map[string]any{"component": "worker", "host_type": "gpu-h100", "node_count": int32(2)},
+				},
+			}
+		}
+
+		It("publishes exactly 1 event for cluster CREATED (not N+1)", func() {
+			cl := makeCluster("cl-1", "tenant-1", privatev1.ClusterState_CLUSTER_STATE_PROGRESSING, defaultNodeSets())
+			event := &privatev1.Event{
+				Id:      "evt-create",
+				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+				Payload: &privatev1.Event_Cluster{Cluster: cl},
+			}
+
+			stream := &mockWatchStream{
+				responses: []*privatev1.EventsWatchResponse{makeResponse(event)},
+			}
+			client.results = []mockStreamResult{{stream: stream}}
+
+			pub := &mockPublisher{published: make([]cloudevents.Event, 0, 1), cancelFunc: cancel}
+			consumer := newConsumer(pub)
+
+			err := consumer.Run(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			pub.mu.Lock()
+			defer pub.mu.Unlock()
+			Expect(pub.published).To(HaveLen(1))
+			Expect(pub.published[0].Type()).To(Equal("osac.resource.created.v1"))
+			Expect(pub.published[0].Extensions()["osacresourcetype"]).To(Equal("cluster_order"))
+		})
+
+		It("publishes N+1 started.v1 events for new cluster PROGRESSING", func() {
+			cl := makeCluster("cl-start", "tenant-1", privatev1.ClusterState_CLUSTER_STATE_PROGRESSING, defaultNodeSets())
+			event := &privatev1.Event{
+				Id:      "evt-start",
+				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+				Payload: &privatev1.Event_Cluster{Cluster: cl},
+			}
+
+			stream := &mockWatchStream{
+				responses: []*privatev1.EventsWatchResponse{makeResponse(event)},
+			}
+			client.results = []mockStreamResult{{stream: stream}}
+
+			// 3 events: 1 control_plane + 2 workers
+			pub := &mockPublisher{published: make([]cloudevents.Event, 0, 3), cancelFunc: cancel}
+			consumer := newConsumer(pub)
+
+			err := consumer.Run(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			pub.mu.Lock()
+			defer pub.mu.Unlock()
+			Expect(pub.published).To(HaveLen(3))
+			for _, e := range pub.published {
+				Expect(e.Type()).To(Equal("osac.resource.started.v1"))
+			}
+		})
+
+		It("each decomposed event has distinct per-component billing_dimensions", func() {
+			cl := makeCluster("cl-decomp", "tenant-1", privatev1.ClusterState_CLUSTER_STATE_PROGRESSING, defaultNodeSets())
+			event := &privatev1.Event{
+				Id:      "evt-decomp",
+				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+				Payload: &privatev1.Event_Cluster{Cluster: cl},
+			}
+
+			stream := &mockWatchStream{
+				responses: []*privatev1.EventsWatchResponse{makeResponse(event)},
+			}
+			client.results = []mockStreamResult{{stream: stream}}
+
+			pub := &mockPublisher{published: make([]cloudevents.Event, 0, 3), cancelFunc: cancel}
+			consumer := newConsumer(pub)
+
+			err := consumer.Run(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			pub.mu.Lock()
+			defer pub.mu.Unlock()
+			Expect(pub.published).To(HaveLen(3))
+
+			components := map[string]bool{}
+			for _, e := range pub.published {
+				var data map[string]any
+				Expect(json.Unmarshal(e.Data(), &data)).To(Succeed())
+				bd := data["billing_dimensions"].(map[string]any)
+				comp := bd["component"].(string) + ":" + bd["host_type"].(string)
+				components[comp] = true
+				Expect(bd).To(HaveKey("cluster_template"))
+				Expect(bd).To(HaveKey("node_count"))
+				Expect(bd).NotTo(HaveKey("components"))
+			}
+			Expect(components).To(HaveLen(3))
+			Expect(components).To(HaveKey("control_plane:_control_plane"))
+			Expect(components).To(HaveKey("worker:cpu-only"))
+			Expect(components).To(HaveKey("worker:gpu-h100"))
+		})
+
+		It("each decomposed event has deterministic component-scoped ID", func() {
+			cl := makeCluster("cl-ids", "tenant-1", privatev1.ClusterState_CLUSTER_STATE_PROGRESSING, defaultNodeSets())
+			event := &privatev1.Event{
+				Id:      "evt-ids",
+				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+				Payload: &privatev1.Event_Cluster{Cluster: cl},
+			}
+
+			stream := &mockWatchStream{
+				responses: []*privatev1.EventsWatchResponse{makeResponse(event)},
+			}
+			client.results = []mockStreamResult{{stream: stream}}
+
+			pub := &mockPublisher{published: make([]cloudevents.Event, 0, 3), cancelFunc: cancel}
+			consumer := newConsumer(pub)
+
+			err := consumer.Run(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			pub.mu.Lock()
+			defer pub.mu.Unlock()
+			ids := map[string]bool{}
+			for _, e := range pub.published {
+				Expect(e.ID()).To(ContainSubstring("evt-ids/"))
+				ids[e.ID()] = true
+			}
+			Expect(ids).To(HaveLen(3))
+		})
+
+		It("skips publish on PROGRESSING→READY (both billable) but updates projection", func() {
+			store := newMockStore()
+			now := time.Now().UTC().Truncate(time.Microsecond)
+			store.states["cl-ready"] = projection.ResourceState{
+				ResourceID:         "cl-ready",
+				ResourceType:       "cluster_order",
+				TenantID:           "tenant-1",
+				CurrentState:       "PROGRESSING",
+				IsBillable:         true,
+				BillableSince:      &now,
+				FulfillmentVersion: 1,
+				BillingDimensions:  clusterBillingDims(),
+				TransitionTime:     now,
+			}
+
+			cl := makeCluster("cl-ready", "tenant-1", privatev1.ClusterState_CLUSTER_STATE_READY, defaultNodeSets())
+			clEvent := &privatev1.Event{
+				Id:      "evt-ready",
+				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+				Payload: &privatev1.Event_Cluster{Cluster: cl},
+			}
+
+			stream := &mockWatchStream{
+				responses: []*privatev1.EventsWatchResponse{makeResponse(clEvent)},
+			}
+			client.results = []mockStreamResult{{stream: stream}}
+
+			pub := &mockPublisher{}
+			consumer := newConsumerWithStore(pub, store)
+
+			done := make(chan error, 1)
+			go func() { done <- consumer.Run(ctx) }()
+
+			time.Sleep(50 * time.Millisecond)
+			cancel()
+			Eventually(done, time.Second).Should(Receive(BeNil()))
+
+			pub.mu.Lock()
+			defer pub.mu.Unlock()
+			Expect(pub.published).To(BeEmpty())
+
+			store.mu.Lock()
+			defer store.mu.Unlock()
+			Expect(store.states["cl-ready"].CurrentState).To(Equal("READY"))
+			Expect(store.states["cl-ready"].IsBillable).To(BeTrue())
+			Expect(store.states["cl-ready"].BillableSince).To(Equal(&now))
+		})
+
+		It("publishes N+1 suspended.v1 on READY→FAILED", func() {
+			store := newMockStore()
+			now := time.Now().UTC().Truncate(time.Microsecond)
+			store.states["cl-fail"] = projection.ResourceState{
+				ResourceID:         "cl-fail",
+				ResourceType:       "cluster_order",
+				TenantID:           "tenant-1",
+				CurrentState:       "READY",
+				IsBillable:         true,
+				BillableSince:      &now,
+				FulfillmentVersion: 1,
+				BillingDimensions:  clusterBillingDims(),
+				TransitionTime:     now,
+			}
+
+			cl := makeCluster("cl-fail", "tenant-1", privatev1.ClusterState_CLUSTER_STATE_FAILED, defaultNodeSets())
+			event := &privatev1.Event{
+				Id:      "evt-fail",
+				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+				Payload: &privatev1.Event_Cluster{Cluster: cl},
+			}
+
+			stream := &mockWatchStream{
+				responses: []*privatev1.EventsWatchResponse{makeResponse(event)},
+			}
+			client.results = []mockStreamResult{{stream: stream}}
+
+			pub := &mockPublisher{published: make([]cloudevents.Event, 0, 3), cancelFunc: cancel}
+			consumer := newConsumerWithStore(pub, store)
+
+			err := consumer.Run(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			pub.mu.Lock()
+			defer pub.mu.Unlock()
+			Expect(pub.published).To(HaveLen(3))
+			for _, e := range pub.published {
+				Expect(e.Type()).To(Equal("osac.resource.suspended.v1"))
+			}
+
+			store.mu.Lock()
+			defer store.mu.Unlock()
+			Expect(store.states["cl-fail"].IsBillable).To(BeFalse())
+			Expect(store.states["cl-fail"].BillableSince).To(BeNil())
+		})
+
+		It("publishes updated.v1 only for changed component on scaling", func() {
+			store := newMockStore()
+			now := time.Now().Add(-1 * time.Hour).UTC().Truncate(time.Microsecond)
+			store.states["cl-scale"] = projection.ResourceState{
+				ResourceID:         "cl-scale",
+				ResourceType:       "cluster_order",
+				TenantID:           "tenant-1",
+				CurrentState:       "READY",
+				IsBillable:         true,
+				BillableSince:      &now,
+				FulfillmentVersion: 1,
+				BillingDimensions:  clusterBillingDims(),
+				TransitionTime:     now,
+			}
+
+			// Scale gpu-h100 from 2 to 4, cpu-only stays at 3
+			scaledNodeSets := map[string]*privatev1.ClusterNodeSet{
+				"gpu-workers": {HostType: "gpu-h100", Size: 4},
+				"cpu-workers": {HostType: "cpu-only", Size: 3},
+			}
+			cl := makeCluster("cl-scale", "tenant-1", privatev1.ClusterState_CLUSTER_STATE_READY, scaledNodeSets)
+			event := &privatev1.Event{
+				Id:      "evt-scale",
+				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+				Payload: &privatev1.Event_Cluster{Cluster: cl},
+			}
+
+			stream := &mockWatchStream{
+				responses: []*privatev1.EventsWatchResponse{makeResponse(event)},
+			}
+			client.results = []mockStreamResult{{stream: stream}}
+
+			pub := &mockPublisher{published: make([]cloudevents.Event, 0, 1), cancelFunc: cancel}
+			consumer := newConsumerWithStore(pub, store)
+
+			err := consumer.Run(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			pub.mu.Lock()
+			defer pub.mu.Unlock()
+			Expect(pub.published).To(HaveLen(1))
+			Expect(pub.published[0].Type()).To(Equal("osac.resource.updated.v1"))
+
+			var data map[string]any
+			Expect(json.Unmarshal(pub.published[0].Data(), &data)).To(Succeed())
+			bd := data["billing_dimensions"].(map[string]any)
+			Expect(bd["host_type"]).To(Equal("gpu-h100"))
+			Expect(bd["node_count"]).To(BeNumerically("==", 4))
+			Expect(data["duration_seconds"]).ToNot(BeNil())
+		})
+
+		It("publishes exactly 1 event for cluster DELETED (not N+1)", func() {
+			store := newMockStore()
+			now := time.Now().UTC().Truncate(time.Microsecond)
+			store.states["cl-del"] = projection.ResourceState{
+				ResourceID:         "cl-del",
+				ResourceType:       "cluster_order",
+				TenantID:           "tenant-1",
+				CurrentState:       "DELETING",
+				IsBillable:         false,
+				FulfillmentVersion: 1,
+				BillingDimensions:  clusterBillingDims(),
+				TransitionTime:     now,
+			}
+
+			cl := makeCluster("cl-del", "tenant-1", privatev1.ClusterState_CLUSTER_STATE_DELETING, defaultNodeSets())
+			cl.Metadata.DeletionTimestamp = timestamppb.Now()
+			event := &privatev1.Event{
+				Id:      "evt-del",
+				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_DELETED,
+				Payload: &privatev1.Event_Cluster{Cluster: cl},
+			}
+
+			stream := &mockWatchStream{
+				responses: []*privatev1.EventsWatchResponse{makeResponse(event)},
+			}
+			client.results = []mockStreamResult{{stream: stream}}
+
+			pub := &mockPublisher{published: make([]cloudevents.Event, 0, 1), cancelFunc: cancel}
+			consumer := newConsumerWithStore(pub, store)
+
+			err := consumer.Run(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			pub.mu.Lock()
+			defer pub.mu.Unlock()
+			Expect(pub.published).To(HaveLen(1))
+			Expect(pub.published[0].Type()).To(Equal("osac.resource.deleted.v1"))
+
+			store.mu.Lock()
+			defer store.mu.Unlock()
+			Expect(store.states).ToNot(HaveKey("cl-del"))
+		})
+	})
 })

@@ -255,4 +255,127 @@ var _ = Describe("Generator", func() {
 			Expect(pub.published[0].Extensions()["osacresourceid"]).To(Equal("vm-1"))
 		})
 	})
+
+	Describe("CaaS cluster N+1 heartbeats", func() {
+		makeClusterBillableState := func(id string) projection.ResourceState {
+			now := time.Now().UTC().Truncate(time.Microsecond)
+			return projection.ResourceState{
+				ResourceID:   id,
+				ResourceType: "cluster_order",
+				TenantID:     "tenant-1",
+				ProjectID:    "project-1",
+				CurrentState: "READY",
+				IsBillable:   true,
+				BillableSince: &now,
+				BillingDimensions: map[string]any{
+					"cluster_template": "ocp-ci-small",
+					"release_image":    "quay.io/ocp:4.17.0",
+					"components": []any{
+						map[string]any{"component": "control_plane", "host_type": "_control_plane", "node_count": float64(1)},
+						map[string]any{"component": "worker", "host_type": "gpu-h100", "node_count": float64(2)},
+					},
+				},
+			}
+		}
+
+		It("publishes N+1 heartbeats per cluster (1 CP + 1 worker = 2)", func() {
+			store := &mockStore{
+				billable: []projection.ResourceState{makeClusterBillableState("cl-1")},
+			}
+			pub := &mockPublisher{}
+			gen := heartbeat.NewGenerator(store, pub, logr.Discard(), 100*time.Millisecond)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+			defer cancel()
+
+			err := gen.Run(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			pub.mu.Lock()
+			defer pub.mu.Unlock()
+			Expect(len(pub.published)).To(BeNumerically(">=", 2))
+
+			components := map[string]bool{}
+			for _, e := range pub.published {
+				Expect(e.Type()).To(Equal("osac.resource.heartbeat.v1"))
+				var data map[string]any
+				Expect(json.Unmarshal(e.Data(), &data)).To(Succeed())
+				bd := data["billing_dimensions"].(map[string]any)
+				Expect(bd).NotTo(HaveKey("components"))
+				Expect(bd).To(HaveKey("component"))
+				Expect(bd).To(HaveKey("host_type"))
+				Expect(bd).To(HaveKey("node_count"))
+				comp := bd["component"].(string) + ":" + bd["host_type"].(string)
+				components[comp] = true
+			}
+			Expect(components).To(HaveKey("control_plane:_control_plane"))
+			Expect(components).To(HaveKey("worker:gpu-h100"))
+		})
+
+		It("VMaaS and CaaS in same tick produce correct event counts", func() {
+			store := &mockStore{
+				billable: []projection.ResourceState{
+					makeBillableState("vm-1"),
+					makeClusterBillableState("cl-1"),
+				},
+			}
+			pub := &mockPublisher{}
+			gen := heartbeat.NewGenerator(store, pub, logr.Discard(), 100*time.Millisecond)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+			defer cancel()
+
+			err := gen.Run(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			pub.mu.Lock()
+			defer pub.mu.Unlock()
+			// Per tick: 1 VMaaS + 2 CaaS (CP + 1 worker) = 3
+			Expect(len(pub.published)).To(BeNumerically(">=", 3))
+
+			store.mu.Lock()
+			defer store.mu.Unlock()
+			Expect(store.updatedIDs).To(ContainElement("vm-1"))
+			Expect(store.updatedIDs).To(ContainElement("cl-1"))
+		})
+
+		It("checkpoints cluster ID after all N+1 component heartbeats published", func() {
+			store := &mockStore{
+				billable: []projection.ResourceState{makeClusterBillableState("cl-cp")},
+			}
+			pub := &mockPublisher{}
+			gen := heartbeat.NewGenerator(store, pub, logr.Discard(), 100*time.Millisecond)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+			defer cancel()
+
+			err := gen.Run(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			store.mu.Lock()
+			defer store.mu.Unlock()
+			Expect(store.updatedIDs).To(ContainElement("cl-cp"))
+		})
+
+		It("fails tick on partial N+1 heartbeat publish failure", func() {
+			store := &mockStore{
+				billable: []projection.ResourceState{makeClusterBillableState("cl-fail")},
+			}
+			pub := &mockPublisher{
+				err:       fmt.Errorf("kafka unavailable"),
+				failAfter: 1,
+			}
+			gen := heartbeat.NewGenerator(store, pub, logr.Discard(), 100*time.Millisecond)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+			defer cancel()
+
+			err := gen.Run(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			store.mu.Lock()
+			defer store.mu.Unlock()
+			Expect(store.updatedIDs).To(BeEmpty())
+		})
+	})
 })

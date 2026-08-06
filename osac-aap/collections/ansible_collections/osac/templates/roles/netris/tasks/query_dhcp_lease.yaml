@@ -1,7 +1,7 @@
 ---
 # Query DHCP leases for a subnet and match a server port MAC address
-# to find the DHCP-assigned IP. Called by the bare-metal-fulfillment-operator
-# during reconcileIPDiscovery after provisioning completes.
+# to find the DHCP-assigned IP. Generic for any resource type that
+# receives IPs via fabric DHCP (bare-metal instances, CaaS agents).
 #
 # Input: dhcp_lease_query dict with subnet_ref (Subnet UUID) and port_mac.
 # Output: discovered_ip_address fact set to the matched IP.

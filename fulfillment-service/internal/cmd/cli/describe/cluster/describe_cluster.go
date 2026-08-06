@@ -18,6 +18,7 @@ import (
 	"io"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
@@ -81,12 +82,36 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	renderCluster(c.console, matched)
+	// Resolve the cluster version, if the cluster references one. Failure to resolve it is not fatal -- version
+	// details are supplementary to the cluster description.
+	var version *publicv1.ClusterVersion
+	if matched.GetSpec().HasVersion() {
+		versionName := matched.GetSpec().GetVersion().GetName()
+		versionsClient := publicv1.NewClusterVersionsClient(conn)
+		version, err = lookup.Find(versionName, "cluster version",
+			func(filter string, limit int32) ([]*publicv1.ClusterVersion, error) {
+				resp, err := versionsClient.List(ctx, publicv1.ClusterVersionsListRequest_builder{
+					Filter: proto.String(filter),
+					Limit:  proto.Int32(limit),
+				}.Build())
+				if err != nil {
+					return nil, fmt.Errorf("failed to fetch cluster version: %w", err)
+				}
+				return resp.GetItems(), nil
+			},
+		)
+		if err != nil {
+			c.console.Errorf(ctx, "Warning: failed to resolve cluster version %q: %v\n", versionName, err)
+			version = nil
+		}
+	}
+
+	renderCluster(c.console, matched, version)
 
 	return nil
 }
 
-func renderCluster(w io.Writer, cluster *publicv1.Cluster) {
+func renderCluster(w io.Writer, cluster *publicv1.Cluster, version *publicv1.ClusterVersion) {
 	writer := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	catalogItem := "-"
 	if cluster.Spec != nil {
@@ -106,7 +131,39 @@ func renderCluster(w io.Writer, cluster *publicv1.Cluster) {
 	fmt.Fprintf(writer, "ID:\t%s\n", cluster.Id)
 	fmt.Fprintf(writer, "Catalog Item:\t%s\n", catalogItem)
 	fmt.Fprintf(writer, "State:\t%s\n", state)
+
 	writer.Flush()
+
+	// Version section — rendered as indented fields under a "Version:" header.
+	if cluster.GetSpec().HasVersion() {
+		fmt.Fprintln(w, "Version:")
+		versionWriter := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+
+		fmt.Fprintf(versionWriter, "\tName:\t%s\n", cluster.GetSpec().GetVersion().GetName())
+
+		versionStr := "-"
+		versionState := "-"
+		if version.GetSpec() != nil {
+			versionStr = version.GetSpec().GetVersion()
+			versionState = strings.TrimPrefix(
+				version.GetSpec().GetState().String(),
+				"CLUSTER_VERSION_STATE_",
+			)
+		}
+		fmt.Fprintf(versionWriter, "\tVersion:\t%s\n", versionStr)
+		fmt.Fprintf(versionWriter, "\tState:\t%s\n", versionState)
+
+		if dep := version.GetSpec().GetDeprecation(); dep != nil {
+			if ts := dep.GetDeprecationTimestamp(); ts != nil {
+				fmt.Fprintf(versionWriter, "\tDeprecated At:\t%s\n", ts.AsTime().Format(time.RFC3339))
+			}
+			if ts := dep.GetObsolescenceTimestamp(); ts != nil {
+				fmt.Fprintf(versionWriter, "\tObsolete At:\t%s\n", ts.AsTime().Format(time.RFC3339))
+			}
+		}
+
+		versionWriter.Flush()
+	}
 }
 
 const shortHelp = `Describe a cluster.`

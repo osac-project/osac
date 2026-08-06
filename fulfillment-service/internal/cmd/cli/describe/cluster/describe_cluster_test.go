@@ -15,16 +15,18 @@ package cluster
 
 import (
 	"bytes"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 )
 
-func formatCluster(cluster *publicv1.Cluster) string {
+func formatCluster(cluster *publicv1.Cluster, version *publicv1.ClusterVersion) string {
 	var buf bytes.Buffer
-	renderCluster(&buf, cluster)
+	renderCluster(&buf, cluster, version)
 	return buf.String()
 }
 
@@ -39,7 +41,7 @@ var _ = Describe("Rendering tests", func() {
 				State: publicv1.ClusterState_CLUSTER_STATE_READY,
 			},
 		}.Build()
-		output := formatCluster(cluster)
+		output := formatCluster(cluster, nil)
 		Expect(output).To(ContainSubstring("cluster-001"))
 		Expect(output).To(MatchRegexp(`Catalog Item:\s+-`))
 		Expect(output).NotTo(ContainSubstring("Template:"))
@@ -50,7 +52,7 @@ var _ = Describe("Rendering tests", func() {
 		cluster := publicv1.Cluster_builder{
 			Id: "cluster-002",
 		}.Build()
-		output := formatCluster(cluster)
+		output := formatCluster(cluster, nil)
 		Expect(output).To(MatchRegexp(`Catalog Item:\s+-`))
 	})
 
@@ -58,7 +60,7 @@ var _ = Describe("Rendering tests", func() {
 		cluster := publicv1.Cluster_builder{
 			Id: "cluster-003",
 		}.Build()
-		output := formatCluster(cluster)
+		output := formatCluster(cluster, nil)
 		Expect(output).To(MatchRegexp(`State:\s+-`))
 	})
 
@@ -69,7 +71,7 @@ var _ = Describe("Rendering tests", func() {
 				State: publicv1.ClusterState_CLUSTER_STATE_READY,
 			},
 		}.Build()
-		output := formatCluster(cluster)
+		output := formatCluster(cluster, nil)
 		Expect(output).To(ContainSubstring("READY"))
 		Expect(output).NotTo(ContainSubstring("CLUSTER_STATE_"))
 	})
@@ -81,7 +83,7 @@ var _ = Describe("Rendering tests", func() {
 				State: publicv1.ClusterState_CLUSTER_STATE_PROGRESSING,
 			},
 		}.Build()
-		output := formatCluster(cluster)
+		output := formatCluster(cluster, nil)
 		Expect(output).To(ContainSubstring("PROGRESSING"))
 		Expect(output).NotTo(ContainSubstring("CLUSTER_STATE_"))
 	})
@@ -93,7 +95,7 @@ var _ = Describe("Rendering tests", func() {
 				Template: publicv1.ClusterTemplateReference_builder{Id: "tpl-ha-001"}.Build(),
 			},
 		}.Build()
-		output := formatCluster(cluster)
+		output := formatCluster(cluster, nil)
 		Expect(output).NotTo(ContainSubstring("Template:"))
 		Expect(output).To(ContainSubstring("Catalog Item:"))
 	})
@@ -102,7 +104,7 @@ var _ = Describe("Rendering tests", func() {
 		cluster := publicv1.Cluster_builder{
 			Id: "cluster-007",
 		}.Build()
-		output := formatCluster(cluster)
+		output := formatCluster(cluster, nil)
 		Expect(output).To(MatchRegexp(`Catalog Item:\s+-`))
 	})
 
@@ -113,7 +115,108 @@ var _ = Describe("Rendering tests", func() {
 				CatalogItem: publicv1.ClusterCatalogItemReference_builder{Id: "my-catalog-item-id"}.Build(),
 			}.Build(),
 		}.Build()
-		output := formatCluster(cluster)
+		output := formatCluster(cluster, nil)
 		Expect(output).To(MatchRegexp(`Catalog Item:\s+my-catalog-item-id`))
+	})
+})
+
+var _ = Describe("Version rendering tests", func() {
+	It("should show version details when version is present and ACTIVE", func() {
+		cluster := publicv1.Cluster_builder{
+			Id: "cluster-v1",
+			Spec: publicv1.ClusterSpec_builder{
+				Version: &publicv1.ClusterVersionReference{Name: "4-17-0"},
+			}.Build(),
+			Status: &publicv1.ClusterStatus{
+				State: publicv1.ClusterState_CLUSTER_STATE_READY,
+			},
+		}.Build()
+		version := publicv1.ClusterVersion_builder{
+			Spec: publicv1.ClusterVersionSpec_builder{
+				Version: "4.17.0",
+				State:   publicv1.ClusterVersionState_CLUSTER_VERSION_STATE_ACTIVE,
+			}.Build(),
+		}.Build()
+		output := formatCluster(cluster, version)
+		Expect(output).To(ContainSubstring("Version:\n"))
+		Expect(output).To(MatchRegexp(`Name:\s+4-17-0`))
+		Expect(output).To(MatchRegexp(`Version:\s+4\.17\.0`))
+		Expect(output).To(MatchRegexp(`State:\s+ACTIVE`))
+		Expect(output).NotTo(ContainSubstring("Deprecated At:"))
+		Expect(output).NotTo(ContainSubstring("Obsolete At:"))
+	})
+
+	It("should show deprecation timestamps when version is DEPRECATED", func() {
+		depTime := time.Date(2026, 7, 15, 10, 30, 0, 0, time.UTC)
+		obsTime := time.Date(2026, 10, 15, 10, 30, 0, 0, time.UTC)
+		cluster := publicv1.Cluster_builder{
+			Id: "cluster-v2",
+			Spec: publicv1.ClusterSpec_builder{
+				Version: &publicv1.ClusterVersionReference{Name: "4-16-0"},
+			}.Build(),
+			Status: &publicv1.ClusterStatus{
+				State: publicv1.ClusterState_CLUSTER_STATE_READY,
+			},
+		}.Build()
+		version := publicv1.ClusterVersion_builder{
+			Spec: publicv1.ClusterVersionSpec_builder{
+				Version: "4.16.0",
+				State:   publicv1.ClusterVersionState_CLUSTER_VERSION_STATE_DEPRECATED,
+				Deprecation: publicv1.ClusterVersionDeprecation_builder{
+					DeprecationTimestamp:  timestamppb.New(depTime),
+					ObsolescenceTimestamp: timestamppb.New(obsTime),
+				}.Build(),
+			}.Build(),
+		}.Build()
+		output := formatCluster(cluster, version)
+		Expect(output).To(ContainSubstring("Version:\n"))
+		Expect(output).To(MatchRegexp(`Name:\s+4-16-0`))
+		Expect(output).To(MatchRegexp(`Version:\s+4\.16\.0`))
+		Expect(output).To(MatchRegexp(`State:\s+DEPRECATED`))
+		Expect(output).To(MatchRegexp(`Deprecated At:\s+2026-07-15T10:30:00Z`))
+		Expect(output).To(MatchRegexp(`Obsolete At:\s+2026-10-15T10:30:00Z`))
+	})
+
+	It("should omit version section when version is not set", func() {
+		cluster := publicv1.Cluster_builder{
+			Id: "cluster-v3",
+			Status: &publicv1.ClusterStatus{
+				State: publicv1.ClusterState_CLUSTER_STATE_READY,
+			},
+		}.Build()
+		output := formatCluster(cluster, nil)
+		Expect(output).NotTo(ContainSubstring("Version:"))
+	})
+
+	It("should show version name but '-' for resolved fields when version lookup failed", func() {
+		cluster := publicv1.Cluster_builder{
+			Id: "cluster-v4",
+			Spec: publicv1.ClusterSpec_builder{
+				Version: &publicv1.ClusterVersionReference{Name: "4-17-0"},
+			}.Build(),
+		}.Build()
+		output := formatCluster(cluster, nil)
+		Expect(output).To(ContainSubstring("Version:\n"))
+		Expect(output).To(MatchRegexp(`Name:\s+4-17-0`))
+		Expect(output).To(MatchRegexp(`Version:\s+-`))
+		Expect(output).To(MatchRegexp(`State:\s+-`))
+	})
+
+	It("should strip CLUSTER_VERSION_STATE_ prefix from OBSOLETE state", func() {
+		cluster := publicv1.Cluster_builder{
+			Id: "cluster-v5",
+			Spec: publicv1.ClusterSpec_builder{
+				Version: &publicv1.ClusterVersionReference{Name: "4-15-0"},
+			}.Build(),
+		}.Build()
+		version := publicv1.ClusterVersion_builder{
+			Spec: publicv1.ClusterVersionSpec_builder{
+				Version: "4.15.0",
+				State:   publicv1.ClusterVersionState_CLUSTER_VERSION_STATE_OBSOLETE,
+			}.Build(),
+		}.Build()
+		output := formatCluster(cluster, version)
+		Expect(output).To(ContainSubstring("OBSOLETE"))
+		Expect(output).NotTo(ContainSubstring("CLUSTER_VERSION_STATE_"))
 	})
 })

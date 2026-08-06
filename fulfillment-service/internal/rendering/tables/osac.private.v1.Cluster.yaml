@@ -27,6 +27,12 @@ columns:
   type: osac.private.v1.ClusterTemplate
   lookup: true
 
+- header: VERSION
+  value: "has(this.spec.version)? this.spec.version.name: ''"
+  type: osac.private.v1.ClusterVersion
+  lookup: true
+  lookup_field: spec.version
+
 - header: STATE
   value: this.status.state
   type: osac.public.v1.ClusterState

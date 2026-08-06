@@ -163,7 +163,10 @@ func (r *Reconciler) reconcileFulfillmentResources(ctx context.Context, fulfillm
 			}
 			corrections++
 
-			isBillable := isBillableForType(fs.resourceType, fs.state)
+			isBillable, billErr := isBillableForType(fs.resourceType, fs.state)
+			if billErr != nil {
+				return corrections, fmt.Errorf("checking billability for %s: %w", id, billErr)
+			}
 			newState := projection.ResourceState{
 				ResourceID:         id,
 				ResourceType:       fs.resourceType,
@@ -213,7 +216,10 @@ func (r *Reconciler) reconcileFulfillmentResources(ctx context.Context, fulfillm
 			}
 			corrections++
 
-			isBillable := isBillableForType(fs.resourceType, fs.state)
+			isBillable, billErr := isBillableForType(fs.resourceType, fs.state)
+			if billErr != nil {
+				return corrections, fmt.Errorf("checking billability for %s: %w", id, billErr)
+			}
 			ps.PreviousState = ps.CurrentState
 			ps.CurrentState = fs.state
 			wasBillable := ps.IsBillable
@@ -355,14 +361,14 @@ type fulfillmentResource struct {
 	billingDimensions map[string]any
 }
 
-func isBillableForType(resourceType, state string) bool {
+func isBillableForType(resourceType, state string) (bool, error) {
 	switch resourceType {
 	case "compute_instance":
-		return events.IsBillableState(state)
+		return events.IsBillableState(state), nil
 	case "cluster_order":
-		return events.IsClusterBillableState(state)
+		return events.IsClusterBillableState(state), nil
 	default:
-		return false
+		return false, fmt.Errorf("unknown resource type: %s", resourceType)
 	}
 }
 

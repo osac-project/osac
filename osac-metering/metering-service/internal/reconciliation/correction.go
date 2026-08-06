@@ -50,18 +50,18 @@ type correctionData struct {
 	SchemaVersion           string            `json:"schema_version"`
 }
 
-func correctionDescription(reason CorrectionReason) string {
+func correctionDescription(reason CorrectionReason) (string, error) {
 	switch reason {
 	case MissedCreation:
-		return "Resource found in fulfillment-service but missing from metering projection"
+		return "Resource found in fulfillment-service but missing from metering projection", nil
 	case StateDrift:
-		return "Resource state in fulfillment-service differs from metering projection"
+		return "Resource state in fulfillment-service differs from metering projection", nil
 	case BillingDimensionsDrift:
-		return "Billing dimensions in fulfillment-service differ from metering projection"
+		return "Billing dimensions in fulfillment-service differ from metering projection", nil
 	case MissedDeletion:
-		return "Resource found in metering projection but missing from fulfillment-service"
+		return "Resource found in metering projection but missing from fulfillment-service", nil
 	default:
-		return fmt.Sprintf("unknown correction reason: %s", reason)
+		return "", fmt.Errorf("unknown correction reason: %s", reason)
 	}
 }
 
@@ -114,13 +114,18 @@ func buildCorrectionEvent(
 	ce.SetTime(now)
 	events.SetOSACExtensions(&ce, resourceID, resourceType, tenantID, projectID)
 
+	description, err := correctionDescription(reason)
+	if err != nil {
+		return ce, err
+	}
+
 	data := correctionData{
 		ResourceID:              resourceID,
 		ResourceType:            resourceType,
 		TenantID:                tenantID,
 		ProjectID:               events.NilIfEmpty(projectID),
 		Reason:                  reason,
-		Description:             correctionDescription(reason),
+		Description:             description,
 		CorrectedState:          events.NilIfEmpty(sourceState),
 		PreviousStateProjection: events.NilIfEmpty(projectionState),
 		ActualStateFromSource:   events.NilIfEmpty(sourceState),

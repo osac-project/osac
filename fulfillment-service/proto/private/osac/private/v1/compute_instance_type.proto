@@ -15,6 +15,7 @@ syntax = "proto3";
 
 package osac.private.v1;
 
+import "google/api/field_behavior.proto";
 import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
 import "osac/private/v1/condition_status_type.proto";
@@ -102,7 +103,13 @@ message ComputeInstanceSpec {
   // for this instance. The API validates that the instance type exists and is not OBSOLETE;
   // resolution of cores/memory_gib happens in the reconciler.
   InstanceTypeReference instance_type = 17;
+
+  // When true, the system auto-selects an ExternalIPPool and creates an ExternalIP
+  // with an ExternalIPAttachment for this instance atomically during creation.
+  // Immutable after creation.
+  bool auto_external_ip_attachment = 18 [(google.api.field_behavior) = IMMUTABLE];
 }
+
 
 message ComputeInstanceStatus {
   // Public fields.

@@ -525,4 +525,82 @@ var _ = Describe("ComputeInstance CEL Validation", func() {
 			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
 		})
 	})
+
+	Describe("StorageTier validation", func() {
+		It("should accept a ComputeInstance without storageTier", func() {
+			instance := createValidInstance("test-tier-absent")
+			instance.Spec.BootDisk.StorageTier = ""
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		})
+
+		DescribeTable("should accept valid storageTier values",
+			func(name, tier string) {
+				instance := createValidInstance(name)
+				instance.Spec.BootDisk.StorageTier = tier
+				Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+			},
+			Entry("simple name", "test-tier-simple", "standard"),
+			Entry("with hyphens", "test-tier-hyphens", "high-perf"),
+			Entry("with dots", "test-tier-dots", "high.perf.ssd"),
+			Entry("with underscores", "test-tier-underscores", "tier_1"),
+			Entry("mixed separators", "test-tier-mixed", "fast.ssd-v2-r1"),
+			Entry("single char", "test-tier-single", "a"),
+		)
+
+		DescribeTable("should reject invalid storageTier values",
+			func(name, tier, expectedErr string) {
+				instance := createValidInstance(name)
+				instance.Spec.BootDisk.StorageTier = tier
+				err := k8sClient.Create(ctx, instance)
+				Expect(err).To(HaveOccurred())
+				Expect(apierrors.IsInvalid(err)).To(BeTrue())
+				Expect(err.Error()).To(ContainSubstring(expectedErr))
+			},
+			Entry("uppercase letters", "test-tier-upper", "Standard", "storageTier"),
+			Entry("leading hyphen", "test-tier-lead-hyphen", "-standard", "storageTier"),
+			Entry("trailing hyphen", "test-tier-trail-hyphen", "standard-", "storageTier"),
+			Entry("spaces", "test-tier-space", "standard tier", "storageTier"),
+		)
+
+		It("should reject storageTier exceeding 63 characters", func() {
+			instance := createValidInstance("test-tier-too-long")
+			instance.Spec.BootDisk.StorageTier = "a234567890123456789012345678901234567890123456789012345678901234"
+			err := k8sClient.Create(ctx, instance)
+			Expect(err).To(HaveOccurred())
+			Expect(apierrors.IsInvalid(err)).To(BeTrue())
+			Expect(err.Error()).To(ContainSubstring("storageTier"))
+		})
+	})
+
+	Describe("StorageTier immutability", func() {
+		It("should reject changing bootDisk storageTier", func() {
+			instance := createValidInstance("test-tier-boot-immutable")
+			instance.Spec.BootDisk.StorageTier = "standard"
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(instance), instance)).To(Succeed())
+
+			instance.Spec.BootDisk.StorageTier = "fast"
+			err := k8sClient.Update(ctx, instance)
+			Expect(err).To(HaveOccurred())
+			Expect(apierrors.IsInvalid(err)).To(BeTrue())
+			Expect(err.Error()).To(ContainSubstring("bootDisk is immutable"))
+		})
+
+		It("should reject changing additionalDisks storageTier", func() {
+			instance := createValidInstance("test-tier-addl-immutable")
+			instance.Spec.AdditionalDisks = []osacv1alpha1.DiskSpec{
+				{SizeGiB: 50, StorageTier: "standard"},
+			}
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(instance), instance)).To(Succeed())
+
+			instance.Spec.AdditionalDisks[0].StorageTier = "fast"
+			err := k8sClient.Update(ctx, instance)
+			Expect(err).To(HaveOccurred())
+			Expect(apierrors.IsInvalid(err)).To(BeTrue())
+			Expect(err.Error()).To(ContainSubstring("additionalDisks is immutable"))
+		})
+	})
 })

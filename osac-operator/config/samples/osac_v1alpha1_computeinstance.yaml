@@ -10,6 +10,7 @@ metadata:
 spec:
   bootDisk:
     sizeGiB: 20
+    storageTier: standard
   cores: 2
   image:
     sourceRef: quay.io/containerdisks/fedora:latest

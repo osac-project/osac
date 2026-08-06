@@ -259,8 +259,14 @@ func (c *Consumer) handleTransientState(
 	return nil
 }
 
+// DimComponents is the billing dimensions key for the nested components array.
+const DimComponents = "components"
+
 func (c *Consumer) publishLifecycleEvents(ctx context.Context, baseCE *cloudevents.Event, mapper events.ResourceMapper, eventID string) error {
 	if baseCE.Type() == events.EventCreated || baseCE.Type() == events.EventDeleted {
+		if mapper.ResourceType() == events.ResourceTypeClusterOrder {
+			c.stripComponentsFromAuditEvent(baseCE)
+		}
 		return c.publishWithRetry(ctx, baseCE)
 	}
 
@@ -280,30 +286,54 @@ func (c *Consumer) publishLifecycleEvents(ctx context.Context, baseCE *cloudeven
 
 func (c *Consumer) handleScalingEvent(ctx context.Context, event *privatev1.Event, mapper events.ResourceMapper, existing *projection.ResourceState, transitionTime time.Time, version int32, currentState string, isBillable bool, dims map[string]any) error {
 	resourceID := mapper.ResourceID()
-	changed := events.ChangedComponents(existing.BillingDimensions, dims)
 	projState := c.buildProjectionState(mapper, existing, transitionTime, version, currentState, isBillable, dims)
-
-	if len(changed) == 0 {
-		c.logger.V(1).Info("non-component dimension change, projection updated",
-			"resource_id", resourceID)
-		return c.publishAndUpsert(ctx, func() error { return nil }, projState, resourceID)
-	}
-
 	stateCtx := c.buildStateContext(existing, isBillable, transitionTime, dims)
+
 	return c.publishAndUpsert(ctx, func() error {
-		for _, comp := range changed {
-			ce, ceErr := c.buildScalingEvent(event.GetId(), mapper, comp, stateCtx, transitionTime)
-			if ceErr != nil {
-				return ceErr
-			}
-			if err := c.publishWithRetry(ctx, &ce); err != nil {
+		scalingEvents, err := events.BuildDimensionChangeEvents(
+			mapper.ResourceType(), existing.BillingDimensions, dims, event.GetId(),
+			func(d map[string]any, eventID string) (cloudevents.Event, error) {
+				return c.buildScalingEvent(eventID, mapper, d, stateCtx, transitionTime)
+			})
+		if err != nil {
+			return err
+		}
+		if len(scalingEvents) == 0 {
+			c.logger.V(1).Info("non-component dimension change, projection updated",
+				"resource_id", resourceID)
+			return nil
+		}
+		for i := range scalingEvents {
+			if err := c.publishWithRetry(ctx, &scalingEvents[i]); err != nil {
 				return err
 			}
 		}
 		c.logger.Info("published scaling events",
-			"resource_id", resourceID, "changed_components", len(changed))
+			"resource_id", resourceID, "changed_components", len(scalingEvents))
 		return nil
 	}, projState, resourceID)
+}
+
+// stripComponentsFromAuditEvent removes the nested "components" array from
+// cluster_order created.v1/deleted.v1 events so the audit payload has flat
+// billing_dimensions (just cluster_template, release_image).
+func (c *Consumer) stripComponentsFromAuditEvent(ce *cloudevents.Event) {
+	var data map[string]any
+	if err := ce.DataAs(&data); err != nil {
+		return
+	}
+	bd, ok := data["billing_dimensions"].(map[string]any)
+	if !ok {
+		return
+	}
+	flatDims := make(map[string]any, len(bd))
+	for k, v := range bd {
+		if k != DimComponents {
+			flatDims[k] = v
+		}
+	}
+	data["billing_dimensions"] = flatDims
+	_ = ce.SetData(cloudevents.ApplicationJSON, data)
 }
 
 func (c *Consumer) buildComponentEvent(baseCE *cloudevents.Event, eventID string, dims map[string]any) (cloudevents.Event, error) {
@@ -329,9 +359,9 @@ func (c *Consumer) buildComponentEvent(baseCE *cloudevents.Event, eventID string
 	return ce, nil
 }
 
-func (c *Consumer) buildScalingEvent(eventID string, mapper events.ResourceMapper, comp events.ComponentRecord, stateCtx *events.StateContext, transitionTime time.Time) (cloudevents.Event, error) {
+func (c *Consumer) buildScalingEvent(eventID string, mapper events.ResourceMapper, dims map[string]any, stateCtx *events.StateContext, transitionTime time.Time) (cloudevents.Event, error) {
 	ce := cloudevents.NewEvent()
-	ce.SetID(events.ComponentEventID(eventID, comp))
+	ce.SetID(eventID)
 	ce.SetSource("osac-metering")
 	ce.SetType(events.EventUpdated)
 	ce.SetTime(transitionTime)
@@ -358,7 +388,7 @@ func (c *Consumer) buildScalingEvent(eventID string, mapper events.ResourceMappe
 		"current_state":      mapper.CurrentState(),
 		"transition_time":    transitionTime.Format(time.RFC3339Nano),
 		"duration_seconds":   stateCtx.DurationSeconds,
-		"billing_dimensions": comp.FlatBillingDimensions(),
+		"billing_dimensions": dims,
 		"schema_version":     "v1",
 	}
 	if err := ce.SetData(cloudevents.ApplicationJSON, data); err != nil {

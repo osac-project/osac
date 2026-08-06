@@ -22,6 +22,9 @@ import (
 
 const ClusterStatePrefix = "CLUSTER_STATE_"
 
+// DimensionReleaseImage is the billing dimension key for the cluster release image.
+const DimensionReleaseImage = "release_image"
+
 // CaaS cluster state constants.
 const (
 	ClusterStateProgressing  = "PROGRESSING"
@@ -187,7 +190,7 @@ func ClusterBillingDimensions(cl *privatev1.Cluster) map[string]any {
 		dims["cluster_template"] = t.GetName()
 	}
 	if vn := spec.GetVersionName(); vn != "" {
-		dims["version_name"] = vn
+		dims[DimensionReleaseImage] = vn
 	}
 
 	// Use []any (not []map[string]any) so DecomposeClusterComponents' type
@@ -229,7 +232,7 @@ type ComponentRecord struct {
 	HostType        string
 	NodeCount       int32
 	ClusterTemplate string
-	VersionName     string
+	ReleaseImage    string
 }
 
 // FlatBillingDimensions returns per-component billing dimensions for a single
@@ -242,8 +245,8 @@ func (cr ComponentRecord) FlatBillingDimensions() map[string]any {
 		"host_type":        cr.HostType,
 		"node_count":       cr.NodeCount,
 	}
-	if cr.VersionName != "" {
-		dims["version_name"] = cr.VersionName
+	if cr.ReleaseImage != "" {
+		dims[DimensionReleaseImage] = cr.ReleaseImage
 	}
 	return dims
 }
@@ -253,7 +256,7 @@ func (cr ComponentRecord) FlatBillingDimensions() map[string]any {
 // Reconciler to fan out one cluster into per-component events.
 func DecomposeClusterComponents(billingDims map[string]any) []ComponentRecord {
 	clusterTemplate, _ := billingDims["cluster_template"].(string)
-	versionName, _ := billingDims["version_name"].(string)
+	releaseImage, _ := billingDims[DimensionReleaseImage].(string)
 
 	componentsRaw, ok := billingDims["components"]
 	if !ok {
@@ -286,7 +289,7 @@ func DecomposeClusterComponents(billingDims map[string]any) []ComponentRecord {
 			HostType:        hostType,
 			NodeCount:       nodeCount,
 			ClusterTemplate: clusterTemplate,
-			VersionName:     versionName,
+			ReleaseImage:    releaseImage,
 		})
 	}
 
@@ -336,7 +339,7 @@ func ChangedComponents(oldDims, newDims map[string]any) []ComponentRecord {
 	for _, r := range newRecords {
 		newByKey[r.NodeSet] = true
 		old, exists := oldByKey[r.NodeSet]
-		if !exists || old.NodeCount != r.NodeCount {
+		if !exists || old.NodeCount != r.NodeCount || old.HostType != r.HostType {
 			changed = append(changed, r)
 		}
 	}
@@ -349,7 +352,7 @@ func ChangedComponents(oldDims, newDims map[string]any) []ComponentRecord {
 				HostType:        r.HostType,
 				NodeCount:       0,
 				ClusterTemplate: r.ClusterTemplate,
-				VersionName:     r.VersionName,
+				ReleaseImage:    r.ReleaseImage,
 			})
 		}
 	}

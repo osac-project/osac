@@ -69,7 +69,7 @@ var computeInstanceTransitions = TransitionTable{
 	{ComputeInstanceStatePaused, ComputeInstanceStateUnspecified}: {Skip: true},
 
 	// --- From FAILED ---
-	{ComputeInstanceStateFailed, ComputeInstanceStateRunning}:     {EventType: EventStarted},
+	{ComputeInstanceStateFailed, ComputeInstanceStateRunning}:     {EventType: EventResumed},
 	{ComputeInstanceStateFailed, ComputeInstanceStateStopped}:     {Skip: true},
 	{ComputeInstanceStateFailed, ComputeInstanceStatePaused}:      {Skip: true},
 	{ComputeInstanceStateFailed, ComputeInstanceStateFailed}:      {Skip: true},
@@ -79,7 +79,7 @@ var computeInstanceTransitions = TransitionTable{
 	{ComputeInstanceStateFailed, ComputeInstanceStateUnspecified}: {Skip: true},
 
 	// --- From STOPPING ---
-	{ComputeInstanceStateStopping, ComputeInstanceStateRunning}:     {EventType: EventStarted},
+	{ComputeInstanceStateStopping, ComputeInstanceStateRunning}:     {EventType: EventResumed},
 	{ComputeInstanceStateStopping, ComputeInstanceStateStopped}:     {Skip: true},
 	{ComputeInstanceStateStopping, ComputeInstanceStatePaused}:      {Skip: true},
 	{ComputeInstanceStateStopping, ComputeInstanceStateFailed}:      {Skip: true},
@@ -89,7 +89,7 @@ var computeInstanceTransitions = TransitionTable{
 	{ComputeInstanceStateStopping, ComputeInstanceStateUnspecified}: {Skip: true},
 
 	// --- From STARTING ---
-	{ComputeInstanceStateStarting, ComputeInstanceStateRunning}:     {EventType: EventStarted},
+	{ComputeInstanceStateStarting, ComputeInstanceStateRunning}:     {EventType: EventResumed},
 	{ComputeInstanceStateStarting, ComputeInstanceStateStopped}:     {Skip: true},
 	{ComputeInstanceStateStarting, ComputeInstanceStatePaused}:      {Skip: true},
 	{ComputeInstanceStateStarting, ComputeInstanceStateFailed}:      {Skip: true},
@@ -99,7 +99,7 @@ var computeInstanceTransitions = TransitionTable{
 	{ComputeInstanceStateStarting, ComputeInstanceStateUnspecified}: {Skip: true},
 
 	// --- From DELETING ---
-	{ComputeInstanceStateDeleting, ComputeInstanceStateRunning}:     {EventType: EventStarted},
+	{ComputeInstanceStateDeleting, ComputeInstanceStateRunning}:     {EventType: EventResumed},
 	{ComputeInstanceStateDeleting, ComputeInstanceStateStopped}:     {Skip: true},
 	{ComputeInstanceStateDeleting, ComputeInstanceStatePaused}:      {Skip: true},
 	{ComputeInstanceStateDeleting, ComputeInstanceStateFailed}:      {Skip: true},
@@ -109,7 +109,7 @@ var computeInstanceTransitions = TransitionTable{
 	{ComputeInstanceStateDeleting, ComputeInstanceStateUnspecified}: {Skip: true},
 
 	// --- From UNSPECIFIED ---
-	{ComputeInstanceStateUnspecified, ComputeInstanceStateRunning}:     {EventType: EventStarted},
+	{ComputeInstanceStateUnspecified, ComputeInstanceStateRunning}:     {EventType: EventResumed},
 	{ComputeInstanceStateUnspecified, ComputeInstanceStateStopped}:     {Skip: true},
 	{ComputeInstanceStateUnspecified, ComputeInstanceStatePaused}:      {Skip: true},
 	{ComputeInstanceStateUnspecified, ComputeInstanceStateFailed}:      {Skip: true},

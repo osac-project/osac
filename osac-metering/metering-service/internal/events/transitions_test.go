@@ -222,6 +222,73 @@ var _ = Describe("BuildResourceEvents", func() {
 	})
 })
 
+var _ = Describe("BuildDimensionChangeEvents", func() {
+	simpleBuildFn := func(dims map[string]any, eventID string) (cloudevents.Event, error) {
+		ce := cloudevents.NewEvent()
+		ce.SetID(eventID)
+		if err := ce.SetData(cloudevents.ApplicationJSON, dims); err != nil {
+			return cloudevents.Event{}, fmt.Errorf("setting data: %w", err)
+		}
+		return ce, nil
+	}
+
+	It("returns a single event for compute_instance (VMaaS)", func() {
+		oldDims := map[string]any{"instance_type": "m5.large"}
+		newDims := map[string]any{"instance_type": "m5.xlarge"}
+		result, err := events.BuildDimensionChangeEvents(
+			events.ResourceTypeComputeInstance, oldDims, newDims, "evt-ci-1", simpleBuildFn,
+		)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(HaveLen(1))
+		Expect(result[0].ID()).To(Equal("evt-ci-1"))
+	})
+
+	It("returns per-changed-component events for cluster_order (CaaS)", func() {
+		oldDims := map[string]any{
+			"cluster_template": "tmpl",
+			"components": []any{
+				map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
+				map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(2)},
+			},
+		}
+		newDims := map[string]any{
+			"cluster_template": "tmpl",
+			"components": []any{
+				map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
+				map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(4)},
+			},
+		}
+		result, err := events.BuildDimensionChangeEvents(
+			events.ResourceTypeClusterOrder, oldDims, newDims, "evt-cl-1", simpleBuildFn,
+		)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(HaveLen(1))
+		Expect(result[0].ID()).To(Equal("evt-cl-1/gpu-workers"))
+	})
+
+	It("returns nil for cluster_order with no changes", func() {
+		dims := map[string]any{
+			"cluster_template": "tmpl",
+			"components": []any{
+				map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
+			},
+		}
+		result, err := events.BuildDimensionChangeEvents(
+			events.ResourceTypeClusterOrder, dims, dims, "evt-cl-1", simpleBuildFn,
+		)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(BeNil())
+	})
+
+	It("returns error for unknown resource type", func() {
+		_, err := events.BuildDimensionChangeEvents(
+			"unknown_resource", map[string]any{}, map[string]any{}, "evt-1", simpleBuildFn,
+		)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("unknown resource type for dimension change"))
+	})
+})
+
 var _ = Describe("resolveTransition (indirect via ResolveCloudEventType)", func() {
 	It("returns correct event type for an exact table match", func() {
 		table := events.TransitionTable{

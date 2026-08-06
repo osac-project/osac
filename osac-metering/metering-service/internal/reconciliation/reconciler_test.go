@@ -732,7 +732,7 @@ var _ = Describe("Reconciler", func() {
 				FulfillmentVersion: 1,
 				BillingDimensions: map[string]any{
 					"cluster_template": "ocp-ci-small",
-					"version_name":     "4.17.0",
+					"release_image":    "4.17.0",
 					"components": []any{
 						map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": float64(1)},
 						map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": float64(2)},
@@ -883,7 +883,7 @@ var _ = Describe("Reconciler", func() {
 				FulfillmentVersion: 1,
 				BillingDimensions: map[string]any{
 					"cluster_template": "ocp-ci-small",
-					"version_name":     "4.17.0",
+					"release_image":    "4.17.0",
 					"components": []any{
 						map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": float64(1)},
 						map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": float64(2)},

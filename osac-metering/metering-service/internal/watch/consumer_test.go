@@ -565,7 +565,7 @@ var _ = Describe("Consumer", func() {
 			pub.mu.Lock()
 			defer pub.mu.Unlock()
 			Expect(pub.published).To(HaveLen(1))
-			Expect(pub.published[0].Type()).To(Equal("osac.resource.started.v1"))
+			Expect(pub.published[0].Type()).To(Equal("osac.resource.resumed.v1"))
 		})
 
 		It("fails fast on data quality error when state actually changed", func() {
@@ -771,7 +771,7 @@ var _ = Describe("Consumer", func() {
 			Expect(store.states["vm-stale"].FulfillmentVersion).To(Equal(int32(10)))
 		})
 
-		It("updates projection on dimension change while billable (RUNNING->RUNNING)", func() {
+		It("publishes updated.v1 and updates projection on dimension change while billable (RUNNING->RUNNING)", func() {
 			store := newMockStore()
 			originalStart := time.Now().Add(-1 * time.Hour).UTC().Truncate(time.Microsecond)
 			store.states["vm-resize"] = projection.ResourceState{
@@ -803,17 +803,23 @@ var _ = Describe("Consumer", func() {
 			}
 			client.results = []mockStreamResult{{stream: stream}}
 
-			// RUNNING->RUNNING is Skip; non-component dimension change
-			// updates projection only (no CloudEvent published for VMaaS).
-			pub := &mockPublisher{}
+			// RUNNING->RUNNING is Skip; dimension change now publishes
+			// updated.v1 for VMaaS via BuildDimensionChangeEvents.
+			pub := &mockPublisher{published: make([]cloudevents.Event, 0, 1), cancelFunc: cancel}
 			consumer := newConsumerWithStore(pub, store)
 
-			done := make(chan error, 1)
-			go func() { done <- consumer.Run(ctx) }()
+			err := consumer.Run(ctx)
+			Expect(err).ToNot(HaveOccurred())
 
-			time.Sleep(50 * time.Millisecond)
-			cancel()
-			Eventually(done, time.Second).Should(Receive(BeNil()))
+			pub.mu.Lock()
+			defer pub.mu.Unlock()
+			Expect(pub.published).To(HaveLen(1))
+			Expect(pub.published[0].Type()).To(Equal(events.EventUpdated))
+
+			var data map[string]any
+			Expect(json.Unmarshal(pub.published[0].Data(), &data)).To(Succeed())
+			bd := data["billing_dimensions"].(map[string]any)
+			Expect(bd["instance_type"]).To(Equal("m5.xlarge"))
 
 			store.mu.Lock()
 			defer store.mu.Unlock()
@@ -821,6 +827,60 @@ var _ = Describe("Consumer", func() {
 			Expect(updated.BillingDimensions["instance_type"]).To(Equal("m5.xlarge"))
 			Expect(updated.BillableSince).ToNot(BeNil())
 			Expect(updated.BillableSince.After(originalStart)).To(BeTrue())
+		})
+
+		It("publishes updated.v1 when VMaaS billing dimensions change while RUNNING", func() {
+			store := newMockStore()
+			originalStart := time.Now().Add(-1 * time.Hour).UTC().Truncate(time.Microsecond)
+			store.states["vm-dim-change"] = projection.ResourceState{
+				ResourceID:         "vm-dim-change",
+				ResourceType:       events.ResourceTypeComputeInstance,
+				TenantID:           "tenant-1",
+				CurrentState:       "RUNNING",
+				IsBillable:         true,
+				BillableSince:      &originalStart,
+				FulfillmentVersion: 1,
+				BillingDimensions:  map[string]any{"instance_type": "m5.large"},
+				TransitionTime:     originalStart,
+			}
+
+			ci := makeComputeInstance("vm-dim-change", "tenant-1")
+			ci.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING
+			ci.Metadata.Version = 2
+			ci.Spec = &privatev1.ComputeInstanceSpec{InstanceType: &privatev1.InstanceTypeReference{Name: "m5.xlarge"}}
+
+			event := &privatev1.Event{
+				Id:      "evt-dim-change",
+				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+				Payload: &privatev1.Event_ComputeInstance{ComputeInstance: ci},
+			}
+
+			stream := &mockWatchStream{
+				responses: []*privatev1.EventsWatchResponse{makeResponse(event)},
+			}
+			client.results = []mockStreamResult{{stream: stream}}
+
+			pub := &mockPublisher{published: make([]cloudevents.Event, 0, 1), cancelFunc: cancel}
+			consumer := newConsumerWithStore(pub, store)
+
+			err := consumer.Run(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			pub.mu.Lock()
+			defer pub.mu.Unlock()
+			Expect(pub.published).To(HaveLen(1))
+			Expect(pub.published[0].Type()).To(Equal(events.EventUpdated))
+
+			var data map[string]any
+			Expect(json.Unmarshal(pub.published[0].Data(), &data)).To(Succeed())
+			bd := data["billing_dimensions"].(map[string]any)
+			Expect(bd["instance_type"]).To(Equal("m5.xlarge"))
+			Expect(data["duration_seconds"]).ToNot(BeNil())
+
+			store.mu.Lock()
+			defer store.mu.Unlock()
+			updated := store.states["vm-dim-change"]
+			Expect(updated.BillingDimensions["instance_type"]).To(Equal("m5.xlarge"))
 		})
 
 		It("preserves billing context through RUNNING→STOPPING→STOPPED sequence", func() {
@@ -953,7 +1013,7 @@ var _ = Describe("Consumer", func() {
 		clusterBillingDims := func() map[string]any {
 			return map[string]any{
 				"cluster_template": "ocp-ci-small",
-				"version_name":     "4.17.0",
+				"release_image":    "4.17.0",
 				"components": []any{
 					map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
 					map[string]any{"node_set": "cpu-workers", "component": "worker", "host_type": "cpu-only", "node_count": int32(3)},
@@ -986,6 +1046,82 @@ var _ = Describe("Consumer", func() {
 			Expect(pub.published).To(HaveLen(1))
 			Expect(pub.published[0].Type()).To(Equal(events.EventCreated))
 			Expect(pub.published[0].Extensions()["osacresourcetype"]).To(Equal(events.ResourceTypeClusterOrder))
+		})
+
+		It("cluster created.v1 has flat billing_dimensions without components", func() {
+			cl := makeCluster("cl-flat", "tenant-1", privatev1.ClusterState_CLUSTER_STATE_PROGRESSING, defaultNodeSets())
+			event := &privatev1.Event{
+				Id:      "evt-flat-create",
+				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+				Payload: &privatev1.Event_Cluster{Cluster: cl},
+			}
+
+			stream := &mockWatchStream{
+				responses: []*privatev1.EventsWatchResponse{makeResponse(event)},
+			}
+			client.results = []mockStreamResult{{stream: stream}}
+
+			pub := &mockPublisher{published: make([]cloudevents.Event, 0, 1), cancelFunc: cancel}
+			consumer := newConsumer(pub)
+
+			err := consumer.Run(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			pub.mu.Lock()
+			defer pub.mu.Unlock()
+			Expect(pub.published).To(HaveLen(1))
+			Expect(pub.published[0].Type()).To(Equal(events.EventCreated))
+
+			var data map[string]any
+			Expect(json.Unmarshal(pub.published[0].Data(), &data)).To(Succeed())
+			bd := data["billing_dimensions"].(map[string]any)
+			Expect(bd).To(HaveKey("cluster_template"))
+			Expect(bd).NotTo(HaveKey("components"))
+		})
+
+		It("cluster deleted.v1 has flat billing_dimensions without components", func() {
+			store := newMockStore()
+			now := time.Now().UTC().Truncate(time.Microsecond)
+			store.states["cl-flat-del"] = projection.ResourceState{
+				ResourceID:         "cl-flat-del",
+				ResourceType:       events.ResourceTypeClusterOrder,
+				TenantID:           "tenant-1",
+				CurrentState:       "DELETING",
+				IsBillable:         false,
+				FulfillmentVersion: 1,
+				BillingDimensions:  clusterBillingDims(),
+				TransitionTime:     now,
+			}
+
+			cl := makeCluster("cl-flat-del", "tenant-1", privatev1.ClusterState_CLUSTER_STATE_DELETING, defaultNodeSets())
+			cl.Metadata.DeletionTimestamp = timestamppb.Now()
+			event := &privatev1.Event{
+				Id:      "evt-flat-del",
+				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_DELETED,
+				Payload: &privatev1.Event_Cluster{Cluster: cl},
+			}
+
+			stream := &mockWatchStream{
+				responses: []*privatev1.EventsWatchResponse{makeResponse(event)},
+			}
+			client.results = []mockStreamResult{{stream: stream}}
+
+			pub := &mockPublisher{published: make([]cloudevents.Event, 0, 1), cancelFunc: cancel}
+			consumer := newConsumerWithStore(pub, store)
+
+			err := consumer.Run(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			pub.mu.Lock()
+			defer pub.mu.Unlock()
+			Expect(pub.published).To(HaveLen(1))
+			Expect(pub.published[0].Type()).To(Equal(events.EventDeleted))
+
+			var data map[string]any
+			Expect(json.Unmarshal(pub.published[0].Data(), &data)).To(Succeed())
+			bd := data["billing_dimensions"].(map[string]any)
+			Expect(bd).To(HaveKey("cluster_template"))
+			Expect(bd).NotTo(HaveKey("components"))
 		})
 
 		It("publishes N+1 started.v1 events for new cluster PROGRESSING", func() {

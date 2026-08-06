@@ -151,8 +151,8 @@ var _ = Describe("MapWatchEvent", func() {
 				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_UNSPECIFIED, "PAUSED", "", true, false),
 
 			// --- From FAILED ---
-			Entry("FAILED -> RUNNING -> started.v1",
-				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING, "FAILED", events.EventStarted, false, false),
+			Entry("FAILED -> RUNNING -> resumed.v1",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING, "FAILED", events.EventResumed, false, false),
 			Entry("FAILED -> STOPPED -> skip",
 				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPED, "FAILED", "", true, false),
 			Entry("FAILED -> PAUSED -> skip",
@@ -169,8 +169,8 @@ var _ = Describe("MapWatchEvent", func() {
 				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_UNSPECIFIED, "FAILED", "", true, false),
 
 			// --- From STOPPING ---
-			Entry("STOPPING -> RUNNING -> started.v1",
-				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING, "STOPPING", events.EventStarted, false, false),
+			Entry("STOPPING -> RUNNING -> resumed.v1",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING, "STOPPING", events.EventResumed, false, false),
 			Entry("STOPPING -> STOPPED -> skip",
 				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPED, "STOPPING", "", true, false),
 			Entry("STOPPING -> PAUSED -> skip",
@@ -187,8 +187,8 @@ var _ = Describe("MapWatchEvent", func() {
 				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_UNSPECIFIED, "STOPPING", "", true, false),
 
 			// --- From STARTING ---
-			Entry("STARTING -> RUNNING -> started.v1",
-				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING, "STARTING", events.EventStarted, false, false),
+			Entry("STARTING -> RUNNING -> resumed.v1",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING, "STARTING", events.EventResumed, false, false),
 			Entry("STARTING -> STOPPED -> skip",
 				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPED, "STARTING", "", true, false),
 			Entry("STARTING -> PAUSED -> skip",
@@ -205,8 +205,8 @@ var _ = Describe("MapWatchEvent", func() {
 				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_UNSPECIFIED, "STARTING", "", true, false),
 
 			// --- From DELETING ---
-			Entry("DELETING -> RUNNING -> started.v1",
-				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING, "DELETING", events.EventStarted, false, false),
+			Entry("DELETING -> RUNNING -> resumed.v1",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING, "DELETING", events.EventResumed, false, false),
 			Entry("DELETING -> STOPPED -> skip",
 				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPED, "DELETING", "", true, false),
 			Entry("DELETING -> PAUSED -> skip",
@@ -223,8 +223,8 @@ var _ = Describe("MapWatchEvent", func() {
 				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_UNSPECIFIED, "DELETING", "", true, false),
 
 			// --- From UNSPECIFIED ---
-			Entry("UNSPECIFIED -> RUNNING -> started.v1",
-				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING, "UNSPECIFIED", events.EventStarted, false, false),
+			Entry("UNSPECIFIED -> RUNNING -> resumed.v1",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING, "UNSPECIFIED", events.EventResumed, false, false),
 			Entry("UNSPECIFIED -> STOPPED -> skip",
 				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPED, "UNSPECIFIED", "", true, false),
 			Entry("UNSPECIFIED -> PAUSED -> skip",

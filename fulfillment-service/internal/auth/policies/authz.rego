@@ -266,7 +266,7 @@ allow if {
 }
 
 # Tenant admins can manage catalog items, users, identity providers,
-# projects, and project memberships within their tenant. The application layer
+# projects, project memberships, and rolebindings within their tenant. The application layer
 # (generic server) enforces resource-level authorization via tenant field validation.
 allow if {
   is_tenant_admin
@@ -300,10 +300,17 @@ allow if {
     "/osac.public.v1.ProjectMemberships/List",
     "/osac.public.v1.ProjectMemberships/Update",
     "/osac.public.v1.ProjectMemberships/Delete",
+    "/osac.public.v1.Roles/Get",
+    "/osac.public.v1.Roles/List",
+    "/osac.public.v1.RoleBindings/Create",
+    "/osac.public.v1.RoleBindings/Get",
+    "/osac.public.v1.RoleBindings/List",
+    "/osac.public.v1.RoleBindings/Update",
+    "/osac.public.v1.RoleBindings/Delete",
   }
 }
 
-# Tenant IdP managers can manage identity providers (but not users or project memberships).
+# Tenant IdP managers can manage identity providers and assign users to roles
 allow if {
   is_tenant_idp_manager
   grpc_method in {
@@ -312,6 +319,15 @@ allow if {
     "/osac.public.v1.IdentityProviders/List",
     "/osac.public.v1.IdentityProviders/Update",
     "/osac.public.v1.IdentityProviders/Delete",
+    "/osac.public.v1.Users/Get",
+    "/osac.public.v1.Users/List",
+    "/osac.public.v1.Roles/Get",
+    "/osac.public.v1.Roles/List",
+    "/osac.public.v1.RoleBindings/Create",
+    "/osac.public.v1.RoleBindings/Get",
+    "/osac.public.v1.RoleBindings/List",
+    "/osac.public.v1.RoleBindings/Update",
+    "/osac.public.v1.RoleBindings/Delete",
   }
 }
 

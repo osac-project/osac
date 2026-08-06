@@ -5,8 +5,11 @@ FROM registry.access.redhat.com/ubi10/go-toolset:1.26 AS builder
 ARG DEBUG=false
 
 # Copy go.work and all workspace go.mod/go.sum files for dependency caching.
+# go.work.sum is intentionally not copied in -- it's not committed to the
+# repo (see root .gitignore); `go mod download` below regenerates it inside
+# the build using the go.sum files already copied in per module.
 WORKDIR /opt/app-root/src
-COPY --chown=1001:1001 go.work go.work.sum ./
+COPY --chown=1001:1001 go.work ./
 COPY --chown=1001:1001 fulfillment-service/go.mod fulfillment-service/go.sum fulfillment-service/
 COPY --chown=1001:1001 bare-metal-fulfillment-operator/go.mod bare-metal-fulfillment-operator/go.sum bare-metal-fulfillment-operator/
 COPY --chown=1001:1001 osac-operator/go.mod osac-operator/go.sum osac-operator/

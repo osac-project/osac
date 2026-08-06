@@ -150,6 +150,9 @@ func (c *Consumer) handleEvent(ctx context.Context, event *privatev1.Event) erro
 
 	ce, err := events.MapWatchEvent(event, mapper, stateCtx)
 	if err != nil {
+		if errors.Is(err, events.ErrTransientState) {
+			return c.handleTransientState(ctx, mapper, existing, version, transitionTime)
+		}
 		return err
 	}
 
@@ -181,6 +184,40 @@ func (c *Consumer) handleEvent(ctx context.Context, event *privatev1.Event) erro
 		return err
 	}
 
+	return nil
+}
+
+// handleTransientState updates only FulfillmentVersion and TransitionTime
+// for transient states (STOPPING, STARTING) without changing CurrentState,
+// billing fields, or emitting a CloudEvent. The projection keeps
+// CurrentState=RUNNING so the subsequent final state (e.g., STOPPED)
+// sees previous_state=RUNNING and computes duration_seconds correctly.
+func (c *Consumer) handleTransientState(
+	ctx context.Context,
+	mapper events.ResourceMapper,
+	existing *projection.ResourceState,
+	version int32,
+	transitionTime time.Time,
+) error {
+	if existing == nil {
+		return nil
+	}
+
+	existing.FulfillmentVersion = version
+	existing.TransitionTime = transitionTime.UTC()
+
+	err := c.store.Upsert(ctx, *existing)
+	if err != nil {
+		if errors.Is(err, projection.ErrStaleVersion) {
+			c.logger.Info("stale version during transient state update, skipping",
+				"resource_id", mapper.ResourceID())
+			return nil
+		}
+		return fmt.Errorf("upserting transient state for %s: %w", mapper.ResourceID(), err)
+	}
+
+	c.logger.V(1).Info("transient state updated (no CloudEvent)",
+		"resource_id", mapper.ResourceID())
 	return nil
 }
 

@@ -61,7 +61,7 @@ func correctionDescription(reason CorrectionReason) string {
 	case MissedDeletion:
 		return "Resource found in metering projection but missing from fulfillment-service"
 	default:
-		return string(reason)
+		return fmt.Sprintf("unknown correction reason: %s", reason)
 	}
 }
 

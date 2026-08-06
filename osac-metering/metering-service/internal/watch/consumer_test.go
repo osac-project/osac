@@ -710,6 +710,80 @@ var _ = Describe("Consumer", func() {
 			Expect(updated.BillableSince.After(originalStart)).To(BeTrue())
 		})
 
+		It("preserves billing context through RUNNING→STOPPING→STOPPED sequence", func() {
+			store := newMockStore()
+			billableStart := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+			store.states["vm-stop-seq"] = projection.ResourceState{
+				ResourceID:         "vm-stop-seq",
+				ResourceType:       "compute_instance",
+				TenantID:           "tenant-1",
+				CurrentState:       "RUNNING",
+				IsBillable:         true,
+				BillableSince:      &billableStart,
+				FulfillmentVersion: 1,
+				BillingDimensions:  map[string]any{},
+				TransitionTime:     billableStart,
+			}
+
+			// Two events: RUNNING→STOPPING, then STOPPING→STOPPED
+			stoppingTime := billableStart.Add(30 * time.Minute)
+			stoppedTime := billableStart.Add(1 * time.Hour)
+
+			ciStopping := makeComputeInstance("vm-stop-seq", "tenant-1")
+			ciStopping.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPING
+			ciStopping.Status.StateTransitionTime = timestamppb.New(stoppingTime)
+			ciStopping.Metadata.Version = 2
+
+			ciStopped := makeComputeInstance("vm-stop-seq", "tenant-1")
+			ciStopped.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPED
+			ciStopped.Status.StateTransitionTime = timestamppb.New(stoppedTime)
+			ciStopped.Metadata.Version = 3
+
+			stream := &mockWatchStream{
+				responses: []*privatev1.EventsWatchResponse{
+					makeResponse(&privatev1.Event{
+						Id:      "evt-stopping",
+						Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+						Payload: &privatev1.Event_ComputeInstance{ComputeInstance: ciStopping},
+					}),
+					makeResponse(&privatev1.Event{
+						Id:      "evt-stopped",
+						Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+						Payload: &privatev1.Event_ComputeInstance{ComputeInstance: ciStopped},
+					}),
+				},
+			}
+			client.results = []mockStreamResult{{stream: stream}}
+
+			pub := &mockPublisher{published: make([]cloudevents.Event, 0, 1), cancelFunc: cancel}
+			consumer := newConsumerWithStore(pub, store)
+
+			err := consumer.Run(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			pub.mu.Lock()
+			defer pub.mu.Unlock()
+
+			// STOPPING is transient — no CloudEvent published for it.
+			// Only suspended.v1 for STOPPED should be published.
+			Expect(pub.published).To(HaveLen(1))
+			Expect(pub.published[0].Type()).To(Equal("osac.resource.suspended.v1"))
+
+			// suspended.v1 should have duration_seconds = 3600 (1 hour from
+			// BillableSince to STOPPED transition time), proving billing context
+			// was preserved through STOPPING, not reset to STOPPING time.
+			var data map[string]any
+			Expect(json.Unmarshal(pub.published[0].Data(), &data)).To(Succeed())
+			Expect(data["previous_state"]).To(Equal("RUNNING"))
+			Expect(data["duration_seconds"]).To(BeNumerically("~", 3600.0, 0.1))
+
+			// Projection should show STOPPED, non-billable
+			store.mu.Lock()
+			defer store.mu.Unlock()
+			Expect(store.states["vm-stop-seq"].CurrentState).To(Equal("STOPPED"))
+			Expect(store.states["vm-stop-seq"].IsBillable).To(BeFalse())
+		})
+
 		It("upserts projection for first-seen resource", func() {
 			store := newMockStore()
 			stream := &mockWatchStream{

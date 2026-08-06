@@ -28,7 +28,8 @@ var _ = Describe("ComputeInstanceSpec", func() {
 				Cores:     4,
 				MemoryGiB: 8,
 				BootDisk: v1alpha1.DiskSpec{
-					SizeGiB: 30,
+					SizeGiB:     30,
+					StorageTier: "standard",
 				},
 				RunStrategy: v1alpha1.RunStrategyAlways,
 			}
@@ -51,7 +52,7 @@ var _ = Describe("ComputeInstanceSpec", func() {
 				},
 				Cores:       1,
 				MemoryGiB:   1,
-				BootDisk:    v1alpha1.DiskSpec{SizeGiB: 1},
+				BootDisk:    v1alpha1.DiskSpec{SizeGiB: 1, StorageTier: "standard"},
 				RunStrategy: v1alpha1.RunStrategyAlways,
 			}
 
@@ -70,11 +71,11 @@ var _ = Describe("ComputeInstanceSpec", func() {
 				},
 				Cores:     2,
 				MemoryGiB: 4,
-				BootDisk:  v1alpha1.DiskSpec{SizeGiB: 10},
+				BootDisk:  v1alpha1.DiskSpec{SizeGiB: 10, StorageTier: "standard"},
 				AdditionalDisks: []v1alpha1.DiskSpec{
-					{SizeGiB: 50},
-					{SizeGiB: 100},
-					{SizeGiB: 200},
+					{SizeGiB: 50, StorageTier: "standard"},
+					{SizeGiB: 100, StorageTier: "standard"},
+					{SizeGiB: 200, StorageTier: "standard"},
 				},
 				RunStrategy: v1alpha1.RunStrategyAlways,
 			}
@@ -94,7 +95,7 @@ var _ = Describe("ComputeInstanceSpec", func() {
 				},
 				Cores:     2,
 				MemoryGiB: 4,
-				BootDisk:  v1alpha1.DiskSpec{SizeGiB: 10},
+				BootDisk:  v1alpha1.DiskSpec{SizeGiB: 10, StorageTier: "standard"},
 				UserDataSecretRef: &corev1.LocalObjectReference{
 					Name: "my-cloud-init",
 				},
@@ -115,7 +116,7 @@ var _ = Describe("ComputeInstanceSpec", func() {
 				},
 				Cores:       2,
 				MemoryGiB:   4,
-				BootDisk:    v1alpha1.DiskSpec{SizeGiB: 10},
+				BootDisk:    v1alpha1.DiskSpec{SizeGiB: 10, StorageTier: "standard"},
 				SSHKey:      sshKey,
 				RunStrategy: v1alpha1.RunStrategyAlways,
 			}
@@ -183,7 +184,7 @@ var _ = Describe("ComputeInstance", func() {
 				},
 				Cores:       2,
 				MemoryGiB:   4,
-				BootDisk:    v1alpha1.DiskSpec{SizeGiB: 10},
+				BootDisk:    v1alpha1.DiskSpec{SizeGiB: 10, StorageTier: "standard"},
 				RunStrategy: v1alpha1.RunStrategyAlways,
 				NetworkAttachments: []v1alpha1.NetworkAttachment{
 					{
@@ -207,7 +208,7 @@ var _ = Describe("ComputeInstance", func() {
 				},
 				Cores:       2,
 				MemoryGiB:   4,
-				BootDisk:    v1alpha1.DiskSpec{SizeGiB: 10},
+				BootDisk:    v1alpha1.DiskSpec{SizeGiB: 10, StorageTier: "standard"},
 				RunStrategy: v1alpha1.RunStrategyAlways,
 				NetworkAttachments: []v1alpha1.NetworkAttachment{
 					{SubnetRef: "subnet-A", SecurityGroupRefs: []string{"web-sg"}},
@@ -231,7 +232,7 @@ var _ = Describe("ComputeInstance", func() {
 				},
 				Cores:       2,
 				MemoryGiB:   4,
-				BootDisk:    v1alpha1.DiskSpec{SizeGiB: 10},
+				BootDisk:    v1alpha1.DiskSpec{SizeGiB: 10, StorageTier: "standard"},
 				RunStrategy: v1alpha1.RunStrategyAlways,
 				NetworkAttachments: []v1alpha1.NetworkAttachment{
 					{SubnetRef: "subnet-A"},
@@ -255,7 +256,7 @@ var _ = Describe("ComputeInstance", func() {
 				},
 				Cores:       2,
 				MemoryGiB:   4,
-				BootDisk:    v1alpha1.DiskSpec{SizeGiB: 10},
+				BootDisk:    v1alpha1.DiskSpec{SizeGiB: 10, StorageTier: "standard"},
 				RunStrategy: v1alpha1.RunStrategyAlways,
 				NetworkAttachments: []v1alpha1.NetworkAttachment{
 					{SubnetRef: "subnet-A", SecurityGroupRefs: []string{"sg-1"}},

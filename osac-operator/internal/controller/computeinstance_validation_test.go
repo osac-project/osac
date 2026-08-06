@@ -69,7 +69,7 @@ var _ = Describe("ComputeInstance CEL Validation", func() {
 				},
 				Cores:       2,
 				MemoryGiB:   4,
-				BootDisk:    osacv1alpha1.DiskSpec{SizeGiB: 20},
+				BootDisk:    osacv1alpha1.DiskSpec{SizeGiB: 20, StorageTier: "standard"},
 				RunStrategy: osacv1alpha1.RunStrategyAlways,
 			},
 		}
@@ -265,7 +265,7 @@ var _ = Describe("ComputeInstance CEL Validation", func() {
 		It("should reject changing additionalDisks", func() {
 			instance := createValidInstance("test-additionaldisks-immutable")
 			instance.Spec.AdditionalDisks = []osacv1alpha1.DiskSpec{
-				{SizeGiB: 100},
+				{SizeGiB: 100, StorageTier: "standard"},
 			}
 			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
 
@@ -283,7 +283,7 @@ var _ = Describe("ComputeInstance CEL Validation", func() {
 		It("should reject adding additionalDisks", func() {
 			instance := createValidInstance("test-add-disk-immutable")
 			instance.Spec.AdditionalDisks = []osacv1alpha1.DiskSpec{
-				{SizeGiB: 100},
+				{SizeGiB: 100, StorageTier: "standard"},
 			}
 			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
 
@@ -292,7 +292,7 @@ var _ = Describe("ComputeInstance CEL Validation", func() {
 
 			// Try to add another disk
 			instance.Spec.AdditionalDisks = append(instance.Spec.AdditionalDisks,
-				osacv1alpha1.DiskSpec{SizeGiB: 200},
+				osacv1alpha1.DiskSpec{SizeGiB: 200, StorageTier: "standard"},
 			)
 			err := k8sClient.Update(ctx, instance)
 			Expect(err).To(HaveOccurred())

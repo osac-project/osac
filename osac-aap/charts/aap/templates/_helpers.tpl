@@ -65,8 +65,7 @@ Wall-clock-bounded (1500s epoch deadline, not iteration count) since each
 iteration can take up to ~65s worst case -- keep activeDeadlineSeconds above this.
 */}}
 {{- define "osac-aap.waitForAapScript" -}}
-echo "Controller gateway: ${AAP_CONTROLLER_GATEWAY_HOSTNAME}"
-echo "Gateway: ${AAP_GATEWAY_HOSTNAME}"
+echo "Checking AAP controller and gateway readiness..."
 
 # A threshold < 1 would satisfy the streak check immediately, reintroducing the race.
 case "${AAP_READINESS_CONSECUTIVE_SUCCESSES}" in
@@ -147,7 +146,7 @@ while [ "$(date +%s)" -lt "${READINESS_DEADLINE}" ]; do
           ;;
         *)
           consecutive_successes=0
-          echo "WARNING: readiness-check token cleanup failed (token_id='${token_id}' delete_code='${delete_code}')"
+          echo "WARNING: readiness-check token cleanup failed (delete_code='${delete_code}')"
           ;;
       esac
     fi
@@ -185,16 +184,16 @@ secretKeyRef -- otherwise a missing Secret at pod-schedule time blocks the
 whole pod in Init:CreateContainerConfigError with no log output.
 */}}
 {{- define "osac-aap.waitForAdminSecretScript" -}}
-echo "Waiting for AAP admin password Secret '${AAP_ADMIN_SECRET_NAME}' to be created by the operator..."
+echo "Waiting for AAP admin password Secret to be created by the operator..."
 for i in {1..60}; do
   if oc get secret "${AAP_ADMIN_SECRET_NAME}" -n "${NAMESPACE}" --request-timeout=10s >/dev/null 2>&1; then
-    echo "Found Secret ${AAP_ADMIN_SECRET_NAME} in namespace ${NAMESPACE}."
+    echo "Found admin password Secret."
     exit 0
   fi
-  echo "Attempt $i: Secret ${AAP_ADMIN_SECRET_NAME} not found yet in namespace ${NAMESPACE}, waiting 5 seconds..."
+  echo "Attempt $i: admin password Secret not found yet, waiting 5 seconds..."
   sleep 5
 done
-echo "ERROR: Timed out waiting for Secret ${AAP_ADMIN_SECRET_NAME} in namespace ${NAMESPACE} to be created."
+echo "ERROR: Timed out waiting for admin password Secret to be created."
 exit 1
 {{- end }}
 

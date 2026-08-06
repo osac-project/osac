@@ -25,12 +25,10 @@ columns:
 - header: VIRTUAL-NETWORK
   value: this.spec.virtual_network.id
   type: osac.private.v1.VirtualNetwork
-  lookup: true
 
 - header: EXTERNAL-IP
   value: this.spec.external_ip.id
   type: osac.private.v1.ExternalIP
-  lookup: true
 
 - header: STATE
   value: this.status.state
@@ -39,4 +37,3 @@ columns:
 - header: HUB
   value: this.status.hub
   type: osac.private.v1.Hub
-  lookup: true

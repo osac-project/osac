@@ -28,7 +28,6 @@ columns:
 - header: NETWORK-CLASS
   value: this.spec.network_class.id
   type: osac.private.v1.NetworkClass
-  lookup: true
 
 - header: IPV4-CIDR
   value: "has(this.spec.ipv4_cidr)? this.spec.ipv4_cidr: '-'"
@@ -46,4 +45,3 @@ columns:
 - header: HUB
   value: this.status.hub
   type: osac.private.v1.Hub
-  lookup: true

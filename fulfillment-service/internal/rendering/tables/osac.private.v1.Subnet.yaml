@@ -25,7 +25,6 @@ columns:
 - header: VIRTUAL-NETWORK
   value: this.spec.virtual_network.id
   type: osac.private.v1.VirtualNetwork
-  lookup: true
 
 - header: IPV4-CIDR
   value: "has(this.spec.ipv4_cidr)? this.spec.ipv4_cidr: '-'"
@@ -40,4 +39,3 @@ columns:
 - header: HUB
   value: this.status.hub
   type: osac.private.v1.Hub
-  lookup: true

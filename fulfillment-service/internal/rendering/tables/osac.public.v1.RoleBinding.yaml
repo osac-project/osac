@@ -29,7 +29,6 @@ columns:
 - header: ROLE
   value: this.spec.role.id
   type: osac.public.v1.Role
-  lookup: true
 
 - header: USERS
   value: "size(this.spec.users) > 0? this.spec.users.map(u, u.id).join(', '): '-'"

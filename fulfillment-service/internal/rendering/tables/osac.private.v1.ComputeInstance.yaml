@@ -25,7 +25,6 @@ columns:
 - header: TEMPLATE
   value: this.spec.template.id
   type: osac.private.v1.ComputeInstanceTemplate
-  lookup: true
 
 - header: OS
   value: "has(this.spec.is_windows) && this.spec.is_windows ? 'windows' : 'linux'"
@@ -37,7 +36,6 @@ columns:
 - header: HUB
   value: this.status.hub
   type: osac.private.v1.Hub
-  lookup: true
 
 - header: INTERNAL IP ADDRESS
   value: this.status.internal_ip_address

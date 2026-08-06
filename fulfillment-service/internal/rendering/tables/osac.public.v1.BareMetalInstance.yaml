@@ -22,7 +22,6 @@ columns:
 - header: CATALOG ITEM
   value: this.spec.catalog_item.id
   type: osac.public.v1.BareMetalInstanceCatalogItem
-  lookup: true
 
 - header: IMAGE
   value: "has(this.spec.image) && has(this.spec.image.source_ref)? this.spec.image.source_ref: '-'"

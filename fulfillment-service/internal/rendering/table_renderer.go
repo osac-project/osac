@@ -28,6 +28,7 @@ import (
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
+	"github.com/google/cel-go/common/types/pb"
 	"github.com/google/cel-go/common/types/ref"
 	"github.com/google/cel-go/ext"
 	"google.golang.org/protobuf/proto"
@@ -70,17 +71,6 @@ type columnLayout struct {
 	// When the result is an identifier the 'type' field should be the name of the type, and it will be used to
 	// find the name of the object.
 	Type protoreflect.FullName `yaml:"type,omitempty"`
-
-	// Lookup indicates if the result of the expression is an identifier that needs to be translated into a name.
-	// When this is set to true the 'type' field also needs to be specified, and should contain the name of the
-	// type to use for the lookup. For example, if the result of the expression is a cluster, then the 'type'
-	// should be 'fulfillment.v1.Cluster'.
-	Lookup bool `yaml:"lookup,omitempty"`
-
-	// LookupField is an optional dot-separated field path used to extract a value from the object found by the
-	// lookup. When empty, the lookup renders the name of the object (the default). For example, to render the
-	// 'spec.version' field of the looked up object, this should be 'spec.version'.
-	LookupField string `yaml:"lookup_field,omitempty"`
 }
 
 // TableRendererBuilder is used to create table renderers. Don't create instances of this type directly, use the
@@ -97,7 +87,7 @@ type TableRenderer struct {
 	logger *slog.Logger
 	helper reflection.Helper
 	writer *tabwriter.Writer
-	cache  map[protoreflect.FullName]map[string]string
+	cache  map[protoreflect.FullName]map[string]proto.Message
 }
 
 // NewTableRenderer creates a new builder for table renderers.
@@ -143,7 +133,7 @@ func (b *TableRendererBuilder) Build() (result *TableRenderer, err error) {
 	writer := tabwriter.NewWriter(b.writer, 0, 0, 2, ' ', 0)
 
 	// Create the cache:
-	cache := map[protoreflect.FullName]map[string]string{}
+	cache := map[protoreflect.FullName]map[string]proto.Message{}
 
 	// Create and populate the object:
 	result = &TableRenderer{
@@ -224,11 +214,13 @@ func (r *TableRenderer) Render(ctx context.Context, objects any) error {
 	// Get the descriptor for the object type:
 	thisDesc := helper.Descriptor()
 
-	// Build CEL environment:
+	// Build CEL environment. Only the row type is registered eagerly; lookup targets are
+	// registered lazily inside lookupFunction when the expression actually evaluates lookup().
 	celEnv, err := cel.NewEnv(
 		cel.Types(dynamicpb.NewMessage(thisDesc)),
 		cel.Variable("this", cel.ObjectType(string(thisDesc.FullName()))),
 		ext.Strings(),
+		r.lookupFunction(ctx),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create CEL environment: %w", err)
@@ -390,10 +382,10 @@ func (r *TableRenderer) renderCell(ctx context.Context, col *columnLayout, val r
 			)
 		}
 	case types.String:
-		if col.Lookup && col.Type != "" {
+		if col.Type != "" {
 			messageType, _ := protoregistry.GlobalTypes.FindMessageByName(col.Type)
 			if messageType != nil {
-				return r.renderCellLookup(ctx, val, messageType.Descriptor(), col.LookupField)
+				return r.renderCellLookup(ctx, val, messageType.Descriptor())
 			}
 		}
 	}
@@ -432,14 +424,13 @@ func (r *TableRenderer) renderCellEnum(val types.Int, enumDesc protoreflect.Enum
 	return err
 }
 
-// renderCellLookup renders a lookup value (identifier to name translation). When lookupField is not empty, it is
-// used as a dot-separated field path to extract a value from the looked up object instead of its name.
+// renderCellLookup renders a lookup value (identifier to name translation).
 func (r *TableRenderer) renderCellLookup(ctx context.Context, val types.String,
-	messageDesc protoreflect.MessageDescriptor, lookupField string) error {
+	messageDesc protoreflect.MessageDescriptor) error {
 	key := string(val)
 	var text string
 	if key != "" {
-		text = r.lookupName(ctx, messageDesc.FullName(), key, lookupField)
+		text = r.lookupName(ctx, messageDesc.FullName(), key)
 	} else {
 		text = "-"
 	}
@@ -447,41 +438,48 @@ func (r *TableRenderer) renderCellLookup(ctx context.Context, val types.String,
 	return err
 }
 
-// lookupName looks up a field value from an identifier. When lookupField is empty it defaults to
-// "metadata.name", which gives the same result as the previous GetMetadata().GetName() path.
+// lookupName looks up a name from an identifier.
 func (r *TableRenderer) lookupName(ctx context.Context, messageFullName protoreflect.FullName,
-	key, lookupField string) (result string) {
-	if lookupField == "" {
-		lookupField = "metadata.name"
+	key string) string {
+	object := r.resolveObject(ctx, messageFullName, key)
+	if object == nil {
+		return key
 	}
+	helper := r.helper.Lookup(string(messageFullName))
+	if helper == nil {
+		return key
+	}
+	name := helper.GetName(object)
+	if name == "" {
+		return key
+	}
+	return name
+}
 
+// resolveObject fetches and caches an object by id or name.
+func (r *TableRenderer) resolveObject(ctx context.Context, targetType protoreflect.FullName,
+	key string) proto.Message {
 	// Check if the result is already in the cache and return it immediately if so, otherwise
-	// remember to update the cache when done. The lookup field is part of the cache key so that
-	// different fields looked up on the same type don't collide.
-	cacheKey := protoreflect.FullName(string(messageFullName) + ":" + lookupField)
-	cache, ok := r.cache[cacheKey]
+	// remember to update the cache when done:
+	cache, ok := r.cache[targetType]
 	if !ok {
-		cache = map[string]string{}
-		r.cache[cacheKey] = cache
+		cache = map[string]proto.Message{}
+		r.cache[targetType] = cache
 	}
-	result, ok = cache[key]
-	if ok {
-		return result
+	if object, ok := cache[key]; ok {
+		return object
 	}
-	defer func() {
-		cache[key] = result
-	}()
 
 	// Find the object helper:
-	helper := r.helper.Lookup(string(messageFullName))
+	helper := r.helper.Lookup(string(targetType))
 	if helper == nil {
 		r.logger.ErrorContext(
 			ctx,
 			"Failed to find object helper for type",
-			slog.String("type", string(messageFullName)),
+			slog.String("type", string(targetType)),
 		)
-		result = key
-		return
+		cache[key] = nil
+		return nil
 	}
 
 	// Find the objects whose identifier or name matches the key:
@@ -497,27 +495,117 @@ func (r *TableRenderer) lookupName(ctx context.Context, messageFullName protoref
 		r.logger.ErrorContext(
 			ctx,
 			"Failed to list objects for lookup",
-			slog.String("type", string(messageFullName)),
+			slog.String("type", string(targetType)),
 			slog.String("key", key),
 			slog.Any("error", err),
 		)
-		result = key
-		return
+		cache[key] = nil
+		return nil
 	}
 
-	// If there is no match, or multiple matches, return the original key:
+	// If there is no match return nil:
 	if len(listResult.Items) == 0 {
-		result = key
-		return
+		cache[key] = nil
+		return nil
 	}
 	object := listResult.Items[0]
+	cache[key] = object
+	return object
+}
 
-	// Resolve the requested field from the looked up object:
-	result = reflection.ResolveFieldPathOr(object, lookupField, "")
-	if result == "" {
-		result = key
+// lookupFunction returns a CEL environment option that registers the lookup() function. The function
+// takes a protobuf reference message (e.g. ClusterVersionReference) and returns the corresponding
+// object (e.g. ClusterVersion) so that the CEL expression can navigate its fields.
+//
+// Each lookup target type gets its own CEL type registry, created lazily on first use and cached
+// for the lifetime of the Render call. This avoids eagerly registering every resource type in the
+// CEL environment.
+func (r *TableRenderer) lookupFunction(ctx context.Context) cel.EnvOption {
+	registries := map[protoreflect.FullName]*types.Registry{}
+
+	return cel.Function("lookup",
+		cel.Overload(
+			"lookup_ref",
+			[]*cel.Type{cel.DynType},
+			cel.DynType,
+			cel.UnaryBinding(func(val ref.Val) ref.Val {
+				msg, ok := val.Value().(proto.Message)
+				if !ok {
+					return types.NewErr("lookup: expected a protobuf reference message, got %T", val.Value())
+				}
+				targetType, ok := referenceTargetType(msg.ProtoReflect().Descriptor())
+				if !ok {
+					r.logger.ErrorContext(
+						ctx,
+						"Failed to derive lookup target type from reference message",
+						slog.String("message", string(msg.ProtoReflect().Descriptor().FullName())),
+					)
+					return types.NewErr(
+						"lookup: cannot derive target type from %q",
+						msg.ProtoReflect().Descriptor().FullName(),
+					)
+				}
+				helper := r.helper.Lookup(string(targetType))
+				if helper == nil {
+					return types.NewErr("lookup: unknown target type %q", targetType)
+				}
+
+				registry, ok := registries[targetType]
+				if !ok {
+					var err error
+					registry, err = types.NewRegistry()
+					if err != nil {
+						return types.NewErr(
+							"lookup: failed to create type registry for %q: %v",
+							targetType, err,
+						)
+					}
+					for _, fd := range pb.CollectFileDescriptorSet(helper.Instance()) {
+						if err = registry.RegisterDescriptor(fd); err != nil {
+							return types.NewErr(
+								"lookup: failed to register type %q: %v",
+								targetType, err,
+							)
+						}
+					}
+					registries[targetType] = registry
+				}
+
+				key := referenceKey(msg)
+				if key == "" {
+					return registry.NativeToValue(helper.Instance())
+				}
+				object := r.resolveObject(ctx, targetType, key)
+				if object == nil {
+					return registry.NativeToValue(helper.Instance())
+				}
+				return registry.NativeToValue(object)
+			}),
+		),
+	)
+}
+
+// referenceTargetType derives the full name of the type that a reference message points to, using
+// the naming convention <Foo>Reference / <Foo>LocalReference -> <Foo>.
+func referenceTargetType(msgDesc protoreflect.MessageDescriptor) (protoreflect.FullName, bool) {
+	name := string(msgDesc.Name())
+	for _, suffix := range []string{"LocalReference", "Reference"} {
+		if base, ok := strings.CutSuffix(name, suffix); ok && base != "" {
+			return msgDesc.FullName().Parent().Append(protoreflect.Name(base)), true
+		}
 	}
-	return
+	return "", false
+}
+
+// referenceKey extracts the lookup key from a reference message, preferring id over name.
+func referenceKey(msg proto.Message) string {
+	if id, ok := reflection.ResolveFieldPath[string](msg, "id"); ok && id != "" {
+		return id
+	}
+	if name, ok := reflection.ResolveFieldPath[string](msg, "name"); ok && name != "" {
+		return name
+	}
+	return ""
 }
 
 // renderCellAny renders any value type as a string.

@@ -35,7 +35,6 @@ columns:
 - header: HUB
   value: this.status.hub
   type: osac.private.v1.Hub
-  lookup: true
 
 - header: ATTACHED
   value: "has(this.status) && this.status.attached? 'true': 'false'"

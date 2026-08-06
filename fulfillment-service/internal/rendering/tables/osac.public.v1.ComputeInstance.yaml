@@ -27,7 +27,6 @@ columns:
 - header: TEMPLATE
   value: this.spec.template.id
   type: osac.public.v1.ComputeInstanceTemplate
-  lookup: true
 
 - header: OS
   value: "has(this.spec.is_windows) && this.spec.is_windows ? 'windows' : 'linux'"

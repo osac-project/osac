@@ -25,13 +25,9 @@ columns:
 - header: TEMPLATE
   value: this.spec.template.id
   type: osac.private.v1.ClusterTemplate
-  lookup: true
 
 - header: VERSION
-  value: "has(this.spec.version)? this.spec.version.name: ''"
-  type: osac.private.v1.ClusterVersion
-  lookup: true
-  lookup_field: spec.version
+  value: "has(this.spec.version)? lookup(this.spec.version).spec.version: '-'"
 
 - header: STATE
   value: this.status.state
@@ -40,7 +36,6 @@ columns:
 - header: HUB
   value: this.status.hub
   type: osac.private.v1.Hub
-  lookup: true
 
 - header: API URL
   value: "has(this.status.api_url)? this.status.api_url: '-'"

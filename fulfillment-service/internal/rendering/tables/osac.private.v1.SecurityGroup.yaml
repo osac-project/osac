@@ -25,7 +25,6 @@ columns:
 - header: VIRTUAL-NETWORK
   value: this.spec.virtual_network.id
   type: osac.private.v1.VirtualNetwork
-  lookup: true
 
 - header: INGRESS-RULES
   value: '"%d".format([size(this.spec.ingress)])'

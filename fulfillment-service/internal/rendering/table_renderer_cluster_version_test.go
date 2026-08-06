@@ -16,11 +16,16 @@ package rendering
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"strings"
 
+	"github.com/google/cel-go/cel"
+	"github.com/google/cel-go/ext"
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/dynamicpb"
 
 	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
@@ -50,6 +55,9 @@ var _ = Describe("Cluster VERSION column rendering", func() {
 		helper.EXPECT().IsTenantScoped().
 			Return(true).
 			AnyTimes()
+		helper.EXPECT().Instance().
+			Return(&publicv1.ClusterVersion{}).
+			AnyTimes()
 		helper.EXPECT().
 			List(gomock.Any(), gomock.Any()).
 			Return(reflection.ListResult{Items: items, Total: int32(len(items))}, nil).
@@ -74,6 +82,8 @@ var _ = Describe("Cluster VERSION column rendering", func() {
 			Return(true).
 			AnyTimes()
 
+		versionDescriptor := (&publicv1.ClusterVersion{}).ProtoReflect().Descriptor()
+
 		helper := reflection.NewMockHelper(ctrl)
 		helper.EXPECT().
 			Lookup(gomock.Any()).
@@ -81,8 +91,11 @@ var _ = Describe("Cluster VERSION column rendering", func() {
 				switch objectType {
 				case string(clusterDescriptor.FullName()):
 					return clusterHelper
-				default:
+				case string(versionDescriptor.FullName()):
 					return versionHelper
+				default:
+					Fail(fmt.Sprintf("unexpected object type lookup: %s", objectType))
+					return nil
 				}
 			}).
 			AnyTimes()
@@ -99,7 +112,7 @@ var _ = Describe("Cluster VERSION column rendering", func() {
 		return buffer.String()
 	}
 
-	It("Resolves the version_name to the semver string via lookup_field", func(ctx context.Context) {
+	It("Resolves the version reference to the semver string via the lookup() function", func(ctx context.Context) {
 		version := publicv1.ClusterVersion_builder{
 			Metadata: publicv1.Metadata_builder{Name: "4-17-0"}.Build(),
 			Spec: publicv1.ClusterVersionSpec_builder{
@@ -109,7 +122,7 @@ var _ = Describe("Cluster VERSION column rendering", func() {
 		cluster := publicv1.Cluster_builder{
 			Id: "cluster-1",
 			Spec: publicv1.ClusterSpec_builder{
-				VersionName: proto.String("4-17-0"),
+				Version: &publicv1.ClusterVersionReference{Name: "4-17-0"},
 			}.Build(),
 		}.Build()
 
@@ -118,29 +131,74 @@ var _ = Describe("Cluster VERSION column rendering", func() {
 		Expect(output).ToNot(ContainSubstring("4-17-0\t"))
 	})
 
-	It("Falls back to the version_name when the looked-up object has no spec.version", func(ctx context.Context) {
-		version := publicv1.ClusterVersion_builder{
-			Metadata: publicv1.Metadata_builder{Name: "4-17-0"}.Build(),
-			Spec:     publicv1.ClusterVersionSpec_builder{}.Build(),
-		}.Build()
+	It("Shows '-' when the cluster has no version", func(ctx context.Context) {
 		cluster := publicv1.Cluster_builder{
-			Id: "cluster-2",
-			Spec: publicv1.ClusterSpec_builder{
-				VersionName: proto.String("4-17-0"),
-			}.Build(),
-		}.Build()
-
-		output := renderClusters(ctx, cluster, makeVersionHelper([]proto.Message{version}))
-		Expect(output).To(ContainSubstring("4-17-0"))
-	})
-
-	It("Shows '-' when the cluster has no version_name", func(ctx context.Context) {
-		cluster := publicv1.Cluster_builder{
-			Id:   "cluster-3",
+			Id:   "cluster3",
 			Spec: publicv1.ClusterSpec_builder{}.Build(),
 		}.Build()
 
 		output := renderClusters(ctx, cluster, makeVersionHelper(nil))
-		Expect(output).To(MatchRegexp(`VERSION.*\n.*-`))
+		lines := strings.Split(strings.TrimSpace(output), "\n")
+		Expect(lines).To(HaveLen(2))
+		versionCol := strings.Index(lines[0], "VERSION")
+		Expect(versionCol).To(BeNumerically(">=", 0))
+		Expect(lines[1][versionCol]).To(Equal(byte('-')))
+	})
+
+	It("Navigates into types from imported proto files via lookup()", func(ctx context.Context) {
+		// Metadata is defined in metadata_type.proto, imported by cluster_version_type.proto.
+		// This test verifies that the lazy type registry registers transitive imports so that
+		// lookup(ref).metadata.name resolves correctly.
+		version := publicv1.ClusterVersion_builder{
+			Metadata: publicv1.Metadata_builder{Name: "my-version"}.Build(),
+			Spec:     publicv1.ClusterVersionSpec_builder{Version: "4.17.0"}.Build(),
+		}.Build()
+		cluster := publicv1.Cluster_builder{
+			Id: "cluster-4",
+			Spec: publicv1.ClusterSpec_builder{
+				Version: &publicv1.ClusterVersionReference{Name: "my-version"},
+			}.Build(),
+		}.Build()
+
+		versionHelper := makeVersionHelper([]proto.Message{version})
+		clusterDescriptor := cluster.ProtoReflect().Descriptor()
+
+		helper := reflection.NewMockHelper(ctrl)
+		helper.EXPECT().
+			Lookup(gomock.Any()).
+			DoAndReturn(func(objectType string) reflection.ObjectHelper {
+				if objectType == string((&publicv1.ClusterVersion{}).ProtoReflect().Descriptor().FullName()) {
+					return versionHelper
+				}
+				return nil
+			}).
+			AnyTimes()
+
+		buffer := &bytes.Buffer{}
+		renderer, err := NewTableRenderer().
+			SetLogger(logger).
+			SetHelper(helper).
+			SetWriter(buffer).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		celEnv, err := cel.NewEnv(
+			cel.Types(dynamicpb.NewMessage(clusterDescriptor)),
+			cel.Variable("this", cel.ObjectType(string(clusterDescriptor.FullName()))),
+			ext.Strings(),
+			renderer.lookupFunction(ctx),
+		)
+		Expect(err).ToNot(HaveOccurred())
+
+		ast, issues := celEnv.Compile("lookup(this.spec.version).metadata.name")
+		Expect(issues.Err()).ToNot(HaveOccurred())
+		prg, err := celEnv.Program(ast)
+		Expect(err).ToNot(HaveOccurred())
+
+		celVars, err := cel.PartialVars(map[string]any{"this": cluster})
+		Expect(err).ToNot(HaveOccurred())
+		out, _, err := prg.Eval(celVars)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(out.Value()).To(Equal("my-version"))
 	})
 })

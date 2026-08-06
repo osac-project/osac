@@ -76,8 +76,10 @@ var _ = Describe("Compute instance table rendering", func() {
 					nil).
 				AnyTimes()
 			templateHelper.EXPECT().
-				GetMetadata(gomock.Any()).
-				Return(templateMetadata).
+				GetName(gomock.Any()).
+				DoAndReturn(func(obj proto.Message) string {
+					return templateName
+				}).
 				AnyTimes()
 
 			// Create the compute instance object:

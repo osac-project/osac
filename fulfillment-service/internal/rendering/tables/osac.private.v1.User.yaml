@@ -25,4 +25,3 @@ columns:
 - header: TENANT
   value: "has(this.metadata.tenant)? this.metadata.tenant: '-'"
   type: osac.private.v1.Tenant
-  lookup: true

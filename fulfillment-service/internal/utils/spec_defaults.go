@@ -14,6 +14,7 @@ language governing permissions and limitations under the License.
 package utils
 
 import (
+	"fmt"
 	"slices"
 	"sort"
 	"strings"
@@ -126,8 +127,13 @@ func ValidateRequiredSpecFields(spec *privatev1.ComputeInstanceSpec) error {
 	if err := validateImage(spec.GetImage()); err != nil {
 		return err
 	}
-	if err := validateBootDisk(spec.GetBootDisk()); err != nil {
-		return err
+	if err := validateDisk(spec.GetBootDisk()); err != nil {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "boot_disk.%s", err)
+	}
+	for i, disk := range spec.GetAdditionalDisks() {
+		if err := validateDisk(disk); err != nil {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument, "additional_disks[%d].%s", i, err)
+		}
 	}
 
 	return nil
@@ -165,15 +171,15 @@ func validateImage(image *privatev1.ComputeInstanceImage) error {
 	return nil
 }
 
-func validateBootDisk(disk *privatev1.ComputeInstanceDisk) error {
+func validateDisk(disk *privatev1.ComputeInstanceDisk) error {
 	if disk == nil {
 		return nil
 	}
 	if disk.GetSizeGib() <= 0 {
-		return grpcstatus.Errorf(
-			grpccodes.InvalidArgument,
-			"boot_disk.size_gib must be greater than 0",
-		)
+		return fmt.Errorf("size_gib must be greater than 0")
+	}
+	if !disk.HasStorageTier() || disk.GetStorageTier() == "" {
+		return fmt.Errorf("storage_tier is required and was not provided by user or any defaults")
 	}
 	return nil
 }

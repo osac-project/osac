@@ -1366,6 +1366,170 @@ var _ = Describe("Consumer", func() {
 			Expect(data["duration_seconds"]).ToNot(BeNil())
 		})
 
+		It("sets duration_seconds=nil for newly-added component (no prior billing interval)", func() {
+			store := newMockStore()
+			billableStart := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+			store.states["cl-add"] = projection.ResourceState{
+				ResourceID:         "cl-add",
+				ResourceType:       events.ResourceTypeClusterOrder,
+				TenantID:           "tenant-1",
+				CurrentState:       "READY",
+				IsBillable:         true,
+				BillableSince:      &billableStart,
+				FulfillmentVersion: 1,
+				BillingDimensions: map[string]any{
+					"cluster_template": "tmpl",
+					"components": []any{
+						map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
+					},
+				},
+				TransitionTime: billableStart,
+			}
+
+			addedNodeSets := map[string]*privatev1.ClusterNodeSet{
+				"tpu-workers": {HostType: &privatev1.HostTypeReference{Name: "tpu-v5"}, Size: 2},
+			}
+			cl := makeCluster("cl-add", "tenant-1", privatev1.ClusterState_CLUSTER_STATE_READY, addedNodeSets)
+			event := &privatev1.Event{
+				Id:      "evt-add-component",
+				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+				Payload: &privatev1.Event_Cluster{Cluster: cl},
+			}
+
+			stream := &mockWatchStream{
+				responses: []*privatev1.EventsWatchResponse{makeResponse(event)},
+			}
+			client.results = []mockStreamResult{{stream: stream}}
+
+			pub := &mockPublisher{published: make([]cloudevents.Event, 0, 1), cancelFunc: cancel}
+			consumer := newConsumerWithStore(pub, store)
+
+			err := consumer.Run(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			pub.mu.Lock()
+			defer pub.mu.Unlock()
+			Expect(pub.published).To(HaveLen(1))
+
+			var data map[string]any
+			Expect(json.Unmarshal(pub.published[0].Data(), &data)).To(Succeed())
+			bd := data["billing_dimensions"].(map[string]any)
+			Expect(bd["node_set"]).To(Equal("tpu-workers"))
+			Expect(data["duration_seconds"]).To(BeNil(),
+				"newly-added component has no prior billing interval, duration must be nil")
+		})
+
+		It("sets duration for modified component and nil for new component in same scaling event", func() {
+			store := newMockStore()
+			billableStart := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+			store.states["cl-mixed"] = projection.ResourceState{
+				ResourceID:         "cl-mixed",
+				ResourceType:       events.ResourceTypeClusterOrder,
+				TenantID:           "tenant-1",
+				CurrentState:       "READY",
+				IsBillable:         true,
+				BillableSince:      &billableStart,
+				FulfillmentVersion: 1,
+				BillingDimensions: map[string]any{
+					"cluster_template": "ocp-ci-small",
+					"components": []any{
+						map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
+						map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(2)},
+					},
+				},
+				TransitionTime: billableStart,
+			}
+
+			mixedNodeSets := map[string]*privatev1.ClusterNodeSet{
+				"gpu-workers": {HostType: &privatev1.HostTypeReference{Name: "gpu-h100"}, Size: 4},
+				"tpu-workers": {HostType: &privatev1.HostTypeReference{Name: "tpu-v5"}, Size: 2},
+			}
+			cl := makeCluster("cl-mixed", "tenant-1", privatev1.ClusterState_CLUSTER_STATE_READY, mixedNodeSets)
+			event := &privatev1.Event{
+				Id:      "evt-mixed",
+				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+				Payload: &privatev1.Event_Cluster{Cluster: cl},
+			}
+
+			stream := &mockWatchStream{
+				responses: []*privatev1.EventsWatchResponse{makeResponse(event)},
+			}
+			client.results = []mockStreamResult{{stream: stream}}
+
+			pub := &mockPublisher{published: make([]cloudevents.Event, 0, 2), cancelFunc: cancel}
+			consumer := newConsumerWithStore(pub, store)
+
+			err := consumer.Run(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			pub.mu.Lock()
+			defer pub.mu.Unlock()
+			Expect(pub.published).To(HaveLen(2))
+
+			eventsByNodeSet := map[string]map[string]any{}
+			for _, e := range pub.published {
+				var data map[string]any
+				Expect(json.Unmarshal(e.Data(), &data)).To(Succeed())
+				bd := data["billing_dimensions"].(map[string]any)
+				eventsByNodeSet[bd["node_set"].(string)] = data
+			}
+
+			Expect(eventsByNodeSet).To(HaveKey("gpu-workers"))
+			Expect(eventsByNodeSet["gpu-workers"]["duration_seconds"]).ToNot(BeNil(),
+				"modified component should have duration_seconds (closes prior billing interval)")
+
+			Expect(eventsByNodeSet).To(HaveKey("tpu-workers"))
+			Expect(eventsByNodeSet["tpu-workers"]["duration_seconds"]).To(BeNil(),
+				"newly-added component should have nil duration_seconds (no prior interval)")
+		})
+
+		It("advances projection version on same-state-same-dims update with higher version", func() {
+			store := newMockStore()
+			now := time.Now().UTC().Truncate(time.Microsecond)
+			store.states["vm-version"] = projection.ResourceState{
+				ResourceID:         "vm-version",
+				ResourceType:       events.ResourceTypeComputeInstance,
+				TenantID:           "tenant-1",
+				CurrentState:       "RUNNING",
+				IsBillable:         true,
+				FulfillmentVersion: 5,
+				BillingDimensions:  map[string]any{},
+				TransitionTime:     now,
+			}
+
+			ci := makeComputeInstance("vm-version", "tenant-1")
+			ci.Metadata.Version = 10
+			ci.Status.StateTransitionTime = timestamppb.New(now)
+			event := &privatev1.Event{
+				Id:      "evt-version-bump",
+				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+				Payload: &privatev1.Event_ComputeInstance{ComputeInstance: ci},
+			}
+
+			stream := &mockWatchStream{
+				responses: []*privatev1.EventsWatchResponse{makeResponse(event)},
+			}
+			client.results = []mockStreamResult{{stream: stream}}
+
+			pub := &mockPublisher{cancelFunc: cancel}
+			consumer := newConsumerWithStore(pub, store)
+
+			done := make(chan error, 1)
+			go func() { done <- consumer.Run(ctx) }()
+			time.Sleep(50 * time.Millisecond)
+			cancel()
+			Eventually(done, time.Second).Should(Receive(BeNil()))
+
+			pub.mu.Lock()
+			defer pub.mu.Unlock()
+			Expect(pub.published).To(BeEmpty(), "same state+dims should not publish")
+
+			store.mu.Lock()
+			defer store.mu.Unlock()
+			Expect(store.states["vm-version"].FulfillmentVersion).To(Equal(int32(10)),
+				"version should be advanced even when event is skipped")
+		})
+
 		It("publishes exactly 1 event for cluster DELETED (not N+1)", func() {
 			store := newMockStore()
 			now := time.Now().UTC().Truncate(time.Microsecond)

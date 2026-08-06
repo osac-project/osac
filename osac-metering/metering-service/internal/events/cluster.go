@@ -233,6 +233,7 @@ type ComponentRecord struct {
 	NodeCount       int32
 	ClusterTemplate string
 	ReleaseImage    string
+	IsNew           bool
 }
 
 // FlatBillingDimensions returns per-component billing dimensions for a single
@@ -340,6 +341,7 @@ func ChangedComponents(oldDims, newDims map[string]any) []ComponentRecord {
 		newByKey[r.NodeSet] = true
 		old, exists := oldByKey[r.NodeSet]
 		if !exists || old.NodeCount != r.NodeCount || old.HostType != r.HostType {
+			r.IsNew = !exists
 			changed = append(changed, r)
 		}
 	}

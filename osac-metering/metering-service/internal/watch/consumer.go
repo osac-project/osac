@@ -159,13 +159,20 @@ func (c *Consumer) handleEvent(ctx context.Context, event *privatev1.Event) erro
 		return err
 	}
 
-	if c.shouldSkipUpdate(event, existing, currentState, dims, transitionTime, resourceID) {
+	if c.shouldSkipUpdate(ctx, event, existing, currentState, dims, version, transitionTime, resourceID) {
 		return nil
 	}
 
 	stateCtx := c.buildStateContext(existing, isBillable, transitionTime, dims)
 
-	ce, err := events.MapWatchEvent(event, mapper, stateCtx)
+	eventDims := dims
+	if mapper.ResourceType() == events.ResourceTypeClusterOrder &&
+		(event.GetType() == privatev1.EventType_EVENT_TYPE_OBJECT_CREATED ||
+			event.GetType() == privatev1.EventType_EVENT_TYPE_OBJECT_DELETED) {
+		eventDims = topLevelDims(dims)
+	}
+
+	ce, err := events.MapWatchEvent(event, mapper, stateCtx, eventDims)
 	if err != nil {
 		if errors.Is(err, events.ErrTransientState) {
 			return c.handleTransientState(ctx, mapper, existing, version, transitionTime)
@@ -264,9 +271,6 @@ const DimComponents = "components"
 
 func (c *Consumer) publishLifecycleEvents(ctx context.Context, baseCE *cloudevents.Event, mapper events.ResourceMapper, eventID string) error {
 	if baseCE.Type() == events.EventCreated || baseCE.Type() == events.EventDeleted {
-		if mapper.ResourceType() == events.ResourceTypeClusterOrder {
-			c.stripComponentsFromAuditEvent(baseCE)
-		}
 		return c.publishWithRetry(ctx, baseCE)
 	}
 
@@ -290,50 +294,53 @@ func (c *Consumer) handleScalingEvent(ctx context.Context, event *privatev1.Even
 	stateCtx := c.buildStateContext(existing, isBillable, transitionTime, dims)
 
 	return c.publishAndUpsert(ctx, func() error {
-		scalingEvents, err := events.BuildDimensionChangeEvents(
-			mapper.ResourceType(), existing.BillingDimensions, dims, event.GetId(),
-			func(d map[string]any, eventID string) (cloudevents.Event, error) {
-				return c.buildScalingEvent(eventID, mapper, d, stateCtx, transitionTime)
-			})
-		if err != nil {
-			return err
-		}
-		if len(scalingEvents) == 0 {
-			c.logger.V(1).Info("non-component dimension change, projection updated",
-				"resource_id", resourceID)
+		if mapper.ResourceType() == events.ResourceTypeClusterOrder {
+			changed := events.ChangedComponents(existing.BillingDimensions, dims)
+			if len(changed) == 0 {
+				c.logger.V(1).Info("non-component dimension change, projection updated",
+					"resource_id", resourceID)
+				return nil
+			}
+			for _, comp := range changed {
+				scalingCtx := stateCtx
+				if comp.IsNew {
+					scalingCtx = &events.StateContext{
+						PreviousState: stateCtx.PreviousState,
+						WasBillable:   stateCtx.WasBillable,
+						NewDimensions: stateCtx.NewDimensions,
+					}
+				}
+				ce, ceErr := c.buildScalingEvent(
+					events.ComponentEventID(event.GetId(), comp),
+					mapper, comp.FlatBillingDimensions(), scalingCtx, transitionTime)
+				if ceErr != nil {
+					return ceErr
+				}
+				if err := c.publishWithRetry(ctx, &ce); err != nil {
+					return err
+				}
+			}
+			c.logger.Info("published scaling events",
+				"resource_id", resourceID, "changed_components", len(changed))
 			return nil
 		}
-		for i := range scalingEvents {
-			if err := c.publishWithRetry(ctx, &scalingEvents[i]); err != nil {
-				return err
-			}
+		// VMaaS: single updated.v1
+		ce, ceErr := c.buildScalingEvent(event.GetId(), mapper, dims, stateCtx, transitionTime)
+		if ceErr != nil {
+			return ceErr
 		}
-		c.logger.Info("published scaling events",
-			"resource_id", resourceID, "changed_components", len(scalingEvents))
-		return nil
+		return c.publishWithRetry(ctx, &ce)
 	}, projState, resourceID)
 }
 
-// stripComponentsFromAuditEvent removes the nested "components" array from
-// cluster_order created.v1/deleted.v1 events so the audit payload has flat
-// billing_dimensions (just cluster_template, release_image).
-func (c *Consumer) stripComponentsFromAuditEvent(ce *cloudevents.Event) {
-	var data map[string]any
-	if err := ce.DataAs(&data); err != nil {
-		return
-	}
-	bd, ok := data["billing_dimensions"].(map[string]any)
-	if !ok {
-		return
-	}
-	flatDims := make(map[string]any, len(bd))
-	for k, v := range bd {
+func topLevelDims(dims map[string]any) map[string]any {
+	flat := make(map[string]any, len(dims))
+	for k, v := range dims {
 		if k != DimComponents {
-			flatDims[k] = v
+			flat[k] = v
 		}
 	}
-	data["billing_dimensions"] = flatDims
-	_ = ce.SetData(cloudevents.ApplicationJSON, data)
+	return flat
 }
 
 func (c *Consumer) buildComponentEvent(baseCE *cloudevents.Event, eventID string, dims map[string]any) (cloudevents.Event, error) {
@@ -396,12 +403,19 @@ func (c *Consumer) buildScalingEvent(eventID string, mapper events.ResourceMappe
 	}
 	return ce, nil
 }
-func (c *Consumer) shouldSkipUpdate(event *privatev1.Event, existing *projection.ResourceState, currentState string, dims map[string]any, transitionTime time.Time, resourceID string) bool {
+func (c *Consumer) shouldSkipUpdate(ctx context.Context, event *privatev1.Event, existing *projection.ResourceState, currentState string, dims map[string]any, version int32, transitionTime time.Time, resourceID string) bool {
 	if event.GetType() != privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED || existing == nil {
 		return false
 	}
 	if existing.CurrentState != currentState || !events.DimensionsEqual(existing.BillingDimensions, dims) {
 		return false
+	}
+	if version > existing.FulfillmentVersion {
+		existing.FulfillmentVersion = version
+		existing.TransitionTime = transitionTime.UTC()
+		if err := c.store.Upsert(ctx, *existing); err != nil && !errors.Is(err, projection.ErrStaleVersion) {
+			c.logger.Error(err, "failed to advance projection version", "resource_id", resourceID)
+		}
 	}
 	if !existing.TransitionTime.Truncate(time.Microsecond).Equal(transitionTime.UTC().Truncate(time.Microsecond)) {
 		c.logger.Info("skipping replayed event (upserted but likely unpublished)",

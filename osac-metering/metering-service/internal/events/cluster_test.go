@@ -733,6 +733,37 @@ var _ = Describe("ChangedComponents", func() {
 		Expect(nodeSetToHostType["pool-b"]).To(Equal("cpu-only"))
 	})
 
+	It("sets IsNew=true for newly-added components and IsNew=false for modified", func() {
+		oldDims := map[string]any{
+			"cluster_template": "tmpl",
+			"components": []any{
+				map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
+				map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(2)},
+			},
+		}
+		newDims := map[string]any{
+			"cluster_template": "tmpl",
+			"components": []any{
+				map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
+				map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(4)},
+				map[string]any{"node_set": "tpu-workers", "component": "worker", "host_type": "tpu-v5", "node_count": int32(2)},
+			},
+		}
+
+		changed := events.ChangedComponents(oldDims, newDims)
+		Expect(changed).To(HaveLen(2))
+
+		byNodeSet := map[string]events.ComponentRecord{}
+		for _, c := range changed {
+			byNodeSet[c.NodeSet] = c
+		}
+
+		Expect(byNodeSet["gpu-workers"].IsNew).To(BeFalse(),
+			"modified component should have IsNew=false")
+		Expect(byNodeSet["tpu-workers"].IsNew).To(BeTrue(),
+			"newly-added component should have IsNew=true")
+	})
+
 	It("detects host_type change within a node set", func() {
 		oldDims := map[string]any{
 			"cluster_template": "tmpl",

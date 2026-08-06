@@ -19,7 +19,7 @@ func mapEvent(event *privatev1.Event, stateCtx *events.StateContext) (*cloudeven
 	if err != nil {
 		return nil, err
 	}
-	return events.MapWatchEvent(event, mapper, stateCtx)
+	return events.MapWatchEvent(event, mapper, stateCtx, mapper.BillingDimensionsMap())
 }
 
 var _ = Describe("MapWatchEvent", func() {

@@ -40,8 +40,10 @@ type StateContext struct {
 }
 
 // MapWatchEvent converts a fulfillment-service Watch Event into a CloudEvents 1.0
-// event using the appropriate ResourceMapper for the payload type.
-func MapWatchEvent(event *privatev1.Event, mapper ResourceMapper, stateCtx *StateContext) (*cloudevents.Event, error) {
+// event. billingDims is the billing dimensions to embed in the event payload —
+// callers pass per-component flat dims (from decomposition) or top-level-only
+// dims (for audit events), never the nested stored form directly.
+func MapWatchEvent(event *privatev1.Event, mapper ResourceMapper, stateCtx *StateContext, billingDims map[string]any) (*cloudevents.Event, error) {
 	previousState := stateCtx.PreviousState
 
 	ceType, err := mapper.CloudEventType(event.GetType(), previousState)
@@ -91,7 +93,7 @@ func MapWatchEvent(event *privatev1.Event, mapper ResourceMapper, stateCtx *Stat
 		CurrentState:      mapper.CurrentState(),
 		TransitionTime:    transitionTime.Format(time.RFC3339Nano),
 		DurationSeconds:   durationPtr,
-		BillingDimensions: mapper.BillingDimensionsMap(),
+		BillingDimensions: billingDims,
 		SchemaVersion:     "v1",
 	}
 	if err := ce.SetData(cloudevents.ApplicationJSON, data); err != nil {

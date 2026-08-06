@@ -348,7 +348,7 @@ var _ = Describe("Clusters server", func() {
 			))
 		})
 
-		It("Rejects node set with host type that isn't in the template", func() {
+		It("Accepts node set with host type different from the template", func() {
 			response, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
 				Object: publicv1.Cluster_builder{
 					Spec: publicv1.ClusterSpec_builder{
@@ -362,15 +362,33 @@ var _ = Describe("Clusters server", func() {
 					}.Build(),
 				}.Build(),
 			}.Build())
-			Expect(err).To(HaveOccurred())
-			Expect(response).To(BeNil())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(Equal(
-				"host type for node set 'compute' should be empty, 'test-host-type-1tib' or 'acme_1tib', like in " +
-					"template 'my_template', but it is 'hal_9000'",
-			))
+			Expect(err).ToNot(HaveOccurred())
+			object := response.GetObject()
+			nodeSets := object.GetSpec().GetNodeSets()
+			Expect(nodeSets).To(HaveKey("compute"))
+			Expect(nodeSets["compute"].GetHostType().GetId()).To(Equal("hal_9000"))
+			Expect(nodeSets["compute"].GetSize()).To(BeNumerically("==", 1000))
+		})
+
+		It("Uses template host type when cluster node set omits it", func() {
+			response, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
+				Object: publicv1.Cluster_builder{
+					Spec: publicv1.ClusterSpec_builder{
+						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
+						NodeSets: map[string]*publicv1.ClusterNodeSet{
+							"compute": publicv1.ClusterNodeSet_builder{
+								Size: 5,
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			object := response.GetObject()
+			nodeSets := object.GetSpec().GetNodeSets()
+			Expect(nodeSets).To(HaveKey("compute"))
+			Expect(nodeSets["compute"].GetHostType().GetId()).To(Equal("acme_1tib"))
+			Expect(nodeSets["compute"].GetSize()).To(BeNumerically("==", 5))
 		})
 
 		It("Rejects node set with zero size", func() {

@@ -513,7 +513,7 @@ func (r *TableRenderer) lookupName(ctx context.Context, messageFullName protoref
 	object := listResult.Items[0]
 
 	// Resolve the requested field from the looked up object:
-	result = reflection.ResolveFieldPath(object, lookupField)
+	result = reflection.ResolveFieldPathOr(object, lookupField, "")
 	if result == "" {
 		result = key
 	}

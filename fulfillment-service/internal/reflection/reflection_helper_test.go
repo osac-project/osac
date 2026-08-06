@@ -25,10 +25,20 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
-	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/packages"
 	"github.com/osac-project/osac/fulfillment-service/internal/testing"
 )
+
+type testTenantKey struct{}
+
+func testTenantFromContext(ctx context.Context) string {
+	v, _ := ctx.Value(testTenantKey{}).(string)
+	return v
+}
+
+func testTenantIntoContext(ctx context.Context, tenant string) context.Context {
+	return context.WithValue(ctx, testTenantKey{}, tenant)
+}
 
 var _ = Describe("Reflection helper", func() {
 	var (
@@ -128,7 +138,7 @@ var _ = Describe("Reflection helper", func() {
 				SetLogger(logger).
 				SetConnection(connection).
 				AddPackage(packages.PublicV1, 1).
-				SetTenantFunc(config.TenantFromContext).
+				SetTenantFunc(testTenantFromContext).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 		})
@@ -694,7 +704,7 @@ var _ = Describe("Reflection helper", func() {
 			})
 			server.Start()
 
-			tenantCtx := config.TenantIntoContext(ctx, "acme")
+			tenantCtx := testTenantIntoContext(ctx, "acme")
 			objectHelper := helper.Lookup("cluster")
 			Expect(objectHelper).ToNot(BeNil())
 			_, err := objectHelper.List(tenantCtx, ListOptions{})
@@ -717,7 +727,7 @@ var _ = Describe("Reflection helper", func() {
 			})
 			server.Start()
 
-			tenantCtx := config.TenantIntoContext(ctx, "acme")
+			tenantCtx := testTenantIntoContext(ctx, "acme")
 			objectHelper := helper.Lookup("cluster")
 			Expect(objectHelper).ToNot(BeNil())
 			_, err := objectHelper.List(tenantCtx, ListOptions{

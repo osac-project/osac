@@ -21,6 +21,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
 )
 
 // errRefNotFound satisfies the IsNotFound() interface expected by the reference validator.
@@ -77,25 +78,11 @@ func NewDAOLookupFunc[O dao.Object](d *dao.GenericDAO[O]) ReferenceLookupFunc {
 			ID: item.GetId(),
 		}
 
-		msg := item.ProtoReflect()
-		metadataFD := msg.Descriptor().Fields().ByName("metadata")
-		if metadataFD != nil {
-			metadataMsg := msg.Get(metadataFD).Message()
-
-			nameFD := metadataMsg.Descriptor().Fields().ByName("name")
-			if nameFD != nil {
-				resolved.Name = metadataMsg.Get(nameFD).String()
-			}
-
-			tenantFD := metadataMsg.Descriptor().Fields().ByName("tenant")
-			if tenantFD != nil {
-				resolved.Tenant = metadataMsg.Get(tenantFD).String()
-			}
-
-			projectFD := metadataMsg.Descriptor().Fields().ByName("project")
-			if projectFD != nil {
-				resolved.Project = metadataMsg.Get(projectFD).String()
-			}
+		if metadata, ok := reflection.ResolveFieldPath[protoreflect.Message](item, "metadata"); ok {
+			m := metadata.Interface()
+			resolved.Name = reflection.ResolveFieldPathOr(m, "name", "")
+			resolved.Tenant = reflection.ResolveFieldPathOr(m, "tenant", "")
+			resolved.Project = reflection.ResolveFieldPathOr(m, "project", "")
 		}
 
 		return resolved, nil

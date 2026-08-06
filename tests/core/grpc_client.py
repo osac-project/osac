@@ -444,14 +444,14 @@ class GRPCClient:
     # ProjectMembership operations (public API)
 
     def create_project_membership(
-        self, *, name: str, project_name: str, user_name: str, role: str = "PROJECT_MEMBERSHIP_ROLE_VIEWER"
+        self, *, name: str, user_names: list[str], role: str = "PROJECT_MEMBERSHIP_ROLE_VIEWER"
     ) -> str:
         response: dict[str, Any] = self.call(
             service=f"{PUBLIC_API}.ProjectMemberships/Create",
             data={
                 "object": {
                     "metadata": {"name": name},
-                    "spec": {"project": {"name": project_name}, "user": {"name": user_name}, "role": role},
+                    "spec": {"role": role, "users": [{"name": u} for u in user_names]},
                 }
             },
         )

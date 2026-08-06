@@ -121,13 +121,22 @@ var _ = Describe("ResolveTransitionTime", func() {
 		Expect(t).To(Equal(stateTransitionTS.AsTime()))
 	})
 
-	It("returns error for unknown event type", func() {
+	It("returns ErrUnsupportedEvent for OBJECT_SIGNALED", func() {
+		_, err := events.ResolveTransitionTime(
+			privatev1.EventType_EVENT_TYPE_OBJECT_SIGNALED,
+			creationTS, deletionTS, stateTransitionTS, "res-1",
+		)
+		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, events.ErrUnsupportedEvent)).To(BeTrue())
+	})
+
+	It("returns ErrUnsupportedEvent for unknown event type", func() {
 		_, err := events.ResolveTransitionTime(
 			privatev1.EventType(9999),
 			creationTS, deletionTS, stateTransitionTS, "res-1",
 		)
 		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("unsupported event type for timestamp"))
+		Expect(errors.Is(err, events.ErrUnsupportedEvent)).To(BeTrue())
 	})
 
 	It("returns ErrDataQuality when creation timestamp is nil for CREATED", func() {

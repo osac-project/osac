@@ -489,6 +489,127 @@ var _ = Describe("Consumer", func() {
 			Expect(client.watchCallCount()).To(BeNumerically(">=", 2))
 		})
 
+		It("skips OBJECT_SIGNALED without killing the stream", func() {
+			ciRunning := makeComputeInstance("vm-signaled", "tenant-1")
+			ciRunning.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING
+
+			stream := &mockWatchStream{
+				responses: []*privatev1.EventsWatchResponse{
+					makeResponse(&privatev1.Event{
+						Id:      "evt-signaled",
+						Type:    privatev1.EventType_EVENT_TYPE_OBJECT_SIGNALED,
+						Payload: &privatev1.Event_ComputeInstance{ComputeInstance: ciRunning},
+					}),
+					makeResponse(makeEvent("evt-after", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED)),
+				},
+			}
+			client.results = []mockStreamResult{{stream: stream}}
+
+			pub := &mockPublisher{published: make([]cloudevents.Event, 0, 1), cancelFunc: cancel}
+			consumer := newConsumer(pub)
+
+			err := consumer.Run(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			// Single stream — no reconnect
+			Expect(client.watchCallCount()).To(Equal(1))
+
+			pub.mu.Lock()
+			defer pub.mu.Unlock()
+			Expect(pub.published).To(HaveLen(1))
+			Expect(pub.published[0].Type()).To(Equal("osac.resource.created.v1"))
+		})
+
+		It("skips metadata-only update with no state_transition_time without killing the stream", func() {
+			store := newMockStore()
+			store.states["vm-meta"] = projection.ResourceState{
+				ResourceID:   "vm-meta",
+				ResourceType: "compute_instance",
+				TenantID:     "tenant-1",
+				CurrentState: "STARTING",
+			}
+
+			ciNoTimestamp := makeComputeInstance("vm-meta", "tenant-1")
+			ciNoTimestamp.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING
+			ciNoTimestamp.Status.StateTransitionTime = nil
+
+			ciRunning := makeComputeInstance("vm-meta", "tenant-1")
+			ciRunning.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING
+			ciRunning.Metadata.Version = 2
+
+			stream := &mockWatchStream{
+				responses: []*privatev1.EventsWatchResponse{
+					makeResponse(&privatev1.Event{
+						Id:      "evt-meta-update",
+						Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+						Payload: &privatev1.Event_ComputeInstance{ComputeInstance: ciNoTimestamp},
+					}),
+					makeResponse(&privatev1.Event{
+						Id:      "evt-running",
+						Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+						Payload: &privatev1.Event_ComputeInstance{ComputeInstance: ciRunning},
+					}),
+				},
+			}
+			client.results = []mockStreamResult{{stream: stream}}
+
+			pub := &mockPublisher{published: make([]cloudevents.Event, 0, 1), cancelFunc: cancel}
+			consumer := newConsumerWithStore(pub, store)
+
+			err := consumer.Run(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			// Single stream — no reconnect
+			Expect(client.watchCallCount()).To(Equal(1))
+
+			pub.mu.Lock()
+			defer pub.mu.Unlock()
+			Expect(pub.published).To(HaveLen(1))
+			Expect(pub.published[0].Type()).To(Equal("osac.resource.started.v1"))
+		})
+
+		It("fails fast on data quality error when state actually changed", func() {
+			store := newMockStore()
+			store.states["vm-dq"] = projection.ResourceState{
+				ResourceID:   "vm-dq",
+				ResourceType: "compute_instance",
+				TenantID:     "tenant-1",
+				CurrentState: "RUNNING",
+			}
+
+			ciStopped := makeComputeInstance("vm-dq", "tenant-1")
+			ciStopped.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPED
+			ciStopped.Status.StateTransitionTime = nil
+
+			goodEvent := makeEvent("evt-after", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED)
+
+			stream1 := &mockWatchStream{
+				responses: []*privatev1.EventsWatchResponse{
+					makeResponse(&privatev1.Event{
+						Id:      "evt-dq",
+						Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+						Payload: &privatev1.Event_ComputeInstance{ComputeInstance: ciStopped},
+					}),
+				},
+			}
+			stream2 := &mockWatchStream{
+				responses: []*privatev1.EventsWatchResponse{makeResponse(goodEvent)},
+			}
+			client.results = []mockStreamResult{
+				{stream: stream1},
+				{stream: stream2},
+			}
+
+			pub := &mockPublisher{published: make([]cloudevents.Event, 0, 1), cancelFunc: cancel}
+			consumer := newConsumerWithStore(pub, store)
+
+			err := consumer.Run(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			// Stream reconnected — real data quality issue, fail fast
+			Expect(client.watchCallCount()).To(BeNumerically(">=", 2))
+		})
+
 		It("skips same-state same-dimensions updates", func() {
 			store := newMockStore()
 			now := time.Now().UTC().Truncate(time.Microsecond)

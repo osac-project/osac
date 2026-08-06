@@ -21,8 +21,9 @@ import (
 )
 
 var (
-	ErrTransientState = errors.New("transient state: update projection only, no CloudEvent")
-	ErrSkipTransition = errors.New("no billing boundary: skip event, check for scaling")
+	ErrTransientState   = errors.New("transient state: update projection only, no CloudEvent")
+	ErrSkipTransition   = errors.New("no billing boundary: skip event, check for scaling")
+	ErrUnsupportedEvent = errors.New("unsupported event type")
 )
 
 // CloudEvent type constants.
@@ -99,7 +100,7 @@ func ResolveCloudEventType(table TransitionTable, eventType privatev1.EventType,
 	if eventType == privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED {
 		return resolveTransition(table, previousState, currentState)
 	}
-	return "", fmt.Errorf("unsupported event type: %v", eventType)
+	return "", fmt.Errorf("%w: %v", ErrUnsupportedEvent, eventType)
 }
 
 // ResolveTransitionTime selects the appropriate timestamp for a given event type.
@@ -112,7 +113,7 @@ func ResolveTransitionTime(eventType privatev1.EventType, creation, deletion, st
 
 	ts, ok := timestamps[eventType]
 	if !ok {
-		return time.Time{}, fmt.Errorf("unsupported event type for timestamp: %v", eventType)
+		return time.Time{}, fmt.Errorf("%w for timestamp: %v", ErrUnsupportedEvent, eventType)
 	}
 	if ts == nil {
 		return time.Time{}, fmt.Errorf("%w: resource %s has no timestamp for event type %v", ErrDataQuality, resourceID, eventType)

@@ -241,6 +241,18 @@ var _ = Describe("MapWatchEvent", func() {
 				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_UNSPECIFIED, "UNSPECIFIED", "", true, false),
 		)
 
+		It("returns ErrUnsupportedEvent for OBJECT_SIGNALED", func() {
+			event := &privatev1.Event{
+				Id:      "evt-signaled",
+				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_SIGNALED,
+				Payload: &privatev1.Event_ComputeInstance{ComputeInstance: ci},
+			}
+
+			_, err := mapEvent(event, &events.StateContext{})
+			Expect(err).To(HaveOccurred())
+			Expect(errors.Is(err, events.ErrUnsupportedEvent)).To(BeTrue())
+		})
+
 		It("returns error for unknown state (missing table entry)", func() {
 			ci.Status.State = privatev1.ComputeInstanceState(9999)
 

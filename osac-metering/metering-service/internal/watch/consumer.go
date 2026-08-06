@@ -26,10 +26,16 @@ import (
 	"github.com/osac-project/osac-metering/internal/projection"
 )
 
-var watchReconnects = promauto.NewCounter(prometheus.CounterOpts{
-	Name: "osac_metering_watch_stream_reconnects_total",
-	Help: "Total Watch stream reconnections",
-})
+var (
+	watchReconnects = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "osac_metering_watch_stream_reconnects_total",
+		Help: "Total Watch stream reconnections",
+	})
+	eventsSkipped = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "osac_metering_events_skipped_total",
+		Help: "Watch events skipped due to unsupported type or data quality issues",
+	}, []string{"reason"})
+)
 
 const (
 	defaultInitialDelay   = 1 * time.Second
@@ -139,6 +145,17 @@ func (c *Consumer) handleEvent(ctx context.Context, event *privatev1.Event) erro
 
 	transitionTime, err := mapper.TransitionTime(event.GetType())
 	if err != nil {
+		if errors.Is(err, events.ErrUnsupportedEvent) {
+			eventsSkipped.WithLabelValues("unsupported_event_type").Inc()
+			c.logger.V(1).Info("skipping unsupported event type",
+				"event_id", event.GetId(), "resource_id", resourceID)
+			return nil
+		}
+		if errors.Is(err, events.ErrDataQuality) && existing != nil && existing.CurrentState == currentState {
+			c.logger.V(1).Info("skipping metadata-only update with no state change",
+				"event_id", event.GetId(), "resource_id", resourceID, "state", currentState)
+			return nil
+		}
 		return err
 	}
 

@@ -75,6 +75,24 @@ jobs:
               - '!.skillsaw.yaml'
               - '!.pre-commit-config.yaml'
 
+  # OSAC-3370: cheap readiness gate before expensive runners.
+  # Allow: lgtm present, e2e-ready applied by github-actions[bot], or
+  # coderabbitai[bot] APPROVED on exact HEAD (blocked by human CHANGES_REQUESTED).
+  # Human APPROVED does not unlock. Non-PR events skip this job.
+  e2e-readiness:
+    needs: changes
+    if: needs.changes.outputs.should-run == 'true' && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: read
+      pull-requests: read
+    steps:
+      - name: Check e2e readiness
+        uses: osac-project/osac-test-infra/.github/actions/check-e2e-readiness@main
+        with:
+          pr-number: ${{ github.event.pull_request.number }}
+          head-sha: ${{ github.event.pull_request.head.sha }}
+
   # Builds fulfillment-service, osac-operator, osac-aap's execution
   # environment (twice -- once each for aap.bootstrap.image and
   # aap.configAsCode.eeImage, see OSAC-3546), and bare-metal-fulfillment-operator
@@ -96,8 +114,13 @@ jobs:
   # built from source for consistency with the other components -- revisit
   # if caas ever needs BMF enabled.
   e2e-caas-full-install:
-    needs: changes
-    if: needs.changes.outputs.should-run == 'true'
+    needs: [changes, e2e-readiness]
+    if: >-
+      always()
+      && needs.changes.result == 'success'
+      && needs.changes.outputs.should-run == 'true'
+      && (needs.e2e-readiness.result == 'success'
+          || needs.e2e-readiness.result == 'skipped')
     uses: osac-project/osac-test-infra/.github/workflows/e2e-caas-full-install.yml@main
     with:
       test-suite: ${{ inputs.test-suite || 'caas' }}
@@ -130,13 +153,23 @@ jobs:
 
   e2e-caas-gate:
     if: always()
-    needs: [changes, e2e-caas-full-install]
+    needs: [changes, e2e-readiness, e2e-caas-full-install]
     runs-on: ubuntu-latest
     steps:
-      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+      - if: needs.e2e-readiness.result == 'failure'
+        run: |
+          echo "e2e-readiness failed: expensive e2e is gated until unlock."
+          echo "Need coderabbitai[bot] APPROVED on this HEAD, lgtm, or /e2e-ready."
+          echo "See .github/e2e-readiness.md"
+          echo "Upstream: changes=${{ needs.changes.result }} e2e-readiness=failure full-install=${{ needs.e2e-caas-full-install.result }}"
+          exit 1
+      - if: >-
+          needs.e2e-readiness.result != 'failure'
+          && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
         run: |
           echo "Upstream job results:"
           echo "  changes: ${{ needs.changes.result }}"
+          echo "  e2e-readiness: ${{ needs.e2e-readiness.result }}"
           echo "  e2e-caas-full-install: ${{ needs.e2e-caas-full-install.result }}"
           echo ""
           echo "One or more upstream jobs failed or were cancelled."

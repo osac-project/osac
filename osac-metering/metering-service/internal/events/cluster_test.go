@@ -3,7 +3,9 @@ package events_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 
+	cloudevents "github.com/cloudevents/sdk-go/v2"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -440,6 +442,73 @@ var _ = Describe("CaaS Cluster Mapper", func() {
 			Expect(err).To(HaveOccurred())
 			Expect(errors.Is(err, events.ErrDataQuality)).To(BeTrue())
 		})
+	})
+})
+
+var _ = Describe("DecomposeClusterEvents", func() {
+	It("produces N+1 events with per-component dims and deterministic IDs", func() {
+		dims := map[string]any{
+			"cluster_template": "ocp-ci-small",
+			"components": []any{
+				map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
+				map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(2)},
+			},
+		}
+
+		built := []string{}
+		result, err := events.DecomposeClusterEvents(dims, "base-id", func(d map[string]any, eventID string) (cloudevents.Event, error) {
+			built = append(built, eventID)
+			ce := cloudevents.NewEvent()
+			ce.SetID(eventID)
+			Expect(ce.SetData(cloudevents.ApplicationJSON, d)).To(Succeed())
+			return ce, nil
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(HaveLen(2))
+		Expect(built).To(ConsistOf("base-id/_control_plane", "base-id/gpu-workers"))
+	})
+
+	It("returns ErrDataQuality when cluster has no components", func() {
+		dims := map[string]any{"cluster_template": "ocp-ci-small"}
+
+		_, err := events.DecomposeClusterEvents(dims, "base-id", func(d map[string]any, eventID string) (cloudevents.Event, error) {
+			Fail("buildFn should not be called")
+			return cloudevents.Event{}, nil
+		})
+
+		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, events.ErrDataQuality)).To(BeTrue())
+	})
+
+	It("returns ErrDataQuality when components array is empty", func() {
+		dims := map[string]any{
+			"cluster_template": "ocp-ci-small",
+			"components":       []any{},
+		}
+
+		_, err := events.DecomposeClusterEvents(dims, "base-id", func(d map[string]any, eventID string) (cloudevents.Event, error) {
+			Fail("buildFn should not be called")
+			return cloudevents.Event{}, nil
+		})
+
+		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, events.ErrDataQuality)).To(BeTrue())
+	})
+
+	It("propagates buildFn errors", func() {
+		dims := map[string]any{
+			"components": []any{
+				map[string]any{"node_set": "_control_plane", "node_count": int32(1)},
+			},
+		}
+
+		_, err := events.DecomposeClusterEvents(dims, "base-id", func(d map[string]any, eventID string) (cloudevents.Event, error) {
+			return cloudevents.Event{}, fmt.Errorf("kafka down")
+		})
+
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("kafka down"))
 	})
 })
 

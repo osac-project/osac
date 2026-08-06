@@ -125,36 +125,18 @@ func (g *Generator) tick(ctx context.Context) error {
 }
 
 func (g *Generator) buildHeartbeatEvents(state *projection.ResourceState, now time.Time) ([]cloudevents.Event, error) {
-	if state.ResourceType != "cluster_order" {
-		ce, err := g.buildHeartbeatEvent(state, uuid.NewString(), state.BillingDimensions, now)
-		if err != nil {
-			return nil, err
-		}
-		return []cloudevents.Event{ce}, nil
+	buildFn := func(dims map[string]any, eventID string) (cloudevents.Event, error) {
+		return g.buildHeartbeatEvent(state, eventID, dims, now)
 	}
 
-	components := events.DecomposeClusterComponents(state.BillingDimensions)
-	if len(components) == 0 {
-		ce, err := g.buildHeartbeatEvent(state, uuid.NewString(), state.BillingDimensions, now)
-		if err != nil {
-			return nil, err
-		}
-		return []cloudevents.Event{ce}, nil
+	if state.ResourceType == "cluster_order" {
+		return events.DecomposeClusterEvents(state.BillingDimensions, uuid.NewString(), buildFn)
 	}
-
-	result := make([]cloudevents.Event, 0, len(components))
-	for _, comp := range components {
-		ce, err := g.buildComponentHeartbeat(state, comp, now)
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, ce)
+	ce, err := buildFn(state.BillingDimensions, uuid.NewString())
+	if err != nil {
+		return nil, err
 	}
-	return result, nil
-}
-
-func (g *Generator) buildComponentHeartbeat(state *projection.ResourceState, comp events.ComponentRecord, now time.Time) (cloudevents.Event, error) {
-	return g.buildHeartbeatEvent(state, events.ComponentEventID(uuid.NewString(), comp), comp.FlatBillingDimensions(), now)
+	return []cloudevents.Event{ce}, nil
 }
 
 func (g *Generator) buildHeartbeatEvent(state *projection.ResourceState, eventID string, dims map[string]any, now time.Time) (cloudevents.Event, error) {

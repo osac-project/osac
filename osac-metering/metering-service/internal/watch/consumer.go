@@ -243,27 +243,26 @@ func (c *Consumer) handleTransientState(
 }
 
 func (c *Consumer) publishLifecycleEvents(ctx context.Context, baseCE *cloudevents.Event, mapper events.ResourceMapper, eventID string) error {
-	if mapper.ResourceType() != "cluster_order" ||
-		baseCE.Type() == "osac.resource.created.v1" ||
-		baseCE.Type() == "osac.resource.deleted.v1" {
+	if baseCE.Type() == "osac.resource.created.v1" || baseCE.Type() == "osac.resource.deleted.v1" {
 		return c.publishWithRetry(ctx, baseCE)
 	}
 
-	components := events.DecomposeClusterComponents(mapper.BillingDimensionsMap())
-	if len(components) == 0 {
-		return c.publishWithRetry(ctx, baseCE)
-	}
-
-	for _, comp := range components {
-		compCE, ceErr := c.buildComponentEvent(baseCE, eventID, comp)
-		if ceErr != nil {
-			return ceErr
-		}
-		if err := c.publishWithRetry(ctx, &compCE); err != nil {
+	if mapper.ResourceType() == "cluster_order" {
+		decomposed, err := events.DecomposeClusterEvents(mapper.BillingDimensionsMap(), eventID, func(dims map[string]any, compEventID string) (cloudevents.Event, error) {
+			return c.buildComponentEvent(baseCE, compEventID, dims)
+		})
+		if err != nil {
 			return err
 		}
+		for i := range decomposed {
+			if err := c.publishWithRetry(ctx, &decomposed[i]); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
-	return nil
+
+	return c.publishWithRetry(ctx, baseCE)
 }
 
 func (c *Consumer) handleScalingEvent(ctx context.Context, event *privatev1.Event, mapper events.ResourceMapper, existing *projection.ResourceState, transitionTime time.Time, version int32, currentState string, isBillable bool, dims map[string]any) error {
@@ -294,9 +293,9 @@ func (c *Consumer) handleScalingEvent(ctx context.Context, event *privatev1.Even
 	}, projState, resourceID)
 }
 
-func (c *Consumer) buildComponentEvent(baseCE *cloudevents.Event, eventID string, comp events.ComponentRecord) (cloudevents.Event, error) {
+func (c *Consumer) buildComponentEvent(baseCE *cloudevents.Event, eventID string, dims map[string]any) (cloudevents.Event, error) {
 	ce := cloudevents.NewEvent()
-	ce.SetID(events.ComponentEventID(eventID, comp))
+	ce.SetID(eventID)
 	ce.SetSource(baseCE.Source())
 	ce.SetType(baseCE.Type())
 	ce.SetTime(baseCE.Time())
@@ -310,7 +309,7 @@ func (c *Consumer) buildComponentEvent(baseCE *cloudevents.Event, eventID string
 		return ce, fmt.Errorf("reading base event data: %w", err)
 	}
 
-	baseData["billing_dimensions"] = comp.FlatBillingDimensions()
+	baseData["billing_dimensions"] = dims
 	if err := ce.SetData(cloudevents.ApplicationJSON, baseData); err != nil {
 		return ce, fmt.Errorf("setting component event data: %w", err)
 	}

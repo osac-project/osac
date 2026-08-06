@@ -74,28 +74,23 @@ func buildCorrectionEvents(
 	now time.Time,
 ) ([]cloudevents.Event, error) {
 	baseID := fmt.Sprintf("correction/%s/%s/%s/%s", resourceID, reason, projectionState, sourceState)
-	if resourceType == "cluster_order" {
-		components := events.DecomposeClusterComponents(billingDimensions)
-		if len(components) > 0 {
-			result := make([]cloudevents.Event, 0, len(components))
-			for _, comp := range components {
-				ce, err := buildCorrectionEvent(resourceID, resourceType, tenantID, projectID,
-					reason, projectionState, sourceState, comp.FlatBillingDimensions(), interval, now)
-				if err != nil {
-					return nil, err
-				}
-				ce.SetID(events.ComponentEventID(baseID, comp))
-				result = append(result, ce)
-			}
-			return result, nil
+	buildFn := func(dims map[string]any, eventID string) (cloudevents.Event, error) {
+		ce, err := buildCorrectionEvent(resourceID, resourceType, tenantID, projectID,
+			reason, projectionState, sourceState, dims, interval, now)
+		if err != nil {
+			return ce, err
 		}
+		ce.SetID(eventID)
+		return ce, nil
 	}
-	ce, err := buildCorrectionEvent(resourceID, resourceType, tenantID, projectID,
-		reason, projectionState, sourceState, billingDimensions, interval, now)
+
+	if resourceType == "cluster_order" {
+		return events.DecomposeClusterEvents(billingDimensions, baseID, buildFn)
+	}
+	ce, err := buildFn(billingDimensions, baseID)
 	if err != nil {
 		return nil, err
 	}
-	ce.SetID(baseID)
 	return []cloudevents.Event{ce}, nil
 }
 

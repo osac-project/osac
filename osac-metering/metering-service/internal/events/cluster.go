@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	cloudevents "github.com/cloudevents/sdk-go/v2"
+
 	privatev1 "github.com/osac-project/osac-metering/internal/api/osac/private/v1"
 )
 
@@ -314,6 +316,26 @@ func DecomposeClusterComponents(billingDims map[string]any) []ComponentRecord {
 // component event. Uses NodeSet as the unique key per cluster.
 func ComponentEventID(baseEventID string, comp ComponentRecord) string {
 	return fmt.Sprintf("%s/%s", baseEventID, comp.NodeSet)
+}
+
+// DecomposeClusterEvents fans out a single event into N+1 per-component events.
+// Returns error if billing dimensions have no components (data quality issue).
+// buildFn receives (per-component billing dimensions, deterministic event ID).
+func DecomposeClusterEvents(billingDims map[string]any, baseID string, buildFn func(dims map[string]any, eventID string) (cloudevents.Event, error)) ([]cloudevents.Event, error) {
+	components := DecomposeClusterComponents(billingDims)
+	if len(components) == 0 {
+		return nil, fmt.Errorf("%w: cluster has no components in billing dimensions", ErrDataQuality)
+	}
+
+	result := make([]cloudevents.Event, 0, len(components))
+	for _, comp := range components {
+		ce, err := buildFn(comp.FlatBillingDimensions(), ComponentEventID(baseID, comp))
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, ce)
+	}
+	return result, nil
 }
 
 // ChangedComponents compares old and new billing dimensions and returns

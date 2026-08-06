@@ -65,6 +65,8 @@ var _ = Describe("parseBareMetalNetworkAttachmentFlag", func() {
 			"subnet=s1,interface=eth0,primary,security-groups=sg1,sg2", "s1", strPtr("eth0"), boolPtr(true), []string{"sg1", "sg2"}),
 		Entry("order-independent keys",
 			"interface=data-1,subnet=s2,primary", "s2", strPtr("data-1"), boolPtr(true), nil),
+		Entry("bare subnet with security-groups",
+			"sub-x,security-groups=g1,g2", "sub-x", nil, nil, []string{"g1", "g2"}),
 	)
 
 	DescribeTable("when input is invalid it should error",
@@ -78,6 +80,7 @@ var _ = Describe("parseBareMetalNetworkAttachmentFlag", func() {
 		Entry("empty value after equals", "subnet="),
 		Entry("duplicate subnet", "subnet=a,subnet=b"),
 		Entry("duplicate interface", "subnet=a,interface=x,interface=y"),
+		Entry("non-keyword bare fragment", "subnet=a,notakeyword"),
 	)
 })
 

@@ -31,10 +31,7 @@ class GRPCClient:
         obj: dict[str, Any] = {"spec": {"catalog_item": {"id": catalog_item}, "network_attachments": attachments}}
         if name is not None:
             obj["metadata"] = {"name": name}
-        response: dict[str, Any] = self.call(
-            service=f"{PUBLIC_API}.ComputeInstances/Create",
-            data={"object": obj},
-        )
+        response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.ComputeInstances/Create", data={"object": obj})
         return response["object"]["id"]
 
     def update_compute_instance_run_strategy(self, *, ci_id: str, run_strategy: str) -> dict[str, Any]:
@@ -164,10 +161,7 @@ class GRPCClient:
 
     def ensure_tenant(self, *, name: str) -> None:
         try:
-            self.call(
-                service=f"{PRIVATE_API}.Tenants/Create",
-                data={"object": {"metadata": {"name": name}}},
-            )
+            self.call(service=f"{PRIVATE_API}.Tenants/Create", data={"object": {"metadata": {"name": name}}})
         except subprocess.CalledProcessError as e:
             output = (e.stdout or "") + (e.stderr or "")
             if not re.search(r"Code:\s*AlreadyExists", output):
@@ -322,24 +316,13 @@ class GRPCClient:
     # InstanceType operations (private API only)
 
     def create_instance_type(
-        self,
-        *,
-        name: str,
-        cores: int,
-        memory_gib: int,
-        description: str = "",
-        gpu: dict[str, Any] | None = None,
+        self, *, name: str, cores: int, memory_gib: int, description: str = "", gpu: dict[str, Any] | None = None
     ) -> str:
-        spec: dict[str, Any] = {
-            "cores": cores,
-            "memory_gib": memory_gib,
-            "description": description,
-        }
+        spec: dict[str, Any] = {"cores": cores, "memory_gib": memory_gib, "description": description}
         if gpu is not None:
             spec["gpu"] = gpu
         response: dict[str, Any] = self.call(
-            service=f"{PRIVATE_API}.InstanceTypes/Create",
-            data={"object": {"metadata": {"name": name}, "spec": spec}},
+            service=f"{PRIVATE_API}.InstanceTypes/Create", data={"object": {"metadata": {"name": name}, "spec": spec}}
         )
         return response["object"]["id"]
 
@@ -353,10 +336,7 @@ class GRPCClient:
     def update_instance_type(self, *, name: str, state: str) -> dict[str, Any]:
         return self.call(
             service=f"{PRIVATE_API}.InstanceTypes/Update",
-            data={
-                "object": {"id": name, "spec": {"state": state}},
-                "updateMask": {"paths": ["spec.state"]},
-            },
+            data={"object": {"id": name, "spec": {"state": state}}, "updateMask": {"paths": ["spec.state"]}},
         )
 
     def delete_instance_type(self, *, name: str) -> None:
@@ -414,3 +394,68 @@ class GRPCClient:
 
     def delete_baremetal_instance_catalog_item(self, *, item_id: str) -> None:
         self.call(service=f"{PRIVATE_API}.BareMetalInstanceCatalogItems/Delete", data={"id": item_id})
+
+    # Generic filtered list
+
+    def list_with_filter(self, *, service: str, filter_expr: str) -> list[dict[str, Any]]:
+        response: dict[str, Any] = self.call(service=service, data={"filter": filter_expr})
+        return response.get("items", [])
+
+    # NATGateway operations (public API)
+
+    def create_nat_gateway(self, *, name: str, virtual_network_name: str, external_ip_name: str) -> str:
+        response: dict[str, Any] = self.call(
+            service=f"{PUBLIC_API}.NATGateways/Create",
+            data={
+                "object": {
+                    "metadata": {"name": name},
+                    "spec": {
+                        "virtual_network": {"name": virtual_network_name},
+                        "external_ip": {"name": external_ip_name},
+                    },
+                }
+            },
+        )
+        return response["object"]["id"]
+
+    def delete_nat_gateway(self, *, nat_gateway_id: str) -> None:
+        self.call(service=f"{PUBLIC_API}.NATGateways/Delete", data={"id": nat_gateway_id})
+
+    # RoleBinding operations (public API)
+
+    def create_role_binding(self, *, name: str, role_name: str, user_names: list[str]) -> str:
+        response: dict[str, Any] = self.call(
+            service=f"{PUBLIC_API}.RoleBindings/Create",
+            data={
+                "object": {
+                    "metadata": {"name": name},
+                    "spec": {"role": {"name": role_name}, "users": [{"name": u} for u in user_names]},
+                }
+            },
+        )
+        return response["object"]["id"]
+
+    def get_role_binding(self, *, role_binding_id: str) -> dict[str, Any]:
+        return self.call(service=f"{PUBLIC_API}.RoleBindings/Get", data={"id": role_binding_id})
+
+    def delete_role_binding(self, *, role_binding_id: str) -> None:
+        self.call(service=f"{PUBLIC_API}.RoleBindings/Delete", data={"id": role_binding_id})
+
+    # ProjectMembership operations (public API)
+
+    def create_project_membership(
+        self, *, name: str, project_name: str, user_name: str, role: str = "PROJECT_MEMBERSHIP_ROLE_VIEWER"
+    ) -> str:
+        response: dict[str, Any] = self.call(
+            service=f"{PUBLIC_API}.ProjectMemberships/Create",
+            data={
+                "object": {
+                    "metadata": {"name": name},
+                    "spec": {"project": {"name": project_name}, "user": {"name": user_name}, "role": role},
+                }
+            },
+        )
+        return response["object"]["id"]
+
+    def delete_project_membership(self, *, membership_id: str) -> None:
+        self.call(service=f"{PUBLIC_API}.ProjectMemberships/Delete", data={"id": membership_id})

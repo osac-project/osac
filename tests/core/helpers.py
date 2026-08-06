@@ -19,6 +19,17 @@ def assert_grpc_rejected(exc_info: pytest.ExceptionInfo[subprocess.CalledProcess
     assert re.search(rf"Code:\s*{code}", combined), f"Expected gRPC {code}, got: {combined.strip()}"
 
 
+def assert_grpc_field_violation(
+    exc_info: pytest.ExceptionInfo[subprocess.CalledProcessError], *, field_path: str
+) -> None:
+    assert_grpc_rejected(exc_info, "InvalidArgument")
+    exc = exc_info.value
+    combined: str = (exc.stderr or "") + (exc.stdout or "")
+    assert field_path in combined, (
+        f"Expected FieldViolation containing '{field_path}' in error output, got: {combined.strip()}"
+    )
+
+
 def wait_for_cr(*, k8s: K8sClient, uuid: str) -> str:
     return poll_until(
         fn=lambda: k8s.get_compute_instance_name(uuid=uuid, checked=False),
@@ -167,6 +178,7 @@ def wait_for_external_ip_pool_grpc_ready(*, private_grpc: GRPCClient, pool_id: s
     this race so that subsequent ExternalIP creation does not hit
     FailedPrecondition.
     """
+
     def _state() -> str:
         try:
             pool = private_grpc.get_external_ip_pool(pool_id=pool_id)
@@ -533,13 +545,9 @@ def wait_for_cluster_order_condition(
         if not k8s.is_present(resource="clusterorder", name=name):
             raise AssertionError(f"ClusterOrder {name} disappeared before {condition_type}={expected_status}")
         phase: str = k8s.get_cluster_order_phase(name=name, checked=False)
-        cond_status = k8s.get_cluster_order_condition_status(
-            name=name, condition_type=condition_type, checked=False
-        )
+        cond_status = k8s.get_cluster_order_condition_status(name=name, condition_type=condition_type, checked=False)
         if phase == "Failed" and cond_status != expected_status:
-            raise AssertionError(
-                f"ClusterOrder {name} entered Failed phase before {condition_type}={expected_status}"
-            )
+            raise AssertionError(f"ClusterOrder {name} entered Failed phase before {condition_type}={expected_status}")
         return cond_status
 
     poll_until(
@@ -677,11 +685,7 @@ def wait_for_bmh_provisioned(*, k8s: K8sClient, name: str, bmh_namespace: str) -
         return state
 
     poll_until(
-        fn=_check,
-        until=lambda v: v == "provisioned",
-        retries=120,
-        delay=10,
-        description=f"{name} BMH provisioned",
+        fn=_check, until=lambda v: v == "provisioned", retries=120, delay=10, description=f"{name} BMH provisioned"
     )
 
 

@@ -733,8 +733,8 @@ var _ = Describe("Reconciler", func() {
 					"cluster_template": "ocp-ci-small",
 					"release_image":    "quay.io/ocp:4.17.0",
 					"components": []any{
-						map[string]any{"component": "control_plane", "host_type": "_control_plane", "node_count": float64(1)},
-						map[string]any{"component": "worker", "host_type": "gpu-h100", "node_count": float64(2)},
+						map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": float64(1)},
+						map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": float64(2)},
 					},
 				},
 			}
@@ -779,8 +779,8 @@ var _ = Describe("Reconciler", func() {
 				BillingDimensions: map[string]any{
 					"cluster_template": "ocp-ci-small",
 					"components": []any{
-						map[string]any{"component": "control_plane", "host_type": "_control_plane", "node_count": float64(1)},
-						map[string]any{"component": "worker", "host_type": "gpu-h100", "node_count": float64(2)},
+						map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": float64(1)},
+						map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": float64(2)},
 					},
 				},
 			}

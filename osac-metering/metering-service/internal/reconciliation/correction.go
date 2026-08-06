@@ -73,6 +73,7 @@ func buildCorrectionEvents(
 	interval *AffectedInterval,
 	now time.Time,
 ) ([]cloudevents.Event, error) {
+	baseID := fmt.Sprintf("correction/%s/%s/%s/%s", resourceID, reason, projectionState, sourceState)
 	if resourceType == "cluster_order" {
 		components := events.DecomposeClusterComponents(billingDimensions)
 		if len(components) > 0 {
@@ -83,7 +84,7 @@ func buildCorrectionEvents(
 				if err != nil {
 					return nil, err
 				}
-				ce.SetID(events.ComponentEventID(ce.ID(), comp))
+				ce.SetID(events.ComponentEventID(baseID, comp))
 				result = append(result, ce)
 			}
 			return result, nil
@@ -94,6 +95,7 @@ func buildCorrectionEvents(
 	if err != nil {
 		return nil, err
 	}
+	ce.SetID(baseID)
 	return []cloudevents.Event{ce}, nil
 }
 

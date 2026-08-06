@@ -112,10 +112,10 @@ func (m *clusterMapper) resolveUpdatedEventType(previousState string) (string, e
 	previousBillable := IsClusterBillableState(previousState)
 
 	switch {
-	case currentBillable && previousState == "FAILED":
-		return "osac.resource.resumed.v1", nil
 	case currentBillable && previousState == "":
 		return "osac.resource.started.v1", nil
+	case currentBillable && !previousBillable:
+		return "osac.resource.resumed.v1", nil
 	case !currentBillable && previousBillable:
 		return "osac.resource.suspended.v1", nil
 	case currentBillable && previousBillable:
@@ -123,7 +123,7 @@ func (m *clusterMapper) resolveUpdatedEventType(previousState string) (string, e
 	case !currentBillable && !previousBillable:
 		return "", ErrSkipNonBillingTransition
 	default:
-		return "osac.resource.updated.v1", nil
+		return "", fmt.Errorf("unexpected cluster state transition: %s -> %s", previousState, currentState)
 	}
 }
 
@@ -182,6 +182,7 @@ func ClusterBillingDimensions(cl *privatev1.Cluster) map[string]any {
 	// assertion works for both fresh dims and JSONB-round-tripped dims.
 	components := []any{
 		map[string]any{
+			"node_set":   "_control_plane",
 			"component":  "control_plane",
 			"host_type":  "_control_plane",
 			"node_count": int32(1),
@@ -197,6 +198,7 @@ func ClusterBillingDimensions(cl *privatev1.Cluster) map[string]any {
 		for _, k := range keys {
 			ns := nodeSets[k]
 			components = append(components, map[string]any{
+				"node_set":   k,
 				"component":  "worker",
 				"host_type":  ns.GetHostType(),
 				"node_count": ns.GetSize(),
@@ -210,6 +212,7 @@ func ClusterBillingDimensions(cl *privatev1.Cluster) map[string]any {
 
 // ComponentRecord represents one billing record in the N+1 decomposition.
 type ComponentRecord struct {
+	NodeSet         string
 	Component       string
 	HostType        string
 	NodeCount       int32
@@ -222,6 +225,7 @@ type ComponentRecord struct {
 func (cr ComponentRecord) FlatBillingDimensions() map[string]any {
 	dims := map[string]any{
 		"cluster_template": cr.ClusterTemplate,
+		"node_set":         cr.NodeSet,
 		"component":        cr.Component,
 		"host_type":        cr.HostType,
 		"node_count":       cr.NodeCount,
@@ -255,6 +259,7 @@ func DecomposeClusterComponents(billingDims map[string]any) []ComponentRecord {
 		if !ok {
 			continue
 		}
+		nodeSet, _ := cm["node_set"].(string)
 		component, _ := cm["component"].(string)
 		hostType, _ := cm["host_type"].(string)
 
@@ -264,6 +269,7 @@ func DecomposeClusterComponents(billingDims map[string]any) []ComponentRecord {
 		}
 
 		records = append(records, ComponentRecord{
+			NodeSet:         nodeSet,
 			Component:       component,
 			HostType:        hostType,
 			NodeCount:       nodeCount,
@@ -276,9 +282,9 @@ func DecomposeClusterComponents(billingDims map[string]any) []ComponentRecord {
 }
 
 // ComponentEventID derives a deterministic CloudEvent ID for a decomposed
-// component event. Deterministic IDs enable adapter-level dedup on replay.
+// component event. Uses NodeSet as the unique key per cluster.
 func ComponentEventID(baseEventID string, comp ComponentRecord) string {
-	return fmt.Sprintf("%s/%s:%s", baseEventID, comp.Component, comp.HostType)
+	return fmt.Sprintf("%s/%s", baseEventID, comp.NodeSet)
 }
 
 // ChangedComponents compares old and new billing dimensions and returns
@@ -290,23 +296,21 @@ func ChangedComponents(oldDims, newDims map[string]any) []ComponentRecord {
 
 	oldByKey := make(map[string]ComponentRecord, len(oldRecords))
 	for _, r := range oldRecords {
-		oldByKey[r.Component+":"+r.HostType] = r
+		oldByKey[r.NodeSet] = r
 	}
 
 	newByKey := make(map[string]bool, len(newRecords))
 	var changed []ComponentRecord
 	for _, r := range newRecords {
-		key := r.Component + ":" + r.HostType
-		newByKey[key] = true
-		old, exists := oldByKey[key]
+		newByKey[r.NodeSet] = true
+		old, exists := oldByKey[r.NodeSet]
 		if !exists || old.NodeCount != r.NodeCount {
 			changed = append(changed, r)
 		}
 	}
 
 	for _, r := range oldRecords {
-		key := r.Component + ":" + r.HostType
-		if !newByKey[key] {
+		if !newByKey[r.NodeSet] {
 			changed = append(changed, ComponentRecord{
 				Component:       r.Component,
 				HostType:        r.HostType,

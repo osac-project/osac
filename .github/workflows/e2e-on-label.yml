@@ -1,0 +1,274 @@
+---
+# OSAC-3370: when lgtm (or quiet e2e-ready override) is added, start expensive
+# e2e callers. Replay the pull_request run at HEAD (paths-filter + readiness).
+# pull_request_target: fork PRs can manage runs/comments with base-repo token.
+name: E2E on unlock label
+
+on:
+  pull_request_target:
+    types: [labeled]
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: write
+
+# Shared with e2e-on-approval so label + approve don't race the same reruns.
+concurrency:
+  group: e2e-start-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  start-e2e:
+    if: contains(fromJSON('["lgtm","e2e-ready"]'), github.event.label.name)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Start e2e workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          TRIGGER_LABEL: ${{ github.event.label.name }}
+        run: |
+          set -euo pipefail
+
+          pr_json=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}")
+          HEAD_SHA=$(jq -r '.head.sha' <<<"${pr_json}")
+          if [[ "${HEAD_SHA}" != "${EVENT_HEAD_SHA}" ]]; then
+            echo "PR head moved (${EVENT_HEAD_SHA:0:7} → ${HEAD_SHA:0:7}); skipping start."
+            exit 0
+          fi
+          labels_json=$(gh api --paginate --slurp "repos/${REPO}/issues/${PR_NUMBER}/labels" | jq 'add')
+          if ! jq -e --arg n "${TRIGGER_LABEL}" '[.[].name] | index($n) != null' <<<"${labels_json}" >/dev/null; then
+            echo "${TRIGGER_LABEL} label no longer present; skipping start."
+            exit 0
+          fi
+
+          # Match gate: labeled_at >= earliest pull_request run created_at for head.
+          unlock_label_fresh() {
+            local labeled_times runs_times labeled_at head_seen_at
+            labeled_times=$(gh api --paginate \
+              "repos/${REPO}/issues/${PR_NUMBER}/events?per_page=100" \
+              --jq ".[] | select(.event == \"labeled\" and .label.name == \"${TRIGGER_LABEL}\") | .created_at")
+            labeled_at=$(printf '%s\n' "${labeled_times}" | sort | tail -1)
+            runs_times=""
+            for _ in $(seq 1 30); do
+              runs_times=$(gh api --paginate \
+                "repos/${REPO}/actions/runs?head_sha=${HEAD_SHA}&event=pull_request&per_page=100" \
+                --jq '.workflow_runs[].created_at')
+              if [[ -n "${runs_times}" ]]; then
+                break
+              fi
+              echo "Waiting for pull_request run at ${HEAD_SHA:0:7} before freshness check..."
+              sleep 2
+            done
+            head_seen_at=$(printf '%s\n' "${runs_times}" | sort | head -1)
+            echo "freshness check (${TRIGGER_LABEL}): labeled_at=${labeled_at:-<none>} head_seen_at=${head_seen_at:-<none>}"
+            [[ -n "${labeled_at}" && -n "${head_seen_at}" ]] || return 1
+            jq -ne --arg a "${labeled_at}" --arg b "${head_seen_at}" \
+              '($a | fromdateiso8601) >= ($b | fromdateiso8601)' >/dev/null
+          }
+
+          if ! unlock_label_fresh; then
+            echo "${TRIGGER_LABEL} label is not fresh for ${HEAD_SHA:0:7}; not starting e2e."
+            {
+              echo "### E2E on \`${TRIGGER_LABEL}\`"
+              echo ""
+              echo "Label \`${TRIGGER_LABEL}\` is present but **not fresh** for \`${HEAD_SHA:0:7}\` (applied before this head's first \`pull_request\` CI run, or no PR run found yet)."
+              echo ""
+              echo "Re-apply \`${TRIGGER_LABEL}\` after CI has registered the head, or wait for CodeRabbit \`APPROVED\` on the current head."
+            } > /tmp/e2e-on-label-stale.md
+            gh pr comment "${PR_NUMBER}" -R "${REPO}" --body "$(cat /tmp/e2e-on-label-stale.md)"
+            exit 0
+          fi
+
+          E2E_WORKFLOWS=(
+            e2e-vmaas-full-install.yml
+            e2e-bmaas-full-install.yml
+            e2e-caas-full-install.yml
+          )
+
+          STARTED=0
+          ERRORS=0
+          SKIPPED=0
+
+          find_pr_run() {
+            local wf="$1"
+            local runs
+            runs=$(gh api --paginate \
+              "repos/${REPO}/actions/workflows/${wf}/runs?event=pull_request&per_page=50" \
+              --jq '.workflow_runs[]' | jq -s '.')
+            # Prefer PR-number match; fork runs often have empty pull_requests —
+            # fall back to head_sha only when pull_requests is empty (not another PR).
+            jq -c --arg sha "${HEAD_SHA}" --argjson pr "${PR_NUMBER}" '
+              ([.[]
+                | select(.head_sha == $sha)
+                | select(any(.pull_requests[]?; .number == $pr))
+              ][0])
+              // ([.[]
+                | select(.head_sha == $sha)
+                | select((.pull_requests // []) | length == 0)
+              ][0])
+              // empty
+            ' <<<"${runs}"
+          }
+
+          # Returns: 0 = ok to rerun (run completed, install not success),
+          #          2 = already going / already green (skip),
+          #          1 = error / timeout.
+          wait_until_rerun_or_skip() {
+            local run_id="$1"
+            local view status install_status install_conc ready_conc
+            for _ in $(seq 1 90); do
+              view=$(gh run view "${run_id}" -R "${REPO}" --json status,jobs)
+              status=$(jq -r '.status' <<<"${view}")
+              install_status=$(jq -r '
+                [.jobs[]
+                  | select(.name | test("full-install|e2e-vmaas|e2e-bmaas|e2e-caas"; "i"))
+                  | select(.name | test("readiness"; "i") | not)
+                  | .status
+                ][0] // "missing"
+              ' <<<"${view}")
+              install_conc=$(jq -r '
+                [.jobs[]
+                  | select(.name | test("full-install|e2e-vmaas|e2e-bmaas|e2e-caas"; "i"))
+                  | select(.name | test("readiness"; "i") | not)
+                  | .conclusion
+                ][0] // "missing"
+              ' <<<"${view}")
+              ready_conc=$(jq -r '
+                [.jobs[] | select(.name | test("readiness"; "i")) | .conclusion][0] // "missing"
+              ' <<<"${view}")
+
+              # waiting/pending usually means blocked on e2e-readiness — keep polling.
+              # queued only counts after readiness already succeeded.
+              if [[ "${install_conc}" == "success" \
+                 || "${install_status}" == "in_progress" \
+                 || ( "${install_status}" == "queued" && "${ready_conc}" == "success" ) ]]; then
+                echo "Expensive job already active/success on run #${run_id} (status=${install_status} conclusion=${install_conc}); skip rerun."
+                return 2
+              fi
+
+              if [[ "${status}" == "completed" ]]; then
+                if [[ "${install_conc}" == "success" ]]; then
+                  return 2
+                fi
+                echo "Run #${run_id} completed (readiness=${ready_conc} install=${install_conc}); will rerun."
+                return 0
+              fi
+              sleep 2
+            done
+            echo "Timed out waiting on run #${run_id}; expensive job never started."
+            return 1
+          }
+
+          start_via_pr_run() {
+            local wf="$1"
+            local candidates run_id rc
+
+            # Re-validate head/label before each workflow touch.
+            pr_json=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}")
+            local cur_sha
+            cur_sha=$(jq -r '.head.sha' <<<"${pr_json}")
+            if [[ "${cur_sha}" != "${HEAD_SHA}" ]]; then
+              echo "PR head moved before starting ${wf}; aborting remaining starts."
+              ERRORS=$((ERRORS + 1))
+              return
+            fi
+            if ! gh api --paginate --slurp "repos/${REPO}/issues/${PR_NUMBER}/labels" \
+              | jq -e --arg n "${TRIGGER_LABEL}" 'add | [.[].name] | index($n) != null' >/dev/null; then
+              echo "${TRIGGER_LABEL} label removed before starting ${wf}; aborting."
+              ERRORS=$((ERRORS + 1))
+              return
+            fi
+            if ! unlock_label_fresh; then
+              echo "${TRIGGER_LABEL} no longer fresh before starting ${wf}; aborting."
+              ERRORS=$((ERRORS + 1))
+              return
+            fi
+
+            candidates=""
+            for _ in $(seq 1 30); do
+              candidates=$(find_pr_run "${wf}")
+              if [[ -n "${candidates}" && "${candidates}" != "null" ]]; then
+                break
+              fi
+              echo "Waiting for pull_request run for ${wf} at ${HEAD_SHA:0:7}..."
+              sleep 2
+            done
+            if [[ -z "${candidates}" || "${candidates}" == "null" ]]; then
+              echo "No pull_request run for ${wf} at ${HEAD_SHA:0:7} on PR #${PR_NUMBER}."
+              ERRORS=$((ERRORS + 1))
+              return
+            fi
+
+            run_id=$(jq -r '.id' <<<"${candidates}")
+            echo "Considering ${wf} PR run #${run_id}..."
+
+            set +e
+            wait_until_rerun_or_skip "${run_id}"
+            rc=$?
+            set -e
+            if [[ ${rc} -eq 2 ]]; then
+              SKIPPED=$((SKIPPED + 1))
+              return
+            fi
+            if [[ ${rc} -ne 0 ]]; then
+              ERRORS=$((ERRORS + 1))
+              return
+            fi
+
+            # Re-check head + label freshness immediately before rerun.
+            pr_json=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}")
+            cur_sha=$(jq -r '.head.sha' <<<"${pr_json}")
+            if [[ "${cur_sha}" != "${HEAD_SHA}" ]]; then
+              echo "PR head moved while waiting for ${wf}; skipping rerun."
+              ERRORS=$((ERRORS + 1))
+              return
+            fi
+            if ! gh api --paginate --slurp "repos/${REPO}/issues/${PR_NUMBER}/labels" \
+              | jq -e --arg n "${TRIGGER_LABEL}" 'add | [.[].name] | index($n) != null' >/dev/null; then
+              echo "${TRIGGER_LABEL} label gone before rerun of ${wf}; skipping."
+              ERRORS=$((ERRORS + 1))
+              return
+            fi
+            if ! unlock_label_fresh; then
+              echo "${TRIGGER_LABEL} no longer fresh before rerun of ${wf}; skipping."
+              ERRORS=$((ERRORS + 1))
+              return
+            fi
+
+            if gh run rerun "${run_id}" -R "${REPO}"; then
+              STARTED=$((STARTED + 1))
+            else
+              ERRORS=$((ERRORS + 1))
+            fi
+          }
+
+          echo "${TRIGGER_LABEL} label on PR #${PR_NUMBER} (${HEAD_SHA:0:7}) — starting e2e via pull_request rerun."
+
+          for wf in "${E2E_WORKFLOWS[@]}"; do
+            start_via_pr_run "${wf}"
+          done
+
+          {
+            echo "### E2E on \`${TRIGGER_LABEL}\`"
+            echo ""
+            echo "Label \`${TRIGGER_LABEL}\` applied — starting expensive e2e (PR run replay)."
+            echo "- Started: ${STARTED}/${#E2E_WORKFLOWS[@]}"
+            if [[ ${SKIPPED} -gt 0 ]]; then
+              echo "- Already active/green (skipped rerun): ${SKIPPED}"
+            fi
+            if [[ ${ERRORS} -gt 0 ]]; then
+              echo "- Errors: ${ERRORS}"
+              echo ""
+              echo "Needs a prior \`pull_request\` e2e run at this head for PR #${PR_NUMBER}."
+            fi
+          } > /tmp/e2e-on-label.md
+
+          gh pr comment "${PR_NUMBER}" -R "${REPO}" --body "$(cat /tmp/e2e-on-label.md)"
+
+          if [[ ${ERRORS} -gt 0 ]]; then
+            exit 1
+          fi

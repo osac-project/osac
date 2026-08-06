@@ -58,6 +58,26 @@ jobs:
               - '!**/*.md'
               - '!**/docs/**'
 
+  # OSAC-3370: cheap readiness gate before expensive runners. Allow when
+  # Fail until CodeRabbit APPROVED on head or fresh lgtm (quiet e2e-ready
+  # override also works). Non-PR events skip this job. Requires
+  # osac-test-infra action on main before this caller can resolve the uses:
+  # pin below.
+  e2e-readiness:
+    needs: changes
+    if: needs.changes.outputs.should-run == 'true' && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Check e2e readiness
+        uses: osac-project/osac-test-infra/.github/actions/check-e2e-readiness@main
+        with:
+          pr-number: ${{ github.event.pull_request.number }}
+          head-sha: ${{ github.event.pull_request.head.sha }}
+
   # Builds fulfillment-service, osac-operator, osac-aap's execution
   # environment (twice -- once each for aap.bootstrap.image and
   # aap.configAsCode.eeImage, see OSAC-3546), and bare-metal-fulfillment-operator
@@ -79,8 +99,13 @@ jobs:
   # built from source for consistency with the other components -- revisit
   # if caas ever needs BMF enabled.
   e2e-caas-full-install:
-    needs: changes
-    if: needs.changes.outputs.should-run == 'true'
+    needs: [changes, e2e-readiness]
+    if: >-
+      always()
+      && needs.changes.result == 'success'
+      && needs.changes.outputs.should-run == 'true'
+      && (needs.e2e-readiness.result == 'success'
+          || needs.e2e-readiness.result == 'skipped')
     uses: osac-project/osac-test-infra/.github/workflows/e2e-caas-full-install.yml@main
     with:
       test-suite: ${{ inputs.test-suite || 'caas' }}
@@ -115,14 +140,16 @@ jobs:
     if: >-
       always()
       && !(needs.e2e-caas-full-install.result == 'skipped'
-           && needs.changes.result == 'success')
-    needs: [changes, e2e-caas-full-install]
+           && needs.changes.result == 'success'
+           && needs.e2e-readiness.result != 'failure')
+    needs: [changes, e2e-readiness, e2e-caas-full-install]
     runs-on: ubuntu-latest
     steps:
       - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         run: |
           echo "Upstream job results:"
           echo "  changes: ${{ needs.changes.result }}"
+          echo "  e2e-readiness: ${{ needs.e2e-readiness.result }}"
           echo "  e2e-caas-full-install: ${{ needs.e2e-caas-full-install.result }}"
           echo ""
           echo "One or more upstream jobs failed or were cancelled."

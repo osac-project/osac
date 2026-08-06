@@ -126,7 +126,7 @@ func (g *Generator) tick(ctx context.Context) error {
 
 func (g *Generator) buildHeartbeatEvents(state *projection.ResourceState, now time.Time) ([]cloudevents.Event, error) {
 	if state.ResourceType != "cluster_order" {
-		ce, err := g.buildHeartbeatEvent(state, now)
+		ce, err := g.buildHeartbeatEvent(state, uuid.NewString(), state.BillingDimensions, now)
 		if err != nil {
 			return nil, err
 		}
@@ -135,7 +135,7 @@ func (g *Generator) buildHeartbeatEvents(state *projection.ResourceState, now ti
 
 	components := events.DecomposeClusterComponents(state.BillingDimensions)
 	if len(components) == 0 {
-		ce, err := g.buildHeartbeatEvent(state, now)
+		ce, err := g.buildHeartbeatEvent(state, uuid.NewString(), state.BillingDimensions, now)
 		if err != nil {
 			return nil, err
 		}
@@ -154,38 +154,12 @@ func (g *Generator) buildHeartbeatEvents(state *projection.ResourceState, now ti
 }
 
 func (g *Generator) buildComponentHeartbeat(state *projection.ResourceState, comp events.ComponentRecord, now time.Time) (cloudevents.Event, error) {
-	ce := cloudevents.NewEvent()
-	ce.SetID(events.ComponentEventID(uuid.NewString(), comp))
-	ce.SetSource("osac-metering")
-	ce.SetType("osac.resource.heartbeat.v1")
-	ce.SetTime(now)
-
-	events.SetOSACExtensions(&ce, state.ResourceID, state.ResourceType, state.TenantID, state.ProjectID)
-
-	var durationSeconds float64
-	if state.BillableSince != nil {
-		durationSeconds = now.Sub(*state.BillableSince).Seconds()
-	}
-
-	data := heartbeatData{
-		ResourceID:        state.ResourceID,
-		ResourceType:      state.ResourceType,
-		TenantID:          state.TenantID,
-		ProjectID:         events.NilIfEmpty(state.ProjectID),
-		CurrentState:      state.CurrentState,
-		DurationSeconds:   durationSeconds,
-		BillingDimensions: comp.FlatBillingDimensions(),
-		SchemaVersion:     "v1",
-	}
-	if err := ce.SetData(cloudevents.ApplicationJSON, data); err != nil {
-		return ce, fmt.Errorf("setting component heartbeat data: %w", err)
-	}
-	return ce, nil
+	return g.buildHeartbeatEvent(state, events.ComponentEventID(uuid.NewString(), comp), comp.FlatBillingDimensions(), now)
 }
 
-func (g *Generator) buildHeartbeatEvent(state *projection.ResourceState, now time.Time) (cloudevents.Event, error) {
+func (g *Generator) buildHeartbeatEvent(state *projection.ResourceState, eventID string, dims map[string]any, now time.Time) (cloudevents.Event, error) {
 	ce := cloudevents.NewEvent()
-	ce.SetID(uuid.NewString())
+	ce.SetID(eventID)
 	ce.SetSource("osac-metering")
 	ce.SetType("osac.resource.heartbeat.v1")
 	ce.SetTime(now)
@@ -204,7 +178,7 @@ func (g *Generator) buildHeartbeatEvent(state *projection.ResourceState, now tim
 		ProjectID:         events.NilIfEmpty(state.ProjectID),
 		CurrentState:      state.CurrentState,
 		DurationSeconds:   durationSeconds,
-		BillingDimensions: state.BillingDimensions,
+		BillingDimensions: dims,
 		SchemaVersion:     "v1",
 	}
 	if err := ce.SetData(cloudevents.ApplicationJSON, data); err != nil {

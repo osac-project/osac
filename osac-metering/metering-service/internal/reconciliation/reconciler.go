@@ -258,10 +258,15 @@ func (r *Reconciler) reconcileFulfillmentResources(ctx context.Context, fulfillm
 
 func (r *Reconciler) reconcileMissedDeletions(ctx context.Context, fulfillmentState map[string]fulfillmentResource, projMap map[string]projection.ResourceState, now time.Time) (int, error) {
 	corrections := 0
+	clusterSkipLogged := false
 
 	for id, ps := range projMap {
 		if _, exists := fulfillmentState[id]; !exists {
 			if ps.ResourceType == "cluster_order" && r.clusterClient == nil {
+				if !clusterSkipLogged {
+					r.logger.Info("skipping cluster_order missed deletion checks, no cluster client configured")
+					clusterSkipLogged = true
+				}
 				continue
 			}
 			if err := r.publishCorrections(ctx, id, ps.ResourceType, ps.TenantID, ps.ProjectID,

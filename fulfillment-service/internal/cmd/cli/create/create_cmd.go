@@ -38,6 +38,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/computeinstancecatalogitem"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/externalip"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/externalipattachment"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/hosttype"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/hub"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/instancetype"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/natgateway"
@@ -70,6 +71,7 @@ func Cmd() *cobra.Command {
 	result.AddCommand(computeinstancecatalogitem.Cmd())
 	result.AddCommand(externalip.Cmd())
 	result.AddCommand(externalipattachment.Cmd())
+	result.AddCommand(hosttype.Cmd())
 	result.AddCommand(hub.Cmd())
 	result.AddCommand(instancetype.Cmd())
 	result.AddCommand(natgateway.Cmd())

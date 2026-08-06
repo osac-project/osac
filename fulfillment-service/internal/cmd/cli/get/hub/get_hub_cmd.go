@@ -75,8 +75,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 			c.console.Infof(ctx, "No hubs found.\n")
 			return nil
 		}
-		renderHubTable(c.console, resp.GetItems())
-		return nil
+		return renderHubTable(c.console, resp.GetItems())
 	}
 
 	ref := args[0]
@@ -94,11 +93,10 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	renderHubDetail(c.console, hub)
-	return nil
+	return renderHubDetail(c.console, hub)
 }
 
-func renderHubTable(w *terminal.Console, hubs []*privatev1.Hub) {
+func renderHubTable(w *terminal.Console, hubs []*privatev1.Hub) error {
 	writer := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(writer, "ID\tNAME\tNAMESPACE\tREGISTERED")
 	for _, h := range hubs {
@@ -112,10 +110,10 @@ func renderHubTable(w *terminal.Console, hubs []*privatev1.Hub) {
 		}
 		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", h.GetId(), name, h.GetSpec().GetNamespace(), created)
 	}
-	writer.Flush()
+	return writer.Flush()
 }
 
-func renderHubDetail(w *terminal.Console, h *privatev1.Hub) {
+func renderHubDetail(w *terminal.Console, h *privatev1.Hub) error {
 	writer := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 
 	name := "-"
@@ -137,5 +135,5 @@ func renderHubDetail(w *terminal.Console, h *privatev1.Hub) {
 	fmt.Fprintf(writer, "Namespace:\t%s\n", h.GetSpec().GetNamespace())
 	fmt.Fprintf(writer, "Creator:\t%s\n", creator)
 	fmt.Fprintf(writer, "Created:\t%s\n", created)
-	writer.Flush()
+	return writer.Flush()
 }

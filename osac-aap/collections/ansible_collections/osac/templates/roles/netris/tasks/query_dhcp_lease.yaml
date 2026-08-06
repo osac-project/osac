@@ -1,0 +1,123 @@
+---
+# Query DHCP leases for a subnet and match a server port MAC address
+# to find the DHCP-assigned IP. Called by the bare-metal-fulfillment-operator
+# during reconcileIPDiscovery after provisioning completes.
+#
+# Input: dhcp_lease_query dict with subnet_ref (Subnet UUID) and port_mac.
+# Output: discovered_ip_address fact set to the matched IP.
+#
+# Netris DHCP lease endpoint: /api/v2/dhcp
+# Response assumed: { "data": [ { "mac": "...", "ip": "...", "vnetID": N, ... } ] }
+# Adjust the endpoint URL and response field names if the Netris controller
+# version uses a different schema.
+
+- name: Extract DHCP lease query parameters
+  ansible.builtin.set_fact:
+    _dq_subnet_ref: "{{ dhcp_lease_query.subnet_ref }}"
+    _dq_port_mac: "{{ dhcp_lease_query.port_mac | lower }}"
+
+- name: Look up Subnet CR by UUID label
+  kubernetes.core.k8s_info:
+    api_version: osac.openshift.io/v1alpha1
+    kind: Subnet
+    label_selectors:
+      - "osac.openshift.io/subnet-uuid={{ _dq_subnet_ref }}"
+  register: _dq_subnet_lookup
+
+- name: Fail if Subnet CR not found
+  ansible.builtin.fail:
+    msg: >-
+      Subnet with UUID '{{ _dq_subnet_ref }}' not found.
+      Ensure the Subnet has been created before querying DHCP leases.
+  when: _dq_subnet_lookup.resources | length == 0
+
+- name: Set subnet name (used as V-Net name in Netris)
+  ansible.builtin.set_fact:
+    _dq_subnet_name: "{{ _dq_subnet_lookup.resources[0].metadata.name }}"
+
+- name: Display DHCP lease query parameters
+  ansible.builtin.debug:
+    msg:
+      - "Querying DHCP lease for MAC '{{ _dq_port_mac }}'"
+      - "Subnet: {{ _dq_subnet_name }} (UUID: {{ _dq_subnet_ref }})"
+
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Get existing V-Nets
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/vnet"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: 200
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _dq_vnet_list_resp
+  no_log: true
+
+- name: Find V-Net by subnet name
+  ansible.builtin.set_fact:
+    _dq_target_vnet: >-
+      {{ (_dq_vnet_list_resp.json.data | default([]))
+         | selectattr('name', 'equalto', _dq_subnet_name)
+         | list | first | default(none) }}
+  when: _dq_vnet_list_resp.json is mapping
+
+- name: Fail if V-Net not found
+  ansible.builtin.fail:
+    msg: >-
+      V-Net '{{ _dq_subnet_name }}' not found in Netris controller.
+      Ensure the Subnet has been provisioned before querying DHCP leases.
+  when: _dq_target_vnet is not defined or _dq_target_vnet is none
+
+- name: Query DHCP leases from Netris
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/dhcp"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: 200
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _dq_dhcp_resp
+  no_log: true
+
+- name: Initialize matched lease
+  ansible.builtin.set_fact:
+    _dq_matched_lease: ~
+
+- name: Find DHCP lease matching port MAC on target V-Net
+  ansible.builtin.set_fact:
+    _dq_matched_lease: "{{ item }}"
+  loop: "{{ _dq_dhcp_resp.json.data | default([]) }}"
+  when:
+    - item.vnetID | default(0) == _dq_target_vnet.id
+    - (item.mac | default('') | lower) == _dq_port_mac
+  loop_control:
+    label: "{{ item.mac | default('unknown') }}"
+  no_log: true
+
+- name: Fail if no DHCP lease matches
+  ansible.builtin.fail:
+    msg: >-
+      No DHCP lease found for MAC '{{ _dq_port_mac }}' on V-Net
+      '{{ _dq_subnet_name }}' (ID: {{ _dq_target_vnet.id }}).
+      Ensure the host has booted and received a DHCP lease before
+      querying. The host must be connected to this V-Net and have
+      completed DHCP negotiation.
+  when: _dq_matched_lease is none
+
+- name: Set discovered IP address
+  ansible.builtin.set_fact:
+    discovered_ip_address: "{{ _dq_matched_lease.ip }}"
+
+- name: Display DHCP lease query result
+  ansible.builtin.debug:
+    msg: >-
+      DHCP lease found: MAC '{{ _dq_port_mac }}' → IP '{{ discovered_ip_address }}'
+      on V-Net '{{ _dq_subnet_name }}' (ID: {{ _dq_target_vnet.id }})

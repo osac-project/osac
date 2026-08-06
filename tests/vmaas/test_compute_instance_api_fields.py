@@ -1,49 +1,35 @@
 from __future__ import annotations
 
-import uuid
-
-import yaml
-
-from tests.core.helpers import wait_for_deletion, wait_for_provision, wait_for_running
+from tests.core.grpc_client import GRPCClient
+from tests.core.helpers import wait_for_cr, wait_for_deletion, wait_for_provision, wait_for_running
 from tests.core.k8s_client import K8sClient
+from tests.core.osac_cli import OsacCLI
 from tests.core.runner import poll_until
 
 TEST_IMAGE_REF: str = "quay.io/containerdisks/fedora:latest"
+TEST_IMAGE_SOURCE_TYPE: str = "registry"
 TEST_BOOT_DISK_SIZE: int = 20
-TEST_CORES: int = 2
-TEST_MEMORY_GIB: int = 4
+TEST_RUN_STRATEGY: str = "Always"
 
 
 def test_compute_instance_api_fields(
+    cli: OsacCLI,
+    grpc: GRPCClient,
     k8s_hub_client: K8sClient,
     k8s_virt_client: K8sClient,
-    namespace: str,
-    default_subnet_ref: str,
+    default_subnet: str,
+    vm_template: str,
 ) -> None:
-    instance_name: str = f"e2e-test-api-fields-{uuid.uuid4().hex[:8]}"
-
-    manifest: str = yaml.dump(
-        {
-            "apiVersion": "osac.openshift.io/v1alpha1",
-            "kind": "ComputeInstance",
-            "metadata": {
-                "name": instance_name,
-                "namespace": namespace,
-                "annotations": {"osac.openshift.io/tenant": namespace},
-            },
-            "spec": {
-                "templateID": "osac.templates.ocp_virt_vm",
-                "networkAttachments": [{"subnetRef": default_subnet_ref}],
-                "image": {"sourceType": "registry", "sourceRef": TEST_IMAGE_REF},
-                "cores": TEST_CORES,
-                "memoryGiB": TEST_MEMORY_GIB,
-                "bootDisk": {"sizeGiB": TEST_BOOT_DISK_SIZE},
-                "runStrategy": "Always",
-            },
-        }
+    ci_uuid: str = cli.create_compute_instance(
+        template=vm_template,
+        network_attachments=[{"subnet": default_subnet}],
+        boot_disk_size=TEST_BOOT_DISK_SIZE,
+        image=TEST_IMAGE_REF,
+        image_source_type=TEST_IMAGE_SOURCE_TYPE,
+        run_strategy=TEST_RUN_STRATEGY,
     )
 
-    k8s_hub_client.apply(manifest=manifest)
+    instance_name: str = wait_for_cr(k8s=k8s_hub_client, uuid=ci_uuid)
 
     wait_for_provision(k8s=k8s_hub_client, name=instance_name)
     wait_for_running(k8s=k8s_hub_client, name=instance_name)
@@ -111,5 +97,5 @@ def test_compute_instance_api_fields(
     assert rc != 0, "image field should be immutable"
     assert "image is immutable" in output, f"Expected immutability error, got: {output}"
 
-    k8s_hub_client.delete(resource="computeinstance", name=instance_name)
+    cli.delete_compute_instance(uuid=ci_uuid)
     wait_for_deletion(k8s=k8s_hub_client, name=instance_name)

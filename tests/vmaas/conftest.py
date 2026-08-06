@@ -13,6 +13,7 @@ from tests.core.helpers import (
     wait_for_subnet_cr,
     wait_for_subnet_deletion,
     wait_for_subnet_ready,
+    wait_for_tenant_condition,
     wait_for_virtual_network_cr,
     wait_for_virtual_network_deletion,
     wait_for_virtual_network_ready,
@@ -170,6 +171,45 @@ def default_instance_type(private_grpc: GRPCClient, test_run_id: str) -> Iterato
         output = ((e.stdout or "") + (e.stderr or "")).lower()
         if "not found" not in output:
             raise
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _wait_for_tenant_storage_ready(
+    k8s_hub_client: K8sClient,
+    namespace: str,
+) -> None:
+    """Wait for ClusterStorageReady=True before any VMaaS tests if storage is configured.
+
+    When storageFulfillment is enabled, the storage controller triggers AAP jobs to
+    create per-tenant StorageClasses. Those jobs consume AAP executor slots. Compute
+    instance provisioning jobs that run while storage jobs are still queued time out
+    after 600s waiting for an executor. This fixture waits for storage setup to
+    complete before tests begin, eliminating the queue contention.
+
+    Polls for up to 30s to detect whether the ClusterStorageReady condition exists;
+    if it never appears the environment has no storage configured and we skip the wait.
+    """
+    condition: str = ""
+    for attempt in range(6):  # 6 x 5s sleeps, 7 reads total
+        condition = k8s_hub_client.get_tenant_condition_status(
+            name=namespace, condition_type="ClusterStorageReady", checked=False
+        )
+        if condition:
+            break
+        if attempt < 5:
+            time.sleep(5)
+    else:
+        # Final read after the last sleep — avoids missing the condition
+        # if it appears during the delay after the 6th check.
+        time.sleep(5)
+        condition = k8s_hub_client.get_tenant_condition_status(
+            name=namespace, condition_type="ClusterStorageReady", checked=False
+        )
+
+    if not condition or condition == "True":
+        return
+
+    wait_for_tenant_condition(k8s=k8s_hub_client, name=namespace, condition_type="ClusterStorageReady")
 
 
 @pytest.fixture(scope="session", autouse=True)

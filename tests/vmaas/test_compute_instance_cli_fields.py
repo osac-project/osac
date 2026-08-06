@@ -22,10 +22,11 @@ def test_compute_instance_cli_explicit_fields(
     grpc: GRPCClient,
     k8s_hub_client: K8sClient,
     default_subnet: str,
+    vm_template: str,
 ) -> None:
     name = unique_name("e2e-ci")
     uuid: str = cli.create_compute_instance(
-        template="osac.templates.ocp_virt_vm",
+        template=vm_template,
         name=name,
         network_attachments=[{"subnet": default_subnet}],
         boot_disk_size=TEST_BOOT_DISK_SIZE,

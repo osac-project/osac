@@ -76,6 +76,11 @@ type columnLayout struct {
 	// type to use for the lookup. For example, if the result of the expression is a cluster, then the 'type'
 	// should be 'fulfillment.v1.Cluster'.
 	Lookup bool `yaml:"lookup,omitempty"`
+
+	// LookupField is an optional dot-separated field path used to extract a value from the object found by the
+	// lookup. When empty, the lookup renders the name of the object (the default). For example, to render the
+	// 'spec.version' field of the looked up object, this should be 'spec.version'.
+	LookupField string `yaml:"lookup_field,omitempty"`
 }
 
 // TableRendererBuilder is used to create table renderers. Don't create instances of this type directly, use the
@@ -388,7 +393,7 @@ func (r *TableRenderer) renderCell(ctx context.Context, col *columnLayout, val r
 		if col.Lookup && col.Type != "" {
 			messageType, _ := protoregistry.GlobalTypes.FindMessageByName(col.Type)
 			if messageType != nil {
-				return r.renderCellLookup(ctx, val, messageType.Descriptor())
+				return r.renderCellLookup(ctx, val, messageType.Descriptor(), col.LookupField)
 			}
 		}
 	}
@@ -427,13 +432,14 @@ func (r *TableRenderer) renderCellEnum(val types.Int, enumDesc protoreflect.Enum
 	return err
 }
 
-// renderCellLookup renders a lookup value (identifier to name translation).
+// renderCellLookup renders a lookup value (identifier to name translation). When lookupField is not empty, it is
+// used as a dot-separated field path to extract a value from the looked up object instead of its name.
 func (r *TableRenderer) renderCellLookup(ctx context.Context, val types.String,
-	messageDesc protoreflect.MessageDescriptor) error {
+	messageDesc protoreflect.MessageDescriptor, lookupField string) error {
 	key := string(val)
 	var text string
 	if key != "" {
-		text = r.lookupName(ctx, messageDesc.FullName(), key)
+		text = r.lookupName(ctx, messageDesc.FullName(), key, lookupField)
 	} else {
 		text = "-"
 	}
@@ -441,15 +447,22 @@ func (r *TableRenderer) renderCellLookup(ctx context.Context, val types.String,
 	return err
 }
 
-// lookupName looks up a name from an identifier.
+// lookupName looks up a field value from an identifier. When lookupField is empty it defaults to
+// "metadata.name", which gives the same result as the previous GetMetadata().GetName() path.
 func (r *TableRenderer) lookupName(ctx context.Context, messageFullName protoreflect.FullName,
-	key string) (result string) {
+	key, lookupField string) (result string) {
+	if lookupField == "" {
+		lookupField = "metadata.name"
+	}
+
 	// Check if the result is already in the cache and return it immediately if so, otherwise
-	// remember to update the cache when done:
-	cache, ok := r.cache[messageFullName]
+	// remember to update the cache when done. The lookup field is part of the cache key so that
+	// different fields looked up on the same type don't collide.
+	cacheKey := protoreflect.FullName(string(messageFullName) + ":" + lookupField)
+	cache, ok := r.cache[cacheKey]
 	if !ok {
 		cache = map[string]string{}
-		r.cache[messageFullName] = cache
+		r.cache[cacheKey] = cache
 	}
 	result, ok = cache[key]
 	if ok {
@@ -497,11 +510,10 @@ func (r *TableRenderer) lookupName(ctx context.Context, messageFullName protoref
 		result = key
 		return
 	}
-
-	// Return the name of the first object, falling back to the key if the name is empty:
 	object := listResult.Items[0]
-	metadata := helper.GetMetadata(object)
-	result = metadata.GetName()
+
+	// Resolve the requested field from the looked up object:
+	result = reflection.ResolveFieldPath(object, lookupField)
 	if result == "" {
 		result = key
 	}

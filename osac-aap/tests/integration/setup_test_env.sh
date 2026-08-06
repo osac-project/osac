@@ -168,11 +168,16 @@ CSIEOF
   # playbook or role (OSAC-1992 moved credential/tier input to
   # storage_provider_backend_connections/storage_provider_tiers extra_vars, set directly
   # by each test target) -- only VIP pool and TLS settings remain relevant here.
-  cat > "${SCRIPT_DIR}/.storage_env" <<'ENVEOF'
+  # Resolve the csi-backends chart path from the repo root — integration tests
+  # run playbooks from test subdirectories, not the top-level osac-aap/ dir,
+  # so the playbook_dir-based default doesn't resolve correctly.
+  REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+  cat > "${SCRIPT_DIR}/.storage_env" <<ENVEOF
 export VAST_VIP_POOL_NAME="osac-test-pool"
 export VAST_VIP_POOL_IP_RANGES='[["10.0.0.10","10.0.0.50"]]'
 export VAST_VIP_POOL_SUBNET_CIDR="24"
 export VAST_VALIDATE_CERTS="false"
+export OSAC_CSI_BACKENDS_CHART_REF="${REPO_ROOT}/../osac-csi-driver/charts/csi-backends"
 ENVEOF
 fi
 

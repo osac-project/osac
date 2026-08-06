@@ -1,0 +1,16 @@
+---
+# csi-backends Helm chart — deploys vendor CSI controllers on the hub cluster.
+# Shared across all storage providers. Each provider is enabled/disabled
+# based on the tier list passed to the storage_provider role.
+#
+# Default: OCI registry. For local development or CI, override via the
+# OSAC_CSI_BACKENDS_CHART_REF env var (e.g., path to the local chart).
+# Gated by storage_provider_csi_backends_enabled (default true).
+storage_provider_csi_backends_enabled: true
+storage_provider_csi_backends_chart_ref: >-
+  {{ lookup('env', 'OSAC_CSI_BACKENDS_CHART_REF')
+     | default('oci://ghcr.io/osac-project/charts/csi-backends', true) }}
+# Leave unset to install the latest version. Set to pin (e.g., "0.1.0").
+storage_provider_csi_backends_chart_version: ""
+storage_provider_csi_backends_release_name: "osac-csi-backends"
+storage_provider_csi_backends_namespace: "osac-csi-backends"

@@ -7,6 +7,9 @@
   ansible.builtin.set_fact:
     _all_tenant_configs: {}
 
+- name: Deploy vendor CSI controllers on hub
+  ansible.builtin.include_tasks: ensure_csi_backends.yaml
+
 - name: Dispatch setup to each provider
   block:
     - name: Run setup per provider

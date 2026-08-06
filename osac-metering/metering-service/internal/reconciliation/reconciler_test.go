@@ -655,7 +655,7 @@ var _ = Describe("Reconciler", func() {
 
 	Describe("CaaS cluster reconciliation", func() {
 		makeClusterProto := func(id, tenant string, state privatev1.ClusterState, version int32) *privatev1.Cluster {
-			releaseImage := "quay.io/ocp:4.17.0"
+			versionName := "4.17.0"
 			return &privatev1.Cluster{
 				Id: id,
 				Metadata: &privatev1.Metadata{
@@ -663,10 +663,10 @@ var _ = Describe("Reconciler", func() {
 					Version: version,
 				},
 				Spec: &privatev1.ClusterSpec{
-					Template:     "ocp-ci-small",
-					ReleaseImage: &releaseImage,
+					Template:    &privatev1.ClusterTemplateReference{Name: "ocp-ci-small"},
+					VersionName: &versionName,
 					NodeSets: map[string]*privatev1.ClusterNodeSet{
-						"gpu-workers": {HostType: "gpu-h100", Size: 2},
+						"gpu-workers": {HostType: &privatev1.HostTypeReference{Name: "gpu-h100"}, Size: 2},
 					},
 				},
 				Status: &privatev1.ClusterStatus{State: state},
@@ -731,7 +731,7 @@ var _ = Describe("Reconciler", func() {
 				FulfillmentVersion: 1,
 				BillingDimensions: map[string]any{
 					"cluster_template": "ocp-ci-small",
-					"release_image":    "quay.io/ocp:4.17.0",
+					"version_name":     "4.17.0",
 					"components": []any{
 						map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": float64(1)},
 						map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": float64(2)},
@@ -770,11 +770,11 @@ var _ = Describe("Reconciler", func() {
 			store := newMockStore()
 			now := time.Now().UTC().Truncate(time.Microsecond)
 			store.states["cl-gone"] = projection.ResourceState{
-				ResourceID:   "cl-gone",
-				ResourceType: "cluster_order",
-				TenantID:     "tenant-1",
-				CurrentState: "READY",
-				IsBillable:   true,
+				ResourceID:    "cl-gone",
+				ResourceType:  "cluster_order",
+				TenantID:      "tenant-1",
+				CurrentState:  "READY",
+				IsBillable:    true,
 				BillableSince: &now,
 				BillingDimensions: map[string]any{
 					"cluster_template": "ocp-ci-small",
@@ -861,6 +861,58 @@ var _ = Describe("Reconciler", func() {
 			store.mu.Lock()
 			defer store.mu.Unlock()
 			Expect(store.states).To(HaveLen(600))
+		})
+
+		It("produces deterministic synthetic heartbeat IDs for clusters", func() {
+			computeClient := &mockComputeClient{}
+			clusterClient := &mockClusterClient{
+				items: []*privatev1.Cluster{
+					makeClusterProto("cl-hb", "tenant-1", privatev1.ClusterState_CLUSTER_STATE_READY, 1),
+				},
+			}
+			store := newMockStore()
+			now := time.Now().Add(-5 * time.Minute).UTC().Truncate(time.Microsecond)
+			store.states["cl-hb"] = projection.ResourceState{
+				ResourceID:         "cl-hb",
+				ResourceType:       "cluster_order",
+				TenantID:           "tenant-1",
+				CurrentState:       "READY",
+				IsBillable:         true,
+				BillableSince:      &now,
+				FulfillmentVersion: 1,
+				BillingDimensions: map[string]any{
+					"cluster_template": "ocp-ci-small",
+					"version_name":     "4.17.0",
+					"components": []any{
+						map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": float64(1)},
+						map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": float64(2)},
+					},
+				},
+			}
+
+			pub := &mockPublisher{}
+			recon := reconciliation.NewReconciler(computeClient, clusterClient, store, pub, logr.Discard(), 60*time.Second)
+
+			Expect(recon.Reconcile(ctx)).To(Succeed())
+
+			pub.mu.Lock()
+			defer pub.mu.Unlock()
+
+			var hbEvents []cloudevents.Event
+			for _, e := range pub.published {
+				if e.Type() == "osac.resource.heartbeat.v1" {
+					hbEvents = append(hbEvents, e)
+				}
+			}
+			Expect(hbEvents).To(HaveLen(2))
+
+			ids := map[string]bool{}
+			for _, e := range hbEvents {
+				Expect(e.ID()).To(ContainSubstring("synthetic-hb/cl-hb/"))
+				Expect(e.ID()).NotTo(ContainSubstring("synthetic-hb/cl-hb//"))
+				ids[e.ID()] = true
+			}
+			Expect(ids).To(HaveLen(2))
 		})
 	})
 })

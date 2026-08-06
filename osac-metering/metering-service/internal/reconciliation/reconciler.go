@@ -18,7 +18,6 @@ import (
 
 	cloudevents "github.com/cloudevents/sdk-go/v2"
 	"github.com/go-logr/logr"
-	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"google.golang.org/grpc"
@@ -476,12 +475,13 @@ func (r *Reconciler) loadClusters(ctx context.Context, result map[string]fulfill
 }
 
 func buildSyntheticHeartbeats(ps projection.ResourceState, now time.Time) ([]cloudevents.Event, error) {
+	baseID := fmt.Sprintf("synthetic-hb/%s/%d", ps.ResourceID, now.UTC().Unix())
 	if ps.ResourceType == "cluster_order" {
 		components := events.DecomposeClusterComponents(ps.BillingDimensions)
 		if len(components) > 0 {
 			result := make([]cloudevents.Event, 0, len(components))
 			for _, comp := range components {
-				ce, err := buildSingleSyntheticHeartbeat(ps, comp.FlatBillingDimensions(), events.ComponentEventID(uuid.NewString(), comp), now)
+				ce, err := buildSingleSyntheticHeartbeat(ps, comp.FlatBillingDimensions(), events.ComponentEventID(baseID, comp), now)
 				if err != nil {
 					return nil, err
 				}
@@ -490,7 +490,7 @@ func buildSyntheticHeartbeats(ps projection.ResourceState, now time.Time) ([]clo
 			return result, nil
 		}
 	}
-	ce, err := buildSingleSyntheticHeartbeat(ps, ps.BillingDimensions, uuid.NewString(), now)
+	ce, err := buildSingleSyntheticHeartbeat(ps, ps.BillingDimensions, baseID, now)
 	if err != nil {
 		return nil, err
 	}

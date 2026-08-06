@@ -810,18 +810,18 @@ var _ = Describe("Consumer", func() {
 
 	Describe("CaaS Cluster events", func() {
 		makeCluster := func(id, tenant string, state privatev1.ClusterState, nodeSets map[string]*privatev1.ClusterNodeSet) *privatev1.Cluster {
-			releaseImage := "quay.io/ocp:4.17.0"
+			versionName := "4.17.0"
 			return &privatev1.Cluster{
 				Id: id,
 				Metadata: &privatev1.Metadata{
 					Tenant:            tenant,
 					Version:           2,
-					CreationTimestamp:  timestamppb.Now(),
+					CreationTimestamp: timestamppb.Now(),
 				},
 				Spec: &privatev1.ClusterSpec{
-					Template:     "ocp-ci-small",
-					ReleaseImage: &releaseImage,
-					NodeSets:     nodeSets,
+					Template:    &privatev1.ClusterTemplateReference{Name: "ocp-ci-small"},
+					VersionName: &versionName,
+					NodeSets:    nodeSets,
 				},
 				Status: &privatev1.ClusterStatus{
 					State:               state,
@@ -832,15 +832,15 @@ var _ = Describe("Consumer", func() {
 
 		defaultNodeSets := func() map[string]*privatev1.ClusterNodeSet {
 			return map[string]*privatev1.ClusterNodeSet{
-				"gpu-workers": {HostType: "gpu-h100", Size: 2},
-				"cpu-workers": {HostType: "cpu-only", Size: 3},
+				"gpu-workers": {HostType: &privatev1.HostTypeReference{Name: "gpu-h100"}, Size: 2},
+				"cpu-workers": {HostType: &privatev1.HostTypeReference{Name: "cpu-only"}, Size: 3},
 			}
 		}
 
 		clusterBillingDims := func() map[string]any {
 			return map[string]any{
 				"cluster_template": "ocp-ci-small",
-				"release_image":    "quay.io/ocp:4.17.0",
+				"version_name":     "4.17.0",
 				"components": []any{
 					map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
 					map[string]any{"node_set": "cpu-workers", "component": "worker", "host_type": "cpu-only", "node_count": int32(3)},
@@ -1083,8 +1083,8 @@ var _ = Describe("Consumer", func() {
 
 			// Scale gpu-h100 from 2 to 4, cpu-only stays at 3
 			scaledNodeSets := map[string]*privatev1.ClusterNodeSet{
-				"gpu-workers": {HostType: "gpu-h100", Size: 4},
-				"cpu-workers": {HostType: "cpu-only", Size: 3},
+				"gpu-workers": {HostType: &privatev1.HostTypeReference{Name: "gpu-h100"}, Size: 4},
+				"cpu-workers": {HostType: &privatev1.HostTypeReference{Name: "cpu-only"}, Size: 3},
 			}
 			cl := makeCluster("cl-scale", "tenant-1", privatev1.ClusterState_CLUSTER_STATE_READY, scaledNodeSets)
 			event := &privatev1.Event{

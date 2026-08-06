@@ -260,16 +260,16 @@ var _ = Describe("Generator", func() {
 		makeClusterBillableState := func(id string) projection.ResourceState {
 			now := time.Now().UTC().Truncate(time.Microsecond)
 			return projection.ResourceState{
-				ResourceID:   id,
-				ResourceType: "cluster_order",
-				TenantID:     "tenant-1",
-				ProjectID:    "project-1",
-				CurrentState: "READY",
-				IsBillable:   true,
+				ResourceID:    id,
+				ResourceType:  "cluster_order",
+				TenantID:      "tenant-1",
+				ProjectID:     "project-1",
+				CurrentState:  "READY",
+				IsBillable:    true,
 				BillableSince: &now,
 				BillingDimensions: map[string]any{
 					"cluster_template": "ocp-ci-small",
-					"release_image":    "quay.io/ocp:4.17.0",
+					"version_name":     "4.17.0",
 					"components": []any{
 						map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": float64(1)},
 						map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": float64(2)},

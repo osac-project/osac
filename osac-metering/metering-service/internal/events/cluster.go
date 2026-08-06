@@ -200,7 +200,7 @@ func ClusterBillingDimensions(cl *privatev1.Cluster) map[string]any {
 			components = append(components, map[string]any{
 				"node_set":   k,
 				"component":  "worker",
-				"host_type":  ns.GetHostType(),
+				"host_type":  ns.GetHostType().GetName(),
 				"node_count": ns.GetSize(),
 			})
 		}
@@ -217,7 +217,7 @@ type ComponentRecord struct {
 	HostType        string
 	NodeCount       int32
 	ClusterTemplate string
-	ReleaseImage    string
+	VersionName     string
 }
 
 // FlatBillingDimensions returns per-component billing dimensions for a single
@@ -230,8 +230,8 @@ func (cr ComponentRecord) FlatBillingDimensions() map[string]any {
 		"host_type":        cr.HostType,
 		"node_count":       cr.NodeCount,
 	}
-	if cr.ReleaseImage != "" {
-		dims["release_image"] = cr.ReleaseImage
+	if cr.VersionName != "" {
+		dims["version_name"] = cr.VersionName
 	}
 	return dims
 }
@@ -241,7 +241,7 @@ func (cr ComponentRecord) FlatBillingDimensions() map[string]any {
 // Reconciler to fan out one cluster into per-component events.
 func DecomposeClusterComponents(billingDims map[string]any) []ComponentRecord {
 	clusterTemplate, _ := billingDims["cluster_template"].(string)
-	releaseImage, _ := billingDims["release_image"].(string)
+	versionName, _ := billingDims["version_name"].(string)
 
 	componentsRaw, ok := billingDims["components"]
 	if !ok {
@@ -274,7 +274,7 @@ func DecomposeClusterComponents(billingDims map[string]any) []ComponentRecord {
 			HostType:        hostType,
 			NodeCount:       nodeCount,
 			ClusterTemplate: clusterTemplate,
-			ReleaseImage:    releaseImage,
+			VersionName:     versionName,
 		})
 	}
 
@@ -312,11 +312,12 @@ func ChangedComponents(oldDims, newDims map[string]any) []ComponentRecord {
 	for _, r := range oldRecords {
 		if !newByKey[r.NodeSet] {
 			changed = append(changed, ComponentRecord{
+				NodeSet:         r.NodeSet,
 				Component:       r.Component,
 				HostType:        r.HostType,
 				NodeCount:       0,
 				ClusterTemplate: r.ClusterTemplate,
-				ReleaseImage:    r.ReleaseImage,
+				VersionName:     r.VersionName,
 			})
 		}
 	}

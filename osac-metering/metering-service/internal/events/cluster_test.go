@@ -24,15 +24,15 @@ var _ = Describe("CaaS Cluster Mapper", func() {
 				Tenant:            "tenant-1",
 				Project:           "project-alpha",
 				Version:           5,
-				CreationTimestamp:  timestamppb.Now(),
+				CreationTimestamp: timestamppb.Now(),
 			},
 			Spec: &privatev1.ClusterSpec{
-				Template:     "ocp-ci-small",
-				CatalogItem:  "cluster-catalog-1",
-				ReleaseImage: strPtr("quay.io/openshift-release-dev/ocp-release:4.17.0-x86_64"),
+				Template:    &privatev1.ClusterTemplateReference{Id: "ocp-ci-small", Name: "ocp-ci-small"},
+				CatalogItem: &privatev1.ClusterCatalogItemReference{Id: "cluster-catalog-1", Name: "cluster-catalog-1"},
+				VersionName: strPtr("quay.io/openshift-release-dev/ocp-release:4.17.0-x86_64"),
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
-					"gpu-workers": {HostType: "gpu-h100", Size: 2},
-					"cpu-workers": {HostType: "cpu-only", Size: 3},
+					"gpu-workers": {HostType: &privatev1.HostTypeReference{Name: "gpu-h100"}, Size: 2},
+					"cpu-workers": {HostType: &privatev1.HostTypeReference{Name: "cpu-only"}, Size: 3},
 				},
 			},
 			Status: &privatev1.ClusterStatus{
@@ -211,10 +211,10 @@ var _ = Describe("CaaS Cluster Mapper", func() {
 	})
 
 	Context("billing dimensions", func() {
-		It("includes cluster_template, release_image, and full components breakdown", func() {
+		It("includes cluster_template, version_name, and full components breakdown", func() {
 			dims := events.ClusterBillingDimensions(cl)
 			Expect(dims["cluster_template"]).To(Equal("ocp-ci-small"))
-			Expect(dims["release_image"]).To(Equal("quay.io/openshift-release-dev/ocp-release:4.17.0-x86_64"))
+			Expect(dims["version_name"]).To(Equal("quay.io/openshift-release-dev/ocp-release:4.17.0-x86_64"))
 
 			components, ok := dims["components"].([]any)
 			Expect(ok).To(BeTrue(), "components must be []any for DecomposeClusterComponents compatibility")
@@ -242,10 +242,10 @@ var _ = Describe("CaaS Cluster Mapper", func() {
 			Expect(w2["node_count"]).To(Equal(int32(2)))
 		})
 
-		It("omits release_image when nil", func() {
-			cl.Spec.ReleaseImage = nil
+		It("omits version_name when nil", func() {
+			cl.Spec.VersionName = nil
 			dims := events.ClusterBillingDimensions(cl)
-			Expect(dims).NotTo(HaveKey("release_image"))
+			Expect(dims).NotTo(HaveKey("version_name"))
 		})
 
 		It("handles nil spec gracefully", func() {
@@ -363,7 +363,7 @@ var _ = Describe("DecomposeClusterComponents", func() {
 	It("decomposes 1 control plane + 2 worker sets into 3 records", func() {
 		dims := map[string]any{
 			"cluster_template": "ocp-ci-small",
-			"release_image":    "quay.io/ocp:4.17.0",
+			"version_name":     "quay.io/ocp:4.17.0",
 			"components": []any{
 				map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
 				map[string]any{"node_set": "cpu-workers", "component": "worker", "host_type": "cpu-only", "node_count": int32(3)},
@@ -379,7 +379,7 @@ var _ = Describe("DecomposeClusterComponents", func() {
 		Expect(records[0].HostType).To(Equal("_control_plane"))
 		Expect(records[0].NodeCount).To(Equal(int32(1)))
 		Expect(records[0].ClusterTemplate).To(Equal("ocp-ci-small"))
-		Expect(records[0].ReleaseImage).To(Equal("quay.io/ocp:4.17.0"))
+		Expect(records[0].VersionName).To(Equal("quay.io/ocp:4.17.0"))
 
 		Expect(records[1].NodeSet).To(Equal("cpu-workers"))
 		Expect(records[1].Component).To(Equal("worker"))
@@ -425,19 +425,19 @@ var _ = Describe("ComponentRecord", func() {
 			HostType:        "gpu-h100",
 			NodeCount:       2,
 			ClusterTemplate: "ocp-ci-small",
-			ReleaseImage:    "quay.io/ocp:4.17.0",
+			VersionName:     "quay.io/ocp:4.17.0",
 		}
 
 		flat := cr.FlatBillingDimensions()
 		Expect(flat["cluster_template"]).To(Equal("ocp-ci-small"))
-		Expect(flat["release_image"]).To(Equal("quay.io/ocp:4.17.0"))
+		Expect(flat["version_name"]).To(Equal("quay.io/ocp:4.17.0"))
 		Expect(flat["node_set"]).To(Equal("gpu-workers"))
 		Expect(flat["component"]).To(Equal("worker"))
 		Expect(flat["host_type"]).To(Equal("gpu-h100"))
 		Expect(flat["node_count"]).To(Equal(int32(2)))
 	})
 
-	It("omits release_image when empty", func() {
+	It("omits version_name when empty", func() {
 		cr := events.ComponentRecord{
 			NodeSet:         "_control_plane",
 			Component:       "control_plane",
@@ -447,7 +447,7 @@ var _ = Describe("ComponentRecord", func() {
 		}
 
 		flat := cr.FlatBillingDimensions()
-		Expect(flat).NotTo(HaveKey("release_image"))
+		Expect(flat).NotTo(HaveKey("version_name"))
 	})
 })
 
@@ -545,6 +545,39 @@ var _ = Describe("ChangedComponents", func() {
 		Expect(changed).To(HaveLen(1))
 		Expect(changed[0].HostType).To(Equal("gpu-h100"))
 		Expect(changed[0].NodeCount).To(Equal(int32(0)))
+		Expect(changed[0].NodeSet).To(Equal("gpu-workers"))
+	})
+
+	It("preserves distinct NodeSet on multi-removal for unique event IDs", func() {
+		oldDims := map[string]any{
+			"cluster_template": "tmpl",
+			"components": []any{
+				map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
+				map[string]any{"node_set": "pool-a", "component": "worker", "host_type": "gpu-h100", "node_count": int32(2)},
+				map[string]any{"node_set": "pool-b", "component": "worker", "host_type": "cpu-only", "node_count": int32(3)},
+			},
+		}
+		newDims := map[string]any{
+			"cluster_template": "tmpl",
+			"components": []any{
+				map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
+			},
+		}
+
+		changed := events.ChangedComponents(oldDims, newDims)
+		Expect(changed).To(HaveLen(2))
+
+		nodeSets := map[string]bool{}
+		for _, c := range changed {
+			Expect(c.NodeCount).To(Equal(int32(0)))
+			Expect(c.NodeSet).NotTo(BeEmpty())
+			id := events.ComponentEventID("evt-1", c)
+			Expect(id).NotTo(Equal("evt-1/"))
+			nodeSets[c.NodeSet] = true
+		}
+		Expect(nodeSets).To(HaveLen(2))
+		Expect(nodeSets).To(HaveKey("pool-a"))
+		Expect(nodeSets).To(HaveKey("pool-b"))
 	})
 
 	It("handles int32 vs float64 from JSONB round-trip", func() {
@@ -569,7 +602,7 @@ var _ = Describe("DimensionsEqual with nested CaaS components", func() {
 	It("matches identical billing dimensions with components array", func() {
 		a := map[string]any{
 			"cluster_template": "ocp-ci-small",
-			"release_image":    "quay.io/ocp:4.17.0",
+			"version_name":     "quay.io/ocp:4.17.0",
 			"components": []any{
 				map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
 				map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(2)},
@@ -577,7 +610,7 @@ var _ = Describe("DimensionsEqual with nested CaaS components", func() {
 		}
 		b := map[string]any{
 			"cluster_template": "ocp-ci-small",
-			"release_image":    "quay.io/ocp:4.17.0",
+			"version_name":     "quay.io/ocp:4.17.0",
 			"components": []any{
 				map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
 				map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(2)},
@@ -622,7 +655,7 @@ var _ = Describe("DimensionsEqual with nested CaaS components", func() {
 	It("handles JSONB round-trip: int32 stored, float64 on read", func() {
 		stored := map[string]any{
 			"cluster_template": "tmpl",
-			"release_image":    "quay.io/ocp:4.17.0",
+			"version_name":     "quay.io/ocp:4.17.0",
 			"components": []any{
 				map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
 				map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": int32(2)},
@@ -667,7 +700,7 @@ var _ = Describe("DimensionsEqual with nested CaaS components", func() {
 	It("round-trip preserves equality for multi-component clusters", func() {
 		original := map[string]any{
 			"cluster_template": "ocp-ci-small",
-			"release_image":    "quay.io/ocp:4.17.0",
+			"version_name":     "quay.io/ocp:4.17.0",
 			"components": []any{
 				map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": int32(1)},
 				map[string]any{"node_set": "cpu-workers", "component": "worker", "host_type": "cpu-only", "node_count": int32(3)},

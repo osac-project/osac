@@ -35,7 +35,7 @@ const (
 	defaultInitialDelay   = 1 * time.Second
 	defaultMaxDelay       = 30 * time.Second
 	defaultHandlerRetries = 3
-	meteringFilter = "has(event.compute_instance) || has(event.cluster)"
+	meteringFilter        = "has(event.compute_instance) || has(event.cluster)"
 )
 
 // Consumer connects to the fulfillment-service gRPC Watch stream, maps

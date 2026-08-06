@@ -545,11 +545,11 @@ var _ = Describe("MapWatchEvent", func() {
 			Expect(err.Error()).To(ContainSubstring("unsupported"))
 		})
 
-		It("returns an error for non-ComputeInstance payload", func() {
+		It("returns an error for unsupported payload type", func() {
 			event := &privatev1.Event{
 				Id:      "evt-1",
 				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
-				Payload: &privatev1.Event_Cluster{Cluster: &privatev1.Cluster{}},
+				Payload: &privatev1.Event_Hub{Hub: &privatev1.Hub{}},
 			}
 
 			_, err := mapEvent(event, &events.StateContext{})

@@ -116,6 +116,9 @@ func mapperForEvent(event *privatev1.Event) (ResourceMapper, error) {
 	if ci := event.GetComputeInstance(); ci != nil {
 		return &computeInstanceMapper{ci: ci}, nil
 	}
+	if cl := event.GetCluster(); cl != nil {
+		return &clusterMapper{cl: cl}, nil
+	}
 	return nil, fmt.Errorf("unsupported event payload type for event %s", event.GetId())
 }
 

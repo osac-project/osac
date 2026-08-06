@@ -124,21 +124,7 @@ var _ = Describe("MapWatchEvent", func() {
 			Expect(ce.Type()).To(Equal("osac.resource.suspended.v1"))
 		})
 
-		It("maps OBJECT_UPDATED with STARTING state to osac.resource.updated.v1", func() {
-			ci.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING
-
-			event := &privatev1.Event{
-				Id:      "evt-2",
-				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
-				Payload: &privatev1.Event_ComputeInstance{ComputeInstance: ci},
-			}
-
-			ce, err := mapEvent(event, &events.StateContext{})
-			Expect(err).NotTo(HaveOccurred())
-			Expect(ce.Type()).To(Equal("osac.resource.updated.v1"))
-		})
-
-		It("maps OBJECT_UPDATED with STOPPING state to osac.resource.updated.v1", func() {
+		It("returns ErrTransientState for STOPPING state", func() {
 			ci.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPING
 
 			event := &privatev1.Event{
@@ -147,9 +133,38 @@ var _ = Describe("MapWatchEvent", func() {
 				Payload: &privatev1.Event_ComputeInstance{ComputeInstance: ci},
 			}
 
-			ce, err := mapEvent(event, &events.StateContext{})
+			_, err := mapEvent(event, &events.StateContext{})
+			Expect(err).To(HaveOccurred())
+			Expect(errors.Is(err, events.ErrTransientState)).To(BeTrue())
+		})
+
+		It("returns ErrTransientState for STARTING state", func() {
+			ci.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING
+
+			event := &privatev1.Event{
+				Id:      "evt-starting",
+				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+				Payload: &privatev1.Event_ComputeInstance{ComputeInstance: ci},
+			}
+
+			_, err := mapEvent(event, &events.StateContext{})
+			Expect(err).To(HaveOccurred())
+			Expect(errors.Is(err, events.ErrTransientState)).To(BeTrue())
+		})
+
+		It("maps DELETING to osac.resource.suspended.v1", func() {
+			ci.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING
+
+			event := &privatev1.Event{
+				Id:      "evt-deleting",
+				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+				Payload: &privatev1.Event_ComputeInstance{ComputeInstance: ci},
+			}
+
+			stateCtx := &events.StateContext{PreviousState: "RUNNING"}
+			ce, err := mapEvent(event, stateCtx)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(ce.Type()).To(Equal("osac.resource.updated.v1"))
+			Expect(ce.Type()).To(Equal("osac.resource.suspended.v1"))
 		})
 
 		It("maps STOPPED→RUNNING to osac.resource.resumed.v1 with state context", func() {
@@ -227,20 +242,6 @@ var _ = Describe("MapWatchEvent", func() {
 			Expect(ce.Type()).To(Equal("osac.resource.started.v1"))
 		})
 
-		It("maps DELETING to osac.resource.updated.v1", func() {
-			ci.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING
-
-			event := &privatev1.Event{
-				Id:      "evt-deleting",
-				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
-				Payload: &privatev1.Event_ComputeInstance{ComputeInstance: ci},
-			}
-
-			ce, err := mapEvent(event, &events.StateContext{})
-			Expect(err).NotTo(HaveOccurred())
-			Expect(ce.Type()).To(Equal("osac.resource.updated.v1"))
-		})
-
 		It("maps UNSPECIFIED to osac.resource.updated.v1", func() {
 			ci.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_UNSPECIFIED
 
@@ -253,6 +254,21 @@ var _ = Describe("MapWatchEvent", func() {
 			ce, err := mapEvent(event, &events.StateContext{})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(ce.Type()).To(Equal("osac.resource.updated.v1"))
+		})
+
+		It("returns error for unknown state (default branch)", func() {
+			ci.Status.State = privatev1.ComputeInstanceState(9999)
+
+			event := &privatev1.Event{
+				Id:      "evt-unknown-state",
+				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+				Payload: &privatev1.Event_ComputeInstance{ComputeInstance: ci},
+			}
+
+			_, err := mapEvent(event, &events.StateContext{})
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("unexpected compute instance state transition"))
+			Expect(errors.Is(err, events.ErrTransientState)).To(BeFalse())
 		})
 
 		It("maps RUNNING→STOPPED with duration to osac.resource.suspended.v1", func() {

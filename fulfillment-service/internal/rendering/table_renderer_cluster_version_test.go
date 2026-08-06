@@ -16,6 +16,8 @@ package rendering
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
@@ -74,6 +76,8 @@ var _ = Describe("Cluster VERSION column rendering", func() {
 			Return(true).
 			AnyTimes()
 
+		versionDescriptor := (&publicv1.ClusterVersion{}).ProtoReflect().Descriptor()
+
 		helper := reflection.NewMockHelper(ctrl)
 		helper.EXPECT().
 			Lookup(gomock.Any()).
@@ -81,8 +85,11 @@ var _ = Describe("Cluster VERSION column rendering", func() {
 				switch objectType {
 				case string(clusterDescriptor.FullName()):
 					return clusterHelper
-				default:
+				case string(versionDescriptor.FullName()):
 					return versionHelper
+				default:
+					Fail(fmt.Sprintf("unexpected object type lookup: %s", objectType))
+					return nil
 				}
 			}).
 			AnyTimes()
@@ -136,11 +143,15 @@ var _ = Describe("Cluster VERSION column rendering", func() {
 
 	It("Shows '-' when the cluster has no version_name", func(ctx context.Context) {
 		cluster := publicv1.Cluster_builder{
-			Id:   "cluster-3",
+			Id:   "cluster3",
 			Spec: publicv1.ClusterSpec_builder{}.Build(),
 		}.Build()
 
 		output := renderClusters(ctx, cluster, makeVersionHelper(nil))
-		Expect(output).To(MatchRegexp(`VERSION.*\n.*-`))
+		lines := strings.Split(strings.TrimSpace(output), "\n")
+		Expect(lines).To(HaveLen(2))
+		versionCol := strings.Index(lines[0], "VERSION")
+		Expect(versionCol).To(BeNumerically(">=", 0))
+		Expect(lines[1][versionCol]).To(Equal(byte('-')))
 	})
 })

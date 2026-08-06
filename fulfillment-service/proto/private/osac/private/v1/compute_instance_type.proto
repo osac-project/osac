@@ -45,6 +45,9 @@ message ComputeInstanceImage {
 message ComputeInstanceDisk {
   // Disk size in GiB.
   int32 size_gib = 1;
+
+  // Storage tier name (e.g., "standard", "fast", "archive").
+  optional string storage_tier = 2;
 }
 
 // Groups one subnet with security groups for that network attachment (multi-NIC VMs).

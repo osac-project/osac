@@ -27,10 +27,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	privatev1 "github.com/osac-project/osac/osac-operator/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/osac-operator/pkg/dispatcher"
 	"github.com/osac-project/osac/osac-operator/pkg/networkmanager"
-	"google.golang.org/grpc"
 )
 
 var _ = Describe("DispatchTable", func() {
@@ -150,22 +148,19 @@ var _ = Describe("Dispatcher", func() {
 		Expect(corev1.AddToScheme(scheme)).To(Succeed())
 	})
 
-	newStubWithManagers := func(fabricName string, k8sName *string) *stubNetworkClassesClient {
-		return &stubNetworkClassesClient{
-			getFunc: func(_ context.Context, _ *privatev1.NetworkClassesGetRequest, _ ...grpc.CallOption) (*privatev1.NetworkClassesGetResponse, error) {
-				return &privatev1.NetworkClassesGetResponse{
-					Object: &privatev1.NetworkClass{
-						Id:            "nc-test",
-						FabricManager: fabricName,
-						K8SManager:    k8sName,
-					},
+	newStubWithManagers := func(fabricName, k8sName string) *stubNetworkClassClient {
+		return &stubNetworkClassClient{
+			getFunc: func(_ context.Context, _ string) (*dispatcher.NetworkClassManagers, error) {
+				return &dispatcher.NetworkClassManagers{
+					FabricManager: fabricName,
+					K8sManager:    k8sName,
 				}, nil
 			},
 		}
 	}
 
 	It("dispatches VirtualNetwork to fabric only", func() {
-		stub := newStubWithManagers("netris", nil)
+		stub := newStubWithManagers("netris", "")
 		cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
 			newFabricManagerConfigMap("fm-netris", "netris", "ipv4"),
 		).Build()
@@ -183,8 +178,7 @@ var _ = Describe("Dispatcher", func() {
 	})
 
 	It("dispatches Subnet to fabric + k8s when both configured", func() {
-		k8sName := "cudn_localnet"
-		stub := newStubWithManagers("neutron", &k8sName)
+		stub := newStubWithManagers("neutron", "cudn_localnet")
 		cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
 			newFabricManagerConfigMap("fm-neutron", "neutron", "ipv4,ipv6,dualStack"),
 			newK8sManagerConfigMap("km-cudn", "cudn_localnet", "ipv4,ipv6,dualStack"),
@@ -205,7 +199,7 @@ var _ = Describe("Dispatcher", func() {
 	})
 
 	It("dispatches Subnet to fabric only when k8sManager is nil", func() {
-		stub := newStubWithManagers("netris", nil)
+		stub := newStubWithManagers("netris", "")
 		cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
 			newFabricManagerConfigMap("fm-netris", "netris", "ipv4"),
 		).Build()
@@ -223,7 +217,7 @@ var _ = Describe("Dispatcher", func() {
 	})
 
 	It("dispatches SecurityGroup to fabric only", func() {
-		stub := newStubWithManagers("netris", nil)
+		stub := newStubWithManagers("netris", "")
 		cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
 			newFabricManagerConfigMap("fm-netris", "netris", "ipv4"),
 		).Build()
@@ -240,7 +234,7 @@ var _ = Describe("Dispatcher", func() {
 	})
 
 	It("dispatches NATGateway to fabric only", func() {
-		stub := newStubWithManagers("netris", nil)
+		stub := newStubWithManagers("netris", "")
 		cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
 			newFabricManagerConfigMap("fm-netris", "netris", "ipv4"),
 		).Build()
@@ -257,7 +251,7 @@ var _ = Describe("Dispatcher", func() {
 	})
 
 	It("returns error for unknown resource kind", func() {
-		stub := newStubWithManagers("netris", nil)
+		stub := newStubWithManagers("netris", "")
 		cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
 			newFabricManagerConfigMap("fm-netris", "netris", "ipv4"),
 		).Build()
@@ -274,8 +268,8 @@ var _ = Describe("Dispatcher", func() {
 	})
 
 	It("propagates resolver errors", func() {
-		stub := &stubNetworkClassesClient{
-			getFunc: func(_ context.Context, _ *privatev1.NetworkClassesGetRequest, _ ...grpc.CallOption) (*privatev1.NetworkClassesGetResponse, error) {
+		stub := &stubNetworkClassClient{
+			getFunc: func(_ context.Context, _ string) (*dispatcher.NetworkClassManagers, error) {
 				return nil, fmt.Errorf("connection refused")
 			},
 		}

@@ -48,17 +48,17 @@ var (
 	})
 )
 
-type ComputeInstanceLister interface {
+type ComputeInstancesClient interface {
 	List(ctx context.Context, in *privatev1.ComputeInstancesListRequest, opts ...grpc.CallOption) (*privatev1.ComputeInstancesListResponse, error)
 }
 
-type ClusterLister interface {
+type ClustersClient interface {
 	List(ctx context.Context, in *privatev1.ClustersListRequest, opts ...grpc.CallOption) (*privatev1.ClustersListResponse, error)
 }
 
 type Reconciler struct {
-	computeClient     ComputeInstanceLister
-	clusterClient     ClusterLister
+	computeClient     ComputeInstancesClient
+	clusterClient     ClustersClient
 	store             projection.Store
 	publisher         kafkapub.EventPublisher
 	logger            logr.Logger
@@ -66,8 +66,8 @@ type Reconciler struct {
 }
 
 func NewReconciler(
-	computeClient ComputeInstanceLister,
-	clusterClient ClusterLister,
+	computeClient ComputeInstancesClient,
+	clusterClient ClustersClient,
 	store projection.Store,
 	publisher kafkapub.EventPublisher,
 	logger logr.Logger,
@@ -267,7 +267,7 @@ func (r *Reconciler) reconcileMissedDeletions(ctx context.Context, fulfillmentSt
 
 	for id, ps := range projMap {
 		if _, exists := fulfillmentState[id]; !exists {
-			if ps.ResourceType == "cluster_order" && r.clusterClient == nil {
+			if ps.ResourceType == events.ResourceTypeClusterOrder && r.clusterClient == nil {
 				if !clusterSkipLogged {
 					r.logger.Info("skipping cluster_order missed deletion checks, no cluster client configured")
 					clusterSkipLogged = true
@@ -360,15 +360,17 @@ type fulfillmentResource struct {
 	billingDimensions map[string]any
 }
 
+var billabilityCheckers = map[string]func(string) bool{
+	events.ResourceTypeComputeInstance: events.IsBillableState,
+	events.ResourceTypeClusterOrder:    events.IsClusterBillableState,
+}
+
 func isBillableForType(resourceType, state string) (bool, error) {
-	switch resourceType {
-	case "compute_instance":
-		return events.IsBillableState(state), nil
-	case "cluster_order":
-		return events.IsClusterBillableState(state), nil
-	default:
+	checker, ok := billabilityCheckers[resourceType]
+	if !ok {
 		return false, fmt.Errorf("unknown resource type: %s", resourceType)
 	}
+	return checker(state), nil
 }
 
 func (r *Reconciler) loadFulfillmentState(ctx context.Context) (map[string]fulfillmentResource, error) {
@@ -413,7 +415,7 @@ func (r *Reconciler) loadComputeInstances(ctx context.Context, result map[string
 				version = md.GetVersion()
 			}
 			result[ci.GetId()] = fulfillmentResource{
-				resourceType:      "compute_instance",
+				resourceType:      events.ResourceTypeComputeInstance,
 				state:             state,
 				version:           version,
 				tenantID:          tenantID,
@@ -457,7 +459,7 @@ func (r *Reconciler) loadClusters(ctx context.Context, result map[string]fulfill
 				version = md.GetVersion()
 			}
 			result[cl.GetId()] = fulfillmentResource{
-				resourceType:      "cluster_order",
+				resourceType:      events.ResourceTypeClusterOrder,
 				state:             state,
 				version:           version,
 				tenantID:          tenantID,
@@ -480,21 +482,14 @@ func buildSyntheticHeartbeats(ps projection.ResourceState, now time.Time) ([]clo
 		return buildSingleSyntheticHeartbeat(ps, dims, eventID, now)
 	}
 
-	if ps.ResourceType == "cluster_order" {
-		return events.DecomposeClusterEvents(ps.BillingDimensions, baseID, buildFn)
-	}
-	ce, err := buildFn(ps.BillingDimensions, baseID)
-	if err != nil {
-		return nil, err
-	}
-	return []cloudevents.Event{ce}, nil
+	return events.BuildResourceEvents(ps.ResourceType, ps.BillingDimensions, baseID, buildFn)
 }
 
 func buildSingleSyntheticHeartbeat(ps projection.ResourceState, billingDims map[string]any, eventID string, now time.Time) (cloudevents.Event, error) {
 	ce := cloudevents.NewEvent()
 	ce.SetID(eventID)
 	ce.SetSource("osac-metering/reconciler")
-	ce.SetType("osac.resource.heartbeat.v1")
+	ce.SetType(events.EventHeartbeat)
 	ce.SetTime(now)
 	events.SetOSACExtensions(&ce, ps.ResourceID, ps.ResourceType, ps.TenantID, ps.ProjectID)
 

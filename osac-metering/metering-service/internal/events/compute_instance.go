@@ -1,7 +1,6 @@
 package events
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
@@ -10,37 +9,121 @@ import (
 
 const ComputeInstanceStatePrefix = "COMPUTE_INSTANCE_STATE_"
 
-// Compute instance state machine. The table IS the spec:
-//   - Exact (from, to) match takes priority over wildcard
-//   - Missing entry = error (fail fast)
-//   - Transient: projection-only, no CloudEvent (billing context preserved)
+// VMaaS compute instance state constants.
+const (
+	ComputeInstanceStateRunning     = "RUNNING"
+	ComputeInstanceStateStopped     = "STOPPED"
+	ComputeInstanceStatePaused      = "PAUSED"
+	ComputeInstanceStateFailed      = "FAILED"
+	ComputeInstanceStateStopping    = "STOPPING"
+	ComputeInstanceStateStarting    = "STARTING"
+	ComputeInstanceStateDeleting    = "DELETING"
+	ComputeInstanceStateUnspecified = "UNSPECIFIED"
+)
+
+// Compute instance state machine. Every (from, to) pair is enumerated
+// explicitly — no wildcards. Missing entry = error (fail fast).
+//
+// Billable: RUNNING
+// Non-billable: STOPPED, PAUSED, FAILED, DELETING, UNSPECIFIED
+// Transient: STOPPING, STARTING
 var computeInstanceTransitions = TransitionTable{
-	// Resumptions: specific previous states take priority over wildcard
-	{"STOPPED", "RUNNING"}: {EventType: "osac.resource.resumed.v1"},
-	{"PAUSED", "RUNNING"}:  {EventType: "osac.resource.resumed.v1"},
+	// --- From "" (initial observation) ---
+	{StateEmpty, ComputeInstanceStateRunning}:     {EventType: EventStarted},
+	{StateEmpty, ComputeInstanceStateStopped}:     {Skip: true},
+	{StateEmpty, ComputeInstanceStatePaused}:      {Skip: true},
+	{StateEmpty, ComputeInstanceStateFailed}:      {Skip: true},
+	{StateEmpty, ComputeInstanceStateStopping}:    {Transient: true},
+	{StateEmpty, ComputeInstanceStateStarting}:    {Transient: true},
+	{StateEmpty, ComputeInstanceStateDeleting}:    {Skip: true},
+	{StateEmpty, ComputeInstanceStateUnspecified}: {Skip: true},
 
-	// Started: any other previous state transitioning to RUNNING
-	{"*", "RUNNING"}: {EventType: "osac.resource.started.v1"},
+	// --- From RUNNING ---
+	{ComputeInstanceStateRunning, ComputeInstanceStateRunning}:     {Skip: true},
+	{ComputeInstanceStateRunning, ComputeInstanceStateStopped}:     {EventType: EventSuspended},
+	{ComputeInstanceStateRunning, ComputeInstanceStatePaused}:      {EventType: EventSuspended},
+	{ComputeInstanceStateRunning, ComputeInstanceStateFailed}:      {EventType: EventSuspended},
+	{ComputeInstanceStateRunning, ComputeInstanceStateStopping}:    {Transient: true},
+	{ComputeInstanceStateRunning, ComputeInstanceStateStarting}:    {Transient: true},
+	{ComputeInstanceStateRunning, ComputeInstanceStateDeleting}:    {EventType: EventSuspended},
+	{ComputeInstanceStateRunning, ComputeInstanceStateUnspecified}: {EventType: EventSuspended},
 
-	// Suspended: billing interval closes
-	{"*", "STOPPED"}:  {EventType: "osac.resource.suspended.v1"},
-	{"*", "PAUSED"}:   {EventType: "osac.resource.suspended.v1"},
-	{"*", "FAILED"}:   {EventType: "osac.resource.suspended.v1"},
-	{"*", "DELETING"}: {EventType: "osac.resource.suspended.v1"},
+	// --- From STOPPED ---
+	{ComputeInstanceStateStopped, ComputeInstanceStateRunning}:     {EventType: EventResumed},
+	{ComputeInstanceStateStopped, ComputeInstanceStateStopped}:     {Skip: true},
+	{ComputeInstanceStateStopped, ComputeInstanceStatePaused}:      {Skip: true},
+	{ComputeInstanceStateStopped, ComputeInstanceStateFailed}:      {Skip: true},
+	{ComputeInstanceStateStopped, ComputeInstanceStateStopping}:    {Transient: true},
+	{ComputeInstanceStateStopped, ComputeInstanceStateStarting}:    {Transient: true},
+	{ComputeInstanceStateStopped, ComputeInstanceStateDeleting}:    {Skip: true},
+	{ComputeInstanceStateStopped, ComputeInstanceStateUnspecified}: {Skip: true},
 
-	// Transient: intermediate states, preserve billing context
-	{"*", "STOPPING"}: {Transient: true},
-	{"*", "STARTING"}: {Transient: true},
+	// --- From PAUSED ---
+	{ComputeInstanceStatePaused, ComputeInstanceStateRunning}:     {EventType: EventResumed},
+	{ComputeInstanceStatePaused, ComputeInstanceStateStopped}:     {Skip: true},
+	{ComputeInstanceStatePaused, ComputeInstanceStatePaused}:      {Skip: true},
+	{ComputeInstanceStatePaused, ComputeInstanceStateFailed}:      {Skip: true},
+	{ComputeInstanceStatePaused, ComputeInstanceStateStopping}:    {Transient: true},
+	{ComputeInstanceStatePaused, ComputeInstanceStateStarting}:    {Transient: true},
+	{ComputeInstanceStatePaused, ComputeInstanceStateDeleting}:    {Skip: true},
+	{ComputeInstanceStatePaused, ComputeInstanceStateUnspecified}: {Skip: true},
 
-	// Updated: no billing effect
-	{"*", "UNSPECIFIED"}: {EventType: "osac.resource.updated.v1"},
+	// --- From FAILED ---
+	{ComputeInstanceStateFailed, ComputeInstanceStateRunning}:     {EventType: EventStarted},
+	{ComputeInstanceStateFailed, ComputeInstanceStateStopped}:     {Skip: true},
+	{ComputeInstanceStateFailed, ComputeInstanceStatePaused}:      {Skip: true},
+	{ComputeInstanceStateFailed, ComputeInstanceStateFailed}:      {Skip: true},
+	{ComputeInstanceStateFailed, ComputeInstanceStateStopping}:    {Transient: true},
+	{ComputeInstanceStateFailed, ComputeInstanceStateStarting}:    {Transient: true},
+	{ComputeInstanceStateFailed, ComputeInstanceStateDeleting}:    {Skip: true},
+	{ComputeInstanceStateFailed, ComputeInstanceStateUnspecified}: {Skip: true},
+
+	// --- From STOPPING ---
+	{ComputeInstanceStateStopping, ComputeInstanceStateRunning}:     {EventType: EventStarted},
+	{ComputeInstanceStateStopping, ComputeInstanceStateStopped}:     {Skip: true},
+	{ComputeInstanceStateStopping, ComputeInstanceStatePaused}:      {Skip: true},
+	{ComputeInstanceStateStopping, ComputeInstanceStateFailed}:      {Skip: true},
+	{ComputeInstanceStateStopping, ComputeInstanceStateStopping}:    {Skip: true},
+	{ComputeInstanceStateStopping, ComputeInstanceStateStarting}:    {Transient: true},
+	{ComputeInstanceStateStopping, ComputeInstanceStateDeleting}:    {Skip: true},
+	{ComputeInstanceStateStopping, ComputeInstanceStateUnspecified}: {Skip: true},
+
+	// --- From STARTING ---
+	{ComputeInstanceStateStarting, ComputeInstanceStateRunning}:     {EventType: EventStarted},
+	{ComputeInstanceStateStarting, ComputeInstanceStateStopped}:     {Skip: true},
+	{ComputeInstanceStateStarting, ComputeInstanceStatePaused}:      {Skip: true},
+	{ComputeInstanceStateStarting, ComputeInstanceStateFailed}:      {Skip: true},
+	{ComputeInstanceStateStarting, ComputeInstanceStateStopping}:    {Transient: true},
+	{ComputeInstanceStateStarting, ComputeInstanceStateStarting}:    {Skip: true},
+	{ComputeInstanceStateStarting, ComputeInstanceStateDeleting}:    {Skip: true},
+	{ComputeInstanceStateStarting, ComputeInstanceStateUnspecified}: {Skip: true},
+
+	// --- From DELETING ---
+	{ComputeInstanceStateDeleting, ComputeInstanceStateRunning}:     {EventType: EventStarted},
+	{ComputeInstanceStateDeleting, ComputeInstanceStateStopped}:     {Skip: true},
+	{ComputeInstanceStateDeleting, ComputeInstanceStatePaused}:      {Skip: true},
+	{ComputeInstanceStateDeleting, ComputeInstanceStateFailed}:      {Skip: true},
+	{ComputeInstanceStateDeleting, ComputeInstanceStateStopping}:    {Transient: true},
+	{ComputeInstanceStateDeleting, ComputeInstanceStateStarting}:    {Transient: true},
+	{ComputeInstanceStateDeleting, ComputeInstanceStateDeleting}:    {Skip: true},
+	{ComputeInstanceStateDeleting, ComputeInstanceStateUnspecified}: {Skip: true},
+
+	// --- From UNSPECIFIED ---
+	{ComputeInstanceStateUnspecified, ComputeInstanceStateRunning}:     {EventType: EventStarted},
+	{ComputeInstanceStateUnspecified, ComputeInstanceStateStopped}:     {Skip: true},
+	{ComputeInstanceStateUnspecified, ComputeInstanceStatePaused}:      {Skip: true},
+	{ComputeInstanceStateUnspecified, ComputeInstanceStateFailed}:      {Skip: true},
+	{ComputeInstanceStateUnspecified, ComputeInstanceStateStopping}:    {Transient: true},
+	{ComputeInstanceStateUnspecified, ComputeInstanceStateStarting}:    {Transient: true},
+	{ComputeInstanceStateUnspecified, ComputeInstanceStateDeleting}:    {Skip: true},
+	{ComputeInstanceStateUnspecified, ComputeInstanceStateUnspecified}: {Skip: true},
 }
 
 type computeInstanceMapper struct {
 	ci *privatev1.ComputeInstance
 }
 
-func (m *computeInstanceMapper) ResourceType() string { return "compute_instance" }
+func (m *computeInstanceMapper) ResourceType() string { return ResourceTypeComputeInstance }
 func (m *computeInstanceMapper) ResourceID() string   { return m.ci.GetId() }
 
 func (m *computeInstanceMapper) FulfillmentVersion() int32 {
@@ -83,7 +166,7 @@ func ComputeInstanceBillingDimensions(ci *privatev1.ComputeInstance) map[string]
 // a billable state. Single source of truth for billability — used by both
 // the Watch Consumer (via IsBillable) and the Reconciler.
 func IsBillableState(state string) bool {
-	return state == "RUNNING"
+	return state == ComputeInstanceStateRunning
 }
 
 func (m *computeInstanceMapper) TenantID() string {
@@ -127,42 +210,13 @@ func (m *computeInstanceMapper) CurrentState() string {
 }
 
 func (m *computeInstanceMapper) CloudEventType(eventType privatev1.EventType, previousState string) (string, error) {
-	switch eventType {
-	case privatev1.EventType_EVENT_TYPE_OBJECT_CREATED:
-		return "osac.resource.created.v1", nil
-	case privatev1.EventType_EVENT_TYPE_OBJECT_DELETED:
-		return "osac.resource.deleted.v1", nil
-	case privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED:
-		return resolveTransition(computeInstanceTransitions, previousState, m.CurrentState())
-	default:
-		return "", fmt.Errorf("unsupported event type: %v", eventType)
-	}
+	return ResolveCloudEventType(computeInstanceTransitions, eventType, previousState, m.CurrentState())
 }
 
 func (m *computeInstanceMapper) TransitionTime(eventType privatev1.EventType) (time.Time, error) {
-	switch eventType {
-	case privatev1.EventType_EVENT_TYPE_OBJECT_CREATED:
-		if md := m.ci.GetMetadata(); md != nil {
-			if ct := md.GetCreationTimestamp(); ct != nil {
-				return ct.AsTime(), nil
-			}
-		}
-		return time.Time{}, fmt.Errorf("%w: event %s has no creation_timestamp", ErrDataQuality, m.ci.GetId())
-
-	case privatev1.EventType_EVENT_TYPE_OBJECT_DELETED:
-		if md := m.ci.GetMetadata(); md != nil {
-			if dt := md.GetDeletionTimestamp(); dt != nil {
-				return dt.AsTime(), nil
-			}
-		}
-		return time.Time{}, fmt.Errorf("%w: event %s has no deletion_timestamp", ErrDataQuality, m.ci.GetId())
-
-	default:
-		if s := m.ci.GetStatus(); s != nil {
-			if t := s.GetStateTransitionTime(); t != nil {
-				return t.AsTime(), nil
-			}
-		}
-		return time.Time{}, fmt.Errorf("%w: event %s has no state_transition_time", ErrDataQuality, m.ci.GetId())
-	}
+	return ResolveTransitionTime(eventType,
+		m.ci.GetMetadata().GetCreationTimestamp(),
+		m.ci.GetMetadata().GetDeletionTimestamp(),
+		m.ci.GetStatus().GetStateTransitionTime(),
+		m.ci.GetId())
 }

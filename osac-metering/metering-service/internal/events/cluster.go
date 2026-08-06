@@ -22,11 +22,21 @@ import (
 
 const ClusterStatePrefix = "CLUSTER_STATE_"
 
+// CaaS cluster state constants.
+const (
+	ClusterStateProgressing  = "PROGRESSING"
+	ClusterStateReady        = "READY"
+	ClusterStateFailed       = "FAILED"
+	ClusterStateDeleting     = "DELETING"
+	ClusterStateDeleteFailed = "DELETE_FAILED"
+	ClusterStateUnspecified  = "UNSPECIFIED"
+)
+
 type clusterMapper struct {
 	cl *privatev1.Cluster
 }
 
-func (m *clusterMapper) ResourceType() string { return "cluster_order" }
+func (m *clusterMapper) ResourceType() string { return ResourceTypeClusterOrder }
 func (m *clusterMapper) ResourceID() string   { return m.cl.GetId() }
 
 func (m *clusterMapper) FulfillmentVersion() int32 {
@@ -91,106 +101,77 @@ func (m *clusterMapper) BillingDimensionsMap() map[string]any {
 // any missed dimension drift.
 var clusterTransitions = TransitionTable{
 	// Started: first billable state (no previous)
-	{"", "PROGRESSING"}: {EventType: "osac.resource.started.v1"},
-	{"", "READY"}:       {EventType: "osac.resource.started.v1"},
+	{StateEmpty, ClusterStateProgressing}: {EventType: EventStarted},
+	{StateEmpty, ClusterStateReady}:       {EventType: EventStarted},
 
 	// Skip: first observed in non-billable state (bootstrap, reconnect after failure)
-	{"", "FAILED"}:        {Skip: true},
-	{"", "DELETING"}:      {Skip: true},
-	{"", "DELETE_FAILED"}: {Skip: true},
-	{"", "UNSPECIFIED"}:   {Skip: true},
+	{StateEmpty, ClusterStateFailed}:       {Skip: true},
+	{StateEmpty, ClusterStateDeleting}:     {Skip: true},
+	{StateEmpty, ClusterStateDeleteFailed}: {Skip: true},
+	{StateEmpty, ClusterStateUnspecified}:  {Skip: true},
 
 	// Resumed: non-billable to billable
-	{"FAILED", "PROGRESSING"}:        {EventType: "osac.resource.resumed.v1"},
-	{"FAILED", "READY"}:              {EventType: "osac.resource.resumed.v1"},
-	{"DELETING", "PROGRESSING"}:      {EventType: "osac.resource.resumed.v1"},
-	{"DELETING", "READY"}:            {EventType: "osac.resource.resumed.v1"},
-	{"DELETE_FAILED", "PROGRESSING"}: {EventType: "osac.resource.resumed.v1"},
-	{"DELETE_FAILED", "READY"}:       {EventType: "osac.resource.resumed.v1"},
-	{"UNSPECIFIED", "PROGRESSING"}:   {EventType: "osac.resource.resumed.v1"},
-	{"UNSPECIFIED", "READY"}:         {EventType: "osac.resource.resumed.v1"},
+	{ClusterStateFailed, ClusterStateProgressing}:       {EventType: EventResumed},
+	{ClusterStateFailed, ClusterStateReady}:             {EventType: EventResumed},
+	{ClusterStateDeleting, ClusterStateProgressing}:     {EventType: EventResumed},
+	{ClusterStateDeleting, ClusterStateReady}:           {EventType: EventResumed},
+	{ClusterStateDeleteFailed, ClusterStateProgressing}: {EventType: EventResumed},
+	{ClusterStateDeleteFailed, ClusterStateReady}:       {EventType: EventResumed},
+	{ClusterStateUnspecified, ClusterStateProgressing}:  {EventType: EventResumed},
+	{ClusterStateUnspecified, ClusterStateReady}:        {EventType: EventResumed},
 
 	// Suspended: billable to non-billable
-	{"PROGRESSING", "FAILED"}:   {EventType: "osac.resource.suspended.v1"},
-	{"PROGRESSING", "DELETING"}: {EventType: "osac.resource.suspended.v1"},
-	{"READY", "FAILED"}:         {EventType: "osac.resource.suspended.v1"},
-	{"READY", "DELETING"}:       {EventType: "osac.resource.suspended.v1"},
+	{ClusterStateProgressing, ClusterStateFailed}:       {EventType: EventSuspended},
+	{ClusterStateProgressing, ClusterStateDeleting}:     {EventType: EventSuspended},
+	{ClusterStateReady, ClusterStateFailed}:             {EventType: EventSuspended},
+	{ClusterStateReady, ClusterStateDeleting}:           {EventType: EventSuspended},
+	{ClusterStateProgressing, ClusterStateUnspecified}:  {EventType: EventSuspended},
+	{ClusterStateReady, ClusterStateUnspecified}:        {EventType: EventSuspended},
+	{ClusterStateReady, ClusterStateDeleteFailed}:       {EventType: EventSuspended},
+	{ClusterStateProgressing, ClusterStateDeleteFailed}: {EventType: EventSuspended},
 
 	// Skip: billable to billable (no billing boundary, includes same-state for scaling)
-	{"PROGRESSING", "READY"}:       {Skip: true},
-	{"READY", "PROGRESSING"}:       {Skip: true},
-	{"PROGRESSING", "PROGRESSING"}: {Skip: true},
-	{"READY", "READY"}:             {Skip: true},
+	{ClusterStateProgressing, ClusterStateReady}:       {Skip: true},
+	{ClusterStateReady, ClusterStateProgressing}:       {Skip: true},
+	{ClusterStateProgressing, ClusterStateProgressing}: {Skip: true},
+	{ClusterStateReady, ClusterStateReady}:             {Skip: true},
 
 	// Skip: non-billable to non-billable (no billing effect, includes same-state)
-	{"FAILED", "FAILED"}:               {Skip: true},
-	{"DELETING", "DELETING"}:           {Skip: true},
-	{"DELETE_FAILED", "DELETE_FAILED"}: {Skip: true},
-	{"UNSPECIFIED", "UNSPECIFIED"}:     {Skip: true},
-	{"FAILED", "DELETING"}:             {Skip: true},
-	{"FAILED", "DELETE_FAILED"}:        {Skip: true},
-	{"DELETING", "DELETE_FAILED"}:      {Skip: true},
-	{"DELETE_FAILED", "DELETING"}:      {Skip: true},
-	{"DELETING", "FAILED"}:             {Skip: true},
-	{"DELETE_FAILED", "FAILED"}:        {Skip: true},
-	{"UNSPECIFIED", "FAILED"}:          {Skip: true},
-	{"UNSPECIFIED", "DELETING"}:        {Skip: true},
-	{"UNSPECIFIED", "DELETE_FAILED"}:   {Skip: true},
-	{"FAILED", "UNSPECIFIED"}:          {Skip: true},
-	{"DELETING", "UNSPECIFIED"}:        {Skip: true},
-	{"DELETE_FAILED", "UNSPECIFIED"}:   {Skip: true},
-	{"PROGRESSING", "UNSPECIFIED"}:     {EventType: "osac.resource.suspended.v1"},
-	{"READY", "UNSPECIFIED"}:           {EventType: "osac.resource.suspended.v1"},
-	{"READY", "DELETE_FAILED"}:         {EventType: "osac.resource.suspended.v1"},
-	{"PROGRESSING", "DELETE_FAILED"}:   {EventType: "osac.resource.suspended.v1"},
+	{ClusterStateFailed, ClusterStateFailed}:             {Skip: true},
+	{ClusterStateDeleting, ClusterStateDeleting}:         {Skip: true},
+	{ClusterStateDeleteFailed, ClusterStateDeleteFailed}: {Skip: true},
+	{ClusterStateUnspecified, ClusterStateUnspecified}:   {Skip: true},
+	{ClusterStateFailed, ClusterStateDeleting}:           {Skip: true},
+	{ClusterStateFailed, ClusterStateDeleteFailed}:       {Skip: true},
+	{ClusterStateDeleting, ClusterStateDeleteFailed}:     {Skip: true},
+	{ClusterStateDeleteFailed, ClusterStateDeleting}:     {Skip: true},
+	{ClusterStateDeleting, ClusterStateFailed}:           {Skip: true},
+	{ClusterStateDeleteFailed, ClusterStateFailed}:       {Skip: true},
+	{ClusterStateUnspecified, ClusterStateFailed}:        {Skip: true},
+	{ClusterStateUnspecified, ClusterStateDeleting}:      {Skip: true},
+	{ClusterStateUnspecified, ClusterStateDeleteFailed}:  {Skip: true},
+	{ClusterStateFailed, ClusterStateUnspecified}:        {Skip: true},
+	{ClusterStateDeleting, ClusterStateUnspecified}:      {Skip: true},
+	{ClusterStateDeleteFailed, ClusterStateUnspecified}:  {Skip: true},
 }
 
 func (m *clusterMapper) CloudEventType(eventType privatev1.EventType, previousState string) (string, error) {
-	switch eventType {
-	case privatev1.EventType_EVENT_TYPE_OBJECT_CREATED:
-		return "osac.resource.created.v1", nil
-	case privatev1.EventType_EVENT_TYPE_OBJECT_DELETED:
-		return "osac.resource.deleted.v1", nil
-	case privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED:
-		return resolveTransition(clusterTransitions, previousState, m.CurrentState())
-	default:
-		return "", fmt.Errorf("unsupported event type: %v", eventType)
-	}
+	return ResolveCloudEventType(clusterTransitions, eventType, previousState, m.CurrentState())
 }
 
 func (m *clusterMapper) TransitionTime(eventType privatev1.EventType) (time.Time, error) {
-	switch eventType {
-	case privatev1.EventType_EVENT_TYPE_OBJECT_CREATED:
-		if md := m.cl.GetMetadata(); md != nil {
-			if ct := md.GetCreationTimestamp(); ct != nil {
-				return ct.AsTime(), nil
-			}
-		}
-		return time.Time{}, fmt.Errorf("%w: cluster %s has no creation_timestamp", ErrDataQuality, m.cl.GetId())
-
-	case privatev1.EventType_EVENT_TYPE_OBJECT_DELETED:
-		if md := m.cl.GetMetadata(); md != nil {
-			if dt := md.GetDeletionTimestamp(); dt != nil {
-				return dt.AsTime(), nil
-			}
-		}
-		return time.Time{}, fmt.Errorf("%w: cluster %s has no deletion_timestamp", ErrDataQuality, m.cl.GetId())
-
-	default:
-		if s := m.cl.GetStatus(); s != nil {
-			if t := s.GetStateTransitionTime(); t != nil {
-				return t.AsTime(), nil
-			}
-		}
-		return time.Time{}, fmt.Errorf("%w: cluster %s has no state_transition_time", ErrDataQuality, m.cl.GetId())
-	}
+	return ResolveTransitionTime(eventType,
+		m.cl.GetMetadata().GetCreationTimestamp(),
+		m.cl.GetMetadata().GetDeletionTimestamp(),
+		m.cl.GetStatus().GetStateTransitionTime(),
+		m.cl.GetId())
 }
 
 // IsClusterBillableState returns whether a ClusterOrder state string represents
 // a billable state. Single source of truth — used by Watch Consumer, Heartbeat
 // Generator, and Reconciler.
 func IsClusterBillableState(state string) bool {
-	return state == "PROGRESSING" || state == "READY"
+	return state == ClusterStateProgressing || state == ClusterStateReady
 }
 
 // ClusterBillingDimensions extracts billing dimensions from a Cluster proto,
@@ -321,7 +302,7 @@ func ComponentEventID(baseEventID string, comp ComponentRecord) string {
 // DecomposeClusterEvents fans out a single event into N+1 per-component events.
 // Returns error if billing dimensions have no components (data quality issue).
 // buildFn receives (per-component billing dimensions, deterministic event ID).
-func DecomposeClusterEvents(billingDims map[string]any, baseID string, buildFn func(dims map[string]any, eventID string) (cloudevents.Event, error)) ([]cloudevents.Event, error) {
+func DecomposeClusterEvents(billingDims map[string]any, baseID string, buildFn EventBuilder) ([]cloudevents.Event, error) {
 	components := DecomposeClusterComponents(billingDims)
 	if len(components) == 0 {
 		return nil, fmt.Errorf("%w: cluster has no components in billing dimensions", ErrDataQuality)

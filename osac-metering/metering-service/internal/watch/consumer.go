@@ -243,26 +243,22 @@ func (c *Consumer) handleTransientState(
 }
 
 func (c *Consumer) publishLifecycleEvents(ctx context.Context, baseCE *cloudevents.Event, mapper events.ResourceMapper, eventID string) error {
-	if baseCE.Type() == "osac.resource.created.v1" || baseCE.Type() == "osac.resource.deleted.v1" {
+	if baseCE.Type() == events.EventCreated || baseCE.Type() == events.EventDeleted {
 		return c.publishWithRetry(ctx, baseCE)
 	}
 
-	if mapper.ResourceType() == "cluster_order" {
-		decomposed, err := events.DecomposeClusterEvents(mapper.BillingDimensionsMap(), eventID, func(dims map[string]any, compEventID string) (cloudevents.Event, error) {
-			return c.buildComponentEvent(baseCE, compEventID, dims)
-		})
-		if err != nil {
+	decomposed, err := events.BuildResourceEvents(mapper.ResourceType(), mapper.BillingDimensionsMap(), eventID, func(dims map[string]any, compEventID string) (cloudevents.Event, error) {
+		return c.buildComponentEvent(baseCE, compEventID, dims)
+	})
+	if err != nil {
+		return err
+	}
+	for i := range decomposed {
+		if err := c.publishWithRetry(ctx, &decomposed[i]); err != nil {
 			return err
 		}
-		for i := range decomposed {
-			if err := c.publishWithRetry(ctx, &decomposed[i]); err != nil {
-				return err
-			}
-		}
-		return nil
 	}
-
-	return c.publishWithRetry(ctx, baseCE)
+	return nil
 }
 
 func (c *Consumer) handleScalingEvent(ctx context.Context, event *privatev1.Event, mapper events.ResourceMapper, existing *projection.ResourceState, transitionTime time.Time, version int32, currentState string, isBillable bool, dims map[string]any) error {
@@ -320,7 +316,7 @@ func (c *Consumer) buildScalingEvent(eventID string, mapper events.ResourceMappe
 	ce := cloudevents.NewEvent()
 	ce.SetID(events.ComponentEventID(eventID, comp))
 	ce.SetSource("osac-metering")
-	ce.SetType("osac.resource.updated.v1")
+	ce.SetType(events.EventUpdated)
 	ce.SetTime(transitionTime)
 
 	projectID := ""

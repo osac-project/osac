@@ -12,6 +12,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/osac-project/osac-metering/internal/events"
 	"github.com/osac-project/osac-metering/internal/heartbeat"
 	"github.com/osac-project/osac-metering/internal/projection"
 )
@@ -78,7 +79,7 @@ func makeBillableState(id string) projection.ResourceState {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	return projection.ResourceState{
 		ResourceID:    id,
-		ResourceType:  "compute_instance",
+		ResourceType:  events.ResourceTypeComputeInstance,
 		TenantID:      "tenant-1",
 		ProjectID:     "project-1",
 		CurrentState:  "RUNNING",
@@ -111,7 +112,7 @@ var _ = Describe("Generator", func() {
 			pub.mu.Lock()
 			defer pub.mu.Unlock()
 			Expect(len(pub.published)).To(BeNumerically(">=", 2))
-			Expect(pub.published[0].Type()).To(Equal("osac.resource.heartbeat.v1"))
+			Expect(pub.published[0].Type()).To(Equal(events.EventHeartbeat))
 		})
 
 		It("stops on context cancellation", func() {
@@ -261,7 +262,7 @@ var _ = Describe("Generator", func() {
 			now := time.Now().UTC().Truncate(time.Microsecond)
 			return projection.ResourceState{
 				ResourceID:    id,
-				ResourceType:  "cluster_order",
+				ResourceType:  events.ResourceTypeClusterOrder,
 				TenantID:      "tenant-1",
 				ProjectID:     "project-1",
 				CurrentState:  "READY",
@@ -297,7 +298,7 @@ var _ = Describe("Generator", func() {
 
 			components := map[string]bool{}
 			for _, e := range pub.published {
-				Expect(e.Type()).To(Equal("osac.resource.heartbeat.v1"))
+				Expect(e.Type()).To(Equal(events.EventHeartbeat))
 				var data map[string]any
 				Expect(json.Unmarshal(e.Data(), &data)).To(Succeed())
 				bd := data["billing_dimensions"].(map[string]any)

@@ -16,6 +16,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	privatev1 "github.com/osac-project/osac-metering/internal/api/osac/private/v1"
+	"github.com/osac-project/osac-metering/internal/events"
 	"github.com/osac-project/osac-metering/internal/projection"
 	"github.com/osac-project/osac-metering/internal/watch"
 )
@@ -260,7 +261,7 @@ var _ = Describe("Consumer", func() {
 			pub.mu.Lock()
 			defer pub.mu.Unlock()
 			Expect(pub.published).To(HaveLen(1))
-			Expect(pub.published[0].Type()).To(Equal("osac.resource.created.v1"))
+			Expect(pub.published[0].Type()).To(Equal(events.EventCreated))
 		})
 
 		It("stops gracefully on context cancellation", func() {
@@ -493,7 +494,7 @@ var _ = Describe("Consumer", func() {
 			now := time.Now().UTC().Truncate(time.Microsecond)
 			store.states["vm-1"] = projection.ResourceState{
 				ResourceID:         "vm-1",
-				ResourceType:       "compute_instance",
+				ResourceType:       events.ResourceTypeComputeInstance,
 				TenantID:           "tenant-1",
 				CurrentState:       "RUNNING",
 				IsBillable:         true,
@@ -529,7 +530,7 @@ var _ = Describe("Consumer", func() {
 			now := time.Now().UTC().Truncate(time.Microsecond)
 			store.states["vm-resume"] = projection.ResourceState{
 				ResourceID:         "vm-resume",
-				ResourceType:       "compute_instance",
+				ResourceType:       events.ResourceTypeComputeInstance,
 				TenantID:           "tenant-1",
 				CurrentState:       "STOPPED",
 				IsBillable:         false,
@@ -561,7 +562,7 @@ var _ = Describe("Consumer", func() {
 			pub.mu.Lock()
 			defer pub.mu.Unlock()
 			Expect(pub.published).To(HaveLen(1))
-			Expect(pub.published[0].Type()).To(Equal("osac.resource.resumed.v1"))
+			Expect(pub.published[0].Type()).To(Equal(events.EventResumed))
 		})
 
 		It("deletes projection on OBJECT_DELETED and publishes event", func() {
@@ -569,7 +570,7 @@ var _ = Describe("Consumer", func() {
 			now := time.Now().UTC().Truncate(time.Microsecond)
 			store.states["vm-del"] = projection.ResourceState{
 				ResourceID:         "vm-del",
-				ResourceType:       "compute_instance",
+				ResourceType:       events.ResourceTypeComputeInstance,
 				TenantID:           "tenant-1",
 				CurrentState:       "RUNNING",
 				IsBillable:         true,
@@ -600,7 +601,7 @@ var _ = Describe("Consumer", func() {
 			pub.mu.Lock()
 			defer pub.mu.Unlock()
 			Expect(pub.published).To(HaveLen(1))
-			Expect(pub.published[0].Type()).To(Equal("osac.resource.deleted.v1"))
+			Expect(pub.published[0].Type()).To(Equal(events.EventDeleted))
 
 			store.mu.Lock()
 			defer store.mu.Unlock()
@@ -612,7 +613,7 @@ var _ = Describe("Consumer", func() {
 			now := time.Now().UTC().Truncate(time.Microsecond)
 			store.states["vm-stale"] = projection.ResourceState{
 				ResourceID:         "vm-stale",
-				ResourceType:       "compute_instance",
+				ResourceType:       events.ResourceTypeComputeInstance,
 				TenantID:           "tenant-1",
 				CurrentState:       "STOPPED",
 				IsBillable:         false,
@@ -649,13 +650,12 @@ var _ = Describe("Consumer", func() {
 			Expect(store.states["vm-stale"].FulfillmentVersion).To(Equal(int32(10)))
 		})
 
-		It("closes billing interval and resets BillableSince on dimension change while billable", func() {
+		It("updates projection on dimension change while billable (RUNNING->RUNNING)", func() {
 			store := newMockStore()
 			originalStart := time.Now().Add(-1 * time.Hour).UTC().Truncate(time.Microsecond)
-			instanceType := "m5.large"
 			store.states["vm-resize"] = projection.ResourceState{
 				ResourceID:         "vm-resize",
-				ResourceType:       "compute_instance",
+				ResourceType:       events.ResourceTypeComputeInstance,
 				TenantID:           "tenant-1",
 				CurrentState:       "RUNNING",
 				IsBillable:         true,
@@ -670,7 +670,6 @@ var _ = Describe("Consumer", func() {
 			ci.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING
 			ci.Metadata.Version = 2
 			ci.Spec = &privatev1.ComputeInstanceSpec{InstanceType: &privatev1.InstanceTypeReference{Name: newType}}
-			_ = instanceType
 
 			event := &privatev1.Event{
 				Id:      "evt-resize",
@@ -683,20 +682,17 @@ var _ = Describe("Consumer", func() {
 			}
 			client.results = []mockStreamResult{{stream: stream}}
 
-			pub := &mockPublisher{published: make([]cloudevents.Event, 0, 1), cancelFunc: cancel}
+			// RUNNING->RUNNING is Skip; non-component dimension change
+			// updates projection only (no CloudEvent published for VMaaS).
+			pub := &mockPublisher{}
 			consumer := newConsumerWithStore(pub, store)
 
-			err := consumer.Run(ctx)
-			Expect(err).ToNot(HaveOccurred())
+			done := make(chan error, 1)
+			go func() { done <- consumer.Run(ctx) }()
 
-			pub.mu.Lock()
-			defer pub.mu.Unlock()
-			Expect(pub.published).To(HaveLen(1))
-
-			var data map[string]any
-			Expect(json.Unmarshal(pub.published[0].Data(), &data)).To(Succeed())
-			Expect(data["duration_seconds"]).ToNot(BeNil())
-			Expect(data["duration_seconds"]).To(BeNumerically(">", 0))
+			time.Sleep(50 * time.Millisecond)
+			cancel()
+			Eventually(done, time.Second).Should(Receive(BeNil()))
 
 			store.mu.Lock()
 			defer store.mu.Unlock()
@@ -711,7 +707,7 @@ var _ = Describe("Consumer", func() {
 			billableStart := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 			store.states["vm-stop-seq"] = projection.ResourceState{
 				ResourceID:         "vm-stop-seq",
-				ResourceType:       "compute_instance",
+				ResourceType:       events.ResourceTypeComputeInstance,
 				TenantID:           "tenant-1",
 				CurrentState:       "RUNNING",
 				IsBillable:         true,
@@ -763,7 +759,7 @@ var _ = Describe("Consumer", func() {
 			// STOPPING is transient — no CloudEvent published for it.
 			// Only suspended.v1 for STOPPED should be published.
 			Expect(pub.published).To(HaveLen(1))
-			Expect(pub.published[0].Type()).To(Equal("osac.resource.suspended.v1"))
+			Expect(pub.published[0].Type()).To(Equal(events.EventSuspended))
 
 			// suspended.v1 should have duration_seconds = 3600 (1 hour from
 			// BillableSince to STOPPED transition time), proving billing context
@@ -867,8 +863,8 @@ var _ = Describe("Consumer", func() {
 			pub.mu.Lock()
 			defer pub.mu.Unlock()
 			Expect(pub.published).To(HaveLen(1))
-			Expect(pub.published[0].Type()).To(Equal("osac.resource.created.v1"))
-			Expect(pub.published[0].Extensions()["osacresourcetype"]).To(Equal("cluster_order"))
+			Expect(pub.published[0].Type()).To(Equal(events.EventCreated))
+			Expect(pub.published[0].Extensions()["osacresourcetype"]).To(Equal(events.ResourceTypeClusterOrder))
 		})
 
 		It("publishes N+1 started.v1 events for new cluster PROGRESSING", func() {
@@ -895,7 +891,7 @@ var _ = Describe("Consumer", func() {
 			defer pub.mu.Unlock()
 			Expect(pub.published).To(HaveLen(3))
 			for _, e := range pub.published {
-				Expect(e.Type()).To(Equal("osac.resource.started.v1"))
+				Expect(e.Type()).To(Equal(events.EventStarted))
 			}
 		})
 
@@ -973,7 +969,7 @@ var _ = Describe("Consumer", func() {
 			now := time.Now().UTC().Truncate(time.Microsecond)
 			store.states["cl-ready"] = projection.ResourceState{
 				ResourceID:         "cl-ready",
-				ResourceType:       "cluster_order",
+				ResourceType:       events.ResourceTypeClusterOrder,
 				TenantID:           "tenant-1",
 				CurrentState:       "PROGRESSING",
 				IsBillable:         true,
@@ -1021,7 +1017,7 @@ var _ = Describe("Consumer", func() {
 			now := time.Now().UTC().Truncate(time.Microsecond)
 			store.states["cl-fail"] = projection.ResourceState{
 				ResourceID:         "cl-fail",
-				ResourceType:       "cluster_order",
+				ResourceType:       events.ResourceTypeClusterOrder,
 				TenantID:           "tenant-1",
 				CurrentState:       "READY",
 				IsBillable:         true,
@@ -1053,7 +1049,7 @@ var _ = Describe("Consumer", func() {
 			defer pub.mu.Unlock()
 			Expect(pub.published).To(HaveLen(3))
 			for _, e := range pub.published {
-				Expect(e.Type()).To(Equal("osac.resource.suspended.v1"))
+				Expect(e.Type()).To(Equal(events.EventSuspended))
 			}
 
 			store.mu.Lock()
@@ -1067,7 +1063,7 @@ var _ = Describe("Consumer", func() {
 			now := time.Now().Add(-1 * time.Hour).UTC().Truncate(time.Microsecond)
 			store.states["cl-scale"] = projection.ResourceState{
 				ResourceID:         "cl-scale",
-				ResourceType:       "cluster_order",
+				ResourceType:       events.ResourceTypeClusterOrder,
 				TenantID:           "tenant-1",
 				CurrentState:       "READY",
 				IsBillable:         true,
@@ -1103,7 +1099,7 @@ var _ = Describe("Consumer", func() {
 			pub.mu.Lock()
 			defer pub.mu.Unlock()
 			Expect(pub.published).To(HaveLen(1))
-			Expect(pub.published[0].Type()).To(Equal("osac.resource.updated.v1"))
+			Expect(pub.published[0].Type()).To(Equal(events.EventUpdated))
 
 			var data map[string]any
 			Expect(json.Unmarshal(pub.published[0].Data(), &data)).To(Succeed())
@@ -1118,7 +1114,7 @@ var _ = Describe("Consumer", func() {
 			now := time.Now().UTC().Truncate(time.Microsecond)
 			store.states["cl-del"] = projection.ResourceState{
 				ResourceID:         "cl-del",
-				ResourceType:       "cluster_order",
+				ResourceType:       events.ResourceTypeClusterOrder,
 				TenantID:           "tenant-1",
 				CurrentState:       "DELETING",
 				IsBillable:         false,
@@ -1149,7 +1145,7 @@ var _ = Describe("Consumer", func() {
 			pub.mu.Lock()
 			defer pub.mu.Unlock()
 			Expect(pub.published).To(HaveLen(1))
-			Expect(pub.published[0].Type()).To(Equal("osac.resource.deleted.v1"))
+			Expect(pub.published[0].Type()).To(Equal(events.EventDeleted))
 
 			store.mu.Lock()
 			defer store.mu.Unlock()

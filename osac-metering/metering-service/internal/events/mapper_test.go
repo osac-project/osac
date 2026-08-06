@@ -55,208 +55,193 @@ var _ = Describe("MapWatchEvent", func() {
 		}
 	})
 
-	Context("event type mapping", func() {
-		It("maps OBJECT_CREATED to osac.resource.created.v1", func() {
-			event := &privatev1.Event{
-				Id:      "evt-1",
-				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
-				Payload: &privatev1.Event_ComputeInstance{ComputeInstance: ci},
-			}
+	Context("VMaaS state machine -- full transition matrix", func() {
+		DescribeTable("resolves correct CloudEvent type for state transitions",
+			func(currentState privatev1.ComputeInstanceState, previousState string, expectedType string, expectSkip, expectTransient bool) {
+				ci.Status.State = currentState
+				event := &privatev1.Event{
+					Id:      "evt-1",
+					Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+					Payload: &privatev1.Event_ComputeInstance{ComputeInstance: ci},
+				}
+				stateCtx := &events.StateContext{PreviousState: previousState}
+				ce, err := mapEvent(event, stateCtx)
+				if expectSkip {
+					Expect(err).To(HaveOccurred())
+					Expect(errors.Is(err, events.ErrSkipTransition)).To(BeTrue())
+				} else if expectTransient {
+					Expect(err).To(HaveOccurred())
+					Expect(errors.Is(err, events.ErrTransientState)).To(BeTrue())
+				} else {
+					Expect(err).NotTo(HaveOccurred())
+					Expect(ce.Type()).To(Equal(expectedType))
+				}
+			},
 
-			ce, err := mapEvent(event, &events.StateContext{})
-			Expect(err).NotTo(HaveOccurred())
-			Expect(ce.Type()).To(Equal("osac.resource.created.v1"))
-		})
+			// --- From "" (initial observation) ---
+			Entry("initial -> RUNNING -> started.v1",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING, "", events.EventStarted, false, false),
+			Entry("initial -> STOPPED -> skip",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPED, "", "", true, false),
+			Entry("initial -> PAUSED -> skip",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_PAUSED, "", "", true, false),
+			Entry("initial -> FAILED -> skip",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED, "", "", true, false),
+			Entry("initial -> STOPPING -> transient",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPING, "", "", false, true),
+			Entry("initial -> STARTING -> transient",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING, "", "", false, true),
+			Entry("initial -> DELETING -> skip",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING, "", "", true, false),
+			Entry("initial -> UNSPECIFIED -> skip",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_UNSPECIFIED, "", "", true, false),
 
-		It("maps OBJECT_UPDATED with RUNNING state to osac.resource.started.v1", func() {
-			ci.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING
+			// --- From RUNNING ---
+			Entry("RUNNING -> RUNNING -> skip (same-state)",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING, "RUNNING", "", true, false),
+			Entry("RUNNING -> STOPPED -> suspended.v1",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPED, "RUNNING", events.EventSuspended, false, false),
+			Entry("RUNNING -> PAUSED -> suspended.v1",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_PAUSED, "RUNNING", events.EventSuspended, false, false),
+			Entry("RUNNING -> FAILED -> suspended.v1",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED, "RUNNING", events.EventSuspended, false, false),
+			Entry("RUNNING -> STOPPING -> transient",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPING, "RUNNING", "", false, true),
+			Entry("RUNNING -> STARTING -> transient",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING, "RUNNING", "", false, true),
+			Entry("RUNNING -> DELETING -> suspended.v1",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING, "RUNNING", events.EventSuspended, false, false),
+			Entry("RUNNING -> UNSPECIFIED -> suspended.v1",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_UNSPECIFIED, "RUNNING", events.EventSuspended, false, false),
 
-			event := &privatev1.Event{
-				Id:      "evt-2",
-				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
-				Payload: &privatev1.Event_ComputeInstance{ComputeInstance: ci},
-			}
+			// --- From STOPPED ---
+			Entry("STOPPED -> RUNNING -> resumed.v1",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING, "STOPPED", events.EventResumed, false, false),
+			Entry("STOPPED -> STOPPED -> skip (same-state)",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPED, "STOPPED", "", true, false),
+			Entry("STOPPED -> PAUSED -> skip",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_PAUSED, "STOPPED", "", true, false),
+			Entry("STOPPED -> FAILED -> skip",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED, "STOPPED", "", true, false),
+			Entry("STOPPED -> STOPPING -> transient",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPING, "STOPPED", "", false, true),
+			Entry("STOPPED -> STARTING -> transient",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING, "STOPPED", "", false, true),
+			Entry("STOPPED -> DELETING -> skip",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING, "STOPPED", "", true, false),
+			Entry("STOPPED -> UNSPECIFIED -> skip",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_UNSPECIFIED, "STOPPED", "", true, false),
 
-			ce, err := mapEvent(event, &events.StateContext{})
-			Expect(err).NotTo(HaveOccurred())
-			Expect(ce.Type()).To(Equal("osac.resource.started.v1"))
-		})
+			// --- From PAUSED ---
+			Entry("PAUSED -> RUNNING -> resumed.v1",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING, "PAUSED", events.EventResumed, false, false),
+			Entry("PAUSED -> STOPPED -> skip",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPED, "PAUSED", "", true, false),
+			Entry("PAUSED -> PAUSED -> skip (same-state)",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_PAUSED, "PAUSED", "", true, false),
+			Entry("PAUSED -> FAILED -> skip",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED, "PAUSED", "", true, false),
+			Entry("PAUSED -> STOPPING -> transient",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPING, "PAUSED", "", false, true),
+			Entry("PAUSED -> STARTING -> transient",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING, "PAUSED", "", false, true),
+			Entry("PAUSED -> DELETING -> skip",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING, "PAUSED", "", true, false),
+			Entry("PAUSED -> UNSPECIFIED -> skip",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_UNSPECIFIED, "PAUSED", "", true, false),
 
-		It("maps OBJECT_UPDATED with STOPPED state to osac.resource.suspended.v1", func() {
-			ci.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPED
+			// --- From FAILED ---
+			Entry("FAILED -> RUNNING -> started.v1",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING, "FAILED", events.EventStarted, false, false),
+			Entry("FAILED -> STOPPED -> skip",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPED, "FAILED", "", true, false),
+			Entry("FAILED -> PAUSED -> skip",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_PAUSED, "FAILED", "", true, false),
+			Entry("FAILED -> FAILED -> skip (same-state)",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED, "FAILED", "", true, false),
+			Entry("FAILED -> STOPPING -> transient",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPING, "FAILED", "", false, true),
+			Entry("FAILED -> STARTING -> transient",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING, "FAILED", "", false, true),
+			Entry("FAILED -> DELETING -> skip",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING, "FAILED", "", true, false),
+			Entry("FAILED -> UNSPECIFIED -> skip",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_UNSPECIFIED, "FAILED", "", true, false),
 
-			event := &privatev1.Event{
-				Id:      "evt-2",
-				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
-				Payload: &privatev1.Event_ComputeInstance{ComputeInstance: ci},
-			}
+			// --- From STOPPING ---
+			Entry("STOPPING -> RUNNING -> started.v1",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING, "STOPPING", events.EventStarted, false, false),
+			Entry("STOPPING -> STOPPED -> skip",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPED, "STOPPING", "", true, false),
+			Entry("STOPPING -> PAUSED -> skip",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_PAUSED, "STOPPING", "", true, false),
+			Entry("STOPPING -> FAILED -> skip",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED, "STOPPING", "", true, false),
+			Entry("STOPPING -> STOPPING -> skip (same-state)",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPING, "STOPPING", "", true, false),
+			Entry("STOPPING -> STARTING -> transient",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING, "STOPPING", "", false, true),
+			Entry("STOPPING -> DELETING -> skip",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING, "STOPPING", "", true, false),
+			Entry("STOPPING -> UNSPECIFIED -> skip",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_UNSPECIFIED, "STOPPING", "", true, false),
 
-			ce, err := mapEvent(event, &events.StateContext{})
-			Expect(err).NotTo(HaveOccurred())
-			Expect(ce.Type()).To(Equal("osac.resource.suspended.v1"))
-		})
+			// --- From STARTING ---
+			Entry("STARTING -> RUNNING -> started.v1",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING, "STARTING", events.EventStarted, false, false),
+			Entry("STARTING -> STOPPED -> skip",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPED, "STARTING", "", true, false),
+			Entry("STARTING -> PAUSED -> skip",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_PAUSED, "STARTING", "", true, false),
+			Entry("STARTING -> FAILED -> skip",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED, "STARTING", "", true, false),
+			Entry("STARTING -> STOPPING -> transient",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPING, "STARTING", "", false, true),
+			Entry("STARTING -> STARTING -> skip (same-state)",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING, "STARTING", "", true, false),
+			Entry("STARTING -> DELETING -> skip",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING, "STARTING", "", true, false),
+			Entry("STARTING -> UNSPECIFIED -> skip",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_UNSPECIFIED, "STARTING", "", true, false),
 
-		It("maps OBJECT_UPDATED with PAUSED state to osac.resource.suspended.v1", func() {
-			ci.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_PAUSED
+			// --- From DELETING ---
+			Entry("DELETING -> RUNNING -> started.v1",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING, "DELETING", events.EventStarted, false, false),
+			Entry("DELETING -> STOPPED -> skip",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPED, "DELETING", "", true, false),
+			Entry("DELETING -> PAUSED -> skip",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_PAUSED, "DELETING", "", true, false),
+			Entry("DELETING -> FAILED -> skip",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED, "DELETING", "", true, false),
+			Entry("DELETING -> STOPPING -> transient",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPING, "DELETING", "", false, true),
+			Entry("DELETING -> STARTING -> transient",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING, "DELETING", "", false, true),
+			Entry("DELETING -> DELETING -> skip (same-state)",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING, "DELETING", "", true, false),
+			Entry("DELETING -> UNSPECIFIED -> skip",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_UNSPECIFIED, "DELETING", "", true, false),
 
-			event := &privatev1.Event{
-				Id:      "evt-2",
-				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
-				Payload: &privatev1.Event_ComputeInstance{ComputeInstance: ci},
-			}
+			// --- From UNSPECIFIED ---
+			Entry("UNSPECIFIED -> RUNNING -> started.v1",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING, "UNSPECIFIED", events.EventStarted, false, false),
+			Entry("UNSPECIFIED -> STOPPED -> skip",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPED, "UNSPECIFIED", "", true, false),
+			Entry("UNSPECIFIED -> PAUSED -> skip",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_PAUSED, "UNSPECIFIED", "", true, false),
+			Entry("UNSPECIFIED -> FAILED -> skip",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED, "UNSPECIFIED", "", true, false),
+			Entry("UNSPECIFIED -> STOPPING -> transient",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPING, "UNSPECIFIED", "", false, true),
+			Entry("UNSPECIFIED -> STARTING -> transient",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING, "UNSPECIFIED", "", false, true),
+			Entry("UNSPECIFIED -> DELETING -> skip",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING, "UNSPECIFIED", "", true, false),
+			Entry("UNSPECIFIED -> UNSPECIFIED -> skip (same-state)",
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_UNSPECIFIED, "UNSPECIFIED", "", true, false),
+		)
 
-			ce, err := mapEvent(event, &events.StateContext{})
-			Expect(err).NotTo(HaveOccurred())
-			Expect(ce.Type()).To(Equal("osac.resource.suspended.v1"))
-		})
-
-		It("maps OBJECT_UPDATED with FAILED state to osac.resource.suspended.v1", func() {
-			ci.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED
-
-			event := &privatev1.Event{
-				Id:      "evt-2",
-				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
-				Payload: &privatev1.Event_ComputeInstance{ComputeInstance: ci},
-			}
-
-			ce, err := mapEvent(event, &events.StateContext{})
-			Expect(err).NotTo(HaveOccurred())
-			Expect(ce.Type()).To(Equal("osac.resource.suspended.v1"))
-		})
-
-		It("returns ErrTransientState for STARTING state", func() {
-			ci.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING
-
-			event := &privatev1.Event{
-				Id:      "evt-2",
-				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
-				Payload: &privatev1.Event_ComputeInstance{ComputeInstance: ci},
-			}
-
-			_, err := mapEvent(event, &events.StateContext{})
-			Expect(err).To(HaveOccurred())
-			Expect(errors.Is(err, events.ErrTransientState)).To(BeTrue())
-		})
-
-		It("returns ErrTransientState for STOPPING state", func() {
-			ci.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPING
-
-			event := &privatev1.Event{
-				Id:      "evt-2",
-				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
-				Payload: &privatev1.Event_ComputeInstance{ComputeInstance: ci},
-			}
-
-			_, err := mapEvent(event, &events.StateContext{})
-			Expect(err).To(HaveOccurred())
-			Expect(errors.Is(err, events.ErrTransientState)).To(BeTrue())
-		})
-
-		It("maps DELETING to osac.resource.suspended.v1", func() {
-			ci.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING
-
-			event := &privatev1.Event{
-				Id:      "evt-deleting",
-				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
-				Payload: &privatev1.Event_ComputeInstance{ComputeInstance: ci},
-			}
-
-			stateCtx := &events.StateContext{PreviousState: "RUNNING"}
-			ce, err := mapEvent(event, stateCtx)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(ce.Type()).To(Equal("osac.resource.suspended.v1"))
-		})
-
-		It("maps STOPPED→RUNNING to osac.resource.resumed.v1 with state context", func() {
-			ci.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING
-
-			event := &privatev1.Event{
-				Id:      "evt-resumed-1",
-				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
-				Payload: &privatev1.Event_ComputeInstance{ComputeInstance: ci},
-			}
-
-			stateCtx := &events.StateContext{PreviousState: "STOPPED"}
-			ce, err := mapEvent(event, stateCtx)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(ce.Type()).To(Equal("osac.resource.resumed.v1"))
-		})
-
-		It("maps PAUSED→RUNNING to osac.resource.resumed.v1 with state context", func() {
-			ci.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING
-
-			event := &privatev1.Event{
-				Id:      "evt-resumed-2",
-				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
-				Payload: &privatev1.Event_ComputeInstance{ComputeInstance: ci},
-			}
-
-			stateCtx := &events.StateContext{PreviousState: "PAUSED"}
-			ce, err := mapEvent(event, stateCtx)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(ce.Type()).To(Equal("osac.resource.resumed.v1"))
-		})
-
-		It("maps STARTING→RUNNING to osac.resource.started.v1 with state context", func() {
-			ci.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING
-
-			event := &privatev1.Event{
-				Id:      "evt-started",
-				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
-				Payload: &privatev1.Event_ComputeInstance{ComputeInstance: ci},
-			}
-
-			stateCtx := &events.StateContext{PreviousState: "STARTING"}
-			ce, err := mapEvent(event, stateCtx)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(ce.Type()).To(Equal("osac.resource.started.v1"))
-		})
-
-		It("maps FAILED→RUNNING to osac.resource.started.v1", func() {
-			ci.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING
-
-			event := &privatev1.Event{
-				Id:      "evt-failed-to-running",
-				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
-				Payload: &privatev1.Event_ComputeInstance{ComputeInstance: ci},
-			}
-
-			stateCtx := &events.StateContext{PreviousState: "FAILED"}
-			ce, err := mapEvent(event, stateCtx)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(ce.Type()).To(Equal("osac.resource.started.v1"))
-		})
-
-		It("maps RUNNING→RUNNING (prev=RUNNING) to osac.resource.started.v1", func() {
-			ci.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING
-
-			event := &privatev1.Event{
-				Id:      "evt-running-to-running",
-				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
-				Payload: &privatev1.Event_ComputeInstance{ComputeInstance: ci},
-			}
-
-			stateCtx := &events.StateContext{PreviousState: "RUNNING"}
-			ce, err := mapEvent(event, stateCtx)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(ce.Type()).To(Equal("osac.resource.started.v1"))
-		})
-
-		It("maps UNSPECIFIED to osac.resource.updated.v1", func() {
-			ci.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_UNSPECIFIED
-
-			event := &privatev1.Event{
-				Id:      "evt-unspecified",
-				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
-				Payload: &privatev1.Event_ComputeInstance{ComputeInstance: ci},
-			}
-
-			ce, err := mapEvent(event, &events.StateContext{})
-			Expect(err).NotTo(HaveOccurred())
-			Expect(ce.Type()).To(Equal("osac.resource.updated.v1"))
-		})
-
-		It("returns error for unknown state (default branch)", func() {
+		It("returns error for unknown state (missing table entry)", func() {
 			ci.Status.State = privatev1.ComputeInstanceState(9999)
 
 			event := &privatev1.Event{
@@ -271,7 +256,7 @@ var _ = Describe("MapWatchEvent", func() {
 			Expect(errors.Is(err, events.ErrTransientState)).To(BeFalse())
 		})
 
-		It("maps RUNNING→STOPPED with duration to osac.resource.suspended.v1", func() {
+		It("maps RUNNING->STOPPED with duration to osac.resource.suspended.v1", func() {
 			ci.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPED
 
 			event := &privatev1.Event{
@@ -287,14 +272,14 @@ var _ = Describe("MapWatchEvent", func() {
 			}
 			ce, err := mapEvent(event, stateCtx)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(ce.Type()).To(Equal("osac.resource.suspended.v1"))
+			Expect(ce.Type()).To(Equal(events.EventSuspended))
 
 			var data map[string]any
 			Expect(json.Unmarshal(ce.Data(), &data)).To(Succeed())
 			Expect(data["duration_seconds"]).To(BeNumerically("==", 7200.0))
 		})
 
-		It("maps RUNNING→FAILED (prev=RUNNING) to osac.resource.suspended.v1", func() {
+		It("maps RUNNING->FAILED (prev=RUNNING) to osac.resource.suspended.v1", func() {
 			ci.Status.State = privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED
 
 			event := &privatev1.Event{
@@ -306,7 +291,7 @@ var _ = Describe("MapWatchEvent", func() {
 			stateCtx := &events.StateContext{PreviousState: "RUNNING"}
 			ce, err := mapEvent(event, stateCtx)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(ce.Type()).To(Equal("osac.resource.suspended.v1"))
+			Expect(ce.Type()).To(Equal(events.EventSuspended))
 		})
 
 		It("includes previous_state and duration_seconds when state context provided", func() {
@@ -332,6 +317,18 @@ var _ = Describe("MapWatchEvent", func() {
 			Expect(data["duration_seconds"]).To(BeNumerically("==", 3600.5))
 		})
 
+		It("maps OBJECT_CREATED to osac.resource.created.v1", func() {
+			event := &privatev1.Event{
+				Id:      "evt-1",
+				Type:    privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+				Payload: &privatev1.Event_ComputeInstance{ComputeInstance: ci},
+			}
+
+			ce, err := mapEvent(event, &events.StateContext{})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ce.Type()).To(Equal(events.EventCreated))
+		})
+
 		It("maps OBJECT_DELETED to osac.resource.deleted.v1", func() {
 			ci.Metadata.DeletionTimestamp = timestamppb.Now()
 
@@ -343,7 +340,7 @@ var _ = Describe("MapWatchEvent", func() {
 
 			ce, err := mapEvent(event, &events.StateContext{})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(ce.Type()).To(Equal("osac.resource.deleted.v1"))
+			Expect(ce.Type()).To(Equal(events.EventDeleted))
 		})
 	})
 
@@ -768,7 +765,7 @@ var _ = Describe("MapWatchEvent", func() {
 
 			_, err := mapEvent(event, &events.StateContext{})
 			Expect(err).To(HaveOccurred())
-			Expect(err).To(MatchError(ContainSubstring("no creation_timestamp")))
+			Expect(err).To(MatchError(ContainSubstring("no timestamp for event type")))
 			Expect(errors.Is(err, events.ErrDataQuality)).To(BeTrue())
 		})
 
@@ -798,7 +795,7 @@ var _ = Describe("MapWatchEvent", func() {
 
 			_, err := mapEvent(event, &events.StateContext{})
 			Expect(err).To(HaveOccurred())
-			Expect(err).To(MatchError(ContainSubstring("no state_transition_time")))
+			Expect(err).To(MatchError(ContainSubstring("no timestamp for event type")))
 			Expect(errors.Is(err, events.ErrDataQuality)).To(BeTrue())
 		})
 
@@ -828,7 +825,7 @@ var _ = Describe("MapWatchEvent", func() {
 
 			_, err := mapEvent(event, &events.StateContext{})
 			Expect(err).To(HaveOccurred())
-			Expect(err).To(MatchError(ContainSubstring("no deletion_timestamp")))
+			Expect(err).To(MatchError(ContainSubstring("no timestamp for event type")))
 			Expect(errors.Is(err, events.ErrDataQuality)).To(BeTrue())
 		})
 	})
@@ -871,5 +868,51 @@ var _ = Describe("DimensionsEqual", func() {
 
 	It("returns true for nil maps", func() {
 		Expect(events.DimensionsEqual(nil, nil)).To(BeTrue())
+	})
+})
+
+var _ = Describe("VMaaS transition table completeness", func() {
+	stateProtoMap := map[string]privatev1.ComputeInstanceState{
+		"RUNNING":     privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
+		"STOPPED":     privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPED,
+		"PAUSED":      privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_PAUSED,
+		"FAILED":      privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED,
+		"STOPPING":    privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPING,
+		"STARTING":    privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
+		"DELETING":    privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_DELETING,
+		"UNSPECIFIED": privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_UNSPECIFIED,
+	}
+
+	It("covers every (from, to) state pair from all proto states plus empty initial", func() {
+		fromStates := []string{"", "RUNNING", "STOPPED", "PAUSED", "FAILED", "STOPPING", "STARTING", "DELETING", "UNSPECIFIED"}
+		toStates := []string{"RUNNING", "STOPPED", "PAUSED", "FAILED", "STOPPING", "STARTING", "DELETING", "UNSPECIFIED"}
+
+		for _, from := range fromStates {
+			for _, to := range toStates {
+				ci := &privatev1.ComputeInstance{
+					Id:       "ci-completeness",
+					Metadata: &privatev1.Metadata{Tenant: "t", CreationTimestamp: timestamppb.Now()},
+					Spec:     &privatev1.ComputeInstanceSpec{},
+					Status: &privatev1.ComputeInstanceStatus{
+						State:               stateProtoMap[to],
+						StateTransitionTime: timestamppb.Now(),
+					},
+				}
+
+				event := &privatev1.Event{
+					Id:      "evt-completeness",
+					Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+					Payload: &privatev1.Event_ComputeInstance{ComputeInstance: ci},
+				}
+
+				stateCtx := &events.StateContext{PreviousState: from}
+				_, err := mapEvent(event, stateCtx)
+
+				Expect(err == nil ||
+					errors.Is(err, events.ErrSkipTransition) ||
+					errors.Is(err, events.ErrTransientState)).To(BeTrue(),
+					"transition %s -> %s returned unexpected error: %v", from, to, err)
+			}
+		}
 	})
 })

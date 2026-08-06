@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc"
 
 	privatev1 "github.com/osac-project/osac-metering/internal/api/osac/private/v1"
+	"github.com/osac-project/osac-metering/internal/events"
 	"github.com/osac-project/osac-metering/internal/projection"
 	"github.com/osac-project/osac-metering/internal/reconciliation"
 )
@@ -190,7 +191,7 @@ var _ = Describe("Reconciler", func() {
 			defer pub.mu.Unlock()
 			var correctionFound bool
 			for _, e := range pub.published {
-				if e.Type() == "osac.resource.correction.v1" {
+				if e.Type() == events.EventCorrection {
 					var data map[string]any
 					Expect(json.Unmarshal(e.Data(), &data)).To(Succeed())
 					Expect(data["reason"]).To(Equal("missed_creation"))
@@ -210,7 +211,7 @@ var _ = Describe("Reconciler", func() {
 			store := newMockStore()
 			store.states["vm-gone"] = projection.ResourceState{
 				ResourceID:   "vm-gone",
-				ResourceType: "compute_instance",
+				ResourceType: events.ResourceTypeComputeInstance,
 				TenantID:     "tenant-1",
 				CurrentState: "RUNNING",
 			}
@@ -240,7 +241,7 @@ var _ = Describe("Reconciler", func() {
 			store := newMockStore()
 			store.states["vm-drift"] = projection.ResourceState{
 				ResourceID:         "vm-drift",
-				ResourceType:       "compute_instance",
+				ResourceType:       events.ResourceTypeComputeInstance,
 				TenantID:           "tenant-1",
 				CurrentState:       "RUNNING",
 				FulfillmentVersion: 3,
@@ -269,7 +270,7 @@ var _ = Describe("Reconciler", func() {
 			store := newMockStore()
 			store.states["res-drift"] = projection.ResourceState{
 				ResourceID:         "res-drift",
-				ResourceType:       "compute_instance",
+				ResourceType:       events.ResourceTypeComputeInstance,
 				TenantID:           "tenant-1",
 				CurrentState:       "STOPPED",
 				IsBillable:         false,
@@ -298,7 +299,7 @@ var _ = Describe("Reconciler", func() {
 			store := newMockStore()
 			store.states["res-stale"] = projection.ResourceState{
 				ResourceID:         "res-stale",
-				ResourceType:       "compute_instance",
+				ResourceType:       events.ResourceTypeComputeInstance,
 				TenantID:           "tenant-1",
 				CurrentState:       "RUNNING",
 				IsBillable:         true,
@@ -314,7 +315,7 @@ var _ = Describe("Reconciler", func() {
 			defer pub.mu.Unlock()
 			found := false
 			for _, e := range pub.published {
-				if e.Type() == "osac.resource.heartbeat.v1" {
+				if e.Type() == events.EventHeartbeat {
 					found = true
 					break
 				}
@@ -352,7 +353,7 @@ var _ = Describe("Reconciler", func() {
 			store := newMockStore()
 			store.states["vm-ok"] = projection.ResourceState{
 				ResourceID:   "vm-ok",
-				ResourceType: "compute_instance",
+				ResourceType: events.ResourceTypeComputeInstance,
 				TenantID:     "tenant-1",
 				CurrentState: "RUNNING",
 				BillingDimensions: map[string]any{
@@ -423,7 +424,7 @@ var _ = Describe("Reconciler", func() {
 			store := newMockStore()
 			store.states["vm-dims-drift"] = projection.ResourceState{
 				ResourceID:         "vm-dims-drift",
-				ResourceType:       "compute_instance",
+				ResourceType:       events.ResourceTypeComputeInstance,
 				TenantID:           "tenant-1",
 				CurrentState:       "RUNNING",
 				IsBillable:         true,
@@ -439,7 +440,7 @@ var _ = Describe("Reconciler", func() {
 			defer pub.mu.Unlock()
 			var found bool
 			for _, e := range pub.published {
-				if e.Type() == "osac.resource.correction.v1" {
+				if e.Type() == events.EventCorrection {
 					var data map[string]any
 					Expect(json.Unmarshal(e.Data(), &data)).To(Succeed())
 					if data["reason"] == "billing_dimensions_drift" {
@@ -477,7 +478,7 @@ var _ = Describe("Reconciler", func() {
 			store := newMockStore()
 			store.states["vm-keep-billable"] = projection.ResourceState{
 				ResourceID:         "vm-keep-billable",
-				ResourceType:       "compute_instance",
+				ResourceType:       events.ResourceTypeComputeInstance,
 				TenantID:           "tenant-1",
 				CurrentState:       "RUNNING",
 				IsBillable:         true,
@@ -507,7 +508,7 @@ var _ = Describe("Reconciler", func() {
 			store := newMockStore()
 			store.states["vm-version-advance"] = projection.ResourceState{
 				ResourceID:         "vm-version-advance",
-				ResourceType:       "compute_instance",
+				ResourceType:       events.ResourceTypeComputeInstance,
 				TenantID:           "tenant-1",
 				CurrentState:       "RUNNING",
 				FulfillmentVersion: 5,
@@ -555,7 +556,7 @@ var _ = Describe("Reconciler", func() {
 			store := newMockStore()
 			store.states["vm-match"] = projection.ResourceState{
 				ResourceID:   "vm-match",
-				ResourceType: "compute_instance",
+				ResourceType: events.ResourceTypeComputeInstance,
 				TenantID:     "tenant-1",
 				CurrentState: "RUNNING",
 				BillingDimensions: map[string]any{
@@ -584,7 +585,7 @@ var _ = Describe("Reconciler", func() {
 			store := newMockStore()
 			store.states["vm-stale"] = projection.ResourceState{
 				ResourceID:         "vm-stale",
-				ResourceType:       "compute_instance",
+				ResourceType:       events.ResourceTypeComputeInstance,
 				TenantID:           "tenant-1",
 				CurrentState:       "RUNNING",
 				FulfillmentVersion: 3,
@@ -623,7 +624,7 @@ var _ = Describe("Reconciler", func() {
 			defer pub.mu.Unlock()
 			var found bool
 			for _, e := range pub.published {
-				if e.Type() == "osac.resource.correction.v1" {
+				if e.Type() == events.EventCorrection {
 					Expect(e.Extensions()["osacresourceid"]).To(Equal("vm-new"))
 					found = true
 					break
@@ -690,12 +691,12 @@ var _ = Describe("Reconciler", func() {
 			defer pub.mu.Unlock()
 			correctionCount := 0
 			for _, e := range pub.published {
-				if e.Type() == "osac.resource.correction.v1" {
+				if e.Type() == events.EventCorrection {
 					correctionCount++
 					var data map[string]any
 					Expect(json.Unmarshal(e.Data(), &data)).To(Succeed())
 					Expect(data["reason"]).To(Equal("missed_creation"))
-					Expect(data["resource_type"]).To(Equal("cluster_order"))
+					Expect(data["resource_type"]).To(Equal(events.ResourceTypeClusterOrder))
 					bd := data["billing_dimensions"].(map[string]any)
 					Expect(bd).To(HaveKey("component"))
 					Expect(bd).To(HaveKey("host_type"))
@@ -708,7 +709,7 @@ var _ = Describe("Reconciler", func() {
 			store.mu.Lock()
 			defer store.mu.Unlock()
 			Expect(store.states).To(HaveKey("cl-missed"))
-			Expect(store.states["cl-missed"].ResourceType).To(Equal("cluster_order"))
+			Expect(store.states["cl-missed"].ResourceType).To(Equal(events.ResourceTypeClusterOrder))
 			Expect(store.states["cl-missed"].IsBillable).To(BeTrue())
 		})
 
@@ -723,7 +724,7 @@ var _ = Describe("Reconciler", func() {
 			now := time.Now().UTC().Truncate(time.Microsecond)
 			store.states["cl-drift"] = projection.ResourceState{
 				ResourceID:         "cl-drift",
-				ResourceType:       "cluster_order",
+				ResourceType:       events.ResourceTypeClusterOrder,
 				TenantID:           "tenant-1",
 				CurrentState:       "READY",
 				IsBillable:         true,
@@ -748,7 +749,7 @@ var _ = Describe("Reconciler", func() {
 			defer pub.mu.Unlock()
 			driftCount := 0
 			for _, e := range pub.published {
-				if e.Type() == "osac.resource.correction.v1" {
+				if e.Type() == events.EventCorrection {
 					var data map[string]any
 					Expect(json.Unmarshal(e.Data(), &data)).To(Succeed())
 					if data["reason"] == "state_drift" {
@@ -771,7 +772,7 @@ var _ = Describe("Reconciler", func() {
 			now := time.Now().UTC().Truncate(time.Microsecond)
 			store.states["cl-gone"] = projection.ResourceState{
 				ResourceID:    "cl-gone",
-				ResourceType:  "cluster_order",
+				ResourceType:  events.ResourceTypeClusterOrder,
 				TenantID:      "tenant-1",
 				CurrentState:  "READY",
 				IsBillable:    true,
@@ -794,7 +795,7 @@ var _ = Describe("Reconciler", func() {
 			defer pub.mu.Unlock()
 			deletionCount := 0
 			for _, e := range pub.published {
-				if e.Type() == "osac.resource.correction.v1" {
+				if e.Type() == events.EventCorrection {
 					var data map[string]any
 					Expect(json.Unmarshal(e.Data(), &data)).To(Succeed())
 					if data["reason"] == "missed_deletion" {
@@ -818,7 +819,7 @@ var _ = Describe("Reconciler", func() {
 			now := time.Now().UTC().Truncate(time.Microsecond)
 			store.states["cl-safe"] = projection.ResourceState{
 				ResourceID:        "cl-safe",
-				ResourceType:      "cluster_order",
+				ResourceType:      events.ResourceTypeClusterOrder,
 				TenantID:          "tenant-1",
 				CurrentState:      "READY",
 				IsBillable:        true,
@@ -835,7 +836,7 @@ var _ = Describe("Reconciler", func() {
 			pub.mu.Lock()
 			defer pub.mu.Unlock()
 			for _, e := range pub.published {
-				Expect(e.Type()).ToNot(Equal("osac.resource.correction.v1"))
+				Expect(e.Type()).ToNot(Equal(events.EventCorrection))
 			}
 
 			store.mu.Lock()
@@ -874,7 +875,7 @@ var _ = Describe("Reconciler", func() {
 			now := time.Now().Add(-5 * time.Minute).UTC().Truncate(time.Microsecond)
 			store.states["cl-hb"] = projection.ResourceState{
 				ResourceID:         "cl-hb",
-				ResourceType:       "cluster_order",
+				ResourceType:       events.ResourceTypeClusterOrder,
 				TenantID:           "tenant-1",
 				CurrentState:       "READY",
 				IsBillable:         true,
@@ -900,7 +901,7 @@ var _ = Describe("Reconciler", func() {
 
 			var hbEvents []cloudevents.Event
 			for _, e := range pub.published {
-				if e.Type() == "osac.resource.heartbeat.v1" {
+				if e.Type() == events.EventHeartbeat {
 					hbEvents = append(hbEvents, e)
 				}
 			}

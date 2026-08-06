@@ -50,19 +50,19 @@ type correctionData struct {
 	SchemaVersion           string            `json:"schema_version"`
 }
 
+var correctionDescriptions = map[CorrectionReason]string{
+	MissedCreation:         "Resource found in fulfillment-service but missing from metering projection",
+	StateDrift:             "Resource state in fulfillment-service differs from metering projection",
+	BillingDimensionsDrift: "Billing dimensions in fulfillment-service differ from metering projection",
+	MissedDeletion:         "Resource found in metering projection but missing from fulfillment-service",
+}
+
 func correctionDescription(reason CorrectionReason) (string, error) {
-	switch reason {
-	case MissedCreation:
-		return "Resource found in fulfillment-service but missing from metering projection", nil
-	case StateDrift:
-		return "Resource state in fulfillment-service differs from metering projection", nil
-	case BillingDimensionsDrift:
-		return "Billing dimensions in fulfillment-service differ from metering projection", nil
-	case MissedDeletion:
-		return "Resource found in metering projection but missing from fulfillment-service", nil
-	default:
+	desc, ok := correctionDescriptions[reason]
+	if !ok {
 		return "", fmt.Errorf("unknown correction reason: %s", reason)
 	}
+	return desc, nil
 }
 
 func buildCorrectionEvents(
@@ -84,14 +84,7 @@ func buildCorrectionEvents(
 		return ce, nil
 	}
 
-	if resourceType == "cluster_order" {
-		return events.DecomposeClusterEvents(billingDimensions, baseID, buildFn)
-	}
-	ce, err := buildFn(billingDimensions, baseID)
-	if err != nil {
-		return nil, err
-	}
-	return []cloudevents.Event{ce}, nil
+	return events.BuildResourceEvents(resourceType, billingDimensions, baseID, buildFn)
 }
 
 func buildCorrectionEvent(
@@ -105,7 +98,7 @@ func buildCorrectionEvent(
 	ce := cloudevents.NewEvent()
 	ce.SetID(uuid.NewString())
 	ce.SetSource("osac-metering/reconciler")
-	ce.SetType("osac.resource.correction.v1")
+	ce.SetType(events.EventCorrection)
 	ce.SetTime(now)
 	events.SetOSACExtensions(&ce, resourceID, resourceType, tenantID, projectID)
 

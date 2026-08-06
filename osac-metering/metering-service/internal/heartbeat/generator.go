@@ -129,21 +129,14 @@ func (g *Generator) buildHeartbeatEvents(state *projection.ResourceState, now ti
 		return g.buildHeartbeatEvent(state, eventID, dims, now)
 	}
 
-	if state.ResourceType == "cluster_order" {
-		return events.DecomposeClusterEvents(state.BillingDimensions, uuid.NewString(), buildFn)
-	}
-	ce, err := buildFn(state.BillingDimensions, uuid.NewString())
-	if err != nil {
-		return nil, err
-	}
-	return []cloudevents.Event{ce}, nil
+	return events.BuildResourceEvents(state.ResourceType, state.BillingDimensions, uuid.NewString(), buildFn)
 }
 
 func (g *Generator) buildHeartbeatEvent(state *projection.ResourceState, eventID string, dims map[string]any, now time.Time) (cloudevents.Event, error) {
 	ce := cloudevents.NewEvent()
 	ce.SetID(eventID)
 	ce.SetSource("osac-metering")
-	ce.SetType("osac.resource.heartbeat.v1")
+	ce.SetType(events.EventHeartbeat)
 	ce.SetTime(now)
 
 	events.SetOSACExtensions(&ce, state.ResourceID, state.ResourceType, state.TenantID, state.ProjectID)

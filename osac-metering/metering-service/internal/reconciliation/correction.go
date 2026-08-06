@@ -65,6 +65,38 @@ func correctionDescription(reason CorrectionReason) string {
 	}
 }
 
+func buildCorrectionEvents(
+	resourceID, resourceType, tenantID, projectID string,
+	reason CorrectionReason,
+	projectionState, sourceState string,
+	billingDimensions map[string]any,
+	interval *AffectedInterval,
+	now time.Time,
+) ([]cloudevents.Event, error) {
+	if resourceType == "cluster_order" {
+		components := events.DecomposeClusterComponents(billingDimensions)
+		if len(components) > 0 {
+			result := make([]cloudevents.Event, 0, len(components))
+			for _, comp := range components {
+				ce, err := buildCorrectionEvent(resourceID, resourceType, tenantID, projectID,
+					reason, projectionState, sourceState, comp.FlatBillingDimensions(), interval, now)
+				if err != nil {
+					return nil, err
+				}
+				ce.SetID(events.ComponentEventID(ce.ID(), comp))
+				result = append(result, ce)
+			}
+			return result, nil
+		}
+	}
+	ce, err := buildCorrectionEvent(resourceID, resourceType, tenantID, projectID,
+		reason, projectionState, sourceState, billingDimensions, interval, now)
+	if err != nil {
+		return nil, err
+	}
+	return []cloudevents.Event{ce}, nil
+}
+
 func buildCorrectionEvent(
 	resourceID, resourceType, tenantID, projectID string,
 	reason CorrectionReason,

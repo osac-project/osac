@@ -96,20 +96,22 @@ func (g *Generator) tick(ctx context.Context) error {
 	// to prevent duplicate heartbeats on retry. At scale (>10K VMs), consider
 	// Kafka transactional producer for atomic batch publish.
 	for i := range billable {
-		ce, ceErr := g.buildHeartbeatEvent(&billable[i], now)
+		hbEvents, ceErr := g.buildHeartbeatEvents(&billable[i], now)
 		if ceErr != nil {
 			g.logger.Error(ceErr, "building heartbeat event, skipping resource",
 				"resource_id", billable[i].ResourceID)
 			continue
 		}
-		if err := g.publisher.Publish(ctx, ce); err != nil {
-			if len(publishedIDs) > 0 {
-				if cpErr := g.store.UpdateLastHeartbeat(ctx, publishedIDs, now); cpErr != nil {
-					g.logger.Error(cpErr, "failed to checkpoint partial heartbeat progress",
-						"published", len(publishedIDs))
+		for j := range hbEvents {
+			if err := g.publisher.Publish(ctx, hbEvents[j]); err != nil {
+				if len(publishedIDs) > 0 {
+					if cpErr := g.store.UpdateLastHeartbeat(ctx, publishedIDs, now); cpErr != nil {
+						g.logger.Error(cpErr, "failed to checkpoint partial heartbeat progress",
+							"published", len(publishedIDs))
+					}
 				}
+				return fmt.Errorf("publishing heartbeat for %s: %w", billable[i].ResourceID, err)
 			}
-			return fmt.Errorf("publishing heartbeat for %s: %w", billable[i].ResourceID, err)
 		}
 		publishedIDs = append(publishedIDs, billable[i].ResourceID)
 	}
@@ -120,6 +122,65 @@ func (g *Generator) tick(ctx context.Context) error {
 
 	g.logger.Info("heartbeat tick completed", "count", len(publishedIDs))
 	return nil
+}
+
+func (g *Generator) buildHeartbeatEvents(state *projection.ResourceState, now time.Time) ([]cloudevents.Event, error) {
+	if state.ResourceType != "cluster_order" {
+		ce, err := g.buildHeartbeatEvent(state, now)
+		if err != nil {
+			return nil, err
+		}
+		return []cloudevents.Event{ce}, nil
+	}
+
+	components := events.DecomposeClusterComponents(state.BillingDimensions)
+	if len(components) == 0 {
+		ce, err := g.buildHeartbeatEvent(state, now)
+		if err != nil {
+			return nil, err
+		}
+		return []cloudevents.Event{ce}, nil
+	}
+
+	result := make([]cloudevents.Event, 0, len(components))
+	for _, comp := range components {
+		ce, err := g.buildComponentHeartbeat(state, comp, now)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, ce)
+	}
+	return result, nil
+}
+
+func (g *Generator) buildComponentHeartbeat(state *projection.ResourceState, comp events.ComponentRecord, now time.Time) (cloudevents.Event, error) {
+	ce := cloudevents.NewEvent()
+	ce.SetID(events.ComponentEventID(uuid.NewString(), comp))
+	ce.SetSource("osac-metering")
+	ce.SetType("osac.resource.heartbeat.v1")
+	ce.SetTime(now)
+
+	events.SetOSACExtensions(&ce, state.ResourceID, state.ResourceType, state.TenantID, state.ProjectID)
+
+	var durationSeconds float64
+	if state.BillableSince != nil {
+		durationSeconds = now.Sub(*state.BillableSince).Seconds()
+	}
+
+	data := heartbeatData{
+		ResourceID:        state.ResourceID,
+		ResourceType:      state.ResourceType,
+		TenantID:          state.TenantID,
+		ProjectID:         events.NilIfEmpty(state.ProjectID),
+		CurrentState:      state.CurrentState,
+		DurationSeconds:   durationSeconds,
+		BillingDimensions: comp.FlatBillingDimensions(),
+		SchemaVersion:     "v1",
+	}
+	if err := ce.SetData(cloudevents.ApplicationJSON, data); err != nil {
+		return ce, fmt.Errorf("setting component heartbeat data: %w", err)
+	}
+	return ce, nil
 }
 
 func (g *Generator) buildHeartbeatEvent(state *projection.ResourceState, now time.Time) (cloudevents.Event, error) {

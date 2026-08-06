@@ -53,8 +53,13 @@ type ComputeInstanceLister interface {
 	List(ctx context.Context, in *privatev1.ComputeInstancesListRequest, opts ...grpc.CallOption) (*privatev1.ComputeInstancesListResponse, error)
 }
 
+type ClusterLister interface {
+	List(ctx context.Context, in *privatev1.ClustersListRequest, opts ...grpc.CallOption) (*privatev1.ClustersListResponse, error)
+}
+
 type Reconciler struct {
 	computeClient     ComputeInstanceLister
+	clusterClient     ClusterLister
 	store             projection.Store
 	publisher         kafkapub.EventPublisher
 	logger            logr.Logger
@@ -63,6 +68,7 @@ type Reconciler struct {
 
 func NewReconciler(
 	computeClient ComputeInstanceLister,
+	clusterClient ClusterLister,
 	store projection.Store,
 	publisher kafkapub.EventPublisher,
 	logger logr.Logger,
@@ -70,6 +76,7 @@ func NewReconciler(
 ) *Reconciler {
 	return &Reconciler{
 		computeClient:     computeClient,
+		clusterClient:     clusterClient,
 		store:             store,
 		publisher:         publisher,
 		logger:            logger,
@@ -129,27 +136,37 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 	return nil
 }
 
+func (r *Reconciler) publishCorrections(ctx context.Context, id, resourceType, tenantID, projectID string, reason CorrectionReason, projState, sourceState string, dims map[string]any, now time.Time) error {
+	ces, err := buildCorrectionEvents(id, resourceType, tenantID, projectID,
+		reason, projState, sourceState, dims, nil, now)
+	if err != nil {
+		return fmt.Errorf("building %s event for %s: %w", reason, id, err)
+	}
+	for _, ce := range ces {
+		if err := r.publisher.Publish(ctx, ce); err != nil {
+			return fmt.Errorf("publishing %s for %s: %w", reason, id, err)
+		}
+	}
+	reconCorrections.WithLabelValues(string(reason), resourceType).Inc()
+	return nil
+}
+
 func (r *Reconciler) reconcileFulfillmentResources(ctx context.Context, fulfillmentState map[string]fulfillmentResource, projMap map[string]projection.ResourceState, now time.Time) (int, error) {
 	corrections := 0
 
 	for id, fs := range fulfillmentState {
 		ps, exists := projMap[id]
 		if !exists {
-			ce, ceErr := buildCorrectionEvent(id, "compute_instance", fs.tenantID, fs.projectID,
-				MissedCreation, "", fs.state, fs.billingDimensions, nil, now)
-			if ceErr != nil {
-				return corrections, fmt.Errorf("building missed_creation event for %s: %w", id, ceErr)
+			if err := r.publishCorrections(ctx, id, fs.resourceType, fs.tenantID, fs.projectID,
+				MissedCreation, "", fs.state, fs.billingDimensions, now); err != nil {
+				return corrections, err
 			}
-			if err := r.publisher.Publish(ctx, ce); err != nil {
-				return corrections, fmt.Errorf("publishing missed_creation for %s: %w", id, err)
-			}
-			reconCorrections.WithLabelValues(string(MissedCreation), "compute_instance").Inc()
 			corrections++
 
-			isBillable := events.IsBillableState(fs.state)
+			isBillable := isBillableForType(fs.resourceType, fs.state)
 			newState := projection.ResourceState{
 				ResourceID:         id,
-				ResourceType:       "compute_instance",
+				ResourceType:       fs.resourceType,
 				TenantID:           fs.tenantID,
 				ProjectID:          fs.projectID,
 				CurrentState:       fs.state,
@@ -190,18 +207,13 @@ func (r *Reconciler) reconcileFulfillmentResources(ctx context.Context, fulfillm
 		}
 
 		if ps.CurrentState != fs.state {
-			ce, ceErr := buildCorrectionEvent(id, "compute_instance", fs.tenantID, fs.projectID,
-				StateDrift, ps.CurrentState, fs.state, fs.billingDimensions, nil, now)
-			if ceErr != nil {
-				return corrections, fmt.Errorf("building state_drift event for %s: %w", id, ceErr)
+			if err := r.publishCorrections(ctx, id, fs.resourceType, fs.tenantID, fs.projectID,
+				StateDrift, ps.CurrentState, fs.state, fs.billingDimensions, now); err != nil {
+				return corrections, err
 			}
-			if err := r.publisher.Publish(ctx, ce); err != nil {
-				return corrections, fmt.Errorf("publishing state_drift for %s: %w", id, err)
-			}
-			reconCorrections.WithLabelValues(string(StateDrift), "compute_instance").Inc()
 			corrections++
 
-			isBillable := events.IsBillableState(fs.state)
+			isBillable := isBillableForType(fs.resourceType, fs.state)
 			ps.PreviousState = ps.CurrentState
 			ps.CurrentState = fs.state
 			wasBillable := ps.IsBillable
@@ -222,15 +234,10 @@ func (r *Reconciler) reconcileFulfillmentResources(ctx context.Context, fulfillm
 				}
 			}
 		} else if !events.DimensionsEqual(ps.BillingDimensions, fs.billingDimensions) {
-			ce, ceErr := buildCorrectionEvent(id, "compute_instance", fs.tenantID, fs.projectID,
-				BillingDimensionsDrift, ps.CurrentState, fs.state, fs.billingDimensions, nil, now)
-			if ceErr != nil {
-				return corrections, fmt.Errorf("building billing_dimensions_drift event for %s: %w", id, ceErr)
+			if err := r.publishCorrections(ctx, id, fs.resourceType, fs.tenantID, fs.projectID,
+				BillingDimensionsDrift, ps.CurrentState, fs.state, fs.billingDimensions, now); err != nil {
+				return corrections, err
 			}
-			if err := r.publisher.Publish(ctx, ce); err != nil {
-				return corrections, fmt.Errorf("publishing billing_dimensions_drift for %s: %w", id, err)
-			}
-			reconCorrections.WithLabelValues(string(BillingDimensionsDrift), "compute_instance").Inc()
 			corrections++
 
 			ps.BillingDimensions = fs.billingDimensions
@@ -254,15 +261,13 @@ func (r *Reconciler) reconcileMissedDeletions(ctx context.Context, fulfillmentSt
 
 	for id, ps := range projMap {
 		if _, exists := fulfillmentState[id]; !exists {
-			ce, ceErr := buildCorrectionEvent(id, ps.ResourceType, ps.TenantID, ps.ProjectID,
-				MissedDeletion, ps.CurrentState, "", ps.BillingDimensions, nil, now)
-			if ceErr != nil {
-				return corrections, fmt.Errorf("building missed_deletion event for %s: %w", id, ceErr)
+			if ps.ResourceType == "cluster_order" && r.clusterClient == nil {
+				continue
 			}
-			if err := r.publisher.Publish(ctx, ce); err != nil {
-				return corrections, fmt.Errorf("publishing missed_deletion for %s: %w", id, err)
+			if err := r.publishCorrections(ctx, id, ps.ResourceType, ps.TenantID, ps.ProjectID,
+				MissedDeletion, ps.CurrentState, "", ps.BillingDimensions, now); err != nil {
+				return corrections, err
 			}
-			reconCorrections.WithLabelValues(string(MissedDeletion), ps.ResourceType).Inc()
 			corrections++
 
 			if err := r.store.Delete(ctx, id); err != nil {
@@ -287,13 +292,20 @@ func (r *Reconciler) reconcileStaleHeartbeats(ctx context.Context, now time.Time
 	for i := range freshProjection {
 		ps := &freshProjection[i]
 		if ps.LastHeartbeatAt == nil || now.Sub(*ps.LastHeartbeatAt) > 2*r.heartbeatInterval {
-			hbEvent, hbErr := buildSyntheticHeartbeat(*ps, now)
+			hbEvents, hbErr := buildSyntheticHeartbeats(*ps, now)
 			if hbErr != nil {
 				r.logger.Error(hbErr, "building synthetic heartbeat", "resource_id", ps.ResourceID)
 				continue
 			}
-			if err := r.publisher.Publish(ctx, hbEvent); err != nil {
-				r.logger.Error(err, "publishing synthetic heartbeat", "resource_id", ps.ResourceID)
+			published := true
+			for _, hb := range hbEvents {
+				if err := r.publisher.Publish(ctx, hb); err != nil {
+					r.logger.Error(err, "publishing synthetic heartbeat", "resource_id", ps.ResourceID)
+					published = false
+					break
+				}
+			}
+			if !published {
 				continue
 			}
 			heartbeatIDs = append(heartbeatIDs, ps.ResourceID)
@@ -330,6 +342,7 @@ func (r *Reconciler) RunPeriodic(ctx context.Context, interval time.Duration) {
 }
 
 type fulfillmentResource struct {
+	resourceType      string
 	state             string
 	version           int32
 	tenantID          string
@@ -337,10 +350,34 @@ type fulfillmentResource struct {
 	billingDimensions map[string]any
 }
 
+func isBillableForType(resourceType, state string) bool {
+	switch resourceType {
+	case "compute_instance":
+		return events.IsBillableState(state)
+	case "cluster_order":
+		return events.IsClusterBillableState(state)
+	default:
+		return false
+	}
+}
+
 func (r *Reconciler) loadFulfillmentState(ctx context.Context) (map[string]fulfillmentResource, error) {
 	result := make(map[string]fulfillmentResource)
-	var offset int32
 
+	if err := r.loadComputeInstances(ctx, result); err != nil {
+		return nil, err
+	}
+	if r.clusterClient != nil {
+		if err := r.loadClusters(ctx, result); err != nil {
+			return nil, err
+		}
+	}
+
+	return result, nil
+}
+
+func (r *Reconciler) loadComputeInstances(ctx context.Context, result map[string]fulfillmentResource) error {
+	var offset int32
 	for {
 		limit := int32(defaultPageSize)
 		resp, err := r.computeClient.List(ctx, &privatev1.ComputeInstancesListRequest{
@@ -348,7 +385,7 @@ func (r *Reconciler) loadFulfillmentState(ctx context.Context) (map[string]fulfi
 			Limit:  &limit,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("listing compute instances (offset=%d): %w", offset, err)
+			return fmt.Errorf("listing compute instances (offset=%d): %w", offset, err)
 		}
 
 		items := resp.GetItems()
@@ -366,6 +403,7 @@ func (r *Reconciler) loadFulfillmentState(ctx context.Context) (map[string]fulfi
 				version = md.GetVersion()
 			}
 			result[ci.GetId()] = fulfillmentResource{
+				resourceType:      "compute_instance",
 				state:             state,
 				version:           version,
 				tenantID:          tenantID,
@@ -379,13 +417,78 @@ func (r *Reconciler) loadFulfillmentState(ctx context.Context) (map[string]fulfi
 		}
 		offset += int32(len(items))
 	}
-
-	return result, nil
+	return nil
 }
 
-func buildSyntheticHeartbeat(ps projection.ResourceState, now time.Time) (cloudevents.Event, error) {
+func (r *Reconciler) loadClusters(ctx context.Context, result map[string]fulfillmentResource) error {
+	var offset int32
+	for {
+		limit := int32(defaultPageSize)
+		resp, err := r.clusterClient.List(ctx, &privatev1.ClustersListRequest{
+			Offset: &offset,
+			Limit:  &limit,
+		})
+		if err != nil {
+			return fmt.Errorf("listing clusters (offset=%d): %w", offset, err)
+		}
+
+		items := resp.GetItems()
+		for _, cl := range items {
+			state := "UNSPECIFIED"
+			if s := cl.GetStatus(); s != nil {
+				state = strings.TrimPrefix(s.GetState().String(), events.ClusterStatePrefix)
+			}
+			tenantID := ""
+			projectID := ""
+			var version int32
+			if md := cl.GetMetadata(); md != nil {
+				tenantID = md.GetTenant()
+				projectID = md.GetProject()
+				version = md.GetVersion()
+			}
+			result[cl.GetId()] = fulfillmentResource{
+				resourceType:      "cluster_order",
+				state:             state,
+				version:           version,
+				tenantID:          tenantID,
+				projectID:         projectID,
+				billingDimensions: events.ClusterBillingDimensions(cl),
+			}
+		}
+
+		if len(items) < defaultPageSize {
+			break
+		}
+		offset += int32(len(items))
+	}
+	return nil
+}
+
+func buildSyntheticHeartbeats(ps projection.ResourceState, now time.Time) ([]cloudevents.Event, error) {
+	if ps.ResourceType == "cluster_order" {
+		components := events.DecomposeClusterComponents(ps.BillingDimensions)
+		if len(components) > 0 {
+			result := make([]cloudevents.Event, 0, len(components))
+			for _, comp := range components {
+				ce, err := buildSingleSyntheticHeartbeat(ps, comp.FlatBillingDimensions(), events.ComponentEventID(uuid.NewString(), comp), now)
+				if err != nil {
+					return nil, err
+				}
+				result = append(result, ce)
+			}
+			return result, nil
+		}
+	}
+	ce, err := buildSingleSyntheticHeartbeat(ps, ps.BillingDimensions, uuid.NewString(), now)
+	if err != nil {
+		return nil, err
+	}
+	return []cloudevents.Event{ce}, nil
+}
+
+func buildSingleSyntheticHeartbeat(ps projection.ResourceState, billingDims map[string]any, eventID string, now time.Time) (cloudevents.Event, error) {
 	ce := cloudevents.NewEvent()
-	ce.SetID(uuid.NewString())
+	ce.SetID(eventID)
 	ce.SetSource("osac-metering/reconciler")
 	ce.SetType("osac.resource.heartbeat.v1")
 	ce.SetTime(now)
@@ -403,7 +506,7 @@ func buildSyntheticHeartbeat(ps projection.ResourceState, now time.Time) (cloude
 		"project_id":         events.NilIfEmpty(ps.ProjectID),
 		"current_state":      ps.CurrentState,
 		"duration_seconds":   durationSeconds,
-		"billing_dimensions": ps.BillingDimensions,
+		"billing_dimensions": billingDims,
 		"schema_version":     "v1",
 	}
 	if err := ce.SetData(cloudevents.ApplicationJSON, data); err != nil {

@@ -195,6 +195,66 @@ var _ = Describe("ApplySpecDefaults", func() {
 		Expect(spec.GetBootDisk().GetSizeGib()).To(Equal(int32(20)))
 	})
 
+	It("Merges default boot_disk storage_tier when user provides boot_disk without storage_tier", func() {
+		spec := privatev1.ComputeInstanceSpec_builder{
+			Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
+			BootDisk: privatev1.ComputeInstanceDisk_builder{
+				SizeGib: 50,
+			}.Build(),
+		}.Build()
+
+		defaults := privatev1.ComputeInstanceTemplateSpecDefaults_builder{
+			BootDisk: privatev1.ComputeInstanceDisk_builder{
+				SizeGib:     20,
+				StorageTier: new("standard"),
+			}.Build(),
+		}.Build()
+
+		ApplySpecDefaults(spec, defaults)
+
+		Expect(spec.GetBootDisk().GetSizeGib()).To(Equal(int32(50)))
+		Expect(spec.GetBootDisk().GetStorageTier()).To(Equal("standard"))
+	})
+
+	It("Does not override user-provided boot_disk storage_tier with template default", func() {
+		spec := privatev1.ComputeInstanceSpec_builder{
+			Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
+			BootDisk: privatev1.ComputeInstanceDisk_builder{
+				SizeGib:     50,
+				StorageTier: new("fast"),
+			}.Build(),
+		}.Build()
+
+		defaults := privatev1.ComputeInstanceTemplateSpecDefaults_builder{
+			BootDisk: privatev1.ComputeInstanceDisk_builder{
+				SizeGib:     20,
+				StorageTier: new("standard"),
+			}.Build(),
+		}.Build()
+
+		ApplySpecDefaults(spec, defaults)
+
+		Expect(spec.GetBootDisk().GetStorageTier()).To(Equal("fast"))
+	})
+
+	It("Clones entire boot_disk default including storage_tier when user provides no boot_disk", func() {
+		spec := privatev1.ComputeInstanceSpec_builder{
+			Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
+		}.Build()
+
+		defaults := privatev1.ComputeInstanceTemplateSpecDefaults_builder{
+			BootDisk: privatev1.ComputeInstanceDisk_builder{
+				SizeGib:     20,
+				StorageTier: new("standard"),
+			}.Build(),
+		}.Build()
+
+		ApplySpecDefaults(spec, defaults)
+
+		Expect(spec.GetBootDisk().GetSizeGib()).To(Equal(int32(20)))
+		Expect(spec.GetBootDisk().GetStorageTier()).To(Equal("standard"))
+	})
+
 	It("Applies instance_type default when user provides no compute fields", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
 			Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),

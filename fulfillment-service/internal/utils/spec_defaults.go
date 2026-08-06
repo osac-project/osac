@@ -83,6 +83,9 @@ func mergeBootDiskDefaults(spec *privatev1.ComputeInstanceSpec, defaults *privat
 	if disk.GetSizeGib() <= 0 && defDisk.GetSizeGib() > 0 {
 		disk.SetSizeGib(defDisk.GetSizeGib())
 	}
+	if !disk.HasStorageTier() && defDisk.HasStorageTier() {
+		disk.SetStorageTier(defDisk.GetStorageTier())
+	}
 }
 
 // ValidateRequiredSpecFields checks that all fields required by the Kubernetes ComputeInstance CRD

@@ -770,12 +770,7 @@ func (h *objectHelper) SetTenant(object proto.Message, tenant string) {
 
 // GetTenant returns the tenant field from the object's metadata.
 func (h *objectHelper) GetTenant(object proto.Message) string {
-	metadata := object.ProtoReflect().Get(h.metadataField).Message()
-	field := metadata.Descriptor().Fields().ByName(tenantFieldName)
-	if field == nil {
-		return ""
-	}
-	return metadata.Get(field).String()
+	return ResolveFieldPathOr(object, "metadata.tenant", "")
 }
 
 // IsTenantScoped returns true if this resource type is scoped to a tenant.

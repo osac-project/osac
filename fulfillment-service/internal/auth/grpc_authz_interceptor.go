@@ -35,6 +35,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/collections"
 	k8sfiles "github.com/osac-project/osac/fulfillment-service/internal/kubernetes/files"
+	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
 )
 
 //go:embed policies/authz.rego
@@ -590,31 +591,7 @@ func (i *GrpcAuthzInterceptor) extractProjectFromRequest(request any) string {
 	if !ok {
 		return ""
 	}
-	reflect := message.ProtoReflect()
-
-	objectField := reflect.Descriptor().Fields().ByName("object")
-	if objectField == nil {
-		return ""
-	}
-	if !reflect.Has(objectField) {
-		return ""
-	}
-	objectMsg := reflect.Get(objectField).Message()
-
-	metadataField := objectMsg.Descriptor().Fields().ByName("metadata")
-	if metadataField == nil {
-		return ""
-	}
-	if !objectMsg.Has(metadataField) {
-		return ""
-	}
-	metadataMsg := objectMsg.Get(metadataField).Message()
-
-	projectField := metadataMsg.Descriptor().Fields().ByName("project")
-	if projectField == nil {
-		return ""
-	}
-	return metadataMsg.Get(projectField).String()
+	return reflection.ResolveFieldPathOr(message, "object.metadata.project", "")
 }
 
 // claimAsAnySlice extracts a claim value and returns it as []any, which is the type that JSON-decoded arrays produce

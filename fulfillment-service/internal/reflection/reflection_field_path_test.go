@@ -23,7 +23,9 @@ import (
 var _ = Describe("ResolveFieldPath", func() {
 	It("Resolves a top-level field", func() {
 		obj := publicv1.Cluster_builder{Id: "abc"}.Build()
-		Expect(ResolveFieldPath(obj, "id")).To(Equal("abc"))
+		val, ok := ResolveFieldPath[string](obj, "id")
+		Expect(ok).To(BeTrue())
+		Expect(val).To(Equal("abc"))
 	})
 
 	It("Resolves a nested field path", func() {
@@ -32,28 +34,84 @@ var _ = Describe("ResolveFieldPath", func() {
 				Version: "4.17.0",
 			}.Build(),
 		}.Build()
-		Expect(ResolveFieldPath(obj, "spec.version")).To(Equal("4.17.0"))
+		val, ok := ResolveFieldPath[string](obj, "spec.version")
+		Expect(ok).To(BeTrue())
+		Expect(val).To(Equal("4.17.0"))
 	})
 
 	It("Resolves metadata.name", func() {
 		obj := publicv1.ClusterVersion_builder{
 			Metadata: publicv1.Metadata_builder{Name: "4-17-0"}.Build(),
 		}.Build()
-		Expect(ResolveFieldPath(obj, "metadata.name")).To(Equal("4-17-0"))
+		val, ok := ResolveFieldPath[string](obj, "metadata.name")
+		Expect(ok).To(BeTrue())
+		Expect(val).To(Equal("4-17-0"))
 	})
 
-	It("Returns empty string for a nonexistent field", func() {
+	It("Returns false for a nonexistent field", func() {
 		obj := publicv1.Cluster_builder{Id: "abc"}.Build()
-		Expect(ResolveFieldPath(obj, "nonexistent")).To(BeEmpty())
+		val, ok := ResolveFieldPath[string](obj, "nonexistent")
+		Expect(ok).To(BeFalse())
+		Expect(val).To(BeEmpty())
 	})
 
-	It("Returns empty string for a nonexistent nested field", func() {
+	It("Returns false for a nonexistent nested field", func() {
 		obj := publicv1.Cluster_builder{Id: "abc"}.Build()
-		Expect(ResolveFieldPath(obj, "spec.nonexistent")).To(BeEmpty())
+		val, ok := ResolveFieldPath[string](obj, "spec.nonexistent")
+		Expect(ok).To(BeFalse())
+		Expect(val).To(BeEmpty())
 	})
 
-	It("Returns empty string when an intermediate segment is not a message", func() {
+	It("Returns false when an intermediate segment is not a message", func() {
 		obj := publicv1.Cluster_builder{Id: "abc"}.Build()
-		Expect(ResolveFieldPath(obj, "id.nested")).To(BeEmpty())
+		val, ok := ResolveFieldPath[string](obj, "id.nested")
+		Expect(ok).To(BeFalse())
+		Expect(val).To(BeEmpty())
+	})
+
+	It("Returns false when the type does not match", func() {
+		obj := publicv1.Cluster_builder{Id: "abc"}.Build()
+		val, ok := ResolveFieldPath[int64](obj, "id")
+		Expect(ok).To(BeFalse())
+		Expect(val).To(BeZero())
+	})
+
+	It("Returns false when an intermediate segment is a repeated field", func() {
+		obj := publicv1.ClustersListResponse_builder{
+			Items: []*publicv1.Cluster{
+				publicv1.Cluster_builder{Id: "c1"}.Build(),
+			},
+		}.Build()
+		val, ok := ResolveFieldPath[string](obj, "items.id")
+		Expect(ok).To(BeFalse())
+		Expect(val).To(BeEmpty())
+	})
+
+	It("Returns false when an intermediate segment is a map field", func() {
+		obj := publicv1.Cluster_builder{
+			Metadata: publicv1.Metadata_builder{
+				Labels: map[string]string{"env": "prod"},
+			}.Build(),
+		}.Build()
+		val, ok := ResolveFieldPath[string](obj, "metadata.labels.env")
+		Expect(ok).To(BeFalse())
+		Expect(val).To(BeEmpty())
+	})
+})
+
+var _ = Describe("ResolveFieldPathOr", func() {
+	It("Returns the field value when the path exists", func() {
+		obj := publicv1.Cluster_builder{Id: "abc"}.Build()
+		Expect(ResolveFieldPathOr(obj, "id", "fallback")).To(Equal("abc"))
+	})
+
+	It("Returns the fallback when the path does not exist", func() {
+		obj := publicv1.Cluster_builder{Id: "abc"}.Build()
+		Expect(ResolveFieldPathOr(obj, "nonexistent", "fallback")).To(Equal("fallback"))
+	})
+
+	It("Returns the fallback when the type does not match", func() {
+		obj := publicv1.Cluster_builder{Id: "abc"}.Build()
+		Expect(ResolveFieldPathOr(obj, "id", int64(42))).To(Equal(int64(42)))
 	})
 })

@@ -21,24 +21,38 @@ import (
 )
 
 // ResolveFieldPath navigates a protobuf message following a dot-separated field path (e.g.
-// "spec.version") and returns the string representation of the final field. Returns an empty
-// string if any segment doesn't exist or if an intermediate segment isn't a message.
-func ResolveFieldPath(msg proto.Message, path string) string {
+// "spec.version") and returns the value of the terminal field converted to T via
+// protoreflect.Value.Interface(). Returns (zero, false) when any segment in the path does not
+// exist or an intermediate segment is not a message, and (value, false) when the terminal field
+// exists but is not assignable to T.
+func ResolveFieldPath[T any](msg proto.Message, path string) (T, bool) {
+	var zero T
 	segments := strings.Split(path, ".")
 	current := msg.ProtoReflect()
 	for i, segment := range segments {
 		fieldDesc := current.Descriptor().Fields().ByName(protoreflect.Name(segment))
 		if fieldDesc == nil {
-			return ""
+			return zero, false
 		}
 		if i < len(segments)-1 {
-			if fieldDesc.Kind() != protoreflect.MessageKind {
-				return ""
+			if fieldDesc.Kind() != protoreflect.MessageKind || fieldDesc.IsList() || fieldDesc.IsMap() {
+				return zero, false
 			}
 			current = current.Get(fieldDesc).Message()
 			continue
 		}
-		return current.Get(fieldDesc).String()
+		result, ok := current.Get(fieldDesc).Interface().(T)
+		return result, ok
 	}
-	return ""
+	return zero, false
+}
+
+// ResolveFieldPathOr is like ResolveFieldPath but returns fallback when the path does not exist
+// or the terminal field is not assignable to T.
+func ResolveFieldPathOr[T any](msg proto.Message, path string, fallback T) T {
+	val, ok := ResolveFieldPath[T](msg, path)
+	if !ok {
+		return fallback
+	}
+	return val
 }

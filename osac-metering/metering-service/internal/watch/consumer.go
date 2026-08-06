@@ -35,7 +35,7 @@ const (
 	defaultInitialDelay   = 1 * time.Second
 	defaultMaxDelay       = 30 * time.Second
 	defaultHandlerRetries = 3
-	computeInstanceFilter = "has(event.compute_instance)"
+	meteringFilter = "has(event.compute_instance) || has(event.cluster)"
 )
 
 // Consumer connects to the fulfillment-service gRPC Watch stream, maps
@@ -94,7 +94,7 @@ func (c *Consumer) Run(ctx context.Context) error {
 }
 
 func (c *Consumer) consumeStream(ctx context.Context) (int, error) {
-	filter := computeInstanceFilter
+	filter := meteringFilter
 	stream, err := c.client.Watch(ctx, &privatev1.EventsWatchRequest{
 		Filter: &filter,
 	})
@@ -153,13 +153,25 @@ func (c *Consumer) handleEvent(ctx context.Context, event *privatev1.Event) erro
 		if errors.Is(err, events.ErrTransientState) {
 			return c.handleTransientState(ctx, mapper, existing, version, transitionTime)
 		}
+		if errors.Is(err, events.ErrSkipNonBillingTransition) {
+			if existing != nil && !events.DimensionsEqual(existing.BillingDimensions, dims) {
+				return c.handleScalingEvent(ctx, event, mapper, existing, transitionTime, version, currentState, isBillable, dims)
+			}
+			c.logger.V(1).Info("non-billing state transition, updating projection only",
+				"resource_id", resourceID, "state", currentState)
+			projState := c.buildProjectionState(mapper, existing, transitionTime, version, currentState, isBillable, dims)
+			if upsertErr := c.store.Upsert(ctx, projState); upsertErr != nil && !errors.Is(upsertErr, projection.ErrStaleVersion) {
+				return fmt.Errorf("upserting projection for %s: %w", resourceID, upsertErr)
+			}
+			return nil
+		}
 		return err
 	}
 
 	projState := c.buildProjectionState(mapper, existing, transitionTime, version, currentState, isBillable, dims)
 
 	if event.GetType() == privatev1.EventType_EVENT_TYPE_OBJECT_DELETED {
-		if err := c.publishWithRetry(ctx, ce); err != nil {
+		if err := c.publishLifecycleEvents(ctx, ce, mapper, event.GetId()); err != nil {
 			return err
 		}
 		if existing != nil {
@@ -180,7 +192,7 @@ func (c *Consumer) handleEvent(ctx context.Context, event *privatev1.Event) erro
 		return fmt.Errorf("upserting projection for %s: %w", resourceID, err)
 	}
 
-	if err := c.publishWithRetry(ctx, ce); err != nil {
+	if err := c.publishLifecycleEvents(ctx, ce, mapper, event.GetId()); err != nil {
 		return err
 	}
 
@@ -221,6 +233,125 @@ func (c *Consumer) handleTransientState(
 	return nil
 }
 
+func (c *Consumer) publishLifecycleEvents(ctx context.Context, baseCE *cloudevents.Event, mapper events.ResourceMapper, eventID string) error {
+	if mapper.ResourceType() != "cluster_order" ||
+		baseCE.Type() == "osac.resource.created.v1" ||
+		baseCE.Type() == "osac.resource.deleted.v1" {
+		return c.publishWithRetry(ctx, baseCE)
+	}
+
+	components := events.DecomposeClusterComponents(mapper.BillingDimensionsMap())
+	if len(components) == 0 {
+		return c.publishWithRetry(ctx, baseCE)
+	}
+
+	for _, comp := range components {
+		compCE, ceErr := c.buildComponentEvent(baseCE, eventID, comp)
+		if ceErr != nil {
+			return ceErr
+		}
+		if err := c.publishWithRetry(ctx, &compCE); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Consumer) handleScalingEvent(ctx context.Context, event *privatev1.Event, mapper events.ResourceMapper, existing *projection.ResourceState, transitionTime time.Time, version int32, currentState string, isBillable bool, dims map[string]any) error {
+	resourceID := mapper.ResourceID()
+	changed := events.ChangedComponents(existing.BillingDimensions, dims)
+
+	projState := c.buildProjectionState(mapper, existing, transitionTime, version, currentState, isBillable, dims)
+	if err := c.store.Upsert(ctx, projState); err != nil {
+		if errors.Is(err, projection.ErrStaleVersion) {
+			c.logger.Info("stale version during scaling, skipping", "resource_id", resourceID)
+			return nil
+		}
+		return fmt.Errorf("upserting projection for scaling %s: %w", resourceID, err)
+	}
+
+	if len(changed) == 0 {
+		c.logger.V(1).Info("non-component dimension change, projection updated",
+			"resource_id", resourceID)
+		return nil
+	}
+
+	stateCtx := c.buildStateContext(existing, isBillable, transitionTime, dims)
+	for _, comp := range changed {
+		ce, ceErr := c.buildScalingEvent(event.GetId(), mapper, comp, stateCtx, transitionTime)
+		if ceErr != nil {
+			return ceErr
+		}
+		if err := c.publishWithRetry(ctx, &ce); err != nil {
+			return err
+		}
+	}
+
+	c.logger.Info("published scaling events",
+		"resource_id", resourceID, "changed_components", len(changed))
+	return nil
+}
+
+func (c *Consumer) buildComponentEvent(baseCE *cloudevents.Event, eventID string, comp events.ComponentRecord) (cloudevents.Event, error) {
+	ce := cloudevents.NewEvent()
+	ce.SetID(events.ComponentEventID(eventID, comp))
+	ce.SetSource(baseCE.Source())
+	ce.SetType(baseCE.Type())
+	ce.SetTime(baseCE.Time())
+
+	for k, v := range baseCE.Extensions() {
+		ce.SetExtension(k, v)
+	}
+
+	var baseData map[string]any
+	if err := baseCE.DataAs(&baseData); err != nil {
+		return ce, fmt.Errorf("reading base event data: %w", err)
+	}
+
+	baseData["billing_dimensions"] = comp.FlatBillingDimensions()
+	if err := ce.SetData(cloudevents.ApplicationJSON, baseData); err != nil {
+		return ce, fmt.Errorf("setting component event data: %w", err)
+	}
+	return ce, nil
+}
+
+func (c *Consumer) buildScalingEvent(eventID string, mapper events.ResourceMapper, comp events.ComponentRecord, stateCtx *events.StateContext, transitionTime time.Time) (cloudevents.Event, error) {
+	ce := cloudevents.NewEvent()
+	ce.SetID(events.ComponentEventID(eventID, comp))
+	ce.SetSource("osac-metering")
+	ce.SetType("osac.resource.updated.v1")
+	ce.SetTime(transitionTime)
+
+	projectID := ""
+	if p := mapper.ProjectID(); p != nil {
+		projectID = *p
+	}
+	events.SetOSACExtensions(&ce, mapper.ResourceID(), mapper.ResourceType(), mapper.TenantID(), projectID)
+
+	var prevStatePtr *string
+	if stateCtx.PreviousState != "" {
+		prevStatePtr = &stateCtx.PreviousState
+	}
+
+	data := map[string]any{
+		"resource_id":        mapper.ResourceID(),
+		"resource_type":      mapper.ResourceType(),
+		"tenant_id":          mapper.TenantID(),
+		"project_id":         mapper.ProjectID(),
+		"catalog_item_id":    mapper.CatalogItemID(),
+		"template_id":        mapper.TemplateID(),
+		"previous_state":     prevStatePtr,
+		"current_state":      mapper.CurrentState(),
+		"transition_time":    transitionTime.Format(time.RFC3339Nano),
+		"duration_seconds":   stateCtx.DurationSeconds,
+		"billing_dimensions": comp.FlatBillingDimensions(),
+		"schema_version":     "v1",
+	}
+	if err := ce.SetData(cloudevents.ApplicationJSON, data); err != nil {
+		return ce, fmt.Errorf("setting scaling event data: %w", err)
+	}
+	return ce, nil
+}
 func (c *Consumer) shouldSkipUpdate(event *privatev1.Event, existing *projection.ResourceState, currentState string, dims map[string]any, transitionTime time.Time, resourceID string) bool {
 	if event.GetType() != privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED || existing == nil {
 		return false

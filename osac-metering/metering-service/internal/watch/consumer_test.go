@@ -372,7 +372,7 @@ var _ = Describe("Consumer", func() {
 			Expect(pub.published[0].ID()).To(Equal("good-evt"))
 		})
 
-		It("sets compute_instance filter on watch request", func() {
+		It("sets metering filter on watch request", func() {
 			blockingStream := &mockWatchStream{ctx: ctx}
 			client.results = []mockStreamResult{{stream: blockingStream}}
 
@@ -394,7 +394,7 @@ var _ = Describe("Consumer", func() {
 			client.mu.Lock()
 			defer client.mu.Unlock()
 			Expect(client.calls).ToNot(BeEmpty())
-			Expect(client.calls[0].GetFilter()).To(Equal("has(event.compute_instance)"))
+			Expect(client.calls[0].GetFilter()).To(Equal("has(event.compute_instance) || has(event.cluster)"))
 		})
 
 		It("fails fast on unknown payload type and reconnects", func() {

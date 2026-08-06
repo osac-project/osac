@@ -53,14 +53,18 @@ func (m *clusterMapper) ProjectID() *string {
 
 func (m *clusterMapper) CatalogItemID() *string {
 	if s := m.cl.GetSpec(); s != nil {
-		return NilIfEmpty(s.GetCatalogItem())
+		if ci := s.GetCatalogItem(); ci != nil {
+			return NilIfEmpty(ci.GetId())
+		}
 	}
 	return nil
 }
 
 func (m *clusterMapper) TemplateID() *string {
 	if s := m.cl.GetSpec(); s != nil {
-		return NilIfEmpty(s.GetTemplate())
+		if t := s.GetTemplate(); t != nil {
+			return NilIfEmpty(t.GetId())
+		}
 	}
 	return nil
 }
@@ -167,9 +171,11 @@ func ClusterBillingDimensions(cl *privatev1.Cluster) map[string]any {
 	if spec == nil {
 		return dims
 	}
-	dims["cluster_template"] = spec.GetTemplate()
-	if ri := spec.GetReleaseImage(); ri != "" {
-		dims["release_image"] = ri
+	if t := spec.GetTemplate(); t != nil {
+		dims["cluster_template"] = t.GetName()
+	}
+	if vn := spec.GetVersionName(); vn != "" {
+		dims["version_name"] = vn
 	}
 
 	// Use []any (not []map[string]any) so DecomposeClusterComponents' type

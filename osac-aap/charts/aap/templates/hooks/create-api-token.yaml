@@ -54,13 +54,13 @@ spec:
             AAP_PASSWORD=$(cat /var/run/secrets/aap-admin/password)
             # netrc avoids leaking the password via curl -u's process args.
             trap 'rm -f /tmp/.netrc' EXIT
-            ( umask 077; printf 'machine %s\nlogin admin\npassword %s\n' "{{ include "osac-aap.gatewayHostname" . }}" "${AAP_PASSWORD}" > /tmp/.netrc )
+            ( umask 077; printf 'machine %s\nlogin admin\npassword %s\n' "${AAP_GATEWAY_HOSTNAME}" "${AAP_PASSWORD}" > /tmp/.netrc )
             echo "Creating AAP API token..."
             TOKEN=$(curl -s --connect-timeout 5 --max-time 30 -X POST \
               --netrc-file /tmp/.netrc \
               -H "Content-Type: application/json" \
               -d '{"description": "osac-operator", "scope": "write"}' \
-              "http://{{ include "osac-aap.gatewayHostname" . }}/api/gateway/v1/tokens/" \
+              "http://${AAP_GATEWAY_HOSTNAME}/api/gateway/v1/tokens/" \
               | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
             [[ -n "${TOKEN}" ]] || { echo "ERROR: Token was empty"; exit 1; }
             echo "Storing token in secret osac-aap-api-token..."
@@ -88,6 +88,8 @@ spec:
         env:
         - name: HOME
           value: /tmp
+        - name: AAP_GATEWAY_HOSTNAME
+          value: {{ include "osac-aap.gatewayHostname" . | quote }}
         volumeMounts:
         - name: aap-admin-password
           mountPath: /var/run/secrets/aap-admin

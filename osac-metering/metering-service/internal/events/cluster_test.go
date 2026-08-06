@@ -58,7 +58,7 @@ var _ = Describe("CaaS Cluster Mapper", func() {
 
 				if expectSkip {
 					Expect(err).To(HaveOccurred())
-					Expect(errors.Is(err, events.ErrSkipNonBillingTransition)).To(BeTrue())
+					Expect(errors.Is(err, events.ErrSkipTransition)).To(BeTrue())
 				} else {
 					Expect(err).NotTo(HaveOccurred())
 					Expect(ce.Type()).To(Equal(expectedType))
@@ -69,6 +69,16 @@ var _ = Describe("CaaS Cluster Mapper", func() {
 				privatev1.ClusterState_CLUSTER_STATE_PROGRESSING, "", "osac.resource.started.v1", false),
 			Entry("initial READY (prev=empty) -> started.v1",
 				privatev1.ClusterState_CLUSTER_STATE_READY, "", "osac.resource.started.v1", false),
+
+			// --- Skip: first observed in non-billable state ---
+			Entry("initial FAILED (prev=empty) -> skip",
+				privatev1.ClusterState_CLUSTER_STATE_FAILED, "", "", true),
+			Entry("initial DELETING (prev=empty) -> skip",
+				privatev1.ClusterState_CLUSTER_STATE_DELETING, "", "", true),
+			Entry("initial DELETE_FAILED (prev=empty) -> skip",
+				privatev1.ClusterState_CLUSTER_STATE_DELETE_FAILED, "", "", true),
+			Entry("initial UNSPECIFIED (prev=empty) -> skip",
+				privatev1.ClusterState_CLUSTER_STATE_UNSPECIFIED, "", "", true),
 
 			// --- Resumed: non-billable to billable ---
 			Entry("FAILED -> PROGRESSING -> resumed.v1",
@@ -165,7 +175,7 @@ var _ = Describe("CaaS Cluster Mapper", func() {
 			_, err := mapEvent(event, &events.StateContext{PreviousState: "READY"})
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("unexpected state transition"))
-			Expect(errors.Is(err, events.ErrSkipNonBillingTransition)).To(BeFalse())
+			Expect(errors.Is(err, events.ErrSkipTransition)).To(BeFalse())
 		})
 
 		It("maps OBJECT_CREATED to created.v1", func() {
@@ -641,17 +651,17 @@ var _ = Describe("ChangedComponents", func() {
 		changed := events.ChangedComponents(oldDims, newDims)
 		Expect(changed).To(HaveLen(2))
 
-		nodeSets := map[string]bool{}
+		nodeSetToHostType := map[string]string{}
 		for _, c := range changed {
 			Expect(c.NodeCount).To(Equal(int32(0)))
 			Expect(c.NodeSet).NotTo(BeEmpty())
 			id := events.ComponentEventID("evt-1", c)
 			Expect(id).NotTo(Equal("evt-1/"))
-			nodeSets[c.NodeSet] = true
+			nodeSetToHostType[c.NodeSet] = c.HostType
 		}
-		Expect(nodeSets).To(HaveLen(2))
-		Expect(nodeSets).To(HaveKey("pool-a"))
-		Expect(nodeSets).To(HaveKey("pool-b"))
+		Expect(nodeSetToHostType).To(HaveLen(2))
+		Expect(nodeSetToHostType["pool-a"]).To(Equal("gpu-h100"))
+		Expect(nodeSetToHostType["pool-b"]).To(Equal("cpu-only"))
 	})
 
 	It("handles int32 vs float64 from JSONB round-trip", func() {
@@ -810,5 +820,68 @@ var _ = Describe("DimensionsEqual with nested CaaS components", func() {
 			},
 		}
 		Expect(events.DimensionsEqual(a, b)).To(BeFalse())
+	})
+
+	It("treats different component array order as unequal", func() {
+		a := map[string]any{
+			"cluster_template": "tmpl",
+			"components": []any{
+				map[string]any{"node_set": "_control_plane", "node_count": int32(1)},
+				map[string]any{"node_set": "gpu-workers", "node_count": int32(2)},
+			},
+		}
+		b := map[string]any{
+			"cluster_template": "tmpl",
+			"components": []any{
+				map[string]any{"node_set": "gpu-workers", "node_count": int32(2)},
+				map[string]any{"node_set": "_control_plane", "node_count": int32(1)},
+			},
+		}
+		Expect(events.DimensionsEqual(a, b)).To(BeFalse(),
+			"component array order matters — ClusterBillingDimensions sorts keys for deterministic ordering")
+	})
+})
+
+var _ = Describe("CaaS transition table completeness", func() {
+	stateProtoMap := map[string]privatev1.ClusterState{
+		"PROGRESSING":   privatev1.ClusterState_CLUSTER_STATE_PROGRESSING,
+		"READY":         privatev1.ClusterState_CLUSTER_STATE_READY,
+		"FAILED":        privatev1.ClusterState_CLUSTER_STATE_FAILED,
+		"DELETING":      privatev1.ClusterState_CLUSTER_STATE_DELETING,
+		"DELETE_FAILED": privatev1.ClusterState_CLUSTER_STATE_DELETE_FAILED,
+		"UNSPECIFIED":   privatev1.ClusterState_CLUSTER_STATE_UNSPECIFIED,
+	}
+
+	It("covers every (from, to) state pair from all proto states plus empty initial", func() {
+		fromStates := []string{"", "PROGRESSING", "READY", "FAILED", "DELETING", "DELETE_FAILED", "UNSPECIFIED"}
+		toStates := []string{"PROGRESSING", "READY", "FAILED", "DELETING", "DELETE_FAILED", "UNSPECIFIED"}
+
+		for _, from := range fromStates {
+			for _, to := range toStates {
+				cl := &privatev1.Cluster{
+					Id:       "cl-completeness",
+					Metadata: &privatev1.Metadata{Tenant: "t", CreationTimestamp: timestamppb.Now()},
+					Spec:     &privatev1.ClusterSpec{},
+					Status: &privatev1.ClusterStatus{
+						State:               stateProtoMap[to],
+						StateTransitionTime: timestamppb.Now(),
+					},
+				}
+
+				event := &privatev1.Event{
+					Id:      "evt-completeness",
+					Type:    privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+					Payload: &privatev1.Event_Cluster{Cluster: cl},
+				}
+
+				stateCtx := &events.StateContext{PreviousState: from}
+				_, err := mapEvent(event, stateCtx)
+
+				Expect(err == nil ||
+					errors.Is(err, events.ErrSkipTransition) ||
+					errors.Is(err, events.ErrTransientState)).To(BeTrue(),
+					"transition %s -> %s returned unexpected error: %v", from, to, err)
+			}
+		}
 	})
 })

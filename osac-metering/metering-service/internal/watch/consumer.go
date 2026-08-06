@@ -153,7 +153,7 @@ func (c *Consumer) handleEvent(ctx context.Context, event *privatev1.Event) erro
 		if errors.Is(err, events.ErrTransientState) {
 			return c.handleTransientState(ctx, mapper, existing, version, transitionTime)
 		}
-		if errors.Is(err, events.ErrSkipNonBillingTransition) {
+		if errors.Is(err, events.ErrSkipTransition) {
 			if existing != nil && !events.DimensionsEqual(existing.BillingDimensions, dims) {
 				return c.handleScalingEvent(ctx, event, mapper, existing, transitionTime, version, currentState, isBillable, dims)
 			}
@@ -182,20 +182,29 @@ func (c *Consumer) handleEvent(ctx context.Context, event *privatev1.Event) erro
 		return nil
 	}
 
-	err = c.store.Upsert(ctx, projState)
-	if err != nil {
+	return c.publishAndUpsert(ctx, func() error {
+		return c.publishLifecycleEvents(ctx, ce, mapper, event.GetId())
+	}, projState, resourceID)
+}
+
+// publishAndUpsert publishes events first, then commits projection state.
+// Publish-first ensures no data loss: if publish fails, projection is not
+// committed, and replay retries the full publish. If upsert fails after
+// successful publish, replay produces duplicate events (handled by adapter
+// dedup via deterministic CloudEvent IDs).
+func (c *Consumer) publishAndUpsert(ctx context.Context, publish func() error, state projection.ResourceState, resourceID string) error {
+	if err := publish(); err != nil {
+		return err
+	}
+
+	if err := c.store.Upsert(ctx, state); err != nil {
 		if errors.Is(err, projection.ErrStaleVersion) {
 			c.logger.Info("stale version, skipping projection update",
-				"resource_id", resourceID, "version", version)
+				"resource_id", resourceID)
 			return nil
 		}
 		return fmt.Errorf("upserting projection for %s: %w", resourceID, err)
 	}
-
-	if err := c.publishLifecycleEvents(ctx, ce, mapper, event.GetId()); err != nil {
-		return err
-	}
-
 	return nil
 }
 
@@ -260,36 +269,29 @@ func (c *Consumer) publishLifecycleEvents(ctx context.Context, baseCE *cloudeven
 func (c *Consumer) handleScalingEvent(ctx context.Context, event *privatev1.Event, mapper events.ResourceMapper, existing *projection.ResourceState, transitionTime time.Time, version int32, currentState string, isBillable bool, dims map[string]any) error {
 	resourceID := mapper.ResourceID()
 	changed := events.ChangedComponents(existing.BillingDimensions, dims)
-
 	projState := c.buildProjectionState(mapper, existing, transitionTime, version, currentState, isBillable, dims)
-	if err := c.store.Upsert(ctx, projState); err != nil {
-		if errors.Is(err, projection.ErrStaleVersion) {
-			c.logger.Info("stale version during scaling, skipping", "resource_id", resourceID)
-			return nil
-		}
-		return fmt.Errorf("upserting projection for scaling %s: %w", resourceID, err)
-	}
 
 	if len(changed) == 0 {
 		c.logger.V(1).Info("non-component dimension change, projection updated",
 			"resource_id", resourceID)
-		return nil
+		return c.publishAndUpsert(ctx, func() error { return nil }, projState, resourceID)
 	}
 
 	stateCtx := c.buildStateContext(existing, isBillable, transitionTime, dims)
-	for _, comp := range changed {
-		ce, ceErr := c.buildScalingEvent(event.GetId(), mapper, comp, stateCtx, transitionTime)
-		if ceErr != nil {
-			return ceErr
+	return c.publishAndUpsert(ctx, func() error {
+		for _, comp := range changed {
+			ce, ceErr := c.buildScalingEvent(event.GetId(), mapper, comp, stateCtx, transitionTime)
+			if ceErr != nil {
+				return ceErr
+			}
+			if err := c.publishWithRetry(ctx, &ce); err != nil {
+				return err
+			}
 		}
-		if err := c.publishWithRetry(ctx, &ce); err != nil {
-			return err
-		}
-	}
-
-	c.logger.Info("published scaling events",
-		"resource_id", resourceID, "changed_components", len(changed))
-	return nil
+		c.logger.Info("published scaling events",
+			"resource_id", resourceID, "changed_components", len(changed))
+		return nil
+	}, projState, resourceID)
 }
 
 func (c *Consumer) buildComponentEvent(baseCE *cloudevents.Event, eventID string, comp events.ComponentRecord) (cloudevents.Event, error) {

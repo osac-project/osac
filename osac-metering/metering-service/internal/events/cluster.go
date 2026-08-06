@@ -92,6 +92,12 @@ var clusterTransitions = TransitionTable{
 	{"", "PROGRESSING"}: {EventType: "osac.resource.started.v1"},
 	{"", "READY"}:       {EventType: "osac.resource.started.v1"},
 
+	// Skip: first observed in non-billable state (bootstrap, reconnect after failure)
+	{"", "FAILED"}:        {Skip: true},
+	{"", "DELETING"}:      {Skip: true},
+	{"", "DELETE_FAILED"}: {Skip: true},
+	{"", "UNSPECIFIED"}:   {Skip: true},
+
 	// Resumed: non-billable to billable
 	{"FAILED", "PROGRESSING"}:        {EventType: "osac.resource.resumed.v1"},
 	{"FAILED", "READY"}:              {EventType: "osac.resource.resumed.v1"},

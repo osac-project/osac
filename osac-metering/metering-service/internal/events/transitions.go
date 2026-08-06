@@ -15,8 +15,8 @@ import (
 )
 
 var (
-	ErrTransientState           = errors.New("transient state: update projection only, no CloudEvent")
-	ErrSkipNonBillingTransition = errors.New("non-billing transition")
+	ErrTransientState = errors.New("transient state: update projection only, no CloudEvent")
+	ErrSkipTransition = errors.New("no billing boundary: skip event, check for scaling")
 )
 
 // TransitionKey identifies a state transition by (previous, current) state.
@@ -52,7 +52,7 @@ func resolveTransition(table TransitionTable, from, to string) (string, error) {
 
 func applyResult(r TransitionResult) (string, error) {
 	if r.Skip {
-		return "", ErrSkipNonBillingTransition
+		return "", ErrSkipTransition
 	}
 	if r.Transient {
 		return "", ErrTransientState

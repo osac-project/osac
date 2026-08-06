@@ -607,7 +607,7 @@ var _ = Describe("Consumer", func() {
 			Expect(store.states).ToNot(HaveKey("vm-del"))
 		})
 
-		It("skips projection update on stale version and does not publish", func() {
+		It("publishes event but skips projection update on stale version", func() {
 			store := newMockStore()
 			now := time.Now().UTC().Truncate(time.Microsecond)
 			store.states["vm-stale"] = projection.ResourceState{
@@ -634,19 +634,15 @@ var _ = Describe("Consumer", func() {
 			}
 			client.results = []mockStreamResult{{stream: stream}}
 
-			pub := &mockPublisher{}
+			pub := &mockPublisher{published: make([]cloudevents.Event, 0, 1), cancelFunc: cancel}
 			consumer := newConsumerWithStore(pub, store)
 
-			done := make(chan error, 1)
-			go func() { done <- consumer.Run(ctx) }()
-
-			time.Sleep(50 * time.Millisecond)
-			cancel()
-			Eventually(done, time.Second).Should(Receive(BeNil()))
+			err := consumer.Run(ctx)
+			Expect(err).ToNot(HaveOccurred())
 
 			pub.mu.Lock()
 			defer pub.mu.Unlock()
-			Expect(pub.published).To(BeEmpty())
+			Expect(pub.published).To(HaveLen(1), "event published even when projection is stale")
 
 			store.mu.Lock()
 			defer store.mu.Unlock()

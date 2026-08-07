@@ -452,13 +452,13 @@ var _ = Describe("Private cluster templates server", func() {
 				Expect(err).ToNot(HaveOccurred())
 			})
 
-			It("Rejects create with non-existent spec_defaults.version_name", func() {
+			It("Rejects create with non-existent spec_defaults.version", func() {
 				_, err := validatedServer.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 					Object: privatev1.ClusterTemplate_builder{
 						Title:       "Bad version template",
 						Description: "Template referencing a non-existent version.",
 						SpecDefaults: privatev1.ClusterTemplateSpecDefaults_builder{
-							VersionName: new("does-not-exist"),
+							Version: &privatev1.ClusterVersionReference{Name: "does-not-exist"},
 						}.Build(),
 					}.Build(),
 				}.Build())
@@ -469,7 +469,7 @@ var _ = Describe("Private cluster templates server", func() {
 				Expect(status.Message()).To(ContainSubstring("cluster version 'does-not-exist' not found"))
 			})
 
-			It("Rejects update with disabled spec_defaults.version_name", func() {
+			It("Rejects update with disabled spec_defaults.version", func() {
 				// Seed a disabled ClusterVersion:
 				cvDao, err := dao.NewGenericDAO[*privatev1.ClusterVersion]().
 					SetLogger(logger).
@@ -502,14 +502,14 @@ var _ = Describe("Private cluster templates server", func() {
 				Expect(err).ToNot(HaveOccurred())
 				object := createResponse.GetObject()
 
-				// Update with a disabled version_name in spec_defaults:
+				// Update with a disabled version in spec_defaults:
 				_, err = validatedServer.Update(ctx, privatev1.ClusterTemplatesUpdateRequest_builder{
 					Object: privatev1.ClusterTemplate_builder{
 						Id:          object.GetId(),
 						Title:       object.GetTitle(),
 						Description: object.GetDescription(),
 						SpecDefaults: privatev1.ClusterTemplateSpecDefaults_builder{
-							VersionName: new("4-18-0-disabled"),
+							Version: &privatev1.ClusterVersionReference{Name: "4-18-0-disabled"},
 						}.Build(),
 					}.Build(),
 					UpdateMask: &fieldmaskpb.FieldMask{

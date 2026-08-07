@@ -328,7 +328,7 @@ func (c *runnerContext) applyOptionalSpecFields(
 		specBuilder.SshPublicKey = &sshPublicKey
 	}
 	if c.args.version != "" {
-		specBuilder.VersionName = &c.args.version
+		specBuilder.Version = &publicv1.ClusterVersionReference{Name: c.args.version}
 	}
 	if c.args.podCIDR != "" || c.args.serviceCIDR != "" {
 		networkBuilder := publicv1.ClusterNetwork_builder{}

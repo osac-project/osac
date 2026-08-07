@@ -13,6 +13,8 @@ language governing permissions and limitations under the License.
 
 package securitygroup
 
+//go:generate mockgen -source=../../api/osac/private/v1/security_groups_service_grpc.pb.go -destination=security_groups_client_mock.go -package=securitygroup SecurityGroupsClient
+
 import (
 	"context"
 	"errors"
@@ -204,7 +206,7 @@ func (t *task) update(ctx context.Context) error {
 		}
 		err = t.hubClient.Create(ctx, object)
 		if err != nil {
-			return err
+			return controllers.HandleK8sWriteError(ctx, t.r.logger, err, t.setFailed)
 		}
 		t.r.logger.DebugContext(
 			ctx,
@@ -217,7 +219,7 @@ func (t *task) update(ctx context.Context) error {
 		update.Spec = spec
 		err = t.hubClient.Patch(ctx, update, clnt.MergeFrom(object))
 		if err != nil {
-			return err
+			return controllers.HandleK8sWriteError(ctx, t.r.logger, err, t.setFailed)
 		}
 		t.r.logger.DebugContext(
 			ctx,
@@ -391,6 +393,14 @@ func (t *task) removeFinalizer() {
 		})
 		t.securityGroup.GetMetadata().SetFinalizers(list)
 	}
+}
+
+func (t *task) setFailed(err error) {
+	if !t.securityGroup.HasStatus() {
+		t.securityGroup.SetStatus(&privatev1.SecurityGroupStatus{})
+	}
+	t.securityGroup.GetStatus().SetState(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_FAILED)
+	t.securityGroup.GetStatus().SetMessage(err.Error())
 }
 
 // buildSpec constructs the spec for the Kubernetes SecurityGroup object based on the

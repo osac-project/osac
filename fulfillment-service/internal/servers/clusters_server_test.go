@@ -1700,7 +1700,7 @@ var _ = Describe("Clusters server", func() {
 						Template:     publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 						PullSecret:   &pullSecret,
 						SshPublicKey: &sshKey,
-						VersionName:  &versionName,
+						Version:      &publicv1.ClusterVersionReference{Name: versionName},
 						Network: publicv1.ClusterNetwork_builder{
 							PodCidr:     &podCIDR,
 							ServiceCidr: &serviceCIDR,
@@ -1720,7 +1720,7 @@ var _ = Describe("Clusters server", func() {
 			Expect(spec.GetPullSecret()).To(Equal("***"))
 			// other fields preserved
 			Expect(spec.GetSshPublicKey()).To(Equal(sshKey))
-			Expect(spec.GetVersionName()).To(Equal(versionName))
+			Expect(spec.GetVersion().GetName()).To(Equal(versionName))
 			Expect(spec.GetNetwork().GetPodCidr()).To(Equal(podCIDR))
 			Expect(spec.GetNetwork().GetServiceCidr()).To(Equal(serviceCIDR))
 		})

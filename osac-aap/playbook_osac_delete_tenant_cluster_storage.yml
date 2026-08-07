@@ -4,7 +4,6 @@
   gather_facts: false
 
   vars:
-    tenant_name: "{{ osac_job_vars.resource.metadata.annotations['osac.openshift.io/tenant'] }}"
     # This template is triggered from two different call sites in storage_controller.go,
     # sharing the same AAP job template but passing different resource kinds as payload:
     #   - handleClusterStorageDeprovisioning (hub storage) sends a Tenant object, whose own
@@ -14,13 +13,18 @@
     #     metadata.namespace ("osac-devel") is hub-side bookkeeping with no relation to the
     #     guest cluster. For that case we target the fixed OSAC system namespace on the guest
     #     cluster instead (mirrors the create playbook's routing).
+    tenant_name: >-
+      {%- if osac_job_vars.resource.kind == 'ClusterOrder' -%}
+      {{ osac_job_vars.resource.metadata.annotations['osac.openshift.io/tenant'] }}
+      {%- elif osac_job_vars.resource.kind == 'Tenant' -%}
+      {{ osac_job_vars.resource.metadata.name }}
+      {%- endif -%}
     tenant_namespace: >-
       {%- if osac_job_vars.resource.kind == 'ClusterOrder' -%}
       openshift-osac-storage
-      {%- else -%}
+      {%- elif osac_job_vars.resource.kind == 'Tenant' -%}
       {{ osac_job_vars.resource.metadata.namespace }}
       {%- endif -%}
-    _storage_tiers_raw: "{{ lookup('env', 'STORAGE_TIERS') }}"
 
   pre_tasks:
     - name: Show resource metadata
@@ -37,25 +41,18 @@
         osac_job_vars.resource.metadata.namespace is not defined or
         osac_job_vars.resource.metadata.namespace | length == 0
 
-    - name: Parse STORAGE_TIERS JSON
-      when: _storage_tiers_raw | length > 0
-      block:
-        - name: Parse tier list from env var
-          ansible.builtin.set_fact:
-            _storage_tiers: "{{ _storage_tiers_raw | from_json }}"
-        - name: Validate STORAGE_TIERS is a JSON array
-          ansible.builtin.assert:
-            that:
-              - _storage_tiers | type_debug == 'list'
-            fail_msg: >-
-              STORAGE_TIERS must be a JSON array of tier objects.
-      rescue:
-        - name: Fail on malformed STORAGE_TIERS JSON
-          ansible.builtin.fail:
-            msg: >-
-              STORAGE_TIERS env var contains invalid JSON.
-              Value: '{{ _storage_tiers_raw }}'.
-              Expected a JSON array of tier objects with name, protocol, and provider fields.
+    - name: Validate storage_tier_definitions is a non-empty array in the EDA event
+      ansible.builtin.fail:
+        msg: >-
+          osac_job_vars.storage_tier_definitions must be a non-empty array, populated
+          by osac-operator from the Tenant's resolved storage tiers.
+          Example: [{"name":"default","protocol":"nfs","provider":"vast","backend_id":"be-001","quota_bytes":500}]
+      when: >-
+        osac_job_vars.storage_tier_definitions is not defined or
+        osac_job_vars.storage_tier_definitions is not sequence or
+        osac_job_vars.storage_tier_definitions is string or
+        osac_job_vars.storage_tier_definitions is mapping or
+        osac_job_vars.storage_tier_definitions | length == 0
 
     - name: Write admin_kubeconfig to temporary file when provided
       when: >-
@@ -78,15 +75,9 @@
         (_remote_kubeconfig is not defined or _remote_kubeconfig | length == 0)
 
   tasks:
-    - name: Skip cleanup when STORAGE_TIERS is not configured
-      when: _storage_tiers_raw | length == 0
-      ansible.builtin.debug:
-        msg: "STORAGE_TIERS env var is not set — nothing to clean up."
-
     - name: Clean up cluster-side tenant storage resources
-      when: _storage_tiers_raw | length > 0
       ansible.builtin.include_role:
         name: osac.service.storage_provider
       vars:
         storage_provider_action: teardown_cluster_storage
-        storage_provider_tiers: "{{ _storage_tiers }}"
+        storage_provider_tiers: "{{ osac_job_vars.storage_tier_definitions }}"

@@ -17,6 +17,7 @@ package osac.public.v1;
 
 import "google/protobuf/any.proto";
 import "osac/public/v1/cluster_type.proto";
+import "osac/public/v1/cluster_version_type.proto";
 import "osac/public/v1/metadata_type.proto";
 import "osac/public/v1/host_type_type.proto";
 
@@ -123,9 +124,9 @@ message ClusterTemplateSpecDefaults {
   // Default cluster networking configuration.
   optional ClusterNetwork network = 4;
 
-  // Default ClusterVersion name for clusters created with this template.
+  // Default ClusterVersion for clusters created with this template.
   //
-  // When set, clusters that don't specify an explicit `spec.version_name` will use this version. The referenced
+  // When set, clusters that don't specify an explicit `spec.version` will use this version. The referenced
   // ClusterVersion must exist, be enabled, and not be in `OBSOLETE` state.
-  optional string version_name = 5;
+  ClusterVersionReference version = 5;
 }

@@ -761,7 +761,7 @@ var _ = Describe("Public clusters", func() {
 		).Should(Succeed())
 	})
 
-	It("Can create a cluster with explicit version_name", func() {
+	It("Can create a cluster with explicit version", func() {
 		// Create a non-default cluster version:
 		cvClient := privatev1.NewClusterVersionsClient(tool.InternalView().AdminConn())
 		version := nextCVVersion()
@@ -784,12 +784,12 @@ var _ = Describe("Public clusters", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		// Create a cluster specifying that version_name:
+		// Create a cluster specifying that version:
 		createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
 				Spec: publicv1.ClusterSpec_builder{
-					Template:    publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
-					VersionName: &cvName,
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Version:  publicv1.ClusterVersionReference_builder{Name: cvName}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -802,15 +802,15 @@ var _ = Describe("Public clusters", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		// Verify the cluster has the correct version_name:
-		Expect(object.GetSpec().GetVersionName()).To(Equal(cvName))
+		// Verify the cluster has the correct version:
+		Expect(object.GetSpec().GetVersion().GetName()).To(Equal(cvName))
 
 		// Verify via Get as well:
 		getResponse, err := clustersClient.Get(ctx, publicv1.ClustersGetRequest_builder{
 			Id: object.GetId(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		Expect(getResponse.GetObject().GetSpec().GetVersionName()).To(Equal(cvName))
+		Expect(getResponse.GetObject().GetSpec().GetVersion().GetName()).To(Equal(cvName))
 	})
 
 	It("Sets creator to the ID of the user when creating a cluster", func() {

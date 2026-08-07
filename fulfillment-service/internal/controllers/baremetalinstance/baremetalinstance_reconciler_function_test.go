@@ -27,9 +27,12 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -39,6 +42,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/gvks"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
+	"github.com/osac-project/osac/fulfillment-service/internal/masks"
 )
 
 func newBareMetalInstanceCR(id, namespace, name string, deletionTimestamp *metav1.Time) *bmfov1alpha1.BareMetalInstance {
@@ -1914,3 +1918,81 @@ type fakeCatalogItemsClient struct {
 func (c *fakeCatalogItemsClient) Get(ctx context.Context, req *privatev1.BareMetalInstanceCatalogItemsGetRequest, opts ...grpc.CallOption) (*privatev1.BareMetalInstanceCatalogItemsGetResponse, error) {
 	return c.getResponse, c.getError
 }
+
+var _ = Describe("Kubernetes validation error handling", func() {
+	It("should set state to FAILED when K8s Create returns Invalid error", func() {
+		ctx := context.Background()
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+
+		const (
+			bmiID        = "bmi-invalid-test"
+			hubID        = "hub-1"
+			hubNamespace = "test-ns"
+		)
+
+		scheme := newFakeScheme()
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Create: func(ctx context.Context, client clnt.WithWatch, obj clnt.Object, opts ...clnt.CreateOption) error {
+					return apierrors.NewInvalid(
+						schema.GroupKind{Group: "bmfo.osac.openshift.io", Kind: "BareMetalInstance"},
+						"bmi-test",
+						field.ErrorList{field.Invalid(field.NewPath("spec", "templateID"), "", "invalid template")},
+					)
+				},
+			}).
+			Build()
+
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), hubID).
+			Return(&controllers.HubEntry{Namespace: hubNamespace, Client: fakeClient}, nil).
+			AnyTimes()
+
+		bareMetalInstancesClient := NewMockBareMetalInstancesClient(ctrl)
+		bareMetalInstancesClient.EXPECT().
+			Update(gomock.Any(), gomock.Any(), gomock.Any()).
+			DoAndReturn(func(ctx context.Context, req *privatev1.BareMetalInstancesUpdateRequest, opts ...grpc.CallOption) (*privatev1.BareMetalInstancesUpdateResponse, error) {
+				return &privatev1.BareMetalInstancesUpdateResponse{Object: req.GetObject()}, nil
+			}).
+			MinTimes(1)
+
+		bmi := privatev1.BareMetalInstance_builder{
+			Id: bmiID,
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     "test-tenant",
+			}.Build(),
+			Spec: privatev1.BareMetalInstanceSpec_builder{
+				CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: "catalog-1"}.Build(),
+			}.Build(),
+			Status: privatev1.BareMetalInstanceStatus_builder{
+				Hub: hubID,
+			}.Build(),
+		}.Build()
+
+		f := &function{
+			logger:                              logger,
+			hubCache:                            hubCache,
+			bareMetalInstancesClient:            bareMetalInstancesClient,
+			bareMetalInstanceCatalogItemsClient: defaultFakeCatalogItemsClient(),
+			maskCalculator:                      masks.NewCalculator().Build(),
+		}
+
+		err := f.run(ctx, bmi)
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(bmi.GetStatus().GetState()).To(
+			Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_FAILED),
+		)
+
+		cond := findProtoCondition(bmi,
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_CONFIGURATION_APPLIED)
+		Expect(cond).ToNot(BeNil())
+		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		Expect(cond.GetReason()).To(Equal("ValidationFailed"))
+		Expect(cond.GetMessage()).To(ContainSubstring("invalid template"))
+	})
+})

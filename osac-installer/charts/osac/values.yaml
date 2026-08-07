@@ -170,7 +170,6 @@ aap:
     storageFulfillment:
       enabled: false
       config:
-        STORAGE_TIERS: ""
         STORAGE_SNAPSHOTS_ENABLED: ""
       secret:
         VAST_ENDPOINT: ""

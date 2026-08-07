@@ -9,8 +9,11 @@
     template_id: "{{ osac_job_vars.resource.spec.templateID }}"
     template_parameters: {}
     tenant_storage_classes: "{{ osac_job_vars.tenant_storage_classes | default([]) }}"
-    _storage_tiers_raw: "{{ lookup('env', 'STORAGE_TIERS') }}"
-    _requested_storage_tier: "{{ lookup('env', 'STORAGE_REQUESTED_TIER') | default('default', true) }}"
+    # 'local' matches the only tier every current environment actually registers
+    # (register-local-storage.yaml's LVMS-backed StorageTier, see osac-installer).
+    # No environment defines a tier literally named 'default' -- that name only
+    # ever appeared in storage_provider's own VAST-oriented unit test fixtures.
+    _requested_storage_tier: "{{ lookup('env', 'STORAGE_REQUESTED_TIER') | default('local', true) }}"
 
   pre_tasks:
     - name: Show resource metadata
@@ -38,31 +41,33 @@
             else (compute_instance.metadata.annotations | default({})).get('osac.openshift.io/tenant', 'unknown')
           }}
 
-    - name: Parse STORAGE_TIERS for JIT storage
-      when: _storage_tiers_raw | length > 0
-      block:
-        - name: Parse tier list from STORAGE_TIERS env var
-          ansible.builtin.set_fact:
-            _jit_all_tiers: "{{ _storage_tiers_raw | from_json }}"
+    - name: Validate optional storage_tier_definitions type
+      ansible.builtin.fail:
+        msg: >-
+          osac_job_vars.storage_tier_definitions must be an array when provided.
+          Example: [{"name":"default","protocol":"nfs","provider":"vast","backend_id":"be-001"}]
+      when: >-
+        osac_job_vars.storage_tier_definitions is defined and
+        (osac_job_vars.storage_tier_definitions is not sequence or
+         osac_job_vars.storage_tier_definitions is string or
+         osac_job_vars.storage_tier_definitions is mapping)
 
+    - name: Filter storage tier definitions to the requested tier for JIT storage
+      when: (osac_job_vars.storage_tier_definitions | default([])) | length > 0
+      block:
         - name: Filter to only the requested tier
           ansible.builtin.set_fact:
-            _jit_storage_tiers: "{{ _jit_all_tiers | selectattr('name', 'equalto', _requested_storage_tier) | list }}"
+            _jit_storage_tiers: >-
+              {{ osac_job_vars.storage_tier_definitions
+                 | selectattr('name', 'equalto', _requested_storage_tier) | list }}
 
-        - name: Warn if requested tier not found in STORAGE_TIERS
+        - name: Warn if requested tier not found in storage_tier_definitions
           ansible.builtin.debug:
             msg: >-
-              Requested storage tier '{{ _requested_storage_tier }}' not found in STORAGE_TIERS.
-              Available tiers: {{ _jit_all_tiers | map(attribute='name') | list | to_json }}.
+              Requested storage tier '{{ _requested_storage_tier }}' not found in storage_tier_definitions.
+              Available tiers: {{ osac_job_vars.storage_tier_definitions | map(attribute='name') | list | to_json }}.
               JIT storage provisioning will be skipped.
           when: _jit_storage_tiers | length == 0
-      rescue:
-        - name: Fail on malformed STORAGE_TIERS JSON
-          ansible.builtin.fail:
-            msg: >-
-              STORAGE_TIERS env var contains invalid JSON.
-              Value: '{{ _storage_tiers_raw }}'.
-              Expected a JSON array of tier objects with name, protocol, and provider fields.
 
     - name: Ensure storage is provisioned for tenant (JIT)
       when: _jit_storage_tiers is defined and _jit_storage_tiers | length > 0
@@ -71,9 +76,9 @@
       vars:
         storage_provider_action: ensure_storage_class
         storage_provider_tiers: "{{ _jit_storage_tiers }}"
+        storage_provider_backend_connections: "{{ osac_job_vars.storage_backend_connections | default({}) }}"
         storage_provider_provisioning_target: vmaas
         storage_provider_block_encryption_passphrase: "{{ osac_job_vars.resource.spec.blockEncryptionPassphrase | default('') }}"
-        storage_provider_snapshots_enabled: "{{ lookup('env', 'STORAGE_SNAPSHOTS_ENABLED') | default('true', true) | bool }}"
 
     - name: Add JIT-provisioned StorageClasses to resolution list
       ansible.builtin.set_fact:
@@ -89,7 +94,7 @@
           ComputeInstance '{{ compute_instance_name }}' has no tenant_storage_classes
           available. Either the osac-operator CI controller should inject the resolved
           storageClasses list before triggering provisioning, or JIT storage provisioning
-          via STORAGE_TIERS must succeed.
+          via storage_tier_definitions must succeed.
       when:
         - tenant_storage_class_storage_classes | length == 0
         - _jit_storage_tiers is not defined or _jit_storage_tiers | length == 0

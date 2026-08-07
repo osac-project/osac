@@ -13,6 +13,8 @@ language governing permissions and limitations under the License.
 
 package baremetalinstance
 
+//go:generate mockgen -source=../../api/osac/private/v1/baremetal_instances_service_grpc.pb.go -destination=bare_metal_instances_client_mock.go -package=baremetalinstance BareMetalInstancesClient
+
 import (
 	"context"
 	"encoding/json"
@@ -189,7 +191,7 @@ func (t *task) update(ctx context.Context) error {
 		return t.mutateBMI(ctx, object)
 	})
 	if err != nil {
-		return err
+		return controllers.HandleK8sWriteError(ctx, t.r.logger, err, t.setFailed)
 	}
 	t.r.logger.DebugContext(
 		ctx,
@@ -387,6 +389,19 @@ func (t *task) removeFinalizer() {
 		})
 		t.bareMetalInstance.GetMetadata().SetFinalizers(list)
 	}
+}
+
+func (t *task) setFailed(err error) {
+	if !t.bareMetalInstance.HasStatus() {
+		t.bareMetalInstance.SetStatus(&privatev1.BareMetalInstanceStatus{})
+	}
+	t.bareMetalInstance.GetStatus().SetState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_FAILED)
+	t.updateCondition(
+		privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_CONFIGURATION_APPLIED,
+		privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+		"ValidationFailed",
+		err.Error(),
+	)
 }
 
 func (t *task) updateCondition(conditionType privatev1.BareMetalInstanceConditionType, status privatev1.ConditionStatus,

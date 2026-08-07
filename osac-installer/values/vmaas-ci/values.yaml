@@ -149,11 +149,6 @@ aap:
   instanceGroups:
     storageFulfillment:
       enabled: true
-      config:
-        # OSAC-3011: local LVMS tier for VMaaS CI storage testing.
-        # Temporary: will be sourced from osac_job_vars.storage_tier_definitions
-        # once OSAC-3013 AAP side lands.
-        STORAGE_TIERS: '[{"name":"local","protocol":"block","provider":"lvms"}]'
 
 # --- Validation ---
 validation:

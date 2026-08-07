@@ -67,6 +67,9 @@ type Reconciler[O dao.Object] struct {
 	listMethod     string
 	listRequest    proto.Message
 	listResponse   proto.Message
+	getMethod      string
+	getRequest     proto.Message
+	getResponse    proto.Message
 	objectChannel  chan O
 	eventsClient   privatev1.EventsClient
 }
@@ -182,6 +185,13 @@ func (b *ReconcilerBuilder[O]) Build() (result *Reconciler[O], err error) {
 		return
 	}
 
+	// Find the method that will be used to get a single object before reconciliation:
+	getMethod, getRequest, getResponse, err := b.findGetMethod()
+	if err != nil {
+		err = fmt.Errorf("failed to find get method: %w", err)
+		return
+	}
+
 	// Set the default event filter:
 	eventFilter := b.eventFilter
 	if eventFilter == "" {
@@ -215,6 +225,9 @@ func (b *ReconcilerBuilder[O]) Build() (result *Reconciler[O], err error) {
 		listMethod:     listMethod,
 		listRequest:    listRequest,
 		listResponse:   listResponse,
+		getMethod:      getMethod,
+		getRequest:     getRequest,
+		getResponse:    getResponse,
 		objectChannel:  make(chan O),
 		eventsClient:   eventsClient,
 	}
@@ -333,6 +346,84 @@ func (b *ReconcilerBuilder[O]) findListMethod() (name string, request, response 
 	return
 }
 
+// findGetMethod finds the method that will be used to get a single object by ID.
+func (b *ReconcilerBuilder[O]) findGetMethod() (name string, request, response proto.Message, err error) {
+	var object O
+	objectDesc := object.ProtoReflect().Descriptor()
+	objectName := objectDesc.FullName()
+	objectPkg := objectName.Parent()
+
+	var methodDesc protoreflect.MethodDescriptor
+	protoregistry.GlobalFiles.RangeFilesByPackage(
+		objectPkg,
+		func(fileDesc protoreflect.FileDescriptor) bool {
+			serviceDescs := fileDesc.Services()
+			for i := range serviceDescs.Len() {
+				serviceDesc := serviceDescs.Get(i)
+				methodDescs := serviceDesc.Methods()
+				for j := range methodDescs.Len() {
+					currentDesc := methodDescs.Get(j)
+					if currentDesc.Name() != protoreflect.Name("Get") {
+						continue
+					}
+					objectField := currentDesc.Output().Fields().ByName("object")
+					if objectField == nil {
+						continue
+					}
+					if objectField.Message().FullName() != objectName {
+						continue
+					}
+					methodDesc = currentDesc
+					return false
+				}
+			}
+			return true
+		},
+	)
+	if methodDesc == nil {
+		err = fmt.Errorf("failed to find get method for type '%T'", object)
+		return
+	}
+
+	requestType, err := protoregistry.GlobalTypes.FindMessageByName(methodDesc.Input().FullName())
+	if err != nil {
+		return
+	}
+	request = requestType.New().Interface()
+	responseType, err := protoregistry.GlobalTypes.FindMessageByName(methodDesc.Output().FullName())
+	if err != nil {
+		return
+	}
+	response = responseType.New().Interface()
+
+	fullMethodName := methodDesc.FullName()
+	name = fmt.Sprintf("/%s/%s", fullMethodName.Parent(), fullMethodName.Name())
+
+	return
+}
+
+// getObject re-reads the current state of an object from the server by ID. This is used before
+// reconciliation to avoid acting on stale data from the channel.
+func (c *Reconciler[O]) getObject(ctx context.Context, id string) (result O, err error) {
+	type requestIface interface {
+		SetId(string)
+	}
+	type responseIface interface {
+		GetObject() O
+	}
+	rpcCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	requestMsg := proto.Clone(c.getRequest).(requestIface)
+	requestMsg.SetId(id)
+	responseMsg := proto.Clone(c.getResponse).(responseIface)
+	err = c.grpcClient.Invoke(rpcCtx, c.getMethod, requestMsg, responseMsg)
+	if err != nil {
+		return
+	}
+	result = responseMsg.GetObject()
+	return
+}
+
 // Start starts the controller. To stop it cancel the context.
 func (c *Reconciler[O]) Start(ctx context.Context) error {
 	// Start the watch and sync loops:
@@ -353,12 +444,23 @@ func (c *Reconciler[O]) Start(ctx context.Context) error {
 		case <-ctx.Done():
 			return context.Canceled
 		case object := <-c.objectChannel:
+			fresh, err := c.getObject(ctx, object.GetId())
+			if err != nil {
+				c.logger.ErrorContext(
+					ctx,
+					"Failed to re-read object before reconciliation, "+
+						"will reconcile with potentially stale state",
+					slog.String("id", object.GetId()),
+					slog.Any("error", err),
+				)
+				fresh = object
+			}
 			c.logger.DebugContext(
 				ctx,
 				"Reconciling object",
-				slog.Any("object", object),
+				slog.String("id", fresh.GetId()),
 			)
-			err := c.function(ctx, object)
+			err = c.function(ctx, fresh)
 			if err != nil {
 				c.logger.ErrorContext(
 					ctx,

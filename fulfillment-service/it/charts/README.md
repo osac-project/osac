@@ -12,4 +12,5 @@ For production PostgreSQL, deploy an in-cluster database via an operator
 |-------|---------|
 | `postgres/` | Single-replica PostgreSQL with TLS for integration tests |
 | `keycloak/` | Keycloak instance for integration tests |
+| `openbao/` | OpenBao secret store (dev mode) for integration tests |
 | `prometheus/` | Prometheus monitoring stack for integration tests |

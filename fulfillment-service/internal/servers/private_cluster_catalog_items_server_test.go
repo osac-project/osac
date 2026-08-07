@@ -774,16 +774,16 @@ var _ = Describe("Private cluster catalog items server", func() {
 				Expect(err).ToNot(HaveOccurred())
 			})
 
-			It("Rejects create with non-existent version_name default in field_definitions", func() {
+			It("Rejects create with non-existent version default in field_definitions", func() {
 				_, err := validatedServer.Create(ctx, privatev1.ClusterCatalogItemsCreateRequest_builder{
 					Object: privatev1.ClusterCatalogItem_builder{
 						Title:    "Bad version catalog item",
 						Template: &privatev1.ClusterTemplateReference{Id: "my-template-id"},
 						FieldDefinitions: []*privatev1.FieldDefinition{
 							privatev1.FieldDefinition_builder{
-								Path:     "version_name",
+								Path:     "version",
 								Editable: true,
-								Default:  structpb.NewStringValue("does-not-exist"),
+								Default:  structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{"name": structpb.NewStringValue("does-not-exist")}}),
 							}.Build(),
 						},
 					}.Build(),
@@ -795,7 +795,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 				Expect(status.Message()).To(ContainSubstring("cluster version 'does-not-exist' not found"))
 			})
 
-			It("Rejects create with obsolete version_name default in field_definitions", func() {
+			It("Rejects create with obsolete version default in field_definitions", func() {
 				// Seed an obsolete ClusterVersion:
 				cvDao, err := dao.NewGenericDAO[*privatev1.ClusterVersion]().
 					SetLogger(logger).
@@ -825,9 +825,9 @@ var _ = Describe("Private cluster catalog items server", func() {
 						Template: &privatev1.ClusterTemplateReference{Id: "my-template-id"},
 						FieldDefinitions: []*privatev1.FieldDefinition{
 							privatev1.FieldDefinition_builder{
-								Path:     "version_name",
+								Path:     "version",
 								Editable: true,
-								Default:  structpb.NewStringValue("4-16-0-obsolete"),
+								Default:  structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{"name": structpb.NewStringValue("4-16-0-obsolete")}}),
 							}.Build(),
 						},
 					}.Build(),
@@ -839,7 +839,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 				Expect(status.Message()).To(ContainSubstring("is obsolete"))
 			})
 
-			It("Rejects update with non-existent version_name default in field_definitions", func() {
+			It("Rejects update with non-existent version default in field_definitions", func() {
 				createResponse, err := validatedServer.Create(ctx, privatev1.ClusterCatalogItemsCreateRequest_builder{
 					Object: privatev1.ClusterCatalogItem_builder{
 						Title:    "Catalog item for update test",
@@ -855,9 +855,9 @@ var _ = Describe("Private cluster catalog items server", func() {
 						Template: &privatev1.ClusterTemplateReference{Id: "my-template-id"},
 						FieldDefinitions: []*privatev1.FieldDefinition{
 							privatev1.FieldDefinition_builder{
-								Path:     "version_name",
+								Path:     "version",
 								Editable: true,
-								Default:  structpb.NewStringValue("does-not-exist"),
+								Default:  structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{"name": structpb.NewStringValue("does-not-exist")}}),
 							}.Build(),
 						},
 					}.Build(),

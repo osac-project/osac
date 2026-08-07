@@ -16,11 +16,11 @@ vast_storage_tenant_config_secret_prefix: "vast-tenant-config-"
 #      ConfigMap, only needed if the config namespace differs from the IG pod's own namespace.
 #   2. The IG pod's own namespace, read from the standard K8s-mounted service account file —
 #      always accurate for wherever the pod actually runs, no per-deployment config needed.
-#   3. "osac-system" — last-resort fallback for local/test execution outside a pod.
+# No hardcoded fallback — fail loudly if neither source is available
+# rather than silently targeting a wrong namespace.
 vast_storage_config_namespace: >-
   {{ lookup('env', 'OSAC_STORAGE_CONFIG_NAMESPACE')
-     | default(lookup('file', '/var/run/secrets/kubernetes.io/serviceaccount/namespace', errors='ignore'), true)
-     | default('osac-system', true) }}
+     | default(lookup('file', '/var/run/secrets/kubernetes.io/serviceaccount/namespace', errors='ignore'), true) }}
 
 # TLS certificate validation for VAST VMS API calls.
 vast_storage_validate_certs: "{{ lookup('env', 'VAST_VALIDATE_CERTS') | default('true', true) | bool }}"

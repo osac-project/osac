@@ -20,6 +20,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 var (
@@ -60,6 +61,21 @@ func ClassifyHubError(err error) error {
 
 	// All other errors are considered transient (network, timeout, etc.)
 	// Caller should retry these
+	return err
+}
+
+// HandleK8sWriteError classifies a Kubernetes write error as permanent or transient.
+// If the error is an apierrors.IsInvalid validation failure, it logs a warning, calls
+// markFailed to let the reconciler set resource-specific FAILED state, and returns nil
+// (permanent — do not retry). All other errors are returned unchanged (transient — retry).
+func HandleK8sWriteError(ctx context.Context, logger *slog.Logger, err error, markFailed func(error)) error {
+	if apierrors.IsInvalid(err) {
+		logger.WarnContext(ctx, "Permanent K8s validation error, marking resource as failed",
+			slog.String("error", err.Error()),
+		)
+		markFailed(err)
+		return nil
+	}
 	return err
 }
 

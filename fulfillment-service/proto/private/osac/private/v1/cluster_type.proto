@@ -17,6 +17,7 @@ package osac.private.v1;
 
 import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
+import "osac/private/v1/cluster_version_type.proto";
 import "osac/private/v1/condition_status_type.proto";
 import "osac/private/v1/metadata_type.proto";
 import "osac/private/v1/host_type_type.proto";
@@ -39,7 +40,7 @@ message ClusterSpec {
   map<string, ClusterNodeSet> node_sets = 3;
   optional string pull_secret = 4;
   optional string ssh_public_key = 5;
-  optional string version_name = 6;
+  ClusterVersionReference version = 6;
   optional ClusterNetwork network = 7;
 
   // Reference to a cluster catalog item. Mutually exclusive with template during the migration period.

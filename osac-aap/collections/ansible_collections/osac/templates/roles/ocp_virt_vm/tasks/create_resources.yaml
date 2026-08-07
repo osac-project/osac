@@ -3,7 +3,9 @@
   ansible.builtin.include_role:
     name: osac.service.tenant_storage_class
   vars:
-    tenant_storage_class_storage_tier: "{{ _requested_storage_tier | default('default') }}"
+    # 'local' matches the only tier every current environment actually registers
+    # (see playbook_osac_create_compute_instance.yml's _requested_storage_tier).
+    tenant_storage_class_storage_tier: "{{ _requested_storage_tier | default('local') }}"
 
 - name: Set storage_class from tenant StorageClass
   ansible.builtin.set_fact:

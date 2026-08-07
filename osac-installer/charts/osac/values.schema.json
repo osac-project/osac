@@ -843,10 +843,6 @@
                   "type": "object",
                   "description": "Environment variables for the storage-operations instance group",
                   "properties": {
-                    "STORAGE_TIERS": {
-                      "type": "string",
-                      "description": "Available storage tiers configuration"
-                    },
                     "STORAGE_SNAPSHOTS_ENABLED": {
                       "type": "string",
                       "description": "Enable storage snapshots"

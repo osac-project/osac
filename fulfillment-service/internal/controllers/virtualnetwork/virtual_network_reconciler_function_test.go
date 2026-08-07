@@ -20,11 +20,13 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -34,6 +36,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
 	"github.com/osac-project/osac/fulfillment-service/internal/masks"
+	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
 
 var _ = Describe("buildSpec", func() {
@@ -825,5 +828,76 @@ var _ = Describe("hub persistence", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(list.Items).To(HaveLen(1))
 		Expect(list.Items[0].Namespace).To(Equal(hubNamespace))
+	})
+})
+
+var _ = Describe("Kubernetes validation error handling", func() {
+	It("should set state to FAILED when K8s Create returns Invalid error", func() {
+		ctx := context.Background()
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Create: func(ctx context.Context, client clnt.WithWatch, obj clnt.Object, opts ...clnt.CreateOption) error {
+					return apierrors.NewInvalid(
+						schema.GroupKind{Group: "osac.openshift.io", Kind: "VirtualNetwork"},
+						"",
+						field.ErrorList{
+							field.Invalid(field.NewPath("spec", "networkClass"), "bad-class", "network class is invalid"),
+						},
+					)
+				},
+			}).
+			Build()
+
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), "hub-validation").
+			Return(&controllers.HubEntry{Namespace: "hub-ns", Client: fakeClient}, nil).
+			AnyTimes()
+
+		vnClient := NewMockVirtualNetworksClient(ctrl)
+		vnClient.EXPECT().
+			Update(gomock.Any(), gomock.Any(), gomock.Any()).
+			DoAndReturn(func(ctx context.Context, req *privatev1.VirtualNetworksUpdateRequest, opts ...grpc.CallOption) (*privatev1.VirtualNetworksUpdateResponse, error) {
+				return &privatev1.VirtualNetworksUpdateResponse{Object: req.GetObject()}, nil
+			}).
+			MinTimes(1)
+
+		vn := privatev1.VirtualNetwork_builder{
+			Id: "vn-validation-test",
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     "test-tenant",
+			}.Build(),
+			Spec: privatev1.VirtualNetworkSpec_builder{
+				Region:       "us-east-1",
+				NetworkClass: privatev1.NetworkClassReference_builder{Name: "cudn-net"}.Build(),
+			}.Build(),
+			Status: privatev1.VirtualNetworkStatus_builder{
+				State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING,
+				Hub:   "hub-validation",
+			}.Build(),
+		}.Build()
+
+		f := &function{
+			logger:                logger,
+			hubCache:              hubCache,
+			virtualNetworksClient: vnClient,
+			maskCalculator:        nil,
+		}
+
+		err := f.run(ctx, vn)
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(vn.GetStatus().GetState()).To(
+			Equal(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_FAILED),
+		)
+		Expect(vn.GetStatus().GetMessage()).To(ContainSubstring("network class is invalid"))
 	})
 })

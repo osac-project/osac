@@ -2399,13 +2399,16 @@ func (t *Tool) runCLI(ctx context.Context, homeDir string, extraEnv []string, ar
 
 // cliEnv builds a minimal sandboxed environment for CLI subprocess execution. Only the
 // variables strictly required by the CLI binary are set; everything else from the host
-// is excluded to guarantee full test isolation.
+// is excluded to guarantee full test isolation. OSAC_SECRET_STORE=file forces file-based
+// secret storage: homeDir has no operating system keychain, so probing it would otherwise
+// misdetect the keyring as usable and fail (or prompt interactively) on save.
 func cliEnv(homeDir string) []string {
 	return []string{
 		"HOME=" + homeDir,
 		"PATH=" + os.Getenv("PATH"),
 		"OSAC_CONFIG=" + filepath.Join(homeDir, ".config", "osac"),
 		"OSAC_CACHE=" + filepath.Join(homeDir, ".cache", "osac"),
+		"OSAC_SECRET_STORE=file",
 	}
 }
 

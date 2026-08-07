@@ -31,6 +31,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
 	grpccodes "google.golang.org/grpc/codes"
@@ -169,6 +170,7 @@ var _ = BeforeSuite(func() {
 		PrivateAttributionLogic: attribution,
 		PublicAttributionLogic:  attribution,
 		TenancyLogic:            tenancy,
+		MetricsRegisterer:       prometheus.NewRegistry(),
 		HubScheme:               hubScheme,
 	})
 	Expect(err).ToNot(HaveOccurred())
@@ -374,10 +376,17 @@ var _ = Describe("Resource server filter oracle", func() {
 
 	// Positive control, one per resource (not per discovered field): confirms that List's InvalidArgument rejection
 	// above genuinely comes from the private-only field reference, not from every filter being rejected regardless
-	// of content — which the rejection-only assertions above couldn't distinguish on their own.
+	// of content — which the rejection-only assertions above couldn't distinguish on their own. Every OSAC public
+	// object is required to have an 'id' field (enforced by the OSAC_OBJECT_SHAPE buf lint rule), so this asserts
+	// that precondition explicitly rather than letting a hypothetical future violation surface as a confusing
+	// InvalidArgument that reads like a filter-oracle regression.
 	for _, testCase := range dedupeByResource(cases) {
 		It(fmt.Sprintf("Accepts a valid filter referencing only public fields on %s", testCase.resourceName),
 			func(ctx context.Context) {
+				itemDesc := testCase.responseDesc.Fields().ByName("items").Message()
+				Expect(itemDesc.Fields().ByName("id")).ToNot(BeNil(),
+					fmt.Sprintf("%s is expected to have an 'id' field per OSAC_OBJECT_SHAPE", itemDesc.FullName()))
+
 				request := newMessage(testCase.requestDesc)
 				request.ProtoReflect().Set(testCase.filterField, protoreflect.ValueOfString("this.id != this.id"))
 				response := newMessage(testCase.responseDesc)

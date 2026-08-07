@@ -333,6 +333,7 @@ func (c *runnerContext) registerHandlers(ctx context.Context, mux *runtime.Serve
 		privatev1.RegisterSecretsHandler,
 		privatev1.RegisterStorageBackendsHandler,
 		privatev1.RegisterStorageTiersHandler,
+		privatev1.RegisterVolumesHandler,
 		privatev1.RegisterVirtualNetworksHandler,
 		privatev1.RegisterSubnetsHandler,
 		privatev1.RegisterSecurityGroupsHandler,

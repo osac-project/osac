@@ -1,0 +1,131 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "osac/private/v1/metadata_type.proto";
+
+// Lifecycle states for Volume resources.
+enum VolumeState {
+  // State is unknown or has not been determined yet.
+  VOLUME_STATE_UNSPECIFIED = 0;
+
+  // The volume is being provisioned on the storage backend.
+  VOLUME_STATE_CREATING = 1;
+
+  // The volume has been provisioned and is ready for use.
+  VOLUME_STATE_AVAILABLE = 2;
+
+  // The volume provisioning has permanently failed after max retries and requires admin intervention.
+  VOLUME_STATE_FAILED = 3;
+
+  // The volume is being deprovisioned from the storage backend.
+  VOLUME_STATE_DELETING = 4;
+
+  // The volume has been fully deprovisioned and the record is archived.
+  VOLUME_STATE_DELETED = 5;
+}
+
+// Identifies the PVC that triggered the volume creation.
+message PVCReference {
+  // Name of the PersistentVolumeClaim.
+  string name = 1;
+
+  // Namespace of the PersistentVolumeClaim.
+  string namespace = 2;
+
+  // Cluster where the PersistentVolumeClaim exists.
+  string cluster = 3;
+}
+
+// Identifies the PV created for a volume.
+message PVReference {
+  // Name of the PersistentVolume.
+  string name = 1;
+
+  // Cluster where the PersistentVolume exists.
+  string cluster = 2;
+}
+
+// Represents a block storage volume managed by the OSAC storage control plane.
+//
+// Volumes are tenant-scoped resources that represent storage provisioned on a backend storage array
+// through the OSAC CSI driver. The fulfillment-service tracks volume inventory in PostgreSQL and
+// reconciles Volume CRs on the hub cluster. The osac-operator Volume controller handles vendor
+// provisioning via the backend's CSI controller.
+//
+// Volumes are created through the private API, typically by the OSAC CSI driver in response to a
+// PVC on a tenant cluster. The spec captures the user's requested configuration (tier, size,
+// access mode), while the status tracks the system-resolved state (vendor volume ID, backend,
+// protocol).
+message Volume {
+  // Unique identifier of the volume.
+  string id = 1;
+
+  // Metadata of the volume.
+  Metadata metadata = 2;
+
+  // Desired configuration of the volume (immutable after creation).
+  VolumeSpec spec = 3;
+
+  // Current operational status of the volume.
+  VolumeStatus status = 4;
+}
+
+// Defines the desired configuration for a Volume. All fields are immutable after creation.
+message VolumeSpec {
+  // Name of the StorageTier that determines which backend and protocol serve this volume.
+  string storage_tier = 1;
+
+  // Requested storage capacity in gibibytes (GiB).
+  int64 size_gib = 2;
+
+  // Kubernetes access mode for the volume (e.g., "ReadWriteOnce", "ReadWriteMany").
+  string access_mode = 3;
+
+  // Name of the cluster where the PVC that triggered this volume exists.
+  string cluster = 4;
+
+  // Reference to the PVC that triggered this volume creation. Set by the CSI driver.
+  // Empty for API-driven volume creation.
+  PVCReference pvc_ref = 5;
+}
+
+// Represents the current operational state of a Volume.
+message VolumeStatus {
+  // Current lifecycle state of the volume.
+  VolumeState state = 1;
+
+  // Human-readable message providing additional details about the current state.
+  optional string message = 2;
+
+  // Opaque identifier assigned by the vendor storage array. Set by the osac-operator after vendor
+  // CSI CreateVolume succeeds.
+  string vendor_volume_id = 3;
+
+  // Name of the StorageBackend that serves this volume. Resolved during tier resolution at
+  // creation time. Visible only through the private API.
+  string backend = 4;
+
+  // Storage protocol used for this volume (e.g., NFS, BLOCK). Resolved during tier resolution at
+  // creation time. Visible only through the private API.
+  string protocol = 5;
+
+  // Operator-confirmed reference to the PVC on the tenant cluster.
+  PVCReference pvc_ref = 6;
+
+  // Reference to the PV created for this volume on the tenant cluster.
+  PVReference pv_ref = 7;
+}

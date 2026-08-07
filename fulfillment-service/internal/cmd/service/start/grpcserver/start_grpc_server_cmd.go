@@ -786,6 +786,34 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	}
 	privatev1.RegisterComputeInstancesServer(grpcServer, privateComputeInstancesServer)
 
+	// Create the disk images server:
+	c.logger.InfoContext(ctx, "Creating disk images server")
+	diskImagesServer, err := servers.NewDiskImagesServer().
+		SetLogger(c.logger).
+		SetNotifier(notifier).
+		SetAttributionLogic(publicAttributionLogic).
+		SetTenancyLogic(tenancyLogic).
+		SetMetricsRegisterer(metricsRegisterer).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create disk images server: %w", err)
+	}
+	publicv1.RegisterDiskImagesServer(grpcServer, diskImagesServer)
+
+	// Create the private disk images server:
+	c.logger.InfoContext(ctx, "Creating private disk images server")
+	privateDiskImagesServer, err := servers.NewPrivateDiskImagesServer().
+		SetLogger(c.logger).
+		SetNotifier(notifier).
+		SetAttributionLogic(privateAttributionLogic).
+		SetTenancyLogic(tenancyLogic).
+		SetMetricsRegisterer(metricsRegisterer).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create private disk images server: %w", err)
+	}
+	privatev1.RegisterDiskImagesServer(grpcServer, privateDiskImagesServer)
+
 	// Create the bare metal instance templates server:
 	c.logger.InfoContext(ctx, "Creating bare metal instance templates server")
 	bareMetalInstanceTemplatesServer, err := servers.NewBareMetalInstanceTemplatesServer().

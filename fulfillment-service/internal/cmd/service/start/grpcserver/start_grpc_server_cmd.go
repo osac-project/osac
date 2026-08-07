@@ -994,3 +994,16 @@ _NAMES_ - Comma-separated list of Kubernetes service account names that are allo
 administrator permissions. These are intended only for emergency situations, for example when the regular authentication
 mechanisms are not working. The service accounts are expected to be in the namespace where the service is deployed.
 `
+
+const vaultEndpointFlagHelp = `
+_URL_ - Vault API endpoint URL.
+`
+
+const vaultNamespaceFlagHelp = `
+_NAMESPACE_ - Parent namespace path within the Vault-compatible
+store. Tenant namespaces are created as children of this namespace.
+`
+
+const vaultKVMountPathFlagHelp = `
+_PATH_ - KV v2 secret engine mount path within tenant namespaces.
+`

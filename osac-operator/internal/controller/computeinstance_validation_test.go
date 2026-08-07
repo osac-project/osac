@@ -527,10 +527,13 @@ var _ = Describe("ComputeInstance CEL Validation", func() {
 	})
 
 	Describe("StorageTier validation", func() {
-		It("should accept a ComputeInstance without storageTier", func() {
+		It("should reject a ComputeInstance without storageTier", func() {
 			instance := createValidInstance("test-tier-absent")
 			instance.Spec.BootDisk.StorageTier = ""
-			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+			err := k8sClient.Create(ctx, instance)
+			Expect(err).To(HaveOccurred())
+			Expect(apierrors.IsInvalid(err)).To(BeTrue())
+			Expect(err.Error()).To(ContainSubstring("storageTier"))
 		})
 
 		DescribeTable("should accept valid storageTier values",

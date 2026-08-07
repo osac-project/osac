@@ -83,10 +83,12 @@ spec:
                       description: StorageTier is the name of the storage tier for
                         this disk
                       maxLength: 63
+                      minLength: 1
                       pattern: ^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$
                       type: string
                   required:
                   - sizeGiB
+                  - storageTier
                   type: object
                 type: array
                 x-kubernetes-validations:
@@ -104,10 +106,12 @@ spec:
                     description: StorageTier is the name of the storage tier for this
                       disk
                     maxLength: 63
+                    minLength: 1
                     pattern: ^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$
                     type: string
                 required:
                 - sizeGiB
+                - storageTier
                 type: object
                 x-kubernetes-validations:
                 - message: bootDisk is immutable

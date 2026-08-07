@@ -1004,8 +1004,19 @@ func (t *FilterTranslator) translateSelectThisMdField(fieldName string,
 
 func (t *FilterTranslator) translateSelectJsonField(operandSql string, msgDesc protoreflect.MessageDescriptor,
 	fieldName string, testOnly bool) (result filterTranslatorResult, err error) {
+	// Escape the field name the same way translateIndex escapes map keys, instead of interpolating it into the
+	// SQL text directly: fieldName always originates from a CEL field selector, so in practice it is already
+	// restricted to safe identifier characters, but this keeps the JSON key construction here from depending on
+	// that external guarantee.
+	fieldText, fieldEscaped := t.translateString(fieldName, "")
+	var fieldSql string
+	if fieldEscaped {
+		fieldSql = "e'" + fieldText + "'"
+	} else {
+		fieldSql = "'" + fieldText + "'"
+	}
 	if testOnly {
-		result.sql = fmt.Sprintf("%s ? '%s'", operandSql, fieldName)
+		result.sql = fmt.Sprintf("%s ? %s", operandSql, fieldSql)
 		result.kind = filterTranslatorBooleanKind
 		result.precedence = filterTranslatorOtherPrecedence
 		return
@@ -1014,14 +1025,14 @@ func (t *FilterTranslator) translateSelectJsonField(operandSql string, msgDesc p
 	// Map fields are stored as JSONB objects — use -> to preserve the object structure, so that bracket-index
 	// and 'in' translate against it instead of falling into the generic message-kind case below:
 	if fieldDesc.IsMap() {
-		result.sql = fmt.Sprintf("%s->'%s'", operandSql, fieldName)
+		result.sql = fmt.Sprintf("%s->%s", operandSql, fieldSql)
 		result.kind = filterTranslatorMapKind
 		result.precedence = filterTranslatorMaxPrecedence
 		return
 	}
 	// Repeated fields are stored as JSONB arrays — use -> to preserve the array structure:
 	if fieldDesc.IsList() {
-		result.sql = fmt.Sprintf("%s->'%s'", operandSql, fieldName)
+		result.sql = fmt.Sprintf("%s->%s", operandSql, fieldSql)
 		result.kind = filterTranslatorJsonArrayKind
 		result.precedence = filterTranslatorMaxPrecedence
 		return
@@ -1029,35 +1040,35 @@ func (t *FilterTranslator) translateSelectJsonField(operandSql string, msgDesc p
 	fieldKind := fieldDesc.Kind()
 	switch fieldKind {
 	case protoreflect.BoolKind:
-		result.sql = fmt.Sprintf("coalesce(cast(%s->>'%s' as bool), false)", operandSql, fieldName)
+		result.sql = fmt.Sprintf("coalesce(cast(%s->>%s as bool), false)", operandSql, fieldSql)
 		result.kind = filterTranslatorBooleanKind
 	case protoreflect.Int32Kind:
-		result.sql = fmt.Sprintf("cast(%s->>'%s' as integer)", operandSql, fieldName)
+		result.sql = fmt.Sprintf("cast(%s->>%s as integer)", operandSql, fieldSql)
 		result.kind = filterTranslatorNumericKind
 	case protoreflect.Int64Kind:
-		result.sql = fmt.Sprintf("cast(%s->>'%s' as bigint)", operandSql, fieldName)
+		result.sql = fmt.Sprintf("cast(%s->>%s as bigint)", operandSql, fieldSql)
 		result.kind = filterTranslatorNumericKind
 	case protoreflect.FloatKind:
-		result.sql = fmt.Sprintf("cast(%s->>'%s' as real)", operandSql, fieldName)
+		result.sql = fmt.Sprintf("cast(%s->>%s as real)", operandSql, fieldSql)
 		result.kind = filterTranslatorNumericKind
 	case protoreflect.DoubleKind:
-		result.sql = fmt.Sprintf("cast(%s->>'%s' as double precision)", operandSql, fieldName)
+		result.sql = fmt.Sprintf("cast(%s->>%s as double precision)", operandSql, fieldSql)
 		result.kind = filterTranslatorNumericKind
 	case protoreflect.StringKind:
-		result.sql = fmt.Sprintf("%s->>'%s'", operandSql, fieldName)
+		result.sql = fmt.Sprintf("%s->>%s", operandSql, fieldSql)
 		result.kind = filterTranslatorStringKind
 	case protoreflect.EnumKind:
-		result.sql = fmt.Sprintf("%s->>'%s'", operandSql, fieldName)
+		result.sql = fmt.Sprintf("%s->>%s", operandSql, fieldSql)
 		result.kind = filterTranslatorStringKind
 		result.enumDesc = fieldDesc.Enum()
 	case protoreflect.MessageKind:
 		msgDesc := fieldDesc.Message()
 		switch msgDesc {
 		case t.tsDesc:
-			result.sql = fmt.Sprintf("cast(%s->>'%s' as timestamp with time zone)", operandSql, fieldName)
+			result.sql = fmt.Sprintf("cast(%s->>%s as timestamp with time zone)", operandSql, fieldSql)
 			result.kind = filterTranslatorTimeKind
 		default:
-			result.sql = fmt.Sprintf("%s->'%s'", operandSql, fieldName)
+			result.sql = fmt.Sprintf("%s->%s", operandSql, fieldSql)
 			result.kind = filterTranslatorJsonKind
 			result.desc = fieldDesc.Message()
 		}

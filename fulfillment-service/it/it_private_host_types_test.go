@@ -118,10 +118,11 @@ var _ = Describe("Private host types", func() {
 	It("Can update a host type", func() {
 		// Create a host type:
 		id := fmt.Sprintf("my_host_type_%s", uuid.New())
+		htName := fmt.Sprintf("test-ht-%s", uuid.New()[24:32])
 		_, err := client.Create(ctx, privatev1.HostTypesCreateRequest_builder{
 			Object: privatev1.HostType_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name: fmt.Sprintf("test-ht-%s", uuid.New()[24:32]),
+					Name: htName,
 				}.Build(),
 				Id:          id,
 				Title:       "My title",
@@ -133,6 +134,9 @@ var _ = Describe("Private host types", func() {
 		// Update it and verify that the returned object is correct:
 		updateResponse, err := client.Update(ctx, privatev1.HostTypesUpdateRequest_builder{
 			Object: privatev1.HostType_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: htName,
+				}.Build(),
 				Id:          id,
 				Title:       "My updated title",
 				Description: "My updated description.",

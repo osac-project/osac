@@ -75,7 +75,7 @@ The `Metadata` message is shared by all object types and contains the following 
 | `creation_timestamp`   | `google.protobuf.Timestamp`  | Time the object was created.                     |
 | `deletion_timestamp`   | `google.protobuf.Timestamp`  | Time the object was marked for deletion.         |
 | `creator`              | `string`                     | Identity that created the object.                |
-| `name`                 | `string`                     | Required, immutable identifier (RFC 1123 DNS label format). |
+| `name`                 | `string`                     | Required, immutable identifier (RFC 1123 DNS label format). Unique within its scope and immutable after creation. |
 | `tenant`               | `string`                     | Tenant that owns the object.                     |
 | `labels`               | `map<string, string>`        | Indexed key-value pairs for organizing objects.  |
 | `annotations`          | `map<string, string>`        | Arbitrary user-controlled metadata.              |

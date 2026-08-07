@@ -115,7 +115,7 @@ var _ = Describe("Private cluster templates", func() {
 	It("Can update a template", func() {
 		// Create a template::
 		id := fmt.Sprintf("my_template_%s", uuid.New())
-		_, err := client.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
+		createResponse, err := client.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
 				Id:          id,
 				Title:       "My title",
@@ -127,6 +127,9 @@ var _ = Describe("Private cluster templates", func() {
 		// Update it and verify that the returned object is correct:
 		updateResponse, err := client.Update(ctx, privatev1.ClusterTemplatesUpdateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: createResponse.GetObject().GetMetadata().GetName(),
+				}.Build(),
 				Id:          id,
 				Title:       "My updated title",
 				Description: "My updated description.",

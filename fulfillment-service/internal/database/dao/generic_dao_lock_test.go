@@ -101,7 +101,7 @@ var _ = Describe("Lock", func() {
 		err := tm.Run(ctx, func(tx database.Tx) {
 			_, err := tx.Exec(
 				ctx,
-				"insert into objects (id, tenant, data) values ($1, $2, '{}')",
+				"insert into objects (id, name, tenant, data) values ($1, $1, $2, '{}')",
 				id, tenant,
 			)
 			Expect(err).ToNot(HaveOccurred())

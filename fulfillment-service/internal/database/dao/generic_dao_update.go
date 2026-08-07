@@ -235,7 +235,7 @@ func (r *UpdateRequest[O]) translateError(ctx context.Context, id, name, tenant 
 	}
 	switch pgErr.Code {
 	case pgerrcode.UniqueViolation:
-		if strings.Contains(pgErr.ConstraintName, "_unique_name_") {
+		if strings.Contains(pgErr.ConstraintName, "_unique_name") {
 			return &ErrAlreadyExists{
 				ID:   id,
 				Name: name,

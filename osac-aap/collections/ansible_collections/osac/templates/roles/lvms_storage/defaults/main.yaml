@@ -23,3 +23,13 @@ lvms_storage_operator_channel: "stable-4.22"
 
 # Namespace where the LVMS operator is installed via OLM.
 lvms_storage_operator_namespace: "openshift-storage"
+
+# OLM CatalogSource for LVMS operator. Override for disconnected clusters that
+# mirror operators to a custom catalog.
+lvms_storage_operator_catalog_source: "redhat-operators"
+lvms_storage_operator_catalog_namespace: "openshift-marketplace"
+
+# Block device path to bind to the LVMCluster deviceSelector on CaaS guest clusters
+# (e.g. /dev/vdb for the second qcow2 disk created by setup-caas-agents.sh).
+# Empty (default): LVMS auto-discovers all eligible block devices.
+lvms_storage_data_device: ""

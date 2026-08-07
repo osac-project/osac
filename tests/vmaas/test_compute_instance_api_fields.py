@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from tests.catalog.conftest import unique_name
 from tests.core.grpc_client import GRPCClient
 from tests.core.helpers import wait_for_cr, wait_for_deletion, wait_for_provision, wait_for_running
 from tests.core.k8s_client import K8sClient
@@ -22,6 +23,7 @@ def test_compute_instance_api_fields(
 ) -> None:
     ci_uuid: str = cli.create_compute_instance(
         template=vm_template,
+        name=unique_name("e2e-api"),
         network_attachments=[{"subnet": default_subnet}],
         boot_disk_size=TEST_BOOT_DISK_SIZE,
         image=TEST_IMAGE_REF,

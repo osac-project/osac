@@ -64,13 +64,28 @@ func (b *SecretStoreBuilder) SetDir(value string) *SecretStoreBuilder {
 	return b
 }
 
-// Build uses the data stored in the builder to create and configure a new secret store. It probes the operating system
-// keyring by attempting to read the secrets key: if the call succeeds or returns ErrNotFound the keyring is usable;
-// any other error indicates the backend is not available and a file-based store is returned instead.
+// Build uses the data stored in the builder to create and configure a new secret store. If the OSAC_SECRET_STORE
+// environment variable is set to 'file' the file-based store is used unconditionally, bypassing the keyring probe
+// below. Otherwise it probes the operating system keyring by attempting to read the secrets key: if the call
+// succeeds or returns ErrNotFound the keyring is usable; any other error indicates the backend is not available and
+// a file-based store is returned instead.
 func (b *SecretStoreBuilder) Build() (result SecretStore, err error) {
 	// Check parameters:
 	if b.logger == nil {
 		err = errors.New("logger is mandatory")
+		return
+	}
+
+	// Honor the explicit override, if set. This exists because the keyring probe below can't distinguish a
+	// keyring that is genuinely usable from one that doesn't exist at all: on macOS, probing a keychain-less
+	// $HOME still reports 'not found' rather than 'unavailable', so the probe alone would incorrectly select the
+	// keyring backend. Callers that know the keyring won't be usable, such as the integration test harness, use
+	// this override to force file-based storage without depending on the probe's outcome.
+	if os.Getenv(secretStoreEnvVar) == secretStoreFileValue {
+		result, err = NewFileSecretStore().
+			SetLogger(b.logger).
+			SetDir(b.dir).
+			Build()
 		return
 	}
 
@@ -328,4 +343,11 @@ func (s *fileSecretStore) Save(ctx context.Context, object any) error {
 const (
 	keyringService = "osac"
 	keyringKey     = "secrets"
+)
+
+// Name of the environment variable that, when set to secretStoreFileValue, forces the use of the file-based
+// secret store regardless of keyring availability.
+const (
+	secretStoreEnvVar    = "OSAC_SECRET_STORE"
+	secretStoreFileValue = "file"
 )

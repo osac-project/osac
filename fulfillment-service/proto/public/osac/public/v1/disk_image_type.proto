@@ -1,0 +1,139 @@
+//
+// Copyright (c) 2025 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.public.v1;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/timestamp.proto";
+import "osac/public/v1/metadata_type.proto";
+
+// Lifecycle states for DiskImage resources.
+enum DiskImageLifecycle {
+  // Lifecycle is unknown or has not been determined yet.
+  DISK_IMAGE_LIFECYCLE_UNSPECIFIED = 0;
+
+  // The disk image is fully available for use in new compute instances.
+  DISK_IMAGE_LIFECYCLE_AVAILABLE = 1;
+
+  // The disk image is available with warnings; migration to a replacement is recommended.
+  DISK_IMAGE_LIFECYCLE_DEPRECATED = 2;
+
+  // The disk image is not available for new compute instances; visible for lookups only.
+  DISK_IMAGE_LIFECYCLE_OBSOLETE = 3;
+}
+
+// Guest operating system family of a disk image.
+enum GuestOSFamily {
+  // Guest OS family is unknown or has not been determined yet.
+  GUEST_OS_FAMILY_UNSPECIFIED = 0;
+
+  // Linux-based guest operating system.
+  GUEST_OS_FAMILY_LINUX = 1;
+
+  // Windows-based guest operating system.
+  GUEST_OS_FAMILY_WINDOWS = 2;
+}
+
+// CPU architectures supported by a disk image.
+enum Architecture {
+  // Architecture is unknown or has not been determined yet.
+  ARCHITECTURE_UNSPECIFIED = 0;
+
+  // AMD64 (x86_64) architecture.
+  ARCHITECTURE_AMD64 = 1;
+
+  // ARM64 (AArch64) architecture.
+  ARCHITECTURE_ARM64 = 2;
+
+  // IBM System/390x architecture.
+  ARCHITECTURE_S390X = 3;
+}
+
+// Source types for disk image references.
+enum SourceType {
+  // Source type is unknown or has not been determined yet.
+  SOURCE_TYPE_UNSPECIFIED = 0;
+
+  // OCI container registry artifact.
+  SOURCE_TYPE_REGISTRY = 1;
+}
+
+// Contains deprecation details for a disk image.
+//
+// This message is only meaningful when the parent DiskImage lifecycle is DEPRECATED or OBSOLETE.
+message DiskImageDeprecation {
+  // When deprecation was announced. Auto-set on transition to DEPRECATED.
+  google.protobuf.Timestamp deprecation_timestamp = 1;
+
+  // When the disk image becomes or became obsolete. Admin-specified or auto-set on transition to OBSOLETE.
+  google.protobuf.Timestamp obsolescence_timestamp = 2;
+}
+
+// Wraps an existing disk image reference (OCI artifact URL) with human-readable metadata, enabling
+// users to discover and select images without knowing raw OCI references.
+//
+// Cloud Provider Admins create globally visible DiskImages. Tenant Admins and Tenant Users create
+// tenant-scoped DiskImages visible to all users within the tenant.
+//
+// The `spec` contains the desired configuration. The `status` contains the current state of the
+// disk image, is provided by the system and can't be modified by the user.
+message DiskImage {
+  // Unique identifier of the disk image.
+  string id = 1;
+
+  // Metadata of the disk image, including name, labels, tenant, and timestamps.
+  Metadata metadata = 2;
+
+  // Desired configuration of the disk image (admin-modifiable).
+  DiskImageSpec spec = 3;
+
+  // Current state of the disk image (system-provided, read-only).
+  DiskImageStatus status = 4;
+}
+
+// Defines the desired configuration for a DiskImage.
+//
+// The spec contains admin-specified parameters that define the disk image. The `source_type`, `source_ref`,
+// and `guest_os_family` fields are immutable after creation. The `architecture`, `lifecycle`, and `deprecation`
+// fields may be updated.
+message DiskImageSpec {
+  // Type of source reference. Immutable after creation.
+  SourceType source_type = 1 [(buf.validate.field).enum.defined_only = true];
+
+  // Reference to the disk image source (e.g., OCI artifact URL). Immutable after creation.
+  string source_ref = 2 [(buf.validate.field).string.min_len = 1];
+
+  // Guest operating system family of the disk image. Affects VM provisioning defaults. Immutable after creation.
+  GuestOSFamily guest_os_family = 3 [(buf.validate.field).enum.defined_only = true];
+
+  // CPU architectures supported by the disk image. Informational metadata only.
+  repeated Architecture architecture = 4 [(buf.validate.field).repeated = {
+    min_items: 1,
+    items: {
+      enum: {defined_only: true}
+    }
+  }];
+
+  // Current lifecycle state of the disk image.
+  DiskImageLifecycle lifecycle = 5;
+
+  // Deprecation details. Only meaningful when lifecycle is DEPRECATED or OBSOLETE.
+  DiskImageDeprecation deprecation = 6;
+}
+
+// Contains the system-provided status of a DiskImage.
+//
+// Currently empty. Reserved for future use.
+message DiskImageStatus {}

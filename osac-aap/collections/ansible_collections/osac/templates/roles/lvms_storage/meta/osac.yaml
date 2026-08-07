@@ -1,12 +1,15 @@
 ---
 title: LVMS Storage Provider
 description: >
-  Provisions per-tenant StorageClasses on the hub cluster using the LVMS (LVM Storage)
-  topolvm provisioner. No external backend or credentials required — LVMS is
-  installed on the hub by osac-installer when lvms.enabled=true. Hub cluster only;
-  CaaS guest cluster storage is out of scope.
+  Provisions per-tenant StorageClasses using the LVMS (LVM Storage) topolvm provisioner.
+  No external backend or credentials required. Hub path: LVMS is installed on the hub by
+  osac-installer when lvms.enabled=true. CaaS guest-cluster path: LVMS operator is
+  installed via OLM on the guest cluster when admin_kubeconfig is provided in the event
+  (requires a raw block device on the worker node — see setup-caas-agents.sh
+  AGENT_VM_DATA_DISK_SIZE).
 template_type: storage_provider
 implementation_strategy: lvms
 capabilities:
   provisioning_targets:
     - vmaas
+    - caas

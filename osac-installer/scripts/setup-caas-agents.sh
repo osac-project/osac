@@ -40,7 +40,11 @@ validate_safe() {
 validate_safe "AGENT_VM_STORAGE_DIR" "${AGENT_VM_STORAGE_DIR}"
 validate_safe "LIBVIRT_NETWORK" "${LIBVIRT_NETWORK}"
 validate_safe "AGENT_VM_DISK_SIZE" "${AGENT_VM_DISK_SIZE}"
-[[ -n "${AGENT_VM_DATA_DISK_SIZE}" ]] && validate_safe "AGENT_VM_DATA_DISK_SIZE" "${AGENT_VM_DATA_DISK_SIZE}"
+[[ -n "${AGENT_VM_DATA_DISK_SIZE}" ]] && {
+    [[ "${AGENT_VM_DATA_DISK_SIZE}" =~ ^[1-9][0-9]*[kMGTb]?$ ]] || {
+        echo "ERROR: AGENT_VM_DATA_DISK_SIZE must be a positive integer with optional size suffix (k/M/G/T/b): ${AGENT_VM_DATA_DISK_SIZE}" >&2; exit 1
+    }
+}
 
 echo "=== Setting up CaaS agent infrastructure ==="
 echo "Agent namespace: ${AGENT_NAMESPACE}"
@@ -186,10 +190,14 @@ curl -k -L --fail-with-body -o '${ISO_FILE}' '${ISO_URL}'
 virsh --connect qemu:///system destroy '${AGENT_VM_NAME}' 2>/dev/null || true
 virsh --connect qemu:///system undefine '${AGENT_VM_NAME}' 2>/dev/null || true
 rm -f '${AGENT_VM_STORAGE_DIR}/${AGENT_VM_NAME}.qcow2'
-${AGENT_VM_DATA_DISK_SIZE:+rm -f '${AGENT_VM_STORAGE_DIR}/${AGENT_VM_NAME}-data.qcow2'}
+if [[ -n '${AGENT_VM_DATA_DISK_SIZE}' ]]; then
+    rm -f '${AGENT_VM_STORAGE_DIR}/${AGENT_VM_NAME}-data.qcow2'
+fi
 
 qemu-img create -f qcow2 '${AGENT_VM_STORAGE_DIR}/${AGENT_VM_NAME}.qcow2' '${AGENT_VM_DISK_SIZE}'
-${AGENT_VM_DATA_DISK_SIZE:+qemu-img create -f qcow2 '${AGENT_VM_STORAGE_DIR}/${AGENT_VM_NAME}-data.qcow2' '${AGENT_VM_DATA_DISK_SIZE}'}
+if [[ -n '${AGENT_VM_DATA_DISK_SIZE}' ]]; then
+    qemu-img create -f qcow2 '${AGENT_VM_STORAGE_DIR}/${AGENT_VM_NAME}-data.qcow2' '${AGENT_VM_DATA_DISK_SIZE}'
+fi
 
 _virt_install_args=(
   --connect qemu:///system
@@ -198,7 +206,9 @@ _virt_install_args=(
   --vcpus '${AGENT_VM_VCPUS}'
   --disk '${AGENT_VM_STORAGE_DIR}/${AGENT_VM_NAME}.qcow2'
 )
-${AGENT_VM_DATA_DISK_SIZE:+_virt_install_args+=(--disk '${AGENT_VM_STORAGE_DIR}/${AGENT_VM_NAME}-data.qcow2')}
+if [[ -n '${AGENT_VM_DATA_DISK_SIZE}' ]]; then
+    _virt_install_args+=(--disk '${AGENT_VM_STORAGE_DIR}/${AGENT_VM_NAME}-data.qcow2')
+fi
 _virt_install_args+=(
   --disk '${ISO_FILE},device=cdrom,readonly=on'
   --network network='${LIBVIRT_NETWORK}'

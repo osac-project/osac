@@ -16,7 +16,7 @@
   block:
     - name: Create openshift-storage namespace on guest cluster
       kubernetes.core.k8s:
-        kubeconfig: "{{ _remote_kubeconfig }}"
+        kubeconfig: "{{ _remote_kubeconfig | default(omit) }}"
         validate_certs: "{{ not (_remote_kubeconfig_insecure | default(false)) }}"
         state: present
         definition:
@@ -27,7 +27,7 @@
 
     - name: Create LVMS OperatorGroup on guest cluster
       kubernetes.core.k8s:
-        kubeconfig: "{{ _remote_kubeconfig }}"
+        kubeconfig: "{{ _remote_kubeconfig | default(omit) }}"
         validate_certs: "{{ not (_remote_kubeconfig_insecure | default(false)) }}"
         state: present
         definition:
@@ -36,10 +36,13 @@
           metadata:
             name: lvms-operator
             namespace: "{{ lvms_storage_operator_namespace }}"
+          spec:
+            targetNamespaces:
+              - "{{ lvms_storage_operator_namespace }}"
 
     - name: Create LVMS Subscription on guest cluster
       kubernetes.core.k8s:
-        kubeconfig: "{{ _remote_kubeconfig }}"
+        kubeconfig: "{{ _remote_kubeconfig | default(omit) }}"
         validate_certs: "{{ not (_remote_kubeconfig_insecure | default(false)) }}"
         state: present
         definition:
@@ -52,12 +55,12 @@
             channel: "{{ lvms_storage_operator_channel }}"
             installPlanApproval: Automatic
             name: lvms-operator
-            source: redhat-operators
-            sourceNamespace: openshift-marketplace
+            source: "{{ lvms_storage_operator_catalog_source }}"
+            sourceNamespace: "{{ lvms_storage_operator_catalog_namespace }}"
 
     - name: Wait for LVMS CSV to reach Succeeded phase
       kubernetes.core.k8s_info:
-        kubeconfig: "{{ _remote_kubeconfig }}"
+        kubeconfig: "{{ _remote_kubeconfig | default(omit) }}"
         validate_certs: "{{ not (_remote_kubeconfig_insecure | default(false)) }}"
         api_version: operators.coreos.com/v1alpha1
         kind: ClusterServiceVersion
@@ -72,8 +75,18 @@
       delay: 20
 
     - name: Create LVMCluster on guest cluster
+      vars:
+        _lvms_base_device_class:
+          name: "{{ lvms_storage_device_class }}"
+          thinPoolConfig:
+            name: thin-pool-1
+            sizePercent: 90
+            overprovisionFactor: 10
+        _lvms_device_selector: >-
+          {{ {'deviceSelector': {'paths': [lvms_storage_data_device]}}
+             if lvms_storage_data_device else {} }}
       kubernetes.core.k8s:
-        kubeconfig: "{{ _remote_kubeconfig }}"
+        kubeconfig: "{{ _remote_kubeconfig | default(omit) }}"
         validate_certs: "{{ not (_remote_kubeconfig_insecure | default(false)) }}"
         state: present
         definition:
@@ -85,15 +98,11 @@
           spec:
             storage:
               deviceClasses:
-                - name: "{{ lvms_storage_device_class }}"
-                  thinPoolConfig:
-                    name: thin-pool-1
-                    sizePercent: 90
-                    overprovisionFactor: 10
+                - "{{ _lvms_base_device_class | combine(_lvms_device_selector) }}"
 
     - name: Wait for LVMCluster to be Ready on guest cluster
       kubernetes.core.k8s_info:
-        kubeconfig: "{{ _remote_kubeconfig }}"
+        kubeconfig: "{{ _remote_kubeconfig | default(omit) }}"
         validate_certs: "{{ not (_remote_kubeconfig_insecure | default(false)) }}"
         api_version: lvm.topolvm.io/v1alpha1
         kind: LVMCluster
@@ -102,7 +111,7 @@
       register: _lvms_cluster_status
       until:
         - _lvms_cluster_status.resources | length > 0
-        - _lvms_cluster_status.resources[0].status.state | default('') == 'Ready'
+        - _lvms_cluster_status.resources[0].status.state | default('') in ['Ready', 'Failed']
       failed_when:
         - _lvms_cluster_status.resources | length > 0
         - _lvms_cluster_status.resources[0].status.state | default('') == 'Failed'
@@ -111,7 +120,7 @@
 
     - name: Wait for LVMS StorageClass to appear on guest cluster
       kubernetes.core.k8s_info:
-        kubeconfig: "{{ _remote_kubeconfig }}"
+        kubeconfig: "{{ _remote_kubeconfig | default(omit) }}"
         validate_certs: "{{ not (_remote_kubeconfig_insecure | default(false)) }}"
         api_version: storage.k8s.io/v1
         kind: StorageClass

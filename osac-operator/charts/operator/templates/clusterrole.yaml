@@ -35,6 +35,7 @@ rules:
   - hypershift.openshift.io
   resources:
   - hostedclusters
+  - hostedcontrolplanes
   - nodepools
   verbs:
   - get

@@ -36,6 +36,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/clusterversion"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/computeinstance"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/computeinstancecatalogitem"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/diskimage"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/externalip"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/externalipattachment"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/hub"
@@ -69,6 +70,7 @@ func Cmd() *cobra.Command {
 	result.AddCommand(help.MarkPrivateAPI(clusterversion.Cmd()))
 	result.AddCommand(computeinstance.Cmd())
 	result.AddCommand(computeinstancecatalogitem.Cmd())
+	result.AddCommand(diskimage.Cmd())
 	result.AddCommand(externalip.Cmd())
 	result.AddCommand(externalipattachment.Cmd())
 	result.AddCommand(help.MarkPrivateAPI(hub.Cmd()))

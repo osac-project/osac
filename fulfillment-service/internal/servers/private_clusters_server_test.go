@@ -194,6 +194,7 @@ var _ = Describe("Private clusters server", func() {
 			_, err = vnDao.Create().SetObject(privatev1.VirtualNetwork_builder{
 				Id: "test-vnet",
 				Metadata: privatev1.Metadata_builder{
+					Name:   "test-vnet",
 					Tenant: auth.SharedTenant,
 				}.Build(),
 			}.Build()).Do(ctx)
@@ -208,6 +209,7 @@ var _ = Describe("Private clusters server", func() {
 				_, err = subnetsDao.Create().SetObject(privatev1.Subnet_builder{
 					Id: subnetID,
 					Metadata: privatev1.Metadata_builder{
+						Name:   subnetID,
 						Tenant: auth.SharedTenant,
 					}.Build(),
 					Spec: privatev1.SubnetSpec_builder{
@@ -230,6 +232,7 @@ var _ = Describe("Private clusters server", func() {
 							Title:       fmt.Sprintf("My template %d", i),
 							Description: fmt.Sprintf("My template %d", i),
 							Metadata: privatev1.Metadata_builder{
+								Name:   fmt.Sprintf("my-template-name-%d", i),
 								Tenant: auth.SharedTenant,
 							}.Build(),
 							NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
@@ -644,6 +647,7 @@ var _ = Describe("Private clusters server", func() {
 		It("Canonicalizes network CIDRs on Update", func() {
 			createResponse, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 				Object: privatev1.Cluster_builder{
+					Metadata: privatev1.Metadata_builder{Name: "test-cluster"}.Build(),
 					Spec: privatev1.ClusterSpec_builder{
 						Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 					}.Build(),
@@ -688,6 +692,7 @@ var _ = Describe("Private clusters server", func() {
 			// Create the object:
 			createResponse, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 				Object: privatev1.Cluster_builder{
+					Metadata: privatev1.Metadata_builder{Name: "test-cluster"}.Build(),
 					Spec: privatev1.ClusterSpec_builder{
 						Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 					}.Build(),
@@ -729,6 +734,7 @@ var _ = Describe("Private clusters server", func() {
 			createResponse, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 				Object: privatev1.Cluster_builder{
 					Metadata: privatev1.Metadata_builder{
+						Name:       "test-cluster",
 						Finalizers: []string{"a"},
 					}.Build(),
 					Spec: privatev1.ClusterSpec_builder{
@@ -785,6 +791,7 @@ var _ = Describe("Private clusters server", func() {
 		It("Rejects update with duplicate condition", func() {
 			_, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 				Object: privatev1.Cluster_builder{
+					Metadata: privatev1.Metadata_builder{Name: "test-cluster"}.Build(),
 					Spec: privatev1.ClusterSpec_builder{
 						Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 					}.Build(),
@@ -823,6 +830,7 @@ var _ = Describe("Private clusters server", func() {
 			// Create a cluster with the default node sets from the template
 			createResponse, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 				Object: privatev1.Cluster_builder{
+					Metadata: privatev1.Metadata_builder{Name: "test-cluster"}.Build(),
 					Spec: privatev1.ClusterSpec_builder{
 						Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 					}.Build(),
@@ -864,6 +872,7 @@ var _ = Describe("Private clusters server", func() {
 			// Create a cluster with the default node sets from the template
 			createResponse, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 				Object: privatev1.Cluster_builder{
+					Metadata: privatev1.Metadata_builder{Name: "test-cluster"}.Build(),
 					Spec: privatev1.ClusterSpec_builder{
 						Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 					}.Build(),
@@ -897,6 +906,7 @@ var _ = Describe("Private clusters server", func() {
 			// Create a cluster with a template that has only one node set
 			createResponse, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 				Object: privatev1.Cluster_builder{
+					Metadata: privatev1.Metadata_builder{Name: "test-cluster"}.Build(),
 					Spec: privatev1.ClusterSpec_builder{
 						Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id-0"}.Build(),
 					}.Build(),
@@ -929,6 +939,7 @@ var _ = Describe("Private clusters server", func() {
 			// Create a cluster with the default node sets from the template
 			createResponse, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 				Object: privatev1.Cluster_builder{
+					Metadata: privatev1.Metadata_builder{Name: "test-cluster"}.Build(),
 					Spec: privatev1.ClusterSpec_builder{
 						Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 					}.Build(),
@@ -969,6 +980,7 @@ var _ = Describe("Private clusters server", func() {
 			// Create a cluster with the default node sets from the template
 			createResponse, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 				Object: privatev1.Cluster_builder{
+					Metadata: privatev1.Metadata_builder{Name: "test-cluster"}.Build(),
 					Spec: privatev1.ClusterSpec_builder{
 						Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 					}.Build(),
@@ -1007,6 +1019,7 @@ var _ = Describe("Private clusters server", func() {
 			// Create a cluster with the default node sets from the template
 			createResponse, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 				Object: privatev1.Cluster_builder{
+					Metadata: privatev1.Metadata_builder{Name: "test-cluster"}.Build(),
 					Spec: privatev1.ClusterSpec_builder{
 						Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 					}.Build(),
@@ -1047,6 +1060,7 @@ var _ = Describe("Private clusters server", func() {
 			// Create a cluster
 			createResponse, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 				Object: privatev1.Cluster_builder{
+					Metadata: privatev1.Metadata_builder{Name: "test-cluster"}.Build(),
 					Spec: privatev1.ClusterSpec_builder{
 						Template: privatev1.ClusterTemplateReference_builder{Id: oldTemplate}.Build(),
 					}.Build(),
@@ -1081,6 +1095,7 @@ var _ = Describe("Private clusters server", func() {
 			// Create a cluster with template parameters
 			createResponse, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 				Object: privatev1.Cluster_builder{
+					Metadata: privatev1.Metadata_builder{Name: "test-cluster"}.Build(),
 					Spec: privatev1.ClusterSpec_builder{
 						Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 					}.Build(),
@@ -1113,6 +1128,7 @@ var _ = Describe("Private clusters server", func() {
 			createClusterWithNetworkAttachment := func(subnet *privatev1.SubnetLocalReference, securityGroups []*privatev1.SecurityGroupLocalReference) *privatev1.Cluster {
 				createResponse, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{Name: "test-cluster"}.Build(),
 						Spec: privatev1.ClusterSpec_builder{
 							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 							NetworkAttachment: privatev1.ClusterNetworkAttachment_builder{
@@ -1176,6 +1192,7 @@ var _ = Describe("Private clusters server", func() {
 			It("Rejects adding network_attachment when none existed", func() {
 				createResponse, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{Name: "test-cluster"}.Build(),
 						Spec: privatev1.ClusterSpec_builder{
 							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 						}.Build(),
@@ -1574,7 +1591,7 @@ var _ = Describe("Private clusters server", func() {
 				Expect(nodeSets["worker"].GetSize()).To(Equal(int32(2)))
 			})
 
-			It("Applies version_name from template spec_defaults via catalog item", func() {
+			It("Applies version from template spec_defaults via catalog item", func() {
 				// Seed a non-default ClusterVersion for the template to pin:
 				seedClusterVersion(ctx, privatev1.ClusterVersion_builder{
 					Id: uuid.New(),
@@ -1589,7 +1606,7 @@ var _ = Describe("Private clusters server", func() {
 					}.Build(),
 				}.Build())
 
-				// Create a template whose spec_defaults pins version_name:
+				// Create a template whose spec_defaults pins version:
 				templatesDao, err := dao.NewGenericDAO[*privatev1.ClusterTemplate]().
 					SetLogger(logger).
 					SetTenancyLogic(tenancy).
@@ -1612,7 +1629,7 @@ var _ = Describe("Private clusters server", func() {
 								}.Build(),
 							},
 							SpecDefaults: privatev1.ClusterTemplateSpecDefaults_builder{
-								VersionName: proto.String("4-18-0"),
+								Version: &privatev1.ClusterVersionReference{Name: "4-18-0"},
 							}.Build(),
 						}.Build(),
 					).
@@ -1620,7 +1637,7 @@ var _ = Describe("Private clusters server", func() {
 				Expect(err).ToNot(HaveOccurred())
 
 				// Create a catalog item referencing the version-pinned template
-				// (no version_name field_definition):
+				// (no version field_definition):
 				_, err = catalogItemsDao.Create().SetObject(
 					privatev1.ClusterCatalogItem_builder{
 						Id: "cat-version-pinned",
@@ -1635,7 +1652,7 @@ var _ = Describe("Private clusters server", func() {
 				).Do(ctx)
 				Expect(err).ToNot(HaveOccurred())
 
-				// Create a cluster via catalog item without specifying version_name:
+				// Create a cluster via catalog item without specifying version:
 				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
 						Spec: privatev1.ClusterSpec_builder{
@@ -1648,11 +1665,11 @@ var _ = Describe("Private clusters server", func() {
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 
-				// Template spec_defaults.version_name should win over system default:
-				Expect(response.GetObject().GetSpec().GetVersionName()).To(Equal("4-18-0"))
+				// Template spec_defaults.version should win over system default:
+				Expect(response.GetObject().GetSpec().GetVersion().GetName()).To(Equal("4-18-0"))
 			})
 
-			It("Field definition version_name overrides template spec_defaults via catalog item", func() {
+			It("Field definition version overrides template spec_defaults via catalog item", func() {
 				// Seed a non-default ClusterVersion for the field_definition to set:
 				seedClusterVersion(ctx, privatev1.ClusterVersion_builder{
 					Id: uuid.New(),
@@ -1667,7 +1684,7 @@ var _ = Describe("Private clusters server", func() {
 					}.Build(),
 				}.Build())
 
-				// Create a template whose spec_defaults pins version_name to 4-17-0
+				// Create a template whose spec_defaults pins version to 4-17-0
 				// (the system default, but specified explicitly as a template default):
 				templatesDao, err := dao.NewGenericDAO[*privatev1.ClusterTemplate]().
 					SetLogger(logger).
@@ -1691,14 +1708,14 @@ var _ = Describe("Private clusters server", func() {
 								}.Build(),
 							},
 							SpecDefaults: privatev1.ClusterTemplateSpecDefaults_builder{
-								VersionName: proto.String("4-17-0"),
+								Version: &privatev1.ClusterVersionReference{Name: "4-17-0"},
 							}.Build(),
 						}.Build(),
 					).
 					Do(ctx)
 				Expect(err).ToNot(HaveOccurred())
 
-				// Create a catalog item with a field_definition that overrides version_name:
+				// Create a catalog item with a field_definition that overrides version:
 				_, err = catalogItemsDao.Create().SetObject(
 					privatev1.ClusterCatalogItem_builder{
 						Id: "cat-fd-override",
@@ -1711,16 +1728,16 @@ var _ = Describe("Private clusters server", func() {
 						Template:  &privatev1.ClusterTemplateReference{Id: "template-fd-override"},
 						FieldDefinitions: []*privatev1.FieldDefinition{
 							privatev1.FieldDefinition_builder{
-								Path:     "version_name",
+								Path:     "version",
 								Editable: false,
-								Default:  structpb.NewStringValue("4-19-0"),
+								Default:  structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{"name": structpb.NewStringValue("4-19-0")}}),
 							}.Build(),
 						},
 					}.Build(),
 				).Do(ctx)
 				Expect(err).ToNot(HaveOccurred())
 
-				// Create a cluster via catalog item without specifying version_name:
+				// Create a cluster via catalog item without specifying version:
 				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
 						Spec: privatev1.ClusterSpec_builder{
@@ -1734,11 +1751,11 @@ var _ = Describe("Private clusters server", func() {
 				Expect(err).ToNot(HaveOccurred())
 
 				// Field definition default should win over template spec_defaults:
-				Expect(response.GetObject().GetSpec().GetVersionName()).To(Equal("4-19-0"))
+				Expect(response.GetObject().GetSpec().GetVersion().GetName()).To(Equal("4-19-0"))
 			})
 
-			It("Falls back to system default version via catalog item when nothing sets version_name", func() {
-				// Create a template with no spec_defaults.version_name:
+			It("Falls back to system default version via catalog item when nothing sets version", func() {
+				// Create a template with no spec_defaults.version:
 				templatesDao, err := dao.NewGenericDAO[*privatev1.ClusterTemplate]().
 					SetLogger(logger).
 					SetTenancyLogic(tenancy).
@@ -1753,7 +1770,7 @@ var _ = Describe("Private clusters server", func() {
 								Tenant: auth.SharedTenant,
 							}.Build(),
 							Title:       "Template without version default",
-							Description: "Template with no spec_defaults.version_name",
+							Description: "Template with no spec_defaults.version",
 							NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
 								"worker": privatev1.ClusterTemplateNodeSet_builder{
 									HostType: &privatev1.HostTypeReference{Id: "acme-1ti-id"},
@@ -1765,7 +1782,7 @@ var _ = Describe("Private clusters server", func() {
 					Do(ctx)
 				Expect(err).ToNot(HaveOccurred())
 
-				// Create a catalog item with no version_name field_definition:
+				// Create a catalog item with no version field_definition:
 				_, err = catalogItemsDao.Create().SetObject(
 					privatev1.ClusterCatalogItem_builder{
 						Id: "cat-no-version",
@@ -1780,7 +1797,7 @@ var _ = Describe("Private clusters server", func() {
 				).Do(ctx)
 				Expect(err).ToNot(HaveOccurred())
 
-				// Create a cluster via catalog item without specifying version_name:
+				// Create a cluster via catalog item without specifying version:
 				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
 						Spec: privatev1.ClusterSpec_builder{
@@ -1794,7 +1811,7 @@ var _ = Describe("Private clusters server", func() {
 				Expect(err).ToNot(HaveOccurred())
 
 				// System default (4-17-0) should be used as last resort:
-				Expect(response.GetObject().GetSpec().GetVersionName()).To(Equal("4-17-0"))
+				Expect(response.GetObject().GetSpec().GetVersion().GetName()).To(Equal("4-17-0"))
 			})
 
 			It("Fails when catalog item has no template", func() {
@@ -1833,6 +1850,7 @@ var _ = Describe("Private clusters server", func() {
 
 				createResponse, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{Name: "test-cluster"}.Build(),
 						Spec: privatev1.ClusterSpec_builder{
 							CatalogItem: privatev1.ClusterCatalogItemReference_builder{Id: "cat-immut"}.Build(),
 						}.Build(),
@@ -1865,15 +1883,18 @@ var _ = Describe("Private clusters server", func() {
 			})
 		})
 
-		It("Allows changing version_name to a valid version on update", func() {
+		It("Allows changing version to a valid version on update", func() {
 			versionName := "4-17-0"
 
-			// Create a cluster with an explicit version_name:
+			// Create a cluster with an explicit version:
 			createResponse, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 				Object: privatev1.Cluster_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-cluster",
+					}.Build(),
 					Spec: privatev1.ClusterSpec_builder{
-						Template:    &privatev1.ClusterTemplateReference{Id: "my-template-id"},
-						VersionName: &versionName,
+						Template: &privatev1.ClusterTemplateReference{Id: "my-template-id"},
+						Version:  &privatev1.ClusterVersionReference{Name: versionName},
 					}.Build(),
 					Status: privatev1.ClusterStatus_builder{
 						Hub: "my-hub-id",
@@ -1897,32 +1918,35 @@ var _ = Describe("Private clusters server", func() {
 				}.Build(),
 			}.Build())
 
-			// Change the version_name:
+			// Change the version:
 			newVersion := "4-18-0"
 			updateResponse, err := server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
 				Object: privatev1.Cluster_builder{
 					Id: object.GetId(),
 					Spec: privatev1.ClusterSpec_builder{
-						VersionName: &newVersion,
+						Version: &privatev1.ClusterVersionReference{Name: newVersion},
 					}.Build(),
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{
-					Paths: []string{"spec.version_name"},
+					Paths: []string{"spec.version"},
 				},
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(updateResponse.GetObject().GetSpec().GetVersionName()).To(Equal("4-18-0"))
+			Expect(updateResponse.GetObject().GetSpec().GetVersion().GetName()).To(Equal("4-18-0"))
 		})
 
-		It("Preserves existing version_name when update sends empty string", func() {
+		It("Preserves existing version when update sends empty name", func() {
 			versionName := "4-17-0"
 
-			// Create a cluster with an explicit version_name:
+			// Create a cluster with an explicit version:
 			createResponse, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 				Object: privatev1.Cluster_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-cluster",
+					}.Build(),
 					Spec: privatev1.ClusterSpec_builder{
-						Template:    &privatev1.ClusterTemplateReference{Id: "my-template-id"},
-						VersionName: &versionName,
+						Template: &privatev1.ClusterTemplateReference{Id: "my-template-id"},
+						Version:  &privatev1.ClusterVersionReference{Name: versionName},
 					}.Build(),
 					Status: privatev1.ClusterStatus_builder{
 						Hub: "my-hub-id",
@@ -1932,32 +1956,31 @@ var _ = Describe("Private clusters server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			object := createResponse.GetObject()
 
-			// Update with an explicitly empty version_name:
-			emptyVersion := ""
+			// Update with an explicitly empty version name:
 			updateResponse, err := server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
 				Object: privatev1.Cluster_builder{
 					Id: object.GetId(),
 					Spec: privatev1.ClusterSpec_builder{
-						VersionName: &emptyVersion,
+						Version: &privatev1.ClusterVersionReference{Name: ""},
 					}.Build(),
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{
-					Paths: []string{"spec.version_name"},
+					Paths: []string{"spec.version"},
 				},
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(updateResponse.GetObject().GetSpec().GetVersionName()).To(Equal("4-17-0"))
+			Expect(updateResponse.GetObject().GetSpec().GetVersion().GetName()).To(Equal("4-17-0"))
 		})
 
-		It("Rejects changing version_name to a non-existent version", func() {
+		It("Rejects changing version to a non-existent version", func() {
 			versionName := "4-17-0"
 
-			// Create a cluster with an explicit version_name:
+			// Create a cluster with an explicit version:
 			createResponse, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 				Object: privatev1.Cluster_builder{
 					Spec: privatev1.ClusterSpec_builder{
-						Template:    &privatev1.ClusterTemplateReference{Id: "my-template-id"},
-						VersionName: &versionName,
+						Template: &privatev1.ClusterTemplateReference{Id: "my-template-id"},
+						Version:  &privatev1.ClusterVersionReference{Name: versionName},
 					}.Build(),
 					Status: privatev1.ClusterStatus_builder{
 						Hub: "my-hub-id",
@@ -1973,11 +1996,11 @@ var _ = Describe("Private clusters server", func() {
 				Object: privatev1.Cluster_builder{
 					Id: object.GetId(),
 					Spec: privatev1.ClusterSpec_builder{
-						VersionName: &nonExistent,
+						Version: &privatev1.ClusterVersionReference{Name: nonExistent},
 					}.Build(),
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{
-					Paths: []string{"spec.version_name"},
+					Paths: []string{"spec.version"},
 				},
 			}.Build())
 			Expect(err).To(HaveOccurred())
@@ -1986,15 +2009,15 @@ var _ = Describe("Private clusters server", func() {
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 		})
 
-		It("Rejects changing version_name to a disabled version", func() {
+		It("Rejects changing version to a disabled version", func() {
 			versionName := "4-17-0"
 
-			// Create a cluster with an explicit version_name:
+			// Create a cluster with an explicit version:
 			createResponse, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 				Object: privatev1.Cluster_builder{
 					Spec: privatev1.ClusterSpec_builder{
-						Template:    &privatev1.ClusterTemplateReference{Id: "my-template-id"},
-						VersionName: &versionName,
+						Template: &privatev1.ClusterTemplateReference{Id: "my-template-id"},
+						Version:  &privatev1.ClusterVersionReference{Name: versionName},
 					}.Build(),
 					Status: privatev1.ClusterStatus_builder{
 						Hub: "my-hub-id",
@@ -2024,11 +2047,11 @@ var _ = Describe("Private clusters server", func() {
 				Object: privatev1.Cluster_builder{
 					Id: object.GetId(),
 					Spec: privatev1.ClusterSpec_builder{
-						VersionName: &disabledName,
+						Version: &privatev1.ClusterVersionReference{Name: disabledName},
 					}.Build(),
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{
-					Paths: []string{"spec.version_name"},
+					Paths: []string{"spec.version"},
 				},
 			}.Build())
 			Expect(err).To(HaveOccurred())
@@ -2037,15 +2060,15 @@ var _ = Describe("Private clusters server", func() {
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 		})
 
-		It("Rejects changing version_name to an obsolete version", func() {
+		It("Rejects changing version to an obsolete version", func() {
 			versionName := "4-17-0"
 
-			// Create a cluster with an explicit version_name:
+			// Create a cluster with an explicit version:
 			createResponse, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 				Object: privatev1.Cluster_builder{
 					Spec: privatev1.ClusterSpec_builder{
-						Template:    &privatev1.ClusterTemplateReference{Id: "my-template-id"},
-						VersionName: &versionName,
+						Template: &privatev1.ClusterTemplateReference{Id: "my-template-id"},
+						Version:  &privatev1.ClusterVersionReference{Name: versionName},
 					}.Build(),
 					Status: privatev1.ClusterStatus_builder{
 						Hub: "my-hub-id",
@@ -2076,11 +2099,11 @@ var _ = Describe("Private clusters server", func() {
 				Object: privatev1.Cluster_builder{
 					Id: object.GetId(),
 					Spec: privatev1.ClusterSpec_builder{
-						VersionName: &obsoleteName,
+						Version: &privatev1.ClusterVersionReference{Name: obsoleteName},
 					}.Build(),
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{
-					Paths: []string{"spec.version_name"},
+					Paths: []string{"spec.version"},
 				},
 			}.Build())
 			Expect(err).To(HaveOccurred())
@@ -2089,15 +2112,15 @@ var _ = Describe("Private clusters server", func() {
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 		})
 
-		It("Rejects non-existent version_name on nil-mask full-object update", func() {
+		It("Rejects non-existent version on nil-mask full-object update", func() {
 			versionName := "4-17-0"
 
-			// Create a cluster with a valid version_name:
+			// Create a cluster with a valid version:
 			createResponse, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 				Object: privatev1.Cluster_builder{
 					Spec: privatev1.ClusterSpec_builder{
-						Template:    &privatev1.ClusterTemplateReference{Id: "my-template-id"},
-						VersionName: &versionName,
+						Template: &privatev1.ClusterTemplateReference{Id: "my-template-id"},
+						Version:  &privatev1.ClusterVersionReference{Name: versionName},
 					}.Build(),
 					Status: privatev1.ClusterStatus_builder{
 						Hub: "my-hub-id",
@@ -2107,9 +2130,8 @@ var _ = Describe("Private clusters server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			object := createResponse.GetObject()
 
-			// Full-object update with nil mask and a non-existent version_name:
-			nonExistent := "does-not-exist"
-			object.GetSpec().SetVersionName(nonExistent)
+			// Full-object update with nil mask and a non-existent version:
+			object.GetSpec().SetVersion(&privatev1.ClusterVersionReference{Name: "does-not-exist"})
 			_, err = server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
 				Object: object,
 			}.Build())
@@ -2132,13 +2154,12 @@ var _ = Describe("Private clusters server", func() {
 				Expect(err).ToNot(HaveOccurred())
 			})
 
-			It("Rejects create with non-existent version_name", func() {
-				nonExistent := "does-not-exist"
+			It("Rejects create with non-existent version", func() {
 				_, err := validatedServer.Create(ctx, privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
 						Spec: privatev1.ClusterSpec_builder{
-							Template:    &privatev1.ClusterTemplateReference{Id: "my-template-id"},
-							VersionName: &nonExistent,
+							Template: &privatev1.ClusterTemplateReference{Id: "my-template-id"},
+							Version:  &privatev1.ClusterVersionReference{Name: "does-not-exist"},
 						}.Build(),
 						Status: privatev1.ClusterStatus_builder{
 							Hub: "my-hub-id",
@@ -2171,8 +2192,8 @@ var _ = Describe("Private clusters server", func() {
 				_, err := validatedServer.Create(ctx, privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
 						Spec: privatev1.ClusterSpec_builder{
-							Template:    &privatev1.ClusterTemplateReference{Id: "my-template-id"},
-							VersionName: &disabledName,
+							Template: &privatev1.ClusterTemplateReference{Id: "my-template-id"},
+							Version:  &privatev1.ClusterVersionReference{Name: disabledName},
 						}.Build(),
 						Status: privatev1.ClusterStatus_builder{
 							Hub: "my-hub-id",
@@ -2206,8 +2227,8 @@ var _ = Describe("Private clusters server", func() {
 				_, err := validatedServer.Create(ctx, privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
 						Spec: privatev1.ClusterSpec_builder{
-							Template:    &privatev1.ClusterTemplateReference{Id: "my-template-id"},
-							VersionName: &obsoleteName,
+							Template: &privatev1.ClusterTemplateReference{Id: "my-template-id"},
+							Version:  &privatev1.ClusterVersionReference{Name: obsoleteName},
 						}.Build(),
 						Status: privatev1.ClusterStatus_builder{
 							Hub: "my-hub-id",
@@ -2235,7 +2256,7 @@ var _ = Describe("Private clusters server", func() {
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
-				Expect(response.GetObject().GetSpec().GetVersionName()).To(Equal("4-17-0"))
+				Expect(response.GetObject().GetSpec().GetVersion().GetName()).To(Equal("4-17-0"))
 			})
 
 			It("Rejects create when no system default version exists", func() {
@@ -2368,6 +2389,7 @@ var _ = Describe("Private clusters server", func() {
 			createCluster := func() *privatev1.Cluster {
 				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{Name: "test-cluster"}.Build(),
 						Spec: privatev1.ClusterSpec_builder{
 							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 						}.Build(),
@@ -2505,6 +2527,9 @@ var _ = Describe("Private clusters server", func() {
 			It("Returns resolved cluster with template path", func() {
 				response, err := server.Create(dryRunCtx(), privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: "test-cluster",
+						}.Build(),
 						Spec: privatev1.ClusterSpec_builder{
 							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-name"}.Build(),
 							NodeSets: map[string]*privatev1.ClusterNodeSet{
@@ -2550,6 +2575,9 @@ var _ = Describe("Private clusters server", func() {
 
 				response, err := server.Create(dryRunCtx(), privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: "test-cluster",
+						}.Build(),
 						Spec: privatev1.ClusterSpec_builder{
 							CatalogItem: privatev1.ClusterCatalogItemReference_builder{Id: "cat-dry-run"}.Build(),
 						}.Build(),
@@ -2568,6 +2596,9 @@ var _ = Describe("Private clusters server", func() {
 			It("Does not persist the object", func() {
 				_, err := server.Create(dryRunCtx(), privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: "test-cluster",
+						}.Build(),
 						Spec: privatev1.ClusterSpec_builder{
 							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-name"}.Build(),
 						}.Build(),
@@ -2586,6 +2617,9 @@ var _ = Describe("Private clusters server", func() {
 			It("Returns same error as real creation for invalid template", func() {
 				_, realErr := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: "test-cluster",
+						}.Build(),
 						Spec: privatev1.ClusterSpec_builder{
 							Template: privatev1.ClusterTemplateReference_builder{Id: "non-existent-template"}.Build(),
 						}.Build(),
@@ -2598,6 +2632,9 @@ var _ = Describe("Private clusters server", func() {
 
 				_, dryRunErr := server.Create(dryRunCtx(), privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: "test-cluster",
+						}.Build(),
 						Spec: privatev1.ClusterSpec_builder{
 							Template: privatev1.ClusterTemplateReference_builder{Id: "non-existent-template"}.Build(),
 						}.Build(),

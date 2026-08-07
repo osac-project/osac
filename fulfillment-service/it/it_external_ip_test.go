@@ -51,6 +51,9 @@ var _ = Describe("Private ExternalIPPool CRUD", func() {
 		response, err := client.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 			Object: privatev1.ExternalIPPool_builder{
 				Id: id,
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("test-pool-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: privatev1.ExternalIPPoolSpec_builder{
 					Cidrs:    []string{cidr},
 					IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
@@ -93,6 +96,7 @@ var _ = Describe("Private ExternalIPPool CRUD", func() {
 		_, err := client.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 			Object: privatev1.ExternalIPPool_builder{
 				Metadata: privatev1.Metadata_builder{
+					Name:       fmt.Sprintf("test-pool-%s", uuid.New()[24:32]),
 					Finalizers: []string{"test"},
 				}.Build(),
 				Id: id,
@@ -121,6 +125,9 @@ var _ = Describe("Private ExternalIPPool CRUD", func() {
 		_, err := client.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 			Object: privatev1.ExternalIPPool_builder{
 				Id: id,
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("test-pool-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: privatev1.ExternalIPPoolSpec_builder{
 					Cidrs:    []string{uniqueCIDR()},
 					IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
@@ -164,6 +171,9 @@ var _ = Describe("Private ExternalIPPool CRUD", func() {
 		_, err := client.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 			Object: privatev1.ExternalIPPool_builder{
 				Id: id1,
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("test-pool-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: privatev1.ExternalIPPoolSpec_builder{
 					Cidrs:    []string{cidr},
 					IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
@@ -176,6 +186,9 @@ var _ = Describe("Private ExternalIPPool CRUD", func() {
 		_, err = client.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 			Object: privatev1.ExternalIPPool_builder{
 				Id: id2,
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("test-pool-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: privatev1.ExternalIPPoolSpec_builder{
 					Cidrs:    []string{cidr},
 					IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
@@ -197,6 +210,9 @@ var _ = Describe("Private ExternalIPPool CRUD", func() {
 		_, err := client.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 			Object: privatev1.ExternalIPPool_builder{
 				Id: poolId,
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("test-pool-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: privatev1.ExternalIPPoolSpec_builder{
 					Cidrs:    []string{uniqueCIDR()},
 					IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
@@ -236,6 +252,9 @@ var _ = Describe("Private ExternalIPPool CRUD", func() {
 		_, err = externalIPsClient.Create(ctx, publicv1.ExternalIPsCreateRequest_builder{
 			Object: publicv1.ExternalIP_builder{
 				Id: ipId,
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-ip-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.ExternalIPSpec_builder{
 					Pool: publicv1.ExternalIPPoolReference_builder{Id: poolId}.Build(),
 				}.Build(),
@@ -298,6 +317,9 @@ var _ = Describe("ExternalIP lifecycle", func() {
 		_, err := poolsClient.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 			Object: privatev1.ExternalIPPool_builder{
 				Id: poolId,
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("test-pool-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: privatev1.ExternalIPPoolSpec_builder{
 					Cidrs:    []string{uniqueCIDR()},
 					IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
@@ -338,6 +360,9 @@ var _ = Describe("ExternalIP lifecycle", func() {
 		response, err := externalIPsClient.Create(ctx, publicv1.ExternalIPsCreateRequest_builder{
 			Object: publicv1.ExternalIP_builder{
 				Id: ipId,
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-ip-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.ExternalIPSpec_builder{
 					Pool: publicv1.ExternalIPPoolReference_builder{Id: poolId}.Build(),
 				}.Build(),
@@ -374,6 +399,9 @@ var _ = Describe("ExternalIP lifecycle", func() {
 		_, err := externalIPsClient.Create(ctx, publicv1.ExternalIPsCreateRequest_builder{
 			Object: publicv1.ExternalIP_builder{
 				Id: ipId,
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-ip-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.ExternalIPSpec_builder{
 					Pool: publicv1.ExternalIPPoolReference_builder{Id: poolId}.Build(),
 				}.Build(),
@@ -399,6 +427,9 @@ var _ = Describe("ExternalIP lifecycle", func() {
 		_, err := externalIPsClient.Create(ctx, publicv1.ExternalIPsCreateRequest_builder{
 			Object: publicv1.ExternalIP_builder{
 				Id: ipId,
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-ip-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.ExternalIPSpec_builder{
 					Pool: publicv1.ExternalIPPoolReference_builder{Id: poolId}.Build(),
 				}.Build(),
@@ -438,6 +469,9 @@ var _ = Describe("ExternalIP lifecycle", func() {
 		_, err := externalIPsClient.Create(ctx, publicv1.ExternalIPsCreateRequest_builder{
 			Object: publicv1.ExternalIP_builder{
 				Id: ipId,
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-ip-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.ExternalIPSpec_builder{
 					Pool: publicv1.ExternalIPPoolReference_builder{Id: poolId}.Build(),
 				}.Build(),
@@ -457,6 +491,9 @@ var _ = Describe("ExternalIP lifecycle", func() {
 		_, err := externalIPsClient.Create(ctx, publicv1.ExternalIPsCreateRequest_builder{
 			Object: publicv1.ExternalIP_builder{
 				Id: ipId,
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-ip-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.ExternalIPSpec_builder{
 					Pool: publicv1.ExternalIPPoolReference_builder{Name: "nonexistent-pool"}.Build(),
 				}.Build(),
@@ -471,6 +508,9 @@ var _ = Describe("ExternalIP lifecycle", func() {
 		_, err := poolsClient.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 			Object: privatev1.ExternalIPPool_builder{
 				Id: nonReadyPoolId,
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("test-pool-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: privatev1.ExternalIPPoolSpec_builder{
 					Cidrs:    []string{uniqueCIDR()},
 					IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
@@ -483,6 +523,9 @@ var _ = Describe("ExternalIP lifecycle", func() {
 		_, err = externalIPsClient.Create(ctx, publicv1.ExternalIPsCreateRequest_builder{
 			Object: publicv1.ExternalIP_builder{
 				Id: ipId,
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-ip-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.ExternalIPSpec_builder{
 					Pool: publicv1.ExternalIPPoolReference_builder{Id: nonReadyPoolId}.Build(),
 				}.Build(),
@@ -545,6 +588,9 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		_, err := poolsClient.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 			Object: privatev1.ExternalIPPool_builder{
 				Id: poolId,
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("test-pool-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: privatev1.ExternalIPPoolSpec_builder{
 					Cidrs:    []string{uniqueCIDR()},
 					IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
@@ -583,6 +629,9 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		_, err = externalIPsClient.Create(ctx, publicv1.ExternalIPsCreateRequest_builder{
 			Object: publicv1.ExternalIP_builder{
 				Id: externalIPId,
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-ip-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.ExternalIPSpec_builder{
 					Pool: publicv1.ExternalIPPoolReference_builder{Id: poolId}.Build(),
 				}.Build(),
@@ -609,6 +658,9 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		_, err = hostTypesClient.Create(ctx, privatev1.HostTypesCreateRequest_builder{
 			Object: privatev1.HostType_builder{
 				Id: hostTypeId,
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("test-ht-%s", uuid.New()[24:32]),
+				}.Build(),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
@@ -618,6 +670,9 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 			Object: privatev1.ClusterTemplate_builder{
 				Id:    templateId,
 				Title: "Test Template",
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("test-tmpl-%s", uuid.New()[24:32]),
+				}.Build(),
 				NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
 					"workers": privatev1.ClusterTemplateNodeSet_builder{
 						HostType: privatev1.HostTypeReference_builder{Id: hostTypeId}.Build(),
@@ -630,6 +685,9 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 
 		createClusterResp, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 				}.Build(),
@@ -672,6 +730,9 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		response, err := attachmentsClient.Create(ctx, publicv1.ExternalIPAttachmentsCreateRequest_builder{
 			Object: publicv1.ExternalIPAttachment_builder{
 				Id: attachmentId,
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-att-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.ExternalIPAttachmentSpec_builder{
 					ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: externalIPId}.Build(),
 					Cluster:        publicv1.ClusterLocalReference_builder{Id: clusterId}.Build(),
@@ -719,6 +780,9 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		_, err := attachmentsClient.Create(ctx, publicv1.ExternalIPAttachmentsCreateRequest_builder{
 			Object: publicv1.ExternalIPAttachment_builder{
 				Id: attachmentId1,
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-att-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.ExternalIPAttachmentSpec_builder{
 					ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: externalIPId}.Build(),
 					Cluster:        publicv1.ClusterLocalReference_builder{Id: clusterId}.Build(),
@@ -737,6 +801,9 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		_, err = attachmentsClient.Create(ctx, publicv1.ExternalIPAttachmentsCreateRequest_builder{
 			Object: publicv1.ExternalIPAttachment_builder{
 				Id: attachmentId2,
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-att-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.ExternalIPAttachmentSpec_builder{
 					ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: externalIPId}.Build(),
 					Cluster:        publicv1.ClusterLocalReference_builder{Id: clusterId}.Build(),
@@ -752,6 +819,9 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		_, err := attachmentsClient.Create(ctx, publicv1.ExternalIPAttachmentsCreateRequest_builder{
 			Object: publicv1.ExternalIPAttachment_builder{
 				Id: attachmentId,
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-att-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.ExternalIPAttachmentSpec_builder{
 					ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: "nonexistent-ip"}.Build(),
 					Cluster:        publicv1.ClusterLocalReference_builder{Id: clusterId}.Build(),
@@ -768,6 +838,9 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		_, err := externalIPsClient.Create(ctx, publicv1.ExternalIPsCreateRequest_builder{
 			Object: publicv1.ExternalIP_builder{
 				Id: pendingIPId,
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-ip-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.ExternalIPSpec_builder{
 					Pool: publicv1.ExternalIPPoolReference_builder{Id: poolId}.Build(),
 				}.Build(),
@@ -779,6 +852,9 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		_, err = attachmentsClient.Create(ctx, publicv1.ExternalIPAttachmentsCreateRequest_builder{
 			Object: publicv1.ExternalIPAttachment_builder{
 				Id: attachmentId,
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-att-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.ExternalIPAttachmentSpec_builder{
 					ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: pendingIPId}.Build(),
 					Cluster:        publicv1.ClusterLocalReference_builder{Id: clusterId}.Build(),
@@ -795,6 +871,9 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		_, err := attachmentsClient.Create(ctx, publicv1.ExternalIPAttachmentsCreateRequest_builder{
 			Object: publicv1.ExternalIPAttachment_builder{
 				Id: attachmentId,
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-att-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.ExternalIPAttachmentSpec_builder{
 					ExternalIp: publicv1.ExternalIPLocalReference_builder{Id: externalIPId}.Build(),
 				}.Build(),
@@ -809,6 +888,9 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		_, err := attachmentsClient.Create(ctx, publicv1.ExternalIPAttachmentsCreateRequest_builder{
 			Object: publicv1.ExternalIPAttachment_builder{
 				Id: attachmentId,
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-att-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.ExternalIPAttachmentSpec_builder{
 					ExternalIp: publicv1.ExternalIPLocalReference_builder{Id: externalIPId}.Build(),
 					Cluster:    publicv1.ClusterLocalReference_builder{Id: clusterId}.Build(),
@@ -820,10 +902,14 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 	})
 
 	It("Rejects immutable fields on update", func() {
+		attName := fmt.Sprintf("test-att-%s", uuid.New()[24:32])
 		attachmentId := fmt.Sprintf("test-att-%s", uuid.New())
 		_, err := attachmentsClient.Create(ctx, publicv1.ExternalIPAttachmentsCreateRequest_builder{
 			Object: publicv1.ExternalIPAttachment_builder{
 				Id: attachmentId,
+				Metadata: publicv1.Metadata_builder{
+					Name: attName,
+				}.Build(),
 				Spec: publicv1.ExternalIPAttachmentSpec_builder{
 					ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: externalIPId}.Build(),
 					Cluster:        publicv1.ClusterLocalReference_builder{Id: clusterId}.Build(),
@@ -841,6 +927,9 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		_, err = attachmentsClient.Update(ctx, publicv1.ExternalIPAttachmentsUpdateRequest_builder{
 			Object: publicv1.ExternalIPAttachment_builder{
 				Id: attachmentId,
+				Metadata: publicv1.Metadata_builder{
+					Name: attName,
+				}.Build(),
 				Spec: publicv1.ExternalIPAttachmentSpec_builder{
 					ExternalIp: publicv1.ExternalIPLocalReference_builder{Id: "different-ip"}.Build(),
 				}.Build(),
@@ -856,6 +945,9 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		_, err := attachmentsClient.Create(ctx, publicv1.ExternalIPAttachmentsCreateRequest_builder{
 			Object: publicv1.ExternalIPAttachment_builder{
 				Id: attachmentId,
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-att-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.ExternalIPAttachmentSpec_builder{
 					ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: externalIPId}.Build(),
 					Cluster:        publicv1.ClusterLocalReference_builder{Id: clusterId}.Build(),

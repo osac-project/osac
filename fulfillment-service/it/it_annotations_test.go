@@ -47,6 +47,9 @@ var _ = Describe("Annotations", func() {
 		_, err := hostTypesClient.Create(ctx, privatev1.HostTypesCreateRequest_builder{
 			Object: privatev1.HostType_builder{
 				Id: hostTypeId,
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("my-host-type-%s", uuid.New()[24:32]),
+				}.Build(),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
@@ -60,8 +63,11 @@ var _ = Describe("Annotations", func() {
 		templateId = fmt.Sprintf("my-template-%s", uuid.New())
 		_, err = templatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
-				Id:          templateId,
-				Title:       "My template %s",
+				Id:    templateId,
+				Title: "My template %s",
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("my-template-%s", uuid.New()[24:32]),
+				}.Build(),
 				Description: "My template.",
 				NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
 					"my-node-set": privatev1.ClusterTemplateNodeSet_builder{
@@ -84,6 +90,7 @@ var _ = Describe("Annotations", func() {
 		createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
 				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("annotations-test-%s", uuid.New()[24:32]),
 					Annotations: map[string]string{
 						"example.com/annotation": "my-annotation",
 						"simple":                 "value",
@@ -119,6 +126,9 @@ var _ = Describe("Annotations", func() {
 	It("Can update a cluster with annotations", func() {
 		createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("annotations-test-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 				}.Build(),
@@ -137,6 +147,7 @@ var _ = Describe("Annotations", func() {
 			Object: publicv1.Cluster_builder{
 				Id: object.GetId(),
 				Metadata: publicv1.Metadata_builder{
+					Name: object.GetMetadata().GetName(),
 					Annotations: map[string]string{
 						"example.com/updated": "updated-annotation",
 						"another":             "second",
@@ -170,6 +181,7 @@ var _ = Describe("Annotations", func() {
 				_, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 					Object: publicv1.Cluster_builder{
 						Metadata: publicv1.Metadata_builder{
+							Name: fmt.Sprintf("annotations-test-%s", uuid.New()[24:32]),
 							Annotations: map[string]string{
 								key: "",
 							},
@@ -189,6 +201,9 @@ var _ = Describe("Annotations", func() {
 			By("Updating a cluster with a valid annotation key", func() {
 				createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 					Object: publicv1.Cluster_builder{
+						Metadata: publicv1.Metadata_builder{
+							Name: fmt.Sprintf("annotations-test-%s", uuid.New()[24:32]),
+						}.Build(),
 						Spec: publicv1.ClusterSpec_builder{
 							Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 						}.Build(),
@@ -206,6 +221,7 @@ var _ = Describe("Annotations", func() {
 					Object: publicv1.Cluster_builder{
 						Id: object.GetId(),
 						Metadata: publicv1.Metadata_builder{
+							Name: object.GetMetadata().GetName(),
 							Annotations: map[string]string{
 								key: "",
 							},

@@ -15,6 +15,7 @@ package it
 
 import (
 	"context"
+	"fmt"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -22,6 +23,7 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 )
 
 var _ = Describe("Tenant domain validation (protovalidate)", func() {
@@ -39,7 +41,7 @@ var _ = Describe("Tenant domain validation (protovalidate)", func() {
 		response, err := tenantClient.Create(ctx, privatev1.TenantsCreateRequest_builder{
 			Object: privatev1.Tenant_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name: "valid-tenant-1",
+					Name: fmt.Sprintf("valid-tenant-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: privatev1.TenantSpec_builder{
 					Domains: []string{"example.com"},
@@ -61,7 +63,7 @@ var _ = Describe("Tenant domain validation (protovalidate)", func() {
 		response, err := tenantClient.Create(ctx, privatev1.TenantsCreateRequest_builder{
 			Object: privatev1.Tenant_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name: "valid-tenant-2",
+					Name: fmt.Sprintf("valid-tenant-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: privatev1.TenantSpec_builder{
 					Domains: []string{"mail.corp.example.com"},
@@ -83,7 +85,7 @@ var _ = Describe("Tenant domain validation (protovalidate)", func() {
 		response, err := tenantClient.Create(ctx, privatev1.TenantsCreateRequest_builder{
 			Object: privatev1.Tenant_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name: "valid-tenant-3",
+					Name: fmt.Sprintf("valid-tenant-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: privatev1.TenantSpec_builder{
 					Domains: []string{"domain-validation-test-1.com", "domain-validation-test-2.org", "test.domain-validation.net"},
@@ -105,7 +107,7 @@ var _ = Describe("Tenant domain validation (protovalidate)", func() {
 		_, err := tenantClient.Create(ctx, privatev1.TenantsCreateRequest_builder{
 			Object: privatev1.Tenant_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name: "invalid-tenant",
+					Name: fmt.Sprintf("invalid-tenant-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: privatev1.TenantSpec_builder{
 					Domains: []string{""},
@@ -132,7 +134,7 @@ var _ = Describe("Tenant domain validation (protovalidate)", func() {
 		_, err := tenantClient.Create(ctx, privatev1.TenantsCreateRequest_builder{
 			Object: privatev1.Tenant_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name: "invalid-tenant",
+					Name: fmt.Sprintf("invalid-tenant-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: privatev1.TenantSpec_builder{
 					Domains: []string{longDomain},
@@ -153,7 +155,7 @@ var _ = Describe("Tenant domain validation (protovalidate)", func() {
 		_, err := tenantClient.Create(ctx, privatev1.TenantsCreateRequest_builder{
 			Object: privatev1.Tenant_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name: "invalid-tenant",
+					Name: fmt.Sprintf("invalid-tenant-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: privatev1.TenantSpec_builder{
 					Domains: []string{"192.168.1.1"},
@@ -173,7 +175,7 @@ var _ = Describe("Tenant domain validation (protovalidate)", func() {
 		_, err := tenantClient.Create(ctx, privatev1.TenantsCreateRequest_builder{
 			Object: privatev1.Tenant_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name: "invalid-tenant",
+					Name: fmt.Sprintf("invalid-tenant-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: privatev1.TenantSpec_builder{
 					Domains: []string{"2001:db8::1"},
@@ -193,7 +195,7 @@ var _ = Describe("Tenant domain validation (protovalidate)", func() {
 		_, err := tenantClient.Create(ctx, privatev1.TenantsCreateRequest_builder{
 			Object: privatev1.Tenant_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name: "invalid-tenant",
+					Name: fmt.Sprintf("invalid-tenant-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: privatev1.TenantSpec_builder{
 					Domains: []string{"example"},
@@ -219,7 +221,7 @@ var _ = Describe("Tenant domain validation (protovalidate)", func() {
 		_, err := tenantClient.Create(ctx, privatev1.TenantsCreateRequest_builder{
 			Object: privatev1.Tenant_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name: "invalid-tenant",
+					Name: fmt.Sprintf("invalid-tenant-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: privatev1.TenantSpec_builder{
 					Domains: []string{invalidDomain},
@@ -240,7 +242,7 @@ var _ = Describe("Tenant domain validation (protovalidate)", func() {
 		_, err := tenantClient.Create(ctx, privatev1.TenantsCreateRequest_builder{
 			Object: privatev1.Tenant_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name: "invalid-tenant",
+					Name: fmt.Sprintf("invalid-tenant-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: privatev1.TenantSpec_builder{
 					Domains: []string{"Example.Com"},
@@ -261,7 +263,7 @@ var _ = Describe("Tenant domain validation (protovalidate)", func() {
 		_, err := tenantClient.Create(ctx, privatev1.TenantsCreateRequest_builder{
 			Object: privatev1.Tenant_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name: "invalid-tenant",
+					Name: fmt.Sprintf("invalid-tenant-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: privatev1.TenantSpec_builder{
 					Domains: []string{"-example.com"},
@@ -282,7 +284,7 @@ var _ = Describe("Tenant domain validation (protovalidate)", func() {
 		_, err := tenantClient.Create(ctx, privatev1.TenantsCreateRequest_builder{
 			Object: privatev1.Tenant_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name: "invalid-tenant",
+					Name: fmt.Sprintf("invalid-tenant-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: privatev1.TenantSpec_builder{
 					Domains: []string{"example-.com"},
@@ -304,7 +306,7 @@ var _ = Describe("Tenant domain validation (protovalidate)", func() {
 		_, err := tenantClient.Create(ctx, privatev1.TenantsCreateRequest_builder{
 			Object: privatev1.Tenant_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name: "invalid-tenant",
+					Name: fmt.Sprintf("invalid-tenant-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: privatev1.TenantSpec_builder{
 					Domains: []string{"exam_ple.com"},
@@ -324,7 +326,7 @@ var _ = Describe("Tenant domain validation (protovalidate)", func() {
 		_, err := tenantClient.Create(ctx, privatev1.TenantsCreateRequest_builder{
 			Object: privatev1.Tenant_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name: "invalid-tenant",
+					Name: fmt.Sprintf("invalid-tenant-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: privatev1.TenantSpec_builder{
 					Domains: []string{"example.com", "test.com", "example.com"},
@@ -346,7 +348,7 @@ var _ = Describe("Tenant domain validation (protovalidate)", func() {
 		created, err := tenantClient.Create(ctx, privatev1.TenantsCreateRequest_builder{
 			Object: privatev1.Tenant_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name: "update-test-tenant",
+					Name: fmt.Sprintf("upd-test-tenant-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: privatev1.TenantSpec_builder{
 					Domains: []string{"initial-update-test.com"},
@@ -384,7 +386,7 @@ var _ = Describe("Tenant domain validation (protovalidate)", func() {
 		created, err := tenantClient.Create(ctx, privatev1.TenantsCreateRequest_builder{
 			Object: privatev1.Tenant_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name: "update-test-tenant-2",
+					Name: fmt.Sprintf("upd-test-tenant-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: privatev1.TenantSpec_builder{
 					Domains: []string{"update-invalid-test.com"},

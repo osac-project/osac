@@ -205,6 +205,9 @@ var _ = Describe("Private compute instance catalog items server", func() {
 		It("Update object", func() {
 			createResponse, err := server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.ComputeInstanceCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-ci-catalog-update",
+					}.Build(),
 					Title:       "Original title",
 					Description: "Original description.",
 					Template:    privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
@@ -242,6 +245,9 @@ var _ = Describe("Private compute instance catalog items server", func() {
 		It("Update published using field mask", func() {
 			createResponse, err := server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.ComputeInstanceCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-ci-catalog-published",
+					}.Build(),
 					Title:     "My CI catalog item",
 					Template:  privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 					Published: false,
@@ -330,6 +336,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 			createResponse, err := server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.ComputeInstanceCatalogItem_builder{
 					Metadata: privatev1.Metadata_builder{
+						Name:       "test-ci-catalog-delete",
 						Finalizers: []string{"a"},
 					}.Build(),
 					Title:    "My CI catalog item",
@@ -629,6 +636,9 @@ var _ = Describe("Private compute instance catalog items server", func() {
 		It("Rejects update that introduces non-editable field without default", func() {
 			createResponse, err := server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.ComputeInstanceCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-ci-catalog-nodefault",
+					}.Build(),
 					Title:    "Valid catalog item",
 					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 				}.Build(),
@@ -667,6 +677,9 @@ var _ = Describe("Private compute instance catalog items server", func() {
 		It("Rejects update that introduces invalid validation_schema", func() {
 			createResponse, err := server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.ComputeInstanceCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-ci-catalog-badschema",
+					}.Build(),
 					Title:    "Valid catalog item",
 					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 				}.Build(),
@@ -705,6 +718,9 @@ var _ = Describe("Private compute instance catalog items server", func() {
 		It("Accepts update with valid field definitions", func() {
 			createResponse, err := server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.ComputeInstanceCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-ci-catalog-validfd",
+					}.Build(),
 					Title:    "Valid catalog item",
 					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 				}.Build(),
@@ -835,6 +851,9 @@ var _ = Describe("Private compute instance catalog items server", func() {
 				// Create a catalog item without field_definitions first.
 				createResponse, err := server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
 					Object: privatev1.ComputeInstanceCatalogItem_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: "test-ci-catalog-deprecated-upd",
+						}.Build(),
 						Title:    "Catalog item to update",
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 					}.Build(),
@@ -891,6 +910,9 @@ var _ = Describe("Private compute instance catalog items server", func() {
 				// Create a catalog item first.
 				createResponse, err := server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
 					Object: privatev1.ComputeInstanceCatalogItem_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: "test-ci-catalog-obsolete-upd",
+						}.Build(),
 						Title:    "Catalog item for obsolete update",
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 					}.Build(),

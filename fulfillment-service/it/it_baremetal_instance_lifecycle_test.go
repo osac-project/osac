@@ -59,6 +59,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				Id:          fmt.Sprintf("test_template_%s", strings.ReplaceAll(uuid.New(), "-", "_")),
 				Title:       "Test BMI Template",
 				Description: "Template for bare metal instance lifecycle test.",
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("test-template-%s", uuid.New()[24:32]),
+				}.Build(),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
@@ -73,6 +76,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		// Create BareMetalInstanceCatalogItem (must be published for public API access)
 		catalogResp, err := bareMetalInstanceCatalogItemsClient.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 			Object: privatev1.BareMetalInstanceCatalogItem_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("test-catalog-item-%s", uuid.New()[24:32]),
+				}.Build(),
 				Title:     "Test BMI Catalog Item",
 				Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: templateId}.Build(),
 				Published: true,
@@ -92,6 +98,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		// Create BareMetalInstance via public API
 		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 				}.Build(),
@@ -152,6 +161,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 	It("Rejects BareMetalInstance with non-existent catalog item", func(ctx context.Context) {
 		_, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: "non-existent-catalog-item"}.Build(),
 				}.Build(),
@@ -166,6 +178,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 	It("Creates BareMetalInstance with image and persists it", func(ctx context.Context) {
 		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					Image: publicv1.BareMetalInstanceImage_builder{
@@ -248,6 +263,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 	It("Creates BareMetalInstance without image when no template default", func(ctx context.Context) {
 		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 				}.Build(),
@@ -286,6 +304,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 					Id:          fmt.Sprintf("test_image_default_%s", strings.ReplaceAll(uuid.New(), "-", "_")),
 					Title:       "Template with image default",
 					Description: "Template that provides a default image via spec_defaults.",
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-template-%s", uuid.New()[24:32]),
+					}.Build(),
 					SpecDefaults: privatev1.BareMetalInstanceTemplateSpecDefaults_builder{
 						Image: privatev1.BareMetalInstanceImage_builder{
 							SourceType: "registry",
@@ -306,6 +327,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		imageCatalogResp, err := bareMetalInstanceCatalogItemsClient.Create(ctx,
 			privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-catalog-item-%s", uuid.New()[24:32]),
+					}.Build(),
 					Title:     "Catalog item with image default template",
 					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: imageTemplateId}.Build(),
 					Published: true,
@@ -323,6 +347,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 
 		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: imageCatalogItemId}.Build(),
 				}.Build(),
@@ -365,6 +392,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 					Id:          fmt.Sprintf("test_image_override_%s", strings.ReplaceAll(uuid.New(), "-", "_")),
 					Title:       "Template with overridable image default",
 					Description: "Template whose image default should be overridden by user.",
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-template-%s", uuid.New()[24:32]),
+					}.Build(),
 					SpecDefaults: privatev1.BareMetalInstanceTemplateSpecDefaults_builder{
 						Image: privatev1.BareMetalInstanceImage_builder{
 							SourceType: "registry",
@@ -385,6 +415,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		imageCatalogResp, err := bareMetalInstanceCatalogItemsClient.Create(ctx,
 			privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-catalog-item-%s", uuid.New()[24:32]),
+					}.Build(),
 					Title:     "Catalog item for image override test",
 					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: imageTemplateId}.Build(),
 					Published: true,
@@ -402,6 +435,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 
 		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: imageCatalogItemId}.Build(),
 					Image: publicv1.BareMetalInstanceImage_builder{
@@ -443,6 +479,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 	It("Rejects image with missing source_type", func(ctx context.Context) {
 		_, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					Image: publicv1.BareMetalInstanceImage_builder{
@@ -461,6 +500,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 	It("Rejects image with missing source_ref", func(ctx context.Context) {
 		_, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					Image: publicv1.BareMetalInstanceImage_builder{
@@ -479,6 +521,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 	It("Rejects update that changes image", func(ctx context.Context) {
 		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					Image: publicv1.BareMetalInstanceImage_builder{
@@ -531,6 +576,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 	It("Propagates restart_trigger to BMFO CR spec", func(ctx context.Context) {
 		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 				}.Build(),

@@ -4,7 +4,6 @@
   gather_facts: false
 
   vars:
-    tenant_name: "{{ osac_job_vars.resource.metadata.annotations['osac.openshift.io/tenant'] }}"
     # This template is triggered from two different call sites in storage_controller.go,
     # sharing the same AAP job template but passing different resource kinds as payload:
     #   - handleClusterStorageProvisioning (hub storage) sends a Tenant object, whose own
@@ -15,15 +14,19 @@
     #     guest cluster. For that case we target a fixed OSAC system namespace on the guest
     #     cluster instead (mirrors vast_storage_csi_operator_namespace's "vast-csi-system"
     #     pattern; openshift-* is appropriate here since OSAC is a Red Hat product).
+    tenant_name: >-
+      {%- if osac_job_vars.resource.kind == 'ClusterOrder' -%}
+      {{ osac_job_vars.resource.metadata.annotations['osac.openshift.io/tenant'] }}
+      {%- elif osac_job_vars.resource.kind == 'Tenant' -%}
+      {{ osac_job_vars.resource.metadata.name }}
+      {%- endif -%}
     tenant_namespace: >-
       {%- if osac_job_vars.resource.kind == 'ClusterOrder' -%}
       openshift-osac-storage
-      {%- else -%}
+      {%- elif osac_job_vars.resource.kind == 'Tenant' -%}
       {{ osac_job_vars.resource.metadata.namespace }}
       {%- endif -%}
     tenant_uid: "{{ osac_job_vars.resource.metadata.uid }}"
-    _storage_tiers_raw: "{{ lookup('env', 'STORAGE_TIERS') }}"
-    _storage_snapshots: "{{ lookup('env', 'STORAGE_SNAPSHOTS_ENABLED') | default('true', true) | bool }}"
 
   pre_tasks:
     - name: Show resource metadata
@@ -42,25 +45,18 @@
         osac_job_vars.resource.metadata.uid is not defined or
         osac_job_vars.resource.metadata.uid | length == 0
 
-    - name: Validate STORAGE_TIERS env var is configured
+    - name: Validate storage_tier_definitions is a non-empty array in the EDA event
       ansible.builtin.fail:
         msg: >-
-          STORAGE_TIERS env var must be set at deployment time as a JSON array.
-          Example: [{"name":"default","protocol":"nfs","provider":"vast"}]
-      when: _storage_tiers_raw | length == 0
-
-    - name: Parse STORAGE_TIERS JSON
-      block:
-        - name: Parse tier list from env var
-          ansible.builtin.set_fact:
-            _storage_tiers: "{{ _storage_tiers_raw | from_json }}"
-      rescue:
-        - name: Fail on malformed STORAGE_TIERS JSON
-          ansible.builtin.fail:
-            msg: >-
-              STORAGE_TIERS env var contains invalid JSON.
-              Value: '{{ _storage_tiers_raw }}'.
-              Expected a JSON array of tier objects with name, protocol, and provider fields.
+          osac_job_vars.storage_tier_definitions must be a non-empty array, populated
+          by osac-operator from the Tenant's resolved storage tiers.
+          Example: [{"name":"default","protocol":"nfs","provider":"vast","backend_id":"be-001","quota_bytes":500}]
+      when: >-
+        osac_job_vars.storage_tier_definitions is not defined or
+        osac_job_vars.storage_tier_definitions is not sequence or
+        osac_job_vars.storage_tier_definitions is string or
+        osac_job_vars.storage_tier_definitions is mapping or
+        osac_job_vars.storage_tier_definitions | length == 0
 
     - name: Write admin_kubeconfig to temporary file when provided
       when: >-
@@ -91,9 +87,9 @@
             name: osac.service.storage_provider
           vars:
             storage_provider_action: ensure_storage_class
-            storage_provider_tiers: "{{ _storage_tiers }}"
+            storage_provider_tiers: "{{ osac_job_vars.storage_tier_definitions }}"
+            storage_provider_backend_connections: "{{ osac_job_vars.storage_backend_connections | default({}) }}"
             storage_provider_block_encryption_passphrase: "{{ osac_job_vars.resource.spec.blockEncryptionPassphrase | default('') }}"
-            storage_provider_snapshots_enabled: "{{ _storage_snapshots }}"
       rescue:
         - name: Warn about StorageClass creation failure
           ansible.builtin.debug:
@@ -106,6 +102,6 @@
             name: osac.service.storage_provider
           vars:
             storage_provider_action: ensure_storage_class
-            storage_provider_tiers: "{{ _storage_tiers }}"
+            storage_provider_tiers: "{{ osac_job_vars.storage_tier_definitions }}"
+            storage_provider_backend_connections: "{{ osac_job_vars.storage_backend_connections | default({}) }}"
             storage_provider_block_encryption_passphrase: "{{ osac_job_vars.resource.spec.blockEncryptionPassphrase | default('') }}"
-            storage_provider_snapshots_enabled: "{{ _storage_snapshots }}"

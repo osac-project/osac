@@ -234,6 +234,9 @@ var _ = Describe("Private compute instance templates server", func() {
 			// Create an object:
 			createResponse, err := server.Create(ctx, privatev1.ComputeInstanceTemplatesCreateRequest_builder{
 				Object: privatev1.ComputeInstanceTemplate_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-ci-template-update",
+					}.Build(),
 					Title:       "My title",
 					Description: "My description.",
 				}.Build(),
@@ -269,6 +272,9 @@ var _ = Describe("Private compute instance templates server", func() {
 			// Create an object with parameters:
 			createResponse, err := server.Create(ctx, privatev1.ComputeInstanceTemplatesCreateRequest_builder{
 				Object: privatev1.ComputeInstanceTemplate_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-ci-template-params",
+					}.Build(),
 					Title:       "My title",
 					Description: "My description.",
 					Parameters: []*privatev1.ComputeInstanceTemplateParameterDefinition{
@@ -457,6 +463,9 @@ var _ = Describe("Private compute instance templates server", func() {
 				// Create a template first (no spec_defaults):
 				createResponse, err := server.Create(ctx, privatev1.ComputeInstanceTemplatesCreateRequest_builder{
 					Object: privatev1.ComputeInstanceTemplate_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: "test-ci-template-deprecated-update",
+						}.Build(),
 						Title:       "Template to update",
 						Description: "Template without spec_defaults.",
 					}.Build(),
@@ -510,6 +519,9 @@ var _ = Describe("Private compute instance templates server", func() {
 				// Create a template first:
 				createResponse, err := server.Create(ctx, privatev1.ComputeInstanceTemplatesCreateRequest_builder{
 					Object: privatev1.ComputeInstanceTemplate_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: "test-ci-template-obsolete-update",
+						}.Build(),
 						Title:       "Template for obsolete update",
 						Description: "Template to test obsolete rejection on update.",
 					}.Build(),

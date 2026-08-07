@@ -240,7 +240,7 @@ func (s *PrivateClustersServer) Update(ctx context.Context,
 	if err != nil {
 		return
 	}
-	err = s.validateVersionNameUpdate(ctx, request)
+	err = s.validateVersionUpdate(ctx, request)
 	if err != nil {
 		return
 	}
@@ -350,18 +350,19 @@ func (s *PrivateClustersServer) lookupHostType(ctx context.Context,
 	return
 }
 
-// ensureClusterVersion makes sure the cluster spec has a usable version_name: if the user didn't provide one, it
+// ensureClusterVersion makes sure the cluster spec has a usable version reference: if the user didn't provide one, it
 // resolves the system default. Either way, it validates that the resulting ClusterVersion isn't deleted, disabled,
 // or obsolete.
 func (s *PrivateClustersServer) ensureClusterVersion(ctx context.Context, cluster *privatev1.Cluster) error {
-	if cluster.GetSpec().HasVersionName() && cluster.GetSpec().GetVersionName() != "" {
-		return lookupAndValidateClusterVersion(ctx, s.logger, s.clusterVersionsDao, cluster.GetSpec().GetVersionName())
+	versionRef := cluster.GetSpec().GetVersion()
+	if versionRef != nil && versionRef.GetName() != "" {
+		return lookupAndValidateClusterVersion(ctx, s.logger, s.clusterVersionsDao, versionRef.GetName())
 	}
-	versionName, err := resolveDefaultClusterVersionName(ctx, s.logger, s.clusterVersionsDao)
+	ref, err := resolveDefaultClusterVersion(ctx, s.logger, s.clusterVersionsDao)
 	if err != nil {
 		return err
 	}
-	cluster.GetSpec().SetVersionName(versionName)
+	cluster.GetSpec().SetVersion(ref)
 	return nil
 }
 
@@ -584,12 +585,12 @@ func (s *PrivateClustersServer) validateTemplateImmutability(ctx context.Context
 	return nil
 }
 
-// validateVersionNameUpdate ensures version_name stays valid on update. Absent
-// version_name is normalized to the existing value (cannot be cleared once set).
+// validateVersionUpdate ensures version stays valid on update. Absent
+// version is normalized to the existing value (cannot be cleared once set).
 // Changed values are validated the same way as Create via ensureClusterVersion.
-func (s *PrivateClustersServer) validateVersionNameUpdate(ctx context.Context,
+func (s *PrivateClustersServer) validateVersionUpdate(ctx context.Context,
 	request *privatev1.ClustersUpdateRequest) error {
-	if !updateIncludesField(request.GetUpdateMask(), "spec.version_name") {
+	if !updateIncludesField(request.GetUpdateMask(), "spec.version") {
 		return nil
 	}
 	newSpec := request.GetObject().GetSpec()
@@ -600,13 +601,15 @@ func (s *PrivateClustersServer) validateVersionNameUpdate(ctx context.Context,
 	if err != nil || !found {
 		return err
 	}
-	if !newSpec.HasVersionName() || newSpec.GetVersionName() == "" {
-		if existing.GetSpec().HasVersionName() {
-			newSpec.SetVersionName(existing.GetSpec().GetVersionName())
+	newRef := newSpec.GetVersion()
+	existingRef := existing.GetSpec().GetVersion()
+	if newRef == nil || newRef.GetName() == "" {
+		if existingRef != nil {
+			newSpec.SetVersion(existingRef)
 		}
 		return nil
 	}
-	if newSpec.GetVersionName() == existing.GetSpec().GetVersionName() {
+	if existingRef != nil && newRef.GetName() == existingRef.GetName() {
 		return nil
 	}
 	return s.ensureClusterVersion(ctx, request.GetObject())

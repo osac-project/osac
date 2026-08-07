@@ -36,19 +36,19 @@ message Metadata {
   // Tenant contains the identifier of the tenant that the object belongs to.
   string tenant = 5;
 
-  // Human friendly name of the object.
+  // Mandatory, immutable, and unique within scope. Must be a valid RFC 1123 DNS label.
   //
-  // Has the same restrictions than DNS labels, as described in RFC 1035:
+  // Has the same restrictions as DNS labels, as described in RFC 1123:
   //
   // - Must be between 1 and 63 characters long.
-  // - Must only contain letters (a-z), digits (0-9) and hyphens (-).
-  // - It isn't case sensitive.
-  //
-  // It is optional and not unique, so multiple objecs, even created by the same user or tenant, can have the same name.
+  // - Must only contain lowercase letters (a-z), digits (0-9) and hyphens (-).
+  // - Must start and end with an alphanumeric character.
   string name = 6 [(buf.validate.field).string = {
+    min_len: 1,
     max_len: 63,
-    pattern: "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)?$"
+    pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
   }];
+
 
   // Labels contains key-value pairs for organizing and selecting objects.
   //

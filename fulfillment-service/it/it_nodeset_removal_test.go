@@ -49,6 +49,9 @@ var _ = Describe("Node set removal", func() {
 		_, err := hostTypesClient.Create(ctx, privatev1.HostTypesCreateRequest_builder{
 			Object: privatev1.HostType_builder{
 				Id: workerHostTypeId,
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("worker-type-%s", uuid.New()),
+				}.Build(),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
@@ -58,6 +61,9 @@ var _ = Describe("Node set removal", func() {
 		_, err = hostTypesClient.Create(ctx, privatev1.HostTypesCreateRequest_builder{
 			Object: privatev1.HostType_builder{
 				Id: storageHostTypeId,
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("storage-type-%s", uuid.New()),
+				}.Build(),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
@@ -66,7 +72,10 @@ var _ = Describe("Node set removal", func() {
 		templateId = fmt.Sprintf("template_2_nodesets_%s", uuid.New())
 		_, err = templatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
-				Id:          templateId,
+				Id: templateId,
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("template-2-nodesets-%s", uuid.New()),
+				}.Build(),
 				Title:       "Template with 2 node sets",
 				Description: "A template with workers and storage node sets.",
 				NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
@@ -88,6 +97,9 @@ var _ = Describe("Node set removal", func() {
 		// Step 1: Create cluster with 2 node sets
 		createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("nodeset-rm-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 				}.Build(),

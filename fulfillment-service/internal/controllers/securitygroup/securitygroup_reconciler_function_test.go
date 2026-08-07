@@ -20,10 +20,20 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
+	"google.golang.org/grpc"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation/field"
+	clnt "sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
+	"github.com/osac-project/osac/fulfillment-service/internal/masks"
+	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
 
 var _ = Describe("buildSpec", func() {
@@ -389,5 +399,91 @@ var _ = Describe("removeFinalizer", func() {
 		t.removeFinalizer()
 
 		Expect(t.securityGroup.HasMetadata()).To(BeFalse())
+	})
+})
+
+var _ = Describe("Kubernetes validation error handling", func() {
+	It("should set state to FAILED when K8s Create returns Invalid error", func() {
+		ctx := context.Background()
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Create: func(ctx context.Context, client clnt.WithWatch, obj clnt.Object, opts ...clnt.CreateOption) error {
+					return apierrors.NewInvalid(
+						schema.GroupKind{Group: "osac.openshift.io", Kind: "SecurityGroup"},
+						"sg-test",
+						field.ErrorList{
+							field.Invalid(
+								field.NewPath("spec", "virtualNetwork"),
+								"invalid-value",
+								"spec.virtualNetwork is invalid",
+							),
+						},
+					)
+				},
+			}).
+			Build()
+
+		vnClient := NewMockVirtualNetworksClient(ctrl)
+		vnClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(privatev1.VirtualNetworksGetResponse_builder{
+				Object: privatev1.VirtualNetwork_builder{
+					Id: "vnet-1",
+					Status: privatev1.VirtualNetworkStatus_builder{
+						Hub: "hub-1",
+					}.Build(),
+				}.Build(),
+			}.Build(), nil)
+
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), "hub-1").
+			Return(&controllers.HubEntry{Namespace: "test-ns", Client: fakeClient}, nil).
+			AnyTimes()
+
+		securityGroupsClient := NewMockSecurityGroupsClient(ctrl)
+		securityGroupsClient.EXPECT().
+			Update(gomock.Any(), gomock.Any(), gomock.Any()).
+			DoAndReturn(func(ctx context.Context, req *privatev1.SecurityGroupsUpdateRequest, opts ...grpc.CallOption) (*privatev1.SecurityGroupsUpdateResponse, error) {
+				return &privatev1.SecurityGroupsUpdateResponse{Object: req.GetObject()}, nil
+			}).
+			MinTimes(1)
+
+		sg := privatev1.SecurityGroup_builder{
+			Id: "sg-validation-test",
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     "test-tenant",
+			}.Build(),
+			Spec: privatev1.SecurityGroupSpec_builder{
+				VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "vnet-1"}.Build(),
+			}.Build(),
+			Status: privatev1.SecurityGroupStatus_builder{
+				State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_PENDING,
+			}.Build(),
+		}.Build()
+
+		f := &function{
+			logger:                logger,
+			hubCache:              hubCache,
+			securityGroupsClient:  securityGroupsClient,
+			virtualNetworksClient: vnClient,
+			maskCalculator:        masks.NewCalculator().Build(),
+		}
+
+		err := f.run(ctx, sg)
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(sg.GetStatus().GetState()).To(
+			Equal(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_FAILED),
+		)
+		Expect(sg.GetStatus().GetMessage()).To(ContainSubstring("spec.virtualNetwork"))
 	})
 })

@@ -246,5 +246,17 @@ func registerReferenceLookups(
 	references.RegisterDAOLookup(validator, "osac.private.v1.UserReference", refUsersDAO)
 	references.RegisterDAOLookup(validator, "osac.public.v1.UserReference", refUsersDAO)
 
+	// Cluster version references
+	clusterVersionsDAO, err := dao.NewGenericDAO[*privatev1.ClusterVersion]().
+		SetLogger(logger).
+		SetTenancyLogic(tenancyLogic).
+		SetMetricsRegisterer(metricsRegisterer).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create ClusterVersion DAO for reference lookups: %w", err)
+	}
+	references.RegisterDAOLookup(validator, "osac.private.v1.ClusterVersionReference", clusterVersionsDAO)
+	references.RegisterDAOLookup(validator, "osac.public.v1.ClusterVersionReference", clusterVersionsDAO)
+
 	return nil
 }

@@ -218,6 +218,7 @@
     OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
 
   vars:
+    vast_storage_config_namespace: osac-system
     tenant_name: "test-teardown"
     tenant_namespace: "osac-system"
     storage_provider_tiers:

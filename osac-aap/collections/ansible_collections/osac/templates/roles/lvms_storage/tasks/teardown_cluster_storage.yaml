@@ -1,0 +1,45 @@
+---
+# LVMS teardown_cluster_storage: remove per-tenant StorageClasses from the hub cluster.
+# Finds SCs by label selector. The target cluster may be unreachable (being destroyed)
+# so failures are tolerated and reported rather than fatal.
+
+- name: Validate tenant_name is a valid DNS label
+  ansible.builtin.fail:
+    msg: "tenant_name '{{ tenant_name }}' is not a valid DNS label."
+  when: tenant_name is not regex('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+
+- name: Clean up tenant StorageClasses
+  block:
+    - name: Find tenant StorageClasses by label
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        label_selectors:
+          - "osac.openshift.io/tenant={{ tenant_name }}"
+          - "app.kubernetes.io/managed-by=osac-aap"
+      register: _lvms_cleanup_sc_list
+
+    - name: Delete tenant StorageClasses
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "{{ item.metadata.name }}"
+      loop: "{{ _lvms_cleanup_sc_list.resources | default([]) }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      ignore_errors: true  # noqa: ignore-errors
+
+    - name: Report teardown_cluster_storage summary
+      ansible.builtin.debug:
+        msg: >-
+          Teardown of cluster-side resources for tenant '{{ tenant_name }}' complete.
+          {{ _lvms_cleanup_sc_list.resources | default([]) | length }} StorageClass(es) removed.
+
+  rescue:
+    - name: Warn about teardown_cluster_storage failure
+      ansible.builtin.debug:
+        msg: >-
+          Teardown of cluster-side resources failed for tenant '{{ tenant_name }}'.
+          This may be expected if the target cluster is being destroyed.
+          Error: {{ ansible_failed_result.msg | default('unknown') }}

@@ -141,6 +141,7 @@ var _ = Describe("Clusters server", func() {
 						Title:       "ACME 1TiB",
 						Description: "ACME 1TiB.",
 						Metadata: privatev1.Metadata_builder{
+							Name:   "test-host-type-1tib",
 							Tenant: auth.SharedTenant,
 						}.Build(),
 					}.Build()).
@@ -153,6 +154,7 @@ var _ = Describe("Clusters server", func() {
 						Title:       "ACME GPU",
 						Description: "ACME GPU.",
 						Metadata: privatev1.Metadata_builder{
+							Name:   "test-host-type-gpu",
 							Tenant: auth.SharedTenant,
 						}.Build(),
 					}.Build(),
@@ -166,6 +168,7 @@ var _ = Describe("Clusters server", func() {
 						Title:       "HAL 9000",
 						Description: "Heuristically programmed ALgorithmic computer.",
 						Metadata: privatev1.Metadata_builder{
+							Name:   "test-host-type-hal",
 							Tenant: auth.SharedTenant,
 						}.Build(),
 					}.Build(),
@@ -181,6 +184,7 @@ var _ = Describe("Clusters server", func() {
 						Title:       "My template",
 						Description: "My template",
 						Metadata: privatev1.Metadata_builder{
+							Name:   "test-template",
 							Tenant: auth.SharedTenant,
 						}.Build(),
 						NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
@@ -208,6 +212,7 @@ var _ = Describe("Clusters server", func() {
 						Title:       "My deleted template",
 						Description: "My deleted template",
 						Metadata: privatev1.Metadata_builder{
+							Name:       "test-deleted-template",
 							Finalizers: []string{"a"},
 							Tenant:     auth.SharedTenant,
 						}.Build(),
@@ -228,6 +233,7 @@ var _ = Describe("Clusters server", func() {
 						Title:       "My with parameters",
 						Description: "My with parameters.",
 						Metadata: privatev1.Metadata_builder{
+							Name:   "test-template-params",
 							Tenant: auth.SharedTenant,
 						}.Build(),
 						Parameters: []*privatev1.ClusterTemplateParameterDefinition{
@@ -362,7 +368,7 @@ var _ = Describe("Clusters server", func() {
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 			Expect(status.Message()).To(Equal(
-				"host type for node set 'compute' should be empty or 'acme_1tib', like in " +
+				"host type for node set 'compute' should be empty, 'test-host-type-1tib' or 'acme_1tib', like in " +
 					"template 'my_template', but it is 'hal_9000'",
 			))
 		})
@@ -772,6 +778,9 @@ var _ = Describe("Clusters server", func() {
 			// Create the object:
 			createResponse, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
 				Object: publicv1.Cluster_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-cluster",
+					}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
 						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 					}.Build(),
@@ -815,6 +824,9 @@ var _ = Describe("Clusters server", func() {
 			// Create the object:
 			createResponse, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
 				Object: publicv1.Cluster_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-cluster",
+					}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
 						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 					}.Build(),
@@ -852,6 +864,9 @@ var _ = Describe("Clusters server", func() {
 			// Create the object:
 			createResponse, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
 				Object: publicv1.Cluster_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-cluster",
+					}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
 						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 					}.Build(),
@@ -911,6 +926,7 @@ var _ = Describe("Clusters server", func() {
 				SetObject(
 					privatev1.Cluster_builder{
 						Metadata: privatev1.Metadata_builder{
+							Name:   "test-cluster",
 							Tenant: auth.SharedTenant,
 						}.Build(),
 						Spec: privatev1.ClusterSpec_builder{
@@ -994,6 +1010,7 @@ var _ = Describe("Clusters server", func() {
 				SetObject(
 					privatev1.Cluster_builder{
 						Metadata: privatev1.Metadata_builder{
+							Name:   "test-cluster",
 							Tenant: auth.SharedTenant,
 						}.Build(),
 						Spec: privatev1.ClusterSpec_builder{
@@ -1033,6 +1050,9 @@ var _ = Describe("Clusters server", func() {
 			// Create the object:
 			createResponse, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
 				Object: publicv1.Cluster_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-cluster",
+					}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
 						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 					}.Build(),
@@ -1087,6 +1107,9 @@ var _ = Describe("Clusters server", func() {
 			// Create a cluster with the default node sets from the template (compute and gpu):
 			createResponse, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
 				Object: publicv1.Cluster_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-cluster",
+					}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
 						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 					}.Build(),
@@ -1252,6 +1275,9 @@ var _ = Describe("Clusters server", func() {
 			// Create the object:
 			createResponse, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
 				Object: publicv1.Cluster_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-cluster",
+					}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
 						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 					}.Build(),
@@ -1265,6 +1291,7 @@ var _ = Describe("Clusters server", func() {
 				Object: publicv1.Cluster_builder{
 					Id: object.GetId(),
 					Metadata: publicv1.Metadata_builder{
+						Name: "test-cluster",
 						Labels: map[string]string{
 							"example.com/my-label": "my-value",
 						},
@@ -1296,6 +1323,7 @@ var _ = Describe("Clusters server", func() {
 			createResponse, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
 				Object: publicv1.Cluster_builder{
 					Metadata: publicv1.Metadata_builder{
+						Name: "test-cluster",
 						Labels: map[string]string{
 							"example.com/my-label": "my-value",
 						},
@@ -1313,6 +1341,7 @@ var _ = Describe("Clusters server", func() {
 				Object: publicv1.Cluster_builder{
 					Id: object.GetId(),
 					Metadata: publicv1.Metadata_builder{
+						Name: "test-cluster",
 						Labels: map[string]string{
 							"example.com/my-label": "your-value",
 						},
@@ -1344,6 +1373,7 @@ var _ = Describe("Clusters server", func() {
 			createResponse, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
 				Object: publicv1.Cluster_builder{
 					Metadata: publicv1.Metadata_builder{
+						Name: "test-cluster",
 						Labels: map[string]string{
 							"example.com/my-label": "my-value",
 						},
@@ -1361,6 +1391,7 @@ var _ = Describe("Clusters server", func() {
 				Object: publicv1.Cluster_builder{
 					Id: object.GetId(),
 					Metadata: publicv1.Metadata_builder{
+						Name:   "test-cluster",
 						Labels: map[string]string{},
 					}.Build(),
 				}.Build(),
@@ -1389,6 +1420,9 @@ var _ = Describe("Clusters server", func() {
 			// Create the object:
 			createResponse, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
 				Object: publicv1.Cluster_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-cluster",
+					}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
 						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 					}.Build(),
@@ -1402,6 +1436,7 @@ var _ = Describe("Clusters server", func() {
 				Object: publicv1.Cluster_builder{
 					Id: object.GetId(),
 					Metadata: publicv1.Metadata_builder{
+						Name: "test-cluster",
 						Labels: map[string]string{
 							"example.com/my-label": "my-value",
 						},
@@ -1428,6 +1463,7 @@ var _ = Describe("Clusters server", func() {
 			createResponse, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
 				Object: publicv1.Cluster_builder{
 					Metadata: publicv1.Metadata_builder{
+						Name: "test-cluster",
 						Labels: map[string]string{
 							"example.com/my-label": "my-value",
 						},
@@ -1445,6 +1481,7 @@ var _ = Describe("Clusters server", func() {
 				Object: publicv1.Cluster_builder{
 					Id: object.GetId(),
 					Metadata: publicv1.Metadata_builder{
+						Name: "test-cluster",
 						Labels: map[string]string{
 							"example.com/my-label": "your-value",
 						},
@@ -1471,6 +1508,7 @@ var _ = Describe("Clusters server", func() {
 			createResponse, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
 				Object: publicv1.Cluster_builder{
 					Metadata: publicv1.Metadata_builder{
+						Name: "test-cluster",
 						Labels: map[string]string{
 							"example.com/my-label": "my-value",
 						},
@@ -1488,6 +1526,7 @@ var _ = Describe("Clusters server", func() {
 				Object: publicv1.Cluster_builder{
 					Id: object.GetId(),
 					Metadata: publicv1.Metadata_builder{
+						Name:   "test-cluster",
 						Labels: map[string]string{},
 					}.Build(),
 				}.Build(),
@@ -1533,6 +1572,7 @@ var _ = Describe("Clusters server", func() {
 					Id:    "acme_1tib",
 					Title: "ACME 1TiB",
 					Metadata: privatev1.Metadata_builder{
+						Name:   "test-host-type-1tib",
 						Tenant: auth.SharedTenant,
 					}.Build(),
 				}.Build()).
@@ -1550,6 +1590,7 @@ var _ = Describe("Clusters server", func() {
 					Id:    "my_template",
 					Title: "My template",
 					Metadata: privatev1.Metadata_builder{
+						Name:   "test-template",
 						Tenant: auth.SharedTenant,
 					}.Build(),
 					NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
@@ -1659,7 +1700,7 @@ var _ = Describe("Clusters server", func() {
 						Template:     publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 						PullSecret:   &pullSecret,
 						SshPublicKey: &sshKey,
-						VersionName:  &versionName,
+						Version:      &publicv1.ClusterVersionReference{Name: versionName},
 						Network: publicv1.ClusterNetwork_builder{
 							PodCidr:     &podCIDR,
 							ServiceCidr: &serviceCIDR,
@@ -1679,7 +1720,7 @@ var _ = Describe("Clusters server", func() {
 			Expect(spec.GetPullSecret()).To(Equal("***"))
 			// other fields preserved
 			Expect(spec.GetSshPublicKey()).To(Equal(sshKey))
-			Expect(spec.GetVersionName()).To(Equal(versionName))
+			Expect(spec.GetVersion().GetName()).To(Equal(versionName))
 			Expect(spec.GetNetwork().GetPodCidr()).To(Equal(podCIDR))
 			Expect(spec.GetNetwork().GetServiceCidr()).To(Equal(serviceCIDR))
 		})
@@ -1701,6 +1742,9 @@ var _ = Describe("Clusters server", func() {
 			pullSecret := "my-real-pull-secret"
 			createResponse, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
 				Object: publicv1.Cluster_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-cluster",
+					}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
 						Template:   publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 						PullSecret: &pullSecret,
@@ -1799,6 +1843,9 @@ var _ = Describe("Clusters server", func() {
 		It("Rejects invalid pod_cidr on update", func() {
 			createResponse, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
 				Object: publicv1.Cluster_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-cluster",
+					}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
 						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 					}.Build(),
@@ -1827,6 +1874,9 @@ var _ = Describe("Clusters server", func() {
 		It("Rejects invalid service_cidr on update", func() {
 			createResponse, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
 				Object: publicv1.Cluster_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-cluster",
+					}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
 						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 					}.Build(),

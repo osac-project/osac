@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -203,8 +204,124 @@ func (s *PrivateComputeInstancesServer) Get(ctx context.Context,
 	return
 }
 
+func (s *PrivateComputeInstancesServer) findDefaultSubnet(ctx context.Context) (*privatev1.Subnet, error) {
+	filter := fmt.Sprintf("this.metadata.labels[\"%s\"] == \"true\" && has(this.spec.ipv4_cidr)", defaultLabel)
+	listResponse, err := s.subnetsDao.List().
+		SetFilter(filter).
+		Do(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var items []*privatev1.Subnet
+	for _, subnet := range listResponse.GetItems() {
+		if subnet.GetMetadata().HasDeletionTimestamp() {
+			continue
+		}
+		if subnet.GetStatus().GetState() != privatev1.SubnetState_SUBNET_STATE_READY {
+			continue
+		}
+		items = append(items, subnet)
+	}
+	if len(items) == 0 {
+		return nil, nil
+	}
+	sort.Slice(items, func(i, j int) bool {
+		ti := items[i].GetMetadata().GetCreationTimestamp().AsTime()
+		tj := items[j].GetMetadata().GetCreationTimestamp().AsTime()
+		return ti.After(tj)
+	})
+	if len(items) > 1 {
+		s.logger.WarnContext(ctx, "multiple default Subnets found, using newest",
+			slog.Int("count", len(items)),
+		)
+	}
+	return items[0], nil
+}
+
+func (s *PrivateComputeInstancesServer) findDefaultSecurityGroup(ctx context.Context, virtualNetworkID string) (*privatev1.SecurityGroup, error) {
+	filter := fmt.Sprintf("this.metadata.labels[\"%s\"] == \"true\"", defaultLabel)
+	listResponse, err := s.securityGroupsDao.List().
+		SetFilter(filter).
+		Do(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var items []*privatev1.SecurityGroup
+	for _, sg := range listResponse.GetItems() {
+		if sg.GetMetadata().HasDeletionTimestamp() {
+			continue
+		}
+		if sg.GetStatus().GetState() != privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY {
+			continue
+		}
+		if refKey(sg.GetSpec().GetVirtualNetwork()) != virtualNetworkID {
+			continue
+		}
+		items = append(items, sg)
+	}
+	if len(items) == 0 {
+		return nil, nil
+	}
+	sort.Slice(items, func(i, j int) bool {
+		ti := items[i].GetMetadata().GetCreationTimestamp().AsTime()
+		tj := items[j].GetMetadata().GetCreationTimestamp().AsTime()
+		return ti.After(tj)
+	})
+	if len(items) > 1 {
+		s.logger.WarnContext(ctx, "multiple default SecurityGroups found, using newest",
+			slog.Int("count", len(items)),
+		)
+	}
+	return items[0], nil
+}
+
+func (s *PrivateComputeInstancesServer) injectDefaultNetworkAttachments(ctx context.Context, spec *privatev1.ComputeInstanceSpec) error {
+	subnet, err := s.findDefaultSubnet(ctx)
+	if err != nil {
+		return grpcstatus.Errorf(grpccodes.Internal, "failed to look up default subnet: %v", err)
+	}
+	if subnet == nil {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"spec.network_attachments: at least one network attachment is required for new compute instances")
+	}
+
+	attachment := privatev1.NetworkAttachment_builder{
+		Subnet: privatev1.SubnetLocalReference_builder{Id: subnet.GetId()}.Build(),
+	}.Build()
+
+	virtualNetworkID := refKey(subnet.GetSpec().GetVirtualNetwork())
+	sg, err := s.findDefaultSecurityGroup(ctx, virtualNetworkID)
+	if err != nil {
+		return grpcstatus.Errorf(grpccodes.Internal, "failed to look up default security group: %v", err)
+	}
+	if sg != nil {
+		attachment.SetSecurityGroups([]*privatev1.SecurityGroupLocalReference{
+			privatev1.SecurityGroupLocalReference_builder{Id: sg.GetId()}.Build(),
+		})
+	}
+
+	spec.SetNetworkAttachments([]*privatev1.NetworkAttachment{attachment})
+
+	attrs := []slog.Attr{
+		slog.String("subnet_id", subnet.GetId()),
+	}
+	if sg != nil {
+		attrs = append(attrs, slog.String("security_group_id", sg.GetId()))
+	}
+	s.logger.LogAttrs(ctx, slog.LevelInfo, "auto-injected default network attachments", attrs...)
+	return nil
+}
+
 func (s *PrivateComputeInstancesServer) Create(ctx context.Context,
 	request *privatev1.ComputeInstancesCreateRequest) (response *privatev1.ComputeInstancesCreateResponse, err error) {
+	// Auto-inject default network attachments if none provided:
+	if len(request.GetObject().GetSpec().GetNetworkAttachments()) == 0 {
+		err = s.injectDefaultNetworkAttachments(ctx, request.GetObject().GetSpec())
+		if err != nil {
+			return
+		}
+	}
+
 	// Validate tenant isolation for network references:
 	err = s.validateNetworkReferencesTenancy(ctx, request.GetObject())
 	if err != nil {
@@ -214,13 +331,6 @@ func (s *PrivateComputeInstancesServer) Create(ctx context.Context,
 	// Validate network references state (exists, READY):
 	err = s.validateNetworkReferencesState(ctx, request.GetObject())
 	if err != nil {
-		return
-	}
-
-	// Require network_attachments for new VMs (no pod network for new VMs):
-	if len(request.GetObject().GetSpec().GetNetworkAttachments()) == 0 {
-		err = grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"spec.network_attachments: at least one network attachment is required for new compute instances")
 		return
 	}
 

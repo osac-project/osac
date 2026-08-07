@@ -109,7 +109,7 @@ var _ = Describe("Role binding reconciler", func() {
 		userResponse, err := usersClient.Create(ctx, privatev1.UsersCreateRequest_builder{
 			Object: privatev1.User_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name: "my-user",
+					Name: fmt.Sprintf("my-user-%s", uuid.New()[24:32]),
 				}.Build(),
 				Status: privatev1.UserStatus_builder{
 					KeycloakUserId: testKeycloakID,

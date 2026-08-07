@@ -63,8 +63,8 @@ message ClusterVersionDeprecation {
 // Contains the details about the cluster version that are available only for the system.
 //
 // Cluster versions are admin-managed catalog entries that define which OpenShift versions are available. Users
-// select a cluster version by name when creating clusters, either directly via Cluster `spec.version_name` or
-// through a ClusterTemplate `spec_defaults.version_name`. Cloud Provider Admins control the version catalog
+// select a cluster version when creating clusters, either directly via Cluster `spec.version` or
+// through a ClusterTemplate `spec_defaults.version`. Cloud Provider Admins control the version catalog
 // through lifecycle-managed cluster versions.
 //
 // If `metadata.name` is omitted on creation, it is auto-generated from `spec.version` by lowercasing and
@@ -116,7 +116,7 @@ message ClusterVersionSpec {
   // the previous default atomically. Auto-cleared when the version becomes OBSOLETE or disabled.
   //
   // When creating a cluster, the version is resolved with the following precedence:
-  // explicit `spec.version_name` > template `spec_defaults.version_name` > system default (`is_default=true`).
+  // explicit `spec.version` > template `spec_defaults.version` > system default (`is_default=true`).
   optional bool is_default = 3 [(google.api.field_behavior) = OPTIONAL];
 
   // Current lifecycle state of the cluster version. Defaults to ACTIVE on creation if unspecified.
@@ -142,3 +142,11 @@ message ClusterVersionSpec {
 //
 // Currently empty. Reserved for future use.
 message ClusterVersionStatus {}
+
+// Reference to a ClusterVersion resource.
+message ClusterVersionReference {
+  string id = 1;
+  string name = 2;
+  string project = 3;
+  bool shared = 4;
+}

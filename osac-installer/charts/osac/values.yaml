@@ -170,7 +170,6 @@ aap:
     storageFulfillment:
       enabled: false
       config:
-        STORAGE_TIERS: ""
         STORAGE_SNAPSHOTS_ENABLED: ""
       secret:
         VAST_ENDPOINT: ""
@@ -287,3 +286,9 @@ clusterVersions:
   # - version: "4.22.0"
   #   image: "quay.io/openshift-release-dev/ocp-release:4.22.0-multi"
   #   default: true
+
+lvms:
+  # Register LVMS as a local StorageBackend + StorageTier in the fulfillment service
+  # after install. For CI/development environments only — production deployments
+  # should use their own storage operators (Ceph, Pure, VAST, etc.).
+  enabled: false

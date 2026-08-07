@@ -20,11 +20,13 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -33,6 +35,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
+	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
 
 var _ = Describe("buildSpec", func() {
@@ -784,5 +787,75 @@ var _ = Describe("hub persistence", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(list.Items).To(HaveLen(1))
 		Expect(list.Items[0].Namespace).To(Equal(hubNamespace))
+	})
+})
+
+var _ = Describe("Kubernetes validation error handling", func() {
+	It("should set state to FAILED when K8s Create returns Invalid error", func() {
+		ctx := context.Background()
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Create: func(ctx context.Context, client clnt.WithWatch, obj clnt.Object, opts ...clnt.CreateOption) error {
+					return apierrors.NewInvalid(
+						schema.GroupKind{Group: "osac.openshift.io", Kind: "Subnet"},
+						"",
+						field.ErrorList{
+							field.Invalid(field.NewPath("spec", "ipv4Cidr"), "bad-cidr", "CIDR is invalid"),
+						},
+					)
+				},
+			}).
+			Build()
+
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), "hub-validation").
+			Return(&controllers.HubEntry{Namespace: "hub-ns", Client: fakeClient}, nil).
+			AnyTimes()
+
+		subnetsClient := NewMockSubnetsClient(ctrl)
+		subnetsClient.EXPECT().
+			Update(gomock.Any(), gomock.Any(), gomock.Any()).
+			DoAndReturn(func(ctx context.Context, req *privatev1.SubnetsUpdateRequest, opts ...grpc.CallOption) (*privatev1.SubnetsUpdateResponse, error) {
+				return &privatev1.SubnetsUpdateResponse{Object: req.GetObject()}, nil
+			}).
+			MinTimes(1)
+
+		subnet := privatev1.Subnet_builder{
+			Id: "subnet-validation-test",
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     "test-tenant",
+			}.Build(),
+			Spec: privatev1.SubnetSpec_builder{
+				VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "vn-123"}.Build(),
+			}.Build(),
+			Status: privatev1.SubnetStatus_builder{
+				State: privatev1.SubnetState_SUBNET_STATE_PENDING,
+				Hub:   "hub-validation",
+			}.Build(),
+		}.Build()
+
+		f := &function{
+			logger:         logger,
+			hubCache:       hubCache,
+			subnetsClient:  subnetsClient,
+			maskCalculator: nil,
+		}
+
+		err := f.run(ctx, subnet)
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(subnet.GetStatus().GetState()).To(
+			Equal(privatev1.SubnetState_SUBNET_STATE_FAILED),
+		)
+		Expect(subnet.GetStatus().GetMessage()).To(ContainSubstring("CIDR is invalid"))
 	})
 })

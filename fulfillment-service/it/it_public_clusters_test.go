@@ -58,6 +58,9 @@ var _ = Describe("Public clusters", func() {
 		hostTypeId = fmt.Sprintf("my-host-type-%s", uuid.New())
 		_, err := hostTypesClient.Create(ctx, privatev1.HostTypesCreateRequest_builder{
 			Object: privatev1.HostType_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("test-ht-%s", uuid.New()[24:32]),
+				}.Build(),
 				Id: hostTypeId,
 			}.Build(),
 		}.Build())
@@ -73,6 +76,9 @@ var _ = Describe("Public clusters", func() {
 		templateId = fmt.Sprintf("my-template-%s", uuid.New())
 		_, err = templatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("test-tmpl-%s", uuid.New()[24:32]),
+				}.Build(),
 				Id:          templateId,
 				Title:       "My template %s",
 				Description: "My template.",
@@ -97,6 +103,9 @@ var _ = Describe("Public clusters", func() {
 		// Create the cluster
 		createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 				}.Build(),
@@ -132,6 +141,9 @@ var _ = Describe("Public clusters", func() {
 		// Create a cluster
 		createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 				}.Build(),
@@ -158,6 +170,9 @@ var _ = Describe("Public clusters", func() {
 		// Create the cluster:
 		response, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 				}.Build(),
@@ -188,6 +203,9 @@ var _ = Describe("Public clusters", func() {
 		// Create the cluster
 		createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 				}.Build(),
@@ -238,6 +256,9 @@ var _ = Describe("Public clusters", func() {
 		// Create the cluster
 		createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 				}.Build(),
@@ -281,7 +302,7 @@ var _ = Describe("Public clusters", func() {
 			Object: publicv1.Cluster_builder{
 				Id: "does-not-exist",
 				Metadata: publicv1.Metadata_builder{
-					Name: "my-name",
+					Name: fmt.Sprintf("my-name-%s", uuid.New()[24:32]),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -305,6 +326,9 @@ var _ = Describe("Public clusters", func() {
 		// Create the cluster
 		createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 				}.Build(),
@@ -413,6 +437,9 @@ var _ = Describe("Public clusters", func() {
 		// Create the cluster
 		createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 				}.Build(),
@@ -520,6 +547,9 @@ var _ = Describe("Public clusters", func() {
 		// Create the cluster
 		createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 				}.Build(),
@@ -625,6 +655,9 @@ var _ = Describe("Public clusters", func() {
 		// Create the cluster
 		createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 				}.Build(),
@@ -728,7 +761,7 @@ var _ = Describe("Public clusters", func() {
 		).Should(Succeed())
 	})
 
-	It("Can create a cluster with explicit version_name", func() {
+	It("Can create a cluster with explicit version", func() {
 		// Create a non-default cluster version:
 		cvClient := privatev1.NewClusterVersionsClient(tool.InternalView().AdminConn())
 		version := nextCVVersion()
@@ -751,12 +784,12 @@ var _ = Describe("Public clusters", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		// Create a cluster specifying that version_name:
+		// Create a cluster specifying that version:
 		createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
 				Spec: publicv1.ClusterSpec_builder{
-					Template:    publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
-					VersionName: &cvName,
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Version:  publicv1.ClusterVersionReference_builder{Name: cvName}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -769,15 +802,15 @@ var _ = Describe("Public clusters", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		// Verify the cluster has the correct version_name:
-		Expect(object.GetSpec().GetVersionName()).To(Equal(cvName))
+		// Verify the cluster has the correct version:
+		Expect(object.GetSpec().GetVersion().GetName()).To(Equal(cvName))
 
 		// Verify via Get as well:
 		getResponse, err := clustersClient.Get(ctx, publicv1.ClustersGetRequest_builder{
 			Id: object.GetId(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		Expect(getResponse.GetObject().GetSpec().GetVersionName()).To(Equal(cvName))
+		Expect(getResponse.GetObject().GetSpec().GetVersion().GetName()).To(Equal(cvName))
 	})
 
 	It("Sets creator to the ID of the user when creating a cluster", func() {
@@ -795,6 +828,9 @@ var _ = Describe("Public clusters", func() {
 		// Create the cluster using the client connection:
 		response, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 				}.Build(),

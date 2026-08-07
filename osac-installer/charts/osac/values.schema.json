@@ -843,10 +843,6 @@
                   "type": "object",
                   "description": "Environment variables for the storage-operations instance group",
                   "properties": {
-                    "STORAGE_TIERS": {
-                      "type": "string",
-                      "description": "Available storage tiers configuration"
-                    },
                     "STORAGE_SNAPSHOTS_ENABLED": {
                       "type": "string",
                       "description": "Enable storage snapshots"
@@ -1007,9 +1003,20 @@
         "image": {
           "type": "object",
           "properties": {
-            "repository": { "type": "string" },
-            "tag": { "type": "string" },
-            "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+            "repository": {
+              "type": "string"
+            },
+            "tag": {
+              "type": "string"
+            },
+            "pullPolicy": {
+              "type": "string",
+              "enum": [
+                "Always",
+                "IfNotPresent",
+                "Never"
+              ]
+            }
           }
         },
         "database": {
@@ -1302,7 +1309,10 @@
           "description": "ClusterVersion records to seed",
           "items": {
             "type": "object",
-            "required": ["version", "image"],
+            "required": [
+              "version",
+              "image"
+            ],
             "properties": {
               "version": {
                 "type": "string",
@@ -1319,6 +1329,17 @@
               }
             }
           }
+        }
+      }
+    },
+    "lvms": {
+      "type": "object",
+      "description": "Register LVMS as a local StorageBackend + StorageTier in the fulfillment service after install. For CI/development environments only.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Run the register-local-storage hook job when LVMS is deployed",
+          "default": false
         }
       }
     }

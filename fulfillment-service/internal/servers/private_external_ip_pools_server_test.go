@@ -141,6 +141,9 @@ var _ = Describe("Private external IP pools server", func() {
 		It("Updates a pool", func() {
 			createResponse, err := poolsServer.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 				Object: privatev1.ExternalIPPool_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-pool-update",
+					}.Build(),
 					Spec: privatev1.ExternalIPPoolSpec_builder{
 						Cidrs:    []string{"192.168.1.0/24"},
 						IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
@@ -169,6 +172,7 @@ var _ = Describe("Private external IP pools server", func() {
 			createResponse, err := poolsServer.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 				Object: privatev1.ExternalIPPool_builder{
 					Metadata: privatev1.Metadata_builder{
+						Name:       "test-pool-delete",
 						Finalizers: []string{"test"},
 					}.Build(),
 					Spec: privatev1.ExternalIPPoolSpec_builder{
@@ -195,6 +199,9 @@ var _ = Describe("Private external IP pools server", func() {
 		It("Rejects deletion when allocated ExternalIPs reference the pool", func() {
 			createPoolResponse, err := poolsServer.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 				Object: privatev1.ExternalIPPool_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-pool-reject-delete",
+					}.Build(),
 					Spec: privatev1.ExternalIPPoolSpec_builder{
 						Cidrs:    []string{"10.0.0.0/24"},
 						IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
@@ -222,6 +229,9 @@ var _ = Describe("Private external IP pools server", func() {
 
 			_, err = ipsServer.Create(ctx, privatev1.ExternalIPsCreateRequest_builder{
 				Object: privatev1.ExternalIP_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-eip",
+					}.Build(),
 					Spec: privatev1.ExternalIPSpec_builder{
 						Pool: privatev1.ExternalIPPoolReference_builder{Id: poolID}.Build(),
 					}.Build(),
@@ -457,6 +467,9 @@ var _ = Describe("Private external IP pools server", func() {
 			It("prevents changing spec.cidrs after creation", func() {
 				createResponse, err := poolsServer.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 					Object: privatev1.ExternalIPPool_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: "test-pool-immutable-cidrs",
+						}.Build(),
 						Spec: privatev1.ExternalIPPoolSpec_builder{
 							Cidrs:    []string{"10.0.0.0/24"},
 							IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
@@ -486,6 +499,9 @@ var _ = Describe("Private external IP pools server", func() {
 			It("prevents changing spec.ip_family after creation", func() {
 				createResponse, err := poolsServer.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 					Object: privatev1.ExternalIPPool_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: "test-pool-immutable-family",
+						}.Build(),
 						Spec: privatev1.ExternalIPPoolSpec_builder{
 							Cidrs:    []string{"10.0.0.0/24"},
 							IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
@@ -514,6 +530,9 @@ var _ = Describe("Private external IP pools server", func() {
 			It("allows metadata-only Update (spec fields omitted)", func() {
 				createResponse, err := poolsServer.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 					Object: privatev1.ExternalIPPool_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: "test-pool-meta-update",
+						}.Build(),
 						Spec: privatev1.ExternalIPPoolSpec_builder{
 							Cidrs:    []string{"10.0.0.0/24"},
 							IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,

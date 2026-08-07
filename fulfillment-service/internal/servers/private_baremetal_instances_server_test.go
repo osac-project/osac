@@ -124,6 +124,7 @@ var _ = Describe("Private bare metal instances server", func() {
 				Title:       "Test Template",
 				Description: "Template with parameters",
 				Metadata: privatev1.Metadata_builder{
+					Name:   id,
 					Tenant: auth.SharedTenant,
 				}.Build(),
 				Parameters: params,
@@ -298,6 +299,9 @@ var _ = Describe("Private bare metal instances server", func() {
 		It("Rejects PATCH that changes catalog_item", func() {
 			createResponse, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-baremetal-instance",
+					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
 					}.Build(),
@@ -337,6 +341,9 @@ var _ = Describe("Private bare metal instances server", func() {
 		It("Rejects PATCH that changes ssh_public_key", func() {
 			createResponse, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-baremetal-instance",
+					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
 						SshPublicKey: new(testSSHPublicKey),
@@ -370,6 +377,9 @@ var _ = Describe("Private bare metal instances server", func() {
 			userData := "original user data"
 			createResponse, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-baremetal-instance",
+					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
 						UserData:    new(userData),
@@ -402,6 +412,9 @@ var _ = Describe("Private bare metal instances server", func() {
 		It("Rejects PATCH that changes image", func() {
 			createResponse, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-baremetal-instance",
+					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
 						Image: privatev1.BareMetalInstanceImage_builder{
@@ -510,6 +523,7 @@ var _ = Describe("Private bare metal instances server", func() {
 				Title:       "Template with image default",
 				Description: "Has default image in spec_defaults",
 				Metadata: privatev1.Metadata_builder{
+					Name:   "image-default-template",
 					Tenant: auth.SharedTenant,
 				}.Build(),
 				SpecDefaults: privatev1.BareMetalInstanceTemplateSpecDefaults_builder{
@@ -558,6 +572,7 @@ var _ = Describe("Private bare metal instances server", func() {
 				Title:       "Template with image default",
 				Description: "Has default image in spec_defaults",
 				Metadata: privatev1.Metadata_builder{
+					Name:   "image-override-template",
 					Tenant: auth.SharedTenant,
 				}.Build(),
 				SpecDefaults: privatev1.BareMetalInstanceTemplateSpecDefaults_builder{
@@ -610,6 +625,7 @@ var _ = Describe("Private bare metal instances server", func() {
 				Title:       "Template with image default",
 				Description: "Has default image in spec_defaults",
 				Metadata: privatev1.Metadata_builder{
+					Name:   "image-partial-merge-template",
 					Tenant: auth.SharedTenant,
 				}.Build(),
 				SpecDefaults: privatev1.BareMetalInstanceTemplateSpecDefaults_builder{
@@ -652,6 +668,9 @@ var _ = Describe("Private bare metal instances server", func() {
 		It("Allows PATCH with same image value", func() {
 			createResponse, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-baremetal-instance",
+					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
 						Image: privatev1.BareMetalInstanceImage_builder{
@@ -685,6 +704,9 @@ var _ = Describe("Private bare metal instances server", func() {
 		It("Allows PATCH that does not touch immutable fields", func() {
 			createResponse, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-baremetal-instance",
+					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
 						RunStrategy: new(privatev1.BareMetalInstanceRunStrategy_BARE_METAL_INSTANCE_RUN_STRATEGY_ALWAYS),
@@ -711,6 +733,9 @@ var _ = Describe("Private bare metal instances server", func() {
 		It("Allows PATCH with no update mask (full replace) preserving same immutable fields", func() {
 			createResponse, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-baremetal-instance",
+					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
 					}.Build(),
@@ -888,6 +913,9 @@ var _ = Describe("Private bare metal instances server", func() {
 
 			createResponse, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-baremetal-instance",
+					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						CatalogItem:        privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catID}.Build(),
 						TemplateParameters: map[string]*anypb.Any{"os_version": osParam},
@@ -930,6 +958,9 @@ var _ = Describe("Private bare metal instances server", func() {
 
 			createResponse, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-baremetal-instance",
+					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						CatalogItem:        privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catID}.Build(),
 						TemplateParameters: map[string]*anypb.Any{"os_version": osParam},
@@ -1186,6 +1217,9 @@ var _ = Describe("Private bare metal instances server", func() {
 		It("Rejects PATCH that changes auto_external_ip_attachment", func() {
 			createResponse, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-baremetal-instance",
+					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						CatalogItem:              privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
 						AutoExternalIpAttachment: true,
@@ -1619,6 +1653,9 @@ var _ = Describe("Private bare metal instances server", func() {
 		It("Accepts update that changes only security_groups", func() {
 			createResp, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "baremetal-instance-1",
+					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithHT}.Build(),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
@@ -1657,6 +1694,9 @@ var _ = Describe("Private bare metal instances server", func() {
 		It("Accepts update that does not touch network_attachments", func() {
 			createResp, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "baremetal-instance-1",
+					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithHT}.Build(),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
@@ -1674,6 +1714,9 @@ var _ = Describe("Private bare metal instances server", func() {
 			_, err = server.Update(ctx, privatev1.BareMetalInstancesUpdateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
 					Id: id,
+					Metadata: privatev1.Metadata_builder{
+						Name: "baremetal-instance-1",
+					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						RunStrategy: privatev1.BareMetalInstanceRunStrategy_BARE_METAL_INSTANCE_RUN_STRATEGY_HALTED.Enum(),
 					}.Build(),

@@ -248,7 +248,7 @@ func (t *task) update(ctx context.Context) error {
 		}
 		err = t.hubClient.Create(ctx, object)
 		if err != nil {
-			return err
+			return controllers.HandleK8sWriteError(ctx, t.r.logger, err, t.setFailed)
 		}
 		t.r.logger.DebugContext(
 			ctx,
@@ -261,7 +261,7 @@ func (t *task) update(ctx context.Context) error {
 		update.Spec = spec
 		err = t.hubClient.Patch(ctx, update, clnt.MergeFrom(object))
 		if err != nil {
-			return err
+			return controllers.HandleK8sWriteError(ctx, t.r.logger, err, t.setFailed)
 		}
 		t.r.logger.DebugContext(
 			ctx,
@@ -343,9 +343,9 @@ func (t *task) addExplicitFields(ctx context.Context, spec *osacv1alpha1.Cluster
 	if clusterSpec.HasSshPublicKey() {
 		spec.SSHPublicKey = clusterSpec.GetSshPublicKey()
 	}
-	// Resolve version_name to a release image via the ClusterVersion resource.
-	if clusterSpec.HasVersionName() && clusterSpec.GetVersionName() != "" {
-		image, err := t.resolveVersionImage(ctx, clusterSpec.GetVersionName())
+	// Resolve version reference to a release image via the ClusterVersion resource.
+	if versionRef := clusterSpec.GetVersion(); versionRef != nil && versionRef.GetName() != "" {
+		image, err := t.resolveVersionImage(ctx, versionRef.GetName())
 		if err != nil {
 			return err
 		}
@@ -529,6 +529,19 @@ func (t *task) getKubeObject(ctx context.Context) (result *osacv1alpha1.ClusterO
 		result = &items[0]
 	}
 	return
+}
+
+func (t *task) setFailed(err error) {
+	if !t.cluster.HasStatus() {
+		t.cluster.SetStatus(&privatev1.ClusterStatus{})
+	}
+	t.cluster.GetStatus().SetState(privatev1.ClusterState_CLUSTER_STATE_FAILED)
+	t.updateCondition(
+		privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_PROGRESSING,
+		privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+		"ValidationFailed",
+		err.Error(),
+	)
 }
 
 // updateCondition updates or creates a condition with the specified type, status, reason, and message.

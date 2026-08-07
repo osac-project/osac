@@ -1,0 +1,262 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.0
+  name: volumes.osac.openshift.io
+spec:
+  group: osac.openshift.io
+  names:
+    kind: Volume
+    listKind: VolumeList
+    plural: volumes
+    shortNames:
+    - vol
+    singular: volume
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.storageTier
+      name: Tier
+      type: string
+    - jsonPath: .spec.sizeGiB
+      name: Size
+      type: integer
+    - jsonPath: .spec.accessMode
+      name: Access
+      type: string
+    - jsonPath: .spec.cluster
+      name: Cluster
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.backend
+      name: Backend
+      priority: 1
+      type: string
+    - jsonPath: .status.vendorVolumeID
+      name: VendorID
+      priority: 1
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Volume is the Schema for the volumes API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: VolumeSpec defines the desired state of Volume.
+            properties:
+              accessMode:
+                description: |-
+                  AccessMode is the Kubernetes access mode for the volume
+                  (e.g., "ReadWriteOnce", "ReadWriteMany").
+                minLength: 1
+                type: string
+                x-kubernetes-validations:
+                - message: accessMode is immutable
+                  rule: self == oldSelf
+              cluster:
+                description: |-
+                  Cluster is the name of the cluster where the PVC that triggered this
+                  volume exists. Empty for standalone volumes created via the API without
+                  a cluster association.
+                type: string
+                x-kubernetes-validations:
+                - message: cluster is immutable
+                  rule: self == oldSelf
+              pvcRef:
+                description: |-
+                  PVCRef is the reference to the PVC that triggered this volume creation.
+                  Set by the CSI driver. Empty for API-driven volume creation.
+                properties:
+                  cluster:
+                    description: Cluster where the PersistentVolumeClaim exists.
+                    minLength: 1
+                    type: string
+                  name:
+                    description: Name of the PersistentVolumeClaim.
+                    minLength: 1
+                    type: string
+                  namespace:
+                    description: Namespace of the PersistentVolumeClaim.
+                    minLength: 1
+                    type: string
+                required:
+                - cluster
+                - name
+                - namespace
+                type: object
+                x-kubernetes-validations:
+                - message: pvcRef is immutable
+                  rule: self == oldSelf
+              sizeGiB:
+                description: SizeGiB is the requested storage capacity in gibibytes.
+                format: int64
+                minimum: 1
+                type: integer
+                x-kubernetes-validations:
+                - message: sizeGiB is immutable
+                  rule: self == oldSelf
+              storageTier:
+                description: |-
+                  StorageTier is the name of the StorageTier that determines which backend
+                  and protocol serve this volume.
+                minLength: 1
+                type: string
+                x-kubernetes-validations:
+                - message: storageTier is immutable
+                  rule: self == oldSelf
+            required:
+            - accessMode
+            - sizeGiB
+            - storageTier
+            type: object
+          status:
+            description: VolumeStatus defines the observed state of Volume.
+            properties:
+              backend:
+                description: |-
+                  Backend is the name of the StorageBackend that serves this volume.
+                  Resolved during tier resolution at creation time.
+                type: string
+              conditions:
+                description: Conditions holds an array of metav1.Condition that describe
+                  the state of the Volume.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              phase:
+                description: Phase provides a single-value overview of the state of
+                  the Volume.
+                enum:
+                - Progressing
+                - Ready
+                - Failed
+                - Deleting
+                type: string
+              protocol:
+                description: |-
+                  Protocol is the storage protocol used for this volume (e.g., NFS, BLOCK).
+                  Resolved during tier resolution at creation time.
+                type: string
+              pvRef:
+                description: PVRef is the reference to the PV created for this volume
+                  on the tenant cluster.
+                properties:
+                  cluster:
+                    description: Cluster where the PersistentVolume exists.
+                    minLength: 1
+                    type: string
+                  name:
+                    description: Name of the PersistentVolume.
+                    minLength: 1
+                    type: string
+                required:
+                - cluster
+                - name
+                type: object
+              pvcRef:
+                description: PVCRef is the operator-confirmed reference to the PVC
+                  on the tenant cluster.
+                properties:
+                  cluster:
+                    description: Cluster where the PersistentVolumeClaim exists.
+                    minLength: 1
+                    type: string
+                  name:
+                    description: Name of the PersistentVolumeClaim.
+                    minLength: 1
+                    type: string
+                  namespace:
+                    description: Namespace of the PersistentVolumeClaim.
+                    minLength: 1
+                    type: string
+                required:
+                - cluster
+                - name
+                - namespace
+                type: object
+              vendorVolumeID:
+                description: |-
+                  VendorVolumeID is the opaque identifier assigned by the vendor storage array.
+                  Set by the Volume controller after vendor CSI CreateVolume succeeds.
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

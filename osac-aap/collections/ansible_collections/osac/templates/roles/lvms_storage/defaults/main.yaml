@@ -18,7 +18,11 @@ lvms_storage_provisioner: "topolvm.io"
 lvms_storage_device_class: "vg1"
 
 # OLM subscription channel for LVMS operator — used when installing LVMS on CaaS
-# guest clusters. Must match the OCP version of the guest cluster.
+# guest clusters. Must match the OCP version of the guest cluster; this default
+# targets OCP 4.22 (the CaaS CI flavor). Override via extra_vars or the
+# storage-operations-ig ConfigMap when guest clusters run a different OCP version.
+# TODO: consider passing the channel derived from ClusterOrder.spec.templateID
+# so it auto-tracks the guest cluster version without manual overrides.
 lvms_storage_operator_channel: "stable-4.22"
 
 # Namespace where the LVMS operator is installed via OLM.

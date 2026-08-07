@@ -56,6 +56,13 @@ type ResourceServers struct {
 // same code path.
 func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistrar, //nolint:gocyclo
 	deps ResourceServerDeps) (*ResourceServers, error) {
+	// ExternalIPPoolsServerBuilder, ProjectsServerBuilder, and PrivateProjectsServerBuilder take the concrete
+	// *database.Notifier, unlike every other builder here, which takes the events.Notifier interface.
+	dbNotifier, ok := deps.Notifier.(*database.Notifier)
+	if !ok {
+		return nil, fmt.Errorf("notifier must be a *database.Notifier, got %T", deps.Notifier)
+	}
+
 	// Create the cluster templates server:
 	deps.Logger.InfoContext(ctx, "Creating cluster templates server")
 	clusterTemplatesServer, err := servers.NewClusterTemplatesServer().
@@ -729,12 +736,9 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 
 	// Create the external IP pools server (read-only: List + Get):
 	deps.Logger.InfoContext(ctx, "Creating external IP pools server")
-	// ExternalIPPoolsServerBuilder.SetNotifier takes the concrete *database.Notifier, unlike every other builder
-	// here, which takes the events.Notifier interface. The assertion is safe as long as every deps.Notifier this
-	// function ever receives is backed by a *database.Notifier.
 	externalIPPoolsServer, err := servers.NewExternalIPPoolsServer().
 		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier.(*database.Notifier)).
+		SetNotifier(dbNotifier).
 		SetAttributionLogic(deps.PublicAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -912,10 +916,9 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 
 	// Create the public projects server:
 	deps.Logger.InfoContext(ctx, "Creating public projects server")
-	// See the external IP pools server above for why this asserts to the concrete *database.Notifier.
 	publicProjectsServer, err := servers.NewProjectsServer().
 		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier.(*database.Notifier)).
+		SetNotifier(dbNotifier).
 		SetAttributionLogic(deps.PublicAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
@@ -927,10 +930,9 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 
 	// Create the private projects server:
 	deps.Logger.InfoContext(ctx, "Creating private projects server")
-	// See the external IP pools server above for why this asserts to the concrete *database.Notifier.
 	privateProjectsServer, err := servers.NewPrivateProjectsServer().
 		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier.(*database.Notifier)).
+		SetNotifier(dbNotifier).
 		SetAttributionLogic(deps.PrivateAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).

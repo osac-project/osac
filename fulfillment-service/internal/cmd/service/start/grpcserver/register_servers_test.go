@@ -371,4 +371,35 @@ var _ = Describe("Resource server filter oracle", func() {
 			},
 		)
 	}
+
+	// Positive control, one per resource (not per discovered field): confirms that List's InvalidArgument rejection
+	// above genuinely comes from the private-only field reference, not from every filter being rejected regardless
+	// of content — which the rejection-only assertions above couldn't distinguish on their own.
+	for _, testCase := range dedupeByResource(cases) {
+		It(fmt.Sprintf("Accepts a valid filter referencing only public fields on %s", testCase.resourceName),
+			func(ctx context.Context) {
+				request := newMessage(testCase.requestDesc)
+				request.ProtoReflect().Set(testCase.filterField, protoreflect.ValueOfString("this.id != this.id"))
+				response := newMessage(testCase.responseDesc)
+
+				err := conn.Invoke(ctx, testCase.methodPath, request, response)
+				Expect(err).ToNot(HaveOccurred())
+			},
+		)
+	}
 })
+
+// dedupeByResource returns one case per distinct resourceName, since every case for the same resource shares the
+// same methodPath/requestDesc/responseDesc/filterField and a positive control only needs to run once per resource.
+func dedupeByResource(cases []filterOracleCase) []filterOracleCase {
+	seen := map[string]bool{}
+	var result []filterOracleCase
+	for _, c := range cases {
+		if seen[c.resourceName] {
+			continue
+		}
+		seen[c.resourceName] = true
+		result = append(result, c)
+	}
+	return result
+}

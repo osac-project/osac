@@ -76,7 +76,7 @@ func (b *PrivateStorageBackendsServerBuilder) SetMetricsRegisterer(value prometh
 }
 
 // SetFilterDesc sets the protobuf message descriptor used to validate and translate CEL filter
-// expressions. This is optional. When unset, the descriptor of the O generic parameter is used.
+// expressions. This is optional. When unset, the descriptor of this server's own private message type is used.
 func (b *PrivateStorageBackendsServerBuilder) SetFilterDesc(value protoreflect.MessageDescriptor) *PrivateStorageBackendsServerBuilder {
 	b.filterDesc = value
 	return b

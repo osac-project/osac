@@ -18,15 +18,16 @@ COPY --chown=1001:1001 osac-metering/metering-service/go.mod osac-metering/meter
 RUN cd osac-csi-driver && go mod download
 
 COPY --chown=1001:1001 osac-csi-driver/ osac-csi-driver/
+COPY --chown=1001:1001 osac-operator/pkg/ osac-operator/pkg/
 
 WORKDIR /opt/app-root/src/osac-csi-driver
 ARG VERSION=0.1.0
 ARG GIT_COMMIT=unknown
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
     go build -a -buildvcs=false -ldflags "-X main.version=${VERSION} -X main.gitCommit=${GIT_COMMIT}" \
-    -o osac-csi-driver ./cmd/osac-csi-driver
+    -o /opt/app-root/bin/osac-csi-driver ./cmd/osac-csi-driver
 
 FROM registry.access.redhat.com/ubi10-minimal:10.2
-COPY --from=builder /opt/app-root/src/osac-csi-driver/osac-csi-driver /usr/local/bin/
+COPY --from=builder /opt/app-root/bin/osac-csi-driver /usr/local/bin/
 USER 1001
 ENTRYPOINT ["/usr/local/bin/osac-csi-driver"]

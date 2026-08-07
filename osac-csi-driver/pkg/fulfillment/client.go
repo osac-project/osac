@@ -4,6 +4,7 @@ package fulfillment
 import (
 	"context"
 
+	"google.golang.org/grpc"
 	"k8s.io/klog/v2"
 )
 
@@ -26,7 +27,7 @@ type Client interface {
 }
 
 // LoggingStub is a Client that logs calls and returns a configurable default
-// backend. Used during development before the real gRPC client is available.
+// backend. Used during development before the Volume API is available.
 type LoggingStub struct {
 	DefaultBackend  string
 	DefaultEndpoint string
@@ -43,3 +44,26 @@ func (s *LoggingStub) Resolve(_ context.Context, tenant, tier string) (*ResolveR
 }
 
 func (s *LoggingStub) Close() error { return nil }
+
+// GRPCClient is a Client that connects to the fulfillment-service.
+// TODO(OSAC-2872): implement Resolve via the Volume API once it lands
+// server-side. Until then, Resolve delegates to the LoggingStub.
+type GRPCClient struct {
+	conn *grpc.ClientConn
+	stub LoggingStub
+}
+
+// NewGRPCClientFromConn creates a fulfillment client from an existing gRPC
+// connection. The caller owns the connection lifecycle; Close will close it.
+func NewGRPCClientFromConn(conn *grpc.ClientConn) *GRPCClient {
+	return &GRPCClient{conn: conn}
+}
+
+// Resolve delegates to the logging stub until the Volume API is implemented.
+func (c *GRPCClient) Resolve(ctx context.Context, tenant, tier string) (*ResolveResult, error) {
+	return c.stub.Resolve(ctx, tenant, tier)
+}
+
+func (c *GRPCClient) Close() error {
+	return c.conn.Close()
+}

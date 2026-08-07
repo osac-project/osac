@@ -95,12 +95,9 @@ message VolumeSpec {
   // Kubernetes access mode for the volume (e.g., "ReadWriteOnce", "ReadWriteMany").
   string access_mode = 3;
 
-  // Name of the cluster where the PVC that triggered this volume exists.
-  string cluster = 4;
-
   // Reference to the PVC that triggered this volume creation. Set by the CSI driver.
   // Empty for API-driven volume creation.
-  PVCReference pvc_ref = 5;
+  PVCReference pvc_ref = 4;
 }
 
 // Represents the current operational state of a Volume.

@@ -80,7 +80,6 @@ var _ = Describe("Private volumes server", func() {
 						StorageTier: "gold",
 						SizeGib:     100,
 						AccessMode:  "ReadWriteOnce",
-						Cluster:     "cluster-1",
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -98,7 +97,6 @@ var _ = Describe("Private volumes server", func() {
 						StorageTier: "gold",
 						SizeGib:     100,
 						AccessMode:  "ReadWriteOnce",
-						Cluster:     "cluster-1",
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -130,7 +128,6 @@ var _ = Describe("Private volumes server", func() {
 			Expect(created.GetSpec().GetStorageTier()).To(Equal("gold"))
 			Expect(created.GetSpec().GetSizeGib()).To(Equal(int64(100)))
 			Expect(created.GetSpec().GetAccessMode()).To(Equal("ReadWriteOnce"))
-			Expect(created.GetSpec().GetCluster()).To(Equal("cluster-1"))
 			Expect(created.GetStatus().GetState()).To(Equal(
 				privatev1.VolumeState_VOLUME_STATE_CREATING))
 
@@ -143,13 +140,12 @@ var _ = Describe("Private volumes server", func() {
 			Expect(obj.GetSpec().GetStorageTier()).To(Equal("gold"))
 		})
 
-		It("Creates a standalone volume without cluster or pvc_ref", func() {
+		It("Creates a standalone volume without pvc_ref", func() {
 			created := createStandaloneVolume()
 
 			Expect(created.GetId()).ToNot(BeEmpty())
 			Expect(created.GetSpec().GetStorageTier()).To(Equal("gold"))
 			Expect(created.GetSpec().GetSizeGib()).To(Equal(int64(50)))
-			Expect(created.GetSpec().GetCluster()).To(BeEmpty())
 			Expect(created.GetSpec().GetPvcRef()).To(BeNil())
 			Expect(created.GetStatus().GetState()).To(Equal(
 				privatev1.VolumeState_VOLUME_STATE_CREATING))
@@ -165,7 +161,6 @@ var _ = Describe("Private volumes server", func() {
 						StorageTier: "gold",
 						SizeGib:     100,
 						AccessMode:  "ReadWriteOnce",
-						Cluster:     "cluster-1",
 						PvcRef: privatev1.PVCReference_builder{
 							Name:      "my-pvc",
 							Namespace: "default",

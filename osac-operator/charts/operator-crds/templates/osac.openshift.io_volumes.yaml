@@ -28,9 +28,6 @@ spec:
     - jsonPath: .spec.accessMode
       name: Access
       type: string
-    - jsonPath: .spec.cluster
-      name: Cluster
-      type: string
     - jsonPath: .status.phase
       name: Phase
       type: string
@@ -75,15 +72,6 @@ spec:
                 type: string
                 x-kubernetes-validations:
                 - message: accessMode is immutable
-                  rule: self == oldSelf
-              cluster:
-                description: |-
-                  Cluster is the name of the cluster where the PVC that triggered this
-                  volume exists. Empty for standalone volumes created via the API without
-                  a cluster association.
-                type: string
-                x-kubernetes-validations:
-                - message: cluster is immutable
                   rule: self == oldSelf
               pvcRef:
                 description: |-
@@ -198,6 +186,9 @@ spec:
                   - type
                   type: object
                 type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
               phase:
                 description: Phase provides a single-value overview of the state of
                   the Volume.

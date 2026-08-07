@@ -87,8 +87,8 @@ var _ = DescribeMigration("Create volumes tables", func() {
 		Expect(err).ToNot(HaveOccurred())
 
 		_, err = conn.Exec(ctx,
-			`insert into tenants (id, name, data) values ($1, $2, $3)`,
-			"tenant-2", "tenant-2", `{}`,
+			`insert into tenants (id, name, tenant, data) values ($1, $2, $3, $4)`,
+			"tenant-2", "tenant-2", "tenant-2", `{}`,
 		)
 		Expect(err).ToNot(HaveOccurred())
 
@@ -138,22 +138,30 @@ var _ = DescribeMigration("Create volumes tables", func() {
 		)
 		Expect(err).ToNot(HaveOccurred())
 
+		var pgErr *pgconn.PgError
+
 		_, err = conn.Exec(ctx,
 			`update volumes set id = $1 where id = $2`,
 			"changed-id", "immutable-id",
 		)
 		Expect(err).To(HaveOccurred())
+		Expect(errors.As(err, &pgErr)).To(BeTrue())
+		Expect(pgErr.Code).To(Equal("Z0001"))
 
 		_, err = conn.Exec(ctx,
 			`update volumes set name = $1 where id = $2`,
 			"changed-name", "immutable-id",
 		)
 		Expect(err).To(HaveOccurred())
+		Expect(errors.As(err, &pgErr)).To(BeTrue())
+		Expect(pgErr.Code).To(Equal("Z0001"))
 
 		_, err = conn.Exec(ctx,
 			`update volumes set tenant = $1 where id = $2`,
 			"other-tenant", "immutable-id",
 		)
 		Expect(err).To(HaveOccurred())
+		Expect(errors.As(err, &pgErr)).To(BeTrue())
+		Expect(pgErr.Code).To(Equal("Z0001"))
 	})
 })

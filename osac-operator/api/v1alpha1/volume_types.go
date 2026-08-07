@@ -42,13 +42,6 @@ type VolumeSpec struct {
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="accessMode is immutable"
 	AccessMode string `json:"accessMode"`
 
-	// Cluster is the name of the cluster where the PVC that triggered this
-	// volume exists. Empty for standalone volumes created via the API without
-	// a cluster association.
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="cluster is immutable"
-	Cluster string `json:"cluster,omitempty"`
-
 	// PVCRef is the reference to the PVC that triggered this volume creation.
 	// Set by the CSI driver. Empty for API-driven volume creation.
 	// +kubebuilder:validation:Optional
@@ -115,7 +108,11 @@ type VolumeStatus struct {
 
 	// Conditions holds an array of metav1.Condition that describe the state of the Volume.
 	// +kubebuilder:validation:Optional
-	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`
+	// +listType=map
+	// +listMapKey=type
+	// +patchStrategy=merge
+	// +patchMergeKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
 
 	// VendorVolumeID is the opaque identifier assigned by the vendor storage array.
 	// Set by the Volume controller after vendor CSI CreateVolume succeeds.
@@ -147,7 +144,6 @@ type VolumeStatus struct {
 // +kubebuilder:printcolumn:name="Tier",type=string,JSONPath=`.spec.storageTier`
 // +kubebuilder:printcolumn:name="Size",type=integer,JSONPath=`.spec.sizeGiB`
 // +kubebuilder:printcolumn:name="Access",type=string,JSONPath=`.spec.accessMode`
-// +kubebuilder:printcolumn:name="Cluster",type=string,JSONPath=`.spec.cluster`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Backend",type=string,JSONPath=`.status.backend`,priority=1
 // +kubebuilder:printcolumn:name="VendorID",type=string,JSONPath=`.status.vendorVolumeID`,priority=1

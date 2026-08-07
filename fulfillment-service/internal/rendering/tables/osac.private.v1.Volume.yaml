@@ -28,9 +28,6 @@ columns:
 - header: SIZE (GIB)
   value: "has(this.spec.size_gib)? string(this.spec.size_gib): '-'"
 
-- header: CLUSTER
-  value: "has(this.spec.cluster)? this.spec.cluster: '-'"
-
 - header: BACKEND
   value: "has(this.status.backend) && this.status.backend != ''? this.status.backend: '-'"
 

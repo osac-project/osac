@@ -84,7 +84,7 @@ func (b *PrivateRolesServerBuilder) SetMetricsRegisterer(value prometheus.Regist
 }
 
 // SetFilterDesc sets the protobuf message descriptor used to validate and translate CEL filter
-// expressions. This is optional. When unset, the descriptor of the O generic parameter is used.
+// expressions. This is optional. When unset, the descriptor of this server's own private message type is used.
 func (b *PrivateRolesServerBuilder) SetFilterDesc(value protoreflect.MessageDescriptor) *PrivateRolesServerBuilder {
 	b.filterDesc = value
 	return b

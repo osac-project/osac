@@ -178,7 +178,7 @@ func (b *ClustersServerBuilder) Build() (result *ClustersServer, err error) {
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
-		SetFilterDesc((*publicv1.Cluster)(nil).ProtoReflect().Descriptor()).
+		SetFilterDesc(objectDesc).
 		Build()
 	if err != nil {
 		return

@@ -89,7 +89,7 @@ func (b *PrivateTenantsServerBuilder) SetDefaultNetworkingProvisioner(value *Def
 }
 
 // SetFilterDesc sets the protobuf message descriptor used to validate and translate CEL filter
-// expressions. This is optional. When unset, the descriptor of the O generic parameter is used.
+// expressions. This is optional. When unset, the descriptor of this server's own private message type is used.
 func (b *PrivateTenantsServerBuilder) SetFilterDesc(value protoreflect.MessageDescriptor) *PrivateTenantsServerBuilder {
 	b.filterDesc = value
 	return b

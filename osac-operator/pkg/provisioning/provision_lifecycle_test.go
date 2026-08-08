@@ -1355,3 +1355,34 @@ var _ = ginkgo.Describe("IsConfigApplied", func() {
 		Expect(IsConfigApplied(&jobs, "v1")).To(BeFalse())
 	})
 })
+
+var _ = ginkgo.Describe("CountFailedJobsByConfigVersion", func() {
+	ginkgo.It("returns 0 when no jobs exist", func() {
+		Expect(CountFailedJobsByConfigVersion(nil, "v1")).To(Equal(0))
+	})
+
+	ginkgo.It("returns 0 when no failed jobs match the config version", func() {
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateSucceeded, ConfigVersion: "v1"},
+			{JobID: "2", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateFailed, ConfigVersion: "v2"},
+		}
+		Expect(CountFailedJobsByConfigVersion(jobs, "v1")).To(Equal(0))
+	})
+
+	ginkgo.It("counts only failed provision jobs with matching config version", func() {
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "1", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateFailed, ConfigVersion: "v1"},
+			{JobID: "2", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateFailed, ConfigVersion: "v1"},
+			{JobID: "3", Type: v1alpha1.JobTypeProvision, State: v1alpha1.JobStateSucceeded, ConfigVersion: "v1"},
+			{JobID: "4", Type: v1alpha1.JobTypeDeprovision, State: v1alpha1.JobStateFailed, ConfigVersion: "v1"},
+		}
+		Expect(CountFailedJobsByConfigVersion(jobs, "v1")).To(Equal(2))
+	})
+
+	ginkgo.It("ignores deprovision jobs", func() {
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "1", Type: v1alpha1.JobTypeDeprovision, State: v1alpha1.JobStateFailed, ConfigVersion: "v1"},
+		}
+		Expect(CountFailedJobsByConfigVersion(jobs, "v1")).To(Equal(0))
+	})
+})

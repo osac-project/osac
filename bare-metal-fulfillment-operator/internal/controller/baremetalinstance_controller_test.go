@@ -463,6 +463,39 @@ var _ = Describe("BareMetalInstance Controller", func() {
 			})
 		})
 
+		Context("when provision condition is Retrying (OSAC-1700)", func() {
+			BeforeEach(func() {
+				mockProvProvider = &mockProvisioningProvider{}
+				reconciler.ProvisioningProvider = mockProvProvider
+				bareMetalInstance.Spec.TemplateID = "image-provision"
+				bareMetalInstance.Spec.ExternalHostID = "host-123"
+				bareMetalInstance.Spec.HostClass = hostClass
+				bareMetalInstance.Status.ProvisioningJobs = []opv1alpha1.JobStatus{
+					{
+						JobID:     "fail-job-1",
+						Type:      opv1alpha1.JobTypeProvision,
+						State:     opv1alpha1.JobStateFailed,
+						Message:   "AAP job timed out",
+						Timestamp: metav1.NewTime(time.Now()),
+					},
+				}
+				bareMetalInstance.SetStatusCondition(
+					v1alpha1.HostConditionProvisionTemplateComplete,
+					metav1.ConditionFalse,
+					v1alpha1.HostConditionReasonRetrying,
+					"Retry #1: Last provision failed due to AAP job timed out",
+				)
+			})
+
+			It("should set Phase to Progressing, not Failed", func() {
+				result, err := reconciler.reconcileManagement(ctx, bareMetalInstance)
+
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+				Expect(bareMetalInstance.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseProgressing))
+			})
+		})
+
 		Context("when RunStrategy is unspecified", func() {
 			BeforeEach(func() {
 				bareMetalInstance.Spec.RunStrategy = v1alpha1.RunStrategyUnspecified
@@ -794,6 +827,102 @@ var _ = Describe("BareMetalInstance Controller", func() {
 					TemplateID:     "image-provision",
 				},
 			}
+		})
+
+		Context("when a provision job fails (OSAC-1700)", func() {
+			var configVersion string
+
+			BeforeEach(func() {
+				var cvErr error
+				configVersion, cvErr = provisioning.ComputeDesiredConfigVersion(struct {
+					HostType                  string
+					ExternalHostID            string
+					ExternalHostName          string
+					HostClass                 string
+					Selector                  v1alpha1.HostSelectorSpec
+					InventoryLabels           map[string]string
+					InventoryPersistentLabels map[string]string
+					TemplateID                string
+					TemplateParameters        string
+				}{
+					bareMetalInstance.Spec.HostType,
+					bareMetalInstance.Spec.ExternalHostID,
+					bareMetalInstance.Spec.ExternalHostName,
+					bareMetalInstance.Spec.HostClass,
+					bareMetalInstance.Spec.Selector,
+					bareMetalInstance.Spec.InventoryLabels,
+					bareMetalInstance.Spec.InventoryPersistentLabels,
+					bareMetalInstance.Spec.TemplateID,
+					bareMetalInstance.Spec.TemplateParameters,
+				})
+				Expect(cvErr).NotTo(HaveOccurred())
+
+				mockProvProvider.getProvisionStatusFunc = func(ctx context.Context, resource client.Object, jobID string) (provisioning.ProvisionStatus, error) {
+					return provisioning.ProvisionStatus{
+						JobID:   jobID,
+						State:   opv1alpha1.JobStateFailed,
+						Message: "AAP job timed out",
+					}, nil
+				}
+			})
+
+			It("should set Retrying condition instead of Failed phase", func() {
+				bareMetalInstance.Status.ProvisioningJobs = []opv1alpha1.JobStatus{
+					{
+						JobID:         "fail-job-1",
+						Type:          opv1alpha1.JobTypeProvision,
+						State:         opv1alpha1.JobStatePending,
+						Timestamp:     metav1.Now(),
+						ConfigVersion: configVersion,
+					},
+				}
+
+				result, err := reconciler.reconcileProvisioning(ctx, bareMetalInstance)
+
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result).To(Equal(ctrl.Result{}))
+
+				cond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionProvisionTemplateComplete)
+				Expect(cond).NotTo(BeNil())
+				Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+				Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonRetrying))
+				Expect(cond.Message).To(ContainSubstring("Retry #1"))
+				Expect(cond.Message).To(ContainSubstring("AAP job timed out"))
+
+				Expect(bareMetalInstance.Status.Phase).NotTo(Equal(v1alpha1.BareMetalInstancePhaseFailed))
+			})
+		})
+
+		Context("when provisioning is in backoff after failure (OSAC-1700)", func() {
+			BeforeEach(func() {
+				bareMetalInstance.Status.ProvisioningJobs = []opv1alpha1.JobStatus{
+					{
+						JobID:         "fail-job-1",
+						Type:          opv1alpha1.JobTypeProvision,
+						State:         opv1alpha1.JobStateFailed,
+						Message:       "AAP job timed out",
+						Timestamp:     metav1.NewTime(time.Now()),
+						ConfigVersion: "",
+					},
+				}
+				bareMetalInstance.SetStatusCondition(
+					v1alpha1.HostConditionProvisionTemplateComplete,
+					metav1.ConditionFalse,
+					v1alpha1.HostConditionReasonRetrying,
+					"Retry #1: Last provision failed due to AAP job timed out",
+				)
+			})
+
+			It("should preserve Retrying condition during backoff", func() {
+				result, err := reconciler.reconcileProvisioning(ctx, bareMetalInstance)
+
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+
+				cond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionProvisionTemplateComplete)
+				Expect(cond).NotTo(BeNil())
+				Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonRetrying))
+			})
 		})
 
 		Context("when a successful provision job exists", func() {

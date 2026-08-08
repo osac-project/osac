@@ -18,6 +18,7 @@ package dispatcher_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -209,6 +210,7 @@ var _ = Describe("Resolver", func() {
 		_, err = resolver.Resolve(ctx, "nc-no-manager")
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("neither fabricManager nor k8sManager is set"))
+		Expect(errors.Is(err, dispatcher.ErrNoManagerConfigured)).To(BeTrue())
 	})
 
 	It("returns error when fabric manager is not registered", func() {

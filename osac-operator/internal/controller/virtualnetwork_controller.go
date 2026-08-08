@@ -35,6 +35,7 @@ import (
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/pkg/dispatcher"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 )
 
@@ -54,6 +55,10 @@ type VirtualNetworkReconciler struct {
 	StatusPollInterval   time.Duration
 	MaxJobHistory        int
 	targetCluster        mc.ClusterName
+	// Resolver resolves a NetworkClass to its registered managers. Nil when the
+	// two-manager model isn't configured (no gRPC connection / networking namespace),
+	// in which case the controller always uses the legacy implementation-strategy path.
+	Resolver *dispatcher.Resolver
 }
 
 // NewVirtualNetworkReconciler creates a new reconciler for VirtualNetwork resources.
@@ -64,6 +69,7 @@ func NewVirtualNetworkReconciler(
 	statusPollInterval time.Duration,
 	maxJobHistory int,
 	targetCluster mc.ClusterName,
+	resolver *dispatcher.Resolver,
 ) *VirtualNetworkReconciler {
 	if mgr == nil {
 		panic("mgr must not be nil")
@@ -84,6 +90,7 @@ func NewVirtualNetworkReconciler(
 		StatusPollInterval:   statusPollInterval,
 		MaxJobHistory:        maxJobHistory,
 		targetCluster:        targetCluster,
+		Resolver:             resolver,
 	}
 }
 
@@ -148,8 +155,14 @@ func (r *VirtualNetworkReconciler) handleUpdate(ctx context.Context, vnet *v1alp
 		vnet.Status.Phase = v1alpha1.VirtualNetworkPhaseProgressing
 	}
 
-	// Read implementation strategy from spec (populated by fulfillment-service from NetworkClass)
-	implementationStrategy := vnet.Spec.ImplementationStrategy
+	// Determine implementation strategy: dispatcher path when the NetworkClass has a
+	// fabricManager registered, else the legacy implementation_strategy annotation path
+	// (populated by fulfillment-service from NetworkClass).
+	implementationStrategy, err := resolveImplementationStrategy(
+		ctx, r.Resolver, "VirtualNetwork", vnet.Spec.NetworkClass, vnet.Spec.ImplementationStrategy)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 	if implementationStrategy == "" {
 		log.Info("implementation strategy not set, requeueing", "virtualNetwork", vnet.Name)
 		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
@@ -169,8 +182,11 @@ func (r *VirtualNetworkReconciler) handleUpdate(ctx context.Context, vnet *v1alp
 		return ctrl.Result{}, nil
 	}
 
-	// Compute desired config version from spec
-	desiredVersion, err := provisioning.ComputeDesiredConfigVersion(vnet.Spec)
+	// Compute desired config version from spec and inherited implementation strategy
+	desiredVersion, err := provisioning.ComputeDesiredConfigVersion(struct {
+		Spec                   v1alpha1.VirtualNetworkSpec
+		ImplementationStrategy string
+	}{vnet.Spec, implementationStrategy})
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to compute desired config version: %w", err)
 	}

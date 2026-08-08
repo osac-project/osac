@@ -34,6 +34,7 @@ import (
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/pkg/dispatcher"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 )
 
@@ -54,6 +55,10 @@ type SubnetReconciler struct {
 	StatusPollInterval   time.Duration
 	MaxJobHistory        int
 	targetCluster        mc.ClusterName
+	// Resolver resolves a NetworkClass to its registered managers. Nil when the
+	// two-manager model isn't configured (no gRPC connection / networking namespace),
+	// in which case the controller always uses the legacy implementation-strategy path.
+	Resolver *dispatcher.Resolver
 }
 
 // NewSubnetReconciler creates a new reconciler for Subnet resources.
@@ -64,6 +69,7 @@ func NewSubnetReconciler(
 	statusPollInterval time.Duration,
 	maxJobHistory int,
 	targetCluster mc.ClusterName,
+	resolver *dispatcher.Resolver,
 ) *SubnetReconciler {
 	if mgr == nil {
 		panic("mgr must not be nil")
@@ -84,6 +90,7 @@ func NewSubnetReconciler(
 		StatusPollInterval:   statusPollInterval,
 		MaxJobHistory:        maxJobHistory,
 		targetCluster:        targetCluster,
+		Resolver:             resolver,
 	}
 }
 
@@ -183,10 +190,21 @@ func (r *SubnetReconciler) handleUpdate(ctx context.Context, subnet *v1alpha1.Su
 		log.Info("parent VirtualNetwork not found, requeueing", "uuid", subnet.Spec.VirtualNetwork)
 		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
+	if len(vnetList.Items) > 1 {
+		return ctrl.Result{}, fmt.Errorf(
+			"expected exactly one parent VirtualNetwork with uuid %q but found %d",
+			subnet.Spec.VirtualNetwork, len(vnetList.Items))
+	}
 	vnet := &vnetList.Items[0]
 
-	// Read implementation strategy from parent VirtualNetwork spec
-	implementationStrategy := vnet.Spec.ImplementationStrategy
+	// Determine implementation strategy: dispatcher path when the parent
+	// VirtualNetwork's NetworkClass has a fabricManager registered, else the legacy
+	// implementation_strategy annotation path (from the parent VirtualNetwork spec).
+	implementationStrategy, err := resolveImplementationStrategy(
+		ctx, r.Resolver, "Subnet", vnet.Spec.NetworkClass, vnet.Spec.ImplementationStrategy)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 	if implementationStrategy == "" {
 		log.Info("implementation strategy not set on parent VirtualNetwork, requeueing", "virtualNetwork", vnet.Name)
 		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil

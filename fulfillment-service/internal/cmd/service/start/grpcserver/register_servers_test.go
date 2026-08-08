@@ -26,6 +26,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"testing"
 	"time"
 
@@ -262,6 +263,13 @@ func discoverFilterOracleCases() []filterOracleCase {
 			})
 		}
 	}
+	// pairs is built by ranging over a map, so cases would otherwise come out in a different order on every run.
+	sort.Slice(cases, func(i, j int) bool {
+		if cases[i].resourceName != cases[j].resourceName {
+			return cases[i].resourceName < cases[j].resourceName
+		}
+		return cases[i].fieldPath < cases[j].fieldPath
+	})
 	return cases
 }
 

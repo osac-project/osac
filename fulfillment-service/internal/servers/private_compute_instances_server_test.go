@@ -2576,4 +2576,283 @@ var _ = Describe("Private compute instances server", func() {
 			})
 		})
 	})
+
+	Context("Auto external IP attachment", func() {
+		var server *PrivateComputeInstancesServer
+		var externalIPPoolDao *dao.GenericDAO[*privatev1.ExternalIPPool]
+		var externalIPDao *dao.GenericDAO[*privatev1.ExternalIP]
+		var externalIPAttachmentDao *dao.GenericDAO[*privatev1.ExternalIPAttachment]
+
+		BeforeEach(func() {
+			var err error
+
+			server, err = NewPrivateComputeInstancesServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			// Create template
+			templatesDao, err := dao.NewGenericDAO[*privatev1.ComputeInstanceTemplate]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			cpuDefault, err := anypb.New(wrapperspb.Int32(1))
+			Expect(err).ToNot(HaveOccurred())
+			memoryDefault, err := anypb.New(wrapperspb.Int32(2))
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = templatesDao.Create().SetObject(
+				privatev1.ComputeInstanceTemplate_builder{
+					Id:    "auto-eip-template",
+					Title: "Auto EIP Template",
+					Metadata: privatev1.Metadata_builder{
+						Tenant: auth.SharedTenant,
+					}.Build(),
+					Parameters: []*privatev1.ComputeInstanceTemplateParameterDefinition{
+						{
+							Name:    "cpu_count",
+							Title:   "CPU",
+							Type:    "type.googleapis.com/google.protobuf.Int32Value",
+							Default: cpuDefault,
+						},
+						{
+							Name:    "memory_gb",
+							Title:   "Memory",
+							Type:    "type.googleapis.com/google.protobuf.Int32Value",
+							Default: memoryDefault,
+						},
+					},
+					SpecDefaults: privatev1.ComputeInstanceTemplateSpecDefaults_builder{
+						InstanceType: privatev1.InstanceTypeReference_builder{Id: "auto-eip-it"}.Build(),
+						Image: privatev1.ComputeInstanceImage_builder{
+							SourceType: "registry",
+							SourceRef:  "quay.io/test:latest",
+						}.Build(),
+						BootDisk: privatev1.ComputeInstanceDisk_builder{
+							SizeGib: 10,
+						}.Build(),
+						RunStrategy: new("Always"),
+					}.Build(),
+				}.Build(),
+			).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			// Create instance type
+			instanceTypesDao, err := dao.NewGenericDAO[*privatev1.InstanceType]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = instanceTypesDao.Create().SetObject(
+				privatev1.InstanceType_builder{
+					Id: "auto-eip-it",
+					Metadata: privatev1.Metadata_builder{
+						Name:   "auto-eip-it",
+						Tenant: auth.SharedTenant,
+					}.Build(),
+					Spec: privatev1.InstanceTypeSpec_builder{
+						Cores:     4,
+						MemoryGib: 16,
+						State:     privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_ACTIVE,
+					}.Build(),
+				}.Build(),
+			).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			// Create DAOs for verification
+			externalIPPoolDao, err = dao.NewGenericDAO[*privatev1.ExternalIPPool]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			externalIPDao, err = dao.NewGenericDAO[*privatev1.ExternalIP]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			externalIPAttachmentDao, err = dao.NewGenericDAO[*privatev1.ExternalIPAttachment]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		createPool := func(id string, available int64) {
+			_, err := externalIPPoolDao.Create().SetObject(
+				privatev1.ExternalIPPool_builder{
+					Id: id,
+					Metadata: privatev1.Metadata_builder{
+						Tenant: auth.SharedTenant,
+					}.Build(),
+					Status: privatev1.ExternalIPPoolStatus_builder{
+						State:     privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY,
+						Available: available,
+						Allocated: 0,
+					}.Build(),
+				}.Build(),
+			).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+		}
+
+		createRequest := func(autoEIP bool) *privatev1.ComputeInstancesCreateRequest {
+			return privatev1.ComputeInstancesCreateRequest_builder{
+				Object: privatev1.ComputeInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Tenant: auth.SharedTenant,
+					}.Build(),
+					Spec: privatev1.ComputeInstanceSpec_builder{
+						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "auto-eip-template"}.Build(),
+						NetworkAttachments: []*privatev1.NetworkAttachment{
+							privatev1.NetworkAttachment_builder{
+								Subnet: privatev1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
+							}.Build(),
+						},
+						AutoExternalIpAttachment: autoEIP,
+					}.Build(),
+					Status: privatev1.ComputeInstanceStatus_builder{
+						State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
+					}.Build(),
+				}.Build(),
+			}.Build()
+		}
+
+		It("Auto-provisions ExternalIP and ExternalIPAttachment on create", func() {
+			createPool("pool-1", 5)
+
+			response, err := server.Create(ctx, createRequest(true))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response).ToNot(BeNil())
+
+			ciID := response.GetObject().GetId()
+
+			// Verify ExternalIP was created
+			eipList, err := externalIPDao.List().
+				SetFilter(fmt.Sprintf("this.metadata.labels['%s'] == '%s'", autoCreatedForLabel, ciID)).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(eipList.GetItems()).To(HaveLen(1))
+
+			eip := eipList.GetItems()[0]
+			Expect(eip.GetMetadata().GetLabels()[autoCreatedLabel]).To(Equal("true"))
+			Expect(eip.GetSpec().GetPool().GetId()).To(Equal("pool-1"))
+			Expect(eip.GetStatus().GetAttached()).To(BeTrue())
+
+			// Verify ExternalIPAttachment was created
+			eiaList, err := externalIPAttachmentDao.List().
+				SetFilter(fmt.Sprintf("this.metadata.labels['%s'] == '%s'", autoCreatedForLabel, ciID)).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(eiaList.GetItems()).To(HaveLen(1))
+
+			eia := eiaList.GetItems()[0]
+			Expect(eia.GetMetadata().GetLabels()[autoCreatedLabel]).To(Equal("true"))
+			Expect(eia.GetSpec().GetExternalIp().GetId()).To(Equal(eip.GetId()))
+			Expect(eia.GetSpec().GetComputeInstance().GetId()).To(Equal(ciID))
+
+			// Verify pool capacity was updated
+			poolResp, err := externalIPPoolDao.Get().SetId("pool-1").Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(poolResp.GetObject().GetStatus().GetAvailable()).To(Equal(int64(4)))
+			Expect(poolResp.GetObject().GetStatus().GetAllocated()).To(Equal(int64(1)))
+		})
+
+		It("Does not auto-provision when auto_external_ip_attachment is false", func() {
+			createPool("pool-1", 5)
+
+			response, err := server.Create(ctx, createRequest(false))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response).ToNot(BeNil())
+
+			// Verify no ExternalIP was created
+			eipList, err := externalIPDao.List().Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(eipList.GetItems()).To(BeEmpty())
+
+			// Verify pool capacity was not changed
+			poolResp, err := externalIPPoolDao.Get().SetId("pool-1").Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(poolResp.GetObject().GetStatus().GetAvailable()).To(Equal(int64(5)))
+		})
+
+		It("Fails with FailedPrecondition when no pool has capacity", func() {
+			createPool("empty-pool", 0)
+
+			_, err := server.Create(ctx, createRequest(true))
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+		})
+
+		It("Fails with FailedPrecondition when no pool exists", func() {
+			_, err := server.Create(ctx, createRequest(true))
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+		})
+
+		It("Cascade-deletes auto-created resources on ComputeInstance delete", func() {
+			createPool("pool-1", 5)
+
+			// Create CI with auto EIP
+			response, err := server.Create(ctx, createRequest(true))
+			Expect(err).ToNot(HaveOccurred())
+			ciID := response.GetObject().GetId()
+
+			// Delete the CI
+			_, err = server.Delete(ctx, privatev1.ComputeInstancesDeleteRequest_builder{
+				Id: ciID,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			// Verify ExternalIPAttachment was deleted
+			eiaList, err := externalIPAttachmentDao.List().Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(eiaList.GetItems()).To(BeEmpty())
+
+			// Verify ExternalIP was deleted
+			eipList, err := externalIPDao.List().Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(eipList.GetItems()).To(BeEmpty())
+
+			// Verify pool capacity was restored
+			poolResp, err := externalIPPoolDao.Get().SetId("pool-1").Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(poolResp.GetObject().GetStatus().GetAvailable()).To(Equal(int64(5)))
+			Expect(poolResp.GetObject().GetStatus().GetAllocated()).To(Equal(int64(0)))
+		})
+
+		It("Rejects update to auto_external_ip_attachment", func() {
+			createPool("pool-1", 5)
+
+			response, err := server.Create(ctx, createRequest(true))
+			Expect(err).ToNot(HaveOccurred())
+			ciID := response.GetObject().GetId()
+
+			_, err = server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+				Object: privatev1.ComputeInstance_builder{
+					Id: ciID,
+					Spec: privatev1.ComputeInstanceSpec_builder{
+						AutoExternalIpAttachment: false,
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{
+					Paths: []string{"spec.auto_external_ip_attachment"},
+				},
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(ContainSubstring("auto_external_ip_attachment"))
+		})
+	})
 })

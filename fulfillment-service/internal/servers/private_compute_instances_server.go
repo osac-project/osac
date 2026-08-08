@@ -53,13 +53,16 @@ var _ privatev1.ComputeInstancesServer = (*PrivateComputeInstancesServer)(nil)
 type PrivateComputeInstancesServer struct {
 	privatev1.UnimplementedComputeInstancesServer
 
-	logger            *slog.Logger
-	generic           *GenericServer[*privatev1.ComputeInstance]
-	templatesDao      *dao.GenericDAO[*privatev1.ComputeInstanceTemplate]
-	catalogItemsDao   *dao.GenericDAO[*privatev1.ComputeInstanceCatalogItem]
-	subnetsDao        *dao.GenericDAO[*privatev1.Subnet]
-	securityGroupsDao *dao.GenericDAO[*privatev1.SecurityGroup]
-	instanceTypesDao  *dao.GenericDAO[*privatev1.InstanceType]
+	logger                  *slog.Logger
+	generic                 *GenericServer[*privatev1.ComputeInstance]
+	templatesDao            *dao.GenericDAO[*privatev1.ComputeInstanceTemplate]
+	catalogItemsDao         *dao.GenericDAO[*privatev1.ComputeInstanceCatalogItem]
+	subnetsDao              *dao.GenericDAO[*privatev1.Subnet]
+	securityGroupsDao       *dao.GenericDAO[*privatev1.SecurityGroup]
+	instanceTypesDao        *dao.GenericDAO[*privatev1.InstanceType]
+	externalIPPoolDao       *dao.GenericDAO[*privatev1.ExternalIPPool]
+	externalIPDao           *dao.GenericDAO[*privatev1.ExternalIP]
+	externalIPAttachmentDao *dao.GenericDAO[*privatev1.ExternalIPAttachment]
 }
 
 func NewPrivateComputeInstancesServer() *PrivateComputeInstancesServerBuilder {
@@ -154,6 +157,33 @@ func (b *PrivateComputeInstancesServerBuilder) Build() (result *PrivateComputeIn
 		return
 	}
 
+	externalIPPoolDao, err := dao.NewGenericDAO[*privatev1.ExternalIPPool]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
+	externalIPDao, err := dao.NewGenericDAO[*privatev1.ExternalIP]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
+	externalIPAttachmentDao, err := dao.NewGenericDAO[*privatev1.ExternalIPAttachment]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
 	// Create the generic server:
 	generic, err := NewGenericServer[*privatev1.ComputeInstance]().
 		SetLogger(b.logger).
@@ -169,13 +199,16 @@ func (b *PrivateComputeInstancesServerBuilder) Build() (result *PrivateComputeIn
 
 	// Create and populate the object:
 	result = &PrivateComputeInstancesServer{
-		logger:            b.logger,
-		generic:           generic,
-		templatesDao:      templatesDao,
-		catalogItemsDao:   catalogItemsDao,
-		subnetsDao:        subnetsDao,
-		securityGroupsDao: securityGroupsDao,
-		instanceTypesDao:  instanceTypesDao,
+		logger:                  b.logger,
+		generic:                 generic,
+		templatesDao:            templatesDao,
+		catalogItemsDao:         catalogItemsDao,
+		subnetsDao:              subnetsDao,
+		securityGroupsDao:       securityGroupsDao,
+		instanceTypesDao:        instanceTypesDao,
+		externalIPPoolDao:       externalIPPoolDao,
+		externalIPDao:           externalIPDao,
+		externalIPAttachmentDao: externalIPAttachmentDao,
 	}
 	return
 }
@@ -366,6 +399,13 @@ func (s *PrivateComputeInstancesServer) Create(ctx context.Context,
 		return
 	}
 
+	if spec.GetAutoExternalIpAttachment() {
+		err = s.autoProvisionExternalIP(ctx, response.GetObject())
+		if err != nil {
+			return
+		}
+	}
+
 	// Attach warnings to the response (deprecation notices for DEPRECATED instance types).
 	if len(warnings) > 0 {
 		response.SetWarnings(warnings)
@@ -414,6 +454,22 @@ func (s *PrivateComputeInstancesServer) Update(ctx context.Context,
 
 func (s *PrivateComputeInstancesServer) Delete(ctx context.Context,
 	request *privatev1.ComputeInstancesDeleteRequest) (response *privatev1.ComputeInstancesDeleteResponse, err error) {
+	id := request.GetId()
+	if id != "" {
+		getResponse, getErr := s.generic.dao.Get().SetId(id).Do(ctx)
+		if getErr != nil {
+			var notFoundErr *dao.ErrNotFound
+			if !errors.As(getErr, &notFoundErr) {
+				err = getErr
+				return
+			}
+		} else if getResponse.GetObject().GetSpec().GetAutoExternalIpAttachment() {
+			err = s.autoCleanupExternalIP(ctx, id)
+			if err != nil {
+				return
+			}
+		}
+	}
 	err = s.generic.Delete(ctx, request, &response)
 	return
 }
@@ -557,8 +613,9 @@ func (s *PrivateComputeInstancesServer) validateTemplateImmutability(ctx context
 	updatingTemplateParams := hasMaskPrefix(updateMask, "spec.template_parameters")
 	updatingCatalogItem := hasMaskPrefix(updateMask, "spec.catalog_item")
 	updatingInstanceType := hasMaskPrefix(updateMask, "spec.instance_type")
+	updatingAutoExternalIP := hasMaskPrefix(updateMask, "spec.auto_external_ip_attachment")
 
-	if !updatingTemplate && !updatingTemplateParams && !updatingCatalogItem && !updatingInstanceType {
+	if !updatingTemplate && !updatingTemplateParams && !updatingCatalogItem && !updatingInstanceType && !updatingAutoExternalIP {
 		return nil
 	}
 
@@ -617,6 +674,11 @@ func (s *PrivateComputeInstancesServer) validateTemplateImmutability(ctx context
 			refKey(existingSpec.GetInstanceType()),
 			refKey(newSpec.GetInstanceType()),
 		)
+	}
+
+	if updatingAutoExternalIP && existingSpec.GetAutoExternalIpAttachment() != newSpec.GetAutoExternalIpAttachment() {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"cannot change spec.auto_external_ip_attachment: auto_external_ip_attachment is immutable after creation")
 	}
 
 	return nil
@@ -973,4 +1035,177 @@ func (s *PrivateComputeInstancesServer) lookupCatalogItem(ctx context.Context,
 	}
 	result = items[0]
 	return
+}
+
+const (
+	autoCreatedLabel    = "osac.openshift.io/auto-created"
+	autoCreatedForLabel = "osac.openshift.io/auto-created-for"
+)
+
+func (s *PrivateComputeInstancesServer) autoProvisionExternalIP(
+	ctx context.Context, ci *privatev1.ComputeInstance,
+) error {
+	pool, err := SelectExternalIPPool(ctx, s.externalIPPoolDao, privatev1.IPFamily_IP_FAMILY_UNSPECIFIED)
+	if err != nil {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "auto_external_ip_attachment: %s", err)
+	}
+
+	tenant := ci.GetMetadata().GetTenant()
+	ciID := ci.GetId()
+
+	eip := privatev1.ExternalIP_builder{
+		Metadata: privatev1.Metadata_builder{
+			Tenant: tenant,
+			Labels: map[string]string{
+				autoCreatedLabel:    "true",
+				autoCreatedForLabel: ciID,
+			},
+			Annotations: map[string]string{
+				ownerReferenceAnnotation: ciID,
+			},
+			Creator: "system",
+		}.Build(),
+		Spec: privatev1.ExternalIPSpec_builder{
+			Pool: privatev1.ExternalIPPoolReference_builder{Id: pool.GetId()}.Build(),
+		}.Build(),
+		Status: privatev1.ExternalIPStatus_builder{
+			State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING,
+		}.Build(),
+	}.Build()
+
+	eipResp, err := s.externalIPDao.Create().SetObject(eip).Do(ctx)
+	if err != nil {
+		return fmt.Errorf("auto_external_ip_attachment: failed to create ExternalIP: %w", err)
+	}
+	eipID := eipResp.GetObject().GetId()
+
+	err = s.updatePoolCapacity(ctx, pool.GetId(), 1)
+	if err != nil {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "auto_external_ip_attachment: %s", err)
+	}
+
+	attachment := privatev1.ExternalIPAttachment_builder{
+		Metadata: privatev1.Metadata_builder{
+			Tenant: tenant,
+			Labels: map[string]string{
+				autoCreatedLabel:    "true",
+				autoCreatedForLabel: ciID,
+			},
+			Annotations: map[string]string{
+				ownerReferenceAnnotation: ciID,
+			},
+			Creator: "system",
+		}.Build(),
+		Spec: privatev1.ExternalIPAttachmentSpec_builder{
+			ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eipID}.Build(),
+			ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: ciID}.Build(),
+		}.Build(),
+		Status: privatev1.ExternalIPAttachmentStatus_builder{
+			State: privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_PENDING,
+		}.Build(),
+	}.Build()
+
+	_, err = s.externalIPAttachmentDao.Create().SetObject(attachment).Do(ctx)
+	if err != nil {
+		return fmt.Errorf("auto_external_ip_attachment: failed to create ExternalIPAttachment: %w", err)
+	}
+
+	err = s.updateExternalIPAttachedFlag(ctx, eipID, true)
+	if err != nil {
+		return fmt.Errorf("auto_external_ip_attachment: %w", err)
+	}
+
+	return nil
+}
+
+func (s *PrivateComputeInstancesServer) autoCleanupExternalIP(ctx context.Context, ciID string) error {
+	filter := fmt.Sprintf(
+		"this.metadata.labels['%s'] == '%s'",
+		autoCreatedForLabel, ciID,
+	)
+	listResp, err := s.externalIPAttachmentDao.List().SetFilter(filter).Do(ctx)
+	if err != nil {
+		return fmt.Errorf("auto_external_ip_attachment cleanup: failed to list attachments: %w", err)
+	}
+
+	for _, attachment := range listResp.GetItems() {
+		eipRef := attachment.GetSpec().GetExternalIp()
+		eipID := refKey(eipRef)
+
+		_, err = s.externalIPAttachmentDao.Delete().SetId(attachment.GetId()).Do(ctx)
+		if err != nil {
+			return fmt.Errorf("auto_external_ip_attachment cleanup: failed to delete attachment: %w", err)
+		}
+
+		if eipID != "" {
+			err = s.updateExternalIPAttachedFlag(ctx, eipID, false)
+			if err != nil {
+				return fmt.Errorf("auto_external_ip_attachment cleanup: %w", err)
+			}
+
+			eipResp, getErr := s.externalIPDao.Get().SetId(eipID).Do(ctx)
+			if getErr != nil {
+				return fmt.Errorf("auto_external_ip_attachment cleanup: failed to get ExternalIP: %w", getErr)
+			}
+			poolRef := eipResp.GetObject().GetSpec().GetPool()
+
+			_, err = s.externalIPDao.Delete().SetId(eipID).Do(ctx)
+			if err != nil {
+				return fmt.Errorf("auto_external_ip_attachment cleanup: failed to delete ExternalIP: %w", err)
+			}
+
+			if poolRef != nil {
+				err = s.updatePoolCapacity(ctx, refKey(poolRef), -1)
+				if err != nil {
+					return fmt.Errorf("auto_external_ip_attachment cleanup: %w", err)
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func (s *PrivateComputeInstancesServer) updatePoolCapacity(ctx context.Context, poolID string, delta int64) error {
+	getResponse, err := s.externalIPPoolDao.Get().
+		SetId(poolID).
+		SetLock(true).
+		Do(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get ExternalIPPool for capacity update: %w", err)
+	}
+
+	pool := getResponse.GetObject()
+	newAllocated := pool.GetStatus().GetAllocated() + delta
+	newAvailable := pool.GetStatus().GetAvailable() - delta
+	if newAvailable < 0 {
+		return fmt.Errorf("ExternalIP pool '%s' has no available capacity", poolID)
+	}
+	pool.GetStatus().SetAllocated(newAllocated)
+	pool.GetStatus().SetAvailable(newAvailable)
+
+	_, err = s.externalIPPoolDao.Update().SetObject(pool).Do(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update ExternalIPPool capacity: %w", err)
+	}
+	return nil
+}
+
+func (s *PrivateComputeInstancesServer) updateExternalIPAttachedFlag(ctx context.Context, externalIPID string, attached bool) error {
+	getResponse, err := s.externalIPDao.Get().
+		SetId(externalIPID).
+		SetLock(true).
+		Do(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get ExternalIP for attached flag update: %w", err)
+	}
+
+	eip := getResponse.GetObject()
+	eip.GetStatus().SetAttached(attached)
+
+	_, err = s.externalIPDao.Update().SetObject(eip).Do(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update ExternalIP attached flag: %w", err)
+	}
+	return nil
 }

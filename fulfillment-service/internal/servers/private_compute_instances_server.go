@@ -60,6 +60,7 @@ type PrivateComputeInstancesServer struct {
 	subnetsDao        *dao.GenericDAO[*privatev1.Subnet]
 	securityGroupsDao *dao.GenericDAO[*privatev1.SecurityGroup]
 	instanceTypesDao  *dao.GenericDAO[*privatev1.InstanceType]
+	storageTiersDao   *dao.GenericDAO[*privatev1.StorageTier]
 }
 
 func NewPrivateComputeInstancesServer() *PrivateComputeInstancesServerBuilder {
@@ -154,6 +155,16 @@ func (b *PrivateComputeInstancesServerBuilder) Build() (result *PrivateComputeIn
 		return
 	}
 
+	// Create the StorageTiers DAO for storage tier validation:
+	storageTiersDao, err := dao.NewGenericDAO[*privatev1.StorageTier]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
 	// Create the generic server:
 	generic, err := NewGenericServer[*privatev1.ComputeInstance]().
 		SetLogger(b.logger).
@@ -176,6 +187,7 @@ func (b *PrivateComputeInstancesServerBuilder) Build() (result *PrivateComputeIn
 		subnetsDao:        subnetsDao,
 		securityGroupsDao: securityGroupsDao,
 		instanceTypesDao:  instanceTypesDao,
+		storageTiersDao:   storageTiersDao,
 	}
 	return
 }
@@ -348,6 +360,11 @@ func (s *PrivateComputeInstancesServer) Create(ctx context.Context,
 	// Apply the template's spec defaults and validate required fields, regardless
 	// of whether the template was referenced directly or resolved via a catalog item.
 	err = s.applySpecDefaults(spec, template)
+	if err != nil {
+		return
+	}
+
+	err = s.validateStorageTiers(ctx, spec)
 	if err != nil {
 		return
 	}
@@ -546,6 +563,41 @@ func (s *PrivateComputeInstancesServer) validateInstanceType(
 	warnings = append(warnings, stateWarnings...)
 
 	return warnings, nil
+}
+
+func (s *PrivateComputeInstancesServer) validateStorageTiers(
+	ctx context.Context,
+	spec *privatev1.ComputeInstanceSpec,
+) error {
+	seen := map[string]bool{}
+	var tiers []string
+	if spec.HasBootDisk() && spec.GetBootDisk().HasStorageTier() {
+		tiers = append(tiers, spec.GetBootDisk().GetStorageTier())
+	}
+	for _, disk := range spec.GetAdditionalDisks() {
+		if disk.HasStorageTier() {
+			tiers = append(tiers, disk.GetStorageTier())
+		}
+	}
+	for _, name := range tiers {
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		_, err := s.storageTiersDao.Get().
+			SetId(name).
+			Do(ctx)
+		if err != nil {
+			var notFoundErr *dao.ErrNotFound
+			if errors.As(err, &notFoundErr) {
+				return grpcstatus.Errorf(grpccodes.InvalidArgument,
+					"storage tier %q does not exist", name)
+			}
+			return grpcstatus.Errorf(grpccodes.Internal,
+				"failed to retrieve storage tier %q", name)
+		}
+	}
+	return nil
 }
 
 // validateTemplateImmutability ensures that the template and template_parameters fields

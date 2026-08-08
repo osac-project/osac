@@ -271,6 +271,29 @@ var _ = Describe("Private compute instances server", func() {
 				}.Build(),
 			).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
+
+			storageTiersDao, err := dao.NewGenericDAO[*privatev1.StorageTier]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = storageTiersDao.Create().SetObject(
+				privatev1.StorageTier_builder{
+					Id: "standard",
+					Metadata: privatev1.Metadata_builder{
+						Name:   "standard",
+						Tenant: auth.SharedTenant,
+					}.Build(),
+					Spec: privatev1.StorageTierSpec_builder{
+						Description: "Standard storage tier",
+					}.Build(),
+					Status: privatev1.StorageTierStatus_builder{
+						State: privatev1.StorageTierState_STORAGE_TIER_STATE_ACTIVE,
+					}.Build(),
+				}.Build(),
+			).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
 		})
 
 		// Helper function to create a template
@@ -321,7 +344,8 @@ var _ = Describe("Private compute instances server", func() {
 						SourceRef:  "quay.io/containerdisks/fedora:latest",
 					}.Build(),
 					BootDisk: privatev1.ComputeInstanceDisk_builder{
-						SizeGib: 10,
+						SizeGib:     10,
+						StorageTier: new("standard"),
 					}.Build(),
 					RunStrategy: new("Always"),
 				}.Build(),
@@ -371,6 +395,30 @@ var _ = Describe("Private compute instances server", func() {
 			Expect(object.GetId()).ToNot(BeEmpty())
 			Expect(object.GetSpec().GetTemplate().GetId()).To(Equal("general.small"))
 			Expect(object.GetStatus().GetState()).To(Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING))
+		})
+
+		It("Rejects nonexistent storage tier", func() {
+			createTemplate("general.small")
+
+			_, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
+				Object: privatev1.ComputeInstance_builder{
+					Spec: privatev1.ComputeInstanceSpec_builder{
+						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "general.small"}.Build(),
+						BootDisk: privatev1.ComputeInstanceDisk_builder{
+							SizeGib:     20,
+							StorageTier: new("nonexistent"),
+						}.Build(),
+						NetworkAttachments: []*privatev1.NetworkAttachment{
+							privatev1.NetworkAttachment_builder{
+								Subnet: privatev1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring(`storage tier "nonexistent" does not exist`))
 		})
 
 		It("List objects", func() {
@@ -993,7 +1041,8 @@ var _ = Describe("Private compute instances server", func() {
 							SourceRef:  "quay.io/containerdisks/fedora:latest",
 						}.Build(),
 						BootDisk: privatev1.ComputeInstanceDisk_builder{
-							SizeGib: 20,
+							SizeGib:     20,
+							StorageTier: new("standard"),
 						}.Build(),
 						RunStrategy: new("Always"),
 						NetworkAttachments: []*privatev1.NetworkAttachment{
@@ -1046,7 +1095,8 @@ var _ = Describe("Private compute instances server", func() {
 							SourceRef:  "quay.io/containerdisks/fedora:latest",
 						}.Build(),
 						BootDisk: privatev1.ComputeInstanceDisk_builder{
-							SizeGib: 20,
+							SizeGib:     20,
+							StorageTier: new("standard"),
 						}.Build(),
 						NetworkAttachments: []*privatev1.NetworkAttachment{
 							privatev1.NetworkAttachment_builder{
@@ -1505,7 +1555,8 @@ var _ = Describe("Private compute instances server", func() {
 								SourceRef:  "quay.io/containerdisks/fedora:latest",
 							}.Build(),
 							BootDisk: privatev1.ComputeInstanceDisk_builder{
-								SizeGib: 10,
+								SizeGib:     10,
+								StorageTier: new("standard"),
 							}.Build(),
 							RunStrategy: new("Always"),
 						}.Build(),
@@ -1575,7 +1626,8 @@ var _ = Describe("Private compute instances server", func() {
 								SourceRef:  "quay.io/containerdisks/fedora:latest",
 							}.Build(),
 							BootDisk: privatev1.ComputeInstanceDisk_builder{
-								SizeGib: 10,
+								SizeGib:     10,
+								StorageTier: new("standard"),
 							}.Build(),
 							RunStrategy: new("Always"),
 						}.Build(),
@@ -1674,6 +1726,29 @@ var _ = Describe("Private compute instances server", func() {
 			).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 
+			storageTiersDao, err := dao.NewGenericDAO[*privatev1.StorageTier]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = storageTiersDao.Create().SetObject(
+				privatev1.StorageTier_builder{
+					Id: "standard",
+					Metadata: privatev1.Metadata_builder{
+						Name:   "standard",
+						Tenant: auth.SharedTenant,
+					}.Build(),
+					Spec: privatev1.StorageTierSpec_builder{
+						Description: "Standard storage tier",
+					}.Build(),
+					Status: privatev1.StorageTierStatus_builder{
+						State: privatev1.StorageTierState_STORAGE_TIER_STATE_ACTIVE,
+					}.Build(),
+				}.Build(),
+			).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
 			template = privatev1.ComputeInstanceTemplate_builder{
 				Id:          "test-template",
 				Title:       "Test Template",
@@ -1707,7 +1782,8 @@ var _ = Describe("Private compute instances server", func() {
 						SourceRef:  "quay.io/containerdisks/fedora:latest",
 					}.Build(),
 					BootDisk: privatev1.ComputeInstanceDisk_builder{
-						SizeGib: 10,
+						SizeGib:     10,
+						StorageTier: new("standard"),
 					}.Build(),
 					RunStrategy: new("Always"),
 				}.Build(),
@@ -2514,7 +2590,8 @@ var _ = Describe("Private compute instances server", func() {
 								SourceRef:  "quay.io/containerdisks/fedora:latest",
 							}.Build(),
 							BootDisk: privatev1.ComputeInstanceDisk_builder{
-								SizeGib: 20,
+								SizeGib:     20,
+								StorageTier: new("standard"),
 							}.Build(),
 							RunStrategy: new("Always"),
 							NetworkAttachments: []*privatev1.NetworkAttachment{

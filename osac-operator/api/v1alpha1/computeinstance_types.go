@@ -52,6 +52,13 @@ type DiskSpec struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Minimum=1
 	SizeGiB int32 `json:"sizeGiB"`
+
+	// StorageTier is the name of the storage tier for this disk
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$`
+	StorageTier string `json:"storageTier"`
 }
 
 // RunStrategyType defines valid VM run strategies

@@ -33,6 +33,8 @@ var _ = Describe("ObjectTypeNames", func() {
 		Expect(names).ToNot(BeEmpty())
 		Expect(names).To(ContainElement("cluster"))
 		Expect(names).To(ContainElement("clusters"))
+		Expect(names).To(ContainElement("baremetalinstancetype"))
+		Expect(names).To(ContainElement("baremetalinstancetypes"))
 	})
 
 	It("includes both singular and plural forms", func() {

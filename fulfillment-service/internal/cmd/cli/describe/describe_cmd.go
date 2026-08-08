@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/baremetalinstance"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/baremetalinstancetype"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/cluster"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/clusterversion"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/computeinstance"
@@ -39,6 +40,7 @@ func Cmd() *cobra.Command {
 		Long:  longHelp,
 	}
 	result.AddCommand(baremetalinstance.Cmd())
+	result.AddCommand(baremetalinstancetype.Cmd())
 	result.AddCommand(cluster.Cmd())
 	result.AddCommand(clusterversion.Cmd())
 	result.AddCommand(computeinstance.Cmd())

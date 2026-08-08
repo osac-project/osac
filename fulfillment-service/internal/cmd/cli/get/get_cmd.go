@@ -28,6 +28,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/baremetalinstancetype"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/externalippool"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/kubeconfig"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/password"
@@ -64,6 +65,7 @@ func Cmd() *cobra.Command {
 		RunE:                  runner.run,
 		ValidArgsFunction:     completeObjectTypes,
 	}
+	result.AddCommand(baremetalinstancetype.Cmd())
 	result.AddCommand(externalippool.Cmd())
 	result.AddCommand(kubeconfig.Cmd())
 	result.AddCommand(password.Cmd())

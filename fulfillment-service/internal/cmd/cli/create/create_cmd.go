@@ -31,6 +31,7 @@ import (
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/baremetalinstance"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/baremetalinstancecatalogitem"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/baremetalinstancetype"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/cluster"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/clustercatalogitem"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/clusterversion"
@@ -63,6 +64,7 @@ func Cmd() *cobra.Command {
 	}
 	result.AddCommand(baremetalinstance.Cmd())
 	result.AddCommand(baremetalinstancecatalogitem.Cmd())
+	result.AddCommand(baremetalinstancetype.Cmd())
 	result.AddCommand(cluster.Cmd())
 	result.AddCommand(clustercatalogitem.Cmd())
 	result.AddCommand(clusterversion.Cmd())

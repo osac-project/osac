@@ -2369,7 +2369,11 @@ func (t *Tool) RunCLIWithEnv(ctx context.Context, homeDir string, extraEnv []str
 // behavior, not errors).
 func (t *Tool) runCLI(ctx context.Context, homeDir string, extraEnv []string, args ...string) (stdout, stderr string, exitCode int) {
 	cmd := exec.CommandContext(ctx, t.cliBinaryPath, args...)
-	cmd.Env = append(cliEnv(homeDir), extraEnv...)
+	// extraEnv is appended after cliEnv(homeDir) so callers can override HOME, OSAC_CONFIG, etc., but
+	// OSAC_SECRET_STORE=file is re-appended last: for duplicate keys, Go's own env parsing in the
+	// spawned CLI process uses the last occurrence, so without this an extraEnv entry could silently
+	// re-enable the real keyring and reintroduce the failure this override exists to prevent.
+	cmd.Env = append(append(cliEnv(homeDir), extraEnv...), "OSAC_SECRET_STORE=file")
 	cmd.Dir = t.projectDir
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf

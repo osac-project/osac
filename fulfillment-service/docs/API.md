@@ -80,6 +80,8 @@ The `Metadata` message is shared by all object types and contains the following 
 | `labels`               | `map<string, string>`        | Indexed key-value pairs for organizing objects.  |
 | `annotations`          | `map<string, string>`        | Arbitrary user-controlled metadata.              |
 | `version`              | `int32`                      | Auto-incremented on every change.                |
+| `display_name`         | `string`                     | Optional friendly label (max 63, not unique, not DNS-constrained). |
+| `description`          | `string`                     | Optional description (max 256, not unique).      |
 
 The private API adds a `finalizers` field (`repeated string`) that is not exposed in the public API.
 

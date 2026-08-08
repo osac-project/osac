@@ -16,18 +16,7 @@ syntax = "proto3";
 package osac.private.v1;
 
 import "osac/private/v1/metadata_type.proto";
-
-// Identifies the storage protocol used by a backend association within a storage tier.
-enum StorageProtocol {
-  // Protocol is unknown or has not been specified.
-  STORAGE_PROTOCOL_UNSPECIFIED = 0;
-
-  // NFS (Network File System) protocol for file-based storage access.
-  STORAGE_PROTOCOL_NFS = 1;
-
-  // Block storage protocol for volume-based storage access.
-  STORAGE_PROTOCOL_BLOCK = 2;
-}
+import "osac/private/v1/storage_common_type.proto";
 
 // Lifecycle states for StorageTier resources.
 enum StorageTierState {

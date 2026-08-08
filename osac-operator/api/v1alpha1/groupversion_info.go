@@ -58,6 +58,8 @@ func addKnownTypes(s *runtime.Scheme) error {
 		&ExternalIPAttachmentList{},
 		&NATGateway{},
 		&NATGatewayList{},
+		&Volume{},
+		&VolumeList{},
 	)
 	metav1.AddToGroupVersion(s, GroupVersion)
 	return nil

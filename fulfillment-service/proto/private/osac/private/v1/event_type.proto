@@ -46,6 +46,7 @@ import "osac/private/v1/storage_tier_type.proto";
 import "osac/private/v1/subnet_type.proto";
 import "osac/private/v1/user_type.proto";
 import "osac/private/v1/virtual_network_type.proto";
+import "osac/private/v1/volume_type.proto";
 
 // Represents events delivered by the server.
 message Event {
@@ -90,6 +91,7 @@ message Event {
     ClusterVersion cluster_version = 38;
     StorageTier storage_tier = 39;
     Secret secret = 40;
+    Volume volume = 41;
   }
 }
 

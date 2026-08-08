@@ -1184,6 +1184,20 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	}
 	privatev1.RegisterStorageTiersServer(grpcServer, privateStorageTiersServer)
 
+	// Create the private volumes server:
+	c.logger.InfoContext(ctx, "Creating private volumes server")
+	privateVolumesServer, err := servers.NewPrivateVolumesServer().
+		SetLogger(c.logger).
+		SetNotifier(notifier).
+		SetAttributionLogic(privateAttributionLogic).
+		SetTenancyLogic(tenancyLogic).
+		SetMetricsRegisterer(metricsRegisterer).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create private volumes server: %w", err)
+	}
+	privatev1.RegisterVolumesServer(grpcServer, privateVolumesServer)
+
 	// Create the roles server:
 	c.logger.InfoContext(ctx, "Creating roles server")
 	rolesServer, err := servers.NewRolesServer().

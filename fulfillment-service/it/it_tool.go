@@ -2369,7 +2369,12 @@ func (t *Tool) RunCLIWithEnv(ctx context.Context, homeDir string, extraEnv []str
 // behavior, not errors).
 func (t *Tool) runCLI(ctx context.Context, homeDir string, extraEnv []string, args ...string) (stdout, stderr string, exitCode int) {
 	cmd := exec.CommandContext(ctx, t.cliBinaryPath, args...)
-	cmd.Env = append(cliEnv(homeDir), extraEnv...)
+	// extraEnv is appended after cliEnv(homeDir) so callers can override HOME, OSAC_CONFIG, etc., but
+	// OSAC_SECRET_STORE is stripped out of it first: for duplicate keys, Go's own env parsing in the
+	// spawned CLI process uses the last occurrence, so without this an extraEnv entry could silently
+	// override cliEnv's OSAC_SECRET_STORE decision (forced file-based storage locally, or no override
+	// at all in CI, where the keyring probe already falls back to file storage on its own).
+	cmd.Env = append(cliEnv(homeDir), stripOSACSecretStore(extraEnv)...)
 	cmd.Dir = t.projectDir
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf
@@ -2400,13 +2405,43 @@ func (t *Tool) runCLI(ctx context.Context, homeDir string, extraEnv []string, ar
 // cliEnv builds a minimal sandboxed environment for CLI subprocess execution. Only the
 // variables strictly required by the CLI binary are set; everything else from the host
 // is excluded to guarantee full test isolation.
+//
+// Outside CI, OSAC_SECRET_STORE=file forces file-based secret storage: homeDir has no
+// operating system keychain, so probing it would otherwise misdetect the keyring as usable
+// and fail (or prompt interactively) on save. In CI there's no Secret Service either way, so
+// the keyring probe already falls back to file storage on its own -- leaving the override
+// unset there keeps CI exercising that real fallback path instead of a forced substitute.
 func cliEnv(homeDir string) []string {
-	return []string{
+	env := []string{
 		"HOME=" + homeDir,
 		"PATH=" + os.Getenv("PATH"),
 		"OSAC_CONFIG=" + filepath.Join(homeDir, ".config", "osac"),
 		"OSAC_CACHE=" + filepath.Join(homeDir, ".cache", "osac"),
 	}
+	if !runningInCI() {
+		env = append(env, "OSAC_SECRET_STORE=file")
+	}
+	return env
+}
+
+// runningInCI reports whether the test process itself is running under a CI system. CI is the
+// de facto standard environment variable for this: GitHub Actions, GitLab CI, CircleCI, and
+// Travis all set it unconditionally.
+func runningInCI() bool {
+	return os.Getenv("CI") != ""
+}
+
+// stripOSACSecretStore returns a copy of env with any OSAC_SECRET_STORE entries removed, so
+// that appending it after cliEnv(homeDir) can't override cliEnv's OSAC_SECRET_STORE decision.
+func stripOSACSecretStore(env []string) []string {
+	filtered := make([]string, 0, len(env))
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "OSAC_SECRET_STORE=") {
+			continue
+		}
+		filtered = append(filtered, kv)
+	}
+	return filtered
 }
 
 // redactCLIArgs returns a copy of args with sensitive flag values masked.

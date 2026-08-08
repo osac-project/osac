@@ -256,7 +256,8 @@ environment variable. If both are provided, the flag takes precedence.
 Configuration is stored in a file named {{ bt }}config.json{{ bt }} inside this directory.
 
 Secrets, such as tokens and passwords, are stored in the operating system keyring. If the keyring is not available,
-they are stored in a file named {{ bt }}secrets.json{{ bt }} inside this directory.
+they are stored in a file named {{ bt }}secrets.json{{ bt }} inside this directory. Set the {{ bt }}OSAC_SECRET_STORE{{ bt }}
+environment variable to {{ bt }}file{{ bt }} to force the file-based store even when a keyring is detected.
 `
 
 const tenantFlagHelp = `

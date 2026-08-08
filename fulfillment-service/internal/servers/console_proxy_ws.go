@@ -14,17 +14,38 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/coder/websocket"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/console"
 )
 
-// ConsoleProxyWSHandler serves WebSocket console connections.
-// Auth is verified BEFORE upgrade -- invalid tickets get HTTP 401.
+// WebSocket close codes for setup errors, sent as a Close frame after the
+// upgrade completes. Browsers collapse any non-101 handshake response into a
+// generic error/1006 close, so setup errors can only reach browser JS as a
+// CloseEvent after the WebSocket upgrade succeeds.
+const (
+	wsStatusUnauthorized websocket.StatusCode = 3000 // IANA-registered.
+	wsStatusConsoleInUse websocket.StatusCode = 4409 // Private-use: HTTP 409 equivalent.
+)
+
+// WebSocket close reasons. Fixed and short -- never include validation
+// details, backend URLs, tokens, or raw error messages.
+const (
+	wsReasonUnauthorized = "unauthorized"
+	wsReasonConsoleInUse = "console session already active"
+	wsReasonBadGateway   = "failed to connect to console backend"
+)
+
+// ConsoleProxyWSHandler serves WebSocket console connections. Ticket
+// verification and backend connection happen after the WebSocket upgrade, so
+// that setup errors can be reported as close frames (see wsStatus* codes)
+// instead of an HTTP status.
 type ConsoleProxyWSHandler struct {
 	core           *ConsoleProxyCore
 	allowedOrigins []string
@@ -58,72 +79,107 @@ func extractTicket(r *http.Request) (string, error) {
 	return "", errors.New("missing ticket: set Authorization header or console-ticket cookie")
 }
 
-func (h *ConsoleProxyWSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+// closeWithStatus sends a WebSocket close frame with an app-level status
+// code and reason. Close performs the close handshake -- up to 5s to write
+// the frame plus up to another 5s waiting for the peer's close frame --
+// unlike CloseNow which drops the connection immediately.
+func closeWithStatus(ctx context.Context, logger *slog.Logger, ws *websocket.Conn, code websocket.StatusCode, reason string) {
+	if err := ws.Close(code, reason); err != nil {
+		logger.DebugContext(ctx, "Failed to complete WS close handshake",
+			slog.Int("code", int(code)),
+			slog.String("reason", reason),
+			slog.Any("error", err),
+		)
+	}
+}
 
+// backendCloseStatus maps a ConnectBackend error to a WebSocket close code
+// and reason.
+func backendCloseStatus(err error) (websocket.StatusCode, string) {
+	if _, ok := errors.AsType[*console.ErrSessionExists](err); ok {
+		return wsStatusConsoleInUse, wsReasonConsoleInUse
+	}
+	return websocket.StatusBadGateway, wsReasonBadGateway
+}
+
+func (h *ConsoleProxyWSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Cookie-based auth (no Authorization header) requires a non-empty Origin
 	// for CSWSH protection. The library's OriginPatterns auto-passes empty
-	// Origin, so we must reject it ourselves for cookie auth.
+	// Origin, so we must reject it ourselves for cookie auth. Handshake-level
+	// rejections abort the upgrade with a plain HTTP 403.
 	if r.Header.Get("Authorization") == "" && r.Header.Get("Origin") == "" {
 		http.Error(w, "origin not allowed", http.StatusForbidden)
 		return
 	}
 
-	// Phase 1: Extract and verify ticket BEFORE upgrade.
-	rawTicket, err := extractTicket(r)
+	// Extract the ticket value now, but defer reporting failure until after
+	// the WebSocket upgrade so the browser can see a close code instead of a
+	// generic 1006.
+	rawTicket, ticketErr := extractTicket(r)
+
+	// Upgrade to WebSocket.
+	// OriginPatterns delegates origin validation to the library. The library
+	// auto-passes empty Origin (hence the CSWSH guard above) and same-origin
+	// requests; a rejected origin aborts the handshake with HTTP 403.
+	wsLogger := h.core.logger.With(slog.String("component", "client_ws"))
+	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+		OriginPatterns: h.allowedOrigins,
+		Subprotocols:   []string{"binary"},
+		OnPingReceived: console.PingReceivedHandler(wsLogger),
+		OnPongReceived: console.PongReceivedHandler(wsLogger),
+	})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusUnauthorized)
+		h.core.logger.ErrorContext(r.Context(), "Failed to accept WebSocket connection",
+			slog.Any("error", err),
+		)
+		return
+	}
+	defer func() { _ = ws.CloseNow() }()
+
+	// r.Context() stays valid for the life of ServeHTTP even after Accept
+	// hijacks the connection (see http.Hijacker), but coder/websocket still
+	// advises against relying on it post-Accept. Own the connection's
+	// context explicitly instead: WithoutCancel keeps the request-scoped
+	// values, and WithCancel gives the handler control of when it ends.
+	connCtx, cancel := context.WithCancel(context.WithoutCancel(r.Context()))
+	defer cancel()
+
+	if ticketErr != nil {
+		closeWithStatus(connCtx, wsLogger, ws, wsStatusUnauthorized, wsReasonUnauthorized)
 		return
 	}
 
-	ticket, err := h.core.OpenTicket(ctx, rawTicket)
+	// OpenTicket may fetch JWKS over the network; bound it.
+	openCtx, openCancel := context.WithTimeout(connCtx, 30*time.Second)
+	defer openCancel()
+
+	ticket, err := h.core.OpenTicket(openCtx, rawTicket)
 	if err != nil {
-		http.Error(w, "invalid ticket", http.StatusUnauthorized)
+		closeWithStatus(connCtx, wsLogger, ws, wsStatusUnauthorized, wsReasonUnauthorized)
 		return
 	}
 
 	// Expose console_type to outer middleware (ConsoleMetrics reads it after handler returns).
 	setConsoleType(r.Context(), ticket.ConsoleType)
 
-	// Phase 2: Connect backend BEFORE upgrade (fail fast with HTTP error).
-	backend, sessionCtx, err := h.core.ConnectBackend(ctx, ticket)
+	backend, sessionCtx, err := h.core.ConnectBackend(connCtx, ticket)
 	if err != nil {
-		h.core.logger.ErrorContext(ctx, "Failed to connect backend", slog.Any("error", err))
-		var sessionErr *console.ErrSessionExists
-		if errors.As(err, &sessionErr) {
-			http.Error(w, "console session already active", http.StatusConflict)
-			return
-		}
-		http.Error(w, "failed to connect to console backend", http.StatusBadGateway)
+		h.core.logger.ErrorContext(connCtx, "Failed to connect backend", slog.Any("error", err))
+		code, reason := backendCloseStatus(err)
+		closeWithStatus(connCtx, wsLogger, ws, code, reason)
 		return
 	}
 
-	// Phase 3: Upgrade to WebSocket.
-	// OriginPatterns delegates origin validation to the library, which matches
-	// each pattern via path.Match against scheme://host (if pattern contains "://")
-	// or host alone. The library also auto-passes when r.Host == Origin host
-	// (same-origin requests) and when Origin is empty.
-	wsLogger := h.core.logger.With(slog.String("component", "client_ws"))
-	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		OriginPatterns: h.allowedOrigins,
-		Subprotocols:   []string{"binary"},
-		OnPingReceived: console.PingReceivedHandler(wsLogger, sessionCtx),
-		OnPongReceived: console.PongReceivedHandler(wsLogger, sessionCtx),
-	})
-	if err != nil {
-		h.core.logger.ErrorContext(ctx, "Failed to accept WebSocket connection",
-			slog.Any("error", err),
-		)
-		backend.Close()
-		return
-	}
-	defer func() { _ = ws.CloseNow() }()
+	// The session is established -- let the outer middleware count this
+	// connection as a success rather than an upgraded-but-rejected attempt.
+	setSessionEstablished(r.Context())
 
 	// Start a ping goroutine to keep the client-facing WebSocket alive.
 	console.StartPing(sessionCtx, ws, wsLogger, h.pingConfig)
 
-	// Phase 4: Relay with sessionCtx: cancelled on eviction, timeout,
-	// or client disconnect. Relay logs errors internally.
+	// Relay uses sessionCtx, which is cancelled on eviction or session
+	// timeout. A client disconnect ends the relay via I/O error instead.
+	// Relay logs errors internally.
 	clientConn := websocket.NetConn(sessionCtx, ws, websocket.MessageBinary)
 	_ = h.core.Relay(sessionCtx, clientConn, backend)
 }

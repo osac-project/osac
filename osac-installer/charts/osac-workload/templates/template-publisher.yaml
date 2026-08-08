@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: template-publisher
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-workload.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: create-controller-token
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-workload.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["serviceaccounts/token"]
+    resourceNames: ["template-publisher"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["osac-aap-api-token"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: template-publisher-binding
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-workload.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: create-controller-token
+subjects:
+  - kind: ServiceAccount
+    name: template-publisher
+    namespace: {{ .Release.Namespace }}

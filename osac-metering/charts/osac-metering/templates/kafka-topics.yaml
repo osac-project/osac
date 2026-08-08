@@ -2,12 +2,13 @@
 {{- $cluster := include "osac-metering.kafkaClusterName" . -}}
 {{- $replicas := include "osac-metering.kafkaReplicas" . | int -}}
 {{- $minIsr := min $replicas 2 -}}
+{{- $prefix := .Values.topicPrefix -}}
 {{- range list
-  (dict "name" "osac.metering.lifecycle"    "partitions" 3 "retentionDays" 30)
-  (dict "name" "osac.metering.heartbeat"    "partitions" 3 "retentionDays" 30)
-  (dict "name" "osac.metering.inference"    "partitions" 3 "retentionDays" 30)
-  (dict "name" "osac.metering.corrections"  "partitions" 3 "retentionDays" 30)
-  (dict "name" "osac.metering.dlq"          "partitions" 1 "retentionDays" 90)
+  (dict "name" (printf "%s.metering.lifecycle"   $prefix) "partitions" 3 "retentionDays" 30)
+  (dict "name" (printf "%s.metering.heartbeat"   $prefix) "partitions" 3 "retentionDays" 30)
+  (dict "name" (printf "%s.metering.inference"   $prefix) "partitions" 3 "retentionDays" 30)
+  (dict "name" (printf "%s.metering.corrections" $prefix) "partitions" 3 "retentionDays" 30)
+  (dict "name" (printf "%s.metering.dlq"         $prefix) "partitions" 1 "retentionDays" 90)
 }}
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaTopic

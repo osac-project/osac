@@ -1,3 +1,5 @@
+topicPrefix: osac
+
 image:
   repository: ghcr.io/osac-project/metering-service
   tag: latest

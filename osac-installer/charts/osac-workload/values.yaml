@@ -1,0 +1,62 @@
+baseNamespace: osac-base
+
+cliImage: quay.io/openshift/origin-cli:4.20.0
+
+operator:
+  consoleProxy:
+    disabled: true
+  aap:
+    url: ""
+    token: ""
+    insecureSkipVerify: "true"
+    statusPollInterval: "30s"
+    templatePrefix: "osac"
+  controllers:
+    clusterOrder: true
+    computeInstance: true
+    tenant: true
+    networking: true
+    bareMetalInstance: true
+    storage: true
+  certs:
+    issuerRef:
+      kind: ClusterIssuer
+      name: default-ca
+  hubAccess:
+    enabled: true
+
+service:
+  externalHostname: ""
+  internalHostname: ""
+  variant: openshift
+  certs:
+    issuerRef:
+      kind: ClusterIssuer
+      name: default-ca
+    caBundle:
+      configMap: ca-bundle
+
+sharedPostgres:
+  enabled: true
+
+bmf:
+  enabled: false
+
+ui:
+  enabled: true
+
+metering:
+  enabled: false
+
+validation:
+  enabled: false
+
+hubAccess:
+  enabled: true
+
+clusterVersions:
+  enabled: false
+  versions: []
+
+lvms:
+  enabled: false

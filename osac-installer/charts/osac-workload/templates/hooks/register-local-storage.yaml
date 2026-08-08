@@ -1,0 +1,125 @@
+{{- if .Values.lvms.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: register-local-storage
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-workload.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "31"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 5
+  # waitForFulfillment polls up to 60 × (30s curl + 10s sleep) = 2400s worst case.
+  # This deadline must exceed that to avoid premature termination.
+  activeDeadlineSeconds: 3000
+  template:
+    metadata:
+      labels:
+        {{- include "osac-workload.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: admin
+      initContainers:
+      {{- include "osac-workload.waitForFulfillment" . | nindent 6 }}
+      containers:
+      - name: register-storage
+        image: {{ .Values.cliImage }}
+        command:
+          - /bin/bash
+          - -euo
+          - pipefail
+          - -c
+          - |
+            AUTH_TOKEN=$(< /var/run/secrets/kubernetes.io/serviceaccount/token)
+            API="https://fulfillment-internal-api:8001/api/private/v1"
+
+            # Step 1: Create the local StorageBackend. Capture the ID whether
+            # this is the first install (2xx) or a re-install (409 = already exists).
+            BACKEND_RESP=$(mktemp)
+            BACKEND_CODE=$(curl -skS \
+              --connect-timeout 5 --max-time 30 \
+              -o "${BACKEND_RESP}" -w '%{http_code}' \
+              -X POST "${API}/storage_backends" \
+              -H "Authorization: Bearer ${AUTH_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d '{"metadata":{"name":"local"},"spec":{"provider":"lvms","endpoint":"n/a","credentials":{"username":"n/a","password":"n/a"}}}')
+
+            case "${BACKEND_CODE}" in
+              2??)
+                BACKEND_ID=$(python3 -c "import sys,json; print(json.load(open('${BACKEND_RESP}'))['id'])")
+                echo "StorageBackend 'local' created (id: ${BACKEND_ID})."
+                ;;
+              409)
+                echo "StorageBackend 'local' already exists, verifying spec..."
+                EXISTING=$(curl -skS --connect-timeout 5 --max-time 30 \
+                  "${API}/storage_backends" \
+                  -H "Authorization: Bearer ${AUTH_TOKEN}")
+                BACKEND_ID=$(echo "${EXISTING}" | python3 -c "import sys,json; items=json.load(sys.stdin).get('items',[]); m=next((i for i in items if i.get('metadata',{}).get('name')=='local'),None); p=m.get('spec',{}).get('provider','') if m else ''; sys.stderr.write('ERROR: backend not found or wrong provider: '+p+'\n') or sys.exit(1) if not m or p!='lvms' else print(m['id'])")
+                echo "StorageBackend 'local' already registered with provider=lvms (id: ${BACKEND_ID})."
+                ;;
+              *)
+                echo "ERROR: Failed to create StorageBackend 'local' (HTTP ${BACKEND_CODE}):" >&2
+                cat "${BACKEND_RESP}" >&2
+                rm -f "${BACKEND_RESP}"
+                exit 1
+                ;;
+            esac
+            rm -f "${BACKEND_RESP}"
+
+            # Step 2: Create the local StorageTier referencing the backend by ID.
+            # Protocol 2 = STORAGE_PROTOCOL_BLOCK (LVMS provides block volumes).
+            TIER_BODY=$(printf '{"metadata":{"name":"local"},"spec":{"backends":[{"backend_id":"%s","protocol":2}]}}' "${BACKEND_ID}")
+            TIER_RESP=$(mktemp)
+            TIER_CODE=$(curl -skS \
+              --connect-timeout 5 --max-time 30 \
+              -o "${TIER_RESP}" -w '%{http_code}' \
+              -X POST "${API}/storage_tiers" \
+              -H "Authorization: Bearer ${AUTH_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "${TIER_BODY}")
+
+            case "${TIER_CODE}" in
+              2??) echo "StorageTier 'local' created." ;;
+              409)
+                echo "StorageTier 'local' already exists, verifying backend reference..."
+                EXISTING_TIER=$(curl -skS --connect-timeout 5 --max-time 30 \
+                  "${API}/storage_tiers" -H "Authorization: Bearer ${AUTH_TOKEN}")
+                echo "${EXISTING_TIER}" | python3 -c "import sys,json; items=json.load(sys.stdin).get('items',[]); m=next((t for t in items if t.get('metadata',{}).get('name')=='local'),None); sys.exit(1) if not m else None; ok=next((b for b in m.get('spec',{}).get('backends',[]) if b.get('backend_id')=='${BACKEND_ID}' and b.get('protocol')==2),None); sys.stderr.write('ERROR: tier does not reference backend ${BACKEND_ID}\n') or sys.exit(1) if not ok else print('ok')"
+                ;;
+              *)
+                echo "ERROR: Failed to create StorageTier 'local' (HTTP ${TIER_CODE}):" >&2
+                cat "${TIER_RESP}" >&2
+                rm -f "${TIER_RESP}"
+                exit 1
+                ;;
+            esac
+            rm -f "${TIER_RESP}"
+
+            echo "Local storage registration complete."
+        env:
+        - name: HOME
+          value: /tmp
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          seccompProfile:
+            type: RuntimeDefault
+          capabilities:
+            drop: ["ALL"]
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      restartPolicy: OnFailure
+{{- end }}

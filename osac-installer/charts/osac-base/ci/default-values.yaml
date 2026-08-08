@@ -1,0 +1,5 @@
+sharedPostgres:
+  enabled: false
+
+validation:
+  enabled: false

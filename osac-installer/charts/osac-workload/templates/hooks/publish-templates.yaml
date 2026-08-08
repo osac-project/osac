@@ -1,0 +1,64 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "osac-workload.fullname" . }}-publish-templates
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-workload.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "20"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        {{- include "osac-workload.labels" . | nindent 8 }}
+    spec:
+      initContainers:
+      {{- include "osac-workload.waitForFulfillment" . | nindent 6 }}
+      containers:
+      - name: publish
+        image: ghcr.io/osac-project/osac-aap:latest
+        command:
+        - ansible-playbook
+        - /usr/share/ansible/collections/ansible_collections/osac/service/playbooks/publish_templates.yaml
+        env:
+        - name: HOME
+          value: /tmp
+        - name: OSAC_FULFILLMENT_SERVICE_URI
+          value: "https://fulfillment-internal-api:8001"
+        - name: OSAC_TEMPLATE_COLLECTIONS
+          value: "osac.templates"
+        - name: OSAC_PUBLISH_TEMPLATES_NAMESPACE_DEFAULT
+          value: {{ .Release.Namespace }}
+        - name: OSAC_PUBLISH_TEMPLATES_SERVICE_ACCOUNT
+          value: "template-publisher"
+        - name: SSL_CERT_FILE
+          value: /etc/pki/ca/bundle.pem
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: ca-bundle
+          mountPath: /etc/pki/ca
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      - name: ca-bundle
+        configMap:
+          name: ca-bundle
+      serviceAccountName: template-publisher
+      restartPolicy: Never

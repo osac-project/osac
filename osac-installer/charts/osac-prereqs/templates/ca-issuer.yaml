@@ -53,9 +53,6 @@ spec:
     configMap:
       key: bundle.pem
     namespaceSelector:
-      matchExpressions:
-      - key: kubernetes.io/metadata.name
-        operator: In
-        values:
-        - {{ .Values.osacNamespace }}
+      matchLabels:
+        osac.openshift.io/managed: "true"
 {{- end }}

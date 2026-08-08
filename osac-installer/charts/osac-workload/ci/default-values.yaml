@@ -1,0 +1,35 @@
+baseNamespace: osac-base
+
+sharedPostgres:
+  enabled: false
+
+service:
+  externalHostname: fulfillment-api.example.com
+  internalHostname: fulfillment-internal-api.example.com
+  auth:
+    issuerUrl: "https://keycloak.example.com/realms/osac"
+    controllerCredentials:
+    - secret:
+        name: fulfillment-controller-credentials
+        key: secret
+  idp:
+    url: "https://keycloak.example.com"
+    credentials:
+    - secret:
+        name: fulfillment-controller-credentials
+        key: secret
+
+hubAccess:
+  enabled: false
+
+validation:
+  enabled: false
+
+ui:
+  enabled: false
+
+bmf:
+  enabled: false
+
+metering:
+  enabled: false

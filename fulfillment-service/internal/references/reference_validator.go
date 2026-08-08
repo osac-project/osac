@@ -30,6 +30,8 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+
+	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
 )
 
 // ResolvedRef is the result of resolving a reference to a known resource.
@@ -435,30 +437,8 @@ func resolveTenantProject(refMsg protoreflect.Message, fullName protoreflect.Ful
 // extractTenantProject extracts the tenant and project from the request's embedded object metadata
 // using protoreflect (request → object → metadata → {tenant, project}).
 func extractTenantProject(request proto.Message) (tenant, project string) {
-	msg := request.ProtoReflect()
-
-	objectField := msg.Descriptor().Fields().ByName("object")
-	if objectField == nil {
-		return
-	}
-	objectMsg := msg.Get(objectField).Message()
-
-	metadataField := objectMsg.Descriptor().Fields().ByName("metadata")
-	if metadataField == nil {
-		return
-	}
-	metadataMsg := objectMsg.Get(metadataField).Message()
-
-	tenantField := metadataMsg.Descriptor().Fields().ByName("tenant")
-	if tenantField != nil {
-		tenant = metadataMsg.Get(tenantField).String()
-	}
-
-	projectField := metadataMsg.Descriptor().Fields().ByName("project")
-	if projectField != nil {
-		project = metadataMsg.Get(projectField).String()
-	}
-
+	tenant = reflection.ResolveFieldPathOr(request, "object.metadata.tenant", "")
+	project = reflection.ResolveFieldPathOr(request, "object.metadata.project", "")
 	return
 }
 

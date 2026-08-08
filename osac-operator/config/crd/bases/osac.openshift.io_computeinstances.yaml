@@ -77,6 +77,12 @@ spec:
                       format: int32
                       minimum: 1
                       type: integer
+                    storageTier:
+                      description: StorageTier is the name of the storage tier for
+                        this disk
+                      maxLength: 63
+                      pattern: ^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$
+                      type: string
                   required:
                   - sizeGiB
                   type: object
@@ -92,6 +98,12 @@ spec:
                     format: int32
                     minimum: 1
                     type: integer
+                  storageTier:
+                    description: StorageTier is the name of the storage tier for this
+                      disk
+                    maxLength: 63
+                    pattern: ^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$
+                    type: string
                 required:
                 - sizeGiB
                 type: object

@@ -177,14 +177,17 @@ var _ = Describe("buildSpec", func() {
 							SourceRef:  "quay.io/fedora/fedora:latest",
 						}.Build(),
 						BootDisk: privatev1.ComputeInstanceDisk_builder{
-							SizeGib: 20,
+							SizeGib:     20,
+							StorageTier: new("fast"),
 						}.Build(),
 						AdditionalDisks: []*privatev1.ComputeInstanceDisk{
 							privatev1.ComputeInstanceDisk_builder{
-								SizeGib: 100,
+								SizeGib:     100,
+								StorageTier: new("standard"),
 							}.Build(),
 							privatev1.ComputeInstanceDisk_builder{
-								SizeGib: 50,
+								SizeGib:     50,
+								StorageTier: new("archive"),
 							}.Build(),
 						},
 						NetworkAttachments: []*privatev1.NetworkAttachment{
@@ -209,10 +212,13 @@ var _ = Describe("buildSpec", func() {
 			Expect(spec.Image.SourceRef).To(Equal("quay.io/fedora/fedora:latest"))
 
 			Expect(spec.BootDisk.SizeGiB).To(Equal(int32(20)))
+			Expect(spec.BootDisk.StorageTier).To(Equal("fast"))
 
 			Expect(spec.AdditionalDisks).To(HaveLen(2))
 			Expect(spec.AdditionalDisks[0].SizeGiB).To(Equal(int32(100)))
+			Expect(spec.AdditionalDisks[0].StorageTier).To(Equal("standard"))
 			Expect(spec.AdditionalDisks[1].SizeGiB).To(Equal(int32(50)))
+			Expect(spec.AdditionalDisks[1].StorageTier).To(Equal("archive"))
 
 			Expect(spec.UserDataSecretRef).ToNot(BeNil())
 			Expect(spec.UserDataSecretRef.Name).To(Equal("test-explicit-fields-user-data"))

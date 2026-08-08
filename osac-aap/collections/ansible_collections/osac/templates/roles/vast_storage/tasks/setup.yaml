@@ -148,6 +148,9 @@
     - name: Ensure VAST CSI Operator is installed
       ansible.builtin.include_tasks: ensure_csi_operator.yaml
 
+    - name: Ensure VAST vendor controller is deployed on hub
+      ansible.builtin.include_tasks: ensure_vendor_controller.yaml
+
     - name: Provision VAST VMS resources
       block:
         # ── Local provider: explicit lifecycle ──

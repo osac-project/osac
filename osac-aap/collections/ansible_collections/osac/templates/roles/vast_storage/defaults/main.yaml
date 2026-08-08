@@ -54,3 +54,21 @@ vast_storage_csi_operator_channel: "stable"
 vast_storage_csi_operator_approval: "Automatic"
 vast_storage_csi_operator_catalog_source: "certified-operators"
 vast_storage_csi_operator_catalog_namespace: "openshift-marketplace"
+
+# csi-backends Helm chart — shared across all storage providers.
+# Deploys vendor CSI controllers on the hub cluster.
+osac_csi_backends_chart_ref: "oci://ghcr.io/osac-project/charts/csi-backends"
+# Leave unset to install the latest chart version from the OCI registry.
+# Set to a specific version (e.g., "0.1.0") to pin.
+osac_csi_backends_chart_version: ""
+osac_csi_backends_release_name: "osac-csi-backends"
+osac_csi_backends_namespace: "osac-csi-backends"
+
+# VAST vendor controller — provider-specific values passed to the chart.
+vast_storage_vendor_controller_image: "docker.io/vastdataorg/csi"
+vast_storage_vendor_controller_image_tag: "v2.6.5"
+vast_storage_vendor_controller_service_port: 50051
+# Name of the K8s Secret in osac_csi_backends_namespace containing VAST VMS
+# admin credentials (keys: username, password). This Secret must be created
+# before running the playbook — typically via osac-installer or manually.
+vast_storage_vendor_controller_credentials_secret: "vast-credentials"

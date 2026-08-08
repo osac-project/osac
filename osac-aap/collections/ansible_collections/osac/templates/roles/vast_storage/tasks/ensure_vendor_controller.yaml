@@ -1,0 +1,68 @@
+---
+# Deploys the VAST vendor CSI controller on the hub cluster using the
+# csi-backends Helm chart from the OCI registry.
+# Idempotent: uses helm upgrade --install (kubernetes.core.helm state=present).
+# One-time per backend — subsequent calls verify the release is healthy.
+#
+# Requires (from caller / defaults):
+#   vast_endpoint                              — VAST VMS management host
+#   vast_storage_vip_pool_name                 — VIP pool name for CSI config
+#   osac_csi_backends_*                        — shared chart config from defaults
+#   vast_storage_vendor_controller_*           — VAST-specific values from defaults
+
+- name: Check if vendor controller Helm release already exists
+  kubernetes.core.helm_info:
+    name: "{{ osac_csi_backends_release_name }}"
+    release_namespace: "{{ osac_csi_backends_namespace }}"
+  register: _vast_vendor_controller_info
+
+- name: Determine if chart install or upgrade is needed
+  ansible.builtin.set_fact:
+    _vast_vendor_controller_needs_install: >-
+      {{ _vast_vendor_controller_info.status is not defined
+         or _vast_vendor_controller_info.status | length == 0
+         or _vast_vendor_controller_info.status.status | default('') == 'failed' }}
+
+- name: Install or upgrade csi-backends Helm chart for VAST
+  kubernetes.core.helm:
+    name: "{{ osac_csi_backends_release_name }}"
+    chart_ref: "{{ osac_csi_backends_chart_ref }}"
+    chart_version: "{{ osac_csi_backends_chart_version | default(omit, true) }}"
+    release_namespace: "{{ osac_csi_backends_namespace }}"
+    create_namespace: true
+    release_state: present
+    release_values:
+      namespace: "{{ osac_csi_backends_namespace }}"
+      vast:
+        enabled: true
+        image:
+          repository: "{{ vast_storage_vendor_controller_image }}"
+          tag: "{{ vast_storage_vendor_controller_image_tag }}"
+        service:
+          port: "{{ vast_storage_vendor_controller_service_port }}"
+        config:
+          vmsHost: "{{ vast_endpoint }}"
+          vipPoolName: "{{ vast_storage_vip_pool_name }}"
+          verifySsl: "{{ vast_storage_validate_certs | string | lower }}"
+          credentialsSecret: "{{ vast_storage_vendor_controller_credentials_secret }}"
+  when: _vast_vendor_controller_needs_install | bool
+
+- name: Wait for vendor controller deployment to be available
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    name: vast-csi-controller
+    namespace: "{{ osac_csi_backends_namespace }}"
+  register: _vast_vendor_controller_deploy
+  retries: 30
+  delay: 10
+  until: >-
+    _vast_vendor_controller_deploy.resources | length > 0
+    and (_vast_vendor_controller_deploy.resources[0].status.availableReplicas | default(0) | int) > 0
+
+- name: Log vendor controller status
+  ansible.builtin.debug:
+    msg: >-
+      VAST vendor controller {{ 'deployed' if (_vast_vendor_controller_needs_install | bool) else 'verified healthy' }}
+      in namespace {{ osac_csi_backends_namespace }}.
+      Service: vast-csi-controller.{{ osac_csi_backends_namespace }}.svc.cluster.local

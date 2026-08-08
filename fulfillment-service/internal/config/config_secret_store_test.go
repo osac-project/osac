@@ -66,7 +66,8 @@ var _ = Describe("Secret store", func() {
 			// proven by the "Selects the keyring store..." test above.
 			keyring.MockInit()
 
-			os.Setenv("OSAC_SECRET_STORE", "file")
+			err := os.Setenv("OSAC_SECRET_STORE", "file")
+			Expect(err).ToNot(HaveOccurred())
 			DeferCleanup(os.Unsetenv, "OSAC_SECRET_STORE")
 
 			store, err := NewSecretStore().
@@ -80,7 +81,8 @@ var _ = Describe("Secret store", func() {
 		It("Does not force the file store for other OSAC_SECRET_STORE values", func() {
 			keyring.MockInit()
 
-			os.Setenv("OSAC_SECRET_STORE", "keyring")
+			err := os.Setenv("OSAC_SECRET_STORE", "keyring")
+			Expect(err).ToNot(HaveOccurred())
 			DeferCleanup(os.Unsetenv, "OSAC_SECRET_STORE")
 
 			store, err := NewSecretStore().

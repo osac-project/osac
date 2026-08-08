@@ -132,6 +132,7 @@ func (b *ClusterVersionsServerBuilder) Build() (*ClusterVersionsServer, error) {
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetFilterDesc((*publicv1.ClusterVersion)(nil).ProtoReflect().Descriptor()).
 		Build()
 	if err != nil {
 		return nil, err

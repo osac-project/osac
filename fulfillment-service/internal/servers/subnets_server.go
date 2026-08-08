@@ -116,6 +116,7 @@ func (b *SubnetsServerBuilder) Build() (result *SubnetsServer, err error) {
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetFilterDesc((*publicv1.Subnet)(nil).ProtoReflect().Descriptor()).
 		Build()
 	if err != nil {
 		return

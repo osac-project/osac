@@ -21,6 +21,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/reflect/protoreflect"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
@@ -33,6 +34,7 @@ type PrivateExternalIPPoolsServerBuilder struct {
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
+	filterDesc        protoreflect.MessageDescriptor
 }
 
 var _ privatev1.ExternalIPPoolsServer = (*PrivateExternalIPPoolsServer)(nil)
@@ -73,6 +75,13 @@ func (b *PrivateExternalIPPoolsServerBuilder) SetMetricsRegisterer(value prometh
 	return b
 }
 
+// SetFilterDesc sets the protobuf message descriptor used to validate and translate CEL filter
+// expressions. This is optional. When unset, the descriptor of this server's own private message type is used.
+func (b *PrivateExternalIPPoolsServerBuilder) SetFilterDesc(value protoreflect.MessageDescriptor) *PrivateExternalIPPoolsServerBuilder {
+	b.filterDesc = value
+	return b
+}
+
 func (b *PrivateExternalIPPoolsServerBuilder) Build() (result *PrivateExternalIPPoolsServer, err error) {
 	if b.logger == nil {
 		err = errors.New("logger is mandatory")
@@ -90,6 +99,7 @@ func (b *PrivateExternalIPPoolsServerBuilder) Build() (result *PrivateExternalIP
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetFilterDesc(b.filterDesc).
 		Build()
 	if err != nil {
 		return

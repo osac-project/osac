@@ -22,6 +22,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/reflect/protoreflect"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
@@ -35,6 +36,7 @@ type PrivateVirtualNetworksServerBuilder struct {
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
+	filterDesc        protoreflect.MessageDescriptor
 }
 
 var _ privatev1.VirtualNetworksServer = (*PrivateVirtualNetworksServer)(nil)
@@ -78,6 +80,13 @@ func (b *PrivateVirtualNetworksServerBuilder) SetMetricsRegisterer(value prometh
 	return b
 }
 
+// SetFilterDesc sets the protobuf message descriptor used to validate and translate CEL filter
+// expressions. This is optional. When unset, the descriptor of this server's own private message type is used.
+func (b *PrivateVirtualNetworksServerBuilder) SetFilterDesc(value protoreflect.MessageDescriptor) *PrivateVirtualNetworksServerBuilder {
+	b.filterDesc = value
+	return b
+}
+
 func (b *PrivateVirtualNetworksServerBuilder) Build() (result *PrivateVirtualNetworksServer, err error) {
 	// Check parameters:
 	if b.logger == nil {
@@ -107,6 +116,7 @@ func (b *PrivateVirtualNetworksServerBuilder) Build() (result *PrivateVirtualNet
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetFilterDesc(b.filterDesc).
 		Build()
 	if err != nil {
 		return

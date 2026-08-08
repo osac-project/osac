@@ -22,6 +22,7 @@ import (
 
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/reflect/protoreflect"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
@@ -36,6 +37,7 @@ type PrivateBareMetalInstanceCatalogItemsServerBuilder struct {
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
 	referenceChecker  catalogItemReferenceChecker
+	filterDesc        protoreflect.MessageDescriptor
 }
 
 var _ privatev1.BareMetalInstanceCatalogItemsServer = (*PrivateBareMetalInstanceCatalogItemsServer)(nil)
@@ -81,6 +83,13 @@ func (b *PrivateBareMetalInstanceCatalogItemsServerBuilder) SetReferenceChecker(
 	return b
 }
 
+// SetFilterDesc sets the protobuf message descriptor used to validate and translate CEL filter
+// expressions. This is optional. When unset, the descriptor of this server's own private message type is used.
+func (b *PrivateBareMetalInstanceCatalogItemsServerBuilder) SetFilterDesc(value protoreflect.MessageDescriptor) *PrivateBareMetalInstanceCatalogItemsServerBuilder {
+	b.filterDesc = value
+	return b
+}
+
 func (b *PrivateBareMetalInstanceCatalogItemsServerBuilder) Build() (result *PrivateBareMetalInstanceCatalogItemsServer, err error) {
 	if b.logger == nil {
 		err = errors.New("logger is mandatory")
@@ -102,6 +111,7 @@ func (b *PrivateBareMetalInstanceCatalogItemsServerBuilder) Build() (result *Pri
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetFilterDesc(b.filterDesc).
 		Build()
 	if err != nil {
 		return

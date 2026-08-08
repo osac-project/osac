@@ -127,6 +127,7 @@ func (b *VirtualNetworksServerBuilder) Build() (result *VirtualNetworksServer, e
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetFilterDesc((*publicv1.VirtualNetwork)(nil).ProtoReflect().Descriptor()).
 		Build()
 	if err != nil {
 		return

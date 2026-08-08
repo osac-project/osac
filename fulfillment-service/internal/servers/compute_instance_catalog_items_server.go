@@ -119,6 +119,7 @@ func (b *ComputeInstanceCatalogItemsServerBuilder) Build() (result *ComputeInsta
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetFilterDesc((*publicv1.ComputeInstanceCatalogItem)(nil).ProtoReflect().Descriptor()).
 		Build()
 	if err != nil {
 		return

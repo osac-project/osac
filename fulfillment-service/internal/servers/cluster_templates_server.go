@@ -116,6 +116,7 @@ func (b *ClusterTemplatesServerBuilder) Build() (result *ClusterTemplatesServer,
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetFilterDesc((*publicv1.ClusterTemplate)(nil).ProtoReflect().Descriptor()).
 		Build()
 	if err != nil {
 		return

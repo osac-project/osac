@@ -124,6 +124,7 @@ func (b *BareMetalInstanceTypesServerBuilder) Build() (result *BareMetalInstance
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetFilterDesc((*publicv1.BareMetalInstanceType)(nil).ProtoReflect().Descriptor()).
 		Build()
 	if err != nil {
 		return

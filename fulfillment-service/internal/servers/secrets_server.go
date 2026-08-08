@@ -115,6 +115,7 @@ func (b *SecretsServerBuilder) Build() (result *SecretsServer, err error) {
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
 		SetSecretStore(b.secretStore).
+		SetFilterDesc((*publicv1.Secret)(nil).ProtoReflect().Descriptor()).
 		Build()
 	if err != nil {
 		return

@@ -21,6 +21,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
@@ -35,6 +36,7 @@ type PrivateClusterCatalogItemsServerBuilder struct {
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
+	filterDesc        protoreflect.MessageDescriptor
 }
 
 var _ privatev1.ClusterCatalogItemsServer = (*PrivateClusterCatalogItemsServer)(nil)
@@ -76,6 +78,13 @@ func (b *PrivateClusterCatalogItemsServerBuilder) SetMetricsRegisterer(value pro
 	return b
 }
 
+// SetFilterDesc sets the protobuf message descriptor used to validate and translate CEL filter
+// expressions. This is optional. When unset, the descriptor of this server's own private message type is used.
+func (b *PrivateClusterCatalogItemsServerBuilder) SetFilterDesc(value protoreflect.MessageDescriptor) *PrivateClusterCatalogItemsServerBuilder {
+	b.filterDesc = value
+	return b
+}
+
 func (b *PrivateClusterCatalogItemsServerBuilder) Build() (result *PrivateClusterCatalogItemsServer, err error) {
 	if b.logger == nil {
 		err = errors.New("logger is mandatory")
@@ -103,6 +112,7 @@ func (b *PrivateClusterCatalogItemsServerBuilder) Build() (result *PrivateCluste
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetFilterDesc(b.filterDesc).
 		Build()
 	if err != nil {
 		return

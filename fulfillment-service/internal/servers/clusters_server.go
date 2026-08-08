@@ -178,6 +178,7 @@ func (b *ClustersServerBuilder) Build() (result *ClustersServer, err error) {
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetFilterDesc(objectDesc).
 		Build()
 	if err != nil {
 		return

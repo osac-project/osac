@@ -20,21 +20,52 @@ import (
 	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
 
+	"google.golang.org/protobuf/reflect/protoreflect"
+
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	testsv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/tests/v1"
 )
 
 var _ = Describe("Filter translator", func() {
+	Describe("Construction", func() {
+		It("Fails without a descriptor", func() {
+			_, err := NewFilterTranslator().
+				SetLogger(logger).
+				Build()
+			Expect(err).To(HaveOccurred())
+		})
+
+		It("Succeeds with a descriptor", func() {
+			_, err := NewFilterTranslator().
+				SetLogger(logger).
+				SetDescriptor((*testsv1.Object)(nil).ProtoReflect().Descriptor()).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+		})
+	})
+
 	Describe("Object translation", func() {
-		var translator *FilterTranslator[*testsv1.Object]
+		var translator *FilterTranslator
 
 		BeforeEach(func() {
 			var err error
 
-			translator, err = NewFilterTranslator[*testsv1.Object]().
+			translator, err = NewFilterTranslator().
 				SetLogger(logger).
+				SetDescriptor((*testsv1.Object)(nil).ProtoReflect().Descriptor()).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("Rejects a filter referencing a field absent from the configured descriptor", func(ctx context.Context) {
+			restricted, err := NewFilterTranslator().
+				SetLogger(logger).
+				SetDescriptor((*testsv1.Status)(nil).ProtoReflect().Descriptor()).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = restricted.Translate(ctx, "this.my_bool")
+			Expect(err).To(HaveOccurred())
 		})
 
 		DescribeTable(
@@ -374,6 +405,16 @@ var _ = Describe("Filter translator", func() {
 				`this.metadata.project.contains('my')`,
 				`cast(project as text) like '%my%'`,
 			),
+			Entry(
+				"Bracket-index on a map field nested under spec",
+				`this.spec.spec_map["key"] == null`,
+				`data->'spec'->'spec_map'->>'key' is null`,
+			),
+			Entry(
+				"Key presence in a map field nested under spec",
+				`'key' in this.spec.spec_map`,
+				`data->'spec'->'spec_map' ? 'key'`,
+			),
 		)
 
 		DescribeTable(
@@ -395,49 +436,88 @@ var _ = Describe("Filter translator", func() {
 				`this.spec.spec_enum != (1 + 1)`,
 			),
 		)
+
+		// These two cases are currently rejected by CEL's own type checker at Compile() time — the 'in' operator
+		// has no overload for a plain string/message operand — so they don't exercise translateInField's
+		// default branch directly. They're kept as regression tests of the externally observable contract
+		// (translate-time error, never broken SQL for an unsupported 'in' target), which also covers that
+		// branch if CEL's checking behavior ever changes.
+		DescribeTable(
+			"'in' operator: unsupported target kind errors",
+			func(ctx context.Context, filter string) {
+				_, err := translator.Translate(ctx, filter)
+				Expect(err).To(HaveOccurred())
+			},
+			Entry(
+				"'in' operator against a plain string field",
+				`'x' in this.spec.spec_string`,
+			),
+			Entry(
+				"'in' operator against a nested message field",
+				`'x' in this.spec.spec_msg`,
+			),
+		)
+
+		It("Does not leak the JSON operand path in the unsupported-field-kind error", func(ctx context.Context) {
+			_, err := translator.Translate(ctx, `this.spec.spec_bytes == this.spec.spec_bytes`)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(Equal(
+				"select of JSON field 'spec_bytes' of type 'osac.tests.v1.Spec' of kind 'bytes' isn't supported",
+			))
+		})
 	})
 
 	// Projects need special translation because the type of the 'name' column is 'ltree', and that can't be
-	// compared directly to strings using the 'like' operator.
+	// compared directly to strings using the 'like' operator. Both the public and private Project descriptors
+	// must be recognized, since a public-fronted ProjectsServer now configures the translator with the public
+	// descriptor while PrivateProjectsServer keeps using the private one.
 	Describe("Project translation", func() {
-		var translator *FilterTranslator[*privatev1.Project]
+		for _, desc := range []protoreflect.MessageDescriptor{
+			(*publicv1.Project)(nil).ProtoReflect().Descriptor(),
+			(*privatev1.Project)(nil).ProtoReflect().Descriptor(),
+		} {
+			Describe(string(desc.FullName()), func() {
+				var translator *FilterTranslator
 
-		BeforeEach(func() {
-			var err error
+				BeforeEach(func() {
+					var err error
 
-			translator, err = NewFilterTranslator[*privatev1.Project]().
-				SetLogger(logger).
-				Build()
-			Expect(err).ToNot(HaveOccurred())
-		})
+					translator, err = NewFilterTranslator().
+						SetLogger(logger).
+						SetDescriptor(desc).
+						Build()
+					Expect(err).ToNot(HaveOccurred())
+				})
 
-		DescribeTable(
-			"Project translation",
-			func(ctx context.Context, filter, expected string) {
-				actual, err := translator.Translate(ctx, filter)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(actual).To(Equal(expected))
-			},
-			Entry(
-				"Compare name to string",
-				`this.metadata.name == 'my_project'`,
-				`name = 'my_project'`,
-			),
-			Entry(
-				"Name starts with string",
-				`this.metadata.name.startsWith('my_project.')`,
-				`cast(name as text) like 'my\_project.%'`,
-			),
-			Entry(
-				"Name ends with string",
-				`this.metadata.name.endsWith('.my_project')`,
-				`cast(name as text) like '%.my\_project'`,
-			),
-			Entry(
-				"Name contains string",
-				`this.metadata.name.contains('my')`,
-				`cast(name as text) like '%my%'`,
-			),
-		)
+				DescribeTable(
+					"Project translation",
+					func(ctx context.Context, filter, expected string) {
+						actual, err := translator.Translate(ctx, filter)
+						Expect(err).ToNot(HaveOccurred())
+						Expect(actual).To(Equal(expected))
+					},
+					Entry(
+						"Compare name to string",
+						`this.metadata.name == 'my_project'`,
+						`name = 'my_project'`,
+					),
+					Entry(
+						"Name starts with string",
+						`this.metadata.name.startsWith('my_project.')`,
+						`cast(name as text) like 'my\_project.%'`,
+					),
+					Entry(
+						"Name ends with string",
+						`this.metadata.name.endsWith('.my_project')`,
+						`cast(name as text) like '%.my\_project'`,
+					),
+					Entry(
+						"Name contains string",
+						`this.metadata.name.contains('my')`,
+						`cast(name as text) like '%my%'`,
+					),
+				)
+			})
+		}
 	})
 })

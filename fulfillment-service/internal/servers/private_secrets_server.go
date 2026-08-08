@@ -21,6 +21,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/reflect/protoreflect"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
@@ -36,6 +37,7 @@ type PrivateSecretsServerBuilder struct {
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
 	secretStore       vault.SecretStore
+	filterDesc        protoreflect.MessageDescriptor
 }
 
 var _ privatev1.SecretsServer = (*PrivateSecretsServer)(nil)
@@ -83,6 +85,13 @@ func (b *PrivateSecretsServerBuilder) SetSecretStore(value vault.SecretStore) *P
 	return b
 }
 
+// SetFilterDesc sets the protobuf message descriptor used to validate and translate CEL filter
+// expressions. This is optional. When unset, the descriptor of this server's own private message type is used.
+func (b *PrivateSecretsServerBuilder) SetFilterDesc(value protoreflect.MessageDescriptor) *PrivateSecretsServerBuilder {
+	b.filterDesc = value
+	return b
+}
+
 func (b *PrivateSecretsServerBuilder) Build() (result *PrivateSecretsServer, err error) {
 	if b.logger == nil {
 		err = errors.New("logger is mandatory")
@@ -107,6 +116,7 @@ func (b *PrivateSecretsServerBuilder) Build() (result *PrivateSecretsServer, err
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetFilterDesc(b.filterDesc).
 		Build()
 	if err != nil {
 		return

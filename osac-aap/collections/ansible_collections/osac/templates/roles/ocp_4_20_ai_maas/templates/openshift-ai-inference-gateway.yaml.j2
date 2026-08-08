@@ -10,6 +10,9 @@ metadata:
     istio.io/rev: openshift-gateway
 spec:
   gatewayClassName: data-science-gateway-class
+  infrastructure:
+    annotations:
+      metallb.universe.tf/address-pool: ingress-ipaddresspool
   listeners:
     - name: https
       port: 443

@@ -9,6 +9,8 @@ metadata:
 spec:
   gatewayClassName: data-science-gateway-class
   infrastructure:
+    annotations:
+      metallb.universe.tf/address-pool: ingress-ipaddresspool
     parametersRef:
       group: ""
       kind: ConfigMap

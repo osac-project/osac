@@ -27,6 +27,7 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/delete/hub"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/exit"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
@@ -48,6 +49,7 @@ func Cmd() *cobra.Command {
 		RunE:                  runner.run,
 		ValidArgsFunction:     completeObjectTypes,
 	}
+	result.AddCommand(hub.Cmd())
 	return result
 }
 

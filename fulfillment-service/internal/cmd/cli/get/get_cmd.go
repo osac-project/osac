@@ -29,6 +29,7 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/externalippool"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/hub"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/kubeconfig"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/password"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/token"
@@ -65,6 +66,7 @@ func Cmd() *cobra.Command {
 		ValidArgsFunction:     completeObjectTypes,
 	}
 	result.AddCommand(externalippool.Cmd())
+	result.AddCommand(hub.Cmd())
 	result.AddCommand(kubeconfig.Cmd())
 	result.AddCommand(password.Cmd())
 	result.AddCommand(token.Cmd())

@@ -3,7 +3,7 @@ module github.com/osac-project/osac/osac-csi-driver
 go 1.26.3
 
 require (
-	github.com/container-storage-interface/spec v1.12.0
+	github.com/container-storage-interface/spec v1.13.0
 	github.com/kubernetes-csi/csi-test/v5 v5.5.0
 	google.golang.org/grpc v1.83.0
 	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af

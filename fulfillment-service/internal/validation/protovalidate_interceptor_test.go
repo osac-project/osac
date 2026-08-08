@@ -15,6 +15,7 @@ package validation
 
 import (
 	"context"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -22,6 +23,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
@@ -369,6 +371,86 @@ var _ = Describe("Protovalidate interceptor", func() {
 			Expect(handlerCalled).To(BeTrue())
 			Expect(response).To(Equal("response"))
 		})
+
+		DescribeTable("Accepts display_name and description within length limits",
+			func(msg proto.Message) {
+				handlerCalled := false
+				mockHandler := func(ctx context.Context, req any) (any, error) {
+					handlerCalled = true
+					return "response", nil
+				}
+
+				response, err := interceptor.UnaryServer(
+					context.Background(),
+					msg,
+					&grpc.UnaryServerInfo{FullMethod: "/test.Service/Method"},
+					mockHandler,
+				)
+
+				Expect(err).ToNot(HaveOccurred())
+				Expect(handlerCalled).To(BeTrue())
+				Expect(response).To(Equal("response"))
+			},
+			Entry("public max lengths", &publicv1.Metadata{
+				Name:        "valid-name",
+				DisplayName: strings.Repeat("a", 63),
+				Description: strings.Repeat("b", 256),
+			}),
+			Entry("public empty values", &publicv1.Metadata{
+				Name:        "valid-name",
+				DisplayName: "",
+				Description: "",
+			}),
+			Entry("private max lengths", &privatev1.Metadata{
+				Name:        "valid-name",
+				DisplayName: strings.Repeat("a", 63),
+				Description: strings.Repeat("b", 256),
+			}),
+			Entry("private empty values", &privatev1.Metadata{
+				Name:        "valid-name",
+				DisplayName: "",
+				Description: "",
+			}),
+		)
+
+		DescribeTable("Rejects over-long display_name and description",
+			func(msg proto.Message) {
+				mockHandler := func(ctx context.Context, req any) (any, error) {
+					Fail("Handler should not be called for invalid request")
+					return nil, nil
+				}
+
+				response, err := interceptor.UnaryServer(
+					context.Background(),
+					msg,
+					&grpc.UnaryServerInfo{FullMethod: "/test.Service/Method"},
+					mockHandler,
+				)
+
+				Expect(err).To(HaveOccurred())
+				Expect(response).To(BeNil())
+				status, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+				Expect(status.Message()).To(ContainSubstring("validation failed"))
+			},
+			Entry("public display_name too long", &publicv1.Metadata{
+				Name:        "valid-name",
+				DisplayName: strings.Repeat("a", 64),
+			}),
+			Entry("public description too long", &publicv1.Metadata{
+				Name:        "valid-name",
+				Description: strings.Repeat("b", 257),
+			}),
+			Entry("private display_name too long", &privatev1.Metadata{
+				Name:        "valid-name",
+				DisplayName: strings.Repeat("a", 64),
+			}),
+			Entry("private description too long", &privatev1.Metadata{
+				Name:        "valid-name",
+				Description: strings.Repeat("b", 257),
+			}),
+		)
 	})
 
 	Describe("Project name validation", func() {

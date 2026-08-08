@@ -1,0 +1,100 @@
+{{- if .Values.validation.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "osac-base.fullname" . }}-pre-install-validate
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-base.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  template:
+    metadata:
+      labels:
+        {{- include "osac-base.labels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "osac-base.fullname" . }}-validate
+      containers:
+      - name: validate
+        image: {{ .Values.cliImage }}
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -e
+          echo "=== OSAC Base Pre-install Validation ==="
+
+          echo "Checking for cert-manager CRDs..."
+          if oc get crd certificates.cert-manager.io >/dev/null; then
+            echo "  cert-manager CRDs found."
+          else
+            echo "ERROR: cert-manager CRDs not found."
+            echo "Please install cert-manager before deploying OSAC base."
+            exit 1
+          fi
+
+          echo "Checking for default StorageClass..."
+          DEFAULT_SC=$(oc get sc -o jsonpath='{.items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")].metadata.name}')
+          if [ -n "$DEFAULT_SC" ]; then
+            echo "  Default StorageClass found: $DEFAULT_SC"
+          else
+            echo "WARNING: No default StorageClass found."
+            echo "Some components (PostgreSQL) may fail to create PVCs."
+          fi
+
+          echo "=== Validation passed ==="
+  backoffLimit: 0
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "osac-base.fullname" . }}-validate
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-base.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-11"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "osac-base.fullname" . }}-validate-{{ .Release.Namespace }}
+  labels:
+    {{- include "osac-base.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-11"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+rules:
+- apiGroups: ["apiextensions.k8s.io"]
+  resources: ["customresourcedefinitions"]
+  verbs: ["get"]
+- apiGroups: ["storage.k8s.io"]
+  resources: ["storageclasses"]
+  verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "osac-base.fullname" . }}-validate-{{ .Release.Namespace }}
+  labels:
+    {{- include "osac-base.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-11"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "osac-base.fullname" . }}-validate-{{ .Release.Namespace }}
+subjects:
+- kind: ServiceAccount
+  name: {{ include "osac-base.fullname" . }}-validate
+  namespace: {{ .Release.Namespace }}
+{{- end }}

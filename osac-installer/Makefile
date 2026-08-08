@@ -102,6 +102,75 @@ uninstall: ## Full uninstall (OSAC + prereqs + operators)
 	-helm uninstall osac-prereqs --namespace osac-prereqs --wait --timeout 10m
 	-helm uninstall osac-operators --namespace osac-operators
 
+##@ Multi-Instance Deployment
+
+BASE_NAMESPACE ?= osac-base
+
+.PHONY: install-multi
+install-multi: ## Full multi-instance setup (operators + prereqs + base)
+	$(MAKE) install-operators
+	$(MAKE) install-prereqs INSTALLER_NAMESPACE=$(BASE_NAMESPACE)
+	$(MAKE) install-base
+
+.PHONY: install-base
+install-base: helm-deps-base install-secrets-base ## Phase 3: Install shared base layer (CRDs + AAP + PostgreSQL)
+	helm upgrade --install osac-base charts/osac-base/ \
+		--namespace $(BASE_NAMESPACE) --create-namespace \
+		--values $(VALUES_FILE) \
+		$(EXTRA_HELM_ARGS) \
+		--timeout 40m --wait
+
+.PHONY: install-secrets-base
+install-secrets-base:
+	@[[ -f "$(AAP_LICENSE_FILE)" ]] || { echo "ERROR: AAP license not found at $(AAP_LICENSE_FILE)"; exit 1; }
+	@bash -c 'source scripts/lib.sh && wait_for_namespace_cleanup "$(BASE_NAMESPACE)"'
+	oc create namespace $(BASE_NAMESPACE) --dry-run=client -o yaml | oc apply -f -
+	oc label namespace $(BASE_NAMESPACE) osac.openshift.io/managed=true --overwrite
+	oc create secret generic config-as-code-manifest-ig \
+		--from-file=license.zip="$(AAP_LICENSE_FILE)" \
+		-n $(BASE_NAMESPACE) --dry-run=client -o yaml | oc apply --server-side -f -
+	oc label secret config-as-code-manifest-ig \
+		osac.openshift.io/project=osac-aap \
+		-n $(BASE_NAMESPACE) --overwrite
+
+.PHONY: install-workload
+install-workload: helm-deps-workload copy-base-secrets ## Phase 4: Install workload in NAMESPACE (repeatable)
+	$(eval DOMAIN := $(shell oc get ingresses.config/cluster -o jsonpath='{.spec.domain}'))
+	@[[ -n "$(NAMESPACE)" ]] || { echo "ERROR: NAMESPACE is required. Usage: make install-workload NAMESPACE=pool-abc123"; exit 1; }
+	@[[ -n "$(DOMAIN)" ]] || { echo "ERROR: Could not determine cluster domain. Is oc logged in?"; exit 1; }
+	helm upgrade --install osac-$(NAMESPACE) charts/osac-workload/ \
+		--namespace $(NAMESPACE) --create-namespace \
+		--values $(VALUES_FILE) \
+		--set baseNamespace=$(BASE_NAMESPACE) \
+		--set service.externalHostname=fulfillment-api-$(NAMESPACE).$(DOMAIN) \
+		--set service.internalHostname=fulfillment-internal-api-$(NAMESPACE).$(DOMAIN) \
+		--set service.auth.issuerUrl=https://keycloak-keycloak.$(DOMAIN)/realms/osac \
+		--set operator.consoleProxy.disabled=true \
+		--set operator.aap.url=http://osac-aap.$(BASE_NAMESPACE).svc.cluster.local/api/controller \
+		$(EXTRA_HELM_ARGS) \
+		--timeout 20m --wait
+
+.PHONY: uninstall-workload
+uninstall-workload: ## Uninstall workload from NAMESPACE
+	@[[ -n "$(NAMESPACE)" ]] || { echo "ERROR: NAMESPACE is required."; exit 1; }
+	-helm uninstall osac-$(NAMESPACE) --namespace $(NAMESPACE) --wait --timeout 10m
+
+.PHONY: uninstall-base
+uninstall-base: ## Uninstall shared base layer
+	-helm uninstall osac-base --namespace $(BASE_NAMESPACE) --wait --timeout 20m
+
+.PHONY: copy-base-secrets
+copy-base-secrets:
+	@[[ -n "$(NAMESPACE)" ]] || { echo "ERROR: NAMESPACE is required."; exit 1; }
+	@oc create namespace $(NAMESPACE) --dry-run=client -o yaml | oc apply -f -
+	@oc label namespace $(NAMESPACE) osac.openshift.io/managed=true --overwrite
+	@for secret in osac-aap-api-token fulfillment-controller-credentials; do \
+		echo "Copying secret $$secret from $(BASE_NAMESPACE) to $(NAMESPACE)..."; \
+		oc get secret $$secret -n $(BASE_NAMESPACE) -o json \
+			| jq 'del(.metadata.resourceVersion,.metadata.uid,.metadata.creationTimestamp,.metadata.ownerReferences,.metadata.labels,.metadata.annotations) | .metadata.namespace = "$(NAMESPACE)"' \
+			| oc apply -f -; \
+	done
+
 ##@ Helm Chart Management
 
 .PHONY: sync-charts
@@ -113,12 +182,24 @@ sync-charts: ## Update submodules and rebuild chart dependencies
 helm-deps: ## Build Helm chart dependencies
 	helm dependency build charts/osac/
 
+.PHONY: helm-deps-base
+helm-deps-base: ## Build base chart dependencies
+	helm dependency build charts/osac-base/
+
+.PHONY: helm-deps-workload
+helm-deps-workload: ## Build workload chart dependencies
+	helm dependency build charts/osac-workload/
+
 .PHONY: helm-lint
 helm-lint: ## Lint all charts
 	helm lint charts/osac-operators/
 	helm lint charts/osac-prereqs/
 	helm dependency build charts/osac/
-	helm lint charts/osac/
+	helm lint charts/osac/ --set service.externalHostname=lint --set service.internalHostname=lint
+	helm dependency build charts/osac-base/
+	helm lint charts/osac-base/ -f charts/osac-base/ci/default-values.yaml
+	helm dependency build charts/osac-workload/
+	helm lint charts/osac-workload/ -f charts/osac-workload/ci/default-values.yaml
 
 .PHONY: helm-template
 helm-template: ## Dry-run render all templates

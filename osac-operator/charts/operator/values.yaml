@@ -41,6 +41,7 @@ serviceAccount:
   name: ""
 
 consoleProxy:
+  disabled: false
   vmClusterMode: auto
   resources:
     limits:

@@ -1,0 +1,147 @@
+{{- if .Values.sharedPostgres.enabled }}
+{{- $prefix := include "osac-workload.dbPrefix" . }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "osac-workload.fullname" . }}-db-init
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-workload.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 5
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        {{- include "osac-workload.labels" . | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ include "osac-workload.fullname" . }}-db-init
+      automountServiceAccountToken: true
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      containers:
+      - name: init-db
+        image: {{ .Values.cliImage }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        env:
+        - name: HOME
+          value: /tmp
+        - name: BASE_NAMESPACE
+          value: {{ .Values.baseNamespace }}
+        - name: DB_PREFIX
+          value: {{ $prefix }}
+        command:
+        - /bin/bash
+        - -euo
+        - pipefail
+        - -c
+        - |
+          echo "Creating databases for namespace {{ .Release.Namespace }}..."
+          echo "Using prefix: ${DB_PREFIX}"
+
+          create_db_and_user() {
+            local name="$1"
+            echo "  Creating user and database: ${name}"
+
+            # CREATE USER/DATABASE return error if already exists — check first
+            local user_exists
+            user_exists=$(oc exec deploy/postgres -n "${BASE_NAMESPACE}" -- \
+              psql -U postgres -tc "SELECT 1 FROM pg_roles WHERE rolname='${name}'")
+            if echo "${user_exists}" | grep -q 1; then
+              echo "  User ${name} already exists"
+            else
+              oc exec deploy/postgres -n "${BASE_NAMESPACE}" -- \
+                psql -U postgres -c "CREATE USER ${name};"
+            fi
+
+            local db_exists
+            db_exists=$(oc exec deploy/postgres -n "${BASE_NAMESPACE}" -- \
+              psql -U postgres -tc "SELECT 1 FROM pg_database WHERE datname='${name}'")
+            if echo "${db_exists}" | grep -q 1; then
+              echo "  Database ${name} already exists"
+            else
+              oc exec deploy/postgres -n "${BASE_NAMESPACE}" -- \
+                psql -U postgres -c "CREATE DATABASE ${name} OWNER ${name};"
+            fi
+
+            # Verify
+            oc exec deploy/postgres -n "${BASE_NAMESPACE}" -- \
+              psql -U postgres -tc "SELECT 1 FROM pg_database WHERE datname='${name}'" | grep -q 1
+            echo "  Verified: ${name}"
+          }
+
+          create_db_and_user "${DB_PREFIX}_service"
+          create_db_and_user "${DB_PREFIX}_metering"
+          echo "Databases created: ${DB_PREFIX}_service, ${DB_PREFIX}_metering"
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "osac-workload.fullname" . }}-db-init
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-workload.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-6"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "osac-workload.fullname" . }}-db-init
+  namespace: {{ .Values.baseNamespace }}
+  labels:
+    {{- include "osac-workload.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-6"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/exec"]
+  verbs: ["get", "list", "create"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "osac-workload.fullname" . }}-db-init
+  namespace: {{ .Values.baseNamespace }}
+  labels:
+    {{- include "osac-workload.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-6"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "osac-workload.fullname" . }}-db-init
+subjects:
+- kind: ServiceAccount
+  name: {{ include "osac-workload.fullname" . }}-db-init
+  namespace: {{ .Release.Namespace }}
+{{- end }}

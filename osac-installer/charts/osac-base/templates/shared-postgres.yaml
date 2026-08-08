@@ -1,0 +1,213 @@
+{{- if .Values.sharedPostgres.enabled }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: postgres-server
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-base.labels" . | nindent 4 }}
+spec:
+  issuerRef:
+    kind: {{ .Values.certs.issuerRef.kind }}
+    name: {{ .Values.certs.issuerRef.name }}
+  dnsNames:
+  - localhost
+  - postgres
+  - postgres.{{ .Release.Namespace }}
+  - postgres.{{ .Release.Namespace }}.svc
+  - postgres.{{ .Release.Namespace }}.svc.cluster.local
+  secretName: postgres-server-cert
+  privateKey:
+    rotationPolicy: Always
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: postgres-admin-client
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-base.labels" . | nindent 4 }}
+spec:
+  issuerRef:
+    kind: {{ .Values.certs.issuerRef.kind }}
+    name: {{ .Values.certs.issuerRef.name }}
+  commonName: {{ .Values.sharedPostgres.adminUser | quote }}
+  usages:
+  - client auth
+  secretName: postgres-admin-client-cert
+  privateKey:
+    rotationPolicy: Always
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-base.labels" . | nindent 4 }}
+data:
+  server.conf: |
+    ssl = on
+    {{- if .Values.certs.caBundle.configMap }}
+    ssl_ca_file = '/config/ca/bundle.pem'
+    {{- else }}
+    ssl_ca_file = '/secrets/cert/ca.crt'
+    {{- end }}
+    ssl_cert_file = '/secrets/cert/tls.crt'
+    ssl_key_file = '/secrets/cert/tls.key'
+    hba_file = '/config/access/access.conf'
+    fsync = off
+    full_page_writes = off
+  access.conf: |
+    local all all peer
+    hostssl all all 0.0.0.0/0 cert
+    hostssl all all ::0/0 cert
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-init
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-base.labels" . | nindent 4 }}
+stringData:
+  init.sh: |
+    #!/bin/bash
+    psql <<'.'
+    create user {{ .Values.sharedPostgres.adminUser }} createdb createrole;
+    create database default_db owner {{ .Values.sharedPostgres.adminUser }};
+    .
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-base.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: postgres
+  ports:
+  - name: postgres
+    port: 5432
+    targetPort: postgres
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: postgres
+    {{- include "osac-base.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+        {{- include "osac-base.labels" . | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+      volumes:
+      - name: server-cert
+        secret:
+          secretName: postgres-server-cert
+          defaultMode: 0440
+      - name: config
+        configMap:
+          name: postgres-config
+      {{- if .Values.certs.caBundle.configMap }}
+      - name: ca-bundle
+        configMap:
+          name: {{ .Values.certs.caBundle.configMap }}
+      {{- end }}
+      - name: init
+        secret:
+          secretName: postgres-init
+      - name: data
+        emptyDir: {}
+      - name: tmp
+        emptyDir: {}
+      - name: run
+        emptyDir: {}
+      initContainers:
+      - name: init-run-dir
+        image: {{ .Values.sharedPostgres.image }}
+        imagePullPolicy: IfNotPresent
+        command:
+        - sh
+        - -c
+        - mkdir -p /run/postgresql
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: run
+          mountPath: /run
+      containers:
+      - name: server
+        image: {{ .Values.sharedPostgres.image }}
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        resources:
+          {{- toYaml .Values.sharedPostgres.resources | nindent 10 }}
+        env:
+        - name: POSTGRESQL_USER
+          value: "default"
+        - name: POSTGRESQL_PASSWORD
+          value: ""
+        - name: POSTGRESQL_DATABASE
+          value: "default"
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/pgsql
+        - name: tmp
+          mountPath: /tmp
+        - name: run
+          mountPath: /run
+        - name: server-cert
+          mountPath: /secrets/cert
+        {{- if .Values.certs.caBundle.configMap }}
+        - name: ca-bundle
+          mountPath: /config/ca
+        {{- end }}
+        - name: config
+          mountPath: /opt/app-root/src/postgresql-cfg/server.conf
+          subPath: server.conf
+        - name: config
+          mountPath: /config/access/access.conf
+          subPath: access.conf
+        - name: init
+          mountPath: /opt/app-root/src/postgresql-init/init.sh
+          subPath: init.sh
+        ports:
+        - name: postgres
+          protocol: TCP
+          containerPort: 5432
+        livenessProbe:
+          tcpSocket:
+            port: postgres
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          tcpSocket:
+            port: postgres
+          initialDelaySeconds: 5
+          periodSeconds: 5
+{{- end }}

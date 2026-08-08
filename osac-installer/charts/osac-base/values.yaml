@@ -1,0 +1,34 @@
+cliImage: quay.io/openshift/origin-cli:4.20.0
+
+operatorCrds:
+  install: true
+
+bmfCrds: {}
+
+aap:
+  aap:
+    instance:
+      enabled: true
+      name: "osac-aap"
+
+validation:
+  enabled: true
+
+sharedPostgres:
+  enabled: true
+  image: "quay.io/sclorg/postgresql-18-c10s@sha256:6be2c9d855f06fb665257a6b0911676a38d740be7022cc61acee1c99a832b1b2"
+  adminUser: "osac_admin"
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+
+certs:
+  issuerRef:
+    kind: ClusterIssuer
+    name: default-ca
+  caBundle:
+    configMap: ca-bundle

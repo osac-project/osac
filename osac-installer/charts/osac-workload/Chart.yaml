@@ -1,0 +1,30 @@
+apiVersion: v2
+name: osac-workload
+description: OSAC per-namespace workload layer
+type: application
+version: 0.0.1
+
+dependencies:
+  - name: osac-operator
+    version: ">=0.0.0"
+    repository: "file://../../../osac-operator/charts/operator"
+    alias: operator
+  - name: fulfillment-service
+    version: ">=0.0.0"
+    repository: "file://../../../fulfillment-service/charts/service"
+    alias: service
+  - name: bare-metal-fulfillment-operator
+    version: ">=0.0.0"
+    repository: "file://../../../bare-metal-fulfillment-operator/charts/operator"
+    alias: bmf
+    condition: bmf.enabled
+  - name: osac-ui
+    version: "0.0.5"
+    repository: "oci://ghcr.io/osac-project/charts"
+    alias: ui
+    condition: ui.enabled
+  - name: osac-metering
+    version: ">=0.0.0"
+    repository: "file://../../../osac-metering/charts/osac-metering"
+    alias: metering
+    condition: metering.enabled

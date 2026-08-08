@@ -1,0 +1,19 @@
+apiVersion: v2
+name: osac-base
+description: OSAC shared base layer — CRDs, AAP, shared PostgreSQL
+type: application
+version: 0.0.1
+
+dependencies:
+  - name: osac-operator-crds
+    version: ">=0.0.0"
+    repository: "file://../../../osac-operator/charts/operator-crds"
+    alias: operatorCrds
+  - name: osac-aap
+    version: ">=0.0.0"
+    repository: "file://../../../osac-aap/charts/aap"
+    alias: aap
+  - name: bare-metal-fulfillment-operator-crds
+    version: ">=0.0.0"
+    repository: "file://../../../bare-metal-fulfillment-operator/charts/operator-crds"
+    alias: bmfCrds

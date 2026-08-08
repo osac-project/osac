@@ -61,6 +61,7 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     playbook: "osac-aap/collections/ansible_collections/osac/service/playbooks/publish_templates.yaml"
     inventory: "{{ aap_prefix }}-publish-templates"
     execution_environment: "{{ aap_prefix }}-ee"
+    ask_variables_on_launch: true
     instance_groups:
       - "{{ aap_prefix }}-publish-templates-ig"
     verbosity: 0

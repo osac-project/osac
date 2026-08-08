@@ -1,0 +1,167 @@
+{{- if .Values.hubAccess.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: fulfillment-create-hub
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-workload.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "25"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+rules:
+- apiGroups: [""]
+  resources: [secrets]
+  resourceNames: [hub-access]
+  verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: fulfillment-create-hub
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-workload.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "25"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: fulfillment-create-hub
+subjects:
+- kind: ServiceAccount
+  name: admin
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: fulfillment-create-hub
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-workload.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "25"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 5
+  activeDeadlineSeconds: 900
+  template:
+    metadata:
+      labels:
+        {{- include "osac-workload.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: admin
+      initContainers:
+      {{- include "osac-workload.waitForFulfillment" . | nindent 6 }}
+      containers:
+      - name: create-hub
+        image: {{ .Values.cliImage }}
+        command:
+          - /bin/bash
+          - -euo
+          - pipefail
+          - -c
+          - |
+            NAMESPACE="{{ .Release.Namespace }}"
+
+            echo "Reading hub-access token..."
+            HUB_TOKEN=$(oc get secret hub-access -n "${NAMESPACE}" \
+              -o jsonpath='{.data.token}' | base64 -d)
+            [[ -n "${HUB_TOKEN}" ]] || { echo "ERROR: hub-access secret has no token"; exit 1; }
+            echo "  hub-access token: ${#HUB_TOKEN} chars"
+
+            echo "Reading cluster CA cert..."
+            CA_DATA=$(base64 -w0 /var/run/secrets/kubernetes.io/serviceaccount/ca.crt)
+            [[ -n "${CA_DATA}" ]] || { echo "ERROR: No CA cert at /var/run/secrets/kubernetes.io/serviceaccount/ca.crt"; exit 1; }
+            echo "  CA data: ${#CA_DATA} chars"
+
+            API_SERVER="https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}"
+            echo "  API server: ${API_SERVER}"
+
+            echo "Building hub kubeconfig..."
+            KUBECONFIG_YAML="apiVersion: v1
+            kind: Config
+            clusters:
+            - cluster:
+                certificate-authority-data: ${CA_DATA}
+                server: ${API_SERVER}
+              name: hub
+            contexts:
+            - context:
+                cluster: hub
+                namespace: ${NAMESPACE}
+                user: hub-access
+              name: hub
+            current-context: hub
+            users:
+            - name: hub-access
+              user:
+                token: ${HUB_TOKEN}"
+            KUBECONFIG_B64=$(echo "${KUBECONFIG_YAML}" | base64 -w0)
+            echo "  kubeconfig: ${#KUBECONFIG_B64} chars (base64)"
+
+            AUTH_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+            [[ -n "${AUTH_TOKEN}" ]] || { echo "ERROR: No service account token mounted"; exit 1; }
+
+            FULFILLMENT_URL="https://fulfillment-internal-api:8001"
+
+            echo "Checking if hub 'hub' already exists..."
+            HTTP_CODE=$(curl -sk --connect-timeout 5 --max-time 30 \
+              -o /tmp/hub-response.json -w '%{http_code}' \
+              -H "Authorization: Bearer ${AUTH_TOKEN}" \
+              "${FULFILLMENT_URL}/api/private/v1/hubs/hub")
+            echo "  GET /api/private/v1/hubs/hub: HTTP ${HTTP_CODE}"
+
+            if [[ "${HTTP_CODE}" == "200" ]]; then
+              echo "Hub exists, updating..."
+              HTTP_CODE=$(curl -sk --connect-timeout 5 --max-time 30 \
+                -o /tmp/hub-update.json -w '%{http_code}' \
+                -X PATCH \
+                -H "Authorization: Bearer ${AUTH_TOKEN}" \
+                -H "Content-Type: application/json" \
+                -d "{\"spec\":{\"kubeconfig\":\"${KUBECONFIG_B64}\",\"namespace\":\"${NAMESPACE}\"}}" \
+                "${FULFILLMENT_URL}/api/private/v1/hubs/hub")
+              echo "  PATCH: HTTP ${HTTP_CODE}"
+              [[ "${HTTP_CODE}" =~ ^2 ]] || { echo "ERROR: Hub update failed"; cat /tmp/hub-update.json; exit 1; }
+              echo "Hub updated."
+            else
+              echo "Creating hub..."
+              HTTP_CODE=$(curl -sk --connect-timeout 5 --max-time 30 \
+                -o /tmp/hub-create.json -w '%{http_code}' \
+                -X POST \
+                -H "Authorization: Bearer ${AUTH_TOKEN}" \
+                -H "Content-Type: application/json" \
+                -d "{\"id\":\"hub\",\"metadata\":{\"name\":\"hub\"},\"spec\":{\"kubeconfig\":\"${KUBECONFIG_B64}\",\"namespace\":\"${NAMESPACE}\"}}" \
+                "${FULFILLMENT_URL}/api/private/v1/hubs")
+              echo "  POST: HTTP ${HTTP_CODE}"
+              [[ "${HTTP_CODE}" =~ ^2 ]] || { echo "ERROR: Hub creation failed"; cat /tmp/hub-create.json; exit 1; }
+              echo "Hub created."
+            fi
+        env:
+        - name: HOME
+          value: /tmp
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      restartPolicy: OnFailure
+{{- end }}

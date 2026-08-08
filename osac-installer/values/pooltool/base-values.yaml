@@ -1,0 +1,66 @@
+# Base layer values for multi-instance (pooltool) deployment.
+# Used with: make install-base VALUES_FILE=values/pooltool/base-values.yaml
+
+# --- Prerequisites (shared with operators/prereqs phases) ---
+certManager:
+  enabled: true
+trustManager:
+  enabled: true
+caIssuer:
+  enabled: true
+keycloak:
+  enabled: true
+aapOperator:
+  enabled: true
+lvms:
+  enabled: true
+metallb:
+  enabled: true
+cnv:
+  enabled: true
+mce:
+  enabled: false
+kafka:
+  enabled: true
+
+# --- CRDs ---
+operatorCrds:
+  install: true
+
+bmfCrds: {}
+
+# --- AAP (shared across all workload namespaces) ---
+aap:
+  aap:
+    instance:
+      enabled: true
+      name: "osac-aap"
+  bootstrap:
+    enabled: true
+    image: ghcr.io/osac-project/osac-aap:latest
+    backoffLimit: 15
+  configAsCode:
+    manifestSecret: "config-as-code-manifest-ig"
+    secret: "config-as-code-ig"
+    eeImage: "ghcr.io/osac-project/osac-aap:latest"
+    projectGitUri: "https://github.com/omer-vishlitzky/osac"
+    projectGitBranch: "feat/base-workload-chart-split"
+  instanceGroups:
+    storageFulfillment:
+      enabled: true
+
+# --- Shared PostgreSQL ---
+sharedPostgres:
+  enabled: true
+  adminUser: "osac_admin"
+
+# --- Validation ---
+validation:
+  enabled: true
+
+certs:
+  issuerRef:
+    kind: ClusterIssuer
+    name: default-ca
+  caBundle:
+    configMap: ca-bundle

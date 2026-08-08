@@ -107,11 +107,13 @@ spec:
               token: "${TOKEN}"
             YAML
             echo "Token created and stored."
-            echo "Restarting operator to pick up new token..."
-            oc rollout restart deploy/osac-operator -n {{ .Release.Namespace }}
-            oc rollout status deploy/osac-operator -n {{ .Release.Namespace }} --timeout=120s
-            echo "Operator restarted."
-            if oc get deploy/bmf-operator-controller-manager -n {{ .Release.Namespace }} &>/dev/null; then
+            if oc get deploy/osac-operator -n {{ .Release.Namespace }} 2>&1 | grep -q osac-operator; then
+              echo "Restarting operator to pick up new token..."
+              oc rollout restart deploy/osac-operator -n {{ .Release.Namespace }}
+              oc rollout status deploy/osac-operator -n {{ .Release.Namespace }} --timeout=120s
+              echo "Operator restarted."
+            fi
+            if oc get deploy/bmf-operator-controller-manager -n {{ .Release.Namespace }} 2>&1 | grep -q bmf-operator; then
               echo "Restarting BMF operator to pick up new token..."
               oc rollout restart deploy/bmf-operator-controller-manager -n {{ .Release.Namespace }}
               oc rollout status deploy/bmf-operator-controller-manager -n {{ .Release.Namespace }} --timeout=120s

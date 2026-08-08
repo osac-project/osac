@@ -1022,6 +1022,10 @@ func (t *FilterTranslator) translateSelectJsonField(operandSql string, msgDesc p
 		return
 	}
 	fieldDesc := msgDesc.Fields().ByName(protoreflect.Name(fieldName))
+	if fieldDesc == nil {
+		err = fmt.Errorf("type '%s' doesn't have a '%s' field", msgDesc.FullName(), fieldName)
+		return
+	}
 	// Map fields are stored as JSONB objects — use -> to preserve the object structure, so that bracket-index
 	// and 'in' translate against it instead of falling into the generic message-kind case below:
 	if fieldDesc.IsMap() {

@@ -47,21 +47,10 @@ jobs:
       # itself completing successfully (i.e. no build/scan error); reviewing
       # new findings in the Security tab remains a manual step. Bump this SHA
       # when github/codeql-action needs to be updated.
-      # paths-ignore carve-out: hack/sync-helm-operator.py trips a clear-text-
-      # storage-of-sensitive-data finding that looks like a heuristic false
-      # positive (it rewrites Kubernetes Secret/ConfigMap *names* into Helm
-      # template *expressions*, never touching actual secret payload values) --
-      # never previously evaluated since bare-metal-fulfillment-operator's own
-      # repo had no CodeQL workflow at all. A human security read to confirm
-      # and either suppress in-code or fix is tracked separately rather than
-      # mixed into a code-relocation PR. Remove this carve-out once resolved.
       - uses: github/codeql-action/init@f205ea1c3313d32999d8d6a48b4f6530d4437b38  # v4.37.4
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
-          config: |
-            paths-ignore:
-              - bare-metal-fulfillment-operator/hack/sync-helm-operator.py
 
       # autobuild runs `go build ./...` from the repo root, which go.work
       # rejects ("directory prefix . does not contain modules listed in

@@ -1,0 +1,99 @@
+{{- if .Values.coredns.localhostRewrite }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "osac-prereqs.fullname" . }}-coredns-patch
+  labels:
+    {{- include "osac-prereqs.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": hook-succeeded
+spec:
+  backoffLimit: 4
+  template:
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ include "osac-prereqs.fullname" . }}-coredns-patch
+      containers:
+        - name: patch
+          image: {{ .Values.cliImage }}
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              COREFILE=$(kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}')
+              if echo "$COREFILE" | grep -q 'name regex .*.localhost'; then
+                echo "CoreDNS *.localhost rewrite already configured"
+                exit 0
+              fi
+              NEW_COREFILE=$(echo "$COREFILE" | awk '/kubernetes cluster.local/ {
+                print "    rewrite name keycloak.osac.localhost keycloak.keycloak.svc.cluster.local"
+                print "    rewrite stop {"
+                print "        name regex (.+)\\.(.+)\\.localhost {1}.{2}.svc.cluster.local"
+                print "        answer name (.+)\\.(.+)\\.svc\\.cluster\\.local {1}.{2}.localhost"
+                print "    }"
+              }
+              {print}')
+              kubectl -n kube-system create configmap coredns \
+                --from-literal=Corefile="$NEW_COREFILE" \
+                --dry-run=client -o yaml | kubectl apply -f -
+              kubectl -n kube-system rollout restart deployment coredns
+              kubectl -n kube-system rollout status deployment coredns --timeout=60s
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "osac-prereqs.fullname" . }}-coredns-patch
+  labels:
+    {{- include "osac-prereqs.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-11"
+    "helm.sh/hook-delete-policy": hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "osac-prereqs.fullname" . }}-coredns-patch
+  namespace: kube-system
+  labels:
+    {{- include "osac-prereqs.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-11"
+    "helm.sh/hook-delete-policy": hook-succeeded
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "update", "patch"]
+    resourceNames: ["coredns"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "patch"]
+    resourceNames: ["coredns"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "osac-prereqs.fullname" . }}-coredns-patch
+  namespace: kube-system
+  labels:
+    {{- include "osac-prereqs.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-11"
+    "helm.sh/hook-delete-policy": hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "osac-prereqs.fullname" . }}-coredns-patch
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "osac-prereqs.fullname" . }}-coredns-patch
+    namespace: {{ .Release.Namespace }}
+{{- end }}

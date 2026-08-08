@@ -72,14 +72,12 @@ message NetworkClass {
 
   // Identifier of the fabric manager that handles physical network operations for this class. The fabric manager
   // controls all fabric-level operations: virtual network segments, security groups, external IPs, and NAT gateways.
-  // For example: "netris", "neutron". Not needed for k8s-only deployments — if unset, k8s_manager must be set
-  // instead, and k8s-only operations (VirtualNetwork, Subnet, SecurityGroup, ExternalIP) are routed to it.
-  optional string fabric_manager = 10;
+  // For example: "netris", "neutron".
+  string fabric_manager = 10;
 
   // Identifier of the K8s manager that bridges the Kubernetes overlay to the physical fabric. Only needed for regions
   // that host VMs — the K8s manager creates the overlay network on hosting clusters and bridges it to the fabric
-  // segment. For example: "cudn_localnet". If not set, the region does not support VM workloads. At least one of
-  // fabric_manager or k8s_manager must be set.
+  // segment. For example: "cudn_localnet". If not set, the region does not support VM workloads.
   optional string k8s_manager = 11;
 
   // Desired configuration for this network class.

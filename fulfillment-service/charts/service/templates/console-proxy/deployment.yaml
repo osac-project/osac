@@ -50,6 +50,7 @@ spec:
       containers:
       - name: console-proxy
         image: {{ .Values.images.service }}
+        imagePullPolicy: {{ .Values.images.pullPolicy }}
         securityContext:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true

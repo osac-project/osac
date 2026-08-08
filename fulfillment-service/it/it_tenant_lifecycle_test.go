@@ -723,7 +723,7 @@ var _ = Describe("Multi-tenant resource isolation", func() {
 				Metadata:               privatev1.Metadata_builder{Name: ncName}.Build(),
 				Title:                  "Phase 4 Isolation Test",
 				ImplementationStrategy: "cudn",
-				FabricManager:          new("netris"),
+				FabricManager:          "netris",
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())

@@ -78,7 +78,7 @@ CONTAINER_TOOL ?= podman
 
 # KIND defines the path to your kind binary.
 KIND = kind
-KIND_CLUSTER_NAME = osac
+KIND_CLUSTER_NAME ?= osac-dev
 
 # Setting SHELL to bash allows bash commands to be executed by recipes.
 # Options are set to exit when a recipe line exits non-zero or a piped command fails.
@@ -127,40 +127,16 @@ vet: ## Run go vet against code.
 test: manifests generate fmt vet envtest ## Run tests.
 	GOTOOLCHAIN=$(GOTOOLCHAIN_AUTO) KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v '/test/integration$$') -coverprofile cover.out
 
-.PHONY: test-integration
-test-integration: test test-kustomize test-smoke ## Run all tests including integration (kustomize + smoke).
+.PHONY: helm-lint
+helm-lint: ## Lint Helm charts.
+	helm lint charts/operator/
+	helm lint charts/operator-crds/
 
-.PHONY: test-kustomize
-test-kustomize: kustomize ## Validate kustomize configurations (catches missing files in kustomization.yaml).
-	@echo "Validating kustomize configurations..."
-	$(KUSTOMIZE) build config/crd > /dev/null
-	$(KUSTOMIZE) build config/rbac > /dev/null
-	$(KUSTOMIZE) build config/samples > /dev/null
-	$(KUSTOMIZE) build config/default > /dev/null
-	$(KUSTOMIZE) build config/console-proxy > /dev/null
-	$(KUSTOMIZE) build config/testing/default > /dev/null
-	$(KUSTOMIZE) build config/testing/console-proxy > /dev/null
-	@echo "All kustomize configurations are valid"
-
-.PHONY: test-smoke
-test-smoke: kustomize ## Run smoke test in kind cluster (creates/deletes test cluster).
-	@echo "Creating kind cluster..."
-	$(KIND) create cluster --name osac-test --wait 5m || true
-	@echo "Installing CRDs..."
-	$(KUBECTL) apply -k config/crd
-	@echo "Creating sample ComputeInstance..."
-	$(KUBECTL) apply -f config/samples/osac_v1alpha1_computeinstance.yaml
-	@echo "Verifying ComputeInstance creation..."
-	$(KUBECTL) get computeinstance
-	$(KUBECTL) get ci
-	@echo "Cleaning up..."
-	$(KIND) delete cluster --name osac-test
-	@echo "Smoke test passed!"
-
-# Run integration tests against a Kind cluster that is spun up.
-.PHONY: test-integration-kind
-test-integration-kind:
-	go test ./test/integration/ -v -ginkgo.v
+# Run integration tests against a pre-existing Kind cluster deployed via
+# the root Makefile's `make dev-env` + `make integration-test-operator`.
+.PHONY: integration-tests
+integration-tests: manifests generate helm-crds ## Run integration tests against a Kind cluster.
+	ginkgo run --timeout 30m -v test/integration
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
@@ -263,10 +239,11 @@ docker-buildx: ## Build and push container image for cross-platform support
 	rm $(CONTAINERFILE).cross
 
 .PHONY: build-installer
-build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.
+build-installer: manifests generate ## Generate a consolidated YAML with CRDs and deployment.
 	mkdir -p dist
-	cd config/manager && $(KUSTOMIZE) edit set image controller=${IMG}
-	$(KUSTOMIZE) build config/default > dist/install.yaml
+	helm template osac-operator-crds charts/operator-crds/ > dist/install.yaml
+	echo "---" >> dist/install.yaml
+	helm template osac-operator charts/operator/ --set image.repository=$(firstword $(subst :, ,${IMG})) --set image.tag=$(lastword $(subst :, ,${IMG})) >> dist/install.yaml
 
 ##@ Deployment
 
@@ -275,23 +252,20 @@ ifndef ignore-not-found
 endif
 
 .PHONY: install
-install: manifests kustomize ## Install CRDs into the K8s cluster specified in ~/.kube/config.
-	$(KUBECTL) apply -k config/crd
+install: manifests helm-crds ## Install CRDs into the K8s cluster specified in ~/.kube/config.
+	helm upgrade --install osac-operator-crds charts/operator-crds/
 
 .PHONY: uninstall
-uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
-	$(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -k config/crd
-
-DEPLOY_OVERLAY ?= config/default
+uninstall: ## Uninstall CRDs from the K8s cluster specified in ~/.kube/config.
+	helm uninstall osac-operator-crds --ignore-not-found || true
 
 .PHONY: deploy
-deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in ~/.kube/config.
-	cd config/manager && $(KUSTOMIZE) edit set image controller=${IMG}
-	$(KUBECTL) apply -k $(DEPLOY_OVERLAY)
+deploy: manifests helm-crds ## Deploy controller to the K8s cluster specified in ~/.kube/config.
+	helm upgrade --install osac-operator charts/operator/ --set image.repository=$(firstword $(subst :, ,${IMG})) --set image.tag=$(lastword $(subst :, ,${IMG}))
 
 .PHONY: undeploy
-undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
-	$(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -k $(DEPLOY_OVERLAY)
+undeploy: ## Undeploy controller from the K8s cluster specified in ~/.kube/config.
+	helm uninstall osac-operator --ignore-not-found || true
 
 ##@ Dependencies
 
@@ -302,21 +276,14 @@ $(LOCALBIN):
 
 ## Tool Binaries
 KUBECTL ?= kubectl
-KUSTOMIZE ?= $(LOCALBIN)/kustomize
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
 
 ## Tool Versions
-KUSTOMIZE_VERSION ?= v5.4.3
 CONTROLLER_TOOLS_VERSION ?= v0.20.0
 ENVTEST_VERSION ?= release-0.19
 GOLANGCI_LINT_VERSION ?= v2.12.1
-
-.PHONY: kustomize
-kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary.
-$(KUSTOMIZE): $(LOCALBIN)
-	$(call go-install-tool,$(KUSTOMIZE),sigs.k8s.io/kustomize/kustomize/v5,$(KUSTOMIZE_VERSION))
 
 .PHONY: controller-gen
 controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessary.
@@ -367,10 +334,7 @@ endif
 endif
 
 .PHONY: bundle
-bundle: manifests kustomize operator-sdk ## Generate bundle manifests and metadata, then validate generated files.
-	$(OPERATOR_SDK) generate kustomize manifests -q
-	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMG)
-	$(KUSTOMIZE) build config/manifests | $(OPERATOR_SDK) generate bundle $(BUNDLE_GEN_FLAGS)
+bundle: operator-sdk ## Validate existing bundle manifests.
 	$(OPERATOR_SDK) bundle validate ./bundle
 
 .PHONY: bundle-build

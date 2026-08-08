@@ -28,9 +28,8 @@ Don't set Phase to Failed — parent may be created soon. Use conditions for tra
 Operator uses Go modules, not vendoring. Delete `vendor/` if it exists. Use `go mod tidy`.
 
 ## 8. Integration test failures
-- Update `kustomization.yaml` after renaming/deleting manifests
-- Clean up test clusters: `kind delete cluster --name osac`
-- Run `make test-kustomize` before committing manifest changes
+- Clean up test clusters: `kind delete cluster --name osac-dev`
+- Run `make helm-lint` before committing chart changes
 
 ## 9. gRPC client version mismatches
 Update module version in `buf.gen.yaml`, never edit proto files directly.

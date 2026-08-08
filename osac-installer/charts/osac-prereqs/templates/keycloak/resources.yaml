@@ -239,6 +239,11 @@ spec:
   - name: https
     port: 443
     targetPort: 8001
+  {{- if .Values.keycloak.extraPort }}
+  - name: https-alt
+    port: {{ .Values.keycloak.extraPort }}
+    targetPort: 8001
+  {{- end }}
 ---
 apiVersion: apps/v1
 kind: StatefulSet
@@ -450,6 +455,7 @@ spec:
             scheme: HTTPS
           periodSeconds: 30
 ---
+{{- if .Capabilities.APIVersions.Has "route.openshift.io/v1" }}
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
@@ -468,6 +474,7 @@ spec:
     targetPort: https
   tls:
     termination: passthrough
+{{- end }}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -517,6 +524,8 @@ data:
 
     # Set all passwords
     echo "Setting passwords for all tenant users..."
+    set_password "admin" "password"
+    set_password "user" "password"
     set_password "tenant1_admin" "foobar"
     set_password "tenant1_user" "foobar"
     set_password "tenant2_admin" "foobar"

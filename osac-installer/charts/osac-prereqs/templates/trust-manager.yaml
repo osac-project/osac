@@ -1,4 +1,4 @@
-{{- if .Values.trustManager.enabled }}
+{{- if and .Values.trustManager.enabled (not .Values.trustManager.upstream.enabled) }}
 # Source: trust-manager/templates/serviceaccount.yaml
 apiVersion: v1
 kind: ServiceAccount

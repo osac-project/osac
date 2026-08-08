@@ -92,7 +92,7 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 				Metadata:               privatev1.Metadata_builder{Name: ncName}.Build(),
 				Title:                  "Test CUDN Network Class",
 				ImplementationStrategy: "cudn",
-				FabricManager:          new("netris"),
+				FabricManager:          "netris",
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())

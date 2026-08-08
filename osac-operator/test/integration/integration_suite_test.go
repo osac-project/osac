@@ -17,9 +17,9 @@ limitations under the License.
 package integration
 
 import (
+	"encoding/json"
 	"fmt"
 	"os/exec"
-	"strings"
 	"testing"
 	"time"
 
@@ -29,93 +29,61 @@ import (
 	"github.com/osac-project/osac/osac-operator/test/utils"
 )
 
-const (
-	operatorImage     = "localhost/osac-operator:latest"
-	operatorNamespace = "osac-operator-system"
-)
+const operatorNamespace = "osac"
 
 var _ = BeforeSuite(func() {
-	By("installing cert-manager")
-	Expect(utils.InstallCertManager()).To(Succeed())
-
-	By("installing CRDs")
-	cmd := exec.Command("make", "install")
-	_, err := utils.Run(cmd)
-	Expect(err).NotTo(HaveOccurred())
-
-	By("installing prometheus operator")
-	Expect(utils.InstallPrometheusOperator()).To(Succeed())
-
-	By("building the operator image")
-	cmd = exec.Command("make", "image-build", fmt.Sprintf("IMG=%s", operatorImage))
-	_, err = utils.Run(cmd)
-	Expect(err).NotTo(HaveOccurred())
-
-	By("loading the operator image into the kind cluster")
-	err = utils.LoadImageToKindClusterWithName(operatorImage)
-	Expect(err).NotTo(HaveOccurred())
-
-	By("creating manager namespace")
-	cmd = exec.Command("kubectl", "create", "ns", operatorNamespace)
-	_, err = utils.Run(cmd)
-	if err != nil && !strings.Contains(err.Error(), "AlreadyExists") {
-		Fail(fmt.Sprintf("failed to create namespace %s: %v", operatorNamespace, err))
-	}
-
-	By("deploying the controller-manager")
-	cmd = exec.Command("kubectl", "apply", "-k", "config/testing/default")
-	_, err = utils.Run(cmd)
-	Expect(err).NotTo(HaveOccurred())
-
-	By("waiting for controller-manager to be ready")
-	verifyControllerUp := func() error {
-		cmd := exec.Command("kubectl", "get",
-			"pods", "-l", "control-plane=controller-manager",
-			"-o", "go-template={{ range .items }}"+
-				"{{ if not .metadata.deletionTimestamp }}"+
-				"{{ .metadata.name }}"+
-				"{{ \"\\n\" }}{{ end }}{{ end }}",
-			"-n", operatorNamespace,
-		)
-		podOutput, err := utils.Run(cmd)
+	By("verifying controller-manager pod is running with zero restarts")
+	Eventually(func() error {
+		cmd := exec.Command("kubectl", "get", "pods",
+			"-l", "control-plane=controller-manager",
+			"-n", operatorNamespace, "-o", "json")
+		output, err := utils.Run(cmd)
 		if err != nil {
 			return err
 		}
-		podNames := utils.GetNonEmptyLines(string(podOutput))
-		if len(podNames) != 1 {
-			return fmt.Errorf("expect 1 controller pod running, but got %d", len(podNames))
+
+		var podList struct {
+			Items []struct {
+				Metadata struct {
+					Name              string     `json:"name"`
+					DeletionTimestamp *time.Time `json:"deletionTimestamp"`
+				} `json:"metadata"`
+				Status struct {
+					Phase             string `json:"phase"`
+					ContainerStatuses []struct {
+						Ready        bool  `json:"ready"`
+						RestartCount int64 `json:"restartCount"`
+					} `json:"containerStatuses"`
+				} `json:"status"`
+			} `json:"items"`
+		}
+		if err := json.Unmarshal(output, &podList); err != nil {
+			return fmt.Errorf("failed to parse pod list: %w", err)
 		}
 
-		cmd = exec.Command("kubectl", "get",
-			"pods", podNames[0], "-o", "jsonpath={.status.phase}",
-			"-n", operatorNamespace,
-		)
-		status, err := utils.Run(cmd)
-		if err != nil {
-			return err
+		var running int
+		for _, pod := range podList.Items {
+			if pod.Metadata.DeletionTimestamp != nil {
+				continue
+			}
+			if pod.Status.Phase != "Running" {
+				return fmt.Errorf("pod %s in %s phase", pod.Metadata.Name, pod.Status.Phase)
+			}
+			for _, cs := range pod.Status.ContainerStatuses {
+				if !cs.Ready {
+					return fmt.Errorf("pod %s has unready container", pod.Metadata.Name)
+				}
+				if cs.RestartCount > 0 {
+					return fmt.Errorf("pod %s has %d restarts (crash-looping)", pod.Metadata.Name, cs.RestartCount)
+				}
+			}
+			running++
 		}
-		if string(status) != "Running" {
-			return fmt.Errorf("controller pod in %s status", status)
+		if running == 0 {
+			return fmt.Errorf("no running controller-manager pods found")
 		}
 		return nil
-	}
-	Eventually(verifyControllerUp, 2*time.Minute, time.Second).Should(Succeed())
-})
-
-var _ = AfterSuite(func() {
-	By("undeploying the controller-manager")
-	cmd := exec.Command("kubectl", "delete", "-k", "config/testing/default", "--ignore-not-found")
-	_, _ = utils.Run(cmd)
-
-	By("removing manager namespace")
-	cmd = exec.Command("kubectl", "delete", "ns", operatorNamespace)
-	_, _ = utils.Run(cmd)
-
-	By("uninstalling the Prometheus manager bundle")
-	utils.UninstallPrometheusOperator()
-
-	By("uninstalling cert-manager")
-	utils.UninstallCertManager()
+	}, 5*time.Minute, 5*time.Second).Should(Succeed())
 })
 
 func TestIntegration(t *testing.T) {

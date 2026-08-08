@@ -54,6 +54,8 @@ wait-for-prereqs-namespaces: ## Wait for the keycloak namespace left Terminating
 install-prereqs: wait-for-prereqs-namespaces ## Phase 2: Configure prerequisites (certificates, keycloak, operator CRs)
 	$(eval OCP_VERSION := $(shell oc get clusterversion version -o jsonpath='{.status.desired.version}' | cut -d. -f1,2))
 	$(eval DOMAIN := $(shell oc get ingresses.config/cluster -o jsonpath='{.spec.domain}'))
+	@helm repo list 2>&1 | grep -q awx-operator || helm repo add awx-operator https://ansible-community.github.io/awx-operator-helm/
+	helm dependency build charts/osac-prereqs/
 	helm upgrade --install osac-prereqs charts/osac-prereqs/ \
 		--namespace osac-prereqs --create-namespace \
 		--values $(VALUES_FILE) \

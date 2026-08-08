@@ -63,7 +63,7 @@ var _ = Describe("NATGateway lifecycle", func() {
 				Metadata:               privatev1.Metadata_builder{Name: ncName}.Build(),
 				Title:                  "Test CUDN Network Class",
 				ImplementationStrategy: "cudn",
-				FabricManager:          new("netris"),
+				FabricManager:          "netris",
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
@@ -376,59 +376,6 @@ var _ = Describe("NATGateway lifecycle", func() {
 				}.Build(),
 				Spec: publicv1.NATGatewaySpec_builder{
 					VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: vn2Id}.Build(),
-					ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: externalIPId}.Build(),
-				}.Build(),
-			}.Build(),
-		}.Build())
-		Expect(err).To(HaveOccurred())
-		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
-	})
-
-	It("Rejects create when the VirtualNetwork's NetworkClass has no fabric_manager", func() {
-		// Create a k8s-only NetworkClass (no fabric_manager):
-		k8sOnlyNC, err := networkClassesClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
-			Object: privatev1.NetworkClass_builder{
-				Title:                  "Test k8s-only Network Class",
-				ImplementationStrategy: "cudn",
-				K8SManager:             new("cudn_localnet"),
-			}.Build(),
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		DeferCleanup(func() {
-			_, err := networkClassesClient.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{
-				Id: k8sOnlyNC.GetObject().GetId(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-		})
-
-		k8sOnlyVNId := fmt.Sprintf("test-vnet-%s", uuid.New())
-		_, err = virtualNetworksClient.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
-			Object: privatev1.VirtualNetwork_builder{
-				Id: k8sOnlyVNId,
-				Metadata: privatev1.Metadata_builder{
-					Name: fmt.Sprintf("test-vnet-%s", uuid.New()[24:32]),
-				}.Build(),
-				Spec: privatev1.VirtualNetworkSpec_builder{
-					NetworkClass: privatev1.NetworkClassReference_builder{Id: k8sOnlyNC.GetObject().GetId()}.Build(),
-					Region:       "us-east-1",
-					Ipv4Cidr:     new("10.150.0.0/16"),
-				}.Build(),
-			}.Build(),
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		DeferCleanup(func() {
-			_, err := virtualNetworksClient.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{
-				Id: k8sOnlyVNId,
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-		})
-
-		ngId := fmt.Sprintf("test-ng-%s", uuid.New())
-		_, err = natGatewaysClient.Create(ctx, publicv1.NATGatewaysCreateRequest_builder{
-			Object: publicv1.NATGateway_builder{
-				Id: ngId,
-				Spec: publicv1.NATGatewaySpec_builder{
-					VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: k8sOnlyVNId}.Build(),
 					ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: externalIPId}.Build(),
 				}.Build(),
 			}.Build(),

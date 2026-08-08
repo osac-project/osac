@@ -1,0 +1,50 @@
+# Kind-specific values for osac-prereqs chart.
+# cert-manager, trust-manager, and envoy gateway are installed as
+# separate Helm releases by the root Makefile (install-prereqs-kind).
+# This values file configures the prereqs chart templates only.
+
+# --- Disable OLM subscription templates (not available in Kind) ---
+certManager:
+  enabled: false
+trustManager:
+  enabled: false
+aapOperator:
+  enabled: false
+cnv:
+  enabled: false
+lvms:
+  enabled: false
+metallb:
+  enabled: false
+mce:
+  enabled: false
+kafka:
+  enabled: false
+awx:
+  enabled: false
+kubevirt:
+  enabled: false
+
+# --- Envoy Gateway resources (Gateway, GatewayClass, EnvoyProxy) ---
+envoygateway:
+  resources: true
+  httpNodePort: 30080
+  httpsNodePort: 30443
+
+# --- CA issuer ---
+caIssuer:
+  enabled: true
+
+# --- Keycloak ---
+keycloak:
+  enabled: true
+  hostname: "https://keycloak.keycloak.svc.cluster.local:8443"
+  extraPort: 8443
+
+# --- Fake CRDs (HyperShift, OVN-K stubs for controllers) ---
+fakeCrds:
+  enabled: true
+
+# --- CoreDNS *.localhost rewrite ---
+coredns:
+  localhostRewrite: true

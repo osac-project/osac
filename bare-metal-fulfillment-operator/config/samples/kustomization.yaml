@@ -1,5 +1,0 @@
-## Append samples of your project ##
-resources:
-- osac_v1alpha1_baremetalpool.yaml
-- osac_v1alpha1_baremetalinstance.yaml
-# +kubebuilder:scaffold:manifestskustomizesamples

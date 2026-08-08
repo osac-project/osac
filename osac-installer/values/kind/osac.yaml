@@ -1,0 +1,146 @@
+# Kind-specific values for the osac umbrella chart.
+# Same chart as production, different values for Kind environment.
+
+# --- Operator ---
+operator:
+  image:
+    repository: ghcr.io/osac-project/osac-operator
+    tag: latest
+    pullPolicy: Always
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 10m
+      memory: 128Mi
+  aap:
+    url: "http://awx-service.awx.svc.cluster.local:80/api"
+    insecureSkipVerify: "true"
+    statusPollInterval: "30s"
+    templatePrefix: "osac"
+    tokenSecret:
+      name: awx-token
+      key: token
+  fulfillment:
+    serverAddress: "fulfillment-internal-api:8001"
+    tokenFile: "/var/run/secrets/kubernetes.io/serviceaccount/token"
+  controllers:
+    clusterOrder: true
+    computeInstance: true
+    tenant: true
+    networking: true
+    storage: false
+  certs:
+    issuerRef:
+      name: default-ca
+  hubAccess:
+    enabled: false
+
+# --- Fulfillment Service ---
+service:
+  variant: kind
+  externalHostname: fulfillment-api.osac.svc.cluster.local
+  internalHostname: fulfillment-internal-api.osac.svc.cluster.local
+  images:
+    service: ghcr.io/osac-project/fulfillment-service:latest
+  certs:
+    issuerRef:
+      kind: ClusterIssuer
+      name: default-ca
+    caBundle:
+      configMap: ca-bundle
+  consoleProxy:
+    readinessProbe:
+      enabled: false
+  auth:
+    issuerUrl: https://keycloak.keycloak.svc.cluster.local:8443/realms/osac
+    emergencyServiceAccounts:
+      - admin
+      - osac-operator
+      - osac-operator-controller-manager
+    controllerCredentials:
+      - secret:
+          name: fulfillment-controller-credentials
+          items:
+            - key: client-id
+              param: client-id
+            - key: client-secret
+              param: client-secret
+  idp:
+    provider: keycloak
+    url: https://keycloak.keycloak.svc.cluster.local:8443
+    credentials:
+      - secret:
+          name: fulfillment-controller-credentials
+          items:
+            - key: client-id
+              param: client-id
+            - key: client-secret
+              param: client-secret
+  database:
+    connection:
+      - secret:
+          name: fulfillment-db
+          items:
+            - key: url
+              param: url
+      - secret:
+          name: postgres-client-cert-service
+          items:
+            - key: tls.crt
+              param: sslcert
+            - key: tls.key
+              param: sslkey
+            - key: ca.crt
+              param: sslrootcert
+  log:
+    level: debug
+
+# --- AAP (disabled for kind) ---
+aap:
+  apiToken:
+    create: false
+  aap:
+    instance:
+      enabled: false
+  bootstrap:
+    enabled: false
+  instanceGroups:
+    publishTemplates:
+      enabled: false
+
+# --- Bare Metal Fulfillment (disabled by default) ---
+bmf:
+  enabled: false
+
+# --- Bundled PostgreSQL for fulfillment-service ---
+bundledPostgres:
+  enabled: true
+  database:
+    name: service
+    user: service
+
+# --- Hub Access (disabled for Kind — hook uses oc CLI, not available outside OpenShift) ---
+hubAccess:
+  enabled: false
+
+# --- Disabled for Kind ---
+validation:
+  enabled: false
+dbMigrate:
+  enabled: false
+instanceGroups:
+  enabled: false
+clusterFulfillment:
+  enabled: false
+networkFulfillment:
+  enabled: false
+storageFulfillment:
+  enabled: false
+ui:
+  enabled: false
+metallb:
+  enabled: false
+capiProvider:
+  enabled: false

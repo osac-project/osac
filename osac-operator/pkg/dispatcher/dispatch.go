@@ -88,23 +88,18 @@ func (p *DispatchPlan) K8sTarget() *DispatchTarget {
 // ResourceDispatchConfig defines which manager roles handle a given resource type.
 type ResourceDispatchConfig struct {
 	Roles []ManagerRole
-
-	// K8sFallback indicates that when no fabric manager is resolved, this kind's
-	// Fabric-role target is served by the k8s manager instead of erroring. Used
-	// for k8s-only deployments where the NetworkClass has no fabricManager.
-	K8sFallback bool
 }
 
 // dispatchTable maps Kubernetes resource kinds to the manager roles that handle
 // their provisioning operations.
 var dispatchTable = map[string]ResourceDispatchConfig{
-	"VirtualNetwork":       {Roles: []ManagerRole{ManagerRoleFabric}, K8sFallback: true},
-	"Subnet":               {Roles: []ManagerRole{ManagerRoleFabric, ManagerRoleK8s}, K8sFallback: true},
-	"SecurityGroup":        {Roles: []ManagerRole{ManagerRoleFabric}, K8sFallback: true},
-	"ExternalIP":           {Roles: []ManagerRole{ManagerRoleFabric}, K8sFallback: true},
-	"ExternalIPPool":       {Roles: []ManagerRole{ManagerRoleFabric}, K8sFallback: true},
-	"ExternalIPAttachment": {Roles: []ManagerRole{ManagerRoleFabric}, K8sFallback: true},
-	"NATGateway":           {Roles: []ManagerRole{ManagerRoleFabric}, K8sFallback: false},
+	"VirtualNetwork":       {Roles: []ManagerRole{ManagerRoleFabric}},
+	"Subnet":               {Roles: []ManagerRole{ManagerRoleFabric, ManagerRoleK8s}},
+	"SecurityGroup":        {Roles: []ManagerRole{ManagerRoleFabric}},
+	"ExternalIP":           {Roles: []ManagerRole{ManagerRoleFabric}},
+	"ExternalIPPool":       {Roles: []ManagerRole{ManagerRoleFabric}},
+	"ExternalIPAttachment": {Roles: []ManagerRole{ManagerRoleFabric}},
+	"NATGateway":           {Roles: []ManagerRole{ManagerRoleFabric}},
 }
 
 // LookupDispatchConfig returns the dispatch configuration for a resource kind.
@@ -117,7 +112,7 @@ func LookupDispatchConfig(kind string) *ResourceDispatchConfig {
 	}
 	rolesCopy := make([]ManagerRole, len(cfg.Roles))
 	copy(rolesCopy, cfg.Roles)
-	return &ResourceDispatchConfig{Roles: rolesCopy, K8sFallback: cfg.K8sFallback}
+	return &ResourceDispatchConfig{Roles: rolesCopy}
 }
 
 // KnownKinds returns a list of all resource kinds in the dispatch table.

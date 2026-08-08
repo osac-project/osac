@@ -50,19 +50,41 @@ type correctionData struct {
 	SchemaVersion           string            `json:"schema_version"`
 }
 
-func correctionDescription(reason CorrectionReason) string {
-	switch reason {
-	case MissedCreation:
-		return "Resource found in fulfillment-service but missing from metering projection"
-	case StateDrift:
-		return "Resource state in fulfillment-service differs from metering projection"
-	case BillingDimensionsDrift:
-		return "Billing dimensions in fulfillment-service differ from metering projection"
-	case MissedDeletion:
-		return "Resource found in metering projection but missing from fulfillment-service"
-	default:
-		return fmt.Sprintf("unknown correction reason: %s", reason)
+var correctionDescriptions = map[CorrectionReason]string{
+	MissedCreation:         "Resource found in fulfillment-service but missing from metering projection",
+	StateDrift:             "Resource state in fulfillment-service differs from metering projection",
+	BillingDimensionsDrift: "Billing dimensions in fulfillment-service differ from metering projection",
+	MissedDeletion:         "Resource found in metering projection but missing from fulfillment-service",
+}
+
+func correctionDescription(reason CorrectionReason) (string, error) {
+	desc, ok := correctionDescriptions[reason]
+	if !ok {
+		return "", fmt.Errorf("unknown correction reason: %s", reason)
 	}
+	return desc, nil
+}
+
+func buildCorrectionEvents(
+	resourceID, resourceType, tenantID, projectID string,
+	reason CorrectionReason,
+	projectionState, sourceState string,
+	billingDimensions map[string]any,
+	interval *AffectedInterval,
+	now time.Time,
+) ([]cloudevents.Event, error) {
+	baseID := fmt.Sprintf("correction/%s/%s/%s/%s", resourceID, reason, projectionState, sourceState)
+	buildFn := func(dims map[string]any, eventID string) (cloudevents.Event, error) {
+		ce, err := buildCorrectionEvent(resourceID, resourceType, tenantID, projectID,
+			reason, projectionState, sourceState, dims, interval, now)
+		if err != nil {
+			return ce, err
+		}
+		ce.SetID(eventID)
+		return ce, nil
+	}
+
+	return events.BuildResourceEvents(resourceType, billingDimensions, baseID, buildFn)
 }
 
 func buildCorrectionEvent(
@@ -76,9 +98,14 @@ func buildCorrectionEvent(
 	ce := cloudevents.NewEvent()
 	ce.SetID(uuid.NewString())
 	ce.SetSource("osac-metering/reconciler")
-	ce.SetType("osac.resource.correction.v1")
+	ce.SetType(events.EventCorrection)
 	ce.SetTime(now)
 	events.SetOSACExtensions(&ce, resourceID, resourceType, tenantID, projectID)
+
+	description, err := correctionDescription(reason)
+	if err != nil {
+		return ce, err
+	}
 
 	data := correctionData{
 		ResourceID:              resourceID,
@@ -86,7 +113,7 @@ func buildCorrectionEvent(
 		TenantID:                tenantID,
 		ProjectID:               events.NilIfEmpty(projectID),
 		Reason:                  reason,
-		Description:             correctionDescription(reason),
+		Description:             description,
 		CorrectedState:          events.NilIfEmpty(sourceState),
 		PreviousStateProjection: events.NilIfEmpty(projectionState),
 		ActualStateFromSource:   events.NilIfEmpty(sourceState),

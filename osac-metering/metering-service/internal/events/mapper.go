@@ -10,10 +10,7 @@ import (
 	privatev1 "github.com/osac-project/osac-metering/internal/api/osac/private/v1"
 )
 
-var (
-	ErrDataQuality    = errors.New("data quality")
-	ErrTransientState = errors.New("transient state: update projection only, no CloudEvent")
-)
+var ErrDataQuality = errors.New("data quality")
 
 // ResourceMapper extracts metering data from a resource-specific Event payload.
 // Each OSAC resource type (ComputeInstance, ClusterOrder, etc.) implements this.
@@ -43,8 +40,10 @@ type StateContext struct {
 }
 
 // MapWatchEvent converts a fulfillment-service Watch Event into a CloudEvents 1.0
-// event using the appropriate ResourceMapper for the payload type.
-func MapWatchEvent(event *privatev1.Event, mapper ResourceMapper, stateCtx *StateContext) (*cloudevents.Event, error) {
+// event. billingDims is the billing dimensions to embed in the event payload —
+// callers pass per-component flat dims (from decomposition) or top-level-only
+// dims (for audit events), never the nested stored form directly.
+func MapWatchEvent(event *privatev1.Event, mapper ResourceMapper, stateCtx *StateContext, billingDims map[string]any) (*cloudevents.Event, error) {
 	previousState := stateCtx.PreviousState
 
 	ceType, err := mapper.CloudEventType(event.GetType(), previousState)
@@ -94,7 +93,7 @@ func MapWatchEvent(event *privatev1.Event, mapper ResourceMapper, stateCtx *Stat
 		CurrentState:      mapper.CurrentState(),
 		TransitionTime:    transitionTime.Format(time.RFC3339Nano),
 		DurationSeconds:   durationPtr,
-		BillingDimensions: mapper.BillingDimensionsMap(),
+		BillingDimensions: billingDims,
 		SchemaVersion:     "v1",
 	}
 	if err := ce.SetData(cloudevents.ApplicationJSON, data); err != nil {
@@ -115,6 +114,9 @@ func MapperForEvent(event *privatev1.Event) (ResourceMapper, error) {
 func mapperForEvent(event *privatev1.Event) (ResourceMapper, error) {
 	if ci := event.GetComputeInstance(); ci != nil {
 		return &computeInstanceMapper{ci: ci}, nil
+	}
+	if cl := event.GetCluster(); cl != nil {
+		return &clusterMapper{cl: cl}, nil
 	}
 	return nil, fmt.Errorf("unsupported event payload type for event %s", event.GetId())
 }

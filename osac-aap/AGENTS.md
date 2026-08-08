@@ -382,6 +382,7 @@ All PRs must pass (docs-only PRs — `*.md`, `docs/` — skip checks 1-3 via `pa
 - `meta/osac.yaml` updated for template role changes
 - Collections re-vendored after `collections/requirements.yml` updates
 - E2E tests require `/ok-to-test` comment for fork PRs (org membership check)
+- Expensive e2e (OSAC-3370): CodeRabbit APPROVED on head or fresh `lgtm` — see [`.github/e2e-readiness.md`](../.github/e2e-readiness.md)
 
 ## Common Fix Locations
 

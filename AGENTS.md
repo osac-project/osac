@@ -27,3 +27,18 @@ Clone as siblings for cross-repo workflows:
 ## Cross-Component Changes
 
 A feature spanning multiple components lands in a single branch and PR. Apply changes in dependency order: fulfillment-service (proto) → osac-operator (CRDs, controllers) → osac-aap (playbooks) → osac-installer (RBAC, Helm). For deployment coordination (image tags, submodules), see `osac-installer/AGENTS.md`.
+
+## Expensive e2e CI (OSAC-3370)
+
+Full-install e2e workflows (`e2e-vmaas-full-install`, `e2e-bmaas-full-install`, `e2e-caas-full-install`) do **not** auto-spend runners on every PR push. A cheap `e2e-readiness` job **fails** until unlocked.
+
+**Allow when any of:**
+- `coderabbitai[bot]` `APPROVED` on the **current head SHA** → starts e2e (blocked while a human still has `CHANGES_REQUESTED`), or
+- fresh `lgtm` label → starts e2e
+
+Human GitHub `APPROVED` does **not** unlock. New pushes clear stale unlock labels.
+Fork PRs still need `ok-to-test` (or org membership) for secrets/cluster — readiness is cost-only.
+
+Cheap checks (pre-commit, lint, etc.) stay ungated. Schedules / `workflow_dispatch` / `merge_group` skip the readiness job.
+
+Details + smoke checklist: [`.github/e2e-readiness.md`](.github/e2e-readiness.md).

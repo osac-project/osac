@@ -212,6 +212,25 @@ type HostSelectorSpec struct {
 	HostSelector map[string]string `json:"hostSelector,omitempty"`
 }
 
+// BareMetalNetworkAttachmentStatus captures the runtime networking state for a single NIC.
+type BareMetalNetworkAttachmentStatus struct {
+	// Interface is the physical interface name from the spec's network attachment.
+	// +kubebuilder:validation:Optional
+	Interface string `json:"interface,omitempty"`
+
+	// SubnetRef is the fulfillment Subnet ID associated with this attachment.
+	// +kubebuilder:validation:Optional
+	SubnetRef string `json:"subnetRef,omitempty"`
+
+	// IPAddress is the IP discovered after DHCP assignment.
+	// +kubebuilder:validation:Optional
+	IPAddress string `json:"ipAddress,omitempty"`
+
+	// Primary indicates whether this attachment is the default gateway attachment.
+	// +kubebuilder:validation:Optional
+	Primary bool `json:"primary,omitempty"`
+}
+
 // BareMetalInstanceStatus defines the observed state of BareMetalInstance.
 type BareMetalInstanceStatus struct {
 	// Phase provides a single-value overview of the state of the BareMetalInstance
@@ -237,6 +256,10 @@ type BareMetalInstanceStatus struct {
 	// RestartTrigger is the observed restart version of the instance
 	// +kubebuilder:validation:Optional
 	RestartTrigger int64 `json:"restartTrigger"`
+	// NetworkAttachmentStatuses captures runtime networking state for each NIC.
+	// Populated by the operator after DHCP lease discovery.
+	// +kubebuilder:validation:Optional
+	NetworkAttachmentStatuses []BareMetalNetworkAttachmentStatus `json:"networkAttachmentStatuses,omitempty"`
 }
 
 // GetPoolID returns the owning BareMetalPool UID if the BareMetalInstance is owned by a BareMetalPool.

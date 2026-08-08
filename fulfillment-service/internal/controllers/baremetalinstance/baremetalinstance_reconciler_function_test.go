@@ -1838,6 +1838,99 @@ var _ = Describe("syncStatus", func() {
 		Expect(ready.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
 	})
 
+	It("should leave network attachment statuses empty when K8s CR has none", func() {
+		t := newTask(0)
+		object := &bmfov1alpha1.BareMetalInstance{
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				Phase: bmfov1alpha1.BareMetalInstancePhaseReady,
+				Conditions: []metav1.Condition{
+					{
+						Type:   string(bmfov1alpha1.HostConditionPowerSynced),
+						Status: metav1.ConditionTrue,
+						Reason: bmfov1alpha1.HostConditionReasonPowerOn,
+					},
+				},
+			},
+		}
+		t.syncStatus(object)
+		Expect(t.bareMetalInstance.GetStatus().GetNetworkAttachmentStatuses()).To(BeEmpty())
+	})
+
+	It("should sync a single network attachment status from K8s CR", func() {
+		t := newTask(0)
+		object := &bmfov1alpha1.BareMetalInstance{
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				NetworkAttachmentStatuses: []bmfov1alpha1.BareMetalNetworkAttachmentStatus{
+					{
+						Interface: "data-0",
+						SubnetRef: "subnet-abc",
+						IPAddress: "10.0.1.5",
+						Primary:   true,
+					},
+				},
+			},
+		}
+		t.syncStatus(object)
+		statuses := t.bareMetalInstance.GetStatus().GetNetworkAttachmentStatuses()
+		Expect(statuses).To(HaveLen(1))
+		Expect(statuses[0].GetInterface()).To(Equal("data-0"))
+		Expect(statuses[0].GetSubnetRef()).To(Equal("subnet-abc"))
+		Expect(statuses[0].GetIpAddress()).To(Equal("10.0.1.5"))
+		Expect(statuses[0].GetPrimary()).To(BeTrue())
+	})
+
+	It("should sync multiple network attachment statuses preserving order", func() {
+		t := newTask(0)
+		object := &bmfov1alpha1.BareMetalInstance{
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				NetworkAttachmentStatuses: []bmfov1alpha1.BareMetalNetworkAttachmentStatus{
+					{
+						Interface: "data-0",
+						SubnetRef: "subnet-data",
+						IPAddress: "10.0.1.5",
+						Primary:   true,
+					},
+					{
+						Interface: "data-1",
+						SubnetRef: "subnet-storage",
+						IPAddress: "10.0.2.10",
+						Primary:   false,
+					},
+				},
+			},
+		}
+		t.syncStatus(object)
+		statuses := t.bareMetalInstance.GetStatus().GetNetworkAttachmentStatuses()
+		Expect(statuses).To(HaveLen(2))
+		Expect(statuses[0].GetInterface()).To(Equal("data-0"))
+		Expect(statuses[0].GetSubnetRef()).To(Equal("subnet-data"))
+		Expect(statuses[0].GetIpAddress()).To(Equal("10.0.1.5"))
+		Expect(statuses[0].GetPrimary()).To(BeTrue())
+		Expect(statuses[1].GetInterface()).To(Equal("data-1"))
+		Expect(statuses[1].GetSubnetRef()).To(Equal("subnet-storage"))
+		Expect(statuses[1].GetIpAddress()).To(Equal("10.0.2.10"))
+		Expect(statuses[1].GetPrimary()).To(BeFalse())
+	})
+
+	It("should sync network attachment status with empty ip_address (pre-DHCP)", func() {
+		t := newTask(0)
+		object := &bmfov1alpha1.BareMetalInstance{
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				NetworkAttachmentStatuses: []bmfov1alpha1.BareMetalNetworkAttachmentStatus{
+					{
+						Interface: "data-0",
+						SubnetRef: "subnet-abc",
+						Primary:   true,
+					},
+				},
+			},
+		}
+		t.syncStatus(object)
+		statuses := t.bareMetalInstance.GetStatus().GetNetworkAttachmentStatuses()
+		Expect(statuses).To(HaveLen(1))
+		Expect(statuses[0].GetIpAddress()).To(BeEmpty())
+	})
+
 	It("should not set PROVISIONED when only Allocated is True (template not yet complete)", func() {
 		t := newTask(0)
 		object := &bmfov1alpha1.BareMetalInstance{

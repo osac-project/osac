@@ -459,6 +459,19 @@ func (t *task) syncStatus(object *bmfov1alpha1.BareMetalInstance) {
 			privatev1.ConditionStatus_CONDITION_STATUS_TRUE, "", "")
 	}
 
+	if len(object.Status.NetworkAttachmentStatuses) > 0 {
+		protoStatuses := make([]*privatev1.BareMetalNetworkAttachmentStatus, 0, len(object.Status.NetworkAttachmentStatuses))
+		for _, nas := range object.Status.NetworkAttachmentStatuses {
+			protoStatuses = append(protoStatuses, privatev1.BareMetalNetworkAttachmentStatus_builder{
+				Interface: nas.Interface,
+				SubnetRef: nas.SubnetRef,
+				IpAddress: nas.IPAddress,
+				Primary:   nas.Primary,
+			}.Build())
+		}
+		t.bareMetalInstance.GetStatus().SetNetworkAttachmentStatuses(protoStatuses)
+	}
+
 	restartPending := t.bareMetalInstance.GetSpec().GetRestartTrigger() != t.bareMetalInstance.GetStatus().GetRestartTrigger()
 
 	for _, cond := range object.Status.Conditions {

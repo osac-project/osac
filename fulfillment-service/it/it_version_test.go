@@ -217,13 +217,14 @@ var _ = Describe("Version", func() {
 						Id: id,
 					}.Build())
 					g.Expect(err).ToNot(HaveOccurred())
-					version = getResponse.GetObject().GetMetadata().GetVersion()
+					current := getResponse.GetObject()
+					version = current.GetMetadata().GetVersion()
 
 					updateResponse, err := clustersClient.Update(ctx, publicv1.ClustersUpdateRequest_builder{
 						Object: publicv1.Cluster_builder{
 							Id: id,
 							Metadata: publicv1.Metadata_builder{
-								Name:    "my-cluster",
+								Name:    current.GetMetadata().GetName(),
 								Version: version,
 								Annotations: map[string]string{
 									"date": time.Now().Format(time.RFC3339Nano),
@@ -287,7 +288,7 @@ var _ = Describe("Version", func() {
 				Object: publicv1.Cluster_builder{
 					Id: id,
 					Metadata: publicv1.Metadata_builder{
-						Name:    "my-cluster",
+						Name:    object.GetMetadata().GetName(),
 						Version: math.MaxInt32,
 						Labels: map[string]string{
 							"should": "succeed",

@@ -678,8 +678,8 @@ func (s *PrivateClustersServer) validateAndTransformCluster(ctx context.Context,
 		return err
 	}
 
-	// Check that the host types given in the cluster and the template exist, and index them by identifier and
-	// name, so that it will be easier to look them up later.
+	// Look up the host types given in the template and index them by identifier and name, so that it will be
+	// easier to resolve references later.
 	hostTypes, err := s.lookupAndIndexHostTypes(ctx, template)
 	if err != nil {
 		return err
@@ -688,11 +688,12 @@ func (s *PrivateClustersServer) validateAndTransformCluster(ctx context.Context,
 	// Validate node sets against the template:
 	templateNodeSets := template.GetNodeSets()
 	clusterNodeSets := cluster.GetSpec().GetNodeSets()
-	if err = s.validateNodeSets(clusterNodeSets, templateNodeSets, hostTypes, templateRefStr); err != nil {
+	if err = s.validateNodeSets(clusterNodeSets, templateNodeSets, templateRefStr); err != nil {
 		return err
 	}
 
-	// Replace the node sets given in the cluster with those from the template, taking only the size from cluster:
+	// Merge node sets from the template with user-specified values (size and host_type from the cluster
+	// take precedence when specified):
 	mergeNodeSetsWithTemplate(cluster, templateNodeSets, clusterNodeSets)
 
 	// Validate template parameters:
@@ -727,7 +728,7 @@ func (s *PrivateClustersServer) validateAndTransformCluster(ctx context.Context,
 }
 
 // lookupAndIndexHostTypes fetches host types referenced by the template's node sets and indexes them
-// by both identifier and name.
+// by both identifier and name, for later resolution of template-default host type references.
 func (s *PrivateClustersServer) lookupAndIndexHostTypes(
 	ctx context.Context, template *privatev1.ClusterTemplate,
 ) (map[string]*privatev1.HostType, error) {
@@ -751,11 +752,10 @@ func (s *PrivateClustersServer) lookupAndIndexHostTypes(
 	return hostTypes, nil
 }
 
-// validateNodeSets checks membership, host-type consistency, and positive size for cluster node sets.
+// validateNodeSets checks membership and positive size for cluster node sets.
 func (s *PrivateClustersServer) validateNodeSets(
 	clusterNodeSets map[string]*privatev1.ClusterNodeSet,
 	templateNodeSets map[string]*privatev1.ClusterTemplateNodeSet,
-	hostTypes map[string]*privatev1.HostType,
 	templateRef string,
 ) error {
 	// Check that all the node sets given in the cluster correspond to node sets that exist in the template:
@@ -775,47 +775,6 @@ func (s *PrivateClustersServer) validateNodeSets(
 		}
 	}
 
-	// Check that all the node sets given in the cluster specify the same host type that is specified in the
-	// template:
-	for clusterNodeSetKey, clusterNodeSet := range clusterNodeSets {
-		clusterHostTypeRef := clusterNodeSet.GetHostType()
-		clusterHostTypeKey := refKey(clusterHostTypeRef)
-		if clusterHostTypeKey == "" {
-			continue
-		}
-		templateNodeSet := templateNodeSets[clusterNodeSetKey]
-		templateHostTypeRef := templateNodeSet.GetHostType()
-		templateHostType := hostTypes[refKey(templateHostTypeRef)]
-		templateHostTypeId := templateHostType.GetId()
-		templateHostTypeName := templateHostType.GetMetadata().GetName()
-		if templateHostTypeName != "" {
-			if clusterHostTypeKey != templateHostTypeId && clusterHostTypeKey != templateHostTypeName {
-				return grpcstatus.Errorf(
-					grpccodes.InvalidArgument,
-					"host type for node set '%s' should be empty, '%s' or '%s', like in template '%s', "+
-						"but it is '%s'",
-					clusterNodeSetKey,
-					templateHostTypeName,
-					templateHostTypeId,
-					templateRef,
-					clusterHostTypeKey,
-				)
-			}
-		} else {
-			if clusterHostTypeKey != templateHostTypeId {
-				return grpcstatus.Errorf(
-					grpccodes.InvalidArgument,
-					"host type for node set '%s' should be empty or '%s', like in template '%s', "+
-						"but it is '%s'",
-					clusterNodeSetKey,
-					templateHostTypeId,
-					templateRef,
-					clusterHostTypeKey,
-				)
-			}
-		}
-	}
-
 	// Check that all the node sets given in the cluster have a positive size:
 	for clusterNodeSetKey, clusterNodeSet := range clusterNodeSets {
 		clusterNodeSetSize := clusterNodeSet.GetSize()
@@ -831,8 +790,8 @@ func (s *PrivateClustersServer) validateNodeSets(
 	return nil
 }
 
-// mergeNodeSetsWithTemplate replaces the cluster's node sets with template-derived sets, keeping only
-// the size from the cluster.
+// mergeNodeSetsWithTemplate replaces the cluster's node sets with template-derived sets, keeping
+// size and host_type from the cluster when specified.
 func mergeNodeSetsWithTemplate(
 	cluster *privatev1.Cluster,
 	templateNodeSets map[string]*privatev1.ClusterTemplateNodeSet,
@@ -841,14 +800,21 @@ func mergeNodeSetsWithTemplate(
 	actualNodeSets := map[string]*privatev1.ClusterNodeSet{}
 	for templateNodeSetKey, templateNodeSet := range templateNodeSets {
 		var actualNodeSetSize int32
+		var actualHostType *privatev1.HostTypeReference
 		clusterNodeSet := clusterNodeSets[templateNodeSetKey]
 		if clusterNodeSet != nil {
 			actualNodeSetSize = clusterNodeSet.GetSize()
+			if refKey(clusterNodeSet.GetHostType()) != "" {
+				actualHostType = clusterNodeSet.GetHostType()
+			} else {
+				actualHostType = templateNodeSet.GetHostType()
+			}
 		} else {
 			actualNodeSetSize = templateNodeSet.GetSize()
+			actualHostType = templateNodeSet.GetHostType()
 		}
 		actualNodeSets[templateNodeSetKey] = privatev1.ClusterNodeSet_builder{
-			HostType: templateNodeSet.GetHostType(),
+			HostType: actualHostType,
 			Size:     actualNodeSetSize,
 		}.Build()
 	}
@@ -914,7 +880,7 @@ func (s *PrivateClustersServer) validateAndTransformCatalogItem(ctx context.Cont
 
 	templateNodeSets := template.GetNodeSets()
 	clusterNodeSets := cluster.GetSpec().GetNodeSets()
-	if err := s.validateNodeSets(clusterNodeSets, templateNodeSets, hostTypes, templateRefStr); err != nil {
+	if err := s.validateNodeSets(clusterNodeSets, templateNodeSets, templateRefStr); err != nil {
 		return err
 	}
 

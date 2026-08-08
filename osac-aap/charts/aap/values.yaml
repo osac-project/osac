@@ -16,7 +16,7 @@ aap:
 
 bootstrap:
   enabled: true
-  image: ghcr.io/osac-project/osac-aap:latest
+  image: ghcr.io/osac-project/osac-aap:latest  # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
   cliImage: quay.io/openshift/origin-cli:4.20.0
   backoffLimit: 15
 

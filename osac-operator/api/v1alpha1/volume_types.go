@@ -35,12 +35,12 @@ type VolumeSpec struct {
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="sizeGiB is immutable"
 	SizeGiB int64 `json:"sizeGiB"`
 
-	// AccessMode is the Kubernetes access mode for the volume
-	// (e.g., "ReadWriteOnce", "ReadWriteMany").
+	// AccessMode is the Kubernetes access mode for the volume.
+	// https://kubernetes.io/docs/concepts/storage/persistent-volumes/#access-modes
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:Enum=ReadWriteOnce;ReadOnlyMany;ReadWriteMany;ReadWriteOncePod
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="accessMode is immutable"
-	AccessMode string `json:"accessMode"`
+	AccessMode VolumeAccessMode `json:"accessMode"`
 
 	// PVCRef is the reference to the PVC that triggered this volume creation.
 	// Set by the CSI driver. Empty for API-driven volume creation.
@@ -79,6 +79,27 @@ type PVReferenceType struct {
 	// +kubebuilder:validation:MinLength=1
 	Cluster string `json:"cluster"`
 }
+
+// VolumeAccessMode defines valid Kubernetes PersistentVolume access modes.
+// https://kubernetes.io/docs/concepts/storage/persistent-volumes/#access-modes
+// +kubebuilder:validation:Enum=ReadWriteOnce;ReadOnlyMany;ReadWriteMany;ReadWriteOncePod
+type VolumeAccessMode string
+
+const (
+	VolumeAccessModeReadWriteOnce    VolumeAccessMode = "ReadWriteOnce"
+	VolumeAccessModeReadOnlyMany     VolumeAccessMode = "ReadOnlyMany"
+	VolumeAccessModeReadWriteMany    VolumeAccessMode = "ReadWriteMany"
+	VolumeAccessModeReadWriteOncePod VolumeAccessMode = "ReadWriteOncePod"
+)
+
+// VolumeProtocol defines valid storage protocols for volumes.
+// +kubebuilder:validation:Enum=Block;NFS
+type VolumeProtocol string
+
+const (
+	VolumeProtocolBlock VolumeProtocol = "Block"
+	VolumeProtocolNFS   VolumeProtocol = "NFS"
+)
 
 // VolumePhaseType is a valid value for .status.phase
 type VolumePhaseType string
@@ -124,10 +145,11 @@ type VolumeStatus struct {
 	// +kubebuilder:validation:Optional
 	Backend string `json:"backend,omitempty"`
 
-	// Protocol is the storage protocol used for this volume (e.g., NFS, BLOCK).
+	// Protocol is the storage protocol used for this volume.
 	// Resolved during tier resolution at creation time.
 	// +kubebuilder:validation:Optional
-	Protocol string `json:"protocol,omitempty"`
+	// +kubebuilder:validation:Enum=Block;NFS
+	Protocol VolumeProtocol `json:"protocol,omitempty"`
 
 	// PVCRef is the operator-confirmed reference to the PVC on the tenant cluster.
 	// +kubebuilder:validation:Optional

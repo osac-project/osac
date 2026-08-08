@@ -16,6 +16,26 @@ syntax = "proto3";
 package osac.private.v1;
 
 import "osac/private/v1/metadata_type.proto";
+import "osac/private/v1/storage_common_type.proto";
+
+// Access modes for Volume resources, matching Kubernetes PersistentVolume access modes.
+// https://kubernetes.io/docs/concepts/storage/persistent-volumes/#access-modes
+enum VolumeAccessMode {
+  // Access mode is unknown or has not been specified.
+  VOLUME_ACCESS_MODE_UNSPECIFIED = 0;
+
+  // The volume can be mounted as read-write by a single node.
+  VOLUME_ACCESS_MODE_READ_WRITE_ONCE = 1;
+
+  // The volume can be mounted as read-only by many nodes.
+  VOLUME_ACCESS_MODE_READ_ONLY_MANY = 2;
+
+  // The volume can be mounted as read-write by many nodes.
+  VOLUME_ACCESS_MODE_READ_WRITE_MANY = 3;
+
+  // The volume can be mounted as read-write by a single pod (requires CSI 1.5+).
+  VOLUME_ACCESS_MODE_READ_WRITE_ONCE_POD = 4;
+}
 
 // Lifecycle states for Volume resources.
 enum VolumeState {
@@ -92,8 +112,8 @@ message VolumeSpec {
   // Requested storage capacity in gibibytes (GiB).
   int64 size_gib = 2;
 
-  // Kubernetes access mode for the volume (e.g., "ReadWriteOnce", "ReadWriteMany").
-  string access_mode = 3;
+  // Kubernetes access mode for the volume.
+  VolumeAccessMode access_mode = 3;
 
   // Reference to the PVC that triggered this volume creation. Set by the CSI driver.
   // Empty for API-driven volume creation.
@@ -116,9 +136,9 @@ message VolumeStatus {
   // creation time. Visible only through the private API.
   string backend = 4;
 
-  // Storage protocol used for this volume (e.g., NFS, BLOCK). Resolved during tier resolution at
-  // creation time. Visible only through the private API.
-  string protocol = 5;
+  // Storage protocol used for this volume. Resolved during tier resolution at creation time.
+  // Visible only through the private API.
+  StorageProtocol protocol = 5;
 
   // Operator-confirmed reference to the PVC on the tenant cluster.
   PVCReference pvc_ref = 6;

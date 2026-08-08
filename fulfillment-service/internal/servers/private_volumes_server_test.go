@@ -79,7 +79,7 @@ var _ = Describe("Private volumes server", func() {
 					Spec: privatev1.VolumeSpec_builder{
 						StorageTier: "gold",
 						SizeGib:     100,
-						AccessMode:  "ReadWriteOnce",
+						AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -96,7 +96,7 @@ var _ = Describe("Private volumes server", func() {
 					Spec: privatev1.VolumeSpec_builder{
 						StorageTier: "gold",
 						SizeGib:     100,
-						AccessMode:  "ReadWriteOnce",
+						AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -113,7 +113,7 @@ var _ = Describe("Private volumes server", func() {
 					Spec: privatev1.VolumeSpec_builder{
 						StorageTier: "gold",
 						SizeGib:     50,
-						AccessMode:  "ReadWriteOnce",
+						AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -127,7 +127,8 @@ var _ = Describe("Private volumes server", func() {
 			Expect(created.GetId()).ToNot(BeEmpty())
 			Expect(created.GetSpec().GetStorageTier()).To(Equal("gold"))
 			Expect(created.GetSpec().GetSizeGib()).To(Equal(int64(100)))
-			Expect(created.GetSpec().GetAccessMode()).To(Equal("ReadWriteOnce"))
+			Expect(created.GetSpec().GetAccessMode()).To(Equal(
+				privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE))
 			Expect(created.GetStatus().GetState()).To(Equal(
 				privatev1.VolumeState_VOLUME_STATE_CREATING))
 
@@ -160,7 +161,7 @@ var _ = Describe("Private volumes server", func() {
 					Spec: privatev1.VolumeSpec_builder{
 						StorageTier: "gold",
 						SizeGib:     100,
-						AccessMode:  "ReadWriteOnce",
+						AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
 						PvcRef: privatev1.PVCReference_builder{
 							Name:      "my-pvc",
 							Namespace: "default",
@@ -241,7 +242,7 @@ var _ = Describe("Private volumes server", func() {
 						State:          privatev1.VolumeState_VOLUME_STATE_AVAILABLE,
 						VendorVolumeId: "vast-vol-123",
 						Backend:        "vast-1",
-						Protocol:       "NFS",
+						Protocol:       privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS,
 					}.Build(),
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
@@ -256,7 +257,8 @@ var _ = Describe("Private volumes server", func() {
 				privatev1.VolumeState_VOLUME_STATE_AVAILABLE))
 			Expect(updateResponse.GetObject().GetStatus().GetVendorVolumeId()).To(Equal("vast-vol-123"))
 			Expect(updateResponse.GetObject().GetStatus().GetBackend()).To(Equal("vast-1"))
-			Expect(updateResponse.GetObject().GetStatus().GetProtocol()).To(Equal("NFS"))
+			Expect(updateResponse.GetObject().GetStatus().GetProtocol()).To(Equal(
+				privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS))
 			Expect(updateResponse.GetObject().GetSpec().GetStorageTier()).To(Equal("gold"))
 		})
 
@@ -288,7 +290,7 @@ var _ = Describe("Private volumes server", func() {
 					Spec: privatev1.VolumeSpec_builder{
 						StorageTier: "gold",
 						SizeGib:     100,
-						AccessMode:  "ReadWriteOnce",
+						AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -307,7 +309,7 @@ var _ = Describe("Private volumes server", func() {
 					Spec: privatev1.VolumeSpec_builder{
 						StorageTier: "gold",
 						SizeGib:     100,
-						AccessMode:  "ReadWriteOnce",
+						AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
 					}.Build(),
 					Status: privatev1.VolumeStatus_builder{
 						State: privatev1.VolumeState_VOLUME_STATE_AVAILABLE,
@@ -317,6 +319,97 @@ var _ = Describe("Private volumes server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(response.GetObject().GetStatus().GetState()).To(Equal(
 				privatev1.VolumeState_VOLUME_STATE_CREATING))
+		})
+
+		Describe("Validation", func() {
+			It("Create without metadata.name fails", func() {
+				_, err := server.Create(ctx, privatev1.VolumesCreateRequest_builder{
+					Object: privatev1.Volume_builder{
+						Spec: privatev1.VolumeSpec_builder{
+							StorageTier: "gold",
+							SizeGib:     100,
+							AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				st, ok := status.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(st.Code()).To(Equal(codes.InvalidArgument))
+				Expect(st.Message()).To(ContainSubstring("metadata.name"))
+			})
+
+			It("Create without storage_tier fails", func() {
+				_, err := server.Create(ctx, privatev1.VolumesCreateRequest_builder{
+					Object: privatev1.Volume_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: "test-volume",
+						}.Build(),
+						Spec: privatev1.VolumeSpec_builder{
+							SizeGib:    100,
+							AccessMode: privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				st, ok := status.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(st.Code()).To(Equal(codes.InvalidArgument))
+				Expect(st.Message()).To(ContainSubstring("storage_tier"))
+			})
+
+			It("Create without size_gib fails", func() {
+				_, err := server.Create(ctx, privatev1.VolumesCreateRequest_builder{
+					Object: privatev1.Volume_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: "test-volume",
+						}.Build(),
+						Spec: privatev1.VolumeSpec_builder{
+							StorageTier: "gold",
+							AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				st, ok := status.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(st.Code()).To(Equal(codes.InvalidArgument))
+				Expect(st.Message()).To(ContainSubstring("size_gib"))
+			})
+
+			It("Create without access_mode fails", func() {
+				_, err := server.Create(ctx, privatev1.VolumesCreateRequest_builder{
+					Object: privatev1.Volume_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: "test-volume",
+						}.Build(),
+						Spec: privatev1.VolumeSpec_builder{
+							StorageTier: "gold",
+							SizeGib:     100,
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				st, ok := status.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(st.Code()).To(Equal(codes.InvalidArgument))
+				Expect(st.Message()).To(ContainSubstring("access_mode"))
+			})
+
+			It("Create without spec fails", func() {
+				_, err := server.Create(ctx, privatev1.VolumesCreateRequest_builder{
+					Object: privatev1.Volume_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: "test-volume",
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				st, ok := status.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(st.Code()).To(Equal(codes.InvalidArgument))
+				Expect(st.Message()).To(ContainSubstring("spec"))
+			})
 		})
 
 		Describe("Name uniqueness", func() {
@@ -331,7 +424,7 @@ var _ = Describe("Private volumes server", func() {
 						Spec: privatev1.VolumeSpec_builder{
 							StorageTier: "gold",
 							SizeGib:     50,
-							AccessMode:  "ReadWriteOnce",
+							AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
 						}.Build(),
 					}.Build(),
 				}.Build())

@@ -63,10 +63,20 @@ spec:
             description: VolumeSpec defines the desired state of Volume.
             properties:
               accessMode:
+                allOf:
+                - enum:
+                  - ReadWriteOnce
+                  - ReadOnlyMany
+                  - ReadWriteMany
+                  - ReadWriteOncePod
+                - enum:
+                  - ReadWriteOnce
+                  - ReadOnlyMany
+                  - ReadWriteMany
+                  - ReadWriteOncePod
                 description: |-
-                  AccessMode is the Kubernetes access mode for the volume
-                  (e.g., "ReadWriteOnce", "ReadWriteMany").
-                minLength: 1
+                  AccessMode is the Kubernetes access mode for the volume.
+                  https://kubernetes.io/docs/concepts/storage/persistent-volumes/#access-modes
                 type: string
                 x-kubernetes-validations:
                 - message: accessMode is immutable
@@ -197,8 +207,15 @@ spec:
                 - Deleting
                 type: string
               protocol:
+                allOf:
+                - enum:
+                  - Block
+                  - NFS
+                - enum:
+                  - Block
+                  - NFS
                 description: |-
-                  Protocol is the storage protocol used for this volume (e.g., NFS, BLOCK).
+                  Protocol is the storage protocol used for this volume.
                   Resolved during tier resolution at creation time.
                 type: string
               pvRef:

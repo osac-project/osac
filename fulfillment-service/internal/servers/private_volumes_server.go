@@ -19,6 +19,8 @@ import (
 	"log/slog"
 
 	"github.com/prometheus/client_golang/prometheus"
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
@@ -116,6 +118,11 @@ func (s *PrivateVolumesServer) Create(ctx context.Context,
 	request *privatev1.VolumesCreateRequest) (response *privatev1.VolumesCreateResponse, err error) {
 	vol := request.GetObject()
 
+	err = s.validateVolumeCreate(vol)
+	if err != nil {
+		return
+	}
+
 	if vol.GetStatus() == nil {
 		vol.SetStatus(&privatev1.VolumeStatus{})
 	}
@@ -125,6 +132,29 @@ func (s *PrivateVolumesServer) Create(ctx context.Context,
 
 	err = s.generic.Create(ctx, request, &response)
 	return
+}
+
+func (s *PrivateVolumesServer) validateVolumeCreate(vol *privatev1.Volume) error {
+	if vol == nil {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "volume is mandatory")
+	}
+	if vol.GetMetadata() == nil || vol.GetMetadata().GetName() == "" {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'metadata.name' is required")
+	}
+	spec := vol.GetSpec()
+	if spec == nil {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec' is required")
+	}
+	if spec.GetStorageTier() == "" {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.storage_tier' is required")
+	}
+	if spec.GetSizeGib() <= 0 {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.size_gib' must be greater than zero")
+	}
+	if spec.GetAccessMode() == privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_UNSPECIFIED {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.access_mode' is required")
+	}
+	return nil
 }
 
 func (s *PrivateVolumesServer) Update(ctx context.Context,

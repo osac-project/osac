@@ -236,6 +236,10 @@ func (s *PrivateClustersServer) Update(ctx context.Context,
 	if err != nil {
 		return
 	}
+	err = s.validateClusterStateForSpecUpdate(ctx, request)
+	if err != nil {
+		return
+	}
 	err = s.validateTemplateImmutability(ctx, request)
 	if err != nil {
 		return
@@ -445,6 +449,48 @@ func (s *PrivateClustersServer) getExistingCluster(ctx context.Context,
 	}
 	existingCluster := getResponse.GetObject()
 	return existingCluster, true, nil
+}
+
+// validateClusterStateForSpecUpdate rejects spec modifications when the cluster is in a
+// terminal or non-reconcilable state. The reconciler processes UNSPECIFIED (by transitioning
+// to PROGRESSING via setDefaults), PROGRESSING, and READY clusters — it returns nil for
+// every other state — so spec changes outside those states would be silently ignored.
+//
+// This uses SetLock(true) (SELECT ... FOR UPDATE) so the row lock is held for the
+// remainder of the transaction, preventing a concurrent status transition from
+// bypassing the check before GenericServer.Update writes the spec changes.
+func (s *PrivateClustersServer) validateClusterStateForSpecUpdate(ctx context.Context,
+	request *privatev1.ClustersUpdateRequest) error {
+	if !updateIncludesField(request.GetUpdateMask(), "spec") {
+		return nil
+	}
+	cluster := request.GetObject()
+	if cluster == nil {
+		return nil
+	}
+	id := cluster.GetId()
+	if id == "" {
+		return nil
+	}
+	getResponse, err := s.generic.dao.Get().
+		SetId(id).
+		SetLock(true).
+		Do(ctx)
+	if err != nil {
+		return err
+	}
+	existingCluster := getResponse.GetObject()
+	state := existingCluster.GetStatus().GetState()
+	if state != privatev1.ClusterState_CLUSTER_STATE_UNSPECIFIED &&
+		state != privatev1.ClusterState_CLUSTER_STATE_PROGRESSING &&
+		state != privatev1.ClusterState_CLUSTER_STATE_READY {
+		return grpcstatus.Errorf(
+			grpccodes.InvalidArgument,
+			"cannot update cluster spec when cluster state is %s",
+			state,
+		)
+	}
+	return nil
 }
 
 // updateAffectsNodeSets checks if the update mask indicates that node_sets are being modified.

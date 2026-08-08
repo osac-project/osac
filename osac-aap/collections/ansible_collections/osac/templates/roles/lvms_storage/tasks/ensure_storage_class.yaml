@@ -40,6 +40,37 @@
             targetNamespaces:
               - "{{ lvms_storage_operator_namespace }}"
 
+    - name: Resolve effective LVMS operator channel
+      when: lvms_storage_operator_channel | length == 0
+      block:
+        - name: Query LVMS packagemanifest default channel
+          kubernetes.core.k8s_info:
+            kubeconfig: "{{ _remote_kubeconfig | default(omit) }}"
+            validate_certs: "{{ not (_remote_kubeconfig_insecure | default(false)) }}"
+            api_version: packages.operators.coreos.com/v1
+            kind: PackageManifest
+            name: lvms-operator
+            namespace: openshift-marketplace
+          register: _lvms_pm
+
+        - name: Set channel from packagemanifest default
+          ansible.builtin.set_fact:
+            _lvms_effective_channel: "{{ _lvms_pm.resources[0].status.defaultChannel }}"
+          when: _lvms_pm.resources | length > 0
+
+        - name: Fail if packagemanifest not found and no channel override set
+          ansible.builtin.fail:
+            msg: >-
+              lvms-operator PackageManifest not found in openshift-marketplace and
+              lvms_storage_operator_channel is not set. Set lvms_storage_operator_channel
+              explicitly (e.g. stable-4.18) to proceed.
+          when: _lvms_pm.resources | length == 0
+
+    - name: Use explicit channel override
+      ansible.builtin.set_fact:
+        _lvms_effective_channel: "{{ lvms_storage_operator_channel }}"
+      when: lvms_storage_operator_channel | length > 0
+
     - name: Create LVMS Subscription on guest cluster
       kubernetes.core.k8s:
         kubeconfig: "{{ _remote_kubeconfig | default(omit) }}"
@@ -52,7 +83,7 @@
             name: lvms-operator
             namespace: "{{ lvms_storage_operator_namespace }}"
           spec:
-            channel: "{{ lvms_storage_operator_channel }}"
+            channel: "{{ _lvms_effective_channel }}"
             installPlanApproval: Automatic
             name: lvms-operator
             source: "{{ lvms_storage_operator_catalog_source }}"

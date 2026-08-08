@@ -6,10 +6,9 @@
 # Input: dhcp_lease_query dict with subnet_ref (Subnet UUID) and port_mac.
 # Output: discovered_ip_address fact set to the matched IP.
 #
-# Netris DHCP lease endpoint: /api/v2/dhcp
-# Response assumed: { "data": [ { "mac": "...", "ip": "...", "vnetID": N, ... } ] }
-# Adjust the endpoint URL and response field names if the Netris controller
-# version uses a different schema.
+# Netris runs Kea DHCP on softgate nodes, one instance per VPC (VRF).
+# This task resolves Subnet → V-Net → VPC, then queries the Kea
+# control socket on each softgate until the MAC is found.
 
 - name: Extract DHCP lease query parameters
   ansible.builtin.set_fact:
@@ -31,7 +30,7 @@
       Ensure the Subnet has been created before querying DHCP leases.
   when: _dq_subnet_lookup.resources | length == 0
 
-- name: Set subnet name (used as V-Net name in Netris)
+- name: Set subnet name
   ansible.builtin.set_fact:
     _dq_subnet_name: "{{ _dq_subnet_lookup.resources[0].metadata.name }}"
 
@@ -46,7 +45,7 @@
     name: netris.controller.auth
   when: netris_session_cookie is not defined
 
-- name: Get existing V-Nets
+- name: Get V-Net list
   ansible.builtin.uri:
     url: "{{ netris_controller_url }}/api/v2/vnet"
     method: GET
@@ -65,18 +64,21 @@
       {{ (_dq_vnet_list_resp.json.data | default([]))
          | selectattr('name', 'equalto', _dq_subnet_name)
          | list | first | default(none) }}
-  when: _dq_vnet_list_resp.json is mapping
 
 - name: Fail if V-Net not found
   ansible.builtin.fail:
     msg: >-
       V-Net '{{ _dq_subnet_name }}' not found in Netris controller.
       Ensure the Subnet has been provisioned before querying DHCP leases.
-  when: _dq_target_vnet is not defined or _dq_target_vnet is none
+  when: _dq_target_vnet is none
 
-- name: Query DHCP leases from Netris
+- name: Set VPC ID for VRF lookup
+  ansible.builtin.set_fact:
+    _dq_vpc_id: "{{ _dq_target_vnet.vpc.id }}"
+
+- name: Get softgate inventory from Netris
   ansible.builtin.uri:
-    url: "{{ netris_controller_url }}/api/v2/dhcp"
+    url: "{{ netris_controller_url }}/api/v2/hw?type=softgate"
     method: GET
     headers:
       Cookie: "connect.sid={{ netris_session_cookie }}"
@@ -84,40 +86,55 @@
     status_code: 200
     timeout: "{{ netris_timeout | default(30) }}"
     validate_certs: "{{ netris_validate_certs | default(true) }}"
-  register: _dq_dhcp_resp
-  no_log: true
+  register: _dq_softgate_resp
 
-- name: Initialize matched lease
-  ansible.builtin.set_fact:
-    _dq_matched_lease: ~
+- name: Fail if no softgates found
+  ansible.builtin.fail:
+    msg: "No softgates found in Netris inventory."
+  when: _dq_softgate_resp.json.data | default([]) | length == 0
 
-- name: Find DHCP lease matching port MAC on target V-Net
-  ansible.builtin.set_fact:
-    _dq_matched_lease: "{{ item }}"
-  loop: "{{ _dq_dhcp_resp.json.data | default([]) }}"
-  when:
-    - item.vnetID | default(0) == _dq_target_vnet.id
-    - (item.mac | default('') | lower) == _dq_port_mac
+- name: Query Kea DHCP for MAC on each softgate
+  ansible.builtin.shell:
+    cmd: >-
+      ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5
+      -i {{ netris_softgate_ssh_key | default('/root/.ssh/id_rsa') }}
+      root@{{ item.mgmtAddress }}
+      'echo "{\"command\": \"lease4-get-by-hw-address\", \"arguments\": {\"hw-address\": \"{{ _dq_port_mac }}\"}}"
+      | socat - UNIX-CONNECT:/tmp/kea4-Vrf_{{ _dq_vpc_id }}-ctrl-socket 2>/dev/null || true'
+  loop: "{{ _dq_softgate_resp.json.data }}"
   loop_control:
-    label: "{{ item.mac | default('unknown') }}"
-  no_log: true
+    label: "{{ item.name }}"
+  register: _dq_kea_results
+  changed_when: false
+  failed_when: false
+
+- name: Parse Kea lease responses
+  ansible.builtin.set_fact:
+    _dq_matched_ip: >-
+      {%- for result in _dq_kea_results.results -%}
+        {%- if result.stdout | default('') | trim | length > 0 -%}
+          {%- set kea_resp = result.stdout | from_json -%}
+          {%- if kea_resp.result | default(1) == 0 and (kea_resp.arguments.leases | default([])) | length > 0 -%}
+            {{ kea_resp.arguments.leases[0]['ip-address'] }}
+          {%- endif -%}
+        {%- endif -%}
+      {%- endfor -%}
 
 - name: Fail if no DHCP lease matches
   ansible.builtin.fail:
     msg: >-
       No DHCP lease found for MAC '{{ _dq_port_mac }}' on V-Net
-      '{{ _dq_subnet_name }}' (ID: {{ _dq_target_vnet.id }}).
-      Ensure the host has booted and received a DHCP lease before
-      querying. The host must be connected to this V-Net and have
-      completed DHCP negotiation.
-  when: _dq_matched_lease is none
+      '{{ _dq_subnet_name }}' (VPC ID: {{ _dq_vpc_id }}).
+      Ensure the host has booted and received a DHCP lease.
+      Checked {{ _dq_kea_results.results | length }} softgate(s).
+  when: _dq_matched_ip is none or _dq_matched_ip | trim | length == 0
 
 - name: Set discovered IP address
   ansible.builtin.set_fact:
-    discovered_ip_address: "{{ _dq_matched_lease.ip }}"
+    discovered_ip_address: "{{ _dq_matched_ip | trim }}"
 
 - name: Display DHCP lease query result
   ansible.builtin.debug:
     msg: >-
       DHCP lease found: MAC '{{ _dq_port_mac }}' → IP '{{ discovered_ip_address }}'
-      on V-Net '{{ _dq_subnet_name }}' (ID: {{ _dq_target_vnet.id }})
+      on V-Net '{{ _dq_subnet_name }}'

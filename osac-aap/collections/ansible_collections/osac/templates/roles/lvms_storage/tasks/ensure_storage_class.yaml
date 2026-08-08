@@ -112,7 +112,7 @@
           thinPoolConfig:
             name: thin-pool-1
             sizePercent: 90
-            overprovisionFactor: 10
+            overprovisionRatio: 10
         _lvms_device_selector: >-
           {{ {'deviceSelector': {'paths': [lvms_storage_data_device]}}
              if lvms_storage_data_device else {} }}

@@ -91,4 +91,16 @@ message Metadata {
   //
   // For organization objects this field is always empty, as organizations don't belong to a project.
   string project = 10;
+
+  // Human-friendly display name. Optional, not unique, mutable.
+  // Not constrained to DNS-label format.
+  string display_name = 11 [(buf.validate.field).string = {
+    max_len: 63
+  }];
+
+  // Optional human-friendly description. Opaque string; clients may
+  // treat content as Markdown. Not unique, mutable.
+  string description = 12 [(buf.validate.field).string = {
+    max_len: 256
+  }];
 }

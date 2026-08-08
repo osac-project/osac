@@ -100,6 +100,7 @@ aap:
     enabled: true
     image: ghcr.io/osac-project/osac-aap:latest  # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
     backoffLimit: 15
+    readinessConsecutiveSuccesses: 3
     gateway:
       hostname: ""
     controller:

@@ -60,4 +60,31 @@ var _ = Describe("Create instancetype flag registration", func() {
 		Expect(flag).NotTo(BeNil())
 		Expect(flag.Usage).To(ContainSubstring("description"))
 	})
+
+	It("should register --gpu-pci-device-selector flag", func() {
+		cmd := Cmd()
+		cmd.SetOut(GinkgoWriter)
+		cmd.SetErr(GinkgoWriter)
+		flag := cmd.Flags().Lookup("gpu-pci-device-selector")
+		Expect(flag).NotTo(BeNil())
+		Expect(flag.Usage).To(ContainSubstring("PCI"))
+	})
+
+	It("should register --gpu-resource-name flag", func() {
+		cmd := Cmd()
+		cmd.SetOut(GinkgoWriter)
+		cmd.SetErr(GinkgoWriter)
+		flag := cmd.Flags().Lookup("gpu-resource-name")
+		Expect(flag).NotTo(BeNil())
+		Expect(flag.Usage).To(ContainSubstring("resource"))
+	})
+
+	It("should register --gpu-count flag", func() {
+		cmd := Cmd()
+		cmd.SetOut(GinkgoWriter)
+		cmd.SetErr(GinkgoWriter)
+		flag := cmd.Flags().Lookup("gpu-count")
+		Expect(flag).NotTo(BeNil())
+		Expect(flag.Usage).To(ContainSubstring("GPU"))
+	})
 })

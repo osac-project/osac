@@ -61,15 +61,37 @@ func Cmd() *cobra.Command {
 		"",
 		descriptionFlagHelp,
 	)
+	flags.StringVar(
+		&runner.gpuPCIDeviceSelector,
+		"gpu-pci-device-selector",
+		"",
+		gpuPCIDeviceSelectorFlagHelp,
+	)
+	flags.StringVar(
+		&runner.gpuResourceName,
+		"gpu-resource-name",
+		"",
+		gpuResourceNameFlagHelp,
+	)
+	flags.Int32Var(
+		&runner.gpuCount,
+		"gpu-count",
+		0,
+		gpuCountFlagHelp,
+	)
+	result.MarkFlagsRequiredTogether("gpu-pci-device-selector", "gpu-resource-name", "gpu-count")
 	return result
 }
 
 type runnerContext struct {
-	console     *terminal.Console
-	name        string
-	cores       int32
-	memoryGiB   int32
-	description string
+	console              *terminal.Console
+	name                 string
+	cores                int32
+	memoryGiB            int32
+	description          string
+	gpuPCIDeviceSelector string
+	gpuResourceName      string
+	gpuCount             int32
 }
 
 func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
@@ -95,6 +117,9 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	if c.memoryGiB <= 0 {
 		return fmt.Errorf("memory-gib must be greater than zero")
 	}
+	if cmd.Flags().Changed("gpu-count") && c.gpuCount <= 0 {
+		return fmt.Errorf("gpu-count must be greater than zero")
+	}
 
 	// Create the gRPC connection from the configuration:
 	conn, err := cfg.Connect(ctx, cmd.Flags())
@@ -107,16 +132,24 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	client := privatev1.NewInstanceTypesClient(conn)
 
 	// Prepare the instance type:
+	specBuilder := privatev1.InstanceTypeSpec_builder{
+		Cores:       c.cores,
+		MemoryGib:   c.memoryGiB,
+		Description: c.description,
+	}
+	if cmd.Flags().Changed("gpu-count") {
+		specBuilder.Gpu = privatev1.GpuSpec_builder{
+			PciDeviceSelector: c.gpuPCIDeviceSelector,
+			ResourceName:      c.gpuResourceName,
+			Count:             c.gpuCount,
+		}.Build()
+	}
 	instanceType := privatev1.InstanceType_builder{
 		Id: c.name,
 		Metadata: privatev1.Metadata_builder{
 			Name: c.name,
 		}.Build(),
-		Spec: privatev1.InstanceTypeSpec_builder{
-			Cores:       c.cores,
-			MemoryGib:   c.memoryGiB,
-			Description: c.description,
-		}.Build(),
+		Spec: specBuilder.Build(),
 	}.Build()
 
 	// Create the instance type:
@@ -146,6 +179,13 @@ To create an instance type:
 {{ bt 3 }}shell
 {{ binary }} create instancetype --name standard-4-16 --cores 4 --memory-gib 16 --description 'Balanced compute'
 {{ bt 3 }}
+
+To create a GPU-enabled instance type, provide all three GPU flags:
+
+{{ bt 3 }}shell
+{{ binary }} create instancetype --name gpu-a100-4-16 --cores 4 --memory-gib 16 \
+  --gpu-pci-device-selector '10DE:20B0' --gpu-resource-name 'nvidia.com/A100' --gpu-count 1
+{{ bt 3 }}
 `
 
 const nameFlagHelp = `
@@ -163,4 +203,16 @@ _MEMORY_ - Amount of memory in GiB for this instance type. Must be greater than 
 
 const descriptionFlagHelp = `
 _DESCRIPTION_ - Human friendly description of the instance type.
+`
+
+const gpuPCIDeviceSelectorFlagHelp = `
+_SELECTOR_ - PCI device selector identifying the GPU hardware (e.g., {{ bt }}10DE:20B0{{ bt }}).
+`
+
+const gpuResourceNameFlagHelp = `
+_RESOURCE_ - Kubernetes device plugin resource name (e.g., {{ bt }}nvidia.com/A100{{ bt }}).
+`
+
+const gpuCountFlagHelp = `
+_COUNT_ - Number of GPU devices of this type. Must be greater than zero.
 `

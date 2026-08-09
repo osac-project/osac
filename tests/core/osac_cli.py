@@ -124,10 +124,28 @@ class OsacCLI:
     def delete_compute_instance(self, *, uuid: str) -> None:
         self._run("delete", "computeinstance", uuid)
 
-    def create_instance_type(self, *, name: str, cores: int, memory_gib: int, description: str = "") -> str:
-        args: list[str] = ["create", "instancetype", "--name", name, "--cores", str(cores), "--memory-gib", str(memory_gib)]
+    def create_instance_type(
+        self,
+        *,
+        name: str,
+        cores: int,
+        memory_gib: int,
+        description: str = "",
+        gpu_pci_device_selector: str = "",
+        gpu_resource_name: str = "",
+        gpu_count: int = 0,
+    ) -> str:
+        args: list[str] = [
+            "create", "instancetype", "--name", name, "--cores", str(cores), "--memory-gib", str(memory_gib),
+        ]
         if description:
             args.extend(["--description", description])
+        if gpu_pci_device_selector:
+            args.extend(["--gpu-pci-device-selector", gpu_pci_device_selector])
+        if gpu_resource_name:
+            args.extend(["--gpu-resource-name", gpu_resource_name])
+        if gpu_count:
+            args.extend(["--gpu-count", str(gpu_count)])
         return self._parse_uuid(self._run(*args))
 
     def describe_instance_type(self, *, name: str) -> str:

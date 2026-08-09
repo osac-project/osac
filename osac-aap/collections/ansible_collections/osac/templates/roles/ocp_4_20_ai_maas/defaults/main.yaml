@@ -28,20 +28,20 @@ ocp_4_20_ai_maas_cert_manager_source: redhat-operators
 
 # Service Mesh (must install BEFORE RHCL)
 ocp_4_20_ai_maas_sm_channel: stable-3.2
-ocp_4_20_ai_maas_sm_starting_csv: servicemeshoperator3.v3.2.7
+ocp_4_20_ai_maas_sm_starting_csv: servicemeshoperator3.v3.2.8
 ocp_4_20_ai_maas_sm_source: redhat-operators
 
 # RHCL sub-operators (pre-create to prevent OLM auto-upgrade to v1.4.0)
-ocp_4_20_ai_maas_authorino_starting_csv: authorino-operator.v1.3.2
-ocp_4_20_ai_maas_limitador_starting_csv: limitador-operator.v1.3.1
-ocp_4_20_ai_maas_dns_starting_csv: dns-operator.v1.3.1
+ocp_4_20_ai_maas_authorino_starting_csv: authorino-operator.v1.3.3
+ocp_4_20_ai_maas_limitador_starting_csv: limitador-operator.v1.3.2
+ocp_4_20_ai_maas_dns_starting_csv: dns-operator.v1.3.2
 
 # RHCL operator
-ocp_4_20_ai_maas_rhcl_starting_csv: rhcl-operator.v1.3.5
+ocp_4_20_ai_maas_rhcl_starting_csv: rhcl-operator.v1.3.6
 ocp_4_20_ai_maas_rhcl_source: redhat-operators
 
 # Version to reject/accept in install plans
-ocp_4_20_ai_maas_reject_version: "v1.4.0"
+ocp_4_20_ai_maas_reject_version: "v1.4"
 ocp_4_20_ai_maas_accept_version: "v1.3"
 
 # Observability operators (COO + OTel, installed in isolated namespaces)

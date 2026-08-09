@@ -106,6 +106,9 @@
     validate_certs: false
   no_log: true
   register: _api_key_response
+  retries: 6
+  delay: 10
+  until: _api_key_response is not failed
   when: ocp_4_20_ai_maas_enable_keycloak | default(true) | bool
 
 - name: Report API key creation

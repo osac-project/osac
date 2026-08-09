@@ -15,6 +15,12 @@
     _dq_subnet_ref: "{{ dhcp_lease_query.subnet_ref }}"
     _dq_port_mac: "{{ dhcp_lease_query.port_mac | lower }}"
 
+- name: Validate port MAC format
+  ansible.builtin.assert:
+    that:
+      - _dq_port_mac is regex('^([0-9a-f]{2}:){5}[0-9a-f]{2}$')
+    fail_msg: "Invalid MAC address format: '{{ _dq_port_mac }}'"
+
 - name: Look up Subnet CR by UUID label
   kubernetes.core.k8s_info:
     api_version: osac.openshift.io/v1alpha1
@@ -107,18 +113,25 @@
   register: _dq_kea_results
   changed_when: false
   failed_when: false
+  no_log: true
 
-- name: Parse Kea lease responses
+- name: Initialize matched IP
+  ansible.builtin.set_fact:
+    _dq_matched_ip: ""
+
+- name: Extract IP from first successful Kea response
   ansible.builtin.set_fact:
     _dq_matched_ip: >-
-      {%- for result in _dq_kea_results.results -%}
-        {%- if result.stdout | default('') | trim | length > 0 -%}
-          {%- set kea_resp = result.stdout | from_json -%}
-          {%- if kea_resp.result | default(1) == 0 and (kea_resp.arguments.leases | default([])) | length > 0 -%}
-            {{ kea_resp.arguments.leases[0]['ip-address'] }}
-          {%- endif -%}
-        {%- endif -%}
-      {%- endfor -%}
+      {{ (item.stdout | from_json).arguments.leases[0]['ip-address'] }}
+  loop: "{{ _dq_kea_results.results }}"
+  when:
+    - _dq_matched_ip | trim | length == 0
+    - item.stdout | default('') | trim | length > 0
+    - (item.stdout | from_json).result | default(1) == 0
+    - ((item.stdout | from_json).arguments.leases | default([])) | length > 0
+  loop_control:
+    label: "{{ item.item.name | default('unknown') }}"
+  no_log: true
 
 - name: Fail if no DHCP lease matches
   ansible.builtin.fail:

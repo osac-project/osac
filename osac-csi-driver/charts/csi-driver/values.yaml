@@ -10,8 +10,25 @@ image:
 controller:
   replicas: 1
   clusterID: ""
-  fulfillmentEndpoint: ""
   vendorSockets: ""
+  # Connection to the OSAC fulfillment-service (runs on the hub / control plane cluster).
+  # The CSI driver runs on tenant clusters and needs credentials that the
+  # fulfillment-service recognises. AAP provisions a Secret with a bearer token
+  # onto each tenant cluster during cluster setup.
+  fulfillment:
+    # gRPC endpoint of the fulfillment-service (e.g. "fulfillment-api.osac.svc:8000").
+    # Leave empty to use in-memory stubs.
+    endpoint: ""
+    # Secret containing a bearer token for fulfillment-service authentication.
+    # The Secret must exist in the release namespace before the chart is installed.
+    credentials:
+      # Name of the Kubernetes Secret (required when endpoint is set).
+      secretName: ""
+      # Key inside the Secret that holds the bearer token.
+      key: "token"
+    tls:
+      # Skip server certificate verification (use for self-signed certs).
+      insecureSkipVerify: false
   resources:
     limits:
       cpu: 500m

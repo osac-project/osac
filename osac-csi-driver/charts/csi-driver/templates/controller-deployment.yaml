@@ -29,8 +29,16 @@ spec:
             {{- if .Values.controller.clusterID }}
             - "--cluster-id={{ .Values.controller.clusterID }}"
             {{- end }}
-            {{- if .Values.controller.fulfillmentEndpoint }}
-            - "--fulfillment-endpoint={{ .Values.controller.fulfillmentEndpoint }}"
+            {{- with .Values.controller.fulfillment }}
+            {{- if .endpoint }}
+            - "--fulfillment-endpoint={{ .endpoint }}"
+            {{- if .credentials.secretName }}
+            - "--fulfillment-token-file=/etc/osac-csi/credentials/{{ .credentials.key }}"
+            {{- end }}
+            {{- if .tls.insecureSkipVerify }}
+            - "--grpc-insecure"
+            {{- end }}
+            {{- end }}
             {{- end }}
             {{- if .Values.controller.vendorSockets }}
             - "--vendor-sockets={{ .Values.controller.vendorSockets }}"
@@ -39,6 +47,11 @@ spec:
           volumeMounts:
             - name: osac-socket-dir
               mountPath: /csi/osac
+            {{- if and .Values.controller.fulfillment.endpoint .Values.controller.fulfillment.credentials.secretName }}
+            - name: fulfillment-credentials
+              mountPath: /etc/osac-csi/credentials
+              readOnly: true
+            {{- end }}
           resources:
             {{- toYaml .Values.controller.resources | nindent 12 }}
           securityContext:
@@ -82,3 +95,11 @@ spec:
       volumes:
         - name: osac-socket-dir
           emptyDir: {}
+        {{- if and .Values.controller.fulfillment.endpoint .Values.controller.fulfillment.credentials.secretName }}
+        - name: fulfillment-credentials
+          secret:
+            secretName: {{ .Values.controller.fulfillment.credentials.secretName }}
+            items:
+              - key: {{ .Values.controller.fulfillment.credentials.key }}
+                path: {{ .Values.controller.fulfillment.credentials.key }}
+        {{- end }}

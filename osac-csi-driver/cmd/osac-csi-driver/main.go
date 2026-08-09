@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"os"
@@ -8,6 +9,10 @@ import (
 
 	"github.com/osac-project/osac/osac-csi-driver/pkg/driver"
 	"github.com/osac-project/osac/osac-csi-driver/pkg/fulfillment"
+	"golang.org/x/oauth2"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/oauth"
+	experimentalcredentials "google.golang.org/grpc/experimental/credentials"
 	"k8s.io/klog/v2"
 )
 
@@ -24,6 +29,9 @@ func main() {
 	clusterID := flag.String("cluster-id", "", "Cluster ID for volume creation")
 	fulfillmentEndpoint := flag.String("fulfillment-endpoint", "",
 		"gRPC endpoint for the OSAC fulfillment service (uses stub if empty)")
+	fulfillmentTokenFile := flag.String("fulfillment-token-file", "",
+		"Path to a file containing the bearer token for fulfillment-service authentication")
+	grpcInsecure := flag.Bool("grpc-insecure", false, "Skip TLS server certificate verification")
 	vendorSocketsFlag := flag.String("vendor-sockets", "",
 		"Comma-separated backend=socketpath pairs (e.g. ontap=/csi/trident/csi.sock)")
 	driverName := flag.String("driver-name", "csi.osac.openshift.io", "CSI driver name")
@@ -34,8 +42,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: --node-id is required\n")
 		os.Exit(1)
 	}
-	// --cluster-id is optional; the fulfillment service may identify the
-	// cluster from connection credentials or a mounted ConfigMap.
 
 	vendorSockets, err := parseVendorSockets(*vendorSocketsFlag)
 	if err != nil {
@@ -52,10 +58,18 @@ func main() {
 	var controlPlaneClient fulfillment.ControlPlaneClient
 
 	if *fulfillmentEndpoint != "" {
-		fmt.Fprintf(os.Stderr, "Error: --fulfillment-endpoint is set but the gRPC client is not implemented yet\n")
-		os.Exit(1)
+		// Establish the gRPC connection to the fulfillment-service.
+		// TODO(OSAC-2872): use the connection to create real VolumeClient
+		// and ControlPlaneClient once the Volume API is implemented.
+		conn, err := dialFulfillment(*fulfillmentEndpoint, *grpcInsecure, *fulfillmentTokenFile)
+		if err != nil {
+			klog.Fatalf("Failed to connect to fulfillment-service: %v", err)
+		}
+		defer func() { _ = conn.Close() }()
+		klog.Infof("Fulfillment endpoint: %s (connected, using stubs until Volume API is implemented)", *fulfillmentEndpoint)
+	} else {
+		klog.Infof("No fulfillment endpoint configured, using in-memory stubs")
 	}
-	klog.Infof("No fulfillment endpoint configured, using in-memory stubs")
 	volumeClient = fulfillment.NewVolumeStub("default-backend", "nfs")
 	controlPlaneClient = &fulfillment.ControlPlaneStub{}
 
@@ -70,6 +84,42 @@ func main() {
 	if err := d.Run(); err != nil {
 		klog.Fatalf("Failed to run driver: %v", err)
 	}
+}
+
+func dialFulfillment(endpoint string, insecureSkipVerify bool, tokenFile string) (*grpc.ClientConn, error) {
+	tlsCfg := &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: insecureSkipVerify, //nolint:gosec // user-controlled flag
+	}
+	// The OpenShift router does not support ALPN, so we use the
+	// experimental credentials package that disables the ALPN check.
+	// See https://github.com/grpc/grpc-go/issues/434
+	dialOpts := []grpc.DialOption{
+		grpc.WithTransportCredentials(experimentalcredentials.NewTLSWithALPNDisabled(tlsCfg)),
+	}
+
+	if tokenFile != "" {
+		dialOpts = append(dialOpts, grpc.WithPerRPCCredentials(
+			oauth.TokenSource{TokenSource: &fileTokenSource{path: tokenFile}},
+		))
+	}
+
+	return grpc.NewClient(endpoint, dialOpts...)
+}
+
+type fileTokenSource struct {
+	path string
+}
+
+func (f *fileTokenSource) Token() (*oauth2.Token, error) {
+	data, err := os.ReadFile(f.path)
+	if err != nil {
+		return nil, fmt.Errorf("reading token file %s: %w", f.path, err)
+	}
+	return &oauth2.Token{
+		AccessToken: strings.TrimSpace(string(data)),
+		TokenType:   "Bearer",
+	}, nil
 }
 
 func parseVendorSockets(s string) (map[string]string, error) {

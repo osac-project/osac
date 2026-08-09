@@ -135,6 +135,7 @@ var _ = Describe("Public external IP pools server", func() {
 		It("Excludes READY pools with zero available capacity", func() {
 			createResp, err := privatePool.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 				Object: privatev1.ExternalIPPool_builder{
+					Metadata: privatev1.Metadata_builder{Name: "test-pool"}.Build(),
 					Spec: privatev1.ExternalIPPoolSpec_builder{
 						Cidrs:    []string{"10.0.0.0/24"},
 						IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
@@ -176,6 +177,7 @@ var _ = Describe("Public external IP pools server", func() {
 		It("Returns pool when READY with available capacity", func() {
 			createResp, err := privatePool.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 				Object: privatev1.ExternalIPPool_builder{
+					Metadata: privatev1.Metadata_builder{Name: "test-pool"}.Build(),
 					Spec: privatev1.ExternalIPPoolSpec_builder{
 						Cidrs:    []string{"10.0.0.0/24"},
 						IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
@@ -218,6 +220,7 @@ var _ = Describe("Public external IP pools server", func() {
 		It("Returns NotFound when pool is not READY", func() {
 			createResp, err := privatePool.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 				Object: privatev1.ExternalIPPool_builder{
+					Metadata: privatev1.Metadata_builder{Name: "test-pool"}.Build(),
 					Spec: privatev1.ExternalIPPoolSpec_builder{
 						Cidrs:    []string{"10.0.0.0/24"},
 						IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,

@@ -34,6 +34,7 @@ if [[ "$KEEP_DATA" == "true" ]]; then
   export KUBECONFIG="${KC_FILE}"
 
   helm uninstall osac -n osac 2>/dev/null || true
+  helm uninstall openbao -n openbao 2>/dev/null || true
   helm uninstall keycloak -n keycloak 2>/dev/null || true
   helm uninstall postgres -n osac 2>/dev/null || true
 

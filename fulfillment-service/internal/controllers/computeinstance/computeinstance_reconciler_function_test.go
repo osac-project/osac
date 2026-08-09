@@ -29,9 +29,12 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -2032,4 +2035,285 @@ var _ = Describe("instance_type resolution in reconciler", func() {
 		Expect(err.Error()).To(ContainSubstring("connection refused"))
 	})
 
+})
+
+var _ = Describe("Kubernetes validation error handling", func() {
+	const (
+		computeInstanceID = "test-ci-validation"
+		tenantName        = "test-tenant"
+		hubID             = "test-hub"
+		hubNamespace      = "test-ns"
+		subnetID          = "test-subnet"
+	)
+
+	var (
+		ctx                     context.Context
+		ctrl                    *gomock.Controller
+		scheme                  *runtime.Scheme
+		subnetCR                *osacv1alpha1.Subnet
+		hubsClient              *controllers.MockHubsClient
+		mockInstanceTypesClient *MockInstanceTypesClient
+		computeInstancesClient  *MockComputeInstancesClient
+	)
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		ctrl = gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+
+		scheme = runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
+
+		subnetCR = &osacv1alpha1.Subnet{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: hubNamespace,
+				Name:      "test-sn",
+				Labels:    map[string]string{labels.SubnetUuid: subnetID},
+			},
+		}
+
+		hubsClient = controllers.NewMockHubsClient(ctrl)
+		mockInstanceTypesClient = NewMockInstanceTypesClient(ctrl)
+
+		computeInstancesClient = NewMockComputeInstancesClient(ctrl)
+		computeInstancesClient.EXPECT().
+			Update(gomock.Any(), gomock.Any(), gomock.Any()).
+			DoAndReturn(func(ctx context.Context, req *privatev1.ComputeInstancesUpdateRequest, opts ...grpc.CallOption) (*privatev1.ComputeInstancesUpdateResponse, error) {
+				return &privatev1.ComputeInstancesUpdateResponse{Object: req.GetObject()}, nil
+			}).
+			MinTimes(1)
+	})
+
+	newComputeInstance := func() *privatev1.ComputeInstance {
+		return privatev1.ComputeInstance_builder{
+			Id: computeInstanceID,
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     tenantName,
+			}.Build(),
+			Spec: privatev1.ComputeInstanceSpec_builder{
+				Template:     &privatev1.ComputeInstanceTemplateReference{Name: "osac.templates.ocp_virt_vm"},
+				InstanceType: &privatev1.InstanceTypeReference{Name: "test-type"},
+				NetworkAttachments: []*privatev1.NetworkAttachment{
+					privatev1.NetworkAttachment_builder{Subnet: &privatev1.SubnetLocalReference{Id: subnetID}}.Build(),
+				},
+			}.Build(),
+			Status: privatev1.ComputeInstanceStatus_builder{
+				State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
+				Hub:   hubID,
+			}.Build(),
+		}.Build()
+	}
+
+	newTestHarness := func(interceptorFuncs interceptor.Funcs, extraObjects ...clnt.Object) (*function, clnt.Client) {
+		objects := append([]clnt.Object{subnetCR}, extraObjects...)
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(objects...).
+			WithInterceptorFuncs(interceptorFuncs).
+			Build()
+
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), hubID).
+			Return(&controllers.HubEntry{Namespace: hubNamespace, Client: fakeClient}, nil).
+			AnyTimes()
+
+		f := &function{
+			logger:                 logger,
+			hubCache:               hubCache,
+			computeInstancesClient: computeInstancesClient,
+			hubsClient:             hubsClient,
+			instanceTypesClient:    mockInstanceTypesClient,
+			maskCalculator:         nil,
+		}
+		return f, fakeClient
+	}
+
+	It("should set state to FAILED when K8s Create returns Invalid error", func() {
+		mockInstanceTypesClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(privatev1.InstanceTypesGetResponse_builder{
+				Object: privatev1.InstanceType_builder{
+					Spec: privatev1.InstanceTypeSpec_builder{
+						Cores:     150,
+						MemoryGib: 2,
+					}.Build(),
+				}.Build(),
+			}.Build(), nil)
+
+		f, _ := newTestHarness(interceptor.Funcs{
+			Create: func(ctx context.Context, client clnt.WithWatch, obj clnt.Object, opts ...clnt.CreateOption) error {
+				if _, ok := obj.(*osacv1alpha1.ComputeInstance); ok {
+					return apierrors.NewInvalid(
+						schema.GroupKind{Group: "osac.openshift.io", Kind: "ComputeInstance"},
+						"vm-test",
+						field.ErrorList{
+							field.Invalid(
+								field.NewPath("spec", "cores"),
+								150,
+								"spec.cores in body should be less than or equal to 128",
+							),
+						},
+					)
+				}
+				return client.Create(ctx, obj, opts...)
+			},
+		})
+
+		computeInstance := newComputeInstance()
+		err := f.run(ctx, computeInstance)
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(computeInstance.GetStatus().GetState()).To(
+			Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED),
+		)
+
+		conditions := computeInstance.GetStatus().GetConditions()
+		var configCondition *privatev1.ComputeInstanceCondition
+		for _, c := range conditions {
+			if c.GetType() == privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_CONFIGURATION_APPLIED {
+				configCondition = c
+				break
+			}
+		}
+		Expect(configCondition).ToNot(BeNil())
+		Expect(configCondition.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		Expect(configCondition.GetReason()).To(Equal("ValidationFailed"))
+		Expect(configCondition.GetMessage()).To(ContainSubstring("spec.cores"))
+		Expect(configCondition.GetMessage()).To(ContainSubstring("128"))
+	})
+
+	It("should set state to FAILED when K8s Patch returns Invalid error", func() {
+		mockInstanceTypesClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(privatev1.InstanceTypesGetResponse_builder{
+				Object: privatev1.InstanceType_builder{
+					Spec: privatev1.InstanceTypeSpec_builder{
+						Cores:     200,
+						MemoryGib: 2,
+					}.Build(),
+				}.Build(),
+			}.Build(), nil)
+
+		existingCR := &osacv1alpha1.ComputeInstance{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: hubNamespace,
+				Name:      "vm-existing",
+				Labels: map[string]string{
+					labels.ComputeInstanceUuid: computeInstanceID,
+				},
+			},
+		}
+
+		f, _ := newTestHarness(interceptor.Funcs{
+			Patch: func(ctx context.Context, client clnt.WithWatch, obj clnt.Object, patch clnt.Patch, opts ...clnt.PatchOption) error {
+				if _, ok := obj.(*osacv1alpha1.ComputeInstance); ok {
+					return apierrors.NewInvalid(
+						schema.GroupKind{Group: "osac.openshift.io", Kind: "ComputeInstance"},
+						"vm-existing",
+						field.ErrorList{
+							field.Invalid(
+								field.NewPath("spec", "cores"),
+								200,
+								"spec.cores in body should be less than or equal to 128",
+							),
+						},
+					)
+				}
+				return client.Patch(ctx, obj, patch, opts...)
+			},
+		}, existingCR)
+
+		computeInstance := newComputeInstance()
+		err := f.run(ctx, computeInstance)
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(computeInstance.GetStatus().GetState()).To(
+			Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED),
+		)
+	})
+
+	It("should still return transient errors from K8s Create", func() {
+		mockInstanceTypesClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(privatev1.InstanceTypesGetResponse_builder{
+				Object: privatev1.InstanceType_builder{
+					Spec: privatev1.InstanceTypeSpec_builder{}.Build(),
+				}.Build(),
+			}.Build(), nil)
+
+		f, _ := newTestHarness(interceptor.Funcs{
+			Create: func(ctx context.Context, client clnt.WithWatch, obj clnt.Object, opts ...clnt.CreateOption) error {
+				if _, ok := obj.(*osacv1alpha1.ComputeInstance); ok {
+					return errors.New("connection refused")
+				}
+				return client.Create(ctx, obj, opts...)
+			},
+		})
+
+		computeInstance := newComputeInstance()
+		err := f.run(ctx, computeInstance)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("connection refused"))
+
+		Expect(computeInstance.GetStatus().GetState()).To(
+			Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING),
+		)
+	})
+
+	It("should recover from FAILED state when spec is corrected and Create succeeds", func() {
+		mockInstanceTypesClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(privatev1.InstanceTypesGetResponse_builder{
+				Object: privatev1.InstanceType_builder{
+					Spec: privatev1.InstanceTypeSpec_builder{
+						Cores:     4,
+						MemoryGib: 2,
+					}.Build(),
+				}.Build(),
+			}.Build(), nil).
+			AnyTimes()
+
+		rejectCreate := true
+		f, fakeClient := newTestHarness(interceptor.Funcs{
+			Create: func(ctx context.Context, client clnt.WithWatch, obj clnt.Object, opts ...clnt.CreateOption) error {
+				if _, ok := obj.(*osacv1alpha1.ComputeInstance); ok && rejectCreate {
+					return apierrors.NewInvalid(
+						schema.GroupKind{Group: "osac.openshift.io", Kind: "ComputeInstance"},
+						"vm-test",
+						field.ErrorList{
+							field.Invalid(
+								field.NewPath("spec", "cores"),
+								150,
+								"spec.cores in body should be less than or equal to 128",
+							),
+						},
+					)
+				}
+				return client.Create(ctx, obj, opts...)
+			},
+		})
+
+		computeInstance := newComputeInstance()
+
+		// First reconcile: K8s rejects Create with Invalid error → FAILED
+		err := f.run(ctx, computeInstance)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(computeInstance.GetStatus().GetState()).To(
+			Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED),
+		)
+
+		// Second reconcile: spec corrected, Create succeeds → CR created
+		rejectCreate = false
+		err = f.run(ctx, computeInstance)
+		Expect(err).ToNot(HaveOccurred())
+
+		list := &osacv1alpha1.ComputeInstanceList{}
+		err = fakeClient.List(ctx, list)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(list.Items).To(HaveLen(1))
+		Expect(list.Items[0].Namespace).To(Equal(hubNamespace))
+	})
 })

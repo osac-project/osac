@@ -22,15 +22,21 @@ import (
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation/field"
+	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/annotations"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
+	"github.com/osac-project/osac/fulfillment-service/internal/masks"
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
 
@@ -449,7 +455,7 @@ var _ = Describe("update tenant annotation", func() {
 				Template:     &privatev1.ClusterTemplateReference{Name: "test-template"},
 				PullSecret:   &pullSecret,
 				SshPublicKey: &sshKey,
-				VersionName:  &versionName,
+				Version:      &privatev1.ClusterVersionReference{Name: versionName},
 				Network: privatev1.ClusterNetwork_builder{
 					PodCidr:     &podCIDR,
 					ServiceCidr: &serviceCIDR,
@@ -556,8 +562,8 @@ var _ = Describe("update tenant annotation", func() {
 				Tenant:     tenantName,
 			}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
-				Template:    &privatev1.ClusterTemplateReference{Name: "test-template"},
-				VersionName: &versionName,
+				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
+				Version:  &privatev1.ClusterVersionReference{Name: versionName},
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
 					"gpu.gb200": privatev1.ClusterNodeSet_builder{
 						HostType: &privatev1.HostTypeReference{Name: "gpu.gb200"},
@@ -595,7 +601,7 @@ var _ = Describe("update tenant annotation", func() {
 		Expect(patchedCR.Spec.NodeRequests[0].NumberOfNodes).To(Equal(5))
 	})
 
-	It("should update ReleaseImage when version_name changes", func() {
+	It("should update ReleaseImage when version changes", func() {
 		oldImage := "quay.io/openshift-release-dev/ocp-release:4.17.0-multi"
 		newImage := "quay.io/openshift-release-dev/ocp-release:4.18.0-multi"
 		newVersionName := "4-18-0"
@@ -664,8 +670,8 @@ var _ = Describe("update tenant annotation", func() {
 				Tenant:     tenantName,
 			}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
-				Template:    &privatev1.ClusterTemplateReference{Name: "test-template"},
-				VersionName: &newVersionName,
+				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
+				Version:  &privatev1.ClusterVersionReference{Name: newVersionName},
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
 					"gpu.gb200": privatev1.ClusterNodeSet_builder{
 						HostType: &privatev1.HostTypeReference{Name: "gpu.gb200"},
@@ -804,8 +810,8 @@ var _ = Describe("update version resolution failure", func() {
 				Tenant:     tenantName,
 			}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
-				Template:    &privatev1.ClusterTemplateReference{Name: "test-template"},
-				VersionName: &versionName,
+				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
+				Version:  &privatev1.ClusterVersionReference{Name: versionName},
 			}.Build(),
 			Status: privatev1.ClusterStatus_builder{
 				State: privatev1.ClusterState_CLUSTER_STATE_PROGRESSING,
@@ -1256,5 +1262,91 @@ var _ = Describe("hub persistence", func() {
 		}
 
 		Expect(func() { f.run(ctx, cluster) }).ToNot(Panic())
+	})
+})
+
+var _ = Describe("Kubernetes validation error handling", func() {
+	It("should set state to FAILED when K8s Create returns Invalid error", func() {
+		ctx := context.Background()
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+
+		const (
+			clusterID    = "cluster-invalid-test"
+			tenantName   = "test-tenant"
+			hubID        = "hub-1"
+			hubNamespace = "test-ns"
+		)
+
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Create: func(ctx context.Context, client clnt.WithWatch, obj clnt.Object, opts ...clnt.CreateOption) error {
+					return apierrors.NewInvalid(
+						schema.GroupKind{Group: "osac.openshift.io", Kind: "ClusterOrder"},
+						"order-test",
+						field.ErrorList{field.Invalid(field.NewPath("spec", "templateID"), "", "invalid template")},
+					)
+				},
+			}).
+			Build()
+
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), hubID).
+			Return(&controllers.HubEntry{Namespace: hubNamespace, Client: fakeClient}, nil)
+
+		clustersClient := NewMockClustersClient(ctrl)
+		clustersClient.EXPECT().
+			Update(gomock.Any(), gomock.Any(), gomock.Any()).
+			DoAndReturn(func(ctx context.Context, req *privatev1.ClustersUpdateRequest, opts ...grpc.CallOption) (*privatev1.ClustersUpdateResponse, error) {
+				return &privatev1.ClustersUpdateResponse{Object: req.GetObject()}, nil
+			}).
+			MinTimes(1)
+
+		cluster := privatev1.Cluster_builder{
+			Id: clusterID,
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     tenantName,
+			}.Build(),
+			Spec: privatev1.ClusterSpec_builder{
+				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
+			}.Build(),
+			Status: privatev1.ClusterStatus_builder{
+				State: privatev1.ClusterState_CLUSTER_STATE_PROGRESSING,
+				Hub:   hubID,
+			}.Build(),
+		}.Build()
+
+		f := &function{
+			logger:         logger,
+			hubCache:       hubCache,
+			clustersClient: clustersClient,
+			maskCalculator: masks.NewCalculator().Build(),
+		}
+
+		err := f.run(ctx, cluster)
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(cluster.GetStatus().GetState()).To(
+			Equal(privatev1.ClusterState_CLUSTER_STATE_FAILED),
+		)
+
+		conditions := cluster.GetStatus().GetConditions()
+		var progressingCondition *privatev1.ClusterCondition
+		for _, c := range conditions {
+			if c.GetType() == privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_PROGRESSING {
+				progressingCondition = c
+				break
+			}
+		}
+		Expect(progressingCondition).ToNot(BeNil())
+		Expect(progressingCondition.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		Expect(progressingCondition.GetReason()).To(Equal("ValidationFailed"))
+		Expect(progressingCondition.GetMessage()).To(ContainSubstring("invalid template"))
 	})
 })

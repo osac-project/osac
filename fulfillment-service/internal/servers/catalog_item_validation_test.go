@@ -104,16 +104,16 @@ var _ = Describe("applyFieldDefinitions", func() {
 		spec := &privatev1.ClusterSpec{
 			SshPublicKey: &sshKey,
 		}
-		defaultVersion, err := structpb.NewValue("4-17-0")
+		defaultVersion, err := structpb.NewValue(map[string]interface{}{"name": "4-17-0"})
 		Expect(err).ToNot(HaveOccurred())
 		fieldDefs := []*privatev1.FieldDefinition{
 			{Path: "ssh_public_key", Editable: true},
-			{Path: "version_name", Editable: false, Default: defaultVersion},
+			{Path: "version", Editable: false, Default: defaultVersion},
 		}
 		err = applyFieldDefinitions(spec, fieldDefs)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(spec.GetSshPublicKey()).To(Equal("ssh-ed25519 USER_KEY"))
-		Expect(spec.GetVersionName()).To(Equal("4-17-0"))
+		Expect(spec.GetVersion().GetName()).To(Equal("4-17-0"))
 	})
 
 	It("returns no error for empty field definitions", func() {
@@ -130,11 +130,11 @@ var _ = Describe("applyFieldDefinitions", func() {
 		spec := &privatev1.ClusterSpec{
 			SshPublicKey: &sshKey,
 		}
-		defaultVersion, err := structpb.NewValue("4-17-0")
+		defaultVersion, err := structpb.NewValue(map[string]interface{}{"name": "4-17-0"})
 		Expect(err).ToNot(HaveOccurred())
 		fieldDefs := []*privatev1.FieldDefinition{
 			{
-				Path:     "version_name",
+				Path:     "version",
 				Editable: true,
 				Default:  defaultVersion,
 			},
@@ -310,11 +310,10 @@ var _ = Describe("applyFieldDefinitions rejects unlisted fields", func() {
 
 	It("rejects multiple unlisted fields on ClusterSpec", func() {
 		pullSecret := "my-secret"
-		versionName := "4-17-0"
-		spec := &privatev1.ClusterSpec{
-			PullSecret:  &pullSecret,
-			VersionName: &versionName,
-		}
+		spec := privatev1.ClusterSpec_builder{
+			PullSecret: &pullSecret,
+			Version:    &privatev1.ClusterVersionReference{Name: "4-17-0"},
+		}.Build()
 		defaultVal, err := structpb.NewValue("ssh-ed25519 AAAA")
 		Expect(err).ToNot(HaveOccurred())
 		fieldDefs := []*privatev1.FieldDefinition{{
@@ -326,7 +325,7 @@ var _ = Describe("applyFieldDefinitions rejects unlisted fields", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 		Expect(err.Error()).To(ContainSubstring("pull_secret"))
-		Expect(err.Error()).To(ContainSubstring("version_name"))
+		Expect(err.Error()).To(ContainSubstring("version"))
 	})
 
 	It("accepts when all fields are covered by field_definitions", func() {
@@ -394,10 +393,10 @@ var _ = Describe("applyFieldDefinitions rejects unlisted fields", func() {
 		spec := &privatev1.ClusterSpec{
 			PullSecret: &pullSecret,
 		}
-		defaultVal, err := structpb.NewValue("4-17-0")
+		defaultVal, err := structpb.NewValue(map[string]interface{}{"name": "4-17-0"})
 		Expect(err).ToNot(HaveOccurred())
 		fieldDefs := []*privatev1.FieldDefinition{{
-			Path:     "version_name",
+			Path:     "version",
 			Editable: false,
 			Default:  defaultVal,
 		}}

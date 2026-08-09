@@ -151,6 +151,12 @@ func Cmd() *cobra.Command {
 		false,
 		windowsFlagHelp,
 	)
+	flags.BoolVar(
+		&runner.args.externalIPAttachment,
+		"external-ip-attachment",
+		false,
+		externalIPAttachmentFlagHelp,
+	)
 	flags.StringArrayVar(
 		&runner.args.setFields,
 		"set",
@@ -181,6 +187,7 @@ type runnerContext struct {
 		userData                string
 		networkAttachments      []string
 		windows                 bool
+		externalIPAttachment    bool
 	}
 	logger                 *slog.Logger
 	console                *terminal.Console
@@ -751,6 +758,7 @@ func (c *runnerContext) buildSpec(templateID string,
 	if c.args.windows {
 		spec.IsWindows = proto.Bool(true)
 	}
+	spec.AutoExternalIpAttachment = c.args.externalIPAttachment
 	if err := c.applyNetworkingFlags(&spec); err != nil {
 		return nil, err
 	}
@@ -901,6 +909,7 @@ func (c *runnerContext) buildSpecFromCatalogItem(catalogItemID string) (*publicv
 	if c.args.windows {
 		spec.IsWindows = proto.Bool(true)
 	}
+	spec.AutoExternalIpAttachment = c.args.externalIPAttachment
 	if err := c.applyNetworkingFlags(&spec); err != nil {
 		return nil, err
 	}
@@ -1054,6 +1063,12 @@ specified multiple times to attach multiple NICs.
 
 const windowsFlagHelp = `
 _[BOOLEAN]_ - Create a Windows VM. Defaults to {{ bt }}false{{ bt }} (Linux VM).
+`
+
+const externalIPAttachmentFlagHelp = `
+_[BOOLEAN]_ - When set, the system auto-selects an ExternalIPPool and
+creates an ExternalIP with an ExternalIPAttachment for this instance
+atomically during creation. Immutable after creation.
 `
 
 const setFlagHelp = `

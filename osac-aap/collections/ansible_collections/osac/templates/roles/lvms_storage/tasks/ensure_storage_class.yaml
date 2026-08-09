@@ -1,0 +1,73 @@
+---
+# LVMS ensure_storage_class: create per-tenant labeled StorageClass on the hub cluster.
+# Uses the topolvm provisioner backed by the lvms-vg1 VolumeGroup created by
+# osac-installer's configure-lvms.sh hook. One StorageClass per tier. Idempotent.
+
+- name: Assert _provider_tiers is defined and non-empty
+  ansible.builtin.assert:
+    that:
+      - _provider_tiers is defined
+      - _provider_tiers | length > 0
+    fail_msg: >-
+      _provider_tiers must be provided by the service role dispatcher.
+
+- name: Validate tenant_name is a valid DNS label
+  ansible.builtin.fail:
+    msg: "tenant_name '{{ tenant_name }}' is not a valid DNS label."
+  when: tenant_name is not regex('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+
+- name: Build expected StorageClass entries
+  ansible.builtin.set_fact:
+    _lvms_expected_sc_entries: >-
+      {% set entries = [] -%}
+      {% for tier in _provider_tiers -%}
+      {% set _ = entries.append({'name': 'osac-' ~ tenant_name ~ '-' ~ tier.name, 'tier': tier.name}) -%}
+      {% endfor -%}
+      {{ entries }}
+    _lvms_expected_sc_names: >-
+      {% set names = [] -%}
+      {% for tier in _provider_tiers -%}
+      {% set _ = names.append('osac-' ~ tenant_name ~ '-' ~ tier.name) -%}
+      {% endfor -%}
+      {{ names }}
+
+- name: Check existing tenant StorageClasses
+  kubernetes.core.k8s_info:
+    api_version: storage.k8s.io/v1
+    kind: StorageClass
+    label_selectors:
+      - "osac.openshift.io/tenant={{ tenant_name }}"
+      - "app.kubernetes.io/managed-by=osac-aap"
+  register: _lvms_sc_check
+
+- name: Determine missing StorageClasses
+  ansible.builtin.set_fact:
+    _lvms_missing_sc_names: >-
+      {{ _lvms_expected_sc_names | difference(
+           _lvms_sc_check.resources | map(attribute='metadata.name') | list
+         ) }}
+
+- name: Create missing per-tenant StorageClasses
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: storage.k8s.io/v1
+      kind: StorageClass
+      metadata:
+        name: "{{ item.name }}"
+        labels:
+          osac.openshift.io/tenant: "{{ tenant_name }}"
+          osac.openshift.io/storage-tier: "{{ item.tier }}"
+          app.kubernetes.io/managed-by: osac-aap
+      provisioner: "{{ lvms_storage_provisioner }}"
+      parameters:
+        "topolvm.io/device-class": "{{ lvms_storage_device_class }}"
+      reclaimPolicy: Delete
+      volumeBindingMode: WaitForFirstConsumer
+  loop: "{{ _lvms_expected_sc_entries | selectattr('name', 'in', _lvms_missing_sc_names) | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Set StorageClass names output
+  ansible.builtin.set_fact:
+    storage_provider_storage_class_names: "{{ _lvms_expected_sc_entries }}"

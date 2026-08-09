@@ -59,6 +59,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				Id:          fmt.Sprintf("test_template_%s", strings.ReplaceAll(uuid.New(), "-", "_")),
 				Title:       "Test BMI Template",
 				Description: "Template for bare metal instance lifecycle test.",
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("test-template-%s", uuid.New()[24:32]),
+				}.Build(),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
@@ -73,6 +76,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		// Create BareMetalInstanceCatalogItem (must be published for public API access)
 		catalogResp, err := bareMetalInstanceCatalogItemsClient.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 			Object: privatev1.BareMetalInstanceCatalogItem_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("test-catalog-item-%s", uuid.New()[24:32]),
+				}.Build(),
 				Title:     "Test BMI Catalog Item",
 				Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: templateId}.Build(),
 				Published: true,
@@ -92,6 +98,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		// Create BareMetalInstance via public API
 		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 				}.Build(),
@@ -152,6 +161,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 	It("Rejects BareMetalInstance with non-existent catalog item", func(ctx context.Context) {
 		_, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: "non-existent-catalog-item"}.Build(),
 				}.Build(),
@@ -163,9 +175,117 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 	})
 
+	It("Rejects Create with network_attachments when the Subnet's NetworkClass has no fabric_manager", func(ctx context.Context) {
+		networkClassesClient := privatev1.NewNetworkClassesClient(tool.InternalView().AdminConn())
+		virtualNetworksClient := privatev1.NewVirtualNetworksClient(tool.InternalView().AdminConn())
+		subnetsClient := privatev1.NewSubnetsClient(tool.InternalView().AdminConn())
+
+		// Create a k8s-only NetworkClass (no fabric_manager):
+		ncResp, err := networkClassesClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
+			Object: privatev1.NetworkClass_builder{
+				Title:                  "Test k8s-only Network Class for BMI",
+				ImplementationStrategy: "cudn",
+				K8SManager:             new("cudn_localnet"),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		networkClassId := ncResp.GetObject().GetId()
+		DeferCleanup(func(ctx context.Context) {
+			_, err := networkClassesClient.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{
+				Id: networkClassId,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		virtualNetworkId := fmt.Sprintf("test-vnet-%s", uuid.New())
+		_, err = virtualNetworksClient.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
+			Object: privatev1.VirtualNetwork_builder{
+				Id: virtualNetworkId,
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("test-vnet-%s", uuid.New()[24:32]),
+				}.Build(),
+				Spec: privatev1.VirtualNetworkSpec_builder{
+					NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClassId}.Build(),
+					Region:       "us-east-1",
+					Ipv4Cidr:     new("10.101.0.0/16"),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func(ctx context.Context) {
+			_, err := virtualNetworksClient.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{
+				Id: virtualNetworkId,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		// Wait for the VN reconciler to finish initial processing before
+		// overriding state, same as other tests that create Subnets.
+		Eventually(func(g Gomega) {
+			resp, err := virtualNetworksClient.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{
+				Id: virtualNetworkId,
+			}.Build())
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(resp.GetObject().GetStatus().GetState()).To(
+				Equal(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING))
+		}, time.Minute, time.Second).Should(Succeed())
+
+		// Set VirtualNetwork to READY state via private Update API.
+		// In IT environment there is no osac-operator/feedback controller to reconcile state.
+		vnGetResp, err := virtualNetworksClient.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{
+			Id: virtualNetworkId,
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		vn := vnGetResp.GetObject()
+		vn.SetStatus(privatev1.VirtualNetworkStatus_builder{
+			State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
+		}.Build())
+		_, err = virtualNetworksClient.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
+			Object:     vn,
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		subnetId := fmt.Sprintf("test-subnet-%s", uuid.New())
+		_, err = subnetsClient.Create(ctx, privatev1.SubnetsCreateRequest_builder{
+			Object: privatev1.Subnet_builder{
+				Id: subnetId,
+				Spec: privatev1.SubnetSpec_builder{
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkId}.Build(),
+					Ipv4Cidr:       new("10.101.1.0/24"),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func(ctx context.Context) {
+			_, err := subnetsClient.Delete(ctx, privatev1.SubnetsDeleteRequest_builder{
+				Id: subnetId,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		_, err = bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
+			Object: publicv1.BareMetalInstance_builder{
+				Spec: publicv1.BareMetalInstanceSpec_builder{
+					CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
+					NetworkAttachments: []*publicv1.BareMetalNetworkAttachment{
+						publicv1.BareMetalNetworkAttachment_builder{
+							Subnet: publicv1.SubnetLocalReference_builder{Id: subnetId}.Build(),
+						}.Build(),
+					},
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).To(HaveOccurred())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+	})
+
 	It("Creates BareMetalInstance with image and persists it", func(ctx context.Context) {
 		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					Image: publicv1.BareMetalInstanceImage_builder{
@@ -248,6 +368,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 	It("Creates BareMetalInstance without image when no template default", func(ctx context.Context) {
 		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 				}.Build(),
@@ -286,6 +409,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 					Id:          fmt.Sprintf("test_image_default_%s", strings.ReplaceAll(uuid.New(), "-", "_")),
 					Title:       "Template with image default",
 					Description: "Template that provides a default image via spec_defaults.",
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-template-%s", uuid.New()[24:32]),
+					}.Build(),
 					SpecDefaults: privatev1.BareMetalInstanceTemplateSpecDefaults_builder{
 						Image: privatev1.BareMetalInstanceImage_builder{
 							SourceType: "registry",
@@ -306,6 +432,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		imageCatalogResp, err := bareMetalInstanceCatalogItemsClient.Create(ctx,
 			privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-catalog-item-%s", uuid.New()[24:32]),
+					}.Build(),
 					Title:     "Catalog item with image default template",
 					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: imageTemplateId}.Build(),
 					Published: true,
@@ -323,6 +452,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 
 		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: imageCatalogItemId}.Build(),
 				}.Build(),
@@ -365,6 +497,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 					Id:          fmt.Sprintf("test_image_override_%s", strings.ReplaceAll(uuid.New(), "-", "_")),
 					Title:       "Template with overridable image default",
 					Description: "Template whose image default should be overridden by user.",
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-template-%s", uuid.New()[24:32]),
+					}.Build(),
 					SpecDefaults: privatev1.BareMetalInstanceTemplateSpecDefaults_builder{
 						Image: privatev1.BareMetalInstanceImage_builder{
 							SourceType: "registry",
@@ -385,6 +520,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		imageCatalogResp, err := bareMetalInstanceCatalogItemsClient.Create(ctx,
 			privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-catalog-item-%s", uuid.New()[24:32]),
+					}.Build(),
 					Title:     "Catalog item for image override test",
 					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: imageTemplateId}.Build(),
 					Published: true,
@@ -402,6 +540,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 
 		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: imageCatalogItemId}.Build(),
 					Image: publicv1.BareMetalInstanceImage_builder{
@@ -443,6 +584,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 	It("Rejects image with missing source_type", func(ctx context.Context) {
 		_, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					Image: publicv1.BareMetalInstanceImage_builder{
@@ -461,6 +605,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 	It("Rejects image with missing source_ref", func(ctx context.Context) {
 		_, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					Image: publicv1.BareMetalInstanceImage_builder{
@@ -479,6 +626,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 	It("Rejects update that changes image", func(ctx context.Context) {
 		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					Image: publicv1.BareMetalInstanceImage_builder{
@@ -531,6 +681,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 	It("Propagates restart_trigger to BMFO CR spec", func(ctx context.Context) {
 		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 				}.Build(),

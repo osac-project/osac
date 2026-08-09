@@ -56,20 +56,35 @@ func (d *Dispatcher) Dispatch(
 		return nil, fmt.Errorf("resolving managers for %s: %w", kind, err)
 	}
 
+	// added tracks which roles already have a target in the plan, so that a
+	// fallback-triggered K8s target (from the Fabric role, below) and Subnet's
+	// own native K8s role entry collapse into a single target instead of two.
 	plan := &DispatchPlan{}
+	added := make(map[ManagerRole]bool, len(cfg.Roles))
+	addTarget := func(target DispatchTarget) {
+		if added[target.Role] {
+			return
+		}
+		added[target.Role] = true
+		plan.Targets = append(plan.Targets, target)
+	}
+
 	for _, role := range cfg.Roles {
 		switch role {
 		case ManagerRoleFabric:
-			plan.Targets = append(plan.Targets, DispatchTarget{
-				Role:    ManagerRoleFabric,
-				Manager: resolved.FabricManager,
-			})
+			switch {
+			case resolved.FabricManager != nil:
+				addTarget(DispatchTarget{Role: ManagerRoleFabric, Manager: *resolved.FabricManager})
+			case cfg.K8sFallback && resolved.K8sManager != nil:
+				addTarget(DispatchTarget{Role: ManagerRoleK8s, Manager: *resolved.K8sManager})
+			default:
+				return nil, fmt.Errorf(
+					"no manager available for %s: NetworkClass has neither a fabricManager nor a usable k8sManager fallback",
+					kind)
+			}
 		case ManagerRoleK8s:
 			if resolved.K8sManager != nil {
-				plan.Targets = append(plan.Targets, DispatchTarget{
-					Role:    ManagerRoleK8s,
-					Manager: *resolved.K8sManager,
-				})
+				addTarget(DispatchTarget{Role: ManagerRoleK8s, Manager: *resolved.K8sManager})
 			}
 		default:
 			return nil, fmt.Errorf("no dispatch handling for manager role %q (kind %q)", role, kind)

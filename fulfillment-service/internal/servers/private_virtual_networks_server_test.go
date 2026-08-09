@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
@@ -310,6 +311,7 @@ var _ = Describe("Private virtual networks server", func() {
 				createResponse, err := server.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 					Object: privatev1.VirtualNetwork_builder{
 						Metadata: privatev1.Metadata_builder{
+							Name:   "test-virtual-network",
 							Tenant: auth.SharedTenant,
 						}.Build(),
 						Spec: privatev1.VirtualNetworkSpec_builder{
@@ -774,6 +776,7 @@ var _ = Describe("Private virtual networks server", func() {
 				createResponse, err := server.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 					Object: privatev1.VirtualNetwork_builder{
 						Metadata: privatev1.Metadata_builder{
+							Name:   "test-virtual-network",
 							Tenant: auth.SharedTenant,
 						}.Build(),
 						Spec: privatev1.VirtualNetworkSpec_builder{
@@ -1040,6 +1043,7 @@ var _ = Describe("Private virtual networks server", func() {
 				createResponse, err := server.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 					Object: privatev1.VirtualNetwork_builder{
 						Metadata: privatev1.Metadata_builder{
+							Name:   "test-virtual-network",
 							Tenant: auth.SharedTenant,
 						}.Build(),
 						Spec: privatev1.VirtualNetworkSpec_builder{
@@ -1331,6 +1335,9 @@ var _ = Describe("Private virtual networks server", func() {
 			// Create VN without network_class:
 			createResponse, err := vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 				Object: privatev1.VirtualNetwork_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr: new("10.0.0.0/16"),
 						Region:   "us-west-1",
@@ -1348,6 +1355,9 @@ var _ = Describe("Private virtual networks server", func() {
 			// Create VN without network_class (no default configured):
 			_, err := vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 				Object: privatev1.VirtualNetwork_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr: new("10.0.0.0/16"),
 						Region:   "us-west-1",
@@ -1368,6 +1378,9 @@ var _ = Describe("Private virtual networks server", func() {
 			// Create VN with explicit network_class=NC-B:
 			createResponse, err := vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 				Object: privatev1.VirtualNetwork_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr:     new("10.0.0.0/16"),
 						Region:       "us-west-1",
@@ -1386,6 +1399,9 @@ var _ = Describe("Private virtual networks server", func() {
 			// Create VN without network_class (default is not READY):
 			_, err := vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 				Object: privatev1.VirtualNetwork_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr: new("10.0.0.0/16"),
 						Region:   "us-west-1",
@@ -1428,6 +1444,9 @@ var _ = Describe("Private virtual networks server", func() {
 			// Must set both capabilities AND ipv6_cidr to trigger VN-VAL-06 check.
 			_, err = vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 				Object: privatev1.VirtualNetwork_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv6Cidr: new("2001:db8::/32"),
 						Region:   "us-west-1",
@@ -1458,6 +1477,9 @@ var _ = Describe("Private virtual networks server", func() {
 			// Attempt to create VN without network_class (no default exists now):
 			_, err := vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 				Object: privatev1.VirtualNetwork_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr: new("10.0.0.0/16"),
 						Region:   "us-west-1",
@@ -1485,6 +1507,9 @@ var _ = Describe("Private virtual networks server", func() {
 			// soft-deleted rows, so no active default is found and creation fails.
 			_, err = vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 				Object: privatev1.VirtualNetwork_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr: new("10.0.0.0/16"),
 						Region:   "us-west-1",
@@ -1502,6 +1527,9 @@ var _ = Describe("Private virtual networks server", func() {
 			// Create VN without network_class (auto-populated):
 			createResponse, err := vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 				Object: privatev1.VirtualNetwork_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr: new("10.0.0.0/16"),
 						Region:   "us-west-1",
@@ -1569,6 +1597,7 @@ var _ = Describe("Private virtual networks server", func() {
 			createResp, err := vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 				Object: privatev1.VirtualNetwork_builder{
 					Metadata: privatev1.Metadata_builder{
+						Name:   "test-virtual-network",
 						Tenant: auth.SharedTenant,
 					}.Build(),
 					Spec: privatev1.VirtualNetworkSpec_builder{
@@ -1749,6 +1778,7 @@ var _ = Describe("Private virtual networks server", func() {
 			createResp, err := vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 				Object: privatev1.VirtualNetwork_builder{
 					Metadata: privatev1.Metadata_builder{
+						Name:   "default-virtual-network",
 						Tenant: auth.SharedTenant,
 						Labels: map[string]string{
 							"osac.openshift.io/default": "true",

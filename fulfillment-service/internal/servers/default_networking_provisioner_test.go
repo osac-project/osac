@@ -33,7 +33,7 @@ var _ = Describe("Default networking provisioner", func() {
 				Tenant: "system",
 			}.Build(),
 			IsDefault:              new(true),
-			FabricManager:          "netris",
+			FabricManager:          new("netris"),
 			ImplementationStrategy: "netris",
 			Spec: privatev1.NetworkClassSpec_builder{
 				Defaults: defaults,

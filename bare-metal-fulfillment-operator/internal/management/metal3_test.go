@@ -260,6 +260,15 @@ var _ = Describe("Metal3 Management Backend", func() {
 			Expect(complete).To(BeTrue())
 		})
 
+		It("returns false when annotation is gone but host is not powered on", func() {
+			bmh := newBMHForManagement("host-rebooting", true, false)
+			m := newMetal3ManagementClient(bmh)
+
+			complete, err := m.IsRestartComplete(ctx, metal3TestNamespace+"/host-rebooting")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(complete).To(BeFalse())
+		})
+
 		It("returns false when reboot annotation is present", func() {
 			annotations := map[string]string{
 				metal3api.RebootAnnotationPrefix: "",

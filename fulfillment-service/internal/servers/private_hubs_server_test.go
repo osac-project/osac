@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
@@ -85,6 +86,9 @@ var _ = Describe("Private hubs server", func() {
 		It("Creates object", func() {
 			response, err := server.Create(ctx, privatev1.HubsCreateRequest_builder{
 				Object: privatev1.Hub_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.HubSpec_builder{
 						Kubeconfig: []byte("my_config"),
 						Namespace:  "my_ns",
@@ -104,6 +108,9 @@ var _ = Describe("Private hubs server", func() {
 			for i := range count {
 				_, err := server.Create(ctx, privatev1.HubsCreateRequest_builder{
 					Object: privatev1.Hub_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Spec: privatev1.HubSpec_builder{
 							Kubeconfig: []byte(fmt.Sprintf("my_config_%d", i)),
 							Namespace:  fmt.Sprintf("my_ns_%d", i),
@@ -127,6 +134,9 @@ var _ = Describe("Private hubs server", func() {
 			for i := range count {
 				_, err := server.Create(ctx, privatev1.HubsCreateRequest_builder{
 					Object: privatev1.Hub_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Spec: privatev1.HubSpec_builder{
 							Kubeconfig: []byte(fmt.Sprintf("my_config_%d", i)),
 							Namespace:  fmt.Sprintf("my_ns_%d", i),
@@ -150,6 +160,9 @@ var _ = Describe("Private hubs server", func() {
 			for i := range count {
 				_, err := server.Create(ctx, privatev1.HubsCreateRequest_builder{
 					Object: privatev1.Hub_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Spec: privatev1.HubSpec_builder{
 							Kubeconfig: []byte(fmt.Sprintf("my_config_%d", i)),
 							Namespace:  fmt.Sprintf("my_ns_%d", i),
@@ -174,6 +187,9 @@ var _ = Describe("Private hubs server", func() {
 			for i := range count {
 				response, err := server.Create(ctx, privatev1.HubsCreateRequest_builder{
 					Object: privatev1.Hub_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Spec: privatev1.HubSpec_builder{
 							Kubeconfig: []byte(fmt.Sprintf("my_config_%d", i)),
 							Namespace:  fmt.Sprintf("my_ns_%d", i),
@@ -199,6 +215,9 @@ var _ = Describe("Private hubs server", func() {
 			// Create the object:
 			createResponse, err := server.Create(ctx, privatev1.HubsCreateRequest_builder{
 				Object: privatev1.Hub_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.HubSpec_builder{
 						Kubeconfig: []byte("my_config"),
 						Namespace:  "my_ns",
@@ -219,6 +238,9 @@ var _ = Describe("Private hubs server", func() {
 			// Create the object:
 			createResponse, err := server.Create(ctx, privatev1.HubsCreateRequest_builder{
 				Object: privatev1.Hub_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.HubSpec_builder{
 						Kubeconfig: []byte("my_config"),
 						Namespace:  "my_ns",
@@ -256,6 +278,7 @@ var _ = Describe("Private hubs server", func() {
 			createResponse, err := server.Create(ctx, privatev1.HubsCreateRequest_builder{
 				Object: privatev1.Hub_builder{
 					Metadata: privatev1.Metadata_builder{
+						Name:       "test-hub",
 						Finalizers: []string{"a"},
 					}.Build(),
 					Spec: privatev1.HubSpec_builder{
@@ -308,6 +331,9 @@ var _ = Describe("Private hubs server", func() {
 		response, err := server.Create(
 			ctx, privatev1.HubsCreateRequest_builder{
 				Object: privatev1.Hub_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.HubSpec_builder{
 						Kubeconfig: []byte("my_config"),
 					}.Build(),

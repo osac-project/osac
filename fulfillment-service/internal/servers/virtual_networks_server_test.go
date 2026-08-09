@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
@@ -146,6 +147,9 @@ var _ = Describe("Virtual networks server", func() {
 		createVirtualNetwork := func() *privatev1.VirtualNetwork {
 			response, err := privateServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 				Object: privatev1.VirtualNetwork_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Region:                 "us-east-1",
 						NetworkClass:           privatev1.NetworkClassReference_builder{Id: "default"}.Build(),

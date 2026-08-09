@@ -132,6 +132,9 @@ var _ = BeforeSuite(func() {
 	cvClient := privatev1.NewClusterVersionsClient(tool.InternalView().AdminConn())
 	_, err = cvClient.Create(ctx, privatev1.ClusterVersionsCreateRequest_builder{
 		Object: privatev1.ClusterVersion_builder{
+			Metadata: privatev1.Metadata_builder{
+				Name: "default",
+			}.Build(),
 			Spec: privatev1.ClusterVersionSpec_builder{
 				Version:   "4.17.0",
 				Image:     "quay.io/openshift-release-dev/ocp-release:4.17.0-multi",

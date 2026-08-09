@@ -1,0 +1,27 @@
+---
+# LVMS teardown_backend: remove the per-tenant hub lifecycle marker Secret.
+# No external backend resources to clean up — LVMS is cluster-native.
+
+- name: Validate tenant_name is a valid DNS label
+  ansible.builtin.fail:
+    msg: "tenant_name '{{ tenant_name }}' is not a valid DNS label."
+  when: tenant_name is not regex('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+
+- name: Delete hub lifecycle marker Secret
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: Secret
+    name: "{{ lvms_storage_tenant_config_secret_prefix }}{{ tenant_name }}"
+    namespace: "{{ lvms_storage_config_namespace }}"
+  register: _lvms_teardown_secret_result
+  failed_when: false
+
+- name: Warn if Secret deletion was unsuccessful
+  ansible.builtin.debug:
+    msg: "Warning: Secret deletion for tenant '{{ tenant_name }}' unsuccessful: {{ _lvms_teardown_secret_result.msg | default('unknown') }}"
+  when: _lvms_teardown_secret_result.failed | default(false)
+
+- name: Report teardown_backend summary
+  ansible.builtin.debug:
+    msg: "Backend teardown for tenant '{{ tenant_name }}' complete."

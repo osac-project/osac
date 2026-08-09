@@ -248,7 +248,7 @@ Test fixtures: `tests/integration/fixtures/` contains sample CRs (ClusterOrder, 
 - End-to-end BM-as-a-Service installation testing
 
 **`.github/workflows/pre-commit.yaml`:**
-- Runs all pre-commit hooks on PRs
+- Runs all pre-commit hooks on PRs, plus gitleaks PR-diff secret scan
 
 **`.github/workflows/helm-lint.yaml`:**
 - Validates Helm chart syntax

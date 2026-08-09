@@ -20,11 +20,13 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -33,6 +35,8 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
+	"github.com/osac-project/osac/fulfillment-service/internal/masks"
+	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
 
 // fakeExternalIPsClient implements the ExternalIPsClient interface for testing selectHub.
@@ -742,5 +746,79 @@ var _ = Describe("selectHub", func() {
 		err := t.selectHub(ctx)
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("external IP not found"))
+	})
+})
+
+var _ = Describe("Kubernetes validation error handling", func() {
+	It("should set state to FAILED when K8s Create returns Invalid error", func() {
+		ctx := context.Background()
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Create: func(ctx context.Context, client clnt.WithWatch, obj clnt.Object, opts ...clnt.CreateOption) error {
+					return apierrors.NewInvalid(
+						schema.GroupKind{Group: "osac.openshift.io", Kind: "ExternalIPAttachment"},
+						"eia-test",
+						field.ErrorList{
+							field.Invalid(
+								field.NewPath("spec", "externalIP"),
+								"invalid-value",
+								"spec.externalIP is invalid",
+							),
+						},
+					)
+				},
+			}).
+			Build()
+
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), "hub-1").
+			Return(&controllers.HubEntry{Namespace: "test-ns", Client: fakeClient}, nil).
+			AnyTimes()
+
+		externalIPAttachmentsClient := NewMockExternalIPAttachmentsClient(ctrl)
+		externalIPAttachmentsClient.EXPECT().
+			Update(gomock.Any(), gomock.Any(), gomock.Any()).
+			DoAndReturn(func(ctx context.Context, req *privatev1.ExternalIPAttachmentsUpdateRequest, opts ...grpc.CallOption) (*privatev1.ExternalIPAttachmentsUpdateResponse, error) {
+				return &privatev1.ExternalIPAttachmentsUpdateResponse{Object: req.GetObject()}, nil
+			}).
+			MinTimes(1)
+
+		attachment := privatev1.ExternalIPAttachment_builder{
+			Id: "eia-validation-test",
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     "test-tenant",
+			}.Build(),
+			Spec: privatev1.ExternalIPAttachmentSpec_builder{
+				ExternalIp: privatev1.ExternalIPLocalReference_builder{Id: "eip-123"}.Build(),
+			}.Build(),
+			Status: privatev1.ExternalIPAttachmentStatus_builder{
+				State: privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_PENDING,
+				Hub:   "hub-1",
+			}.Build(),
+		}.Build()
+
+		f := &function{
+			logger:                      logger,
+			hubCache:                    hubCache,
+			externalIPAttachmentsClient: externalIPAttachmentsClient,
+			maskCalculator:              masks.NewCalculator().Build(),
+		}
+
+		err := f.run(ctx, attachment)
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(attachment.GetStatus().GetState()).To(
+			Equal(privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_FAILED),
+		)
+		Expect(attachment.GetStatus().GetMessage()).To(ContainSubstring("spec.externalIP"))
 	})
 })

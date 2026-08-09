@@ -309,6 +309,7 @@ var _ = Describe("Private instance types server", func() {
 					Object: privatev1.InstanceType_builder{
 						Id: object.GetId(),
 						Metadata: privatev1.Metadata_builder{
+							Name: "label-test",
 							Labels: map[string]string{
 								key: value,
 							},
@@ -392,6 +393,7 @@ var _ = Describe("Private instance types server", func() {
 					Object: privatev1.InstanceType_builder{
 						Id: object.GetId(),
 						Metadata: privatev1.Metadata_builder{
+							Name: "annotation-test",
 							Annotations: map[string]string{
 								key: value,
 							},

@@ -194,7 +194,7 @@ func (t *task) update(ctx context.Context) error {
 		}
 		err = t.hubClient.Create(ctx, newObject)
 		if err != nil {
-			return err
+			return controllers.HandleK8sWriteError(ctx, t.r.logger, err, t.setFailed)
 		}
 		t.r.logger.DebugContext(
 			ctx,
@@ -207,7 +207,7 @@ func (t *task) update(ctx context.Context) error {
 		update.Spec = spec
 		err = t.hubClient.Patch(ctx, update, clnt.MergeFrom(object))
 		if err != nil {
-			return err
+			return controllers.HandleK8sWriteError(ctx, t.r.logger, err, t.setFailed)
 		}
 		t.r.logger.DebugContext(
 			ctx,
@@ -398,6 +398,14 @@ func (t *task) removeFinalizer() {
 		})
 		t.externalIP.GetMetadata().SetFinalizers(list)
 	}
+}
+
+func (t *task) setFailed(err error) {
+	if !t.externalIP.HasStatus() {
+		t.externalIP.SetStatus(&privatev1.ExternalIPStatus{})
+	}
+	t.externalIP.GetStatus().SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_FAILED)
+	t.externalIP.GetStatus().SetMessage(err.Error())
 }
 
 // buildSpec constructs the spec map for the Kubernetes ExternalIP object based on the

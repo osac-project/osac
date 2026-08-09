@@ -107,6 +107,9 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 				_, err := hostTypesClient.Create(ctx, privatev1.HostTypesCreateRequest_builder{
 					Object: privatev1.HostType_builder{
 						Id: hostTypeId,
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-hosttype-%s", uuid.New()[24:32]),
+						}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -140,6 +143,9 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 				_, err = templatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 					Object: privatev1.ClusterTemplate_builder{
 						Id: templateId,
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-template-%s", uuid.New()[24:32]),
+						}.Build(),
 						NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
 							"my-node-set": privatev1.ClusterTemplateNodeSet_builder{
 								HostType: privatev1.HostTypeReference_builder{Id: hostTypeId}.Build(),
@@ -166,6 +172,9 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 					clustersClient := publicv1.NewClustersClient(conn)
 					createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 						Object: publicv1.Cluster_builder{
+							Metadata: publicv1.Metadata_builder{
+								Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
+							}.Build(),
 							Spec: publicv1.ClusterSpec_builder{
 								Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 							}.Build(),
@@ -378,6 +387,9 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 				_, err := hostTypesClient.Create(ctx, privatev1.HostTypesCreateRequest_builder{
 					Object: privatev1.HostType_builder{
 						Id: hostTypeId,
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-hosttype-%s", uuid.New()[24:32]),
+						}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -394,6 +406,9 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 				_, err = templatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 					Object: privatev1.ClusterTemplate_builder{
 						Id: templateId,
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-template-%s", uuid.New()[24:32]),
+						}.Build(),
 						NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
 							"my-node-set": privatev1.ClusterTemplateNodeSet_builder{
 								HostType: privatev1.HostTypeReference_builder{Id: hostTypeId}.Build(),
@@ -420,6 +435,9 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 					clustersClient := publicv1.NewClustersClient(conn)
 					createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 						Object: publicv1.Cluster_builder{
+							Metadata: publicv1.Metadata_builder{
+								Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
+							}.Build(),
 							Spec: publicv1.ClusterSpec_builder{
 								Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 							}.Build(),

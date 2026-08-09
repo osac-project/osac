@@ -16,6 +16,7 @@ package servers
 import (
 	"fmt"
 
+	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
@@ -84,6 +85,9 @@ var _ = Describe("Private external IP pools server", func() {
 		It("Creates a pool", func() {
 			response, err := poolsServer.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 				Object: privatev1.ExternalIPPool_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.ExternalIPPoolSpec_builder{
 						Cidrs:    []string{"192.168.1.0/24"},
 						IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
@@ -123,6 +127,9 @@ var _ = Describe("Private external IP pools server", func() {
 		It("Gets a pool", func() {
 			createResponse, err := poolsServer.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 				Object: privatev1.ExternalIPPool_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.ExternalIPPoolSpec_builder{
 						Cidrs:    []string{"192.168.1.0/24"},
 						IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
@@ -141,6 +148,9 @@ var _ = Describe("Private external IP pools server", func() {
 		It("Updates a pool", func() {
 			createResponse, err := poolsServer.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 				Object: privatev1.ExternalIPPool_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-pool-update",
+					}.Build(),
 					Spec: privatev1.ExternalIPPoolSpec_builder{
 						Cidrs:    []string{"192.168.1.0/24"},
 						IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
@@ -169,6 +179,7 @@ var _ = Describe("Private external IP pools server", func() {
 			createResponse, err := poolsServer.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 				Object: privatev1.ExternalIPPool_builder{
 					Metadata: privatev1.Metadata_builder{
+						Name:       "test-pool-delete",
 						Finalizers: []string{"test"},
 					}.Build(),
 					Spec: privatev1.ExternalIPPoolSpec_builder{
@@ -195,6 +206,9 @@ var _ = Describe("Private external IP pools server", func() {
 		It("Rejects deletion when allocated ExternalIPs reference the pool", func() {
 			createPoolResponse, err := poolsServer.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 				Object: privatev1.ExternalIPPool_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-pool-reject-delete",
+					}.Build(),
 					Spec: privatev1.ExternalIPPoolSpec_builder{
 						Cidrs:    []string{"10.0.0.0/24"},
 						IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
@@ -222,6 +236,9 @@ var _ = Describe("Private external IP pools server", func() {
 
 			_, err = ipsServer.Create(ctx, privatev1.ExternalIPsCreateRequest_builder{
 				Object: privatev1.ExternalIP_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-eip",
+					}.Build(),
 					Spec: privatev1.ExternalIPSpec_builder{
 						Pool: privatev1.ExternalIPPoolReference_builder{Id: poolID}.Build(),
 					}.Build(),
@@ -239,6 +256,9 @@ var _ = Describe("Private external IP pools server", func() {
 		It("Allows deletion when no ExternalIPs reference the pool", func() {
 			createPoolResponse, err := poolsServer.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 				Object: privatev1.ExternalIPPool_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.ExternalIPPoolSpec_builder{
 						Cidrs:    []string{"10.1.0.0/24"},
 						IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
@@ -272,6 +292,9 @@ var _ = Describe("Private external IP pools server", func() {
 		Context("ip_family validation", func() {
 			It("rejects pool with unspecified ip_family", func() {
 				pool := privatev1.ExternalIPPool_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-pool-ip-family",
+					}.Build(),
 					Spec: privatev1.ExternalIPPoolSpec_builder{
 						Cidrs: []string{"192.168.1.0/24"},
 					}.Build(),
@@ -289,6 +312,9 @@ var _ = Describe("Private external IP pools server", func() {
 		Context("CIDRs required", func() {
 			It("rejects pool with no CIDRs", func() {
 				pool := privatev1.ExternalIPPool_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-pool-cidrs",
+					}.Build(),
 					Spec: privatev1.ExternalIPPoolSpec_builder{
 						IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
 					}.Build(),
@@ -306,6 +332,9 @@ var _ = Describe("Private external IP pools server", func() {
 		Context("CIDR format validation", func() {
 			It("rejects malformed CIDR", func() {
 				pool := privatev1.ExternalIPPool_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-pool-cidr-format",
+					}.Build(),
 					Spec: privatev1.ExternalIPPoolSpec_builder{
 						Cidrs:    []string{"not-a-cidr"},
 						IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
@@ -324,6 +353,9 @@ var _ = Describe("Private external IP pools server", func() {
 		Context("IP family consistency", func() {
 			It("rejects IPv6 CIDR in an IPv4 pool", func() {
 				pool := privatev1.ExternalIPPool_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-pool-ip-family",
+					}.Build(),
 					Spec: privatev1.ExternalIPPoolSpec_builder{
 						Cidrs:    []string{"2001:db8::/64"},
 						IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
@@ -340,6 +372,9 @@ var _ = Describe("Private external IP pools server", func() {
 
 			It("canonicalizes non-canonical CIDRs on Create", func() {
 				pool := privatev1.ExternalIPPool_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-pool-ip-family",
+					}.Build(),
 					Spec: privatev1.ExternalIPPoolSpec_builder{
 						Cidrs:    []string{"10.0.1.5/24"},
 						IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
@@ -385,6 +420,9 @@ var _ = Describe("Private external IP pools server", func() {
 			It("accepts a pool with a non-overlapping CIDR", func() {
 				_, err := poolsServer.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 					Object: privatev1.ExternalIPPool_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Spec: privatev1.ExternalIPPoolSpec_builder{
 							Cidrs:    []string{"10.0.0.0/24"},
 							IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
@@ -395,6 +433,9 @@ var _ = Describe("Private external IP pools server", func() {
 
 				_, err = poolsServer.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 					Object: privatev1.ExternalIPPool_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Spec: privatev1.ExternalIPPoolSpec_builder{
 							Cidrs:    []string{"10.0.1.0/24"},
 							IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
@@ -408,6 +449,9 @@ var _ = Describe("Private external IP pools server", func() {
 		Context("Intra-pool CIDR overlap detection", func() {
 			It("rejects a pool whose second CIDR is a subset of the first", func() {
 				pool := privatev1.ExternalIPPool_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-pool-intra-pool-overlap",
+					}.Build(),
 					Spec: privatev1.ExternalIPPoolSpec_builder{
 						Cidrs:    []string{"10.0.0.0/24", "10.0.0.0/25"},
 						IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
@@ -427,6 +471,9 @@ var _ = Describe("Private external IP pools server", func() {
 			It("sets status.total to 254 for a /24 IPv4 CIDR", func() {
 				response, err := poolsServer.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 					Object: privatev1.ExternalIPPool_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Spec: privatev1.ExternalIPPoolSpec_builder{
 							Cidrs:    []string{"192.168.1.0/24"},
 							IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
@@ -440,6 +487,9 @@ var _ = Describe("Private external IP pools server", func() {
 			It("sets status.available equal to status.total on a new pool", func() {
 				response, err := poolsServer.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 					Object: privatev1.ExternalIPPool_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Spec: privatev1.ExternalIPPoolSpec_builder{
 							Cidrs:    []string{"10.0.0.0/24"},
 							IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
@@ -457,6 +507,9 @@ var _ = Describe("Private external IP pools server", func() {
 			It("prevents changing spec.cidrs after creation", func() {
 				createResponse, err := poolsServer.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 					Object: privatev1.ExternalIPPool_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: "test-pool-immutable-cidrs",
+						}.Build(),
 						Spec: privatev1.ExternalIPPoolSpec_builder{
 							Cidrs:    []string{"10.0.0.0/24"},
 							IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
@@ -486,6 +539,9 @@ var _ = Describe("Private external IP pools server", func() {
 			It("prevents changing spec.ip_family after creation", func() {
 				createResponse, err := poolsServer.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 					Object: privatev1.ExternalIPPool_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: "test-pool-immutable-family",
+						}.Build(),
 						Spec: privatev1.ExternalIPPoolSpec_builder{
 							Cidrs:    []string{"10.0.0.0/24"},
 							IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
@@ -514,6 +570,9 @@ var _ = Describe("Private external IP pools server", func() {
 			It("allows metadata-only Update (spec fields omitted)", func() {
 				createResponse, err := poolsServer.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 					Object: privatev1.ExternalIPPool_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: "test-pool-meta-update",
+						}.Build(),
 						Spec: privatev1.ExternalIPPoolSpec_builder{
 							Cidrs:    []string{"10.0.0.0/24"},
 							IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,

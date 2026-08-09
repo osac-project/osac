@@ -69,6 +69,7 @@ var _ = Describe("Public NAT gateways server", func() {
 			vnDao             *dao.GenericDAO[*privatev1.VirtualNetwork]
 			externalIPPoolDao *dao.GenericDAO[*privatev1.ExternalIPPool]
 			externalIPDao     *dao.GenericDAO[*privatev1.ExternalIP]
+			networkClassDao   *dao.GenericDAO[*privatev1.NetworkClass]
 			sharedPool        *privatev1.ExternalIPPool
 		)
 
@@ -100,6 +101,12 @@ var _ = Describe("Public NAT gateways server", func() {
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 
+			networkClassDao, err = dao.NewGenericDAO[*privatev1.NetworkClass]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
 			poolResp, err := externalIPPoolDao.Create().SetObject(
 				privatev1.ExternalIPPool_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -121,10 +128,24 @@ var _ = Describe("Public NAT gateways server", func() {
 		})
 
 		createVirtualNetwork := func() string {
+			ncResp, err := networkClassDao.Create().SetObject(
+				privatev1.NetworkClass_builder{
+					ImplementationStrategy: "test-strategy",
+					FabricManager:          new("netris"),
+					Metadata: privatev1.Metadata_builder{
+						Tenant: auth.SharedTenant,
+					}.Build(),
+				}.Build(),
+			).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
 			resp, err := vnDao.Create().SetObject(
 				privatev1.VirtualNetwork_builder{
 					Metadata: privatev1.Metadata_builder{
 						Tenant: auth.SharedTenant,
+					}.Build(),
+					Spec: privatev1.VirtualNetworkSpec_builder{
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: ncResp.GetObject().GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			).Do(ctx)

@@ -16,6 +16,7 @@ package servers
 import (
 	"fmt"
 
+	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc/codes"
@@ -75,6 +76,9 @@ var _ = Describe("Bare metal instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			catalogResp, err := catalogServer.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:     "Test catalog item",
 					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "test-template"}.Build(),
 					Published: true,
@@ -94,6 +98,9 @@ var _ = Describe("Bare metal instances server", func() {
 		It("Creates object", func() {
 			response, err := server.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 				Object: publicv1.BareMetalInstance_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-baremetal-instance",
+					}.Build(),
 					Spec: publicv1.BareMetalInstanceSpec_builder{
 						CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
 					}.Build(),
@@ -136,6 +143,9 @@ var _ = Describe("Bare metal instances server", func() {
 		It("Gets object", func() {
 			createResponse, err := server.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 				Object: publicv1.BareMetalInstance_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-baremetal-instance",
+					}.Build(),
 					Spec: publicv1.BareMetalInstanceSpec_builder{
 						CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
 					}.Build(),
@@ -155,6 +165,9 @@ var _ = Describe("Bare metal instances server", func() {
 		It("Updates mutable fields via field mask", func() {
 			createResponse, err := server.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 				Object: publicv1.BareMetalInstance_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-baremetal-instance",
+					}.Build(),
 					Spec: publicv1.BareMetalInstanceSpec_builder{
 						CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
 						RunStrategy: new(publicv1.BareMetalInstanceRunStrategy_BARE_METAL_INSTANCE_RUN_STRATEGY_ALWAYS),
@@ -201,6 +214,9 @@ var _ = Describe("Bare metal instances server", func() {
 		It("Rejects update that changes immutable catalog_item", func() {
 			createResponse, err := server.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 				Object: publicv1.BareMetalInstance_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-baremetal-instance",
+					}.Build(),
 					Spec: publicv1.BareMetalInstanceSpec_builder{
 						CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
 					}.Build(),
@@ -229,6 +245,9 @@ var _ = Describe("Bare metal instances server", func() {
 		It("Deletes object", func() {
 			createResponse, err := server.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 				Object: publicv1.BareMetalInstance_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-baremetal-instance",
+					}.Build(),
 					Spec: publicv1.BareMetalInstanceSpec_builder{
 						CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
 					}.Build(),

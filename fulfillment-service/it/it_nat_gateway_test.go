@@ -63,7 +63,7 @@ var _ = Describe("NATGateway lifecycle", func() {
 				Metadata:               privatev1.Metadata_builder{Name: ncName}.Build(),
 				Title:                  "Test CUDN Network Class",
 				ImplementationStrategy: "cudn",
-				FabricManager:          "netris",
+				FabricManager:          new("netris"),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
@@ -74,6 +74,9 @@ var _ = Describe("NATGateway lifecycle", func() {
 		_, err = virtualNetworksClient.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 			Object: privatev1.VirtualNetwork_builder{
 				Id: virtualNetworkId,
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("test-vnet-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: privatev1.VirtualNetworkSpec_builder{
 					NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClassId}.Build(),
 					Region:       "us-east-1",
@@ -111,6 +114,9 @@ var _ = Describe("NATGateway lifecycle", func() {
 		_, err = poolsClient.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 			Object: privatev1.ExternalIPPool_builder{
 				Id: poolId,
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("test-pool-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: privatev1.ExternalIPPoolSpec_builder{
 					Cidrs:    []string{uniqueCIDR()},
 					IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
@@ -150,6 +156,9 @@ var _ = Describe("NATGateway lifecycle", func() {
 		_, err = externalIPsClient.Create(ctx, publicv1.ExternalIPsCreateRequest_builder{
 			Object: publicv1.ExternalIP_builder{
 				Id: externalIPId,
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-ip-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.ExternalIPSpec_builder{
 					Pool: publicv1.ExternalIPPoolReference_builder{Id: poolId}.Build(),
 				}.Build(),
@@ -201,6 +210,9 @@ var _ = Describe("NATGateway lifecycle", func() {
 		response, err := natGatewaysClient.Create(ctx, publicv1.NATGatewaysCreateRequest_builder{
 			Object: publicv1.NATGateway_builder{
 				Id: ngId,
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-ng-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.NATGatewaySpec_builder{
 					VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkId}.Build(),
 					ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: externalIPId}.Build(),
@@ -248,6 +260,9 @@ var _ = Describe("NATGateway lifecycle", func() {
 		_, err := natGatewaysClient.Create(ctx, publicv1.NATGatewaysCreateRequest_builder{
 			Object: publicv1.NATGateway_builder{
 				Id: ngId,
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-ng-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.NATGatewaySpec_builder{
 					VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkId}.Build(),
 					ExternalIp:     publicv1.ExternalIPLocalReference_builder{Name: "nonexistent-ip"}.Build(),
@@ -263,6 +278,9 @@ var _ = Describe("NATGateway lifecycle", func() {
 		_, err := externalIPsClient.Create(ctx, publicv1.ExternalIPsCreateRequest_builder{
 			Object: publicv1.ExternalIP_builder{
 				Id: pendingIPId,
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-ip-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.ExternalIPSpec_builder{
 					Pool: publicv1.ExternalIPPoolReference_builder{Id: poolId}.Build(),
 				}.Build(),
@@ -293,6 +311,9 @@ var _ = Describe("NATGateway lifecycle", func() {
 		_, err = natGatewaysClient.Create(ctx, publicv1.NATGatewaysCreateRequest_builder{
 			Object: publicv1.NATGateway_builder{
 				Id: ngId,
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-ng-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.NATGatewaySpec_builder{
 					VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkId}.Build(),
 					ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: pendingIPId}.Build(),
@@ -308,6 +329,9 @@ var _ = Describe("NATGateway lifecycle", func() {
 		_, err := natGatewaysClient.Create(ctx, publicv1.NATGatewaysCreateRequest_builder{
 			Object: publicv1.NATGateway_builder{
 				Id: ngId1,
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-ng-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.NATGatewaySpec_builder{
 					VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkId}.Build(),
 					ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: externalIPId}.Build(),
@@ -326,6 +350,9 @@ var _ = Describe("NATGateway lifecycle", func() {
 		_, err = virtualNetworksClient.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 			Object: privatev1.VirtualNetwork_builder{
 				Id: vn2Id,
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("test-vnet-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: privatev1.VirtualNetworkSpec_builder{
 					NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClassId}.Build(),
 					Region:       "us-east-1",
@@ -344,8 +371,64 @@ var _ = Describe("NATGateway lifecycle", func() {
 		_, err = natGatewaysClient.Create(ctx, publicv1.NATGatewaysCreateRequest_builder{
 			Object: publicv1.NATGateway_builder{
 				Id: ngId2,
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-ng-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.NATGatewaySpec_builder{
 					VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: vn2Id}.Build(),
+					ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: externalIPId}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).To(HaveOccurred())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+	})
+
+	It("Rejects create when the VirtualNetwork's NetworkClass has no fabric_manager", func() {
+		// Create a k8s-only NetworkClass (no fabric_manager):
+		k8sOnlyNC, err := networkClassesClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
+			Object: privatev1.NetworkClass_builder{
+				Title:                  "Test k8s-only Network Class",
+				ImplementationStrategy: "cudn",
+				K8SManager:             new("cudn_localnet"),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func() {
+			_, err := networkClassesClient.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{
+				Id: k8sOnlyNC.GetObject().GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		k8sOnlyVNId := fmt.Sprintf("test-vnet-%s", uuid.New())
+		_, err = virtualNetworksClient.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
+			Object: privatev1.VirtualNetwork_builder{
+				Id: k8sOnlyVNId,
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("test-vnet-%s", uuid.New()[24:32]),
+				}.Build(),
+				Spec: privatev1.VirtualNetworkSpec_builder{
+					NetworkClass: privatev1.NetworkClassReference_builder{Id: k8sOnlyNC.GetObject().GetId()}.Build(),
+					Region:       "us-east-1",
+					Ipv4Cidr:     new("10.150.0.0/16"),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func() {
+			_, err := virtualNetworksClient.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{
+				Id: k8sOnlyVNId,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		ngId := fmt.Sprintf("test-ng-%s", uuid.New())
+		_, err = natGatewaysClient.Create(ctx, publicv1.NATGatewaysCreateRequest_builder{
+			Object: publicv1.NATGateway_builder{
+				Id: ngId,
+				Spec: publicv1.NATGatewaySpec_builder{
+					VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: k8sOnlyVNId}.Build(),
 					ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: externalIPId}.Build(),
 				}.Build(),
 			}.Build(),
@@ -359,6 +442,9 @@ var _ = Describe("NATGateway lifecycle", func() {
 		_, err := natGatewaysClient.Create(ctx, publicv1.NATGatewaysCreateRequest_builder{
 			Object: publicv1.NATGateway_builder{
 				Id: ngId,
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-ng-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.NATGatewaySpec_builder{
 					VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkId}.Build(),
 					ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: externalIPId}.Build(),
@@ -390,6 +476,9 @@ var _ = Describe("NATGateway lifecycle", func() {
 		_, err := natGatewaysClient.Create(ctx, publicv1.NATGatewaysCreateRequest_builder{
 			Object: publicv1.NATGateway_builder{
 				Id: ngId,
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-ng-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.NATGatewaySpec_builder{
 					VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkId}.Build(),
 					ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: externalIPId}.Build(),
@@ -421,6 +510,9 @@ var _ = Describe("NATGateway lifecycle", func() {
 		_, err := natGatewaysClient.Create(ctx, publicv1.NATGatewaysCreateRequest_builder{
 			Object: publicv1.NATGateway_builder{
 				Id: ngId,
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-ng-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.NATGatewaySpec_builder{
 					VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkId}.Build(),
 					ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: externalIPId}.Build(),
@@ -452,6 +544,9 @@ var _ = Describe("NATGateway lifecycle", func() {
 		_, err := natGatewaysClient.Create(ctx, publicv1.NATGatewaysCreateRequest_builder{
 			Object: publicv1.NATGateway_builder{
 				Id: ngId,
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-ng-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: publicv1.NATGatewaySpec_builder{
 					VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkId}.Build(),
 					ExternalIp:     publicv1.ExternalIPLocalReference_builder{Id: externalIPId}.Build(),

@@ -49,6 +49,9 @@ var _ = Describe("Version", func() {
 		_, err := hostTypesClient.Create(ctx, privatev1.HostTypesCreateRequest_builder{
 			Object: privatev1.HostType_builder{
 				Id: hostTypeId,
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("my-host-type-%s", uuid.New()[24:32]),
+				}.Build(),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
@@ -62,7 +65,10 @@ var _ = Describe("Version", func() {
 		templateId = fmt.Sprintf("my-template-%s", uuid.New())
 		_, err = templatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
-				Id:          templateId,
+				Id: templateId,
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("my-template-%s", uuid.New()[24:32]),
+				}.Build(),
 				Title:       "My template",
 				Description: "My template.",
 				NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
@@ -83,8 +89,12 @@ var _ = Describe("Version", func() {
 	})
 
 	createCluster := func() *publicv1.Cluster {
+		clusterName := fmt.Sprintf("my-cluster-%s", uuid.New()[24:32])
 		response, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: clusterName,
+				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
 				}.Build(),
@@ -143,6 +153,7 @@ var _ = Describe("Version", func() {
 			Object: publicv1.Cluster_builder{
 				Id: object.GetId(),
 				Metadata: publicv1.Metadata_builder{
+					Name: object.GetMetadata().GetName(),
 					Labels: map[string]string{
 						"step": "one",
 					},
@@ -166,6 +177,7 @@ var _ = Describe("Version", func() {
 			Object: publicv1.Cluster_builder{
 				Id: object.GetId(),
 				Metadata: publicv1.Metadata_builder{
+					Name: object.GetMetadata().GetName(),
 					Labels: map[string]string{
 						"step": "one",
 					},
@@ -211,6 +223,7 @@ var _ = Describe("Version", func() {
 						Object: publicv1.Cluster_builder{
 							Id: id,
 							Metadata: publicv1.Metadata_builder{
+								Name:    "my-cluster",
 								Version: version,
 								Annotations: map[string]string{
 									"date": time.Now().Format(time.RFC3339Nano),
@@ -237,6 +250,7 @@ var _ = Describe("Version", func() {
 				Object: publicv1.Cluster_builder{
 					Id: id,
 					Metadata: publicv1.Metadata_builder{
+						Name:    "my-cluster",
 						Version: math.MaxInt32,
 						Labels: map[string]string{
 							"should": "fail",
@@ -273,6 +287,7 @@ var _ = Describe("Version", func() {
 				Object: publicv1.Cluster_builder{
 					Id: id,
 					Metadata: publicv1.Metadata_builder{
+						Name:    "my-cluster",
 						Version: math.MaxInt32,
 						Labels: map[string]string{
 							"should": "succeed",

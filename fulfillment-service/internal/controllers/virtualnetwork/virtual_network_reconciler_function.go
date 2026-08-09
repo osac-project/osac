@@ -195,7 +195,7 @@ func (t *task) update(ctx context.Context) error {
 		}
 		err = t.hubClient.Create(ctx, object)
 		if err != nil {
-			return err
+			return controllers.HandleK8sWriteError(ctx, t.r.logger, err, t.setFailed)
 		}
 		t.r.logger.DebugContext(
 			ctx,
@@ -208,7 +208,7 @@ func (t *task) update(ctx context.Context) error {
 		update.Spec = spec
 		err = t.hubClient.Patch(ctx, update, clnt.MergeFrom(object))
 		if err != nil {
-			return err
+			return controllers.HandleK8sWriteError(ctx, t.r.logger, err, t.setFailed)
 		}
 		t.r.logger.DebugContext(
 			ctx,
@@ -388,6 +388,14 @@ func (t *task) removeFinalizer() {
 		})
 		t.virtualNetwork.GetMetadata().SetFinalizers(list)
 	}
+}
+
+func (t *task) setFailed(err error) {
+	if !t.virtualNetwork.HasStatus() {
+		t.virtualNetwork.SetStatus(&privatev1.VirtualNetworkStatus{})
+	}
+	t.virtualNetwork.GetStatus().SetState(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_FAILED)
+	t.virtualNetwork.GetStatus().SetMessage(err.Error())
 }
 
 // buildSpec constructs the spec for the Kubernetes VirtualNetwork object based on the

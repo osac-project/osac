@@ -131,6 +131,11 @@ spec:
         - --token-encryption-crt=/etc/fulfillment-token-encryption/tls.crt
         - --token-issuer={{ include "fulfillment-api.tokenIssuerUrl" . }}
         - --metrics-listener-address=0.0.0.0:8002
+        {{ if .Values.vault.endpoint }}
+        - --vault-endpoint={{ .Values.vault.endpoint }}
+        - --vault-namespace={{ .Values.vault.namespace }}
+        - --vault-kv-mount-path={{ .Values.vault.kvMountPath }}
+        {{ end }}
         ports:
         - name: grpc
           containerPort: 8000

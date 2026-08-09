@@ -322,13 +322,6 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 	clusterName := string(r.targetCluster)
 
 	if r.ClusterStorageProvider != nil {
-		// When AAP is configured, prefer tenant-specific StorageClasses
-		// (labeled osac.openshift.io/tenant=<tenantName>). If none exist,
-		// fall back to shared Default SCs so VMs can provision immediately,
-		// and trigger the AAP cluster storage job to create a proper
-		// tenant-specific SC. Once the tenant-specific SC appears (via the
-		// StorageClass watch), the next reconcile picks it up and replaces
-		// the Default.
 		scResult, err := r.resolveTenantSpecificStorageClasses(ctx, targetClient, tenantName)
 		if err != nil {
 			return ctrl.Result{}, err
@@ -352,39 +345,15 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 				return ctrl.Result{}, nil
 			}
 
-			// No tenant-specific SCs. Check for shared Default SCs so VMs
-			// can provision while the AAP job creates the real one.
-			defaultFallback, err := getTenantStorageClasses(ctx, targetClient, tenantName)
-			if err != nil {
-				return ctrl.Result{}, err
-			}
-
-			for _, msg := range defaultFallback.duplicateMessages {
-				r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, eventReasonDuplicateStorageClass, eventActionDetectDuplicate, "%s", msg)
-			}
-
-			if len(defaultFallback.resolved) > 0 {
-				condMsg := r.appendMissingTierWarnings(instance, tierDefinitions, defaultFallback.resolved, defaultFallback.ambiguousTiers,
-					defaultFallback.conditionMessage()+"; tenant-specific provisioning pending")
-				instance.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady,
-					metav1.ConditionTrue,
-					v1alpha1.TenantReasonFound,
-					condMsg)
-				instance.Status.StorageClasses = defaultFallback.resolved
-				instance.Status.ClusterStorage = []v1alpha1.ClusterStorageStatus{
-					{ClusterName: clusterName, Ready: true, Reason: v1alpha1.TenantReasonFound},
-				}
-			} else {
-				condMsg := r.appendMissingTierWarnings(instance, tierDefinitions, nil, defaultFallback.ambiguousTiers,
-					fmt.Sprintf("no StorageClass found for tenant %q", tenantName))
-				instance.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady,
-					metav1.ConditionFalse,
-					v1alpha1.TenantReasonNotFound,
-					condMsg)
-				instance.Status.StorageClasses = nil
-				instance.Status.ClusterStorage = []v1alpha1.ClusterStorageStatus{
-					{ClusterName: clusterName, Ready: false, Reason: v1alpha1.TenantReasonNotFound},
-				}
+			condMsg := r.appendMissingTierWarnings(instance, tierDefinitions, nil, scResult.ambiguousTiers,
+				fmt.Sprintf("no StorageClass found for tenant %q", tenantName))
+			instance.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady,
+				metav1.ConditionFalse,
+				v1alpha1.TenantReasonNotFound,
+				condMsg)
+			instance.Status.StorageClasses = nil
+			instance.Status.ClusterStorage = []v1alpha1.ClusterStorageStatus{
+				{ClusterName: clusterName, Ready: false, Reason: v1alpha1.TenantReasonNotFound},
 			}
 
 			return r.handleClusterStorageProvisioning(ctx, instance, hubSecretReady)
@@ -405,11 +374,9 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 		}
 	} else {
 		// When no provisioning provider is configured, resolve StorageClasses
-		// using the full tier resolution logic: tenant-specific SCs take
-		// priority, with shared default SCs (labeled tenant=Default) as
-		// fallback. This serves environments running OSAC without AAP/VAST
-		// where an admin or prepare-tenant.sh has labeled existing
-		// StorageClasses manually.
+		// labeled osac.openshift.io/tenant=<tenantName>. This serves environments
+		// running OSAC without AAP where an admin has pre-provisioned
+		// tenant-specific StorageClasses manually.
 		result, err := getTenantStorageClasses(ctx, targetClient, tenantName)
 		if err != nil {
 			return ctrl.Result{}, err
@@ -979,12 +946,6 @@ func (r *StorageReconciler) mapStorageClassToTenant(ctx context.Context, obj cli
 		return nil
 	}
 
-	if tenantName == defaultStorageClassSentinel {
-		log.Info("shared Default StorageClass changed, reconciling all tenants",
-			"storageClass", obj.GetName())
-		return r.allTenantReconcileRequests(ctx)
-	}
-
 	tenant := &v1alpha1.Tenant{}
 	if err := r.Get(ctx, client.ObjectKey{Namespace: r.tenantNamespace, Name: tenantName}, tenant); err != nil {
 		if client.IgnoreNotFound(err) != nil {
@@ -1011,24 +972,6 @@ func (r *StorageReconciler) mapSecretToTenant(ctx context.Context, obj client.Ob
 	return []reconcile.Request{{NamespacedName: client.ObjectKeyFromObject(tenant)}}
 }
 
-func (r *StorageReconciler) allTenantReconcileRequests(ctx context.Context) []reconcile.Request {
-	log := ctrllog.FromContext(ctx)
-
-	tenantList := &v1alpha1.TenantList{}
-	if err := r.List(ctx, tenantList, client.InNamespace(r.tenantNamespace)); err != nil {
-		log.Error(err, "unable to list Tenants for Default SC reconciliation")
-		return nil
-	}
-
-	requests := make([]reconcile.Request, 0, len(tenantList.Items))
-	for i := range tenantList.Items {
-		requests = append(requests, reconcile.Request{
-			NamespacedName: client.ObjectKeyFromObject(&tenantList.Items[i]),
-		})
-	}
-	return requests
-}
-
 // tenantSpecificStorageClasses is the result of resolveTenantSpecificStorageClasses:
 // resolved StorageClasses per tier, plus the duplicate-SC messages and ambiguous
 // tier names for tiers excluded from resolved because multiple StorageClasses
@@ -1039,9 +982,8 @@ type tenantSpecificStorageClasses struct {
 	ambiguousTiers    []string
 }
 
-// resolveTenantSpecificStorageClasses lists only StorageClasses labeled with the
-// given tenant name, ignoring shared defaults (labeled tenant=Default). Used when
-// AAP is configured and the controller should not fall back to shared defaults.
+// resolveTenantSpecificStorageClasses lists StorageClasses labeled with the
+// given tenant name. Used when AAP is configured.
 func (r *StorageReconciler) resolveTenantSpecificStorageClasses(
 	ctx context.Context, targetClient client.Client, tenantName string,
 ) (tenantSpecificStorageClasses, error) {

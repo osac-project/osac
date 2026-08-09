@@ -95,6 +95,7 @@
     OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
 
   vars:
+    vast_storage_config_namespace: osac-system
     tenant_name: "test-ensuresc"
     tenant_namespace: "osac-system"
     _cluster_name: "test-cluster"
@@ -353,6 +354,7 @@
     OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
 
   vars:
+    vast_storage_config_namespace: osac-system
     tenant_name: "test-ensuresc"
     tenant_namespace: "osac-system"
     _cluster_name: "test-cluster"
@@ -495,6 +497,7 @@
     OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
 
   vars:
+    vast_storage_config_namespace: osac-system
     tenant_name: "test-ensuresc-nosnap"
     tenant_namespace: "osac-system"
     _cluster_name: "test-cluster"

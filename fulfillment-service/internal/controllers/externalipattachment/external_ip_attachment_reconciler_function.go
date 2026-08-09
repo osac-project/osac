@@ -13,6 +13,8 @@ language governing permissions and limitations under the License.
 
 package externalipattachment
 
+//go:generate mockgen -source=../../api/osac/private/v1/external_ip_attachments_service_grpc.pb.go -destination=external_ip_attachments_client_mock.go -package=externalipattachment ExternalIPAttachmentsClient
+
 import (
 	"context"
 	"errors"
@@ -177,7 +179,7 @@ func (t *task) update(ctx context.Context) error {
 		}
 		err = t.hubClient.Create(ctx, newObject)
 		if err != nil {
-			return err
+			return controllers.HandleK8sWriteError(ctx, t.r.logger, err, t.setFailed)
 		}
 		t.r.logger.DebugContext(
 			ctx,
@@ -190,7 +192,7 @@ func (t *task) update(ctx context.Context) error {
 		update.Spec = spec
 		err = t.hubClient.Patch(ctx, update, clnt.MergeFrom(object))
 		if err != nil {
-			return err
+			return controllers.HandleK8sWriteError(ctx, t.r.logger, err, t.setFailed)
 		}
 		t.r.logger.DebugContext(
 			ctx,
@@ -366,6 +368,14 @@ func (t *task) removeFinalizer() {
 		})
 		t.externalIPAttachment.GetMetadata().SetFinalizers(list)
 	}
+}
+
+func (t *task) setFailed(err error) {
+	if !t.externalIPAttachment.HasStatus() {
+		t.externalIPAttachment.SetStatus(&privatev1.ExternalIPAttachmentStatus{})
+	}
+	t.externalIPAttachment.GetStatus().SetState(privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_FAILED)
+	t.externalIPAttachment.GetStatus().SetMessage(err.Error())
 }
 
 func (t *task) buildSpec() osacv1alpha1.ExternalIPAttachmentSpec {

@@ -25,15 +25,17 @@ import (
 	"github.com/osac-project/osac/osac-operator/pkg/networkmanager"
 )
 
-// ErrFabricManagerNotSet is returned by Resolve when the NetworkClass has no
-// fabricManager set. It is wrapped in the returned error so callers can match it
-// with errors.Is to distinguish "not configured yet" from other resolution failures.
-var ErrFabricManagerNotSet = errors.New("fabricManager is required but not set")
+// ErrNoManagerConfigured is returned by Resolve when a NetworkClass has neither a
+// fabricManager nor a k8sManager set. It is wrapped in the returned error so callers
+// can match it with errors.Is to distinguish "not configured yet" from other
+// resolution failures.
+var ErrNoManagerConfigured = errors.New("neither fabricManager nor k8sManager is set")
 
 // ResolvedManagers holds the validated fabric and k8s managers extracted from a NetworkClass.
 type ResolvedManagers struct {
-	// FabricManager is the validated fabric manager. Always populated.
-	FabricManager networkmanager.Manager
+	// FabricManager is the validated fabric manager, or nil when the NetworkClass
+	// does not specify one (k8s-only deployments).
+	FabricManager *networkmanager.Manager
 
 	// K8sManager is the validated k8s manager, or nil when the NetworkClass
 	// does not specify one (regions without VM workloads).
@@ -71,19 +73,16 @@ func (r *Resolver) Resolve(ctx context.Context, networkClassID string) (*Resolve
 		return nil, fmt.Errorf("NetworkClass %q: response contains no object", networkClassID)
 	}
 
+	result := &ResolvedManagers{}
+
 	fabricManagerName := nc.GetFabricManager()
-	if fabricManagerName == "" {
-		return nil, fmt.Errorf("NetworkClass %q: %w", networkClassID, ErrFabricManagerNotSet)
-	}
-
-	fabricMgr, err := r.discovery.GetFabricManager(ctx, fabricManagerName)
-	if err != nil {
-		return nil, fmt.Errorf("NetworkClass %q: resolving fabricManager %q: %w",
-			networkClassID, fabricManagerName, err)
-	}
-
-	result := &ResolvedManagers{
-		FabricManager: *fabricMgr,
+	if fabricManagerName != "" {
+		fabricMgr, err := r.discovery.GetFabricManager(ctx, fabricManagerName)
+		if err != nil {
+			return nil, fmt.Errorf("NetworkClass %q: resolving fabricManager %q: %w",
+				networkClassID, fabricManagerName, err)
+		}
+		result.FabricManager = fabricMgr
 	}
 
 	k8sManagerName := nc.GetK8SManager()
@@ -94,6 +93,10 @@ func (r *Resolver) Resolve(ctx context.Context, networkClassID string) (*Resolve
 				networkClassID, k8sManagerName, err)
 		}
 		result.K8sManager = k8sMgr
+	}
+
+	if result.FabricManager == nil && result.K8sManager == nil {
+		return nil, fmt.Errorf("NetworkClass %q: %w", networkClassID, ErrNoManagerConfigured)
 	}
 
 	return result, nil

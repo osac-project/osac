@@ -16,6 +16,7 @@ package servers
 import (
 	"fmt"
 
+	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
@@ -144,6 +145,9 @@ var _ = Describe("SecurityGroups server", func() {
 		It("Creates object", func() {
 			response, err := server.Create(ctx, publicv1.SecurityGroupsCreateRequest_builder{
 				Object: publicv1.SecurityGroup_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: publicv1.SecurityGroupSpec_builder{
 						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 						Ingress: []*publicv1.SecurityRule{
@@ -211,6 +215,9 @@ var _ = Describe("SecurityGroups server", func() {
 			for range count {
 				_, err := server.Create(ctx, publicv1.SecurityGroupsCreateRequest_builder{
 					Object: publicv1.SecurityGroup_builder{
+						Metadata: publicv1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Spec: publicv1.SecurityGroupSpec_builder{
 							VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 						}.Build(),
@@ -233,6 +240,9 @@ var _ = Describe("SecurityGroups server", func() {
 			for range count {
 				_, err := server.Create(ctx, publicv1.SecurityGroupsCreateRequest_builder{
 					Object: publicv1.SecurityGroup_builder{
+						Metadata: publicv1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Spec: publicv1.SecurityGroupSpec_builder{
 							VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 						}.Build(),
@@ -256,6 +266,9 @@ var _ = Describe("SecurityGroups server", func() {
 			for range count {
 				response, err := server.Create(ctx, publicv1.SecurityGroupsCreateRequest_builder{
 					Object: publicv1.SecurityGroup_builder{
+						Metadata: publicv1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Spec: publicv1.SecurityGroupSpec_builder{
 							VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 						}.Build(),
@@ -280,6 +293,9 @@ var _ = Describe("SecurityGroups server", func() {
 			// Create the object:
 			createResponse, err := server.Create(ctx, publicv1.SecurityGroupsCreateRequest_builder{
 				Object: publicv1.SecurityGroup_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: publicv1.SecurityGroupSpec_builder{
 						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 						Ingress: []*publicv1.SecurityRule{
@@ -306,6 +322,9 @@ var _ = Describe("SecurityGroups server", func() {
 		It("Canonicalizes non-canonical rule CIDRs on Create", func() {
 			response, err := server.Create(ctx, publicv1.SecurityGroupsCreateRequest_builder{
 				Object: publicv1.SecurityGroup_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: publicv1.SecurityGroupSpec_builder{
 						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 						Ingress: []*publicv1.SecurityRule{
@@ -332,6 +351,9 @@ var _ = Describe("SecurityGroups server", func() {
 		It("Canonicalizes rule CIDRs on Update", func() {
 			createResponse, err := server.Create(ctx, publicv1.SecurityGroupsCreateRequest_builder{
 				Object: publicv1.SecurityGroup_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: publicv1.SecurityGroupSpec_builder{
 						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 						Ingress: []*publicv1.SecurityRule{
@@ -431,6 +453,9 @@ var _ = Describe("SecurityGroups server", func() {
 			// Create the object:
 			createResponse, err := server.Create(ctx, publicv1.SecurityGroupsCreateRequest_builder{
 				Object: publicv1.SecurityGroup_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: publicv1.SecurityGroupSpec_builder{
 						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 					}.Build(),
@@ -470,6 +495,7 @@ var _ = Describe("SecurityGroups server", func() {
 			createResponse, err := server.Create(ctx, publicv1.SecurityGroupsCreateRequest_builder{
 				Object: publicv1.SecurityGroup_builder{
 					Metadata: publicv1.Metadata_builder{
+						Name: "default-security-group",
 						Labels: map[string]string{
 							"osac.openshift.io/default": "true",
 						},

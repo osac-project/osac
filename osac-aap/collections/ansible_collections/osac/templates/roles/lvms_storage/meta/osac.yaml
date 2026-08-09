@@ -1,0 +1,12 @@
+---
+title: LVMS Storage Provider
+description: >
+  Provisions per-tenant StorageClasses on the hub cluster using the LVMS (LVM Storage)
+  topolvm provisioner. No external backend or credentials required — LVMS is
+  installed on the hub by osac-installer when lvms.enabled=true. Hub cluster only;
+  CaaS guest cluster storage is out of scope.
+template_type: storage_provider
+implementation_strategy: lvms
+capabilities:
+  provisioning_targets:
+    - vmaas

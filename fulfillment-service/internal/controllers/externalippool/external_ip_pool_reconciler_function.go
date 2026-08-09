@@ -197,7 +197,7 @@ func (t *task) update(ctx context.Context) error {
 		}
 		err = t.hubClient.Create(ctx, object)
 		if err != nil {
-			return err
+			return controllers.HandleK8sWriteError(ctx, t.r.logger, err, t.setFailed)
 		}
 		t.r.logger.DebugContext(
 			ctx,
@@ -210,7 +210,7 @@ func (t *task) update(ctx context.Context) error {
 		update.Spec = spec
 		err = t.hubClient.Patch(ctx, update, clnt.MergeFrom(existingObject))
 		if err != nil {
-			return err
+			return controllers.HandleK8sWriteError(ctx, t.r.logger, err, t.setFailed)
 		}
 		t.r.logger.DebugContext(
 			ctx,
@@ -388,6 +388,14 @@ func (t *task) removeFinalizer() {
 		})
 		t.externalIPPool.GetMetadata().SetFinalizers(list)
 	}
+}
+
+func (t *task) setFailed(err error) {
+	if !t.externalIPPool.HasStatus() {
+		t.externalIPPool.SetStatus(&privatev1.ExternalIPPoolStatus{})
+	}
+	t.externalIPPool.GetStatus().SetState(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_FAILED)
+	t.externalIPPool.GetStatus().SetMessage(err.Error())
 }
 
 func (t *task) buildSpec() osacv1alpha1.ExternalIPPoolSpec {

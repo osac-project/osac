@@ -56,7 +56,7 @@ var _ = Describe("computeCapabilities", func() {
 	}
 
 	It("uses the fabric manager's capabilities as-is when no k8s manager is configured", func() {
-		caps := computeCapabilities(&dispatcher.ResolvedManagers{FabricManager: fabricDualStack})
+		caps := computeCapabilities(&dispatcher.ResolvedManagers{FabricManager: &fabricDualStack})
 		Expect(caps.GetSupportsIpv4()).To(BeTrue())
 		Expect(caps.GetSupportsIpv6()).To(BeTrue())
 		Expect(caps.GetSupportsDualStack()).To(BeTrue())
@@ -65,7 +65,7 @@ var _ = Describe("computeCapabilities", func() {
 
 	It("intersects fabric and k8s capabilities, dropping what the k8s manager lacks", func() {
 		k8s := k8sIPv4Only
-		caps := computeCapabilities(&dispatcher.ResolvedManagers{FabricManager: fabricDualStack, K8sManager: &k8s})
+		caps := computeCapabilities(&dispatcher.ResolvedManagers{FabricManager: &fabricDualStack, K8sManager: &k8s})
 		Expect(caps.GetSupportsIpv4()).To(BeTrue())
 		Expect(caps.GetSupportsIpv6()).To(BeFalse())
 		Expect(caps.GetSupportsDualStack()).To(BeFalse())
@@ -74,7 +74,7 @@ var _ = Describe("computeCapabilities", func() {
 
 	It("drops capabilities the fabric manager doesn't declare even when the k8s manager does", func() {
 		k8s := k8sIPv4AndDPU
-		caps := computeCapabilities(&dispatcher.ResolvedManagers{FabricManager: fabricIPv4Only, K8sManager: &k8s})
+		caps := computeCapabilities(&dispatcher.ResolvedManagers{FabricManager: &fabricIPv4Only, K8sManager: &k8s})
 		Expect(caps.GetSupportsIpv4()).To(BeTrue())
 		Expect(caps.GetDpuSupport()).To(BeFalse())
 	})

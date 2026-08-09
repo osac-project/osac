@@ -294,6 +294,9 @@ var _ = Describe("Private secrets server", func() {
 			It("Create without name fails", func() {
 				_, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{
 					Object: privatev1.Secret_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: "",
+						}.Build(),
 						Spec: privatev1.SecretSpec_builder{
 							Data: map[string][]byte{
 								"key": []byte("value"),

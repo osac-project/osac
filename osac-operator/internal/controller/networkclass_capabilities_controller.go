@@ -182,8 +182,8 @@ func (r *NetworkClassCapabilitiesReconciler) syncOne(ctx context.Context, nc *pr
 
 	resolved, err := r.resolver.Resolve(ctx, nc.GetId())
 	switch {
-	case errors.Is(err, dispatcher.ErrFabricManagerNotSet):
-		log.V(1).Info("network class has no fabricManager set, skipping capabilities sync",
+	case errors.Is(err, dispatcher.ErrNoManagerConfigured):
+		log.V(1).Info("network class has no fabricManager or k8sManager set, skipping capabilities sync",
 			"networkClassID", nc.GetId())
 		return nil
 	case networkmanager.IsManagerNotFound(err):
@@ -192,6 +192,14 @@ func (r *NetworkClassCapabilitiesReconciler) syncOne(ctx context.Context, nc *pr
 		return nil
 	case err != nil:
 		return fmt.Errorf("resolving managers for network class %q: %w", nc.GetId(), err)
+	}
+
+	// Capabilities describe fabric-level networking support, so a NetworkClass
+	// with no fabricManager (k8s-only deployment) has none to report.
+	if resolved.FabricManager == nil {
+		log.V(1).Info("network class has no fabricManager set, skipping capabilities sync",
+			"networkClassID", nc.GetId())
+		return nil
 	}
 
 	newCaps := computeCapabilities(resolved)

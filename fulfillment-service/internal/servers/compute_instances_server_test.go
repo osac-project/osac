@@ -15,6 +15,7 @@ package servers
 
 import (
 	"fmt"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -97,6 +98,7 @@ var _ = Describe("Compute instances server", func() {
 			vn := privatev1.VirtualNetwork_builder{
 				Id: "test-vnet",
 				Metadata: privatev1.Metadata_builder{
+					Name:   "test-vnet",
 					Tenant: auth.SharedTenant,
 				}.Build(),
 			}.Build()
@@ -113,6 +115,7 @@ var _ = Describe("Compute instances server", func() {
 			subnet := privatev1.Subnet_builder{
 				Id: "test-subnet",
 				Metadata: privatev1.Metadata_builder{
+					Name:   "test-subnet",
 					Tenant: auth.SharedTenant,
 				}.Build(),
 				Spec: privatev1.SubnetSpec_builder{
@@ -171,6 +174,7 @@ var _ = Describe("Compute instances server", func() {
 				Title:       "Test Template",
 				Description: "Test template for validation",
 				Metadata: privatev1.Metadata_builder{
+					Name:   strings.ReplaceAll(templateID, ".", "-"),
 					Tenant: auth.SharedTenant,
 				}.Build(),
 				Parameters: []*privatev1.ComputeInstanceTemplateParameterDefinition{
@@ -224,6 +228,9 @@ var _ = Describe("Compute instances server", func() {
 
 			response, err := server.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
 				Object: publicv1.ComputeInstance_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-compute-instance",
+					}.Build(),
 					Spec: publicv1.ComputeInstanceSpec_builder{
 						Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: "general.small"}.Build(),
 						TemplateParameters: templateParams,
@@ -256,6 +263,9 @@ var _ = Describe("Compute instances server", func() {
 
 				_, err := server.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
 					Object: publicv1.ComputeInstance_builder{
+						Metadata: publicv1.Metadata_builder{
+							Name: fmt.Sprintf("test-ci-%d", i),
+						}.Build(),
 						Spec: publicv1.ComputeInstanceSpec_builder{
 							Template: publicv1.ComputeInstanceTemplateReference_builder{Id: templateID}.Build(),
 							NetworkAttachments: []*publicv1.NetworkAttachment{
@@ -289,6 +299,9 @@ var _ = Describe("Compute instances server", func() {
 
 				_, err := server.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
 					Object: publicv1.ComputeInstance_builder{
+						Metadata: publicv1.Metadata_builder{
+							Name: fmt.Sprintf("test-ci-limit-%d", i),
+						}.Build(),
 						Spec: publicv1.ComputeInstanceSpec_builder{
 							Template: publicv1.ComputeInstanceTemplateReference_builder{Id: templateID}.Build(),
 							NetworkAttachments: []*publicv1.NetworkAttachment{
@@ -324,6 +337,9 @@ var _ = Describe("Compute instances server", func() {
 
 				_, err := server.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
 					Object: publicv1.ComputeInstance_builder{
+						Metadata: publicv1.Metadata_builder{
+							Name: fmt.Sprintf("test-ci-offset-%d", i),
+						}.Build(),
 						Spec: publicv1.ComputeInstanceSpec_builder{
 							Template: publicv1.ComputeInstanceTemplateReference_builder{Id: templateID}.Build(),
 							NetworkAttachments: []*publicv1.NetworkAttachment{
@@ -357,6 +373,9 @@ var _ = Describe("Compute instances server", func() {
 			// Create an object:
 			createResponse, err := server.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
 				Object: publicv1.ComputeInstance_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-compute-instance",
+					}.Build(),
 					Spec: publicv1.ComputeInstanceSpec_builder{
 						Template: publicv1.ComputeInstanceTemplateReference_builder{Id: "general.small"}.Build(),
 						NetworkAttachments: []*publicv1.NetworkAttachment{
@@ -397,6 +416,9 @@ var _ = Describe("Compute instances server", func() {
 			// Create an object with explicit fields:
 			createResponse, err := server.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
 				Object: publicv1.ComputeInstance_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-compute-instance",
+					}.Build(),
 					Spec: publicv1.ComputeInstanceSpec_builder{
 						Template:     publicv1.ComputeInstanceTemplateReference_builder{Id: "general.small"}.Build(),
 						InstanceType: publicv1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
@@ -471,6 +493,9 @@ var _ = Describe("Compute instances server", func() {
 			// Create an object:
 			createResponse, err := server.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
 				Object: publicv1.ComputeInstance_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-compute-instance",
+					}.Build(),
 					Spec: publicv1.ComputeInstanceSpec_builder{
 						Template: publicv1.ComputeInstanceTemplateReference_builder{Id: "general.small"}.Build(),
 						NetworkAttachments: []*publicv1.NetworkAttachment{
@@ -549,6 +574,9 @@ var _ = Describe("Compute instances server", func() {
 			// Create with some user-provided fields and let template cover the rest for validation:
 			response, err := server.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
 				Object: publicv1.ComputeInstance_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-compute-instance",
+					}.Build(),
 					Spec: publicv1.ComputeInstanceSpec_builder{
 						Template:    publicv1.ComputeInstanceTemplateReference_builder{Id: "mapping-template"}.Build(),
 						RunStrategy: new("Halted"),

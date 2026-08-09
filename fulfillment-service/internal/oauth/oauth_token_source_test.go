@@ -1007,4 +1007,82 @@ var _ = Describe("Token source", func() {
 		// Verify that no scopes were requested:
 		Expect(requestedScopes).To(BeEmpty())
 	})
+
+	It("Fails promptly instead of hanging when the token endpoint never responds", func() {
+		// Create a server whose token endpoint accepts the request but never writes a response,
+		// simulating a stalled connection to the OAuth server. This isn't reachable using the
+		// standard ghttp handlers used by the other tests in this file, which always respond
+		// immediately.
+		server, caFile := testing.MakeTCPTLSServer()
+		DeferCleanup(server.Close)
+		DeferCleanup(func() {
+			err := os.Remove(caFile)
+			Expect(err).ToNot(HaveOccurred())
+		})
+		caPool, err := network.NewCertPool().
+			SetLogger(logger).
+			AddFile(caFile).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+		server.RouteToHandler(
+			http.MethodGet,
+			"/.well-known/oauth-authorization-server",
+			RespondWithJSONEncoded(
+				http.StatusOK,
+				&ServerMetadata{
+					Issuer:        server.URL(),
+					TokenEndpoint: fmt.Sprintf("%s/token", server.URL()),
+				},
+			),
+		)
+		// release unblocks the handler. Deferred so it always runs — even if the goroutine below
+		// never completes — so server.Close() during cleanup doesn't itself block waiting for this
+		// handler to return.
+		release := make(chan struct{})
+		defer close(release)
+		server.RouteToHandler(
+			http.MethodPost,
+			"/token",
+			func(w http.ResponseWriter, r *http.Request) {
+				<-release
+			},
+		)
+
+		// Create the source:
+		source, err := NewTokenSource().
+			SetLogger(logger).
+			SetIssuer(server.URL()).
+			SetStore(store).
+			SetFlow(CredentialsFlow).
+			SetClientId("my_client").
+			SetClientSecret("my_secret").
+			SetCaPool(caPool).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		// Request a token with a context that has a short deadline. If the request honors the
+		// context, it fails quickly once the deadline is reached instead of hanging forever. Run it
+		// in a goroutine racing a timer, rather than calling it synchronously, so that a regression
+		// fails this spec cleanly instead of hanging the whole test binary:
+		requestCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		defer cancel()
+		done := make(chan error, 1)
+		start := time.Now()
+		go func() {
+			_, tokenErr := source.Token(requestCtx)
+			done <- tokenErr
+		}()
+
+		var tokenErr error
+		select {
+		case tokenErr = <-done:
+		case <-time.After(5 * time.Second):
+			Fail("Token() should fail promptly once the context deadline is reached, not hang forever")
+		}
+		elapsed := time.Since(start)
+
+		Expect(tokenErr).To(HaveOccurred())
+		Expect(elapsed).To(BeNumerically("<", 5*time.Second),
+			"Token() should fail promptly once the context deadline is reached, not hang forever")
+	})
 })

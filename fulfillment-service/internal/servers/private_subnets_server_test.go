@@ -384,6 +384,7 @@ var _ = Describe("Private subnets server", func() {
 				createResponse, err := server.Create(ctx, privatev1.SubnetsCreateRequest_builder{
 					Object: privatev1.Subnet_builder{
 						Metadata: privatev1.Metadata_builder{
+							Name:   "test-subnet",
 							Tenant: auth.SharedTenant,
 						}.Build(),
 						Spec: privatev1.SubnetSpec_builder{
@@ -1104,6 +1105,7 @@ var _ = Describe("Private subnets server", func() {
 				createResponse, err := server.Create(ctx, privatev1.SubnetsCreateRequest_builder{
 					Object: privatev1.Subnet_builder{
 						Metadata: privatev1.Metadata_builder{
+							Name:   "test-subnet",
 							Tenant: auth.SharedTenant,
 						}.Build(),
 						Spec: privatev1.SubnetSpec_builder{
@@ -1289,6 +1291,7 @@ var _ = Describe("Private subnets server", func() {
 				createResponse, err := server.Create(ctx, privatev1.SubnetsCreateRequest_builder{
 					Object: privatev1.Subnet_builder{
 						Metadata: privatev1.Metadata_builder{
+							Name:   "test-subnet",
 							Tenant: auth.SharedTenant,
 						}.Build(),
 						Spec: privatev1.SubnetSpec_builder{
@@ -1332,6 +1335,7 @@ var _ = Describe("Private subnets server", func() {
 				createResponse, err := server.Create(ctx, privatev1.SubnetsCreateRequest_builder{
 					Object: privatev1.Subnet_builder{
 						Metadata: privatev1.Metadata_builder{
+							Name:   "test-subnet",
 							Tenant: auth.SharedTenant,
 						}.Build(),
 						Spec: privatev1.SubnetSpec_builder{
@@ -1360,6 +1364,7 @@ var _ = Describe("Private subnets server", func() {
 				createResponse, err := server.Create(ctx, privatev1.SubnetsCreateRequest_builder{
 					Object: privatev1.Subnet_builder{
 						Metadata: privatev1.Metadata_builder{
+							Name:   "test-subnet",
 							Tenant: auth.SharedTenant,
 						}.Build(),
 						Spec: privatev1.SubnetSpec_builder{
@@ -1403,6 +1408,7 @@ var _ = Describe("Private subnets server", func() {
 				createResponse, err := server.Create(ctx, privatev1.SubnetsCreateRequest_builder{
 					Object: privatev1.Subnet_builder{
 						Metadata: privatev1.Metadata_builder{
+							Name:   "test-subnet",
 							Tenant: auth.SharedTenant,
 						}.Build(),
 						Spec: privatev1.SubnetSpec_builder{
@@ -1449,6 +1455,7 @@ var _ = Describe("Private subnets server", func() {
 				createResponse, err := server.Create(ctx, privatev1.SubnetsCreateRequest_builder{
 					Object: privatev1.Subnet_builder{
 						Metadata: privatev1.Metadata_builder{
+							Name:   "test-subnet",
 							Tenant: auth.SharedTenant,
 							Labels: map[string]string{
 								"osac.openshift.io/default": "true",

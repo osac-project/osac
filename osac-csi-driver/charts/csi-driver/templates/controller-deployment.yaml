@@ -26,6 +26,9 @@ spec:
           args:
             - "--csi-endpoint=unix:///csi/osac/csi.sock"
             - "--node-id=controller"
+            {{- if .Values.controller.clusterID }}
+            - "--cluster-id={{ .Values.controller.clusterID }}"
+            {{- end }}
             {{- if .Values.controller.fulfillmentEndpoint }}
             - "--fulfillment-endpoint={{ .Values.controller.fulfillmentEndpoint }}"
             {{- end }}

@@ -14,13 +14,9 @@ import (
 )
 
 // metaDriverSkips lists CSI sanity tests that don't apply to the OSAC
-// meta-driver. The CSI sanity framework omits VolumeContext from
-// ValidateVolumeCapabilities and ControllerPublishVolume calls, but the
-// meta-driver requires volume_context["osac.backend"] to route requests
-// to the correct vendor backend.
+// controller. The controller delegates publish/unpublish to the control
+// plane stub which does not validate volume or node existence.
 var metaDriverSkips = []string{
-	"ValidateVolumeCapabilities.*should return appropriate values",
-	"ValidateVolumeCapabilities.*should fail when the requested volume does not exist",
 	"ControllerPublishVolume.*should fail when the volume does not exist",
 	"ControllerPublishVolume.*should fail when the node does not exist",
 }
@@ -48,11 +44,8 @@ func TestSanity(t *testing.T) {
 	}
 	defer vendorSrv.GracefulStop()
 
-	fc := &fulfillment.LoggingStub{
-		DefaultBackend:  backendName,
-		DefaultEndpoint: vendorSocket,
-		DefaultProtocol: "nfs",
-	}
+	vc := fulfillment.NewVolumeStub(backendName, "nfs")
+	cpc := &fulfillment.ControlPlaneStub{}
 
 	vendorSockets := map[string]string{
 		backendName: vendorSocket,
@@ -63,7 +56,9 @@ func TestSanity(t *testing.T) {
 		"0.0.1-test",
 		"unix://"+driverSocket,
 		nodeID,
-		fc,
+		"test-cluster",
+		vc,
+		cpc,
 		vendorSockets,
 	)
 	if err != nil {

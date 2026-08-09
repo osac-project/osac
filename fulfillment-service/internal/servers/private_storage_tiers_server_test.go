@@ -420,6 +420,9 @@ var _ = Describe("Private storage tiers server", func() {
 			It("Create without name fails", func() {
 				_, err := server.Create(ctx, privatev1.StorageTiersCreateRequest_builder{
 					Object: privatev1.StorageTier_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: "",
+						}.Build(),
 						Spec: privatev1.StorageTierSpec_builder{
 							Backends: []*privatev1.BackendAssociation{
 								privatev1.BackendAssociation_builder{

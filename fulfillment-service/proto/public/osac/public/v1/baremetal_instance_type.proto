@@ -157,6 +157,25 @@ message BareMetalInstanceStatus {
   // Echo of `spec.restart_trigger` after the controller has executed the requested restart.
   // The controller sets this to match `spec.restart_trigger` once the power cycle is complete.
   int64 restart_trigger = 3;
+
+  // Runtime networking state for each network attachment.
+  // Populated by the operator after DHCP lease discovery and synced via the feedback controller.
+  repeated BareMetalNetworkAttachmentStatus network_attachment_statuses = 4;
+}
+
+// Runtime networking state for a single bare metal network attachment.
+message BareMetalNetworkAttachmentStatus {
+  // Physical interface name from the spec's network attachment.
+  string interface = 1;
+
+  // Reference to the Subnet associated with this attachment.
+  string subnet_ref = 2;
+
+  // IP address discovered after DHCP assignment.
+  string ip_address = 3;
+
+  // Whether this attachment is the primary (default gateway) attachment.
+  bool primary = 4;
 }
 
 // Run strategy for the bare metal instance.

@@ -146,6 +146,9 @@ aap:
     eeImage: "ghcr.io/osac-project/osac-aap:latest"
     projectGitUri: "https://github.com/osac-project/osac"
     projectGitBranch: "main"
+  instanceGroups:
+    storageFulfillment:
+      enabled: true
 
 # --- Validation ---
 validation:

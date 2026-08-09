@@ -37,8 +37,8 @@ import "osac/private/v1/metadata_type.proto";
 message Project {
   option (buf.validate.message).cel = {
     id: "project_name_segments"
-    message: "project name must be empty (root project) or dot-separated DNS labels (each segment: max 63 chars, lowercase a-z/0-9/hyphen, alphanumeric start/end)"
-    expression: "this.metadata.name == '' || this.metadata.name.split('.').all(segment, segment.size() > 0 && segment.size() <= 63 && segment.matches('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?'))"
+    message: "project name must be dot-separated DNS labels (each segment: max 63 chars, lowercase a-z/0-9/hyphen, alphanumeric start/end)"
+    expression: "this.metadata.name.size() > 0 && this.metadata.name.split('.').all(segment, segment.size() > 0 && segment.size() <= 63 && segment.matches('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'))"
   };
 
   // Unique identifier of the project.
@@ -48,7 +48,7 @@ message Project {
   //
   // Project names follow a hierarchical dot-separated DNS label format (e.g., "org.team.project").
   // Each segment must be a valid DNS label: max 63 characters, lowercase letters (a-z), digits (0-9),
-  // and hyphens, with alphanumeric start and end. Empty name is allowed for the root project.
+  // and hyphens, with alphanumeric start and end.
   //
   // Note: Uses (buf.validate.field).ignore = IGNORE_ALWAYS to skip standard Metadata.name pattern
   // validation (which doesn't allow dots). Project-specific validation is handled by message-level CEL.

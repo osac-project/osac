@@ -41,9 +41,11 @@ var _ privatev1.NATGatewaysServer = (*PrivateNATGatewaysServer)(nil)
 type PrivateNATGatewaysServer struct {
 	privatev1.UnimplementedNATGatewaysServer
 
-	logger        *slog.Logger
-	generic       *GenericServer[*privatev1.NATGateway]
-	externalIPDao *dao.GenericDAO[*privatev1.ExternalIP]
+	logger             *slog.Logger
+	generic            *GenericServer[*privatev1.NATGateway]
+	externalIPDao      *dao.GenericDAO[*privatev1.ExternalIP]
+	virtualNetworksDao *dao.GenericDAO[*privatev1.VirtualNetwork]
+	networkClassesDao  *dao.GenericDAO[*privatev1.NetworkClass]
 }
 
 func NewPrivateNATGatewaysServer() *PrivateNATGatewaysServerBuilder {
@@ -98,6 +100,24 @@ func (b *PrivateNATGatewaysServerBuilder) Build() (result *PrivateNATGatewaysSer
 		return
 	}
 
+	virtualNetworksDao, err := dao.NewGenericDAO[*privatev1.VirtualNetwork]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
+	networkClassesDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
 	generic, err := NewGenericServer[*privatev1.NATGateway]().
 		SetLogger(b.logger).
 		SetService(privatev1.NATGateways_ServiceDesc.ServiceName).
@@ -111,9 +131,11 @@ func (b *PrivateNATGatewaysServerBuilder) Build() (result *PrivateNATGatewaysSer
 	}
 
 	result = &PrivateNATGatewaysServer{
-		logger:        b.logger,
-		generic:       generic,
-		externalIPDao: externalIPDao,
+		logger:             b.logger,
+		generic:            generic,
+		externalIPDao:      externalIPDao,
+		virtualNetworksDao: virtualNetworksDao,
+		networkClassesDao:  networkClassesDao,
 	}
 	return
 }
@@ -135,6 +157,11 @@ func (s *PrivateNATGatewaysServer) Create(ctx context.Context,
 	natGateway := request.GetObject()
 
 	err = s.validateNATGateway(natGateway)
+	if err != nil {
+		return
+	}
+
+	err = s.validateNetworkClassHasFabricManager(ctx, refKey(natGateway.GetSpec().GetVirtualNetwork()))
 	if err != nil {
 		return
 	}
@@ -296,6 +323,51 @@ func (s *PrivateNATGatewaysServer) validateExternalIPReference(
 	if externalIP.GetStatus().GetAttached() {
 		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
 			"ExternalIP '%s' is already attached", externalIPID)
+	}
+
+	return nil
+}
+
+// validateNetworkClassHasFabricManager resolves the VirtualNetwork referenced by virtualNetworkID to its
+// NetworkClass and returns a FailedPrecondition error if the NetworkClass has no fabric_manager. NATGateway
+// provisioning is a fabric-level operation with no k8sManager fallback.
+func (s *PrivateNATGatewaysServer) validateNetworkClassHasFabricManager(
+	ctx context.Context, virtualNetworkID string) error {
+	vnResponse, err := s.virtualNetworksDao.Get().
+		SetId(virtualNetworkID).
+		Do(ctx)
+	if err != nil {
+		var notFoundErr *dao.ErrNotFound
+		if errors.As(err, &notFoundErr) {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"VirtualNetwork '%s' does not exist", virtualNetworkID)
+		}
+		s.logger.ErrorContext(ctx, "Failed to query VirtualNetwork",
+			slog.String("virtual_network_id", virtualNetworkID),
+			slog.Any("error", err))
+		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate spec.virtual_network")
+	}
+
+	networkClassID := refKey(vnResponse.GetObject().GetSpec().GetNetworkClass())
+	ncResponse, err := s.networkClassesDao.Get().
+		SetId(networkClassID).
+		Do(ctx)
+	if err != nil {
+		var notFoundErr *dao.ErrNotFound
+		if errors.As(err, &notFoundErr) {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"NetworkClass '%s' does not exist", networkClassID)
+		}
+		s.logger.ErrorContext(ctx, "Failed to query NetworkClass",
+			slog.String("network_class_id", networkClassID),
+			slog.Any("error", err))
+		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate spec.virtual_network")
+	}
+
+	if !ncResponse.GetObject().HasFabricManager() {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"VirtualNetwork '%s' uses NetworkClass '%s' which has no 'fabric_manager'; NAT gateways require a fabric manager",
+			virtualNetworkID, networkClassID)
 	}
 
 	return nil

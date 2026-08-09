@@ -16,6 +16,7 @@ package servers
 import (
 	"fmt"
 
+	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -80,6 +81,9 @@ var _ = Describe("Bare metal instance templates server", func() {
 			for i := range count {
 				_, err := privateServer.Create(ctx, privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
 					Object: privatev1.BareMetalInstanceTemplate_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Title: fmt.Sprintf("Template %d", i),
 					}.Build(),
 				}.Build())
@@ -94,6 +98,9 @@ var _ = Describe("Bare metal instance templates server", func() {
 		It("Gets object", func() {
 			createResponse, err := privateServer.Create(ctx, privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceTemplate_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:       "My template",
 					Description: "A test template.",
 				}.Build(),

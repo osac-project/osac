@@ -16,6 +16,7 @@ package servers
 import (
 	"fmt"
 
+	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
@@ -84,6 +85,9 @@ var _ = Describe("Private compute instance templates server", func() {
 		It("Creates object", func() {
 			response, err := server.Create(ctx, privatev1.ComputeInstanceTemplatesCreateRequest_builder{
 				Object: privatev1.ComputeInstanceTemplate_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:       "My title",
 					Description: "My description.",
 				}.Build(),
@@ -100,6 +104,9 @@ var _ = Describe("Private compute instance templates server", func() {
 		It("Creates object with parameters", func() {
 			response, err := server.Create(ctx, privatev1.ComputeInstanceTemplatesCreateRequest_builder{
 				Object: privatev1.ComputeInstanceTemplate_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:       "My title",
 					Description: "My description.",
 					Parameters: []*privatev1.ComputeInstanceTemplateParameterDefinition{
@@ -141,6 +148,9 @@ var _ = Describe("Private compute instance templates server", func() {
 			for i := range count {
 				_, err := server.Create(ctx, privatev1.ComputeInstanceTemplatesCreateRequest_builder{
 					Object: privatev1.ComputeInstanceTemplate_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Title:       fmt.Sprintf("My title %d", i),
 						Description: fmt.Sprintf("My description %d.", i),
 					}.Build(),
@@ -162,6 +172,9 @@ var _ = Describe("Private compute instance templates server", func() {
 			for i := range count {
 				_, err := server.Create(ctx, privatev1.ComputeInstanceTemplatesCreateRequest_builder{
 					Object: privatev1.ComputeInstanceTemplate_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Title:       fmt.Sprintf("My title %d", i),
 						Description: fmt.Sprintf("My description %d.", i),
 					}.Build(),
@@ -185,6 +198,9 @@ var _ = Describe("Private compute instance templates server", func() {
 			for i := range count {
 				_, err := server.Create(ctx, privatev1.ComputeInstanceTemplatesCreateRequest_builder{
 					Object: privatev1.ComputeInstanceTemplate_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Title:       fmt.Sprintf("My title %d", i),
 						Description: fmt.Sprintf("My description %d.", i),
 					}.Build(),
@@ -206,6 +222,9 @@ var _ = Describe("Private compute instance templates server", func() {
 			// Create an object:
 			createResponse, err := server.Create(ctx, privatev1.ComputeInstanceTemplatesCreateRequest_builder{
 				Object: privatev1.ComputeInstanceTemplate_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:       "My title",
 					Description: "My description.",
 				}.Build(),
@@ -234,6 +253,9 @@ var _ = Describe("Private compute instance templates server", func() {
 			// Create an object:
 			createResponse, err := server.Create(ctx, privatev1.ComputeInstanceTemplatesCreateRequest_builder{
 				Object: privatev1.ComputeInstanceTemplate_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-ci-template-update",
+					}.Build(),
 					Title:       "My title",
 					Description: "My description.",
 				}.Build(),
@@ -269,6 +291,9 @@ var _ = Describe("Private compute instance templates server", func() {
 			// Create an object with parameters:
 			createResponse, err := server.Create(ctx, privatev1.ComputeInstanceTemplatesCreateRequest_builder{
 				Object: privatev1.ComputeInstanceTemplate_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-ci-template-params",
+					}.Build(),
 					Title:       "My title",
 					Description: "My description.",
 					Parameters: []*privatev1.ComputeInstanceTemplateParameterDefinition{
@@ -324,6 +349,9 @@ var _ = Describe("Private compute instance templates server", func() {
 			// Create an object:
 			createResponse, err := server.Create(ctx, privatev1.ComputeInstanceTemplatesCreateRequest_builder{
 				Object: privatev1.ComputeInstanceTemplate_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:       "My title",
 					Description: "My description.",
 				}.Build(),
@@ -359,12 +387,14 @@ var _ = Describe("Private compute instance templates server", func() {
 			Expect(getResponse).To(BeNil())
 		})
 
-		It("Creates empty object if no object is provided", func() {
+		It("Rejects creation if no object is provided", func() {
 			response, err := server.Create(ctx, privatev1.ComputeInstanceTemplatesCreateRequest_builder{}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(response).ToNot(BeNil())
-			Expect(response.GetObject()).ToNot(BeNil())
-			Expect(response.GetObject().GetId()).ToNot(BeEmpty())
+			Expect(err).To(HaveOccurred())
+			Expect(response).To(BeNil())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(Equal("metadata is required"))
 		})
 
 		It("Handles empty object in update request", func() {
@@ -440,6 +470,9 @@ var _ = Describe("Private compute instance templates server", func() {
 
 				response, err := server.Create(ctx, privatev1.ComputeInstanceTemplatesCreateRequest_builder{
 					Object: privatev1.ComputeInstanceTemplate_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Title:       "Template with deprecated default",
 						Description: "Template referencing a deprecated instance type.",
 						SpecDefaults: privatev1.ComputeInstanceTemplateSpecDefaults_builder{
@@ -457,6 +490,9 @@ var _ = Describe("Private compute instance templates server", func() {
 				// Create a template first (no spec_defaults):
 				createResponse, err := server.Create(ctx, privatev1.ComputeInstanceTemplatesCreateRequest_builder{
 					Object: privatev1.ComputeInstanceTemplate_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: "test-ci-template-deprecated-update",
+						}.Build(),
 						Title:       "Template to update",
 						Description: "Template without spec_defaults.",
 					}.Build(),
@@ -491,6 +527,9 @@ var _ = Describe("Private compute instance templates server", func() {
 
 				response, err := server.Create(ctx, privatev1.ComputeInstanceTemplatesCreateRequest_builder{
 					Object: privatev1.ComputeInstanceTemplate_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Title:       "Template with obsolete default",
 						Description: "Template referencing an obsolete instance type.",
 						SpecDefaults: privatev1.ComputeInstanceTemplateSpecDefaults_builder{
@@ -510,6 +549,9 @@ var _ = Describe("Private compute instance templates server", func() {
 				// Create a template first:
 				createResponse, err := server.Create(ctx, privatev1.ComputeInstanceTemplatesCreateRequest_builder{
 					Object: privatev1.ComputeInstanceTemplate_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: "test-ci-template-obsolete-update",
+						}.Build(),
 						Title:       "Template for obsolete update",
 						Description: "Template to test obsolete rejection on update.",
 					}.Build(),
@@ -546,6 +588,9 @@ var _ = Describe("Private compute instance templates server", func() {
 
 				response, err := server.Create(ctx, privatev1.ComputeInstanceTemplatesCreateRequest_builder{
 					Object: privatev1.ComputeInstanceTemplate_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Title:       "Template with active default",
 						Description: "Template referencing an active instance type.",
 						SpecDefaults: privatev1.ComputeInstanceTemplateSpecDefaults_builder{
@@ -561,6 +606,9 @@ var _ = Describe("Private compute instance templates server", func() {
 			It("Rejects Create when spec_defaults references a non-existent instance type", func() {
 				response, err := server.Create(ctx, privatev1.ComputeInstanceTemplatesCreateRequest_builder{
 					Object: privatev1.ComputeInstanceTemplate_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Title:       "Template with missing default",
 						Description: "Template referencing a non-existent instance type.",
 						SpecDefaults: privatev1.ComputeInstanceTemplateSpecDefaults_builder{

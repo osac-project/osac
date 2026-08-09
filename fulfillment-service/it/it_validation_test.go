@@ -15,6 +15,7 @@ package it
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -24,6 +25,7 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 )
 
 var _ = Describe("Protovalidate validation", func() {
@@ -31,6 +33,7 @@ var _ = Describe("Protovalidate validation", func() {
 		ctx            context.Context
 		tenantClient   privatev1.TenantsClient
 		projectsClient privatev1.ProjectsClient
+		tenantName     string
 	)
 
 	BeforeEach(func() {
@@ -39,16 +42,36 @@ var _ = Describe("Protovalidate validation", func() {
 		projectsClient = privatev1.NewProjectsClient(tool.InternalView().AdminConn())
 
 		// Create test tenant for Project tests
-		_, err := tenantClient.Create(ctx, privatev1.TenantsCreateRequest_builder{
+		tenantName = fmt.Sprintf("my-tenant-%s", uuid.New()[24:32])
+		resp, err := tenantClient.Create(ctx, privatev1.TenantsCreateRequest_builder{
 			Object: privatev1.Tenant_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name: "my-tenant",
+					Name: tenantName,
 				}.Build(),
 			}.Build(),
 		}.Build())
 		if err != nil && !strings.Contains(err.Error(), "already exists") {
 			Expect(err).ToNot(HaveOccurred())
 		}
+		if resp != nil {
+			DeferCleanup(func() {
+				_, _ = tenantClient.Delete(ctx, privatev1.TenantsDeleteRequest_builder{
+					Id: resp.GetObject().GetId(),
+				}.Build())
+			})
+		}
+	})
+
+	It("Rejects Tenant with missing metadata", func() {
+		_, err := tenantClient.Create(ctx, privatev1.TenantsCreateRequest_builder{
+			Object: privatev1.Tenant_builder{}.Build(),
+		}.Build())
+
+		Expect(err).To(HaveOccurred())
+		status, ok := grpcstatus.FromError(err)
+		Expect(ok).To(BeTrue(), "error should be a gRPC status error")
+		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument), "should return InvalidArgument")
+		Expect(status.Message()).To(ContainSubstring("'metadata.name' is mandatory"))
 	})
 
 	It("Rejects Tenant with invalid metadata name (too long)", func() {
@@ -104,7 +127,7 @@ var _ = Describe("Protovalidate validation", func() {
 		_, err := tenantClient.Create(ctx, privatev1.TenantsCreateRequest_builder{
 			Object: privatev1.Tenant_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name: "valid-name",
+					Name: fmt.Sprintf("valid-name-%s", uuid.New()[24:32]),
 					Labels: map[string]string{
 						longKey: "value",
 					},
@@ -160,7 +183,7 @@ var _ = Describe("Protovalidate validation", func() {
 			Object: privatev1.Project_builder{
 				Metadata: privatev1.Metadata_builder{
 					Name:   "org",
-					Tenant: "my-tenant",
+					Tenant: tenantName,
 				}.Build(),
 				Spec: privatev1.ProjectSpec_builder{
 					Title: "Organization",
@@ -178,7 +201,7 @@ var _ = Describe("Protovalidate validation", func() {
 			Object: privatev1.Project_builder{
 				Metadata: privatev1.Metadata_builder{
 					Name:   "org.team-a",
-					Tenant: "my-tenant",
+					Tenant: tenantName,
 				}.Build(),
 				Spec: privatev1.ProjectSpec_builder{
 					Title: "Team A",
@@ -197,7 +220,7 @@ var _ = Describe("Protovalidate validation", func() {
 			Object: privatev1.Project_builder{
 				Metadata: privatev1.Metadata_builder{
 					Name:   hierarchicalName,
-					Tenant: "my-tenant",
+					Tenant: tenantName,
 				}.Build(),
 				Spec: privatev1.ProjectSpec_builder{
 					Title: "Frontend Team",
@@ -227,7 +250,7 @@ var _ = Describe("Protovalidate validation", func() {
 			Object: privatev1.Project_builder{
 				Metadata: privatev1.Metadata_builder{
 					Name:   invalidName,
-					Tenant: "my-tenant",
+					Tenant: tenantName,
 				}.Build(),
 				Spec: privatev1.ProjectSpec_builder{
 					Title: "Invalid Project",
@@ -241,7 +264,7 @@ var _ = Describe("Protovalidate validation", func() {
 		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 		// Should be rejected by CEL validation (project_name_segments)
 		Expect(status.Message()).To(ContainSubstring("validation failed"))
-		Expect(status.Message()).To(ContainSubstring("project name must be empty (root project) or dot-separated DNS labels"))
+		Expect(status.Message()).To(ContainSubstring("project name must be dot-separated DNS labels"))
 	})
 
 	It("Rejects Tenant with dots (proves IGNORE_ALWAYS is working for Projects)", func() {
@@ -273,7 +296,7 @@ var _ = Describe("Protovalidate validation", func() {
 			Object: privatev1.Project_builder{
 				Metadata: privatev1.Metadata_builder{
 					Name:   "valid-project",
-					Tenant: "my-tenant",
+					Tenant: tenantName,
 				}.Build(),
 				Spec: privatev1.ProjectSpec_builder{
 					Title: "Valid Project",
@@ -294,7 +317,7 @@ var _ = Describe("Protovalidate validation", func() {
 				Id: validProject.Object.Id,
 				Metadata: privatev1.Metadata_builder{
 					Name:   invalidName,
-					Tenant: "my-tenant",
+					Tenant: tenantName,
 				}.Build(),
 				Spec: privatev1.ProjectSpec_builder{
 					Title: "Updated Title",
@@ -308,7 +331,7 @@ var _ = Describe("Protovalidate validation", func() {
 		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 		// Should be rejected by message-level CEL validation
 		Expect(status.Message()).To(ContainSubstring("validation failed"))
-		Expect(status.Message()).To(ContainSubstring("project name must be empty (root project) or dot-separated DNS labels"))
+		Expect(status.Message()).To(ContainSubstring("project name must be dot-separated DNS labels"))
 	})
 
 	It("Accepts partial Update with empty name not in mask (update_mask bypass)", func() {
@@ -322,7 +345,7 @@ var _ = Describe("Protovalidate validation", func() {
 			Object: privatev1.Project_builder{
 				Metadata: privatev1.Metadata_builder{
 					Name:   "valid-project",
-					Tenant: "my-tenant",
+					Tenant: tenantName,
 				}.Build(),
 				Spec: privatev1.ProjectSpec_builder{
 					Title: "Original Title",
@@ -374,7 +397,7 @@ var _ = Describe("Protovalidate validation", func() {
 			Object: privatev1.Project_builder{
 				Metadata: privatev1.Metadata_builder{
 					Name:   "valid-project",
-					Tenant: "my-tenant",
+					Tenant: tenantName,
 				}.Build(),
 				Spec: privatev1.ProjectSpec_builder{
 					Title: "Original Title",
@@ -395,7 +418,7 @@ var _ = Describe("Protovalidate validation", func() {
 				Id: validProject.Object.Id,
 				Metadata: privatev1.Metadata_builder{
 					Name:   invalidName,
-					Tenant: "my-tenant",
+					Tenant: tenantName,
 				}.Build(),
 			}.Build(),
 			UpdateMask: &fieldmaskpb.FieldMask{
@@ -410,17 +433,18 @@ var _ = Describe("Protovalidate validation", func() {
 		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 		// Should be rejected by message-level CEL validation
 		Expect(status.Message()).To(ContainSubstring("validation failed"))
-		Expect(status.Message()).To(ContainSubstring("project name must be empty (root project) or dot-separated DNS labels"))
+		Expect(status.Message()).To(ContainSubstring("project name must be dot-separated DNS labels"))
 	})
 
 	It("Rejects Update with invalid label in mask (Go validation on labels)", func() {
 		// Tests Go validation on labels works in Update flow
 
 		// Create a valid tenant
+		tenantName := fmt.Sprintf("upd-labels-%s", uuid.New()[24:32])
 		validTenant, err := tenantClient.Create(ctx, privatev1.TenantsCreateRequest_builder{
 			Object: privatev1.Tenant_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name: "update-labels-test",
+					Name: tenantName,
 					Labels: map[string]string{
 						"key1": "value1",
 					},
@@ -441,6 +465,7 @@ var _ = Describe("Protovalidate validation", func() {
 			Object: privatev1.Tenant_builder{
 				Id: validTenant.Object.Id,
 				Metadata: privatev1.Metadata_builder{
+					Name: tenantName,
 					Labels: map[string]string{
 						longKey: "value",
 					},

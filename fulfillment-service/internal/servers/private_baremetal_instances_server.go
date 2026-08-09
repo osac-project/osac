@@ -48,11 +48,14 @@ var _ privatev1.BareMetalInstancesServer = (*PrivateBareMetalInstancesServer)(ni
 
 type PrivateBareMetalInstancesServer struct {
 	privatev1.UnimplementedBareMetalInstancesServer
-	logger          *slog.Logger
-	generic         *GenericServer[*privatev1.BareMetalInstance]
-	catalogItemsDao *dao.GenericDAO[*privatev1.BareMetalInstanceCatalogItem]
-	templatesDao    *dao.GenericDAO[*privatev1.BareMetalInstanceTemplate]
-	hostTypesDao    *dao.GenericDAO[*privatev1.HostType]
+	logger             *slog.Logger
+	generic            *GenericServer[*privatev1.BareMetalInstance]
+	catalogItemsDao    *dao.GenericDAO[*privatev1.BareMetalInstanceCatalogItem]
+	templatesDao       *dao.GenericDAO[*privatev1.BareMetalInstanceTemplate]
+	hostTypesDao       *dao.GenericDAO[*privatev1.HostType]
+	subnetsDao         *dao.GenericDAO[*privatev1.Subnet]
+	virtualNetworksDao *dao.GenericDAO[*privatev1.VirtualNetwork]
+	networkClassesDao  *dao.GenericDAO[*privatev1.NetworkClass]
 }
 
 func NewPrivateBareMetalInstancesServer() *PrivateBareMetalInstancesServerBuilder {
@@ -125,6 +128,33 @@ func (b *PrivateBareMetalInstancesServerBuilder) Build() (result *PrivateBareMet
 		return
 	}
 
+	subnetsDao, err := dao.NewGenericDAO[*privatev1.Subnet]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
+	virtualNetworksDao, err := dao.NewGenericDAO[*privatev1.VirtualNetwork]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
+	networkClassesDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
 	generic, err := NewGenericServer[*privatev1.BareMetalInstance]().
 		SetLogger(b.logger).
 		SetService(privatev1.BareMetalInstances_ServiceDesc.ServiceName).
@@ -138,11 +168,14 @@ func (b *PrivateBareMetalInstancesServerBuilder) Build() (result *PrivateBareMet
 	}
 
 	result = &PrivateBareMetalInstancesServer{
-		logger:          b.logger,
-		generic:         generic,
-		catalogItemsDao: catalogItemsDao,
-		templatesDao:    templatesDao,
-		hostTypesDao:    hostTypesDao,
+		logger:             b.logger,
+		generic:            generic,
+		catalogItemsDao:    catalogItemsDao,
+		templatesDao:       templatesDao,
+		hostTypesDao:       hostTypesDao,
+		subnetsDao:         subnetsDao,
+		virtualNetworksDao: virtualNetworksDao,
+		networkClassesDao:  networkClassesDao,
 	}
 	return
 }
@@ -168,6 +201,9 @@ func (s *PrivateBareMetalInstancesServer) Create(ctx context.Context,
 		return
 	}
 	if err = s.validateNetworkAttachments(ctx, request.GetObject()); err != nil {
+		return
+	}
+	if err = s.validateNetworkAttachmentsRequireFabricManager(ctx, request.GetObject()); err != nil {
 		return
 	}
 	err = s.generic.Create(ctx, request, &response)
@@ -552,6 +588,64 @@ func (s *PrivateBareMetalInstancesServer) validateNetworkAttachments(ctx context
 		}
 	}
 
+	return nil
+}
+
+// validateNetworkAttachmentsRequireFabricManager rejects Create when any network_attachments entry
+// resolves (Subnet -> VirtualNetwork -> NetworkClass) to a NetworkClass with no fabric_manager.
+// BareMetalInstance provisioning is a fabric-level operation with no k8sManager fallback. Attachments
+// whose subnet, virtual network, or network class cannot be found are skipped rather than rejected:
+// resolution to a concrete instance (via AAP) already fails independently for a dangling reference, and
+// many existing fixtures use placeholder subnet IDs that predate this check.
+func (s *PrivateBareMetalInstancesServer) validateNetworkAttachmentsRequireFabricManager(
+	ctx context.Context, bmi *privatev1.BareMetalInstance) error {
+	for i, a := range bmi.GetSpec().GetNetworkAttachments() {
+		subnetKey := refKey(a.GetSubnet())
+		if subnetKey == "" {
+			continue
+		}
+
+		subnetResp, err := s.subnetsDao.Get().SetId(subnetKey).Do(ctx)
+		if err != nil {
+			var notFoundErr *dao.ErrNotFound
+			if errors.As(err, &notFoundErr) {
+				continue
+			}
+			s.logger.ErrorContext(ctx, "Failed to lookup subnet for fabric manager validation",
+				slog.String("subnet_id", subnetKey), slog.Any("error", err))
+			return grpcstatus.Errorf(grpccodes.Internal, "failed to validate network_attachments")
+		}
+
+		virtualNetworkKey := refKey(subnetResp.GetObject().GetSpec().GetVirtualNetwork())
+		vnResp, err := s.virtualNetworksDao.Get().SetId(virtualNetworkKey).Do(ctx)
+		if err != nil {
+			var notFoundErr *dao.ErrNotFound
+			if errors.As(err, &notFoundErr) {
+				continue
+			}
+			s.logger.ErrorContext(ctx, "Failed to lookup virtual network for fabric manager validation",
+				slog.String("virtual_network_id", virtualNetworkKey), slog.Any("error", err))
+			return grpcstatus.Errorf(grpccodes.Internal, "failed to validate network_attachments")
+		}
+
+		networkClassKey := refKey(vnResp.GetObject().GetSpec().GetNetworkClass())
+		ncResp, err := s.networkClassesDao.Get().SetId(networkClassKey).Do(ctx)
+		if err != nil {
+			var notFoundErr *dao.ErrNotFound
+			if errors.As(err, &notFoundErr) {
+				continue
+			}
+			s.logger.ErrorContext(ctx, "Failed to lookup network class for fabric manager validation",
+				slog.String("network_class_id", networkClassKey), slog.Any("error", err))
+			return grpcstatus.Errorf(grpccodes.Internal, "failed to validate network_attachments")
+		}
+
+		if !ncResp.GetObject().HasFabricManager() {
+			return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+				"network_attachments[%d]: subnet '%s' uses NetworkClass '%s' which has no 'fabric_manager'; "+
+					"bare metal instances require a fabric manager", i, subnetKey, networkClassKey)
+		}
+	}
 	return nil
 }
 

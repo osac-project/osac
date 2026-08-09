@@ -6,7 +6,6 @@
   vars:
     tenant_name: "{{ osac_job_vars.resource.metadata.name }}"
     tenant_namespace: "{{ osac_job_vars.resource.metadata.namespace }}"
-    _storage_tiers_raw: "{{ lookup('env', 'STORAGE_TIERS') }}"
 
   pre_tasks:
     - name: Show resource metadata
@@ -23,30 +22,24 @@
         osac_job_vars.resource.metadata.namespace is not defined or
         osac_job_vars.resource.metadata.namespace | length == 0
 
-    - name: Parse STORAGE_TIERS JSON
-      when: _storage_tiers_raw | length > 0
-      block:
-        - name: Parse tier list from env var
-          ansible.builtin.set_fact:
-            _storage_tiers: "{{ _storage_tiers_raw | from_json }}"
-      rescue:
-        - name: Fail on malformed STORAGE_TIERS JSON
-          ansible.builtin.fail:
-            msg: >-
-              STORAGE_TIERS env var contains invalid JSON.
-              Value: '{{ _storage_tiers_raw }}'.
-              Expected a JSON array of tier objects with name, protocol, and provider fields.
+    - name: Validate storage_tier_definitions is a non-empty array in the EDA event
+      ansible.builtin.fail:
+        msg: >-
+          osac_job_vars.storage_tier_definitions must be a non-empty array, populated
+          by osac-operator from the Tenant's resolved storage tiers.
+          Example: [{"name":"default","protocol":"nfs","provider":"vast","backend_id":"be-001","quota_bytes":500}]
+      when: >-
+        osac_job_vars.storage_tier_definitions is not defined or
+        osac_job_vars.storage_tier_definitions is not sequence or
+        osac_job_vars.storage_tier_definitions is string or
+        osac_job_vars.storage_tier_definitions is mapping or
+        osac_job_vars.storage_tier_definitions | length == 0
 
   tasks:
-    - name: Skip teardown when STORAGE_TIERS is not configured
-      when: _storage_tiers_raw | length == 0
-      ansible.builtin.debug:
-        msg: "STORAGE_TIERS env var is not set — nothing to tear down."
-
     - name: Delete tenant storage backend
-      when: _storage_tiers_raw | length > 0
       ansible.builtin.include_role:
         name: osac.service.storage_provider
       vars:
         storage_provider_action: teardown_backend
-        storage_provider_tiers: "{{ _storage_tiers }}"
+        storage_provider_tiers: "{{ osac_job_vars.storage_tier_definitions }}"
+        storage_provider_backend_connections: "{{ osac_job_vars.storage_backend_connections | default({}) }}"

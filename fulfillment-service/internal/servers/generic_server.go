@@ -540,13 +540,14 @@ func (s *GenericServer[O]) prepareForCreate(ctx context.Context, request any) (O
 	requestObject := requestMsg.GetObject()
 	if s.isNil(requestObject) {
 		requestObject = proto.Clone(s.template).(O)
-	} else {
-		requestMetadata := s.getMetadata(requestObject)
-		if requestMetadata != nil {
-			if err := s.validateMetadata(ctx, requestMetadata); err != nil {
-				return nilObject, err
-			}
-		}
+	}
+
+	requestMetadata := s.getMetadata(requestObject)
+	if requestMetadata == nil {
+		return nilObject, grpcstatus.Errorf(grpccodes.InvalidArgument, "metadata is required")
+	}
+	if err := s.validateMetadata(ctx, requestMetadata); err != nil {
+		return nilObject, err
 	}
 
 	assignedCreator, err := s.determineAssignedCreator(ctx)

@@ -121,6 +121,31 @@ spec:
                 x-kubernetes-validations:
                 - message: cores is immutable
                   rule: self == oldSelf
+              gpu:
+                description: Gpu defines GPU passthrough configuration resolved from
+                  the InstanceType.
+                properties:
+                  count:
+                    description: Count is the number of GPU devices of this type.
+                    format: int32
+                    maximum: 16
+                    minimum: 1
+                    type: integer
+                  pciDeviceSelector:
+                    description: PciDeviceSelector is the PCI vendor:device ID (e.g.,
+                      "10DE:20B0").
+                    minLength: 1
+                    type: string
+                  resourceName:
+                    description: ResourceName is the Kubernetes device plugin resource
+                      (e.g., "nvidia.com/A100").
+                    minLength: 1
+                    type: string
+                required:
+                - count
+                - pciDeviceSelector
+                - resourceName
+                type: object
               guestOSFamily:
                 description: |-
                   GuestOSFamily specifies the guest operating system family for the VM.

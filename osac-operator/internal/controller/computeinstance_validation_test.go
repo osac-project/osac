@@ -488,6 +488,85 @@ var _ = Describe("ComputeInstance CEL Validation", func() {
 		})
 	})
 
+	Describe("GPU validation", func() {
+		It("should allow creation with valid GPU spec", func() {
+			instance := createValidInstance("test-gpu-valid")
+			instance.Spec.Gpu = &osacv1alpha1.GpuSpec{
+				PciDeviceSelector: "10DE:20B0",
+				ResourceName:      "nvidia.com/A100",
+				Count:             1,
+			}
+
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		})
+
+		It("should allow creation without GPU spec", func() {
+			instance := createValidInstance("test-gpu-none")
+
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		})
+
+		It("should omit gpu from JSON when not set (omitempty)", func() {
+			instance := createValidInstance("test-gpu-omitempty")
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(instance), instance)).To(Succeed())
+			Expect(instance.Spec.Gpu).To(BeNil())
+		})
+
+		It("should reject GPU with count below minimum", func() {
+			instance := createValidInstance("test-gpu-count-zero")
+			instance.Spec.Gpu = &osacv1alpha1.GpuSpec{
+				PciDeviceSelector: "10DE:20B0",
+				ResourceName:      "nvidia.com/A100",
+				Count:             0,
+			}
+
+			err := k8sClient.Create(ctx, instance)
+			Expect(err).To(HaveOccurred())
+			Expect(apierrors.IsInvalid(err)).To(BeTrue())
+		})
+
+		It("should reject GPU with count above maximum", func() {
+			instance := createValidInstance("test-gpu-count-max")
+			instance.Spec.Gpu = &osacv1alpha1.GpuSpec{
+				PciDeviceSelector: "10DE:20B0",
+				ResourceName:      "nvidia.com/A100",
+				Count:             17,
+			}
+
+			err := k8sClient.Create(ctx, instance)
+			Expect(err).To(HaveOccurred())
+			Expect(apierrors.IsInvalid(err)).To(BeTrue())
+		})
+
+		It("should reject GPU with empty pciDeviceSelector", func() {
+			instance := createValidInstance("test-gpu-empty-pci")
+			instance.Spec.Gpu = &osacv1alpha1.GpuSpec{
+				PciDeviceSelector: "",
+				ResourceName:      "nvidia.com/A100",
+				Count:             1,
+			}
+
+			err := k8sClient.Create(ctx, instance)
+			Expect(err).To(HaveOccurred())
+			Expect(apierrors.IsInvalid(err)).To(BeTrue())
+		})
+
+		It("should reject GPU with empty resourceName", func() {
+			instance := createValidInstance("test-gpu-empty-rn")
+			instance.Spec.Gpu = &osacv1alpha1.GpuSpec{
+				PciDeviceSelector: "10DE:20B0",
+				ResourceName:      "",
+				Count:             1,
+			}
+
+			err := k8sClient.Create(ctx, instance)
+			Expect(err).To(HaveOccurred())
+			Expect(apierrors.IsInvalid(err)).To(BeTrue())
+		})
+	})
+
 	Describe("MaxItems validation", func() {
 		It("should reject creating ComputeInstance with more than 8 networkAttachments", func() {
 			instance := createValidInstance("test-max-attachments")

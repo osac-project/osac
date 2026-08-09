@@ -60,6 +60,25 @@ type DiskSpec struct {
 	StorageTier string `json:"storageTier,omitempty"`
 }
 
+// GpuSpec defines GPU passthrough configuration resolved from the InstanceType.
+type GpuSpec struct {
+	// PciDeviceSelector is the PCI vendor:device ID (e.g., "10DE:20B0").
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	PciDeviceSelector string `json:"pciDeviceSelector"`
+
+	// ResourceName is the Kubernetes device plugin resource (e.g., "nvidia.com/A100").
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	ResourceName string `json:"resourceName"`
+
+	// Count is the number of GPU devices of this type.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=16
+	Count int32 `json:"count"`
+}
+
 // RunStrategyType defines valid VM run strategies
 // +kubebuilder:validation:Enum=Always;Halted
 type RunStrategyType string
@@ -136,6 +155,10 @@ type ComputeInstanceSpec struct {
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="additionalDisks is immutable"
 	AdditionalDisks []DiskSpec `json:"additionalDisks,omitempty"`
+
+	// Gpu defines GPU passthrough configuration resolved from the InstanceType.
+	// +optional
+	Gpu *GpuSpec `json:"gpu,omitempty"`
 
 	// RunStrategy controls VM running state (MUTABLE)
 	// +kubebuilder:validation:Required

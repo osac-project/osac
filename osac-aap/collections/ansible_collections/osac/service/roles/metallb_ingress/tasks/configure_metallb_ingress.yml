@@ -4,6 +4,21 @@
   ansible.builtin.set_fact:
     metallb_namespace: metallb-system
 
+- name: Wait for pod-to-API connectivity on hosted cluster
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ metallb_ingress_admin_kubeconfig }}"
+    api_version: v1
+    kind: Pod
+    namespace: kube-system
+    label_selectors:
+      - app=konnectivity-agent
+  register: _konnectivity_check
+  until:
+    - _konnectivity_check.resources | length > 0
+    - _konnectivity_check.resources[0].status.phase == "Running"
+  retries: 60
+  delay: 10
+
 - name: Create metallb namespace
   kubernetes.core.k8s:
     state: present

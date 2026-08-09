@@ -8,8 +8,8 @@
 #
 # Netris exposes DHCP leases via the IPAM hosts API:
 #   GET /api/v2/ipam/hosts/{subnetID}
-# Each host entry has address, name, and meta fields.
-# DHCP lease entries include the client MAC in meta.mac.
+# Each host entry has address, name, meta, and mac fields.
+# DHCP lease entries include a mac array with address/source/state.
 
 - name: Extract DHCP lease query parameters
   ansible.builtin.set_fact:
@@ -102,7 +102,11 @@
   loop: "{{ _dq_hosts_resp.json.data | default([]) }}"
   when:
     - _dq_matched_ip | length == 0
-    - (item.meta.mac | default(item.name) | default('') | lower) == _dq_port_mac
+    - (item.mac | default([]))
+      | map(attribute='address')
+      | map('lower')
+      | select('equalto', _dq_port_mac)
+      | list | length > 0
   loop_control:
     label: "{{ item.address | default('unknown') }}"
   no_log: true

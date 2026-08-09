@@ -92,6 +92,45 @@ def test_instance_type_lifecycle(cli: OsacCLI, private_grpc: GRPCClient) -> None
                 raise
 
 
+def test_create_instance_type_via_cli(cli: OsacCLI, private_grpc: GRPCClient) -> None:
+    it_name: str = f"e2e-cli-it-{uuid4().hex[:8]}"
+
+    try:
+        cli.create_instance_type(
+            name=it_name,
+            cores=TEST_CORES,
+            memory_gib=TEST_MEMORY_GIB,
+            description="CLI create test type",
+            gpu_pci_device_selector=TEST_GPU["pci_device_selector"],
+            gpu_resource_name=TEST_GPU["resource_name"],
+            gpu_count=TEST_GPU["count"],
+        )
+
+        response: dict = private_grpc.get_instance_type(name=it_name)
+        spec: dict = response["object"]["spec"]
+        assert spec["cores"] == TEST_CORES, f"spec.cores mismatch: {spec['cores']} != {TEST_CORES}"
+        assert spec["memoryGib"] == TEST_MEMORY_GIB, (
+            f"spec.memoryGib mismatch: {spec['memoryGib']} != {TEST_MEMORY_GIB}"
+        )
+        assert "gpu" in spec, f"spec.gpu missing from response: {spec}"
+        gpu: dict = spec["gpu"]
+        assert gpu["pciDeviceSelector"] == TEST_GPU["pci_device_selector"], (
+            f"gpu.pciDeviceSelector mismatch: {gpu['pciDeviceSelector']} != {TEST_GPU['pci_device_selector']}"
+        )
+        assert gpu["resourceName"] == TEST_GPU["resource_name"], (
+            f"gpu.resourceName mismatch: {gpu['resourceName']} != {TEST_GPU['resource_name']}"
+        )
+        assert gpu["count"] == TEST_GPU["count"], f"gpu.count mismatch: {gpu['count']} != {TEST_GPU['count']}"
+
+    finally:
+        try:
+            private_grpc.delete_instance_type(name=it_name)
+        except subprocess.CalledProcessError as e:
+            output = ((e.stdout or "") + (e.stderr or "")).lower()
+            if "not found" not in output:
+                raise
+
+
 def test_gpu_instance_type(private_grpc: GRPCClient) -> None:
     gpu_name: str = f"e2e-gpu-lifecycle-{uuid4().hex[:8]}"
     nogpu_name: str = f"e2e-nogpu-lifecycle-{uuid4().hex[:8]}"

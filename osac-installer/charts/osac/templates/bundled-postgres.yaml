@@ -16,6 +16,17 @@ type: Opaque
 stringData:
   url: "postgres://{{ .Values.bundledPostgres.database.user }}@postgres:5432/{{ .Values.bundledPostgres.database.name }}?sslmode=verify-full&sslrootcert=/etc/fulfillment-grpc-server/db/sslrootcert&sslcert=/etc/fulfillment-grpc-server/db/sslcert&sslkey=/etc/fulfillment-grpc-server/db/sslkey"
 ---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: metering-db
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  url: "postgres://metering@postgres:5432/metering?sslmode=verify-full&sslrootcert=/etc/metering/db/sslrootcert&sslcert=/etc/metering/db/sslcert&sslkey=/etc/metering/db/sslkey"
+---
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
@@ -31,6 +42,24 @@ spec:
   usages:
   - client auth
   secretName: postgres-client-cert-service
+  privateKey:
+    rotationPolicy: Always
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: postgres-client-metering
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+spec:
+  issuerRef:
+    kind: {{ .Values.service.certs.issuerRef.kind }}
+    name: {{ .Values.service.certs.issuerRef.name }}
+  commonName: "metering"
+  usages:
+  - client auth
+  secretName: postgres-client-cert-metering
   privateKey:
     rotationPolicy: Always
 ---
@@ -92,6 +121,8 @@ stringData:
     psql <<'.'
     create user {{ .Values.bundledPostgres.database.user }};
     create database {{ .Values.bundledPostgres.database.name }} owner {{ .Values.bundledPostgres.database.user }};
+    create user metering;
+    create database metering owner metering;
     .
 ---
 apiVersion: v1

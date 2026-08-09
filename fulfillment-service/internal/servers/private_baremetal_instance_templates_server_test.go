@@ -16,6 +16,7 @@ package servers
 import (
 	"fmt"
 
+	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/protobuf/proto"
@@ -80,7 +81,10 @@ var _ = Describe("Private bare metal instance templates server", func() {
 		It("Creates object", func() {
 			response, err := server.Create(ctx, privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceTemplate_builder{
-					Id:          "test_template_create",
+					Id: "test_template_create",
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:       "My template",
 					Description: "A test template.",
 				}.Build(),
@@ -98,7 +102,10 @@ var _ = Describe("Private bare metal instance templates server", func() {
 			for i := range count {
 				_, err := server.Create(ctx, privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
 					Object: privatev1.BareMetalInstanceTemplate_builder{
-						Id:    fmt.Sprintf("test_template_list_%d", i),
+						Id: fmt.Sprintf("test_template_list_%d", i),
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Title: fmt.Sprintf("Template %d", i),
 					}.Build(),
 				}.Build())
@@ -113,7 +120,10 @@ var _ = Describe("Private bare metal instance templates server", func() {
 		It("Gets object", func() {
 			createResponse, err := server.Create(ctx, privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceTemplate_builder{
-					Id:    "test_template_get",
+					Id: "test_template_get",
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title: "My template",
 				}.Build(),
 			}.Build())
@@ -130,7 +140,10 @@ var _ = Describe("Private bare metal instance templates server", func() {
 		It("Updates object", func() {
 			createResponse, err := server.Create(ctx, privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceTemplate_builder{
-					Id:          "test_template_update",
+					Id: "test_template_update",
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:       "Original title",
 					Description: "Original description.",
 				}.Build(),
@@ -153,7 +166,10 @@ var _ = Describe("Private bare metal instance templates server", func() {
 		It("Rejects update when ID does not match required pattern", func() {
 			createResponse, err := server.Create(ctx, privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceTemplate_builder{
-					Id:    "0192a3b4-5678-7def-9012-abcdef345678",
+					Id: "0192a3b4-5678-7def-9012-abcdef345678",
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title: "My template",
 				}.Build(),
 			}.Build())
@@ -197,7 +213,10 @@ var _ = Describe("Private bare metal instance templates server", func() {
 		It("Signals object", func() {
 			createResponse, err := server.Create(ctx, privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceTemplate_builder{
-					Id:    "test_template_signal",
+					Id: "test_template_signal",
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title: "My template",
 				}.Build(),
 			}.Build())

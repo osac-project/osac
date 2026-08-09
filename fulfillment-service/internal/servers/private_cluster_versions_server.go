@@ -36,6 +36,7 @@ import (
 )
 
 const maxSemVerLength = 256
+const maxImageLength = 512
 
 type PrivateClusterVersionsServerBuilder struct {
 	logger            *slog.Logger
@@ -299,6 +300,10 @@ func validateClusterVersionCreateRequest(request *privatev1.ClusterVersionsCreat
 	}
 	if spec.GetImage() == "" {
 		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.image' is required")
+	}
+	if len(spec.GetImage()) > maxImageLength {
+		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'spec.image' exceeds maximum length of %d characters", maxImageLength)
 	}
 
 	// Validate semver format:

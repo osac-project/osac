@@ -1,0 +1,40 @@
+---
+# LVMS setup: create a per-tenant hub Secret as a lifecycle marker.
+# LVMS has no external backend credentials — the Secret exists solely so that
+# the storage controller's hubSecretExists() check returns true, allowing it to
+# advance from Stage 1 (StorageBackendReady) to Stage 2 (ensure_storage_class).
+# Deleted by teardown_backend when the tenant is removed.
+
+- name: Assert _provider_tiers is defined and non-empty
+  ansible.builtin.assert:
+    that:
+      - _provider_tiers is defined
+      - _provider_tiers | length > 0
+    fail_msg: >-
+      _provider_tiers must be provided by the service role dispatcher.
+      This role should not be called directly — use osac.service.storage_provider.
+
+- name: Validate tenant_name is a valid DNS label
+  ansible.builtin.fail:
+    msg: "tenant_name '{{ tenant_name }}' is not a valid DNS label."
+  when: tenant_name is not regex('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+
+- name: Create hub lifecycle marker Secret for tenant
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: "{{ lvms_storage_tenant_config_secret_prefix }}{{ tenant_name }}"
+        namespace: "{{ lvms_storage_config_namespace }}"
+        labels:
+          osac.openshift.io/tenant: "{{ tenant_name }}"
+          app.kubernetes.io/managed-by: osac-aap
+      stringData:
+        provider: lvms
+
+- name: Set tenant config output (required by dispatcher)
+  ansible.builtin.set_fact:
+    storage_provider_tenant_config:
+      provider: lvms

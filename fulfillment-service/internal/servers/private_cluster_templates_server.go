@@ -133,8 +133,14 @@ func (s *PrivateClusterTemplatesServer) Get(ctx context.Context,
 func (s *PrivateClusterTemplatesServer) Create(ctx context.Context,
 	request *privatev1.ClusterTemplatesCreateRequest) (response *privatev1.ClusterTemplatesCreateResponse, err error) {
 	if object := request.GetObject(); object != nil {
-		if err = s.validateSpecDefaultsVersionName(ctx, object); err != nil {
+		if err = s.validateSpecDefaultsVersion(ctx, object); err != nil {
 			return
+		}
+		if object.GetMetadata().GetName() == "" && object.GetId() != "" {
+			if object.GetMetadata() == nil {
+				object.SetMetadata(&privatev1.Metadata{})
+			}
+			object.GetMetadata().SetName(templateNameFromID(object.GetId()))
 		}
 	}
 	err = s.generic.Create(ctx, request, &response)
@@ -145,7 +151,7 @@ func (s *PrivateClusterTemplatesServer) Update(ctx context.Context,
 	request *privatev1.ClusterTemplatesUpdateRequest) (response *privatev1.ClusterTemplatesUpdateResponse, err error) {
 	if object := request.GetObject(); object != nil {
 		if updateIncludesField(request.GetUpdateMask(), "spec_defaults") {
-			if err = s.validateSpecDefaultsVersionName(ctx, object); err != nil {
+			if err = s.validateSpecDefaultsVersion(ctx, object); err != nil {
 				return
 			}
 		}
@@ -154,14 +160,14 @@ func (s *PrivateClusterTemplatesServer) Update(ctx context.Context,
 	return
 }
 
-func (s *PrivateClusterTemplatesServer) validateSpecDefaultsVersionName(
+func (s *PrivateClusterTemplatesServer) validateSpecDefaultsVersion(
 	ctx context.Context, template *privatev1.ClusterTemplate,
 ) error {
-	if !template.GetSpecDefaults().HasVersionName() {
+	versionRef := template.GetSpecDefaults().GetVersion()
+	if versionRef == nil || versionRef.GetName() == "" {
 		return nil
 	}
-	name := template.GetSpecDefaults().GetVersionName()
-	return lookupAndValidateClusterVersion(ctx, s.logger, s.clusterVersionsDao, name)
+	return lookupAndValidateClusterVersion(ctx, s.logger, s.clusterVersionsDao, versionRef.GetName())
 }
 
 func (s *PrivateClusterTemplatesServer) Delete(ctx context.Context,

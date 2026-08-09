@@ -30,7 +30,7 @@ var _ = Describe("Calculator", func() {
 	Context("when no fields have changed", func() {
 		It("should return an empty field mask", func() {
 			finalizers := []string{"controller"}
-			template := "template-1"
+			template := privatev1.ClusterTemplateReference_builder{Id: "template-1"}.Build()
 
 			before := privatev1.Cluster_builder{
 				Id: "test-cluster",
@@ -84,18 +84,18 @@ var _ = Describe("Calculator", func() {
 		It("should detect string field change", func() {
 			before := privatev1.Cluster_builder{
 				Spec: privatev1.ClusterSpec_builder{
-					Template: "template-1",
+					Template: privatev1.ClusterTemplateReference_builder{Id: "template-1"}.Build(),
 				}.Build(),
 			}.Build()
 
 			after := privatev1.Cluster_builder{
 				Spec: privatev1.ClusterSpec_builder{
-					Template: "template-2",
+					Template: privatev1.ClusterTemplateReference_builder{Id: "template-2"}.Build(),
 				}.Build(),
 			}.Build()
 
 			mask := calculator.Calculate(before, after)
-			Expect(mask.Paths).To(ContainElement("spec.template"))
+			Expect(mask.Paths).To(ContainElement("spec.template.id"))
 		})
 
 		It("should detect hub field addition", func() {
@@ -226,7 +226,7 @@ var _ = Describe("Calculator", func() {
 				Spec: privatev1.ClusterSpec_builder{
 					NodeSets: map[string]*privatev1.ClusterNodeSet{
 						"workers": privatev1.ClusterNodeSet_builder{
-							HostType: "worker-type",
+							HostType: privatev1.HostTypeReference_builder{Id: "worker-type"}.Build(),
 							Size:     3,
 						}.Build(),
 					},
@@ -237,7 +237,7 @@ var _ = Describe("Calculator", func() {
 				Spec: privatev1.ClusterSpec_builder{
 					NodeSets: map[string]*privatev1.ClusterNodeSet{
 						"workers": privatev1.ClusterNodeSet_builder{
-							HostType: "worker-type",
+							HostType: privatev1.HostTypeReference_builder{Id: "worker-type"}.Build(),
 							Size:     5,
 						}.Build(),
 					},
@@ -253,7 +253,7 @@ var _ = Describe("Calculator", func() {
 				Spec: privatev1.ClusterSpec_builder{
 					NodeSets: map[string]*privatev1.ClusterNodeSet{
 						"workers": privatev1.ClusterNodeSet_builder{
-							HostType: "worker-type",
+							HostType: privatev1.HostTypeReference_builder{Id: "worker-type"}.Build(),
 							Size:     3,
 						}.Build(),
 					},
@@ -264,11 +264,11 @@ var _ = Describe("Calculator", func() {
 				Spec: privatev1.ClusterSpec_builder{
 					NodeSets: map[string]*privatev1.ClusterNodeSet{
 						"workers": privatev1.ClusterNodeSet_builder{
-							HostType: "worker-type",
+							HostType: privatev1.HostTypeReference_builder{Id: "worker-type"}.Build(),
 							Size:     3,
 						}.Build(),
 						"storage": privatev1.ClusterNodeSet_builder{
-							HostType: "storage-type",
+							HostType: privatev1.HostTypeReference_builder{Id: "storage-type"}.Build(),
 							Size:     2,
 						}.Build(),
 					},
@@ -284,11 +284,11 @@ var _ = Describe("Calculator", func() {
 				Spec: privatev1.ClusterSpec_builder{
 					NodeSets: map[string]*privatev1.ClusterNodeSet{
 						"workers": privatev1.ClusterNodeSet_builder{
-							HostType: "worker-type",
+							HostType: privatev1.HostTypeReference_builder{Id: "worker-type"}.Build(),
 							Size:     3,
 						}.Build(),
 						"storage": privatev1.ClusterNodeSet_builder{
-							HostType: "storage-type",
+							HostType: privatev1.HostTypeReference_builder{Id: "storage-type"}.Build(),
 							Size:     2,
 						}.Build(),
 					},
@@ -299,7 +299,7 @@ var _ = Describe("Calculator", func() {
 				Spec: privatev1.ClusterSpec_builder{
 					NodeSets: map[string]*privatev1.ClusterNodeSet{
 						"workers": privatev1.ClusterNodeSet_builder{
-							HostType: "worker-type",
+							HostType: privatev1.HostTypeReference_builder{Id: "worker-type"}.Build(),
 							Size:     3,
 						}.Build(),
 					},
@@ -313,7 +313,7 @@ var _ = Describe("Calculator", func() {
 
 	Context("when multiple fields change at different levels", func() {
 		It("should detect all changed fields", func() {
-			template := "template-1"
+			template := privatev1.ClusterTemplateReference_builder{Id: "template-1"}.Build()
 
 			before := privatev1.Cluster_builder{
 				Id: "test-cluster",

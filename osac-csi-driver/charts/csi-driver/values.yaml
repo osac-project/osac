@@ -9,6 +9,7 @@ image:
 
 controller:
   replicas: 1
+  clusterID: ""
   fulfillmentEndpoint: ""
   vendorSockets: ""
   resources:

@@ -118,11 +118,11 @@ var _ = Describe("ApplyFields", func() {
 
 	It("does nothing with empty fields", func() {
 		spec := publicv1.ClusterSpec_builder{
-			CatalogItem: "cat-123",
+			CatalogItem: publicv1.ClusterCatalogItemReference_builder{Id: "cat-123"}.Build(),
 		}.Build()
 		err := ApplyFields(spec, nil)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(spec.GetCatalogItem()).To(Equal("cat-123"))
+		Expect(spec.GetCatalogItem().GetId()).To(Equal("cat-123"))
 	})
 
 	It("returns error for invalid format", func() {

@@ -34,7 +34,7 @@ type daoReferenceChecker[Resource dao.Object] struct {
 }
 
 func (c *daoReferenceChecker[Resource]) hasReference(ctx context.Context, catalogItemID string) (bool, error) {
-	filter := fmt.Sprintf("this.spec.catalog_item == %q", catalogItemID)
+	filter := fmt.Sprintf("this.spec.catalog_item.id == %[1]q || this.spec.catalog_item.name == %[1]q", catalogItemID)
 	response, err := c.resourceDao.List().
 		SetFilter(filter).
 		SetLimit(1).

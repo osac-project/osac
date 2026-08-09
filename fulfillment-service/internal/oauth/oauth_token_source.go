@@ -29,6 +29,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -420,19 +421,31 @@ func (b *TokenSourceBuilder) resolveDefaults() (cfg resolvedConfig, err error) {
 		}
 	}
 
-	// Create HTTP client with optional insecure TLS configuration:
+	// Create the HTTP client with optional insecure TLS configuration. If the caller explicitly
+	// supplied a client, trust that it is already configured correctly and use it as-is — don't
+	// overwrite its transport. Otherwise build a fresh client rather than reusing and mutating the
+	// shared http.DefaultClient, and give it a bounded per-request timeout: sendForm sends requests
+	// built with the caller's context, but a client with no Timeout combined with a Transport that
+	// has no dial/handshake/response timeouts would still hang forever if the context is never
+	// canceled (e.g. a bare context.Background()).
 	cfg.httpClient = b.httpClient
 	if cfg.httpClient == nil {
-		cfg.httpClient = http.DefaultClient
-	}
-	tlsConfig := &tls.Config{
-		RootCAs: cfg.caPool,
-	}
-	if b.insecure {
-		tlsConfig.InsecureSkipVerify = true
-	}
-	cfg.httpClient.Transport = &http.Transport{
-		TLSClientConfig: tlsConfig,
+		tlsConfig := &tls.Config{
+			RootCAs:    cfg.caPool,
+			MinVersion: tls.VersionTLS13,
+		}
+		if b.insecure {
+			tlsConfig.InsecureSkipVerify = true
+		}
+		// Clone http.DefaultTransport rather than starting from a bare struct literal, so proxy
+		// support (Proxy: http.ProxyFromEnvironment), dial/keep-alive timeouts, HTTP/2, and
+		// connection pooling defaults are preserved — only the TLS configuration is overridden.
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.TLSClientConfig = tlsConfig
+		cfg.httpClient = &http.Client{
+			Timeout:   httpRequestTimeout,
+			Transport: transport,
+		}
 	}
 
 	// Set the default open function:
@@ -744,7 +757,15 @@ func (s *TokenSource) sendForm(ctx context.Context, endpoint string, form any, r
 	if err != nil {
 		return err
 	}
-	response, err := s.httpClient.PostForm(endpoint, values)
+	// Build the request with the caller's context explicitly rather than using http.Client.PostForm,
+	// which always issues its request with context.Background() and therefore ignores cancellation
+	// and deadlines set by the caller.
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(values.Encode()))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response, err := s.httpClient.Do(request)
 	if err != nil {
 		return err
 	}
@@ -874,6 +895,11 @@ func (s *TokenSource) Invalidate(ctx context.Context) error {
 // defaultRedirectUri is the default redirect URI to use for the authorization code flow. It binds to localhost with
 // a dynamically allocated port.
 const defaultRedirectUri = "http://localhost:0"
+
+// httpRequestTimeout is the timeout applied to the HTTP client built when the caller doesn't supply their own via
+// SetHttpClient. It bounds discovery and token-endpoint requests so a stalled connection to the authorization server
+// fails instead of hanging forever.
+const httpRequestTimeout = 30 * time.Second
 
 // defaultScopes is the list of scopes that will be requested by default if the server supports them and the user
 // doesn't explicitly set scopes.

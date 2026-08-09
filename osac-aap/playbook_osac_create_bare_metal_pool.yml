@@ -4,7 +4,7 @@
   gather_facts: false
 
   vars:
-    bare_metal_pool: "{{ ansible_eda.event.payload }}"
+    bare_metal_pool: "{{ osac_job_vars.resource }}"
     bare_metal_pool_name: "{{ bare_metal_pool.metadata.name }}"
     bare_metal_pool_namespace: "{{ bare_metal_pool.metadata.namespace }}"
     template_id: "{{ bare_metal_pool.metadata.annotations['osac.openshift.io/templateID'] }}"

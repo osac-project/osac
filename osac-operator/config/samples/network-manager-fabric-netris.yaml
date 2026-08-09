@@ -4,7 +4,7 @@
 # virtual network segments, security groups, external IPs, and NAT gateways.
 #
 # The operator discovers fabric managers by selecting ConfigMaps with the label
-# osac.openshift.io/network/fabric-manager. The data.name value is referenced
+# osac.openshift.io/network-fabric-manager. The data.name value is referenced
 # by NetworkClass.fabricManager.
 apiVersion: v1
 kind: ConfigMap
@@ -12,7 +12,7 @@ metadata:
   name: osac-network-fabric-manager-netris
   namespace: osac
   labels:
-    osac.openshift.io/network/fabric-manager: "true"
+    osac.openshift.io/network-fabric-manager: "true"
 data:
   # Unique identifier for this manager. Must match the fabricManager field
   # on NetworkClass resources that use this backend.

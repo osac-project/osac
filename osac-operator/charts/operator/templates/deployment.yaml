@@ -62,6 +62,10 @@ spec:
           - name: OSAC_AAP_TEMPLATE_PREFIX
             value: {{ .Values.aap.templatePrefix | quote }}
           {{- end }}
+          {{- if .Values.networkManagers.capabilitiesSyncInterval }}
+          - name: OSAC_NETWORK_CLASS_SYNC_INTERVAL
+            value: {{ .Values.networkManagers.capabilitiesSyncInterval | quote }}
+          {{- end }}
           - name: OSAC_FULFILLMENT_SERVER_ADDRESS
             value: {{ .Values.fulfillment.serverAddress | default "fulfillment-internal-api:8001" | quote }}
           - name: OSAC_FULFILLMENT_TOKEN_FILE

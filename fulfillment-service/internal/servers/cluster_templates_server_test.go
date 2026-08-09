@@ -16,6 +16,7 @@ package servers
 import (
 	"fmt"
 
+	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/protobuf/proto"
@@ -83,6 +84,9 @@ var _ = Describe("Cluster templates server", func() {
 		It("Creates object", func() {
 			response, err := server.Create(ctx, publicv1.ClusterTemplatesCreateRequest_builder{
 				Object: publicv1.ClusterTemplate_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Id:          "my_template",
 					Title:       "My template",
 					Description: "My template is *nice*",
@@ -101,6 +105,9 @@ var _ = Describe("Cluster templates server", func() {
 			for i := range count {
 				_, err := server.Create(ctx, publicv1.ClusterTemplatesCreateRequest_builder{
 					Object: publicv1.ClusterTemplate_builder{
+						Metadata: publicv1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Id:          fmt.Sprintf("my_template_%d", i),
 						Title:       fmt.Sprintf("My template %d", i),
 						Description: fmt.Sprintf("My template is *nice* %d", i),
@@ -125,6 +132,9 @@ var _ = Describe("Cluster templates server", func() {
 			for i := range count {
 				_, err := server.Create(ctx, publicv1.ClusterTemplatesCreateRequest_builder{
 					Object: publicv1.ClusterTemplate_builder{
+						Metadata: publicv1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Id:          fmt.Sprintf("my_template_%d", i),
 						Title:       fmt.Sprintf("My template %d", i),
 						Description: fmt.Sprintf("My template is *nice* %d", i),
@@ -147,6 +157,9 @@ var _ = Describe("Cluster templates server", func() {
 			for i := range count {
 				_, err := server.Create(ctx, publicv1.ClusterTemplatesCreateRequest_builder{
 					Object: publicv1.ClusterTemplate_builder{
+						Metadata: publicv1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Id:          fmt.Sprintf("my_template_%d", i),
 						Title:       fmt.Sprintf("My template %d", i),
 						Description: fmt.Sprintf("My template is *nice* %d", i),
@@ -171,6 +184,9 @@ var _ = Describe("Cluster templates server", func() {
 			for i := range count {
 				response, err := server.Create(ctx, publicv1.ClusterTemplatesCreateRequest_builder{
 					Object: publicv1.ClusterTemplate_builder{
+						Metadata: publicv1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Id:          fmt.Sprintf("my_template_%d", i),
 						Title:       fmt.Sprintf("My template %d", i),
 						Description: fmt.Sprintf("My template is *nice* %d", i),
@@ -195,6 +211,9 @@ var _ = Describe("Cluster templates server", func() {
 			// Create the object:
 			createResponse, err := server.Create(ctx, publicv1.ClusterTemplatesCreateRequest_builder{
 				Object: publicv1.ClusterTemplate_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Id:          "my_template",
 					Title:       "My template",
 					Description: "My template is *nice*",
@@ -214,6 +233,9 @@ var _ = Describe("Cluster templates server", func() {
 			// Create the object:
 			createResponse, err := server.Create(ctx, publicv1.ClusterTemplatesCreateRequest_builder{
 				Object: publicv1.ClusterTemplate_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Id:          "my_template",
 					Title:       "My template",
 					Description: "My template is *nice*",
@@ -247,6 +269,9 @@ var _ = Describe("Cluster templates server", func() {
 			// Create the object:
 			createResponse, err := server.Create(ctx, publicv1.ClusterTemplatesCreateRequest_builder{
 				Object: publicv1.ClusterTemplate_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Id:          "my_template",
 					Title:       "My template",
 					Description: "My template is *nice*",

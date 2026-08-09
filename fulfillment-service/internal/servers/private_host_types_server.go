@@ -118,6 +118,13 @@ func (s *PrivateHostTypesServer) Get(ctx context.Context,
 
 func (s *PrivateHostTypesServer) Create(ctx context.Context,
 	request *privatev1.HostTypesCreateRequest) (response *privatev1.HostTypesCreateResponse, err error) {
+	obj := request.GetObject()
+	if obj != nil && obj.GetMetadata().GetName() == "" && obj.GetId() != "" {
+		if obj.GetMetadata() == nil {
+			obj.SetMetadata(&privatev1.Metadata{})
+		}
+		obj.GetMetadata().SetName(toDNSLabel(obj.GetId()))
+	}
 	err = s.generic.Create(ctx, request, &response)
 	return
 }

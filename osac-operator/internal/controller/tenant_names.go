@@ -25,11 +25,6 @@ import (
 )
 
 const (
-	// defaultStorageClassSentinel is the label value that marks a shared StorageClass
-	// available to all tenants. No Tenant CR can be named "Default" because uppercase
-	// is forbidden in Kubernetes resource names.
-	defaultStorageClassSentinel = "Default"
-
 	// tenantControllerName is the name used when creating the event recorder
 	tenantControllerName = "tenant-controller"
 

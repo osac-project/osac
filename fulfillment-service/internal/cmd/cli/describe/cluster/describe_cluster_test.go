@@ -33,7 +33,7 @@ var _ = Describe("Rendering tests", func() {
 		cluster := publicv1.Cluster_builder{
 			Id: "cluster-001",
 			Spec: &publicv1.ClusterSpec{
-				Template: "tpl-ha-001",
+				Template: publicv1.ClusterTemplateReference_builder{Id: "tpl-ha-001"}.Build(),
 			},
 			Status: &publicv1.ClusterStatus{
 				State: publicv1.ClusterState_CLUSTER_STATE_READY,
@@ -90,7 +90,7 @@ var _ = Describe("Rendering tests", func() {
 		cluster := publicv1.Cluster_builder{
 			Id: "cluster-006",
 			Spec: &publicv1.ClusterSpec{
-				Template: "tpl-ha-001",
+				Template: publicv1.ClusterTemplateReference_builder{Id: "tpl-ha-001"}.Build(),
 			},
 		}.Build()
 		output := formatCluster(cluster)
@@ -110,7 +110,7 @@ var _ = Describe("Rendering tests", func() {
 		cluster := publicv1.Cluster_builder{
 			Id: "cluster-008",
 			Spec: publicv1.ClusterSpec_builder{
-				CatalogItem: "my-catalog-item-id",
+				CatalogItem: publicv1.ClusterCatalogItemReference_builder{Id: "my-catalog-item-id"}.Build(),
 			}.Build(),
 		}.Build()
 		output := formatCluster(cluster)

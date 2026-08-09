@@ -194,7 +194,7 @@ func (t *task) update(ctx context.Context) error {
 		}
 		err = t.hubClient.Create(ctx, newObject)
 		if err != nil {
-			return err
+			return controllers.HandleK8sWriteError(ctx, t.r.logger, err, t.setFailed)
 		}
 		t.r.logger.DebugContext(
 			ctx,
@@ -207,7 +207,7 @@ func (t *task) update(ctx context.Context) error {
 		update.Spec = spec
 		err = t.hubClient.Patch(ctx, update, clnt.MergeFrom(object))
 		if err != nil {
-			return err
+			return controllers.HandleK8sWriteError(ctx, t.r.logger, err, t.setFailed)
 		}
 		t.r.logger.DebugContext(
 			ctx,
@@ -303,9 +303,10 @@ func (t *task) delete(ctx context.Context) (err error) {
 func (t *task) selectHub(ctx context.Context) error {
 	t.hubId = t.externalIP.GetStatus().GetHub()
 	if t.hubId == "" {
+		poolKey := controllers.RefKeyStr(t.externalIP.GetSpec().GetPool())
 		// Look up the parent pool to derive the hub:
 		poolResponse, err := t.r.externalIPPoolsClient.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{
-			Id: t.externalIP.GetSpec().GetPool(),
+			Id: poolKey,
 		}.Build())
 		if err != nil {
 			return err
@@ -314,7 +315,7 @@ func (t *task) selectHub(ctx context.Context) error {
 		if poolHub == "" {
 			return fmt.Errorf(
 				"pool %s has no hub assigned yet, skipping",
-				t.externalIP.GetSpec().GetPool(),
+				poolKey,
 			)
 		}
 		t.hubId = poolHub
@@ -399,12 +400,20 @@ func (t *task) removeFinalizer() {
 	}
 }
 
+func (t *task) setFailed(err error) {
+	if !t.externalIP.HasStatus() {
+		t.externalIP.SetStatus(&privatev1.ExternalIPStatus{})
+	}
+	t.externalIP.GetStatus().SetState(privatev1.ExternalIPState_EXTERNAL_IP_STATE_FAILED)
+	t.externalIP.GetStatus().SetMessage(err.Error())
+}
+
 // buildSpec constructs the spec map for the Kubernetes ExternalIP object based on the
 // external IP from the database. Only spec fields are pushed to the CRD; status fields
 // (address, state) originate from the operator side and flow K8s -> fulfillment-service.
 func (t *task) buildSpec() osacv1alpha1.ExternalIPSpec {
 	spec := osacv1alpha1.ExternalIPSpec{
-		Pool: t.externalIP.GetSpec().GetPool(),
+		Pool: controllers.RefKeyStr(t.externalIP.GetSpec().GetPool()),
 	}
 	return spec
 }

@@ -12,9 +12,8 @@
 
     - name: Set test variables for baseline workflow
       ansible.builtin.set_fact:
-        ansible_eda:
-          event:
-            payload: "{{ test_compute_instance }}"
+        osac_job_vars:
+          resource: "{{ test_compute_instance }}"
         tenant_target_namespace: "computeinstance-test-vm-work"
         tenant_storage_class_name: "test-storage-class"
         # Override only resource creation to prevent actual VM/DataVolume creation

@@ -136,7 +136,7 @@ spec:
                 -X POST \
                 -H "Authorization: Bearer ${AUTH_TOKEN}" \
                 -H "Content-Type: application/json" \
-                -d "{\"id\":\"hub\",\"spec\":{\"kubeconfig\":\"${KUBECONFIG_B64}\",\"namespace\":\"${NAMESPACE}\"}}" \
+                -d "{\"id\":\"hub\",\"metadata\":{\"name\":\"hub\"},\"spec\":{\"kubeconfig\":\"${KUBECONFIG_B64}\",\"namespace\":\"${NAMESPACE}\"}}" \
                 "${FULFILLMENT_URL}/api/private/v1/hubs")
               echo "  POST: HTTP ${HTTP_CODE}"
               [[ "${HTTP_CODE}" =~ ^2 ]] || { echo "ERROR: Hub creation failed"; cat /tmp/hub-create.json; exit 1; }

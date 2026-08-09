@@ -16,6 +16,7 @@ package servers
 import (
 	"fmt"
 
+	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc/codes"
@@ -75,8 +76,11 @@ var _ = Describe("Bare metal instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			catalogResp, err := catalogServer.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:     "Test catalog item",
-					Template:  "test-template",
+					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "test-template"}.Build(),
 					Published: true,
 				}.Build(),
 			}.Build())
@@ -94,14 +98,17 @@ var _ = Describe("Bare metal instances server", func() {
 		It("Creates object", func() {
 			response, err := server.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 				Object: publicv1.BareMetalInstance_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-baremetal-instance",
+					}.Build(),
 					Spec: publicv1.BareMetalInstanceSpec_builder{
-						CatalogItem: catalogItemID,
+						CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(response.GetObject().GetId()).ToNot(BeEmpty())
-			Expect(response.GetObject().GetSpec().GetCatalogItem()).To(Equal(catalogItemID))
+			Expect(response.GetObject().GetSpec().GetCatalogItem().GetId()).To(Equal(catalogItemID))
 		})
 
 		It("Fails to create without an object", func() {
@@ -118,7 +125,7 @@ var _ = Describe("Bare metal instances server", func() {
 				_, err := server.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 					Object: publicv1.BareMetalInstance_builder{
 						Spec: publicv1.BareMetalInstanceSpec_builder{
-							CatalogItem: catalogItemID,
+							CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
 						}.Build(),
 						Metadata: publicv1.Metadata_builder{
 							Name: fmt.Sprintf("bmi-%d", i),
@@ -136,8 +143,11 @@ var _ = Describe("Bare metal instances server", func() {
 		It("Gets object", func() {
 			createResponse, err := server.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 				Object: publicv1.BareMetalInstance_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-baremetal-instance",
+					}.Build(),
 					Spec: publicv1.BareMetalInstanceSpec_builder{
-						CatalogItem: catalogItemID,
+						CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -149,14 +159,17 @@ var _ = Describe("Bare metal instances server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(getResponse.GetObject().GetId()).To(Equal(id))
-			Expect(getResponse.GetObject().GetSpec().GetCatalogItem()).To(Equal(catalogItemID))
+			Expect(getResponse.GetObject().GetSpec().GetCatalogItem().GetId()).To(Equal(catalogItemID))
 		})
 
 		It("Updates mutable fields via field mask", func() {
 			createResponse, err := server.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 				Object: publicv1.BareMetalInstance_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-baremetal-instance",
+					}.Build(),
 					Spec: publicv1.BareMetalInstanceSpec_builder{
-						CatalogItem: catalogItemID,
+						CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
 						RunStrategy: new(publicv1.BareMetalInstanceRunStrategy_BARE_METAL_INSTANCE_RUN_STRATEGY_ALWAYS),
 					}.Build(),
 				}.Build(),
@@ -201,8 +214,11 @@ var _ = Describe("Bare metal instances server", func() {
 		It("Rejects update that changes immutable catalog_item", func() {
 			createResponse, err := server.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 				Object: publicv1.BareMetalInstance_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-baremetal-instance",
+					}.Build(),
 					Spec: publicv1.BareMetalInstanceSpec_builder{
-						CatalogItem: catalogItemID,
+						CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -213,7 +229,7 @@ var _ = Describe("Bare metal instances server", func() {
 				Object: publicv1.BareMetalInstance_builder{
 					Id: id,
 					Spec: publicv1.BareMetalInstanceSpec_builder{
-						CatalogItem: "different-catalog-item",
+						CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: "different-catalog-item"}.Build(),
 					}.Build(),
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{
@@ -229,8 +245,11 @@ var _ = Describe("Bare metal instances server", func() {
 		It("Deletes object", func() {
 			createResponse, err := server.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 				Object: publicv1.BareMetalInstance_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-baremetal-instance",
+					}.Build(),
 					Spec: publicv1.BareMetalInstanceSpec_builder{
-						CatalogItem: catalogItemID,
+						CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())

@@ -37,6 +37,21 @@ var _ = Describe("ExternalIPAttachmentSpec", func() {
 		Expect(*spec.ComputeInstance).To(Equal("my-instance"))
 	})
 
+	It("should accept a spec with baremetalInstance target", func() {
+		bmi := "my-bmi"
+		spec := v1alpha1.ExternalIPAttachmentSpec{
+			ExternalIP:       "my-public-ip",
+			BaremetalInstance: &bmi,
+		}
+
+		Expect(spec.ExternalIP).To(Equal("my-public-ip"))
+		Expect(spec.BaremetalInstance).ToNot(BeNil())
+		Expect(*spec.BaremetalInstance).To(Equal("my-bmi"))
+		Expect(spec.ComputeInstance).To(BeNil())
+		Expect(spec.Cluster).To(BeNil())
+		Expect(spec.TargetEndpoint).To(BeNil())
+	})
+
 	It("should accept a minimal spec without optional target", func() {
 		spec := v1alpha1.ExternalIPAttachmentSpec{
 			ExternalIP: "my-public-ip",

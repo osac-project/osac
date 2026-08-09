@@ -38,7 +38,7 @@ var _ = Describe("Describe Subnet", func() {
 					Name: "example-subnet",
 				}.Build(),
 				Spec: publicv1.SubnetSpec_builder{
-					VirtualNetwork: "vnet-abc123",
+					VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: "vnet-abc123"}.Build(),
 					Ipv4Cidr:       new("10.0.1.0/24"),
 					Ipv6Cidr:       new("2001:db8::/64"),
 				}.Build(),
@@ -62,7 +62,7 @@ var _ = Describe("Describe Subnet", func() {
 			s := publicv1.Subnet_builder{
 				Id: "subnet-002",
 				Spec: publicv1.SubnetSpec_builder{
-					VirtualNetwork: "vnet-abc123",
+					VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: "vnet-abc123"}.Build(),
 				}.Build(),
 			}.Build()
 
@@ -76,7 +76,7 @@ var _ = Describe("Describe Subnet", func() {
 			s := publicv1.Subnet_builder{
 				Id: "subnet-003",
 				Spec: publicv1.SubnetSpec_builder{
-					VirtualNetwork: "vnet-abc123",
+					VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: "vnet-abc123"}.Build(),
 					Ipv6Cidr:       new("2001:db8::/64"),
 				}.Build(),
 			}.Build()
@@ -90,7 +90,7 @@ var _ = Describe("Describe Subnet", func() {
 			s := publicv1.Subnet_builder{
 				Id: "subnet-004",
 				Spec: publicv1.SubnetSpec_builder{
-					VirtualNetwork: "vnet-abc123",
+					VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: "vnet-abc123"}.Build(),
 				}.Build(),
 				Status: publicv1.SubnetStatus_builder{
 					State: publicv1.SubnetState_SUBNET_STATE_READY,
@@ -106,7 +106,7 @@ var _ = Describe("Describe Subnet", func() {
 			s := publicv1.Subnet_builder{
 				Id: "subnet-006",
 				Spec: publicv1.SubnetSpec_builder{
-					VirtualNetwork: "vnet-abc123",
+					VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: "vnet-abc123"}.Build(),
 					Ipv4Cidr:       new("10.0.1.0/24"),
 				}.Build(),
 			}.Build()
@@ -120,7 +120,7 @@ var _ = Describe("Describe Subnet", func() {
 			s := publicv1.Subnet_builder{
 				Id: "subnet-005",
 				Spec: publicv1.SubnetSpec_builder{
-					VirtualNetwork: "vnet-abc123",
+					VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: "vnet-abc123"}.Build(),
 				}.Build(),
 				Status: publicv1.SubnetStatus_builder{
 					State: publicv1.SubnetState_SUBNET_STATE_PENDING,

@@ -131,6 +131,14 @@ func (s *PrivateComputeInstanceTemplatesServer) Get(ctx context.Context,
 
 func (s *PrivateComputeInstanceTemplatesServer) Create(ctx context.Context,
 	request *privatev1.ComputeInstanceTemplatesCreateRequest) (response *privatev1.ComputeInstanceTemplatesCreateResponse, err error) {
+	obj := request.GetObject()
+	if obj != nil && obj.GetMetadata().GetName() == "" && obj.GetId() != "" {
+		if obj.GetMetadata() == nil {
+			obj.SetMetadata(&privatev1.Metadata{})
+		}
+		obj.GetMetadata().SetName(templateNameFromID(obj.GetId()))
+	}
+
 	// Validate instance type in spec_defaults before creating (D-14, D-17).
 	var warnings []string
 	if request.GetObject() != nil {
@@ -187,11 +195,11 @@ func (s *PrivateComputeInstanceTemplatesServer) validateSpecDefaultsInstanceType
 	ctx context.Context,
 	specDefaults *privatev1.ComputeInstanceTemplateSpecDefaults,
 ) ([]string, error) {
-	if specDefaults == nil || !specDefaults.HasInstanceType() || specDefaults.GetInstanceType() == "" {
+	if specDefaults == nil || !specDefaults.HasInstanceType() || specDefaults.GetInstanceType() == nil {
 		return nil, nil
 	}
 
-	instanceTypeName := specDefaults.GetInstanceType()
+	instanceTypeName := refKey(specDefaults.GetInstanceType())
 
 	// Look up the instance type and validate its state.
 	return validateInstanceTypeState(ctx, s.instanceTypesDao, instanceTypeName, " in spec_defaults")

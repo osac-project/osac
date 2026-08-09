@@ -151,6 +151,12 @@ func Cmd() *cobra.Command {
 		false,
 		windowsFlagHelp,
 	)
+	flags.BoolVar(
+		&runner.args.externalIPAttachment,
+		"external-ip-attachment",
+		false,
+		externalIPAttachmentFlagHelp,
+	)
 	flags.StringArrayVar(
 		&runner.args.setFields,
 		"set",
@@ -181,6 +187,7 @@ type runnerContext struct {
 		userData                string
 		networkAttachments      []string
 		windows                 bool
+		externalIPAttachment    bool
 	}
 	logger                 *slog.Logger
 	console                *terminal.Console
@@ -715,7 +722,7 @@ func (c *runnerContext) convertTextToTemplateParameterValue(ctx context.Context,
 func (c *runnerContext) buildSpec(templateID string,
 	templateParams map[string]*anypb.Any) (*publicv1.ComputeInstanceSpec, error) {
 	spec := publicv1.ComputeInstanceSpec_builder{
-		Template:           templateID,
+		Template:           &publicv1.ComputeInstanceTemplateReference{Id: templateID},
 		TemplateParameters: templateParams,
 	}
 	if c.args.imageSourceRef != "" {
@@ -725,7 +732,7 @@ func (c *runnerContext) buildSpec(templateID string,
 		}.Build()
 	}
 	if c.args.instanceType != "" {
-		spec.InstanceType = proto.String(c.args.instanceType)
+		spec.InstanceType = &publicv1.InstanceTypeReference{Name: c.args.instanceType}
 	}
 	if c.args.sshPublicKey != "" {
 		spec.SshPublicKey = proto.String(c.args.sshPublicKey)
@@ -751,6 +758,7 @@ func (c *runnerContext) buildSpec(templateID string,
 	if c.args.windows {
 		spec.IsWindows = proto.Bool(true)
 	}
+	spec.AutoExternalIpAttachment = c.args.externalIPAttachment
 	if err := c.applyNetworkingFlags(&spec); err != nil {
 		return nil, err
 	}
@@ -851,18 +859,22 @@ func parseNetworkAttachmentFlag(s string) (*publicv1.NetworkAttachment, error) {
 		return nil, err
 	}
 	if !hadGroups && !strings.Contains(s, "=") {
-		return publicv1.NetworkAttachment_builder{Subnet: s}.Build(), nil
+		return publicv1.NetworkAttachment_builder{Subnet: &publicv1.SubnetLocalReference{Id: s}}.Build(), nil
+	}
+	sgRefs := make([]*publicv1.SecurityGroupLocalReference, len(securityGroups))
+	for i, sg := range securityGroups {
+		sgRefs[i] = &publicv1.SecurityGroupLocalReference{Id: sg}
 	}
 	return publicv1.NetworkAttachment_builder{
-		Subnet:         subnet,
-		SecurityGroups: securityGroups,
+		Subnet:         &publicv1.SubnetLocalReference{Id: subnet},
+		SecurityGroups: sgRefs,
 	}.Build(), nil
 }
 
 // buildSpecFromCatalogItem builds the spec for catalog-item-based creation.
 func (c *runnerContext) buildSpecFromCatalogItem(catalogItemID string) (*publicv1.ComputeInstanceSpec, error) {
 	spec := publicv1.ComputeInstanceSpec_builder{
-		CatalogItem: catalogItemID,
+		CatalogItem: &publicv1.ComputeInstanceCatalogItemReference{Id: catalogItemID},
 	}
 	if c.args.imageSourceRef != "" {
 		spec.Image = publicv1.ComputeInstanceImage_builder{
@@ -871,7 +883,7 @@ func (c *runnerContext) buildSpecFromCatalogItem(catalogItemID string) (*publicv
 		}.Build()
 	}
 	if c.args.instanceType != "" {
-		spec.InstanceType = proto.String(c.args.instanceType)
+		spec.InstanceType = &publicv1.InstanceTypeReference{Name: c.args.instanceType}
 	}
 	if c.args.sshPublicKey != "" {
 		spec.SshPublicKey = proto.String(c.args.sshPublicKey)
@@ -897,6 +909,7 @@ func (c *runnerContext) buildSpecFromCatalogItem(catalogItemID string) (*publicv
 	if c.args.windows {
 		spec.IsWindows = proto.Bool(true)
 	}
+	spec.AutoExternalIpAttachment = c.args.externalIPAttachment
 	if err := c.applyNetworkingFlags(&spec); err != nil {
 		return nil, err
 	}
@@ -1050,6 +1063,12 @@ specified multiple times to attach multiple NICs.
 
 const windowsFlagHelp = `
 _[BOOLEAN]_ - Create a Windows VM. Defaults to {{ bt }}false{{ bt }} (Linux VM).
+`
+
+const externalIPAttachmentFlagHelp = `
+_[BOOLEAN]_ - When set, the system auto-selects an ExternalIPPool and
+creates an ExternalIP with an ExternalIPAttachment for this instance
+atomically during creation. Immutable after creation.
 `
 
 const setFlagHelp = `

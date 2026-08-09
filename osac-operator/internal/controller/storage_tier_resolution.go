@@ -36,8 +36,8 @@ type tierResolutionResult struct {
 	errorMessages     []string
 	duplicateMessages []string
 	// ambiguousTiers holds the name of every tier excluded from resolved because
-	// multiple StorageClasses matched it (tenant-specific or Default) — a distinct,
-	// separately-reported problem from a tier having no StorageClass at all.
+	// multiple StorageClasses matched it — a distinct, separately-reported problem
+	// from a tier having no StorageClass at all.
 	ambiguousTiers []string
 }
 
@@ -82,19 +82,10 @@ func getTenantStorageClasses(ctx context.Context, targetClient client.Client, te
 		return tierResolutionResult{}, err
 	}
 
-	defaultSCList := &storagev1.StorageClassList{}
-	if err := targetClient.List(ctx, defaultSCList, client.MatchingLabels{osacTenantKey: defaultStorageClassSentinel}); err != nil {
-		return tierResolutionResult{}, err
-	}
-
 	tenantByTier := groupByTier(tenantSCList.Items)
-	defaultByTier := groupByTier(defaultSCList.Items)
 
 	allTiers := make(map[string]struct{})
 	for t := range tenantByTier {
-		allTiers[t] = struct{}{}
-	}
-	for t := range defaultByTier {
 		allTiers[t] = struct{}{}
 	}
 
@@ -108,7 +99,6 @@ func getTenantStorageClasses(ctx context.Context, targetClient client.Client, te
 
 	for _, tier := range sortedTiers {
 		tenantSCs := tenantByTier[tier]
-		defaultSCs := defaultByTier[tier]
 
 		switch len(tenantSCs) {
 		case 1:
@@ -119,33 +109,11 @@ func getTenantStorageClasses(ctx context.Context, targetClient client.Client, te
 			})
 			msg := fmt.Sprintf("tier %q: StorageClass %q (tenant-specific)", tier, scName)
 			result.resolvedMessages = append(result.resolvedMessages, msg)
-			continue
 		case 0:
-			// Fall through to Default resolution below.
+			// Tier not available — no StorageClass labeled for this tenant.
 		default:
 			joined, names := joinStorageClassNames(tenantSCs)
 			msg := fmt.Sprintf("tier %q: multiple tenant StorageClasses [%s]", tier, joined)
-			log.Info(msg, "tenant", tenantName, "tier", tier, "storageClasses", names)
-			result.errorMessages = append(result.errorMessages, msg)
-			result.duplicateMessages = append(result.duplicateMessages, msg)
-			result.ambiguousTiers = append(result.ambiguousTiers, tier)
-			continue
-		}
-
-		switch len(defaultSCs) {
-		case 1:
-			scName := defaultSCs[0].GetName()
-			result.resolved = append(result.resolved, v1alpha1.ResolvedStorageClass{
-				Name: scName,
-				Tier: tier,
-			})
-			msg := fmt.Sprintf("tier %q: StorageClass %q (shared Default)", tier, scName)
-			result.resolvedMessages = append(result.resolvedMessages, msg)
-		case 0:
-			// Tier not available.
-		default:
-			joined, names := joinStorageClassNames(defaultSCs)
-			msg := fmt.Sprintf("tier %q: multiple shared Default StorageClasses [%s]", tier, joined)
 			log.Info(msg, "tenant", tenantName, "tier", tier, "storageClasses", names)
 			result.errorMessages = append(result.errorMessages, msg)
 			result.duplicateMessages = append(result.duplicateMessages, msg)

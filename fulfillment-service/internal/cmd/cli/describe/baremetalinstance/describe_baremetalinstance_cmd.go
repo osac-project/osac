@@ -81,8 +81,8 @@ func renderBareMetalInstance(w io.Writer, bmi *publicv1.BareMetalInstance) {
 	writer := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	catalogItem := "-"
 	if bmi.Spec != nil {
-		if id := bmi.Spec.GetCatalogItem(); id != "" {
-			catalogItem = id
+		if id := bmi.Spec.GetCatalogItem(); id != nil {
+			catalogItem = id.GetName()
 		}
 	}
 	state := "-"

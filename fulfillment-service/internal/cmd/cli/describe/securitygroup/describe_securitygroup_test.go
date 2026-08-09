@@ -34,7 +34,7 @@ var _ = Describe("Describe Security Group", func() {
 			sg := publicv1.SecurityGroup_builder{
 				Id: "sg-001",
 				Spec: publicv1.SecurityGroupSpec_builder{
-					VirtualNetwork: "vnet-abc123",
+					VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: "vnet-abc123"}.Build(),
 				}.Build(),
 			}.Build()
 
@@ -47,7 +47,7 @@ var _ = Describe("Describe Security Group", func() {
 			sg := publicv1.SecurityGroup_builder{
 				Id: "sg-002",
 				Spec: publicv1.SecurityGroupSpec_builder{
-					VirtualNetwork: "vnet-abc123",
+					VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: "vnet-abc123"}.Build(),
 					Ingress: []*publicv1.SecurityRule{
 						publicv1.SecurityRule_builder{
 							Protocol: publicv1.Protocol_PROTOCOL_TCP,
@@ -69,7 +69,7 @@ var _ = Describe("Describe Security Group", func() {
 			sg := publicv1.SecurityGroup_builder{
 				Id: "sg-003",
 				Spec: publicv1.SecurityGroupSpec_builder{
-					VirtualNetwork: "vnet-abc123",
+					VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: "vnet-abc123"}.Build(),
 					Ingress: []*publicv1.SecurityRule{
 						publicv1.SecurityRule_builder{
 							Protocol: publicv1.Protocol_PROTOCOL_ICMP,
@@ -88,7 +88,7 @@ var _ = Describe("Describe Security Group", func() {
 			sg := publicv1.SecurityGroup_builder{
 				Id: "sg-004",
 				Spec: publicv1.SecurityGroupSpec_builder{
-					VirtualNetwork: "vnet-abc123",
+					VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: "vnet-abc123"}.Build(),
 					Ingress: []*publicv1.SecurityRule{
 						publicv1.SecurityRule_builder{
 							Protocol: publicv1.Protocol_PROTOCOL_ALL,
@@ -105,7 +105,7 @@ var _ = Describe("Describe Security Group", func() {
 			sg := publicv1.SecurityGroup_builder{
 				Id: "sg-005",
 				Spec: publicv1.SecurityGroupSpec_builder{
-					VirtualNetwork: "vnet-abc123",
+					VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: "vnet-abc123"}.Build(),
 					Ingress: []*publicv1.SecurityRule{
 						publicv1.SecurityRule_builder{
 							Protocol: publicv1.Protocol_PROTOCOL_TCP,
@@ -125,7 +125,7 @@ var _ = Describe("Describe Security Group", func() {
 			sg := publicv1.SecurityGroup_builder{
 				Id: "sg-006",
 				Spec: publicv1.SecurityGroupSpec_builder{
-					VirtualNetwork: "vnet-abc123",
+					VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: "vnet-abc123"}.Build(),
 				}.Build(),
 				Status: publicv1.SecurityGroupStatus_builder{
 					State: publicv1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
@@ -141,7 +141,7 @@ var _ = Describe("Describe Security Group", func() {
 			sg := publicv1.SecurityGroup_builder{
 				Id: "sg-007",
 				Spec: publicv1.SecurityGroupSpec_builder{
-					VirtualNetwork: "vnet-abc123",
+					VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: "vnet-abc123"}.Build(),
 				}.Build(),
 			}.Build()
 
@@ -158,7 +158,7 @@ var _ = Describe("Describe Security Group", func() {
 					Name: "web-sg",
 				}.Build(),
 				Spec: publicv1.SecurityGroupSpec_builder{
-					VirtualNetwork: "vnet-abc123",
+					VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: "vnet-abc123"}.Build(),
 				}.Build(),
 				Status: publicv1.SecurityGroupStatus_builder{
 					State:   publicv1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
@@ -178,7 +178,7 @@ var _ = Describe("Describe Security Group", func() {
 			sg := publicv1.SecurityGroup_builder{
 				Id: "sg-009",
 				Spec: publicv1.SecurityGroupSpec_builder{
-					VirtualNetwork: "vnet-abc123",
+					VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: "vnet-abc123"}.Build(),
 					Egress: []*publicv1.SecurityRule{
 						publicv1.SecurityRule_builder{
 							Protocol: publicv1.Protocol_PROTOCOL_ALL,

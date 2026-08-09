@@ -168,7 +168,7 @@ See roles/ocp_virt_vm for more examples
 ### Creating a New Storage Provider Role
 
 Storage provider roles use a tier-based dispatch model: osac-operator resolves storage tiers
-from the Tier API and passes them via the `ansible_eda.event.storage_tier_definitions`
+from the Tier API and passes them via the `osac_job_vars.storage_tier_definitions`
 extra_var, each tier declares its provider, and the service-layer dispatcher
 (`osac.service.storage_provider`) groups tiers by provider and dispatches to each provider's
 template role with the filtered tier subset.
@@ -225,7 +225,7 @@ When implemented, `hcp_data_plane` will support provisioning multiple StorageCla
 into the guest HCP cluster (e.g., separate tiers for databases and general workloads).
 Currently, all CaaS targets return an explicit "not yet implemented" error.
 
-**Configuration:** Storage tiers arrive via the `ansible_eda.event.storage_tier_definitions`
+**Configuration:** Storage tiers arrive via the `osac_job_vars.storage_tier_definitions`
 extra_var, populated by osac-operator from the Tier API:
 
 ```json

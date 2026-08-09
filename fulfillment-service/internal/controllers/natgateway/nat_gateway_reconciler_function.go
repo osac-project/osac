@@ -13,6 +13,8 @@ language governing permissions and limitations under the License.
 
 package natgateway
 
+//go:generate mockgen -source=../../api/osac/private/v1/nat_gateways_service_grpc.pb.go -destination=nat_gateways_client_mock.go -package=natgateway NATGatewaysClient
+
 import (
 	"context"
 	"errors"
@@ -177,7 +179,7 @@ func (t *task) update(ctx context.Context) error {
 		}
 		err = t.hubClient.Create(ctx, newObject)
 		if err != nil {
-			return err
+			return controllers.HandleK8sWriteError(ctx, t.r.logger, err, t.setFailed)
 		}
 		t.r.logger.DebugContext(
 			ctx,
@@ -190,7 +192,7 @@ func (t *task) update(ctx context.Context) error {
 		update.Spec = spec
 		err = t.hubClient.Patch(ctx, update, clnt.MergeFrom(object))
 		if err != nil {
-			return err
+			return controllers.HandleK8sWriteError(ctx, t.r.logger, err, t.setFailed)
 		}
 		t.r.logger.DebugContext(
 			ctx,
@@ -275,7 +277,7 @@ func (t *task) selectHub(ctx context.Context) error {
 	t.hubId = t.natGateway.GetStatus().GetHub()
 	if t.hubId == "" {
 		vnResponse, err := t.r.virtualNetworksClient.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{
-			Id: t.natGateway.GetSpec().GetVirtualNetwork(),
+			Id: controllers.RefKeyStr(t.natGateway.GetSpec().GetVirtualNetwork()),
 		}.Build())
 		if err != nil {
 			return err
@@ -284,7 +286,7 @@ func (t *task) selectHub(ctx context.Context) error {
 		if vnHub == "" {
 			return fmt.Errorf(
 				"virtual network %s has no hub assigned yet, skipping",
-				t.natGateway.GetSpec().GetVirtualNetwork(),
+				controllers.RefKeyStr(t.natGateway.GetSpec().GetVirtualNetwork()),
 			)
 		}
 		t.hubId = vnHub
@@ -367,9 +369,17 @@ func (t *task) removeFinalizer() {
 	}
 }
 
+func (t *task) setFailed(err error) {
+	if !t.natGateway.HasStatus() {
+		t.natGateway.SetStatus(&privatev1.NATGatewayStatus{})
+	}
+	t.natGateway.GetStatus().SetState(privatev1.NATGatewayState_NAT_GATEWAY_STATE_FAILED)
+	t.natGateway.GetStatus().SetMessage(err.Error())
+}
+
 func (t *task) buildSpec() osacv1alpha1.NATGatewaySpec {
 	return osacv1alpha1.NATGatewaySpec{
-		VirtualNetwork: t.natGateway.GetSpec().GetVirtualNetwork(),
-		ExternalIP:     t.natGateway.GetSpec().GetExternalIp(),
+		VirtualNetwork: controllers.RefKeyStr(t.natGateway.GetSpec().GetVirtualNetwork()),
+		ExternalIP:     controllers.RefKeyStr(t.natGateway.GetSpec().GetExternalIp()),
 	}
 }

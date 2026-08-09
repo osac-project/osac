@@ -88,3 +88,11 @@ message UserCondition {
   // Human-readable message about the transition.
   optional string message = 5;
 }
+
+// Reference to a User resource.
+message UserReference {
+  string id = 1;
+  string name = 2;
+  string project = 3;
+  bool shared = 4;
+}

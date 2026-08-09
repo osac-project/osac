@@ -410,7 +410,7 @@
 # validation -- that task is unreachable for auto-derived values, since the length-guard
 # rejects any QoS-enabled tier whose name would produce an over-length derived qos_policy
 # before derivation ever runs). Proves the length-guard actually catches this case
-# (OSAC-1992: tiers from ansible_eda.event.storage_tier_definitions never carry
+# (OSAC-1992: tiers from osac_job_vars.storage_tier_definitions never carry
 # qos_policy -- the role derives it as '<name>-qos').
 # ──────────────────────────────────────────────────────────────
 - name: Test storage_provider -- tier name too long for derived qos_policy (should fail)

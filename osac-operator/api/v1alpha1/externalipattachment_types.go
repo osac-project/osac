@@ -33,9 +33,10 @@ const (
 // The entire spec is immutable after creation: to change the target, delete
 // the attachment and create a new one.
 // +kubebuilder:validation:XValidation:rule="self == oldSelf",message="spec is immutable after creation"
-// +kubebuilder:validation:XValidation:rule="(has(self.computeInstance) ? 1 : 0) + (has(self.cluster) ? 1 : 0) <= 1",message="at most one target field may be set"
+// +kubebuilder:validation:XValidation:rule="(has(self.computeInstance) ? 1 : 0) + (has(self.cluster) ? 1 : 0) + (has(self.baremetalInstance) ? 1 : 0) == 1",message="exactly one target field must be set"
 // +kubebuilder:validation:XValidation:rule="!has(self.cluster) || has(self.targetEndpoint)",message="targetEndpoint is required when cluster is set"
 // +kubebuilder:validation:XValidation:rule="!has(self.computeInstance) || !has(self.targetEndpoint)",message="targetEndpoint must not be set when computeInstance is set"
+// +kubebuilder:validation:XValidation:rule="!has(self.baremetalInstance) || !has(self.targetEndpoint)",message="targetEndpoint must not be set when baremetalInstance is set"
 type ExternalIPAttachmentSpec struct {
 	// ExternalIP is the name of the ExternalIP resource to attach.
 	// +kubebuilder:validation:Required
@@ -43,19 +44,25 @@ type ExternalIPAttachmentSpec struct {
 	ExternalIP string `json:"externalIP"`
 
 	// ComputeInstance is the UUID of the ComputeInstance to attach to.
-	// Exactly one target field (computeInstance or cluster) must be set.
+	// Exactly one target field (computeInstance, cluster, or baremetalInstance) must be set.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:MinLength=1
 	ComputeInstance *string `json:"computeInstance,omitempty"`
 
 	// Cluster is the UUID of the ClusterOrder to attach to.
-	// Exactly one target field (computeInstance or cluster) must be set.
+	// Exactly one target field (computeInstance, cluster, or baremetalInstance) must be set.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:MinLength=1
 	Cluster *string `json:"cluster,omitempty"`
 
+	// BaremetalInstance is the UUID of the BareMetalInstance to attach to.
+	// Exactly one target field (computeInstance, cluster, or baremetalInstance) must be set.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MinLength=1
+	BaremetalInstance *string `json:"baremetalInstance,omitempty"`
+
 	// TargetEndpoint specifies which cluster endpoint receives the DNAT rule.
-	// Required when cluster is set; must not be set when computeInstance is set.
+	// Required when cluster is set; must not be set when computeInstance or baremetalInstance is set.
 	// +kubebuilder:validation:Optional
 	TargetEndpoint *ExternalIPAttachmentTargetEndpoint `json:"targetEndpoint,omitempty"`
 }
@@ -104,6 +111,7 @@ type ExternalIPAttachmentStatus struct {
 // +kubebuilder:printcolumn:name="ExternalIP",type=string,JSONPath=`.spec.externalIP`
 // +kubebuilder:printcolumn:name="ComputeInstance",type=string,JSONPath=`.spec.computeInstance`
 // +kubebuilder:printcolumn:name="Cluster",type=string,JSONPath=`.spec.cluster`
+// +kubebuilder:printcolumn:name="BaremetalInstance",type=string,JSONPath=`.spec.baremetalInstance`,priority=1
 // +kubebuilder:printcolumn:name="TargetEndpoint",type=string,JSONPath=`.spec.targetEndpoint`,priority=1
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`

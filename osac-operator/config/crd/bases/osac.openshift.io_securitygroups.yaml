@@ -278,6 +278,13 @@ spec:
                       - Canceled
                       - Unknown
                       type: string
+                    target:
+                      description: |-
+                        Target identifies which manager this job was dispatched to, for resources
+                        that provision through multiple managers concurrently (e.g. a Subnet
+                        dispatching to both a fabric manager and a k8s manager). Empty for
+                        resources with a single provisioning target.
+                      type: string
                     timestamp:
                       description: Timestamp when this job was created/triggered
                       format: date-time

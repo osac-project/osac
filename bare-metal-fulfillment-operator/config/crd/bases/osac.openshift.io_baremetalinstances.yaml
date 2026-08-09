@@ -272,6 +272,31 @@ spec:
                 description: DesiredConfigVersion is a hash of the spec, used to detect
                   spec changes and control retry behavior.
                 type: string
+              networkAttachmentStatuses:
+                description: |-
+                  NetworkAttachmentStatuses captures runtime networking state for each NIC.
+                  Populated by the operator after DHCP lease discovery.
+                items:
+                  description: BareMetalNetworkAttachmentStatus captures the runtime
+                    networking state for a single NIC.
+                  properties:
+                    interface:
+                      description: Interface is the physical interface name from the
+                        spec's network attachment.
+                      type: string
+                    ipAddress:
+                      description: IPAddress is the IP discovered after DHCP assignment.
+                      type: string
+                    primary:
+                      description: Primary indicates whether this attachment is the
+                        default gateway attachment.
+                      type: boolean
+                    subnetRef:
+                      description: SubnetRef is the fulfillment Subnet ID associated
+                        with this attachment.
+                      type: string
+                  type: object
+                type: array
               phase:
                 description: Phase provides a single-value overview of the state of
                   the BareMetalInstance
@@ -321,6 +346,13 @@ spec:
                       - Failed
                       - Canceled
                       - Unknown
+                      type: string
+                    target:
+                      description: |-
+                        Target identifies which manager this job was dispatched to, for resources
+                        that provision through multiple managers concurrently (e.g. a Subnet
+                        dispatching to both a fabric manager and a k8s manager). Empty for
+                        resources with a single provisioning target.
                       type: string
                     timestamp:
                       description: Timestamp when this job was created/triggered

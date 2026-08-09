@@ -86,7 +86,7 @@ var _ = Describe("Rendering tests", func() {
 				MemoryGib: 16,
 				State:     publicv1.InstanceTypeState_INSTANCE_TYPE_STATE_DEPRECATED,
 				Deprecation: publicv1.InstanceTypeDeprecation_builder{
-					Replacement:           "standard-8-32",
+					Replacement:           publicv1.InstanceTypeLocalReference_builder{Id: "standard-8-32"}.Build(),
 					DeprecationTimestamp:  timestamppb.New(depTime),
 					ObsolescenceTimestamp: timestamppb.New(obsTime),
 				}.Build(),

@@ -104,3 +104,11 @@ message BareMetalInstanceTemplateSpecDefaults {
   // Default OS base image used when the tenant does not specify one.
   optional BareMetalInstanceImage image = 1;
 }
+
+// Reference to a BareMetalInstanceTemplate resource.
+message BareMetalInstanceTemplateReference {
+  string id = 1;
+  string name = 2;
+  string project = 3;
+  bool shared = 4;
+}

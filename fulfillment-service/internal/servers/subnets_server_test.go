@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
@@ -88,7 +89,7 @@ var _ = Describe("Subnets server", func() {
 			}.Build(),
 			Spec: privatev1.VirtualNetworkSpec_builder{
 				Region:       "us-east-1",
-				NetworkClass: "default",
+				NetworkClass: privatev1.NetworkClassReference_builder{Id: "default"}.Build(),
 				Ipv4Cidr:     new("10.0.0.0/16"),
 				Capabilities: privatev1.VirtualNetworkCapabilities_builder{
 					EnableIpv4: true,
@@ -165,8 +166,11 @@ var _ = Describe("Subnets server", func() {
 		It("Creates object", func() {
 			response, err := server.Create(ctx, publicv1.SubnetsCreateRequest_builder{
 				Object: publicv1.Subnet_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: publicv1.SubnetSpec_builder{
-						VirtualNetwork: virtualNetworkID,
+						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 						Ipv4Cidr:       new("10.0.1.0/24"),
 					}.Build(),
 				}.Build(),
@@ -184,8 +188,11 @@ var _ = Describe("Subnets server", func() {
 			for i := range count {
 				_, err := server.Create(ctx, publicv1.SubnetsCreateRequest_builder{
 					Object: publicv1.Subnet_builder{
+						Metadata: publicv1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Spec: publicv1.SubnetSpec_builder{
-							VirtualNetwork: virtualNetworkID,
+							VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 							Ipv4Cidr:       new(fmt.Sprintf("10.0.%d.0/24", i+1)),
 						}.Build(),
 					}.Build(),
@@ -207,8 +214,11 @@ var _ = Describe("Subnets server", func() {
 			for i := range count {
 				_, err := server.Create(ctx, publicv1.SubnetsCreateRequest_builder{
 					Object: publicv1.Subnet_builder{
+						Metadata: publicv1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Spec: publicv1.SubnetSpec_builder{
-							VirtualNetwork: virtualNetworkID,
+							VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 							Ipv4Cidr:       new(fmt.Sprintf("10.0.%d.0/24", i+1)),
 						}.Build(),
 					}.Build(),
@@ -230,8 +240,11 @@ var _ = Describe("Subnets server", func() {
 			for i := range count {
 				_, err := server.Create(ctx, publicv1.SubnetsCreateRequest_builder{
 					Object: publicv1.Subnet_builder{
+						Metadata: publicv1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Spec: publicv1.SubnetSpec_builder{
-							VirtualNetwork: virtualNetworkID,
+							VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 							Ipv4Cidr:       new(fmt.Sprintf("10.0.%d.0/24", i+1)),
 						}.Build(),
 					}.Build(),
@@ -254,8 +267,11 @@ var _ = Describe("Subnets server", func() {
 			for i := range count {
 				response, err := server.Create(ctx, publicv1.SubnetsCreateRequest_builder{
 					Object: publicv1.Subnet_builder{
+						Metadata: publicv1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Spec: publicv1.SubnetSpec_builder{
-							VirtualNetwork: virtualNetworkID,
+							VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 							Ipv4Cidr:       new(fmt.Sprintf("10.0.%d.0/24", i+1)),
 						}.Build(),
 					}.Build(),
@@ -279,8 +295,11 @@ var _ = Describe("Subnets server", func() {
 			// Create the object:
 			createResponse, err := server.Create(ctx, publicv1.SubnetsCreateRequest_builder{
 				Object: publicv1.Subnet_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: publicv1.SubnetSpec_builder{
-						VirtualNetwork: virtualNetworkID,
+						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 						Ipv4Cidr:       new("10.0.1.0/24"),
 					}.Build(),
 				}.Build(),
@@ -303,7 +322,7 @@ var _ = Describe("Subnets server", func() {
 						Name: "original-name",
 					}.Build(),
 					Spec: publicv1.SubnetSpec_builder{
-						VirtualNetwork: virtualNetworkID,
+						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 						Ipv4Cidr:       new("10.0.1.0/24"),
 					}.Build(),
 				}.Build(),
@@ -319,7 +338,7 @@ var _ = Describe("Subnets server", func() {
 						Name: "updated-name",
 					}.Build(),
 					Spec: publicv1.SubnetSpec_builder{
-						VirtualNetwork: virtualNetworkID,
+						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 						Ipv4Cidr:       new("10.0.1.0/24"),
 					}.Build(),
 				}.Build(),
@@ -339,8 +358,11 @@ var _ = Describe("Subnets server", func() {
 			// Create the object:
 			createResponse, err := server.Create(ctx, publicv1.SubnetsCreateRequest_builder{
 				Object: publicv1.Subnet_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: publicv1.SubnetSpec_builder{
-						VirtualNetwork: virtualNetworkID,
+						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 						Ipv4Cidr:       new("10.0.1.0/24"),
 					}.Build(),
 				}.Build(),
@@ -356,7 +378,7 @@ var _ = Describe("Subnets server", func() {
 						Name: "renamed",
 					}.Build(),
 					Spec: publicv1.SubnetSpec_builder{
-						VirtualNetwork: virtualNetworkID,
+						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 						Ipv4Cidr:       new("10.0.1.0/24"),
 					}.Build(),
 				}.Build(),
@@ -369,8 +391,11 @@ var _ = Describe("Subnets server", func() {
 			// Create the object:
 			createResponse, err := server.Create(ctx, publicv1.SubnetsCreateRequest_builder{
 				Object: publicv1.Subnet_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: publicv1.SubnetSpec_builder{
-						VirtualNetwork: virtualNetworkID,
+						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 						Ipv4Cidr:       new("10.0.2.0/24"),
 					}.Build(),
 				}.Build(),
@@ -387,7 +412,7 @@ var _ = Describe("Subnets server", func() {
 						Name: "cidr-omitted",
 					}.Build(),
 					Spec: publicv1.SubnetSpec_builder{
-						VirtualNetwork: virtualNetworkID,
+						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -399,8 +424,11 @@ var _ = Describe("Subnets server", func() {
 			// Create with "10.0.3.0/24":
 			createResponse, err := server.Create(ctx, publicv1.SubnetsCreateRequest_builder{
 				Object: publicv1.Subnet_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: publicv1.SubnetSpec_builder{
-						VirtualNetwork: virtualNetworkID,
+						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 						Ipv4Cidr:       new("10.0.3.0/24"),
 					}.Build(),
 				}.Build(),
@@ -413,7 +441,7 @@ var _ = Describe("Subnets server", func() {
 				Object: publicv1.Subnet_builder{
 					Id: object.GetId(),
 					Spec: publicv1.SubnetSpec_builder{
-						VirtualNetwork: virtualNetworkID,
+						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 						Ipv4Cidr:       new("10.0.4.0/24"),
 					}.Build(),
 				}.Build(),
@@ -429,8 +457,11 @@ var _ = Describe("Subnets server", func() {
 			// Create the object:
 			createResponse, err := server.Create(ctx, publicv1.SubnetsCreateRequest_builder{
 				Object: publicv1.Subnet_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: publicv1.SubnetSpec_builder{
-						VirtualNetwork: virtualNetworkID,
+						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 						Ipv4Cidr:       new("10.0.5.0/24"),
 					}.Build(),
 				}.Build(),
@@ -447,7 +478,7 @@ var _ = Describe("Subnets server", func() {
 						Version: math.MaxInt32,
 					}.Build(),
 					Spec: publicv1.SubnetSpec_builder{
-						VirtualNetwork: virtualNetworkID,
+						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 						Ipv4Cidr:       new("10.0.5.0/24"),
 					}.Build(),
 				}.Build(),
@@ -463,8 +494,11 @@ var _ = Describe("Subnets server", func() {
 			// Create the object:
 			createResponse, err := server.Create(ctx, publicv1.SubnetsCreateRequest_builder{
 				Object: publicv1.Subnet_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: publicv1.SubnetSpec_builder{
-						VirtualNetwork: virtualNetworkID,
+						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 						Ipv4Cidr:       new("10.0.1.0/24"),
 					}.Build(),
 				}.Build(),

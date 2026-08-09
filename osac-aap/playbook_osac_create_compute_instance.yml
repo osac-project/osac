@@ -4,24 +4,21 @@
   gather_facts: false
 
   vars:
-    compute_instance: "{{ ansible_eda.event.payload }}"
-    compute_instance_name: "{{ ansible_eda.event.payload.metadata.name }}"
-    template_id: "{{ ansible_eda.event.payload.spec.templateID }}"
+    compute_instance: "{{ osac_job_vars.resource }}"
+    compute_instance_name: "{{ osac_job_vars.resource.metadata.name }}"
+    template_id: "{{ osac_job_vars.resource.spec.templateID }}"
     template_parameters: {}
-    tenant_storage_classes: "{{ ansible_eda.event.tenant_storage_classes | default([]) }}"
-    _requested_storage_tier: "{{ lookup('env', 'STORAGE_REQUESTED_TIER') | default('default', true) }}"
+    tenant_storage_classes: "{{ osac_job_vars.tenant_storage_classes | default([]) }}"
+    # 'local' matches the only tier every current environment actually registers
+    # (register-local-storage.yaml's LVMS-backed StorageTier, see osac-installer).
+    # No environment defines a tier literally named 'default' -- that name only
+    # ever appeared in storage_provider's own VAST-oriented unit test fixtures.
+    _requested_storage_tier: "{{ lookup('env', 'STORAGE_REQUESTED_TIER') | default('local', true) }}"
 
   pre_tasks:
-    # payload.spec.blockEncryptionPassphrase carries a real secret (see
-    # storage_provider_block_encryption_passphrase below) -- use the shared,
-    # centralized redaction task instead of debugging the whole payload object.
-    - name: Show EDA Event metadata
-      ansible.builtin.include_role:
-        name: osac.service.common
-        tasks_from: show_eda_event_metadata
-      vars:
-        eda_event_extra_fields:
-          template_id: "{{ ansible_eda.event.payload.spec.templateID | default('unknown') }}"
+    - name: Show resource metadata
+      ansible.builtin.debug:
+        var: osac_job_vars.resource.metadata
 
     - name: Determine tenant target namespace
       # Brings in variables:
@@ -47,28 +44,28 @@
     - name: Validate optional storage_tier_definitions type
       ansible.builtin.fail:
         msg: >-
-          ansible_eda.event.storage_tier_definitions must be an array when provided.
+          osac_job_vars.storage_tier_definitions must be an array when provided.
           Example: [{"name":"default","protocol":"nfs","provider":"vast","backend_id":"be-001"}]
       when: >-
-        ansible_eda.event.storage_tier_definitions is defined and
-        (ansible_eda.event.storage_tier_definitions is not sequence or
-         ansible_eda.event.storage_tier_definitions is string or
-         ansible_eda.event.storage_tier_definitions is mapping)
+        osac_job_vars.storage_tier_definitions is defined and
+        (osac_job_vars.storage_tier_definitions is not sequence or
+         osac_job_vars.storage_tier_definitions is string or
+         osac_job_vars.storage_tier_definitions is mapping)
 
     - name: Filter storage tier definitions to the requested tier for JIT storage
-      when: (ansible_eda.event.storage_tier_definitions | default([])) | length > 0
+      when: (osac_job_vars.storage_tier_definitions | default([])) | length > 0
       block:
         - name: Filter to only the requested tier
           ansible.builtin.set_fact:
             _jit_storage_tiers: >-
-              {{ ansible_eda.event.storage_tier_definitions
+              {{ osac_job_vars.storage_tier_definitions
                  | selectattr('name', 'equalto', _requested_storage_tier) | list }}
 
         - name: Warn if requested tier not found in storage_tier_definitions
           ansible.builtin.debug:
             msg: >-
               Requested storage tier '{{ _requested_storage_tier }}' not found in storage_tier_definitions.
-              Available tiers: {{ ansible_eda.event.storage_tier_definitions | map(attribute='name') | list | to_json }}.
+              Available tiers: {{ osac_job_vars.storage_tier_definitions | map(attribute='name') | list | to_json }}.
               JIT storage provisioning will be skipped.
           when: _jit_storage_tiers | length == 0
 
@@ -79,9 +76,9 @@
       vars:
         storage_provider_action: ensure_storage_class
         storage_provider_tiers: "{{ _jit_storage_tiers }}"
-        storage_provider_backend_connections: "{{ ansible_eda.event.storage_backend_connections | default({}) }}"
+        storage_provider_backend_connections: "{{ osac_job_vars.storage_backend_connections | default({}) }}"
         storage_provider_provisioning_target: vmaas
-        storage_provider_block_encryption_passphrase: "{{ ansible_eda.event.payload.spec.blockEncryptionPassphrase | default('') }}"
+        storage_provider_block_encryption_passphrase: "{{ osac_job_vars.resource.spec.blockEncryptionPassphrase | default('') }}"
 
     - name: Add JIT-provisioned StorageClasses to resolution list
       ansible.builtin.set_fact:

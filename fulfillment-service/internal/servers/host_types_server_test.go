@@ -16,6 +16,7 @@ package servers
 import (
 	"fmt"
 
+	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/protobuf/proto"
@@ -82,7 +83,11 @@ var _ = Describe("Host types server", func() {
 
 		It("Creates object", func() {
 			response, err := server.Create(ctx, publicv1.HostTypesCreateRequest_builder{
-				Object: publicv1.HostType_builder{}.Build(),
+				Object: publicv1.HostType_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(response).ToNot(BeNil())
@@ -111,6 +116,9 @@ var _ = Describe("Host types server", func() {
 			}
 			createResponse, err := server.Create(ctx, publicv1.HostTypesCreateRequest_builder{
 				Object: publicv1.HostType_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:      "BM host type",
 					Interfaces: interfaces,
 				}.Build(),
@@ -135,6 +143,9 @@ var _ = Describe("Host types server", func() {
 		It("Creates object without interfaces", func() {
 			createResponse, err := server.Create(ctx, publicv1.HostTypesCreateRequest_builder{
 				Object: publicv1.HostType_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title: "VM host type",
 				}.Build(),
 			}.Build())
@@ -146,6 +157,9 @@ var _ = Describe("Host types server", func() {
 		It("Updates object interfaces", func() {
 			createResponse, err := server.Create(ctx, publicv1.HostTypesCreateRequest_builder{
 				Object: publicv1.HostType_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title: "BM host type",
 				}.Build(),
 			}.Build())
@@ -183,7 +197,11 @@ var _ = Describe("Host types server", func() {
 			const count = 10
 			for range count {
 				_, err := server.Create(ctx, publicv1.HostTypesCreateRequest_builder{
-					Object: publicv1.HostType_builder{}.Build(),
+					Object: publicv1.HostType_builder{
+						Metadata: publicv1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
+					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 			}
@@ -201,7 +219,11 @@ var _ = Describe("Host types server", func() {
 			const count = 10
 			for range count {
 				_, err := server.Create(ctx, publicv1.HostTypesCreateRequest_builder{
-					Object: publicv1.HostType_builder{}.Build(),
+					Object: publicv1.HostType_builder{
+						Metadata: publicv1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
+					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 			}
@@ -219,7 +241,11 @@ var _ = Describe("Host types server", func() {
 			const count = 10
 			for range count {
 				_, err := server.Create(ctx, publicv1.HostTypesCreateRequest_builder{
-					Object: publicv1.HostType_builder{}.Build(),
+					Object: publicv1.HostType_builder{
+						Metadata: publicv1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
+					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 			}
@@ -238,7 +264,11 @@ var _ = Describe("Host types server", func() {
 			var objects []*publicv1.HostType
 			for range count {
 				response, err := server.Create(ctx, publicv1.HostTypesCreateRequest_builder{
-					Object: publicv1.HostType_builder{}.Build(),
+					Object: publicv1.HostType_builder{
+						Metadata: publicv1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
+					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				objects = append(objects, response.GetObject())
@@ -258,7 +288,11 @@ var _ = Describe("Host types server", func() {
 		It("Get object", func() {
 			// Create the object:
 			createResponse, err := server.Create(ctx, publicv1.HostTypesCreateRequest_builder{
-				Object: publicv1.HostType_builder{}.Build(),
+				Object: publicv1.HostType_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 
@@ -274,6 +308,9 @@ var _ = Describe("Host types server", func() {
 			// Create the object:
 			createResponse, err := server.Create(ctx, publicv1.HostTypesCreateRequest_builder{
 				Object: publicv1.HostType_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:       "My title",
 					Description: "My description.",
 				}.Build(),
@@ -305,7 +342,11 @@ var _ = Describe("Host types server", func() {
 		It("Delete object", func() {
 			// Create the object:
 			createResponse, err := server.Create(ctx, publicv1.HostTypesCreateRequest_builder{
-				Object: publicv1.HostType_builder{}.Build(),
+				Object: publicv1.HostType_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			object := createResponse.GetObject()

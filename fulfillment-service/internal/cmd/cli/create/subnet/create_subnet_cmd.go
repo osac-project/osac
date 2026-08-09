@@ -122,7 +122,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	client := publicv1.NewSubnetsClient(conn)
 
 	spec := publicv1.SubnetSpec_builder{
-		VirtualNetwork: vn.GetId(),
+		VirtualNetwork: &publicv1.VirtualNetworkLocalReference{Id: vn.GetId()},
 	}
 	if c.args.ipv4Cidr != "" {
 		spec.Ipv4Cidr = &c.args.ipv4Cidr

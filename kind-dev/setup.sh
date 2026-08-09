@@ -737,6 +737,67 @@ EOF
   log "External TLSRoutes created"
 }
 
+install_openbao() {
+  local chart_dir="${REPO_ROOT}/fulfillment-service/it/charts/openbao"
+  if [[ ! -d "$chart_dir" ]]; then
+    err "OpenBao chart not found at ${chart_dir}"
+    return 1
+  fi
+
+  log "Installing OpenBao..."
+  helm upgrade --install openbao \
+    "${chart_dir}" \
+    --namespace openbao \
+    --create-namespace \
+    --set "dev.rootToken=dev-root-token" \
+    --set "caBundle.configMap=ca-bundle" \
+    --wait --timeout 2m
+
+  log "OpenBao installed"
+}
+
+configure_openbao() {
+  log "Configuring OpenBao (creating parent namespace)..."
+
+  local openbao_token="dev-root-token"
+
+  kubectl port-forward svc/openbao 8200:8200 -n openbao &
+  local pf_pid=$!
+
+  cleanup_port_forward() {
+    kill "${pf_pid}" 2>/dev/null || true
+    wait "${pf_pid}" 2>/dev/null || true
+  }
+
+  local attempts=0
+  while ! curl -sf http://localhost:8200/v1/sys/health >/dev/null 2>&1; do
+    attempts=$((attempts + 1))
+    if [[ $attempts -ge 30 ]]; then
+      err "OpenBao port-forward did not become reachable"
+      cleanup_port_forward
+      return 1
+    fi
+    sleep 1
+  done
+
+  local status
+  status=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+    http://localhost:8200/v1/sys/namespaces/osac \
+    -H "X-Vault-Token: ${openbao_token}")
+
+  case "$status" in
+    200|204) log "Created 'osac' namespace in OpenBao" ;;
+    400)     log "OpenBao 'osac' namespace already exists (idempotent)" ;;
+    *)       err "Failed to create 'osac' namespace in OpenBao (HTTP ${status})"
+             cleanup_port_forward
+             return 1 ;;
+  esac
+
+  cleanup_port_forward
+
+  log "OpenBao configured"
+}
+
 create_controller_credentials() {
   log "Creating controller credentials..."
 
@@ -812,7 +873,7 @@ deploy_osac() {
   fi
 
   log "Building umbrella chart dependencies..."
-  helm dependency build "${chart_dir}" 2>&1 | tail -3
+  helm dependency update "${chart_dir}" 2>&1 | tail -3
 
   log "Deploying OSAC via umbrella chart..."
   local helm_args=(
@@ -1511,6 +1572,8 @@ main() {
   install_postgres
   create_database_resources
   install_keycloak
+  install_openbao
+  configure_openbao
   create_controller_credentials
 
   if [[ "$SKIP_OSAC" == "true" ]]; then

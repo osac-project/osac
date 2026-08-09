@@ -40,6 +40,9 @@ var _ = Describe("Private host types", func() {
 		id := fmt.Sprintf("my_host_type_%s", uuid.New())
 		_, err := client.Create(ctx, privatev1.HostTypesCreateRequest_builder{
 			Object: privatev1.HostType_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("test-ht-%s", uuid.New()[24:32]),
+				}.Build(),
 				Id:          id,
 				Title:       "My title",
 				Description: "My description.",
@@ -60,6 +63,9 @@ var _ = Describe("Private host types", func() {
 		id := fmt.Sprintf("my_host_type_%s", uuid.New())
 		_, err := client.Create(ctx, privatev1.HostTypesCreateRequest_builder{
 			Object: privatev1.HostType_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("test-ht-%s", uuid.New()[24:32]),
+				}.Build(),
 				Id:          id,
 				Title:       "My title",
 				Description: "My description.",
@@ -88,6 +94,9 @@ var _ = Describe("Private host types", func() {
 		id := fmt.Sprintf("my_template_%s", uuid.New())
 		response, err := client.Create(ctx, privatev1.HostTypesCreateRequest_builder{
 			Object: privatev1.HostType_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("test-ht-%s", uuid.New()[24:32]),
+				}.Build(),
 				Id:          id,
 				Title:       "My title",
 				Description: "My description.",
@@ -111,6 +120,9 @@ var _ = Describe("Private host types", func() {
 		id := fmt.Sprintf("my_host_type_%s", uuid.New())
 		_, err := client.Create(ctx, privatev1.HostTypesCreateRequest_builder{
 			Object: privatev1.HostType_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("test-ht-%s", uuid.New()[24:32]),
+				}.Build(),
 				Id:          id,
 				Title:       "My title",
 				Description: "My description.",
@@ -161,6 +173,7 @@ var _ = Describe("Private host types", func() {
 		_, err := client.Create(ctx, privatev1.HostTypesCreateRequest_builder{
 			Object: privatev1.HostType_builder{
 				Metadata: privatev1.Metadata_builder{
+					Name:       fmt.Sprintf("ht-to-delete-%s", uuid.New()[24:32]),
 					Finalizers: []string{"a"},
 				}.Build(),
 				Id:          id,

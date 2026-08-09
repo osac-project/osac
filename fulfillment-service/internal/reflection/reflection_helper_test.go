@@ -394,7 +394,7 @@ var _ = Describe("Reflection helper", func() {
 							Spec: publicv1.ClusterSpec_builder{
 								NodeSets: map[string]*publicv1.ClusterNodeSet{
 									"xyz": publicv1.ClusterNodeSet_builder{
-										HostType: "acme_1tib",
+										HostType: publicv1.HostTypeReference_builder{Id: "acme_1tib"}.Build(),
 										Size:     3,
 									}.Build(),
 								},
@@ -407,7 +407,7 @@ var _ = Describe("Reflection helper", func() {
 							Spec: publicv1.ClusterSpec_builder{
 								NodeSets: map[string]*publicv1.ClusterNodeSet{
 									"xyz": publicv1.ClusterNodeSet_builder{
-										HostType: "acme_1tib",
+										HostType: publicv1.HostTypeReference_builder{Id: "acme_1tib"}.Build(),
 										Size:     3,
 									}.Build(),
 								},
@@ -428,7 +428,7 @@ var _ = Describe("Reflection helper", func() {
 				Spec: publicv1.ClusterSpec_builder{
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"xyz": publicv1.ClusterNodeSet_builder{
-							HostType: "acme_1tib",
+							HostType: publicv1.HostTypeReference_builder{Id: "acme_1tib"}.Build(),
 							Size:     3,
 						}.Build(),
 					},
@@ -442,7 +442,7 @@ var _ = Describe("Reflection helper", func() {
 					Spec: publicv1.ClusterSpec_builder{
 						NodeSets: map[string]*publicv1.ClusterNodeSet{
 							"xyz": publicv1.ClusterNodeSet_builder{
-								HostType: "acme_1tib",
+								HostType: publicv1.HostTypeReference_builder{Id: "acme_1tib"}.Build(),
 								Size:     3,
 							}.Build(),
 						},
@@ -476,7 +476,7 @@ var _ = Describe("Reflection helper", func() {
 							Spec: publicv1.ClusterSpec_builder{
 								NodeSets: map[string]*publicv1.ClusterNodeSet{
 									"xyz": publicv1.ClusterNodeSet_builder{
-										HostType: "acme_1tib",
+										HostType: publicv1.HostTypeReference_builder{Id: "acme_1tib"}.Build(),
 										Size:     3,
 									}.Build(),
 								},
@@ -511,7 +511,7 @@ var _ = Describe("Reflection helper", func() {
 					Spec: publicv1.ClusterSpec_builder{
 						NodeSets: map[string]*publicv1.ClusterNodeSet{
 							"xyz": publicv1.ClusterNodeSet_builder{
-								HostType: "acme_1tib",
+								HostType: publicv1.HostTypeReference_builder{Id: "acme_1tib"}.Build(),
 								Size:     3,
 							}.Build(),
 						},

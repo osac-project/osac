@@ -116,6 +116,8 @@ func NewClusterOrderReconciler(
 // +kubebuilder:rbac:groups="",resources=namespaces;serviceaccounts,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=hypershift.openshift.io,resources=hostedclusters;nodepools,verbs=get;list;watch
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=subnets,verbs=get;list;watch
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=networkclasses,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.

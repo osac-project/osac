@@ -21,6 +21,8 @@ import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
 import "osac/private/v1/condition_status_type.proto";
 import "osac/private/v1/metadata_type.proto";
+import "osac/private/v1/security_group_type.proto";
+import "osac/private/v1/subnet_type.proto";
 
 // Contains the image configuration for a bare metal instance.
 message BareMetalInstanceImage {
@@ -47,12 +49,12 @@ message BareMetalInstance {
 // Network attachment for a bare metal instance NIC.
 // Groups a subnet with security groups and a physical interface binding.
 message BareMetalNetworkAttachment {
-  // Fulfillment Subnet ID. Must reference a Subnet in READY state.
-  string subnet = 1;
+  // Reference to the Subnet. Must reference a Subnet in READY state.
+  SubnetLocalReference subnet = 1;
 
-  // Fulfillment SecurityGroup IDs applied on this NIC.
+  // References to the SecurityGroups applied on this NIC.
   // Each must be READY and belong to the same VirtualNetwork as the subnet.
-  repeated string security_groups = 2;
+  repeated SecurityGroupLocalReference security_groups = 2;
 
   // Physical interface name from the HostType's NetworkInterface list.
   // When omitted on a single-attachment instance, the system selects the first fabric-role interface.
@@ -72,7 +74,7 @@ message BareMetalInstanceSpec {
   };
 
   // Reference to the BareMetalInstanceCatalogItem. Required on create; immutable after creation.
-  string catalog_item = 1 [(google.api.field_behavior) = IMMUTABLE];
+  BareMetalInstanceCatalogItemReference catalog_item = 1 [(google.api.field_behavior) = IMMUTABLE];
 
   // SSH public key injected into the OS at provisioning time. Immutable after creation.
   // Must be a valid SSH public key in OpenSSH format (ssh-rsa, ssh-ed25519, etc.).
@@ -122,6 +124,25 @@ message BareMetalInstanceStatus {
 
   // Identifier of the hub that was selected for this bare metal instance.
   string hub = 4;
+
+  // Runtime networking state for each network attachment.
+  // Populated by the operator after DHCP lease discovery and synced via the feedback controller.
+  repeated BareMetalNetworkAttachmentStatus network_attachment_statuses = 5;
+}
+
+// Runtime networking state for a single bare metal network attachment.
+message BareMetalNetworkAttachmentStatus {
+  // Physical interface name from the spec's network attachment.
+  string interface = 1;
+
+  // Reference to the Subnet associated with this attachment.
+  string subnet_ref = 2;
+
+  // IP address discovered after DHCP assignment.
+  string ip_address = 3;
+
+  // Whether this attachment is the primary (default gateway) attachment.
+  bool primary = 4;
 }
 
 // Run strategy for the bare metal instance.
@@ -178,4 +199,18 @@ enum BareMetalInstanceConditionType {
 
   // Configuration changes require a restart to take effect.
   BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_REQUIRED      = 6;
+}
+
+// Local reference to a BareMetalInstance resource.
+message BareMetalInstanceLocalReference {
+  string id = 1;
+  string name = 2;
+}
+
+// Reference to a BareMetalInstanceCatalogItem resource.
+message BareMetalInstanceCatalogItemReference {
+  string id = 1;
+  string name = 2;
+  string project = 3;
+  bool shared = 4;
 }

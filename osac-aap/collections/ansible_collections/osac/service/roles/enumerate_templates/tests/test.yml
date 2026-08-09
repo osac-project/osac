@@ -107,11 +107,10 @@
           - item.title is defined
           - item.implementation_strategy is defined
           - item.implementation_strategy | length > 0
-          - item.fabric_manager is defined
-          - item.fabric_manager | length > 0
+          - (item.fabric_manager is defined and item.fabric_manager | length > 0) or (item.k8s_manager is defined and item.k8s_manager | length > 0)
           - item.capabilities is defined
-        fail_msg: "Network class '{{ item.id }}' missing required fields"
-        success_msg: "Network class '{{ item.id }}' has correct structure (strategy={{ item.implementation_strategy }}, fabric_manager={{ item.fabric_manager }})"
+        fail_msg: "Network class '{{ item.id }}' missing required fields, or has neither fabric_manager nor k8s_manager set"
+        success_msg: "Network class '{{ item.id }}' has correct structure (strategy={{ item.implementation_strategy }}, fabric_manager={{ item.fabric_manager | default('unset') }}, k8s_manager={{ item.k8s_manager | default('unset') }})"
       loop: "{{ osac_network_classes }}"
       loop_control:
         label: "{{ item.id }}"

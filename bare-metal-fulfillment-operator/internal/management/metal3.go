@@ -202,9 +202,12 @@ func (m *Metal3Client) IsRestartComplete(ctx context.Context, hostID string) (bo
 		return false, err
 	}
 
-	// Restart is complete when the reboot annotation is no longer present
+	// Restart is complete when the reboot annotation has been processed and
+	// the host is back online. Checking only the annotation is insufficient
+	// because the BMH controller removes it as soon as the reboot command is
+	// sent to Ironic, before the host finishes rebooting.
 	_, hasRebootAnnotation := bmh.Annotations[metal3api.RebootAnnotationPrefix]
-	return !hasRebootAnnotation, nil
+	return !hasRebootAnnotation && bmh.Status.PoweredOn, nil
 }
 
 func (m *Metal3Client) getBMH(ctx context.Context, hostID string) (*metal3api.BareMetalHost, error) {

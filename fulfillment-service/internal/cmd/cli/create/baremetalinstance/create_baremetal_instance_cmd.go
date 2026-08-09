@@ -151,7 +151,7 @@ func (c *runnerContext) run(cmd *cobra.Command, _ []string) error {
 	}
 
 	spec := publicv1.BareMetalInstanceSpec_builder{
-		CatalogItem: catalogItem.GetId(),
+		CatalogItem: &publicv1.BareMetalInstanceCatalogItemReference{Id: catalogItem.GetId()},
 	}
 	if c.args.sshKey != "" {
 		sshKey := c.args.sshKey

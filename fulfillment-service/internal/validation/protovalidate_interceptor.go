@@ -24,6 +24,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
 // ProtovalidateInterceptorBuilder contains the data and logic needed to build a gRPC interceptor that validates
@@ -143,7 +144,7 @@ func (i *ProtovalidateInterceptor) validate(message any) error {
 	// Skip validation for Update requests - they are validated in the server after mask merging.
 	// This avoids false validation errors when clients send partial objects with update_mask.
 	type updateRequest interface {
-		GetUpdateMask() any
+		GetUpdateMask() *fieldmaskpb.FieldMask
 	}
 	if _, isUpdate := message.(updateRequest); isUpdate {
 		return nil

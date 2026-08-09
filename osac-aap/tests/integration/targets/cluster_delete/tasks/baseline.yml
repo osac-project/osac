@@ -12,9 +12,8 @@
 
     - name: Set test variables for baseline workflow
       ansible.builtin.set_fact:
-        ansible_eda:
-          event:
-            payload: "{{ test_cluster_order }}"
+        osac_job_vars:
+          resource: "{{ test_cluster_order }}"
         cluster_working_namespace: "cluster-test-cluster-work"
         # NOTE: Using real template (osac.templates.ocp_small from fixture)
         # Override infrastructure-deleting steps to avoid actual resource deletion

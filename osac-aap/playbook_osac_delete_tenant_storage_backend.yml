@@ -4,41 +4,36 @@
   gather_facts: false
 
   vars:
-    tenant_name: "{{ ansible_eda.event.payload.metadata.name }}"
-    tenant_namespace: "{{ ansible_eda.event.payload.metadata.namespace }}"
+    tenant_name: "{{ osac_job_vars.resource.metadata.name }}"
+    tenant_namespace: "{{ osac_job_vars.resource.metadata.namespace }}"
 
   pre_tasks:
-    # Use the shared, centralized redaction task rather than debugging the whole payload
-    # object, matching the create-side playbook -- payload.spec is not currently used
-    # here, but keeping the same convention avoids reintroducing a full-payload debug
-    # if that ever changes.
-    - name: Show EDA Event metadata
-      ansible.builtin.include_role:
-        name: osac.service.common
-        tasks_from: show_eda_event_metadata
+    - name: Show resource metadata
+      ansible.builtin.debug:
+        var: osac_job_vars.resource.metadata
 
     - name: Validate tenant payload is present
       ansible.builtin.fail:
-        msg: "tenant must be provided via ansible_eda.event.payload with metadata.name and metadata.namespace set"
+        msg: "tenant must be provided via osac_job_vars.resource with metadata.name and metadata.namespace set"
       when: >-
-        ansible_eda is not defined or
-        ansible_eda.event.payload.metadata.name is not defined or
-        ansible_eda.event.payload.metadata.name | length == 0 or
-        ansible_eda.event.payload.metadata.namespace is not defined or
-        ansible_eda.event.payload.metadata.namespace | length == 0
+        osac_job_vars is not defined or
+        osac_job_vars.resource.metadata.name is not defined or
+        osac_job_vars.resource.metadata.name | length == 0 or
+        osac_job_vars.resource.metadata.namespace is not defined or
+        osac_job_vars.resource.metadata.namespace | length == 0
 
     - name: Validate storage_tier_definitions is a non-empty array in the EDA event
       ansible.builtin.fail:
         msg: >-
-          ansible_eda.event.storage_tier_definitions must be a non-empty array, populated
+          osac_job_vars.storage_tier_definitions must be a non-empty array, populated
           by osac-operator from the Tenant's resolved storage tiers.
           Example: [{"name":"default","protocol":"nfs","provider":"vast","backend_id":"be-001","quota_bytes":500}]
       when: >-
-        ansible_eda.event.storage_tier_definitions is not defined or
-        ansible_eda.event.storage_tier_definitions is not sequence or
-        ansible_eda.event.storage_tier_definitions is string or
-        ansible_eda.event.storage_tier_definitions is mapping or
-        ansible_eda.event.storage_tier_definitions | length == 0
+        osac_job_vars.storage_tier_definitions is not defined or
+        osac_job_vars.storage_tier_definitions is not sequence or
+        osac_job_vars.storage_tier_definitions is string or
+        osac_job_vars.storage_tier_definitions is mapping or
+        osac_job_vars.storage_tier_definitions | length == 0
 
   tasks:
     - name: Delete tenant storage backend
@@ -46,5 +41,5 @@
         name: osac.service.storage_provider
       vars:
         storage_provider_action: teardown_backend
-        storage_provider_tiers: "{{ ansible_eda.event.storage_tier_definitions }}"
-        storage_provider_backend_connections: "{{ ansible_eda.event.storage_backend_connections | default({}) }}"
+        storage_provider_tiers: "{{ osac_job_vars.storage_tier_definitions }}"
+        storage_provider_backend_connections: "{{ osac_job_vars.storage_backend_connections | default({}) }}"

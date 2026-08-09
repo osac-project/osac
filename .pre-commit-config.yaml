@@ -20,6 +20,18 @@ repos:
     - id: check-symlinks
     - id: detect-private-key
 
+- repo: https://github.com/gitleaks/gitleaks
+  rev: v8.30.1
+  hooks:
+    # Upstream entry is `--staged` (commit-time only). `pre-commit run --all-files`
+    # and CI pre-commit/action leave the index empty, so this hook is a no-op there.
+    # CI secret scanning is the dedicated docker step in pre-commit.yaml (SKIP'd below
+    # via the workflow). Locally: rely on `git commit` / stage then `pre-commit run gitleaks`.
+    # Override entry to drop upstream `--verbose`: gitleaks can print secrets before
+    # redaction, so verbose output must not land in CI/local logs.
+    - id: gitleaks
+      entry: gitleaks git --pre-commit --redact --staged
+
 - repo: https://github.com/adrienverge/yamllint.git
   rev: v1.35.1
   hooks:

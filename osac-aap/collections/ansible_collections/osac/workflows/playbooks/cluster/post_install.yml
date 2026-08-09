@@ -7,14 +7,14 @@
 #   - name: Post-install cluster
 #     ansible.builtin.import_playbook: osac.workflows.cluster.post_install
 #     vars:
-#       cluster_order: "{{ ansible_eda.event.payload }}"
+#       cluster_order: "{{ osac_job_vars.resource }}"
 #       admin_kubeconfig: "{{ kubeconfig_content }}"
 #
 # Hook example:
 #   - name: Post-install with custom hooks
 #     ansible.builtin.import_playbook: osac.workflows.cluster.post_install
 #     vars:
-#       cluster_order: "{{ ansible_eda.event.payload }}"
+#       cluster_order: "{{ osac_job_vars.resource }}"
 #       admin_kubeconfig: "{{ kubeconfig_content }}"
 #       hook_workflow_start:
 #         name: my_custom_hooks
@@ -31,7 +31,7 @@
     K8S_AUTH_KUBECONFIG: "{{ lookup('env', 'K8S_AUTH_KUBECONFIG') | default(lookup('env', 'KUBECONFIG'), true) | default(lookup('env', 'HOME') + '/.kube/config', true) }}"
 
   vars:
-    cluster_order: "{{ ansible_eda.event.payload }}"
+    cluster_order: "{{ osac_job_vars.resource }}"
 
     # GENERIC HOOKS - Default to noop
     hook_workflow_start_default:

@@ -146,6 +146,9 @@ aap:
     eeImage: "ghcr.io/osac-project/osac-aap:latest"
     projectGitUri: "https://github.com/osac-project/osac"
     projectGitBranch: "main"
+  instanceGroups:
+    storageFulfillment:
+      enabled: true
 
 # --- Validation ---
 validation:
@@ -176,3 +179,21 @@ kafka:
 # --- Metering ---
 metering:
   enabled: true
+  testAdapter:
+    enabled: true
+  database:
+    connection:
+    - secret:
+        name: metering-db
+        items:
+        - key: url
+          param: url
+    - secret:
+        name: postgres-client-cert-metering
+        items:
+        - key: tls.crt
+          param: sslcert
+        - key: tls.key
+          param: sslkey
+        - key: ca.crt
+          param: sslrootcert

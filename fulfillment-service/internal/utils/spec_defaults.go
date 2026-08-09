@@ -38,7 +38,7 @@ func ApplySpecDefaults(spec *privatev1.ComputeInstanceSpec, defaults *privatev1.
 	}
 
 	// Apply instance_type default.
-	if spec.GetInstanceType() == "" && defaults.HasInstanceType() && defaults.GetInstanceType() != "" {
+	if spec.GetInstanceType() == nil && defaults.HasInstanceType() && defaults.GetInstanceType() != nil {
 		spec.SetInstanceType(defaults.GetInstanceType())
 	}
 
@@ -96,7 +96,7 @@ func ValidateRequiredSpecFields(spec *privatev1.ComputeInstanceSpec) error {
 	}
 	var missing []string
 	// instance_type is always required.
-	if spec.GetInstanceType() == "" {
+	if spec.GetInstanceType() == nil {
 		missing = append(missing, "instance_type")
 	}
 	if !spec.HasImage() {

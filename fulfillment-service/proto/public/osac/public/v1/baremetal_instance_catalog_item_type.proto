@@ -17,6 +17,7 @@ package osac.public.v1;
 
 import "osac/public/v1/field_definition_type.proto";
 import "osac/public/v1/metadata_type.proto";
+import "osac/public/v1/baremetal_instance_template_type.proto";
 
 // A bare metal instance catalog item defines a curated hardware offering that references an underlying bare metal
 // instance template.
@@ -34,8 +35,8 @@ message BareMetalInstanceCatalogItem {
   // Human friendly long description of the catalog item, using Markdown format.
   string description = 4;
 
-  // Identifier of the underlying bare metal instance template that this catalog item references.
-  string template = 5;
+  // Reference to the underlying bare metal instance template that this catalog item references.
+  BareMetalInstanceTemplateReference template = 5;
 
   // Whether this catalog item is published.
   bool published = 6;

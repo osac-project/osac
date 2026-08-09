@@ -77,11 +77,11 @@ var _ = Describe("REST gateway", func() {
 		templateID := fmt.Sprintf("my_%s", uuid.New())
 		nodeSets := map[string]*privatev1.ClusterTemplateNodeSet{
 			"compute": privatev1.ClusterTemplateNodeSet_builder{
-				HostType: computeHostTypeID,
+				HostType: privatev1.HostTypeReference_builder{Id: computeHostTypeID}.Build(),
 				Size:     3,
 			}.Build(),
 			"gpu": privatev1.ClusterTemplateNodeSet_builder{
-				HostType: gpuHostTypeID,
+				HostType: privatev1.HostTypeReference_builder{Id: gpuHostTypeID}.Build(),
 				Size:     2,
 			}.Build(),
 		}
@@ -160,11 +160,11 @@ var _ = Describe("REST gateway", func() {
 		templateID := fmt.Sprintf("my_%s", uuid.New())
 		nodeSets := map[string]*privatev1.ClusterTemplateNodeSet{
 			"compute": privatev1.ClusterTemplateNodeSet_builder{
-				HostType: computeHostTypeID,
+				HostType: privatev1.HostTypeReference_builder{Id: computeHostTypeID}.Build(),
 				Size:     3,
 			}.Build(),
 			"gpu": privatev1.ClusterTemplateNodeSet_builder{
-				HostType: gpuHostTypeID,
+				HostType: privatev1.HostTypeReference_builder{Id: gpuHostTypeID}.Build(),
 				Size:     2,
 			}.Build(),
 		}

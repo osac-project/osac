@@ -31,13 +31,19 @@ type Driver struct {
 }
 
 // NewDriver creates a new OSAC CSI driver instance.
-func NewDriver(name, version, endpoint, nodeID string, fulfillmentClient fulfillment.Client, vendorSockets map[string]string) (*Driver, error) {
+func NewDriver(name, version, endpoint, nodeID, clusterID string, vc fulfillment.VolumeClient, cpc fulfillment.ControlPlaneClient, vendorSockets map[string]string) (*Driver, error) {
 	if name == "" {
 		return nil, fmt.Errorf("driver name is required")
 	}
 	if nodeID == "" {
 		return nil, fmt.Errorf("node ID is required")
 	}
+	if vc == nil {
+		return nil, fmt.Errorf("volume client is required")
+	}
+
+	// clusterID is optional — the fulfillment service may identify the
+	// cluster from connection credentials or a mounted ConfigMap.
 
 	proxyMgr := proxy.NewManager(vendorSockets)
 
@@ -47,7 +53,7 @@ func NewDriver(name, version, endpoint, nodeID string, fulfillmentClient fulfill
 		nodeID:     nodeID,
 		endpoint:   endpoint,
 		identity:   NewIdentityServer(name, version),
-		controller: NewControllerServer(fulfillmentClient, proxyMgr, vendorSockets),
+		controller: NewControllerServer(vc, cpc, clusterID),
 		node:       NewNodeServer(nodeID, proxyMgr, vendorSockets),
 	}, nil
 }

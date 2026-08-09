@@ -16,6 +16,7 @@ package servers
 import (
 	"fmt"
 
+	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc/codes"
@@ -76,9 +77,12 @@ var _ = Describe("Compute instance catalog items server", func() {
 		It("Creates object", func() {
 			response, err := server.Create(ctx, publicv1.ComputeInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.ComputeInstanceCatalogItem_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:       "My CI catalog item",
 					Description: "My description.",
-					Template:    "my-ci-template-id",
+					Template:    publicv1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 					Published:   true,
 				}.Build(),
 			}.Build())
@@ -88,7 +92,7 @@ var _ = Describe("Compute instance catalog items server", func() {
 			Expect(object).ToNot(BeNil())
 			Expect(object.GetId()).ToNot(BeEmpty())
 			Expect(object.GetTitle()).To(Equal("My CI catalog item"))
-			Expect(object.GetTemplate()).To(Equal("my-ci-template-id"))
+			Expect(object.GetTemplate().GetId()).To(Equal("my-ci-template-id"))
 			Expect(object.GetPublished()).To(BeTrue())
 		})
 
@@ -97,8 +101,11 @@ var _ = Describe("Compute instance catalog items server", func() {
 			for i := range count {
 				_, err := server.Create(ctx, publicv1.ComputeInstanceCatalogItemsCreateRequest_builder{
 					Object: publicv1.ComputeInstanceCatalogItem_builder{
+						Metadata: publicv1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Title:     fmt.Sprintf("CI catalog item %d", i),
-						Template:  "my-ci-template-id",
+						Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 						Published: true,
 					}.Build(),
 				}.Build())
@@ -116,8 +123,11 @@ var _ = Describe("Compute instance catalog items server", func() {
 			for i := range count {
 				_, err := server.Create(ctx, publicv1.ComputeInstanceCatalogItemsCreateRequest_builder{
 					Object: publicv1.ComputeInstanceCatalogItem_builder{
+						Metadata: publicv1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Title:     fmt.Sprintf("CI catalog item %d", i),
-						Template:  "my-ci-template-id",
+						Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 						Published: true,
 					}.Build(),
 				}.Build())
@@ -137,8 +147,11 @@ var _ = Describe("Compute instance catalog items server", func() {
 			for i := range count {
 				response, err := server.Create(ctx, publicv1.ComputeInstanceCatalogItemsCreateRequest_builder{
 					Object: publicv1.ComputeInstanceCatalogItem_builder{
+						Metadata: publicv1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Title:     fmt.Sprintf("CI catalog item %d", i),
-						Template:  "my-ci-template-id",
+						Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 						Published: true,
 					}.Build(),
 				}.Build())
@@ -159,8 +172,11 @@ var _ = Describe("Compute instance catalog items server", func() {
 		It("List excludes unpublished objects", func() {
 			_, err := server.Create(ctx, publicv1.ComputeInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.ComputeInstanceCatalogItem_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:     "Published item",
-					Template:  "my-ci-template-id",
+					Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 					Published: true,
 				}.Build(),
 			}.Build())
@@ -168,8 +184,11 @@ var _ = Describe("Compute instance catalog items server", func() {
 
 			_, err = server.Create(ctx, publicv1.ComputeInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.ComputeInstanceCatalogItem_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:     "Unpublished item",
-					Template:  "my-ci-template-id",
+					Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 					Published: false,
 				}.Build(),
 			}.Build())
@@ -184,8 +203,11 @@ var _ = Describe("Compute instance catalog items server", func() {
 		It("List with user filter excludes unpublished objects", func() {
 			publishedResponse, err := server.Create(ctx, publicv1.ComputeInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.ComputeInstanceCatalogItem_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:     "Target published",
-					Template:  "my-ci-template-id",
+					Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 					Published: true,
 				}.Build(),
 			}.Build())
@@ -193,8 +215,11 @@ var _ = Describe("Compute instance catalog items server", func() {
 
 			_, err = server.Create(ctx, publicv1.ComputeInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.ComputeInstanceCatalogItem_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:     "Other published",
-					Template:  "my-ci-template-id",
+					Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 					Published: true,
 				}.Build(),
 			}.Build())
@@ -202,8 +227,11 @@ var _ = Describe("Compute instance catalog items server", func() {
 
 			unpublishedResponse, err := server.Create(ctx, publicv1.ComputeInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.ComputeInstanceCatalogItem_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:     "Target unpublished",
-					Template:  "my-ci-template-id",
+					Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 					Published: false,
 				}.Build(),
 			}.Build())
@@ -222,8 +250,11 @@ var _ = Describe("Compute instance catalog items server", func() {
 		It("Get returns unpublished item when caller has a referencing compute instance", func() {
 			createResponse, err := server.Create(ctx, publicv1.ComputeInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.ComputeInstanceCatalogItem_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:     "Unpublished item",
-					Template:  "my-ci-template-id",
+					Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 					Published: false,
 				}.Build(),
 			}.Build())
@@ -243,8 +274,8 @@ var _ = Describe("Compute instance catalog items server", func() {
 						Tenant: "system",
 					}.Build(),
 					Spec: privatev1.ComputeInstanceSpec_builder{
-						CatalogItem: catalogItemID,
-						Template:    "my-ci-template-id",
+						CatalogItem: privatev1.ComputeInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						Template:    privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 					}.Build(),
 				}.Build(),
 			).Do(ctx)
@@ -260,8 +291,11 @@ var _ = Describe("Compute instance catalog items server", func() {
 		It("Get returns not found for unpublished object", func() {
 			createResponse, err := server.Create(ctx, publicv1.ComputeInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.ComputeInstanceCatalogItem_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:     "Unpublished item",
-					Template:  "my-ci-template-id",
+					Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 					Published: false,
 				}.Build(),
 			}.Build())
@@ -277,9 +311,12 @@ var _ = Describe("Compute instance catalog items server", func() {
 		It("Get object", func() {
 			createResponse, err := server.Create(ctx, publicv1.ComputeInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.ComputeInstanceCatalogItem_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:       "My CI catalog item",
 					Description: "My description.",
-					Template:    "my-ci-template-id",
+					Template:    publicv1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 					Published:   true,
 				}.Build(),
 			}.Build())
@@ -295,9 +332,12 @@ var _ = Describe("Compute instance catalog items server", func() {
 		It("Update object", func() {
 			createResponse, err := server.Create(ctx, publicv1.ComputeInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.ComputeInstanceCatalogItem_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:       "Original title",
 					Description: "Original description.",
-					Template:    "my-ci-template-id",
+					Template:    publicv1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 					Published:   true,
 				}.Build(),
 			}.Build())
@@ -309,7 +349,7 @@ var _ = Describe("Compute instance catalog items server", func() {
 					Id:          object.GetId(),
 					Title:       "Updated title",
 					Description: "Updated description.",
-					Template:    "my-ci-template-id",
+					Template:    publicv1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 					Published:   true,
 				}.Build(),
 			}.Build())
@@ -328,8 +368,11 @@ var _ = Describe("Compute instance catalog items server", func() {
 		It("Delete object", func() {
 			createResponse, err := server.Create(ctx, publicv1.ComputeInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.ComputeInstanceCatalogItem_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:     "My CI catalog item",
-					Template:  "my-ci-template-id",
+					Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 					Published: true,
 				}.Build(),
 			}.Build())

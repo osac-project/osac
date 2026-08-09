@@ -36,7 +36,8 @@ func ValidateNetworkAttachments(networkAttachments []*privatev1.NetworkAttachmen
 		if att == nil {
 			return fmt.Errorf("network_attachments[%d]: attachment cannot be null", i)
 		}
-		if att.GetSubnet() == "" {
+		ref := att.GetSubnet()
+		if ref == nil || (ref.GetId() == "" && ref.GetName() == "") {
 			return fmt.Errorf("network_attachments[%d]: subnet is required", i)
 		}
 	}

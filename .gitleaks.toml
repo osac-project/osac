@@ -3,7 +3,22 @@
   # replacing them (a config file without this is a full ruleset override).
   useDefault = true
 
-[allowlist]
+# Add an entry below for each confirmed false positive, so gitleaks stops
+# flagging it on every PR instead of it being ignored out of alert fatigue.
+# Keep entries narrowly scoped (a specific regex/path, not a broad pattern)
+# and always fill in `description` explaining *why* it's safe to ignore, so
+# it's auditable in review instead of a silent, unexplained suppression.
+#
+# If a finding is a real secret instead of a false positive, rotate it at
+# its source immediately — do not allowlist it.
+#
+# [[allowlists]]
+#   description = "Why this specific value/pattern is a false positive"
+#   regexes = [
+#     '''the-false-positive-value-or-pattern''',
+#   ]
+
+[[allowlists]]
   description = "Global Allowlist"
 
   # Ignore based on any subset of the line

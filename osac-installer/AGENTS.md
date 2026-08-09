@@ -12,7 +12,7 @@ git submodule update --init --recursive
 
 # Validate changes
 yamllint --strict .
-pre-commit run --all-files
+pre-commit run --all-files   # gitleaks hook is staged-only; use `git commit` or CI for secrets
 make helm-lint
 make helm-validate
 ```

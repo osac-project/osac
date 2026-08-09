@@ -16,6 +16,7 @@ package servers
 import (
 	"fmt"
 
+	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
@@ -84,6 +85,9 @@ var _ = Describe("Private host types server", func() {
 		It("Creates object", func() {
 			response, err := server.Create(ctx, privatev1.HostTypesCreateRequest_builder{
 				Object: privatev1.HostType_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:       "My title",
 					Description: "My description.",
 				}.Build(),
@@ -101,6 +105,9 @@ var _ = Describe("Private host types server", func() {
 			for i := range count {
 				_, err := server.Create(ctx, privatev1.HostTypesCreateRequest_builder{
 					Object: privatev1.HostType_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Title:       fmt.Sprintf("My title %d", i),
 						Description: fmt.Sprintf("My description %d.", i),
 					}.Build(),
@@ -122,6 +129,9 @@ var _ = Describe("Private host types server", func() {
 			for i := range count {
 				_, err := server.Create(ctx, privatev1.HostTypesCreateRequest_builder{
 					Object: privatev1.HostType_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Title:       fmt.Sprintf("My title %d", i),
 						Description: fmt.Sprintf("My description %d.", i),
 					}.Build(),
@@ -143,6 +153,9 @@ var _ = Describe("Private host types server", func() {
 			for i := range count {
 				_, err := server.Create(ctx, privatev1.HostTypesCreateRequest_builder{
 					Object: privatev1.HostType_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Title:       fmt.Sprintf("My title %d", i),
 						Description: fmt.Sprintf("My description %d.", i),
 					}.Build(),
@@ -165,6 +178,9 @@ var _ = Describe("Private host types server", func() {
 			for i := range count {
 				response, err := server.Create(ctx, privatev1.HostTypesCreateRequest_builder{
 					Object: privatev1.HostType_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Title:       fmt.Sprintf("My title %d", i),
 						Description: fmt.Sprintf("My description %d.", i),
 					}.Build(),
@@ -188,6 +204,9 @@ var _ = Describe("Private host types server", func() {
 			// Create the object:
 			createResponse, err := server.Create(ctx, privatev1.HostTypesCreateRequest_builder{
 				Object: privatev1.HostType_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:       "My title",
 					Description: "My description.",
 				}.Build(),
@@ -206,6 +225,9 @@ var _ = Describe("Private host types server", func() {
 			// Create the object:
 			createResponse, err := server.Create(ctx, privatev1.HostTypesCreateRequest_builder{
 				Object: privatev1.HostType_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-host-type",
+					}.Build(),
 					Title:       "My title",
 					Description: "My description.",
 				}.Build(),
@@ -216,7 +238,10 @@ var _ = Describe("Private host types server", func() {
 			// Update the object:
 			updateResponse, err := server.Update(ctx, privatev1.HostTypesUpdateRequest_builder{
 				Object: privatev1.HostType_builder{
-					Id:          object.GetId(),
+					Id: object.GetId(),
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-host-type",
+					}.Build(),
 					Title:       "Your title",
 					Description: "Your description.",
 				}.Build(),
@@ -240,6 +265,7 @@ var _ = Describe("Private host types server", func() {
 				_, err := server.Create(ctx, privatev1.HostTypesCreateRequest_builder{
 					Object: privatev1.HostType_builder{
 						Metadata: privatev1.Metadata_builder{
+							Name: "test-host-type-bad-label",
 							Labels: map[string]string{
 								key: value,
 							},
@@ -256,6 +282,9 @@ var _ = Describe("Private host types server", func() {
 
 				createResponse, err := server.Create(ctx, privatev1.HostTypesCreateRequest_builder{
 					Object: privatev1.HostType_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: "test-host-type-label-update",
+						}.Build(),
 						Title:       "My title",
 						Description: "My description.",
 					}.Build(),
@@ -267,6 +296,7 @@ var _ = Describe("Private host types server", func() {
 					Object: privatev1.HostType_builder{
 						Id: object.GetId(),
 						Metadata: privatev1.Metadata_builder{
+							Name: "test-host-type-label-update",
 							Labels: map[string]string{
 								key: value,
 							},
@@ -310,6 +340,7 @@ var _ = Describe("Private host types server", func() {
 				_, err := server.Create(ctx, privatev1.HostTypesCreateRequest_builder{
 					Object: privatev1.HostType_builder{
 						Metadata: privatev1.Metadata_builder{
+							Name: "test-host-type-bad-annotation",
 							Annotations: map[string]string{
 								key: value,
 							},
@@ -326,6 +357,9 @@ var _ = Describe("Private host types server", func() {
 
 				createResponse, err := server.Create(ctx, privatev1.HostTypesCreateRequest_builder{
 					Object: privatev1.HostType_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: "test-host-type-annotation-update",
+						}.Build(),
 						Title:       "My title",
 						Description: "My description.",
 					}.Build(),
@@ -338,6 +372,7 @@ var _ = Describe("Private host types server", func() {
 					Object: privatev1.HostType_builder{
 						Id: object.GetId(),
 						Metadata: privatev1.Metadata_builder{
+							Name: "test-host-type-annotation-update",
 							Annotations: map[string]string{
 								key: value,
 							},
@@ -373,6 +408,7 @@ var _ = Describe("Private host types server", func() {
 			createResponse, err := server.Create(ctx, privatev1.HostTypesCreateRequest_builder{
 				Object: privatev1.HostType_builder{
 					Metadata: privatev1.Metadata_builder{
+						Name:       "test-host-type-delete",
 						Finalizers: []string{"a"},
 					}.Build(),
 					Title:       "My title",

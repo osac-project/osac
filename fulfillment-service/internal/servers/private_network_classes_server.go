@@ -176,6 +176,14 @@ func (s *PrivateNetworkClassesServer) Create(ctx context.Context,
 	// Clear any caller-provided ID so the DAO always generates a UUID.
 	nc.SetId("")
 
+	// Auto-derive metadata.name from implementation_strategy if not set.
+	if nc.GetMetadata().GetName() == "" && nc.GetImplementationStrategy() != "" {
+		if nc.GetMetadata() == nil {
+			nc.SetMetadata(&privatev1.Metadata{})
+		}
+		nc.GetMetadata().SetName(toDNSLabel(nc.GetImplementationStrategy()))
+	}
+
 	// Default-swap: if this NC is being created as the default, unset all existing defaults.
 	// Both the old-default unset(s) and the new-NC persist share this request's database transaction via ctx.
 	if nc.GetIsDefault() {
@@ -360,8 +368,8 @@ func (s *PrivateNetworkClassesServer) validateNetworkClass(ctx context.Context,
 				existingNC.GetImplementationStrategy(), newNC.GetImplementationStrategy())
 		}
 
-		// NC-VAL-06: fabric_manager is immutable
-		if newNC.GetFabricManager() != existingNC.GetFabricManager() {
+		// NC-VAL-06: fabric_manager is immutable once set (but can be set for the first time)
+		if existingNC.HasFabricManager() && newNC.GetFabricManager() != existingNC.GetFabricManager() {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"field 'fabric_manager' is immutable and cannot be changed from '%s' to '%s'",
 				existingNC.GetFabricManager(), newNC.GetFabricManager())
@@ -375,9 +383,10 @@ func (s *PrivateNetworkClassesServer) validateNetworkClass(ctx context.Context,
 		}
 	}
 
-	// NC-VAL-05: fabric_manager is required
-	if newNC.GetFabricManager() == "" {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'fabric_manager' is required")
+	// NC-VAL-05: at least one of fabric_manager or k8s_manager is required
+	if !hasAnyManager(newNC) {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"at least one of 'fabric_manager' or 'k8s_manager' is required")
 	}
 
 	// NC-VAL-08: Validate defaults if present
@@ -388,6 +397,15 @@ func (s *PrivateNetworkClassesServer) validateNetworkClass(ctx context.Context,
 	}
 
 	return nil
+}
+
+// hasAnyManager reports whether the NetworkClass has at least one of fabric_manager
+// or k8s_manager set to a non-empty value. Using the Has* presence helpers is not enough:
+// they only test whether the optional field is present, so an explicitly empty string
+// (e.g. fabric_manager: "") would incorrectly pass validation here and then be treated as
+// absent everywhere else (e.g. by the osac-operator dispatcher/resolver).
+func hasAnyManager(nc *privatev1.NetworkClass) bool {
+	return nc.GetFabricManager() != "" || nc.GetK8SManager() != ""
 }
 
 // cloneNetworkClass creates a deep copy of a NetworkClass.

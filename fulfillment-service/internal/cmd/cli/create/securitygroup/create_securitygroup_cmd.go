@@ -136,7 +136,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 			Tenant: c.settings.Tenant(),
 		}.Build(),
 		Spec: publicv1.SecurityGroupSpec_builder{
-			VirtualNetwork: vn.GetId(),
+			VirtualNetwork: &publicv1.VirtualNetworkLocalReference{Id: vn.GetId()},
 			Ingress:        ingress,
 			Egress:         egress,
 		}.Build(),

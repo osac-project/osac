@@ -5,7 +5,10 @@ ARG TARGETOS
 ARG TARGETARCH
 
 WORKDIR /opt/app-root/src
-COPY --chown=1001:1001 go.work go.work.sum ./
+# go.work.sum is intentionally not copied in -- it's not committed to the
+# repo (see root .gitignore); `go mod download` below regenerates it inside
+# the build using the go.sum files already copied in per module.
+COPY --chown=1001:1001 go.work ./
 COPY --chown=1001:1001 osac-operator/go.mod osac-operator/go.sum osac-operator/
 COPY --chown=1001:1001 osac-operator/api/go.mod osac-operator/api/go.sum osac-operator/api/
 COPY --chown=1001:1001 bare-metal-fulfillment-operator/go.mod bare-metal-fulfillment-operator/go.sum bare-metal-fulfillment-operator/

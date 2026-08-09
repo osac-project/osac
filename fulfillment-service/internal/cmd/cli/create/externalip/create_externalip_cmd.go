@@ -106,7 +106,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 			Tenant: c.settings.Tenant(),
 		}.Build(),
 		Spec: publicv1.ExternalIPSpec_builder{
-			Pool: pool.GetId(),
+			Pool: &publicv1.ExternalIPPoolReference{Id: pool.GetId()},
 		}.Build(),
 	}.Build()
 

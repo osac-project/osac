@@ -65,7 +65,7 @@
   ansible.builtin.set_fact:
     attach_compute_instance_name: "{{ attach_ci_lookup.resources[0].metadata.name }}"
 
-# Check if the LB Service already exists (idempotency for EDA event redelivery).
+# Check if the LB Service already exists (idempotency for job vars redelivery).
 - name: Check if LB Service already exists in VM namespace
   kubernetes.core.k8s_info:
     kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"

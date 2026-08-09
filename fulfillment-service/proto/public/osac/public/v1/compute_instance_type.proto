@@ -15,10 +15,14 @@ syntax = "proto3";
 
 package osac.public.v1;
 
+import "google/api/field_behavior.proto";
 import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
 import "osac/public/v1/condition_status_type.proto";
 import "osac/public/v1/metadata_type.proto";
+import "osac/public/v1/instance_type_type.proto";
+import "osac/public/v1/security_group_type.proto";
+import "osac/public/v1/subnet_type.proto";
 
 // Contains the details of the compute instance.
 //
@@ -50,21 +54,21 @@ message ComputeInstanceDisk {
 
 // Groups one subnet with security groups for that network attachment (multi-NIC VMs).
 message NetworkAttachment {
-  // Fulfillment Subnet ID; must reference a Subnet in READY state (same tenant and region rules as ComputeInstance).
-  string subnet = 1;
+  // Reference to the Subnet for this NIC; must be in READY state (same tenant and region rules as ComputeInstance).
+  SubnetLocalReference subnet = 1;
 
-  // Fulfillment SecurityGroup IDs applied on this NIC; each must be READY and belong to the same VirtualNetwork as subnet.
-  repeated string security_groups = 2;
+  // References to SecurityGroups for this NIC; each must be READY and belong to the same VirtualNetwork as subnet.
+  repeated SecurityGroupLocalReference security_groups = 2;
 }
 
 // The spec contains the details of a compute instance as desired by the user.
 message ComputeInstanceSpec {
   // Reference to the compute instance template. Either `template` or `catalog_item` is required on create.
   //
-  // Must be the value of the `id` field of one of the compute instance templates. Mutually exclusive with `catalog_item`.
+  // Mutually exclusive with `catalog_item`.
   //
   // This can't be modified after the compute instance is created.
-  string template = 1;
+  ComputeInstanceTemplateReference template = 1;
 
   // Values of the template parameters.
   //
@@ -159,7 +163,7 @@ message ComputeInstanceSpec {
 
   // Reference to a compute instance catalog item. Mutually exclusive with template during the migration period.
   // When set, the server fetches the catalog item and applies its field definitions.
-  string catalog_item = 15;
+  ComputeInstanceCatalogItemReference catalog_item = 15;
 
   // IsWindows indicates whether this compute instance runs a Windows guest operating system.
   //
@@ -179,11 +183,17 @@ message ComputeInstanceSpec {
   //
   optional bool is_windows = 16;
 
-  // Reference to an instance type by name. Specifies the compute configuration (cores, memory)
+  // Reference to an instance type. Specifies the compute configuration (cores, memory)
   // for this instance. The API validates that the instance type exists and is not OBSOLETE;
   // resolution of cores/memory_gib happens in the reconciler.
-  optional string instance_type = 17;
+  InstanceTypeReference instance_type = 17;
+
+  // When true, the system auto-selects an ExternalIPPool and creates an ExternalIP
+  // with an ExternalIPAttachment for this instance atomically during creation.
+  // Immutable after creation.
+  bool auto_external_ip_attachment = 18 [(google.api.field_behavior) = IMMUTABLE];
 }
+
 
 // The status contains the details of the compute instance provided by the system.
 message ComputeInstanceStatus {
@@ -380,4 +390,26 @@ enum ComputeInstanceConditionType {
   //
   // When `status` is `FALSE`, no restart is required.
   COMPUTE_INSTANCE_CONDITION_TYPE_RESTART_REQUIRED = 6;
+}
+
+// Local reference to a ComputeInstance resource.
+message ComputeInstanceLocalReference {
+  string id = 1;
+  string name = 2;
+}
+
+// Reference to a ComputeInstanceTemplate resource.
+message ComputeInstanceTemplateReference {
+  string id = 1;
+  string name = 2;
+  string project = 3;
+  bool shared = 4;
+}
+
+// Reference to a ComputeInstanceCatalogItem resource.
+message ComputeInstanceCatalogItemReference {
+  string id = 1;
+  string name = 2;
+  string project = 3;
+  bool shared = 4;
 }

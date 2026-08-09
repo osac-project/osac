@@ -2,7 +2,7 @@
   hosts: localhost
   gather_facts: true
   vars:
-    cluster_order: "{{ ansible_eda.event.payload }}"
+    cluster_order: "{{ osac_job_vars.resource }}"
     workflow_name: unknown
     workflow_status: unknown
   tasks:

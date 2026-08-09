@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Red Hat Inc.
+# Copyright (c) 2026 Red Hat Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
 # in compliance with the License. You may obtain a copy of the License at
@@ -17,6 +17,9 @@ GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
 
 build:
 	go build -o bin/$(BINARY_NAME) ./cmd/metering-service
+
+build-test-adapter:
+	go build -o bin/test-adapter ./cmd/test-adapter
 
 test:
 	$(GINKGO) run -r internal

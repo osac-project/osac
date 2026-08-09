@@ -28,6 +28,29 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 1Mi
+        - name: database
+          projected:
+            sources:
+            {{- range .Values.database.connection }}
+            {{- if .secret }}
+            - secret:
+                name: {{ .secret.name }}
+                items:
+                {{- range .secret.items }}
+                - key: {{ .key }}
+                  path: {{ .param }}
+                {{- end }}
+            {{- end }}
+            {{- if .configMap }}
+            - configMap:
+                name: {{ .configMap.name }}
+                items:
+                {{- range .configMap.items }}
+                - key: {{ .key }}
+                  path: {{ .param }}
+                {{- end }}
+            {{- end }}
+            {{- end }}
         - name: tmp
           emptyDir: {}
         - name: ca-bundle
@@ -69,15 +92,21 @@ spec:
             - pipefail
             - -c
             - |
-              echo "Waiting for secret ${SASL_SECRET} in ${SOURCE_NS}..."
-              until oc get secret "${SASL_SECRET}" -n "${SOURCE_NS}" > /dev/null 2>&1; do
-                sleep 5
-              done
+              DEADLINE=$((SECONDS + 300))
+              wait_for_secret() {
+                local name=$1 ns=$2
+                echo "Waiting for secret ${name} in ${ns} (timeout 5m)..."
+                until oc get secret "${name}" -n "${ns}" > /dev/null 2>&1; do
+                  if [ $SECONDS -ge $DEADLINE ]; then
+                    echo "Timed out waiting for secret ${name} in ${ns}"
+                    exit 1
+                  fi
+                  sleep 5
+                done
+              }
 
-              echo "Waiting for secret ${CA_SECRET} in ${SOURCE_NS}..."
-              until oc get secret "${CA_SECRET}" -n "${SOURCE_NS}" > /dev/null 2>&1; do
-                sleep 5
-              done
+              wait_for_secret "${SASL_SECRET}" "${SOURCE_NS}"
+              wait_for_secret "${CA_SECRET}" "${SOURCE_NS}"
 
               oc get secret "${SASL_SECRET}" -n "${SOURCE_NS}" -o jsonpath='{.data.password}' | base64 -d > /etc/kafka-secrets/password
               oc get secret "${CA_SECRET}" -n "${SOURCE_NS}" -o jsonpath='{.data.ca\.crt}' | base64 -d > /etc/kafka-secrets/ca.crt
@@ -91,10 +120,14 @@ spec:
               value: {{ ((.Values.fulfillment).address) | default (printf "fulfillment-internal-api.%s.svc.cluster.local:8001" .Release.Namespace) | quote }}
             - name: TLS_CA_CERT
               value: /etc/ca-bundle/bundle.pem
+            - name: DB_URL_FILE
+              value: /etc/metering/db
+            - name: HEARTBEAT_INTERVAL
+              value: {{ .Values.heartbeat.interval | default "60s" | quote }}
+            - name: RECONCILIATION_INTERVAL
+              value: {{ .Values.reconciliation.interval | default "60m" | quote }}
             - name: KAFKA_BROKERS
               value: {{ include "osac-metering.kafkaBrokers" . | quote }}
-            - name: KAFKA_TOPIC
-              value: {{ include "osac-metering.kafkaTopic" . | quote }}
             - name: KAFKA_TLS_CA_CERT
               value: /etc/kafka-secrets/ca.crt
             - name: KAFKA_SASL_USERNAME
@@ -104,6 +137,9 @@ spec:
           volumeMounts:
             - name: kafka-secrets
               mountPath: /etc/kafka-secrets
+              readOnly: true
+            - name: database
+              mountPath: /etc/metering/db
               readOnly: true
             - name: ca-bundle
               mountPath: /etc/ca-bundle

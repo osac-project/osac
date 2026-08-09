@@ -23,6 +23,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	grpcstatus "google.golang.org/grpc/status"
 
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 )
 
@@ -247,9 +248,33 @@ var _ = Describe("Protovalidate interceptor", func() {
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 		})
 
-		It("Accepts empty name (optional field)", func() {
-			validMetadata := &publicv1.Metadata{
+		It("Rejects empty name (mandatory field)", func() {
+			invalidMetadata := &publicv1.Metadata{
 				Name: "",
+			}
+
+			mockHandler := func(ctx context.Context, req any) (any, error) {
+				Fail("Handler should not be called for invalid request")
+				return nil, nil
+			}
+
+			response, err := interceptor.UnaryServer(
+				context.Background(),
+				invalidMetadata,
+				&grpc.UnaryServerInfo{FullMethod: "/test.Service/Method"},
+				mockHandler,
+			)
+
+			Expect(err).To(HaveOccurred())
+			Expect(response).To(BeNil())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+		})
+
+		It("Accepts single-character name", func() {
+			validMetadata := &publicv1.Metadata{
+				Name: "a",
 			}
 
 			handlerCalled := false
@@ -268,6 +293,53 @@ var _ = Describe("Protovalidate interceptor", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(handlerCalled).To(BeTrue())
 			Expect(response).To(Equal("response"))
+		})
+
+		It("Accepts 63-character name (max length)", func() {
+			validMetadata := &publicv1.Metadata{
+				Name: "a23456789012345678901234567890123456789012345678901234567890123",
+			}
+
+			handlerCalled := false
+			mockHandler := func(ctx context.Context, req any) (any, error) {
+				handlerCalled = true
+				return "response", nil
+			}
+
+			response, err := interceptor.UnaryServer(
+				context.Background(),
+				validMetadata,
+				&grpc.UnaryServerInfo{FullMethod: "/test.Service/Method"},
+				mockHandler,
+			)
+
+			Expect(err).ToNot(HaveOccurred())
+			Expect(handlerCalled).To(BeTrue())
+			Expect(response).To(Equal("response"))
+		})
+
+		It("Rejects 64-character name (exceeds max length)", func() {
+			invalidMetadata := &publicv1.Metadata{
+				Name: "a234567890123456789012345678901234567890123456789012345678901234",
+			}
+
+			mockHandler := func(ctx context.Context, req any) (any, error) {
+				Fail("Handler should not be called for invalid request")
+				return nil, nil
+			}
+
+			response, err := interceptor.UnaryServer(
+				context.Background(),
+				invalidMetadata,
+				&grpc.UnaryServerInfo{FullMethod: "/test.Service/Method"},
+				mockHandler,
+			)
+
+			Expect(err).To(HaveOccurred())
+			Expect(response).To(BeNil())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 		})
 
 		It("Accepts valid labels", func() {
@@ -289,6 +361,92 @@ var _ = Describe("Protovalidate interceptor", func() {
 			response, err := interceptor.UnaryServer(
 				context.Background(),
 				validMetadata,
+				&grpc.UnaryServerInfo{FullMethod: "/test.Service/Method"},
+				mockHandler,
+			)
+
+			Expect(err).ToNot(HaveOccurred())
+			Expect(handlerCalled).To(BeTrue())
+			Expect(response).To(Equal("response"))
+		})
+	})
+
+	Describe("Project name validation", func() {
+		BeforeEach(func() {
+			var err error
+			interceptor, err = NewProtovalidateInterceptor().
+				SetLogger(logger).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("Rejects project with empty name", func() {
+			project := privatev1.Project_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: "",
+				}.Build(),
+			}.Build()
+
+			mockHandler := func(ctx context.Context, req any) (any, error) {
+				Fail("Handler should not be called for invalid request")
+				return nil, nil
+			}
+
+			response, err := interceptor.UnaryServer(
+				context.Background(),
+				project,
+				&grpc.UnaryServerInfo{FullMethod: "/test.Service/Method"},
+				mockHandler,
+			)
+
+			Expect(err).To(HaveOccurred())
+			Expect(response).To(BeNil())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+		})
+
+		It("Accepts project with single DNS label name", func() {
+			project := privatev1.Project_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: "myproject",
+				}.Build(),
+			}.Build()
+
+			handlerCalled := false
+			mockHandler := func(ctx context.Context, req any) (any, error) {
+				handlerCalled = true
+				return "response", nil
+			}
+
+			response, err := interceptor.UnaryServer(
+				context.Background(),
+				project,
+				&grpc.UnaryServerInfo{FullMethod: "/test.Service/Method"},
+				mockHandler,
+			)
+
+			Expect(err).ToNot(HaveOccurred())
+			Expect(handlerCalled).To(BeTrue())
+			Expect(response).To(Equal("response"))
+		})
+
+		It("Accepts project with dot-separated name", func() {
+			project := privatev1.Project_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: "team.dev",
+				}.Build(),
+			}.Build()
+
+			handlerCalled := false
+			mockHandler := func(ctx context.Context, req any) (any, error) {
+				handlerCalled = true
+				return "response", nil
+			}
+
+			response, err := interceptor.UnaryServer(
+				context.Background(),
+				project,
 				&grpc.UnaryServerInfo{FullMethod: "/test.Service/Method"},
 				mockHandler,
 			)

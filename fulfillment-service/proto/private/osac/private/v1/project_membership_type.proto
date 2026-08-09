@@ -16,6 +16,7 @@ syntax = "proto3";
 package osac.private.v1;
 
 import "osac/private/v1/metadata_type.proto";
+import "osac/private/v1/user_type.proto";
 
 // ProjectMembership represents a member's association with a project and their role within it.
 message ProjectMembership {
@@ -37,9 +38,8 @@ message ProjectMembershipSpec {
   // Role of the members in the project. This indicates whether the members are viewers, managers, etc.
   ProjectMembershipRole role = 2;
 
-  // Identifiers of the users that are members of the project. These are user identifiers (the `id` field of User
-  // objects), not usernames or email addresses.
-  repeated string users = 3;
+  // References to the users that are members of the project.
+  repeated UserReference users = 3;
 }
 
 // Describes the role of a member in a project.
@@ -63,10 +63,10 @@ message ProjectMembershipStatus {
   // FAILED, this field may explain why the synchronization with the identity provider failed.
   optional string message = 2;
 
-  // List of user IDs that have been successfully synced to the identity provider. This tracks which users
+  // List of users that have been successfully synced to the identity provider. This tracks which users
   // currently have the role assigned, allowing the controller to detect when users are added or removed from
   // the membership.
-  repeated string users = 3;
+  repeated UserReference users = 3;
 }
 
 // Describes the state of a project membership.

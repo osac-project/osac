@@ -309,6 +309,7 @@ var _ = Describe("Private instance types server", func() {
 					Object: privatev1.InstanceType_builder{
 						Id: object.GetId(),
 						Metadata: privatev1.Metadata_builder{
+							Name: "label-test",
 							Labels: map[string]string{
 								key: value,
 							},
@@ -392,6 +393,7 @@ var _ = Describe("Private instance types server", func() {
 					Object: privatev1.InstanceType_builder{
 						Id: object.GetId(),
 						Metadata: privatev1.Metadata_builder{
+							Name: "annotation-test",
 							Annotations: map[string]string{
 								key: value,
 							},
@@ -857,7 +859,9 @@ var _ = Describe("Private instance types server", func() {
 					func() string {
 						data, err := json.Marshal(map[string]any{
 							"spec": map[string]any{
-								"instance_type": instanceType.GetId(),
+								"instance_type": map[string]any{
+									"id": instanceType.GetId(),
+								},
 							},
 						})
 						Expect(err).ToNot(HaveOccurred())

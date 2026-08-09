@@ -25,17 +25,17 @@ import (
 var _ = Describe("ApplySpecDefaults", func() {
 	It("Does nothing when defaults are nil", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
-			Template: "test.template",
+			Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
 		}.Build()
 
 		ApplySpecDefaults(spec, nil)
 
-		Expect(spec.GetInstanceType()).To(BeEmpty())
+		Expect(spec.GetInstanceType()).To(BeNil())
 	})
 
 	It("Does nothing when spec is nil", func() {
 		defaults := privatev1.ComputeInstanceTemplateSpecDefaults_builder{
-			InstanceType: new("standard-4-16"),
+			InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
 		}.Build()
 
 		ApplySpecDefaults(nil, defaults)
@@ -43,11 +43,11 @@ var _ = Describe("ApplySpecDefaults", func() {
 
 	It("Applies all defaults to empty spec", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
-			Template: "test.template",
+			Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
 		}.Build()
 
 		defaults := privatev1.ComputeInstanceTemplateSpecDefaults_builder{
-			InstanceType: new("standard-4-16"),
+			InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
 			Image: privatev1.ComputeInstanceImage_builder{
 				SourceType: "registry",
 				SourceRef:  "quay.io/containerdisks/fedora:latest",
@@ -60,7 +60,7 @@ var _ = Describe("ApplySpecDefaults", func() {
 
 		ApplySpecDefaults(spec, defaults)
 
-		Expect(spec.GetInstanceType()).To(Equal("standard-4-16"))
+		Expect(spec.GetInstanceType().GetId()).To(Equal("standard-4-16"))
 		Expect(spec.GetImage().GetSourceType()).To(Equal("registry"))
 		Expect(spec.GetImage().GetSourceRef()).To(Equal("quay.io/containerdisks/fedora:latest"))
 		Expect(spec.GetBootDisk().GetSizeGib()).To(Equal(int32(10)))
@@ -69,13 +69,13 @@ var _ = Describe("ApplySpecDefaults", func() {
 
 	It("Does not override user-provided values", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
-			Template:     "test.template",
-			InstanceType: new("user-type"),
+			Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
+			InstanceType: privatev1.InstanceTypeReference_builder{Id: "user-type"}.Build(),
 			RunStrategy:  new("Halted"),
 		}.Build()
 
 		defaults := privatev1.ComputeInstanceTemplateSpecDefaults_builder{
-			InstanceType: new("default-type"),
+			InstanceType: privatev1.InstanceTypeReference_builder{Id: "default-type"}.Build(),
 			Image: privatev1.ComputeInstanceImage_builder{
 				SourceType: "registry",
 				SourceRef:  "quay.io/containerdisks/fedora:latest",
@@ -89,7 +89,7 @@ var _ = Describe("ApplySpecDefaults", func() {
 		ApplySpecDefaults(spec, defaults)
 
 		// User-provided values preserved:
-		Expect(spec.GetInstanceType()).To(Equal("user-type"))
+		Expect(spec.GetInstanceType().GetId()).To(Equal("user-type"))
 		Expect(spec.GetRunStrategy()).To(Equal("Halted"))
 		// Defaults fill the rest:
 		Expect(spec.GetImage().GetSourceRef()).To(Equal("quay.io/containerdisks/fedora:latest"))
@@ -98,17 +98,17 @@ var _ = Describe("ApplySpecDefaults", func() {
 
 	It("Applies partial defaults", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
-			Template: "test.template",
+			Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
 		}.Build()
 
 		defaults := privatev1.ComputeInstanceTemplateSpecDefaults_builder{
-			InstanceType: new("standard-4-16"),
+			InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
 			RunStrategy:  new("Always"),
 		}.Build()
 
 		ApplySpecDefaults(spec, defaults)
 
-		Expect(spec.GetInstanceType()).To(Equal("standard-4-16"))
+		Expect(spec.GetInstanceType().GetId()).To(Equal("standard-4-16"))
 		Expect(spec.GetRunStrategy()).To(Equal("Always"))
 		Expect(spec.HasImage()).To(BeFalse())
 		Expect(spec.HasBootDisk()).To(BeFalse())
@@ -116,7 +116,7 @@ var _ = Describe("ApplySpecDefaults", func() {
 
 	It("Merges default source_type into user-provided partial image", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
-			Template: "test.template",
+			Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
 			Image: privatev1.ComputeInstanceImage_builder{
 				SourceRef: "quay.io/my-image:latest",
 			}.Build(),
@@ -137,7 +137,7 @@ var _ = Describe("ApplySpecDefaults", func() {
 
 	It("Merges default source_ref into user-provided partial image", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
-			Template: "test.template",
+			Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
 			Image: privatev1.ComputeInstanceImage_builder{
 				SourceType: "registry",
 			}.Build(),
@@ -158,7 +158,7 @@ var _ = Describe("ApplySpecDefaults", func() {
 
 	It("Does not override user-provided image fields with defaults", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
-			Template: "test.template",
+			Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
 			Image: privatev1.ComputeInstanceImage_builder{
 				SourceType: "registry",
 				SourceRef:  "quay.io/my-image:latest",
@@ -180,7 +180,7 @@ var _ = Describe("ApplySpecDefaults", func() {
 
 	It("Merges default boot_disk size_gib when user provides empty boot_disk", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
-			Template: "test.template",
+			Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
 			BootDisk: privatev1.ComputeInstanceDisk_builder{}.Build(),
 		}.Build()
 
@@ -197,37 +197,37 @@ var _ = Describe("ApplySpecDefaults", func() {
 
 	It("Applies instance_type default when user provides no compute fields", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
-			Template: "test.template",
+			Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
 		}.Build()
 
 		defaults := privatev1.ComputeInstanceTemplateSpecDefaults_builder{
-			InstanceType: new("standard-4-16"),
+			InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
 		}.Build()
 
 		ApplySpecDefaults(spec, defaults)
 
-		Expect(spec.GetInstanceType()).To(Equal("standard-4-16"))
+		Expect(spec.GetInstanceType().GetId()).To(Equal("standard-4-16"))
 	})
 
 	It("Does not override user-provided instance_type with template default", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
-			Template:     "test.template",
-			InstanceType: new("user-chosen-type"),
+			Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
+			InstanceType: privatev1.InstanceTypeReference_builder{Id: "user-chosen-type"}.Build(),
 		}.Build()
 
 		defaults := privatev1.ComputeInstanceTemplateSpecDefaults_builder{
-			InstanceType: new("standard-4-16"),
+			InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
 		}.Build()
 
 		ApplySpecDefaults(spec, defaults)
 
-		Expect(spec.GetInstanceType()).To(Equal("user-chosen-type"))
+		Expect(spec.GetInstanceType().GetId()).To(Equal("user-chosen-type"))
 	})
 
 	It("Still applies non-compute defaults when instance_type is set", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
-			Template:     "test.template",
-			InstanceType: new("standard-4-16"),
+			Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
+			InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
 		}.Build()
 
 		defaults := privatev1.ComputeInstanceTemplateSpecDefaults_builder{
@@ -250,7 +250,7 @@ var _ = Describe("ApplySpecDefaults", func() {
 
 	It("Clones message-type defaults to prevent shared state", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
-			Template: "test.template",
+			Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
 		}.Build()
 
 		defaultImage := privatev1.ComputeInstanceImage_builder{
@@ -271,7 +271,7 @@ var _ = Describe("ApplySpecDefaults", func() {
 
 	It("Applies is_windows default when user does not provide value", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
-			Template: "test.template",
+			Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
 		}.Build()
 
 		trueVal := true
@@ -288,7 +288,7 @@ var _ = Describe("ApplySpecDefaults", func() {
 	It("Does not override user-provided is_windows value with template default", func() {
 		falseVal := false
 		spec := privatev1.ComputeInstanceSpec_builder{
-			Template:  "test.template",
+			Template:  privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
 			IsWindows: &falseVal,
 		}.Build()
 
@@ -304,7 +304,7 @@ var _ = Describe("ApplySpecDefaults", func() {
 
 	It("Does nothing when template has no is_windows default", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
-			Template: "test.template",
+			Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
 		}.Build()
 
 		defaults := privatev1.ComputeInstanceTemplateSpecDefaults_builder{}.Build()
@@ -324,7 +324,7 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 
 	It("Returns error listing all missing fields", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
-			Template: "test.template",
+			Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
 		}.Build()
 
 		err := ValidateRequiredSpecFields(spec)
@@ -338,8 +338,8 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 
 	It("Returns error for partially missing fields", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
-			Template:     "test.template",
-			InstanceType: new("standard-4-16"),
+			Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
+			InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
 			RunStrategy:  new("Always"),
 		}.Build()
 
@@ -354,8 +354,8 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 
 	It("Passes when all required fields are set", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
-			Template:     "test.template",
-			InstanceType: new("standard-4-16"),
+			Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
+			InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
 			Image: privatev1.ComputeInstanceImage_builder{
 				SourceType: "registry",
 				SourceRef:  "quay.io/containerdisks/fedora:latest",
@@ -372,7 +372,7 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 
 	It("Requires instance_type when not set", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
-			Template: "test.template",
+			Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
 			Image: privatev1.ComputeInstanceImage_builder{
 				SourceType: "registry",
 				SourceRef:  "quay.io/containerdisks/fedora:latest",
@@ -391,8 +391,8 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 
 	It("Still requires image, boot_disk, run_strategy when instance_type is set", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
-			Template:     "test.template",
-			InstanceType: new("standard-4-16"),
+			Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
+			InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
 		}.Build()
 
 		err := ValidateRequiredSpecFields(spec)
@@ -406,8 +406,8 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 
 	It("Rejects invalid run_strategy value", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
-			Template:     "test.template",
-			InstanceType: new("standard-4-16"),
+			Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
+			InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
 			Image: privatev1.ComputeInstanceImage_builder{
 				SourceType: "registry",
 				SourceRef:  "quay.io/containerdisks/fedora:latest",
@@ -428,8 +428,8 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 
 	It("Rejects empty image fields", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
-			Template:     "test.template",
-			InstanceType: new("standard-4-16"),
+			Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
+			InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
 			Image:        privatev1.ComputeInstanceImage_builder{}.Build(),
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
 				SizeGib: 20,
@@ -446,8 +446,8 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 
 	It("Rejects image with partial fields", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
-			Template:     "test.template",
-			InstanceType: new("standard-4-16"),
+			Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
+			InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
 			Image: privatev1.ComputeInstanceImage_builder{
 				SourceType: "registry",
 			}.Build(),
@@ -466,8 +466,8 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 
 	It("Rejects boot_disk with zero size", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
-			Template:     "test.template",
-			InstanceType: new("standard-4-16"),
+			Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
+			InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
 			Image: privatev1.ComputeInstanceImage_builder{
 				SourceType: "registry",
 				SourceRef:  "quay.io/containerdisks/fedora:latest",

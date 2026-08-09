@@ -92,6 +92,10 @@ service:
               param: sslrootcert
   log:
     level: debug
+  vault:
+    endpoint: "http://openbao.openbao.svc.cluster.local:8200"
+    namespace: osac
+    kvMountPath: secret
 
 # --- AAP (disabled for kind) ---
 aap:

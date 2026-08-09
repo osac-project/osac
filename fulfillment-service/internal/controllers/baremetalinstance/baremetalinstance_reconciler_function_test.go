@@ -27,9 +27,12 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -39,6 +42,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/gvks"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
+	"github.com/osac-project/osac/fulfillment-service/internal/masks"
 )
 
 func newBareMetalInstanceCR(id, namespace, name string, deletionTimestamp *metav1.Time) *bmfov1alpha1.BareMetalInstance {
@@ -106,7 +110,7 @@ var _ = Describe("mutateBMI", func() {
 			getResponse: privatev1.BareMetalInstanceCatalogItemsGetResponse_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
 					Id:       catalogItemID,
-					Template: templateID,
+					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: templateID}.Build(),
 				}.Build(),
 			}.Build(),
 		}
@@ -119,7 +123,7 @@ var _ = Describe("mutateBMI", func() {
 			bareMetalInstance: privatev1.BareMetalInstance_builder{
 				Id: "bmi-test",
 				Spec: privatev1.BareMetalInstanceSpec_builder{
-					CatalogItem: catalogItemID,
+					CatalogItem: &privatev1.BareMetalInstanceCatalogItemReference{Id: catalogItemID},
 				}.Build(),
 			}.Build(),
 		}
@@ -142,7 +146,7 @@ var _ = Describe("mutateBMI", func() {
 			bareMetalInstance: privatev1.BareMetalInstance_builder{
 				Id: "bmi-test",
 				Spec: privatev1.BareMetalInstanceSpec_builder{
-					CatalogItem: "catalog-1",
+					CatalogItem: &privatev1.BareMetalInstanceCatalogItemReference{Id: "catalog-1"},
 					RunStrategy: new(privatev1.BareMetalInstanceRunStrategy_BARE_METAL_INSTANCE_RUN_STRATEGY_ALWAYS),
 				}.Build(),
 			}.Build(),
@@ -165,7 +169,7 @@ var _ = Describe("mutateBMI", func() {
 			bareMetalInstance: privatev1.BareMetalInstance_builder{
 				Id: "bmi-test",
 				Spec: privatev1.BareMetalInstanceSpec_builder{
-					CatalogItem: "catalog-1",
+					CatalogItem: &privatev1.BareMetalInstanceCatalogItemReference{Id: "catalog-1"},
 					RunStrategy: new(privatev1.BareMetalInstanceRunStrategy_BARE_METAL_INSTANCE_RUN_STRATEGY_HALTED),
 				}.Build(),
 			}.Build(),
@@ -188,7 +192,7 @@ var _ = Describe("mutateBMI", func() {
 			bareMetalInstance: privatev1.BareMetalInstance_builder{
 				Id: "bmi-test",
 				Spec: privatev1.BareMetalInstanceSpec_builder{
-					CatalogItem: "catalog-1",
+					CatalogItem: &privatev1.BareMetalInstanceCatalogItemReference{Id: "catalog-1"},
 				}.Build(),
 			}.Build(),
 		}
@@ -210,7 +214,7 @@ var _ = Describe("mutateBMI", func() {
 			bareMetalInstance: privatev1.BareMetalInstance_builder{
 				Id: "bmi-test",
 				Spec: privatev1.BareMetalInstanceSpec_builder{
-					CatalogItem:    "catalog-1",
+					CatalogItem:    &privatev1.BareMetalInstanceCatalogItemReference{Id: "catalog-1"},
 					RestartTrigger: 42,
 				}.Build(),
 			}.Build(),
@@ -233,7 +237,7 @@ var _ = Describe("mutateBMI", func() {
 			bareMetalInstance: privatev1.BareMetalInstance_builder{
 				Id: "bmi-test",
 				Spec: privatev1.BareMetalInstanceSpec_builder{
-					CatalogItem: "catalog-1",
+					CatalogItem: &privatev1.BareMetalInstanceCatalogItemReference{Id: "catalog-1"},
 				}.Build(),
 			}.Build(),
 		}
@@ -255,7 +259,7 @@ var _ = Describe("mutateBMI", func() {
 			bareMetalInstance: privatev1.BareMetalInstance_builder{
 				Id: "bmi-test",
 				Spec: privatev1.BareMetalInstanceSpec_builder{
-					CatalogItem:  "catalog-1",
+					CatalogItem:  &privatev1.BareMetalInstanceCatalogItemReference{Id: "catalog-1"},
 					SshPublicKey: new("ssh-ed25519 AAAA... test@example.com"),
 				}.Build(),
 			}.Build(),
@@ -284,7 +288,7 @@ var _ = Describe("mutateBMI", func() {
 			bareMetalInstance: privatev1.BareMetalInstance_builder{
 				Id: "bmi-test",
 				Spec: privatev1.BareMetalInstanceSpec_builder{
-					CatalogItem:  "catalog-1",
+					CatalogItem:  &privatev1.BareMetalInstanceCatalogItemReference{Id: "catalog-1"},
 					SshPublicKey: new(sshPublicKey),
 				}.Build(),
 			}.Build(),
@@ -312,7 +316,7 @@ var _ = Describe("mutateBMI", func() {
 			bareMetalInstance: privatev1.BareMetalInstance_builder{
 				Id: "bmi-test",
 				Spec: privatev1.BareMetalInstanceSpec_builder{
-					CatalogItem: "catalog-1",
+					CatalogItem: &privatev1.BareMetalInstanceCatalogItemReference{Id: "catalog-1"},
 				}.Build(),
 			}.Build(),
 		}
@@ -337,7 +341,7 @@ var _ = Describe("mutateBMI", func() {
 			bareMetalInstance: privatev1.BareMetalInstance_builder{
 				Id: "bmi-test",
 				Spec: privatev1.BareMetalInstanceSpec_builder{
-					CatalogItem:        "catalog-1",
+					CatalogItem:        &privatev1.BareMetalInstanceCatalogItemReference{Id: "catalog-1"},
 					TemplateParameters: map[string]*anypb.Any{"os_version": osParam},
 				}.Build(),
 			}.Build(),
@@ -366,7 +370,7 @@ var _ = Describe("mutateBMI", func() {
 			bareMetalInstance: privatev1.BareMetalInstance_builder{
 				Id: "bmi-test",
 				Spec: privatev1.BareMetalInstanceSpec_builder{
-					CatalogItem:        "catalog-1",
+					CatalogItem:        &privatev1.BareMetalInstanceCatalogItemReference{Id: "catalog-1"},
 					SshPublicKey:       new("ssh-ed25519 AAAA... test@example.com"),
 					TemplateParameters: map[string]*anypb.Any{"os_version": osParam},
 				}.Build(),
@@ -399,7 +403,7 @@ var _ = Describe("mutateBMI", func() {
 			bareMetalInstance: privatev1.BareMetalInstance_builder{
 				Id: "bmi-test",
 				Spec: privatev1.BareMetalInstanceSpec_builder{
-					CatalogItem:        "catalog-1",
+					CatalogItem:        &privatev1.BareMetalInstanceCatalogItemReference{Id: "catalog-1"},
 					SshPublicKey:       new("ssh-ed25519 AAAA... real@example.com"),
 					TemplateParameters: map[string]*anypb.Any{"sshPublicKey": userSshParam},
 				}.Build(),
@@ -429,7 +433,7 @@ var _ = Describe("mutateBMI", func() {
 			bareMetalInstance: privatev1.BareMetalInstance_builder{
 				Id: "bmi-test",
 				Spec: privatev1.BareMetalInstanceSpec_builder{
-					CatalogItem: "missing-catalog",
+					CatalogItem: &privatev1.BareMetalInstanceCatalogItemReference{Id: "missing-catalog"},
 				}.Build(),
 			}.Build(),
 		}
@@ -452,7 +456,7 @@ var _ = Describe("mutateBMI", func() {
 			bareMetalInstance: privatev1.BareMetalInstance_builder{
 				Id: "bmi-test",
 				Spec: privatev1.BareMetalInstanceSpec_builder{
-					CatalogItem: "catalog-1",
+					CatalogItem: &privatev1.BareMetalInstanceCatalogItemReference{Id: "catalog-1"},
 					Image: privatev1.BareMetalInstanceImage_builder{
 						SourceType: "registry",
 						SourceRef:  "quay.io/org/rhel9:latest",
@@ -468,6 +472,7 @@ var _ = Describe("mutateBMI", func() {
 		var params map[string]string
 		Expect(json.Unmarshal([]byte(obj.Spec.TemplateParameters), &params)).To(Succeed())
 		Expect(params["imageURL"]).To(Equal("quay.io/org/rhel9:latest"))
+		Expect(params["imageSourceType"]).To(Equal("registry"))
 	})
 
 	It("should not include imageURL in templateParameters when image is not set", func() {
@@ -481,7 +486,7 @@ var _ = Describe("mutateBMI", func() {
 			bareMetalInstance: privatev1.BareMetalInstance_builder{
 				Id: "bmi-test",
 				Spec: privatev1.BareMetalInstanceSpec_builder{
-					CatalogItem:  "catalog-1",
+					CatalogItem:  &privatev1.BareMetalInstanceCatalogItemReference{Id: "catalog-1"},
 					SshPublicKey: new("ssh-ed25519 AAAA... test@example.com"),
 				}.Build(),
 			}.Build(),
@@ -494,12 +499,15 @@ var _ = Describe("mutateBMI", func() {
 		var params map[string]string
 		Expect(json.Unmarshal([]byte(obj.Spec.TemplateParameters), &params)).To(Succeed())
 		Expect(params).ToNot(HaveKey("imageURL"))
+		Expect(params).ToNot(HaveKey("imageSourceType"))
 	})
 
 	It("should let system imageURL override user-provided template_parameters value", func() {
 		catalogItemsClient := defaultFakeCatalogItemsClient()
 
 		userImageParam, err := anypb.New(wrapperspb.String("user-provided-image"))
+		Expect(err).ToNot(HaveOccurred())
+		userSourceTypeParam, err := anypb.New(wrapperspb.String("user-provided-type"))
 		Expect(err).ToNot(HaveOccurred())
 
 		t := &task{
@@ -510,8 +518,11 @@ var _ = Describe("mutateBMI", func() {
 			bareMetalInstance: privatev1.BareMetalInstance_builder{
 				Id: "bmi-test",
 				Spec: privatev1.BareMetalInstanceSpec_builder{
-					CatalogItem:        "catalog-1",
-					TemplateParameters: map[string]*anypb.Any{"imageURL": userImageParam},
+					CatalogItem: &privatev1.BareMetalInstanceCatalogItemReference{Id: "catalog-1"},
+					TemplateParameters: map[string]*anypb.Any{
+						"imageURL":        userImageParam,
+						"imageSourceType": userSourceTypeParam,
+					},
 					Image: privatev1.BareMetalInstanceImage_builder{
 						SourceType: "registry",
 						SourceRef:  "quay.io/org/rhel9:latest",
@@ -528,6 +539,42 @@ var _ = Describe("mutateBMI", func() {
 		Expect(json.Unmarshal([]byte(obj.Spec.TemplateParameters), &params)).To(Succeed())
 		Expect(params["imageURL"]).To(Equal("quay.io/org/rhel9:latest"),
 			"system imageURL must override user-provided template_parameters value")
+		Expect(params["imageSourceType"]).To(Equal("registry"),
+			"system imageSourceType must override user-provided template_parameters value")
+	})
+
+	It("should let system imageSourceType override user-provided template_parameters value", func() {
+		catalogItemsClient := defaultFakeCatalogItemsClient()
+
+		userSourceTypeParam, err := anypb.New(wrapperspb.String("user-provided-type"))
+		Expect(err).ToNot(HaveOccurred())
+
+		t := &task{
+			r: &function{
+				logger:                              logger,
+				bareMetalInstanceCatalogItemsClient: catalogItemsClient,
+			},
+			bareMetalInstance: privatev1.BareMetalInstance_builder{
+				Id: "bmi-test",
+				Spec: privatev1.BareMetalInstanceSpec_builder{
+					CatalogItem:        &privatev1.BareMetalInstanceCatalogItemReference{Id: "catalog-1"},
+					TemplateParameters: map[string]*anypb.Any{"imageSourceType": userSourceTypeParam},
+					Image: privatev1.BareMetalInstanceImage_builder{
+						SourceType: "oci",
+						SourceRef:  "quay.io/org/rhel9:latest",
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}
+
+		var obj bmfov1alpha1.BareMetalInstance
+		err = t.mutateBMI(ctx, &obj)
+		Expect(err).ToNot(HaveOccurred())
+
+		var params map[string]any
+		Expect(json.Unmarshal([]byte(obj.Spec.TemplateParameters), &params)).To(Succeed())
+		Expect(params["imageSourceType"]).To(Equal("oci"),
+			"system imageSourceType must override user-provided template_parameters value")
 	})
 
 	It("should include imageURL alongside sshPublicKey in templateParameters", func() {
@@ -541,7 +588,7 @@ var _ = Describe("mutateBMI", func() {
 			bareMetalInstance: privatev1.BareMetalInstance_builder{
 				Id: "bmi-test",
 				Spec: privatev1.BareMetalInstanceSpec_builder{
-					CatalogItem:  "catalog-1",
+					CatalogItem:  &privatev1.BareMetalInstanceCatalogItemReference{Id: "catalog-1"},
 					SshPublicKey: new("ssh-ed25519 AAAA... test@example.com"),
 					Image: privatev1.BareMetalInstanceImage_builder{
 						SourceType: "registry",
@@ -559,9 +606,207 @@ var _ = Describe("mutateBMI", func() {
 		var params map[string]string
 		Expect(json.Unmarshal([]byte(obj.Spec.TemplateParameters), &params)).To(Succeed())
 		Expect(params["imageURL"]).To(Equal("quay.io/org/fedora:latest"))
+		Expect(params["imageSourceType"]).To(Equal("registry"))
 		Expect(params["sshPublicKey"]).To(Equal("ssh-ed25519 AAAA... test@example.com"))
 		Expect(params["userDataSecret"]).To(Equal("bmi-test-user-data"))
 	})
+
+	It("should copy single network attachment with all fields", func() {
+		catalogItemsClient := defaultFakeCatalogItemsClient()
+
+		t := &task{
+			r: &function{
+				logger:                              logger,
+				bareMetalInstanceCatalogItemsClient: catalogItemsClient,
+			},
+			bareMetalInstance: privatev1.BareMetalInstance_builder{
+				Id: "bmi-test",
+				Spec: privatev1.BareMetalInstanceSpec_builder{
+					CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: "catalog-1"}.Build(),
+					NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
+						privatev1.BareMetalNetworkAttachment_builder{
+							Subnet: privatev1.SubnetLocalReference_builder{Id: "subnet-1"}.Build(),
+							SecurityGroups: []*privatev1.SecurityGroupLocalReference{
+								privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build(),
+								privatev1.SecurityGroupLocalReference_builder{Id: "sg-2"}.Build(),
+							},
+							Interface: new("data-0"),
+							Primary:   new(true),
+						}.Build(),
+					},
+				}.Build(),
+			}.Build(),
+		}
+
+		var obj bmfov1alpha1.BareMetalInstance
+		err := t.mutateBMI(ctx, &obj)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(obj.Spec.NetworkAttachments).To(HaveLen(1))
+		Expect(obj.Spec.NetworkAttachments[0].SubnetRef).To(Equal("subnet-1"))
+		Expect(obj.Spec.NetworkAttachments[0].SecurityGroupRefs).To(Equal([]string{"sg-1", "sg-2"}))
+		Expect(obj.Spec.NetworkAttachments[0].Interface).To(Equal("data-0"))
+		Expect(obj.Spec.NetworkAttachments[0].Primary).To(BeTrue())
+	})
+
+	It("should copy multiple network attachments preserving order", func() {
+		catalogItemsClient := defaultFakeCatalogItemsClient()
+
+		t := &task{
+			r: &function{
+				logger:                              logger,
+				bareMetalInstanceCatalogItemsClient: catalogItemsClient,
+			},
+			bareMetalInstance: privatev1.BareMetalInstance_builder{
+				Id: "bmi-test",
+				Spec: privatev1.BareMetalInstanceSpec_builder{
+					CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: "catalog-1"}.Build(),
+					NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
+						privatev1.BareMetalNetworkAttachment_builder{
+							Subnet:    privatev1.SubnetLocalReference_builder{Id: "subnet-data"}.Build(),
+							Interface: new("data-0"),
+							Primary:   new(true),
+						}.Build(),
+						privatev1.BareMetalNetworkAttachment_builder{
+							Subnet: privatev1.SubnetLocalReference_builder{Id: "subnet-storage"}.Build(),
+							SecurityGroups: []*privatev1.SecurityGroupLocalReference{
+								privatev1.SecurityGroupLocalReference_builder{Id: "sg-storage"}.Build(),
+							},
+							Interface: new("data-1"),
+						}.Build(),
+					},
+				}.Build(),
+			}.Build(),
+		}
+
+		var obj bmfov1alpha1.BareMetalInstance
+		err := t.mutateBMI(ctx, &obj)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(obj.Spec.NetworkAttachments).To(HaveLen(2))
+		Expect(obj.Spec.NetworkAttachments[0].SubnetRef).To(Equal("subnet-data"))
+		Expect(obj.Spec.NetworkAttachments[0].Interface).To(Equal("data-0"))
+		Expect(obj.Spec.NetworkAttachments[0].Primary).To(BeTrue())
+		Expect(obj.Spec.NetworkAttachments[1].SubnetRef).To(Equal("subnet-storage"))
+		Expect(obj.Spec.NetworkAttachments[1].SecurityGroupRefs).To(Equal([]string{"sg-storage"}))
+		Expect(obj.Spec.NetworkAttachments[1].Interface).To(Equal("data-1"))
+		Expect(obj.Spec.NetworkAttachments[1].Primary).To(BeFalse())
+	})
+
+	It("should leave NetworkAttachments empty when proto has none", func() {
+		catalogItemsClient := defaultFakeCatalogItemsClient()
+
+		t := &task{
+			r: &function{
+				logger:                              logger,
+				bareMetalInstanceCatalogItemsClient: catalogItemsClient,
+			},
+			bareMetalInstance: privatev1.BareMetalInstance_builder{
+				Id: "bmi-test",
+				Spec: privatev1.BareMetalInstanceSpec_builder{
+					CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: "catalog-1"}.Build(),
+				}.Build(),
+			}.Build(),
+		}
+
+		var obj bmfov1alpha1.BareMetalInstance
+		err := t.mutateBMI(ctx, &obj)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(obj.Spec.NetworkAttachments).To(BeEmpty())
+	})
+
+	It("should handle attachment with optional fields omitted", func() {
+		catalogItemsClient := defaultFakeCatalogItemsClient()
+
+		t := &task{
+			r: &function{
+				logger:                              logger,
+				bareMetalInstanceCatalogItemsClient: catalogItemsClient,
+			},
+			bareMetalInstance: privatev1.BareMetalInstance_builder{
+				Id: "bmi-test",
+				Spec: privatev1.BareMetalInstanceSpec_builder{
+					CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: "catalog-1"}.Build(),
+					NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
+						privatev1.BareMetalNetworkAttachment_builder{
+							Subnet: privatev1.SubnetLocalReference_builder{Id: "subnet-1"}.Build(),
+						}.Build(),
+					},
+				}.Build(),
+			}.Build(),
+		}
+
+		var obj bmfov1alpha1.BareMetalInstance
+		err := t.mutateBMI(ctx, &obj)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(obj.Spec.NetworkAttachments).To(HaveLen(1))
+		Expect(obj.Spec.NetworkAttachments[0].SubnetRef).To(Equal("subnet-1"))
+		Expect(obj.Spec.NetworkAttachments[0].SecurityGroupRefs).To(BeEmpty())
+		Expect(obj.Spec.NetworkAttachments[0].Interface).To(BeEmpty())
+		Expect(obj.Spec.NetworkAttachments[0].Primary).To(BeFalse())
+	})
+
+	It("should not include imageSourceType when source_type is empty", func() {
+		catalogItemsClient := defaultFakeCatalogItemsClient()
+
+		t := &task{
+			r: &function{
+				logger:                              logger,
+				bareMetalInstanceCatalogItemsClient: catalogItemsClient,
+			},
+			bareMetalInstance: privatev1.BareMetalInstance_builder{
+				Id: "bmi-test",
+				Spec: privatev1.BareMetalInstanceSpec_builder{
+					CatalogItem: &privatev1.BareMetalInstanceCatalogItemReference{Id: "catalog-1"},
+					Image: privatev1.BareMetalInstanceImage_builder{
+						SourceRef: "quay.io/org/rhel9:latest",
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}
+
+		var obj bmfov1alpha1.BareMetalInstance
+		err := t.mutateBMI(ctx, &obj)
+		Expect(err).ToNot(HaveOccurred())
+
+		var params map[string]any
+		Expect(json.Unmarshal([]byte(obj.Spec.TemplateParameters), &params)).To(Succeed())
+		Expect(params).To(HaveKey("imageURL"))
+		Expect(params).ToNot(HaveKey("imageSourceType"))
+	})
+
+	It("should strip user-provided imageSourceType when image has empty source_type", func() {
+		catalogItemsClient := defaultFakeCatalogItemsClient()
+
+		userSourceTypeParam, err := anypb.New(wrapperspb.String("user-injected-type"))
+		Expect(err).ToNot(HaveOccurred())
+
+		t := &task{
+			r: &function{
+				logger:                              logger,
+				bareMetalInstanceCatalogItemsClient: catalogItemsClient,
+			},
+			bareMetalInstance: privatev1.BareMetalInstance_builder{
+				Id: "bmi-test",
+				Spec: privatev1.BareMetalInstanceSpec_builder{
+					CatalogItem:        &privatev1.BareMetalInstanceCatalogItemReference{Id: "catalog-1"},
+					TemplateParameters: map[string]*anypb.Any{"imageSourceType": userSourceTypeParam},
+					Image: privatev1.BareMetalInstanceImage_builder{
+						SourceRef: "oci://registry.example.com/rhel9:latest",
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}
+
+		var obj bmfov1alpha1.BareMetalInstance
+		err = t.mutateBMI(ctx, &obj)
+		Expect(err).ToNot(HaveOccurred())
+
+		var params map[string]any
+		Expect(json.Unmarshal([]byte(obj.Spec.TemplateParameters), &params)).To(Succeed())
+		Expect(params).To(HaveKey("imageURL"))
+		Expect(params).ToNot(HaveKey("imageSourceType"),
+			"user-provided imageSourceType must be stripped when spec image has no source_type")
+	})
+
 })
 
 var _ = Describe("update", func() {
@@ -621,7 +866,7 @@ var _ = Describe("update", func() {
 					Tenant:     "test-tenant",
 				}.Build(),
 				Spec: privatev1.BareMetalInstanceSpec_builder{
-					CatalogItem: "catalog-1",
+					CatalogItem: &privatev1.BareMetalInstanceCatalogItemReference{Id: "catalog-1"},
 				}.Build(),
 				Status: privatev1.BareMetalInstanceStatus_builder{
 					Hub:   hubID,
@@ -1455,7 +1700,11 @@ var _ = Describe("syncStatus", func() {
 	It("should clear restart conditions and sync restart trigger when PowerSynced is True", func() {
 		t := newTask(42)
 		object := &bmfov1alpha1.BareMetalInstance{
+			Spec: bmfov1alpha1.BareMetalInstanceSpec{
+				RestartTrigger: 42,
+			},
 			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				RestartTrigger: 42,
 				Conditions: []metav1.Condition{
 					{
 						Type:    string(bmfov1alpha1.HostConditionPowerSynced),
@@ -1479,6 +1728,39 @@ var _ = Describe("syncStatus", func() {
 		Expect(failed.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
 
 		Expect(t.bareMetalInstance.GetStatus().GetRestartTrigger()).To(Equal(int64(42)))
+	})
+
+	It("should not echo restart trigger when operator has not completed restart", func() {
+		t := newTask(42)
+		object := &bmfov1alpha1.BareMetalInstance{
+			Spec: bmfov1alpha1.BareMetalInstanceSpec{
+				RestartTrigger: 42,
+			},
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				RestartTrigger: 0,
+				Conditions: []metav1.Condition{
+					{
+						Type:    string(bmfov1alpha1.HostConditionPowerSynced),
+						Status:  metav1.ConditionTrue,
+						Reason:  bmfov1alpha1.HostConditionReasonPowerOn,
+						Message: "Power on complete",
+					},
+				},
+			},
+		}
+		t.syncStatus(object)
+
+		Expect(t.bareMetalInstance.GetStatus().GetRestartTrigger()).To(Equal(int64(0)))
+
+		inProgress := findProtoCondition(t.bareMetalInstance,
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_IN_PROGRESS)
+		Expect(inProgress).ToNot(BeNil())
+		Expect(inProgress.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+
+		failed := findProtoCondition(t.bareMetalInstance,
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_FAILED)
+		Expect(failed).ToNot(BeNil())
+		Expect(failed.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
 	})
 
 	It("should not set restart conditions when PowerSynced is False with unhandled reason", func() {
@@ -1556,6 +1838,116 @@ var _ = Describe("syncStatus", func() {
 		Expect(ready.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
 	})
 
+	It("should leave network attachment statuses empty when K8s CR has none", func() {
+		t := newTask(0)
+		object := &bmfov1alpha1.BareMetalInstance{
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				Phase: bmfov1alpha1.BareMetalInstancePhaseReady,
+				Conditions: []metav1.Condition{
+					{
+						Type:   string(bmfov1alpha1.HostConditionPowerSynced),
+						Status: metav1.ConditionTrue,
+						Reason: bmfov1alpha1.HostConditionReasonPowerOn,
+					},
+				},
+			},
+		}
+		t.syncStatus(object)
+		Expect(t.bareMetalInstance.GetStatus().GetNetworkAttachmentStatuses()).To(BeEmpty())
+	})
+
+	It("should clear previously synced network attachment statuses when K8s CR has none", func() {
+		t := newTask(0)
+		t.bareMetalInstance.GetStatus().SetNetworkAttachmentStatuses([]*privatev1.BareMetalNetworkAttachmentStatus{
+			privatev1.BareMetalNetworkAttachmentStatus_builder{
+				Interface: "stale-nic",
+				SubnetRef: "stale-subnet",
+				IpAddress: "10.99.99.99",
+				Primary:   true,
+			}.Build(),
+		})
+		Expect(t.bareMetalInstance.GetStatus().GetNetworkAttachmentStatuses()).To(HaveLen(1))
+
+		object := &bmfov1alpha1.BareMetalInstance{}
+		t.syncStatus(object)
+		Expect(t.bareMetalInstance.GetStatus().GetNetworkAttachmentStatuses()).To(BeEmpty())
+	})
+
+	It("should sync a single network attachment status from K8s CR", func() {
+		t := newTask(0)
+		object := &bmfov1alpha1.BareMetalInstance{
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				NetworkAttachmentStatuses: []bmfov1alpha1.BareMetalNetworkAttachmentStatus{
+					{
+						Interface: "data-0",
+						SubnetRef: "subnet-abc",
+						IPAddress: "10.0.1.5",
+						Primary:   true,
+					},
+				},
+			},
+		}
+		t.syncStatus(object)
+		statuses := t.bareMetalInstance.GetStatus().GetNetworkAttachmentStatuses()
+		Expect(statuses).To(HaveLen(1))
+		Expect(statuses[0].GetInterface()).To(Equal("data-0"))
+		Expect(statuses[0].GetSubnetRef()).To(Equal("subnet-abc"))
+		Expect(statuses[0].GetIpAddress()).To(Equal("10.0.1.5"))
+		Expect(statuses[0].GetPrimary()).To(BeTrue())
+	})
+
+	It("should sync multiple network attachment statuses preserving order", func() {
+		t := newTask(0)
+		object := &bmfov1alpha1.BareMetalInstance{
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				NetworkAttachmentStatuses: []bmfov1alpha1.BareMetalNetworkAttachmentStatus{
+					{
+						Interface: "data-0",
+						SubnetRef: "subnet-data",
+						IPAddress: "10.0.1.5",
+						Primary:   true,
+					},
+					{
+						Interface: "data-1",
+						SubnetRef: "subnet-storage",
+						IPAddress: "10.0.2.10",
+						Primary:   false,
+					},
+				},
+			},
+		}
+		t.syncStatus(object)
+		statuses := t.bareMetalInstance.GetStatus().GetNetworkAttachmentStatuses()
+		Expect(statuses).To(HaveLen(2))
+		Expect(statuses[0].GetInterface()).To(Equal("data-0"))
+		Expect(statuses[0].GetSubnetRef()).To(Equal("subnet-data"))
+		Expect(statuses[0].GetIpAddress()).To(Equal("10.0.1.5"))
+		Expect(statuses[0].GetPrimary()).To(BeTrue())
+		Expect(statuses[1].GetInterface()).To(Equal("data-1"))
+		Expect(statuses[1].GetSubnetRef()).To(Equal("subnet-storage"))
+		Expect(statuses[1].GetIpAddress()).To(Equal("10.0.2.10"))
+		Expect(statuses[1].GetPrimary()).To(BeFalse())
+	})
+
+	It("should sync network attachment status with empty ip_address (pre-DHCP)", func() {
+		t := newTask(0)
+		object := &bmfov1alpha1.BareMetalInstance{
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				NetworkAttachmentStatuses: []bmfov1alpha1.BareMetalNetworkAttachmentStatus{
+					{
+						Interface: "data-0",
+						SubnetRef: "subnet-abc",
+						Primary:   true,
+					},
+				},
+			},
+		}
+		t.syncStatus(object)
+		statuses := t.bareMetalInstance.GetStatus().GetNetworkAttachmentStatuses()
+		Expect(statuses).To(HaveLen(1))
+		Expect(statuses[0].GetIpAddress()).To(BeEmpty())
+	})
+
 	It("should not set PROVISIONED when only Allocated is True (template not yet complete)", func() {
 		t := newTask(0)
 		object := &bmfov1alpha1.BareMetalInstance{
@@ -1620,7 +2012,7 @@ func defaultFakeCatalogItemsClient() *fakeCatalogItemsClient {
 	return &fakeCatalogItemsClient{
 		getResponse: privatev1.BareMetalInstanceCatalogItemsGetResponse_builder{
 			Object: privatev1.BareMetalInstanceCatalogItem_builder{
-				Template: "osac.templates.default",
+				Template: &privatev1.BareMetalInstanceTemplateReference{Name: "osac.templates.default"},
 			}.Build(),
 		}.Build(),
 	}
@@ -1636,3 +2028,81 @@ type fakeCatalogItemsClient struct {
 func (c *fakeCatalogItemsClient) Get(ctx context.Context, req *privatev1.BareMetalInstanceCatalogItemsGetRequest, opts ...grpc.CallOption) (*privatev1.BareMetalInstanceCatalogItemsGetResponse, error) {
 	return c.getResponse, c.getError
 }
+
+var _ = Describe("Kubernetes validation error handling", func() {
+	It("should set state to FAILED when K8s Create returns Invalid error", func() {
+		ctx := context.Background()
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+
+		const (
+			bmiID        = "bmi-invalid-test"
+			hubID        = "hub-1"
+			hubNamespace = "test-ns"
+		)
+
+		scheme := newFakeScheme()
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Create: func(ctx context.Context, client clnt.WithWatch, obj clnt.Object, opts ...clnt.CreateOption) error {
+					return apierrors.NewInvalid(
+						schema.GroupKind{Group: "bmfo.osac.openshift.io", Kind: "BareMetalInstance"},
+						"bmi-test",
+						field.ErrorList{field.Invalid(field.NewPath("spec", "templateID"), "", "invalid template")},
+					)
+				},
+			}).
+			Build()
+
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), hubID).
+			Return(&controllers.HubEntry{Namespace: hubNamespace, Client: fakeClient}, nil).
+			AnyTimes()
+
+		bareMetalInstancesClient := NewMockBareMetalInstancesClient(ctrl)
+		bareMetalInstancesClient.EXPECT().
+			Update(gomock.Any(), gomock.Any(), gomock.Any()).
+			DoAndReturn(func(ctx context.Context, req *privatev1.BareMetalInstancesUpdateRequest, opts ...grpc.CallOption) (*privatev1.BareMetalInstancesUpdateResponse, error) {
+				return &privatev1.BareMetalInstancesUpdateResponse{Object: req.GetObject()}, nil
+			}).
+			MinTimes(1)
+
+		bmi := privatev1.BareMetalInstance_builder{
+			Id: bmiID,
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     "test-tenant",
+			}.Build(),
+			Spec: privatev1.BareMetalInstanceSpec_builder{
+				CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: "catalog-1"}.Build(),
+			}.Build(),
+			Status: privatev1.BareMetalInstanceStatus_builder{
+				Hub: hubID,
+			}.Build(),
+		}.Build()
+
+		f := &function{
+			logger:                              logger,
+			hubCache:                            hubCache,
+			bareMetalInstancesClient:            bareMetalInstancesClient,
+			bareMetalInstanceCatalogItemsClient: defaultFakeCatalogItemsClient(),
+			maskCalculator:                      masks.NewCalculator().Build(),
+		}
+
+		err := f.run(ctx, bmi)
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(bmi.GetStatus().GetState()).To(
+			Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_FAILED),
+		)
+
+		cond := findProtoCondition(bmi,
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_CONFIGURATION_APPLIED)
+		Expect(cond).ToNot(BeNil())
+		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		Expect(cond.GetReason()).To(Equal("ValidationFailed"))
+		Expect(cond.GetMessage()).To(ContainSubstring("invalid template"))
+	})
+})

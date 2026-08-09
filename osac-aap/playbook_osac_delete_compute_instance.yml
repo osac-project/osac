@@ -4,9 +4,9 @@
   gather_facts: false
 
   vars:
-    compute_instance: "{{ ansible_eda.event.payload }}"
-    compute_instance_name: "{{ ansible_eda.event.payload.metadata.name }}"
-    template_id: "{{ ansible_eda.event.payload.spec.templateID }}"
+    compute_instance: "{{ osac_job_vars.resource }}"
+    compute_instance_name: "{{ osac_job_vars.resource.metadata.name }}"
+    template_id: "{{ osac_job_vars.resource.spec.templateID }}"
 
   pre_tasks:
     - name: Determine tenant target namespace

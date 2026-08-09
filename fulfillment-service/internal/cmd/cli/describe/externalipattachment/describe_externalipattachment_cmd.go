@@ -98,21 +98,21 @@ func RenderExternalIPAttachment(w io.Writer, a *publicv1.ExternalIPAttachment) {
 	}
 
 	externalIP := "-"
-	if v := a.GetSpec().GetExternalIp(); v != "" {
-		externalIP = v
+	if v := a.GetSpec().GetExternalIp(); v != nil {
+		externalIP = v.GetName()
 	}
 
 	targetType := "-"
 	targetID := "-"
-	if v := a.GetSpec().GetComputeInstance(); v != "" {
+	if v := a.GetSpec().GetComputeInstance(); v != nil {
 		targetType = "ComputeInstance"
-		targetID = v
-	} else if v := a.GetSpec().GetCluster(); v != "" {
+		targetID = v.GetName()
+	} else if v := a.GetSpec().GetCluster(); v != nil {
 		targetType = "Cluster"
-		targetID = v
-	} else if v := a.GetSpec().GetBaremetalInstance(); v != "" {
+		targetID = v.GetName()
+	} else if v := a.GetSpec().GetBaremetalInstance(); v != nil {
 		targetType = "BaremetalInstance"
-		targetID = v
+		targetID = v.GetName()
 	}
 
 	state := "-"
@@ -133,7 +133,7 @@ func RenderExternalIPAttachment(w io.Writer, a *publicv1.ExternalIPAttachment) {
 	fmt.Fprintf(writer, "External IP:\t%s\n", externalIP)
 	fmt.Fprintf(writer, "Target Type:\t%s\n", targetType)
 	fmt.Fprintf(writer, "Target:\t%s\n", targetID)
-	if a.GetSpec().GetCluster() != "" {
+	if a.GetSpec().GetCluster() != nil {
 		endpoint := strings.TrimPrefix(a.GetSpec().GetTargetEndpoint().String(), "EXTERNAL_IP_ATTACHMENT_ENDPOINT_")
 		fmt.Fprintf(writer, "Target Endpoint:\t%s\n", endpoint)
 	}

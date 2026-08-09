@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2025 Red Hat, Inc.
+Copyright (c) 2026 Red Hat, Inc.
 
 Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
 in compliance with the License. You may obtain a copy of the License at
@@ -34,17 +34,18 @@ var _ = Describe("Publisher", func() {
 	BeforeEach(func() {
 		ctx = context.Background()
 		mockProducer = mocks.NewSyncProducer(GinkgoT(), nil)
-		pub = kafka.NewPublisher(mockProducer, "osac.metering.lifecycle")
+		pub = kafka.NewPublisher(mockProducer)
 
 		testEvent = cloudevents.NewEvent()
 		testEvent.SetID("test-id")
-		testEvent.SetType("osac.metering.lifecycle.created.v1")
+		testEvent.SetType("osac.resource.created.v1")
 		testEvent.SetSource("osac-metering/test")
 		testEvent.SetExtension("osacresourceid", "resource-123")
+		testEvent.SetExtension("osacresourcetype", "compute_instance")
 	})
 
 	Describe("Publish", func() {
-		It("publishes CloudEvent to the correct topic", func() {
+		It("routes lifecycle events to osac.metering.lifecycle topic", func() {
 			var capturedMsg *sarama.ProducerMessage
 			mockProducer.ExpectSendMessageWithMessageCheckerFunctionAndSucceed(
 				func(msg *sarama.ProducerMessage) error {
@@ -55,8 +56,54 @@ var _ = Describe("Publisher", func() {
 
 			err := pub.Publish(ctx, testEvent)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(capturedMsg).NotTo(BeNil())
 			Expect(capturedMsg.Topic).To(Equal("osac.metering.lifecycle"))
+		})
+
+		It("routes heartbeat events to osac.metering.heartbeat topic", func() {
+			testEvent.SetType("osac.resource.heartbeat.v1")
+			var capturedMsg *sarama.ProducerMessage
+			mockProducer.ExpectSendMessageWithMessageCheckerFunctionAndSucceed(
+				func(msg *sarama.ProducerMessage) error {
+					capturedMsg = msg
+					return nil
+				},
+			)
+
+			err := pub.Publish(ctx, testEvent)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(capturedMsg.Topic).To(Equal("osac.metering.heartbeat"))
+		})
+
+		It("routes correction events to osac.metering.corrections topic", func() {
+			testEvent.SetType("osac.resource.correction.v1")
+			var capturedMsg *sarama.ProducerMessage
+			mockProducer.ExpectSendMessageWithMessageCheckerFunctionAndSucceed(
+				func(msg *sarama.ProducerMessage) error {
+					capturedMsg = msg
+					return nil
+				},
+			)
+
+			err := pub.Publish(ctx, testEvent)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(capturedMsg.Topic).To(Equal("osac.metering.corrections"))
+		})
+
+		It("routes all lifecycle event types to the lifecycle topic", func() {
+			lifecycleTypes := []string{
+				"osac.resource.created.v1",
+				"osac.resource.started.v1",
+				"osac.resource.updated.v1",
+				"osac.resource.suspended.v1",
+				"osac.resource.resumed.v1",
+				"osac.resource.deleted.v1",
+			}
+			for _, eventType := range lifecycleTypes {
+				topic, err := kafka.TopicFor(eventType)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(topic).To(Equal("osac.metering.lifecycle"),
+					"event type %s should route to lifecycle topic", eventType)
+			}
 		})
 
 		It("uses osacresourceid extension as partition key", func() {
@@ -95,8 +142,7 @@ var _ = Describe("Publisher", func() {
 			err = json.Unmarshal(valueBytes, &decoded)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(decoded.ID()).To(Equal("test-id"))
-			Expect(decoded.Type()).To(Equal("osac.metering.lifecycle.created.v1"))
-			Expect(decoded.Source()).To(Equal("osac-metering/test"))
+			Expect(decoded.Type()).To(Equal("osac.resource.created.v1"))
 		})
 
 		It("returns error when osacresourceid extension is missing", func() {
@@ -127,7 +173,7 @@ var _ = Describe("Publisher", func() {
 				headerMap[string(h.Key)] = string(h.Value)
 			}
 			Expect(headerMap).To(HaveKeyWithValue("ce_id", "test-id"))
-			Expect(headerMap).To(HaveKeyWithValue("ce_type", "osac.metering.lifecycle.created.v1"))
+			Expect(headerMap).To(HaveKeyWithValue("ce_type", "osac.resource.created.v1"))
 			Expect(headerMap).To(HaveKeyWithValue("ce_source", "osac-metering/test"))
 			Expect(headerMap).To(HaveKeyWithValue("ce_specversion", "1.0"))
 		})
@@ -139,6 +185,14 @@ var _ = Describe("Publisher", func() {
 			err := pub.Publish(ctx, testEvent)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("kafka connection failed"))
+		})
+	})
+
+	Describe("TopicFor", func() {
+		It("returns error on unknown event type", func() {
+			_, err := kafka.TopicFor("osac.resource.unknown.v1")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("no topic route"))
 		})
 	})
 

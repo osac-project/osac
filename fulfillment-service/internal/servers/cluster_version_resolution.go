@@ -85,13 +85,21 @@ func lookupAndValidateClusterVersion(
 	return validateClusterVersionUsability(cv, versionName)
 }
 
-// resolveDefaultClusterVersionName looks up the system default ClusterVersion (spec.is_default == true),
-// validates it is usable, and returns its metadata.name.
-func resolveDefaultClusterVersionName(
+// buildClusterVersionReference creates a ClusterVersionReference from a ClusterVersion.
+func buildClusterVersionReference(cv *privatev1.ClusterVersion) *privatev1.ClusterVersionReference {
+	ref := &privatev1.ClusterVersionReference{}
+	ref.SetId(cv.GetId())
+	ref.SetName(cv.GetMetadata().GetName())
+	return ref
+}
+
+// resolveDefaultClusterVersion looks up the system default ClusterVersion (spec.is_default == true),
+// validates it is usable, and returns a ClusterVersionReference.
+func resolveDefaultClusterVersion(
 	ctx context.Context,
 	logger *slog.Logger,
 	clusterVersionsDao *dao.GenericDAO[*privatev1.ClusterVersion],
-) (string, error) {
+) (*privatev1.ClusterVersionReference, error) {
 	response, err := clusterVersionsDao.List().
 		SetFilter("this.spec.is_default == true && !has(this.metadata.deletion_timestamp)").
 		SetLimit(1).
@@ -100,11 +108,11 @@ func resolveDefaultClusterVersionName(
 		logger.ErrorContext(ctx, "Failed to look up default cluster version",
 			slog.Any("error", err),
 		)
-		return "", grpcstatus.Errorf(grpccodes.Internal,
+		return nil, grpcstatus.Errorf(grpccodes.Internal,
 			"failed to look up default cluster version")
 	}
 	if len(response.GetItems()) == 0 {
-		return "", grpcstatus.Errorf(grpccodes.InvalidArgument,
+		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"no version specified and no system default version is configured")
 	}
 	if response.GetTotal() > 1 {
@@ -115,7 +123,7 @@ func resolveDefaultClusterVersionName(
 	cv := response.GetItems()[0]
 	versionName := cv.GetMetadata().GetName()
 	if err := validateClusterVersionUsability(cv, versionName); err != nil {
-		return "", err
+		return nil, err
 	}
-	return versionName, nil
+	return buildClusterVersionReference(cv), nil
 }

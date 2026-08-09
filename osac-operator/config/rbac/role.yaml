@@ -83,6 +83,7 @@ rules:
   verbs:
   - get
   - list
+  - patch
   - update
   - watch
 - apiGroups:
@@ -139,6 +140,14 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - networkclasses
+  verbs:
+  - get
+  - list
+  - watch
 - apiGroups:
   - rbac.authorization.k8s.io
   resources:

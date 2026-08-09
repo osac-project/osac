@@ -188,10 +188,16 @@ class NodeRequest(Base):
                                           validation_alias="numberOfNodes")
 
 
+class HostTypeReference(Base):
+    """Typed reference to a HostType resource (matches the proto HostTypeReference message)."""
+
+    name: str
+
+
 class NodeSet(Base):
     """NodeSet represents the template's default bare metal resources"""
 
-    host_type: str
+    host_type: HostTypeReference
     size: int
 
 
@@ -321,6 +327,7 @@ class NetworkClassCapabilities(Base):
 class Metadata(Base):
     """Metadata about the template"""
 
+    metadata_name: str | None = pydantic.Field(None, validation_alias="name")
     title: str
     description: str | None = None
     template_type: TemplateTypeEnum = pydantic.Field(
@@ -349,6 +356,7 @@ class BaseTemplate(Base):
     collection: str = pydantic.Field(..., exclude=True)
     path: Path = pydantic.Field(..., exclude=True)
     name: str = pydantic.Field(..., exclude=True)
+    metadata_name: str | None = pydantic.Field(None, exclude=True)
     title: str | None = None
     description: str | None = None
     template_type: TemplateTypeEnum = pydantic.Field(exclude=True)
@@ -361,6 +369,11 @@ class BaseTemplate(Base):
     @pydantic.computed_field
     def id(self) -> str:
         return f"{self.collection}.{self.name}"
+
+    @pydantic.computed_field
+    def metadata(self) -> dict[str, str]:
+        name = self.metadata_name if self.metadata_name else self.name.replace("_", "-")
+        return {"name": name}
 
 
 class ClusterTemplate(BaseTemplate):
@@ -377,7 +390,8 @@ class ClusterTemplate(BaseTemplate):
     def node_sets(self) -> dict[str, NodeSet] | None:
         ret = {
             nr.resource_class: NodeSet(
-                host_type=nr.resource_class, size=nr.number_of_nodes
+                host_type=HostTypeReference(name=nr.resource_class),
+                size=nr.number_of_nodes,
             )
             for nr in self.default_node_request
         }
@@ -420,6 +434,7 @@ class NetworkClassTemplate(Base):
     collection: str = pydantic.Field(..., exclude=True)
     path: Path = pydantic.Field(..., exclude=True)
     name: str = pydantic.Field(..., exclude=True)
+    metadata_name: str | None = pydantic.Field(None, exclude=True)
     template_type: Literal[TemplateTypeEnum.network] = pydantic.Field(
         default=TemplateTypeEnum.network, exclude=True
     )
@@ -446,6 +461,11 @@ class NetworkClassTemplate(Base):
     @pydantic.field_serializer("path")
     def serialize_path(self, value: Path):
         return str(value)
+
+    @pydantic.computed_field
+    def metadata(self) -> dict[str, str]:
+        name = self.metadata_name if self.metadata_name else self.implementation_strategy.replace("_", "-")
+        return {"name": name}
 
 
 def _validate_collection_name(name: str) -> None:
@@ -585,6 +605,7 @@ class Collection(Base):
                         "collection": self.name,
                         "path": path,
                         "name": path.name,
+                        "metadata_name": metadata.metadata_name,
                         "title": metadata.title,
                         "description": metadata.description,
                         "parameters": params,
@@ -613,6 +634,7 @@ class Collection(Base):
                             collection=self.name,
                             path=path,
                             name=path.name,
+                            metadata_name=metadata.metadata_name,
                             title=metadata.title,
                             description=metadata.description,
                             implementation_strategy=metadata.implementation_strategy,

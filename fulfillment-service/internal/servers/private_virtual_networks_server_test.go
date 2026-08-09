@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
@@ -172,7 +173,7 @@ var _ = Describe("Private virtual networks server", func() {
 				vn := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr:     new("192.168.0.0/16"),
-						NetworkClass: nc.GetId(),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 						Region:       "us-west-1",
 					}.Build(),
 				}.Build()
@@ -228,7 +229,7 @@ var _ = Describe("Private virtual networks server", func() {
 				vn := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv6Cidr:     new("2001:db8::/32"),
-						NetworkClass: nc.GetId(),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 						Region:       "us-west-1",
 					}.Build(),
 				}.Build()
@@ -284,7 +285,7 @@ var _ = Describe("Private virtual networks server", func() {
 				ipv4VN := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr:     new("10.0.1.5/24"),
-						NetworkClass: nc.GetId(),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 						Region:       "us-west-1",
 					}.Build(),
 				}.Build()
@@ -295,7 +296,7 @@ var _ = Describe("Private virtual networks server", func() {
 				ipv6VN := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv6Cidr:     new("2001:db8::1/32"),
-						NetworkClass: nc.GetId(),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 						Region:       "us-west-1",
 					}.Build(),
 				}.Build()
@@ -310,11 +311,12 @@ var _ = Describe("Private virtual networks server", func() {
 				createResponse, err := server.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 					Object: privatev1.VirtualNetwork_builder{
 						Metadata: privatev1.Metadata_builder{
+							Name:   "test-virtual-network",
 							Tenant: auth.SharedTenant,
 						}.Build(),
 						Spec: privatev1.VirtualNetworkSpec_builder{
 							Ipv4Cidr:     new("10.0.1.5/24"),
-							NetworkClass: nc.GetId(),
+							NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 							Region:       "us-west-1",
 						}.Build(),
 					}.Build(),
@@ -329,7 +331,7 @@ var _ = Describe("Private virtual networks server", func() {
 				existing := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Region:       "us-west-1",
-						NetworkClass: nc.GetId(),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 						Ipv4Cidr:     new("10.0.1.5/24"),
 					}.Build(),
 				}.Build()
@@ -337,7 +339,7 @@ var _ = Describe("Private virtual networks server", func() {
 				equivalentRewrite := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Region:       "us-west-1",
-						NetworkClass: nc.GetId(),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 						Ipv4Cidr:     new("10.0.1.0/24"),
 					}.Build(),
 				}.Build()
@@ -348,7 +350,7 @@ var _ = Describe("Private virtual networks server", func() {
 				omittedField := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Region:       "us-west-1",
-						NetworkClass: nc.GetId(),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 					}.Build(),
 				}.Build()
 				_, err = server.validateVirtualNetwork(ctx, omittedField, existing)
@@ -376,7 +378,7 @@ var _ = Describe("Private virtual networks server", func() {
 				vn := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: nc.GetId(),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 						Region:       "us-west-1",
 					}.Build(),
 				}.Build()
@@ -391,7 +393,7 @@ var _ = Describe("Private virtual networks server", func() {
 				vn := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv6Cidr:     new("2001:db8::/32"),
-						NetworkClass: nc.GetId(),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 						Region:       "us-west-1",
 					}.Build(),
 				}.Build()
@@ -407,7 +409,7 @@ var _ = Describe("Private virtual networks server", func() {
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr:     new("10.0.0.0/16"),
 						Ipv6Cidr:     new("2001:db8::/32"),
-						NetworkClass: nc.GetId(),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 						Region:       "us-west-1",
 					}.Build(),
 				}.Build()
@@ -424,7 +426,7 @@ var _ = Describe("Private virtual networks server", func() {
 				vn := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: nc.GetId(),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 						Region:       "us-west-1",
 					}.Build(),
 				}.Build()
@@ -437,7 +439,7 @@ var _ = Describe("Private virtual networks server", func() {
 				vn := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: "non-existent-class",
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: "non-existent-class"}.Build(),
 						Region:       "us-west-1",
 					}.Build(),
 				}.Build()
@@ -468,7 +470,7 @@ var _ = Describe("Private virtual networks server", func() {
 				vn := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: nc.GetId(),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 						Region:       "us-west-1",
 					}.Build(),
 				}.Build()
@@ -483,7 +485,7 @@ var _ = Describe("Private virtual networks server", func() {
 				vn := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: nc.GetId(),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 						Region:       "us-west-1",
 					}.Build(),
 				}.Build()
@@ -502,7 +504,7 @@ var _ = Describe("Private virtual networks server", func() {
 				vn := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: nc.GetId(),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 						Region:       "us-west-1",
 					}.Build(),
 				}.Build()
@@ -523,7 +525,7 @@ var _ = Describe("Private virtual networks server", func() {
 				vn := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: nc.GetId(),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 						Region:       "us-west-1",
 						Capabilities: privatev1.VirtualNetworkCapabilities_builder{
 							EnableIpv4: true,
@@ -568,7 +570,7 @@ var _ = Describe("Private virtual networks server", func() {
 					}.Build(),
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: nc.GetId(),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 						Region:       "us-west-1",
 						Capabilities: privatev1.VirtualNetworkCapabilities_builder{
 							EnableIpv4: true,
@@ -602,7 +604,7 @@ var _ = Describe("Private virtual networks server", func() {
 				vn := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: nc.GetId(),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 						Region:       "us-west-1",
 					}.Build(),
 				}.Build()
@@ -618,7 +620,7 @@ var _ = Describe("Private virtual networks server", func() {
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Region:       "us-west-1",
 						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: "test-class",
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: "test-class"}.Build(),
 					}.Build(),
 				}.Build()
 
@@ -626,7 +628,7 @@ var _ = Describe("Private virtual networks server", func() {
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Region:       "us-east-1",
 						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: "test-class",
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: "test-class"}.Build(),
 					}.Build(),
 				}.Build()
 
@@ -646,7 +648,7 @@ var _ = Describe("Private virtual networks server", func() {
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Region:       "us-west-1",
 						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: nc.GetId(),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 					}.Build(),
 				}.Build()
 
@@ -654,7 +656,7 @@ var _ = Describe("Private virtual networks server", func() {
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Region:       "us-west-1",
 						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: nc.GetId(),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 					}.Build(),
 				}.Build()
 
@@ -669,7 +671,7 @@ var _ = Describe("Private virtual networks server", func() {
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Region:       "us-west-1",
 						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: "class-1",
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: "class-1"}.Build(),
 					}.Build(),
 				}.Build()
 
@@ -677,7 +679,7 @@ var _ = Describe("Private virtual networks server", func() {
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Region:       "us-west-1",
 						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: "class-2",
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: "class-2"}.Build(),
 					}.Build(),
 				}.Build()
 
@@ -697,7 +699,7 @@ var _ = Describe("Private virtual networks server", func() {
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Region:       "us-west-1",
 						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: nc.GetId(),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 					}.Build(),
 				}.Build()
 
@@ -705,7 +707,7 @@ var _ = Describe("Private virtual networks server", func() {
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Region:       "us-west-1",
 						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: nc.GetId(),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 					}.Build(),
 				}.Build()
 
@@ -719,7 +721,7 @@ var _ = Describe("Private virtual networks server", func() {
 				existing := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Region:                 "us-west-1",
-						NetworkClass:           "test-class",
+						NetworkClass:           privatev1.NetworkClassReference_builder{Id: "test-class"}.Build(),
 						Ipv4Cidr:               new("10.0.0.0/16"),
 						ImplementationStrategy: "strategy-a",
 					}.Build(),
@@ -728,7 +730,7 @@ var _ = Describe("Private virtual networks server", func() {
 				updated := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Region:                 "us-west-1",
-						NetworkClass:           "test-class",
+						NetworkClass:           privatev1.NetworkClassReference_builder{Id: "test-class"}.Build(),
 						Ipv4Cidr:               new("10.0.0.0/16"),
 						ImplementationStrategy: "strategy-b",
 					}.Build(),
@@ -749,7 +751,7 @@ var _ = Describe("Private virtual networks server", func() {
 				existing := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Region:                 "us-west-1",
-						NetworkClass:           nc.GetId(),
+						NetworkClass:           privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 						Ipv4Cidr:               new("10.0.0.0/16"),
 						ImplementationStrategy: "test-strategy",
 					}.Build(),
@@ -758,7 +760,7 @@ var _ = Describe("Private virtual networks server", func() {
 				updated := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Region:                 "us-west-1",
-						NetworkClass:           nc.GetId(),
+						NetworkClass:           privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 						Ipv4Cidr:               new("10.0.0.0/16"),
 						ImplementationStrategy: "test-strategy",
 					}.Build(),
@@ -774,11 +776,12 @@ var _ = Describe("Private virtual networks server", func() {
 				createResponse, err := server.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 					Object: privatev1.VirtualNetwork_builder{
 						Metadata: privatev1.Metadata_builder{
+							Name:   "test-virtual-network",
 							Tenant: auth.SharedTenant,
 						}.Build(),
 						Spec: privatev1.VirtualNetworkSpec_builder{
 							Ipv4Cidr:     new("10.0.0.0/16"),
-							NetworkClass: nc.GetId(),
+							NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 							Region:       "us-west-1",
 						}.Build(),
 					}.Build(),
@@ -794,7 +797,7 @@ var _ = Describe("Private virtual networks server", func() {
 							Name: "renamed-vn",
 						}.Build(),
 						Spec: privatev1.VirtualNetworkSpec_builder{
-							NetworkClass: nc.GetId(),
+							NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 							Region:       "us-west-1",
 						}.Build(),
 					}.Build(),
@@ -812,7 +815,7 @@ var _ = Describe("Private virtual networks server", func() {
 				existing := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Region:       "us-west-1",
-						NetworkClass: "test-class",
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: "test-class"}.Build(),
 						Ipv4Cidr:     new("10.0.0.0/16"),
 					}.Build(),
 				}.Build()
@@ -820,7 +823,7 @@ var _ = Describe("Private virtual networks server", func() {
 				updated := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Region:       "us-west-1",
-						NetworkClass: "test-class",
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: "test-class"}.Build(),
 						Ipv4Cidr:     new("192.168.0.0/16"),
 					}.Build(),
 				}.Build()
@@ -842,7 +845,7 @@ var _ = Describe("Private virtual networks server", func() {
 				existing := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Region:       "us-west-1",
-						NetworkClass: nc.GetId(),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 						Ipv4Cidr:     new("10.0.0.0/16"),
 					}.Build(),
 				}.Build()
@@ -850,7 +853,7 @@ var _ = Describe("Private virtual networks server", func() {
 				updated := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Region:       "us-west-1",
-						NetworkClass: nc.GetId(),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 						Ipv4Cidr:     new("10.0.0.0/16"),
 					}.Build(),
 				}.Build()
@@ -866,7 +869,7 @@ var _ = Describe("Private virtual networks server", func() {
 				existing := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Region:       "us-west-1",
-						NetworkClass: "test-class",
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: "test-class"}.Build(),
 						Ipv6Cidr:     new("2001:db8::/32"),
 					}.Build(),
 				}.Build()
@@ -874,7 +877,7 @@ var _ = Describe("Private virtual networks server", func() {
 				updated := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Region:       "us-west-1",
-						NetworkClass: "test-class",
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: "test-class"}.Build(),
 						Ipv4Cidr:     new("10.0.0.0/16"),
 						Ipv6Cidr:     new("2001:db8::/32"),
 					}.Build(),
@@ -895,7 +898,7 @@ var _ = Describe("Private virtual networks server", func() {
 				existing := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Region:       "us-west-1",
-						NetworkClass: "test-class",
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: "test-class"}.Build(),
 						Ipv4Cidr:     new("10.0.0.0/16"),
 					}.Build(),
 				}.Build()
@@ -903,7 +906,7 @@ var _ = Describe("Private virtual networks server", func() {
 				updated := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Region:       "us-west-1",
-						NetworkClass: "test-class",
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: "test-class"}.Build(),
 						Ipv4Cidr:     new(""),
 						Ipv6Cidr:     new("2001:db8::/32"),
 					}.Build(),
@@ -924,7 +927,7 @@ var _ = Describe("Private virtual networks server", func() {
 				existing := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Region:       "us-west-1",
-						NetworkClass: "test-class",
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: "test-class"}.Build(),
 						Ipv6Cidr:     new("2001:db8::/32"),
 					}.Build(),
 				}.Build()
@@ -932,7 +935,7 @@ var _ = Describe("Private virtual networks server", func() {
 				updated := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Region:       "us-west-1",
-						NetworkClass: "test-class",
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: "test-class"}.Build(),
 						Ipv6Cidr:     new("fd00:1234::/32"),
 					}.Build(),
 				}.Build()
@@ -952,7 +955,7 @@ var _ = Describe("Private virtual networks server", func() {
 				existing := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Region:       "us-west-1",
-						NetworkClass: nc.GetId(),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 						Ipv6Cidr:     new("2001:db8::/32"),
 					}.Build(),
 				}.Build()
@@ -960,7 +963,7 @@ var _ = Describe("Private virtual networks server", func() {
 				updated := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Region:       "us-west-1",
-						NetworkClass: nc.GetId(),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 						Ipv6Cidr:     new("2001:db8::/32"),
 					}.Build(),
 				}.Build()
@@ -977,7 +980,7 @@ var _ = Describe("Private virtual networks server", func() {
 				existing := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Region:       "us-west-1",
-						NetworkClass: "test-class",
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: "test-class"}.Build(),
 						Ipv4Cidr:     new("10.0.0.0/16"),
 					}.Build(),
 				}.Build()
@@ -985,7 +988,7 @@ var _ = Describe("Private virtual networks server", func() {
 				updated := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Region:       "us-west-1",
-						NetworkClass: "test-class",
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: "test-class"}.Build(),
 						Ipv4Cidr:     new("10.0.0.0/16"),
 						Ipv6Cidr:     new("2001:db8::/32"),
 					}.Build(),
@@ -1007,7 +1010,7 @@ var _ = Describe("Private virtual networks server", func() {
 				existing := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Region:       "us-west-1",
-						NetworkClass: "test-class",
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: "test-class"}.Build(),
 						Ipv4Cidr:     new("10.0.0.0/16"),
 						Ipv6Cidr:     new("2001:db8::/32"),
 					}.Build(),
@@ -1016,7 +1019,7 @@ var _ = Describe("Private virtual networks server", func() {
 				updated := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Region:       "us-west-1",
-						NetworkClass: "test-class",
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: "test-class"}.Build(),
 						Ipv4Cidr:     new("10.0.0.0/16"),
 						Ipv6Cidr:     new(""),
 					}.Build(),
@@ -1040,11 +1043,12 @@ var _ = Describe("Private virtual networks server", func() {
 				createResponse, err := server.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 					Object: privatev1.VirtualNetwork_builder{
 						Metadata: privatev1.Metadata_builder{
+							Name:   "test-virtual-network",
 							Tenant: auth.SharedTenant,
 						}.Build(),
 						Spec: privatev1.VirtualNetworkSpec_builder{
 							Ipv4Cidr:     new("10.0.0.0/16"),
-							NetworkClass: nc.GetId(),
+							NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 							Region:       "us-west-1",
 						}.Build(),
 					}.Build(),
@@ -1060,7 +1064,7 @@ var _ = Describe("Private virtual networks server", func() {
 							Name: "renamed-vn",
 						}.Build(),
 						Spec: privatev1.VirtualNetworkSpec_builder{
-							NetworkClass: nc.GetId(),
+							NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 							Region:       "us-west-1",
 						}.Build(),
 					}.Build(),
@@ -1096,7 +1100,7 @@ var _ = Describe("Private virtual networks server", func() {
 				Spec: privatev1.VirtualNetworkSpec_builder{
 					Ipv4Cidr:     new("10.0.0.0/16"),
 					Region:       "us-west-1",
-					NetworkClass: "class-id",
+					NetworkClass: privatev1.NetworkClassReference_builder{Id: "class-id"}.Build(),
 				}.Build(),
 			}.Build()
 
@@ -1118,7 +1122,7 @@ var _ = Describe("Private virtual networks server", func() {
 				Spec: privatev1.VirtualNetworkSpec_builder{
 					Ipv4Cidr:     new("10.0.0.0/16"),
 					Region:       "us-west-1",
-					NetworkClass: "class-id",
+					NetworkClass: privatev1.NetworkClassReference_builder{Id: "class-id"}.Build(),
 				}.Build(),
 			}.Build()
 
@@ -1148,7 +1152,7 @@ var _ = Describe("Private virtual networks server", func() {
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr:     new(fmt.Sprintf("10.%d.0.0/16", i)),
 						Region:       "us-west-1",
-						NetworkClass: "class-id",
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: "class-id"}.Build(),
 					}.Build(),
 				}.Build()
 
@@ -1178,7 +1182,7 @@ var _ = Describe("Private virtual networks server", func() {
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr:     new(fmt.Sprintf("10.%d.0.0/16", i)),
 						Region:       "us-west-1",
-						NetworkClass: "class-id",
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: "class-id"}.Build(),
 					}.Build(),
 				}.Build()
 
@@ -1206,7 +1210,7 @@ var _ = Describe("Private virtual networks server", func() {
 				Spec: privatev1.VirtualNetworkSpec_builder{
 					Ipv4Cidr:     new("10.0.0.0/16"),
 					Region:       "us-west-1",
-					NetworkClass: "class-id",
+					NetworkClass: privatev1.NetworkClassReference_builder{Id: "class-id"}.Build(),
 				}.Build(),
 			}.Build()
 
@@ -1242,7 +1246,7 @@ var _ = Describe("Private virtual networks server", func() {
 				Spec: privatev1.VirtualNetworkSpec_builder{
 					Ipv4Cidr:     new("10.0.0.0/16"),
 					Region:       "us-west-1",
-					NetworkClass: "class-id",
+					NetworkClass: privatev1.NetworkClassReference_builder{Id: "class-id"}.Build(),
 				}.Build(),
 			}.Build()
 
@@ -1277,7 +1281,7 @@ var _ = Describe("Private virtual networks server", func() {
 				Spec: privatev1.VirtualNetworkSpec_builder{
 					Ipv4Cidr:     new("10.1.0.0/16"),
 					Region:       "us-west-1",
-					NetworkClass: "class-id",
+					NetworkClass: privatev1.NetworkClassReference_builder{Id: "class-id"}.Build(),
 				}.Build(),
 			}.Build()
 
@@ -1295,7 +1299,7 @@ var _ = Describe("Private virtual networks server", func() {
 				Spec: privatev1.VirtualNetworkSpec_builder{
 					Ipv4Cidr:     new("10.2.0.0/16"),
 					Region:       "us-west-1",
-					NetworkClass: "class-id",
+					NetworkClass: privatev1.NetworkClassReference_builder{Id: "class-id"}.Build(),
 				}.Build(),
 			}.Build()
 
@@ -1331,6 +1335,9 @@ var _ = Describe("Private virtual networks server", func() {
 			// Create VN without network_class:
 			createResponse, err := vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 				Object: privatev1.VirtualNetwork_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr: new("10.0.0.0/16"),
 						Region:   "us-west-1",
@@ -1338,7 +1345,7 @@ var _ = Describe("Private virtual networks server", func() {
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(createResponse.GetObject().GetSpec().GetNetworkClass()).To(Equal(defaultNC.GetId()))
+			Expect(createResponse.GetObject().GetSpec().GetNetworkClass().GetId()).To(Equal(defaultNC.GetId()))
 		})
 
 		It("Create VN without network_class when no default exists returns error", func() {
@@ -1348,6 +1355,9 @@ var _ = Describe("Private virtual networks server", func() {
 			// Create VN without network_class (no default configured):
 			_, err := vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 				Object: privatev1.VirtualNetwork_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr: new("10.0.0.0/16"),
 						Region:   "us-west-1",
@@ -1368,15 +1378,18 @@ var _ = Describe("Private virtual networks server", func() {
 			// Create VN with explicit network_class=NC-B:
 			createResponse, err := vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 				Object: privatev1.VirtualNetwork_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr:     new("10.0.0.0/16"),
 						Region:       "us-west-1",
-						NetworkClass: ncB.GetId(),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: ncB.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(createResponse.GetObject().GetSpec().GetNetworkClass()).To(Equal(ncB.GetId()))
+			Expect(createResponse.GetObject().GetSpec().GetNetworkClass().GetId()).To(Equal(ncB.GetId()))
 		})
 
 		It("Default NC must be READY: PENDING default returns FailedPrecondition", func() {
@@ -1386,6 +1399,9 @@ var _ = Describe("Private virtual networks server", func() {
 			// Create VN without network_class (default is not READY):
 			_, err := vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 				Object: privatev1.VirtualNetwork_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr: new("10.0.0.0/16"),
 						Region:   "us-west-1",
@@ -1428,6 +1444,9 @@ var _ = Describe("Private virtual networks server", func() {
 			// Must set both capabilities AND ipv6_cidr to trigger VN-VAL-06 check.
 			_, err = vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 				Object: privatev1.VirtualNetwork_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv6Cidr: new("2001:db8::/32"),
 						Region:   "us-west-1",
@@ -1458,6 +1477,9 @@ var _ = Describe("Private virtual networks server", func() {
 			// Attempt to create VN without network_class (no default exists now):
 			_, err := vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 				Object: privatev1.VirtualNetwork_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr: new("10.0.0.0/16"),
 						Region:   "us-west-1",
@@ -1485,6 +1507,9 @@ var _ = Describe("Private virtual networks server", func() {
 			// soft-deleted rows, so no active default is found and creation fails.
 			_, err = vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 				Object: privatev1.VirtualNetwork_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr: new("10.0.0.0/16"),
 						Region:   "us-west-1",
@@ -1502,6 +1527,9 @@ var _ = Describe("Private virtual networks server", func() {
 			// Create VN without network_class (auto-populated):
 			createResponse, err := vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 				Object: privatev1.VirtualNetwork_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr: new("10.0.0.0/16"),
 						Region:   "us-west-1",
@@ -1510,7 +1538,7 @@ var _ = Describe("Private virtual networks server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			vn := createResponse.GetObject()
-			Expect(vn.GetSpec().GetNetworkClass()).To(Equal(defaultNC.GetId()))
+			Expect(vn.GetSpec().GetNetworkClass().GetId()).To(Equal(defaultNC.GetId()))
 
 			// Create a second NC to attempt switching to:
 			ncB := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
@@ -1522,7 +1550,7 @@ var _ = Describe("Private virtual networks server", func() {
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr:     new("10.0.0.0/16"),
 						Region:       "us-west-1",
-						NetworkClass: ncB.GetId(),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: ncB.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -1569,11 +1597,12 @@ var _ = Describe("Private virtual networks server", func() {
 			createResp, err := vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 				Object: privatev1.VirtualNetwork_builder{
 					Metadata: privatev1.Metadata_builder{
+						Name:   "test-virtual-network",
 						Tenant: auth.SharedTenant,
 					}.Build(),
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr:     proto.String("10.0.0.0/16"),
-						NetworkClass: nc.GetId(),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 						Region:       "us-west-1",
 					}.Build(),
 				}.Build(),
@@ -1613,7 +1642,7 @@ var _ = Describe("Private virtual networks server", func() {
 					Tenant: auth.SharedTenant,
 				}.Build(),
 				Spec: privatev1.SubnetSpec_builder{
-					VirtualNetwork: vn.GetId(),
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vn.GetId()}.Build(),
 					Ipv4Cidr:       proto.String("10.0.1.0/24"),
 				}.Build(),
 			}.Build()
@@ -1639,7 +1668,7 @@ var _ = Describe("Private virtual networks server", func() {
 					Tenant: auth.SharedTenant,
 				}.Build(),
 				Spec: privatev1.SecurityGroupSpec_builder{
-					VirtualNetwork: vn.GetId(),
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vn.GetId()}.Build(),
 				}.Build(),
 			}.Build()
 			_, err := sgDao.Create().SetObject(sg).Do(ctx)
@@ -1665,7 +1694,7 @@ var _ = Describe("Private virtual networks server", func() {
 					Tenant: auth.SharedTenant,
 				}.Build(),
 				Spec: privatev1.SubnetSpec_builder{
-					VirtualNetwork: vn.GetId(),
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vn.GetId()}.Build(),
 					Ipv4Cidr:       proto.String("10.0.1.0/24"),
 				}.Build(),
 			}.Build()
@@ -1677,7 +1706,7 @@ var _ = Describe("Private virtual networks server", func() {
 					Tenant: auth.SharedTenant,
 				}.Build(),
 				Spec: privatev1.SecurityGroupSpec_builder{
-					VirtualNetwork: vn.GetId(),
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vn.GetId()}.Build(),
 				}.Build(),
 			}.Build()
 			_, err = sgDao.Create().SetObject(sg).Do(ctx)
@@ -1701,7 +1730,7 @@ var _ = Describe("Private virtual networks server", func() {
 					Tenant: auth.SharedTenant,
 				}.Build(),
 				Spec: privatev1.SecurityGroupSpec_builder{
-					VirtualNetwork: vn.GetId(),
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vn.GetId()}.Build(),
 				}.Build(),
 			}.Build()
 			sgResp, err := sgDao.Create().SetObject(sg).Do(ctx)
@@ -1726,7 +1755,7 @@ var _ = Describe("Private virtual networks server", func() {
 						Tenant: auth.SharedTenant,
 					}.Build(),
 					Spec: privatev1.SubnetSpec_builder{
-						VirtualNetwork: vn.GetId(),
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vn.GetId()}.Build(),
 						Ipv4Cidr:       proto.String(fmt.Sprintf("10.0.%d.0/24", i)),
 					}.Build(),
 				}.Build()
@@ -1749,6 +1778,7 @@ var _ = Describe("Private virtual networks server", func() {
 			createResp, err := vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 				Object: privatev1.VirtualNetwork_builder{
 					Metadata: privatev1.Metadata_builder{
+						Name:   "default-virtual-network",
 						Tenant: auth.SharedTenant,
 						Labels: map[string]string{
 							"osac.openshift.io/default": "true",
@@ -1756,7 +1786,7 @@ var _ = Describe("Private virtual networks server", func() {
 					}.Build(),
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr:     proto.String("10.0.0.0/16"),
-						NetworkClass: nc.GetId(),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 						Region:       "us-west-1",
 					}.Build(),
 				}.Build(),

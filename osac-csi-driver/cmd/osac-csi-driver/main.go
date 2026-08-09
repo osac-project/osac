@@ -21,6 +21,7 @@ func main() {
 
 	csiEndpoint := flag.String("csi-endpoint", "unix:///csi/osac/csi.sock", "CSI endpoint this driver listens on")
 	nodeID := flag.String("node-id", "", "Node ID for NodeGetInfo")
+	clusterID := flag.String("cluster-id", "", "Cluster ID for volume creation")
 	fulfillmentEndpoint := flag.String("fulfillment-endpoint", "",
 		"gRPC endpoint for the OSAC fulfillment service (uses stub if empty)")
 	vendorSocketsFlag := flag.String("vendor-sockets", "",
@@ -33,6 +34,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: --node-id is required\n")
 		os.Exit(1)
 	}
+	// --cluster-id is optional; the fulfillment service may identify the
+	// cluster from connection credentials or a mounted ConfigMap.
 
 	vendorSockets, err := parseVendorSockets(*vendorSocketsFlag)
 	if err != nil {
@@ -45,17 +48,21 @@ func main() {
 	klog.Infof("Node ID: %s", *nodeID)
 	klog.Infof("Vendor sockets: %v", vendorSockets)
 
-	var fulfillmentClient fulfillment.Client
-	if *fulfillmentEndpoint != "" {
-		klog.Infof("Fulfillment endpoint: %s (real gRPC client not yet implemented, using stub)", *fulfillmentEndpoint)
-		fulfillmentClient = &fulfillment.LoggingStub{}
-	} else {
-		klog.Infof("No fulfillment endpoint configured, using logging stub")
-		fulfillmentClient = &fulfillment.LoggingStub{}
-	}
-	defer func() { _ = fulfillmentClient.Close() }()
+	var volumeClient fulfillment.VolumeClient
+	var controlPlaneClient fulfillment.ControlPlaneClient
 
-	d, err := driver.NewDriver(*driverName, version, *csiEndpoint, *nodeID, fulfillmentClient, vendorSockets)
+	if *fulfillmentEndpoint != "" {
+		fmt.Fprintf(os.Stderr, "Error: --fulfillment-endpoint is set but the gRPC client is not implemented yet\n")
+		os.Exit(1)
+	}
+	klog.Infof("No fulfillment endpoint configured, using in-memory stubs")
+	volumeClient = fulfillment.NewVolumeStub("default-backend", "nfs")
+	controlPlaneClient = &fulfillment.ControlPlaneStub{}
+
+	d, err := driver.NewDriver(
+		*driverName, version, *csiEndpoint, *nodeID, *clusterID,
+		volumeClient, controlPlaneClient, vendorSockets,
+	)
 	if err != nil {
 		klog.Fatalf("Failed to create driver: %v", err)
 	}

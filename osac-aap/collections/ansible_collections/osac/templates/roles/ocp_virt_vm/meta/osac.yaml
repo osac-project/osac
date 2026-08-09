@@ -1,4 +1,5 @@
 # Define the display name and description of the template
+name: ocp-virt-vm
 title: Virtual Machine Template (Linux and Windows)
 description: >
   Virtual machine template for OpenShift Virtualization supporting both Linux and Windows guest operating systems.

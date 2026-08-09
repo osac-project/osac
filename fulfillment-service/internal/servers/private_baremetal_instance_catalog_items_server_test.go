@@ -16,6 +16,7 @@ package servers
 import (
 	"fmt"
 
+	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -85,9 +86,12 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 		It("Creates object", func() {
 			response, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:       "My catalog item",
 					Description: "A test catalog item.",
-					Template:    "my-template-id",
+					Template:    privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
 					Published:   true,
 					Tenant:      "my-tenant",
 				}.Build(),
@@ -96,7 +100,7 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 			object := response.GetObject()
 			Expect(object.GetId()).ToNot(BeEmpty())
 			Expect(object.GetTitle()).To(Equal("My catalog item"))
-			Expect(object.GetTemplate()).To(Equal("my-template-id"))
+			Expect(object.GetTemplate().GetId()).To(Equal("my-template-id"))
 			Expect(object.GetPublished()).To(BeTrue())
 			Expect(object.GetTenant()).To(Equal("my-tenant"))
 		})
@@ -106,8 +110,11 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 			for i := range count {
 				_, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 					Object: privatev1.BareMetalInstanceCatalogItem_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Title:    fmt.Sprintf("Catalog item %d", i),
-						Template: "my-template-id",
+						Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -121,8 +128,11 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 		It("Updates object", func() {
 			createResponse, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:    "Original title",
-					Template: "my-template-id",
+					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -132,7 +142,7 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
 					Id:       object.GetId(),
 					Title:    "Updated title",
-					Template: "my-template-id",
+					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -146,7 +156,7 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 						Finalizers: []string{"keep"},
 					}.Build(),
 					Title:    "My catalog item",
-					Template: "my-template-id",
+					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -167,8 +177,11 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 		It("Blocks delete when referenced by a bare metal instance", func() {
 			createResponse, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:     "Referenced catalog item",
-					Template:  "my-template-id",
+					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
 					Published: true,
 				}.Build(),
 			}.Build())
@@ -187,7 +200,7 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 						Tenant: "system",
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem: catalogItem.GetId(),
+						CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItem.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			).Do(ctx)
@@ -206,8 +219,11 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 		It("Creates object with field definitions", func() {
 			response, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:    "Catalog item with fields",
-					Template: "my-template-id",
+					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
 					FieldDefinitions: []*privatev1.FieldDefinition{
 						privatev1.FieldDefinition_builder{
 							Path:        "spec.run_strategy",
@@ -225,8 +241,11 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 		It("Rejects non-editable field definition without default value", func() {
 			_, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:    "Bad catalog item",
-					Template: "my-template-id",
+					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
 					FieldDefinitions: []*privatev1.FieldDefinition{
 						privatev1.FieldDefinition_builder{
 							Path:     "spec.pull_secret",
@@ -246,8 +265,11 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 		It("Accepts non-editable field definition with default value", func() {
 			response, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:    "Good catalog item",
-					Template: "my-template-id",
+					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
 					FieldDefinitions: []*privatev1.FieldDefinition{
 						privatev1.FieldDefinition_builder{
 							Path:     "spec.pull_secret",
@@ -271,8 +293,11 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 		It("Accepts editable field definition without default value", func() {
 			response, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:    "Editable no default",
-					Template: "my-template-id",
+					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
 					FieldDefinitions: []*privatev1.FieldDefinition{
 						privatev1.FieldDefinition_builder{
 							Path:     "spec.pull_secret",
@@ -295,8 +320,11 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 		It("Rejects non-editable field definition without default when not first in list", func() {
 			_, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:    "Bad catalog item",
-					Template: "my-template-id",
+					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
 					FieldDefinitions: []*privatev1.FieldDefinition{
 						privatev1.FieldDefinition_builder{
 							Path:     "spec.pull_secret",
@@ -319,8 +347,11 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 		It("Rejects field definition with invalid validation_schema JSON", func() {
 			_, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:    "Bad schema catalog item",
-					Template: "my-template-id",
+					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
 					FieldDefinitions: []*privatev1.FieldDefinition{
 						privatev1.FieldDefinition_builder{
 							Path:             "spec.cores",
@@ -341,8 +372,11 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 		It("Accepts field definition with valid validation_schema JSON", func() {
 			response, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:    "Valid schema catalog item",
-					Template: "my-template-id",
+					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
 					FieldDefinitions: []*privatev1.FieldDefinition{
 						privatev1.FieldDefinition_builder{
 							Path:             "spec.cores",
@@ -366,8 +400,11 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 		It("Rejects update that introduces non-editable field without default", func() {
 			createResponse, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:    "Valid catalog item",
-					Template: "my-template-id",
+					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -404,8 +441,11 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 		It("Rejects update that introduces invalid validation_schema", func() {
 			createResponse, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:    "Valid catalog item",
-					Template: "my-template-id",
+					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())

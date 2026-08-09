@@ -1,4 +1,5 @@
 ---
+name: network-policy
 title: Kubernetes NetworkPolicy Backend
 description: >
   Implements SecurityGroup enforcement via standard Kubernetes NetworkPolicy.

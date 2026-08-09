@@ -52,3 +52,11 @@ message ExternalIPPoolStatus {
   // Number of IP addresses available for new allocations from this pool.
   int64 available = 6 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
+
+// Reference to an ExternalIPPool resource.
+message ExternalIPPoolReference {
+  string id = 1;
+  string name = 2;
+  string project = 3;
+  bool shared = 4;
+}

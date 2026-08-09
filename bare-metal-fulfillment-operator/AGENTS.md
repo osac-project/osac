@@ -127,7 +127,7 @@ CRDs must stay in sync: after `make manifests`, run `make helm-crds` (uses `hack
 
 - **build-bmf-image.yaml**: Runs tests, builds + pushes container image and manifests
 - **helm-lint.yaml** (repo root, matrixed across components): Checks CRD sync (`make check-helm-crds`) and lints Helm charts
-- **pre-commit.yaml** (repo root, shared across components): pre-commit hooks + golangci-lint on PRs
+- **pre-commit.yaml** (repo root, shared across components): pre-commit hooks + golangci-lint + gitleaks PR-diff secret scan on PRs
 - **publish-charts.yaml** (repo root, shared across components): packages and pushes Helm charts to GHCR on version tags
 - **e2e-bmaas-full-install.yml** (repo root, shared with fulfillment-service/osac-operator/osac-aap): builds all four components and runs E2E tests in a BMaaS environment
 

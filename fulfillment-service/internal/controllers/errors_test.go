@@ -14,12 +14,18 @@ language governing permissions and limitations under the License.
 package controllers
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 var _ = Describe("ClassifyHubError", func() {
@@ -106,5 +112,35 @@ var _ = Describe("ClassifyHubError", func() {
 			Expect(result).To(HaveOccurred())
 			Expect(result).To(Equal(grpcErr))
 		})
+	})
+})
+
+var _ = Describe("HandleK8sWriteError", func() {
+	It("should call markFailed and return nil for Invalid errors", func() {
+		invalidErr := apierrors.NewInvalid(
+			schema.GroupKind{Group: "osac.openshift.io", Kind: "Subnet"},
+			"test",
+			field.ErrorList{field.Invalid(field.NewPath("spec"), "", "bad value")},
+		)
+
+		var captured error
+		result := HandleK8sWriteError(context.Background(), slog.Default(), invalidErr, func(err error) {
+			captured = err
+		})
+
+		Expect(result).ToNot(HaveOccurred())
+		Expect(captured).To(Equal(invalidErr))
+	})
+
+	It("should return the original error for non-Invalid errors", func() {
+		transientErr := fmt.Errorf("connection refused")
+
+		called := false
+		result := HandleK8sWriteError(context.Background(), slog.Default(), transientErr, func(err error) {
+			called = true
+		})
+
+		Expect(result).To(Equal(transientErr))
+		Expect(called).To(BeFalse())
 	})
 })

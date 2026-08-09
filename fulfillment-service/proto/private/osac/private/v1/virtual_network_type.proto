@@ -66,14 +66,10 @@ message VirtualNetworkSpec {
   // The NetworkClass for this VirtualNetwork. If omitted on creation, the default NetworkClass is used.
   // Once set (either explicitly or via default), this field is immutable.
   //
-  // This field stores the ID of the selected NetworkClass resource. The selected NetworkClass determines the
-  // network backend (implementation_strategy) and the available capabilities.
-  //
-  // The NetworkClass must support the requested IP addressing capabilities (IPv4, IPv6, or dual-stack) specified
-  // via the capabilities field.
-  //
-  // Example: "udn-net", "phys-net", "ovn-kubernetes"
-  string network_class = 2 [
+  // The selected NetworkClass determines the network backend (implementation_strategy) and the available
+  // capabilities. The NetworkClass must support the requested IP addressing capabilities (IPv4, IPv6, or
+  // dual-stack) specified via the capabilities field.
+  NetworkClassReference network_class = 2 [
     (google.api.field_behavior) = OPTIONAL,
     (google.api.field_behavior) = IMMUTABLE
   ];
@@ -199,4 +195,18 @@ enum VirtualNetworkState {
   // The status.message field will contain specific error details. Failed networks typically require deletion
   // and recreation with corrected parameters.
   VIRTUAL_NETWORK_STATE_FAILED = 3;
+}
+
+// Local reference to a VirtualNetwork resource.
+message VirtualNetworkLocalReference {
+  string id = 1;
+  string name = 2;
+}
+
+// Reference to a NetworkClass resource.
+message NetworkClassReference {
+  string id = 1;
+  string name = 2;
+  string project = 3;
+  bool shared = 4;
 }

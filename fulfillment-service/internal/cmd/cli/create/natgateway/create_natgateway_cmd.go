@@ -129,8 +129,8 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 			Tenant: c.settings.Tenant(),
 		}.Build(),
 		Spec: publicv1.NATGatewaySpec_builder{
-			VirtualNetwork: vn.GetId(),
-			ExternalIp:     eip.GetId(),
+			VirtualNetwork: &publicv1.VirtualNetworkLocalReference{Id: vn.GetId()},
+			ExternalIp:     &publicv1.ExternalIPLocalReference{Id: eip.GetId()},
 		}.Build(),
 	}.Build()
 

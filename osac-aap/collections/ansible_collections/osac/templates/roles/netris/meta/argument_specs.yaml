@@ -5,7 +5,7 @@ argument_specs:
       virtual_network:
         type: dict
         required: true
-        description: VirtualNetwork CR from fulfillment-api via EDA payload
+        description: VirtualNetwork CR from fulfillment-api via osac_job_vars
       template_parameters:
         type: dict
         description: Template-specific parameters (reserved for future use)
@@ -17,14 +17,14 @@ argument_specs:
       virtual_network:
         type: dict
         required: true
-        description: VirtualNetwork CR from fulfillment-api via EDA payload
+        description: VirtualNetwork CR from fulfillment-api via osac_job_vars
 
   create_subnet:
     options:
       subnet:
         type: dict
         required: true
-        description: Subnet CR from fulfillment-api via EDA payload
+        description: Subnet CR from fulfillment-api via osac_job_vars
       template_parameters:
         type: dict
         description: Template-specific parameters (reserved for future use)
@@ -36,14 +36,14 @@ argument_specs:
       subnet:
         type: dict
         required: true
-        description: Subnet CR from fulfillment-api via EDA payload
+        description: Subnet CR from fulfillment-api via osac_job_vars
 
   create_security_group:
     options:
       security_group:
         type: dict
         required: true
-        description: SecurityGroup CR from fulfillment-api via EDA payload
+        description: SecurityGroup CR from fulfillment-api via osac_job_vars
       template_parameters:
         type: dict
         description: Template-specific parameters (reserved for future use)
@@ -55,14 +55,14 @@ argument_specs:
       security_group:
         type: dict
         required: true
-        description: SecurityGroup CR from fulfillment-api via EDA payload
+        description: SecurityGroup CR from fulfillment-api via osac_job_vars
 
   create_external_ip:
     options:
       external_ip:
         type: dict
         required: true
-        description: ExternalIP CR from fulfillment-api via EDA payload
+        description: ExternalIP CR from fulfillment-api via osac_job_vars
       template_parameters:
         type: dict
         description: Template-specific parameters (reserved for future use)
@@ -74,14 +74,14 @@ argument_specs:
       external_ip:
         type: dict
         required: true
-        description: ExternalIP CR from fulfillment-api via EDA payload
+        description: ExternalIP CR from fulfillment-api via osac_job_vars
 
   create_nat_gateway:
     options:
       nat_gateway:
         type: dict
         required: true
-        description: NATGateway CR from fulfillment-api via EDA payload
+        description: NATGateway CR from fulfillment-api via osac_job_vars
       template_parameters:
         type: dict
         description: Template-specific parameters (reserved for future use)
@@ -93,7 +93,7 @@ argument_specs:
       nat_gateway:
         type: dict
         required: true
-        description: NATGateway CR from fulfillment-api via EDA payload
+        description: NATGateway CR from fulfillment-api via osac_job_vars
 
   create_network_attachment:
     options:

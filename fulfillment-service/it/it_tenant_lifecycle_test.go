@@ -717,11 +717,13 @@ var _ = Describe("Multi-tenant resource isolation", func() {
 		vnAdminClient = privatev1.NewVirtualNetworksClient(tool.InternalView().AdminConn())
 
 		By("Creating a shared NetworkClass prerequisite")
+		ncName := fmt.Sprintf("cudn-tenant-%s", uuid.New())
 		ncResp, err := networkClassesClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 			Object: privatev1.NetworkClass_builder{
+				Metadata:               privatev1.Metadata_builder{Name: ncName}.Build(),
 				Title:                  "Phase 4 Isolation Test",
 				ImplementationStrategy: "cudn",
-				FabricManager:          "netris",
+				FabricManager:          new("netris"),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
@@ -763,7 +765,7 @@ var _ = Describe("Multi-tenant resource isolation", func() {
 					Name: fmt.Sprintf("vn-%s", uuid.New()),
 				}.Build(),
 				Spec: publicv1.VirtualNetworkSpec_builder{
-					NetworkClass: networkClassId,
+					NetworkClass: publicv1.NetworkClassReference_builder{Id: networkClassId}.Build(),
 					Ipv4Cidr:     &ipv4Cidr,
 				}.Build(),
 			}.Build(),
@@ -832,7 +834,7 @@ var _ = Describe("Multi-tenant resource isolation", func() {
 					Name: fmt.Sprintf("vn-%s", uuid.New()),
 				}.Build(),
 				Spec: publicv1.VirtualNetworkSpec_builder{
-					NetworkClass: networkClassId,
+					NetworkClass: publicv1.NetworkClassReference_builder{Id: networkClassId}.Build(),
 					Ipv4Cidr:     &ipv4Cidr,
 				}.Build(),
 			}.Build(),
@@ -890,7 +892,7 @@ var _ = Describe("Multi-tenant resource isolation", func() {
 					Name: fmt.Sprintf("vn-a-%s", uuid.New()),
 				}.Build(),
 				Spec: publicv1.VirtualNetworkSpec_builder{
-					NetworkClass: networkClassId,
+					NetworkClass: publicv1.NetworkClassReference_builder{Id: networkClassId}.Build(),
 					Ipv4Cidr:     &ipv4CidrA,
 				}.Build(),
 			}.Build(),
@@ -912,7 +914,7 @@ var _ = Describe("Multi-tenant resource isolation", func() {
 					Name: fmt.Sprintf("vn-b-%s", uuid.New()),
 				}.Build(),
 				Spec: publicv1.VirtualNetworkSpec_builder{
-					NetworkClass: networkClassId,
+					NetworkClass: publicv1.NetworkClassReference_builder{Id: networkClassId}.Build(),
 					Ipv4Cidr:     &ipv4CidrB,
 				}.Build(),
 			}.Build(),

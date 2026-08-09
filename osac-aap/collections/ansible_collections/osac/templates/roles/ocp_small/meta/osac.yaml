@@ -1,3 +1,4 @@
+name: ocp-small
 title: OpenShift Small Cluster
 description: >
   Builds a minimally configured OpenShift cluster with a configurable OCP

@@ -1,4 +1,5 @@
 ---
+name: ocp-4-20-ai-maas
 title: OpenShift AI 4.20 Cluster with MaaS
 description: >
   Builds an OpenShift 4.20 cluster with RHOAI 3.4, Models-as-a-Service (GA),

@@ -4,7 +4,7 @@
   gather_facts: false
 
   vars:
-    cluster_order: "{{ ansible_eda.event.payload }}"
+    cluster_order: "{{ osac_job_vars.resource }}"
 
   pre_tasks:
     - name: Apply default settings

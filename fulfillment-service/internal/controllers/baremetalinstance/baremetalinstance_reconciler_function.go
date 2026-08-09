@@ -13,6 +13,8 @@ language governing permissions and limitations under the License.
 
 package baremetalinstance
 
+//go:generate mockgen -source=../../api/osac/private/v1/baremetal_instances_service_grpc.pb.go -destination=bare_metal_instances_client_mock.go -package=baremetalinstance BareMetalInstancesClient
+
 import (
 	"context"
 	"encoding/json"
@@ -189,7 +191,7 @@ func (t *task) update(ctx context.Context) error {
 		return t.mutateBMI(ctx, object)
 	})
 	if err != nil {
-		return err
+		return controllers.HandleK8sWriteError(ctx, t.r.logger, err, t.setFailed)
 	}
 	t.r.logger.DebugContext(
 		ctx,
@@ -389,6 +391,19 @@ func (t *task) removeFinalizer() {
 	}
 }
 
+func (t *task) setFailed(err error) {
+	if !t.bareMetalInstance.HasStatus() {
+		t.bareMetalInstance.SetStatus(&privatev1.BareMetalInstanceStatus{})
+	}
+	t.bareMetalInstance.GetStatus().SetState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_FAILED)
+	t.updateCondition(
+		privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_CONFIGURATION_APPLIED,
+		privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+		"ValidationFailed",
+		err.Error(),
+	)
+}
+
 func (t *task) updateCondition(conditionType privatev1.BareMetalInstanceConditionType, status privatev1.ConditionStatus,
 	reason string, message string) {
 	conditions := t.bareMetalInstance.GetStatus().GetConditions()
@@ -444,6 +459,17 @@ func (t *task) syncStatus(object *bmfov1alpha1.BareMetalInstance) {
 			privatev1.ConditionStatus_CONDITION_STATUS_TRUE, "", "")
 	}
 
+	protoStatuses := make([]*privatev1.BareMetalNetworkAttachmentStatus, 0, len(object.Status.NetworkAttachmentStatuses))
+	for _, nas := range object.Status.NetworkAttachmentStatuses {
+		protoStatuses = append(protoStatuses, privatev1.BareMetalNetworkAttachmentStatus_builder{
+			Interface: nas.Interface,
+			SubnetRef: nas.SubnetRef,
+			IpAddress: nas.IPAddress,
+			Primary:   nas.Primary,
+		}.Build())
+	}
+	t.bareMetalInstance.GetStatus().SetNetworkAttachmentStatuses(protoStatuses)
+
 	restartPending := t.bareMetalInstance.GetSpec().GetRestartTrigger() != t.bareMetalInstance.GetStatus().GetRestartTrigger()
 
 	for _, cond := range object.Status.Conditions {
@@ -474,14 +500,23 @@ func (t *task) syncStatus(object *bmfov1alpha1.BareMetalInstance) {
 					privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_IN_PROGRESS,
 					privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "", "")
 			} else if cond.Status == metav1.ConditionTrue {
-				t.updateCondition(
-					privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_IN_PROGRESS,
-					privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "", "")
-				t.updateCondition(
-					privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_FAILED,
-					privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "", "")
-				t.bareMetalInstance.GetStatus().SetRestartTrigger(
-					t.bareMetalInstance.GetSpec().GetRestartTrigger())
+				if object.Spec.RestartTrigger == object.Status.RestartTrigger {
+					t.updateCondition(
+						privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_IN_PROGRESS,
+						privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "", "")
+					t.updateCondition(
+						privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_FAILED,
+						privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "", "")
+					t.bareMetalInstance.GetStatus().SetRestartTrigger(
+						t.bareMetalInstance.GetSpec().GetRestartTrigger())
+				} else {
+					t.updateCondition(
+						privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_IN_PROGRESS,
+						privatev1.ConditionStatus_CONDITION_STATUS_TRUE, cond.Reason, "Restart in progress")
+					t.updateCondition(
+						privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_FAILED,
+						privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "", "")
+				}
 			}
 		}
 	}
@@ -562,14 +597,14 @@ func (t *task) mutateBMI(ctx context.Context, object *bmfov1alpha1.BareMetalInst
 
 	catalogItemID := t.bareMetalInstance.GetSpec().GetCatalogItem()
 	catalogItemResp, err := t.r.bareMetalInstanceCatalogItemsClient.Get(ctx, privatev1.BareMetalInstanceCatalogItemsGetRequest_builder{
-		Id: catalogItemID,
+		Id: catalogItemID.GetId(),
 	}.Build())
 	if err != nil {
 		return fmt.Errorf("failed to get catalog item '%s': %w", catalogItemID, err)
 	}
 
 	object.Spec.HostType = defaultHostType
-	object.Spec.TemplateID = catalogItemResp.GetObject().GetTemplate()
+	object.Spec.TemplateID = catalogItemResp.GetObject().GetTemplate().GetId()
 	object.Spec.TemplateParameters = ""
 	object.Spec.RunStrategy = bmfov1alpha1.RunStrategyUnspecified
 	object.Spec.RestartTrigger = t.bareMetalInstance.GetSpec().GetRestartTrigger()
@@ -595,6 +630,11 @@ func (t *task) mutateBMI(ctx context.Context, object *bmfov1alpha1.BareMetalInst
 	}
 	if t.bareMetalInstance.GetSpec().HasImage() {
 		params["imageURL"] = t.bareMetalInstance.GetSpec().GetImage().GetSourceRef()
+		if st := t.bareMetalInstance.GetSpec().GetImage().GetSourceType(); st != "" {
+			params["imageSourceType"] = st
+		} else {
+			delete(params, "imageSourceType")
+		}
 	}
 	if len(params) > 0 {
 		paramsJSON, err := json.Marshal(params)
@@ -611,6 +651,24 @@ func (t *task) mutateBMI(ctx context.Context, object *bmfov1alpha1.BareMetalInst
 		case privatev1.BareMetalInstanceRunStrategy_BARE_METAL_INSTANCE_RUN_STRATEGY_HALTED:
 			object.Spec.RunStrategy = bmfov1alpha1.RunStrategyHalted
 		}
+	}
+
+	protoAttachments := t.bareMetalInstance.GetSpec().GetNetworkAttachments()
+	if len(protoAttachments) > 0 {
+		networkAttachments := make([]bmfov1alpha1.BareMetalNetworkAttachment, 0, len(protoAttachments))
+		for _, att := range protoAttachments {
+			secGroupRefs := make([]string, 0, len(att.GetSecurityGroups()))
+			for _, sg := range att.GetSecurityGroups() {
+				secGroupRefs = append(secGroupRefs, controllers.RefKeyStr(sg))
+			}
+			networkAttachments = append(networkAttachments, bmfov1alpha1.BareMetalNetworkAttachment{
+				SubnetRef:         controllers.RefKeyStr(att.GetSubnet()),
+				SecurityGroupRefs: secGroupRefs,
+				Interface:         att.GetInterface(),
+				Primary:           att.GetPrimary(),
+			})
+		}
+		object.Spec.NetworkAttachments = networkAttachments
 	}
 
 	return nil

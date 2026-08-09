@@ -5,7 +5,7 @@ argument_specs:
       security_group:
         type: dict
         required: true
-        description: SecurityGroup CR from fulfillment-api via EDA payload
+        description: SecurityGroup CR from fulfillment-api via osac_job_vars
       template_parameters:
         type: dict
         description: Template-specific parameters (reserved for future use)
@@ -17,4 +17,4 @@ argument_specs:
       security_group:
         type: dict
         required: true
-        description: SecurityGroup CR from fulfillment-api via EDA payload
+        description: SecurityGroup CR from fulfillment-api via osac_job_vars

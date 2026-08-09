@@ -17,6 +17,7 @@ package osac.public.v1;
 
 import "google/api/field_behavior.proto";
 import "osac/public/v1/metadata_type.proto";
+import "osac/public/v1/virtual_network_type.proto";
 
 // Represents a virtual firewall controlling network traffic for compute instances.
 //
@@ -57,14 +58,12 @@ message SecurityGroup {
 // in order, and the first matching rule determines whether traffic is allowed. If no rules match, traffic
 // is denied by default.
 message SecurityGroupSpec {
-  // Parent VirtualNetwork ID for this security group.
+  // Parent VirtualNetwork reference for this security group.
   //
-  // Must reference the ID of an existing VirtualNetwork in READY state. Security groups are scoped to a
+  // Must reference an existing VirtualNetwork in READY state. Security groups are scoped to a
   // VirtualNetwork and can only be applied to compute instances within that network. This field is required
   // and immutable after creation.
-  //
-  // Example: "vnet-12345abc"
-  string virtual_network = 1 [
+  VirtualNetworkLocalReference virtual_network = 1 [
     (google.api.field_behavior) = REQUIRED,
     (google.api.field_behavior) = IMMUTABLE
   ];
@@ -252,4 +251,10 @@ enum SecurityGroupState {
   // Manual intervention may be required to resolve the underlying issue
   // before retrying deletion.
   SECURITY_GROUP_STATE_DELETE_FAILED = 5;
+}
+
+// Local reference to a SecurityGroup resource.
+message SecurityGroupLocalReference {
+  string id = 1;
+  string name = 2;
 }

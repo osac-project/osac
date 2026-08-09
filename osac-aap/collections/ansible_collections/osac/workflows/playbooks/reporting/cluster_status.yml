@@ -7,7 +7,7 @@
 #   - name: Report cluster status
 #     ansible.builtin.import_playbook: osac.workflows.reporting.cluster_status
 #     vars:
-#       cluster_order: "{{ ansible_eda.event.payload }}"
+#       cluster_order: "{{ osac_job_vars.resource }}"
 #       workflow_name: "cluster_create"
 #       workflow_status: "succeeded"
 #
@@ -15,7 +15,7 @@
 #   - name: Report with custom hooks
 #     ansible.builtin.import_playbook: osac.workflows.reporting.cluster_status
 #     vars:
-#       cluster_order: "{{ ansible_eda.event.payload }}"
+#       cluster_order: "{{ osac_job_vars.resource }}"
 #       workflow_name: "cluster_create"
 #       workflow_status: "succeeded"
 #       hook_workflow_complete:
@@ -30,7 +30,7 @@
 
 
   vars:
-    cluster_order: "{{ ansible_eda.event.payload }}"
+    cluster_order: "{{ osac_job_vars.resource }}"
     workflow_name: unknown
     workflow_status: unknown
 

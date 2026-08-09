@@ -236,8 +236,12 @@ func (s *VirtualNetworksServer) Create(ctx context.Context,
 	// Restore network_class from the public request. AddIgnoredFields drops it during Copy
 	// to protect Update from false immutability errors, but on Create the caller's explicit
 	// network_class must be honored. If empty, the private server applies the default.
-	if publicVirtualNetwork.HasSpec() && privateVirtualNetwork.HasSpec() && publicVirtualNetwork.GetSpec().GetNetworkClass() != "" {
-		privateVirtualNetwork.GetSpec().SetNetworkClass(publicVirtualNetwork.GetSpec().GetNetworkClass())
+	if publicVirtualNetwork.HasSpec() && privateVirtualNetwork.HasSpec() && publicVirtualNetwork.GetSpec().GetNetworkClass() != nil {
+		pubNC := publicVirtualNetwork.GetSpec().GetNetworkClass()
+		privNC := &privatev1.NetworkClassReference{}
+		privNC.SetId(pubNC.GetId())
+		privNC.SetName(pubNC.GetName())
+		privateVirtualNetwork.GetSpec().SetNetworkClass(privNC)
 	}
 
 	// Set default region if not provided (public API doesn't expose region):
@@ -299,9 +303,10 @@ func (s *VirtualNetworksServer) Update(ctx context.Context,
 	// Reject explicit network_class changes — the mapper ignores this field to prevent false
 	// immutability errors on Update, but without this check a client sending a different value
 	// gets silent success instead of the expected immutability error.
-	if publicVirtualNetwork.HasSpec() && publicVirtualNetwork.GetSpec().GetNetworkClass() != "" {
+	if publicVirtualNetwork.HasSpec() && publicVirtualNetwork.GetSpec().GetNetworkClass() != nil {
 		existingNC := existingPrivateVirtualNetwork.GetSpec().GetNetworkClass()
-		if publicVirtualNetwork.GetSpec().GetNetworkClass() != existingNC {
+		pubNC := publicVirtualNetwork.GetSpec().GetNetworkClass()
+		if refKey(pubNC) != refKey(existingNC) {
 			return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"field 'spec.network_class' is immutable and cannot be changed")
 		}

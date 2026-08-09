@@ -91,8 +91,12 @@ func renderComputeInstance(w io.Writer, ci *publicv1.ComputeInstance) {
 	writer := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	catalogItem := "-"
 	if ci.Spec != nil {
-		if catalogItemID := ci.Spec.GetCatalogItem(); catalogItemID != "" {
-			catalogItem = catalogItemID
+		if ref := ci.Spec.GetCatalogItem(); ref != nil {
+			if ref.GetName() != "" {
+				catalogItem = ref.GetName()
+			} else if ref.GetId() != "" {
+				catalogItem = ref.GetId()
+			}
 		}
 	}
 	state := "-"

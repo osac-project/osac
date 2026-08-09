@@ -16,7 +16,7 @@ limitations under the License.
 
 // Package networkmanager provides discovery and validation of network manager
 // registrations. Managers are registered as labeled ConfigMaps in the operator
-// namespace. Fabric managers (osac.openshift.io/network/fabric-manager) handle
-// physical networking, while k8s managers (osac.openshift.io/network/k8s-manager)
+// namespace. Fabric managers (osac.openshift.io/network-fabric-manager) handle
+// physical networking, while k8s managers (osac.openshift.io/network-k8s-manager)
 // bridge the Kubernetes OVN overlay to the physical fabric.
 package networkmanager

@@ -111,7 +111,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		}.Build(),
 		Title:       c.args.title,
 		Description: c.args.description,
-		Template:    c.args.template,
+		Template:    &publicv1.ComputeInstanceTemplateReference{Name: c.args.template},
 		Published:   c.args.published,
 	}.Build()
 

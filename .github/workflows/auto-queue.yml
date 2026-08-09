@@ -1,0 +1,19 @@
+---
+name: auto-queue
+
+on:
+  pull_request_target:
+    types: [opened, ready_for_review]
+    branches: [main]
+
+jobs:
+  enable-auto-merge:
+    if: >-
+      github.event.pull_request.draft == false
+      && contains(fromJSON('["MEMBER","COLLABORATOR","OWNER"]'), github.event.pull_request.author_association)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enable auto-merge
+        env:
+          GH_TOKEN: ${{ secrets.MERGE_QUEUE_TOKEN }}
+        run: gh pr merge ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --auto --rebase

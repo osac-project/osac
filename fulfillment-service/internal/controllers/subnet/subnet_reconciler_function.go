@@ -195,7 +195,7 @@ func (t *task) update(ctx context.Context) error {
 		}
 		err = t.hubClient.Create(ctx, object)
 		if err != nil {
-			return err
+			return controllers.HandleK8sWriteError(ctx, t.r.logger, err, t.setFailed)
 		}
 		t.r.logger.DebugContext(
 			ctx,
@@ -208,7 +208,7 @@ func (t *task) update(ctx context.Context) error {
 		update.Spec = spec
 		err = t.hubClient.Patch(ctx, update, clnt.MergeFrom(object))
 		if err != nil {
-			return err
+			return controllers.HandleK8sWriteError(ctx, t.r.logger, err, t.setFailed)
 		}
 		t.r.logger.DebugContext(
 			ctx,
@@ -390,11 +390,19 @@ func (t *task) removeFinalizer() {
 	}
 }
 
+func (t *task) setFailed(err error) {
+	if !t.subnet.HasStatus() {
+		t.subnet.SetStatus(&privatev1.SubnetStatus{})
+	}
+	t.subnet.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_FAILED)
+	t.subnet.GetStatus().SetMessage(err.Error())
+}
+
 // buildSpec constructs the spec for the Kubernetes Subnet object based on the
 // subnet from the database.
 func (t *task) buildSpec() osacv1alpha1.SubnetSpec {
 	spec := osacv1alpha1.SubnetSpec{
-		VirtualNetwork: t.subnet.GetSpec().GetVirtualNetwork(),
+		VirtualNetwork: controllers.RefKeyStr(t.subnet.GetSpec().GetVirtualNetwork()),
 	}
 
 	// Add IPv4 CIDR if present:

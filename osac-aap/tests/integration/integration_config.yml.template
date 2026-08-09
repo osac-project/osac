@@ -45,7 +45,7 @@ vast_vip_pool_ip_ranges: '${VAST_VIP_POOL_IP_RANGES}'
 vast_vip_pool_subnet_cidr: ${VAST_VIP_POOL_SUBNET_CIDR}
 
 # Storage tier definitions — JSON array with per-tier provider selection and backend_id,
-# matching the storage_provider_tiers/ansible_eda.event.storage_tier_definitions shape.
+# matching the storage_provider_tiers/osac_job_vars.storage_tier_definitions shape.
 # Used by test playbooks to exercise the multi-tier storage provider interface. Left
 # unquoted (unlike vast_vip_pool_ip_ranges above) so it parses as a native YAML list --
 # the storage_provider role's own validation requires storage_provider_tiers to be a

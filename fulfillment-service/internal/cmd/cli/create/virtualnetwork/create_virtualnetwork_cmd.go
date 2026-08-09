@@ -110,7 +110,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	enableDualStack := enableIpv4 && enableIpv6
 
 	spec := publicv1.VirtualNetworkSpec_builder{
-		NetworkClass: c.args.networkClass,
+		NetworkClass: &publicv1.NetworkClassReference{Name: c.args.networkClass},
 		Capabilities: publicv1.VirtualNetworkCapabilities_builder{
 			EnableIpv4:      enableIpv4,
 			EnableIpv6:      enableIpv6,

@@ -26,8 +26,16 @@ var _ = Describe("parseNetworkAttachmentFlag", func() {
 		func(input, wantSubnet string, wantSGs []string) {
 			got, err := parseNetworkAttachmentFlag(input)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(got.GetSubnet()).To(Equal(wantSubnet))
-			Expect(got.GetSecurityGroups()).To(Equal(wantSGs))
+			Expect(got.GetSubnet().GetId()).To(Equal(wantSubnet))
+			var gotSGs []string
+			for _, sg := range got.GetSecurityGroups() {
+				gotSGs = append(gotSGs, sg.GetId())
+			}
+			if wantSGs == nil {
+				Expect(gotSGs).To(BeNil())
+			} else {
+				Expect(gotSGs).To(Equal(wantSGs))
+			}
 		},
 		Entry("when value is bare subnet id it should use it as subnet",
 			"  sub-1  ", "sub-1", nil),
@@ -63,10 +71,13 @@ var _ = Describe("buildSpec", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		want := publicv1.ComputeInstanceSpec_builder{
-			Template: "tmpl",
+			Template: publicv1.ComputeInstanceTemplateReference_builder{Id: "tmpl"}.Build(),
 			NetworkAttachments: []*publicv1.NetworkAttachment{
-				publicv1.NetworkAttachment_builder{Subnet: "n1"}.Build(),
-				publicv1.NetworkAttachment_builder{Subnet: "n2", SecurityGroups: []string{"g1"}}.Build(),
+				publicv1.NetworkAttachment_builder{Subnet: publicv1.SubnetLocalReference_builder{Id: "n1"}.Build()}.Build(),
+				publicv1.NetworkAttachment_builder{
+					Subnet:         publicv1.SubnetLocalReference_builder{Id: "n2"}.Build(),
+					SecurityGroups: []*publicv1.SecurityGroupLocalReference{publicv1.SecurityGroupLocalReference_builder{Id: "g1"}.Build()},
+				}.Build(),
 			},
 		}.Build()
 		Expect(proto.Equal(spec, want)).To(BeTrue(), "spec should equal expected spec")
@@ -78,8 +89,8 @@ var _ = Describe("buildSpec", func() {
 		spec, err := c.buildSpec("tmpl", nil)
 		Expect(err).NotTo(HaveOccurred())
 
-		Expect(spec.IsWindows).NotTo(BeNil())
-		Expect(*spec.IsWindows).To(BeTrue())
+		Expect(spec.HasIsWindows()).To(BeTrue())
+		Expect(spec.GetIsWindows()).To(BeTrue())
 	})
 
 	It("should leave IsWindows nil when windows flag is false", func() {
@@ -88,7 +99,7 @@ var _ = Describe("buildSpec", func() {
 		spec, err := c.buildSpec("tmpl", nil)
 		Expect(err).NotTo(HaveOccurred())
 
-		Expect(spec.IsWindows).To(BeNil())
+		Expect(spec.HasIsWindows()).To(BeFalse())
 	})
 })
 
@@ -100,10 +111,13 @@ var _ = Describe("buildSpecFromCatalogItem", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		want := publicv1.ComputeInstanceSpec_builder{
-			CatalogItem: "cat-001",
+			CatalogItem: publicv1.ComputeInstanceCatalogItemReference_builder{Id: "cat-001"}.Build(),
 			NetworkAttachments: []*publicv1.NetworkAttachment{
-				publicv1.NetworkAttachment_builder{Subnet: "n1"}.Build(),
-				publicv1.NetworkAttachment_builder{Subnet: "n2", SecurityGroups: []string{"g1"}}.Build(),
+				publicv1.NetworkAttachment_builder{Subnet: publicv1.SubnetLocalReference_builder{Id: "n1"}.Build()}.Build(),
+				publicv1.NetworkAttachment_builder{
+					Subnet:         publicv1.SubnetLocalReference_builder{Id: "n2"}.Build(),
+					SecurityGroups: []*publicv1.SecurityGroupLocalReference{publicv1.SecurityGroupLocalReference_builder{Id: "g1"}.Build()},
+				}.Build(),
 			},
 		}.Build()
 		Expect(proto.Equal(spec, want)).To(BeTrue(), "spec should equal expected spec")
@@ -115,7 +129,7 @@ var _ = Describe("buildSpecFromCatalogItem", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		want := publicv1.ComputeInstanceSpec_builder{
-			CatalogItem: "cat-002",
+			CatalogItem: publicv1.ComputeInstanceCatalogItemReference_builder{Id: "cat-002"}.Build(),
 		}.Build()
 		Expect(proto.Equal(spec, want)).To(BeTrue(), "spec should equal expected spec")
 	})
@@ -133,8 +147,8 @@ var _ = Describe("buildSpecFromCatalogItem", func() {
 		spec, err := c.buildSpecFromCatalogItem("cat-004")
 		Expect(err).NotTo(HaveOccurred())
 
-		Expect(spec.IsWindows).NotTo(BeNil())
-		Expect(*spec.IsWindows).To(BeTrue())
+		Expect(spec.HasIsWindows()).To(BeTrue())
+		Expect(spec.GetIsWindows()).To(BeTrue())
 	})
 
 	It("should leave IsWindows nil when windows flag is false", func() {
@@ -143,7 +157,7 @@ var _ = Describe("buildSpecFromCatalogItem", func() {
 		spec, err := c.buildSpecFromCatalogItem("cat-005")
 		Expect(err).NotTo(HaveOccurred())
 
-		Expect(spec.IsWindows).To(BeNil())
+		Expect(spec.HasIsWindows()).To(BeFalse())
 	})
 })
 

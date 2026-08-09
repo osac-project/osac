@@ -1,0 +1,40 @@
+---
+name: label-gate
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    types: [opened, labeled, unlabeled, synchronize, reopened]
+    branches: [main]
+  merge_group:
+
+jobs:
+  check-labels:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Auto-pass for merge queue
+        if: github.event_name == 'merge_group'
+        run: echo "Labels already validated on PR"
+      - name: Check required Prow labels
+        if: github.event_name == 'pull_request'
+        env:
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          missing=()
+          for label in lgtm approved jira/valid-reference; do
+            if ! echo "$LABELS" | jq -e "index(\"$label\")" > /dev/null 2>&1; then
+              missing+=("$label")
+            fi
+          done
+          if [[ ${#missing[@]} -gt 0 ]]; then
+            echo "::error::Missing required labels: ${missing[*]}"
+            echo ""
+            echo "Required labels are set by Prow plugins via OWNERS files:"
+            echo "  lgtm           - reviewer types /lgtm"
+            echo "  approved       - approver types /approve"
+            echo "  jira/valid-reference - PR title has valid Jira key"
+            exit 1
+          fi
+          echo "All required labels present"

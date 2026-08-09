@@ -1,0 +1,137 @@
+{{- if .Values.testAdapter.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "osac-metering.fullname" . }}-test-adapter
+  labels:
+    {{- include "osac-metering.labels" . | nindent 4 }}
+    app.kubernetes.io/component: test-adapter
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "osac-metering.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: test-adapter
+  template:
+    metadata:
+      labels:
+        {{- include "osac-metering.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: test-adapter
+    spec:
+      serviceAccountName: {{ include "osac-metering.fullname" . }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: kafka-secrets
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 10Mi
+      initContainers:
+        - name: fetch-kafka-secrets
+          image: {{ .Values.cliImage | default "quay.io/openshift/origin-cli:4.20.0" }}
+          env:
+            - name: HOME
+              value: /tmp
+            - name: SOURCE_NS
+              value: {{ include "osac-metering.kafkaClusterNamespace" . }}
+            - name: SASL_SECRET
+              value: osac-metering-test-adapter
+            - name: CA_SECRET
+              value: {{ include "osac-metering.kafkaCaSecret" . }}
+          volumeMounts:
+            - name: kafka-secrets
+              mountPath: /etc/kafka-secrets
+            - name: tmp
+              mountPath: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+          command:
+            - /bin/bash
+            - -euo
+            - pipefail
+            - -c
+            - |
+              DEADLINE=$((SECONDS + 300))
+              wait_for_secret() {
+                local name=$1 ns=$2
+                echo "Waiting for secret ${name} in ${ns} (timeout 5m)..."
+                until oc get secret "${name}" -n "${ns}" > /dev/null 2>&1; do
+                  if [ $SECONDS -ge $DEADLINE ]; then
+                    echo "Timed out waiting for secret ${name} in ${ns}"
+                    exit 1
+                  fi
+                  sleep 5
+                done
+              }
+
+              wait_for_secret "${SASL_SECRET}" "${SOURCE_NS}"
+              wait_for_secret "${CA_SECRET}" "${SOURCE_NS}"
+
+              oc get secret "${SASL_SECRET}" -n "${SOURCE_NS}" -o jsonpath='{.data.password}' | base64 -d > /etc/kafka-secrets/password
+              oc get secret "${CA_SECRET}" -n "${SOURCE_NS}" -o jsonpath='{.data.ca\.crt}' | base64 -d > /etc/kafka-secrets/ca.crt
+              echo "Kafka secrets fetched."
+      containers:
+        - name: test-adapter
+          image: "{{ .Values.testAdapter.image.repository }}:{{ .Values.testAdapter.image.tag }}"
+          imagePullPolicy: {{ .Values.testAdapter.image.pullPolicy }}
+          env:
+            - name: KAFKA_BROKERS
+              value: {{ include "osac-metering.kafkaBrokers" . | quote }}
+            - name: KAFKA_TLS_CA_CERT
+              value: /etc/kafka-secrets/ca.crt
+            - name: KAFKA_SASL_USERNAME
+              value: osac-metering-test-adapter
+            - name: KAFKA_SASL_PASSWORD_FILE
+              value: /etc/kafka-secrets/password
+          volumeMounts:
+            - name: kafka-secrets
+              mountPath: /etc/kafka-secrets
+              readOnly: true
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+{{- end }}

@@ -4,7 +4,6 @@
   gather_facts: false
 
   vars:
-    tenant_name: "{{ ansible_eda.event.payload.metadata.annotations['osac.openshift.io/tenant'] }}"
     # This template is triggered from two different call sites in storage_controller.go,
     # sharing the same AAP job template but passing different resource kinds as payload:
     #   - handleClusterStorageProvisioning (hub storage) sends a Tenant object, whose own
@@ -15,57 +14,56 @@
     #     guest cluster. For that case we target a fixed OSAC system namespace on the guest
     #     cluster instead (mirrors vast_storage_csi_operator_namespace's "vast-csi-system"
     #     pattern; openshift-* is appropriate here since OSAC is a Red Hat product).
-    tenant_namespace: >-
-      {%- if ansible_eda.event.payload.kind == 'ClusterOrder' -%}
-      openshift-osac-storage
-      {%- else -%}
-      {{ ansible_eda.event.payload.metadata.namespace }}
+    tenant_name: >-
+      {%- if osac_job_vars.resource.kind == 'ClusterOrder' -%}
+      {{ osac_job_vars.resource.metadata.annotations['osac.openshift.io/tenant'] }}
+      {%- elif osac_job_vars.resource.kind == 'Tenant' -%}
+      {{ osac_job_vars.resource.metadata.name }}
       {%- endif -%}
-    tenant_uid: "{{ ansible_eda.event.payload.metadata.uid }}"
+    tenant_namespace: >-
+      {%- if osac_job_vars.resource.kind == 'ClusterOrder' -%}
+      openshift-osac-storage
+      {%- elif osac_job_vars.resource.kind == 'Tenant' -%}
+      {{ osac_job_vars.resource.metadata.namespace }}
+      {%- endif -%}
+    tenant_uid: "{{ osac_job_vars.resource.metadata.uid }}"
 
   pre_tasks:
-    # payload.spec.blockEncryptionPassphrase carries a real secret (see
-    # storage_provider_block_encryption_passphrase below) -- use the shared,
-    # centralized redaction task instead of debugging the whole payload object.
-    - name: Show EDA Event metadata
-      ansible.builtin.include_role:
-        name: osac.service.common
-        tasks_from: show_eda_event_metadata
-      vars:
-        eda_event_extra_fields:
-          tenant_annotation: "{{ ansible_eda.event.payload.metadata.annotations['osac.openshift.io/tenant'] | default('unknown') }}"
+    - name: Show resource metadata
+      ansible.builtin.debug:
+        var: osac_job_vars.resource.metadata
 
     - name: Validate tenant payload is present
       ansible.builtin.fail:
-        msg: "tenant must be provided via ansible_eda.event.payload with metadata.name, metadata.namespace, and metadata.uid set"
+        msg: "tenant must be provided via osac_job_vars.resource with metadata.name, metadata.namespace, and metadata.uid set"
       when: >-
-        ansible_eda is not defined or
-        ansible_eda.event.payload.metadata.name is not defined or
-        ansible_eda.event.payload.metadata.name | length == 0 or
-        ansible_eda.event.payload.metadata.namespace is not defined or
-        ansible_eda.event.payload.metadata.namespace | length == 0 or
-        ansible_eda.event.payload.metadata.uid is not defined or
-        ansible_eda.event.payload.metadata.uid | length == 0
+        osac_job_vars is not defined or
+        osac_job_vars.resource.metadata.name is not defined or
+        osac_job_vars.resource.metadata.name | length == 0 or
+        osac_job_vars.resource.metadata.namespace is not defined or
+        osac_job_vars.resource.metadata.namespace | length == 0 or
+        osac_job_vars.resource.metadata.uid is not defined or
+        osac_job_vars.resource.metadata.uid | length == 0
 
     - name: Validate storage_tier_definitions is a non-empty array in the EDA event
       ansible.builtin.fail:
         msg: >-
-          ansible_eda.event.storage_tier_definitions must be a non-empty array, populated
+          osac_job_vars.storage_tier_definitions must be a non-empty array, populated
           by osac-operator from the Tenant's resolved storage tiers.
           Example: [{"name":"default","protocol":"nfs","provider":"vast","backend_id":"be-001","quota_bytes":500}]
       when: >-
-        ansible_eda.event.storage_tier_definitions is not defined or
-        ansible_eda.event.storage_tier_definitions is not sequence or
-        ansible_eda.event.storage_tier_definitions is string or
-        ansible_eda.event.storage_tier_definitions is mapping or
-        ansible_eda.event.storage_tier_definitions | length == 0
+        osac_job_vars.storage_tier_definitions is not defined or
+        osac_job_vars.storage_tier_definitions is not sequence or
+        osac_job_vars.storage_tier_definitions is string or
+        osac_job_vars.storage_tier_definitions is mapping or
+        osac_job_vars.storage_tier_definitions | length == 0
 
     - name: Write admin_kubeconfig to temporary file when provided
       when: >-
-        ansible_eda.event.admin_kubeconfig is defined and
-        ansible_eda.event.admin_kubeconfig | length > 0
+        osac_job_vars.admin_kubeconfig is defined and
+        osac_job_vars.admin_kubeconfig | length > 0
       ansible.builtin.set_fact:
-        _remote_kubeconfig: "{{ ansible_eda.event.admin_kubeconfig | osac.service.to_temp_file(suffix='.kubeconfig') }}"
+        _remote_kubeconfig: "{{ osac_job_vars.admin_kubeconfig | osac.service.to_temp_file(suffix='.kubeconfig') }}"
         # HCP guest-cluster kubeconfigs are typically accessed via an external Route whose
         # serving cert doesn't match the CA bundled in the admin kubeconfig.
         _remote_kubeconfig_insecure: true
@@ -73,12 +71,12 @@
     - name: Fail when guest-cluster storage is requested without admin_kubeconfig
       ansible.builtin.fail:
         msg: >-
-          admin_kubeconfig is required in the EDA event for ClusterOrder
+          admin_kubeconfig is required in the job vars for ClusterOrder
           (guest-cluster) storage provisioning; without it this play would
           target the controller's default cluster instead of the intended
           guest cluster.
       when: >-
-        ansible_eda.event.payload.kind == 'ClusterOrder' and
+        osac_job_vars.resource.kind == 'ClusterOrder' and
         (_remote_kubeconfig is not defined or _remote_kubeconfig | length == 0)
 
   tasks:
@@ -89,9 +87,9 @@
             name: osac.service.storage_provider
           vars:
             storage_provider_action: ensure_storage_class
-            storage_provider_tiers: "{{ ansible_eda.event.storage_tier_definitions }}"
-            storage_provider_backend_connections: "{{ ansible_eda.event.storage_backend_connections | default({}) }}"
-            storage_provider_block_encryption_passphrase: "{{ ansible_eda.event.payload.spec.blockEncryptionPassphrase | default('') }}"
+            storage_provider_tiers: "{{ osac_job_vars.storage_tier_definitions }}"
+            storage_provider_backend_connections: "{{ osac_job_vars.storage_backend_connections | default({}) }}"
+            storage_provider_block_encryption_passphrase: "{{ osac_job_vars.resource.spec.blockEncryptionPassphrase | default('') }}"
       rescue:
         - name: Warn about StorageClass creation failure
           ansible.builtin.debug:
@@ -104,6 +102,6 @@
             name: osac.service.storage_provider
           vars:
             storage_provider_action: ensure_storage_class
-            storage_provider_tiers: "{{ ansible_eda.event.storage_tier_definitions }}"
-            storage_provider_backend_connections: "{{ ansible_eda.event.storage_backend_connections | default({}) }}"
-            storage_provider_block_encryption_passphrase: "{{ ansible_eda.event.payload.spec.blockEncryptionPassphrase | default('') }}"
+            storage_provider_tiers: "{{ osac_job_vars.storage_tier_definitions }}"
+            storage_provider_backend_connections: "{{ osac_job_vars.storage_backend_connections | default({}) }}"
+            storage_provider_block_encryption_passphrase: "{{ osac_job_vars.resource.spec.blockEncryptionPassphrase | default('') }}"

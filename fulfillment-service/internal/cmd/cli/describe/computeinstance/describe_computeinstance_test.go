@@ -35,7 +35,7 @@ var _ = Describe("Describe Compute Instance", func() {
 		ci := &publicv1.ComputeInstance{
 			Id: "ci-001",
 			Spec: &publicv1.ComputeInstanceSpec{
-				Template: "tpl-small-001",
+				Template: publicv1.ComputeInstanceTemplateReference_builder{Id: "tpl-small-001"}.Build(),
 			},
 			Status: &publicv1.ComputeInstanceStatus{
 				State: publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
@@ -73,7 +73,7 @@ var _ = Describe("Describe Compute Instance", func() {
 		ci := &publicv1.ComputeInstance{
 			Id: "ci-test-001",
 			Spec: &publicv1.ComputeInstanceSpec{
-				Template: "tpl-small-001",
+				Template: publicv1.ComputeInstanceTemplateReference_builder{Id: "tpl-small-001"}.Build(),
 			},
 			Status: &publicv1.ComputeInstanceStatus{
 				State:           publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
@@ -92,7 +92,7 @@ var _ = Describe("Describe Compute Instance", func() {
 		ci := &publicv1.ComputeInstance{
 			Id: "ci-test-002",
 			Spec: &publicv1.ComputeInstanceSpec{
-				Template: "tpl-small-001",
+				Template: publicv1.ComputeInstanceTemplateReference_builder{Id: "tpl-small-001"}.Build(),
 			},
 			Status: &publicv1.ComputeInstanceStatus{
 				State: publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
@@ -109,7 +109,7 @@ var _ = Describe("Describe Compute Instance", func() {
 		ci := &publicv1.ComputeInstance{
 			Id: "ci-test-003",
 			Spec: &publicv1.ComputeInstanceSpec{
-				Template: "tpl-small-001",
+				Template: publicv1.ComputeInstanceTemplateReference_builder{Id: "tpl-small-001"}.Build(),
 			},
 		}
 
@@ -124,7 +124,7 @@ var _ = Describe("Describe Compute Instance", func() {
 		ci := &publicv1.ComputeInstance{
 			Id: "ci-010",
 			Spec: &publicv1.ComputeInstanceSpec{
-				Template: "tpl-small-001",
+				Template: publicv1.ComputeInstanceTemplateReference_builder{Id: "tpl-small-001"}.Build(),
 			},
 		}
 		output := formatComputeInstance(ci)
@@ -135,7 +135,7 @@ var _ = Describe("Describe Compute Instance", func() {
 	It("should show catalog item ID when set", func() {
 		ci := &publicv1.ComputeInstance{
 			Spec: publicv1.ComputeInstanceSpec_builder{
-				CatalogItem: "my-ci-catalog-item",
+				CatalogItem: publicv1.ComputeInstanceCatalogItemReference_builder{Id: "my-ci-catalog-item"}.Build(),
 			}.Build(),
 		}
 		output := formatComputeInstance(ci)

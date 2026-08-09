@@ -7,13 +7,13 @@
 #   - name: Create cluster
 #     ansible.builtin.import_playbook: osac.workflows.cluster.create
 #     vars:
-#       cluster_order: "{{ ansible_eda.event.payload }}"
+#       cluster_order: "{{ osac_job_vars.resource }}"
 #
 # Hook example:
 #   - name: Create cluster with custom hooks
 #     ansible.builtin.import_playbook: osac.workflows.cluster.create
 #     vars:
-#       cluster_order: "{{ ansible_eda.event.payload }}"
+#       cluster_order: "{{ osac_job_vars.resource }}"
 #       hook_workflow_start:
 #         name: my_custom_hooks
 #         tasks_from: initialize.yml
@@ -29,7 +29,7 @@
     K8S_AUTH_KUBECONFIG: "{{ lookup('env', 'K8S_AUTH_KUBECONFIG') | default(lookup('env', 'KUBECONFIG'), true) | default(lookup('env', 'HOME') + '/.kube/config', true) }}"
 
   vars:
-    cluster_order: "{{ ansible_eda.event.payload }}"
+    cluster_order: "{{ osac_job_vars.resource }}"
 
     # GENERIC HOOKS - Default to noop
     hook_workflow_start_default:

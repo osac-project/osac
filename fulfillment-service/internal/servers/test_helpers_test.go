@@ -33,7 +33,7 @@ func createComputeInstanceInState(
 				Tenant: "shared",
 			}.Build(),
 			Spec: privatev1.ComputeInstanceSpec_builder{
-				Template: "general.small",
+				Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "general.small"}.Build(),
 			}.Build(),
 			Status: privatev1.ComputeInstanceStatus_builder{
 				State: state,

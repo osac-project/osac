@@ -108,8 +108,8 @@ var _ = Describe("NATGatewayFeedbackController", func() {
 					Name: natGatewayName,
 				},
 				Spec: &privatev1.NATGatewaySpec{
-					VirtualNetwork: "vnet-123",
-					ExternalIp:     "eip-456",
+					VirtualNetwork: &privatev1.VirtualNetworkLocalReference{Name: "vnet-123"},
+					ExternalIp:     &privatev1.ExternalIPLocalReference{Id: "eip-456"},
 				},
 				Status: &privatev1.NATGatewayStatus{
 					State: privatev1.NATGatewayState_NAT_GATEWAY_STATE_PENDING,
@@ -158,8 +158,8 @@ var _ = Describe("NATGatewayFeedbackController", func() {
 					Name: natGatewayName,
 				},
 				Spec: &privatev1.NATGatewaySpec{
-					VirtualNetwork: "vnet-123",
-					ExternalIp:     "eip-456",
+					VirtualNetwork: &privatev1.VirtualNetworkLocalReference{Name: "vnet-123"},
+					ExternalIp:     &privatev1.ExternalIPLocalReference{Id: "eip-456"},
 				},
 				Status: &privatev1.NATGatewayStatus{
 					State: privatev1.NATGatewayState_NAT_GATEWAY_STATE_READY,
@@ -204,8 +204,8 @@ var _ = Describe("NATGatewayFeedbackController", func() {
 					Name: natGatewayName,
 				},
 				Spec: &privatev1.NATGatewaySpec{
-					VirtualNetwork: "vnet-123",
-					ExternalIp:     "eip-456",
+					VirtualNetwork: &privatev1.VirtualNetworkLocalReference{Name: "vnet-123"},
+					ExternalIp:     &privatev1.ExternalIPLocalReference{Id: "eip-456"},
 				},
 				Status: &privatev1.NATGatewayStatus{
 					State: privatev1.NATGatewayState_NAT_GATEWAY_STATE_PENDING,
@@ -278,8 +278,8 @@ var _ = Describe("NATGatewayFeedbackController", func() {
 					Name: natGatewayName,
 				},
 				Spec: &privatev1.NATGatewaySpec{
-					VirtualNetwork: "vnet-123",
-					ExternalIp:     "eip-456",
+					VirtualNetwork: &privatev1.VirtualNetworkLocalReference{Name: "vnet-123"},
+					ExternalIp:     &privatev1.ExternalIPLocalReference{Id: "eip-456"},
 				},
 				Status: &privatev1.NATGatewayStatus{
 					State: privatev1.NATGatewayState_NAT_GATEWAY_STATE_READY,
@@ -331,8 +331,8 @@ var _ = Describe("NATGatewayFeedbackController", func() {
 					Name: natGatewayName,
 				},
 				Spec: &privatev1.NATGatewaySpec{
-					VirtualNetwork: "vnet-123",
-					ExternalIp:     "eip-456",
+					VirtualNetwork: &privatev1.VirtualNetworkLocalReference{Name: "vnet-123"},
+					ExternalIp:     &privatev1.ExternalIPLocalReference{Id: "eip-456"},
 				},
 				Status: &privatev1.NATGatewayStatus{
 					State: privatev1.NATGatewayState_NAT_GATEWAY_STATE_READY,
@@ -380,8 +380,8 @@ var _ = Describe("NATGatewayFeedbackController", func() {
 					Name: natGatewayName,
 				},
 				Spec: &privatev1.NATGatewaySpec{
-					VirtualNetwork: "vnet-123",
-					ExternalIp:     "eip-456",
+					VirtualNetwork: &privatev1.VirtualNetworkLocalReference{Name: "vnet-123"},
+					ExternalIp:     &privatev1.ExternalIPLocalReference{Id: "eip-456"},
 				},
 				Status: &privatev1.NATGatewayStatus{
 					State: privatev1.NATGatewayState_NAT_GATEWAY_STATE_READY,
@@ -503,8 +503,8 @@ var _ = Describe("NATGatewayFeedbackController", func() {
 					Name: natGatewayName,
 				},
 				Spec: &privatev1.NATGatewaySpec{
-					VirtualNetwork: "vnet-123",
-					ExternalIp:     "eip-456",
+					VirtualNetwork: &privatev1.VirtualNetworkLocalReference{Name: "vnet-123"},
+					ExternalIp:     &privatev1.ExternalIPLocalReference{Id: "eip-456"},
 				},
 				Status: &privatev1.NATGatewayStatus{
 					State: privatev1.NATGatewayState_NAT_GATEWAY_STATE_READY,

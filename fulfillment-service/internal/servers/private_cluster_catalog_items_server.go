@@ -134,7 +134,7 @@ func (s *PrivateClusterCatalogItemsServer) Create(ctx context.Context,
 		if err = validateFieldDefinitions(object.GetFieldDefinitions()); err != nil {
 			return
 		}
-		if err = s.validateFieldDefinitionsVersionName(ctx, object.GetFieldDefinitions()); err != nil {
+		if err = s.validateFieldDefinitionsVersion(ctx, object.GetFieldDefinitions()); err != nil {
 			return
 		}
 	}
@@ -149,7 +149,7 @@ func (s *PrivateClusterCatalogItemsServer) Update(ctx context.Context,
 			if err = validateFieldDefinitions(object.GetFieldDefinitions()); err != nil {
 				return
 			}
-			if err = s.validateFieldDefinitionsVersionName(ctx, object.GetFieldDefinitions()); err != nil {
+			if err = s.validateFieldDefinitionsVersion(ctx, object.GetFieldDefinitions()); err != nil {
 				return
 			}
 		}
@@ -158,27 +158,31 @@ func (s *PrivateClusterCatalogItemsServer) Update(ctx context.Context,
 	return
 }
 
-// validateFieldDefinitionsVersionName validates version_name constraints in field_definitions.
+// validateFieldDefinitionsVersion validates version constraints in field_definitions.
 // Rejects OBSOLETE, disabled, or non-existent cluster versions used as defaults.
-func (s *PrivateClusterCatalogItemsServer) validateFieldDefinitionsVersionName(
+func (s *PrivateClusterCatalogItemsServer) validateFieldDefinitionsVersion(
 	ctx context.Context,
 	fieldDefinitions []*privatev1.FieldDefinition,
 ) error {
 	var versionName string
 	for _, fd := range fieldDefinitions {
-		if fd.GetPath() == "version_name" {
+		if fd.GetPath() == "version" {
 			defaultValue := fd.GetDefault()
 			if defaultValue == nil {
 				break
 			}
-			switch defaultValue.GetKind().(type) {
-			case *structpb.Value_StringValue:
-				versionName = defaultValue.GetStringValue()
+			switch v := defaultValue.GetKind().(type) {
+			case *structpb.Value_StructValue:
+				if v.StructValue != nil {
+					if nameField, ok := v.StructValue.GetFields()["name"]; ok {
+						versionName = nameField.GetStringValue()
+					}
+				}
 			case *structpb.Value_NullValue, nil:
 				// No default specified.
 			default:
 				return grpcstatus.Errorf(grpccodes.InvalidArgument,
-					"field_definitions: version_name default must be a string")
+					"field_definitions: version default must be a reference object with a 'name' field")
 			}
 			break
 		}

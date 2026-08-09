@@ -31,6 +31,7 @@ var _ = Describe("Private NAT gateways server", func() {
 		vnDao             *dao.GenericDAO[*privatev1.VirtualNetwork]
 		externalIPPoolDao *dao.GenericDAO[*privatev1.ExternalIPPool]
 		externalIPDao     *dao.GenericDAO[*privatev1.ExternalIP]
+		networkClassDao   *dao.GenericDAO[*privatev1.NetworkClass]
 		sharedPool        *privatev1.ExternalIPPool
 	)
 
@@ -49,6 +50,12 @@ var _ = Describe("Private NAT gateways server", func() {
 		Expect(err).ToNot(HaveOccurred())
 
 		externalIPDao, err = dao.NewGenericDAO[*privatev1.ExternalIP]().
+			SetLogger(logger).
+			SetTenancyLogic(tenancy).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		networkClassDao, err = dao.NewGenericDAO[*privatev1.NetworkClass]().
 			SetLogger(logger).
 			SetTenancyLogic(tenancy).
 			Build()
@@ -74,11 +81,50 @@ var _ = Describe("Private NAT gateways server", func() {
 		sharedPool = poolResp.GetObject()
 	})
 
+	// createNetworkClass creates a NetworkClass with the given managers via the DAO
+	// (bypassing NetworkClass server validation, matching this file's existing fixture pattern).
+	createNetworkClass := func(fabricManager, k8sManager *string) *privatev1.NetworkClass {
+		resp, err := networkClassDao.Create().SetObject(
+			privatev1.NetworkClass_builder{
+				ImplementationStrategy: "test-strategy",
+				FabricManager:          fabricManager,
+				K8SManager:             k8sManager,
+				Metadata: privatev1.Metadata_builder{
+					Tenant: auth.SharedTenant,
+				}.Build(),
+			}.Build(),
+		).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		return resp.GetObject()
+	}
+
 	createVirtualNetwork := func() string {
+		nc := createNetworkClass(new("netris"), nil)
 		resp, err := vnDao.Create().SetObject(
 			privatev1.VirtualNetwork_builder{
 				Metadata: privatev1.Metadata_builder{
 					Tenant: auth.SharedTenant,
+				}.Build(),
+				Spec: privatev1.VirtualNetworkSpec_builder{
+					NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
+				}.Build(),
+			}.Build(),
+		).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		return resp.GetObject().GetId()
+	}
+
+	// createVirtualNetworkWithoutFabricManager creates a VirtualNetwork backed by a k8s-only
+	// NetworkClass (no fabric_manager) for the fabric-manager rejection tests.
+	createVirtualNetworkWithoutFabricManager := func() string {
+		nc := createNetworkClass(nil, new("cudn_localnet"))
+		resp, err := vnDao.Create().SetObject(
+			privatev1.VirtualNetwork_builder{
+				Metadata: privatev1.Metadata_builder{
+					Tenant: auth.SharedTenant,
+				}.Build(),
+				Spec: privatev1.VirtualNetworkSpec_builder{
+					NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 				}.Build(),
 			}.Build(),
 		).Do(ctx)
@@ -151,10 +197,10 @@ var _ = Describe("Private NAT gateways server", func() {
 			eip := createAllocatedExternalIP()
 			response, err := natGatewaysServer.Create(ctx, privatev1.NATGatewaysCreateRequest_builder{
 				Object: privatev1.NATGateway_builder{
-					Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+					Metadata: privatev1.Metadata_builder{Name: "test-nat-gateway", Tenant: auth.SharedTenant}.Build(),
 					Spec: privatev1.NATGatewaySpec_builder{
-						VirtualNetwork: vnID,
-						ExternalIp:     eip.GetId(),
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
+						ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -167,10 +213,10 @@ var _ = Describe("Private NAT gateways server", func() {
 			eip := createAllocatedExternalIP()
 			response, err := natGatewaysServer.Create(ctx, privatev1.NATGatewaysCreateRequest_builder{
 				Object: privatev1.NATGateway_builder{
-					Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+					Metadata: privatev1.Metadata_builder{Name: "test-nat-gateway", Tenant: auth.SharedTenant}.Build(),
 					Spec: privatev1.NATGatewaySpec_builder{
-						VirtualNetwork: vnID,
-						ExternalIp:     eip.GetId(),
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
+						ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
 					}.Build(),
 					Status: privatev1.NATGatewayStatus_builder{
 						State: privatev1.NATGatewayState_NAT_GATEWAY_STATE_READY,
@@ -186,10 +232,10 @@ var _ = Describe("Private NAT gateways server", func() {
 			eip := createAllocatedExternalIP()
 			createResponse, err := natGatewaysServer.Create(ctx, privatev1.NATGatewaysCreateRequest_builder{
 				Object: privatev1.NATGateway_builder{
-					Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+					Metadata: privatev1.Metadata_builder{Name: "test-nat-gateway", Tenant: auth.SharedTenant}.Build(),
 					Spec: privatev1.NATGatewaySpec_builder{
-						VirtualNetwork: vnID,
-						ExternalIp:     eip.GetId(),
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
+						ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -209,10 +255,10 @@ var _ = Describe("Private NAT gateways server", func() {
 				eip := createAllocatedExternalIP()
 				_, err := natGatewaysServer.Create(ctx, privatev1.NATGatewaysCreateRequest_builder{
 					Object: privatev1.NATGateway_builder{
-						Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+						Metadata: privatev1.Metadata_builder{Name: "test-nat-gateway", Tenant: auth.SharedTenant}.Build(),
 						Spec: privatev1.NATGatewaySpec_builder{
-							VirtualNetwork: vn,
-							ExternalIp:     eip.GetId(),
+							VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vn}.Build(),
+							ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build())
@@ -228,10 +274,10 @@ var _ = Describe("Private NAT gateways server", func() {
 			eip := createAllocatedExternalIP()
 			createResponse, err := natGatewaysServer.Create(ctx, privatev1.NATGatewaysCreateRequest_builder{
 				Object: privatev1.NATGateway_builder{
-					Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+					Metadata: privatev1.Metadata_builder{Name: "test-nat-gateway", Tenant: auth.SharedTenant}.Build(),
 					Spec: privatev1.NATGatewaySpec_builder{
-						VirtualNetwork: vnID,
-						ExternalIp:     eip.GetId(),
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
+						ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -251,12 +297,13 @@ var _ = Describe("Private NAT gateways server", func() {
 			createResponse, err := natGatewaysServer.Create(ctx, privatev1.NATGatewaysCreateRequest_builder{
 				Object: privatev1.NATGateway_builder{
 					Metadata: privatev1.Metadata_builder{
+						Name:       "test-nat-gateway",
 						Finalizers: []string{"test-finalizer"},
 						Tenant:     auth.SharedTenant,
 					}.Build(),
 					Spec: privatev1.NATGatewaySpec_builder{
-						VirtualNetwork: vnID,
-						ExternalIp:     eip.GetId(),
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
+						ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -278,10 +325,10 @@ var _ = Describe("Private NAT gateways server", func() {
 			eip := createAllocatedExternalIP()
 			createResponse, err := natGatewaysServer.Create(ctx, privatev1.NATGatewaysCreateRequest_builder{
 				Object: privatev1.NATGateway_builder{
-					Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+					Metadata: privatev1.Metadata_builder{Name: "test-nat-gateway", Tenant: auth.SharedTenant}.Build(),
 					Spec: privatev1.NATGatewaySpec_builder{
-						VirtualNetwork: vnID,
-						ExternalIp:     eip.GetId(),
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
+						ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -317,7 +364,7 @@ var _ = Describe("Private NAT gateways server", func() {
 		It("rejects Create with nil spec", func() {
 			_, err := natGatewaysServer.Create(ctx, privatev1.NATGatewaysCreateRequest_builder{
 				Object: privatev1.NATGateway_builder{
-					Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+					Metadata: privatev1.Metadata_builder{Name: "test-nat-gateway", Tenant: auth.SharedTenant}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).To(HaveOccurred())
@@ -329,9 +376,9 @@ var _ = Describe("Private NAT gateways server", func() {
 			eip := createAllocatedExternalIP()
 			_, err := natGatewaysServer.Create(ctx, privatev1.NATGatewaysCreateRequest_builder{
 				Object: privatev1.NATGateway_builder{
-					Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+					Metadata: privatev1.Metadata_builder{Name: "test-nat-gateway", Tenant: auth.SharedTenant}.Build(),
 					Spec: privatev1.NATGatewaySpec_builder{
-						ExternalIp: eip.GetId(),
+						ExternalIp: privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -344,9 +391,9 @@ var _ = Describe("Private NAT gateways server", func() {
 			vnID := createVirtualNetwork()
 			_, err := natGatewaysServer.Create(ctx, privatev1.NATGatewaysCreateRequest_builder{
 				Object: privatev1.NATGateway_builder{
-					Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+					Metadata: privatev1.Metadata_builder{Name: "test-nat-gateway", Tenant: auth.SharedTenant}.Build(),
 					Spec: privatev1.NATGatewaySpec_builder{
-						VirtualNetwork: vnID,
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -373,10 +420,10 @@ var _ = Describe("Private NAT gateways server", func() {
 			vnID := createVirtualNetwork()
 			_, err := natGatewaysServer.Create(ctx, privatev1.NATGatewaysCreateRequest_builder{
 				Object: privatev1.NATGateway_builder{
-					Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+					Metadata: privatev1.Metadata_builder{Name: "test-nat-gateway", Tenant: auth.SharedTenant}.Build(),
 					Spec: privatev1.NATGatewaySpec_builder{
-						VirtualNetwork: vnID,
-						ExternalIp:     "nonexistent-id",
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
+						ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: "nonexistent-id"}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -391,10 +438,10 @@ var _ = Describe("Private NAT gateways server", func() {
 				privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING, false)
 			_, err := natGatewaysServer.Create(ctx, privatev1.NATGatewaysCreateRequest_builder{
 				Object: privatev1.NATGateway_builder{
-					Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+					Metadata: privatev1.Metadata_builder{Name: "test-nat-gateway", Tenant: auth.SharedTenant}.Build(),
 					Spec: privatev1.NATGatewaySpec_builder{
-						VirtualNetwork: vnID,
-						ExternalIp:     eip.GetId(),
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
+						ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -409,16 +456,62 @@ var _ = Describe("Private NAT gateways server", func() {
 				privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, true)
 			_, err := natGatewaysServer.Create(ctx, privatev1.NATGatewaysCreateRequest_builder{
 				Object: privatev1.NATGateway_builder{
-					Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+					Metadata: privatev1.Metadata_builder{Name: "test-nat-gateway", Tenant: auth.SharedTenant}.Build(),
 					Spec: privatev1.NATGatewaySpec_builder{
-						VirtualNetwork: vnID,
-						ExternalIp:     eip.GetId(),
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
+						ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).To(HaveOccurred())
 			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
 			Expect(err.Error()).To(ContainSubstring("already attached"))
+		})
+	})
+
+	Describe("Fabric manager validation", func() {
+		var natGatewaysServer *PrivateNATGatewaysServer
+
+		BeforeEach(func() {
+			var err error
+			natGatewaysServer, err = NewPrivateNATGatewaysServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("rejects Create when the VirtualNetwork's NetworkClass has no fabric_manager", func() {
+			vnID := createVirtualNetworkWithoutFabricManager()
+			eip := createAllocatedExternalIP()
+			_, err := natGatewaysServer.Create(ctx, privatev1.NATGatewaysCreateRequest_builder{
+				Object: privatev1.NATGateway_builder{
+					Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+					Spec: privatev1.NATGatewaySpec_builder{
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
+						ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+			Expect(err.Error()).To(ContainSubstring("fabric_manager"))
+		})
+
+		It("allows Create when the VirtualNetwork's NetworkClass has a fabric_manager", func() {
+			vnID := createVirtualNetwork()
+			eip := createAllocatedExternalIP()
+			_, err := natGatewaysServer.Create(ctx, privatev1.NATGatewaysCreateRequest_builder{
+				Object: privatev1.NATGateway_builder{
+					Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+					Spec: privatev1.NATGatewaySpec_builder{
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
+						ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
 		})
 	})
 
@@ -440,10 +533,10 @@ var _ = Describe("Private NAT gateways server", func() {
 			eip := createAllocatedExternalIP()
 			createResponse, err := natGatewaysServer.Create(ctx, privatev1.NATGatewaysCreateRequest_builder{
 				Object: privatev1.NATGateway_builder{
-					Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+					Metadata: privatev1.Metadata_builder{Name: "test-nat-gateway", Tenant: auth.SharedTenant}.Build(),
 					Spec: privatev1.NATGatewaySpec_builder{
-						VirtualNetwork: vnID,
-						ExternalIp:     eip.GetId(),
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
+						ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -451,7 +544,7 @@ var _ = Describe("Private NAT gateways server", func() {
 
 			object := createResponse.GetObject()
 			newVN := createVirtualNetwork()
-			object.GetSpec().SetVirtualNetwork(newVN)
+			object.GetSpec().SetVirtualNetwork(privatev1.VirtualNetworkLocalReference_builder{Id: newVN}.Build())
 			_, err = natGatewaysServer.Update(ctx, privatev1.NATGatewaysUpdateRequest_builder{
 				Object: object,
 				UpdateMask: &fieldmaskpb.FieldMask{
@@ -468,10 +561,10 @@ var _ = Describe("Private NAT gateways server", func() {
 			eip := createAllocatedExternalIP()
 			createResponse, err := natGatewaysServer.Create(ctx, privatev1.NATGatewaysCreateRequest_builder{
 				Object: privatev1.NATGateway_builder{
-					Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+					Metadata: privatev1.Metadata_builder{Name: "test-nat-gateway", Tenant: auth.SharedTenant}.Build(),
 					Spec: privatev1.NATGatewaySpec_builder{
-						VirtualNetwork: vnID,
-						ExternalIp:     eip.GetId(),
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
+						ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -479,7 +572,7 @@ var _ = Describe("Private NAT gateways server", func() {
 
 			object := createResponse.GetObject()
 			newEIP := createAllocatedExternalIP()
-			object.GetSpec().SetExternalIp(newEIP.GetId())
+			object.GetSpec().SetExternalIp(privatev1.ExternalIPLocalReference_builder{Id: newEIP.GetId()}.Build())
 			_, err = natGatewaysServer.Update(ctx, privatev1.NATGatewaysUpdateRequest_builder{
 				Object: object,
 				UpdateMask: &fieldmaskpb.FieldMask{
@@ -510,10 +603,10 @@ var _ = Describe("Private NAT gateways server", func() {
 			eip := createAllocatedExternalIP()
 			_, err := natGatewaysServer.Create(ctx, privatev1.NATGatewaysCreateRequest_builder{
 				Object: privatev1.NATGateway_builder{
-					Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+					Metadata: privatev1.Metadata_builder{Name: "test-nat-gateway", Tenant: auth.SharedTenant}.Build(),
 					Spec: privatev1.NATGatewaySpec_builder{
-						VirtualNetwork: vnID,
-						ExternalIp:     eip.GetId(),
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
+						ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -530,12 +623,13 @@ var _ = Describe("Private NAT gateways server", func() {
 			createResponse, err := natGatewaysServer.Create(ctx, privatev1.NATGatewaysCreateRequest_builder{
 				Object: privatev1.NATGateway_builder{
 					Metadata: privatev1.Metadata_builder{
+						Name:       "test-nat-gateway",
 						Finalizers: []string{"test-finalizer"},
 						Tenant:     auth.SharedTenant,
 					}.Build(),
 					Spec: privatev1.NATGatewaySpec_builder{
-						VirtualNetwork: vnID,
-						ExternalIp:     eip.GetId(),
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
+						ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -557,6 +651,7 @@ var _ = Describe("Private NAT gateways server", func() {
 			createResponse, err := natGatewaysServer.Create(ctx, privatev1.NATGatewaysCreateRequest_builder{
 				Object: privatev1.NATGateway_builder{
 					Metadata: privatev1.Metadata_builder{
+						Name:       "test-nat-gateway",
 						Finalizers: []string{"test-finalizer"},
 						Tenant:     auth.SharedTenant,
 						Labels: map[string]string{
@@ -564,8 +659,8 @@ var _ = Describe("Private NAT gateways server", func() {
 						},
 					}.Build(),
 					Spec: privatev1.NATGatewaySpec_builder{
-						VirtualNetwork: vnID,
-						ExternalIp:     eip.GetId(),
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
+						ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())

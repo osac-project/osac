@@ -20,11 +20,13 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -33,6 +35,8 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
+	"github.com/osac-project/osac/fulfillment-service/internal/masks"
+	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
 
 // fakeExternalIPsClient implements the ExternalIPsClient interface for testing selectHub.
@@ -98,13 +102,12 @@ func newTaskForDelete(attachmentID, hubID string, hubCache controllers.HubCache)
 
 var _ = Describe("buildSpec", func() {
 	It("Includes externalIP and computeInstance in spec", func() {
-		ci := "ci-uuid-abc123"
 		t := &task{
 			externalIPAttachment: privatev1.ExternalIPAttachment_builder{
 				Id: "eia-uuid-test-1",
 				Spec: privatev1.ExternalIPAttachmentSpec_builder{
-					ExternalIp:      "eip-uuid-abc123",
-					ComputeInstance: &ci,
+					ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: "eip-uuid-abc123"}.Build(),
+					ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: "ci-uuid-abc123"}.Build(),
 				}.Build(),
 			}.Build(),
 		}
@@ -121,7 +124,7 @@ var _ = Describe("buildSpec", func() {
 			externalIPAttachment: privatev1.ExternalIPAttachment_builder{
 				Id: "eia-uuid-test-2",
 				Spec: privatev1.ExternalIPAttachmentSpec_builder{
-					ExternalIp: "eip-uuid-abc456",
+					ExternalIp: privatev1.ExternalIPLocalReference_builder{Id: "eip-uuid-abc456"}.Build(),
 				}.Build(),
 			}.Build(),
 		}
@@ -132,14 +135,75 @@ var _ = Describe("buildSpec", func() {
 		Expect(spec.ComputeInstance).To(BeNil())
 	})
 
+	It("Includes cluster and targetEndpoint in spec", func() {
+		t := &task{
+			externalIPAttachment: privatev1.ExternalIPAttachment_builder{
+				Id: "eia-uuid-test-cluster",
+				Spec: privatev1.ExternalIPAttachmentSpec_builder{
+					ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: "eip-uuid-cluster"}.Build(),
+					Cluster:        privatev1.ClusterLocalReference_builder{Id: "cluster-uuid-abc123"}.Build(),
+					TargetEndpoint: privatev1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_API,
+				}.Build(),
+			}.Build(),
+		}
+
+		spec := t.buildSpec()
+
+		Expect(spec.ExternalIP).To(Equal("eip-uuid-cluster"))
+		Expect(spec.Cluster).ToNot(BeNil())
+		Expect(*spec.Cluster).To(Equal("cluster-uuid-abc123"))
+		Expect(spec.TargetEndpoint).ToNot(BeNil())
+		Expect(*spec.TargetEndpoint).To(Equal(osacv1alpha1.ExternalIPAttachmentTargetEndpointAPI))
+		Expect(spec.ComputeInstance).To(BeNil())
+		Expect(spec.BaremetalInstance).To(BeNil())
+	})
+
+	It("Includes cluster with ingress endpoint in spec", func() {
+		t := &task{
+			externalIPAttachment: privatev1.ExternalIPAttachment_builder{
+				Id: "eia-uuid-test-ingress",
+				Spec: privatev1.ExternalIPAttachmentSpec_builder{
+					ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: "eip-uuid-ingress"}.Build(),
+					Cluster:        privatev1.ClusterLocalReference_builder{Id: "cluster-uuid-ingress"}.Build(),
+					TargetEndpoint: privatev1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_INGRESS,
+				}.Build(),
+			}.Build(),
+		}
+
+		spec := t.buildSpec()
+
+		Expect(spec.TargetEndpoint).ToNot(BeNil())
+		Expect(*spec.TargetEndpoint).To(Equal(osacv1alpha1.ExternalIPAttachmentTargetEndpointIngress))
+	})
+
+	It("Includes baremetalInstance in spec", func() {
+		t := &task{
+			externalIPAttachment: privatev1.ExternalIPAttachment_builder{
+				Id: "eia-uuid-test-bmi",
+				Spec: privatev1.ExternalIPAttachmentSpec_builder{
+					ExternalIp:        privatev1.ExternalIPLocalReference_builder{Id: "eip-uuid-bmi"}.Build(),
+					BaremetalInstance: privatev1.BareMetalInstanceLocalReference_builder{Id: "bmi-uuid-abc123"}.Build(),
+				}.Build(),
+			}.Build(),
+		}
+
+		spec := t.buildSpec()
+
+		Expect(spec.ExternalIP).To(Equal("eip-uuid-bmi"))
+		Expect(spec.BaremetalInstance).ToNot(BeNil())
+		Expect(*spec.BaremetalInstance).To(Equal("bmi-uuid-abc123"))
+		Expect(spec.ComputeInstance).To(BeNil())
+		Expect(spec.Cluster).To(BeNil())
+		Expect(spec.TargetEndpoint).To(BeNil())
+	})
+
 	It("Does not include status fields", func() {
-		ci := "ci-uuid-xyz"
 		t := &task{
 			externalIPAttachment: privatev1.ExternalIPAttachment_builder{
 				Id: "eia-uuid-test-3",
 				Spec: privatev1.ExternalIPAttachmentSpec_builder{
-					ExternalIp:      "eip-uuid-abc789",
-					ComputeInstance: &ci,
+					ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: "eip-uuid-abc789"}.Build(),
+					ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: "ci-uuid-xyz"}.Build(),
 				}.Build(),
 				Status: privatev1.ExternalIPAttachmentStatus_builder{
 					State:             privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_READY,
@@ -558,7 +622,7 @@ var _ = Describe("selectHub", func() {
 		attachment := privatev1.ExternalIPAttachment_builder{
 			Id: "eia-uuid-existing-hub",
 			Spec: privatev1.ExternalIPAttachmentSpec_builder{
-				ExternalIp: "eip-uuid-1",
+				ExternalIp: privatev1.ExternalIPLocalReference_builder{Id: "eip-uuid-1"}.Build(),
 			}.Build(),
 			Status: privatev1.ExternalIPAttachmentStatus_builder{
 				Hub: "hub-1",
@@ -604,7 +668,7 @@ var _ = Describe("selectHub", func() {
 		attachment := privatev1.ExternalIPAttachment_builder{
 			Id: "eia-uuid-derive-hub",
 			Spec: privatev1.ExternalIPAttachmentSpec_builder{
-				ExternalIp: "eip-uuid-1",
+				ExternalIp: privatev1.ExternalIPLocalReference_builder{Id: "eip-uuid-1"}.Build(),
 			}.Build(),
 		}.Build()
 
@@ -638,7 +702,7 @@ var _ = Describe("selectHub", func() {
 		attachment := privatev1.ExternalIPAttachment_builder{
 			Id: "eia-uuid-eip-no-hub",
 			Spec: privatev1.ExternalIPAttachmentSpec_builder{
-				ExternalIp: "eip-uuid-no-hub",
+				ExternalIp: privatev1.ExternalIPLocalReference_builder{Id: "eip-uuid-no-hub"}.Build(),
 			}.Build(),
 		}.Build()
 
@@ -665,7 +729,7 @@ var _ = Describe("selectHub", func() {
 		attachment := privatev1.ExternalIPAttachment_builder{
 			Id: "eia-uuid-eip-error",
 			Spec: privatev1.ExternalIPAttachmentSpec_builder{
-				ExternalIp: "eip-uuid-missing",
+				ExternalIp: privatev1.ExternalIPLocalReference_builder{Id: "eip-uuid-missing"}.Build(),
 			}.Build(),
 		}.Build()
 
@@ -682,5 +746,79 @@ var _ = Describe("selectHub", func() {
 		err := t.selectHub(ctx)
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("external IP not found"))
+	})
+})
+
+var _ = Describe("Kubernetes validation error handling", func() {
+	It("should set state to FAILED when K8s Create returns Invalid error", func() {
+		ctx := context.Background()
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Create: func(ctx context.Context, client clnt.WithWatch, obj clnt.Object, opts ...clnt.CreateOption) error {
+					return apierrors.NewInvalid(
+						schema.GroupKind{Group: "osac.openshift.io", Kind: "ExternalIPAttachment"},
+						"eia-test",
+						field.ErrorList{
+							field.Invalid(
+								field.NewPath("spec", "externalIP"),
+								"invalid-value",
+								"spec.externalIP is invalid",
+							),
+						},
+					)
+				},
+			}).
+			Build()
+
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), "hub-1").
+			Return(&controllers.HubEntry{Namespace: "test-ns", Client: fakeClient}, nil).
+			AnyTimes()
+
+		externalIPAttachmentsClient := NewMockExternalIPAttachmentsClient(ctrl)
+		externalIPAttachmentsClient.EXPECT().
+			Update(gomock.Any(), gomock.Any(), gomock.Any()).
+			DoAndReturn(func(ctx context.Context, req *privatev1.ExternalIPAttachmentsUpdateRequest, opts ...grpc.CallOption) (*privatev1.ExternalIPAttachmentsUpdateResponse, error) {
+				return &privatev1.ExternalIPAttachmentsUpdateResponse{Object: req.GetObject()}, nil
+			}).
+			MinTimes(1)
+
+		attachment := privatev1.ExternalIPAttachment_builder{
+			Id: "eia-validation-test",
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     "test-tenant",
+			}.Build(),
+			Spec: privatev1.ExternalIPAttachmentSpec_builder{
+				ExternalIp: privatev1.ExternalIPLocalReference_builder{Id: "eip-123"}.Build(),
+			}.Build(),
+			Status: privatev1.ExternalIPAttachmentStatus_builder{
+				State: privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_PENDING,
+				Hub:   "hub-1",
+			}.Build(),
+		}.Build()
+
+		f := &function{
+			logger:                      logger,
+			hubCache:                    hubCache,
+			externalIPAttachmentsClient: externalIPAttachmentsClient,
+			maskCalculator:              masks.NewCalculator().Build(),
+		}
+
+		err := f.run(ctx, attachment)
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(attachment.GetStatus().GetState()).To(
+			Equal(privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_FAILED),
+		)
+		Expect(attachment.GetStatus().GetMessage()).To(ContainSubstring("spec.externalIP"))
 	})
 })

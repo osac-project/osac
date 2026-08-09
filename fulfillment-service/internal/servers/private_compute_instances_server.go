@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -52,13 +53,16 @@ var _ privatev1.ComputeInstancesServer = (*PrivateComputeInstancesServer)(nil)
 type PrivateComputeInstancesServer struct {
 	privatev1.UnimplementedComputeInstancesServer
 
-	logger            *slog.Logger
-	generic           *GenericServer[*privatev1.ComputeInstance]
-	templatesDao      *dao.GenericDAO[*privatev1.ComputeInstanceTemplate]
-	catalogItemsDao   *dao.GenericDAO[*privatev1.ComputeInstanceCatalogItem]
-	subnetsDao        *dao.GenericDAO[*privatev1.Subnet]
-	securityGroupsDao *dao.GenericDAO[*privatev1.SecurityGroup]
-	instanceTypesDao  *dao.GenericDAO[*privatev1.InstanceType]
+	logger                  *slog.Logger
+	generic                 *GenericServer[*privatev1.ComputeInstance]
+	templatesDao            *dao.GenericDAO[*privatev1.ComputeInstanceTemplate]
+	catalogItemsDao         *dao.GenericDAO[*privatev1.ComputeInstanceCatalogItem]
+	subnetsDao              *dao.GenericDAO[*privatev1.Subnet]
+	securityGroupsDao       *dao.GenericDAO[*privatev1.SecurityGroup]
+	instanceTypesDao        *dao.GenericDAO[*privatev1.InstanceType]
+	externalIPPoolDao       *dao.GenericDAO[*privatev1.ExternalIPPool]
+	externalIPDao           *dao.GenericDAO[*privatev1.ExternalIP]
+	externalIPAttachmentDao *dao.GenericDAO[*privatev1.ExternalIPAttachment]
 }
 
 func NewPrivateComputeInstancesServer() *PrivateComputeInstancesServerBuilder {
@@ -153,6 +157,33 @@ func (b *PrivateComputeInstancesServerBuilder) Build() (result *PrivateComputeIn
 		return
 	}
 
+	externalIPPoolDao, err := dao.NewGenericDAO[*privatev1.ExternalIPPool]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
+	externalIPDao, err := dao.NewGenericDAO[*privatev1.ExternalIP]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
+	externalIPAttachmentDao, err := dao.NewGenericDAO[*privatev1.ExternalIPAttachment]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
 	// Create the generic server:
 	generic, err := NewGenericServer[*privatev1.ComputeInstance]().
 		SetLogger(b.logger).
@@ -168,13 +199,16 @@ func (b *PrivateComputeInstancesServerBuilder) Build() (result *PrivateComputeIn
 
 	// Create and populate the object:
 	result = &PrivateComputeInstancesServer{
-		logger:            b.logger,
-		generic:           generic,
-		templatesDao:      templatesDao,
-		catalogItemsDao:   catalogItemsDao,
-		subnetsDao:        subnetsDao,
-		securityGroupsDao: securityGroupsDao,
-		instanceTypesDao:  instanceTypesDao,
+		logger:                  b.logger,
+		generic:                 generic,
+		templatesDao:            templatesDao,
+		catalogItemsDao:         catalogItemsDao,
+		subnetsDao:              subnetsDao,
+		securityGroupsDao:       securityGroupsDao,
+		instanceTypesDao:        instanceTypesDao,
+		externalIPPoolDao:       externalIPPoolDao,
+		externalIPDao:           externalIPDao,
+		externalIPAttachmentDao: externalIPAttachmentDao,
 	}
 	return
 }
@@ -191,8 +225,124 @@ func (s *PrivateComputeInstancesServer) Get(ctx context.Context,
 	return
 }
 
+func (s *PrivateComputeInstancesServer) findDefaultSubnet(ctx context.Context) (*privatev1.Subnet, error) {
+	filter := fmt.Sprintf("this.metadata.labels[\"%s\"] == \"true\" && has(this.spec.ipv4_cidr)", defaultLabel)
+	listResponse, err := s.subnetsDao.List().
+		SetFilter(filter).
+		Do(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var items []*privatev1.Subnet
+	for _, subnet := range listResponse.GetItems() {
+		if subnet.GetMetadata().HasDeletionTimestamp() {
+			continue
+		}
+		if subnet.GetStatus().GetState() != privatev1.SubnetState_SUBNET_STATE_READY {
+			continue
+		}
+		items = append(items, subnet)
+	}
+	if len(items) == 0 {
+		return nil, nil
+	}
+	sort.Slice(items, func(i, j int) bool {
+		ti := items[i].GetMetadata().GetCreationTimestamp().AsTime()
+		tj := items[j].GetMetadata().GetCreationTimestamp().AsTime()
+		return ti.After(tj)
+	})
+	if len(items) > 1 {
+		s.logger.WarnContext(ctx, "multiple default Subnets found, using newest",
+			slog.Int("count", len(items)),
+		)
+	}
+	return items[0], nil
+}
+
+func (s *PrivateComputeInstancesServer) findDefaultSecurityGroup(ctx context.Context, virtualNetworkID string) (*privatev1.SecurityGroup, error) {
+	filter := fmt.Sprintf("this.metadata.labels[\"%s\"] == \"true\"", defaultLabel)
+	listResponse, err := s.securityGroupsDao.List().
+		SetFilter(filter).
+		Do(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var items []*privatev1.SecurityGroup
+	for _, sg := range listResponse.GetItems() {
+		if sg.GetMetadata().HasDeletionTimestamp() {
+			continue
+		}
+		if sg.GetStatus().GetState() != privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY {
+			continue
+		}
+		if refKey(sg.GetSpec().GetVirtualNetwork()) != virtualNetworkID {
+			continue
+		}
+		items = append(items, sg)
+	}
+	if len(items) == 0 {
+		return nil, nil
+	}
+	sort.Slice(items, func(i, j int) bool {
+		ti := items[i].GetMetadata().GetCreationTimestamp().AsTime()
+		tj := items[j].GetMetadata().GetCreationTimestamp().AsTime()
+		return ti.After(tj)
+	})
+	if len(items) > 1 {
+		s.logger.WarnContext(ctx, "multiple default SecurityGroups found, using newest",
+			slog.Int("count", len(items)),
+		)
+	}
+	return items[0], nil
+}
+
+func (s *PrivateComputeInstancesServer) injectDefaultNetworkAttachments(ctx context.Context, spec *privatev1.ComputeInstanceSpec) error {
+	subnet, err := s.findDefaultSubnet(ctx)
+	if err != nil {
+		return grpcstatus.Errorf(grpccodes.Internal, "failed to look up default subnet: %v", err)
+	}
+	if subnet == nil {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"spec.network_attachments: at least one network attachment is required for new compute instances")
+	}
+
+	attachment := privatev1.NetworkAttachment_builder{
+		Subnet: privatev1.SubnetLocalReference_builder{Id: subnet.GetId()}.Build(),
+	}.Build()
+
+	virtualNetworkID := refKey(subnet.GetSpec().GetVirtualNetwork())
+	sg, err := s.findDefaultSecurityGroup(ctx, virtualNetworkID)
+	if err != nil {
+		return grpcstatus.Errorf(grpccodes.Internal, "failed to look up default security group: %v", err)
+	}
+	if sg != nil {
+		attachment.SetSecurityGroups([]*privatev1.SecurityGroupLocalReference{
+			privatev1.SecurityGroupLocalReference_builder{Id: sg.GetId()}.Build(),
+		})
+	}
+
+	spec.SetNetworkAttachments([]*privatev1.NetworkAttachment{attachment})
+
+	attrs := []slog.Attr{
+		slog.String("subnet_id", subnet.GetId()),
+	}
+	if sg != nil {
+		attrs = append(attrs, slog.String("security_group_id", sg.GetId()))
+	}
+	s.logger.LogAttrs(ctx, slog.LevelInfo, "auto-injected default network attachments", attrs...)
+	return nil
+}
+
 func (s *PrivateComputeInstancesServer) Create(ctx context.Context,
 	request *privatev1.ComputeInstancesCreateRequest) (response *privatev1.ComputeInstancesCreateResponse, err error) {
+	// Auto-inject default network attachments if none provided:
+	if len(request.GetObject().GetSpec().GetNetworkAttachments()) == 0 {
+		err = s.injectDefaultNetworkAttachments(ctx, request.GetObject().GetSpec())
+		if err != nil {
+			return
+		}
+	}
+
 	// Validate tenant isolation for network references:
 	err = s.validateNetworkReferencesTenancy(ctx, request.GetObject())
 	if err != nil {
@@ -205,29 +355,22 @@ func (s *PrivateComputeInstancesServer) Create(ctx context.Context,
 		return
 	}
 
-	// Require network_attachments for new VMs (no pod network for new VMs):
-	if len(request.GetObject().GetSpec().GetNetworkAttachments()) == 0 {
-		err = grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"spec.network_attachments: at least one network attachment is required for new compute instances")
-		return
-	}
-
 	// Dispatch between catalog item and template paths:
 	spec := request.GetObject().GetSpec()
 	catalogItemRef := spec.GetCatalogItem()
 	templateRef := spec.GetTemplate()
-	if catalogItemRef != "" && templateRef != "" {
+	if catalogItemRef != nil && templateRef != nil {
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"catalog_item and template are mutually exclusive")
 		return
 	}
 	var template *privatev1.ComputeInstanceTemplate
-	if catalogItemRef != "" {
+	if catalogItemRef != nil {
 		err = s.validateAndTransformCatalogItem(ctx, request.GetObject())
 		if err != nil {
 			return
 		}
-		template, err = s.fetchTemplate(ctx, spec.GetTemplate())
+		template, err = s.fetchTemplate(ctx, refKey(spec.GetTemplate()))
 	} else {
 		template, err = s.fetchAndValidateTemplate(ctx, request.GetObject())
 	}
@@ -254,6 +397,13 @@ func (s *PrivateComputeInstancesServer) Create(ctx context.Context,
 	err = s.generic.Create(ctx, request, &response)
 	if err != nil {
 		return
+	}
+
+	if spec.GetAutoExternalIpAttachment() {
+		err = s.autoProvisionExternalIP(ctx, response.GetObject())
+		if err != nil {
+			return
+		}
 	}
 
 	// Attach warnings to the response (deprecation notices for DEPRECATED instance types).
@@ -304,6 +454,22 @@ func (s *PrivateComputeInstancesServer) Update(ctx context.Context,
 
 func (s *PrivateComputeInstancesServer) Delete(ctx context.Context,
 	request *privatev1.ComputeInstancesDeleteRequest) (response *privatev1.ComputeInstancesDeleteResponse, err error) {
+	id := request.GetId()
+	if id != "" {
+		getResponse, getErr := s.generic.dao.Get().SetId(id).Do(ctx)
+		if getErr != nil {
+			var notFoundErr *dao.ErrNotFound
+			if !errors.As(getErr, &notFoundErr) {
+				err = getErr
+				return
+			}
+		} else if getResponse.GetObject().GetSpec().GetAutoExternalIpAttachment() {
+			err = s.autoCleanupExternalIP(ctx, id)
+			if err != nil {
+				return
+			}
+		}
+	}
 	err = s.generic.Delete(ctx, request, &response)
 	return
 }
@@ -326,7 +492,7 @@ func (s *PrivateComputeInstancesServer) fetchAndValidateTemplate(ctx context.Con
 		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "compute instance spec is mandatory")
 	}
 
-	template, err := s.fetchTemplate(ctx, spec.GetTemplate())
+	template, err := s.fetchTemplate(ctx, refKey(spec.GetTemplate()))
 	if err != nil {
 		return nil, err
 	}
@@ -405,16 +571,21 @@ func (s *PrivateComputeInstancesServer) validateInstanceType(
 	ci *privatev1.ComputeInstance,
 ) ([]string, error) {
 	spec := ci.GetSpec()
-	instanceTypeName := spec.GetInstanceType()
+	instanceTypeRef := spec.GetInstanceType()
 	var warnings []string
+	var instanceTypeName string
+
+	if instanceTypeRef != nil {
+		instanceTypeName = refKey(instanceTypeRef)
+	}
 
 	if instanceTypeName == "" {
 		// instance_type not on the spec directly. If a template is referenced
 		// (e.g. via catalog item), check whether its spec_defaults provide one.
-		if templateRef := spec.GetTemplate(); templateRef != "" {
-			template, fetchErr := s.fetchTemplate(ctx, templateRef)
+		if templateRef := spec.GetTemplate(); templateRef != nil {
+			template, fetchErr := s.fetchTemplate(ctx, refKey(templateRef))
 			if fetchErr == nil && template.GetSpecDefaults().HasInstanceType() {
-				instanceTypeName = template.GetSpecDefaults().GetInstanceType()
+				instanceTypeName = refKey(template.GetSpecDefaults().GetInstanceType())
 			}
 		}
 	}
@@ -442,8 +613,9 @@ func (s *PrivateComputeInstancesServer) validateTemplateImmutability(ctx context
 	updatingTemplateParams := hasMaskPrefix(updateMask, "spec.template_parameters")
 	updatingCatalogItem := hasMaskPrefix(updateMask, "spec.catalog_item")
 	updatingInstanceType := hasMaskPrefix(updateMask, "spec.instance_type")
+	updatingAutoExternalIP := hasMaskPrefix(updateMask, "spec.auto_external_ip_attachment")
 
-	if !updatingTemplate && !updatingTemplateParams && !updatingCatalogItem && !updatingInstanceType {
+	if !updatingTemplate && !updatingTemplateParams && !updatingCatalogItem && !updatingInstanceType && !updatingAutoExternalIP {
 		return nil
 	}
 
@@ -465,12 +637,12 @@ func (s *PrivateComputeInstancesServer) validateTemplateImmutability(ctx context
 	existingSpec := existingCI.GetSpec()
 	newSpec := request.GetObject().GetSpec()
 
-	if updatingTemplate && existingSpec.GetTemplate() != newSpec.GetTemplate() {
+	if updatingTemplate && refKey(existingSpec.GetTemplate()) != refKey(newSpec.GetTemplate()) {
 		return grpcstatus.Errorf(
 			grpccodes.InvalidArgument,
 			"cannot change spec.template from '%s' to '%s': template is immutable",
-			existingSpec.GetTemplate(),
-			newSpec.GetTemplate(),
+			refKey(existingSpec.GetTemplate()),
+			refKey(newSpec.GetTemplate()),
 		)
 	}
 
@@ -486,22 +658,27 @@ func (s *PrivateComputeInstancesServer) validateTemplateImmutability(ctx context
 		}
 	}
 
-	if updatingCatalogItem && existingSpec.GetCatalogItem() != newSpec.GetCatalogItem() {
+	if updatingCatalogItem && refKey(existingSpec.GetCatalogItem()) != refKey(newSpec.GetCatalogItem()) {
 		return grpcstatus.Errorf(
 			grpccodes.InvalidArgument,
 			"cannot change spec.catalog_item from '%s' to '%s': catalog item is immutable",
-			existingSpec.GetCatalogItem(),
-			newSpec.GetCatalogItem(),
+			refKey(existingSpec.GetCatalogItem()),
+			refKey(newSpec.GetCatalogItem()),
 		)
 	}
 
-	if updatingInstanceType && existingSpec.GetInstanceType() != newSpec.GetInstanceType() {
+	if updatingInstanceType && refKey(existingSpec.GetInstanceType()) != refKey(newSpec.GetInstanceType()) {
 		return grpcstatus.Errorf(
 			grpccodes.InvalidArgument,
 			"cannot change spec.instance_type from '%s' to '%s': instance type is immutable",
-			existingSpec.GetInstanceType(),
-			newSpec.GetInstanceType(),
+			refKey(existingSpec.GetInstanceType()),
+			refKey(newSpec.GetInstanceType()),
 		)
+	}
+
+	if updatingAutoExternalIP && existingSpec.GetAutoExternalIpAttachment() != newSpec.GetAutoExternalIpAttachment() {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"cannot change spec.auto_external_ip_attachment: auto_external_ip_attachment is immutable after creation")
 	}
 
 	return nil
@@ -560,11 +737,11 @@ func (s *PrivateComputeInstancesServer) validateNetworkAttachmentsImmutability(
 	for i := range existingAttachments {
 		existingSubnet := existingAttachments[i].GetSubnet()
 		newSubnet := newAttachments[i].GetSubnet()
-		if existingSubnet != newSubnet {
+		if refKey(existingSubnet) != refKey(newSubnet) {
 			return grpcstatus.Errorf(
 				grpccodes.InvalidArgument,
 				"cannot change network_attachments[%d].subnet from '%s' to '%s': subnet is immutable",
-				i, existingSubnet, newSubnet,
+				i, refKey(existingSubnet), refKey(newSubnet),
 			)
 		}
 	}
@@ -618,17 +795,18 @@ func (s *PrivateComputeInstancesServer) validateNetworkReferencesTenancy(
 	}
 
 	for _, att := range attachments {
-		subnetID := att.GetSubnet()
-		securityGroupIDs := att.GetSecurityGroups()
+		subnetRef := att.GetSubnet()
+		securityGroupRefs := att.GetSecurityGroups()
 
-		// At this point, subnetID is guaranteed to be non-empty because
+		// At this point, subnetRef is guaranteed to be non-nil because
 		// ValidateNetworkAttachments ensures all attachments have non-empty subnet.
+		subnetIDStr := refKey(subnetRef)
 
 		// Validate tenant isolation for subnet.
 		// TenancyLogic in DAO filters out cross-tenant resources, making them appear as NotFound.
 		// We allow NotFound during deletion (resource may be deleted or cross-tenant).
 		// The key is that we ALWAYS call DAO Get() so tenant filtering happens.
-		_, getErr := s.subnetsDao.Get().SetId(subnetID).Do(ctx)
+		_, getErr := s.subnetsDao.Get().SetId(subnetIDStr).Do(ctx)
 		if getErr != nil {
 			var notFoundErr *dao.ErrNotFound
 			if errors.As(getErr, &notFoundErr) {
@@ -639,17 +817,18 @@ func (s *PrivateComputeInstancesServer) validateNetworkReferencesTenancy(
 			}
 			// Other error - propagate
 			s.logger.ErrorContext(ctx, "Failed to query Subnet for tenancy check",
-				slog.String("subnet_id", subnetID),
+				slog.String("subnet_id", subnetIDStr),
 				slog.Any("error", getErr))
 			return grpcstatus.Errorf(grpccodes.Internal, "failed to validate subnet")
 		}
 
 		// Validate tenant isolation for security groups.
-		for _, sgID := range securityGroupIDs {
-			if sgID == "" {
+		for _, sgRef := range securityGroupRefs {
+			if sgRef == nil {
 				continue
 			}
-			_, getErr := s.securityGroupsDao.Get().SetId(sgID).Do(ctx)
+			sgIDStr := refKey(sgRef)
+			_, getErr := s.securityGroupsDao.Get().SetId(sgIDStr).Do(ctx)
 			if getErr != nil {
 				var notFoundErr *dao.ErrNotFound
 				if errors.As(getErr, &notFoundErr) {
@@ -660,7 +839,7 @@ func (s *PrivateComputeInstancesServer) validateNetworkReferencesTenancy(
 				}
 				// Other error - propagate
 				s.logger.ErrorContext(ctx, "Failed to query SecurityGroup for tenancy check",
-					slog.String("security_group_id", sgID),
+					slog.String("security_group_id", sgIDStr),
 					slog.Any("error", getErr))
 				return grpcstatus.Errorf(grpccodes.Internal, "failed to validate security group")
 			}
@@ -699,27 +878,28 @@ func (s *PrivateComputeInstancesServer) validateNetworkReferencesState(
 	}
 
 	for i, att := range attachments {
-		subnetID := att.GetSubnet()
-		securityGroupIDs := att.GetSecurityGroups()
+		subnetRef := att.GetSubnet()
+		securityGroupRefs := att.GetSecurityGroups()
 
-		// At this point, subnetID is guaranteed to be non-empty because
+		// At this point, subnetRef is guaranteed to be non-nil because
 		// ValidateNetworkAttachments ensures all attachments have non-empty subnet
 		var subnet *privatev1.Subnet
 		var virtualNetworkID string
+		subnetKey := refKey(subnetRef)
 
 		// VAL-01: Validate Subnet exists and is READY
 		getSubnetResponse, getErr := s.subnetsDao.Get().
-			SetId(subnetID).
+			SetId(subnetKey).
 			Do(ctx)
 		if getErr != nil {
 			var notFoundErr *dao.ErrNotFound
 			if errors.As(getErr, &notFoundErr) {
 				return grpcstatus.Errorf(grpccodes.InvalidArgument,
-					"network_attachments[%d]: subnet '%s' does not exist", i, subnetID)
+					"network_attachments[%d]: subnet '%s' does not exist", i, subnetKey)
 			}
 			// Note: TenancyErr won't happen here because tenancy was already validated
 			s.logger.ErrorContext(ctx, "Failed to query Subnet",
-				slog.String("subnet_id", subnetID),
+				slog.String("subnet_id", subnetKey),
 				slog.Any("error", getErr))
 			return grpcstatus.Errorf(grpccodes.Internal, "failed to validate subnet")
 		}
@@ -727,35 +907,36 @@ func (s *PrivateComputeInstancesServer) validateNetworkReferencesState(
 		subnet = getSubnetResponse.GetObject()
 		if subnet == nil {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"network_attachments[%d]: subnet '%s' does not exist", i, subnetID)
+				"network_attachments[%d]: subnet '%s' does not exist", i, subnetKey)
 		}
 
 		// VAL-02: Validate READY state
 		if subnet.GetStatus().GetState() != privatev1.SubnetState_SUBNET_STATE_READY {
 			return grpcstatus.Errorf(grpccodes.FailedPrecondition,
 				"network_attachments[%d]: subnet '%s' is not in READY state (current state: %s)",
-				i, subnetID, subnet.GetStatus().GetState().String())
+				i, subnetKey, subnet.GetStatus().GetState().String())
 		}
 
-		virtualNetworkID = subnet.GetSpec().GetVirtualNetwork()
+		virtualNetworkID = refKey(subnet.GetSpec().GetVirtualNetwork())
 
-		for _, sgID := range securityGroupIDs {
-			if sgID == "" {
+		for _, sgRef := range securityGroupRefs {
+			if sgRef == nil {
 				continue
 			}
+			sgKey := refKey(sgRef)
 
 			getSGResponse, getErr := s.securityGroupsDao.Get().
-				SetId(sgID).
+				SetId(sgKey).
 				Do(ctx)
 			if getErr != nil {
 				var notFoundErr *dao.ErrNotFound
 				if errors.As(getErr, &notFoundErr) {
 					return grpcstatus.Errorf(grpccodes.InvalidArgument,
-						"network_attachments[%d]: security group '%s' does not exist", i, sgID)
+						"network_attachments[%d]: security group '%s' does not exist", i, sgKey)
 				}
 				// Note: TenancyErr won't happen here because tenancy was already validated
 				s.logger.ErrorContext(ctx, "Failed to query SecurityGroup",
-					slog.String("security_group_id", sgID),
+					slog.String("security_group_id", sgKey),
 					slog.Any("error", getErr))
 				return grpcstatus.Errorf(grpccodes.Internal, "failed to validate security group")
 			}
@@ -763,23 +944,23 @@ func (s *PrivateComputeInstancesServer) validateNetworkReferencesState(
 			sg := getSGResponse.GetObject()
 			if sg == nil {
 				return grpcstatus.Errorf(grpccodes.InvalidArgument,
-					"network_attachments[%d]: security group '%s' does not exist", i, sgID)
+					"network_attachments[%d]: security group '%s' does not exist", i, sgKey)
 			}
 
 			// VAL-02: Validate READY state
 			if sg.GetStatus().GetState() != privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY {
 				return grpcstatus.Errorf(grpccodes.FailedPrecondition,
 					"network_attachments[%d]: security group '%s' is not in READY state (current state: %s)",
-					i, sgID, sg.GetStatus().GetState().String())
+					i, sgKey, sg.GetStatus().GetState().String())
 			}
 
 			// VAL-03: Validate SecurityGroup belongs to same VirtualNetwork as Subnet
 			if virtualNetworkID != "" {
-				sgVirtualNetworkID := sg.GetSpec().GetVirtualNetwork()
+				sgVirtualNetworkID := refKey(sg.GetSpec().GetVirtualNetwork())
 				if sgVirtualNetworkID != virtualNetworkID {
 					return grpcstatus.Errorf(grpccodes.InvalidArgument,
 						"network_attachments[%d]: security group '%s' belongs to VirtualNetwork '%s', but subnet '%s' belongs to VirtualNetwork '%s'",
-						i, sgID, sgVirtualNetworkID, subnetID, virtualNetworkID)
+						i, sgKey, sgVirtualNetworkID, subnetKey, virtualNetworkID)
 				}
 			}
 		}
@@ -801,23 +982,24 @@ func (s *PrivateComputeInstancesServer) validateAndTransformCatalogItem(
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "object is mandatory")
 	}
 	catalogItemRef := ci.GetSpec().GetCatalogItem()
-	if catalogItemRef == "" {
+	if catalogItemRef == nil {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "catalog_item is mandatory")
 	}
+	catalogItemRefStr := refKey(catalogItemRef)
 
-	catalogItem, err := s.lookupCatalogItem(ctx, catalogItemRef)
+	catalogItem, err := s.lookupCatalogItem(ctx, catalogItemRefStr)
 	if err != nil {
 		return err
 	}
 
-	if err := validateCatalogItemAccess(catalogItem, catalogItemRef); err != nil {
+	if err := validateCatalogItemAccess(catalogItem, catalogItemRefStr); err != nil {
 		return err
 	}
 
 	templateRef := catalogItem.GetTemplate()
-	if templateRef == "" {
+	if templateRef == nil {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"catalog item '%s' does not reference a template", catalogItemRef)
+			"catalog item '%s' does not reference a template", catalogItemRefStr)
 	}
 	ci.GetSpec().SetTemplate(templateRef)
 
@@ -853,4 +1035,177 @@ func (s *PrivateComputeInstancesServer) lookupCatalogItem(ctx context.Context,
 	}
 	result = items[0]
 	return
+}
+
+const (
+	autoCreatedLabel    = "osac.openshift.io/auto-created"
+	autoCreatedForLabel = "osac.openshift.io/auto-created-for"
+)
+
+func (s *PrivateComputeInstancesServer) autoProvisionExternalIP(
+	ctx context.Context, ci *privatev1.ComputeInstance,
+) error {
+	pool, err := SelectExternalIPPool(ctx, s.externalIPPoolDao, privatev1.IPFamily_IP_FAMILY_UNSPECIFIED)
+	if err != nil {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "auto_external_ip_attachment: %s", err)
+	}
+
+	tenant := ci.GetMetadata().GetTenant()
+	ciID := ci.GetId()
+
+	eip := privatev1.ExternalIP_builder{
+		Metadata: privatev1.Metadata_builder{
+			Tenant: tenant,
+			Labels: map[string]string{
+				autoCreatedLabel:    "true",
+				autoCreatedForLabel: ciID,
+			},
+			Annotations: map[string]string{
+				ownerReferenceAnnotation: ciID,
+			},
+			Creator: "system",
+		}.Build(),
+		Spec: privatev1.ExternalIPSpec_builder{
+			Pool: privatev1.ExternalIPPoolReference_builder{Id: pool.GetId()}.Build(),
+		}.Build(),
+		Status: privatev1.ExternalIPStatus_builder{
+			State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING,
+		}.Build(),
+	}.Build()
+
+	eipResp, err := s.externalIPDao.Create().SetObject(eip).Do(ctx)
+	if err != nil {
+		return fmt.Errorf("auto_external_ip_attachment: failed to create ExternalIP: %w", err)
+	}
+	eipID := eipResp.GetObject().GetId()
+
+	err = s.updatePoolCapacity(ctx, pool.GetId(), 1)
+	if err != nil {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "auto_external_ip_attachment: %s", err)
+	}
+
+	attachment := privatev1.ExternalIPAttachment_builder{
+		Metadata: privatev1.Metadata_builder{
+			Tenant: tenant,
+			Labels: map[string]string{
+				autoCreatedLabel:    "true",
+				autoCreatedForLabel: ciID,
+			},
+			Annotations: map[string]string{
+				ownerReferenceAnnotation: ciID,
+			},
+			Creator: "system",
+		}.Build(),
+		Spec: privatev1.ExternalIPAttachmentSpec_builder{
+			ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eipID}.Build(),
+			ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: ciID}.Build(),
+		}.Build(),
+		Status: privatev1.ExternalIPAttachmentStatus_builder{
+			State: privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_PENDING,
+		}.Build(),
+	}.Build()
+
+	_, err = s.externalIPAttachmentDao.Create().SetObject(attachment).Do(ctx)
+	if err != nil {
+		return fmt.Errorf("auto_external_ip_attachment: failed to create ExternalIPAttachment: %w", err)
+	}
+
+	err = s.updateExternalIPAttachedFlag(ctx, eipID, true)
+	if err != nil {
+		return fmt.Errorf("auto_external_ip_attachment: %w", err)
+	}
+
+	return nil
+}
+
+func (s *PrivateComputeInstancesServer) autoCleanupExternalIP(ctx context.Context, ciID string) error {
+	filter := fmt.Sprintf(
+		"this.metadata.labels['%s'] == '%s'",
+		autoCreatedForLabel, ciID,
+	)
+	listResp, err := s.externalIPAttachmentDao.List().SetFilter(filter).Do(ctx)
+	if err != nil {
+		return fmt.Errorf("auto_external_ip_attachment cleanup: failed to list attachments: %w", err)
+	}
+
+	for _, attachment := range listResp.GetItems() {
+		eipRef := attachment.GetSpec().GetExternalIp()
+		eipID := refKey(eipRef)
+
+		_, err = s.externalIPAttachmentDao.Delete().SetId(attachment.GetId()).Do(ctx)
+		if err != nil {
+			return fmt.Errorf("auto_external_ip_attachment cleanup: failed to delete attachment: %w", err)
+		}
+
+		if eipID != "" {
+			err = s.updateExternalIPAttachedFlag(ctx, eipID, false)
+			if err != nil {
+				return fmt.Errorf("auto_external_ip_attachment cleanup: %w", err)
+			}
+
+			eipResp, getErr := s.externalIPDao.Get().SetId(eipID).Do(ctx)
+			if getErr != nil {
+				return fmt.Errorf("auto_external_ip_attachment cleanup: failed to get ExternalIP: %w", getErr)
+			}
+			poolRef := eipResp.GetObject().GetSpec().GetPool()
+
+			_, err = s.externalIPDao.Delete().SetId(eipID).Do(ctx)
+			if err != nil {
+				return fmt.Errorf("auto_external_ip_attachment cleanup: failed to delete ExternalIP: %w", err)
+			}
+
+			if poolRef != nil {
+				err = s.updatePoolCapacity(ctx, refKey(poolRef), -1)
+				if err != nil {
+					return fmt.Errorf("auto_external_ip_attachment cleanup: %w", err)
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func (s *PrivateComputeInstancesServer) updatePoolCapacity(ctx context.Context, poolID string, delta int64) error {
+	getResponse, err := s.externalIPPoolDao.Get().
+		SetId(poolID).
+		SetLock(true).
+		Do(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get ExternalIPPool for capacity update: %w", err)
+	}
+
+	pool := getResponse.GetObject()
+	newAllocated := pool.GetStatus().GetAllocated() + delta
+	newAvailable := pool.GetStatus().GetAvailable() - delta
+	if newAvailable < 0 {
+		return fmt.Errorf("ExternalIP pool '%s' has no available capacity", poolID)
+	}
+	pool.GetStatus().SetAllocated(newAllocated)
+	pool.GetStatus().SetAvailable(newAvailable)
+
+	_, err = s.externalIPPoolDao.Update().SetObject(pool).Do(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update ExternalIPPool capacity: %w", err)
+	}
+	return nil
+}
+
+func (s *PrivateComputeInstancesServer) updateExternalIPAttachedFlag(ctx context.Context, externalIPID string, attached bool) error {
+	getResponse, err := s.externalIPDao.Get().
+		SetId(externalIPID).
+		SetLock(true).
+		Do(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get ExternalIP for attached flag update: %w", err)
+	}
+
+	eip := getResponse.GetObject()
+	eip.GetStatus().SetAttached(attached)
+
+	_, err = s.externalIPDao.Update().SetObject(eip).Do(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update ExternalIP attached flag: %w", err)
+	}
+	return nil
 }

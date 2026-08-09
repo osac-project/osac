@@ -111,7 +111,7 @@ var _ = Describe("SubnetFeedbackController", func() {
 					Name: subnetName,
 				},
 				Spec: &privatev1.SubnetSpec{
-					VirtualNetwork: "vnet-123",
+					VirtualNetwork: &privatev1.VirtualNetworkLocalReference{Name: "vnet-123"},
 					Ipv4Cidr:       &ipv4Cidr,
 				},
 				Status: &privatev1.SubnetStatus{
@@ -166,7 +166,7 @@ var _ = Describe("SubnetFeedbackController", func() {
 					Name: subnetName,
 				},
 				Spec: &privatev1.SubnetSpec{
-					VirtualNetwork: "vnet-123",
+					VirtualNetwork: &privatev1.VirtualNetworkLocalReference{Name: "vnet-123"},
 					Ipv4Cidr:       &ipv4Cidr,
 				},
 				Status: &privatev1.SubnetStatus{
@@ -213,7 +213,7 @@ var _ = Describe("SubnetFeedbackController", func() {
 					Name: subnetName,
 				},
 				Spec: &privatev1.SubnetSpec{
-					VirtualNetwork: "vnet-123",
+					VirtualNetwork: &privatev1.VirtualNetworkLocalReference{Name: "vnet-123"},
 					Ipv4Cidr:       &ipv4Cidr,
 				},
 				Status: &privatev1.SubnetStatus{
@@ -260,7 +260,7 @@ var _ = Describe("SubnetFeedbackController", func() {
 					Name: subnetName,
 				},
 				Spec: &privatev1.SubnetSpec{
-					VirtualNetwork: "vnet-123",
+					VirtualNetwork: &privatev1.VirtualNetworkLocalReference{Name: "vnet-123"},
 					Ipv4Cidr:       &ipv4Cidr,
 				},
 				Status: &privatev1.SubnetStatus{
@@ -337,7 +337,7 @@ var _ = Describe("SubnetFeedbackController", func() {
 					Name: subnetName,
 				},
 				Spec: &privatev1.SubnetSpec{
-					VirtualNetwork: "vnet-123",
+					VirtualNetwork: &privatev1.VirtualNetworkLocalReference{Name: "vnet-123"},
 					Ipv4Cidr:       &ipv4Cidr,
 				},
 				Status: &privatev1.SubnetStatus{
@@ -395,7 +395,7 @@ var _ = Describe("SubnetFeedbackController", func() {
 					Name: subnetName,
 				},
 				Spec: &privatev1.SubnetSpec{
-					VirtualNetwork: "vnet-123",
+					VirtualNetwork: &privatev1.VirtualNetworkLocalReference{Name: "vnet-123"},
 					Ipv4Cidr:       &ipv4Cidr,
 				},
 				Status: &privatev1.SubnetStatus{
@@ -448,7 +448,7 @@ var _ = Describe("SubnetFeedbackController", func() {
 					Name: subnetName,
 				},
 				Spec: &privatev1.SubnetSpec{
-					VirtualNetwork: "vnet-123",
+					VirtualNetwork: &privatev1.VirtualNetworkLocalReference{Name: "vnet-123"},
 					Ipv4Cidr:       &ipv4Cidr,
 				},
 				Status: &privatev1.SubnetStatus{
@@ -580,7 +580,7 @@ var _ = Describe("SubnetFeedbackController", func() {
 					Name: subnetName,
 				},
 				Spec: &privatev1.SubnetSpec{
-					VirtualNetwork: "vnet-123",
+					VirtualNetwork: &privatev1.VirtualNetworkLocalReference{Name: "vnet-123"},
 					Ipv4Cidr:       &ipv4Cidr,
 				},
 				Status: &privatev1.SubnetStatus{

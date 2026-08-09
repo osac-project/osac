@@ -17,7 +17,9 @@ package osac.public.v1;
 
 import "google/protobuf/any.proto";
 import "osac/public/v1/cluster_type.proto";
+import "osac/public/v1/cluster_version_type.proto";
 import "osac/public/v1/metadata_type.proto";
+import "osac/public/v1/host_type_type.proto";
 
 // A cluster template defines a type of cluster that can be created by the user. Note that the user doesn't create these
 // templates: the system provides a collection of them, and the user chooses one.
@@ -103,8 +105,8 @@ message ClusterTemplateParameterDefinition {
 
 // Defines a set of nodes that will be part of cluster, all of them of the same type of host.
 message ClusterTemplateNodeSet {
-  // Identifier of the type of hosts that are part of the set.
-  string host_type = 1;
+  // Reference to the type of hosts that are part of the set.
+  HostTypeReference host_type = 1;
 
   // Number of nodes of the set.
   int32 size = 2;
@@ -122,9 +124,9 @@ message ClusterTemplateSpecDefaults {
   // Default cluster networking configuration.
   optional ClusterNetwork network = 4;
 
-  // Default ClusterVersion name for clusters created with this template.
+  // Default ClusterVersion for clusters created with this template.
   //
-  // When set, clusters that don't specify an explicit `spec.version_name` will use this version. The referenced
+  // When set, clusters that don't specify an explicit `spec.version` will use this version. The referenced
   // ClusterVersion must exist, be enabled, and not be in `OBSOLETE` state.
-  optional string version_name = 5;
+  ClusterVersionReference version = 5;
 }

@@ -98,8 +98,8 @@ func RenderExternalIP(w io.Writer, eip *publicv1.ExternalIP) {
 	}
 
 	pool := "-"
-	if v := eip.GetSpec().GetPool(); v != "" {
-		pool = v
+	if v := eip.GetSpec().GetPool(); v != nil {
+		pool = v.GetName()
 	}
 
 	attached := "false"

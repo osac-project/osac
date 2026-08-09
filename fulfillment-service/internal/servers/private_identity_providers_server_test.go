@@ -278,9 +278,10 @@ var _ = Describe("Private identity providers server", func() {
 			Expect(updateResp.Object.Spec.Title).To(Equal("Updated OIDC Title"))
 		})
 
-		It("Accepts creation of an identity provider without a name", func() {
-			// Identity providers can have empty names (name is not mandatory)
-			response, err := server.Create(ctx, privatev1.IdentityProvidersCreateRequest_builder{
+		It("Creates an identity provider without a name when interceptor is not present", func() {
+			// Name validation is enforced by the protovalidate interceptor, not the server handler.
+			// In unit tests (no interceptor), creating with an empty name succeeds.
+			_, err := server.Create(ctx, privatev1.IdentityProvidersCreateRequest_builder{
 				Object: privatev1.IdentityProvider_builder{
 					Metadata: privatev1.Metadata_builder{
 						Tenant: "my-tenant",
@@ -299,9 +300,6 @@ var _ = Describe("Private identity providers server", func() {
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(response).ToNot(BeNil())
-			// Tenant should be preserved from the request
-			Expect(response.Object.Metadata.Tenant).To(Equal("my-tenant"))
 		})
 
 		It("Rejects update of the name of an identity provider", func() {

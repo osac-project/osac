@@ -37,7 +37,7 @@ Import a workflow playbook directly:
 - name: Create cluster
   ansible.builtin.import_playbook: osac.workflows.cluster.create
   vars:
-    cluster_order: "{{ ansible_eda.event.payload }}"
+    cluster_order: "{{ osac_job_vars.resource }}"
 ```
 
 ### Override a Workflow Step
@@ -49,7 +49,7 @@ Replace a specific step with your custom role:
 - name: Create cluster with custom infrastructure
   ansible.builtin.import_playbook: osac.workflows.cluster.create
   vars:
-    cluster_order: "{{ ansible_eda.event.payload }}"
+    cluster_order: "{{ osac_job_vars.resource }}"
 
     # Override infrastructure creation step
     template_step_create_infra_override:
@@ -64,7 +64,7 @@ Replace a specific step with your custom role:
 - name: Create cluster with multiple overrides
   ansible.builtin.import_playbook: osac.workflows.cluster.create
   vars:
-    cluster_order: "{{ ansible_eda.event.payload }}"
+    cluster_order: "{{ osac_job_vars.resource }}"
 
     # Override defaults application
     step_apply_defaults_override:
@@ -130,7 +130,7 @@ Templates may define their own override points:
 - name: MOC Cluster Creation
   ansible.builtin.import_playbook: osac.workflows.cluster.create
   vars:
-    cluster_order: "{{ ansible_eda.event.payload }}"
+    cluster_order: "{{ osac_job_vars.resource }}"
 
     # Use MOC template collection
     template_id_override: osac.templates.ocp_small

@@ -113,6 +113,13 @@ func (s *PrivateBareMetalInstanceTemplatesServer) Get(ctx context.Context,
 
 func (s *PrivateBareMetalInstanceTemplatesServer) Create(ctx context.Context,
 	request *privatev1.BareMetalInstanceTemplatesCreateRequest) (response *privatev1.BareMetalInstanceTemplatesCreateResponse, err error) {
+	obj := request.GetObject()
+	if obj != nil && obj.GetMetadata().GetName() == "" && obj.GetId() != "" {
+		if obj.GetMetadata() == nil {
+			obj.SetMetadata(&privatev1.Metadata{})
+		}
+		obj.GetMetadata().SetName(templateNameFromID(obj.GetId()))
+	}
 	err = s.generic.Create(ctx, request, &response)
 	return
 }

@@ -16,6 +16,7 @@ package servers
 import (
 	"fmt"
 
+	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc/codes"
@@ -74,8 +75,11 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 				Object: publicv1.BareMetalInstanceCatalogItem_builder{
 					Title:       "My BMI catalog item",
 					Description: "My description.",
-					Template:    "my-bmi-template-id",
+					Template:    publicv1.BareMetalInstanceTemplateReference_builder{Id: "my-bmi-template-id"}.Build(),
 					Published:   true,
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-bmi-catalog-item",
+					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -84,7 +88,7 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 			Expect(object).ToNot(BeNil())
 			Expect(object.GetId()).ToNot(BeEmpty())
 			Expect(object.GetTitle()).To(Equal("My BMI catalog item"))
-			Expect(object.GetTemplate()).To(Equal("my-bmi-template-id"))
+			Expect(object.GetTemplate().GetId()).To(Equal("my-bmi-template-id"))
 			Expect(object.GetPublished()).To(BeTrue())
 		})
 
@@ -102,8 +106,11 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 				_, err := server.Create(ctx, publicv1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 					Object: publicv1.BareMetalInstanceCatalogItem_builder{
 						Title:     fmt.Sprintf("Published item %d", i),
-						Template:  "my-bmi-template-id",
+						Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my-bmi-template-id"}.Build(),
 						Published: true,
+						Metadata: publicv1.Metadata_builder{
+							Name: fmt.Sprintf("published-item-%d", i),
+						}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -111,8 +118,11 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 			_, err := server.Create(ctx, publicv1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.BareMetalInstanceCatalogItem_builder{
 					Title:     "Unpublished item",
-					Template:  "my-bmi-template-id",
+					Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my-bmi-template-id"}.Build(),
 					Published: false,
+					Metadata: publicv1.Metadata_builder{
+						Name: "unpublished-item",
+					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -139,8 +149,11 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 			createResponse, err := server.Create(ctx, publicv1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.BareMetalInstanceCatalogItem_builder{
 					Title:     "Published item",
-					Template:  "my-bmi-template-id",
+					Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my-bmi-template-id"}.Build(),
 					Published: true,
+					Metadata: publicv1.Metadata_builder{
+						Name: "published-item",
+					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -157,8 +170,11 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 			createResponse, err := server.Create(ctx, publicv1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.BareMetalInstanceCatalogItem_builder{
 					Title:     "Unpublished item",
-					Template:  "my-bmi-template-id",
+					Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my-bmi-template-id"}.Build(),
 					Published: false,
+					Metadata: publicv1.Metadata_builder{
+						Name: "unpublished-item-get",
+					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -177,8 +193,11 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 			createResponse, err := server.Create(ctx, publicv1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.BareMetalInstanceCatalogItem_builder{
 					Title:     "Original title",
-					Template:  "my-bmi-template-id",
+					Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my-bmi-template-id"}.Build(),
 					Published: true,
+					Metadata: publicv1.Metadata_builder{
+						Name: "original-item",
+					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -188,8 +207,11 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 				Object: publicv1.BareMetalInstanceCatalogItem_builder{
 					Id:        id,
 					Title:     "Updated title",
-					Template:  "my-bmi-template-id",
+					Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my-bmi-template-id"}.Build(),
 					Published: true,
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-bmi-catalog-item-update",
+					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -218,8 +240,11 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 			createResponse, err := server.Create(ctx, publicv1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.BareMetalInstanceCatalogItem_builder{
 					Title:     "Item to delete",
-					Template:  "my-bmi-template-id",
+					Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my-bmi-template-id"}.Build(),
 					Published: true,
+					Metadata: publicv1.Metadata_builder{
+						Name: "item-to-delete",
+					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -243,8 +268,11 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 			createResponse, err := server.Create(ctx, publicv1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.BareMetalInstanceCatalogItem_builder{
 					Title:     "Referenced item",
-					Template:  "my-bmi-template-id",
+					Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my-bmi-template-id"}.Build(),
 					Published: true,
+					Metadata: publicv1.Metadata_builder{
+						Name: "referenced-item",
+					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -258,8 +286,11 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			_, err = instancesServer.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem: catalogItemID,
+						CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())

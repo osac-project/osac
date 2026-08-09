@@ -20,11 +20,13 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -33,6 +35,8 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
+	"github.com/osac-project/osac/fulfillment-service/internal/masks"
+	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
 
 // fakeVirtualNetworksClient implements the VirtualNetworksClient interface for testing selectHub.
@@ -102,8 +106,8 @@ var _ = Describe("buildSpec", func() {
 			natGateway: privatev1.NATGateway_builder{
 				Id: "natgw-uuid-test-1",
 				Spec: privatev1.NATGatewaySpec_builder{
-					VirtualNetwork: "vn-uuid-abc123",
-					ExternalIp:     "eip-uuid-abc123",
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "vn-uuid-abc123"}.Build(),
+					ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: "eip-uuid-abc123"}.Build(),
 				}.Build(),
 			}.Build(),
 		}
@@ -119,8 +123,8 @@ var _ = Describe("buildSpec", func() {
 			natGateway: privatev1.NATGateway_builder{
 				Id: "natgw-uuid-test-2",
 				Spec: privatev1.NATGatewaySpec_builder{
-					VirtualNetwork: "vn-uuid-abc456",
-					ExternalIp:     "eip-uuid-abc456",
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "vn-uuid-abc456"}.Build(),
+					ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: "eip-uuid-abc456"}.Build(),
 				}.Build(),
 				Status: privatev1.NATGatewayStatus_builder{
 					State: privatev1.NATGatewayState_NAT_GATEWAY_STATE_READY,
@@ -520,7 +524,7 @@ var _ = Describe("selectHub", func() {
 			natGateway: privatev1.NATGateway_builder{
 				Id: "natgw-uuid-existing-hub",
 				Spec: privatev1.NATGatewaySpec_builder{
-					VirtualNetwork: "vn-uuid-1",
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "vn-uuid-1"}.Build(),
 				}.Build(),
 				Status: privatev1.NATGatewayStatus_builder{
 					Hub: "hub-1",
@@ -563,7 +567,7 @@ var _ = Describe("selectHub", func() {
 			natGateway: privatev1.NATGateway_builder{
 				Id: "natgw-uuid-derive-hub",
 				Spec: privatev1.NATGatewaySpec_builder{
-					VirtualNetwork: "vn-uuid-1",
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "vn-uuid-1"}.Build(),
 				}.Build(),
 			}.Build(),
 		}
@@ -592,7 +596,7 @@ var _ = Describe("selectHub", func() {
 			natGateway: privatev1.NATGateway_builder{
 				Id: "natgw-uuid-vn-no-hub",
 				Spec: privatev1.NATGatewaySpec_builder{
-					VirtualNetwork: "vn-uuid-no-hub",
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "vn-uuid-no-hub"}.Build(),
 				}.Build(),
 			}.Build(),
 		}
@@ -615,7 +619,7 @@ var _ = Describe("selectHub", func() {
 			natGateway: privatev1.NATGateway_builder{
 				Id: "natgw-uuid-vn-error",
 				Spec: privatev1.NATGatewaySpec_builder{
-					VirtualNetwork: "vn-uuid-missing",
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "vn-uuid-missing"}.Build(),
 				}.Build(),
 			}.Build(),
 		}
@@ -623,5 +627,80 @@ var _ = Describe("selectHub", func() {
 		err := t.selectHub(ctx)
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("virtual network not found"))
+	})
+})
+
+var _ = Describe("Kubernetes validation error handling", func() {
+	It("should set state to FAILED when K8s Create returns Invalid error", func() {
+		ctx := context.Background()
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Create: func(ctx context.Context, client clnt.WithWatch, obj clnt.Object, opts ...clnt.CreateOption) error {
+					return apierrors.NewInvalid(
+						schema.GroupKind{Group: "osac.openshift.io", Kind: "NATGateway"},
+						"natgw-test",
+						field.ErrorList{
+							field.Invalid(
+								field.NewPath("spec", "virtualNetwork"),
+								"invalid-value",
+								"spec.virtualNetwork is invalid",
+							),
+						},
+					)
+				},
+			}).
+			Build()
+
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), "hub-1").
+			Return(&controllers.HubEntry{Namespace: "test-ns", Client: fakeClient}, nil).
+			AnyTimes()
+
+		natGatewaysClient := NewMockNATGatewaysClient(ctrl)
+		natGatewaysClient.EXPECT().
+			Update(gomock.Any(), gomock.Any(), gomock.Any()).
+			DoAndReturn(func(ctx context.Context, req *privatev1.NATGatewaysUpdateRequest, opts ...grpc.CallOption) (*privatev1.NATGatewaysUpdateResponse, error) {
+				return &privatev1.NATGatewaysUpdateResponse{Object: req.GetObject()}, nil
+			}).
+			MinTimes(1)
+
+		natGateway := privatev1.NATGateway_builder{
+			Id: "natgw-validation-test",
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     "test-tenant",
+			}.Build(),
+			Spec: privatev1.NATGatewaySpec_builder{
+				VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "vn-123"}.Build(),
+				ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: "eip-123"}.Build(),
+			}.Build(),
+			Status: privatev1.NATGatewayStatus_builder{
+				State: privatev1.NATGatewayState_NAT_GATEWAY_STATE_PENDING,
+				Hub:   "hub-1",
+			}.Build(),
+		}.Build()
+
+		f := &function{
+			logger:            logger,
+			hubCache:          hubCache,
+			natGatewaysClient: natGatewaysClient,
+			maskCalculator:    masks.NewCalculator().Build(),
+		}
+
+		err := f.run(ctx, natGateway)
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(natGateway.GetStatus().GetState()).To(
+			Equal(privatev1.NATGatewayState_NAT_GATEWAY_STATE_FAILED),
+		)
+		Expect(natGateway.GetStatus().GetMessage()).To(ContainSubstring("spec.virtualNetwork"))
 	})
 })

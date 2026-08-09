@@ -7,13 +7,13 @@
 #   - name: Delete compute instance
 #     ansible.builtin.import_playbook: osac.workflows.compute_instance.delete
 #     vars:
-#       compute_instance: "{{ ansible_eda.event.payload }}"
+#       compute_instance: "{{ osac_job_vars.resource }}"
 #
 # Hook example:
 #   - name: Delete compute instance with custom hooks
 #     ansible.builtin.import_playbook: osac.workflows.compute_instance.delete
 #     vars:
-#       compute_instance: "{{ ansible_eda.event.payload }}"
+#       compute_instance: "{{ osac_job_vars.resource }}"
 #       hook_workflow_complete:
 #         name: my_custom_hooks
 #         tasks_from: cleanup_vm.yml
@@ -26,7 +26,7 @@
 
 
   vars:
-    compute_instance: "{{ ansible_eda.event.payload }}"
+    compute_instance: "{{ osac_job_vars.resource }}"
 
     # GENERIC HOOKS - Default to noop
     hook_workflow_start_default:

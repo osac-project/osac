@@ -25,7 +25,7 @@ columns:
   value: "has(this.metadata.name)? this.metadata.name: '-'"
 
 - header: TEMPLATE
-  value: this.spec.template
+  value: this.spec.template.id
   type: osac.public.v1.ComputeInstanceTemplate
   lookup: true
 

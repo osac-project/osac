@@ -43,3 +43,12 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - networkclasses
+  - subnets
+  verbs:
+  - get
+  - list
+  - watch

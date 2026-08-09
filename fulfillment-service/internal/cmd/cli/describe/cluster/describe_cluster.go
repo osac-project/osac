@@ -90,8 +90,12 @@ func renderCluster(w io.Writer, cluster *publicv1.Cluster) {
 	writer := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	catalogItem := "-"
 	if cluster.Spec != nil {
-		if catalogItemID := cluster.Spec.GetCatalogItem(); catalogItemID != "" {
-			catalogItem = catalogItemID
+		if ref := cluster.Spec.GetCatalogItem(); ref != nil {
+			if ref.GetName() != "" {
+				catalogItem = ref.GetName()
+			} else if ref.GetId() != "" {
+				catalogItem = ref.GetId()
+			}
 		}
 	}
 	state := "-"

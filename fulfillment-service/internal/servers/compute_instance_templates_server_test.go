@@ -16,6 +16,7 @@ package servers
 import (
 	"fmt"
 
+	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -84,6 +85,9 @@ var _ = Describe("Compute instance templates server", func() {
 		It("Creates object", func() {
 			response, err := server.Create(ctx, publicv1.ComputeInstanceTemplatesCreateRequest_builder{
 				Object: publicv1.ComputeInstanceTemplate_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:       "My title",
 					Description: "My description.",
 				}.Build(),
@@ -100,6 +104,9 @@ var _ = Describe("Compute instance templates server", func() {
 		It("Creates object with parameters", func() {
 			response, err := server.Create(ctx, publicv1.ComputeInstanceTemplatesCreateRequest_builder{
 				Object: publicv1.ComputeInstanceTemplate_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:       "My title",
 					Description: "My description.",
 					Parameters: []*publicv1.ComputeInstanceTemplateParameterDefinition{
@@ -141,6 +148,9 @@ var _ = Describe("Compute instance templates server", func() {
 			for i := range count {
 				_, err := server.Create(ctx, publicv1.ComputeInstanceTemplatesCreateRequest_builder{
 					Object: publicv1.ComputeInstanceTemplate_builder{
+						Metadata: publicv1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Title:       fmt.Sprintf("My title %d", i),
 						Description: fmt.Sprintf("My description %d.", i),
 					}.Build(),
@@ -162,6 +172,9 @@ var _ = Describe("Compute instance templates server", func() {
 			for i := range count {
 				_, err := server.Create(ctx, publicv1.ComputeInstanceTemplatesCreateRequest_builder{
 					Object: publicv1.ComputeInstanceTemplate_builder{
+						Metadata: publicv1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Title:       fmt.Sprintf("My title %d", i),
 						Description: fmt.Sprintf("My description %d.", i),
 					}.Build(),
@@ -185,6 +198,9 @@ var _ = Describe("Compute instance templates server", func() {
 			for i := range count {
 				_, err := server.Create(ctx, publicv1.ComputeInstanceTemplatesCreateRequest_builder{
 					Object: publicv1.ComputeInstanceTemplate_builder{
+						Metadata: publicv1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 						Title:       fmt.Sprintf("My title %d", i),
 						Description: fmt.Sprintf("My description %d.", i),
 					}.Build(),
@@ -206,6 +222,9 @@ var _ = Describe("Compute instance templates server", func() {
 			// Create an object:
 			createResponse, err := server.Create(ctx, publicv1.ComputeInstanceTemplatesCreateRequest_builder{
 				Object: publicv1.ComputeInstanceTemplate_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:       "My title",
 					Description: "My description.",
 				}.Build(),
@@ -234,6 +253,9 @@ var _ = Describe("Compute instance templates server", func() {
 			// Create an object:
 			createResponse, err := server.Create(ctx, publicv1.ComputeInstanceTemplatesCreateRequest_builder{
 				Object: publicv1.ComputeInstanceTemplate_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:       "My title",
 					Description: "My description.",
 				}.Build(),
@@ -269,6 +291,9 @@ var _ = Describe("Compute instance templates server", func() {
 			// Create an object with parameters:
 			createResponse, err := server.Create(ctx, publicv1.ComputeInstanceTemplatesCreateRequest_builder{
 				Object: publicv1.ComputeInstanceTemplate_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:       "My title",
 					Description: "My description.",
 					Parameters: []*publicv1.ComputeInstanceTemplateParameterDefinition{
@@ -324,6 +349,9 @@ var _ = Describe("Compute instance templates server", func() {
 			// Create an object:
 			createResponse, err := server.Create(ctx, publicv1.ComputeInstanceTemplatesCreateRequest_builder{
 				Object: publicv1.ComputeInstanceTemplate_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Title:       "My title",
 					Description: "My description.",
 				}.Build(),

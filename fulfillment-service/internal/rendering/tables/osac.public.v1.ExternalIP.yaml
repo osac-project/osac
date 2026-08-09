@@ -23,7 +23,7 @@ columns:
   value: "has(this.metadata.name)? this.metadata.name: '-'"
 
 - header: POOL
-  value: this.spec.pool
+  value: this.spec.pool.id
 
 - header: STATE
   value: this.status.state

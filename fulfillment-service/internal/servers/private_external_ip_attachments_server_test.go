@@ -15,7 +15,9 @@ package servers
 
 import (
 	"context"
+	"fmt"
 
+	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
@@ -40,7 +42,7 @@ func createExternalIPInState(
 				Tenant: auth.SharedTenant,
 			}.Build(),
 			Spec: privatev1.ExternalIPSpec_builder{
-				Pool: poolID,
+				Pool: privatev1.ExternalIPPoolReference_builder{Id: poolID}.Build(),
 			}.Build(),
 			Status: privatev1.ExternalIPStatus_builder{
 				State:    state,
@@ -63,7 +65,7 @@ func createClusterInState(
 				Tenant: auth.SharedTenant,
 			}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
-				Template: "ocp_small",
+				Template: privatev1.ClusterTemplateReference_builder{Id: "ocp_small"}.Build(),
 			}.Build(),
 		}.Build(),
 	).Do(ctx)
@@ -81,7 +83,7 @@ func createBareMetalInstanceInState(
 				Tenant: auth.SharedTenant,
 			}.Build(),
 			Spec: privatev1.BareMetalInstanceSpec_builder{
-				CatalogItem: "bcm_h100",
+				CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: "bcm_h100"}.Build(),
 			}.Build(),
 		}.Build(),
 	).Do(ctx)
@@ -203,15 +205,15 @@ var _ = Describe("Private external IP attachments server", func() {
 						Name: "ci-attachment",
 					}.Build(),
 					Spec: privatev1.ExternalIPAttachmentSpec_builder{
-						ExternalIp:      eip.GetId(),
-						ComputeInstance: new(ci.GetId()),
+						ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+						ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: ci.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(response.GetObject().GetId()).ToNot(BeEmpty())
-			Expect(response.GetObject().GetSpec().GetExternalIp()).To(Equal(eip.GetId()))
-			Expect(response.GetObject().GetSpec().GetComputeInstance()).To(Equal(ci.GetId()))
+			Expect(response.GetObject().GetSpec().GetExternalIp().GetId()).To(Equal(eip.GetId()))
+			Expect(response.GetObject().GetSpec().GetComputeInstance().GetId()).To(Equal(ci.GetId()))
 			Expect(response.GetObject().GetStatus().GetState()).To(
 				Equal(privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_PENDING))
 		})
@@ -227,14 +229,14 @@ var _ = Describe("Private external IP attachments server", func() {
 						Name: "cluster-api-attachment",
 					}.Build(),
 					Spec: privatev1.ExternalIPAttachmentSpec_builder{
-						ExternalIp:     eip.GetId(),
-						Cluster:        new(cluster.GetId()),
+						ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+						Cluster:        privatev1.ClusterLocalReference_builder{Id: cluster.GetId()}.Build(),
 						TargetEndpoint: privatev1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_API,
 					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(response.GetObject().GetSpec().GetCluster()).To(Equal(cluster.GetId()))
+			Expect(response.GetObject().GetSpec().GetCluster().GetId()).To(Equal(cluster.GetId()))
 			Expect(response.GetObject().GetSpec().GetTargetEndpoint()).To(
 				Equal(privatev1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_API))
 		})
@@ -246,9 +248,12 @@ var _ = Describe("Private external IP attachments server", func() {
 
 			response, err := server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
 				Object: privatev1.ExternalIPAttachment_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.ExternalIPAttachmentSpec_builder{
-						ExternalIp:     eip.GetId(),
-						Cluster:        new(cluster.GetId()),
+						ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+						Cluster:        privatev1.ClusterLocalReference_builder{Id: cluster.GetId()}.Build(),
 						TargetEndpoint: privatev1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_INGRESS,
 					}.Build(),
 				}.Build(),
@@ -265,14 +270,17 @@ var _ = Describe("Private external IP attachments server", func() {
 
 			response, err := server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
 				Object: privatev1.ExternalIPAttachment_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.ExternalIPAttachmentSpec_builder{
-						ExternalIp:        eip.GetId(),
-						BaremetalInstance: new(bmi.GetId()),
+						ExternalIp:        privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+						BaremetalInstance: privatev1.BareMetalInstanceLocalReference_builder{Id: bmi.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(response.GetObject().GetSpec().GetBaremetalInstance()).To(Equal(bmi.GetId()))
+			Expect(response.GetObject().GetSpec().GetBaremetalInstance().GetId()).To(Equal(bmi.GetId()))
 		})
 
 		It("Lists external IP attachments", func() {
@@ -287,9 +295,12 @@ var _ = Describe("Private external IP attachments server", func() {
 
 			_, err := server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
 				Object: privatev1.ExternalIPAttachment_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.ExternalIPAttachmentSpec_builder{
-						ExternalIp:      eip1.GetId(),
-						ComputeInstance: new(ci1.GetId()),
+						ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eip1.GetId()}.Build(),
+						ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: ci1.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -297,9 +308,12 @@ var _ = Describe("Private external IP attachments server", func() {
 
 			_, err = server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
 				Object: privatev1.ExternalIPAttachment_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.ExternalIPAttachmentSpec_builder{
-						ExternalIp:      eip2.GetId(),
-						ComputeInstance: new(ci2.GetId()),
+						ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eip2.GetId()}.Build(),
+						ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: ci2.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -323,8 +337,8 @@ var _ = Describe("Private external IP attachments server", func() {
 						Name: "my-attachment",
 					}.Build(),
 					Spec: privatev1.ExternalIPAttachmentSpec_builder{
-						ExternalIp:      eip.GetId(),
-						ComputeInstance: new(ci.GetId()),
+						ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+						ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: ci.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -335,8 +349,8 @@ var _ = Describe("Private external IP attachments server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(getResponse.GetObject().GetId()).To(Equal(createResponse.GetObject().GetId()))
-			Expect(getResponse.GetObject().GetSpec().GetExternalIp()).To(Equal(eip.GetId()))
-			Expect(getResponse.GetObject().GetSpec().GetComputeInstance()).To(Equal(ci.GetId()))
+			Expect(getResponse.GetObject().GetSpec().GetExternalIp().GetId()).To(Equal(eip.GetId()))
+			Expect(getResponse.GetObject().GetSpec().GetComputeInstance().GetId()).To(Equal(ci.GetId()))
 		})
 
 		It("Updates metadata of an external IP attachment", func() {
@@ -351,8 +365,8 @@ var _ = Describe("Private external IP attachments server", func() {
 						Name: "my-attachment",
 					}.Build(),
 					Spec: privatev1.ExternalIPAttachmentSpec_builder{
-						ExternalIp:      eip.GetId(),
-						ComputeInstance: new(ci.GetId()),
+						ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+						ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: ci.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -381,9 +395,12 @@ var _ = Describe("Private external IP attachments server", func() {
 
 			createResponse, err := server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
 				Object: privatev1.ExternalIPAttachment_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.ExternalIPAttachmentSpec_builder{
-						ExternalIp:      eip.GetId(),
-						ComputeInstance: new(ci.GetId()),
+						ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+						ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: ci.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -403,9 +420,12 @@ var _ = Describe("Private external IP attachments server", func() {
 
 			createResponse, err := server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
 				Object: privatev1.ExternalIPAttachment_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.ExternalIPAttachmentSpec_builder{
-						ExternalIp:      eip.GetId(),
-						ComputeInstance: new(ci.GetId()),
+						ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+						ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: ci.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -446,8 +466,11 @@ var _ = Describe("Private external IP attachments server", func() {
 		It("Rejects Create with empty spec.external_ip", func() {
 			_, err := server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
 				Object: privatev1.ExternalIPAttachment_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.ExternalIPAttachmentSpec_builder{
-						ComputeInstance: new("some-ci"),
+						ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: "some-ci"}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -461,8 +484,11 @@ var _ = Describe("Private external IP attachments server", func() {
 		It("Rejects Create with no target set", func() {
 			_, err := server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
 				Object: privatev1.ExternalIPAttachment_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.ExternalIPAttachmentSpec_builder{
-						ExternalIp: "some-ip",
+						ExternalIp: privatev1.ExternalIPLocalReference_builder{Id: "some-ip"}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -480,9 +506,12 @@ var _ = Describe("Private external IP attachments server", func() {
 
 			_, err := server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
 				Object: privatev1.ExternalIPAttachment_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.ExternalIPAttachmentSpec_builder{
-						ExternalIp: eip.GetId(),
-						Cluster:    new(cluster.GetId()),
+						ExternalIp: privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+						Cluster:    privatev1.ClusterLocalReference_builder{Id: cluster.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -502,9 +531,12 @@ var _ = Describe("Private external IP attachments server", func() {
 
 			_, err := server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
 				Object: privatev1.ExternalIPAttachment_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.ExternalIPAttachmentSpec_builder{
-						ExternalIp:      eip.GetId(),
-						ComputeInstance: new(ci.GetId()),
+						ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+						ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: ci.GetId()}.Build(),
 						TargetEndpoint:  privatev1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_API,
 					}.Build(),
 				}.Build(),
@@ -525,9 +557,12 @@ var _ = Describe("Private external IP attachments server", func() {
 
 			_, err := server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
 				Object: privatev1.ExternalIPAttachment_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.ExternalIPAttachmentSpec_builder{
-						ExternalIp:      "nonexistent-external-ip-id",
-						ComputeInstance: new(ci.GetId()),
+						ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: "nonexistent-external-ip-id"}.Build(),
+						ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: ci.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -546,9 +581,12 @@ var _ = Describe("Private external IP attachments server", func() {
 
 			_, err := server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
 				Object: privatev1.ExternalIPAttachment_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.ExternalIPAttachmentSpec_builder{
-						ExternalIp:      eip.GetId(),
-						ComputeInstance: new(ci.GetId()),
+						ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+						ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: ci.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -567,9 +605,12 @@ var _ = Describe("Private external IP attachments server", func() {
 
 			_, err := server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
 				Object: privatev1.ExternalIPAttachment_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.ExternalIPAttachmentSpec_builder{
-						ExternalIp:      eip.GetId(),
-						ComputeInstance: new(ci.GetId()),
+						ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+						ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: ci.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -588,9 +629,12 @@ var _ = Describe("Private external IP attachments server", func() {
 
 			_, err := server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
 				Object: privatev1.ExternalIPAttachment_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.ExternalIPAttachmentSpec_builder{
-						ExternalIp:      eip.GetId(),
-						ComputeInstance: new("nonexistent-ci-id"),
+						ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+						ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: "nonexistent-ci-id"}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -608,9 +652,12 @@ var _ = Describe("Private external IP attachments server", func() {
 
 			_, err := server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
 				Object: privatev1.ExternalIPAttachment_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.ExternalIPAttachmentSpec_builder{
-						ExternalIp:     eip.GetId(),
-						Cluster:        new("nonexistent-cluster-id"),
+						ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+						Cluster:        privatev1.ClusterLocalReference_builder{Id: "nonexistent-cluster-id"}.Build(),
 						TargetEndpoint: privatev1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_API,
 					}.Build(),
 				}.Build(),
@@ -629,9 +676,12 @@ var _ = Describe("Private external IP attachments server", func() {
 
 			_, err := server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
 				Object: privatev1.ExternalIPAttachment_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.ExternalIPAttachmentSpec_builder{
-						ExternalIp:        eip.GetId(),
-						BaremetalInstance: new("nonexistent-bmi-id"),
+						ExternalIp:        privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+						BaremetalInstance: privatev1.BareMetalInstanceLocalReference_builder{Id: "nonexistent-bmi-id"}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -655,9 +705,12 @@ var _ = Describe("Private external IP attachments server", func() {
 
 			_, err := server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
 				Object: privatev1.ExternalIPAttachment_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.ExternalIPAttachmentSpec_builder{
-						ExternalIp:      eip.GetId(),
-						ComputeInstance: new(ci1.GetId()),
+						ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+						ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: ci1.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -665,9 +718,12 @@ var _ = Describe("Private external IP attachments server", func() {
 
 			_, err = server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
 				Object: privatev1.ExternalIPAttachment_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.ExternalIPAttachmentSpec_builder{
-						ExternalIp:      eip.GetId(),
-						ComputeInstance: new(ci2.GetId()),
+						ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+						ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: ci2.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -688,9 +744,12 @@ var _ = Describe("Private external IP attachments server", func() {
 
 			_, err := server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
 				Object: privatev1.ExternalIPAttachment_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.ExternalIPAttachmentSpec_builder{
-						ExternalIp:      eip.GetId(),
-						ComputeInstance: new(ci1.GetId()),
+						ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+						ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: ci1.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -705,9 +764,12 @@ var _ = Describe("Private external IP attachments server", func() {
 
 			_, err = server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
 				Object: privatev1.ExternalIPAttachment_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.ExternalIPAttachmentSpec_builder{
-						ExternalIp:      eip.GetId(),
-						ComputeInstance: new(ci2.GetId()),
+						ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+						ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: ci2.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -728,9 +790,12 @@ var _ = Describe("Private external IP attachments server", func() {
 
 			createResponse, err := server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
 				Object: privatev1.ExternalIPAttachment_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.ExternalIPAttachmentSpec_builder{
-						ExternalIp:      eip.GetId(),
-						ComputeInstance: new(ci.GetId()),
+						ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+						ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: ci.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -742,7 +807,7 @@ var _ = Describe("Private external IP attachments server", func() {
 				Object: privatev1.ExternalIPAttachment_builder{
 					Id: createResponse.GetObject().GetId(),
 					Spec: privatev1.ExternalIPAttachmentSpec_builder{
-						ExternalIp: eip2.GetId(),
+						ExternalIp: privatev1.ExternalIPLocalReference_builder{Id: eip2.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{
@@ -765,9 +830,12 @@ var _ = Describe("Private external IP attachments server", func() {
 
 			createResponse, err := server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
 				Object: privatev1.ExternalIPAttachment_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.ExternalIPAttachmentSpec_builder{
-						ExternalIp:      eip.GetId(),
-						ComputeInstance: new(ci.GetId()),
+						ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+						ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: ci.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -779,8 +847,8 @@ var _ = Describe("Private external IP attachments server", func() {
 				Object: privatev1.ExternalIPAttachment_builder{
 					Id: createResponse.GetObject().GetId(),
 					Spec: privatev1.ExternalIPAttachmentSpec_builder{
-						ExternalIp:      eip.GetId(),
-						ComputeInstance: new(ci2.GetId()),
+						ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+						ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: ci2.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{
@@ -805,9 +873,12 @@ var _ = Describe("Private external IP attachments server", func() {
 
 			_, err := server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
 				Object: privatev1.ExternalIPAttachment_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.ExternalIPAttachmentSpec_builder{
-						ExternalIp:      eip.GetId(),
-						ComputeInstance: new(ci.GetId()),
+						ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+						ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: ci.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -826,9 +897,12 @@ var _ = Describe("Private external IP attachments server", func() {
 
 			createResp, err := server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
 				Object: privatev1.ExternalIPAttachment_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.ExternalIPAttachmentSpec_builder{
-						ExternalIp:      eip.GetId(),
-						ComputeInstance: new(ci.GetId()),
+						ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+						ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: ci.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())

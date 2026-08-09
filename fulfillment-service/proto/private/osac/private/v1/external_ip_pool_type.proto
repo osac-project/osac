@@ -164,3 +164,11 @@ enum ExternalIPPoolState {
   // No CRD phase equivalent (follows the Subnet pattern for proto-level tracking).
   EXTERNAL_IP_POOL_STATE_DELETE_FAILED = 5;
 }
+
+// Reference to an ExternalIPPool resource.
+message ExternalIPPoolReference {
+  string id = 1;
+  string name = 2;
+  string project = 3;
+  bool shared = 4;
+}

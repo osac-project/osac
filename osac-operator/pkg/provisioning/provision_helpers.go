@@ -62,15 +62,22 @@ const (
 // HandleBackoff checks if the backoff period has elapsed since the last failed job.
 // If elapsed, it calls triggerFn to retry. Otherwise, it returns a RequeueAfter with the remaining delay.
 func HandleBackoff(ctx context.Context, provState *State, latestJob *v1alpha1.JobStatus, triggerFn func() (ctrl.Result, error)) (ctrl.Result, error) {
+	return handleBackoffForTarget(ctx, provState, "", latestJob, triggerFn)
+}
+
+// handleBackoffForTarget is HandleBackoff scoped to a single job target, so
+// concurrent targets on the same resource back off independently using only
+// their own failed-job history.
+func handleBackoffForTarget(ctx context.Context, provState *State, target string, latestJob *v1alpha1.JobStatus, triggerFn func() (ctrl.Result, error)) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
-	backoff := ComputeBackoffFromJobs(*provState.Jobs, provState.DesiredConfigVersion)
+	backoff := computeBackoffFromJobsForTarget(*provState.Jobs, provState.DesiredConfigVersion, target)
 	elapsed := time.Since(latestJob.Timestamp.Time)
 	if elapsed >= backoff {
-		log.Info("backoff elapsed, retrying provision", "jobID", latestJob.JobID, "backoff", backoff, "elapsed", elapsed)
+		log.Info("backoff elapsed, retrying provision", "jobID", latestJob.JobID, "target", target, "backoff", backoff, "elapsed", elapsed)
 		return triggerFn()
 	}
 	remaining := backoff - elapsed
-	log.Info("provision failed, backing off", "jobID", latestJob.JobID, "backoff", backoff, "remaining", remaining)
+	log.Info("provision failed, backing off", "jobID", latestJob.JobID, "target", target, "backoff", backoff, "remaining", remaining)
 	return ctrl.Result{RequeueAfter: remaining}, nil
 }
 
@@ -118,14 +125,27 @@ func computeBackoffFromFailedJobs(jobs []v1alpha1.JobStatus, match func(*v1alpha
 // ComputeBackoffFromJobs determines the next backoff duration based on the gap
 // between the last two failed provision jobs with the same ConfigVersion.
 func ComputeBackoffFromJobs(jobs []v1alpha1.JobStatus, configVersion string) time.Duration {
+	return computeBackoffFromJobsForTarget(jobs, configVersion, "")
+}
+
+// computeBackoffFromJobsForTarget is ComputeBackoffFromJobs scoped to a single
+// job target, so a failing target's backoff is computed only from that
+// target's own job history.
+func computeBackoffFromJobsForTarget(jobs []v1alpha1.JobStatus, configVersion, target string) time.Duration {
 	return computeBackoffFromFailedJobs(jobs, func(j *v1alpha1.JobStatus) bool {
-		return j.Type == v1alpha1.JobTypeProvision && j.ConfigVersion == configVersion
+		return j.Type == v1alpha1.JobTypeProvision && j.ConfigVersion == configVersion && j.Target == target
 	})
 }
 
 // ComputeDeprovisionBackoff determines the next backoff duration for deprovision retries.
 func ComputeDeprovisionBackoff(jobs []v1alpha1.JobStatus) time.Duration {
+	return computeDeprovisionBackoffForTarget(jobs, "")
+}
+
+// computeDeprovisionBackoffForTarget is ComputeDeprovisionBackoff scoped to a
+// single job target.
+func computeDeprovisionBackoffForTarget(jobs []v1alpha1.JobStatus, target string) time.Duration {
 	return computeBackoffFromFailedJobs(jobs, func(j *v1alpha1.JobStatus) bool {
-		return j.Type == v1alpha1.JobTypeDeprovision
+		return j.Type == v1alpha1.JobTypeDeprovision && j.Target == target
 	})
 }

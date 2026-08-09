@@ -132,9 +132,9 @@ def test_cluster_create_with_version(
     ssh_public_key_path: str,
 ) -> None:
     """Verify that an explicit --version resolves end-to-end: the Cluster API
-    resource stores versionName, the ClusterOrder CR's releaseImage is resolved
-    from the matching ClusterVersion, and the provisioned HostedCluster uses
-    that release image."""
+    resource stores the version reference, the ClusterOrder CR's releaseImage
+    is resolved from the matching ClusterVersion, and the provisioned
+    HostedCluster uses that release image."""
     version = private_grpc.ensure_cluster_version(version="4.20.0-e2e", image=TEST_RELEASE_IMAGE)
 
     name = unique_name("e2e-cluster-version")
@@ -150,7 +150,7 @@ def test_cluster_create_with_version(
         co_name = wait_for_cluster_order_cr(k8s=k8s_hub_client, uuid=uuid)
 
         cluster = grpc.get_cluster(cluster_id=uuid)
-        assert cluster["object"]["spec"]["versionName"] == version["name"]
+        assert cluster["object"]["spec"]["version"]["name"] == version["name"]
 
         release_image = poll_until(
             fn=lambda: k8s_hub_client.get_cluster_order_spec(name=co_name).get("releaseImage", ""),
@@ -202,7 +202,7 @@ def test_cluster_create_rejected_for_invalid_version(
     def _create_with_version(version_name: str) -> tuple[str, int]:
         return grpc.call_unchecked(
             service="osac.public.v1.Clusters/Create",
-            data={"object": {"spec": {"template": {"name": cluster_template}, "version_name": version_name}}},
+            data={"object": {"spec": {"template": {"name": cluster_template}, "version": {"name": version_name}}}},
         )
 
     output, rc = _create_with_version(disabled["name"])

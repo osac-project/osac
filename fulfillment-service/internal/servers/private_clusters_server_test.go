@@ -1110,7 +1110,7 @@ var _ = Describe("Private clusters server", func() {
 				createResponse, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
 						Spec: privatev1.ClusterSpec_builder{
-							Template: "my-template-id",
+							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build())

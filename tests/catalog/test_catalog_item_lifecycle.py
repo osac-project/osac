@@ -223,7 +223,7 @@ def test_create_cluster_with_catalog_item_version(
     grpc: GRPCClient, private_grpc: GRPCClient, cli: OsacCLI, k8s_hub_client: K8sClient, cluster_template: str
 ) -> None:
     """Verify the catalog-item version resolution path: a field_definition
-    default for version_name overrides the template's own spec_defaults.version_name."""
+    default for version overrides the template's own spec_defaults.version."""
     version = private_grpc.ensure_cluster_version(version="4.20.0-e2e-catalog-item", image=TEST_RELEASE_IMAGE)
 
     name = unique_name("e2e-cv-cat")
@@ -233,7 +233,7 @@ def test_create_cluster_with_catalog_item_version(
         published=True,
         field_definitions=[
             {
-                "path": "version_name",
+                "path": "version",
                 "display_name": "Version",
                 "editable": True,
                 "default": {"stringValue": version["name"]},
@@ -246,7 +246,7 @@ def test_create_cluster_with_catalog_item_version(
         cluster_id = cli.create_cluster_with_catalog_item(catalog_item=catalog_item_id, name=cluster_name)
 
         cluster = grpc.get_cluster(cluster_id=cluster_id)
-        assert cluster["object"]["spec"]["versionName"] == version["name"]
+        assert cluster["object"]["spec"]["version"]["name"] == version["name"]
 
         co_name = wait_for_cluster_order_cr(k8s=k8s_hub_client, uuid=cluster_id)
         release_image = poll_until(

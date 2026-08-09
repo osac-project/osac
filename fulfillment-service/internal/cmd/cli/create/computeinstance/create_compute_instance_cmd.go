@@ -35,6 +35,7 @@ import (
 
 	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/fieldutil"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/netutil"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/exit"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
@@ -783,30 +784,6 @@ func (c *runnerContext) applyNetworkingFlags(spec *publicv1.ComputeInstanceSpec_
 	return nil
 }
 
-// extractSecurityGroupListSuffix returns the substring before a trailing "security-groups=" or "security_groups="
-// clause (case-insensitive) and the list parsed from the remainder of the string after that clause.
-// Works entirely on the lowercase copy to avoid Unicode byte-offset issues.
-func extractSecurityGroupListSuffix(s string) (prefix string, groups []string, ok bool) {
-	lower := strings.ToLower(s)
-
-	// Try both "security-groups=" and "security_groups="
-	for _, marker := range []string{"security-groups=", "security_groups="} {
-		if i := strings.Index(lower, marker); i >= 0 {
-			// Work entirely on lowercase copy to avoid Unicode byte/rune offset mismatches
-			prefix = strings.TrimSpace(strings.TrimSuffix(lower[:i], ","))
-			rest := strings.TrimSpace(lower[i+len(marker):])
-			for _, id := range strings.Split(rest, ",") {
-				id = strings.TrimSpace(id)
-				if id != "" {
-					groups = append(groups, id)
-				}
-			}
-			return prefix, groups, true
-		}
-	}
-	return s, nil, false
-}
-
 // parseMainSubnetOnly parses the subnet portion of --network-attachment (no security-groups clause): either a bare id
 // or exactly subnet=<id>, optionally with a single comma between other parts only if we add more keys later.
 func parseMainSubnetOnly(main string) (string, error) {
@@ -853,7 +830,7 @@ func parseNetworkAttachmentFlag(s string) (*publicv1.NetworkAttachment, error) {
 	if s == "" {
 		return nil, fmt.Errorf("empty --network-attachment value")
 	}
-	prefix, securityGroups, hadGroups := extractSecurityGroupListSuffix(s)
+	prefix, securityGroups, hadGroups := netutil.ExtractSecurityGroupListSuffix(s)
 	subnet, err := parseMainSubnetOnly(prefix)
 	if err != nil {
 		return nil, err

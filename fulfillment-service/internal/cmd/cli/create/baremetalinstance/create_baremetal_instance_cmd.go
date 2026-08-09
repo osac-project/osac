@@ -23,6 +23,7 @@ import (
 
 	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/fieldutil"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/netutil"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/lookup"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
@@ -292,31 +293,13 @@ func (c *runnerContext) applyNetworkingFlags(spec *publicv1.BareMetalInstanceSpe
 	return nil
 }
 
-func extractSecurityGroupListSuffix(s string) (prefix string, groups []string, ok bool) {
-	lower := strings.ToLower(s)
-	for _, marker := range []string{"security-groups=", "security_groups="} {
-		if i := strings.Index(lower, marker); i >= 0 {
-			prefix = strings.TrimSpace(strings.TrimSuffix(lower[:i], ","))
-			rest := strings.TrimSpace(lower[i+len(marker):])
-			for _, id := range strings.Split(rest, ",") {
-				id = strings.TrimSpace(id)
-				if id != "" {
-					groups = append(groups, id)
-				}
-			}
-			return prefix, groups, true
-		}
-	}
-	return s, nil, false
-}
-
 func parseBareMetalNetworkAttachmentFlag(s string) (*publicv1.BareMetalNetworkAttachment, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return nil, fmt.Errorf("empty --network-attachment value")
 	}
 
-	prefix, securityGroups, _ := extractSecurityGroupListSuffix(s)
+	prefix, securityGroups, _ := netutil.ExtractSecurityGroupListSuffix(s)
 
 	if !strings.Contains(prefix, "=") && !strings.EqualFold(prefix, "primary") {
 		builder := publicv1.BareMetalNetworkAttachment_builder{

@@ -91,3 +91,23 @@
     - _vnet_create_resp is not skipped
     - _vnet_create_resp is changed or (_vnet_create_resp.status | default(0)) in [200, 201]
     - _vnet_create_resp.json is mapping
+
+- name: Wait for V-Net to finish provisioning
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/vnet/{{ vnet_id }}"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    return_content: true
+    status_code: 200
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _vnet_status_resp
+  no_log: true
+  until: >-
+    _vnet_status_resp.json is mapping
+    and ((_vnet_status_resp.json.data | default([]) | first | default({}))['provisioning'] | default(true)) == false
+    and ((_vnet_status_resp.json.data | default([]) | first | default({}))['state'] | default('')) == 'active'
+  retries: "{{ vnet_wait_retries }}"
+  delay: "{{ vnet_wait_delay }}"
+  when: not (vnet_already_existed | default(false))

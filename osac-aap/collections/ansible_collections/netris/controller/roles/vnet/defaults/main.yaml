@@ -1,3 +1,5 @@
 ---
 vnet_state: present
 vnet_vlan_id: auto
+vnet_wait_retries: 30
+vnet_wait_delay: 10

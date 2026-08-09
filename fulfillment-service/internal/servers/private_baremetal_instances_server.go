@@ -399,7 +399,13 @@ func (s *PrivateBareMetalInstancesServer) resolveDefaultInterface(
 	}
 	catResp, err := s.catalogItemsDao.Get().SetId(catalogItemID).Do(ctx)
 	if err != nil {
-		return "", nil
+		var notFoundErr *dao.ErrNotFound
+		if errors.As(err, &notFoundErr) {
+			return "", nil
+		}
+		s.logger.ErrorContext(ctx, "Failed to lookup catalog item for default interface resolution",
+			slog.String("catalog_item", catalogItemID), slog.Any("error", err))
+		return "", grpcstatus.Errorf(grpccodes.Internal, "failed to resolve default interface")
 	}
 	templateID := refKey(catResp.GetObject().GetTemplate())
 	if templateID == "" {
@@ -407,7 +413,13 @@ func (s *PrivateBareMetalInstancesServer) resolveDefaultInterface(
 	}
 	tmplResp, err := s.templatesDao.Get().SetId(templateID).Do(ctx)
 	if err != nil {
-		return "", nil
+		var notFoundErr *dao.ErrNotFound
+		if errors.As(err, &notFoundErr) {
+			return "", nil
+		}
+		s.logger.ErrorContext(ctx, "Failed to lookup template for default interface resolution",
+			slog.String("template_id", templateID), slog.Any("error", err))
+		return "", grpcstatus.Errorf(grpccodes.Internal, "failed to resolve default interface")
 	}
 	hostTypeID := tmplResp.GetObject().GetHostType()
 	if hostTypeID == "" {
@@ -415,7 +427,13 @@ func (s *PrivateBareMetalInstancesServer) resolveDefaultInterface(
 	}
 	htResp, err := s.hostTypesDao.Get().SetId(hostTypeID).Do(ctx)
 	if err != nil {
-		return "", nil
+		var notFoundErr *dao.ErrNotFound
+		if errors.As(err, &notFoundErr) {
+			return "", nil
+		}
+		s.logger.ErrorContext(ctx, "Failed to lookup host type for default interface resolution",
+			slog.String("host_type_id", hostTypeID), slog.Any("error", err))
+		return "", grpcstatus.Errorf(grpccodes.Internal, "failed to resolve default interface")
 	}
 	for _, ni := range htResp.GetObject().GetInterfaces() {
 		if strings.EqualFold(ni.GetRole(), "fabric") {

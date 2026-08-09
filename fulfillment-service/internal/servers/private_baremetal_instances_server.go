@@ -16,6 +16,7 @@ package servers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"maps"
 	"strings"
@@ -49,6 +50,7 @@ var _ privatev1.BareMetalInstancesServer = (*PrivateBareMetalInstancesServer)(ni
 type PrivateBareMetalInstancesServer struct {
 	privatev1.UnimplementedBareMetalInstancesServer
 	logger             *slog.Logger
+	tenancyLogic       auth.TenancyLogic
 	generic            *GenericServer[*privatev1.BareMetalInstance]
 	catalogItemsDao    *dao.GenericDAO[*privatev1.BareMetalInstanceCatalogItem]
 	templatesDao       *dao.GenericDAO[*privatev1.BareMetalInstanceTemplate]
@@ -56,6 +58,7 @@ type PrivateBareMetalInstancesServer struct {
 	subnetsDao         *dao.GenericDAO[*privatev1.Subnet]
 	virtualNetworksDao *dao.GenericDAO[*privatev1.VirtualNetwork]
 	networkClassesDao  *dao.GenericDAO[*privatev1.NetworkClass]
+	securityGroupsDao  *dao.GenericDAO[*privatev1.SecurityGroup]
 }
 
 func NewPrivateBareMetalInstancesServer() *PrivateBareMetalInstancesServerBuilder {
@@ -155,6 +158,15 @@ func (b *PrivateBareMetalInstancesServerBuilder) Build() (result *PrivateBareMet
 		return
 	}
 
+	securityGroupsDao, err := dao.NewGenericDAO[*privatev1.SecurityGroup]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
 	generic, err := NewGenericServer[*privatev1.BareMetalInstance]().
 		SetLogger(b.logger).
 		SetService(privatev1.BareMetalInstances_ServiceDesc.ServiceName).
@@ -169,6 +181,7 @@ func (b *PrivateBareMetalInstancesServerBuilder) Build() (result *PrivateBareMet
 
 	result = &PrivateBareMetalInstancesServer{
 		logger:             b.logger,
+		tenancyLogic:       b.tenancyLogic,
 		generic:            generic,
 		catalogItemsDao:    catalogItemsDao,
 		templatesDao:       templatesDao,
@@ -176,6 +189,7 @@ func (b *PrivateBareMetalInstancesServerBuilder) Build() (result *PrivateBareMet
 		subnetsDao:         subnetsDao,
 		virtualNetworksDao: virtualNetworksDao,
 		networkClassesDao:  networkClassesDao,
+		securityGroupsDao:  securityGroupsDao,
 	}
 	return
 }
@@ -198,6 +212,9 @@ func (s *PrivateBareMetalInstancesServer) Create(ctx context.Context,
 		return
 	}
 	if err = s.validateSpec(request.GetObject()); err != nil {
+		return
+	}
+	if err = s.applyDefaultNetworkAttachments(ctx, request.GetObject()); err != nil {
 		return
 	}
 	if err = s.validateNetworkAttachments(ctx, request.GetObject()); err != nil {
@@ -266,6 +283,147 @@ func (s *PrivateBareMetalInstancesServer) validateSpec(bmi *privatev1.BareMetalI
 	}
 
 	return nil
+}
+
+// applyDefaultNetworkAttachments populates network_attachments with tenant defaults when
+// omitted at create time: default IPv4 Subnet, default SecurityGroup, first fabric-role
+// interface from the HostType.
+func (s *PrivateBareMetalInstancesServer) applyDefaultNetworkAttachments(
+	ctx context.Context, bmi *privatev1.BareMetalInstance) error {
+	if len(bmi.GetSpec().GetNetworkAttachments()) > 0 {
+		return nil
+	}
+
+	tenantName := bmi.GetMetadata().GetTenant()
+	if tenantName == "" {
+		var err error
+		tenantName, err = s.tenancyLogic.DetermineDefaultTenant(ctx)
+		if err != nil {
+			s.logger.ErrorContext(ctx, "Failed to determine default tenant for network attachment defaults",
+				slog.Any("error", err))
+			return grpcstatus.Errorf(grpccodes.Internal, "failed to determine tenant")
+		}
+	}
+
+	subnet, err := s.findDefaultSubnet(ctx, tenantName)
+	if err != nil {
+		return err
+	}
+	if subnet == nil {
+		return nil
+	}
+
+	sg, err := s.findDefaultSecurityGroup(ctx, tenantName)
+	if err != nil {
+		return err
+	}
+	if sg == nil {
+		return nil
+	}
+
+	ifaceName, err := s.resolveDefaultInterface(ctx, bmi)
+	if err != nil {
+		return err
+	}
+
+	attachment := privatev1.BareMetalNetworkAttachment_builder{
+		Subnet: privatev1.SubnetLocalReference_builder{Id: subnet.GetId()}.Build(),
+		SecurityGroups: []*privatev1.SecurityGroupLocalReference{
+			privatev1.SecurityGroupLocalReference_builder{Id: sg.GetId()}.Build(),
+		},
+	}
+	if ifaceName != "" {
+		attachment.Interface = &ifaceName
+	}
+
+	bmi.GetSpec().SetNetworkAttachments([]*privatev1.BareMetalNetworkAttachment{
+		attachment.Build(),
+	})
+
+	return nil
+}
+
+func (s *PrivateBareMetalInstancesServer) findDefaultSubnet(
+	ctx context.Context, tenantName string) (*privatev1.Subnet, error) {
+	filter := fmt.Sprintf(
+		"this.metadata.labels['%s'] == 'true' && this.metadata.tenant == %q",
+		defaultLabel, tenantName,
+	)
+	listResp, err := s.subnetsDao.List().SetFilter(filter).Do(ctx)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to list default subnets",
+			slog.String("tenant", tenantName), slog.Any("error", err))
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to find default subnet")
+	}
+	for _, subnet := range listResp.GetItems() {
+		if subnet.GetMetadata().HasDeletionTimestamp() {
+			continue
+		}
+		if subnet.GetSpec().HasIpv4Cidr() {
+			return subnet, nil
+		}
+	}
+	return nil, nil
+}
+
+func (s *PrivateBareMetalInstancesServer) findDefaultSecurityGroup(
+	ctx context.Context, tenantName string) (*privatev1.SecurityGroup, error) {
+	filter := fmt.Sprintf(
+		"this.metadata.labels['%s'] == 'true' && this.metadata.tenant == %q",
+		defaultLabel, tenantName,
+	)
+	listResp, err := s.securityGroupsDao.List().SetFilter(filter).Do(ctx)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to list default security groups",
+			slog.String("tenant", tenantName), slog.Any("error", err))
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to find default security group")
+	}
+	for _, sg := range listResp.GetItems() {
+		if sg.GetMetadata().HasDeletionTimestamp() {
+			continue
+		}
+		return sg, nil
+	}
+	return nil, nil
+}
+
+// resolveDefaultInterface returns the first fabric-role interface name from the HostType
+// resolved via the catalog_item → template → host_type chain. Returns ("", nil) if the
+// chain cannot be resolved (no template or no host_type). Returns an error if a HostType
+// is found but has no fabric-role interface.
+func (s *PrivateBareMetalInstancesServer) resolveDefaultInterface(
+	ctx context.Context, bmi *privatev1.BareMetalInstance) (string, error) {
+	catalogItemID := refKey(bmi.GetSpec().GetCatalogItem())
+	if catalogItemID == "" {
+		return "", nil
+	}
+	catResp, err := s.catalogItemsDao.Get().SetId(catalogItemID).Do(ctx)
+	if err != nil {
+		return "", nil
+	}
+	templateID := refKey(catResp.GetObject().GetTemplate())
+	if templateID == "" {
+		return "", nil
+	}
+	tmplResp, err := s.templatesDao.Get().SetId(templateID).Do(ctx)
+	if err != nil {
+		return "", nil
+	}
+	hostTypeID := tmplResp.GetObject().GetHostType()
+	if hostTypeID == "" {
+		return "", nil
+	}
+	htResp, err := s.hostTypesDao.Get().SetId(hostTypeID).Do(ctx)
+	if err != nil {
+		return "", nil
+	}
+	for _, ni := range htResp.GetObject().GetInterfaces() {
+		if strings.EqualFold(ni.GetRole(), "fabric") {
+			return ni.GetName(), nil
+		}
+	}
+	return "", grpcstatus.Errorf(grpccodes.FailedPrecondition,
+		"host type '%s' has no fabric-role interface for default network attachment", hostTypeID)
 }
 
 // validateAndApplyCatalogItem verifies the referenced catalog item exists, is accessible,

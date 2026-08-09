@@ -21,6 +21,10 @@ mce:
 # OSAC VMaaS (VM-as-a-Service) CI Environment Values
 # VMaaS CI values
 
+# --- CSI Driver ---
+csiDriver:
+  enabled: true
+
 # --- Operator ---
 operator:
   image:

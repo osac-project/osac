@@ -52,6 +52,12 @@ jobs:
               - '!**/LICENSE'
               - '!**/*.md'
               - '!**/docs/**'
+              - '!**/.claude/**'
+              - '!**/.cursor/**'
+              - '!**/.gemini/**'
+              - '!.design/**'
+              - '!.skillsaw.yaml'
+              - '!.pre-commit-config.yaml'
 
   run-unit-tests:
     name: Run unit tests

@@ -8,11 +8,13 @@ on:
       - '!fulfillment-service/LICENSE'
       - '!fulfillment-service/**/*.md'
       - '!fulfillment-service/docs/**'
+      - '!fulfillment-service/.claude/**'
       - 'osac-operator/**'
       - '!osac-operator/OWNERS'
       - '!osac-operator/LICENSE'
       - '!osac-operator/**/*.md'
       - '!osac-operator/docs/**'
+      - '!osac-operator/.claude/**'
 
 permissions:
   contents: read
@@ -38,12 +40,14 @@ jobs:
               - '!fulfillment-service/LICENSE'
               - '!fulfillment-service/**/*.md'
               - '!fulfillment-service/docs/**'
+              - '!fulfillment-service/.claude/**'
             osac-operator:
               - 'osac-operator/**'
               - '!osac-operator/OWNERS'
               - '!osac-operator/LICENSE'
               - '!osac-operator/**/*.md'
               - '!osac-operator/docs/**'
+              - '!osac-operator/.claude/**'
 
   check-generated-code:
     name: Check generated code (${{ matrix.component }})

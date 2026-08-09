@@ -57,6 +57,12 @@ jobs:
               - '!**/LICENSE'
               - '!**/*.md'
               - '!**/docs/**'
+              - '!**/.claude/**'
+              - '!**/.cursor/**'
+              - '!**/.gemini/**'
+              - '!.design/**'
+              - '!.skillsaw.yaml'
+              - '!.pre-commit-config.yaml'
 
   # Builds fulfillment-service, osac-operator, osac-aap's execution
   # environment (twice -- once each for aap.bootstrap.image and

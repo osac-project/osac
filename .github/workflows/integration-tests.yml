@@ -42,6 +42,12 @@ jobs:
               - '!**/LICENSE'
               - '!**/*.md'
               - '!**/docs/**'
+              - '!**/.claude/**'
+              - '!**/.cursor/**'
+              - '!**/.gemini/**'
+              - '!.design/**'
+              - '!.skillsaw.yaml'
+              - '!.pre-commit-config.yaml'
 
   # fulfillment-service, osac-operator, and osac-aap use genuinely different
   # integration test mechanisms (ginkgo directly, a Kind cluster + Makefile

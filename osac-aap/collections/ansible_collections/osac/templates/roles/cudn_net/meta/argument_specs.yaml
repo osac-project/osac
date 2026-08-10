@@ -53,3 +53,24 @@ argument_specs:
         type: str
         required: true
         description: Name of the VirtualNetwork resource
+
+  # SecurityGroup entrypoints delegate to the network_policy role (see
+  # tasks/create_security_group.yaml and tasks/delete_security_group.yaml).
+  create_security_group:
+    options:
+      security_group:
+        type: dict
+        required: true
+        description: SecurityGroup CR from fulfillment-api via osac_job_vars
+      template_parameters:
+        type: dict
+        description: Template-specific parameters (reserved for future use)
+        options: {}
+        default: {}
+
+  delete_security_group:
+    options:
+      security_group:
+        type: dict
+        required: true
+        description: SecurityGroup CR from fulfillment-api via osac_job_vars

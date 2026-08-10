@@ -1,6 +1,6 @@
 # OSAC Mono-Repo
 
-OSAC (Open Sovereign AI Cloud) is a fulfillment system for provisioning Kubernetes clusters, compute instances, bare-metal hosts, and networking. This mono-repo contains six components, each with its own `CLAUDE.md`/`AGENTS.md` — **read the component's docs before making changes in it**.
+OSAC (Open Sovereign AI Cloud) is a fulfillment system for provisioning Kubernetes clusters, compute instances, bare-metal hosts, and networking. This mono-repo contains seven components, each with its own `CLAUDE.md`/`AGENTS.md` — **read the component's docs before making changes in it**.
 
 ## Components
 
@@ -12,6 +12,7 @@ OSAC (Open Sovereign AI Cloud) is a fulfillment system for provisioning Kubernet
 | `osac-installer/` | Helm-based three-phase deployment orchestrator |
 | `bare-metal-fulfillment-operator/` | Kubernetes operator for bare-metal host pools |
 | `osac-csi-driver/` | CSI meta-driver aggregating vendor storage drivers |
+| `osac-metering/` | Metering pipeline — collects usage events via gRPC Watch, publishes CloudEvents to Kafka, and provides Provider Adapters framework for billing integrations |
 
 ## External Repos
 
@@ -34,6 +35,7 @@ fulfillment-service (proto)
 │  ├→ osac-aap (playbooks)
 │  └→ bare-metal-fulfillment-operator (bare metal types)
 ├→ osac-csi-driver (storage tier APIs)
+├→ osac-metering (usage collection)
 └→ osac-installer (RBAC, Helm) — depends on all above
 ```
 

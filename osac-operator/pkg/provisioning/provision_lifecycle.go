@@ -96,6 +96,7 @@ func CheckAPIServerForNonTerminalProvisionJob(ctx context.Context, apiReader cli
 func CheckAPIServerForNonTerminalProvisionJobAndTarget(ctx context.Context, apiReader client.Reader, key client.ObjectKey, fresh client.Object, extract JobsExtractor, target string) bool {
 	log := ctrllog.FromContext(ctx)
 	if err := apiReader.Get(ctx, key, fresh); err != nil {
+		log.Error(err, "failed to read resource from API server; proceeding without duplicate-job check", "target", target)
 		return false
 	}
 	freshJobs := extract(fresh)
@@ -208,7 +209,7 @@ func RunProvisioningLifecycle(
 	checkAPIServer func() bool,
 	statusFlush func() error,
 ) (ctrl.Result, error) {
-	result, err, triggered := runLifecycleCore(ctx, provider, resource, provState, "", maxHistory, pollInterval, callbacks, checkAPIServer)
+	result, triggered, err := runLifecycleCore(ctx, provider, resource, provState, "", maxHistory, pollInterval, callbacks, checkAPIServer)
 	if err != nil {
 		return result, err
 	}
@@ -236,7 +237,7 @@ func runLifecycleCore(
 	pollInterval time.Duration,
 	callbacks *PollCallbacks,
 	checkAPIServer func() bool,
-) (ctrl.Result, error, bool) {
+) (ctrl.Result, bool, error) {
 	action, latestJob := evaluateActionForTarget(provState, target, checkAPIServer)
 
 	triggered := false
@@ -259,18 +260,18 @@ func runLifecycleCore(
 
 	switch action {
 	case Skip:
-		return ctrl.Result{}, nil, false
+		return ctrl.Result{}, false, nil
 	case Trigger:
 		res, err := trigger()
-		return res, err, triggered
+		return res, triggered, err
 	case Requeue:
-		return ctrl.Result{RequeueAfter: pollInterval}, nil, false
+		return ctrl.Result{RequeueAfter: pollInterval}, false, nil
 	case Backoff:
 		res, err := handleBackoffForTarget(ctx, provState, target, latestJob, trigger)
-		return res, err, triggered
+		return res, triggered, err
 	default: // Poll
 		res, err := PollJob(ctx, provider, resource, provState, latestJob, pollInterval, callbacks)
-		return res, err, false
+		return res, false, err
 	}
 }
 
@@ -299,6 +300,16 @@ type JobTarget struct {
 	// CheckAPIServerForNonTerminalProvisionJob) to populate this for a
 	// non-"" target.
 	CheckAPIServer func() bool
+
+	// AbsorbsLegacyHistory marks this target as the successor to a resource's
+	// pre-multi-target job history. A resource that switches from
+	// RunProvisioningLifecycle (single, untargeted job history) to
+	// RunMultiTargetProvisioningLifecycle carries existing jobs with
+	// Target == "" that would otherwise match no target and be re-triggered
+	// from scratch. Set this on the one target that used to be the resource's
+	// sole target (see backfillLegacyJobTargets) — at most one target per
+	// call may set it.
+	AbsorbsLegacyHistory bool
 }
 
 // RunMultiTargetProvisioningLifecycle runs the same evaluate/trigger/poll/
@@ -314,6 +325,12 @@ type JobTarget struct {
 // included here — a target that was never dispatched (e.g. a resource with
 // no k8s manager configured) has no job history to evaluate and should be
 // omitted by the caller rather than passed in.
+//
+// Migration from single-target history: before the first per-target action
+// runs, any job with Target == "" (from before this resource used
+// multi-target dispatch) is backfilled to the Name of whichever target set
+// AbsorbsLegacyHistory, so it isn't orphaned and re-triggered — see
+// backfillLegacyJobTargets.
 func RunMultiTargetProvisioningLifecycle(
 	ctx context.Context,
 	targets []JobTarget,
@@ -326,6 +343,7 @@ func RunMultiTargetProvisioningLifecycle(
 	if err := validateJobTargets(targets); err != nil {
 		return ctrl.Result{}, err
 	}
+	backfillLegacyJobTargets(provState.Jobs, legacyHistoryOwner(targets))
 
 	var (
 		errs         []error
@@ -334,7 +352,7 @@ func RunMultiTargetProvisioningLifecycle(
 	)
 
 	for _, t := range targets {
-		res, err, triggered := runLifecycleCore(ctx, t.Provider, resource, provState, t.Name, maxHistory, pollInterval, t.Callbacks, t.CheckAPIServer)
+		res, triggered, err := runLifecycleCore(ctx, t.Provider, resource, provState, t.Name, maxHistory, pollInterval, t.Callbacks, t.CheckAPIServer)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("target %q: %w", t.Name, err))
 		}
@@ -358,13 +376,15 @@ func RunMultiTargetProvisioningLifecycle(
 // validateJobTargets rejects target lists that would make
 // RunMultiTargetProvisioningLifecycle's per-target dispatch ambiguous or
 // impossible: at least one target, every target with a non-empty and unique
-// Name, and a non-nil Provider and CheckAPIServer for each (both are
-// unconditionally invoked while evaluating that target's action).
+// Name, a non-nil Provider and CheckAPIServer for each (both are
+// unconditionally invoked while evaluating that target's action), and at
+// most one target with AbsorbsLegacyHistory set (see legacyHistoryOwner).
 func validateJobTargets(targets []JobTarget) error {
 	if len(targets) == 0 {
 		return errors.New("at least one JobTarget is required")
 	}
 	seen := make(map[string]struct{}, len(targets))
+	legacyOwnerSeen := false
 	for _, t := range targets {
 		if t.Name == "" {
 			return errors.New("JobTarget.Name must not be empty")
@@ -379,8 +399,42 @@ func validateJobTargets(targets []JobTarget) error {
 		if t.CheckAPIServer == nil {
 			return fmt.Errorf("JobTarget %q: CheckAPIServer must not be nil", t.Name)
 		}
+		if t.AbsorbsLegacyHistory {
+			if legacyOwnerSeen {
+				return errors.New("at most one JobTarget may set AbsorbsLegacyHistory")
+			}
+			legacyOwnerSeen = true
+		}
 	}
 	return nil
+}
+
+// legacyHistoryOwner returns the Name of the target that set
+// AbsorbsLegacyHistory, or "" if none did. validateJobTargets guarantees at
+// most one such target.
+func legacyHistoryOwner(targets []JobTarget) string {
+	for _, t := range targets {
+		if t.AbsorbsLegacyHistory {
+			return t.Name
+		}
+	}
+	return ""
+}
+
+// backfillLegacyJobTargets sets Target on every job with an empty Target to
+// owner, in place. owner is "" when no target requested legacy-history
+// absorption, in which case this is a no-op. Also a no-op once every job
+// already carries a non-empty Target, so it's safe to call unconditionally
+// on every multi-target run.
+func backfillLegacyJobTargets(jobs *[]v1alpha1.JobStatus, owner string) {
+	if owner == "" {
+		return
+	}
+	for i := range *jobs {
+		if (*jobs)[i].Target == "" {
+			(*jobs)[i].Target = owner
+		}
+	}
 }
 
 // IsConfigApplied returns true if the current spec has been successfully applied.
@@ -421,6 +475,20 @@ func TriggerDeprovisionJob(ctx context.Context, provider ProvisioningProvider, r
 	return triggerDeprovisionJobForTarget(ctx, provider, resource, jobs, "", maxHistory, pollInterval)
 }
 
+// filterJobsByTarget returns the subset of jobs tagged with target,
+// preserving order. For a single-target caller (target == ""), every job
+// belongs to that resource's sole target and is already untagged, so this is
+// a no-op filter.
+func filterJobsByTarget(jobs []v1alpha1.JobStatus, target string) []v1alpha1.JobStatus {
+	filtered := make([]v1alpha1.JobStatus, 0, len(jobs))
+	for _, j := range jobs {
+		if j.Target == target {
+			filtered = append(filtered, j)
+		}
+	}
+	return filtered
+}
+
 // triggerDeprovisionJobForTarget is TriggerDeprovisionJob scoped to a single
 // job target: the appended deprovision JobStatus is tagged with target.
 func triggerDeprovisionJobForTarget(ctx context.Context, provider ProvisioningProvider, resource client.Object,
@@ -428,7 +496,11 @@ func triggerDeprovisionJobForTarget(ctx context.Context, provider ProvisioningPr
 	log := ctrllog.FromContext(ctx)
 	log.Info("triggering deprovision job", "target", target)
 
-	result, err := provider.TriggerDeprovision(ctx, resource, *jobs)
+	// Scope the provision job history the provider sees to its own target — a
+	// provider may inspect provisionJobs to detect and cancel a running
+	// provision before deprovisioning, and the full unfiltered history would
+	// let one target's provider act on another target's in-flight job.
+	result, err := provider.TriggerDeprovision(ctx, resource, filterJobsByTarget(*jobs, target))
 	if err != nil {
 		if rateLimitErr, ok := AsRateLimitError(err); ok {
 			log.Info("deprovision request rate-limited, requeueing", "target", target, "retryAfter", rateLimitErr.RetryAfter)
@@ -588,6 +660,11 @@ type DeprovisionTarget struct {
 
 	// Provider triggers/polls deprovision jobs for this target only.
 	Provider ProvisioningProvider
+
+	// AbsorbsLegacyHistory marks this target as the successor to a resource's
+	// pre-multi-target job history — see JobTarget.AbsorbsLegacyHistory for
+	// the full rationale. At most one target per call may set it.
+	AbsorbsLegacyHistory bool
 }
 
 // RunMultiTargetDeprovisioningLifecycle runs the same trigger-or-poll
@@ -604,6 +681,11 @@ type DeprovisionTarget struct {
 // Every target's manager must have actually been dispatched to before being
 // included here — a target that was never dispatched has no job history to
 // evaluate and should be omitted by the caller rather than passed in.
+//
+// Migration from single-target history: as in RunMultiTargetProvisioningLifecycle,
+// any job with Target == "" is backfilled to the Name of whichever target set
+// AbsorbsLegacyHistory before targets are evaluated, so a resource deprovisioned
+// via its old single-target job history isn't torn down a second time.
 func RunMultiTargetDeprovisioningLifecycle(
 	ctx context.Context,
 	targets []DeprovisionTarget,
@@ -615,6 +697,7 @@ func RunMultiTargetDeprovisioningLifecycle(
 	if err := validateDeprovisionTargets(targets); err != nil {
 		return ctrl.Result{}, false, err
 	}
+	backfillLegacyJobTargets(jobs, legacyHistoryOwnerForDeprovision(targets))
 
 	var (
 		errs    []error
@@ -641,12 +724,14 @@ func RunMultiTargetDeprovisioningLifecycle(
 // validateDeprovisionTargets rejects target lists that would make
 // RunMultiTargetDeprovisioningLifecycle's per-target dispatch ambiguous or
 // impossible: at least one target, every target with a non-empty and unique
-// Name, and a non-nil Provider.
+// Name, a non-nil Provider, and at most one target with AbsorbsLegacyHistory
+// set (see legacyHistoryOwnerForDeprovision).
 func validateDeprovisionTargets(targets []DeprovisionTarget) error {
 	if len(targets) == 0 {
 		return errors.New("at least one DeprovisionTarget is required")
 	}
 	seen := make(map[string]struct{}, len(targets))
+	legacyOwnerSeen := false
 	for _, t := range targets {
 		if t.Name == "" {
 			return errors.New("DeprovisionTarget.Name must not be empty")
@@ -658,6 +743,24 @@ func validateDeprovisionTargets(targets []DeprovisionTarget) error {
 		if t.Provider == nil {
 			return fmt.Errorf("DeprovisionTarget %q: Provider must not be nil", t.Name)
 		}
+		if t.AbsorbsLegacyHistory {
+			if legacyOwnerSeen {
+				return errors.New("at most one DeprovisionTarget may set AbsorbsLegacyHistory")
+			}
+			legacyOwnerSeen = true
+		}
 	}
 	return nil
+}
+
+// legacyHistoryOwnerForDeprovision returns the Name of the target that set
+// AbsorbsLegacyHistory, or "" if none did. validateDeprovisionTargets
+// guarantees at most one such target.
+func legacyHistoryOwnerForDeprovision(targets []DeprovisionTarget) string {
+	for _, t := range targets {
+		if t.AbsorbsLegacyHistory {
+			return t.Name
+		}
+	}
+	return ""
 }

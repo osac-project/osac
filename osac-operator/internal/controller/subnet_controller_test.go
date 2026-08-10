@@ -499,14 +499,14 @@ var _ = Describe("SubnetReconciler", func() {
 				},
 			}
 			Expect(k8sClient.Create(ctx, dualVnet)).To(Succeed())
-			defer func() { _ = k8sClient.Delete(ctx, dualVnet) }()
+			DeferCleanup(deleteObjectWithClearedFinalizers, ctx, dualVnet)
 
 			dualSubnet := &osacv1alpha1.Subnet{
 				ObjectMeta: metav1.ObjectMeta{Name: "dual-subnet", Namespace: "default"},
 				Spec:       osacv1alpha1.SubnetSpec{VirtualNetwork: "dual-vnet-uuid", IPv4CIDR: "10.4.1.0/24"},
 			}
 			Expect(k8sClient.Create(ctx, dualSubnet)).To(Succeed())
-			defer func() { _ = k8sClient.Delete(ctx, dualSubnet) }()
+			DeferCleanup(deleteObjectWithClearedFinalizers, ctx, dualSubnet)
 
 			var seenAnnotations []string
 			triggerCount := 0
@@ -542,6 +542,73 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(k8sClient.Get(ctx, key, final)).To(Succeed())
 			Expect(provisioning.FindLatestJobByTypeAndTarget(final.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision, "fabric")).NotTo(BeNil())
 			Expect(provisioning.FindLatestJobByTypeAndTarget(final.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision, "k8s")).NotTo(BeNil())
+		})
+
+		It("clears the stale k8s implementation-strategy annotation when the NetworkClass later drops its k8sManager", func() {
+			scheme := runtime.NewScheme()
+			Expect(corev1.AddToScheme(scheme)).To(Succeed())
+			dualDiscoveryClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+				newFabricManagerConfigMap("fm-netris", "osac", "netris"),
+				newK8sManagerConfigMap("km-cudn", "osac", "cudn_net", "ipv4"),
+			).Build()
+			disc, err := networkmanager.NewDiscovery(dualDiscoveryClient, "osac")
+			Expect(err).NotTo(HaveOccurred())
+			k8sManagerName := "cudn_net"
+			// Held by pointer so mutating its K8SManager field below simulates the
+			// NetworkClass being updated (e.g. via fulfillment-service) between reconciles,
+			// without needing to construct a second resolver.
+			transitionNetworkClass := &privatev1.NetworkClass{Id: "nc-dual-to-fabric", FabricManager: ptr.To("netris"), K8SManager: &k8sManagerName}
+			reconciler.Resolver = dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+				[]*privatev1.NetworkClass{transitionNetworkClass}, &[]*privatev1.NetworkClass{},
+			)), disc)
+
+			transitionVnet := &osacv1alpha1.VirtualNetwork{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "transition-vnet",
+					Namespace: "default",
+					Labels:    map[string]string{osacVirtualNetworkIDLabel: "transition-vnet-uuid"},
+				},
+				Spec: osacv1alpha1.VirtualNetworkSpec{
+					Region:       "us-west-1",
+					IPv4CIDR:     "10.5.0.0/16",
+					NetworkClass: "nc-dual-to-fabric",
+				},
+			}
+			Expect(k8sClient.Create(ctx, transitionVnet)).To(Succeed())
+			DeferCleanup(deleteObjectWithClearedFinalizers, ctx, transitionVnet)
+
+			transitionSubnet := &osacv1alpha1.Subnet{
+				ObjectMeta: metav1.ObjectMeta{Name: "transition-subnet", Namespace: "default"},
+				Spec:       osacv1alpha1.SubnetSpec{VirtualNetwork: "transition-vnet-uuid", IPv4CIDR: "10.5.1.0/24"},
+			}
+			Expect(k8sClient.Create(ctx, transitionSubnet)).To(Succeed())
+			DeferCleanup(deleteObjectWithClearedFinalizers, ctx, transitionSubnet)
+
+			key := types.NamespacedName{Name: transitionSubnet.Name, Namespace: transitionSubnet.Namespace}
+			req := mcreconcile.Request{Request: reconcile.Request{NamespacedName: key}}
+
+			// First reconcile: adds finalizer, then (same call) sets both
+			// implementation-strategy annotations since the NetworkClass has both managers.
+			_, err = reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			dual := &osacv1alpha1.Subnet{}
+			Expect(k8sClient.Get(ctx, key, dual)).To(Succeed())
+			Expect(dual.Annotations[osacImplementationStrategyAnnotation]).To(Equal("netris"))
+			Expect(dual.Annotations[osacK8sImplementationStrategyAnnotation]).To(Equal("cudn_net"))
+
+			// NetworkClass drops its k8sManager (e.g. migrated to fabric-only). The next
+			// reconcile resolves a fabric-only plan and should remove the now-stale k8s
+			// annotation while keeping the fabric one intact.
+			transitionNetworkClass.K8SManager = nil
+
+			_, err = reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			afterTransition := &osacv1alpha1.Subnet{}
+			Expect(k8sClient.Get(ctx, key, afterTransition)).To(Succeed())
+			Expect(afterTransition.Annotations[osacImplementationStrategyAnnotation]).To(Equal("netris"))
+			Expect(afterTransition.Annotations).NotTo(HaveKey(osacK8sImplementationStrategyAnnotation))
 		})
 
 		It("returns a reconcile error when the NetworkClass references an unregistered manager", func() {

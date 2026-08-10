@@ -81,8 +81,12 @@ func resolveImplementationStrategy(
 	}
 	target := plan.FabricTarget()
 	if target == nil {
-		// Defensive: every entry in the dispatch table includes the fabric role,
-		// so this should not happen in practice.
+		// A K8sFallback kind (e.g. VirtualNetwork, SecurityGroup) with no fabricManager
+		// resolves its fabric role to a k8s-role target instead (see Dispatch), so check
+		// K8sTarget before giving up and falling back to legacyStrategy.
+		target = plan.K8sTarget()
+	}
+	if target == nil {
 		return legacyStrategy, nil
 	}
 	return target.Manager.Name, nil

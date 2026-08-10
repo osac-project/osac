@@ -248,7 +248,10 @@ func (r *SubnetReconciler) handleUpdate(ctx context.Context, subnet *v1alpha1.Su
 	// the plan also resolves a k8s target (dual-dispatch), osacK8sImplementationStrategyAnnotation
 	// persists the k8s manager's name so handleDeprovisioning can build its
 	// DeprovisionTarget without re-resolving the plan against a parent VirtualNetwork
-	// that may already be gone at delete time.
+	// that may already be gone at delete time. The k8s annotation is compared and, when
+	// absent from the plan, removed unconditionally (not just when present) so a Subnet
+	// that transitions from dual-dispatch to fabric-only (NetworkClass drops its
+	// k8sManager) doesn't leave a stale k8s target for handleDeprovisioning to act on.
 	if subnet.Annotations == nil {
 		subnet.Annotations = make(map[string]string)
 	}
@@ -262,8 +265,12 @@ func (r *SubnetReconciler) handleUpdate(ctx context.Context, subnet *v1alpha1.Su
 		subnet.Annotations[osacImplementationStrategyAnnotation] = implementationStrategy
 		annotationsChanged = true
 	}
-	if k8sTarget != nil && subnet.Annotations[osacK8sImplementationStrategyAnnotation] != k8sStrategy {
-		subnet.Annotations[osacK8sImplementationStrategyAnnotation] = k8sStrategy
+	if subnet.Annotations[osacK8sImplementationStrategyAnnotation] != k8sStrategy {
+		if k8sTarget != nil {
+			subnet.Annotations[osacK8sImplementationStrategyAnnotation] = k8sStrategy
+		} else {
+			delete(subnet.Annotations, osacK8sImplementationStrategyAnnotation)
+		}
 		annotationsChanged = true
 	}
 	if vipCIDR != "" && subnet.Annotations[osacVIPCIDRAnnotation] != vipCIDR {
@@ -422,6 +429,10 @@ func (r *SubnetReconciler) handleProvisioning(ctx context.Context, subnet *v1alp
 				Provider:       newDispatchTargetProvider(r.ProvisioningProvider, fabricTarget.Manager.Name),
 				Callbacks:      &provisioning.PollCallbacks{OnFailed: onFailedFor(fabricName), OnSuccess: onSuccess},
 				CheckAPIServer: checkAPIServerFor(fabricName),
+				// Subnet was fabric-only (single, untargeted job history) before
+				// dual-dispatch existed, so fabric inherits any pre-existing
+				// Target=="" jobs when a NetworkClass gains a k8sManager.
+				AbsorbsLegacyHistory: true,
 			},
 			{
 				Name:           k8sName,
@@ -499,8 +510,17 @@ func (r *SubnetReconciler) handleDeprovisioning(ctx context.Context, subnet *v1a
 	}
 
 	fabricStrategy := subnet.Annotations[osacImplementationStrategyAnnotation]
+	if fabricStrategy == "" {
+		// Defensive: handleUpdate always sets the fabric annotation whenever it sets the
+		// k8s one, so this should not happen in practice. An empty manager name would
+		// otherwise route the fabric deprovision job to an undefined AAP role.
+		return ctrl.Result{}, fmt.Errorf(
+			"subnet %s/%s has %s set but %s is empty", subnet.Namespace, subnet.Name,
+			osacK8sImplementationStrategyAnnotation, osacImplementationStrategyAnnotation)
+	}
 	targets := []provisioning.DeprovisionTarget{
-		{Name: string(dispatcher.ManagerRoleFabric), Provider: newDispatchTargetProvider(r.ProvisioningProvider, fabricStrategy)},
+		// AbsorbsLegacyHistory: true — see the matching comment in handleProvisioning.
+		{Name: string(dispatcher.ManagerRoleFabric), Provider: newDispatchTargetProvider(r.ProvisioningProvider, fabricStrategy), AbsorbsLegacyHistory: true},
 		{Name: string(dispatcher.ManagerRoleK8s), Provider: newDispatchTargetProvider(r.ProvisioningProvider, k8sStrategy)},
 	}
 

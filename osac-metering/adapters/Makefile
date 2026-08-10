@@ -5,6 +5,8 @@
 #
 #   http://www.apache.org/licenses/LICENSE-2.0
 
+GO_VERSION ?= $(shell grep '^go ' go.mod | cut -d' ' -f2)
+GOTOOLCHAIN ?= go$(GO_VERSION)
 GINKGO ?= go run github.com/onsi/ginkgo/v2/ginkgo
 GOLANGCI_LINT_VERSION ?= v2.12.1
 
@@ -25,7 +27,7 @@ lint: $(GOLANGCI_LINT)
 
 $(GOLANGCI_LINT):
 	@mkdir -p $(LOCALBIN)
-	GOBIN=$(LOCALBIN) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+	GOTOOLCHAIN=$(GOTOOLCHAIN) GOBIN=$(LOCALBIN) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
 clean:
 	rm -rf bin/

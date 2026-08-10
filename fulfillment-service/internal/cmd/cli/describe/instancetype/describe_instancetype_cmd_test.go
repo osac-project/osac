@@ -148,4 +148,45 @@ var _ = Describe("Rendering tests", func() {
 		output := formatInstanceType(it)
 		Expect(output).To(MatchRegexp(`Description:\s+High memory`))
 	})
+
+	It("should display GPU fields when GpuSpec is present", func() {
+		it := publicv1.InstanceType_builder{
+			Id: "gpu-a100-4-16",
+			Metadata: publicv1.Metadata_builder{
+				Name: "gpu-a100-4-16",
+			}.Build(),
+			Spec: publicv1.InstanceTypeSpec_builder{
+				Cores:     4,
+				MemoryGib: 16,
+				State:     publicv1.InstanceTypeState_INSTANCE_TYPE_STATE_ACTIVE,
+				Gpu: publicv1.GpuSpec_builder{
+					PciDeviceSelector: "10DE:20B0",
+					ResourceName:      "nvidia.com/A100",
+					Count:             2,
+				}.Build(),
+			}.Build(),
+		}.Build()
+		output := formatInstanceType(it)
+		Expect(output).To(MatchRegexp(`GPU PCI Device Selector:\s+10DE:20B0`))
+		Expect(output).To(MatchRegexp(`GPU Resource Name:\s+nvidia.com/A100`))
+		Expect(output).To(MatchRegexp(`GPU Count:\s+2`))
+	})
+
+	It("should omit GPU fields when GpuSpec is absent", func() {
+		it := publicv1.InstanceType_builder{
+			Id: "standard-4-16",
+			Metadata: publicv1.Metadata_builder{
+				Name: "standard-4-16",
+			}.Build(),
+			Spec: publicv1.InstanceTypeSpec_builder{
+				Cores:     4,
+				MemoryGib: 16,
+				State:     publicv1.InstanceTypeState_INSTANCE_TYPE_STATE_ACTIVE,
+			}.Build(),
+		}.Build()
+		output := formatInstanceType(it)
+		Expect(output).NotTo(ContainSubstring("GPU PCI Device Selector:"))
+		Expect(output).NotTo(ContainSubstring("GPU Resource Name:"))
+		Expect(output).NotTo(ContainSubstring("GPU Count:"))
+	})
 })

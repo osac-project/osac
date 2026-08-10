@@ -109,6 +109,12 @@ func renderInstanceType(w io.Writer, it *publicv1.InstanceType) {
 		state := strings.TrimPrefix(spec.GetState().String(), "INSTANCE_TYPE_STATE_")
 		fmt.Fprintf(writer, "State:\t%s\n", state)
 
+		if gpu := spec.GetGpu(); gpu != nil {
+			fmt.Fprintf(writer, "GPU Count:\t%d\n", gpu.GetCount())
+			fmt.Fprintf(writer, "GPU Resource Name:\t%s\n", gpu.GetResourceName())
+			fmt.Fprintf(writer, "GPU PCI Device Selector:\t%s\n", gpu.GetPciDeviceSelector())
+		}
+
 		// Description (only when non-empty):
 		if desc := spec.GetDescription(); desc != "" {
 			fmt.Fprintf(writer, "Description:\t%s\n", desc)

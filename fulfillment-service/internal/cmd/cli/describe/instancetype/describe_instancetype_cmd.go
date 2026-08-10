@@ -105,15 +105,15 @@ func renderInstanceType(w io.Writer, it *publicv1.InstanceType) {
 		fmt.Fprintf(writer, "Cores:\t%d\n", spec.GetCores())
 		fmt.Fprintf(writer, "Memory (GiB):\t%d\n", spec.GetMemoryGib())
 
-		// State with prefix stripping (D-02):
-		state := strings.TrimPrefix(spec.GetState().String(), "INSTANCE_TYPE_STATE_")
-		fmt.Fprintf(writer, "State:\t%s\n", state)
-
 		if gpu := spec.GetGpu(); gpu != nil {
 			fmt.Fprintf(writer, "GPU Count:\t%d\n", gpu.GetCount())
 			fmt.Fprintf(writer, "GPU Resource Name:\t%s\n", gpu.GetResourceName())
 			fmt.Fprintf(writer, "GPU PCI Device Selector:\t%s\n", gpu.GetPciDeviceSelector())
 		}
+
+		// State with prefix stripping (D-02):
+		state := strings.TrimPrefix(spec.GetState().String(), "INSTANCE_TYPE_STATE_")
+		fmt.Fprintf(writer, "State:\t%s\n", state)
 
 		// Description (only when non-empty):
 		if desc := spec.GetDescription(); desc != "" {

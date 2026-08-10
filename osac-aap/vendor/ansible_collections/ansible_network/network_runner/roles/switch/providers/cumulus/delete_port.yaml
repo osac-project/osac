@@ -1,5 +1,7 @@
 ---
 - name: "cumulus: remove port VLAN configuration using nvue"
   raw: |
-    nv unset interface {{ port_name }} bridge domain
-    nv config apply -y
+    flock /tmp/nvue.lock -c '
+      nv unset interface {{ port_name }} bridge domain
+      nv config diff --quiet 2>/dev/null && nv config apply -y
+    '

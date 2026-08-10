@@ -1,0 +1,43 @@
+---
+# https://access.redhat.com/support/policy/updates/ansible-automation-platform
+# https://docs.ansible.com/ansible/latest/reference_appendices/release_and_maintenance.html#ansible-core-support-matrix
+requires_ansible: ">=2.16.0" # AAP 2.4 or newer
+action_groups:
+  eda:
+    - activation
+    - activation_info
+    - controller_token
+    - credential
+    - credential_info
+    - credential_input_source
+    - credential_input_source_info
+    - credential_type
+    - credential_type_info
+    - decision_environment
+    - decision_environment_info
+    - event_stream
+    - event_stream_info
+    - project
+    - project_info
+    - rulebook_info
+    - rulebook_activation
+    - rulebook_activation_copy
+    - role_team_assignment
+    - rulebook_activation_info
+    - user
+plugin_routing:
+  modules:
+    activation:
+      redirect: ansible.eda.rulebook_activation
+      deprecation:
+        removal_version: 4.0.0
+        warning_text: >-
+          activation has been renamed to rulebook_activation.
+          Please update your tasks.
+    activation_info:
+      redirect: ansible.eda.rulebook_activation_info
+      deprecation:
+        removal_version: 4.0.0
+        warning_text: >-
+          activation_info has been renamed to rulebook_activation_info.
+          Please update your tasks.

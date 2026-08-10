@@ -102,7 +102,7 @@ func (s *succeedingOpener) Open(_ context.Context, _ string) (*console.Ticket, e
 }
 
 var _ = Describe("ServeHTTP ConnectBackend error handling", func() {
-	It("should return 409 when backend reports an active session", func() {
+	It("should send WS close code 4409 when backend reports an active session", func() {
 		backend := &mockBackendForServer{conn: newMockConn("")}
 		manager, err := console.NewManager().
 			SetLogger(logger).
@@ -134,12 +134,6 @@ var _ = Describe("ServeHTTP ConnectBackend error handling", func() {
 			SetManager(manager).
 			Build()
 		Expect(err).NotTo(HaveOccurred())
-		core.opener = &succeedingOpener{ticket: ticket}
-
-		handler := &ConsoleProxyWSHandler{
-			core:           core,
-			allowedOrigins: []string{"*"},
-		}
 
 		// Second connect with different clientID triggers ErrSessionExists.
 		secondTicket := &console.Ticket{
@@ -151,15 +145,34 @@ var _ = Describe("ServeHTTP ConnectBackend error handling", func() {
 		}
 		core.opener = &succeedingOpener{ticket: secondTicket}
 
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
-		req.Header.Set("Authorization", "Bearer some-ticket")
-		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, req)
-		Expect(w.Code).To(Equal(http.StatusConflict))
-		Expect(w.Body.String()).To(ContainSubstring("console session already active"))
+		handler := &ConsoleProxyWSHandler{
+			core:           core,
+			allowedOrigins: []string{"*"},
+		}
+
+		srv := httptest.NewServer(handler)
+		defer srv.Close()
+
+		dialCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		ws, _, err := websocket.Dial(dialCtx, "ws"+srv.URL[len("http"):], &websocket.DialOptions{
+			HTTPHeader: http.Header{"Authorization": []string{"Bearer some-ticket"}},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		defer ws.CloseNow()
+
+		// Read should return a CloseError with the application-defined code.
+		_, _, readErr := ws.Read(dialCtx)
+		Expect(readErr).To(HaveOccurred())
+
+		var closeErr websocket.CloseError
+		Expect(errors.As(readErr, &closeErr)).To(BeTrue(), "expected CloseError, got: %v", readErr)
+		Expect(closeErr.Code).To(Equal(websocket.StatusCode(4409)))
+		Expect(closeErr.Reason).To(ContainSubstring("console session already active"))
 	})
 
-	It("should return 502 for generic backend errors", func() {
+	It("should send WS close code 1011 for generic backend errors", func() {
 		backend := &mockBackendForServer{
 			connErr: errors.New("dial backend failed"),
 		}
@@ -190,12 +203,26 @@ var _ = Describe("ServeHTTP ConnectBackend error handling", func() {
 			allowedOrigins: []string{"*"},
 		}
 
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
-		req.Header.Set("Authorization", "Bearer some-ticket")
-		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, req)
-		Expect(w.Code).To(Equal(http.StatusBadGateway))
-		Expect(w.Body.String()).To(ContainSubstring("failed to connect to console backend"))
+		srv := httptest.NewServer(handler)
+		defer srv.Close()
+
+		dialCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		ws, _, err := websocket.Dial(dialCtx, "ws"+srv.URL[len("http"):], &websocket.DialOptions{
+			HTTPHeader: http.Header{"Authorization": []string{"Bearer some-ticket"}},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		defer ws.CloseNow()
+
+		// Read should return a CloseError with the Internal Error code.
+		_, _, readErr := ws.Read(dialCtx)
+		Expect(readErr).To(HaveOccurred())
+
+		var closeErr websocket.CloseError
+		Expect(errors.As(readErr, &closeErr)).To(BeTrue(), "expected CloseError, got: %v", readErr)
+		Expect(closeErr.Code).To(Equal(websocket.StatusCode(1011)))
+		Expect(closeErr.Reason).To(ContainSubstring("failed to connect to console backend"))
 	})
 })
 

@@ -85,20 +85,7 @@ func (h *ConsoleProxyWSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 	// Expose console_type to outer middleware (ConsoleMetrics reads it after handler returns).
 	setConsoleType(r.Context(), ticket.ConsoleType)
 
-	// Phase 2: Connect backend BEFORE upgrade (fail fast with HTTP error).
-	backend, sessionCtx, err := h.core.ConnectBackend(ctx, ticket)
-	if err != nil {
-		h.core.logger.ErrorContext(ctx, "Failed to connect backend", slog.Any("error", err))
-		var sessionErr *console.ErrSessionExists
-		if errors.As(err, &sessionErr) {
-			http.Error(w, "console session already active", http.StatusConflict)
-			return
-		}
-		http.Error(w, "failed to connect to console backend", http.StatusBadGateway)
-		return
-	}
-
-	// Phase 3: Upgrade to WebSocket.
+	// Phase 2: Upgrade to WebSocket.
 	// OriginPatterns delegates origin validation to the library, which matches
 	// each pattern via path.Match against scheme://host (if pattern contains "://")
 	// or host alone. The library also auto-passes when r.Host == Origin host
@@ -107,17 +94,31 @@ func (h *ConsoleProxyWSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		OriginPatterns: h.allowedOrigins,
 		Subprotocols:   []string{"binary"},
-		OnPingReceived: console.PingReceivedHandler(wsLogger, sessionCtx),
-		OnPongReceived: console.PongReceivedHandler(wsLogger, sessionCtx),
+		OnPingReceived: console.PingReceivedHandler(wsLogger, ctx),
+		OnPongReceived: console.PongReceivedHandler(wsLogger, ctx),
 	})
 	if err != nil {
 		h.core.logger.ErrorContext(ctx, "Failed to accept WebSocket connection",
 			slog.Any("error", err),
 		)
-		backend.Close()
 		return
 	}
 	defer func() { _ = ws.CloseNow() }()
+
+	// Phase 3: Connect backend AFTER upgrade. Errors are delivered as WebSocket
+	// close frames because standard WS clients cannot observe HTTP status codes
+	// or bodies for failed upgrades.
+	backend, sessionCtx, err := h.core.ConnectBackend(ctx, ticket)
+	if err != nil {
+		h.core.logger.ErrorContext(ctx, "Failed to connect backend", slog.Any("error", err))
+		var sessionErr *console.ErrSessionExists
+		if errors.As(err, &sessionErr) {
+			ws.Close(websocket.StatusCode(4409), "console session already active")
+			return
+		}
+		ws.Close(websocket.StatusCode(1011), "failed to connect to console backend")
+		return
+	}
 
 	// Start a ping goroutine to keep the client-facing WebSocket alive.
 	console.StartPing(sessionCtx, ws, wsLogger, h.pingConfig)

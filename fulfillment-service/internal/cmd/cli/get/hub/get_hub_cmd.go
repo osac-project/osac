@@ -14,11 +14,15 @@ language governing permissions and limitations under the License.
 package hub
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/lookup"
@@ -26,8 +30,18 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 )
 
+const (
+	outputFormatTable = "table"
+	outputFormatJson  = "json"
+	outputFormatYaml  = "yaml"
+)
+
 func Cmd() *cobra.Command {
-	runner := &runnerContext{}
+	runner := &runnerContext{
+		marshalOptions: protojson.MarshalOptions{
+			UseProtoNames: true,
+		},
+	}
 	result := &cobra.Command{
 		Use:     "hub [ID|NAME]",
 		Aliases: []string{"hubs"},
@@ -37,15 +51,30 @@ func Cmd() *cobra.Command {
   osac get hub
 
   # Get a specific hub by ID
-  osac get hub hub0`,
+  osac get hub hub0
+
+  # Get hub details in JSON format
+  osac get hub hub0 -o json`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: runner.run,
 	}
+	flags := result.Flags()
+	flags.StringVarP(
+		&runner.args.format,
+		"output",
+		"o",
+		outputFormatTable,
+		"_FORMAT_ - Output format. Must be one of {{ bt }}table{{ bt }}, {{ bt }}json{{ bt }} or {{ bt }}yaml{{ bt }}.",
+	)
 	return result
 }
 
 type runnerContext struct {
-	console *terminal.Console
+	args struct {
+		format string
+	}
+	console        *terminal.Console
+	marshalOptions protojson.MarshalOptions
 }
 
 func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
@@ -56,6 +85,13 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	cfg := config.SettingsFromContext(ctx)
 	if !cfg.Armed() {
 		return fmt.Errorf("there is no configuration, run the 'login' command")
+	}
+
+	if c.args.format != outputFormatTable && c.args.format != outputFormatJson && c.args.format != outputFormatYaml {
+		return fmt.Errorf(
+			"unknown output format '%s', should be '%s', '%s' or '%s'",
+			c.args.format, outputFormatTable, outputFormatJson, outputFormatYaml,
+		)
 	}
 
 	conn, err := cfg.Connect(ctx, cmd.Flags())
@@ -75,7 +111,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 			c.console.Infof(ctx, "No hubs found.\n")
 			return nil
 		}
-		return renderHubTable(c.console, resp.GetItems())
+		return c.renderList(ctx, resp.GetItems())
 	}
 
 	ref := args[0]
@@ -93,11 +129,33 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	return renderHubDetail(c.console, hub)
+	return c.renderDetail(ctx, hub)
 }
 
-func renderHubTable(w *terminal.Console, hubs []*privatev1.Hub) error {
-	writer := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+func (c *runnerContext) renderList(ctx context.Context, hubs []*privatev1.Hub) error {
+	switch c.args.format {
+	case outputFormatJson:
+		return c.renderJson(ctx, hubs)
+	case outputFormatYaml:
+		return c.renderYaml(ctx, hubs)
+	default:
+		return c.renderHubTable(hubs)
+	}
+}
+
+func (c *runnerContext) renderDetail(ctx context.Context, hub *privatev1.Hub) error {
+	switch c.args.format {
+	case outputFormatJson:
+		return c.renderJson(ctx, []*privatev1.Hub{hub})
+	case outputFormatYaml:
+		return c.renderYaml(ctx, []*privatev1.Hub{hub})
+	default:
+		return c.renderHubDetail(hub)
+	}
+}
+
+func (c *runnerContext) renderHubTable(hubs []*privatev1.Hub) error {
+	writer := tabwriter.NewWriter(c.console, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(writer, "ID\tNAME\tNAMESPACE\tREGISTERED")
 	for _, h := range hubs {
 		name := h.GetMetadata().GetName()
@@ -113,8 +171,8 @@ func renderHubTable(w *terminal.Console, hubs []*privatev1.Hub) error {
 	return writer.Flush()
 }
 
-func renderHubDetail(w *terminal.Console, h *privatev1.Hub) error {
-	writer := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+func (c *runnerContext) renderHubDetail(h *privatev1.Hub) error {
+	writer := tabwriter.NewWriter(c.console, 0, 0, 2, ' ', 0)
 
 	name := "-"
 	if v := h.GetMetadata().GetName(); v != "" {
@@ -136,4 +194,58 @@ func renderHubDetail(w *terminal.Console, h *privatev1.Hub) error {
 	fmt.Fprintf(writer, "Creator:\t%s\n", creator)
 	fmt.Fprintf(writer, "Created:\t%s\n", created)
 	return writer.Flush()
+}
+
+func (c *runnerContext) renderJson(ctx context.Context, hubs []*privatev1.Hub) error {
+	values, err := c.encodeObjects(hubs)
+	if err != nil {
+		return err
+	}
+	if len(values) == 1 {
+		c.console.RenderJson(ctx, values[0])
+	} else {
+		c.console.RenderJson(ctx, values)
+	}
+	return nil
+}
+
+func (c *runnerContext) renderYaml(ctx context.Context, hubs []*privatev1.Hub) error {
+	values, err := c.encodeObjects(hubs)
+	if err != nil {
+		return err
+	}
+	if len(values) == 1 {
+		c.console.RenderYaml(ctx, values[0])
+	} else {
+		c.console.RenderYaml(ctx, values)
+	}
+	return nil
+}
+
+func (c *runnerContext) encodeObjects(hubs []*privatev1.Hub) ([]any, error) {
+	values := make([]any, len(hubs))
+	for i, h := range hubs {
+		v, err := c.encodeObject(h)
+		if err != nil {
+			return nil, err
+		}
+		values[i] = v
+	}
+	return values, nil
+}
+
+func (c *runnerContext) encodeObject(hub *privatev1.Hub) (any, error) {
+	clone := proto.Clone(hub).(*privatev1.Hub)
+	clone.GetSpec().SetKubeconfig(nil)
+	wrapper, err := anypb.New(clone)
+	if err != nil {
+		return nil, err
+	}
+	data, err := c.marshalOptions.Marshal(wrapper)
+	if err != nil {
+		return nil, err
+	}
+	var result any
+	err = json.Unmarshal(data, &result)
+	return result, err
 }

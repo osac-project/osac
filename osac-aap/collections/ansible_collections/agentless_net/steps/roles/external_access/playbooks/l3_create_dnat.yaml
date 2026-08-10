@@ -28,3 +28,31 @@
         -o {{ _dnat_veth_iface }} -j MASQUERADE
       when: _veth_masq_check.rc != 0
       changed_when: true
+
+    - name: Find VLAN sub-interface in namespace {{ dnat_router_name }}
+      ansible.builtin.raw: >-
+        ip netns exec {{ dnat_router_name }}
+        ip -o link show type vlan 2>/dev/null | awk -F'[ :]+' '{split($2,a,"@"); print a[1]}' | head -1
+      register: _hairpin_vlan_iface
+      changed_when: false
+      failed_when: false
+
+    - name: Check if hairpin MASQUERADE exists on VLAN sub-interface
+      ansible.builtin.raw: >-
+        ip netns exec {{ dnat_router_name }}
+        iptables -t nat -C POSTROUTING
+        -o {{ _hairpin_vlan_iface.stdout | trim }} -j MASQUERADE 2>/dev/null
+      register: _hairpin_masq_check
+      changed_when: false
+      failed_when: false
+      when: _hairpin_vlan_iface.stdout | trim | length > 0
+
+    - name: Add MASQUERADE on VLAN sub-interface for hairpin NAT (namespace {{ dnat_router_name }})
+      ansible.builtin.raw: >-
+        ip netns exec {{ dnat_router_name }}
+        iptables -t nat -A POSTROUTING
+        -o {{ _hairpin_vlan_iface.stdout | trim }} -j MASQUERADE
+      when:
+        - _hairpin_vlan_iface.stdout | trim | length > 0
+        - _hairpin_masq_check.rc | default(1) != 0
+      changed_when: true

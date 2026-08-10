@@ -177,6 +177,10 @@ type bcmErrorResponse struct {
 // NewBCMClient creates a BCM inventory client. It validates connectivity
 // by checking the BCM version at startup.
 func NewBCMClient(ctx context.Context, cfg *Config) (Client, error) {
+	if cfg.BMHLifecycleManager == nil {
+		return nil, fmt.Errorf("BCM inventory backend requires Metal3 management backend")
+	}
+
 	registerBCMMetrics()
 
 	bcmCfg, err := parseBCMConfig(cfg)

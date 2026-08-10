@@ -570,6 +570,27 @@ func TestBCMBackendRegistration(t *testing.T) {
 	}
 }
 
+func TestNewBCMClientRequiresBMHLifecycleManager(t *testing.T) {
+	cfg := &Config{
+		Type: "bcm",
+		Options: map[string]any{
+			"bcm": map[string]any{
+				"url":      "https://bcm-head:8081",
+				"certFile": "/certs/tls.crt",
+				"keyFile":  "/certs/tls.key",
+			},
+		},
+	}
+
+	_, err := NewBCMClient(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("expected error when BMHLifecycleManager is nil, got nil")
+	}
+	if !strings.Contains(err.Error(), "BCM inventory backend requires Metal3 management backend") {
+		t.Errorf("expected Metal3 requirement error, got: %v", err)
+	}
+}
+
 // assertJSONCall reads and validates the BCM JSON API request body.
 func assertJSONCall(t *testing.T, r *http.Request, expectedService, expectedCall string) *bcmJSONRequest {
 	t.Helper()

@@ -206,7 +206,8 @@ func run(ctx context.Context, logger logr.Logger, cfg *config) error {
 	publisher := kafkapub.NewPublisher(producer)
 
 	computeClient := privatev1.NewComputeInstancesClient(grpcConn)
-	reconciler := reconciliation.NewReconciler(computeClient, store, publisher, logger, cfg.heartbeatInterval)
+	clusterClient := privatev1.NewClustersClient(grpcConn)
+	reconciler := reconciliation.NewReconciler(computeClient, clusterClient, store, publisher, logger, cfg.heartbeatInterval)
 
 	logger.Info("running startup reconciliation")
 	if err := reconciler.Reconcile(ctx); err != nil {

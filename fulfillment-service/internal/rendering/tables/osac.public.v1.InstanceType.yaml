@@ -22,6 +22,12 @@ columns:
 - header: MEMORY
   value: this.spec.memory_gib
 
+- header: GPUS
+  value: "has(this.spec.gpu) ? this.spec.gpu.count : 0"
+
+- header: GPU NAME
+  value: "has(this.spec.gpu) ? this.spec.gpu.resource_name : '-'"
+
 - header: STATE
   value: this.spec.state
   type: osac.public.v1.InstanceTypeState

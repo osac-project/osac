@@ -96,11 +96,8 @@ jobs:
       test-infra-repository: osac-project/osac-test-infra
       test-infra-ref: ${{ inputs.test-infra-ref || 'main' }}
 
-  e2e:
-    if: >-
-      always()
-      && !(needs.e2e-bmaas-full-install.result == 'skipped'
-           && needs.changes.result == 'success')
+  e2e-bmaas-gate:
+    if: always()
     needs: [changes, e2e-bmaas-full-install]
     runs-on: ubuntu-latest
     steps:

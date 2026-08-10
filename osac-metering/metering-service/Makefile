@@ -18,9 +18,6 @@ GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
 build:
 	go build -o bin/$(BINARY_NAME) ./cmd/metering-service
 
-build-test-adapter:
-	go build -o bin/test-adapter ./cmd/test-adapter
-
 test:
 	$(GINKGO) run -r internal
 

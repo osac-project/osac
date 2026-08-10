@@ -1,11 +1,11 @@
-{{- if .Values.testAdapter.enabled }}
+{{- if .Values.echoAdapter.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "osac-metering.fullname" . }}-test-adapter
+  name: {{ include "osac-metering.fullname" . }}-echo-adapter
   labels:
     {{- include "osac-metering.labels" . | nindent 4 }}
-    app.kubernetes.io/component: test-adapter
+    app.kubernetes.io/component: echo-adapter
 spec:
   replicas: 1
   strategy:
@@ -13,12 +13,12 @@ spec:
   selector:
     matchLabels:
       {{- include "osac-metering.selectorLabels" . | nindent 6 }}
-      app.kubernetes.io/component: test-adapter
+      app.kubernetes.io/component: echo-adapter
   template:
     metadata:
       labels:
         {{- include "osac-metering.selectorLabels" . | nindent 8 }}
-        app.kubernetes.io/component: test-adapter
+        app.kubernetes.io/component: echo-adapter
     spec:
       serviceAccountName: {{ include "osac-metering.fullname" . }}
       securityContext:
@@ -42,7 +42,7 @@ spec:
             - name: SOURCE_NS
               value: {{ include "osac-metering.kafkaClusterNamespace" . }}
             - name: SASL_SECRET
-              value: osac-metering-test-adapter
+              value: osac-metering-echo-adapter
             - name: CA_SECRET
               value: {{ include "osac-metering.kafkaCaSecret" . }}
           volumeMounts:
@@ -89,18 +89,24 @@ spec:
               oc get secret "${CA_SECRET}" -n "${SOURCE_NS}" -o jsonpath='{.data.ca\.crt}' | base64 -d > /etc/kafka-secrets/ca.crt
               echo "Kafka secrets fetched."
       containers:
-        - name: test-adapter
-          image: "{{ .Values.testAdapter.image.repository }}:{{ .Values.testAdapter.image.tag }}"
-          imagePullPolicy: {{ .Values.testAdapter.image.pullPolicy }}
+        - name: echo-adapter
+          image: "{{ .Values.echoAdapter.image.repository }}:{{ .Values.echoAdapter.image.tag }}"
+          imagePullPolicy: {{ .Values.echoAdapter.image.pullPolicy }}
           env:
             - name: KAFKA_BROKERS
               value: {{ include "osac-metering.kafkaBrokers" . | quote }}
+            - name: KAFKA_TLS_ENABLED
+              value: "true"
             - name: KAFKA_TLS_CA_CERT
               value: /etc/kafka-secrets/ca.crt
             - name: KAFKA_SASL_USERNAME
-              value: osac-metering-test-adapter
+              value: osac-metering-echo-adapter
+            - name: KAFKA_CONSUMER_GROUP
+              value: osac-metering-echo-adapter
             - name: KAFKA_SASL_PASSWORD_FILE
               value: /etc/kafka-secrets/password
+            - name: METRICS_ADDR
+              value: ":8080"
           volumeMounts:
             - name: kafka-secrets
               mountPath: /etc/kafka-secrets

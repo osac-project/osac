@@ -26,4 +26,15 @@ Clone as siblings for cross-repo workflows:
 
 ## Cross-Component Changes
 
-A feature spanning multiple components lands in a single branch and PR. Apply changes in dependency order: fulfillment-service (proto) → osac-operator (CRDs, controllers) → osac-aap (playbooks) → osac-installer (RBAC, Helm). For deployment coordination (image tags, submodules), see `osac-installer/AGENTS.md`.
+A feature spanning multiple components lands in a single branch and PR. Apply changes in dependency order:
+
+```text
+fulfillment-service (proto)
+├→ osac-operator (CRDs, controllers)
+│  ├→ osac-aap (playbooks)
+│  └→ bare-metal-fulfillment-operator (bare metal types)
+├→ osac-csi-driver (storage tier APIs)
+└→ osac-installer (RBAC, Helm) — depends on all above
+```
+
+For deployment coordination (image tags, submodules), see `osac-installer/AGENTS.md`.

@@ -79,3 +79,9 @@ repos:
     language: system
     files: ^osac-metering/metering-service/.*\.go$
     entry: make -C osac-metering/metering-service lint
+  - id: osac-metering-adapters-golangci-lint
+    pass_filenames: false
+    name: osac-metering-adapters golangci-lint
+    language: system
+    files: ^osac-metering/adapters/(.*\.go|\.golangci\.yml|Makefile|go\.(mod|sum))$
+    entry: make -C osac-metering/adapters lint

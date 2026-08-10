@@ -16,6 +16,7 @@ COPY --chown=1001:1001 osac-operator/go.mod osac-operator/go.sum osac-operator/
 COPY --chown=1001:1001 osac-operator/api/go.mod osac-operator/api/go.sum osac-operator/api/
 COPY --chown=1001:1001 osac-csi-driver/go.mod osac-csi-driver/go.sum osac-csi-driver/
 COPY --chown=1001:1001 osac-metering/metering-service/go.mod osac-metering/metering-service/go.sum osac-metering/metering-service/
+COPY --chown=1001:1001 osac-metering/adapters/go.mod osac-metering/adapters/go.sum osac-metering/adapters/
 RUN \
   set -e; \
   cd fulfillment-service && go mod download

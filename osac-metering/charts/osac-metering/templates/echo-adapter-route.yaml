@@ -1,0 +1,17 @@
+{{- if .Values.echoAdapter.enabled }}
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ include "osac-metering.fullname" . }}-echo-adapter
+  labels:
+    {{- include "osac-metering.labels" . | nindent 4 }}
+    app.kubernetes.io/component: echo-adapter
+spec:
+  to:
+    kind: Service
+    name: {{ include "osac-metering.fullname" . }}-echo-adapter
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+{{- end }}

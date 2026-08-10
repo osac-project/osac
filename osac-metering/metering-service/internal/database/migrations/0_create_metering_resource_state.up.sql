@@ -18,6 +18,7 @@ CREATE TABLE metering_resource_state (
     transition_time   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     fulfillment_version INT       NOT NULL,
     billing_dimensions JSONB      NOT NULL DEFAULT '{}'::JSONB,
+    component_billable_since JSONB NOT NULL DEFAULT '{}'::JSONB,
     created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

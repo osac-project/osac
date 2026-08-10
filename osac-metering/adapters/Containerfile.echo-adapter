@@ -8,10 +8,10 @@ RUN go mod download
 
 COPY . ./
 
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -buildvcs=false -a -o test-adapter ./cmd/test-adapter
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -buildvcs=false -a -o echo-adapter ./cmd/echo-adapter
 
 FROM registry.access.redhat.com/ubi10-minimal:10.2
 WORKDIR /
-COPY --from=builder /opt/app-root/src/test-adapter .
+COPY --from=builder /opt/app-root/src/echo-adapter .
 USER 65532:65532
-ENTRYPOINT ["/test-adapter"]
+ENTRYPOINT ["/echo-adapter"]

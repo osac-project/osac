@@ -1,11 +1,11 @@
-name: Build metering-test-adapter image
+name: Build metering-echo-adapter image
 
 on:
   workflow_dispatch:
   pull_request:
     paths:
-      - 'osac-metering/metering-service/**'
-      - '!osac-metering/metering-service/**/*.md'
+      - 'osac-metering/adapters/**'
+      - '!osac-metering/adapters/**/*.md'
   push:
     branches:
     - main
@@ -18,7 +18,7 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: osac-project/metering-test-adapter
+  IMAGE_NAME: osac-project/metering-echo-adapter
 
 jobs:
   build:
@@ -70,8 +70,8 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@v7
         with:
-          context: osac-metering/metering-service
-          file: osac-metering/metering-service/Containerfile.test-adapter
+          context: osac-metering/adapters
+          file: osac-metering/adapters/Containerfile.echo-adapter
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

@@ -179,8 +179,14 @@ kafka:
 # --- Metering ---
 metering:
   enabled: true
-  testAdapter:
+  # Echo adapter — test/development tool only. Consumes metering events from
+  # Kafka and exposes them via HTTP for E2E test assertions.
+  echoAdapter:
     enabled: true
+    image:
+      repository: ghcr.io/osac-project/metering-echo-adapter
+      tag: latest
+      pullPolicy: Always
   database:
     connection:
     - secret:

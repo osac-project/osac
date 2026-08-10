@@ -14,16 +14,23 @@ import (
 )
 
 type ResourceState struct {
-	ResourceID         string
-	ResourceType       string
-	TenantID           string
-	ProjectID          string
-	CurrentState       string
-	PreviousState      string
-	IsBillable         bool
-	BillableSince      *time.Time
-	LastHeartbeatAt    *time.Time
-	TransitionTime     time.Time
-	FulfillmentVersion int32
-	BillingDimensions  map[string]any
+	ResourceID    string
+	ResourceType  string
+	TenantID      string
+	ProjectID     string
+	CurrentState  string
+	PreviousState string
+	IsBillable    bool
+	BillableSince *time.Time
+	// ComponentBillableSince tracks, per node_set, when that component's
+	// billing dimensions last changed. N+1 decomposed resources (ClusterOrder)
+	// scale different node sets at different times — BillableSince alone
+	// would understate duration_seconds for a component that didn't cause
+	// the most recent reset. Keyed by ComponentRecord.NodeSet; absent for
+	// resource types that don't decompose into components.
+	ComponentBillableSince map[string]time.Time
+	LastHeartbeatAt        *time.Time
+	TransitionTime         time.Time
+	FulfillmentVersion     int32
+	BillingDimensions      map[string]any
 }

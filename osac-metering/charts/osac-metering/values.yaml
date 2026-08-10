@@ -27,9 +27,11 @@ resources:
     cpu: 500m
     memory: 256Mi
 
-testAdapter:
+## Echo adapter — test/development tool only, not for production use.
+## Enable and configure via environment-specific values (e.g., values/vmaas-ci/values.yaml).
+echoAdapter:
   enabled: false
-  image:
-    repository: ghcr.io/osac-project/metering-test-adapter
-    tag: latest
-    pullPolicy: Always
+  # image:
+  #   repository: ghcr.io/osac-project/metering-echo-adapter
+  #   tag: latest
+  #   pullPolicy: Always

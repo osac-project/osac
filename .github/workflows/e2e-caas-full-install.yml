@@ -111,11 +111,8 @@ jobs:
       # defaults -- none are required and this caller has no need to override
       # them today.
 
-  e2e:
-    if: >-
-      always()
-      && !(needs.e2e-caas-full-install.result == 'skipped'
-           && needs.changes.result == 'success')
+  e2e-caas-gate:
+    if: always()
     needs: [changes, e2e-caas-full-install]
     runs-on: ubuntu-latest
     steps:

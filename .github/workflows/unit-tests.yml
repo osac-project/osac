@@ -84,3 +84,19 @@ jobs:
     - working-directory: osac-metering/metering-service
       run: |
         ginkgo run -r internal
+
+  run-osac-metering-adapters-tests:
+    name: Run unit tests (osac-metering/adapters)
+    needs: changes
+    if: needs.changes.outputs.should-run == 'true'
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      with:
+        persist-credentials: false
+    - uses: ./.github/actions/setup-go
+      with:
+        working-directory: osac-metering/adapters
+    - working-directory: osac-metering/adapters
+      run: |
+        ginkgo run .

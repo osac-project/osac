@@ -1,8 +1,8 @@
-{{- if .Values.testAdapter.enabled }}
+{{- if .Values.echoAdapter.enabled }}
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaUser
 metadata:
-  name: osac-metering-test-adapter
+  name: osac-metering-echo-adapter
   namespace: {{ include "osac-metering.kafkaClusterNamespace" . }}
   labels:
     strimzi.io/cluster: {{ include "osac-metering.kafkaClusterName" . }}
@@ -22,7 +22,7 @@ spec:
         host: "*"
       - resource:
           type: group
-          name: osac-metering-test-adapter
+          name: osac-metering-echo-adapter
           patternType: literal
         operations:
           - Read

@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc"
 
 	privatev1 "github.com/osac-project/osac-metering/internal/api/osac/private/v1"
+	"github.com/osac-project/osac-metering/internal/events"
 	"github.com/osac-project/osac-metering/internal/projection"
 	"github.com/osac-project/osac-metering/internal/reconciliation"
 )
@@ -37,6 +38,29 @@ func (m *mockComputeClient) List(_ context.Context, req *privatev1.ComputeInstan
 		end = len(m.items)
 	}
 	return &privatev1.ComputeInstancesListResponse{
+		Items: m.items[offset:end],
+	}, nil
+}
+
+type mockClusterClient struct {
+	items []*privatev1.Cluster
+	err   error
+}
+
+func (m *mockClusterClient) List(_ context.Context, req *privatev1.ClustersListRequest, _ ...grpc.CallOption) (*privatev1.ClustersListResponse, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	offset := int(req.GetOffset())
+	limit := int(req.GetLimit())
+	if offset >= len(m.items) {
+		return &privatev1.ClustersListResponse{}, nil
+	}
+	end := offset + limit
+	if end > len(m.items) {
+		end = len(m.items)
+	}
+	return &privatev1.ClustersListResponse{
 		Items: m.items[offset:end],
 	}, nil
 }
@@ -159,7 +183,7 @@ var _ = Describe("Reconciler", func() {
 			}
 			store := newMockStore()
 			pub := &mockPublisher{}
-			recon := reconciliation.NewReconciler(client, store, pub, logr.Discard(), 60*time.Second)
+			recon := reconciliation.NewReconciler(client, nil, store, pub, logr.Discard(), 60*time.Second)
 
 			Expect(recon.Reconcile(ctx)).To(Succeed())
 
@@ -167,7 +191,7 @@ var _ = Describe("Reconciler", func() {
 			defer pub.mu.Unlock()
 			var correctionFound bool
 			for _, e := range pub.published {
-				if e.Type() == "osac.resource.correction.v1" {
+				if e.Type() == events.EventCorrection {
 					var data map[string]any
 					Expect(json.Unmarshal(e.Data(), &data)).To(Succeed())
 					Expect(data["reason"]).To(Equal("missed_creation"))
@@ -187,12 +211,12 @@ var _ = Describe("Reconciler", func() {
 			store := newMockStore()
 			store.states["vm-gone"] = projection.ResourceState{
 				ResourceID:   "vm-gone",
-				ResourceType: "compute_instance",
+				ResourceType: events.ResourceTypeComputeInstance,
 				TenantID:     "tenant-1",
 				CurrentState: "RUNNING",
 			}
 			pub := &mockPublisher{}
-			recon := reconciliation.NewReconciler(client, store, pub, logr.Discard(), 60*time.Second)
+			recon := reconciliation.NewReconciler(client, nil, store, pub, logr.Discard(), 60*time.Second)
 
 			Expect(recon.Reconcile(ctx)).To(Succeed())
 
@@ -217,13 +241,13 @@ var _ = Describe("Reconciler", func() {
 			store := newMockStore()
 			store.states["vm-drift"] = projection.ResourceState{
 				ResourceID:         "vm-drift",
-				ResourceType:       "compute_instance",
+				ResourceType:       events.ResourceTypeComputeInstance,
 				TenantID:           "tenant-1",
 				CurrentState:       "RUNNING",
 				FulfillmentVersion: 3,
 			}
 			pub := &mockPublisher{}
-			recon := reconciliation.NewReconciler(client, store, pub, logr.Discard(), 60*time.Second)
+			recon := reconciliation.NewReconciler(client, nil, store, pub, logr.Discard(), 60*time.Second)
 
 			Expect(recon.Reconcile(ctx)).To(Succeed())
 
@@ -246,14 +270,14 @@ var _ = Describe("Reconciler", func() {
 			store := newMockStore()
 			store.states["res-drift"] = projection.ResourceState{
 				ResourceID:         "res-drift",
-				ResourceType:       "compute_instance",
+				ResourceType:       events.ResourceTypeComputeInstance,
 				TenantID:           "tenant-1",
 				CurrentState:       "STOPPED",
 				IsBillable:         false,
 				FulfillmentVersion: 1,
 			}
 			pub := &mockPublisher{}
-			recon := reconciliation.NewReconciler(client, store, pub, logr.Discard(), 60*time.Second)
+			recon := reconciliation.NewReconciler(client, nil, store, pub, logr.Discard(), 60*time.Second)
 
 			Expect(recon.Reconcile(ctx)).To(Succeed())
 
@@ -275,7 +299,7 @@ var _ = Describe("Reconciler", func() {
 			store := newMockStore()
 			store.states["res-stale"] = projection.ResourceState{
 				ResourceID:         "res-stale",
-				ResourceType:       "compute_instance",
+				ResourceType:       events.ResourceTypeComputeInstance,
 				TenantID:           "tenant-1",
 				CurrentState:       "RUNNING",
 				IsBillable:         true,
@@ -283,7 +307,7 @@ var _ = Describe("Reconciler", func() {
 				LastHeartbeatAt:    &staleTime,
 			}
 			pub := &mockPublisher{}
-			recon := reconciliation.NewReconciler(client, store, pub, logr.Discard(), 60*time.Second)
+			recon := reconciliation.NewReconciler(client, nil, store, pub, logr.Discard(), 60*time.Second)
 
 			Expect(recon.Reconcile(ctx)).To(Succeed())
 
@@ -291,7 +315,7 @@ var _ = Describe("Reconciler", func() {
 			defer pub.mu.Unlock()
 			found := false
 			for _, e := range pub.published {
-				if e.Type() == "osac.resource.heartbeat.v1" {
+				if e.Type() == events.EventHeartbeat {
 					found = true
 					break
 				}
@@ -307,7 +331,7 @@ var _ = Describe("Reconciler", func() {
 			}
 			store := newMockStore()
 			pub := &mockPublisher{}
-			recon := reconciliation.NewReconciler(client, store, pub, logr.Discard(), 60*time.Second)
+			recon := reconciliation.NewReconciler(client, nil, store, pub, logr.Discard(), 60*time.Second)
 
 			Expect(recon.Reconcile(ctx)).To(Succeed())
 
@@ -329,7 +353,7 @@ var _ = Describe("Reconciler", func() {
 			store := newMockStore()
 			store.states["vm-ok"] = projection.ResourceState{
 				ResourceID:   "vm-ok",
-				ResourceType: "compute_instance",
+				ResourceType: events.ResourceTypeComputeInstance,
 				TenantID:     "tenant-1",
 				CurrentState: "RUNNING",
 				BillingDimensions: map[string]any{
@@ -339,7 +363,7 @@ var _ = Describe("Reconciler", func() {
 				},
 			}
 			pub := &mockPublisher{}
-			recon := reconciliation.NewReconciler(client, store, pub, logr.Discard(), 60*time.Second)
+			recon := reconciliation.NewReconciler(client, nil, store, pub, logr.Discard(), 60*time.Second)
 
 			Expect(recon.Reconcile(ctx)).To(Succeed())
 
@@ -352,7 +376,7 @@ var _ = Describe("Reconciler", func() {
 			client := &mockComputeClient{err: fmt.Errorf("connection refused")}
 			store := newMockStore()
 			pub := &mockPublisher{}
-			recon := reconciliation.NewReconciler(client, store, pub, logr.Discard(), 60*time.Second)
+			recon := reconciliation.NewReconciler(client, nil, store, pub, logr.Discard(), 60*time.Second)
 
 			err := recon.Reconcile(ctx)
 			Expect(err).To(HaveOccurred())
@@ -367,7 +391,7 @@ var _ = Describe("Reconciler", func() {
 			}
 			store := newMockStore()
 			pub := &mockPublisher{err: fmt.Errorf("kafka down")}
-			recon := reconciliation.NewReconciler(client, store, pub, logr.Discard(), 60*time.Second)
+			recon := reconciliation.NewReconciler(client, nil, store, pub, logr.Discard(), 60*time.Second)
 
 			err := recon.Reconcile(ctx)
 			Expect(err).To(HaveOccurred())
@@ -400,7 +424,7 @@ var _ = Describe("Reconciler", func() {
 			store := newMockStore()
 			store.states["vm-dims-drift"] = projection.ResourceState{
 				ResourceID:         "vm-dims-drift",
-				ResourceType:       "compute_instance",
+				ResourceType:       events.ResourceTypeComputeInstance,
 				TenantID:           "tenant-1",
 				CurrentState:       "RUNNING",
 				IsBillable:         true,
@@ -408,7 +432,7 @@ var _ = Describe("Reconciler", func() {
 				BillingDimensions:  map[string]any{"instance_type": "m5.large"},
 			}
 			pub := &mockPublisher{}
-			recon := reconciliation.NewReconciler(client, store, pub, logr.Discard(), 60*time.Second)
+			recon := reconciliation.NewReconciler(client, nil, store, pub, logr.Discard(), 60*time.Second)
 
 			Expect(recon.Reconcile(ctx)).To(Succeed())
 
@@ -416,7 +440,7 @@ var _ = Describe("Reconciler", func() {
 			defer pub.mu.Unlock()
 			var found bool
 			for _, e := range pub.published {
-				if e.Type() == "osac.resource.correction.v1" {
+				if e.Type() == events.EventCorrection {
 					var data map[string]any
 					Expect(json.Unmarshal(e.Data(), &data)).To(Succeed())
 					if data["reason"] == "billing_dimensions_drift" {
@@ -454,7 +478,7 @@ var _ = Describe("Reconciler", func() {
 			store := newMockStore()
 			store.states["vm-keep-billable"] = projection.ResourceState{
 				ResourceID:         "vm-keep-billable",
-				ResourceType:       "compute_instance",
+				ResourceType:       events.ResourceTypeComputeInstance,
 				TenantID:           "tenant-1",
 				CurrentState:       "RUNNING",
 				IsBillable:         true,
@@ -463,7 +487,7 @@ var _ = Describe("Reconciler", func() {
 				BillingDimensions:  map[string]any{"instance_type": "m5.large"},
 			}
 			pub := &mockPublisher{}
-			recon := reconciliation.NewReconciler(client, store, pub, logr.Discard(), 60*time.Second)
+			recon := reconciliation.NewReconciler(client, nil, store, pub, logr.Discard(), 60*time.Second)
 
 			Expect(recon.Reconcile(ctx)).To(Succeed())
 
@@ -484,7 +508,7 @@ var _ = Describe("Reconciler", func() {
 			store := newMockStore()
 			store.states["vm-version-advance"] = projection.ResourceState{
 				ResourceID:         "vm-version-advance",
-				ResourceType:       "compute_instance",
+				ResourceType:       events.ResourceTypeComputeInstance,
 				TenantID:           "tenant-1",
 				CurrentState:       "RUNNING",
 				FulfillmentVersion: 5,
@@ -495,7 +519,7 @@ var _ = Describe("Reconciler", func() {
 				},
 			}
 			pub := &mockPublisher{}
-			recon := reconciliation.NewReconciler(client, store, pub, logr.Discard(), 60*time.Second)
+			recon := reconciliation.NewReconciler(client, nil, store, pub, logr.Discard(), 60*time.Second)
 
 			Expect(recon.Reconcile(ctx)).To(Succeed())
 
@@ -532,7 +556,7 @@ var _ = Describe("Reconciler", func() {
 			store := newMockStore()
 			store.states["vm-match"] = projection.ResourceState{
 				ResourceID:   "vm-match",
-				ResourceType: "compute_instance",
+				ResourceType: events.ResourceTypeComputeInstance,
 				TenantID:     "tenant-1",
 				CurrentState: "RUNNING",
 				BillingDimensions: map[string]any{
@@ -542,7 +566,7 @@ var _ = Describe("Reconciler", func() {
 				},
 			}
 			pub := &mockPublisher{}
-			recon := reconciliation.NewReconciler(client, store, pub, logr.Discard(), 60*time.Second)
+			recon := reconciliation.NewReconciler(client, nil, store, pub, logr.Discard(), 60*time.Second)
 
 			Expect(recon.Reconcile(ctx)).To(Succeed())
 
@@ -561,7 +585,7 @@ var _ = Describe("Reconciler", func() {
 			store := newMockStore()
 			store.states["vm-stale"] = projection.ResourceState{
 				ResourceID:         "vm-stale",
-				ResourceType:       "compute_instance",
+				ResourceType:       events.ResourceTypeComputeInstance,
 				TenantID:           "tenant-1",
 				CurrentState:       "RUNNING",
 				FulfillmentVersion: 3,
@@ -575,7 +599,7 @@ var _ = Describe("Reconciler", func() {
 				"vm-stale": projection.ErrStaleVersion,
 			}
 			pub := &mockPublisher{}
-			recon := reconciliation.NewReconciler(client, store, pub, logr.Discard(), 60*time.Second)
+			recon := reconciliation.NewReconciler(client, nil, store, pub, logr.Discard(), 60*time.Second)
 
 			Expect(recon.Reconcile(ctx)).To(Succeed())
 
@@ -592,7 +616,7 @@ var _ = Describe("Reconciler", func() {
 			}
 			store := newMockStore()
 			pub := &mockPublisher{}
-			recon := reconciliation.NewReconciler(client, store, pub, logr.Discard(), 60*time.Second)
+			recon := reconciliation.NewReconciler(client, nil, store, pub, logr.Discard(), 60*time.Second)
 
 			Expect(recon.Reconcile(ctx)).To(Succeed())
 
@@ -600,7 +624,7 @@ var _ = Describe("Reconciler", func() {
 			defer pub.mu.Unlock()
 			var found bool
 			for _, e := range pub.published {
-				if e.Type() == "osac.resource.correction.v1" {
+				if e.Type() == events.EventCorrection {
 					Expect(e.Extensions()["osacresourceid"]).To(Equal("vm-new"))
 					found = true
 					break
@@ -615,7 +639,7 @@ var _ = Describe("Reconciler", func() {
 			client := &mockComputeClient{}
 			store := newMockStore()
 			pub := &mockPublisher{}
-			recon := reconciliation.NewReconciler(client, store, pub, logr.Discard(), 60*time.Second)
+			recon := reconciliation.NewReconciler(client, nil, store, pub, logr.Discard(), 60*time.Second)
 
 			periodicCtx, periodicCancel := context.WithCancel(ctx)
 			done := make(chan struct{})
@@ -627,6 +651,268 @@ var _ = Describe("Reconciler", func() {
 			time.Sleep(10 * time.Millisecond)
 			periodicCancel()
 			Eventually(done, time.Second).Should(BeClosed())
+		})
+	})
+
+	Describe("CaaS cluster reconciliation", func() {
+		makeClusterProto := func(id, tenant string, state privatev1.ClusterState, version int32) *privatev1.Cluster {
+			return &privatev1.Cluster{
+				Id: id,
+				Metadata: &privatev1.Metadata{
+					Tenant:  tenant,
+					Version: version,
+				},
+				Spec: &privatev1.ClusterSpec{
+					Template: &privatev1.ClusterTemplateReference{Name: "ocp-ci-small"},
+					Version:  &privatev1.ClusterVersionReference{Id: "4.17.0", Name: "4.17.0"},
+					NodeSets: map[string]*privatev1.ClusterNodeSet{
+						"gpu-workers": {HostType: &privatev1.HostTypeReference{Name: "gpu-h100"}, Size: 2},
+					},
+				},
+				Status: &privatev1.ClusterStatus{State: state},
+			}
+		}
+
+		It("detects missed_creation for cluster and emits N+1 correction events", func() {
+			computeClient := &mockComputeClient{}
+			clusterClient := &mockClusterClient{
+				items: []*privatev1.Cluster{
+					makeClusterProto("cl-missed", "tenant-1", privatev1.ClusterState_CLUSTER_STATE_READY, 1),
+				},
+			}
+			store := newMockStore()
+			pub := &mockPublisher{}
+			recon := reconciliation.NewReconciler(computeClient, clusterClient, store, pub, logr.Discard(), 60*time.Second)
+
+			Expect(recon.Reconcile(ctx)).To(Succeed())
+
+			pub.mu.Lock()
+			defer pub.mu.Unlock()
+			correctionCount := 0
+			for _, e := range pub.published {
+				if e.Type() == events.EventCorrection {
+					correctionCount++
+					var data map[string]any
+					Expect(json.Unmarshal(e.Data(), &data)).To(Succeed())
+					Expect(data["reason"]).To(Equal("missed_creation"))
+					Expect(data["resource_type"]).To(Equal(events.ResourceTypeClusterOrder))
+					bd := data["billing_dimensions"].(map[string]any)
+					Expect(bd).To(HaveKey("component"))
+					Expect(bd).To(HaveKey("host_type"))
+					Expect(bd).NotTo(HaveKey("components"))
+				}
+			}
+			// 1 control_plane + 1 gpu-h100 worker = 2 correction events
+			Expect(correctionCount).To(Equal(2))
+
+			store.mu.Lock()
+			defer store.mu.Unlock()
+			Expect(store.states).To(HaveKey("cl-missed"))
+			Expect(store.states["cl-missed"].ResourceType).To(Equal(events.ResourceTypeClusterOrder))
+			Expect(store.states["cl-missed"].IsBillable).To(BeTrue())
+		})
+
+		It("detects state_drift for cluster and emits N+1 correction events", func() {
+			computeClient := &mockComputeClient{}
+			clusterClient := &mockClusterClient{
+				items: []*privatev1.Cluster{
+					makeClusterProto("cl-drift", "tenant-1", privatev1.ClusterState_CLUSTER_STATE_FAILED, 2),
+				},
+			}
+			store := newMockStore()
+			now := time.Now().UTC().Truncate(time.Microsecond)
+			store.states["cl-drift"] = projection.ResourceState{
+				ResourceID:         "cl-drift",
+				ResourceType:       events.ResourceTypeClusterOrder,
+				TenantID:           "tenant-1",
+				CurrentState:       "READY",
+				IsBillable:         true,
+				BillableSince:      &now,
+				FulfillmentVersion: 1,
+				BillingDimensions: map[string]any{
+					"cluster_template": "ocp-ci-small",
+					"release_image":    "4.17.0",
+					"components": []any{
+						map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": float64(1)},
+						map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": float64(2)},
+					},
+				},
+			}
+
+			pub := &mockPublisher{}
+			recon := reconciliation.NewReconciler(computeClient, clusterClient, store, pub, logr.Discard(), 60*time.Second)
+
+			Expect(recon.Reconcile(ctx)).To(Succeed())
+
+			pub.mu.Lock()
+			defer pub.mu.Unlock()
+			driftCount := 0
+			for _, e := range pub.published {
+				if e.Type() == events.EventCorrection {
+					var data map[string]any
+					Expect(json.Unmarshal(e.Data(), &data)).To(Succeed())
+					if data["reason"] == "state_drift" {
+						driftCount++
+					}
+				}
+			}
+			Expect(driftCount).To(Equal(2))
+
+			store.mu.Lock()
+			defer store.mu.Unlock()
+			Expect(store.states["cl-drift"].CurrentState).To(Equal("FAILED"))
+			Expect(store.states["cl-drift"].IsBillable).To(BeFalse())
+		})
+
+		It("detects missed_deletion for cluster and emits N+1 correction events", func() {
+			computeClient := &mockComputeClient{}
+			clusterClient := &mockClusterClient{}
+			store := newMockStore()
+			now := time.Now().UTC().Truncate(time.Microsecond)
+			store.states["cl-gone"] = projection.ResourceState{
+				ResourceID:    "cl-gone",
+				ResourceType:  events.ResourceTypeClusterOrder,
+				TenantID:      "tenant-1",
+				CurrentState:  "READY",
+				IsBillable:    true,
+				BillableSince: &now,
+				BillingDimensions: map[string]any{
+					"cluster_template": "ocp-ci-small",
+					"components": []any{
+						map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": float64(1)},
+						map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": float64(2)},
+					},
+				},
+			}
+
+			pub := &mockPublisher{}
+			recon := reconciliation.NewReconciler(computeClient, clusterClient, store, pub, logr.Discard(), 60*time.Second)
+
+			Expect(recon.Reconcile(ctx)).To(Succeed())
+
+			pub.mu.Lock()
+			defer pub.mu.Unlock()
+			deletionCount := 0
+			for _, e := range pub.published {
+				if e.Type() == events.EventCorrection {
+					var data map[string]any
+					Expect(json.Unmarshal(e.Data(), &data)).To(Succeed())
+					if data["reason"] == "missed_deletion" {
+						deletionCount++
+						bd := data["billing_dimensions"].(map[string]any)
+						Expect(bd).To(HaveKey("component"))
+						Expect(bd).NotTo(HaveKey("components"))
+					}
+				}
+			}
+			Expect(deletionCount).To(Equal(2))
+
+			store.mu.Lock()
+			defer store.mu.Unlock()
+			Expect(store.states).ToNot(HaveKey("cl-gone"))
+		})
+
+		It("skips cluster missed_deletion when clusterClient is nil", func() {
+			computeClient := &mockComputeClient{}
+			store := newMockStore()
+			now := time.Now().UTC().Truncate(time.Microsecond)
+			store.states["cl-safe"] = projection.ResourceState{
+				ResourceID:        "cl-safe",
+				ResourceType:      events.ResourceTypeClusterOrder,
+				TenantID:          "tenant-1",
+				CurrentState:      "READY",
+				IsBillable:        true,
+				BillableSince:     &now,
+				LastHeartbeatAt:   &now,
+				BillingDimensions: map[string]any{},
+			}
+
+			pub := &mockPublisher{}
+			recon := reconciliation.NewReconciler(computeClient, nil, store, pub, logr.Discard(), 60*time.Second)
+
+			Expect(recon.Reconcile(ctx)).To(Succeed())
+
+			pub.mu.Lock()
+			defer pub.mu.Unlock()
+			for _, e := range pub.published {
+				Expect(e.Type()).ToNot(Equal(events.EventCorrection))
+			}
+
+			store.mu.Lock()
+			defer store.mu.Unlock()
+			Expect(store.states).To(HaveKey("cl-safe"))
+		})
+
+		It("paginates ListClusters correctly", func() {
+			clusters := make([]*privatev1.Cluster, 0, 600)
+			for i := range 600 {
+				clusters = append(clusters, makeClusterProto(
+					fmt.Sprintf("cl-%d", i), "tenant-1",
+					privatev1.ClusterState_CLUSTER_STATE_READY, 1))
+			}
+			computeClient := &mockComputeClient{}
+			clusterClient := &mockClusterClient{items: clusters}
+			store := newMockStore()
+			pub := &mockPublisher{}
+			recon := reconciliation.NewReconciler(computeClient, clusterClient, store, pub, logr.Discard(), 60*time.Second)
+
+			Expect(recon.Reconcile(ctx)).To(Succeed())
+
+			store.mu.Lock()
+			defer store.mu.Unlock()
+			Expect(store.states).To(HaveLen(600))
+		})
+
+		It("produces deterministic synthetic heartbeat IDs for clusters", func() {
+			computeClient := &mockComputeClient{}
+			clusterClient := &mockClusterClient{
+				items: []*privatev1.Cluster{
+					makeClusterProto("cl-hb", "tenant-1", privatev1.ClusterState_CLUSTER_STATE_READY, 1),
+				},
+			}
+			store := newMockStore()
+			now := time.Now().Add(-5 * time.Minute).UTC().Truncate(time.Microsecond)
+			store.states["cl-hb"] = projection.ResourceState{
+				ResourceID:         "cl-hb",
+				ResourceType:       events.ResourceTypeClusterOrder,
+				TenantID:           "tenant-1",
+				CurrentState:       "READY",
+				IsBillable:         true,
+				BillableSince:      &now,
+				FulfillmentVersion: 1,
+				BillingDimensions: map[string]any{
+					"cluster_template": "ocp-ci-small",
+					"release_image":    "4.17.0",
+					"components": []any{
+						map[string]any{"node_set": "_control_plane", "component": "control_plane", "host_type": "_control_plane", "node_count": float64(1)},
+						map[string]any{"node_set": "gpu-workers", "component": "worker", "host_type": "gpu-h100", "node_count": float64(2)},
+					},
+				},
+			}
+
+			pub := &mockPublisher{}
+			recon := reconciliation.NewReconciler(computeClient, clusterClient, store, pub, logr.Discard(), 60*time.Second)
+
+			Expect(recon.Reconcile(ctx)).To(Succeed())
+
+			pub.mu.Lock()
+			defer pub.mu.Unlock()
+
+			var hbEvents []cloudevents.Event
+			for _, e := range pub.published {
+				if e.Type() == events.EventHeartbeat {
+					hbEvents = append(hbEvents, e)
+				}
+			}
+			Expect(hbEvents).To(HaveLen(2))
+
+			ids := map[string]bool{}
+			for _, e := range hbEvents {
+				Expect(e.ID()).To(ContainSubstring("synthetic-hb/cl-hb/"))
+				Expect(e.ID()).NotTo(ContainSubstring("synthetic-hb/cl-hb//"))
+				ids[e.ID()] = true
+			}
+			Expect(ids).To(HaveLen(2))
 		})
 	})
 })

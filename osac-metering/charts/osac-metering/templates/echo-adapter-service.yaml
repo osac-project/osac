@@ -1,11 +1,11 @@
-{{- if .Values.testAdapter.enabled }}
+{{- if .Values.echoAdapter.enabled }}
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "osac-metering.fullname" . }}-test-adapter
+  name: {{ include "osac-metering.fullname" . }}-echo-adapter
   labels:
     {{- include "osac-metering.labels" . | nindent 4 }}
-    app.kubernetes.io/component: test-adapter
+    app.kubernetes.io/component: echo-adapter
 spec:
   type: ClusterIP
   ports:
@@ -15,5 +15,5 @@ spec:
       name: http
   selector:
     {{- include "osac-metering.selectorLabels" . | nindent 4 }}
-    app.kubernetes.io/component: test-adapter
+    app.kubernetes.io/component: echo-adapter
 {{- end }}

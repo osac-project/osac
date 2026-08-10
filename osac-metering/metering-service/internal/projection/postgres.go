@@ -33,7 +33,7 @@ func (s *PostgresStore) Get(ctx context.Context, resourceID string) (*ResourceSt
 		SELECT resource_id, resource_type, tenant_id, project_id,
 		       current_state, previous_state, is_billable, billable_since,
 		       last_heartbeat_at, transition_time, fulfillment_version,
-		       billing_dimensions
+		       billing_dimensions, component_billable_since
 		FROM metering_resource_state
 		WHERE resource_id = $1`,
 		resourceID)
@@ -52,6 +52,10 @@ func (s *PostgresStore) Upsert(ctx context.Context, state ResourceState) error {
 	dimensions, err := json.Marshal(state.BillingDimensions)
 	if err != nil {
 		return fmt.Errorf("marshaling billing dimensions: %w", err)
+	}
+	componentSince, err := json.Marshal(state.ComponentBillableSince)
+	if err != nil {
+		return fmt.Errorf("marshaling component billable since: %w", err)
 	}
 
 	tx, err := s.pool.Begin(ctx)
@@ -84,8 +88,8 @@ func (s *PostgresStore) Upsert(ctx context.Context, state ResourceState) error {
 			resource_id, resource_type, tenant_id, project_id,
 			current_state, previous_state, is_billable, billable_since,
 			last_heartbeat_at, transition_time, fulfillment_version,
-			billing_dimensions, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
+			billing_dimensions, component_billable_since, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
 		ON CONFLICT (resource_id) DO UPDATE SET
 			resource_type = EXCLUDED.resource_type,
 			tenant_id = EXCLUDED.tenant_id,
@@ -98,6 +102,7 @@ func (s *PostgresStore) Upsert(ctx context.Context, state ResourceState) error {
 			transition_time = EXCLUDED.transition_time,
 			fulfillment_version = EXCLUDED.fulfillment_version,
 			billing_dimensions = EXCLUDED.billing_dimensions,
+			component_billable_since = EXCLUDED.component_billable_since,
 			updated_at = NOW()
 		WHERE metering_resource_state.fulfillment_version <= EXCLUDED.fulfillment_version`,
 		state.ResourceID,
@@ -112,6 +117,7 @@ func (s *PostgresStore) Upsert(ctx context.Context, state ResourceState) error {
 		state.TransitionTime,
 		state.FulfillmentVersion,
 		dimensions,
+		componentSince,
 	)
 	if err != nil {
 		return fmt.Errorf("upserting resource state %s: %w", state.ResourceID, err)
@@ -135,7 +141,7 @@ func (s *PostgresStore) ListBillable(ctx context.Context) ([]ResourceState, erro
 		SELECT resource_id, resource_type, tenant_id, project_id,
 		       current_state, previous_state, is_billable, billable_since,
 		       last_heartbeat_at, transition_time, fulfillment_version,
-		       billing_dimensions
+		       billing_dimensions, component_billable_since
 		FROM metering_resource_state
 		WHERE is_billable = TRUE`)
 	if err != nil {
@@ -150,7 +156,7 @@ func (s *PostgresStore) ListAll(ctx context.Context) ([]ResourceState, error) {
 		SELECT resource_id, resource_type, tenant_id, project_id,
 		       current_state, previous_state, is_billable, billable_since,
 		       last_heartbeat_at, transition_time, fulfillment_version,
-		       billing_dimensions
+		       billing_dimensions, component_billable_since
 		FROM metering_resource_state`)
 	if err != nil {
 		return nil, fmt.Errorf("querying all resources: %w", err)
@@ -176,12 +182,13 @@ func (s *PostgresStore) UpdateLastHeartbeat(ctx context.Context, resourceIDs []s
 
 func scanResourceState(row pgx.Row) (*ResourceState, error) {
 	var (
-		state          ResourceState
-		previousState  *string
-		projectID      *string
-		billableSince  *time.Time
-		lastHeartbeat  *time.Time
-		dimensionsJSON []byte
+		state              ResourceState
+		previousState      *string
+		projectID          *string
+		billableSince      *time.Time
+		lastHeartbeat      *time.Time
+		dimensionsJSON     []byte
+		componentSinceJSON []byte
 	)
 
 	err := row.Scan(
@@ -197,6 +204,7 @@ func scanResourceState(row pgx.Row) (*ResourceState, error) {
 		&state.TransitionTime,
 		&state.FulfillmentVersion,
 		&dimensionsJSON,
+		&componentSinceJSON,
 	)
 	if err != nil {
 		return nil, err
@@ -214,6 +222,12 @@ func scanResourceState(row pgx.Row) (*ResourceState, error) {
 	if len(dimensionsJSON) > 0 {
 		if err := json.Unmarshal(dimensionsJSON, &state.BillingDimensions); err != nil {
 			return nil, fmt.Errorf("unmarshaling billing dimensions: %w", err)
+		}
+	}
+
+	if len(componentSinceJSON) > 0 {
+		if err := json.Unmarshal(componentSinceJSON, &state.ComponentBillableSince); err != nil {
+			return nil, fmt.Errorf("unmarshaling component billable since: %w", err)
 		}
 	}
 

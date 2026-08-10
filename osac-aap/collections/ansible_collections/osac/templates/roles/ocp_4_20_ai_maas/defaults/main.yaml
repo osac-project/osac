@@ -31,7 +31,7 @@ ocp_4_20_ai_maas_sm_channel: stable-3.2
 ocp_4_20_ai_maas_sm_starting_csv: servicemeshoperator3.v3.2.8
 ocp_4_20_ai_maas_sm_source: redhat-operators
 
-# RHCL sub-operators (pre-create to prevent OLM auto-upgrade to v1.4.0)
+# RHCL sub-operators (pre-create to prevent OLM auto-upgrade to v1.4.x)
 ocp_4_20_ai_maas_authorino_starting_csv: authorino-operator.v1.3.3
 ocp_4_20_ai_maas_limitador_starting_csv: limitador-operator.v1.3.2
 ocp_4_20_ai_maas_dns_starting_csv: dns-operator.v1.3.2

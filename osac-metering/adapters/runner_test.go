@@ -122,7 +122,7 @@ func newTestMessageWithTime(id, resourceID string, offset int64, tt time.Time) *
 
 	ceJSON, _ := json.Marshal(ce)
 	return &sarama.ConsumerMessage{
-		Topic:     "osac.metering.lifecycle",
+		Topic:     TopicLifecycle,
 		Partition: 0,
 		Offset:    offset,
 		Value:     ceJSON,
@@ -139,7 +139,7 @@ func newTestMessageWithoutTransitionTime(id, resourceID string, offset int64) *s
 
 	ceJSON, _ := json.Marshal(ce)
 	return &sarama.ConsumerMessage{
-		Topic:     "osac.metering.lifecycle",
+		Topic:     TopicLifecycle,
 		Partition: 0,
 		Offset:    offset,
 		Value:     ceJSON,
@@ -150,7 +150,7 @@ func newRunner(adapter ProviderAdapter) *Runner {
 	return NewRunner(adapter, RunnerConfig{
 		Brokers:       "localhost:9092",
 		ConsumerGroup: "test-group",
-		Topics:        []string{"osac.metering.lifecycle"},
+		Topics:        []string{TopicLifecycle},
 		FlushInterval: 10 * time.Second,
 		DedupTTL:      10 * time.Minute,
 		MaxRetries:    3,
@@ -181,7 +181,7 @@ var _ = Describe("Runner", func() {
 		runner = newRunner(adapter)
 		session = &mockSession{ctx: context.Background()}
 		claim = &mockClaim{
-			topic:     "osac.metering.lifecycle",
+			topic:     TopicLifecycle,
 			partition: 0,
 			messages:  make(chan *sarama.ConsumerMessage, 10),
 		}
@@ -214,7 +214,7 @@ var _ = Describe("Runner", func() {
 
 			runner.mu.Lock()
 			defer runner.mu.Unlock()
-			tp := topicPartition{Topic: "osac.metering.lifecycle", Partition: 0}
+			tp := topicPartition{Topic: TopicLifecycle, Partition: 0}
 			Expect(runner.offsets[tp]).To(Equal(int64(5)))
 		})
 
@@ -225,7 +225,7 @@ var _ = Describe("Runner", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			val := testutil.ToFloat64(
-				runner.metrics.eventsSubmitted.WithLabelValues("test-provider", "osac.metering.lifecycle"),
+				runner.metrics.eventsSubmitted.WithLabelValues("test-provider", TopicLifecycle),
 			)
 			Expect(val).To(Equal(float64(1)))
 		})
@@ -260,7 +260,7 @@ var _ = Describe("Runner", func() {
 
 			runner.mu.Lock()
 			defer runner.mu.Unlock()
-			tp := topicPartition{Topic: "osac.metering.lifecycle", Partition: 0}
+			tp := topicPartition{Topic: TopicLifecycle, Partition: 0}
 			Expect(runner.offsets[tp]).To(Equal(int64(3)))
 		})
 	})
@@ -307,7 +307,7 @@ var _ = Describe("Runner", func() {
 	Describe("ConsumeClaim — error handling", func() {
 		It("skips messages with invalid JSON", func() {
 			msg := &sarama.ConsumerMessage{
-				Topic:     "osac.metering.lifecycle",
+				Topic:     TopicLifecycle,
 				Partition: 0,
 				Offset:    0,
 				Value:     []byte("not valid json{{{"),
@@ -356,7 +356,7 @@ var _ = Describe("Runner", func() {
 
 			runner.mu.Lock()
 			defer runner.mu.Unlock()
-			tp := topicPartition{Topic: "osac.metering.lifecycle", Partition: 0}
+			tp := topicPartition{Topic: TopicLifecycle, Partition: 0}
 			Expect(runner.offsets[tp]).To(Equal(int64(7)))
 		})
 
@@ -369,7 +369,7 @@ var _ = Describe("Runner", func() {
 
 			runner.mu.Lock()
 			defer runner.mu.Unlock()
-			tp := topicPartition{Topic: "osac.metering.lifecycle", Partition: 0}
+			tp := topicPartition{Topic: TopicLifecycle, Partition: 0}
 			Expect(runner.offsets[tp]).To(Equal(int64(12)))
 		})
 
@@ -392,7 +392,7 @@ var _ = Describe("Runner", func() {
 
 			runner.mu.Lock()
 			defer runner.mu.Unlock()
-			tp := topicPartition{Topic: "osac.metering.lifecycle", Partition: 0}
+			tp := topicPartition{Topic: TopicLifecycle, Partition: 0}
 			_, tracked := runner.offsets[tp]
 			Expect(tracked).To(BeFalse(), "offset should not be tracked when context is cancelled")
 		})
@@ -402,7 +402,7 @@ var _ = Describe("Runner", func() {
 		It("commits offsets on successful flush", func() {
 			// Simulate processed messages by setting tracked offsets
 			runner.mu.Lock()
-			runner.offsets[topicPartition{Topic: "osac.metering.lifecycle", Partition: 0}] = 5
+			runner.offsets[topicPartition{Topic: TopicLifecycle, Partition: 0}] = 5
 			runner.mu.Unlock()
 
 			err := runner.flush(context.Background())
@@ -412,7 +412,7 @@ var _ = Describe("Runner", func() {
 			defer session.mu.Unlock()
 			Expect(session.marks).To(HaveLen(1))
 			Expect(session.marks[0]).To(Equal(markEntry{
-				topic: "osac.metering.lifecycle", partition: 0, offset: 6, // offset+1
+				topic: TopicLifecycle, partition: 0, offset: 6, // offset+1
 			}))
 			Expect(session.committed).To(Equal(1))
 		})
@@ -420,7 +420,7 @@ var _ = Describe("Runner", func() {
 		It("does not commit offsets when flush fails", func() {
 			adapter.flushErr = errors.New("provider unavailable")
 			runner.mu.Lock()
-			runner.offsets[topicPartition{Topic: "osac.metering.lifecycle", Partition: 0}] = 5
+			runner.offsets[topicPartition{Topic: TopicLifecycle, Partition: 0}] = 5
 			runner.mu.Unlock()
 
 			err := runner.flush(context.Background())
@@ -437,7 +437,7 @@ var _ = Describe("Runner", func() {
 
 		It("clears tracked offsets after successful flush", func() {
 			runner.mu.Lock()
-			runner.offsets[topicPartition{Topic: "osac.metering.lifecycle", Partition: 0}] = 5
+			runner.offsets[topicPartition{Topic: TopicLifecycle, Partition: 0}] = 5
 			runner.mu.Unlock()
 
 			err := runner.flush(context.Background())
@@ -461,7 +461,7 @@ var _ = Describe("Runner", func() {
 			_ = runner.Cleanup(session)
 
 			runner.mu.Lock()
-			runner.offsets[topicPartition{Topic: "osac.metering.lifecycle", Partition: 0}] = 5
+			runner.offsets[topicPartition{Topic: TopicLifecycle, Partition: 0}] = 5
 			runner.mu.Unlock()
 
 			err := runner.flush(context.Background())
@@ -470,7 +470,7 @@ var _ = Describe("Runner", func() {
 			// Offsets should be retained for the next session
 			runner.mu.Lock()
 			defer runner.mu.Unlock()
-			tp := topicPartition{Topic: "osac.metering.lifecycle", Partition: 0}
+			tp := topicPartition{Topic: TopicLifecycle, Partition: 0}
 			Expect(runner.offsets[tp]).To(Equal(int64(5)))
 		})
 	})

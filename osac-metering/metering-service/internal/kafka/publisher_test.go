@@ -56,7 +56,7 @@ var _ = Describe("Publisher", func() {
 
 			err := pub.Publish(ctx, testEvent)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(capturedMsg.Topic).To(Equal("osac.metering.lifecycle"))
+			Expect(capturedMsg.Topic).To(Equal(kafka.TopicLifecycle))
 		})
 
 		It("routes heartbeat events to osac.metering.heartbeat topic", func() {
@@ -71,7 +71,7 @@ var _ = Describe("Publisher", func() {
 
 			err := pub.Publish(ctx, testEvent)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(capturedMsg.Topic).To(Equal("osac.metering.heartbeat"))
+			Expect(capturedMsg.Topic).To(Equal(kafka.TopicHeartbeat))
 		})
 
 		It("routes correction events to osac.metering.corrections topic", func() {
@@ -86,7 +86,7 @@ var _ = Describe("Publisher", func() {
 
 			err := pub.Publish(ctx, testEvent)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(capturedMsg.Topic).To(Equal("osac.metering.corrections"))
+			Expect(capturedMsg.Topic).To(Equal(kafka.TopicCorrections))
 		})
 
 		It("routes all lifecycle event types to the lifecycle topic", func() {
@@ -101,7 +101,7 @@ var _ = Describe("Publisher", func() {
 			for _, eventType := range lifecycleTypes {
 				topic, err := kafka.TopicFor(eventType)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(topic).To(Equal("osac.metering.lifecycle"),
+				Expect(topic).To(Equal(kafka.TopicLifecycle),
 					"event type %s should route to lifecycle topic", eventType)
 			}
 		})

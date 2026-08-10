@@ -19,7 +19,6 @@ in compliance with the License. You may obtain a copy of the License at
 // Usage:
 //
 //	export KAFKA_BROKERS="localhost:9092"
-//	export KAFKA_TOPICS="osac.metering.events"
 //	go run ./cmd/echo-adapter/
 //
 // Optional TLS/SASL (for cluster-deployed Kafka):
@@ -44,6 +43,7 @@ import (
 	"time"
 
 	"github.com/go-logr/stdr"
+
 	"github.com/osac-project/osac-metering/adapters"
 )
 
@@ -91,15 +91,6 @@ func main() {
 		log.Fatal("KAFKA_BROKERS is required (comma-separated broker list)")
 	}
 
-	topicsEnv := os.Getenv("KAFKA_TOPICS")
-	if topicsEnv == "" {
-		topicsEnv = "osac.metering.events"
-	}
-	topics := strings.Split(topicsEnv, ",")
-	for i := range topics {
-		topics[i] = strings.TrimSpace(topics[i])
-	}
-
 	group := os.Getenv("KAFKA_CONSUMER_GROUP")
 	if group == "" {
 		group = "echo-adapter-smoke-test"
@@ -135,7 +126,7 @@ func main() {
 	runner := adapters.NewRunner(adapter, adapters.RunnerConfig{
 		Brokers:       brokers,
 		ConsumerGroup: group,
-		Topics:        topics,
+		Topics:        adapters.AllTopics,
 		FlushInterval: flushInterval,
 		Kafka: adapters.KafkaConfig{
 			TLSEnabled:   os.Getenv("KAFKA_TLS_ENABLED") == "true",
@@ -171,7 +162,7 @@ func main() {
 	defer cancel()
 
 	log.Printf("starting echo adapter: broker_count=%d topics=%v group=%s flush=%s",
-		len(strings.Split(brokers, ",")), topics, group, flushInterval)
+		len(strings.Split(brokers, ",")), adapters.AllTopics, group, flushInterval)
 
 	if err := runner.Run(ctx); err != nil {
 		log.Fatalf("runner error: %v", err)

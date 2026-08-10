@@ -9,6 +9,14 @@
 #      containing sed/regex metacharacters without corrupting the JSON.
 set -euo pipefail
 
+python3 -c "import yaml" 2>/dev/null || {
+    echo "ERROR: PyYAML is required to run this script (used to extract embedded" >&2
+    echo "scripts and structural fields from rendered/static manifests)." >&2
+    echo "Install it with: pip install pyyaml  (already present in the workspace's" >&2
+    echo "documented dev Containerfile via python3-pyyaml)." >&2
+    exit 1
+}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CHART_DIR="${SCRIPT_DIR}/../charts/osac-prereqs"
 FAILURES=0
@@ -32,28 +40,62 @@ assert_not_contains() {
     fi
 }
 
-echo "=== Test 1: defaults preserve today's literals ==="
-DEFAULT_RENDER=$(helm template "${CHART_DIR}")
-assert_contains "${DEFAULT_RENDER}" 'name: KEYCLOAK_ADMIN
-          value: "admin"' "Default KEYCLOAK_ADMIN"
-assert_contains "${DEFAULT_RENDER}" 'name: KEYCLOAK_ADMIN_PASSWORD
-          value: "admin"' "Default KEYCLOAK_ADMIN_PASSWORD"
-assert_contains "${DEFAULT_RENDER}" 'name: DEFAULT_USER_PASSWORD
-          value: "foobar"' "Default DEFAULT_USER_PASSWORD"
+# Structural check: does the given Deployment/Job's named container/
+# initContainer have an env var sourced from the expected Secret name/key
+# (not a plaintext `value:`)? Uses PyYAML for a real structural check rather
+# than brittle multi-line grep -F (which silently splits multi-line needles
+# into OR'd single-line alternatives -- see Test 7's comment below).
+assert_secret_key_ref() {
+    local render="$1" kind="$2" resource_name="$3" container_name="$4" env_name="$5" expected_secret="$6" expected_key="$7" description="$8"
+    python3 -c "
+import yaml, sys
+docs = list(yaml.safe_load_all(sys.stdin.read()))
+for d in docs:
+    if not d or d.get('kind') != '${kind}' or d.get('metadata', {}).get('name') != '${resource_name}':
+        continue
+    spec = d['spec']['template']['spec']
+    for c in spec.get('containers', []) + spec.get('initContainers', []):
+        if c.get('name') != '${container_name}':
+            continue
+        for e in c.get('env', []):
+            if e.get('name') == '${env_name}':
+                ref = e.get('valueFrom', {}).get('secretKeyRef', {})
+                sys.exit(0 if ref.get('name') == '${expected_secret}' and ref.get('key') == '${expected_key}' else 1)
+sys.exit(1)
+" <<<"${render}" || fail "${description}"
+}
 
-echo "=== Test 2: --set overrides propagate (the actual regression) ==="
+echo "=== Test 1: defaults preserve today's literals (via the keycloak-admin-credentials Secret) ==="
+DEFAULT_RENDER=$(helm template "${CHART_DIR}")
+assert_contains "${DEFAULT_RENDER}" 'admin-username: "admin"' "Default admin-username in keycloak-admin-credentials Secret"
+assert_contains "${DEFAULT_RENDER}" 'admin-password: "admin"' "Default admin-password in keycloak-admin-credentials Secret"
+assert_contains "${DEFAULT_RENDER}" 'default-user-password: "foobar"' "Default default-user-password in keycloak-admin-credentials Secret"
+assert_secret_key_ref "${DEFAULT_RENDER}" Deployment keycloak-service keycloak KEYCLOAK_ADMIN keycloak-admin-credentials admin-username "Deployment's KEYCLOAK_ADMIN must source from keycloak-admin-credentials/admin-username"
+assert_secret_key_ref "${DEFAULT_RENDER}" Deployment keycloak-service keycloak KEYCLOAK_ADMIN_PASSWORD keycloak-admin-credentials admin-password "Deployment's KEYCLOAK_ADMIN_PASSWORD must source from keycloak-admin-credentials/admin-password"
+assert_secret_key_ref "${DEFAULT_RENDER}" Deployment keycloak-service resolve-realm-secrets REALM_ADMIN_USERNAME keycloak-admin-credentials admin-username "resolve-realm-secrets init container's REALM_ADMIN_USERNAME must source from the Secret"
+assert_secret_key_ref "${DEFAULT_RENDER}" Deployment keycloak-service resolve-realm-secrets REALM_ADMIN_PASSWORD keycloak-admin-credentials admin-password "resolve-realm-secrets init container's REALM_ADMIN_PASSWORD must source from the Secret"
+assert_secret_key_ref "${DEFAULT_RENDER}" Job keycloak-set-passwords set-passwords ADMIN_USERNAME keycloak-admin-credentials admin-username "keycloak-set-passwords Job's ADMIN_USERNAME must source from the Secret"
+assert_secret_key_ref "${DEFAULT_RENDER}" Job keycloak-set-passwords set-passwords ADMIN_PASSWORD keycloak-admin-credentials admin-password "keycloak-set-passwords Job's ADMIN_PASSWORD must source from the Secret"
+assert_secret_key_ref "${DEFAULT_RENDER}" Job keycloak-set-passwords set-passwords DEFAULT_USER_PASSWORD keycloak-admin-credentials default-user-password "keycloak-set-passwords Job's DEFAULT_USER_PASSWORD must source from the Secret"
+
+echo "=== Test 2: --set overrides propagate into the Secret (the actual regression) ==="
 OVERRIDE_RENDER=$(helm template "${CHART_DIR}" \
     --set keycloak.adminUsername=demo-admin \
     --set keycloak.adminPassword=SuperSecret123 \
     --set keycloak.defaultUserPassword=DemoUserPass456)
-assert_contains "${OVERRIDE_RENDER}" 'name: KEYCLOAK_ADMIN
-          value: "demo-admin"' "Overridden KEYCLOAK_ADMIN"
-assert_contains "${OVERRIDE_RENDER}" 'name: KEYCLOAK_ADMIN_PASSWORD
-          value: "SuperSecret123"' "Overridden KEYCLOAK_ADMIN_PASSWORD"
-assert_contains "${OVERRIDE_RENDER}" 'name: DEFAULT_USER_PASSWORD
-          value: "DemoUserPass456"' "Overridden DEFAULT_USER_PASSWORD"
-assert_not_contains "${OVERRIDE_RENDER}" 'value: "admin"' "Overridden render must not retain hardcoded admin literal"
-assert_not_contains "${OVERRIDE_RENDER}" 'value: "foobar"' "Overridden render must not retain hardcoded foobar literal"
+assert_contains "${OVERRIDE_RENDER}" 'admin-username: "demo-admin"' "Overridden admin-username in Secret"
+assert_contains "${OVERRIDE_RENDER}" 'admin-password: "SuperSecret123"' "Overridden admin-password in Secret"
+assert_contains "${OVERRIDE_RENDER}" 'default-user-password: "DemoUserPass456"' "Overridden default-user-password in Secret"
+assert_not_contains "${OVERRIDE_RENDER}" 'admin-username: "admin"' "Overridden Secret must not retain the hardcoded admin-username default"
+assert_not_contains "${OVERRIDE_RENDER}" 'admin-password: "admin"' "Overridden Secret must not retain the hardcoded admin-password default"
+assert_not_contains "${OVERRIDE_RENDER}" 'default-user-password: "foobar"' "Overridden Secret must not retain the hardcoded default-user-password default"
+
+echo "=== Test 2b: pod specs never carry credentials as plaintext, only via secretKeyRef ==="
+assert_not_contains "${DEFAULT_RENDER}" '          value: "admin"' "Default render must have no plaintext admin literal in any pod spec env"
+assert_not_contains "${DEFAULT_RENDER}" '          value: "foobar"' "Default render must have no plaintext foobar literal in any pod spec env"
+assert_not_contains "${OVERRIDE_RENDER}" '          value: "demo-admin"' "Overridden render must have no plaintext admin-username literal in any pod spec env"
+assert_not_contains "${OVERRIDE_RENDER}" '          value: "SuperSecret123"' "Overridden render must have no plaintext admin-password literal in any pod spec env"
+assert_not_contains "${OVERRIDE_RENDER}" '          value: "DemoUserPass456"' "Overridden render must have no plaintext default-user-password literal in any pod spec env"
 
 echo "=== Test 3: realm.json placeholders present, no baked-in credential hash ==="
 assert_contains "${DEFAULT_RENDER}" '__OSAC_REALM_ADMIN_USERNAME__' "realm.json admin username placeholder"
@@ -198,6 +240,72 @@ if [[ -n "${STATIC_SCRIPT}" ]]; then
         fail "Static reference manifest's actual set-passwords.sh never reached the reset-password call"
     fi
 fi
+
+echo "=== Test 6: static reference manifest's realm.json and resolve-realm-secrets coverage ==="
+# Tests 3/4 only cover the chart's copies. The static prerequisites/
+# manifest has its own hand-maintained duplicates of both realm.json and
+# the resolve-realm-secrets logic (deployment.yaml has no shared script
+# file to reference), so they need their own direct coverage -- otherwise
+# a future edit to the static copy alone could silently diverge unnoticed.
+
+STATIC_REALM_JSON=$(cat "${SCRIPT_DIR}/../prerequisites/keycloak/service/files/realm.json")
+assert_contains "${STATIC_REALM_JSON}" '__OSAC_REALM_ADMIN_USERNAME__' "Static realm.json admin username placeholder"
+assert_contains "${STATIC_REALM_JSON}" '__OSAC_REALM_ADMIN_PASSWORD__' "Static realm.json admin password placeholder"
+assert_not_contains "${STATIC_REALM_JSON}" 'ETe90wgj32P' "Static reference manifest's realm.json must not retain the static argon2 password hash"
+
+STATIC_RESOLVE_SCRIPT=$(python3 -c "
+import yaml
+with open('${SCRIPT_DIR}/../prerequisites/keycloak/service/deployment.yaml') as f:
+    docs = list(yaml.safe_load_all(f))
+for d in docs:
+    if d and d.get('kind') == 'Deployment':
+        for c in d['spec']['template']['spec']['initContainers']:
+            if c.get('name') == 'resolve-realm-secrets':
+                print(c['command'][2])
+                break
+        break
+")
+[[ -n "${STATIC_RESOLVE_SCRIPT}" ]] || fail "Could not extract resolve-realm-secrets init container script from the static Deployment manifest"
+
+if [[ -n "${STATIC_RESOLVE_SCRIPT}" ]]; then
+    # Unlike the chart's copy (which takes paths via REALM_RAW_PATH/
+    # REALM_OUTPUT_PATH env vars), this script hardcodes /realm-raw/realm.json
+    # and /realm/realm.json -- redirect them to TMP_DIR paths for this test
+    # run only; the committed file is never touched.
+    STATIC_RESOLVE_REDIRECTED=$(printf '%s' "${STATIC_RESOLVE_SCRIPT}" | sed \
+        -e "s#/realm-raw/realm\.json#${TMP_DIR}/static-realm-raw.json#g" \
+        -e "s#/realm/realm\.json#${TMP_DIR}/static-realm-resolved.json#g")
+    cp "${TMP_DIR}/realm-raw.json" "${TMP_DIR}/static-realm-raw.json"
+    echo "${STATIC_RESOLVE_REDIRECTED}" > "${TMP_DIR}/extracted-static-resolve.sh"
+    rm -f "${TMP_DIR}/static-realm-resolved.json"
+
+    PATH="${TMP_DIR}/bin:${PATH}" \
+    REALM_ADMIN_USERNAME="demo-admin" \
+    REALM_ADMIN_PASSWORD=$'test-p@ss#word&with\\slash/chars\tand\ttabs\nand\nnewlines' \
+        bash "${TMP_DIR}/extracted-static-resolve.sh" >/dev/null 2>&1 || {
+            fail "Static reference manifest's resolve-realm-secrets init container script exited non-zero"
+        }
+
+    if [[ -f "${TMP_DIR}/static-realm-resolved.json" ]]; then
+        STATIC_DECODED_PASSWORD=$(python3 -c "import json; print(json.load(open('${TMP_DIR}/static-realm-resolved.json'))['credentials'][0]['value'])" 2>/dev/null) || {
+            fail "Static reference manifest's resolved realm.json is not valid JSON after substituting a password with sed/JSON metacharacters"
+        }
+        if [[ "${STATIC_DECODED_PASSWORD}" != $'test-p@ss#word&with\\slash/chars\tand\ttabs\nand\nnewlines' ]]; then
+            fail "Static reference manifest's resolved realm.json decoded password does not match the original"
+        fi
+    else
+        fail "Static reference manifest's resolve-realm-secrets script did not produce a resolved realm.json"
+    fi
+fi
+
+echo "=== Test 7: static deployment.yaml sources credentials via secretKeyRef, not literals ==="
+STATIC_DEPLOYMENT=$(cat "${SCRIPT_DIR}/../prerequisites/keycloak/service/deployment.yaml")
+assert_contains "${STATIC_DEPLOYMENT}" 'name: keycloak-admin-credentials' "deployment.yaml must reference the keycloak-admin-credentials Secret"
+# A single-line needle, not a multi-line one: grep -F splits multi-line
+# patterns into OR'd single-line alternatives, which would make a
+# "name: KEYCLOAK_ADMIN\n  value: admin" needle match on the (harmless,
+# always-present) variable-name line alone and produce a false failure.
+assert_not_contains "${STATIC_DEPLOYMENT}" '          value: admin' "deployment.yaml must not hardcode a literal admin credential value"
 
 echo
 if [[ "${FAILURES}" -gt 0 ]]; then

@@ -10,6 +10,11 @@
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 # specific language governing permissions and limitations under the License.
 #
+# Prerequisite: create the keycloak-admin-credentials secret before applying, e.g.:
+#   oc create secret generic keycloak-admin-credentials -n keycloak \
+#     --from-literal=admin-username=<your-admin-username> \
+#     --from-literal=admin-password=<your-admin-password> \
+#     --from-literal=default-user-password=<your-default-user-password>
 
 apiVersion: apps/v1
 kind: Deployment
@@ -67,10 +72,26 @@ spec:
           CONTROLLER_SECRET=$(oc get secret keycloak-client-secrets -o jsonpath='{.data.osac-controller}' | base64 -d)
           ADMIN_SECRET=$(oc get secret keycloak-client-secrets -o jsonpath='{.data.osac-admin}' | base64 -d)
           [[ -n "${CONTROLLER_SECRET}" && -n "${ADMIN_SECRET}" ]] || { echo "ERROR: keycloak-client-secrets is missing osac-controller or osac-admin" >&2; exit 1; }
+          [[ -n "${REALM_ADMIN_USERNAME}" && -n "${REALM_ADMIN_PASSWORD}" ]] || { echo "ERROR: keycloak-admin-credentials is missing admin-username or admin-password" >&2; exit 1; }
+          json_escape_string() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+          escape_sed_replacement() { printf '%s' "$1" | sed -e 's/[\&#]/\\&/g'; }
           sed \
             -e "s#__OSAC_CONTROLLER_CLIENT_SECRET__#${CONTROLLER_SECRET}#" \
             -e "s#__OSAC_ADMIN_CLIENT_SECRET__#${ADMIN_SECRET}#" \
+            -e "s#__OSAC_REALM_ADMIN_USERNAME__#$(escape_sed_replacement "$(json_escape_string "${REALM_ADMIN_USERNAME}")")#" \
+            -e "s#__OSAC_REALM_ADMIN_PASSWORD__#$(escape_sed_replacement "$(json_escape_string "${REALM_ADMIN_PASSWORD}")")#" \
             /realm-raw/realm.json > /realm/realm.json
+        env:
+        - name: REALM_ADMIN_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: keycloak-admin-credentials
+              key: admin-username
+        - name: REALM_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: keycloak-admin-credentials
+              key: admin-password
         volumeMounts:
         - name: realm-raw
           mountPath: /realm-raw
@@ -93,9 +114,15 @@ spec:
           readOnly: true
         env:
         - name: KEYCLOAK_ADMIN
-          value: admin
+          valueFrom:
+            secretKeyRef:
+              name: keycloak-admin-credentials
+              key: admin-username
         - name: KEYCLOAK_ADMIN_PASSWORD
-          value: admin
+          valueFrom:
+            secretKeyRef:
+              name: keycloak-admin-credentials
+              key: admin-password
         - name: KC_HOSTNAME_STRICT
           value: "true"
         - name: KC_HOSTNAME_STRICT_HTTPS

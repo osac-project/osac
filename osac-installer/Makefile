@@ -136,4 +136,5 @@ helm-validate: helm-lint ## Validate all charts (lint + template)
 		helm template osac-operators charts/osac-operators/ --values "$$f" > /dev/null; \
 		helm template osac-prereqs charts/osac-prereqs/ --values "$$f" > /dev/null; \
 	done
+	./scripts/validate-keycloak-credentials.sh
 	@echo "Validation passed."

@@ -372,6 +372,10 @@ spec:
           value: /realm-raw/realm.json
         - name: REALM_OUTPUT_PATH
           value: /realm/realm.json
+        - name: REALM_ADMIN_USERNAME
+          value: {{ .Values.keycloak.adminUsername | quote }}
+        - name: REALM_ADMIN_PASSWORD
+          value: {{ .Values.keycloak.adminPassword | quote }}
         volumeMounts:
         - name: scripts
           mountPath: /scripts
@@ -397,9 +401,9 @@ spec:
           readOnly: true
         env:
         - name: KEYCLOAK_ADMIN
-          value: admin
+          value: {{ .Values.keycloak.adminUsername | quote }}
         - name: KEYCLOAK_ADMIN_PASSWORD
-          value: admin
+          value: {{ .Values.keycloak.adminPassword | quote }}
         - name: KC_HTTP_ENABLED
           value: "false"
         - name: KC_HTTPS_ENABLED
@@ -499,33 +503,38 @@ data:
         -H 'Content-Type: application/x-www-form-urlencoded' \
         -d 'grant_type=password' \
         -d 'client_id=admin-cli' \
-        -d 'username=admin' \
-        -d 'password=admin' | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+        --data-urlencode "username=${ADMIN_USERNAME}" \
+        --data-urlencode "password=${ADMIN_PASSWORD}" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
       [[ -n "${TOKEN}" ]] || { echo "ERROR: Could not get admin token"; return 1; }
 
       USER_ID=$(curl -k -sf -X GET "https://keycloak:443/admin/realms/osac/users?username=$username" \
         -H "Authorization: Bearer $TOKEN" | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['id'])")
       [[ -n "${USER_ID}" ]] || { echo "ERROR: Could not find user: $username"; return 1; }
 
+      # Build the JSON body with python3 (already used above for parsing)
+      # rather than hand-rolled bash string interpolation, so $password can
+      # safely contain quotes, backslashes, or other JSON-significant chars.
+      PAYLOAD=$(python3 -c "import json,sys; print(json.dumps({'type': 'password', 'value': sys.argv[1], 'temporary': False}))" "$password")
+
       curl -k -sf -X PUT "https://keycloak:443/admin/realms/osac/users/$USER_ID/reset-password" \
         -H "Authorization: Bearer $TOKEN" \
         -H "Content-Type: application/json" \
-        -d "{\"type\":\"password\",\"value\":\"$password\",\"temporary\":false}"
+        -d "$PAYLOAD"
 
       echo "Set password for $username"
     }
 
     # Set all passwords
     echo "Setting passwords for all tenant users..."
-    set_password "tenant1_admin" "foobar"
-    set_password "tenant1_user" "foobar"
-    set_password "tenant2_admin" "foobar"
-    set_password "tenant2_user" "foobar"
-    set_password "twotenant" "foobar"
-    set_password "my_user" "foobar"
-    set_password "your_user" "foobar"
+    set_password "tenant1_admin" "${DEFAULT_USER_PASSWORD}"
+    set_password "tenant1_user" "${DEFAULT_USER_PASSWORD}"
+    set_password "tenant2_admin" "${DEFAULT_USER_PASSWORD}"
+    set_password "tenant2_user" "${DEFAULT_USER_PASSWORD}"
+    set_password "twotenant" "${DEFAULT_USER_PASSWORD}"
+    set_password "my_user" "${DEFAULT_USER_PASSWORD}"
+    set_password "your_user" "${DEFAULT_USER_PASSWORD}"
 
-    echo "All passwords set to 'foobar'"
+    echo "All demo-user passwords set"
 ---
 apiVersion: batch/v1
 kind: Job
@@ -554,6 +563,12 @@ spec:
         env:
         - name: HOME
           value: /tmp
+        - name: ADMIN_USERNAME
+          value: {{ .Values.keycloak.adminUsername | quote }}
+        - name: ADMIN_PASSWORD
+          value: {{ .Values.keycloak.adminPassword | quote }}
+        - name: DEFAULT_USER_PASSWORD
+          value: {{ .Values.keycloak.defaultUserPassword | quote }}
         resources:
           requests:
             cpu: 50m

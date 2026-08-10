@@ -21,9 +21,28 @@ ADMIN_SECRET=$(oc get secret "${SECRET_NAME}" -n "${NAMESPACE}" -o jsonpath='{.d
 [[ -n "${CONTROLLER_SECRET}" ]] || { echo "ERROR: ${SECRET_NAME} missing osac-controller key" >&2; exit 1; }
 [[ -n "${ADMIN_SECRET}" ]] || { echo "ERROR: ${SECRET_NAME} missing osac-admin key" >&2; exit 1; }
 
+REALM_ADMIN_USERNAME="${REALM_ADMIN_USERNAME:-admin}"
+REALM_ADMIN_PASSWORD="${REALM_ADMIN_PASSWORD:?REALM_ADMIN_PASSWORD must be set}"
+
+# REALM_ADMIN_USERNAME/PASSWORD are user-supplied Helm values (unlike the
+# auto-generated base64 client secrets above) substituted into JSON string
+# values, so each needs two escaping passes: first JSON string-escaping
+# (backslash, then quote) since the raw value lands inside a JSON string,
+# then sed replacement-escaping (backslash, ampersand, and the s### delimiter)
+# so sed doesn't reinterpret characters introduced by the JSON escaping.
+json_escape_string() {
+    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+}
+
+escape_sed_replacement() {
+    printf '%s' "$1" | sed -e 's/[\&#]/\\&/g'
+}
+
 sed \
     -e "s#__OSAC_CONTROLLER_CLIENT_SECRET__#${CONTROLLER_SECRET}#" \
     -e "s#__OSAC_ADMIN_CLIENT_SECRET__#${ADMIN_SECRET}#" \
+    -e "s#__OSAC_REALM_ADMIN_USERNAME__#$(escape_sed_replacement "$(json_escape_string "${REALM_ADMIN_USERNAME}")")#" \
+    -e "s#__OSAC_REALM_ADMIN_PASSWORD__#$(escape_sed_replacement "$(json_escape_string "${REALM_ADMIN_PASSWORD}")")#" \
     "${RAW_REALM}" > "${RESOLVED_REALM}"
 
 echo "Realm secrets resolved -> ${RESOLVED_REALM}"

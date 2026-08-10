@@ -22,10 +22,14 @@ import (
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 
+	metal3api "github.com/metal3-io/baremetal-operator/apis/metal3.io/v1alpha1"
 	osacv1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/inventory"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/management"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 func TestMain(t *testing.T) {
@@ -82,5 +86,62 @@ var _ = Describe("Scheme Initialization", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(gvks).NotTo(BeEmpty())
 		Expect(gvks[0].Kind).To(Equal("Pod"))
+	})
+
+	It("should register metal3 BareMetalHost types", func() {
+		Expect(scheme.IsGroupRegistered("metal3.io")).To(BeTrue(),
+			"metal3.io types should be registered for BMH lifecycle manager")
+
+		bmh := &metal3api.BareMetalHost{}
+		gvks, _, err := scheme.ObjectKinds(bmh)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(gvks).NotTo(BeEmpty())
+		Expect(gvks[0].Kind).To(Equal("BareMetalHost"))
+	})
+})
+
+var _ = Describe("BMH Lifecycle Manager Wiring", func() {
+	It("should set BMHLifecycleManager on inventory config when management is metal3", func() {
+		managementConfig := management.Config{
+			Type: "metal3",
+			Options: map[string]any{
+				"metal3": map[string]any{
+					"namespace": "osac-baremetal",
+				},
+			},
+		}
+
+		var inventoryConfig inventory.Config
+
+		metal3Namespace, err := management.ParseMetal3Namespace(&managementConfig)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(metal3Namespace).To(Equal("osac-baremetal"))
+
+		testScheme := runtime.NewScheme()
+		Expect(metal3api.AddToScheme(testScheme)).To(Succeed())
+		k8sClient := fake.NewClientBuilder().WithScheme(testScheme).Build()
+
+		inventoryConfig.BMHLifecycleManager = inventory.NewBMHLifecycleManager(
+			k8sClient, metal3Namespace,
+		)
+
+		Expect(inventoryConfig.BMHLifecycleManager).NotTo(BeNil())
+	})
+
+	It("should not set BMHLifecycleManager when management is not metal3", func() {
+		managementConfig := management.Config{
+			Type: "openstack",
+			Options: map[string]any{
+				"openstack": map[string]any{},
+			},
+		}
+
+		var inventoryConfig inventory.Config
+
+		if managementConfig.Type == "metal3" {
+			Fail("should not enter metal3 wiring path for openstack management")
+		}
+
+		Expect(inventoryConfig.BMHLifecycleManager).To(BeNil())
 	})
 })

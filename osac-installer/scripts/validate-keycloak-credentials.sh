@@ -89,7 +89,7 @@ PATH="${TMP_DIR}/bin:${PATH}" \
 REALM_RAW_PATH="${TMP_DIR}/realm-raw.json" \
 REALM_OUTPUT_PATH="${TMP_DIR}/realm-resolved.json" \
 REALM_ADMIN_USERNAME="demo-admin" \
-REALM_ADMIN_PASSWORD='test-p@ss#word&with\slash/chars' \
+REALM_ADMIN_PASSWORD=$'test-p@ss#word&with\\slash/chars\tand\ttabs\nand\nnewlines' \
     bash "${CHART_DIR}/files/hooks/resolve-realm-secrets.sh" >/dev/null 2>&1 || {
         fail "resolve-realm-secrets.sh exited non-zero"
     }
@@ -102,8 +102,8 @@ if [[ -f "${TMP_DIR}/realm-resolved.json" ]]; then
     # Compare the JSON-decoded value, not the raw file text -- valid JSON
     # necessarily re-escapes the backslash as \\, so the raw bytes never
     # contain the password's literal backslash form.
-    if [[ "${DECODED_PASSWORD}" != 'test-p@ss#word&with\slash/chars' ]]; then
-        fail "Resolved realm.json's decoded password does not match the original -- got: ${DECODED_PASSWORD}"
+    if [[ "${DECODED_PASSWORD}" != $'test-p@ss#word&with\\slash/chars\tand\ttabs\nand\nnewlines' ]]; then
+        fail "Resolved realm.json's decoded password does not match the original"
     fi
     assert_not_contains "${RESOLVED}" '__OSAC_REALM_ADMIN_PASSWORD__' "Placeholder must be fully substituted"
 else
@@ -169,7 +169,7 @@ if [[ -n "${CHART_SCRIPT}" ]]; then
         DECODED=$(python3 -c "import json; print(json.load(open('${CAPTURE_FILE}'))['value'])" 2>/dev/null) || {
             fail "Chart Job's actual set-passwords.sh produced an invalid JSON reset-password body for a password with quote/backslash"
         }
-        [[ "${DECODED}" == "${DEMO_PASSWORD}" ]] || fail "Chart Job's actual set-passwords.sh reset-password body does not round-trip the password -- got: ${DECODED}"
+        [[ "${DECODED}" == "${DEMO_PASSWORD}" ]] || fail "Chart Job's actual set-passwords.sh reset-password body does not round-trip the password"
     else
         fail "Chart Job's actual set-passwords.sh never reached the reset-password call"
     fi
@@ -193,7 +193,7 @@ if [[ -n "${STATIC_SCRIPT}" ]]; then
         DECODED=$(python3 -c "import json; print(json.load(open('${CAPTURE_FILE}'))['value'])" 2>/dev/null) || {
             fail "Static reference manifest's actual set-passwords.sh produced an invalid JSON reset-password body for a password with quote/backslash"
         }
-        [[ "${DECODED}" == "${DEMO_PASSWORD}" ]] || fail "Static reference manifest's actual set-passwords.sh reset-password body does not round-trip the password -- got: ${DECODED}"
+        [[ "${DECODED}" == "${DEMO_PASSWORD}" ]] || fail "Static reference manifest's actual set-passwords.sh reset-password body does not round-trip the password"
     else
         fail "Static reference manifest's actual set-passwords.sh never reached the reset-password call"
     fi

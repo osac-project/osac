@@ -26,12 +26,14 @@ REALM_ADMIN_PASSWORD="${REALM_ADMIN_PASSWORD:?REALM_ADMIN_PASSWORD must be set}"
 
 # REALM_ADMIN_USERNAME/PASSWORD are user-supplied Helm values (unlike the
 # auto-generated base64 client secrets above) substituted into JSON string
-# values, so each needs two escaping passes: first JSON string-escaping
-# (backslash, then quote) since the raw value lands inside a JSON string,
-# then sed replacement-escaping (backslash, ampersand, and the s### delimiter)
-# so sed doesn't reinterpret characters introduced by the JSON escaping.
+# values, so each needs two escaping passes: first full JSON string escaping
+# (via python3's json.dumps, so control characters like tabs/newlines are
+# handled correctly, not just backslash/quote) since the raw value lands
+# inside a JSON string, then sed replacement-escaping (backslash, ampersand,
+# and the s### delimiter) so sed doesn't reinterpret characters introduced
+# by the JSON escaping.
 json_escape_string() {
-    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+    python3 -c "import json,sys; print(json.dumps(sys.argv[1])[1:-1])" "$1"
 }
 
 escape_sed_replacement() {

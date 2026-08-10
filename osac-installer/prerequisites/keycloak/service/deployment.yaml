@@ -73,7 +73,7 @@ spec:
           ADMIN_SECRET=$(oc get secret keycloak-client-secrets -o jsonpath='{.data.osac-admin}' | base64 -d)
           [[ -n "${CONTROLLER_SECRET}" && -n "${ADMIN_SECRET}" ]] || { echo "ERROR: keycloak-client-secrets is missing osac-controller or osac-admin" >&2; exit 1; }
           [[ -n "${REALM_ADMIN_USERNAME}" && -n "${REALM_ADMIN_PASSWORD}" ]] || { echo "ERROR: keycloak-admin-credentials is missing admin-username or admin-password" >&2; exit 1; }
-          json_escape_string() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+          json_escape_string() { python3 -c "import json,sys; print(json.dumps(sys.argv[1])[1:-1])" "$1"; }
           escape_sed_replacement() { printf '%s' "$1" | sed -e 's/[\&#]/\\&/g'; }
           sed \
             -e "s#__OSAC_CONTROLLER_CLIENT_SECRET__#${CONTROLLER_SECRET}#" \

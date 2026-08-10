@@ -241,6 +241,14 @@ if [[ -n "${STATIC_SCRIPT}" ]]; then
     fi
 fi
 
+# Test 5 above only proves the extracted script's logic works when given
+# credentials via env vars -- it doesn't prove the Job manifest actually
+# wires those env vars to the Secret. Check that structurally too.
+STATIC_PASSWORD_JOB=$(cat "${SCRIPT_DIR}/../prerequisites/keycloak/service/password-setup-job.yaml")
+assert_secret_key_ref "${STATIC_PASSWORD_JOB}" Job keycloak-set-passwords set-passwords ADMIN_USERNAME keycloak-admin-credentials admin-username "Static password-setup-job.yaml's ADMIN_USERNAME must source from keycloak-admin-credentials/admin-username"
+assert_secret_key_ref "${STATIC_PASSWORD_JOB}" Job keycloak-set-passwords set-passwords ADMIN_PASSWORD keycloak-admin-credentials admin-password "Static password-setup-job.yaml's ADMIN_PASSWORD must source from keycloak-admin-credentials/admin-password"
+assert_secret_key_ref "${STATIC_PASSWORD_JOB}" Job keycloak-set-passwords set-passwords DEFAULT_USER_PASSWORD keycloak-admin-credentials default-user-password "Static password-setup-job.yaml's DEFAULT_USER_PASSWORD must source from keycloak-admin-credentials/default-user-password"
+
 echo "=== Test 6: static reference manifest's realm.json and resolve-realm-secrets coverage ==="
 # Tests 3/4 only cover the chart's copies. The static prerequisites/
 # manifest has its own hand-maintained duplicates of both realm.json and
@@ -299,13 +307,16 @@ if [[ -n "${STATIC_RESOLVE_SCRIPT}" ]]; then
 fi
 
 echo "=== Test 7: static deployment.yaml sources credentials via secretKeyRef, not literals ==="
+# Structural checks per env var (assert_secret_key_ref), not a substring
+# search: "name: keycloak-admin-credentials" appearing *somewhere* in the
+# file doesn't prove any specific env var points at the right secret/key --
+# e.g. KEYCLOAK_ADMIN could be wired to the wrong key and this would have
+# still passed under the old string-based check.
 STATIC_DEPLOYMENT=$(cat "${SCRIPT_DIR}/../prerequisites/keycloak/service/deployment.yaml")
-assert_contains "${STATIC_DEPLOYMENT}" 'name: keycloak-admin-credentials' "deployment.yaml must reference the keycloak-admin-credentials Secret"
-# A single-line needle, not a multi-line one: grep -F splits multi-line
-# patterns into OR'd single-line alternatives, which would make a
-# "name: KEYCLOAK_ADMIN\n  value: admin" needle match on the (harmless,
-# always-present) variable-name line alone and produce a false failure.
-assert_not_contains "${STATIC_DEPLOYMENT}" '          value: admin' "deployment.yaml must not hardcode a literal admin credential value"
+assert_secret_key_ref "${STATIC_DEPLOYMENT}" Deployment keycloak-service keycloak KEYCLOAK_ADMIN keycloak-admin-credentials admin-username "Static deployment.yaml's KEYCLOAK_ADMIN must source from keycloak-admin-credentials/admin-username"
+assert_secret_key_ref "${STATIC_DEPLOYMENT}" Deployment keycloak-service keycloak KEYCLOAK_ADMIN_PASSWORD keycloak-admin-credentials admin-password "Static deployment.yaml's KEYCLOAK_ADMIN_PASSWORD must source from keycloak-admin-credentials/admin-password"
+assert_secret_key_ref "${STATIC_DEPLOYMENT}" Deployment keycloak-service resolve-realm-secrets REALM_ADMIN_USERNAME keycloak-admin-credentials admin-username "Static deployment.yaml's REALM_ADMIN_USERNAME must source from keycloak-admin-credentials/admin-username"
+assert_secret_key_ref "${STATIC_DEPLOYMENT}" Deployment keycloak-service resolve-realm-secrets REALM_ADMIN_PASSWORD keycloak-admin-credentials admin-password "Static deployment.yaml's REALM_ADMIN_PASSWORD must source from keycloak-admin-credentials/admin-password"
 
 echo
 if [[ "${FAILURES}" -gt 0 ]]; then

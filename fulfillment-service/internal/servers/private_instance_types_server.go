@@ -192,7 +192,7 @@ func (s *PrivateInstanceTypesServer) Update(ctx context.Context,
 
 	// If state changed, ensure the deprecation fields are included in the update mask
 	// so the generic server persists the timestamps set by handleInstanceTypeStateTransition.
-	if stateChanged && request.GetUpdateMask() != nil {
+	if stateChanged && len(request.GetUpdateMask().GetPaths()) > 0 {
 		mask := request.GetUpdateMask()
 		mask.Paths = append(mask.Paths, "spec.deprecation")
 	}

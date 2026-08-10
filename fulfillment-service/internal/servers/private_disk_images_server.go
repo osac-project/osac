@@ -177,7 +177,7 @@ func (s *PrivateDiskImagesServer) Update(ctx context.Context,
 
 	lifecycleChanged := handleDiskImageLifecycleTransition(existing, merged)
 
-	if lifecycleChanged && request.GetUpdateMask() != nil {
+	if lifecycleChanged && len(request.GetUpdateMask().GetPaths()) > 0 {
 		mask := request.GetUpdateMask()
 		mask.Paths = append(mask.Paths, "spec.deprecation")
 	}

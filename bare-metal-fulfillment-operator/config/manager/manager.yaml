@@ -108,6 +108,9 @@ spec:
             mountPath: /etc/openstack/
           - name: profiles
             mountPath: /etc/osac/profile/
+          - name: bcm-certs
+            mountPath: /etc/osac/bcm-certs/
+            readOnly: true
       volumes:
         - name: inventory-config
           secret:
@@ -122,6 +125,10 @@ spec:
         - name: profiles
           configMap:
             name: osac-profiles
+            optional: true
+        - name: bcm-certs
+          secret:
+            secretName: osac-bcm-certs
             optional: true
       serviceAccountName: controller-manager
       terminationGracePeriodSeconds: 10

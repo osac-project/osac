@@ -27,6 +27,11 @@ type Config struct {
 	Type      string         `json:"type"`
 	Options   map[string]any `json:"options"`
 	HostClass string         `json:"hostClass"`
+
+	// BMHLifecycleManager is set by main.go when the management backend is
+	// Metal3. Inventory backends that create on-demand BareMetalHost CRs
+	// (e.g., BCM) use this for BMH creation, deletion, and readiness checks.
+	BMHLifecycleManager *BMHLifecycleManager `json:"-"`
 }
 
 // Host is the common return type all clients must use

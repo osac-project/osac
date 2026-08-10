@@ -53,6 +53,7 @@ SECRET_TO_VALUES: dict[str, str] = {
     "osac-inventory-config": "{{ .Values.secrets.inventoryConfig }}",
     "osac-management-config": "{{ .Values.secrets.managementConfig }}",
     "osac-os-clouds": "{{ .Values.secrets.osClouds }}",
+    "osac-bcm-certs": "{{ .Values.secrets.bcmCerts }}",
 }
 CONFIGMAP_TO_VALUES: dict[str, str] = {
     "osac-profiles": "{{ .Values.configMaps.profiles }}",

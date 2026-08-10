@@ -59,7 +59,7 @@ func (m *Metal3Client) TestClient() client.Client {
 }
 
 func NewMetal3ManagementClient(ctx context.Context, cfg *Config) (Client, error) {
-	namespace, err := parseMetal3ManagementNamespace(cfg)
+	namespace, err := ParseMetal3Namespace(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +85,8 @@ func NewMetal3ManagementClient(ctx context.Context, cfg *Config) (Client, error)
 	}, nil
 }
 
-func parseMetal3ManagementNamespace(cfg *Config) (string, error) {
+// ParseMetal3Namespace extracts the Metal3 namespace from management config options.
+func ParseMetal3Namespace(cfg *Config) (string, error) {
 	metal3Opts, ok := cfg.Options["metal3"]
 	if !ok {
 		return "", fmt.Errorf("metal3 options not found in management config")

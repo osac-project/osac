@@ -42,6 +42,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/yaml"
 
+	metal3api "github.com/metal3-io/baremetal-operator/apis/metal3.io/v1alpha1"
 	osacv1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/controller"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/helpers"
@@ -85,8 +86,8 @@ const (
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-
 	utilruntime.Must(osacv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(metal3api.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -408,15 +409,8 @@ func setupBareMetalInstanceController(
 		return fmt.Errorf("failed to parse inventory config: %w", err)
 	}
 
-	inventoryClient, err := inventory.NewClient(ctx, &inventoryConfig)
-	if err != nil {
-		return fmt.Errorf("failed to create inventory client: %w", err)
-	}
-	if inventoryClient == nil {
-		return fmt.Errorf("unsupported inventory type %q", inventoryConfig.Type)
-	}
-
-	// Read and parse management configuration
+	// Parse management config before inventory client — Metal3 management
+	// triggers BMH lifecycle manager wiring on the inventory config.
 	managementConfigPath := helpers.GetEnvWithDefault(envManagementConfigPath, "/etc/osac/management/management.yaml")
 	managementConfigData, err := os.ReadFile(managementConfigPath)
 	if err != nil {
@@ -426,6 +420,25 @@ func setupBareMetalInstanceController(
 	var managementConfig management.Config
 	if err := yaml.Unmarshal(managementConfigData, &managementConfig); err != nil {
 		return fmt.Errorf("failed to parse management config: %w", err)
+	}
+
+	if managementConfig.Type == "metal3" {
+		metal3Namespace, err := management.ParseMetal3Namespace(&managementConfig)
+		if err != nil {
+			return fmt.Errorf("failed to parse metal3 namespace for BMH lifecycle: %w", err)
+		}
+		inventoryConfig.BMHLifecycleManager = inventory.NewBMHLifecycleManager(
+			mgr.GetClient(), metal3Namespace,
+		)
+		setupLog.Info("BMH lifecycle manager configured", "namespace", metal3Namespace)
+	}
+
+	inventoryClient, err := inventory.NewClient(ctx, &inventoryConfig)
+	if err != nil {
+		return fmt.Errorf("failed to create inventory client: %w", err)
+	}
+	if inventoryClient == nil {
+		return fmt.Errorf("unsupported inventory type %q", inventoryConfig.Type)
 	}
 
 	managementClient, err := management.NewClient(ctx, &managementConfig)

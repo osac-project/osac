@@ -60,6 +60,7 @@ type PrivateComputeInstancesServer struct {
 	subnetsDao              *dao.GenericDAO[*privatev1.Subnet]
 	securityGroupsDao       *dao.GenericDAO[*privatev1.SecurityGroup]
 	instanceTypesDao        *dao.GenericDAO[*privatev1.InstanceType]
+	storageTiersDao         *dao.GenericDAO[*privatev1.StorageTier]
 	externalIPPoolDao       *dao.GenericDAO[*privatev1.ExternalIPPool]
 	externalIPDao           *dao.GenericDAO[*privatev1.ExternalIP]
 	externalIPAttachmentDao *dao.GenericDAO[*privatev1.ExternalIPAttachment]
@@ -157,6 +158,16 @@ func (b *PrivateComputeInstancesServerBuilder) Build() (result *PrivateComputeIn
 		return
 	}
 
+	// Create the StorageTiers DAO for storage tier validation:
+	storageTiersDao, err := dao.NewGenericDAO[*privatev1.StorageTier]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
 	externalIPPoolDao, err := dao.NewGenericDAO[*privatev1.ExternalIPPool]().
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
@@ -206,6 +217,7 @@ func (b *PrivateComputeInstancesServerBuilder) Build() (result *PrivateComputeIn
 		subnetsDao:              subnetsDao,
 		securityGroupsDao:       securityGroupsDao,
 		instanceTypesDao:        instanceTypesDao,
+		storageTiersDao:         storageTiersDao,
 		externalIPPoolDao:       externalIPPoolDao,
 		externalIPDao:           externalIPDao,
 		externalIPAttachmentDao: externalIPAttachmentDao,
@@ -385,6 +397,11 @@ func (s *PrivateComputeInstancesServer) Create(ctx context.Context,
 		return
 	}
 
+	err = s.validateStorageTiers(ctx, spec)
+	if err != nil {
+		return
+	}
+
 	// Validate instance type existence and state (D-02: validate-only, no resolution).
 	// Must run after template/catalog defaults are applied so instance_type defaults
 	// from templates are visible.
@@ -444,6 +461,11 @@ func (s *PrivateComputeInstancesServer) Update(ctx context.Context,
 	}
 
 	err = s.validateNetworkAttachmentsImmutability(ctx, request)
+	if err != nil {
+		return
+	}
+
+	err = s.validateDiskImmutability(ctx, request)
 	if err != nil {
 		return
 	}
@@ -604,6 +626,37 @@ func (s *PrivateComputeInstancesServer) validateInstanceType(
 	return warnings, nil
 }
 
+// validateStorageTiers checks that all storage tiers referenced by boot and additional disks exist.
+func (s *PrivateComputeInstancesServer) validateStorageTiers(
+	ctx context.Context,
+	spec *privatev1.ComputeInstanceSpec,
+) error {
+	tiers := map[string]bool{}
+	if tier := spec.GetBootDisk().GetStorageTier(); tier != "" {
+		tiers[tier] = true
+	}
+	for _, disk := range spec.GetAdditionalDisks() {
+		if tier := disk.GetStorageTier(); tier != "" {
+			tiers[tier] = true
+		}
+	}
+	for name := range tiers {
+		_, err := s.storageTiersDao.Get().
+			SetId(name).
+			Do(ctx)
+		if err != nil {
+			var notFoundErr *dao.ErrNotFound
+			if errors.As(err, &notFoundErr) {
+				return grpcstatus.Errorf(grpccodes.InvalidArgument,
+					"storage tier '%s' does not exist", name)
+			}
+			return grpcstatus.Errorf(grpccodes.Internal,
+				"failed to retrieve storage tier '%s'", name)
+		}
+	}
+	return nil
+}
+
 // validateTemplateImmutability ensures that the template and template_parameters fields
 // cannot be changed after compute instance creation.
 func (s *PrivateComputeInstancesServer) validateTemplateImmutability(ctx context.Context,
@@ -743,6 +796,91 @@ func (s *PrivateComputeInstancesServer) validateNetworkAttachmentsImmutability(
 				"cannot change network_attachments[%d].subnet from '%s' to '%s': subnet is immutable",
 				i, refKey(existingSubnet), refKey(newSubnet),
 			)
+		}
+	}
+
+	return nil
+}
+
+// validateDiskImmutability ensures that boot_disk and additional_disks cannot be
+// modified after creation. The entire DiskSpec is immutable (size_gib and storage_tier).
+func (s *PrivateComputeInstancesServer) validateDiskImmutability(
+	ctx context.Context,
+	request *privatev1.ComputeInstancesUpdateRequest,
+) error {
+	updateMask := request.GetUpdateMask()
+	updatingBootDisk := hasMaskPrefix(updateMask, "spec.boot_disk")
+	updatingAdditionalDisks := hasMaskPrefix(updateMask, "spec.additional_disks")
+
+	if !updatingBootDisk && !updatingAdditionalDisks {
+		return nil
+	}
+
+	ci := request.GetObject()
+	if ci == nil {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "compute instance is mandatory")
+	}
+	id := ci.GetId()
+	if id == "" {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "compute instance id is mandatory")
+	}
+
+	getResponse, err := s.generic.dao.Get().SetId(id).Do(ctx)
+	if err != nil {
+		return err
+	}
+	existingCI := getResponse.GetObject()
+
+	existingSpec := existingCI.GetSpec()
+	newSpec := request.GetObject().GetSpec()
+
+	// Validate boot_disk immutability
+	if updatingBootDisk {
+		existingBootDisk := existingSpec.GetBootDisk()
+		newBootDisk := newSpec.GetBootDisk()
+
+		if existingBootDisk.GetSizeGib() != newBootDisk.GetSizeGib() {
+			return grpcstatus.Errorf(
+				grpccodes.InvalidArgument,
+				"cannot change spec.boot_disk.size_gib from %d to %d: boot disk is immutable",
+				existingBootDisk.GetSizeGib(), newBootDisk.GetSizeGib(),
+			)
+		}
+
+		if existingBootDisk.GetStorageTier() != newBootDisk.GetStorageTier() {
+			return grpcstatus.Errorf(
+				grpccodes.InvalidArgument,
+				"cannot change spec.boot_disk.storage_tier from %q to %q: boot disk is immutable",
+				existingBootDisk.GetStorageTier(), newBootDisk.GetStorageTier(),
+			)
+		}
+	}
+
+	// Validate additional_disks immutability
+	if updatingAdditionalDisks {
+		existingDisks := existingSpec.GetAdditionalDisks()
+		newDisks := newSpec.GetAdditionalDisks()
+
+		// Check that existing disks are not modified (adding new disks is allowed)
+		for i := 0; i < len(existingDisks) && i < len(newDisks); i++ {
+			existingDisk := existingDisks[i]
+			newDisk := newDisks[i]
+
+			if existingDisk.GetSizeGib() != newDisk.GetSizeGib() {
+				return grpcstatus.Errorf(
+					grpccodes.InvalidArgument,
+					"cannot change spec.additional_disks[%d].size_gib from %d to %d: disk is immutable",
+					i, existingDisk.GetSizeGib(), newDisk.GetSizeGib(),
+				)
+			}
+
+			if existingDisk.GetStorageTier() != newDisk.GetStorageTier() {
+				return grpcstatus.Errorf(
+					grpccodes.InvalidArgument,
+					"cannot change spec.additional_disks[%d].storage_tier from %q to %q: disk is immutable",
+					i, existingDisk.GetStorageTier(), newDisk.GetStorageTier(),
+				)
+			}
 		}
 	}
 

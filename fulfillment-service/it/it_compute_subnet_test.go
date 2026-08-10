@@ -36,6 +36,8 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 		computeInstancesClient         publicv1.ComputeInstancesClient
 		computeInstanceTemplatesClient privatev1.ComputeInstanceTemplatesClient
 		instanceTypesClient            privatev1.InstanceTypesClient
+		storageTiersClient             privatev1.StorageTiersClient
+		storageBackendsClient          privatev1.StorageBackendsClient
 
 		networkClassId            string
 		virtualNetworkId          string
@@ -43,6 +45,8 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 		computeInstanceId         string
 		computeInstanceTemplateId string
 		instanceTypeId            string
+		storageBackendId          string
+		storageTierId             string
 	)
 
 	BeforeEach(func() {
@@ -55,10 +59,51 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 		computeInstancesClient = publicv1.NewComputeInstancesClient(tool.ExternalView().UserConn())
 		computeInstanceTemplatesClient = privatev1.NewComputeInstanceTemplatesClient(tool.InternalView().AdminConn())
 		instanceTypesClient = privatev1.NewInstanceTypesClient(tool.InternalView().AdminConn())
+		storageTiersClient = privatev1.NewStorageTiersClient(tool.InternalView().AdminConn())
+		storageBackendsClient = privatev1.NewStorageBackendsClient(tool.InternalView().AdminConn())
+
+		// Create StorageBackend
+		sbResp, err := storageBackendsClient.Create(ctx, privatev1.StorageBackendsCreateRequest_builder{
+			Object: privatev1.StorageBackend_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("test-sb-%s", uuid.New()),
+				}.Build(),
+				Spec: privatev1.StorageBackendSpec_builder{
+					Provider:    "test",
+					Description: "Test storage backend for subnet tests",
+					Endpoint:    "https://test-backend.example.com",
+					Credentials: privatev1.StorageBackendCredentials_builder{
+						Username: "test-user",
+						Password: "test-credential", //nolint:goconst // test-only dummy credential for fake provider
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		storageBackendId = sbResp.GetObject().GetId()
+
+		// Create StorageTier
+		stResp, err := storageTiersClient.Create(ctx, privatev1.StorageTiersCreateRequest_builder{
+			Object: privatev1.StorageTier_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("test-st-%s", uuid.New()),
+				}.Build(),
+				Spec: privatev1.StorageTierSpec_builder{
+					Description: "Test storage tier for subnet tests",
+					Backends: []*privatev1.BackendAssociation{
+						privatev1.BackendAssociation_builder{
+							BackendId: storageBackendId,
+						}.Build(),
+					},
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		storageTierId = stResp.GetObject().GetId()
 
 		// Create InstanceType
 		instanceTypeId = fmt.Sprintf("test-it-%s", uuid.New())
-		_, err := instanceTypesClient.Create(ctx, privatev1.InstanceTypesCreateRequest_builder{
+		_, err = instanceTypesClient.Create(ctx, privatev1.InstanceTypesCreateRequest_builder{
 			Object: privatev1.InstanceType_builder{
 				Metadata: privatev1.Metadata_builder{
 					Name: instanceTypeId,
@@ -228,6 +273,20 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 				Id: instanceTypeId,
 			}.Build())
 		}
+
+		// Clean up StorageTier
+		if storageTierId != "" {
+			storageTiersClient.Delete(ctx, privatev1.StorageTiersDeleteRequest_builder{
+				Id: storageTierId,
+			}.Build())
+		}
+
+		// Clean up StorageBackend
+		if storageBackendId != "" {
+			storageBackendsClient.Delete(ctx, privatev1.StorageBackendsDeleteRequest_builder{
+				Id: storageBackendId,
+			}.Build())
+		}
 	})
 
 	It("creates ComputeInstance with network attachments", func() {
@@ -244,7 +303,8 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 					InstanceType: publicv1.InstanceTypeReference_builder{Name: instanceTypeId}.Build(),
 					RunStrategy:  new("Always"),
 					BootDisk: publicv1.ComputeInstanceDisk_builder{
-						SizeGib: 20,
+						SizeGib:     20,
+						StorageTier: &storageTierId,
 					}.Build(),
 					Image: publicv1.ComputeInstanceImage_builder{
 						SourceType: "registry",
@@ -284,7 +344,8 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 					InstanceType: publicv1.InstanceTypeReference_builder{Name: instanceTypeId}.Build(),
 					RunStrategy:  new("Always"),
 					BootDisk: publicv1.ComputeInstanceDisk_builder{
-						SizeGib: 20,
+						SizeGib:     20,
+						StorageTier: &storageTierId,
 					}.Build(),
 					Image: publicv1.ComputeInstanceImage_builder{
 						SourceType: "registry",

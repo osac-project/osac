@@ -1109,6 +1109,9 @@ var _ = Describe("Private clusters server", func() {
 			createClusterWithState := func(state privatev1.ClusterState) *privatev1.Cluster {
 				createResponse, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.New()[24:32]),
+						}.Build(),
 						Spec: privatev1.ClusterSpec_builder{
 							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 						}.Build(),

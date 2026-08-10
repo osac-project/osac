@@ -861,8 +861,15 @@ func (s *PrivateComputeInstancesServer) validateDiskImmutability(
 		existingDisks := existingSpec.GetAdditionalDisks()
 		newDisks := newSpec.GetAdditionalDisks()
 
-		// Check that existing disks are not modified (adding new disks is allowed)
-		for i := 0; i < len(existingDisks) && i < len(newDisks); i++ {
+		if len(existingDisks) != len(newDisks) {
+			return grpcstatus.Errorf(
+				grpccodes.InvalidArgument,
+				"cannot change spec.additional_disks array length from %d to %d: additional disks are immutable",
+				len(existingDisks), len(newDisks),
+			)
+		}
+
+		for i := range existingDisks {
 			existingDisk := existingDisks[i]
 			newDisk := newDisks[i]
 

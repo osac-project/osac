@@ -122,6 +122,12 @@ func Cmd() *cobra.Command {
 		0,
 		bootDiskSizeFlagHelp,
 	)
+	flags.StringVar(
+		&runner.args.bootDiskStorageTier,
+		"boot-disk-storage-tier",
+		"",
+		bootDiskStorageTierFlagHelp,
+	)
 	flags.StringSliceVar(
 		&runner.args.additionalDisks,
 		"additional-disk",
@@ -183,6 +189,7 @@ type runnerContext struct {
 		imageSourceType         string
 		sshPublicKey            string
 		bootDiskSizeGiB         int32
+		bootDiskStorageTier     string
 		additionalDisks         []string
 		runStrategy             string
 		userData                string
@@ -738,10 +745,8 @@ func (c *runnerContext) buildSpec(templateID string,
 	if c.args.sshPublicKey != "" {
 		spec.SshPublicKey = proto.String(c.args.sshPublicKey)
 	}
-	if c.args.bootDiskSizeGiB > 0 {
-		spec.BootDisk = publicv1.ComputeInstanceDisk_builder{
-			SizeGib: c.args.bootDiskSizeGiB,
-		}.Build()
+	if disk := c.buildBootDisk(); disk != nil {
+		spec.BootDisk = disk
 	}
 	if len(c.args.additionalDisks) > 0 {
 		disks, err := parseAdditionalDisks(c.args.additionalDisks)
@@ -764,6 +769,20 @@ func (c *runnerContext) buildSpec(templateID string,
 		return nil, err
 	}
 	return spec.Build(), nil
+}
+
+// buildBootDisk returns a boot disk from CLI flags, or nil if neither size nor storage tier was set.
+func (c *runnerContext) buildBootDisk() *publicv1.ComputeInstanceDisk {
+	if c.args.bootDiskSizeGiB <= 0 && c.args.bootDiskStorageTier == "" {
+		return nil
+	}
+	builder := publicv1.ComputeInstanceDisk_builder{
+		SizeGib: c.args.bootDiskSizeGiB,
+	}
+	if c.args.bootDiskStorageTier != "" {
+		builder.StorageTier = proto.String(c.args.bootDiskStorageTier)
+	}
+	return builder.Build()
 }
 
 // applyNetworkingFlags sets spec.network_attachments from CLI flags.
@@ -865,10 +884,8 @@ func (c *runnerContext) buildSpecFromCatalogItem(catalogItemID string) (*publicv
 	if c.args.sshPublicKey != "" {
 		spec.SshPublicKey = proto.String(c.args.sshPublicKey)
 	}
-	if c.args.bootDiskSizeGiB > 0 {
-		spec.BootDisk = publicv1.ComputeInstanceDisk_builder{
-			SizeGib: c.args.bootDiskSizeGiB,
-		}.Build()
+	if disk := c.buildBootDisk(); disk != nil {
+		spec.BootDisk = disk
 	}
 	if len(c.args.additionalDisks) > 0 {
 		disks, diskErr := parseAdditionalDisks(c.args.additionalDisks)
@@ -893,18 +910,74 @@ func (c *runnerContext) buildSpecFromCatalogItem(catalogItemID string) (*publicv
 	return spec.Build(), nil
 }
 
-// parseAdditionalDisks parses disk sizes in GiB.
-// Example: "100"
+// parseAdditionalDisks parses disk specifications in two formats:
+//  1. Bare integer (legacy): "100" specifies size in GiB
+//  2. Key=value format: "size=100,storage-tier=standard"
+//
+// The storage-tier field is optional in the key=value format for backward compatibility.
 func parseAdditionalDisks(diskArgs []string) ([]*publicv1.ComputeInstanceDisk, error) {
 	disks := make([]*publicv1.ComputeInstanceDisk, 0, len(diskArgs))
 	for _, arg := range diskArgs {
-		sizeGiB, err := strconv.ParseInt(arg, 10, 32)
-		if err != nil {
-			return nil, fmt.Errorf("invalid disk size '%s': expected an integer number of GiB", arg)
+		arg = strings.TrimSpace(arg)
+		if arg == "" {
+			return nil, fmt.Errorf("empty --additional-disk value")
 		}
-		disks = append(disks, publicv1.ComputeInstanceDisk_builder{
-			SizeGib: int32(sizeGiB),
-		}.Build())
+
+		// Legacy format: bare integer is interpreted as size in GiB
+		if !strings.Contains(arg, "=") {
+			sizeGiB, err := strconv.ParseInt(arg, 10, 32)
+			if err != nil {
+				return nil, fmt.Errorf("invalid --additional-disk value %q: expected an integer or key=value format", arg)
+			}
+			disk := publicv1.ComputeInstanceDisk_builder{
+				SizeGib: int32(sizeGiB),
+			}.Build()
+			disks = append(disks, disk)
+			continue
+		}
+
+		// Key=value format
+		disk := publicv1.ComputeInstanceDisk_builder{}
+		var hasSize bool
+
+		for _, fragment := range strings.Split(arg, ",") {
+			fragment = strings.TrimSpace(fragment)
+			if fragment == "" {
+				continue
+			}
+
+			key, value, found := strings.Cut(fragment, "=")
+			if !found {
+				return nil, fmt.Errorf("invalid --additional-disk fragment %q (expected key=value)", fragment)
+			}
+
+			key = strings.TrimSpace(key)
+			value = strings.TrimSpace(value)
+
+			if value == "" {
+				return nil, fmt.Errorf("invalid --additional-disk fragment %q (value is empty)", fragment)
+			}
+
+			switch key {
+			case "size":
+				sizeGiB, err := strconv.ParseInt(value, 10, 32)
+				if err != nil {
+					return nil, fmt.Errorf("invalid size value %q: expected an integer number of GiB", value)
+				}
+				disk.SizeGib = int32(sizeGiB)
+				hasSize = true
+			case "storage-tier":
+				disk.StorageTier = proto.String(value)
+			default:
+				return nil, fmt.Errorf("unknown --additional-disk key %q (expected 'size' or 'storage-tier')", key)
+			}
+		}
+
+		if !hasSize {
+			return nil, fmt.Errorf("--additional-disk %q must include size=<value>", arg)
+		}
+
+		disks = append(disks, disk.Build())
 	}
 	return disks, nil
 }
@@ -1016,9 +1089,16 @@ const bootDiskSizeFlagHelp = `
 _SIZE_ - Boot disk size in GiB.
 `
 
+const bootDiskStorageTierFlagHelp = `
+_TIER_ - Storage tier for the boot disk.
+`
+
 const additionalDiskFlagHelp = `
-_SIZE_ - Additional disk size in GiB. Can be specified multiple times to add
-more than one disk.
+_SPEC_ - Additional disk specification. Accepts two formats:
+1. Bare integer: {{ bt }}<GiB>{{ bt }} specifies disk size in GiB (temporary, backward compatibility only)
+2. Key=value: {{ bt }}size=<GiB>,storage-tier=<name>{{ bt }} specifies disk size and storage tier name
+
+Can be specified multiple times to add more than one disk.
 `
 
 const runStrategyFlagHelp = `

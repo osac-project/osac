@@ -34,7 +34,7 @@ import (
 type mockProvider struct {
 	triggerProvisionFunc     func(ctx context.Context, resource client.Object) (*ProvisionResult, error)
 	getProvisionStatusFunc   func(ctx context.Context, resource client.Object, jobID string) (ProvisionStatus, error)
-	triggerDeprovisionFunc   func(ctx context.Context, resource client.Object) (*DeprovisionResult, error)
+	triggerDeprovisionFunc   func(ctx context.Context, resource client.Object, provisionJobs []v1alpha1.JobStatus) (*DeprovisionResult, error)
 	getDeprovisionStatusFunc func(ctx context.Context, resource client.Object, jobID string) (ProvisionStatus, error)
 }
 
@@ -51,7 +51,7 @@ func (m *mockProvider) GetProvisionStatus(ctx context.Context, resource client.O
 	return ProvisionStatus{JobID: jobID, State: v1alpha1.JobStateSucceeded}, nil
 }
 func (m *mockProvider) TriggerDeprovision(ctx context.Context, resource client.Object, provisionJobs []v1alpha1.JobStatus) (*DeprovisionResult, error) {
-	return m.triggerDeprovisionFunc(ctx, resource)
+	return m.triggerDeprovisionFunc(ctx, resource, provisionJobs)
 }
 func (m *mockProvider) GetDeprovisionStatus(ctx context.Context, resource client.Object, jobID string) (ProvisionStatus, error) {
 	return m.getDeprovisionStatusFunc(ctx, resource, jobID)
@@ -555,6 +555,61 @@ var _ = ginkgo.Describe("RunMultiTargetProvisioningLifecycle", func() {
 		_, err := RunMultiTargetProvisioningLifecycle(ctx, targets, resource, provState, 5, 30*time.Second, nil)
 		Expect(err).To(HaveOccurred())
 	})
+
+	ginkgo.It("returns an error when more than one target sets AbsorbsLegacyHistory", func() {
+		resource := &v1alpha1.Subnet{}
+		jobs := []v1alpha1.JobStatus{}
+		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
+
+		targets := []JobTarget{
+			{Name: "fabric", Provider: &mockProvider{}, CheckAPIServer: noAPIServerJob, AbsorbsLegacyHistory: true},
+			{Name: "k8s", Provider: &mockProvider{}, CheckAPIServer: noAPIServerJob, AbsorbsLegacyHistory: true},
+		}
+		_, err := RunMultiTargetProvisioningLifecycle(ctx, targets, resource, provState, 5, 30*time.Second, nil)
+		Expect(err).To(HaveOccurred())
+	})
+
+	ginkgo.It("backfills a pre-existing untagged succeeded job onto the target that absorbs legacy history, skipping it instead of re-triggering", func() {
+		// Simulates a Subnet provisioned before dual-dispatch existed: its only
+		// job is untagged (Target == ""). Once its NetworkClass gains a
+		// k8sManager, fabric (AbsorbsLegacyHistory: true) must recognize this
+		// job as its own rather than provisioning a duplicate, while k8s (which
+		// never ran before) triggers fresh.
+		fabricTriggerCalled := false
+		fabricProvider := &mockProvider{
+			triggerProvisionFunc: func(_ context.Context, _ client.Object) (*ProvisionResult, error) {
+				fabricTriggerCalled = true
+				return &ProvisionResult{JobID: "should-not-be-triggered"}, nil
+			},
+		}
+		k8sTriggerCalled := false
+		k8sProvider := &mockProvider{
+			triggerProvisionFunc: func(_ context.Context, _ client.Object) (*ProvisionResult, error) {
+				k8sTriggerCalled = true
+				return &ProvisionResult{JobID: "k8s-job"}, nil
+			},
+		}
+		resource := &v1alpha1.Subnet{}
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "legacy-1", Type: v1alpha1.JobTypeProvision, Target: "", State: v1alpha1.JobStateSucceeded,
+				ConfigVersion: "v1", Timestamp: metav1.NewTime(time.Now())},
+		}
+		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
+
+		targets := []JobTarget{
+			{Name: "fabric", Provider: fabricProvider, CheckAPIServer: noAPIServerJob, AbsorbsLegacyHistory: true},
+			{Name: "k8s", Provider: k8sProvider, CheckAPIServer: noAPIServerJob},
+		}
+
+		_, err := RunMultiTargetProvisioningLifecycle(ctx, targets, resource, provState, 5, 30*time.Second, nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fabricTriggerCalled).To(BeFalse(), "the legacy job, once backfilled to fabric, must not be re-provisioned")
+		Expect(k8sTriggerCalled).To(BeTrue(), "k8s never ran before and has no history to inherit")
+
+		backfilled := FindLatestJobByTypeAndTarget(*provState.Jobs, v1alpha1.JobTypeProvision, "fabric")
+		Expect(backfilled).NotTo(BeNil())
+		Expect(backfilled.JobID).To(Equal("legacy-1"))
+	})
 })
 
 var _ = ginkgo.Describe("ComputeDesiredConfigVersion", func() {
@@ -828,7 +883,7 @@ var _ = ginkgo.Describe("TriggerDeprovisionJob", func() {
 
 	ginkgo.It("handles DeprovisionSkipped — returns done with no requeue", func() {
 		provider := &mockProvider{
-			triggerDeprovisionFunc: func(_ context.Context, _ client.Object) (*DeprovisionResult, error) {
+			triggerDeprovisionFunc: func(_ context.Context, _ client.Object, _ []v1alpha1.JobStatus) (*DeprovisionResult, error) {
 				return &DeprovisionResult{Action: DeprovisionSkipped}, nil
 			},
 		}
@@ -841,7 +896,7 @@ var _ = ginkgo.Describe("TriggerDeprovisionJob", func() {
 
 	ginkgo.It("handles DeprovisionWaiting — updates provision job and requeues", func() {
 		provider := &mockProvider{
-			triggerDeprovisionFunc: func(_ context.Context, _ client.Object) (*DeprovisionResult, error) {
+			triggerDeprovisionFunc: func(_ context.Context, _ client.Object, _ []v1alpha1.JobStatus) (*DeprovisionResult, error) {
 				return &DeprovisionResult{
 					Action: DeprovisionWaiting,
 					ProvisionJobStatus: &ProvisionStatus{
@@ -865,7 +920,7 @@ var _ = ginkgo.Describe("TriggerDeprovisionJob", func() {
 
 	ginkgo.It("handles DeprovisionTriggered — appends deprovision job and requeues", func() {
 		provider := &mockProvider{
-			triggerDeprovisionFunc: func(_ context.Context, _ client.Object) (*DeprovisionResult, error) {
+			triggerDeprovisionFunc: func(_ context.Context, _ client.Object, _ []v1alpha1.JobStatus) (*DeprovisionResult, error) {
 				return &DeprovisionResult{
 					Action:                 DeprovisionTriggered,
 					JobID:                  "deprov-1",
@@ -886,7 +941,7 @@ var _ = ginkgo.Describe("TriggerDeprovisionJob", func() {
 
 	ginkgo.It("handles rate-limit error — requeues with RetryAfter", func() {
 		provider := &mockProvider{
-			triggerDeprovisionFunc: func(_ context.Context, _ client.Object) (*DeprovisionResult, error) {
+			triggerDeprovisionFunc: func(_ context.Context, _ client.Object, _ []v1alpha1.JobStatus) (*DeprovisionResult, error) {
 				return nil, &RateLimitError{RetryAfter: 45 * time.Second}
 			},
 		}
@@ -898,7 +953,7 @@ var _ = ginkgo.Describe("TriggerDeprovisionJob", func() {
 
 	ginkgo.It("returns error on non-rate-limit provider error", func() {
 		provider := &mockProvider{
-			triggerDeprovisionFunc: func(_ context.Context, _ client.Object) (*DeprovisionResult, error) {
+			triggerDeprovisionFunc: func(_ context.Context, _ client.Object, _ []v1alpha1.JobStatus) (*DeprovisionResult, error) {
 				return nil, fmt.Errorf("connection refused")
 			},
 		}
@@ -946,7 +1001,7 @@ var _ = ginkgo.Describe("PollDeprovisionJob", func() {
 		latestJob := &jobs[0]
 		retryCalled := false
 		provider := &mockProvider{
-			triggerDeprovisionFunc: func(_ context.Context, _ client.Object) (*DeprovisionResult, error) {
+			triggerDeprovisionFunc: func(_ context.Context, _ client.Object, _ []v1alpha1.JobStatus) (*DeprovisionResult, error) {
 				retryCalled = true
 				return &DeprovisionResult{
 					Action: DeprovisionTriggered,
@@ -1058,12 +1113,12 @@ var _ = ginkgo.Describe("RunMultiTargetDeprovisioningLifecycle", func() {
 
 	ginkgo.It("triggers every target with no deprovision job yet, tagging each with its target and requiring another pass to finish", func() {
 		fabricProvider := &mockProvider{
-			triggerDeprovisionFunc: func(_ context.Context, _ client.Object) (*DeprovisionResult, error) {
+			triggerDeprovisionFunc: func(_ context.Context, _ client.Object, _ []v1alpha1.JobStatus) (*DeprovisionResult, error) {
 				return &DeprovisionResult{Action: DeprovisionTriggered, JobID: "fabric-deprov"}, nil
 			},
 		}
 		k8sProvider := &mockProvider{
-			triggerDeprovisionFunc: func(_ context.Context, _ client.Object) (*DeprovisionResult, error) {
+			triggerDeprovisionFunc: func(_ context.Context, _ client.Object, _ []v1alpha1.JobStatus) (*DeprovisionResult, error) {
 				return &DeprovisionResult{Action: DeprovisionTriggered, JobID: "k8s-deprov"}, nil
 			},
 		}
@@ -1091,7 +1146,7 @@ var _ = ginkgo.Describe("RunMultiTargetDeprovisioningLifecycle", func() {
 			},
 		}
 		k8sProvider := &mockProvider{
-			triggerDeprovisionFunc: func(_ context.Context, _ client.Object) (*DeprovisionResult, error) {
+			triggerDeprovisionFunc: func(_ context.Context, _ client.Object, _ []v1alpha1.JobStatus) (*DeprovisionResult, error) {
 				return &DeprovisionResult{Action: DeprovisionTriggered, JobID: "k8s-deprov"}, nil
 			},
 		}
@@ -1132,14 +1187,14 @@ var _ = ginkgo.Describe("RunMultiTargetDeprovisioningLifecycle", func() {
 	ginkgo.It("backs off only the failing target while a succeeded target contributes no further requeue and is not retried", func() {
 		fabricRetriggered := false
 		fabricProvider := &mockProvider{
-			triggerDeprovisionFunc: func(_ context.Context, _ client.Object) (*DeprovisionResult, error) {
+			triggerDeprovisionFunc: func(_ context.Context, _ client.Object, _ []v1alpha1.JobStatus) (*DeprovisionResult, error) {
 				fabricRetriggered = true
 				return &DeprovisionResult{Action: DeprovisionTriggered, JobID: "fabric-deprov-2"}, nil
 			},
 		}
 		k8sCalled := false
 		k8sProvider := &mockProvider{
-			triggerDeprovisionFunc: func(_ context.Context, _ client.Object) (*DeprovisionResult, error) {
+			triggerDeprovisionFunc: func(_ context.Context, _ client.Object, _ []v1alpha1.JobStatus) (*DeprovisionResult, error) {
 				k8sCalled = true
 				return nil, fmt.Errorf("should not be called")
 			},
@@ -1166,7 +1221,7 @@ var _ = ginkgo.Describe("RunMultiTargetDeprovisioningLifecycle", func() {
 
 	ginkgo.It("scopes ProvisionJobStatus sync from DeprovisionWaiting to only the matching target's provision job", func() {
 		fabricProvider := &mockProvider{
-			triggerDeprovisionFunc: func(_ context.Context, _ client.Object) (*DeprovisionResult, error) {
+			triggerDeprovisionFunc: func(_ context.Context, _ client.Object, _ []v1alpha1.JobStatus) (*DeprovisionResult, error) {
 				return &DeprovisionResult{
 					Action: DeprovisionWaiting,
 					ProvisionJobStatus: &ProvisionStatus{
@@ -1200,12 +1255,12 @@ var _ = ginkgo.Describe("RunMultiTargetDeprovisioningLifecycle", func() {
 
 	ginkgo.It("invokes every target's provider and joins the error when one target's trigger fails, without blocking the other", func() {
 		fabricProvider := &mockProvider{
-			triggerDeprovisionFunc: func(_ context.Context, _ client.Object) (*DeprovisionResult, error) {
+			triggerDeprovisionFunc: func(_ context.Context, _ client.Object, _ []v1alpha1.JobStatus) (*DeprovisionResult, error) {
 				return nil, fmt.Errorf("fabric API unreachable")
 			},
 		}
 		k8sProvider := &mockProvider{
-			triggerDeprovisionFunc: func(_ context.Context, _ client.Object) (*DeprovisionResult, error) {
+			triggerDeprovisionFunc: func(_ context.Context, _ client.Object, _ []v1alpha1.JobStatus) (*DeprovisionResult, error) {
 				return &DeprovisionResult{Action: DeprovisionTriggered, JobID: "k8s-deprov"}, nil
 			},
 		}
@@ -1250,6 +1305,83 @@ var _ = ginkgo.Describe("RunMultiTargetDeprovisioningLifecycle", func() {
 		Expect(err).To(HaveOccurred())
 	})
 
+	ginkgo.It("returns an error when more than one target sets AbsorbsLegacyHistory", func() {
+		jobs := []v1alpha1.JobStatus{}
+		targets := []DeprovisionTarget{
+			{Name: "fabric", Provider: &mockProvider{}, AbsorbsLegacyHistory: true},
+			{Name: "k8s", Provider: &mockProvider{}, AbsorbsLegacyHistory: true},
+		}
+		_, _, err := RunMultiTargetDeprovisioningLifecycle(ctx, targets, resource, &jobs, maxHistory, pollInterval)
+		Expect(err).To(HaveOccurred())
+	})
+
+	ginkgo.It("backfills a pre-existing untagged provision job onto the target that absorbs legacy history before deprovisioning", func() {
+		// A resource provisioned before dual-dispatch existed has an untagged
+		// (Target == "") successful provision job. Deleting it after the
+		// NetworkClass gained a k8sManager must not orphan that history: fabric
+		// (AbsorbsLegacyHistory: true) should see it as its own provision job.
+		var fabricSawProvisionJobs []v1alpha1.JobStatus
+		fabricProvider := &mockProvider{
+			triggerDeprovisionFunc: func(_ context.Context, _ client.Object, provisionJobs []v1alpha1.JobStatus) (*DeprovisionResult, error) {
+				fabricSawProvisionJobs = provisionJobs
+				return &DeprovisionResult{Action: DeprovisionTriggered, JobID: "fabric-deprov"}, nil
+			},
+		}
+		k8sProvider := &mockProvider{
+			triggerDeprovisionFunc: func(_ context.Context, _ client.Object, provisionJobs []v1alpha1.JobStatus) (*DeprovisionResult, error) {
+				Expect(provisionJobs).To(BeEmpty(), "k8s never provisioned anything and must not see fabric's legacy history")
+				return &DeprovisionResult{Action: DeprovisionTriggered, JobID: "k8s-deprov"}, nil
+			},
+		}
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "legacy-prov", Type: v1alpha1.JobTypeProvision, Target: "", State: v1alpha1.JobStateSucceeded, Timestamp: metav1.NewTime(time.Now())},
+		}
+
+		targets := []DeprovisionTarget{
+			{Name: "fabric", Provider: fabricProvider, AbsorbsLegacyHistory: true},
+			{Name: "k8s", Provider: k8sProvider},
+		}
+
+		_, _, err := RunMultiTargetDeprovisioningLifecycle(ctx, targets, resource, &jobs, maxHistory, pollInterval)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fabricSawProvisionJobs).To(HaveLen(1))
+		Expect(fabricSawProvisionJobs[0].JobID).To(Equal("legacy-prov"))
+		Expect(FindLatestJobByTypeAndTarget(jobs, v1alpha1.JobTypeProvision, "fabric")).NotTo(BeNil(),
+			"the legacy provision job should be backfilled onto fabric, not left untagged")
+	})
+
+	ginkgo.It("passes only the target's own provision jobs to that target's provider", func() {
+		var fabricSaw, k8sSaw []v1alpha1.JobStatus
+		fabricProvider := &mockProvider{
+			triggerDeprovisionFunc: func(_ context.Context, _ client.Object, provisionJobs []v1alpha1.JobStatus) (*DeprovisionResult, error) {
+				fabricSaw = provisionJobs
+				return &DeprovisionResult{Action: DeprovisionTriggered, JobID: "fabric-deprov"}, nil
+			},
+		}
+		k8sProvider := &mockProvider{
+			triggerDeprovisionFunc: func(_ context.Context, _ client.Object, provisionJobs []v1alpha1.JobStatus) (*DeprovisionResult, error) {
+				k8sSaw = provisionJobs
+				return &DeprovisionResult{Action: DeprovisionTriggered, JobID: "k8s-deprov"}, nil
+			},
+		}
+		jobs := []v1alpha1.JobStatus{
+			{JobID: "fabric-prov", Type: v1alpha1.JobTypeProvision, Target: "fabric", State: v1alpha1.JobStateRunning, Timestamp: metav1.NewTime(time.Now())},
+			{JobID: "k8s-prov", Type: v1alpha1.JobTypeProvision, Target: "k8s", State: v1alpha1.JobStateRunning, Timestamp: metav1.NewTime(time.Now())},
+		}
+
+		targets := []DeprovisionTarget{
+			{Name: "fabric", Provider: fabricProvider},
+			{Name: "k8s", Provider: k8sProvider},
+		}
+
+		_, _, err := RunMultiTargetDeprovisioningLifecycle(ctx, targets, resource, &jobs, maxHistory, pollInterval)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fabricSaw).To(HaveLen(1))
+		Expect(fabricSaw[0].JobID).To(Equal("fabric-prov"))
+		Expect(k8sSaw).To(HaveLen(1))
+		Expect(k8sSaw[0].JobID).To(Equal("k8s-prov"))
+	})
+
 	ginkgo.It("completes based on a single target alone when the other manager was never dispatched", func() {
 		// A resource whose k8s manager was never dispatched (e.g. the dispatcher's
 		// DispatchPlan omitted it) must be deprovisioned by passing only the
@@ -1272,12 +1404,12 @@ var _ = ginkgo.Describe("RunMultiTargetDeprovisioningLifecycle", func() {
 
 	ginkgo.It("reaches done=true across two calls once every target's newly-triggered job is polled to success", func() {
 		fabricProvider := &mockProvider{
-			triggerDeprovisionFunc: func(_ context.Context, _ client.Object) (*DeprovisionResult, error) {
+			triggerDeprovisionFunc: func(_ context.Context, _ client.Object, _ []v1alpha1.JobStatus) (*DeprovisionResult, error) {
 				return &DeprovisionResult{Action: DeprovisionTriggered, JobID: "fabric-deprov"}, nil
 			},
 		}
 		k8sProvider := &mockProvider{
-			triggerDeprovisionFunc: func(_ context.Context, _ client.Object) (*DeprovisionResult, error) {
+			triggerDeprovisionFunc: func(_ context.Context, _ client.Object, _ []v1alpha1.JobStatus) (*DeprovisionResult, error) {
 				return &DeprovisionResult{Action: DeprovisionTriggered, JobID: "k8s-deprov"}, nil
 			},
 		}

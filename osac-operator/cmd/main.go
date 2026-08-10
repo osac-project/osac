@@ -527,7 +527,7 @@ func setupNetworkingControllers(
 		resolver = dispatcher.NewResolver(networkClassAdapter, disc)
 
 		if err := setupNetworkClassCapabilitiesController(
-			mgr, localMgr, grpcConn, networkingNamespace, resolver,
+			mgr, localMgr, networkClassesClient, networkingNamespace, resolver,
 		); err != nil {
 			return err
 		}
@@ -584,14 +584,14 @@ func setupNetworkingControllers(
 
 // setupNetworkClassCapabilitiesController registers the NetworkClass capabilities
 // reconciler (ConfigMap-triggered) and its periodic resync runnable. Both require the
-// gRPC connection and a manager resolver built from ConfigMap-based discovery, so this
-// is only called when grpcConn is set and a networking namespace is configured.
+// gRPC connection (via networkClassesClient) and a manager resolver built from
+// ConfigMap-based discovery, so this is only called when grpcConn is set and a
+// networking namespace is configured. networkClassesClient is passed in rather than
+// constructed here since the caller already builds one from the same grpcConn for resolver.
 func setupNetworkClassCapabilitiesController(
-	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn *grpc.ClientConn, networkingNamespace string,
-	resolver *dispatcher.Resolver,
+	mgr mcmanager.Manager, localMgr ctrl.Manager, networkClassesClient privatev1.NetworkClassesClient,
+	networkingNamespace string, resolver *dispatcher.Resolver,
 ) error {
-	networkClassesClient := privatev1.NewNetworkClassesClient(grpcConn)
-
 	ncReconciler := controller.NewNetworkClassCapabilitiesReconciler(
 		networkClassesClient, resolver, networkingNamespace,
 	)

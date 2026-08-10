@@ -156,6 +156,58 @@ var _ = Describe("resolveDispatchPlan", func() {
 	})
 })
 
+var _ = Describe("resolveImplementationStrategy", func() {
+	var (
+		ctx                 context.Context
+		fakeDiscoveryClient client.Client
+	)
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		scheme := runtime.NewScheme()
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
+		fakeDiscoveryClient = fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+			newFabricManagerConfigMap("fm-netris", "osac", "netris"),
+			newK8sManagerConfigMap("km-cudn", "osac", "cudn_net", "ipv4"),
+		).Build()
+	})
+
+	It("returns the resolved k8s manager's name for a K8sFallback kind with no fabricManager set", func() {
+		disc, err := networkmanager.NewDiscovery(fakeDiscoveryClient, "osac")
+		Expect(err).NotTo(HaveOccurred())
+		k8sManagerName := "cudn_net"
+		resolver := dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+			[]*privatev1.NetworkClass{{Id: "nc-k8s-fallback", K8SManager: &k8sManagerName}},
+			&[]*privatev1.NetworkClass{},
+		)), disc)
+
+		// VirtualNetwork's dispatch config is Fabric-role-only with K8sFallback: true, so a
+		// NetworkClass with only a k8sManager set resolves the fabric role's target to the k8s
+		// manager (see dispatch.go's Dispatch), and this should NOT fall back to legacyStrategy.
+		strategy, err := resolveImplementationStrategy(ctx, resolver, "VirtualNetwork", "nc-k8s-fallback", "legacy-strategy")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(strategy).To(Equal("cudn_net"))
+	})
+
+	It("returns the resolved fabric manager's name when the NetworkClass has a fabricManager set", func() {
+		disc, err := networkmanager.NewDiscovery(fakeDiscoveryClient, "osac")
+		Expect(err).NotTo(HaveOccurred())
+		resolver := dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+			[]*privatev1.NetworkClass{{Id: "nc-fabric", FabricManager: ptr.To("netris")}}, &[]*privatev1.NetworkClass{},
+		)), disc)
+
+		strategy, err := resolveImplementationStrategy(ctx, resolver, "VirtualNetwork", "nc-fabric", "legacy-strategy")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(strategy).To(Equal("netris"))
+	})
+
+	It("returns legacyStrategy when the dispatcher path is not active", func() {
+		strategy, err := resolveImplementationStrategy(ctx, nil, "VirtualNetwork", "nc-any", "legacy-strategy")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(strategy).To(Equal("legacy-strategy"))
+	})
+})
+
 var _ = Describe("dispatchTargetProvider", func() {
 	var (
 		ctx      context.Context

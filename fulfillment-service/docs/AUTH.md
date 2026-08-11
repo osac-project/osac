@@ -579,6 +579,7 @@ The authorization policy allows:
      - Cluster Catalog Items: `Get`, `List`
      - Compute Instances: `Create`, `Delete`, `Get`, `List`, `Update`
      - Compute Instance Templates: `Get`, `List`
+     - Disk Images: `Create`, `Delete`, `Get`, `List`, `Update`
      - Console Sessions: `Create`
      - Events: `Watch`
      - Host Types: `Get`, `List`
@@ -667,7 +668,7 @@ The fulfillment service implements a comprehensive authorization model that comb
 **Tenancy:** Scoped to their assigned tenant(s) + shared tenant
 
 **Permissions:** Read/write access to infrastructure resources:
-- Bare-metal instances, clusters, compute instances
+- Bare-metal instances, clusters, compute instances, disk images
 - Networking (virtual networks, subnets, network classes, security groups)
 - IPs (external IPs and their attachments/pools)
 - Templates and catalog items (read-only)

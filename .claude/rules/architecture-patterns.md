@@ -18,6 +18,7 @@ Cluster Resources:
 
 Compute Resources:
   ComputeInstance → KubeVirt VM, attached to Subnets + SecurityGroups
+  DiskImage → disk image source (registry, URL)
 
 Networking Resources:
   NetworkClass (platform-defined, read-only for tenants)

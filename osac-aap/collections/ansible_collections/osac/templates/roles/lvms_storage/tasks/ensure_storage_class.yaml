@@ -50,7 +50,7 @@
             api_version: packages.operators.coreos.com/v1
             kind: PackageManifest
             name: lvms-operator
-            namespace: openshift-marketplace
+            namespace: "{{ lvms_storage_operator_catalog_namespace }}"
           register: _lvms_pm
 
         - name: Set channel from packagemanifest default

@@ -191,7 +191,7 @@ template role with the filtered tier subset.
      supports_nfs: true
      provisioning_targets:
        - vmaas
-       - caas
+       # Add caas only when this provider implements guest-cluster provisioning.
    ```
 
 3. Implement the three required action task files. Each receives `_provider_tiers`
@@ -215,12 +215,11 @@ template role with the filtered tier subset.
    osac-operator from the Tier API and keyed by `backend_id`) — there is no
    env-var or K8s Secret fallback for admin credentials.
 
-6. **Provisioning targets:** Each provider handles VMaaS and CaaS provisioning
-   targets via the `_provisioning_target` parameter. Currently supported: `vmaas`
-   and `caas` (via the LVMS provider — installs LVMS operator on the guest cluster
-   and creates per-tenant StorageClasses backed by a local block device).
+6. **Provisioning targets:** Each provider declares only the targets it implements
+   via `meta/osac.yaml`. `caas` is currently supported by the `lvms_storage`
+   provider (installs LVMS on the guest cluster, creates per-tenant StorageClasses).
    HCP-level targets (`hcp_control_plane`, `hcp_worker_root`, `hcp_data_plane`)
-   are defined but not yet implemented.
+   are defined but not yet implemented by any provider.
 
 **CaaS provisioning targets:** `caas` is supported by the `lvms_storage` provider
 (OSAC-3234). `hcp_control_plane`, `hcp_worker_root`, and `hcp_data_plane` remain

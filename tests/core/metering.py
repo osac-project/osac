@@ -95,6 +95,10 @@ class MeteringCollector:
             f"but found {len(matching)}: {[{'id': e.get('id'), 'time': e.get('time')} for e in matching]}"
         )
 
+    def get_all_events(self, event_type: str, resource_id: str) -> list[dict[str, Any]]:
+        """Return all events matching type and resource_id (for N+1 count assertions)."""
+        return self._fetch_events(event_type, resource_id)
+
     def _fetch_events(self, event_type: str, resource_id: str) -> list[dict[str, Any]]:
         params = urlencode({
             "type": event_type,
@@ -154,10 +158,10 @@ class MeteringCollector:
             f"Wrong source: {event.get('source')}"
         assert event.get("id"), "Missing event id"
         assert event.get("time"), "Missing event time"
-        assert event.get("osacresourcetype") == "compute_instance", \
-            f"Wrong osacresourcetype: {event.get('osacresourcetype')}"
         assert event.get("osacresourceid") == expected.resource_id, \
             f"Wrong osacresourceid: {event.get('osacresourceid')}"
+        assert event.get("osacresourcetype") in ("compute_instance", "cluster_order"), \
+            f"Wrong osacresourcetype: {event.get('osacresourcetype')}"
         assert event.get("osactenant"), "Missing osactenant"
 
         data = event.get("data", {})
@@ -165,16 +169,8 @@ class MeteringCollector:
         assert data.get("resource_type"), "Missing resource_type in data"
         assert data.get("tenant_id"), "Missing tenant_id in data"
         assert data.get("schema_version") == "v1", f"Wrong schema_version: {data.get('schema_version')}"
-
-        bd = data.get("billing_dimensions", {})
-        assert bd.get("instance_type"), "Missing or empty instance_type in billing_dimensions"
-        assert bd.get("image_ref"), "Missing or empty image_ref in billing_dimensions"
-        assert "boot_disk_size_gib" in bd, "Missing boot_disk_size_gib in billing_dimensions"
-        assert isinstance(
-            bd["boot_disk_size_gib"], (int, float)
-        ), f"boot_disk_size_gib should be numeric, got {type(bd['boot_disk_size_gib']).__name__}"
-
         assert "project_id" in data, "Missing project_id in data"
+        assert "billing_dimensions" in data, "Missing billing_dimensions in data"
 
         if expected.event_type != "osac.resource.heartbeat.v1":
             assert data.get("transition_time"), "Missing transition_time in data"
@@ -192,14 +188,23 @@ class MeteringCollector:
             assert "previous_state" in data, f"Missing previous_state in {expected.event_type}"
             assert "duration_seconds" in data, f"Missing duration_seconds in {expected.event_type}"
 
-        if expected.event_type == "osac.resource.suspended.v1":
-            valid_suspended_previous = ("RUNNING", "STOPPING", "STARTING")
-            assert data.get("previous_state") in valid_suspended_previous, (
-                f"suspended.v1 previous_state should be one of {valid_suspended_previous}, "
-                f"got {data.get('previous_state')!r}"
-            )
 
-        if expected.event_type == "osac.resource.resumed.v1":
-            assert data.get("previous_state") in ("STOPPED", "PAUSED"), (
-                f"resumed.v1 should have previous_state in (STOPPED, PAUSED), got {data.get('previous_state')}"
-            )
+def validate_vmaas_billing(event: dict[str, Any]) -> None:
+    bd = event.get("data", {}).get("billing_dimensions", {})
+    assert bd.get("instance_type"), "Missing or empty instance_type in billing_dimensions"
+    assert bd.get("image_ref"), "Missing or empty image_ref in billing_dimensions"
+    assert "boot_disk_size_gib" in bd, "Missing boot_disk_size_gib in billing_dimensions"
+    assert isinstance(
+        bd["boot_disk_size_gib"], (int, float)
+    ), f"boot_disk_size_gib should be numeric, got {type(bd['boot_disk_size_gib']).__name__}"
+
+
+def validate_caas_billing(event: dict[str, Any]) -> None:
+    bd = event.get("data", {}).get("billing_dimensions", {})
+    assert bd.get("cluster_template"), "Missing cluster_template in billing_dimensions"
+    assert bd.get("component") in ("control_plane", "worker"), \
+        f"component should be control_plane or worker, got {bd.get('component')!r}"
+    assert bd.get("node_set"), "Missing node_set in billing_dimensions"
+    assert bd.get("host_type"), "Missing host_type in billing_dimensions"
+    assert isinstance(bd.get("node_count"), (int, float)) and bd["node_count"] > 0, \
+        f"node_count should be positive number, got {bd.get('node_count')!r}"

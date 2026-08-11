@@ -18,6 +18,9 @@
 #
 #   Test 4 (duplicate tiers -- first-match semantics):
 #     ansible-playbook ... -e test_duplicate_tier=true
+#
+#   Test 5 (disk label appears in tier-not-available error):
+#     ansible-playbook ... -e test_disk_label=true
 
 # ──────────────────────────────────────────────────────────────
 # Test 1: Resolve requested tier (happy path)
@@ -151,3 +154,39 @@
         fail_msg: "Expected 'ceph-fast-primary' but got '{{ tenant_storage_class_name | default('undefined') }}'"
         success_msg: "First-match semantics confirmed: {{ tenant_storage_class_name }}"
       when: test_duplicate_tier | default(false) | bool
+
+# ──────────────────────────────────────────────────────────────
+# Test 5: Disk label included in tier-not-available error
+# Expected: role fails with message containing the disk label
+# ──────────────────────────────────────────────────────────────
+- name: Test tenant_storage_class role -- disk label in error message
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run disk-label error test
+      when: test_disk_label | default(false) | bool
+      block:
+        - name: Attempt to discover StorageClass with disk label (expected to fail)
+          ansible.builtin.include_role:
+            name: osac.service.tenant_storage_class
+          vars:
+            tenant_storage_class_tenant_name: "tenant-acme"
+            tenant_storage_class_storage_classes:
+              - name: "ceph-acme-default"
+                tier: "default"
+            tenant_storage_class_storage_tier: "fast"
+            tenant_storage_class_disk_label: "additional disk 2"
+
+        - name: This task should not be reached -- role should have failed
+          ansible.builtin.fail:
+            msg: "Role did not fail as expected when tier is not available"
+
+      rescue:
+        - name: Verify error message includes disk label
+          ansible.builtin.assert:
+            that:
+              - "'additional disk 2' in ansible_failed_result.msg"
+              - "'is not available' in ansible_failed_result.msg"
+            fail_msg: "Error message missing disk label: {{ ansible_failed_result.msg }}"
+            success_msg: "Disk label found in error: {{ ansible_failed_result.msg }}"

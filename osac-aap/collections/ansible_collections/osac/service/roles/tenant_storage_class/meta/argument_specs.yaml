@@ -23,3 +23,11 @@ argument_specs:
           The role matches this against the tier field in the injected
           storageClasses list and fails if no matching tier is found,
           listing the available tiers.
+      tenant_storage_class_disk_label:
+        type: str
+        required: false
+        default: ""
+        description: >-
+          Human-readable disk label (e.g. "boot disk", "additional disk 2")
+          included in error messages to identify which disk failed tier
+          resolution.

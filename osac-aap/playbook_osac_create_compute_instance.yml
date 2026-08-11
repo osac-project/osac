@@ -9,11 +9,6 @@
     template_id: "{{ osac_job_vars.resource.spec.templateID }}"
     template_parameters: {}
     tenant_storage_classes: "{{ osac_job_vars.tenant_storage_classes | default([]) }}"
-    # 'local' matches the only tier every current environment actually registers
-    # (register-local-storage.yaml's LVMS-backed StorageTier, see osac-installer).
-    # No environment defines a tier literally named 'default' -- that name only
-    # ever appeared in storage_provider's own VAST-oriented unit test fixtures.
-    _requested_storage_tier: "{{ lookup('env', 'STORAGE_REQUESTED_TIER') | default('local', true) }}"
 
   pre_tasks:
     - name: Show resource metadata
@@ -52,19 +47,27 @@
          osac_job_vars.storage_tier_definitions is string or
          osac_job_vars.storage_tier_definitions is mapping)
 
-    - name: Filter storage tier definitions to the requested tier for JIT storage
+    - name: Collect unique storage tiers from CR payload
+      ansible.builtin.set_fact:
+        _cr_requested_tiers: >-
+          {{ ([compute_instance.spec.bootDisk.storageTier | default('')]
+              + (compute_instance.spec.additionalDisks | default([]) | map(attribute='storageTier', default='') | list))
+             | select | unique | list }}
+
+    - name: Filter storage tier definitions to requested tiers for JIT storage
       when: (osac_job_vars.storage_tier_definitions | default([])) | length > 0
       block:
-        - name: Filter to only the requested tier
+        - name: Filter to only the requested tiers
           ansible.builtin.set_fact:
             _jit_storage_tiers: >-
               {{ osac_job_vars.storage_tier_definitions
-                 | selectattr('name', 'equalto', _requested_storage_tier) | list }}
+                 | selectattr('name', 'in', _cr_requested_tiers) | list }}
 
-        - name: Warn if requested tier not found in storage_tier_definitions
+        - name: Warn if no requested tiers found in storage_tier_definitions
           ansible.builtin.debug:
             msg: >-
-              Requested storage tier '{{ _requested_storage_tier }}' not found in storage_tier_definitions.
+              None of the requested storage tiers {{ _cr_requested_tiers | to_json }}
+              found in storage_tier_definitions.
               Available tiers: {{ osac_job_vars.storage_tier_definitions | map(attribute='name') | list | to_json }}.
               JIT storage provisioning will be skipped.
           when: _jit_storage_tiers | length == 0

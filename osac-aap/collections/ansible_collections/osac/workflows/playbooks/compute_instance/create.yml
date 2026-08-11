@@ -72,14 +72,15 @@
     # This workflow is an internal implementation detail invoked via import_playbook — JIT storage
     # provisioning only runs in the top-level playbook (playbook_osac_create_compute_instance.yml).
     # Direct invocation of this workflow bypasses JIT, so this guard catches that case explicitly.
-    - name: Fail if tenant_storage_class_name is not set before template call
+    - name: Fail if tenant_storage_class_storage_classes is not set before template call
       ansible.builtin.fail:
         msg: >-
-          tenant_storage_class_name is not defined or empty. Direct invocation of this workflow
-          bypasses JIT storage provisioning (osac.service.storage_provider ensure_storage_class).
-          Either invoke via playbook_osac_create_compute_instance.yml (recommended) or set
-          tenant_storage_class_name explicitly before calling this workflow.
-      when: tenant_storage_class_name is not defined or tenant_storage_class_name | length == 0
+          tenant_storage_class_storage_classes is not defined or empty. Direct invocation of
+          this workflow bypasses JIT storage provisioning (osac.service.storage_provider
+          ensure_storage_class). Either invoke via playbook_osac_create_compute_instance.yml
+          (recommended) or set tenant_storage_class_storage_classes explicitly before calling
+          this workflow.
+      when: tenant_storage_class_storage_classes is not defined or tenant_storage_class_storage_classes | length == 0
 
     - name: Display compute instance information
       ansible.builtin.debug:

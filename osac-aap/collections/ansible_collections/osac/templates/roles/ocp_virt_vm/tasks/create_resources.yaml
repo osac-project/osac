@@ -1,19 +1,33 @@
 ---
-- name: Resolve StorageClass for this template's storage tier
+# Phase 1: Resolve all storage tiers before creating any resources.
+
+- name: Resolve StorageClass for boot disk tier
   ansible.builtin.include_role:
     name: osac.service.tenant_storage_class
   vars:
-    # 'local' matches the only tier every current environment actually registers
-    # (see playbook_osac_create_compute_instance.yml's _requested_storage_tier).
-    tenant_storage_class_storage_tier: "{{ _requested_storage_tier | default('local') }}"
+    tenant_storage_class_storage_tier: "{{ compute_instance.spec.bootDisk.storageTier }}"
+    tenant_storage_class_disk_label: "boot disk"
 
-- name: Set storage_class from tenant StorageClass
+- name: Set boot disk StorageClass
   ansible.builtin.set_fact:
-    storage_class: "{{ tenant_storage_class_name }}"
+    boot_disk_storage_class: "{{ tenant_storage_class_name }}"
 
-- name: Using tenant storage_class
+- name: Initialize additional disk StorageClasses list
+  ansible.builtin.set_fact:
+    additional_disk_storage_classes: []
+
+- name: Resolve StorageClass for each additional disk
+  ansible.builtin.include_tasks: resolve_additional_disk.yaml
+  loop: "{{ vm_additional_disks }}"
+  loop_control:
+    index_var: resolve_disk_index
+  when: vm_additional_disks | length > 0
+
+- name: Display resolved StorageClasses
   ansible.builtin.debug:
-    var: storage_class
+    msg: "Resolved StorageClasses for boot disk + {{ additional_disk_storage_classes | length }} additional disk(s)"
+
+# Phase 2: Create resources using resolved StorageClasses.
 
 - name: Create DataVolume for VM root disk
   kubernetes.core.k8s:
@@ -36,7 +50,7 @@
           resources:
             requests:
               storage: "{{ vm_boot_disk_size }}"
-          storageClassName: "{{ storage_class }}"
+          storageClassName: "{{ boot_disk_storage_class }}"
     state: present
 
 - name: Create DataVolumes for additional disks
@@ -59,7 +73,7 @@
           resources:
             requests:
               storage: "{{ item.sizeGiB }}Gi"
-          storageClassName: "{{ storage_class }}"
+          storageClassName: "{{ additional_disk_storage_classes[idx] }}"
     state: present
   loop: "{{ vm_additional_disks }}"
   loop_control:

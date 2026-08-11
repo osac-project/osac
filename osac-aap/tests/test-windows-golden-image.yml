@@ -26,6 +26,7 @@
         memoryGiB: 8
         bootDisk:
           sizeGiB: 80
+          storageTier: default
         image:
           sourceRef: "{{ golden_image_ref }}"
         runStrategy: "Always"

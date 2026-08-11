@@ -101,8 +101,8 @@ var _ = Describe("Scheme Initialization", func() {
 })
 
 var _ = Describe("BMH Lifecycle Manager Wiring", func() {
-	It("should set BMHLifecycleManager on inventory config when management is metal3", func() {
-		managementConfig := management.Config{
+	It("should set BMHLifecycleManager when management is metal3", func() {
+		managementCfg := &management.Config{
 			Type: "metal3",
 			Options: map[string]any{
 				"metal3": map[string]any{
@@ -111,37 +111,45 @@ var _ = Describe("BMH Lifecycle Manager Wiring", func() {
 			},
 		}
 
-		var inventoryConfig inventory.Config
-
-		metal3Namespace, err := management.ParseMetal3Namespace(&managementConfig)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(metal3Namespace).To(Equal("osac-baremetal"))
-
+		var inventoryCfg inventory.Config
 		testScheme := runtime.NewScheme()
 		Expect(metal3api.AddToScheme(testScheme)).To(Succeed())
 		k8sClient := fake.NewClientBuilder().WithScheme(testScheme).Build()
 
-		inventoryConfig.BMHLifecycleManager = inventory.NewBMHLifecycleManager(
-			k8sClient, metal3Namespace,
-		)
-
-		Expect(inventoryConfig.BMHLifecycleManager).NotTo(BeNil())
+		err := wireBMHLifecycleManager(managementCfg, &inventoryCfg, k8sClient)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(inventoryCfg.BMHLifecycleManager).NotTo(BeNil())
 	})
 
-	It("should not set BMHLifecycleManager when management is not metal3", func() {
-		managementConfig := management.Config{
+	It("should not set BMHLifecycleManager when management is openstack", func() {
+		managementCfg := &management.Config{
 			Type: "openstack",
 			Options: map[string]any{
 				"openstack": map[string]any{},
 			},
 		}
 
-		var inventoryConfig inventory.Config
+		var inventoryCfg inventory.Config
+		k8sClient := fake.NewClientBuilder().Build()
 
-		if managementConfig.Type == "metal3" {
-			Fail("should not enter metal3 wiring path for openstack management")
+		err := wireBMHLifecycleManager(managementCfg, &inventoryCfg, k8sClient)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(inventoryCfg.BMHLifecycleManager).To(BeNil())
+	})
+
+	It("should return error when metal3 namespace is missing", func() {
+		managementCfg := &management.Config{
+			Type: "metal3",
+			Options: map[string]any{
+				"metal3": map[string]any{},
+			},
 		}
 
-		Expect(inventoryConfig.BMHLifecycleManager).To(BeNil())
+		var inventoryCfg inventory.Config
+		k8sClient := fake.NewClientBuilder().Build()
+
+		err := wireBMHLifecycleManager(managementCfg, &inventoryCfg, k8sClient)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("namespace is required"))
 	})
 })

@@ -422,15 +422,8 @@ func setupBareMetalInstanceController(
 		return fmt.Errorf("failed to parse management config: %w", err)
 	}
 
-	if managementConfig.Type == "metal3" {
-		metal3Namespace, err := management.ParseMetal3Namespace(&managementConfig)
-		if err != nil {
-			return fmt.Errorf("failed to parse metal3 namespace for BMH lifecycle: %w", err)
-		}
-		inventoryConfig.BMHLifecycleManager = inventory.NewBMHLifecycleManager(
-			mgr.GetClient(), metal3Namespace,
-		)
-		setupLog.Info("BMH lifecycle manager configured", "namespace", metal3Namespace)
+	if err := wireBMHLifecycleManager(&managementConfig, &inventoryConfig, mgr.GetClient()); err != nil {
+		return err
 	}
 
 	inventoryClient, err := inventory.NewClient(ctx, &inventoryConfig)
@@ -484,5 +477,22 @@ func setupBareMetalInstanceController(
 	).SetupWithManager(mgr, maxConcurrentReconciles); err != nil {
 		return fmt.Errorf("baremetalinstance controller: %w", err)
 	}
+	return nil
+}
+
+func wireBMHLifecycleManager(
+	managementCfg *management.Config,
+	inventoryCfg *inventory.Config,
+	k8sClient client.Client,
+) error {
+	if managementCfg.Type != "metal3" {
+		return nil
+	}
+	ns, err := management.ParseMetal3Namespace(managementCfg)
+	if err != nil {
+		return fmt.Errorf("failed to parse metal3 namespace for BMH lifecycle: %w", err)
+	}
+	inventoryCfg.BMHLifecycleManager = inventory.NewBMHLifecycleManager(k8sClient, ns)
+	setupLog.Info("BMH lifecycle manager configured", "namespace", ns)
 	return nil
 }

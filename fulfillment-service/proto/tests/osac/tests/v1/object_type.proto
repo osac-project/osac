@@ -70,6 +70,13 @@ message Metadata {
   map<string, string> labels = 7;
   map<string, string> annotations = 8;
   int32 version = 9;
+
+  // Human-friendly display name. Optional, not unique, mutable.
+  string display_name = 11;
+
+  // Optional human-friendly description. Opaque string; clients may
+  // treat content as Markdown. Not unique, mutable.
+  string description = 12;
 }
 
 message Spec {

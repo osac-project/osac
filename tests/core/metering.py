@@ -206,7 +206,7 @@ class MeteringCollector:
         if resource_type == "compute_instance":
             _validate_vmaas_billing(event)
         elif resource_type == "cluster_order":
-            _validate_caas_billing(event)
+            _validate_caas_billing(event, expected.event_type)
 
 
 def _validate_vmaas_billing(event: dict[str, Any]) -> None:
@@ -219,9 +219,14 @@ def _validate_vmaas_billing(event: dict[str, Any]) -> None:
     ), f"boot_disk_size_gib should be numeric, got {type(bd['boot_disk_size_gib']).__name__}"
 
 
-def _validate_caas_billing(event: dict[str, Any]) -> None:
+def _validate_caas_billing(event: dict[str, Any], event_type: str) -> None:
     bd = event.get("data", {}).get("billing_dimensions", {})
     assert bd.get("cluster_template"), "Missing cluster_template in billing_dimensions"
+    # created.v1 and deleted.v1 use topLevelDims (cluster_template +
+    # release_image only, no per-component decomposition)
+    if event_type in ("osac.resource.created.v1", "osac.resource.deleted.v1"):
+        assert bd.get("release_image"), "Missing release_image in billing_dimensions"
+        return
     assert bd.get("component") in ("control_plane", "worker"), \
         f"component should be control_plane or worker, got {bd.get('component')!r}"
     assert bd.get("node_set"), "Missing node_set in billing_dimensions"

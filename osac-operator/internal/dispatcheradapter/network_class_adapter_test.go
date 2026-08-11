@@ -46,6 +46,7 @@ var _ = Describe("NetworkClassAdapter", func() {
 	})
 
 	It("maps a response with both managers set", func() {
+		fabricManager := "netris"
 		k8sManager := "cudn_localnet"
 		stub := &stubNetworkClassesClient{
 			getFunc: func(_ context.Context, req *privatev1.NetworkClassesGetRequest, _ ...grpc.CallOption) (*privatev1.NetworkClassesGetResponse, error) {
@@ -53,7 +54,7 @@ var _ = Describe("NetworkClassAdapter", func() {
 				return &privatev1.NetworkClassesGetResponse{
 					Object: &privatev1.NetworkClass{
 						Id:            "nc-1",
-						FabricManager: "netris",
+						FabricManager: &fabricManager,
 						K8SManager:    &k8sManager,
 					},
 				}, nil
@@ -68,12 +69,13 @@ var _ = Describe("NetworkClassAdapter", func() {
 	})
 
 	It("maps a response with no k8s manager to an empty string", func() {
+		fabricManager := "neutron"
 		stub := &stubNetworkClassesClient{
 			getFunc: func(_ context.Context, _ *privatev1.NetworkClassesGetRequest, _ ...grpc.CallOption) (*privatev1.NetworkClassesGetResponse, error) {
 				return &privatev1.NetworkClassesGetResponse{
 					Object: &privatev1.NetworkClass{
 						Id:            "nc-2",
-						FabricManager: "neutron",
+						FabricManager: &fabricManager,
 					},
 				}, nil
 			},

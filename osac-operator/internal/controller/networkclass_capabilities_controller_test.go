@@ -21,6 +21,7 @@ import (
 	"fmt"
 
 	"google.golang.org/grpc"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
@@ -117,7 +118,7 @@ var _ = Describe("NetworkClassCapabilitiesReconciler", func() {
 		k8sManagerName := "k8s-caps-1"
 		nc := &privatev1.NetworkClass{
 			Id:            "nc-caps-1",
-			FabricManager: "fabric-caps-1",
+			FabricManager: ptr.To("fabric-caps-1"),
 			K8SManager:    &k8sManagerName,
 		}
 		var updates []*privatev1.NetworkClass
@@ -144,7 +145,7 @@ var _ = Describe("NetworkClassCapabilitiesReconciler", func() {
 
 		nc := &privatev1.NetworkClass{
 			Id:            "nc-caps-noop",
-			FabricManager: "fabric-caps-noop",
+			FabricManager: ptr.To("fabric-caps-noop"),
 			Capabilities:  &privatev1.NetworkClassCapabilities{SupportsIpv4: true},
 		}
 		var updates []*privatev1.NetworkClass
@@ -177,7 +178,7 @@ var _ = Describe("NetworkClassCapabilitiesReconciler", func() {
 		disc, err := networkmanager.NewDiscovery(k8sClient, namespace)
 		Expect(err).NotTo(HaveOccurred())
 
-		nc := &privatev1.NetworkClass{Id: "nc-caps-bad-fabric", FabricManager: "unregistered-fabric"}
+		nc := &privatev1.NetworkClass{Id: "nc-caps-bad-fabric", FabricManager: ptr.To("unregistered-fabric")}
 		var updates []*privatev1.NetworkClass
 		stubClient := newListingNetworkClassClient([]*privatev1.NetworkClass{nc}, &updates)
 		resolver := dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(stubClient), disc)
@@ -196,8 +197,8 @@ var _ = Describe("NetworkClassCapabilitiesReconciler", func() {
 		disc, err := networkmanager.NewDiscovery(k8sClient, namespace)
 		Expect(err).NotTo(HaveOccurred())
 
-		goodNC := &privatev1.NetworkClass{Id: "nc-caps-good", FabricManager: "fabric-caps-multi"}
-		badNC := &privatev1.NetworkClass{Id: "nc-caps-bad", FabricManager: "unregistered-fabric-multi"}
+		goodNC := &privatev1.NetworkClass{Id: "nc-caps-good", FabricManager: ptr.To("fabric-caps-multi")}
+		badNC := &privatev1.NetworkClass{Id: "nc-caps-bad", FabricManager: ptr.To("unregistered-fabric-multi")}
 		var updates []*privatev1.NetworkClass
 		stubClient := newListingNetworkClassClient([]*privatev1.NetworkClass{badNC, goodNC}, &updates)
 		resolver := dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(stubClient), disc)

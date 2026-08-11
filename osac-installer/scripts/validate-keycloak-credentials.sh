@@ -131,22 +131,29 @@ PATH="${TMP_DIR}/bin:${PATH}" \
 REALM_RAW_PATH="${TMP_DIR}/realm-raw.json" \
 REALM_OUTPUT_PATH="${TMP_DIR}/realm-resolved.json" \
 REALM_ADMIN_USERNAME="demo-admin" \
-REALM_ADMIN_PASSWORD=$'test-p@ss#word&with\\slash/chars\tand\ttabs\nand\nnewlines' \
+REALM_ADMIN_PASSWORD=$'test-p@ss#word&with\\slash/chars\tand\ttabs\nand\nnewlines\n' \
     bash "${CHART_DIR}/files/hooks/resolve-realm-secrets.sh" >/dev/null 2>&1 || {
         fail "resolve-realm-secrets.sh exited non-zero"
     }
 
 if [[ -f "${TMP_DIR}/realm-resolved.json" ]]; then
     RESOLVED=$(cat "${TMP_DIR}/realm-resolved.json")
-    DECODED_PASSWORD=$(python3 -c "import json; print(json.load(open('${TMP_DIR}/realm-resolved.json'))['credentials'][0]['value'])" 2>/dev/null) || {
-        fail "Resolved realm.json is not valid JSON after substituting a password with sed/JSON metacharacters"
-    }
-    # Compare the JSON-decoded value, not the raw file text -- valid JSON
-    # necessarily re-escapes the backslash as \\, so the raw bytes never
-    # contain the password's literal backslash form.
-    if [[ "${DECODED_PASSWORD}" != $'test-p@ss#word&with\\slash/chars\tand\ttabs\nand\nnewlines' ]]; then
-        fail "Resolved realm.json's decoded password does not match the original"
-    fi
+    # Compare byte-for-byte inside Python via the environment, not through a
+    # $(...) capture -- command substitution silently strips trailing
+    # newlines, which would hide a real bug for passwords ending in "\n".
+    EXPECTED_REALM_PASSWORD=$'test-p@ss#word&with\\slash/chars\tand\ttabs\nand\nnewlines\n' \
+        python3 -c "
+import json, os, sys
+try:
+    decoded = json.load(open('${TMP_DIR}/realm-resolved.json'))['credentials'][0]['value']
+except Exception:
+    sys.exit(2)
+sys.exit(0 if decoded == os.environ['EXPECTED_REALM_PASSWORD'] else 1)
+"
+    case $? in
+        2) fail "Resolved realm.json is not valid JSON after substituting a password with sed/JSON metacharacters" ;;
+        1) fail "Resolved realm.json's decoded password does not match the original" ;;
+    esac
     assert_not_contains "${RESOLVED}" '__OSAC_REALM_ADMIN_PASSWORD__' "Placeholder must be fully substituted"
 else
     fail "resolve-realm-secrets.sh did not produce ${TMP_DIR}/realm-resolved.json"
@@ -289,18 +296,27 @@ if [[ -n "${STATIC_RESOLVE_SCRIPT}" ]]; then
 
     PATH="${TMP_DIR}/bin:${PATH}" \
     REALM_ADMIN_USERNAME="demo-admin" \
-    REALM_ADMIN_PASSWORD=$'test-p@ss#word&with\\slash/chars\tand\ttabs\nand\nnewlines' \
+    REALM_ADMIN_PASSWORD=$'test-p@ss#word&with\\slash/chars\tand\ttabs\nand\nnewlines\n' \
         bash "${TMP_DIR}/extracted-static-resolve.sh" >/dev/null 2>&1 || {
             fail "Static reference manifest's resolve-realm-secrets init container script exited non-zero"
         }
 
     if [[ -f "${TMP_DIR}/static-realm-resolved.json" ]]; then
-        STATIC_DECODED_PASSWORD=$(python3 -c "import json; print(json.load(open('${TMP_DIR}/static-realm-resolved.json'))['credentials'][0]['value'])" 2>/dev/null) || {
-            fail "Static reference manifest's resolved realm.json is not valid JSON after substituting a password with sed/JSON metacharacters"
-        }
-        if [[ "${STATIC_DECODED_PASSWORD}" != $'test-p@ss#word&with\\slash/chars\tand\ttabs\nand\nnewlines' ]]; then
-            fail "Static reference manifest's resolved realm.json decoded password does not match the original"
-        fi
+        # See the chart resolver test above for why this avoids a $(...)
+        # capture: it would silently strip a trailing "\n" from the password.
+        EXPECTED_REALM_PASSWORD=$'test-p@ss#word&with\\slash/chars\tand\ttabs\nand\nnewlines\n' \
+            python3 -c "
+import json, os, sys
+try:
+    decoded = json.load(open('${TMP_DIR}/static-realm-resolved.json'))['credentials'][0]['value']
+except Exception:
+    sys.exit(2)
+sys.exit(0 if decoded == os.environ['EXPECTED_REALM_PASSWORD'] else 1)
+"
+        case $? in
+            2) fail "Static reference manifest's resolved realm.json is not valid JSON after substituting a password with sed/JSON metacharacters" ;;
+            1) fail "Static reference manifest's resolved realm.json decoded password does not match the original" ;;
+        esac
     else
         fail "Static reference manifest's resolve-realm-secrets script did not produce a resolved realm.json"
     fi

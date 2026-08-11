@@ -48,6 +48,8 @@ rules:
   - get
   - list
   - watch
+# hostedcontrolplanes: get only — storage controller reads the kubeconfig secret name,
+# no watch/list needed (looked up by name from the ClusterOrder).
 - apiGroups:
   - hypershift.openshift.io
   resources:

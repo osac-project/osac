@@ -2,10 +2,14 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
 from tests.catalog.conftest import unique_name
+
 from tests.core.grpc_client import GRPCClient
 from tests.core.helpers import wait_for_cr, wait_for_deletion, wait_for_restart, wait_for_running
 from tests.core.k8s_client import K8sClient
+from tests.core.metering import MeteringCollector
 from tests.core.osac_cli import OsacCLI
 from tests.core.runner import poll_until
 
@@ -21,6 +25,7 @@ def _wait_for_new_vmi(k8s_virt: K8sClient, *, vmi_namespace: str, ci_name: str, 
     return k8s_virt.get_vmi_creation_timestamp(vmi_namespace=vmi_namespace, compute_instance_name=ci_name)
 
 
+@pytest.mark.metering
 def test_compute_instance_restart(
     cli: OsacCLI,
     grpc: GRPCClient,
@@ -28,6 +33,7 @@ def test_compute_instance_restart(
     k8s_virt_client: K8sClient,
     vm_template: str,
     default_subnet: str,
+    metering: MeteringCollector,
 ) -> None:
     name = unique_name("e2e-ci")
     uuid: str = cli.create_compute_instance(
@@ -35,8 +41,12 @@ def test_compute_instance_restart(
         template=vm_template,
         network_attachments=[{"subnet": default_subnet}],
     )
+    metering.expect("osac.resource.created.v1", resource_id=uuid)
+
     ci_name: str = wait_for_cr(k8s=k8s_hub_client, uuid=uuid)
     wait_for_running(k8s=k8s_hub_client, name=ci_name)
+
+    metering.expect("osac.resource.started.v1", resource_id=uuid)
 
     vmi_ns: str = k8s_hub_client.get_compute_instance_vm_namespace(name=ci_name)
     original_vmi_ts: str = k8s_virt_client.get_vmi_creation_timestamp(
@@ -46,6 +56,9 @@ def test_compute_instance_restart(
 
     restart_ts: str = datetime.now(tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     grpc.update_restart(uuid=uuid, template=vm_template, timestamp=restart_ts)
+
+    metering.expect("osac.resource.suspended.v1", resource_id=uuid)
+    metering.expect("osac.resource.resumed.v1", resource_id=uuid)
 
     wait_for_restart(k8s=k8s_hub_client, name=ci_name, initial=initial_last_restarted, restart_ts=restart_ts)
 

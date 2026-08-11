@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import time
 
+import pytest
+
 from tests.catalog.conftest import unique_name
+
 from tests.core.grpc_client import GRPCClient
 from tests.core.helpers import wait_for_cr, wait_for_deletion, wait_for_grpc_removal
 from tests.core.k8s_client import K8sClient
+from tests.core.metering import MeteringCollector
 from tests.core.osac_cli import OsacCLI
 from tests.core.runner import poll_until
 
@@ -52,6 +56,7 @@ def _verify_no_duplicate_deprovision(k8s: K8sClient, *, name: str) -> None:
     assert first_id == second_id, f"Deprovision job ID changed: {first_id} -> {second_id}"
 
 
+@pytest.mark.metering
 def test_compute_instance_delete_during_provision(
     cli: OsacCLI,
     grpc: GRPCClient,
@@ -59,6 +64,7 @@ def test_compute_instance_delete_during_provision(
     k8s_virt_client: K8sClient,
     vm_template: str,
     default_subnet: str,
+    metering: MeteringCollector,
 ) -> None:
     name = unique_name("e2e-ci")
     uuid: str = cli.create_compute_instance(
@@ -66,6 +72,8 @@ def test_compute_instance_delete_during_provision(
         template=vm_template,
         network_attachments=[{"subnet": default_subnet}],
     )
+    metering.expect("osac.resource.created.v1", resource_id=uuid)
+
     ci_name: str = wait_for_cr(k8s=k8s_hub_client, uuid=uuid)
 
     poll_until(
@@ -81,6 +89,7 @@ def test_compute_instance_delete_during_provision(
     assert deprov_job_id == "", "No deprovision job should exist before deletion"
 
     cli.delete_compute_instance(uuid=uuid)
+    metering.expect("osac.resource.deleted.v1", resource_id=uuid)
 
     _wait_for_provision_termination(k8s_hub_client, name=ci_name)
     _wait_for_deprovision_completion(k8s_hub_client, name=ci_name)

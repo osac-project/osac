@@ -457,6 +457,60 @@ var _ = Describe("Generic DAO", func() {
 			Expect(annotations).To(HaveKeyWithValue("my-annotation", "my-value"))
 		})
 
+		It("Sets display name and description when creating", func() {
+			object := &testsv1.Object{
+				Metadata: &testsv1.Metadata{
+					DisplayName: "My Display Name",
+					Description: "My description",
+					Tenant:      "my-tenant",
+					Name:        "my-object",
+				},
+			}
+			response, err := generic.Create().
+				SetObject(object).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			object = response.GetObject()
+			Expect(object.GetMetadata().GetDisplayName()).To(Equal("My Display Name"))
+			Expect(object.GetMetadata().GetDescription()).To(Equal("My description"))
+
+			getResponse, err := generic.Get().
+				SetId(object.GetId()).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			object = getResponse.GetObject()
+			Expect(object.GetMetadata().GetDisplayName()).To(Equal("My Display Name"))
+			Expect(object.GetMetadata().GetDescription()).To(Equal("My description"))
+		})
+
+		It("Allows duplicate display names in the same tenant", func() {
+			_, err := generic.Create().
+				SetObject(
+					testsv1.Object_builder{
+						Metadata: testsv1.Metadata_builder{
+							DisplayName: "shared-display-name",
+							Tenant:      "my-tenant",
+							Name:        "my-object-1",
+						}.Build(),
+					}.Build(),
+				).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = generic.Create().
+				SetObject(
+					testsv1.Object_builder{
+						Metadata: testsv1.Metadata_builder{
+							DisplayName: "shared-display-name",
+							Tenant:      "my-tenant",
+							Name:        "my-object-2",
+						}.Build(),
+					}.Build(),
+				).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+		})
+
 		It("Generates non empty identifiers", func() {
 			response, err := generic.Create().
 				SetObject(
@@ -590,6 +644,30 @@ var _ = Describe("Generic DAO", func() {
 			for _, item := range response.GetItems() {
 				Expect(item).ToNot(BeNil())
 			}
+		})
+
+		It("Lists display name and description", func() {
+			_, err := generic.Create().
+				SetObject(
+					testsv1.Object_builder{
+						Metadata: testsv1.Metadata_builder{
+							DisplayName: "Listed Display Name",
+							Description: "Listed description",
+							Tenant:      "my-tenant",
+							Name:        "my-object",
+						}.Build(),
+					}.Build(),
+				).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			response, err := generic.List().
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetItems()).To(HaveLen(1))
+			metadata := response.GetItems()[0].GetMetadata()
+			Expect(metadata.GetDisplayName()).To(Equal("Listed Display Name"))
+			Expect(metadata.GetDescription()).To(Equal("Listed description"))
 		})
 
 		It("Lists objects sorted by identifier by default", func() {
@@ -888,6 +966,50 @@ var _ = Describe("Generic DAO", func() {
 			}))
 		})
 
+		It("Copies display name and description when archived on delete", func() {
+			response, err := generic.Create().
+				SetObject(
+					testsv1.Object_builder{
+						Metadata: testsv1.Metadata_builder{
+							DisplayName: "Archived Display Name",
+							Description: "Archived description",
+							Tenant:      "my-tenant",
+							Name:        "my-object",
+						}.Build(),
+					}.Build(),
+				).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			object := response.GetObject()
+
+			_, err = generic.Delete().
+				SetId(object.GetId()).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			row := tx.QueryRow(
+				ctx,
+				`
+				select
+					display_name,
+					description
+				from
+					archived_objects
+				where
+					id = $1
+				`,
+				object.GetId(),
+			)
+			var (
+				displayName string
+				description string
+			)
+			err = row.Scan(&displayName, &description)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(displayName).To(Equal("Archived Display Name"))
+			Expect(description).To(Equal("Archived description"))
+		})
+
 		It("Copies labels and annotations when archived on update", func() {
 			// Create an object with finalizers:
 			response, err := generic.Create().
@@ -956,6 +1078,58 @@ var _ = Describe("Generic DAO", func() {
 			Expect(annotations).To(Equal(map[string]string{
 				"my-annotation": "my-value",
 			}))
+		})
+
+		It("Copies display name and description when archived on update", func() {
+			response, err := generic.Create().
+				SetObject(
+					testsv1.Object_builder{
+						Metadata: testsv1.Metadata_builder{
+							Finalizers: []string{"a"},
+							Tenant:     "my-tenant",
+							Name:       "my-object",
+						}.Build(),
+					}.Build(),
+				).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			object := response.GetObject()
+
+			_, err = generic.Delete().
+				SetId(object.GetId()).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			metadata := object.GetMetadata()
+			metadata.SetFinalizers([]string{})
+			metadata.SetDisplayName("Archived Display Name")
+			metadata.SetDescription("Archived description")
+			_, err = generic.Update().
+				SetObject(object).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			row := tx.QueryRow(
+				ctx,
+				`
+				select
+					display_name,
+					description
+				from
+					archived_objects
+				where
+					id = $1
+				`,
+				object.GetId(),
+			)
+			var (
+				displayName string
+				description string
+			)
+			err = row.Scan(&displayName, &description)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(displayName).To(Equal("Archived Display Name"))
+			Expect(description).To(Equal("Archived description"))
 		})
 
 		It("Returns not found error when deleting object that doesn't exist", func() {
@@ -1468,6 +1642,76 @@ var _ = Describe("Generic DAO", func() {
 			object = getResponse.GetObject()
 			annotations = object.GetMetadata().GetAnnotations()
 			Expect(annotations).To(HaveKeyWithValue("your-annotation", "your-value"))
+		})
+
+		It("Updates display name and description", func() {
+			response, err := generic.Create().
+				SetObject(
+					testsv1.Object_builder{
+						Metadata: testsv1.Metadata_builder{
+							DisplayName: "Old Display Name",
+							Description: "Old description",
+							Tenant:      "my-tenant",
+							Name:        "my-object",
+						}.Build(),
+					}.Build(),
+				).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			object := response.GetObject()
+
+			object.GetMetadata().SetDisplayName("New Display Name")
+			object.GetMetadata().SetDescription("New description")
+			updateResponse, err := generic.Update().
+				SetObject(object).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			object = updateResponse.GetObject()
+			Expect(object.GetMetadata().GetDisplayName()).To(Equal("New Display Name"))
+			Expect(object.GetMetadata().GetDescription()).To(Equal("New description"))
+
+			getResponse, err := generic.Get().
+				SetId(object.GetId()).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			object = getResponse.GetObject()
+			Expect(object.GetMetadata().GetDisplayName()).To(Equal("New Display Name"))
+			Expect(object.GetMetadata().GetDescription()).To(Equal("New description"))
+		})
+
+		It("Clears display name and description when updating to empty", func() {
+			response, err := generic.Create().
+				SetObject(
+					testsv1.Object_builder{
+						Metadata: testsv1.Metadata_builder{
+							DisplayName: "Old Display Name",
+							Description: "Old description",
+							Tenant:      "my-tenant",
+							Name:        "my-object",
+						}.Build(),
+					}.Build(),
+				).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			object := response.GetObject()
+
+			object.GetMetadata().SetDisplayName("")
+			object.GetMetadata().SetDescription("")
+			updateResponse, err := generic.Update().
+				SetObject(object).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			object = updateResponse.GetObject()
+			Expect(object.GetMetadata().GetDisplayName()).To(BeEmpty())
+			Expect(object.GetMetadata().GetDescription()).To(BeEmpty())
+
+			getResponse, err := generic.Get().
+				SetId(object.GetId()).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			object = getResponse.GetObject()
+			Expect(object.GetMetadata().GetDisplayName()).To(BeEmpty())
+			Expect(object.GetMetadata().GetDescription()).To(BeEmpty())
 		})
 
 		It("Updates finalizers", func() {

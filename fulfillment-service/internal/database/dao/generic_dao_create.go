@@ -75,6 +75,8 @@ func (r *CreateRequest[O]) do(ctx context.Context) (response *CreateResponse[O],
 		name        string
 		labels      map[string]string
 		annotations map[string]string
+		displayName string
+		description string
 		tenant      string
 		project     string
 		creator     string
@@ -83,6 +85,8 @@ func (r *CreateRequest[O]) do(ctx context.Context) (response *CreateResponse[O],
 		name = metadata.GetName()
 		labels = metadata.GetLabels()
 		annotations = metadata.GetAnnotations()
+		displayName = metadata.GetDisplayName()
+		description = metadata.GetDescription()
 		tenant = metadata.GetTenant()
 		project = metadata.GetProject()
 		creator = metadata.GetCreator()
@@ -118,6 +122,8 @@ func (r *CreateRequest[O]) do(ctx context.Context) (response *CreateResponse[O],
 			project,
 			labels,
 			annotations,
+			display_name,
+			description,
 			data
 		) values (
 		 	$1,
@@ -128,7 +134,9 @@ func (r *CreateRequest[O]) do(ctx context.Context) (response *CreateResponse[O],
 			$6,
 			$7,
 			$8,
-			$9
+			$9,
+			$10,
+			$11
 		)
 		returning
 			creation_timestamp,
@@ -156,6 +164,8 @@ func (r *CreateRequest[O]) do(ctx context.Context) (response *CreateResponse[O],
 			project,
 			labelsData,
 			annotationsData,
+			displayName,
+			description,
 			data,
 		)
 		defer func() {
@@ -182,6 +192,8 @@ func (r *CreateRequest[O]) do(ctx context.Context) (response *CreateResponse[O],
 		name:        name,
 		labels:      labels,
 		annotations: annotations,
+		displayName: displayName,
+		description: description,
 		version:     version,
 	})
 	created.SetId(id)

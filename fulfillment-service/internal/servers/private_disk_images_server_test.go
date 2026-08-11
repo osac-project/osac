@@ -291,6 +291,43 @@ var _ = Describe("Private disk images server", func() {
 			))
 		})
 
+		It("Updates without mask does not duplicate architecture", func() {
+			createResponse, err := server.Create(ctx, privatev1.DiskImagesCreateRequest_builder{
+				Object: privatev1.DiskImage_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "no-mask-update-test",
+					}.Build(),
+					Spec: privatev1.DiskImageSpec_builder{
+						SourceType: privatev1.SourceType_SOURCE_TYPE_REGISTRY,
+						SourceRef:  "quay.io/test:nomask",
+						Architecture: []privatev1.Architecture{
+							privatev1.Architecture_ARCHITECTURE_AMD64,
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			object := createResponse.GetObject()
+
+			updateResponse, err := server.Update(ctx, privatev1.DiskImagesUpdateRequest_builder{
+				Object: privatev1.DiskImage_builder{
+					Id: object.GetId(),
+					Spec: privatev1.DiskImageSpec_builder{
+						SourceType: privatev1.SourceType_SOURCE_TYPE_REGISTRY,
+						SourceRef:  "quay.io/test:nomask",
+						Architecture: []privatev1.Architecture{
+							privatev1.Architecture_ARCHITECTURE_AMD64,
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updateResponse.GetObject().GetSpec().GetArchitecture()).To(ConsistOf(
+				privatev1.Architecture_ARCHITECTURE_AMD64,
+			))
+			Expect(updateResponse.GetObject().GetSpec().GetArchitecture()).To(HaveLen(1))
+		})
+
 		It("Deletes object", func() {
 			createResponse, err := server.Create(ctx, privatev1.DiskImagesCreateRequest_builder{
 				Object: privatev1.DiskImage_builder{

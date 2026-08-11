@@ -186,7 +186,7 @@ func (s *PrivateDiskImagesServer) Update(ctx context.Context,
 		mask.Paths = append(mask.Paths, "spec.deprecation")
 	}
 
-	request.GetObject().SetSpec(merged.GetSpec())
+	request.SetObject(merged)
 
 	err = s.generic.Update(ctx, request, &response)
 	return
@@ -211,6 +211,11 @@ func cloneDiskImage(di *privatev1.DiskImage) *privatev1.DiskImage {
 func applyDiskImageUpdate(base, update *privatev1.DiskImage, mask *fieldmaskpb.FieldMask) {
 	if mask == nil || len(mask.GetPaths()) == 0 {
 		proto.Merge(base, update)
+		// proto.Merge appends repeated fields instead of replacing them.
+		// Replace the architecture repeated field from the update to avoid duplication.
+		if update.GetSpec() != nil && len(update.GetSpec().GetArchitecture()) > 0 {
+			base.GetSpec().SetArchitecture(update.GetSpec().GetArchitecture())
+		}
 		return
 	}
 	for _, path := range mask.GetPaths() {

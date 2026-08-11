@@ -105,17 +105,8 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 	client := publicv1.NewVirtualNetworksClient(conn)
 
-	enableIpv4 := c.args.ipv4Cidr != ""
-	enableIpv6 := c.args.ipv6Cidr != ""
-	enableDualStack := enableIpv4 && enableIpv6
-
 	spec := publicv1.VirtualNetworkSpec_builder{
 		NetworkClass: &publicv1.NetworkClassReference{Name: c.args.networkClass},
-		Capabilities: publicv1.VirtualNetworkCapabilities_builder{
-			EnableIpv4:      enableIpv4,
-			EnableIpv6:      enableIpv6,
-			EnableDualStack: enableDualStack,
-		}.Build(),
 	}
 	if c.args.ipv4Cidr != "" {
 		spec.Ipv4Cidr = &c.args.ipv4Cidr

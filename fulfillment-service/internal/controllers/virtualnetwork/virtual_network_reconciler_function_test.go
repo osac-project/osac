@@ -56,11 +56,6 @@ var _ = Describe("buildSpec", func() {
 					ImplementationStrategy: implementationStrategy,
 					Ipv4Cidr:               &ipv4,
 					Ipv6Cidr:               &ipv6,
-					Capabilities: privatev1.VirtualNetworkCapabilities_builder{
-						EnableIpv4:      true,
-						EnableIpv6:      true,
-						EnableDualStack: true,
-					}.Build(),
 				}.Build(),
 			}.Build(),
 		}
@@ -88,9 +83,6 @@ var _ = Describe("buildSpec", func() {
 					NetworkClass:           privatev1.NetworkClassReference_builder{Name: networkClass}.Build(),
 					ImplementationStrategy: implementationStrategy,
 					Ipv4Cidr:               &ipv4,
-					Capabilities: privatev1.VirtualNetworkCapabilities_builder{
-						EnableIpv4: true,
-					}.Build(),
 				}.Build(),
 			}.Build(),
 		}
@@ -118,9 +110,6 @@ var _ = Describe("buildSpec", func() {
 					NetworkClass:           privatev1.NetworkClassReference_builder{Name: networkClass}.Build(),
 					ImplementationStrategy: implementationStrategy,
 					Ipv6Cidr:               &ipv6,
-					Capabilities: privatev1.VirtualNetworkCapabilities_builder{
-						EnableIpv6: true,
-					}.Build(),
 				}.Build(),
 			}.Build(),
 		}

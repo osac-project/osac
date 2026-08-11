@@ -56,8 +56,8 @@ message VirtualNetworkSpec {
   // NetworkClass to use for this network.
   //
   // The selected NetworkClass determines the network type and available capabilities.
-  // The NetworkClass must support the requested IP addressing capabilities (IPv4, IPv6, or dual-stack) specified
-  // via the capabilities field.
+  // The NetworkClass must support the IP addressing mode implied by whichever of ipv4_cidr and ipv6_cidr
+  // are set below.
   //
   // If omitted on creation and a default NetworkClass is configured, the default is used;
   // otherwise creation fails. Once set, this field is immutable.
@@ -86,27 +86,9 @@ message VirtualNetworkSpec {
   // Leave empty when creating an IPv4-only network.
   optional string ipv6_cidr = 4 [(google.api.field_behavior) = IMMUTABLE];
 
-  // Requested network capabilities for this VirtualNetwork.
-  //
-  // These capabilities must be compatible with the selected NetworkClass.capabilities. The system will validate
-  // that the NetworkClass supports the requested addressing mode before creating the network.
-  VirtualNetworkCapabilities capabilities = 5;
-}
-
-// Describes the IP addressing capabilities requested for a VirtualNetwork.
-//
-// These flags must be compatible with the selected NetworkClass.capabilities. For example, if enable_dual_stack
-// is true, the selected NetworkClass must have supports_dual_stack set to true.
-message VirtualNetworkCapabilities {
-  // Whether IPv4 is enabled for this network. Should be true when ipv4_cidr is set.
-  bool enable_ipv4 = 1;
-
-  // Whether IPv6 is enabled for this network. Should be true when ipv6_cidr is set.
-  bool enable_ipv6 = 2;
-
-  // Whether dual-stack mode (both IPv4 and IPv6) is enabled. Should be true when both ipv4_cidr and ipv6_cidr
-  // are set.
-  bool enable_dual_stack = 3;
+  // Reserved field numbers for removed fields (do not reuse).
+  reserved 5;
+  reserved "capabilities";
 }
 
 // Represents the current operational state of a VirtualNetwork.

@@ -91,9 +91,6 @@ var _ = Describe("Subnets server", func() {
 				Region:       "us-east-1",
 				NetworkClass: privatev1.NetworkClassReference_builder{Id: "default"}.Build(),
 				Ipv4Cidr:     new("10.0.0.0/16"),
-				Capabilities: privatev1.VirtualNetworkCapabilities_builder{
-					EnableIpv4: true,
-				}.Build(),
 			}.Build(),
 			Status: privatev1.VirtualNetworkStatus_builder{
 				State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,

@@ -155,9 +155,6 @@ var _ = Describe("Virtual networks server", func() {
 						NetworkClass:           privatev1.NetworkClassReference_builder{Id: "default"}.Build(),
 						ImplementationStrategy: "ovn-kubernetes",
 						Ipv4Cidr:               new("10.0.0.0/16"),
-						Capabilities: privatev1.VirtualNetworkCapabilities_builder{
-							EnableIpv4: true,
-						}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -258,9 +255,6 @@ var _ = Describe("Virtual networks server", func() {
 					Spec: publicv1.VirtualNetworkSpec_builder{
 						NetworkClass: publicv1.NetworkClassReference_builder{Id: "default"}.Build(),
 						Ipv4Cidr:     new("10.0.0.0/16"),
-						Capabilities: publicv1.VirtualNetworkCapabilities_builder{
-							EnableIpv4: true,
-						}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -427,9 +421,6 @@ var _ = Describe("Virtual networks server", func() {
 					}.Build(),
 					Spec: publicv1.VirtualNetworkSpec_builder{
 						Ipv4Cidr: new("10.2.0.0/16"),
-						Capabilities: publicv1.VirtualNetworkCapabilities_builder{
-							EnableIpv4: true,
-						}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -472,9 +463,6 @@ var _ = Describe("Virtual networks server", func() {
 					Spec: publicv1.VirtualNetworkSpec_builder{
 						NetworkClass: publicv1.NetworkClassReference_builder{Id: altNCId}.Build(),
 						Ipv4Cidr:     new("10.1.0.0/16"),
-						Capabilities: publicv1.VirtualNetworkCapabilities_builder{
-							EnableIpv4: true,
-						}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -498,9 +486,6 @@ var _ = Describe("Virtual networks server", func() {
 					}.Build(),
 					Spec: publicv1.VirtualNetworkSpec_builder{
 						Ipv4Cidr: new("10.0.0.0/16"),
-						Capabilities: publicv1.VirtualNetworkCapabilities_builder{
-							EnableIpv4: true,
-						}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -522,9 +507,6 @@ var _ = Describe("Virtual networks server", func() {
 					Spec: publicv1.VirtualNetworkSpec_builder{
 						NetworkClass: publicv1.NetworkClassReference_builder{Id: "different-nc"}.Build(),
 						Ipv4Cidr:     new("10.0.0.0/16"),
-						Capabilities: publicv1.VirtualNetworkCapabilities_builder{
-							EnableIpv4: true,
-						}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())

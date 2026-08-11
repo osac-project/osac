@@ -518,27 +518,9 @@ var _ = Describe("Private virtual networks server", func() {
 			})
 		})
 
-		Context("VN-VAL-06: Capabilities matching", func() {
-			It("accepts matching IPv4 capability", func() {
-				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
-
-				vn := privatev1.VirtualNetwork_builder{
-					Spec: privatev1.VirtualNetworkSpec_builder{
-						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-						Region:       "us-west-1",
-						Capabilities: privatev1.VirtualNetworkCapabilities_builder{
-							EnableIpv4: true,
-						}.Build(),
-					}.Build(),
-				}.Build()
-
-				_, err := server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).ToNot(HaveOccurred())
-			})
-
-			It("rejects IPv4 when NetworkClass doesn't support it", func() {
-				// Create NetworkClass without IPv4 support
+		Context("VN-VAL-06: Capabilities matching (derived from CIDR fields)", func() {
+			// createNetworkClassWithCapabilities creates a READY NetworkClass with the given capabilities.
+			createNetworkClassWithCapabilities := func(caps *privatev1.NetworkClassCapabilities) *privatev1.NetworkClass {
 				ncDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
 					SetLogger(logger).
 					SetTenancyLogic(tenancy).
@@ -546,13 +528,139 @@ var _ = Describe("Private virtual networks server", func() {
 				Expect(err).ToNot(HaveOccurred())
 
 				nc := privatev1.NetworkClass_builder{
-					ImplementationStrategy: "no-ipv4-class",
+					ImplementationStrategy: "test-strategy",
 					Metadata: privatev1.Metadata_builder{
 						Tenant: auth.SharedTenant,
 					}.Build(),
-					Capabilities: privatev1.NetworkClassCapabilities_builder{
-						SupportsIpv4: false,
-						SupportsIpv6: true,
+					Capabilities: caps,
+					Status: privatev1.NetworkClassStatus_builder{
+						State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+					}.Build(),
+				}.Build()
+				response, err := ncDao.Create().
+					SetObject(nc).
+					Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				return response.GetObject()
+			}
+
+			It("accepts an IPv4-only VirtualNetwork with no capabilities field set", func() {
+				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
+
+				vn := privatev1.VirtualNetwork_builder{
+					Spec: privatev1.VirtualNetworkSpec_builder{
+						Ipv4Cidr:     new("10.0.0.0/16"),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
+						Region:       "us-west-1",
+					}.Build(),
+				}.Build()
+
+				_, err := server.validateVirtualNetwork(ctx, vn, nil)
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			It("rejects an IPv4-only VirtualNetwork when NetworkClass doesn't support IPv4", func() {
+				nc := createNetworkClassWithCapabilities(privatev1.NetworkClassCapabilities_builder{
+					SupportsIpv4: false,
+					SupportsIpv6: true,
+				}.Build())
+
+				vn := privatev1.VirtualNetwork_builder{
+					Metadata: privatev1.Metadata_builder{
+						Tenant: auth.SharedTenant,
+					}.Build(),
+					Spec: privatev1.VirtualNetworkSpec_builder{
+						Ipv4Cidr:     new("10.0.0.0/16"),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
+						Region:       "us-west-1",
+					}.Build(),
+				}.Build()
+
+				_, err := server.validateVirtualNetwork(ctx, vn, nil)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("does not support IPv4"))
+			})
+
+			It("rejects an IPv6-only VirtualNetwork when NetworkClass doesn't support IPv6", func() {
+				nc := createNetworkClassWithCapabilities(privatev1.NetworkClassCapabilities_builder{
+					SupportsIpv4: true,
+					SupportsIpv6: false,
+				}.Build())
+
+				vn := privatev1.VirtualNetwork_builder{
+					Metadata: privatev1.Metadata_builder{
+						Tenant: auth.SharedTenant,
+					}.Build(),
+					Spec: privatev1.VirtualNetworkSpec_builder{
+						Ipv6Cidr:     new("2001:db8::/48"),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
+						Region:       "us-west-1",
+					}.Build(),
+				}.Build()
+
+				_, err := server.validateVirtualNetwork(ctx, vn, nil)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("does not support IPv6"))
+			})
+
+			It("accepts a dual-stack VirtualNetwork when NetworkClass supports dual-stack", func() {
+				nc := createNetworkClassWithCapabilities(privatev1.NetworkClassCapabilities_builder{
+					SupportsIpv4:      true,
+					SupportsIpv6:      true,
+					SupportsDualStack: true,
+				}.Build())
+
+				vn := privatev1.VirtualNetwork_builder{
+					Metadata: privatev1.Metadata_builder{
+						Tenant: auth.SharedTenant,
+					}.Build(),
+					Spec: privatev1.VirtualNetworkSpec_builder{
+						Ipv4Cidr:     new("10.0.0.0/16"),
+						Ipv6Cidr:     new("2001:db8::/48"),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
+						Region:       "us-west-1",
+					}.Build(),
+				}.Build()
+
+				_, err := server.validateVirtualNetwork(ctx, vn, nil)
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			It("rejects a dual-stack VirtualNetwork when NetworkClass supports each family individually but not dual-stack", func() {
+				nc := createNetworkClassWithCapabilities(privatev1.NetworkClassCapabilities_builder{
+					SupportsIpv4:      true,
+					SupportsIpv6:      true,
+					SupportsDualStack: false,
+				}.Build())
+
+				vn := privatev1.VirtualNetwork_builder{
+					Metadata: privatev1.Metadata_builder{
+						Tenant: auth.SharedTenant,
+					}.Build(),
+					Spec: privatev1.VirtualNetworkSpec_builder{
+						Ipv4Cidr:     new("10.0.0.0/16"),
+						Ipv6Cidr:     new("2001:db8::/48"),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
+						Region:       "us-west-1",
+					}.Build(),
+				}.Build()
+
+				_, err := server.validateVirtualNetwork(ctx, vn, nil)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("does not support dual-stack"))
+			})
+
+			It("accepts any addressing mode when NetworkClass has no capabilities set", func() {
+				ncDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+
+				nc := privatev1.NetworkClass_builder{
+					ImplementationStrategy: "no-capabilities-class",
+					Metadata: privatev1.Metadata_builder{
+						Tenant: auth.SharedTenant,
 					}.Build(),
 					Status: privatev1.NetworkClassStatus_builder{
 						State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
@@ -570,17 +678,14 @@ var _ = Describe("Private virtual networks server", func() {
 					}.Build(),
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr:     new("10.0.0.0/16"),
+						Ipv6Cidr:     new("2001:db8::/48"),
 						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 						Region:       "us-west-1",
-						Capabilities: privatev1.VirtualNetworkCapabilities_builder{
-							EnableIpv4: true,
-						}.Build(),
 					}.Build(),
 				}.Build()
 
 				_, err = server.validateVirtualNetwork(ctx, vn, nil)
-				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("does not support IPv4"))
+				Expect(err).ToNot(HaveOccurred())
 			})
 		})
 
@@ -1440,8 +1545,8 @@ var _ = Describe("Private virtual networks server", func() {
 			_, err = ncDao.Create().SetObject(nc).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 
-			// Create VN without network_class but requesting IPv6 capability:
-			// Must set both capabilities AND ipv6_cidr to trigger VN-VAL-06 check.
+			// Create VN without network_class but with an IPv6 CIDR, which the default NC above
+			// doesn't support:
 			_, err = vnServer.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 				Object: privatev1.VirtualNetwork_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -1450,9 +1555,6 @@ var _ = Describe("Private virtual networks server", func() {
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv6Cidr: new("2001:db8::/32"),
 						Region:   "us-west-1",
-						Capabilities: privatev1.VirtualNetworkCapabilities_builder{
-							EnableIpv6: true,
-						}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())

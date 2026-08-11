@@ -392,21 +392,23 @@ func (s *PrivateVirtualNetworksServer) validateNetworkClassReference(ctx context
 		return
 	}
 
-	// VN-VAL-06: Validate capabilities match
-	vnCaps := spec.GetCapabilities()
+	// VN-VAL-06: Validate the addressing mode implied by ipv4_cidr/ipv6_cidr against the
+	// NetworkClass's capabilities.
 	ncCaps := networkClass.GetCapabilities()
-	if vnCaps != nil && ncCaps != nil {
-		if vnCaps.GetEnableIpv4() && !ncCaps.GetSupportsIpv4() {
+	if ncCaps != nil {
+		hasIpv4 := spec.GetIpv4Cidr() != ""
+		hasIpv6 := spec.GetIpv6Cidr() != ""
+		if hasIpv4 && !ncCaps.GetSupportsIpv4() {
 			err = grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"network_class '%s' does not support IPv4", networkClassKey)
 			return
 		}
-		if vnCaps.GetEnableIpv6() && !ncCaps.GetSupportsIpv6() {
+		if hasIpv6 && !ncCaps.GetSupportsIpv6() {
 			err = grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"network_class '%s' does not support IPv6", networkClassKey)
 			return
 		}
-		if vnCaps.GetEnableDualStack() && !ncCaps.GetSupportsDualStack() {
+		if hasIpv4 && hasIpv6 && !ncCaps.GetSupportsDualStack() {
 			err = grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"network_class '%s' does not support dual-stack", networkClassKey)
 			return

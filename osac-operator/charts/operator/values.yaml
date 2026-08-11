@@ -55,9 +55,6 @@ certs:
     kind: ClusterIssuer
     name: default-ca
 
-bootstrap:
-  cliImage: quay.io/openshift/origin-cli:4.20.0
-
 hubAccess:
   enabled: false
 

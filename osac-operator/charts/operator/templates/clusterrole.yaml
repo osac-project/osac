@@ -35,12 +35,17 @@ rules:
   - hypershift.openshift.io
   resources:
   - hostedclusters
-  - hostedcontrolplanes
   - nodepools
   verbs:
   - get
   - list
   - watch
+- apiGroups:
+  - hypershift.openshift.io
+  resources:
+  - hostedcontrolplanes
+  verbs:
+  - get
 - apiGroups:
   - k8s.ovn.org
   resources:

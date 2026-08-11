@@ -101,7 +101,10 @@
       register: _lvms_csv
       until:
         - _lvms_csv.resources | length > 0
-        - _lvms_csv.resources[0].status.phase | default('') == 'Succeeded'
+        - _lvms_csv.resources[0].status.phase | default('') in ['Succeeded', 'Failed', 'CopierFailed']
+      failed_when:
+        - _lvms_csv.resources | length > 0
+        - _lvms_csv.resources[0].status.phase | default('') != 'Succeeded'
       retries: 30
       delay: 20
 

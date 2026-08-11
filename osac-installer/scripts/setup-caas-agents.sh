@@ -41,8 +41,8 @@ validate_safe "AGENT_VM_STORAGE_DIR" "${AGENT_VM_STORAGE_DIR}"
 validate_safe "LIBVIRT_NETWORK" "${LIBVIRT_NETWORK}"
 validate_safe "AGENT_VM_DISK_SIZE" "${AGENT_VM_DISK_SIZE}"
 [[ -n "${AGENT_VM_DATA_DISK_SIZE}" ]] && {
-    [[ "${AGENT_VM_DATA_DISK_SIZE}" =~ ^[1-9][0-9]*[kMGTb]?$ ]] || {
-        echo "ERROR: AGENT_VM_DATA_DISK_SIZE must be a positive integer with optional size suffix (k/M/G/T/b): ${AGENT_VM_DATA_DISK_SIZE}" >&2; exit 1
+    [[ "${AGENT_VM_DATA_DISK_SIZE}" =~ ^[1-9][0-9]*[kMGT]?$ ]] || {
+        echo "ERROR: AGENT_VM_DATA_DISK_SIZE must be a positive integer with optional size suffix (k/M/G/T): ${AGENT_VM_DATA_DISK_SIZE}" >&2; exit 1
     }
 }
 

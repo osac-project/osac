@@ -15,7 +15,9 @@
         osac_job_vars:
           resource: "{{ test_compute_instance }}"
         tenant_target_namespace: "computeinstance-test-vm-gpu-work"
-        tenant_storage_class_name: "test-storage-class"
+        tenant_storage_class_storage_classes:
+          - name: "test-storage-class"
+            tier: "local"
         create_step_resources_override:
           name: osac.workflows.workflow_helpers
           tasks_from: noop.yml

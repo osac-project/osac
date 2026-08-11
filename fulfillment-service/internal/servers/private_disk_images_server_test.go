@@ -113,7 +113,7 @@ var _ = Describe("Private disk images server", func() {
 						SourceType:    privatev1.SourceType_SOURCE_TYPE_REGISTRY,
 						SourceRef:     "quay.io/containerdisks/windows:2022",
 						GuestOsFamily: privatev1.GuestOSFamily_GUEST_OS_FAMILY_WINDOWS,
-						Lifecycle:     privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_DEPRECATED,
+						Lifecycle:     privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE,
 						Architecture: []privatev1.Architecture{
 							privatev1.Architecture_ARCHITECTURE_AMD64,
 						},
@@ -124,7 +124,7 @@ var _ = Describe("Private disk images server", func() {
 			Expect(response.GetObject().GetSpec().GetGuestOsFamily()).To(Equal(
 				privatev1.GuestOSFamily_GUEST_OS_FAMILY_WINDOWS))
 			Expect(response.GetObject().GetSpec().GetLifecycle()).To(Equal(
-				privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_DEPRECATED))
+				privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE))
 		})
 
 		It("Rejects create with unspecified source type", func() {
@@ -170,6 +170,29 @@ var _ = Describe("Private disk images server", func() {
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 			Expect(status.Message()).To(Equal("object spec is mandatory"))
+		})
+
+		It("Rejects create with non-AVAILABLE lifecycle", func() {
+			_, err := server.Create(ctx, privatev1.DiskImagesCreateRequest_builder{
+				Object: privatev1.DiskImage_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "deprecated-on-create",
+					}.Build(),
+					Spec: privatev1.DiskImageSpec_builder{
+						SourceType: privatev1.SourceType_SOURCE_TYPE_REGISTRY,
+						SourceRef:  "quay.io/test:v1",
+						Architecture: []privatev1.Architecture{
+							privatev1.Architecture_ARCHITECTURE_AMD64,
+						},
+						Lifecycle: privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_DEPRECATED,
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(ContainSubstring("AVAILABLE"))
 		})
 
 		It("Lists objects", func() {

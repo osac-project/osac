@@ -152,6 +152,10 @@ func (s *PrivateInstanceTypesServer) Create(ctx context.Context,
 	if spec.GetState() == privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_UNSPECIFIED {
 		spec.SetState(privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_ACTIVE)
 	}
+	if spec.GetState() != privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_ACTIVE {
+		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.state' must be ACTIVE on create")
+		return
+	}
 
 	err = s.generic.Create(ctx, request, &response)
 	return

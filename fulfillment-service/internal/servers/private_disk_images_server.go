@@ -140,6 +140,10 @@ func (s *PrivateDiskImagesServer) Create(ctx context.Context,
 	if spec.GetLifecycle() == privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_UNSPECIFIED {
 		spec.SetLifecycle(privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE)
 	}
+	if spec.GetLifecycle() != privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE {
+		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.lifecycle' must be AVAILABLE on create")
+		return
+	}
 
 	if spec.GetGuestOsFamily() == privatev1.GuestOSFamily_GUEST_OS_FAMILY_UNSPECIFIED {
 		spec.SetGuestOsFamily(privatev1.GuestOSFamily_GUEST_OS_FAMILY_LINUX)

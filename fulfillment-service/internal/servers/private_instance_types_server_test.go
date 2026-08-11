@@ -100,6 +100,26 @@ var _ = Describe("Private instance types server", func() {
 			Expect(object.GetSpec().GetMemoryGib()).To(Equal(int32(16)))
 		})
 
+		It("Rejects create with non-ACTIVE state", func() {
+			_, err := server.Create(ctx, privatev1.InstanceTypesCreateRequest_builder{
+				Object: privatev1.InstanceType_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "deprecated-on-create",
+					}.Build(),
+					Spec: privatev1.InstanceTypeSpec_builder{
+						Cores:     4,
+						MemoryGib: 16,
+						State:     privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_DEPRECATED,
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(ContainSubstring("ACTIVE"))
+		})
+
 		It("Creates object with GPU", func() {
 			response, err := server.Create(ctx, privatev1.InstanceTypesCreateRequest_builder{
 				Object: privatev1.InstanceType_builder{

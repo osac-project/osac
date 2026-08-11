@@ -29,14 +29,14 @@ fail() {
 assert_contains() {
     local haystack="$1" needle="$2" description="$3"
     if ! grep -qF -- "${needle}" <<<"${haystack}"; then
-        fail "${description} -- expected to find: ${needle}"
+        fail "${description} -- expected value not found"
     fi
 }
 
 assert_not_contains() {
     local haystack="$1" needle="$2" description="$3"
     if grep -qF -- "${needle}" <<<"${haystack}"; then
-        fail "${description} -- did not expect to find: ${needle}"
+        fail "${description} -- unexpected value was found"
     fi
 }
 

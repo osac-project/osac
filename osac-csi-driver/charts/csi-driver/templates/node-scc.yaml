@@ -1,0 +1,31 @@
+{{- if .Capabilities.APIVersions.Has "security.openshift.io/v1" }}
+apiVersion: security.openshift.io/v1
+kind: SecurityContextConstraints
+metadata:
+  name: {{ include "csi-driver.fullname" . }}-node
+  labels:
+    {{- include "csi-driver.labels" . | nindent 4 }}
+    app.kubernetes.io/component: node
+allowPrivilegedContainer: true
+allowHostDirVolumePlugin: true
+allowHostNetwork: false
+allowHostPorts: false
+allowHostPID: false
+allowHostIPC: false
+runAsUser:
+  type: RunAsAny
+seLinuxContext:
+  type: RunAsAny
+fsGroup:
+  type: RunAsAny
+supplementalGroups:
+  type: RunAsAny
+volumes:
+  - hostPath
+  - emptyDir
+  - projected
+  - secret
+  - configMap
+users:
+  - system:serviceaccount:{{ .Values.namespace }}:{{ include "csi-driver.nodeServiceAccountName" . }}
+{{- end }}

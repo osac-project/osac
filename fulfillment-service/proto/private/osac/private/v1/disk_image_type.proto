@@ -121,8 +121,9 @@ message DiskImageSpec {
   // CPU architectures supported by the disk image. Informational metadata only.
   repeated Architecture architecture = 4 [(buf.validate.field).repeated = {
     min_items: 1,
+    unique: true,
     items: {
-      enum: {defined_only: true}
+      enum: {defined_only: true, not_in: [0]}
     }
   }];
 

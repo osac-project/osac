@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"time"
 
+	"buf.build/go/protovalidate"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
@@ -529,6 +530,67 @@ var _ = Describe("Private disk images server", func() {
 				Expect(updated.GetSpec().GetDeprecation().GetDeprecationTimestamp().AsTime()).To(
 					Equal(depTimestamp.AsTime()))
 			})
+		})
+	})
+
+	Describe("Architecture validation", func() {
+		var validator protovalidate.Validator
+
+		BeforeEach(func() {
+			var err error
+			validator, err = protovalidate.New()
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("Accepts valid architectures", func() {
+			spec := privatev1.DiskImageSpec_builder{
+				SourceType: privatev1.SourceType_SOURCE_TYPE_REGISTRY,
+				SourceRef:  "quay.io/test:v1",
+				Architecture: []privatev1.Architecture{
+					privatev1.Architecture_ARCHITECTURE_AMD64,
+					privatev1.Architecture_ARCHITECTURE_ARM64,
+				},
+			}.Build()
+			err := validator.Validate(spec)
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("Rejects ARCHITECTURE_UNSPECIFIED", func() {
+			spec := privatev1.DiskImageSpec_builder{
+				SourceType: privatev1.SourceType_SOURCE_TYPE_REGISTRY,
+				SourceRef:  "quay.io/test:v1",
+				Architecture: []privatev1.Architecture{
+					privatev1.Architecture_ARCHITECTURE_UNSPECIFIED,
+				},
+			}.Build()
+			err := validator.Validate(spec)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("architecture"))
+		})
+
+		It("Rejects duplicate architectures", func() {
+			spec := privatev1.DiskImageSpec_builder{
+				SourceType: privatev1.SourceType_SOURCE_TYPE_REGISTRY,
+				SourceRef:  "quay.io/test:v1",
+				Architecture: []privatev1.Architecture{
+					privatev1.Architecture_ARCHITECTURE_AMD64,
+					privatev1.Architecture_ARCHITECTURE_AMD64,
+				},
+			}.Build()
+			err := validator.Validate(spec)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("architecture"))
+		})
+
+		It("Rejects empty architecture list", func() {
+			spec := privatev1.DiskImageSpec_builder{
+				SourceType:   privatev1.SourceType_SOURCE_TYPE_REGISTRY,
+				SourceRef:    "quay.io/test:v1",
+				Architecture: []privatev1.Architecture{},
+			}.Build()
+			err := validator.Validate(spec)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("architecture"))
 		})
 	})
 })

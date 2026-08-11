@@ -519,7 +519,8 @@ func setupNetworkingControllers(
 		if err != nil {
 			return fmt.Errorf("network manager discovery: %w", err)
 		}
-		resolver = dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(privatev1.NewNetworkClassesClient(grpcConn)), disc)
+		networkClassAdapter := dispatcheradapter.NewNetworkClassAdapter(privatev1.NewNetworkClassesClient(grpcConn))
+		resolver = dispatcher.NewResolver(networkClassAdapter, disc)
 
 		if err := setupNetworkClassCapabilitiesController(
 			mgr, localMgr, grpcConn, networkingNamespace, resolver,

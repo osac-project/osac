@@ -33,10 +33,9 @@ import (
 // "dispatcher path") and returns the resolved manager's name. If the NetworkClass has
 // neither a fabricManager nor a k8sManager set yet (dispatcher.ErrNoManagerConfigured),
 // it falls back to legacyStrategy (the "implementation_strategy annotation path"). Any
-// other resolution
-// error (e.g. a fabricManager referencing an unregistered manager ConfigMap) is
-// returned to the caller as a real reconcile error, since that indicates a
-// misconfiguration rather than an expected pre-migration state.
+// other resolution error (e.g. a fabricManager referencing an unregistered manager
+// ConfigMap) is returned to the caller as a real reconcile error, since that indicates
+// a misconfiguration rather than an expected pre-migration state.
 //
 // When resolver is nil or networkClassID is empty, dispatch is skipped entirely and
 // legacyStrategy is returned unchanged — this is the behavior for deployments without

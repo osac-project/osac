@@ -797,6 +797,33 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			Expect(fakeClient.Get(ctx, key, updated)).To(Succeed())
 			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("custom-backend"))
 		})
+
+		It("returns an error when multiple VirtualNetworks share the parent uuid label", func() {
+			// Create a second VirtualNetwork with the same osacVirtualNetworkIDLabel as
+			// the fixture "vnet", simulating an ambiguous parent lookup.
+			duplicateVnet := &osacv1alpha1.VirtualNetwork{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-vnet-duplicate",
+					Namespace: "test-namespace",
+					Labels: map[string]string{
+						osacVirtualNetworkIDLabel: "test-vnet-uuid",
+					},
+				},
+				Spec: osacv1alpha1.VirtualNetworkSpec{
+					Region:                 "us-west-1",
+					NetworkClass:           "cudn-net",
+					ImplementationStrategy: "cudn-net",
+				},
+			}
+			Expect(fakeClient.Create(ctx, duplicateVnet)).To(Succeed())
+
+			key := types.NamespacedName{Name: sg.Name, Namespace: sg.Namespace}
+
+			// SecurityGroup resolves the dispatch plan on the very first reconcile
+			// (unlike VirtualNetwork/Subnet, finalizer-add doesn't return early here).
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).To(HaveOccurred())
+		})
 	})
 
 	Context("provisioning condition updates", func() {

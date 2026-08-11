@@ -165,6 +165,10 @@ func (r *SecurityGroupReconciler) handleUpdate(ctx context.Context, sg *v1alpha1
 		client.MatchingLabels{osacVirtualNetworkIDLabel: sg.Spec.VirtualNetwork},
 	); err != nil {
 		return ctrl.Result{}, err
+	} else if len(vnetList.Items) > 1 {
+		return ctrl.Result{}, fmt.Errorf(
+			"expected exactly one parent VirtualNetwork with uuid %q but found %d",
+			sg.Spec.VirtualNetwork, len(vnetList.Items))
 	} else if len(vnetList.Items) == 1 {
 		networkClassID = vnetList.Items[0].Spec.NetworkClass
 	} else {

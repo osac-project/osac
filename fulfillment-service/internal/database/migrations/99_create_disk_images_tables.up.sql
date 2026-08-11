@@ -105,9 +105,11 @@ begin
 
   if exists (
     select 1
-    from compute_instance_catalog_items
+    from compute_instance_catalog_items,
+         jsonb_array_elements(data->'spec'->'field_definitions') as fd
     where deletion_timestamp = 'epoch'
-      and data::text like '%' || old.id || '%'
+      and fd->>'path' = 'spec.disk_image'
+      and fd->>'default' = old.id
   ) then
     raise exception using
       errcode = 'Z0003',

@@ -244,7 +244,7 @@ var _ = DescribeMigration("Create disk images tables", func() {
 			insert into compute_instance_catalog_items (id, tenant, data)
 			values ($1, $2, $3::jsonb)`,
 			"cat-1", "test-tenant",
-			`{"spec":{"field_definitions":[{"path":"spec.disk_image","default_value":"di-cat-ref"}]}}`,
+			`{"spec":{"field_definitions":[{"path":"spec.disk_image","default":"di-cat-ref"}]}}`,
 		)
 		Expect(err).ToNot(HaveOccurred())
 
@@ -257,6 +257,35 @@ var _ = DescribeMigration("Create disk images tables", func() {
 		Expect(errors.As(err, &pgErr)).To(BeTrue())
 		Expect(pgErr.Code).To(Equal("Z0003"))
 		Expect(pgErr.Message).To(ContainSubstring("di-cat-ref"))
+	})
+
+	It("Allows soft-deleting a disk image not referenced by a catalog item", func(ctx context.Context) {
+		_, err := conn.Exec(ctx,
+			`insert into tenants (id, name, tenant, creator, data)
+			 values ('test-tenant', 'test-tenant', 'test-tenant', 'system', '{}')
+			 on conflict do nothing`)
+		Expect(err).ToNot(HaveOccurred())
+
+		_, err = conn.Exec(ctx, `
+			insert into disk_images (id, name, tenant, data)
+			values ('di-1', 'image-one', 'test-tenant', '{}'),
+			       ('di-10', 'image-ten', 'test-tenant', '{}')`,
+		)
+		Expect(err).ToNot(HaveOccurred())
+
+		_, err = conn.Exec(ctx, `
+			insert into compute_instance_catalog_items (id, tenant, data)
+			values ($1, $2, $3::jsonb)`,
+			"cat-other", "test-tenant",
+			`{"spec":{"field_definitions":[{"path":"spec.disk_image","default":"di-10"}]}}`,
+		)
+		Expect(err).ToNot(HaveOccurred())
+
+		_, err = conn.Exec(ctx, `
+			update disk_images
+			set deletion_timestamp = now()
+			where id = 'di-1'`)
+		Expect(err).ToNot(HaveOccurred())
 	})
 
 	It("Allows soft-deleting a disk image that is not referenced", func(ctx context.Context) {

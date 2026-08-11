@@ -17,6 +17,7 @@ from tests.core.keycloak_admin import (
     get_user_id,
     wait_for_organization,
 )
+from tests.core.metering import MeteringCollector
 from tests.core.osac_cli import OsacCLI
 from tests.core.runner import env, run
 
@@ -28,6 +29,7 @@ def pytest_configure(config: pytest.Config) -> None:
     pace; gather-osac-logs.sh merges the per-worker files back into one sorted
     e2e.log artifact.
     """
+    config.addinivalue_line("markers", "metering: test verifies metering events via the test adapter HTTP API")
     worker_id = os.environ.get("PYTEST_XDIST_WORKER")
     if worker_id is not None:
         log_dir = Path(config.getini("log_file")).parent
@@ -218,3 +220,33 @@ def jwt_grpc_tenant2(fulfillment_address: str, keycloak_url: str, jwt_password: 
         keycloak_url=keycloak_url, realm="osac", client_id="osac-cli", username="tenant2_user", password=jwt_password
     )
     return GRPCClient(address=fulfillment_address, token=token)
+
+
+# --- Cross-cutting concern: Metering ---
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    metering_tests = [item for item in items if item.get_closest_marker("metering")]
+    if metering_tests and not os.environ.get("METERING_ADAPTER_URL"):
+        pytest.fail(
+            f"METERING_ADAPTER_URL is not set but {len(metering_tests)} test(s) require metering. "
+            "Set the env var or run with -m 'not metering' to exclude metering tests.",
+            pytrace=False,
+        )
+
+
+@pytest.fixture
+def metering() -> Iterator[MeteringCollector]:
+    """Composable metering verifier. Inject into any test to verify
+    that lifecycle events appear via the test adapter HTTP API.
+
+    Records a start timestamp on setup, verifies all expectations
+    (including CloudEvent structure validation) on teardown.
+    """
+    collector = MeteringCollector(base_url=env("METERING_ADAPTER_URL"))
+    collector.start()
+    yield collector
+    try:
+        collector.verify()
+    finally:
+        collector.stop()

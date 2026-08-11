@@ -10,6 +10,7 @@ This file contains only frequently-needed commands and non-obvious rules. For de
 - **API design conventions**: [docs/API.md](docs/API.md)
 - **Authentication & authorization**: [docs/AUTH.md](docs/AUTH.md)
 - **Installation & deployment**: [docs/INSTALL.md](docs/INSTALL.md)
+- **Console access architecture**: [docs/VM_CONSOLE.md](docs/VM_CONSOLE.md)
 - **Database patterns**: See examples in `internal/database/migrations/*.up.sql` for:
   - Materialized helper tables with triggers (cross-object constraints)
   - Backfill patterns (`update table set data = data`)

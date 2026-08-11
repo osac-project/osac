@@ -41,6 +41,7 @@ var architectureMap = map[string]publicv1.Architecture{
 	"s390x": publicv1.Architecture_ARCHITECTURE_S390X,
 }
 
+// Cmd creates the command to create a disk image.
 func Cmd() *cobra.Command {
 	runner := &runnerContext{}
 	result := &cobra.Command{

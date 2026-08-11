@@ -29,6 +29,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 )
 
+// Cmd creates the command to describe a disk image.
 func Cmd() *cobra.Command {
 	runner := &runnerContext{}
 	result := &cobra.Command{

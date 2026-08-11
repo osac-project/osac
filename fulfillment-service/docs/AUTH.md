@@ -119,6 +119,9 @@ helm install keycloak oci://ghcr.io/osac/charts/keycloak \
 | `certs.issuerRef.name` | The name of the cert-manager issuer for TLS certificates | **Yes** | None |
 | `images.keycloak` | The Keycloak container image | No | `quay.io/keycloak/keycloak:26.3` |
 | `images.postgres` | The PostgreSQL container image | No | `quay.io/sclorg/postgresql-18-c10s:latest` |
+| `keycloak.adminUsername` | Realm admin username | No | `admin` |
+| `keycloak.adminPassword` | Realm admin password | No | `admin` |
+| `keycloak.defaultUserPassword` | Default password for pre-configured example users | No | `foobar` |
 
 ### Important Notes
 
@@ -126,10 +129,25 @@ helm install keycloak oci://ghcr.io/osac/charts/keycloak \
   reference itself, meaning that when Keycloak redirects users, or generates an URL for itself, it
   will use this host name. This is also used for token issuer URLs.
 
-- The default admin credentials are:
-  - Username: `admin`
-  - Password: `admin`
-  - **Important**: Change these credentials in production environments!
+- The realm admin credentials are configurable via Helm values in
+  `charts/osac-prereqs/values.yaml`:
+
+  | Value | Description | Default |
+  |-------|-------------|---------|
+  | `keycloak.adminUsername` | Realm admin username | `admin` |
+  | `keycloak.adminPassword` | Realm admin password | `admin` |
+  | `keycloak.defaultUserPassword` | Default password for example users | `foobar` |
+
+  Override at install time:
+
+  ```bash
+  helm install osac-prereqs charts/osac-prereqs/ \
+    --set keycloak.adminUsername=my-admin \
+    --set keycloak.adminPassword='<strong-password>' \
+    --set keycloak.defaultUserPassword='<user-password>'
+  ```
+
+  **Important**: Always override these defaults in production environments!
 
 ## Keycloak Configuration
 
@@ -192,8 +210,8 @@ To access the Keycloak Admin Console:
 
 2. **Login**:
 
-   - Username: `admin`
-   - Password: `admin`
+   - Username: the value of `keycloak.adminUsername` (default: `admin`)
+   - Password: the value of `keycloak.adminPassword` (default: `admin`)
 
 3. **Select the realm**:
 

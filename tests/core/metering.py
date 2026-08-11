@@ -188,8 +188,28 @@ class MeteringCollector:
             assert "previous_state" in data, f"Missing previous_state in {expected.event_type}"
             assert "duration_seconds" in data, f"Missing duration_seconds in {expected.event_type}"
 
+        if expected.event_type == "osac.resource.suspended.v1":
+            valid = ("RUNNING", "STOPPING", "STARTING", "PROGRESSING", "READY")
+            assert data.get("previous_state") in valid, (
+                f"suspended.v1 previous_state should be one of {valid}, "
+                f"got {data.get('previous_state')!r}"
+            )
 
-def validate_vmaas_billing(event: dict[str, Any]) -> None:
+        if expected.event_type == "osac.resource.resumed.v1":
+            valid = ("STOPPED", "PAUSED", "FAILED", "DELETE_FAILED")
+            assert data.get("previous_state") in valid, (
+                f"resumed.v1 previous_state should be one of {valid}, "
+                f"got {data.get('previous_state')!r}"
+            )
+
+        resource_type = event.get("osacresourcetype")
+        if resource_type == "compute_instance":
+            _validate_vmaas_billing(event)
+        elif resource_type == "cluster_order":
+            _validate_caas_billing(event)
+
+
+def _validate_vmaas_billing(event: dict[str, Any]) -> None:
     bd = event.get("data", {}).get("billing_dimensions", {})
     assert bd.get("instance_type"), "Missing or empty instance_type in billing_dimensions"
     assert bd.get("image_ref"), "Missing or empty image_ref in billing_dimensions"
@@ -199,7 +219,7 @@ def validate_vmaas_billing(event: dict[str, Any]) -> None:
     ), f"boot_disk_size_gib should be numeric, got {type(bd['boot_disk_size_gib']).__name__}"
 
 
-def validate_caas_billing(event: dict[str, Any]) -> None:
+def _validate_caas_billing(event: dict[str, Any]) -> None:
     bd = event.get("data", {}).get("billing_dimensions", {})
     assert bd.get("cluster_template"), "Missing cluster_template in billing_dimensions"
     assert bd.get("component") in ("control_plane", "worker"), \

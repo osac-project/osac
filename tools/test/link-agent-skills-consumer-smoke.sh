@@ -1,11 +1,111 @@
 #!/usr/bin/env bash
 # Smoke test: osac consumer wrapper for osac-ai-skills fan-out.
 # Run from osac/: bash tools/test/link-agent-skills-consumer-smoke.sh
+#
+# Self-contained: prefers a real PROJECT_ROOT-capable fan-out when present,
+# otherwise embeds a minimal stub so a clean checkout can run without bootstrap.
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "${SCRIPT_DIR}/../.." && pwd)
 WRAPPER="${REPO_ROOT}/tools/link-agent-skills.sh"
+
+OSAC_SKILL_NAMES=(
+  browser-demo-recording capture-tasks-from-meeting-notes create-pr
+  design-review generate-status-report github-actions-workflows jira-task-management
+  milestone-scope osac-cluster osac-demo-recording osac-feature osac-release
+  performance-review prd-review presentation quick-fix report-bug review-gate
+  security-review
+)
+
+fail() { echo "FAIL: $*" >&2; exit 1; }
+pass() { echo "PASS: $*"; }
+
+[[ -f "$WRAPPER" ]] || fail "missing $WRAPPER"
+[[ -x "$WRAPPER" ]] || fail "$WRAPPER is not executable"
+
+TMPDIR_ROOT=$(mktemp -d)
+trap 'rm -rf "$TMPDIR_ROOT"' EXIT
+
+# Minimal fan-out stub: enough for wrapper smoke (umbrellas, ai-workflows, verify).
+write_stub_fanout() {
+  local dest="$1"
+  cat >"$dest" <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ -n "${PROJECT_ROOT:-}" ]]; then
+  PROJECT_ROOT="$(realpath "${PROJECT_ROOT}")"
+else
+  PROJECT_ROOT="$(realpath "$(dirname "${BASH_SOURCE[0]}")/..")"
+fi
+LINK_CLAUDE=false LINK_CURSOR=false LINK_GEMINI=false LINK_AI=false VERIFY=false
+if [[ $# -eq 0 ]]; then LINK_CLAUDE=true; LINK_CURSOR=true; LINK_GEMINI=true; fi
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --claude) LINK_CLAUDE=true ;;
+    --cursor) LINK_CURSOR=true ;;
+    --gemini) LINK_GEMINI=true ;;
+    --all) LINK_CLAUDE=true; LINK_CURSOR=true; LINK_GEMINI=true ;;
+    --with-ai-workflows) LINK_AI=true ;;
+    --verify) VERIFY=true ;;
+    -h|--help) exit 0 ;;
+    *) echo "Unknown option: $1" >&2; exit 1 ;;
+  esac
+  shift
+done
+safe_symlink() {
+  local link_path="$1" target="$2"
+  if [[ -L "${link_path}" ]]; then rm -f "${link_path}"
+  elif [[ -e "${link_path}" ]]; then
+    echo "ERROR: ${link_path} exists and is not a symlink; refusing to replace" >&2
+    return 1
+  fi
+  ln -sfn "${target}" "${link_path}"
+}
+link_agent() {
+  mkdir -p "$1"
+  safe_symlink "$1/skills" ../skills
+  echo "  Linked $1/skills -> ../skills  ($2)"
+}
+if [[ "${VERIFY}" == true ]]; then
+  errors=0
+  for pair in ".claude:Claude" ".cursor:Cursor" ".gemini:Gemini"; do
+    dir="${PROJECT_ROOT}/${pair%%:*}"; label="${pair##*:}"
+    if [[ ! -L "${dir}/skills" ]]; then
+      echo "ERROR: ${label}: ${dir}/skills is not a symlink" >&2; errors=1; continue
+    fi
+    if [[ ! -r "${dir}/skills/create-pr/SKILL.md" ]]; then
+      echo "ERROR: ${label}: cannot read create-pr via ${dir}/skills" >&2; errors=1
+    else
+      echo "  OK ${label}: ${dir}/skills -> ../skills"
+    fi
+  done
+  [[ "${errors}" -eq 0 ]] || { echo "Verification failed." >&2; exit 1; }
+  echo "Verification passed."
+  exit 0
+fi
+echo "Linking agent skill directories to skills/..."
+if [[ "${LINK_AI}" == true ]]; then
+  ai=""
+  for d in "${HOME}/.ai-workflows" "${PROJECT_ROOT}/.ai-workflows"; do
+    [[ -d "$d" ]] && { ai="$(cd "$d" && pwd -P)"; break; }
+  done
+  if [[ -n "$ai" ]]; then
+    mkdir -p "${PROJECT_ROOT}/skills"
+    for wf in _shared bugfix design e2e implement prd; do
+      [[ -d "${ai}/${wf}" ]] || continue
+      safe_symlink "${PROJECT_ROOT}/skills/${wf}" "${ai}/${wf}"
+      echo "  Linked skills/${wf} -> ${ai}/${wf}"
+    done
+  fi
+fi
+[[ "${LINK_CLAUDE}" == true ]] && link_agent "${PROJECT_ROOT}/.claude" Claude
+[[ "${LINK_CURSOR}" == true ]] && link_agent "${PROJECT_ROOT}/.cursor" Cursor
+[[ "${LINK_GEMINI}" == true ]] && link_agent "${PROJECT_ROOT}/.gemini" Gemini
+exit 0
+STUB
+  chmod +x "$dest"
+}
 
 VENDOR_FANOUT=""
 for candidate in \
@@ -18,15 +118,11 @@ for candidate in \
   fi
 done
 
-fail() { echo "FAIL: $*" >&2; exit 1; }
-pass() { echo "PASS: $*"; }
-
-[[ -f "$WRAPPER" ]] || fail "missing $WRAPPER"
-[[ -x "$WRAPPER" ]] || fail "$WRAPPER is not executable"
-[[ -n "$VENDOR_FANOUT" ]] || fail "no PROJECT_ROOT-capable fan-out found (need osac-ai-skills with PROJECT_ROOT support)"
-
-TMPDIR_ROOT=$(mktemp -d)
-trap 'rm -rf "$TMPDIR_ROOT"' EXIT
+if [[ -z "$VENDOR_FANOUT" ]]; then
+  VENDOR_FANOUT="${TMPDIR_ROOT}/stub-link-agent-skills.sh"
+  write_stub_fanout "$VENDOR_FANOUT"
+  echo "NOTE: using embedded fan-out stub (no real osac-ai-skills fan-out found)"
+fi
 
 # Isolate HOME so fixtures never pick up the developer's ~/.osac-ai-skills.
 run_wrapper() {
@@ -54,15 +150,10 @@ seed_vendor() {
       break
     fi
   done
-  [[ -n "$real_skills" ]] || fail "cannot locate a real skills/create-pr tree for fixtures"
 
   local name
-  for name in browser-demo-recording capture-tasks-from-meeting-notes create-pr \
-    design-review generate-status-report github-actions-workflows jira-task-management \
-    milestone-scope osac-cluster osac-demo-recording osac-feature osac-release \
-    performance-review prd-review presentation quick-fix report-bug review-gate \
-    security-review; do
-    if [[ -d "${real_skills}/${name}" ]]; then
+  for name in "${OSAC_SKILL_NAMES[@]}"; do
+    if [[ -n "$real_skills" && -d "${real_skills}/${name}" ]]; then
       ln -sfn "${real_skills}/${name}" "${vendor}/skills/${name}"
     else
       mkdir -p "${vendor}/skills/${name}"
@@ -149,11 +240,12 @@ test_prunes_removed_vendor_skill() {
   mkdir -p "${ws}/.osac-ai-skills/skills/obsolete-skill"
   echo '# obsolete' >"${ws}/.osac-ai-skills/skills/obsolete-skill/SKILL.md"
 
-  run_wrapper "$ws" --claude >/dev/null
+  local out
+  out=$(run_wrapper "$ws" --claude 2>&1) || fail "first prune wrapper failed: $out"
   [[ -L "${ws}/skills/obsolete-skill" ]] || fail "expected obsolete-skill link after first materialize"
 
   rm -rf "${ws}/.osac-ai-skills/skills/obsolete-skill"
-  run_wrapper "$ws" --claude >/dev/null
+  out=$(run_wrapper "$ws" --claude 2>&1) || fail "second prune wrapper failed: $out"
   [[ ! -e "${ws}/skills/obsolete-skill" && ! -L "${ws}/skills/obsolete-skill" ]] \
     || fail "expected obsolete-skill symlink to be pruned after vendor removal"
   [[ -L "${ws}/skills/create-pr" ]] || fail "create-pr should still be linked after prune"

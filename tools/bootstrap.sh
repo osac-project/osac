@@ -40,7 +40,7 @@ if [[ -d "${HOME}/.osac-ai-skills" ]] && osac_ai_skills_vendor_ok "${HOME}/.osac
   else
     echo "  osac-ai-skills up to date"
   fi
-elif [[ -d "${PROJECT_ROOT}/.osac-ai-skills" ]]; then
+elif [[ -d "${PROJECT_ROOT}/.osac-ai-skills" ]] && osac_ai_skills_vendor_ok "${PROJECT_ROOT}/.osac-ai-skills"; then
   OSAC_AI_SKILLS_DIR="${PROJECT_ROOT}/.osac-ai-skills"
   echo "Updating osac-ai-skills (.osac-ai-skills)..."
   if ! (cd "$OSAC_AI_SKILLS_DIR" && git fetch origin -q); then
@@ -51,6 +51,11 @@ elif [[ -d "${PROJECT_ROOT}/.osac-ai-skills" ]]; then
   else
     echo "  osac-ai-skills up to date"
   fi
+elif [[ -d "${PROJECT_ROOT}/.osac-ai-skills" ]]; then
+  echo "ERROR: ${PROJECT_ROOT}/.osac-ai-skills exists but is not a usable vendor checkout." >&2
+  echo "Expected a git clone with skills/ and an executable tools/link-agent-skills.sh." >&2
+  echo "Remove or rename that directory, then re-run tools/bootstrap.sh to clone a fresh copy." >&2
+  exit 1
 else
   if [[ -d "${HOME}/.osac-ai-skills" ]]; then
     echo "  ${HOME}/.osac-ai-skills exists but is not a usable vendor checkout; using ${PROJECT_ROOT}/.osac-ai-skills"

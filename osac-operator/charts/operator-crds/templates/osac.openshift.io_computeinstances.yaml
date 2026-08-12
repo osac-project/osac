@@ -146,9 +146,6 @@ spec:
                 - pciDeviceSelector
                 - resourceName
                 type: object
-                x-kubernetes-validations:
-                - message: gpu is immutable
-                  rule: self == oldSelf
               guestOSFamily:
                 description: |-
                   GuestOSFamily specifies the guest operating system family for the VM.
@@ -309,6 +306,10 @@ spec:
             - runStrategy
             - templateID
             type: object
+            x-kubernetes-validations:
+            - message: gpu is immutable
+              rule: has(self.gpu) == has(oldSelf.gpu) && (!has(self.gpu) || self.gpu
+                == oldSelf.gpu)
           status:
             description: status defines the observed state of ComputeInstance
             properties:

@@ -107,6 +107,7 @@ type NetworkAttachment struct {
 }
 
 // ComputeInstanceSpec defines the desired state of ComputeInstance
+// +kubebuilder:validation:XValidation:rule="has(self.gpu) == has(oldSelf.gpu) && (!has(self.gpu) || self.gpu == oldSelf.gpu)",message="gpu is immutable"
 type ComputeInstanceSpec struct {
 	// TemplateID is the unique identifier of the compute instance template to use when creating this compute instance
 	// +kubebuilder:validation:Required
@@ -158,7 +159,6 @@ type ComputeInstanceSpec struct {
 
 	// Gpu defines GPU passthrough configuration resolved from the InstanceType.
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="gpu is immutable"
 	Gpu *GpuSpec `json:"gpu,omitempty"`
 
 	// RunStrategy controls VM running state (MUTABLE)

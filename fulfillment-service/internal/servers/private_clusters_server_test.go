@@ -290,8 +290,9 @@ var _ = Describe("Private clusters server", func() {
 			Expect(object).ToNot(BeNil())
 			Expect(object.GetId()).ToNot(BeEmpty())
 
-			// Verify that the template name was replaced by the identifier:
+			// Verify that the template name was replaced by the identifier and name is preserved:
 			Expect(object.GetSpec().GetTemplate().GetId()).To(Equal("my-template-id"))
+			Expect(object.GetSpec().GetTemplate().GetName()).To(Equal("my-template-name"))
 		})
 
 		It("Fails when creating object with non-existent template name", func() {
@@ -344,11 +345,12 @@ var _ = Describe("Private clusters server", func() {
 			Expect(object).ToNot(BeNil())
 			Expect(object.GetId()).ToNot(BeEmpty())
 
-			// Verify that the host type name was replaced by the identifier:
+			// Verify that the host type name was replaced by the identifier and name is preserved:
 			nodeSets := object.GetSpec().GetNodeSets()
 			Expect(nodeSets).To(HaveKey("compute"))
 			nodeSet := nodeSets["compute"]
 			Expect(nodeSet.GetHostType().GetId()).To(Equal("acme-1ti-id"))
+			Expect(nodeSet.GetHostType().GetName()).To(Equal("acme-1ti-name"))
 		})
 
 		It("Creates object with host type specified by identifier in node set", func() {
@@ -378,11 +380,12 @@ var _ = Describe("Private clusters server", func() {
 			Expect(object).ToNot(BeNil())
 			Expect(object.GetId()).ToNot(BeEmpty())
 
-			// Verify that the host type identifier is preserved:
+			// Verify that the host type identifier is preserved and name is resolved:
 			nodeSets := object.GetSpec().GetNodeSets()
 			Expect(nodeSets).To(HaveKey("compute"))
 			nodeSet := nodeSets["compute"]
 			Expect(nodeSet.GetHostType().GetId()).To(Equal("acme-1ti-id"))
+			Expect(nodeSet.GetHostType().GetName()).To(Equal("acme-1ti-name"))
 		})
 
 		It("Creates object with template and host type specified by name", func() {
@@ -412,12 +415,15 @@ var _ = Describe("Private clusters server", func() {
 			Expect(object).ToNot(BeNil())
 			Expect(object.GetId()).ToNot(BeEmpty())
 
-			// Verify that the the template and host type names were replaced by the identifiers:
+			// Verify that the template and host type names were replaced by the identifiers
+			// and metadata names are preserved on the resolved references:
 			Expect(object.GetSpec().GetTemplate().GetId()).To(Equal("my-template-id"))
+			Expect(object.GetSpec().GetTemplate().GetName()).To(Equal("my-template-name"))
 			nodeSets := object.GetSpec().GetNodeSets()
 			Expect(nodeSets).To(HaveKey("compute"))
 			nodeSet := nodeSets["compute"]
 			Expect(nodeSet.GetHostType().GetId()).To(Equal("acme-1ti-id"))
+			Expect(nodeSet.GetHostType().GetName()).To(Equal("acme-1ti-name"))
 		})
 
 		It("Fails when creating object with non-existent host type name", func() {
@@ -1588,6 +1594,7 @@ var _ = Describe("Private clusters server", func() {
 				Expect(object).ToNot(BeNil())
 				Expect(object.GetId()).ToNot(BeEmpty())
 				Expect(object.GetSpec().GetTemplate().GetId()).To(Equal("my-template-id"))
+				Expect(object.GetSpec().GetTemplate().GetName()).To(Equal("my-template-name"))
 				Expect(object.GetSpec().GetCatalogItem().GetId()).To(Equal("cat-happy"))
 
 				// Verify node sets are populated from the template:
@@ -1595,9 +1602,11 @@ var _ = Describe("Private clusters server", func() {
 				Expect(nodeSets).To(HaveLen(2))
 				Expect(nodeSets).To(HaveKey("compute"))
 				Expect(nodeSets["compute"].GetHostType().GetId()).To(Equal("acme-1ti-id"))
+				Expect(nodeSets["compute"].GetHostType().GetName()).To(Equal("acme-1ti-name"))
 				Expect(nodeSets["compute"].GetSize()).To(Equal(int32(3)))
 				Expect(nodeSets).To(HaveKey("gpu"))
 				Expect(nodeSets["gpu"].GetHostType().GetId()).To(Equal("acme-gpu-id"))
+				Expect(nodeSets["gpu"].GetHostType().GetName()).To(Equal("acme-gpu-name"))
 				Expect(nodeSets["gpu"].GetSize()).To(Equal(int32(1)))
 			})
 

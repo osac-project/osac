@@ -105,4 +105,4 @@ jobs:
         working-directory: osac-metering/adapters
     - working-directory: osac-metering/adapters
       run: |
-        ginkgo run .
+        ginkgo run -r .

@@ -4,6 +4,11 @@ Provisions networking resources using ClusterUserDefinedNetwork (CUDN) on OpenSh
 
 > **Note:** SecurityGroup enforcement (NetworkPolicy) has been extracted to the standalone
 > `osac.templates.network_policy` role so it can be reused across any K8s-based NetworkClass.
+> `cudn_net`'s `create_security_group`/`delete_security_group` entrypoints delegate to that
+> role directly (see [Task Files](#task-files)) — the dispatcher resolves `SecurityGroup` to
+> this NetworkClass's fabric manager (`cudn_net`) the same way it does for `VirtualNetwork`
+> and `Subnet`, so `cudn_net` must provide these entrypoints even though the underlying
+> enforcement mechanism lives in `network_policy`.
 
 ## Resources
 
@@ -57,6 +62,8 @@ This role implements the `cudn_net` NetworkClass strategy using OpenShift's Clus
 - `tasks/delete_virtual_network.yaml` - Removes ClusterUserDefinedNetwork CR
 - `tasks/create_subnet.yaml` - Creates namespace with CUDN labels from Subnet resource
 - `tasks/delete_subnet.yaml` - Removes namespace
+- `tasks/create_security_group.yaml` - Delegates to `osac.templates.network_policy` (`create_security_group`)
+- `tasks/delete_security_group.yaml` - Delegates to `osac.templates.network_policy` (`delete_security_group`)
 
 ## Usage
 

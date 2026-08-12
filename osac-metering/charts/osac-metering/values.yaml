@@ -35,3 +35,15 @@ echoAdapter:
   #   repository: ghcr.io/osac-project/metering-echo-adapter
   #   tag: latest
   #   pullPolicy: Always
+
+## M360 adapter — forwards metering events to Monetize360 Usage API.
+m360Adapter:
+  enabled: false
+  image:
+    repository: ghcr.io/osac-project/metering-m360-adapter
+    tag: latest
+    pullPolicy: Always
+  m360:
+    apiUrl: ""
+    apiKeySecret: ""     # name of K8s Secret with key "api-key"
+    apiVersion: "v1"

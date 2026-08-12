@@ -1,0 +1,30 @@
+{{- if .Values.m360Adapter.enabled }}
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: osac-metering-m360-adapter
+  namespace: {{ include "osac-metering.kafkaClusterNamespace" . }}
+  labels:
+    strimzi.io/cluster: {{ include "osac-metering.kafkaClusterName" . }}
+spec:
+  authentication:
+    type: scram-sha-512
+  authorization:
+    type: simple
+    acls:
+      - resource:
+          type: topic
+          name: osac.metering.
+          patternType: prefix
+        operations:
+          - Read
+          - Describe
+        host: "*"
+      - resource:
+          type: group
+          name: osac-metering-m360-adapter
+          patternType: literal
+        operations:
+          - Read
+        host: "*"
+{{- end }}

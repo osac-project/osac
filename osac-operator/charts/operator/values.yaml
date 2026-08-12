@@ -65,7 +65,7 @@ tenants: []
 # The operator discovers managers by selecting ConfigMaps with labels
 # osac.openshift.io/network-fabric-manager or osac.openshift.io/network-k8s-manager.
 networkManagers:
-  enabled: false
+  enabled: true
   # capabilitiesSyncInterval controls how often the operator recomputes NetworkClass
   # capabilities from the fabric/k8s manager ConfigMaps (in addition to reacting
   # immediately to ConfigMap changes).
@@ -77,4 +77,11 @@ networkManagers:
         Netris SDN controller for physical fabric management.
         Manages VLAN/VxLAN segments, ACLs, public IP allocation, and NAT gateways.
       capabilities: "ipv4"
+    cudn_net:
+      enabled: true
+      description: >-
+        CUDN-based isolated networking (ClusterUserDefinedNetwork). Self-contained
+        VirtualNetwork/Subnet provisioning with no separate physical fabric to
+        bridge into — used as the platform default NetworkClass.
+      capabilities: "ipv4,ipv6,dualStack"
   k8sManagers: {}

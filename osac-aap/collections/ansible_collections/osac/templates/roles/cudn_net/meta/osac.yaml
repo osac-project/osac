@@ -8,9 +8,13 @@ description: >
 template_type: network
 
 # NetworkClass registration fields
+# Note: no k8s_manager is set here. cudn_net's Subnet role already creates a
+# self-contained ClusterUserDefinedNetwork (isolated Layer2/Primary) — there is no
+# separate physical fabric to bridge into, so this NetworkClass is fabric-only.
+# A future k8sManager (e.g. cudn_localnet, bridging OVN to a physical VLAN via
+# LocalNet topology) does not exist yet; see OSAC-1511.
 implementation_strategy: cudn_net
 fabric_manager: cudn_net
-k8s_manager: cudn_localnet
 is_default: true
 capabilities:
   supports_ipv4: true

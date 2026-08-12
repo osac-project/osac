@@ -32,13 +32,13 @@ func makeEvent(id, eventType, source, resourceID string) adapters.MeteringEvent 
 	ce.SetExtension("osacresourcetype", "compute_instance")
 	ce.SetExtension("osactenant", "test-tenant")
 	_ = ce.SetData(cloudevents.ApplicationJSON, map[string]any{
-		"resource_id":   resourceID,
-		"resource_type": "ComputeInstance",
-		"tenant_id":     "test-tenant",
+		"resource_id":    resourceID,
+		"resource_type":  "ComputeInstance",
+		"tenant_id":      "test-tenant",
 		"schema_version": "v1",
 		"billing_dimensions": map[string]any{
-			"instance_type":     "m5.large",
-			"image_ref":         "rhel-9",
+			"instance_type":      "m5.large",
+			"image_ref":          "rhel-9",
 			"boot_disk_size_gib": 50,
 		},
 		"transition_time": time.Now().UTC().Format(time.RFC3339),

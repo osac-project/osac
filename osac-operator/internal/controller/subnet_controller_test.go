@@ -22,15 +22,22 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	privatev1 "github.com/osac-project/osac/osac-operator/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/osac-operator/internal/dispatcheradapter"
+	"github.com/osac-project/osac/osac-operator/pkg/dispatcher"
+	"github.com/osac-project/osac/osac-operator/pkg/networkmanager"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 )
 
@@ -220,6 +227,39 @@ var _ = Describe("SubnetReconciler", func() {
 			_ = k8sClient.Delete(ctx, subnetNoParent)
 		})
 
+		It("should return an error when multiple VirtualNetworks share the parent uuid label", func() {
+			// Create a second VirtualNetwork with the same osacVirtualNetworkIDLabel as
+			// the fixture "vnet" created in BeforeEach, simulating an ambiguous parent lookup.
+			duplicateVnet := &osacv1alpha1.VirtualNetwork{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-vnet-duplicate",
+					Namespace: "default",
+					Labels: map[string]string{
+						osacVirtualNetworkIDLabel: "test-vnet-uuid",
+					},
+				},
+				Spec: osacv1alpha1.VirtualNetworkSpec{
+					Region:                 "us-west-1",
+					IPv4CIDR:               "10.9.0.0/16",
+					NetworkClass:           "cudn-net",
+					ImplementationStrategy: "cudn-net",
+				},
+			}
+			Expect(k8sClient.Create(ctx, duplicateVnet)).To(Succeed())
+			DeferCleanup(deleteObjectWithClearedFinalizers, ctx, duplicateVnet)
+
+			Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      subnet.Name,
+					Namespace: subnet.Namespace,
+				},
+			}})
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("expected exactly one parent VirtualNetwork"))
+		})
+
 		It("should requeue when parent VirtualNetwork has no ImplementationStrategy", func() {
 			// Create VirtualNetwork without ImplementationStrategy
 			vnetNoStrategy := &osacv1alpha1.VirtualNetwork{
@@ -335,6 +375,133 @@ var _ = Describe("SubnetReconciler", func() {
 			Eventually(func() bool {
 				return errors.IsNotFound(k8sClient.Get(ctx, key, &osacv1alpha1.Subnet{}))
 			}, 5*time.Second, 100*time.Millisecond).Should(BeTrue())
+		})
+	})
+
+	Context("dispatcher path", func() {
+		var fakeDiscoveryClient client.Client
+
+		BeforeEach(func() {
+			scheme := runtime.NewScheme()
+			Expect(corev1.AddToScheme(scheme)).To(Succeed())
+			fakeDiscoveryClient = fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+				newFabricManagerConfigMap("fm-netris", "osac", "netris"),
+			).Build()
+		})
+
+		It("uses the resolved fabric manager name from the parent VirtualNetwork's NetworkClass", func() {
+			disc, err := networkmanager.NewDiscovery(fakeDiscoveryClient, "osac")
+			Expect(err).NotTo(HaveOccurred())
+			reconciler.Resolver = dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+				[]*privatev1.NetworkClass{{Id: "nc-dispatch", FabricManager: "netris"}}, &[]*privatev1.NetworkClass{},
+			)), disc)
+
+			dispatchVnet := &osacv1alpha1.VirtualNetwork{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "dispatch-vnet",
+					Namespace: "default",
+					Labels:    map[string]string{osacVirtualNetworkIDLabel: "dispatch-vnet-uuid"},
+				},
+				Spec: osacv1alpha1.VirtualNetworkSpec{
+					Region:                 "us-west-1",
+					IPv4CIDR:               "10.1.0.0/16",
+					NetworkClass:           "nc-dispatch",
+					ImplementationStrategy: "legacy-value",
+				},
+			}
+			Expect(k8sClient.Create(ctx, dispatchVnet)).To(Succeed())
+			DeferCleanup(deleteObjectWithClearedFinalizers, ctx, dispatchVnet)
+
+			dispatchSubnet := &osacv1alpha1.Subnet{
+				ObjectMeta: metav1.ObjectMeta{Name: "dispatch-subnet", Namespace: "default"},
+				Spec:       osacv1alpha1.SubnetSpec{VirtualNetwork: "dispatch-vnet-uuid", IPv4CIDR: "10.1.1.0/24"},
+			}
+			Expect(k8sClient.Create(ctx, dispatchSubnet)).To(Succeed())
+			DeferCleanup(deleteObjectWithClearedFinalizers, ctx, dispatchSubnet)
+
+			_, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: dispatchSubnet.Name, Namespace: dispatchSubnet.Namespace},
+			}})
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &osacv1alpha1.Subnet{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: dispatchSubnet.Name, Namespace: dispatchSubnet.Namespace}, updated)).To(Succeed())
+			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("netris"))
+		})
+
+		It("falls back to the parent VirtualNetwork's legacy implementation strategy when fabricManager is not set", func() {
+			disc, err := networkmanager.NewDiscovery(fakeDiscoveryClient, "osac")
+			Expect(err).NotTo(HaveOccurred())
+			reconciler.Resolver = dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+				[]*privatev1.NetworkClass{{Id: "nc-legacy"}}, &[]*privatev1.NetworkClass{},
+			)), disc)
+
+			dispatchVnet := &osacv1alpha1.VirtualNetwork{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "legacy-vnet",
+					Namespace: "default",
+					Labels:    map[string]string{osacVirtualNetworkIDLabel: "legacy-vnet-uuid"},
+				},
+				Spec: osacv1alpha1.VirtualNetworkSpec{
+					Region:                 "us-west-1",
+					IPv4CIDR:               "10.2.0.0/16",
+					NetworkClass:           "nc-legacy",
+					ImplementationStrategy: "cudn-net",
+				},
+			}
+			Expect(k8sClient.Create(ctx, dispatchVnet)).To(Succeed())
+			DeferCleanup(deleteObjectWithClearedFinalizers, ctx, dispatchVnet)
+
+			dispatchSubnet := &osacv1alpha1.Subnet{
+				ObjectMeta: metav1.ObjectMeta{Name: "legacy-subnet", Namespace: "default"},
+				Spec:       osacv1alpha1.SubnetSpec{VirtualNetwork: "legacy-vnet-uuid", IPv4CIDR: "10.2.1.0/24"},
+			}
+			Expect(k8sClient.Create(ctx, dispatchSubnet)).To(Succeed())
+			DeferCleanup(deleteObjectWithClearedFinalizers, ctx, dispatchSubnet)
+
+			_, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: dispatchSubnet.Name, Namespace: dispatchSubnet.Namespace},
+			}})
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &osacv1alpha1.Subnet{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: dispatchSubnet.Name, Namespace: dispatchSubnet.Namespace}, updated)).To(Succeed())
+			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("cudn-net"))
+		})
+
+		It("returns a reconcile error when the NetworkClass references an unregistered manager", func() {
+			disc, err := networkmanager.NewDiscovery(fakeDiscoveryClient, "osac")
+			Expect(err).NotTo(HaveOccurred())
+			reconciler.Resolver = dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+				[]*privatev1.NetworkClass{{Id: "nc-broken", FabricManager: "does-not-exist"}}, &[]*privatev1.NetworkClass{},
+			)), disc)
+
+			dispatchVnet := &osacv1alpha1.VirtualNetwork{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "broken-vnet",
+					Namespace: "default",
+					Labels:    map[string]string{osacVirtualNetworkIDLabel: "broken-vnet-uuid"},
+				},
+				Spec: osacv1alpha1.VirtualNetworkSpec{
+					Region:       "us-west-1",
+					IPv4CIDR:     "10.3.0.0/16",
+					NetworkClass: "nc-broken",
+				},
+			}
+			Expect(k8sClient.Create(ctx, dispatchVnet)).To(Succeed())
+			DeferCleanup(deleteObjectWithClearedFinalizers, ctx, dispatchVnet)
+
+			dispatchSubnet := &osacv1alpha1.Subnet{
+				ObjectMeta: metav1.ObjectMeta{Name: "broken-subnet", Namespace: "default"},
+				Spec:       osacv1alpha1.SubnetSpec{VirtualNetwork: "broken-vnet-uuid", IPv4CIDR: "10.3.1.0/24"},
+			}
+			Expect(k8sClient.Create(ctx, dispatchSubnet)).To(Succeed())
+			DeferCleanup(deleteObjectWithClearedFinalizers, ctx, dispatchSubnet)
+
+			_, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: dispatchSubnet.Name, Namespace: dispatchSubnet.Namespace},
+			}})
+			Expect(err).To(HaveOccurred())
 		})
 	})
 
@@ -707,6 +874,24 @@ var _ = Describe("SubnetReconciler", func() {
 		})
 	})
 })
+
+// deleteObjectWithClearedFinalizers deletes obj, first clearing any finalizers it has
+// so it doesn't remain stuck in Terminating state in the shared envtest API server.
+// Intended for use with Ginkgo's DeferCleanup.
+func deleteObjectWithClearedFinalizers(ctx context.Context, obj client.Object) {
+	key := client.ObjectKeyFromObject(obj)
+	if err := k8sClient.Get(ctx, key, obj); err != nil {
+		if errors.IsNotFound(err) {
+			return
+		}
+		Expect(err).NotTo(HaveOccurred())
+	}
+	if len(obj.GetFinalizers()) > 0 {
+		obj.SetFinalizers(nil)
+		Expect(k8sClient.Update(ctx, obj)).To(Succeed())
+	}
+	Expect(k8sClient.Delete(ctx, obj)).To(Succeed())
+}
 
 // mockSubnetProvider implements the ProvisioningProvider interface for Subnet testing
 type mockSubnetProvider struct {

@@ -20,6 +20,7 @@ make lint                      # Run golangci-lint
 # adapters (consumer framework)
 cd adapters
 make build-echo-adapter        # Build the echo-adapter binary
+make build-m360-adapter        # Build the m360-adapter binary
 make test                      # Run unit tests
 make lint                      # Run golangci-lint
 ```

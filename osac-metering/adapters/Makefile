@@ -13,17 +13,23 @@ GOLANGCI_LINT_VERSION ?= v2.12.1
 LOCALBIN ?= $(shell pwd)/bin
 GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
 
-.PHONY: build-echo-adapter test lint clean
+.PHONY: all build-echo-adapter build-m360-adapter test lint clean
+
+all: build-echo-adapter build-m360-adapter
 
 build-echo-adapter:
 	@mkdir -p bin
 	go build -o bin/echo-adapter ./cmd/echo-adapter
 
+build-m360-adapter:
+	@mkdir -p bin
+	go build -o bin/m360-adapter ./cmd/m360-adapter
+
 test:
-	$(GINKGO) run .
+	$(GINKGO) run -r .
 
 lint: $(GOLANGCI_LINT)
-	$(GOLANGCI_LINT) run .
+	$(GOLANGCI_LINT) run ./...
 
 $(GOLANGCI_LINT):
 	@mkdir -p $(LOCALBIN)

@@ -32,6 +32,7 @@ make clean                     # Clean build artifacts
 # adapters (consumer framework)
 cd adapters
 make build-echo-adapter        # Build the echo-adapter binary
+make build-m360-adapter        # Build the m360-adapter binary
 make test                      # Run unit tests with Ginkgo
 make lint                      # Run golangci-lint
 make clean                     # Clean build artifacts
@@ -43,7 +44,7 @@ make clean                     # Clean build artifacts
 |-----------|---------|
 | `metering-service/` | Producer — watches fulfillment-service gRPC Watch stream, publishes CloudEvents to Kafka |
 | `adapters/` | Consumer framework — Kafka-to-provider bridge with `ProviderAdapter` interface and `Runner` |
-| `charts/osac-metering/` | Helm chart for deploying metering-service and echo-adapter |
+| `charts/osac-metering/` | Helm chart for deploying metering-service, echo-adapter, and m360-adapter |
 
 ## Architecture
 
@@ -56,7 +57,7 @@ Kafka Topics
   ↓ Sarama consumer group
 adapters.Runner (dedup → out-of-order check → retry → Submit → Flush → offset commit)
   ↓ ProviderAdapter interface
-Concrete Adapters (echo-adapter, billing providers)
+Concrete Adapters (echo-adapter, m360-adapter, billing providers)
 ```
 
 ### Key Packages
@@ -113,6 +114,20 @@ The `adapters/` package is a standalone Go module that provides everything a bil
 
 Deployed via Helm with `echoAdapter.enabled: true` (disabled by default; enabled in CI values profiles).
 
+### M360 Adapter
+
+`adapters/cmd/m360-adapter/` forwards OSAC metering CloudEvents to the Monetize360 (M360) Usage API via REST. It translates nested CloudEvents to M360's flat payload format and routes to the correct M360 endpoint by resource type (`/vmaas/event`, `/caas/event`, `/maas/event`).
+
+- Per-event submit (M360 API is per-event; no batch endpoint)
+- Bearer token auth from K8s Secret file mount
+- Error classification: 4xx → non-retryable (except 408/429), 5xx → retryable
+- TLS enabled by default, configurable API version (default `v1`)
+- `GET /healthz` — liveness probe (always 200)
+- `GET /readyz` — readiness probe (M360 connectivity check)
+- `GET /metrics` — Prometheus metrics
+
+Deployed via Helm with `m360Adapter.enabled: true` (disabled by default).
+
 ## Deployment
 
 The metering subsystem is deployed via the osac-installer umbrella chart with `metering.enabled: true`.
@@ -136,17 +151,22 @@ Key configuration parameters in `charts/osac-metering/values.yaml`:
 - `reconciliation.interval` — Reconciliation sweep interval (default `60m`)
 - `certs.caBundle.configMap` — CA bundle ConfigMap name
 - `echoAdapter.enabled` — Deploy the echo-adapter (default `false`)
+- `m360Adapter.enabled` — Deploy the m360-adapter (default `false`)
+- `m360Adapter.m360.apiUrl` — M360 Usage API base URL
+- `m360Adapter.m360.apiKeySecret` — K8s Secret name containing the M360 API key
+- `m360Adapter.m360.apiVersion` — M360 API version (default `v1`)
 
 ## CI Integration
 
 - **build-metering-service-image.yaml** — Builds and pushes metering-service container image
 - **build-metering-echo-adapter-image.yaml** — Builds echo-adapter image on `osac-metering/adapters/**` changes
+- **build-metering-m360-adapter-image.yaml** — Builds m360-adapter image on `osac-metering/adapters/**` changes
 - **run-osac-metering-tests** — Runs unit tests as part of the mono-repo test suite
 - **E2E workflows** (CaaS, VMaaS, BMaaS) — Tests metering in full OSAC deployments
 
 ## Testing
 
 - **metering-service unit tests** — `make test` in `metering-service/`
-- **adapters unit tests** — `make test` in `adapters/` (covers Runner, dedup, retry, order tracker, metrics)
+- **adapters unit tests** — `make test` in `adapters/` (covers Runner, dedup, retry, order tracker, metrics, echo-adapter, m360-adapter)
 - **E2E validation** — echo-adapter deployed in CI, queried via HTTP to assert event delivery
 - **Integration tests** — Included in E2E workflows with full Kafka setup

@@ -272,6 +272,11 @@ func handleDiskImageLifecycleTransition(existing, merged *privatev1.DiskImage) b
 	oldLifecycle := existing.GetSpec().GetLifecycle()
 	newLifecycle := merged.GetSpec().GetLifecycle()
 
+	if newLifecycle == privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_UNSPECIFIED {
+		merged.GetSpec().SetLifecycle(oldLifecycle)
+		return false
+	}
+
 	if oldLifecycle == newLifecycle {
 		return false
 	}

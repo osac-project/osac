@@ -328,6 +328,46 @@ var _ = Describe("Private disk images server", func() {
 			Expect(updateResponse.GetObject().GetSpec().GetArchitecture()).To(HaveLen(1))
 		})
 
+		It("Masked update with UNSPECIFIED lifecycle preserves existing lifecycle", func() {
+			createResponse, err := server.Create(ctx, privatev1.DiskImagesCreateRequest_builder{
+				Object: privatev1.DiskImage_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "unspecified-lifecycle-test",
+					}.Build(),
+					Spec: privatev1.DiskImageSpec_builder{
+						SourceType: privatev1.SourceType_SOURCE_TYPE_REGISTRY,
+						SourceRef:  "quay.io/test:unspecified-lc",
+						Architecture: []privatev1.Architecture{
+							privatev1.Architecture_ARCHITECTURE_AMD64,
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			object := createResponse.GetObject()
+			Expect(object.GetSpec().GetLifecycle()).To(
+				Equal(privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE))
+
+			updateResponse, err := server.Update(ctx, privatev1.DiskImagesUpdateRequest_builder{
+				Object: privatev1.DiskImage_builder{
+					Id: object.GetId(),
+					Spec: privatev1.DiskImageSpec_builder{
+						SourceType: privatev1.SourceType_SOURCE_TYPE_REGISTRY,
+						SourceRef:  "quay.io/test:unspecified-lc",
+						Architecture: []privatev1.Architecture{
+							privatev1.Architecture_ARCHITECTURE_AMD64,
+						},
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{
+					Paths: []string{"spec.lifecycle"},
+				},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updateResponse.GetObject().GetSpec().GetLifecycle()).To(
+				Equal(privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE))
+		})
+
 		It("Deletes object", func() {
 			createResponse, err := server.Create(ctx, privatev1.DiskImagesCreateRequest_builder{
 				Object: privatev1.DiskImage_builder{

@@ -61,8 +61,8 @@ type GenericDAOBuilder[O Object] struct {
 //   - `project` - The project that the object is assigned to.
 //   - `labels` - The labels assigned to the object.
 //   - `annotations` - The annotations assigned to the object.
-//   - `display_name` - The optional human-friendly display name of the object.
-//   - `description` - The optional human-friendly description of the object.
+//   - `display_name` - The human friendly display name of the object.
+//   - `description` - The human friendly description of the object.
 //   - `version` - The version number, automatically incremented on every update.
 //   - `data` - The serialized object, using the protocol buffers JSON serialization.
 //

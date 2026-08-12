@@ -15,6 +15,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(realpath "$(dirname "${BASH_SOURCE[0]}")")"
+# REPO_ROOT: this wrapper's own name for its repo root (osac-workspace's
+# reference wrapper calls the same concept WORKSPACE_ROOT). Exported to the
+# vendored fan-out below as PROJECT_ROOT instead — that name is a fixed
+# cross-repo contract (see osac-ai-skills' fan-out and OSAC-3956), not a
+# stylistic choice, so it isn't renamed to match.
 REPO_ROOT="$(realpath "${SCRIPT_DIR}/..")"
 
 usage() {

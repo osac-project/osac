@@ -6,8 +6,10 @@
 # This script:
 #   1. Clones or updates osac-project/osac-ai-skills (prefers ~/.osac-ai-skills)
 #   2. Clones or updates flightctl/ai-workflows (prefers ~/.ai-workflows)
-#   3. Installs workflows (bugfix, implement, prd, design, e2e)
-#   4. Materializes skills/ and links Claude/Cursor/Gemini discovery dirs
+#   3. Materializes skills/ and links Claude/Cursor/Gemini discovery dirs
+#      (umbrella symlinks must exist before ai-workflows install.sh, which
+#      writes workflow links into those paths)
+#   4. Installs workflows (bugfix, implement, prd, design, e2e)
 #
 # Re-run anytime to update to latest main.
 set -euo pipefail
@@ -91,12 +93,14 @@ else
   git clone "https://github.com/${AI_WORKFLOWS_REPO}.git" "${AI_WORKFLOWS_DIR}"
 fi
 
+# Umbrella .*/skills -> ../skills must exist before install.sh, which mkdir -p's
+# those paths and writes workflow symlinks into them (through the umbrellas).
+echo "Linking agent skill directories..."
+"${PROJECT_ROOT}/tools/link-agent-skills.sh"
+
 echo "Installing ai-workflows skills..."
 AI_WORKFLOWS="bugfix,implement,prd,design,e2e"
 "${AI_WORKFLOWS_DIR}/install.sh" all --project "${PROJECT_ROOT}" --workflows "${AI_WORKFLOWS}"
-
-echo "Linking agent skill directories..."
-"${PROJECT_ROOT}/tools/link-agent-skills.sh"
 
 echo ""
 echo "AI workflows and OSAC skills installed."

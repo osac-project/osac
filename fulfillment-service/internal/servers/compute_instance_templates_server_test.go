@@ -266,11 +266,12 @@ var _ = Describe("Compute instance templates server", func() {
 			Expect(createdObject).ToNot(BeNil())
 			id := createdObject.GetId()
 			Expect(id).ToNot(BeEmpty())
-
+			name := createdObject.GetMetadata().GetName()
 			// Update the object:
 			updateResponse, err := server.Update(ctx, publicv1.ComputeInstanceTemplatesUpdateRequest_builder{
 				Object: publicv1.ComputeInstanceTemplate_builder{
 					Id:          id,
+					Metadata:    publicv1.Metadata_builder{Name: name}.Build(),
 					Title:       "My updated title",
 					Description: "My updated description.",
 				}.Build(),
@@ -313,11 +314,12 @@ var _ = Describe("Compute instance templates server", func() {
 			Expect(createdObject).ToNot(BeNil())
 			id := createdObject.GetId()
 			Expect(id).ToNot(BeEmpty())
-
+			name := createdObject.GetMetadata().GetName()
 			// Update the object with new parameters:
 			updateResponse, err := server.Update(ctx, publicv1.ComputeInstanceTemplatesUpdateRequest_builder{
 				Object: publicv1.ComputeInstanceTemplate_builder{
 					Id:          id,
+					Metadata:    publicv1.Metadata_builder{Name: name}.Build(),
 					Title:       "My title",
 					Description: "My description.",
 					Parameters: []*publicv1.ComputeInstanceTemplateParameterDefinition{

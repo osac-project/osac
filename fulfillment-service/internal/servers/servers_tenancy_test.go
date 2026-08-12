@@ -449,10 +449,11 @@ var _ = Describe("Tenancy logic", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		object := createResponse.GetObject()
-
+		name := object.GetMetadata().GetName()
 		updateResponse, err := clustersServer.Update(ctx, publicv1.ClustersUpdateRequest_builder{
 			Object: publicv1.Cluster_builder{
-				Id: object.GetId(),
+				Id:       object.GetId(),
+				Metadata: publicv1.Metadata_builder{Name: name}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"compute": publicv1.ClusterNodeSet_builder{

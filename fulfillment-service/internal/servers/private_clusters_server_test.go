@@ -758,11 +758,12 @@ var _ = Describe("Private clusters server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			object := createResponse.GetObject()
-
+			name := object.GetMetadata().GetName()
 			// Update the object (keeping template unchanged):
 			updateResponse, err := server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
 				Object: privatev1.Cluster_builder{
-					Id: object.GetId(),
+					Id:       object.GetId(),
+					Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 					Spec: privatev1.ClusterSpec_builder{
 						Template: object.GetSpec().GetTemplate(),
 					}.Build(),

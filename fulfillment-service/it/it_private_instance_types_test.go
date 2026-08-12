@@ -165,6 +165,9 @@ var _ = Describe("Private instance types", func() {
 		// Update the description:
 		updateResponse, err := client.Update(ctx, privatev1.InstanceTypesUpdateRequest_builder{
 			Object: privatev1.InstanceType_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: name,
+				}.Build(),
 				Id: name,
 				Spec: privatev1.InstanceTypeSpec_builder{
 					Description: "Updated description.",
@@ -252,6 +255,9 @@ var _ = Describe("Private instance types", func() {
 		// Transition to DEPRECATED:
 		_, err = client.Update(ctx, privatev1.InstanceTypesUpdateRequest_builder{
 			Object: privatev1.InstanceType_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: name,
+				}.Build(),
 				Id: name,
 				Spec: privatev1.InstanceTypeSpec_builder{
 					State: privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_DEPRECATED,
@@ -299,6 +305,9 @@ var _ = Describe("Private instance types", func() {
 		// Transition ACTIVE -> DEPRECATED:
 		_, err = client.Update(ctx, privatev1.InstanceTypesUpdateRequest_builder{
 			Object: privatev1.InstanceType_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: name,
+				}.Build(),
 				Id: name,
 				Spec: privatev1.InstanceTypeSpec_builder{
 					State: privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_DEPRECATED,
@@ -311,6 +320,9 @@ var _ = Describe("Private instance types", func() {
 		// Transition DEPRECATED -> OBSOLETE:
 		_, err = client.Update(ctx, privatev1.InstanceTypesUpdateRequest_builder{
 			Object: privatev1.InstanceType_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: name,
+				}.Build(),
 				Id: name,
 				Spec: privatev1.InstanceTypeSpec_builder{
 					State: privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_OBSOLETE,
@@ -358,6 +370,9 @@ var _ = Describe("Private instance types", func() {
 		// Transition to DEPRECATED:
 		_, err = client.Update(ctx, privatev1.InstanceTypesUpdateRequest_builder{
 			Object: privatev1.InstanceType_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: name,
+				}.Build(),
 				Id: name,
 				Spec: privatev1.InstanceTypeSpec_builder{
 					State: privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_DEPRECATED,
@@ -370,6 +385,9 @@ var _ = Describe("Private instance types", func() {
 		// Reactivate back to ACTIVE:
 		_, err = client.Update(ctx, privatev1.InstanceTypesUpdateRequest_builder{
 			Object: privatev1.InstanceType_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: name,
+				}.Build(),
 				Id: name,
 				Spec: privatev1.InstanceTypeSpec_builder{
 					State: privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_ACTIVE,
@@ -418,6 +436,9 @@ var _ = Describe("Private instance types", func() {
 		// Attempt to change cores:
 		_, err = client.Update(ctx, privatev1.InstanceTypesUpdateRequest_builder{
 			Object: privatev1.InstanceType_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: name,
+				}.Build(),
 				Id: name,
 				Spec: privatev1.InstanceTypeSpec_builder{
 					Cores: 8,
@@ -456,6 +477,9 @@ var _ = Describe("Private instance types", func() {
 		// Attempt to change memory_gib:
 		_, err = client.Update(ctx, privatev1.InstanceTypesUpdateRequest_builder{
 			Object: privatev1.InstanceType_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: name,
+				}.Build(),
 				Id: name,
 				Spec: privatev1.InstanceTypeSpec_builder{
 					MemoryGib: 32,
@@ -567,6 +591,9 @@ var _ = Describe("Private instance types", func() {
 		// Transition the third instance type to OBSOLETE (ACTIVE -> DEPRECATED -> OBSOLETE):
 		_, err := client.Update(ctx, privatev1.InstanceTypesUpdateRequest_builder{
 			Object: privatev1.InstanceType_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: names[2],
+				}.Build(),
 				Id: names[2],
 				Spec: privatev1.InstanceTypeSpec_builder{
 					State: privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_DEPRECATED,
@@ -578,6 +605,9 @@ var _ = Describe("Private instance types", func() {
 
 		_, err = client.Update(ctx, privatev1.InstanceTypesUpdateRequest_builder{
 			Object: privatev1.InstanceType_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: names[2],
+				}.Build(),
 				Id: names[2],
 				Spec: privatev1.InstanceTypeSpec_builder{
 					State: privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_OBSOLETE,

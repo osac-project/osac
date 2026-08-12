@@ -169,11 +169,13 @@ var _ = Describe("Public Users Server", func() {
 		}
 		createResp, err := publicServer.Create(ctx, createReq)
 		Expect(err).ToNot(HaveOccurred())
+		name := createResp.Object.Metadata.Name
 
 		// Update the user:
 		updateReq := &publicv1.UsersUpdateRequest{
 			Object: &publicv1.User{
-				Id: createResp.Object.Id,
+				Id:       createResp.Object.Id,
+				Metadata: publicv1.Metadata_builder{Name: name}.Build(),
 				Spec: &publicv1.UserSpec{
 					Email: "updated@example.com",
 				},
@@ -252,11 +254,12 @@ var _ = Describe("Public Users Server", func() {
 			},
 		})
 		Expect(err).ToNot(HaveOccurred())
-
+		name := createResp.Object.Metadata.Name
 		// Update with credentials and verify they are pruned from the response:
 		updateResp, err := publicServer.Update(ctx, &publicv1.UsersUpdateRequest{
 			Object: &publicv1.User{
-				Id: createResp.Object.Id,
+				Id:       createResp.Object.Id,
+				Metadata: publicv1.Metadata_builder{Name: name}.Build(),
 				Spec: &publicv1.UserSpec{
 					Email: "updated@example.com",
 					Credentials: &publicv1.UserCredentials{

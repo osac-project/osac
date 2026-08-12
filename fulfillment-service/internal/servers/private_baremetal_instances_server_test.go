@@ -808,10 +808,11 @@ var _ = Describe("Private bare metal instances server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			object := createResponse.GetObject()
-
+			name := object.GetMetadata().GetName()
 			_, err = server.Update(ctx, privatev1.BareMetalInstancesUpdateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
-					Id: object.GetId(),
+					Id:       object.GetId(),
+					Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
 					}.Build(),
@@ -1437,6 +1438,7 @@ var _ = Describe("Private bare metal instances server", func() {
 				Title: "Test Host Type",
 				Metadata: privatev1.Metadata_builder{
 					Tenant: auth.SharedTenant,
+					Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 				}.Build(),
 				Interfaces: []*privatev1.NetworkInterface{
 					privatev1.NetworkInterface_builder{Name: "data-0", Role: "fabric"}.Build(),
@@ -1459,6 +1461,7 @@ var _ = Describe("Private bare metal instances server", func() {
 				HostType: "test-host-type",
 				Metadata: privatev1.Metadata_builder{
 					Tenant: auth.SharedTenant,
+					Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 				}.Build(),
 			}.Build()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
@@ -1469,6 +1472,7 @@ var _ = Describe("Private bare metal instances server", func() {
 				Title: "Template without HostType",
 				Metadata: privatev1.Metadata_builder{
 					Tenant: auth.SharedTenant,
+					Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 				}.Build(),
 			}.Build()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
@@ -2271,6 +2275,7 @@ var _ = Describe("Private bare metal instances server", func() {
 				Title: "Template without HostType",
 				Metadata: privatev1.Metadata_builder{
 					Tenant: auth.SharedTenant,
+					Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 				}.Build(),
 			}.Build()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
@@ -2299,6 +2304,7 @@ var _ = Describe("Private bare metal instances server", func() {
 					K8SManager:             k8sManager,
 					Metadata: privatev1.Metadata_builder{
 						Tenant: auth.SharedTenant,
+						Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 				}.Build(),
 			).Do(ctx)
@@ -2308,6 +2314,7 @@ var _ = Describe("Private bare metal instances server", func() {
 				privatev1.VirtualNetwork_builder{
 					Metadata: privatev1.Metadata_builder{
 						Tenant: auth.SharedTenant,
+						Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						NetworkClass: privatev1.NetworkClassReference_builder{Id: ncResp.GetObject().GetId()}.Build(),
@@ -2320,6 +2327,7 @@ var _ = Describe("Private bare metal instances server", func() {
 				privatev1.Subnet_builder{
 					Metadata: privatev1.Metadata_builder{
 						Tenant: auth.SharedTenant,
+						Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.SubnetSpec_builder{
 						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnResp.GetObject().GetId()}.Build(),
@@ -2335,6 +2343,9 @@ var _ = Describe("Private bare metal instances server", func() {
 			subnetID := createSubnet(nil, new("cudn_localnet"))
 			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catID}.Build(),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
@@ -2425,6 +2436,7 @@ var _ = Describe("Private bare metal instances server", func() {
 				Title: "Default Test Host Type",
 				Metadata: privatev1.Metadata_builder{
 					Tenant: auth.SharedTenant,
+					Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 				}.Build(),
 				Interfaces: []*privatev1.NetworkInterface{
 					privatev1.NetworkInterface_builder{Name: "data-0", Role: "fabric"}.Build(),
@@ -2447,6 +2459,7 @@ var _ = Describe("Private bare metal instances server", func() {
 				HostType: "default-test-host-type",
 				Metadata: privatev1.Metadata_builder{
 					Tenant: auth.SharedTenant,
+					Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 				}.Build(),
 			}.Build()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
@@ -2456,6 +2469,7 @@ var _ = Describe("Private bare metal instances server", func() {
 				Title: "Template without HostType",
 				Metadata: privatev1.Metadata_builder{
 					Tenant: auth.SharedTenant,
+					Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 				}.Build(),
 			}.Build()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
@@ -2701,6 +2715,7 @@ var _ = Describe("Private bare metal instances server", func() {
 				Title: "No Fabric Host Type",
 				Metadata: privatev1.Metadata_builder{
 					Tenant: auth.SharedTenant,
+					Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 				}.Build(),
 				Interfaces: []*privatev1.NetworkInterface{
 					privatev1.NetworkInterface_builder{Name: "mgmt-0", Role: "management"}.Build(),
@@ -2721,6 +2736,7 @@ var _ = Describe("Private bare metal instances server", func() {
 				HostType: "no-fabric-host-type",
 				Metadata: privatev1.Metadata_builder{
 					Tenant: auth.SharedTenant,
+					Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 				}.Build(),
 			}.Build()).Do(ctx)
 			Expect(tmplErr).ToNot(HaveOccurred())

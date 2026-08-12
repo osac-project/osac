@@ -244,13 +244,14 @@ var _ = Describe("Virtual networks server", func() {
 		It("Update object", func() {
 			// Create the object via the private server:
 			privateObj := createVirtualNetwork()
+			originalName := privateObj.GetMetadata().GetName()
 
 			// Update the object via public server:
 			updateResponse, err := publicServer.Update(ctx, publicv1.VirtualNetworksUpdateRequest_builder{
 				Object: publicv1.VirtualNetwork_builder{
 					Id: privateObj.GetId(),
 					Metadata: publicv1.Metadata_builder{
-						Name: "updated-name",
+						Name: originalName,
 					}.Build(),
 					Spec: publicv1.VirtualNetworkSpec_builder{
 						NetworkClass: publicv1.NetworkClassReference_builder{Id: "default"}.Build(),
@@ -259,14 +260,14 @@ var _ = Describe("Virtual networks server", func() {
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(updateResponse.GetObject().GetMetadata().GetName()).To(Equal("updated-name"))
+			Expect(updateResponse.GetObject().GetMetadata().GetName()).To(Equal(originalName))
 
 			// Get and verify via public server:
 			getResponse, err := publicServer.Get(ctx, publicv1.VirtualNetworksGetRequest_builder{
 				Id: privateObj.GetId(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(getResponse.GetObject().GetMetadata().GetName()).To(Equal("updated-name"))
+			Expect(getResponse.GetObject().GetMetadata().GetName()).To(Equal(originalName))
 		})
 
 		It("Update object preserves CIDRs when explicitly repeated in request", func() {
@@ -278,7 +279,7 @@ var _ = Describe("Virtual networks server", func() {
 				Object: publicv1.VirtualNetwork_builder{
 					Id: privateObj.GetId(),
 					Metadata: publicv1.Metadata_builder{
-						Name: "cidr-explicit",
+						Name: privateObj.GetMetadata().GetName(),
 					}.Build(),
 					Spec: publicv1.VirtualNetworkSpec_builder{
 						NetworkClass: publicv1.NetworkClassReference_builder{Id: "default"}.Build(),
@@ -300,7 +301,7 @@ var _ = Describe("Virtual networks server", func() {
 				Object: publicv1.VirtualNetwork_builder{
 					Id: privateObj.GetId(),
 					Metadata: publicv1.Metadata_builder{
-						Name: "cidr-omitted",
+						Name: privateObj.GetMetadata().GetName(),
 					}.Build(),
 					Spec: publicv1.VirtualNetworkSpec_builder{
 						NetworkClass: publicv1.NetworkClassReference_builder{Id: "default"}.Build(),
@@ -442,6 +443,7 @@ var _ = Describe("Virtual networks server", func() {
 				ImplementationStrategy: "ovn-kubernetes",
 				Metadata: privatev1.Metadata_builder{
 					Tenant: "shared",
+					Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 				}.Build(),
 				Capabilities: privatev1.NetworkClassCapabilities_builder{
 					SupportsIpv4: true,
@@ -482,7 +484,7 @@ var _ = Describe("Virtual networks server", func() {
 				Object: publicv1.VirtualNetwork_builder{
 					Id: privateObj.GetId(),
 					Metadata: publicv1.Metadata_builder{
-						Name: "renamed-vn",
+						Name: privateObj.GetMetadata().GetName(),
 					}.Build(),
 					Spec: publicv1.VirtualNetworkSpec_builder{
 						Ipv4Cidr: new("10.0.0.0/16"),
@@ -492,7 +494,7 @@ var _ = Describe("Virtual networks server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			// The network_class should still be "default" even though it was not in the public update request:
 			Expect(updateResponse.GetObject().GetSpec().GetNetworkClass().GetId()).To(Equal("default"))
-			Expect(updateResponse.GetObject().GetMetadata().GetName()).To(Equal("renamed-vn"))
+			Expect(updateResponse.GetObject().GetMetadata().GetName()).To(Equal(privateObj.GetMetadata().GetName()))
 		})
 
 		It("Public Update rejects explicit network_class change with immutability error", func() {

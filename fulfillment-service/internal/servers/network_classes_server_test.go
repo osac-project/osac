@@ -208,11 +208,13 @@ var _ = Describe("Network classes server", func() {
 		It("Update object", func() {
 			// Create the object via the private server:
 			privateObj := createNetworkClass()
+			name := privateObj.GetMetadata().GetName()
 
 			// Update the object via public server:
 			updateResponse, err := publicServer.Update(ctx, publicv1.NetworkClassesUpdateRequest_builder{
 				Object: publicv1.NetworkClass_builder{
 					Id:          privateObj.GetId(),
+					Metadata:    publicv1.Metadata_builder{Name: name}.Build(),
 					Title:       "Your title",
 					Description: "Your description.",
 				}.Build(),
@@ -424,12 +426,14 @@ var _ = Describe("Network classes server", func() {
 				// Create NC-A as default via private server:
 				ncA := createDefaultNetworkClass()
 				Expect(ncA.GetIsDefault()).To(BeTrue())
+				name := ncA.GetMetadata().GetName()
 
 				// Do a public Update changing only the title (not touching is_default):
 				_, err := publicServer.Update(ctx, publicv1.NetworkClassesUpdateRequest_builder{
 					Object: publicv1.NetworkClass_builder{
-						Id:    ncA.GetId(),
-						Title: "Updated Title",
+						Id:       ncA.GetId(),
+						Title:    "Updated Title",
+						Metadata: publicv1.Metadata_builder{Name: name}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -447,6 +451,7 @@ var _ = Describe("Network classes server", func() {
 				// Create NC-A as default via private server:
 				ncA := createDefaultNetworkClass()
 				Expect(ncA.GetIsDefault()).To(BeTrue())
+				name := ncA.GetMetadata().GetName()
 
 				// Attempt public Update with is_default=false (AddIgnoredFields should prevent it):
 				_, err := publicServer.Update(ctx, publicv1.NetworkClassesUpdateRequest_builder{
@@ -454,6 +459,7 @@ var _ = Describe("Network classes server", func() {
 						Id:        ncA.GetId(),
 						Title:     ncA.GetTitle(),
 						IsDefault: new(false),
+						Metadata:  publicv1.Metadata_builder{Name: name}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -554,6 +560,7 @@ var _ = Describe("Network classes server", func() {
 				// Create NC-A not as default:
 				ncA := createNetworkClass()
 				Expect(ncA.GetIsDefault()).To(BeFalse())
+				name := ncA.GetMetadata().GetName()
 
 				// Update without a field mask, setting is_default=true (proto.Merge path):
 				updateResponse, err := privateServer.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
@@ -561,6 +568,7 @@ var _ = Describe("Network classes server", func() {
 						Id:        ncA.GetId(),
 						Title:     ncA.GetTitle(),
 						IsDefault: new(true),
+						Metadata:  privatev1.Metadata_builder{Name: name}.Build(),
 					}.Build(),
 					// No UpdateMask — triggers proto.Merge branch in applyNetworkClassUpdate
 				}.Build())
@@ -592,6 +600,7 @@ var _ = Describe("Network classes server", func() {
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				nc := response.GetObject()
+				name := nc.GetMetadata().GetName()
 
 				// Update without a field mask (full replacement), dropping supports_ipv4/ipv6 but
 				// keeping supports_dual_stack=true. The persisted object (via generic.Update, which
@@ -604,6 +613,7 @@ var _ = Describe("Network classes server", func() {
 					Object: privatev1.NetworkClass_builder{
 						Id:                     nc.GetId(),
 						Title:                  nc.GetTitle(),
+						Metadata:               privatev1.Metadata_builder{Name: name}.Build(),
 						ImplementationStrategy: nc.GetImplementationStrategy(),
 						FabricManager:          new(nc.GetFabricManager()),
 						Capabilities: privatev1.NetworkClassCapabilities_builder{
@@ -620,13 +630,15 @@ var _ = Describe("Network classes server", func() {
 				// Create NC-A as default:
 				ncA := createDefaultNetworkClass()
 				Expect(ncA.GetIsDefault()).To(BeTrue())
+				name := ncA.GetMetadata().GetName()
 
 				// Update without a field mask, with is_default absent in the update object.
 				// generic.Update replaces the entire object, so absent fields are cleared.
 				updateResponse, err := privateServer.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
-						Id:    ncA.GetId(),
-						Title: ncA.GetTitle(),
+						Id:       ncA.GetId(),
+						Title:    ncA.GetTitle(),
+						Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -640,14 +652,16 @@ var _ = Describe("Network classes server", func() {
 
 				// Create NC-B (non-default):
 				ncB := createNetworkClass()
+				name := ncB.GetMetadata().GetName()
 
 				// Update NC-B with no mask and is_default absent.
 				// The swap guard uses HasIsDefault() on the request object,
 				// so it should NOT fire (is_default was not explicitly set).
 				_, err := privateServer.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
-						Id:    ncB.GetId(),
-						Title: "updated title",
+						Id:       ncB.GetId(),
+						Title:    "updated title",
+						Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -940,11 +954,12 @@ var _ = Describe("Network classes server", func() {
 			It("Update changing fabric_manager fails with immutability error", func() {
 				nc := createNetworkClass()
 				Expect(nc.GetFabricManager()).To(Equal("netris"))
-
+				name := nc.GetMetadata().GetName()
 				_, err := privateServer.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
 						Id:            nc.GetId(),
 						FabricManager: new("neutron"),
+						Metadata:      privatev1.Metadata_builder{Name: name}.Build(),
 					}.Build(),
 					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"fabric_manager"}},
 				}.Build())
@@ -957,12 +972,13 @@ var _ = Describe("Network classes server", func() {
 				// Create NC without k8s_manager (BM-only region):
 				nc := createNetworkClass()
 				Expect(nc.HasK8SManager()).To(BeFalse())
-
+				name := nc.GetMetadata().GetName()
 				// Set k8s_manager for the first time (adding VM support):
 				updateResponse, err := privateServer.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
 						Id:         nc.GetId(),
 						K8SManager: new("cudn_localnet"),
+						Metadata:   privatev1.Metadata_builder{Name: name}.Build(),
 					}.Build(),
 					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"k8s_manager"}},
 				}.Build())
@@ -984,10 +1000,12 @@ var _ = Describe("Network classes server", func() {
 				Expect(nc.HasFabricManager()).To(BeFalse())
 
 				// Set fabric_manager for the first time (migrating from k8s-only to hybrid):
+				name := nc.GetMetadata().GetName()
 				updateResponse, err := privateServer.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
 						Id:            nc.GetId(),
 						FabricManager: new("netris"),
+						Metadata:      privatev1.Metadata_builder{Name: name}.Build(),
 					}.Build(),
 					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"fabric_manager"}},
 				}.Build())
@@ -1007,11 +1025,12 @@ var _ = Describe("Network classes server", func() {
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				nc := response.GetObject()
-
+				name := nc.GetMetadata().GetName()
 				_, err = privateServer.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
 						Id:         nc.GetId(),
 						K8SManager: new("ovn_evpn"),
+						Metadata:   privatev1.Metadata_builder{Name: name}.Build(),
 					}.Build(),
 					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"k8s_manager"}},
 				}.Build())
@@ -1032,11 +1051,12 @@ var _ = Describe("Network classes server", func() {
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				nc := response.GetObject()
-
+				name := nc.GetMetadata().GetName()
 				updateResponse, err := privateServer.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
-						Id:    nc.GetId(),
-						Title: "Updated title",
+						Id:       nc.GetId(),
+						Title:    "Updated title",
+						Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 					}.Build(),
 					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"title"}},
 				}.Build())
@@ -1048,12 +1068,13 @@ var _ = Describe("Network classes server", func() {
 			It("Full replacement update with same fabric_manager succeeds", func() {
 				nc := createNetworkClass()
 				Expect(nc.GetFabricManager()).To(Equal("netris"))
-
+				name := nc.GetMetadata().GetName()
 				updateResponse, err := privateServer.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
 						Id:            nc.GetId(),
 						Title:         "Updated",
 						FabricManager: new("netris"),
+						Metadata:      privatev1.Metadata_builder{Name: name}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -1062,12 +1083,13 @@ var _ = Describe("Network classes server", func() {
 
 			It("Full replacement update changing fabric_manager fails", func() {
 				nc := createNetworkClass()
-
+				name := nc.GetMetadata().GetName()
 				_, err := privateServer.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
 						Id:            nc.GetId(),
 						Title:         nc.GetTitle(),
 						FabricManager: new("neutron"),
+						Metadata:      privatev1.Metadata_builder{Name: name}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).To(HaveOccurred())
@@ -1155,11 +1177,12 @@ var _ = Describe("Network classes server", func() {
 					VirtualNetworkIpv4Cidr: "172.16.0.0/12",
 					SubnetIpv4Cidr:         "172.16.1.0/24",
 				}.Build()
-
+				name := nc.GetMetadata().GetName()
 				updateResponse, err := privateServer.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
-						Id:   nc.GetId(),
-						Spec: privatev1.NetworkClassSpec_builder{Defaults: newDefaults}.Build(),
+						Id:       nc.GetId(),
+						Metadata: privatev1.Metadata_builder{Name: name}.Build(),
+						Spec:     privatev1.NetworkClassSpec_builder{Defaults: newDefaults}.Build(),
 					}.Build(),
 					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.defaults"}},
 				}.Build())
@@ -1173,10 +1196,11 @@ var _ = Describe("Network classes server", func() {
 
 			It("Update defaults to nil clears them", func() {
 				nc := createNetworkClassWithDefaults(validDefaults())
-
+				name := nc.GetMetadata().GetName()
 				updateResponse, err := privateServer.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
-						Id: nc.GetId(),
+						Id:       nc.GetId(),
+						Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 					}.Build(),
 					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.defaults"}},
 				}.Build())
@@ -1355,14 +1379,15 @@ var _ = Describe("Network classes server", func() {
 
 			It("Update with invalid defaults via field mask fails validation", func() {
 				nc := createNetworkClassWithDefaults(validDefaults())
-
+				name := nc.GetMetadata().GetName()
 				invalidDefaults := privatev1.NetworkDefaults_builder{
 					VirtualNetworkIpv4Cidr: "not-a-cidr",
 				}.Build()
 				_, err := privateServer.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
-						Id:   nc.GetId(),
-						Spec: privatev1.NetworkClassSpec_builder{Defaults: invalidDefaults}.Build(),
+						Id:       nc.GetId(),
+						Metadata: privatev1.Metadata_builder{Name: name}.Build(),
+						Spec:     privatev1.NetworkClassSpec_builder{Defaults: invalidDefaults}.Build(),
 					}.Build(),
 					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.defaults"}},
 				}.Build())
@@ -1372,11 +1397,12 @@ var _ = Describe("Network classes server", func() {
 
 			It("Update with an unknown field mask path fails", func() {
 				nc := createNetworkClass()
-
+				name := nc.GetMetadata().GetName()
 				_, err := privateServer.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
-						Id:    nc.GetId(),
-						Title: "New Title",
+						Id:       nc.GetId(),
+						Title:    "New Title",
+						Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 					}.Build(),
 					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"not_a_real_field"}},
 				}.Build())
@@ -1401,7 +1427,7 @@ var _ = Describe("Network classes server", func() {
 				// Create NC via private API (no defaults):
 				nc := createNetworkClass()
 				Expect(nc.GetSpec().GetDefaults()).To(BeNil())
-
+				name := nc.GetMetadata().GetName()
 				// Attempt to set defaults via public Update — inMapper should ignore the field:
 				publicDefaults := publicv1.NetworkDefaults_builder{
 					VirtualNetworkIpv4Cidr: "10.0.0.0/16",
@@ -1409,9 +1435,10 @@ var _ = Describe("Network classes server", func() {
 				}.Build()
 				_, err := publicServer.Update(ctx, publicv1.NetworkClassesUpdateRequest_builder{
 					Object: publicv1.NetworkClass_builder{
-						Id:    nc.GetId(),
-						Title: nc.GetTitle(),
-						Spec:  publicv1.NetworkClassSpec_builder{Defaults: publicDefaults}.Build(),
+						Id:       nc.GetId(),
+						Title:    nc.GetTitle(),
+						Metadata: publicv1.Metadata_builder{Name: name}.Build(),
+						Spec:     publicv1.NetworkClassSpec_builder{Defaults: publicDefaults}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -1426,11 +1453,12 @@ var _ = Describe("Network classes server", func() {
 
 			It("Public Update preserves defaults set via private API", func() {
 				nc := createNetworkClassWithDefaults(validDefaults())
-
+				name := nc.GetMetadata().GetName()
 				_, err := publicServer.Update(ctx, publicv1.NetworkClassesUpdateRequest_builder{
 					Object: publicv1.NetworkClass_builder{
-						Id:    nc.GetId(),
-						Title: "Updated title",
+						Id:       nc.GetId(),
+						Metadata: publicv1.Metadata_builder{Name: name}.Build(),
+						Title:    "Updated title",
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -1508,10 +1536,11 @@ var _ = Describe("Network classes server", func() {
 				nc := createWithDisableCapabilities(privatev1.NetworkClassCapabilities_builder{
 					SupportsIpv6: true,
 				}.Build())
-
+				name := nc.GetMetadata().GetName()
 				updateResponse, err := privateServer.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
-						Id: nc.GetId(),
+						Id:       nc.GetId(),
+						Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 						Spec: privatev1.NetworkClassSpec_builder{
 							DisableCapabilities: privatev1.NetworkClassCapabilities_builder{
 								DpuSupport: true,
@@ -1529,7 +1558,7 @@ var _ = Describe("Network classes server", func() {
 				nc := createWithDisableCapabilities(privatev1.NetworkClassCapabilities_builder{
 					SupportsIpv6: true,
 				}.Build())
-
+				name := nc.GetMetadata().GetName()
 				// Update without a field mask, setting a different disable_capabilities value
 				// (proto.Merge path in applyNetworkClassUpdate). proto.Merge recursively merges
 				// nested messages instead of replacing them, so if that semantic leaked through,
@@ -1538,6 +1567,7 @@ var _ = Describe("Network classes server", func() {
 					Object: privatev1.NetworkClass_builder{
 						Id:                     nc.GetId(),
 						Title:                  nc.GetTitle(),
+						Metadata:               privatev1.Metadata_builder{Name: name}.Build(),
 						ImplementationStrategy: nc.GetImplementationStrategy(),
 						FabricManager:          new(nc.GetFabricManager()),
 						Spec: privatev1.NetworkClassSpec_builder{
@@ -1557,10 +1587,11 @@ var _ = Describe("Network classes server", func() {
 				nc := createWithDisableCapabilities(privatev1.NetworkClassCapabilities_builder{
 					SupportsIpv6: true,
 				}.Build())
-
+				name := nc.GetMetadata().GetName()
 				updateResponse, err := privateServer.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
-						Id: nc.GetId(),
+						Id:       nc.GetId(),
+						Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 						Spec: privatev1.NetworkClassSpec_builder{
 							DisableCapabilities: privatev1.NetworkClassCapabilities_builder{
 								DpuSupport:        true,
@@ -1582,10 +1613,11 @@ var _ = Describe("Network classes server", func() {
 					SupportsIpv6: true,
 					DpuSupport:   true,
 				}.Build())
-
+				name := nc.GetMetadata().GetName()
 				updateResponse, err := privateServer.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
-						Id: nc.GetId(),
+						Id:       nc.GetId(),
+						Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 						Spec: privatev1.NetworkClassSpec_builder{
 							DisableCapabilities: privatev1.NetworkClassCapabilities_builder{}.Build(),
 						}.Build(),
@@ -1601,6 +1633,7 @@ var _ = Describe("Network classes server", func() {
 				nc := createWithDisableCapabilities(privatev1.NetworkClassCapabilities_builder{
 					SupportsIpv6: true,
 				}.Build())
+				name := nc.GetMetadata().GetName()
 
 				defaults := privatev1.NetworkDefaults_builder{
 					VirtualNetworkIpv4Cidr: "10.0.0.0/16",
@@ -1608,8 +1641,9 @@ var _ = Describe("Network classes server", func() {
 				}.Build()
 				updateResponse, err := privateServer.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
-						Id:   nc.GetId(),
-						Spec: privatev1.NetworkClassSpec_builder{Defaults: defaults}.Build(),
+						Id:       nc.GetId(),
+						Metadata: privatev1.Metadata_builder{Name: name}.Build(),
+						Spec:     privatev1.NetworkClassSpec_builder{Defaults: defaults}.Build(),
 					}.Build(),
 					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.defaults"}},
 				}.Build())
@@ -1639,10 +1673,12 @@ var _ = Describe("Network classes server", func() {
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				nc := response.GetObject()
+				name := nc.GetMetadata().GetName()
 
 				updateResponse, err := privateServer.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
-						Id: nc.GetId(),
+						Id:       nc.GetId(),
+						Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 						Spec: privatev1.NetworkClassSpec_builder{
 							DisableCapabilities: privatev1.NetworkClassCapabilities_builder{
 								DpuSupport: true,
@@ -1677,11 +1713,12 @@ var _ = Describe("Network classes server", func() {
 				nc := createWithDisableCapabilities(privatev1.NetworkClassCapabilities_builder{
 					SupportsIpv6: true,
 				}.Build())
-
+				name := nc.GetMetadata().GetName()
 				_, err := publicServer.Update(ctx, publicv1.NetworkClassesUpdateRequest_builder{
 					Object: publicv1.NetworkClass_builder{
-						Id:    nc.GetId(),
-						Title: nc.GetTitle(),
+						Id:       nc.GetId(),
+						Title:    nc.GetTitle(),
+						Metadata: publicv1.Metadata_builder{Name: name}.Build(),
 						Spec: publicv1.NetworkClassSpec_builder{
 							DisableCapabilities: publicv1.NetworkClassCapabilities_builder{
 								DpuSupport: true,
@@ -1703,11 +1740,12 @@ var _ = Describe("Network classes server", func() {
 				nc := createWithDisableCapabilities(privatev1.NetworkClassCapabilities_builder{
 					SupportsIpv6: true,
 				}.Build())
-
+				name := nc.GetMetadata().GetName()
 				_, err := publicServer.Update(ctx, publicv1.NetworkClassesUpdateRequest_builder{
 					Object: publicv1.NetworkClass_builder{
-						Id:    nc.GetId(),
-						Title: "Updated title",
+						Id:       nc.GetId(),
+						Metadata: publicv1.Metadata_builder{Name: name}.Build(),
+						Title:    "Updated title",
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())

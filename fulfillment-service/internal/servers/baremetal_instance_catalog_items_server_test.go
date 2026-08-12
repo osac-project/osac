@@ -189,7 +189,7 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 			Expect(s.Code()).To(Equal(codes.NotFound))
 		})
 
-		It("Updates an object", func() {
+		It("Rejects update of the name of BareMetalInstanceCatalogItem", func() {
 			createResponse, err := server.Create(ctx, publicv1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.BareMetalInstanceCatalogItem_builder{
 					Title:     "Original title",
@@ -203,7 +203,7 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			id := createResponse.GetObject().GetId()
 
-			updateResponse, err := server.Update(ctx, publicv1.BareMetalInstanceCatalogItemsUpdateRequest_builder{
+			_, err = server.Update(ctx, publicv1.BareMetalInstanceCatalogItemsUpdateRequest_builder{
 				Object: publicv1.BareMetalInstanceCatalogItem_builder{
 					Id:        id,
 					Title:     "Updated title",
@@ -211,6 +211,35 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 					Published: true,
 					Metadata: publicv1.Metadata_builder{
 						Name: "test-bmi-catalog-item-update",
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("immutable"))
+		})
+
+		It("Updates an object", func() {
+			createResponse, err := server.Create(ctx, publicv1.BareMetalInstanceCatalogItemsCreateRequest_builder{
+				Object: publicv1.BareMetalInstanceCatalogItem_builder{
+					Title:     "Original title",
+					Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my-bmi-template-id"}.Build(),
+					Published: true,
+					Metadata: publicv1.Metadata_builder{
+						Name: "original-item",
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			id := createResponse.GetObject().GetId()
+			name := createResponse.GetObject().GetMetadata().GetName()
+			updateResponse, err := server.Update(ctx, publicv1.BareMetalInstanceCatalogItemsUpdateRequest_builder{
+				Object: publicv1.BareMetalInstanceCatalogItem_builder{
+					Id:        id,
+					Title:     "Updated title",
+					Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my-bmi-template-id"}.Build(),
+					Published: true,
+					Metadata: publicv1.Metadata_builder{
+						Name: name,
 					}.Build(),
 				}.Build(),
 			}.Build())

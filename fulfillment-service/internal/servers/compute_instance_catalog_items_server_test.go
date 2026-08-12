@@ -343,10 +343,12 @@ var _ = Describe("Compute instance catalog items server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			object := createResponse.GetObject()
+			name := object.GetMetadata().GetName()
 
 			updateResponse, err := server.Update(ctx, publicv1.ComputeInstanceCatalogItemsUpdateRequest_builder{
 				Object: publicv1.ComputeInstanceCatalogItem_builder{
 					Id:          object.GetId(),
+					Metadata:    publicv1.Metadata_builder{Name: name}.Build(),
 					Title:       "Updated title",
 					Description: "Updated description.",
 					Template:    publicv1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),

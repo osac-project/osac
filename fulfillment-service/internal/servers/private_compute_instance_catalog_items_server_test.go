@@ -237,10 +237,11 @@ var _ = Describe("Private compute instance catalog items server", func() {
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 			})
-
+			name := object.GetMetadata().GetName()
 			updateResponse, err := server.Update(ctx, privatev1.ComputeInstanceCatalogItemsUpdateRequest_builder{
 				Object: privatev1.ComputeInstanceCatalogItem_builder{
 					Id:          object.GetId(),
+					Metadata:    privatev1.Metadata_builder{Name: name}.Build(),
 					Title:       "Updated title",
 					Description: "Updated description.",
 					Template:    privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
@@ -472,46 +473,6 @@ var _ = Describe("Private compute instance catalog items server", func() {
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-		})
-
-		It("Rejects update to duplicate name within same tenant", func() {
-			_, err := server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
-				Object: privatev1.ComputeInstanceCatalogItem_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: "first-item",
-					}.Build(),
-					Title:    "First CI catalog item",
-					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-
-			secondResponse, err := server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
-				Object: privatev1.ComputeInstanceCatalogItem_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: "second-item",
-					}.Build(),
-					Title:    "Second CI catalog item",
-					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-
-			_, err = server.Update(ctx, privatev1.ComputeInstanceCatalogItemsUpdateRequest_builder{
-				Object: privatev1.ComputeInstanceCatalogItem_builder{
-					Id: secondResponse.GetObject().GetId(),
-					Metadata: privatev1.Metadata_builder{
-						Name: "first-item",
-					}.Build(),
-					Title:    "Second CI catalog item",
-					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.AlreadyExists))
-			Expect(status.Message()).To(ContainSubstring("first-item"))
 		})
 
 		It("Rejects non-editable field definition without default value", func() {
@@ -798,26 +759,6 @@ var _ = Describe("Private compute instance catalog items server", func() {
 			Expect(updateResponse.GetObject().GetFieldDefinitions()).To(HaveLen(2))
 		})
 
-		It("Allows empty name without conflict", func() {
-			_, err := server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
-				Object: privatev1.ComputeInstanceCatalogItem_builder{
-					Metadata: privatev1.Metadata_builder{}.Build(),
-					Title:    "First unnamed CI item",
-					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-
-			_, err = server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
-				Object: privatev1.ComputeInstanceCatalogItem_builder{
-					Metadata: privatev1.Metadata_builder{}.Build(),
-					Title:    "Second unnamed CI item",
-					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-		})
-
 		Describe("Instance type validation in field_definitions", func() {
 			var itServer *PrivateInstanceTypesServer
 
@@ -905,13 +846,14 @@ var _ = Describe("Private compute instance catalog items server", func() {
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				catalogItemId := createResponse.GetObject().GetId()
-
+				name := createResponse.GetObject().GetMetadata().GetName()
 				createInstanceTypeWithState("deprecated-type-upd",
 					privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_DEPRECATED)
 
 				updateResponse, err := server.Update(ctx, privatev1.ComputeInstanceCatalogItemsUpdateRequest_builder{
 					Object: privatev1.ComputeInstanceCatalogItem_builder{
 						Id:       catalogItemId,
+						Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 						Title:    "Catalog item to update",
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 						FieldDefinitions: []*privatev1.FieldDefinition{

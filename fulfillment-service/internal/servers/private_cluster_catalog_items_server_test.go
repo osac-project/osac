@@ -239,10 +239,12 @@ var _ = Describe("Private cluster catalog items server", func() {
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 			})
+			name := object.GetMetadata().GetName()
 
 			updateResponse, err := server.Update(ctx, privatev1.ClusterCatalogItemsUpdateRequest_builder{
 				Object: privatev1.ClusterCatalogItem_builder{
 					Id:          object.GetId(),
+					Metadata:    privatev1.Metadata_builder{Name: name}.Build(),
 					Title:       "Updated title",
 					Description: "Updated description.",
 					Template:    privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
@@ -279,10 +281,11 @@ var _ = Describe("Private cluster catalog items server", func() {
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 			})
-
+			name := object.GetMetadata().GetName()
 			updateResponse, err := server.Update(ctx, privatev1.ClusterCatalogItemsUpdateRequest_builder{
 				Object: privatev1.ClusterCatalogItem_builder{
 					Id:        object.GetId(),
+					Metadata:  privatev1.Metadata_builder{Name: name}.Build(),
 					Published: true,
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{
@@ -510,10 +513,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 				}.Build(),
 			}.Build())
 			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.AlreadyExists))
-			Expect(status.Message()).To(ContainSubstring("first-item"))
+			Expect(err.Error()).To(ContainSubstring("immutable"))
 		})
 
 		It("Rejects non-editable field definition without default value", func() {
@@ -687,6 +687,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			id := createResponse.GetObject().GetId()
+			name := createResponse.GetObject().GetMetadata().GetName()
 			DeferCleanup(func() {
 				_, err := server.Delete(ctx, privatev1.ClusterCatalogItemsDeleteRequest_builder{
 					Id: id,
@@ -696,7 +697,8 @@ var _ = Describe("Private cluster catalog items server", func() {
 
 			_, err = server.Update(ctx, privatev1.ClusterCatalogItemsUpdateRequest_builder{
 				Object: privatev1.ClusterCatalogItem_builder{
-					Id: id,
+					Id:       id,
+					Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 					FieldDefinitions: []*privatev1.FieldDefinition{
 						privatev1.FieldDefinition_builder{
 							Path:     "spec.pull_secret",
@@ -728,6 +730,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			id := createResponse.GetObject().GetId()
+			name := createResponse.GetObject().GetMetadata().GetName()
 			DeferCleanup(func() {
 				_, err := server.Delete(ctx, privatev1.ClusterCatalogItemsDeleteRequest_builder{
 					Id: id,
@@ -737,7 +740,8 @@ var _ = Describe("Private cluster catalog items server", func() {
 
 			_, err = server.Update(ctx, privatev1.ClusterCatalogItemsUpdateRequest_builder{
 				Object: privatev1.ClusterCatalogItem_builder{
-					Id: id,
+					Id:       id,
+					Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 					FieldDefinitions: []*privatev1.FieldDefinition{
 						privatev1.FieldDefinition_builder{
 							Path:             "spec.network.pod_cidr",
@@ -775,10 +779,12 @@ var _ = Describe("Private cluster catalog items server", func() {
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 			})
+			name := createResponse.GetObject().GetMetadata().GetName()
 
 			updateResponse, err := server.Update(ctx, privatev1.ClusterCatalogItemsUpdateRequest_builder{
 				Object: privatev1.ClusterCatalogItem_builder{
-					Id: id,
+					Id:       id,
+					Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 					FieldDefinitions: []*privatev1.FieldDefinition{
 						privatev1.FieldDefinition_builder{
 							Path:     "spec.pull_secret",
@@ -895,10 +901,11 @@ var _ = Describe("Private cluster catalog items server", func() {
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
-
+				name := createResponse.GetObject().GetMetadata().GetName()
 				_, err = validatedServer.Update(ctx, privatev1.ClusterCatalogItemsUpdateRequest_builder{
 					Object: privatev1.ClusterCatalogItem_builder{
 						Id:       createResponse.GetObject().GetId(),
+						Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 						Title:    "Catalog item for update test",
 						Template: &privatev1.ClusterTemplateReference{Id: "my-template-id"},
 						FieldDefinitions: []*privatev1.FieldDefinition{
@@ -918,7 +925,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 			})
 		})
 
-		It("Allows empty name without conflict", func() {
+		It("Rejects empty name on create", func() {
 			_, err := server.Create(ctx, privatev1.ClusterCatalogItemsCreateRequest_builder{
 				Object: privatev1.ClusterCatalogItem_builder{
 					Metadata: privatev1.Metadata_builder{}.Build(),
@@ -935,7 +942,10 @@ var _ = Describe("Private cluster catalog items server", func() {
 					Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 				}.Build(),
 			}.Build())
-			Expect(err).ToNot(HaveOccurred())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.AlreadyExists))
 		})
 	})
 })

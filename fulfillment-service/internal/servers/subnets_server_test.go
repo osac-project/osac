@@ -332,7 +332,7 @@ var _ = Describe("Subnets server", func() {
 				Object: publicv1.Subnet_builder{
 					Id: object.GetId(),
 					Metadata: publicv1.Metadata_builder{
-						Name: "updated-name",
+						Name: object.GetMetadata().GetName(),
 					}.Build(),
 					Spec: publicv1.SubnetSpec_builder{
 						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
@@ -341,14 +341,14 @@ var _ = Describe("Subnets server", func() {
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(updateResponse.GetObject().GetMetadata().GetName()).To(Equal("updated-name"))
+			Expect(updateResponse.GetObject().GetMetadata().GetName()).To(Equal("original-name"))
 
 			// Get and verify:
 			getResponse, err := server.Get(ctx, publicv1.SubnetsGetRequest_builder{
 				Id: object.GetId(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(getResponse.GetObject().GetMetadata().GetName()).To(Equal("updated-name"))
+			Expect(getResponse.GetObject().GetMetadata().GetName()).To(Equal("original-name"))
 		})
 
 		It("Update object preserves CIDRs when explicitly repeated in request", func() {
@@ -372,7 +372,7 @@ var _ = Describe("Subnets server", func() {
 				Object: publicv1.Subnet_builder{
 					Id: object.GetId(),
 					Metadata: publicv1.Metadata_builder{
-						Name: "renamed",
+						Name: createResponse.GetObject().GetMetadata().GetName(),
 					}.Build(),
 					Spec: publicv1.SubnetSpec_builder{
 						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
@@ -406,7 +406,7 @@ var _ = Describe("Subnets server", func() {
 				Object: publicv1.Subnet_builder{
 					Id: object.GetId(),
 					Metadata: publicv1.Metadata_builder{
-						Name: "cidr-omitted",
+						Name: object.GetMetadata().GetName(),
 					}.Build(),
 					Spec: publicv1.SubnetSpec_builder{
 						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
@@ -437,6 +437,9 @@ var _ = Describe("Subnets server", func() {
 			_, err = server.Update(ctx, publicv1.SubnetsUpdateRequest_builder{
 				Object: publicv1.Subnet_builder{
 					Id: object.GetId(),
+					Metadata: publicv1.Metadata_builder{
+						Name: object.GetMetadata().GetName(),
+					}.Build(),
 					Spec: publicv1.SubnetSpec_builder{
 						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 						Ipv4Cidr:       new("10.0.4.0/24"),
@@ -471,7 +474,7 @@ var _ = Describe("Subnets server", func() {
 				Object: publicv1.Subnet_builder{
 					Id: object.GetId(),
 					Metadata: publicv1.Metadata_builder{
-						Name:    "locked-update",
+						Name:    object.GetMetadata().GetName(),
 						Version: math.MaxInt32,
 					}.Build(),
 					Spec: publicv1.SubnetSpec_builder{

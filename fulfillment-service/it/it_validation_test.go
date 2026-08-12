@@ -290,7 +290,7 @@ var _ = Describe("Protovalidate validation", func() {
 		Expect(status.Message()).To(ContainSubstring("does not match regex pattern"))
 	})
 
-	It("Rejects Project Update with invalid segment in hierarchical name", func() {
+	It("Rejects Project name Update", func() {
 		// Create a valid project first
 		validProject, err := projectsClient.Create(ctx, privatev1.ProjectsCreateRequest_builder{
 			Object: privatev1.Project_builder{
@@ -310,13 +310,13 @@ var _ = Describe("Protovalidate validation", func() {
 			}.Build())
 		})
 
-		// Try to update with invalid name containing uppercase
-		invalidName := "Invalid-Name-With-Uppercase"
+		// Try to update project name
+		newName := "new-name"
 		_, err = projectsClient.Update(ctx, privatev1.ProjectsUpdateRequest_builder{
 			Object: privatev1.Project_builder{
 				Id: validProject.Object.Id,
 				Metadata: privatev1.Metadata_builder{
-					Name:   invalidName,
+					Name:   newName,
 					Tenant: tenantName,
 				}.Build(),
 				Spec: privatev1.ProjectSpec_builder{
@@ -330,8 +330,7 @@ var _ = Describe("Protovalidate validation", func() {
 		Expect(ok).To(BeTrue())
 		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 		// Should be rejected by message-level CEL validation
-		Expect(status.Message()).To(ContainSubstring("validation failed"))
-		Expect(status.Message()).To(ContainSubstring("project name must be dot-separated DNS labels"))
+		Expect(status.Message()).To(ContainSubstring("immutable"))
 	})
 
 	It("Accepts partial Update with empty name not in mask (update_mask bypass)", func() {
@@ -386,9 +385,9 @@ var _ = Describe("Protovalidate validation", func() {
 		Expect(response.Object.Metadata.Name).To(Equal("valid-project")) // Unchanged from DB
 	})
 
-	It("Rejects Update with invalid name in mask (validates merged object)", func() {
+	It("Rejects Project name Update in mask", func() {
 		// Tests that server validation runs on the merged object:
-		// - Client explicitly updates name to invalid value (in mask)
+		// - Client explicitly updates name (in mask)
 		// - Server merges and validates
 		// - Validation rejects the invalid merged object
 
@@ -412,12 +411,12 @@ var _ = Describe("Protovalidate validation", func() {
 		})
 
 		// Try to update name to invalid value WITH name in the mask
-		invalidName := "Invalid-Name-With-Uppercase"
+		newName := "new-name"
 		_, err = projectsClient.Update(ctx, privatev1.ProjectsUpdateRequest_builder{
 			Object: privatev1.Project_builder{
 				Id: validProject.Object.Id,
 				Metadata: privatev1.Metadata_builder{
-					Name:   invalidName,
+					Name:   newName,
 					Tenant: tenantName,
 				}.Build(),
 			}.Build(),
@@ -432,8 +431,7 @@ var _ = Describe("Protovalidate validation", func() {
 		Expect(ok).To(BeTrue())
 		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 		// Should be rejected by message-level CEL validation
-		Expect(status.Message()).To(ContainSubstring("validation failed"))
-		Expect(status.Message()).To(ContainSubstring("project name must be dot-separated DNS labels"))
+		Expect(status.Message()).To(ContainSubstring("immutable"))
 	})
 
 	It("Rejects Update with invalid label in mask (Go validation on labels)", func() {

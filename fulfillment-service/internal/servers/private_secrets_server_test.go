@@ -96,7 +96,7 @@ var _ = Describe("Private secrets server", func() {
 			response, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{
 				Object: privatev1.Secret_builder{
 					Metadata: privatev1.Metadata_builder{
-						Name: name,
+						Name: fmt.Sprintf("%s-%s", name, uuid.NewString()[:4]),
 					}.Build(),
 					Data: map[string][]byte{
 						"key": []byte("value"),
@@ -215,16 +215,16 @@ var _ = Describe("Private secrets server", func() {
 		})
 
 		It("List secrets with order", func() {
-			createVaultSecretWithName("aaa-secret")
-			createVaultSecretWithName("zzz-secret")
+			first := createVaultSecretWithName("aaa-secret")
+			second := createVaultSecretWithName("zzz-secret")
 
 			response, err := server.List(ctx, privatev1.SecretsListRequest_builder{
 				Order: new("metadata.name asc"),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(response.GetSize()).To(BeNumerically("==", 2))
-			Expect(response.GetItems()[0].GetMetadata().GetName()).To(Equal("aaa-secret"))
-			Expect(response.GetItems()[1].GetMetadata().GetName()).To(Equal("zzz-secret"))
+			Expect(response.GetItems()[0].GetMetadata().GetName()).To(Equal(first.GetMetadata().GetName()))
+			Expect(response.GetItems()[1].GetMetadata().GetName()).To(Equal(second.GetMetadata().GetName()))
 		})
 
 		It("Update applies partial changes via field mask", func() {

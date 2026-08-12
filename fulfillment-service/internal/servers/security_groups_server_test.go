@@ -372,10 +372,11 @@ var _ = Describe("SecurityGroups server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			object := createResponse.GetObject()
-
+			name := object.GetMetadata().GetName()
 			updateResponse, err := server.Update(ctx, publicv1.SecurityGroupsUpdateRequest_builder{
 				Object: publicv1.SecurityGroup_builder{
-					Id: object.GetId(),
+					Id:       object.GetId(),
+					Metadata: publicv1.Metadata_builder{Name: name}.Build(),
 					Spec: publicv1.SecurityGroupSpec_builder{
 						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 						Ingress: []*publicv1.SecurityRule{
@@ -413,14 +414,12 @@ var _ = Describe("SecurityGroups server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			object := createResponse.GetObject()
-
+			name := object.GetMetadata().GetName()
 			// Update the object:
 			updateResponse, err := server.Update(ctx, publicv1.SecurityGroupsUpdateRequest_builder{
 				Object: publicv1.SecurityGroup_builder{
-					Id: object.GetId(),
-					Metadata: publicv1.Metadata_builder{
-						Name: "updated-name",
-					}.Build(),
+					Id:       object.GetId(),
+					Metadata: publicv1.Metadata_builder{Name: name}.Build(),
 					Spec: publicv1.SecurityGroupSpec_builder{
 						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
 						Ingress: []*publicv1.SecurityRule{
@@ -435,7 +434,7 @@ var _ = Describe("SecurityGroups server", func() {
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(updateResponse.GetObject().GetMetadata().GetName()).To(Equal("updated-name"))
+			Expect(updateResponse.GetObject().GetMetadata().GetName()).To(Equal("original-name"))
 			Expect(updateResponse.GetObject().GetSpec().GetIngress()).To(HaveLen(1))
 
 			// Get and verify:
@@ -443,7 +442,7 @@ var _ = Describe("SecurityGroups server", func() {
 				Id: object.GetId(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(getResponse.GetObject().GetMetadata().GetName()).To(Equal("updated-name"))
+			Expect(getResponse.GetObject().GetMetadata().GetName()).To(Equal("original-name"))
 		})
 
 		It("Delete object", func() {

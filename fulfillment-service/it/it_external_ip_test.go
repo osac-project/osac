@@ -122,7 +122,7 @@ var _ = Describe("Private ExternalIPPool CRUD", func() {
 
 	It("Rejects immutable field changes on update", func() {
 		id := fmt.Sprintf("test-pool-%s", uuid.New())
-		_, err := client.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
+		response, err := client.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 			Object: privatev1.ExternalIPPool_builder{
 				Id: id,
 				Metadata: privatev1.Metadata_builder{
@@ -135,10 +135,14 @@ var _ = Describe("Private ExternalIPPool CRUD", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
+		name := response.GetObject().GetMetadata().GetName()
 
 		_, err = client.Update(ctx, privatev1.ExternalIPPoolsUpdateRequest_builder{
 			Object: privatev1.ExternalIPPool_builder{
 				Id: id,
+				Metadata: privatev1.Metadata_builder{
+					Name: name,
+				}.Build(),
 				Spec: privatev1.ExternalIPPoolSpec_builder{
 					IpFamily: privatev1.IPFamily_IP_FAMILY_IPV6,
 				}.Build(),
@@ -150,6 +154,9 @@ var _ = Describe("Private ExternalIPPool CRUD", func() {
 		_, err = client.Update(ctx, privatev1.ExternalIPPoolsUpdateRequest_builder{
 			Object: privatev1.ExternalIPPool_builder{
 				Id: id,
+				Metadata: privatev1.Metadata_builder{
+					Name: name,
+				}.Build(),
 				Spec: privatev1.ExternalIPPoolSpec_builder{
 					Cidrs: []string{uniqueCIDR()},
 				}.Build(),
@@ -396,7 +403,7 @@ var _ = Describe("ExternalIP lifecycle", func() {
 
 	It("Rejects changing immutable pool field", func() {
 		ipId := fmt.Sprintf("test-ip-%s", uuid.New())
-		_, err := externalIPsClient.Create(ctx, publicv1.ExternalIPsCreateRequest_builder{
+		response, err := externalIPsClient.Create(ctx, publicv1.ExternalIPsCreateRequest_builder{
 			Object: publicv1.ExternalIP_builder{
 				Id: ipId,
 				Metadata: publicv1.Metadata_builder{
@@ -408,10 +415,13 @@ var _ = Describe("ExternalIP lifecycle", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
-
+		name := response.GetObject().GetMetadata().GetName()
 		_, err = externalIPsClient.Update(ctx, publicv1.ExternalIPsUpdateRequest_builder{
 			Object: publicv1.ExternalIP_builder{
 				Id: ipId,
+				Metadata: publicv1.Metadata_builder{
+					Name: name,
+				}.Build(),
 				Spec: publicv1.ExternalIPSpec_builder{
 					Pool: publicv1.ExternalIPPoolReference_builder{Name: "different-pool"}.Build(),
 				}.Build(),

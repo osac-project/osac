@@ -856,11 +856,12 @@ var _ = Describe("Clusters server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			object := createResponse.GetObject()
-
+			name := object.GetMetadata().GetName()
 			// Update the object:
 			updateResponse, err := server.Update(ctx, publicv1.ClustersUpdateRequest_builder{
 				Object: publicv1.Cluster_builder{
-					Id: object.GetId(),
+					Id:       object.GetId(),
+					Metadata: publicv1.Metadata_builder{Name: name}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
 						NodeSets: map[string]*publicv1.ClusterNodeSet{
 							"compute": publicv1.ClusterNodeSet_builder{
@@ -902,11 +903,12 @@ var _ = Describe("Clusters server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			object := createResponse.GetObject()
-
+			name := object.GetMetadata().GetName()
 			// Try to update the status:
 			updateResponse, err := server.Update(ctx, publicv1.ClustersUpdateRequest_builder{
 				Object: publicv1.Cluster_builder{
-					Id: object.GetId(),
+					Id:       object.GetId(),
+					Metadata: publicv1.Metadata_builder{Name: name}.Build(),
 					Status: publicv1.ClusterStatus_builder{
 						ApiUrl:     "https://my.api.com",
 						ConsoleUrl: "https://my.console.com",
@@ -1015,11 +1017,12 @@ var _ = Describe("Clusters server", func() {
 				Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			object := createResponse.GetObject()
-
+			name := object.GetMetadata().GetName()
 			// Update the object using the public server:
 			_, err = server.Update(ctx, publicv1.ClustersUpdateRequest_builder{
 				Object: publicv1.Cluster_builder{
-					Id: object.GetId(),
+					Id:       object.GetId(),
+					Metadata: publicv1.Metadata_builder{Name: name}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
 						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 						NodeSets: map[string]*publicv1.ClusterNodeSet{
@@ -1095,11 +1098,12 @@ var _ = Describe("Clusters server", func() {
 				Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			object := createResponse.GetObject()
-
+			name := object.GetMetadata().GetName()
 			// Try to update the status:
 			_, err = server.Update(ctx, publicv1.ClustersUpdateRequest_builder{
 				Object: publicv1.Cluster_builder{
-					Id: object.GetId(),
+					Id:       object.GetId(),
+					Metadata: publicv1.Metadata_builder{Name: name}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
 						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 					}.Build(),
@@ -1248,7 +1252,7 @@ var _ = Describe("Clusters server", func() {
 			Expect(getResponse.GetObject().GetMetadata().GetName()).To(Equal("my-cluster"))
 		})
 
-		It("Updates name", func() {
+		It("Rejects update of the name of cluster", func() {
 			// Create the object with an initial name:
 			createResponse, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
 				Object: publicv1.Cluster_builder{
@@ -1264,7 +1268,7 @@ var _ = Describe("Clusters server", func() {
 			Expect(createResponse.GetObject().GetMetadata().GetName()).To(Equal("my-name"))
 
 			// Update the name:
-			updateResponse, err := server.Update(ctx, publicv1.ClustersUpdateRequest_builder{
+			_, err = server.Update(ctx, publicv1.ClustersUpdateRequest_builder{
 				Object: publicv1.Cluster_builder{
 					Id: createResponse.GetObject().GetId(),
 					Metadata: publicv1.Metadata_builder{
@@ -1272,15 +1276,8 @@ var _ = Describe("Clusters server", func() {
 					}.Build(),
 				}.Build(),
 			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(updateResponse.GetObject().GetMetadata().GetName()).To(Equal("your-name"))
-
-			// Get and verify:
-			getResponse, err := server.Get(ctx, publicv1.ClustersGetRequest_builder{
-				Id: createResponse.GetObject().GetId(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(getResponse.GetObject().GetMetadata().GetName()).To(Equal("your-name"))
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("immutable"))
 		})
 
 		It("Returns not found error when updating object that doesn't exist", func() {
@@ -1839,13 +1836,14 @@ var _ = Describe("Clusters server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			id := createResponse.GetObject().GetId()
-
+			name := createResponse.GetObject().GetMetadata().GetName()
 			// Update echoing back the redacted value (simulating a client that
 			// does GET then PUT with the full object):
 			redacted := "***"
 			_, err = server.Update(ctx, publicv1.ClustersUpdateRequest_builder{
 				Object: publicv1.Cluster_builder{
-					Id: id,
+					Id:       id,
+					Metadata: publicv1.Metadata_builder{Name: name}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
 						Template:   publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 						PullSecret: &redacted,

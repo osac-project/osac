@@ -243,11 +243,12 @@ var _ = Describe("Cluster templates server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			object := createResponse.GetObject()
-
+			name := object.GetMetadata().GetName()
 			// Update the object:
 			updateResponse, err := server.Update(ctx, publicv1.ClusterTemplatesUpdateRequest_builder{
 				Object: publicv1.ClusterTemplate_builder{
 					Id:          object.GetId(),
+					Metadata:    publicv1.Metadata_builder{Name: name}.Build(),
 					Title:       "Still my template",
 					Description: "But now it is _ugly_",
 				}.Build(),

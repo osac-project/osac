@@ -15,7 +15,9 @@ package servers
 
 import (
 	"context"
+	"fmt"
 
+	"github.com/google/uuid"
 	. "github.com/onsi/gomega"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
@@ -31,6 +33,7 @@ func createComputeInstanceInState(
 		privatev1.ComputeInstance_builder{
 			Metadata: privatev1.Metadata_builder{
 				Tenant: "shared",
+				Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 			}.Build(),
 			Spec: privatev1.ComputeInstanceSpec_builder{
 				Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "general.small"}.Build(),

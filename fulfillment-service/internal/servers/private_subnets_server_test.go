@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
@@ -66,6 +67,7 @@ var _ = Describe("Private subnets server", func() {
 
 	// Helper function to create a NetworkClass for validation tests
 	createNetworkClass := func(ctx context.Context) *privatev1.NetworkClass {
+		name := fmt.Sprintf("test-network-class-%s", uuid.New().String()[:8])
 		// Create NetworkClass DAO
 		ncDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
 			SetLogger(logger).
@@ -77,6 +79,7 @@ var _ = Describe("Private subnets server", func() {
 			ImplementationStrategy: "test-strategy",
 			Metadata: privatev1.Metadata_builder{
 				Tenant: auth.SharedTenant,
+				Name:   name,
 			}.Build(),
 			Capabilities: privatev1.NetworkClassCapabilities_builder{
 				SupportsIpv4:      true,
@@ -111,6 +114,7 @@ var _ = Describe("Private subnets server", func() {
 		builder := privatev1.VirtualNetwork_builder{
 			Metadata: privatev1.Metadata_builder{
 				Tenant: auth.SharedTenant,
+				Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 			}.Build(),
 			Spec: privatev1.VirtualNetworkSpec_builder{
 				NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetImplementationStrategy()}.Build(),
@@ -1116,14 +1120,13 @@ var _ = Describe("Private subnets server", func() {
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				created := createResponse.GetObject()
+				name := created.GetMetadata().GetName()
 
 				// Update with only the name changed; no CIDR fields in the request:
 				updateResponse, err := server.Update(ctx, privatev1.SubnetsUpdateRequest_builder{
 					Object: privatev1.Subnet_builder{
-						Id: created.GetId(),
-						Metadata: privatev1.Metadata_builder{
-							Name: "renamed-subnet",
-						}.Build(),
+						Id:       created.GetId(),
+						Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 						Spec: privatev1.SubnetSpec_builder{
 							VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vn.GetId()}.Build(),
 						}.Build(),
@@ -1169,6 +1172,9 @@ var _ = Describe("Private subnets server", func() {
 				createSubnetInDB(ctx, "existing-subnet", "10.0.1.0/24", "", vn.GetId())
 
 				newSubnet := privatev1.Subnet_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "new-subnet",
+					}.Build(),
 					Spec: privatev1.SubnetSpec_builder{
 						Ipv4Cidr:       new("10.0.1.0/24"),
 						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vn.GetId()}.Build(),
@@ -1631,7 +1637,7 @@ var _ = Describe("Private subnets server", func() {
 			}
 		})
 
-		It("updates Subnet", func() {
+		It("Rejects update of the name of Subnet", func() {
 			vn := createVirtualNetwork(ctx, "10.0.0.0/16", "")
 
 			subnet := privatev1.Subnet_builder{
@@ -1653,19 +1659,11 @@ var _ = Describe("Private subnets server", func() {
 
 			// Update name
 			subnet.GetMetadata().Name = "updated-name"
-			updateResponse, err := generic.Update().
+			_, err = generic.Update().
 				SetObject(subnet).
 				Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-			subnet = updateResponse.GetObject()
-
-			// Verify update
-			getResponse, err := generic.Get().
-				SetId(subnet.GetId()).
-				Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-			retrieved := getResponse.GetObject()
-			Expect(retrieved.GetMetadata().GetName()).To(Equal("updated-name"))
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("immutable"))
 		})
 
 		It("soft deletes Subnet", func() {

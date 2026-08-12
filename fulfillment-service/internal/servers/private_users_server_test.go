@@ -200,11 +200,12 @@ var _ = Describe("Users Server", func() {
 			},
 		})
 		Expect(err).ToNot(HaveOccurred())
-
+		name := createResp.Object.GetMetadata().GetName()
 		// Update with credentials and verify they are preserved so controllers can access them:
 		updateResp, err := privateServer.Update(ctx, &privatev1.UsersUpdateRequest{
 			Object: &privatev1.User{
-				Id: createResp.Object.Id,
+				Id:       createResp.Object.Id,
+				Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 				Spec: &privatev1.UserSpec{
 					Email: "updated@example.com",
 					Credentials: &privatev1.UserCredentials{
@@ -232,11 +233,13 @@ var _ = Describe("Users Server", func() {
 		}
 		createResp, err := privateServer.Create(ctx, createReq)
 		Expect(err).ToNot(HaveOccurred())
+		name := createResp.Object.GetMetadata().GetName()
 
 		// Update the user:
 		updateReq := &privatev1.UsersUpdateRequest{
 			Object: &privatev1.User{
-				Id: createResp.Object.Id,
+				Id:       createResp.Object.Id,
+				Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 				Spec: &privatev1.UserSpec{
 					Email: "updated@example.com",
 				},

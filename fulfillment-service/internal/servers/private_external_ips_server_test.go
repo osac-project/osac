@@ -473,14 +473,14 @@ var _ = Describe("Private external IPs server", func() {
 			object := createExternalIPInState(externalIPsServer, privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED)
 
 			object.GetMetadata().Name = "updated-name"
-			resp, err := externalIPsServer.Update(ctx, privatev1.ExternalIPsUpdateRequest_builder{
+			_, err := externalIPsServer.Update(ctx, privatev1.ExternalIPsUpdateRequest_builder{
 				Object: object,
 				UpdateMask: &fieldmaskpb.FieldMask{
 					Paths: []string{"metadata.name"},
 				},
 			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(resp.GetObject().GetMetadata().GetName()).To(Equal("updated-name"))
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("immutable"))
 		})
 	})
 

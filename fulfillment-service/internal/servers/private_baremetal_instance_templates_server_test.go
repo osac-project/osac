@@ -150,10 +150,11 @@ var _ = Describe("Private bare metal instance templates server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			object := createResponse.GetObject()
-
+			name := object.GetMetadata().GetName()
 			updateResponse, err := server.Update(ctx, privatev1.BareMetalInstanceTemplatesUpdateRequest_builder{
 				Object: privatev1.BareMetalInstanceTemplate_builder{
 					Id:          object.GetId(),
+					Metadata:    privatev1.Metadata_builder{Name: name}.Build(),
 					Title:       "Updated title",
 					Description: "Updated description.",
 				}.Build(),

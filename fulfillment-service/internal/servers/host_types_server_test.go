@@ -166,11 +166,12 @@ var _ = Describe("Host types server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			object := createResponse.GetObject()
 			Expect(object.GetInterfaces()).To(BeEmpty())
-
+			name := object.GetMetadata().GetName()
 			updateResponse, err := server.Update(ctx, publicv1.HostTypesUpdateRequest_builder{
 				Object: publicv1.HostType_builder{
-					Id:    object.GetId(),
-					Title: "BM host type",
+					Id:       object.GetId(),
+					Metadata: publicv1.Metadata_builder{Name: name}.Build(),
+					Title:    "BM host type",
 					Interfaces: []*publicv1.NetworkInterface{
 						publicv1.NetworkInterface_builder{
 							Name:        "data-0",
@@ -317,11 +318,12 @@ var _ = Describe("Host types server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			object := createResponse.GetObject()
-
+			name := object.GetMetadata().GetName()
 			// Update the object:
 			updateResponse, err := server.Update(ctx, publicv1.HostTypesUpdateRequest_builder{
 				Object: publicv1.HostType_builder{
 					Id:          object.GetId(),
+					Metadata:    publicv1.Metadata_builder{Name: name}.Build(),
 					Title:       "Your title",
 					Description: "Your description.",
 				}.Build(),

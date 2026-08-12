@@ -100,6 +100,7 @@ var _ = Describe("Private cluster versions", func() {
 			Object: privatev1.ClusterVersion_builder{
 				Id: object.GetId(),
 				Metadata: privatev1.Metadata_builder{
+					Name:   name,
 					Labels: map[string]string{"env": "test"},
 				}.Build(),
 			}.Build(),
@@ -132,6 +133,9 @@ var _ = Describe("Private cluster versions", func() {
 		_, err := client.Update(ctx, privatev1.ClusterVersionsUpdateRequest_builder{
 			Object: privatev1.ClusterVersion_builder{
 				Id: object.GetId(),
+				Metadata: privatev1.Metadata_builder{
+					Name: object.GetMetadata().GetName(),
+				}.Build(),
 				Spec: privatev1.ClusterVersionSpec_builder{
 					Version: "9.9.9",
 				}.Build(),

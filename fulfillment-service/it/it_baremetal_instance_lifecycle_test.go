@@ -640,6 +640,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		bareMetalInstanceId := createResp.GetObject().GetId()
+		name := createResp.GetObject().GetMetadata().GetName()
 		DeferCleanup(func(ctx context.Context) {
 			_, err := privateBareMetalInstancesClient.Delete(ctx, privatev1.BareMetalInstancesDeleteRequest_builder{
 				Id: bareMetalInstanceId,
@@ -659,6 +660,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		_, err = privateBareMetalInstancesClient.Update(ctx, privatev1.BareMetalInstancesUpdateRequest_builder{
 			Object: privatev1.BareMetalInstance_builder{
 				Id: bareMetalInstanceId,
+				Metadata: privatev1.Metadata_builder{
+					Name: name,
+				}.Build(),
 				Spec: privatev1.BareMetalInstanceSpec_builder{
 					CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					Image: privatev1.BareMetalInstanceImage_builder{
@@ -691,6 +695,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		bareMetalInstanceId := createResp.GetObject().GetId()
+		name := createResp.GetObject().GetMetadata().GetName()
 		DeferCleanup(func(ctx context.Context) {
 			_, err := privateBareMetalInstancesClient.Delete(ctx, privatev1.BareMetalInstancesDeleteRequest_builder{
 				Id: bareMetalInstanceId,
@@ -741,6 +746,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		_, err = bareMetalInstancesClient.Update(ctx, publicv1.BareMetalInstancesUpdateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
 				Id: bareMetalInstanceId,
+				Metadata: publicv1.Metadata_builder{
+					Name: name,
+				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					RestartTrigger: 1,
 				}.Build(),

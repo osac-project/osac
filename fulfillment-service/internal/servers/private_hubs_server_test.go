@@ -249,11 +249,12 @@ var _ = Describe("Private hubs server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			object := createResponse.GetObject()
-
+			name := object.GetMetadata().GetName()
 			// Update the object:
 			updateResponse, err := server.Update(ctx, privatev1.HubsUpdateRequest_builder{
 				Object: privatev1.Hub_builder{
-					Id: object.GetId(),
+					Id:       object.GetId(),
+					Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 					Spec: privatev1.HubSpec_builder{
 						Kubeconfig: []byte("your_config"),
 						Namespace:  "your_ns",

@@ -170,11 +170,15 @@ var _ = Describe("DiskImage tenant isolation", func() {
 		status, ok := grpcstatus.FromError(err)
 		Expect(ok).To(BeTrue())
 		Expect(status.Code()).To(Equal(grpccodes.NotFound))
+		name := getResp.GetObject().GetMetadata().GetName()
 
 		By("Verifying tenant-B cannot Update tenant-A's DiskImage")
 		_, err = diClientB.Update(ctx, publicv1.DiskImagesUpdateRequest_builder{
 			Object: publicv1.DiskImage_builder{
 				Id: diId,
+				Metadata: publicv1.Metadata_builder{
+					Name: name,
+				}.Build(),
 				Spec: publicv1.DiskImageSpec_builder{
 					Architecture: []publicv1.Architecture{
 						publicv1.Architecture_ARCHITECTURE_ARM64,
@@ -247,6 +251,9 @@ var _ = Describe("DiskImage tenant isolation", func() {
 		_, err = diClient.Update(ctx, publicv1.DiskImagesUpdateRequest_builder{
 			Object: publicv1.DiskImage_builder{
 				Id: diId,
+				Metadata: publicv1.Metadata_builder{
+					Name: name,
+				}.Build(),
 				Spec: publicv1.DiskImageSpec_builder{
 					Architecture: []publicv1.Architecture{
 						publicv1.Architecture_ARCHITECTURE_AMD64,

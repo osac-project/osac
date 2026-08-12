@@ -439,7 +439,7 @@ var _ = Describe("NATGateway lifecycle", func() {
 
 	It("Rejects update of immutable spec.virtual_network", func() {
 		ngId := fmt.Sprintf("test-ng-%s", uuid.New())
-		_, err := natGatewaysClient.Create(ctx, publicv1.NATGatewaysCreateRequest_builder{
+		response, err := natGatewaysClient.Create(ctx, publicv1.NATGatewaysCreateRequest_builder{
 			Object: publicv1.NATGateway_builder{
 				Id: ngId,
 				Metadata: publicv1.Metadata_builder{
@@ -457,10 +457,13 @@ var _ = Describe("NATGateway lifecycle", func() {
 				Id: ngId,
 			}.Build())
 		})
-
+		name := response.GetObject().GetMetadata().GetName()
 		_, err = natGatewaysClient.Update(ctx, publicv1.NATGatewaysUpdateRequest_builder{
 			Object: publicv1.NATGateway_builder{
 				Id: ngId,
+				Metadata: publicv1.Metadata_builder{
+					Name: name,
+				}.Build(),
 				Spec: publicv1.NATGatewaySpec_builder{
 					VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{Name: "different-vnet"}.Build(),
 				}.Build(),
@@ -473,7 +476,7 @@ var _ = Describe("NATGateway lifecycle", func() {
 
 	It("Rejects update of immutable spec.external_ip", func() {
 		ngId := fmt.Sprintf("test-ng-%s", uuid.New())
-		_, err := natGatewaysClient.Create(ctx, publicv1.NATGatewaysCreateRequest_builder{
+		response, err := natGatewaysClient.Create(ctx, publicv1.NATGatewaysCreateRequest_builder{
 			Object: publicv1.NATGateway_builder{
 				Id: ngId,
 				Metadata: publicv1.Metadata_builder{
@@ -491,10 +494,13 @@ var _ = Describe("NATGateway lifecycle", func() {
 				Id: ngId,
 			}.Build())
 		})
-
+		name := response.GetObject().GetMetadata().GetName()
 		_, err = natGatewaysClient.Update(ctx, publicv1.NATGatewaysUpdateRequest_builder{
 			Object: publicv1.NATGateway_builder{
 				Id: ngId,
+				Metadata: publicv1.Metadata_builder{
+					Name: name,
+				}.Build(),
 				Spec: publicv1.NATGatewaySpec_builder{
 					ExternalIp: publicv1.ExternalIPLocalReference_builder{Name: "different-ip"}.Build(),
 				}.Build(),
@@ -541,7 +547,7 @@ var _ = Describe("NATGateway lifecycle", func() {
 
 	It("Can update metadata labels", func() {
 		ngId := fmt.Sprintf("test-ng-%s", uuid.New())
-		_, err := natGatewaysClient.Create(ctx, publicv1.NATGatewaysCreateRequest_builder{
+		response, err := natGatewaysClient.Create(ctx, publicv1.NATGatewaysCreateRequest_builder{
 			Object: publicv1.NATGateway_builder{
 				Id: ngId,
 				Metadata: publicv1.Metadata_builder{
@@ -559,11 +565,12 @@ var _ = Describe("NATGateway lifecycle", func() {
 				Id: ngId,
 			}.Build())
 		})
-
+		name := response.GetObject().GetMetadata().GetName()
 		_, err = natGatewaysClient.Update(ctx, publicv1.NATGatewaysUpdateRequest_builder{
 			Object: publicv1.NATGateway_builder{
 				Id: ngId,
 				Metadata: publicv1.Metadata_builder{
+					Name:   name,
 					Labels: map[string]string{"env": "test"},
 				}.Build(),
 			}.Build(),

@@ -343,10 +343,11 @@ var _ = Describe("Cluster catalog items server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			object := createResponse.GetObject()
-
+			name := object.GetMetadata().GetName()
 			updateResponse, err := server.Update(ctx, publicv1.ClusterCatalogItemsUpdateRequest_builder{
 				Object: publicv1.ClusterCatalogItem_builder{
 					Id:          object.GetId(),
+					Metadata:    publicv1.Metadata_builder{Name: name}.Build(),
 					Title:       "Updated title",
 					Description: "Updated description.",
 					Template:    publicv1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),

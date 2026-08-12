@@ -145,7 +145,7 @@ var _ = Describe("Private external IP pools server", func() {
 			Expect(proto.Equal(createResponse.GetObject(), getResponse.GetObject())).To(BeTrue())
 		})
 
-		It("Updates a pool", func() {
+		It("Rejects update of the name of ExternalIPPool", func() {
 			createResponse, err := poolsServer.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 				Object: privatev1.ExternalIPPool_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -160,7 +160,7 @@ var _ = Describe("Private external IP pools server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			object := createResponse.GetObject()
 
-			updateResponse, err := poolsServer.Update(ctx, privatev1.ExternalIPPoolsUpdateRequest_builder{
+			_, err = poolsServer.Update(ctx, privatev1.ExternalIPPoolsUpdateRequest_builder{
 				Object: privatev1.ExternalIPPool_builder{
 					Id: object.GetId(),
 					Metadata: privatev1.Metadata_builder{
@@ -171,8 +171,8 @@ var _ = Describe("Private external IP pools server", func() {
 					Paths: []string{"metadata.name"},
 				},
 			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(updateResponse.GetObject().GetMetadata().GetName()).To(Equal("my-pool"))
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("immutable"))
 		})
 
 		It("Deletes a pool", func() {
@@ -567,7 +567,7 @@ var _ = Describe("Private external IP pools server", func() {
 				Expect(err.Error()).To(ContainSubstring("immutable"))
 			})
 
-			It("allows metadata-only Update (spec fields omitted)", func() {
+			It("Rejects update of the name of ExternalIPPool (spec fields omitted)", func() {
 				createResponse, err := poolsServer.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 					Object: privatev1.ExternalIPPool_builder{
 						Metadata: privatev1.Metadata_builder{
@@ -582,7 +582,7 @@ var _ = Describe("Private external IP pools server", func() {
 				Expect(err).ToNot(HaveOccurred())
 				id := createResponse.GetObject().GetId()
 
-				updateResponse, err := poolsServer.Update(ctx, privatev1.ExternalIPPoolsUpdateRequest_builder{
+				_, err = poolsServer.Update(ctx, privatev1.ExternalIPPoolsUpdateRequest_builder{
 					Object: privatev1.ExternalIPPool_builder{
 						Id: id,
 						Metadata: privatev1.Metadata_builder{
@@ -593,9 +593,11 @@ var _ = Describe("Private external IP pools server", func() {
 						Paths: []string{"metadata.name"},
 					},
 				}.Build())
-				Expect(err).ToNot(HaveOccurred())
-				Expect(updateResponse.GetObject().GetMetadata().GetName()).To(Equal("my-pool"))
-				Expect(updateResponse.GetObject().GetSpec().GetCidrs()).To(ConsistOf("10.0.0.0/24"))
+				Expect(err).To(HaveOccurred())
+				status, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+				Expect(err.Error()).To(ContainSubstring("immutable"))
 			})
 		})
 	})

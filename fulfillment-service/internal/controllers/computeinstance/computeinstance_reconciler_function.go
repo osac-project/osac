@@ -705,6 +705,13 @@ func (t *task) addExplicitFields(ctx context.Context, spec *osacv1alpha1.Compute
 	itSpec := response.GetObject().GetSpec()
 	spec.Cores = itSpec.GetCores()
 	spec.MemoryGiB = itSpec.GetMemoryGib()
+	if gpu := itSpec.GetGpu(); gpu != nil {
+		spec.Gpu = &osacv1alpha1.GpuSpec{
+			PciDeviceSelector: gpu.GetPciDeviceSelector(),
+			ResourceName:      gpu.GetResourceName(),
+			Count:             gpu.GetCount(),
+		}
+	}
 	if ciSpec.HasRunStrategy() {
 		spec.RunStrategy = osacv1alpha1.RunStrategyType(ciSpec.GetRunStrategy())
 	}

@@ -1909,6 +1909,144 @@ var _ = Describe("instance_type resolution in reconciler", func() {
 		Expect(spec.MemoryGiB).To(Equal(int32(8)))
 	})
 
+	It("resolves instance_type gpu fields onto CR spec", func() {
+		mockInstanceTypesClient := NewMockInstanceTypesClient(ctrl)
+		mockInstanceTypesClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(privatev1.InstanceTypesGetResponse_builder{
+				Object: privatev1.InstanceType_builder{
+					Id: "gpu-a100-8core",
+					Spec: privatev1.InstanceTypeSpec_builder{
+						Cores:     8,
+						MemoryGib: 64,
+						Gpu: privatev1.GpuSpec_builder{
+							PciDeviceSelector: "10DE:20B0",
+							ResourceName:      "nvidia.com/A100",
+							Count:             1,
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build(), nil)
+
+		t := &task{
+			r: &function{
+				logger:              logger,
+				instanceTypesClient: mockInstanceTypesClient,
+			},
+			computeInstance: privatev1.ComputeInstance_builder{
+				Id: "test-gpu-instance",
+				Spec: privatev1.ComputeInstanceSpec_builder{
+					Template:     &privatev1.ComputeInstanceTemplateReference{Name: "osac.templates.ocp_virt_vm"},
+					InstanceType: &privatev1.InstanceTypeReference{Name: "gpu-a100-8core"},
+					NetworkAttachments: []*privatev1.NetworkAttachment{
+						privatev1.NetworkAttachment_builder{Subnet: &privatev1.SubnetLocalReference{Id: subnetID}}.Build(),
+					},
+				}.Build(),
+			}.Build(),
+			hubNamespace: hubNamespace,
+			hubClient:    fakeClient,
+		}
+
+		spec, err := t.buildSpec(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(spec.Cores).To(Equal(int32(8)))
+		Expect(spec.MemoryGiB).To(Equal(int32(64)))
+		Expect(spec.Gpu).ToNot(BeNil())
+		Expect(spec.Gpu.PciDeviceSelector).To(Equal("10DE:20B0"))
+		Expect(spec.Gpu.ResourceName).To(Equal("nvidia.com/A100"))
+		Expect(spec.Gpu.Count).To(Equal(int32(1)))
+	})
+
+	It("leaves gpu nil when InstanceType has no gpu", func() {
+		mockInstanceTypesClient := NewMockInstanceTypesClient(ctrl)
+		mockInstanceTypesClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(privatev1.InstanceTypesGetResponse_builder{
+				Object: privatev1.InstanceType_builder{
+					Id: "standard-4-8",
+					Spec: privatev1.InstanceTypeSpec_builder{
+						Cores:     4,
+						MemoryGib: 8,
+					}.Build(),
+				}.Build(),
+			}.Build(), nil)
+
+		t := &task{
+			r: &function{
+				logger:              logger,
+				instanceTypesClient: mockInstanceTypesClient,
+			},
+			computeInstance: privatev1.ComputeInstance_builder{
+				Id: "test-no-gpu-instance",
+				Spec: privatev1.ComputeInstanceSpec_builder{
+					Template:     &privatev1.ComputeInstanceTemplateReference{Name: "osac.templates.ocp_virt_vm"},
+					InstanceType: &privatev1.InstanceTypeReference{Name: "standard-4-8"},
+					NetworkAttachments: []*privatev1.NetworkAttachment{
+						privatev1.NetworkAttachment_builder{Subnet: &privatev1.SubnetLocalReference{Id: subnetID}}.Build(),
+					},
+				}.Build(),
+			}.Build(),
+			hubNamespace: hubNamespace,
+			hubClient:    fakeClient,
+		}
+
+		spec, err := t.buildSpec(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(spec.Cores).To(Equal(int32(4)))
+		Expect(spec.MemoryGiB).To(Equal(int32(8)))
+		Expect(spec.Gpu).To(BeNil())
+	})
+
+	It("gpu stamping is idempotent", func() {
+		mockInstanceTypesClient := NewMockInstanceTypesClient(ctrl)
+		mockInstanceTypesClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(privatev1.InstanceTypesGetResponse_builder{
+				Object: privatev1.InstanceType_builder{
+					Id: "gpu-a100-8core",
+					Spec: privatev1.InstanceTypeSpec_builder{
+						Cores:     8,
+						MemoryGib: 64,
+						Gpu: privatev1.GpuSpec_builder{
+							PciDeviceSelector: "10DE:20B0",
+							ResourceName:      "nvidia.com/A100",
+							Count:             2,
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build(), nil).
+			Times(2)
+
+		t := &task{
+			r: &function{
+				logger:              logger,
+				instanceTypesClient: mockInstanceTypesClient,
+			},
+			computeInstance: privatev1.ComputeInstance_builder{
+				Id: "test-idempotent-gpu",
+				Spec: privatev1.ComputeInstanceSpec_builder{
+					Template:     &privatev1.ComputeInstanceTemplateReference{Name: "osac.templates.ocp_virt_vm"},
+					InstanceType: &privatev1.InstanceTypeReference{Name: "gpu-a100-8core"},
+					NetworkAttachments: []*privatev1.NetworkAttachment{
+						privatev1.NetworkAttachment_builder{Subnet: &privatev1.SubnetLocalReference{Id: subnetID}}.Build(),
+					},
+				}.Build(),
+			}.Build(),
+			hubNamespace: hubNamespace,
+			hubClient:    fakeClient,
+		}
+
+		spec1, err := t.buildSpec(ctx)
+		Expect(err).ToNot(HaveOccurred())
+
+		spec2, err := t.buildSpec(ctx)
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(spec1.Gpu).ToNot(BeNil())
+		Expect(spec2.Gpu).ToNot(BeNil())
+		Expect(*spec1.Gpu).To(Equal(*spec2.Gpu))
+	})
+
 	It("returns error when instance_type is empty", func() {
 		t := &task{
 			r: &function{

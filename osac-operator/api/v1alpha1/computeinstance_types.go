@@ -157,7 +157,8 @@ type ComputeInstanceSpec struct {
 	AdditionalDisks []DiskSpec `json:"additionalDisks,omitempty"`
 
 	// Gpu defines GPU passthrough configuration resolved from the InstanceType.
-	// +optional
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="gpu is immutable"
 	Gpu *GpuSpec `json:"gpu,omitempty"`
 
 	// RunStrategy controls VM running state (MUTABLE)

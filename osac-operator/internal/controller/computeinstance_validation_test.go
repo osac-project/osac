@@ -565,6 +565,24 @@ var _ = Describe("ComputeInstance CEL Validation", func() {
 			Expect(err).To(HaveOccurred())
 			Expect(apierrors.IsInvalid(err)).To(BeTrue())
 		})
+
+		It("should reject changing gpu", func() {
+			instance := createValidInstance("test-gpu-immutable")
+			instance.Spec.Gpu = &osacv1alpha1.GpuSpec{
+				PciDeviceSelector: "10DE:20B0",
+				ResourceName:      "nvidia.com/A100",
+				Count:             1,
+			}
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(instance), instance)).To(Succeed())
+
+			instance.Spec.Gpu.Count = 2
+			err := k8sClient.Update(ctx, instance)
+			Expect(err).To(HaveOccurred())
+			Expect(apierrors.IsInvalid(err)).To(BeTrue())
+			Expect(err.Error()).To(ContainSubstring("gpu is immutable"))
+		})
 	})
 
 	Describe("MaxItems validation", func() {

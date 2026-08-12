@@ -83,7 +83,7 @@ def test_cluster_create(
 
         # Scale a worker node set and verify updated.v1
         worker_node_set = next(iter(node_sets))
-        original_size = node_sets[worker_node_set].get("count", 1)
+        original_size = node_sets[worker_node_set].get("size", 1)
         scaled_size = original_size + 1
         cli.scale_cluster(uuid=uuid, node_set=worker_node_set, size=scaled_size)
         metering.expect("osac.resource.updated.v1", resource_id=uuid, timeout=120)

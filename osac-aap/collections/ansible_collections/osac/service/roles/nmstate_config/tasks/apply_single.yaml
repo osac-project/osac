@@ -1,4 +1,14 @@
 ---
+- name: Validate bastion configuration
+  ansible.builtin.assert:
+    that:
+      - nmstate_config_ssh_bastion_user | length > 0
+      - nmstate_config_ssh_bastion_key | length > 0
+    fail_msg: >-
+      nmstate_config_ssh_bastion_user and nmstate_config_ssh_bastion_key
+      must be set when nmstate_config_ssh_bastion_host is configured.
+  when: nmstate_config_ssh_bastion_host | default('') | length > 0
+
 - name: "Get management IP for agent {{ _nmstate_apply_assignment.agent.metadata.name }}"
   ansible.builtin.set_fact:
     _nmstate_apply_mgmt_ip: "{{ _nmstate_apply_assignment.agent | osac.service.agent_mgmt_ip(nmstate_config_mgmt_interface) }}"
@@ -11,6 +21,13 @@
       Check that the agent has a '{{ nmstate_config_mgmt_interface }}' interface
       with an IPv4 address in status.inventory.interfaces.
   when: _nmstate_apply_mgmt_ip is none or _nmstate_apply_mgmt_ip == ""
+
+- name: "Build SSH proxy args for agent {{ _nmstate_apply_assignment.agent.metadata.name }}"
+  ansible.builtin.set_fact:
+    _nmstate_apply_ssh_proxy_args: >-
+      {% if nmstate_config_ssh_bastion_host | default('') | length > 0 %}
+      -o 'ProxyCommand=ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 -i {{ nmstate_config_ssh_bastion_key }} -W %h:%p {{ nmstate_config_ssh_bastion_user }}@{{ nmstate_config_ssh_bastion_host }}'
+      {% endif %}
 
 - name: "Calculate static IP for agent {{ _nmstate_apply_assignment.agent.metadata.name }}"
   ansible.builtin.set_fact:
@@ -41,7 +58,7 @@
   ansible.builtin.shell:
     cmd: |
       ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 \
-        -o 'ProxyCommand=ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 -i {{ nmstate_config_ssh_bastion_key }} -W %h:%p {{ nmstate_config_ssh_bastion_user }}@{{ nmstate_config_ssh_bastion_host }}' \
+        {{ _nmstate_apply_ssh_proxy_args }} \
         -i {{ nmstate_config_ssh_key }} \
         {{ nmstate_config_ssh_user }}@{{ _nmstate_apply_mgmt_ip }} \
         'sudo sysctl -qw net.ipv4.conf.all.rp_filter=0 net.ipv4.conf.{{ nmstate_config_mgmt_interface }}.rp_filter=0'
@@ -52,7 +69,7 @@
   ansible.builtin.shell:
     cmd: |
       scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 \
-        -o 'ProxyCommand=ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 -i {{ nmstate_config_ssh_bastion_key }} -W %h:%p {{ nmstate_config_ssh_bastion_user }}@{{ nmstate_config_ssh_bastion_host }}' \
+        {{ _nmstate_apply_ssh_proxy_args }} \
         -i {{ nmstate_config_ssh_key }} \
         /tmp/nmstate-{{ _nmstate_apply_assignment.agent.metadata.name }}.yaml \
         {{ nmstate_config_ssh_user }}@{{ _nmstate_apply_mgmt_ip }}:/tmp/nmstate-config.yaml
@@ -63,7 +80,7 @@
   ansible.builtin.shell:
     cmd: |
       ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 \
-        -o 'ProxyCommand=ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 -i {{ nmstate_config_ssh_bastion_key }} -W %h:%p {{ nmstate_config_ssh_bastion_user }}@{{ nmstate_config_ssh_bastion_host }}' \
+        {{ _nmstate_apply_ssh_proxy_args }} \
         -i {{ nmstate_config_ssh_key }} \
         {{ nmstate_config_ssh_user }}@{{ _nmstate_apply_mgmt_ip }} \
         'nohup sudo nmstatectl apply /tmp/nmstate-config.yaml > /tmp/nmstate-apply.log 2>&1 &'

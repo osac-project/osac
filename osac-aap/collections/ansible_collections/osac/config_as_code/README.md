@@ -58,8 +58,8 @@ use case, e.g.:
 - `OS_*`: OpenStack credentials
 - ...whatever in needed
 - `NETRIS_PASSWORD`: Netris password
-- `SERVER_SSH_KEY`: Private key used to SSH into bare-metal servers via the bastion (base64-encoded)
-- `SERVER_SSH_BASTION_KEY`: Private key used to SSH into the bastion host (base64-encoded)
+- `SERVER_SSH_KEY`: Private key used to SSH into bare-metal servers (base64-encoded)
+- `SERVER_SSH_BASTION_KEY`: Private key used to SSH into the bastion host (base64-encoded). Required only when `SERVER_SSH_BASTION_HOST` is configured
 
 These variables must be defined in a secret named: `cluster-fulfillment-ig` in
 the namespace where AAP is deployed.

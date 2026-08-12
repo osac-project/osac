@@ -15,6 +15,8 @@ agentless_net_trunk_interface: "{{ lookup('env', 'AGENTLESS_NET_TRUNK_INTERFACE'
 agentless_net_external_interface: "{{ lookup('env', 'AGENTLESS_NET_EXTERNAL_INTERFACE', default='eth0') }}"
 agentless_net_external_gateway: "{{ lookup('env', 'AGENTLESS_NET_EXTERNAL_GATEWAY', default='') }}"
 agentless_net_subnet_cidr: "{{ lookup('env', 'AGENTLESS_NET_SUBNET_CIDR', default='') }}"
+agentless_net_data_interface: "{{ lookup('env', 'AGENTLESS_NET_DATA_INTERFACE') }}"
+agentless_net_mgmt_interface: "{{ lookup('env', 'AGENTLESS_NET_MGMT_INTERFACE') }}"
 
 # external_access role
 agentless_net_public_ip_pool_start: "{{ lookup('env', 'AGENTLESS_NET_PUBLIC_IP_POOL_START', default='') }}"

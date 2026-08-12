@@ -28,6 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -393,7 +394,7 @@ var _ = Describe("SubnetReconciler", func() {
 			disc, err := networkmanager.NewDiscovery(fakeDiscoveryClient, "osac")
 			Expect(err).NotTo(HaveOccurred())
 			reconciler.Resolver = dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
-				[]*privatev1.NetworkClass{{Id: "nc-dispatch", FabricManager: "netris"}}, &[]*privatev1.NetworkClass{},
+				[]*privatev1.NetworkClass{{Id: "nc-dispatch", FabricManager: ptr.To("netris")}}, &[]*privatev1.NetworkClass{},
 			)), disc)
 
 			dispatchVnet := &osacv1alpha1.VirtualNetwork{
@@ -473,7 +474,7 @@ var _ = Describe("SubnetReconciler", func() {
 			disc, err := networkmanager.NewDiscovery(fakeDiscoveryClient, "osac")
 			Expect(err).NotTo(HaveOccurred())
 			reconciler.Resolver = dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
-				[]*privatev1.NetworkClass{{Id: "nc-broken", FabricManager: "does-not-exist"}}, &[]*privatev1.NetworkClass{},
+				[]*privatev1.NetworkClass{{Id: "nc-broken", FabricManager: ptr.To("does-not-exist")}}, &[]*privatev1.NetworkClass{},
 			)), disc)
 
 			dispatchVnet := &osacv1alpha1.VirtualNetwork{

@@ -698,7 +698,7 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			disc, err := networkmanager.NewDiscovery(fakeClient, "test-namespace")
 			Expect(err).NotTo(HaveOccurred())
 			reconciler.Resolver = dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
-				[]*privatev1.NetworkClass{{Id: "nc-dispatch", FabricManager: "netris"}}, &[]*privatev1.NetworkClass{},
+				[]*privatev1.NetworkClass{{Id: "nc-dispatch", FabricManager: ptr.To("netris")}}, &[]*privatev1.NetworkClass{},
 			)), disc)
 
 			vnet.Spec.NetworkClass = "nc-dispatch"
@@ -753,7 +753,7 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			disc, err := networkmanager.NewDiscovery(fakeClient, "test-namespace")
 			Expect(err).NotTo(HaveOccurred())
 			reconciler.Resolver = dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
-				[]*privatev1.NetworkClass{{Id: "nc-broken", FabricManager: "does-not-exist"}}, &[]*privatev1.NetworkClass{},
+				[]*privatev1.NetworkClass{{Id: "nc-broken", FabricManager: ptr.To("does-not-exist")}}, &[]*privatev1.NetworkClass{},
 			)), disc)
 
 			vnet.Spec.NetworkClass = "nc-broken"

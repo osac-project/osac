@@ -28,6 +28,14 @@ Usage: $(basename "$0") [--claude] [--cursor] [--gemini] [--all] [--with-ai-work
 EOF
 }
 
+# Content-based check only (no .git requirement), unlike bootstrap.sh's
+# osac_ai_skills_vendor_ok(). This wrapper never runs git against the vendor
+# dir — it only reads files — so it doesn't share bootstrap.sh's need for a
+# real git checkout. Staying content-based also matches the reference
+# osac-workspace wrapper and the upstream osac-ai-skills fan-out itself
+# (neither checks .git), and leaves room for the non-git vendoring mechanisms
+# ADR 0001 Decision item 3 still has open (git subtree / copy-bot) for
+# automated-framework consumption.
 resolve_osac_ai_skills_dir() {
   local dir
   for dir in "${HOME}/.osac-ai-skills" "${REPO_ROOT}/.osac-ai-skills"; do

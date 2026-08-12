@@ -18,8 +18,14 @@ SCRIPT_DIR="$(realpath "$(dirname "${BASH_SOURCE[0]}")")"
 PROJECT_ROOT="$(realpath "${SCRIPT_DIR}/..")"
 
 OSAC_AI_SKILLS_REPO="osac-project/osac-ai-skills"
-OSAC_AI_SKILLS_DIR=""
 
+# Git-capable check — gates the git fetch/rebase below. tools/link-agent-skills.sh's
+# resolve_osac_ai_skills_dir() intentionally uses a weaker, content-based check
+# instead (skills/ + executable fan-out, no .git): it never runs git against the
+# vendor dir, and staying content-based matches the reference osac-workspace
+# wrapper and the upstream osac-ai-skills fan-out itself (neither checks .git),
+# while leaving room for non-git vendoring mechanisms ADR 0001 Decision item 3
+# still has open (git subtree / copy-bot) for automated-framework consumption.
 osac_ai_skills_vendor_ok() {
   local dir="$1"
   [[ -d "${dir}/.git" ]] \
@@ -27,30 +33,31 @@ osac_ai_skills_vendor_ok() {
     && [[ -x "${dir}/tools/link-agent-skills.sh" ]]
 }
 
+# Fetch + rebase a vendored git checkout onto origin/main. Warns and continues
+# on failure rather than exiting — a stale vendor is recoverable manually, and
+# this runs before any skill-discovery step that depends on it.
+update_git_repo() {
+  local dir="$1" label="$2"
+  if ! (cd "${dir}" && git fetch origin -q); then
+    echo "  Fetch failed for ${label}. Skipping update."
+  elif ! (cd "${dir}" && git rebase origin/main --autostash -q); then
+    (cd "${dir}" && git rebase --abort 2>/dev/null || true)
+    echo "  Rebase failed for ${label}. Resolve manually: cd ${dir} && git rebase origin/main"
+  else
+    echo "  ${label} up to date"
+  fi
+}
+
 # --- osac-ai-skills ---
 
 if [[ -d "${HOME}/.osac-ai-skills" ]] && osac_ai_skills_vendor_ok "${HOME}/.osac-ai-skills"; then
   OSAC_AI_SKILLS_DIR="$(readlink -f "${HOME}/.osac-ai-skills")"
   echo "Updating osac-ai-skills (${OSAC_AI_SKILLS_DIR})..."
-  if ! (cd "$OSAC_AI_SKILLS_DIR" && git fetch origin -q); then
-    echo "  Fetch failed for osac-ai-skills. Skipping update."
-  elif ! (cd "$OSAC_AI_SKILLS_DIR" && git rebase origin/main --autostash -q); then
-    (cd "$OSAC_AI_SKILLS_DIR" && git rebase --abort 2>/dev/null || true)
-    echo "  Rebase failed for osac-ai-skills. Resolve manually: cd $OSAC_AI_SKILLS_DIR && git rebase origin/main"
-  else
-    echo "  osac-ai-skills up to date"
-  fi
+  update_git_repo "${OSAC_AI_SKILLS_DIR}" "osac-ai-skills"
 elif [[ -d "${PROJECT_ROOT}/.osac-ai-skills" ]] && osac_ai_skills_vendor_ok "${PROJECT_ROOT}/.osac-ai-skills"; then
   OSAC_AI_SKILLS_DIR="${PROJECT_ROOT}/.osac-ai-skills"
   echo "Updating osac-ai-skills (.osac-ai-skills)..."
-  if ! (cd "$OSAC_AI_SKILLS_DIR" && git fetch origin -q); then
-    echo "  Fetch failed for osac-ai-skills. Skipping update."
-  elif ! (cd "$OSAC_AI_SKILLS_DIR" && git rebase origin/main --autostash -q); then
-    (cd "$OSAC_AI_SKILLS_DIR" && git rebase --abort 2>/dev/null || true)
-    echo "  Rebase failed for osac-ai-skills. Resolve manually: cd $OSAC_AI_SKILLS_DIR && git rebase origin/main"
-  else
-    echo "  osac-ai-skills up to date"
-  fi
+  update_git_repo "${OSAC_AI_SKILLS_DIR}" "osac-ai-skills"
 elif [[ -d "${PROJECT_ROOT}/.osac-ai-skills" ]]; then
   echo "ERROR: ${PROJECT_ROOT}/.osac-ai-skills exists but is not a usable vendor checkout." >&2
   echo "Expected a git clone with skills/ and an executable tools/link-agent-skills.sh." >&2
@@ -73,25 +80,11 @@ AI_WORKFLOWS_DIR=""
 if [[ -d "${HOME}/.ai-workflows" ]]; then
   AI_WORKFLOWS_DIR="$(readlink -f "${HOME}/.ai-workflows")"
   echo "Updating ai-workflows (${AI_WORKFLOWS_DIR})..."
-  if ! (cd "$AI_WORKFLOWS_DIR" && git fetch origin -q); then
-    echo "  Fetch failed for ai-workflows. Skipping update."
-  elif ! (cd "$AI_WORKFLOWS_DIR" && git rebase origin/main --autostash -q); then
-    (cd "$AI_WORKFLOWS_DIR" && git rebase --abort 2>/dev/null || true)
-    echo "  Rebase failed for ai-workflows. Resolve manually: cd $AI_WORKFLOWS_DIR && git rebase origin/main"
-  else
-    echo "  ai-workflows up to date"
-  fi
+  update_git_repo "${AI_WORKFLOWS_DIR}" "ai-workflows"
 elif [[ -d "${PROJECT_ROOT}/.ai-workflows" ]]; then
   AI_WORKFLOWS_DIR="${PROJECT_ROOT}/.ai-workflows"
   echo "Updating ai-workflows (.ai-workflows)..."
-  if ! (cd "$AI_WORKFLOWS_DIR" && git fetch origin -q); then
-    echo "  Fetch failed. Skipping update."
-  elif ! (cd "$AI_WORKFLOWS_DIR" && git rebase origin/main --autostash -q); then
-    (cd "$AI_WORKFLOWS_DIR" && git rebase --abort 2>/dev/null || true)
-    echo "  Rebase failed. Resolve manually: cd $AI_WORKFLOWS_DIR && git rebase origin/main"
-  else
-    echo "  ai-workflows up to date"
-  fi
+  update_git_repo "${AI_WORKFLOWS_DIR}" "ai-workflows"
 else
   AI_WORKFLOWS_DIR="${PROJECT_ROOT}/.ai-workflows"
   echo "Cloning ai-workflows..."

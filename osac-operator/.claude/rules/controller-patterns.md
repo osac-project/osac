@@ -64,10 +64,18 @@ Key rules:
 
 ## AAP Integration
 
-Networking controllers use `provisioning.RunProvisioningLifecycle()` with callbacks:
-- `OnBeforeProvision` — validate preconditions
+Networking controllers use `provisioning.RunProvisioningLifecycle()` with `PollCallbacks`:
 - `OnSuccess` — extract outputs, set Phase to Ready
 - `OnFailed` — set Phase to Failed
+
+Subnet drives dual-dispatch (fabric + k8s manager) via
+`provisioning.RunMultiTargetProvisioningLifecycle()` /
+`RunMultiTargetDeprovisioningLifecycle()` instead: each `JobTarget`/`DeprovisionTarget`
+triggers/polls its own AAP job independently, and the resource only reaches
+Ready/fully-deprovisioned once every target's callback confirms success. One target
+set per resource may set `AbsorbsLegacyHistory: true` so pre-existing, untargeted job
+history is attributed to it rather than orphaned when a NetworkClass gains a second
+manager.
 
 Template naming: `{prefix}-{action}-{kind}` (e.g., `osac-create-subnet`).
 Prefix configurable via `OSAC_AAP_TEMPLATE_PREFIX`.

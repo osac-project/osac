@@ -171,10 +171,6 @@ func (r *SecurityGroupReconciler) handleUpdate(ctx context.Context, sg *v1alpha1
 			sg.Spec.VirtualNetwork, len(vnetList.Items))
 	} else if len(vnetList.Items) == 1 {
 		networkClassID = vnetList.Items[0].Spec.NetworkClass
-	} else if len(vnetList.Items) > 1 {
-		return ctrl.Result{}, fmt.Errorf(
-			"expected exactly one parent VirtualNetwork with uuid %q but found %d",
-			sg.Spec.VirtualNetwork, len(vnetList.Items))
 	} else {
 		log.Info("parent VirtualNetwork not found, using legacy implementation strategy", "uuid", sg.Spec.VirtualNetwork)
 	}

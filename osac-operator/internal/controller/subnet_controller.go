@@ -359,7 +359,7 @@ func subnetProvisioningJobsExtractor(obj client.Object) []v1alpha1.JobStatus {
 // and a k8s target (dual-dispatch), it drives both targets in parallel via
 // RunMultiTargetProvisioningLifecycle: each target triggers/polls its own AAP job
 // through a dispatchTargetProvider routing to that target's manager, and the Subnet
-// only reaches Ready once bothProvisionTargetsSucceeded reports both targets'
+// only reaches Ready once allProvisionTargetsSucceeded reports both targets'
 // latest jobs succeeded at the current desired config version — one target
 // succeeding does not flip Ready on its own, and one target failing/backing off
 // does not block the other target's independent retry.
@@ -411,7 +411,7 @@ func (r *SubnetReconciler) handleProvisioning(ctx context.Context, subnet *v1alp
 			}
 		}
 		onSuccess := func(_ provisioning.ProvisionStatus) {
-			if bothProvisionTargetsSucceeded(subnet.Status.ProvisioningJobs, subnet.Status.DesiredConfigVersion, fabricName, k8sName) {
+			if allProvisionTargetsSucceeded(subnet.Status.ProvisioningJobs, subnet.Status.DesiredConfigVersion, fabricName, k8sName) {
 				subnet.Status.Phase = v1alpha1.SubnetPhaseReady
 				setReadyConditionTrue(&subnet.Status.Conditions)
 			}
@@ -465,13 +465,13 @@ func (r *SubnetReconciler) handleProvisioning(ctx context.Context, subnet *v1alp
 	return result, nil
 }
 
-// bothProvisionTargetsSucceeded reports whether every named target's most recent
+// allProvisionTargetsSucceeded reports whether every named target's most recent
 // provision job succeeded at desiredVersion (or is a pre-Target legacy success with
 // ConfigVersion == "" — mirrors IsConfigApplied's same accommodation). Used from
 // each target's OnSuccess callback to decide whether the aggregate Subnet Phase can
 // flip to Ready: Ready requires ALL targets independently confirmed successful, not
 // just the one whose callback just fired.
-func bothProvisionTargetsSucceeded(jobs []v1alpha1.JobStatus, desiredVersion string, targetNames ...string) bool {
+func allProvisionTargetsSucceeded(jobs []v1alpha1.JobStatus, desiredVersion string, targetNames ...string) bool {
 	for _, name := range targetNames {
 		job := provisioning.FindLatestJobByTypeAndTarget(jobs, v1alpha1.JobTypeProvision, name)
 		if job == nil || job.State != v1alpha1.JobStateSucceeded {

@@ -3,8 +3,6 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import pytest
-
 from tests.core.grpc_client import GRPCClient
 from tests.core.helpers import wait_for_bmi_cr, wait_for_bmi_deletion, wait_for_bmi_grpc_removal, wait_for_bmi_running
 from tests.core.k8s_client import K8sClient
@@ -30,7 +28,6 @@ def _get_status_restart_trigger(grpc: GRPCClient, bmi_id: str) -> int:
     return int(response.get("object", {}).get("status", {}).get("restartTrigger", "0"))
 
 
-@pytest.mark.xdist_group("bmaas")
 def test_baremetal_instance_restart(
     cli: OsacCLI,
     grpc: GRPCClient,

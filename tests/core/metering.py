@@ -61,7 +61,8 @@ class MeteringCollector:
 
     def verify(self) -> None:
         if not self._expectations:
-            logger.warning("verify() called with no expectations — did you forget to call expect()?")
+            if not self._verified:
+                logger.warning("verify() called with no expectations — did you forget to call expect()?")
             return
         for exp in self._expectations:
             event = self._poll_for_event(exp)

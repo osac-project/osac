@@ -56,7 +56,7 @@ type archiveArgs struct {
 	name            string
 	labelsData      []byte
 	annotationsData []byte
-	displayName     string
+	title           string
 	description     string
 	version         int32
 	data            []byte
@@ -88,7 +88,7 @@ func (r *request[O]) archive(ctx context.Context, args archiveArgs) error {
 			project,
 			labels,
 			annotations,
-			display_name,
+			title,
 			description,
 			version,
 			data
@@ -123,7 +123,7 @@ func (r *request[O]) archive(ctx context.Context, args archiveArgs) error {
 		args.project,
 		args.labelsData,
 		args.annotationsData,
-		args.displayName,
+		args.title,
 		args.description,
 		args.version,
 		args.data,
@@ -199,7 +199,7 @@ type makeMetadataArgs struct {
 	name        string
 	labels      map[string]string
 	annotations map[string]string
-	displayName string
+	title       string
 	description string
 	version     int32
 }
@@ -219,7 +219,7 @@ func (r *request[O]) makeMetadata(args makeMetadataArgs) metadataIface {
 	result.SetProject(args.project)
 	result.SetLabels(args.labels)
 	result.SetAnnotations(args.annotations)
-	result.SetDisplayName(args.displayName)
+	result.SetTitle(args.title)
 	result.SetDescription(args.description)
 	result.SetVersion(args.version)
 	return result

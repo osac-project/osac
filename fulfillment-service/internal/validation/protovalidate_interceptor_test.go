@@ -372,7 +372,7 @@ var _ = Describe("Protovalidate interceptor", func() {
 			Expect(response).To(Equal("response"))
 		})
 
-		DescribeTable("Accepts display_name and description within length limits",
+		DescribeTable("Accepts title and description within length limits",
 			func(msg proto.Message) {
 				handlerCalled := false
 				mockHandler := func(ctx context.Context, req any) (any, error) {
@@ -393,27 +393,27 @@ var _ = Describe("Protovalidate interceptor", func() {
 			},
 			Entry("public max lengths", &publicv1.Metadata{
 				Name:        "valid-name",
-				DisplayName: strings.Repeat("a", 63),
+				Title:       strings.Repeat("a", 63),
 				Description: strings.Repeat("b", 256),
 			}),
 			Entry("public empty values", &publicv1.Metadata{
 				Name:        "valid-name",
-				DisplayName: "",
+				Title:       "",
 				Description: "",
 			}),
 			Entry("private max lengths", &privatev1.Metadata{
 				Name:        "valid-name",
-				DisplayName: strings.Repeat("a", 63),
+				Title:       strings.Repeat("a", 63),
 				Description: strings.Repeat("b", 256),
 			}),
 			Entry("private empty values", &privatev1.Metadata{
 				Name:        "valid-name",
-				DisplayName: "",
+				Title:       "",
 				Description: "",
 			}),
 		)
 
-		DescribeTable("Rejects over-long display_name and description",
+		DescribeTable("Rejects over-long title and description",
 			func(msg proto.Message) {
 				mockHandler := func(ctx context.Context, req any) (any, error) {
 					Fail("Handler should not be called for invalid request")
@@ -434,17 +434,17 @@ var _ = Describe("Protovalidate interceptor", func() {
 				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 				Expect(status.Message()).To(ContainSubstring("validation failed"))
 			},
-			Entry("public display_name too long", &publicv1.Metadata{
-				Name:        "valid-name",
-				DisplayName: strings.Repeat("a", 64),
+			Entry("public title too long", &publicv1.Metadata{
+				Name:  "valid-name",
+				Title: strings.Repeat("a", 64),
 			}),
 			Entry("public description too long", &publicv1.Metadata{
 				Name:        "valid-name",
 				Description: strings.Repeat("b", 257),
 			}),
-			Entry("private display_name too long", &privatev1.Metadata{
-				Name:        "valid-name",
-				DisplayName: strings.Repeat("a", 64),
+			Entry("private title too long", &privatev1.Metadata{
+				Name:  "valid-name",
+				Title: strings.Repeat("a", 64),
 			}),
 			Entry("private description too long", &privatev1.Metadata{
 				Name:        "valid-name",

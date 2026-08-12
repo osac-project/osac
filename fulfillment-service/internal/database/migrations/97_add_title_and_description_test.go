@@ -20,13 +20,13 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-var _ = DescribeMigration("Add display_name and description columns", func() {
+var _ = DescribeMigration("Add title and description columns", func() {
 	BeforeEach(func(ctx context.Context) {
 		err := tool.Migrate(ctx, 97)
 		Expect(err).ToNot(HaveOccurred())
 	})
 
-	It("Adds display_name and description text columns to every GenericDAO table", func(ctx context.Context) {
+	It("Adds title and description text columns to every GenericDAO table", func(ctx context.Context) {
 		rows, err := conn.Query(ctx, `
 			select
 				t.table_name
@@ -63,7 +63,7 @@ var _ = DescribeMigration("Add display_name and description columns", func() {
 		Expect(tables).ToNot(BeEmpty())
 
 		for _, table := range tables {
-			var displayNameType, descriptionType string
+			var titleType, descriptionType string
 			err := conn.QueryRow(ctx, `
 				select
 					format_type(a.atttypid, a.atttypmod)
@@ -76,12 +76,12 @@ var _ = DescribeMigration("Add display_name and description columns", func() {
 				where
 					n.nspname = 'public' and
 					c.relname = $1 and
-					a.attname = 'display_name' and
+					a.attname = 'title' and
 					a.attnum > 0 and
 					not a.attisdropped
-			`, table).Scan(&displayNameType)
-			Expect(err).ToNot(HaveOccurred(), "table %s missing display_name", table)
-			Expect(displayNameType).To(Equal("text"), "table %s display_name type", table)
+			`, table).Scan(&titleType)
+			Expect(err).ToNot(HaveOccurred(), "table %s missing title", table)
+			Expect(titleType).To(Equal("text"), "table %s title type", table)
 
 			err = conn.QueryRow(ctx, `
 				select

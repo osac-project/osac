@@ -92,15 +92,22 @@ message Metadata {
   // For organization objects this field is always empty, as organizations don't belong to a project.
   string project = 10;
 
-  // Human-friendly display name. Optional, not unique, mutable.
-  // Not constrained to DNS-label format.
-  string display_name = 11 [(buf.validate.field).string = {
+  // Human-friendly short title. Optional, not unique, mutable.
+  // Not constrained to DNS-label format. Same role as today's per-type
+  // `title` fields (e.g. ClusterTemplate.title).
+  string title = 11 [(buf.validate.field).string = {
     max_len: 63
   }];
 
-  // Optional human-friendly description. Opaque string; clients may
-  // treat content as Markdown. Not unique, mutable.
+  // Human-friendly long description in Markdown. Optional, not unique,
+  // mutable. Clients that display this field MUST render it as Markdown
+  // (with safe sanitization).
   string description = 12 [(buf.validate.field).string = {
     max_len: 256
   }];
+
+  // Reserved for future internationalization (locale → string maps).
+  // Canonical/default locale content remains in `title` / `description`.
+  reserved 13, 14;
+  reserved "localized_titles", "localized_descriptions";
 }

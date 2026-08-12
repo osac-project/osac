@@ -71,11 +71,12 @@ message Metadata {
   map<string, string> annotations = 8;
   int32 version = 9;
 
-  // Human-friendly display name. Optional, not unique, mutable.
-  string display_name = 11;
+  // Human-friendly short title. Optional, not unique, mutable.
+  string title = 11;
 
-  // Optional human-friendly description. Opaque string; clients may
-  // treat content as Markdown. Not unique, mutable.
+  // Human-friendly long description in Markdown. Optional, not unique,
+  // mutable. Clients that display this field MUST render it as Markdown
+  // (with safe sanitization).
   string description = 12;
 }
 

@@ -11,10 +11,10 @@
 -- specific language governing permissions and limitations under the License.
 --
 
--- Add optional Metadata display_name and description columns to every GenericDAO object and archive table.
+-- Add optional Metadata title and description columns to every GenericDAO object and archive table.
 -- Tables are selected by the presence of both `name` and `data` columns (the GenericDAO layout).
 
-create procedure add_display_name_and_description_columns() language plpgsql as $$
+create procedure add_title_and_description_columns() language plpgsql as $$
 declare
   table_name text;
 begin
@@ -42,13 +42,13 @@ begin
         select 1 from information_schema.columns c
         where c.table_schema = 'public'
           and c.table_name = t.table_name
-          and c.column_name = 'display_name'
+          and c.column_name = 'title'
       )
     order by
       t.table_name
   loop
     execute format(
-      'alter table %I add column display_name text not null default ''''',
+      'alter table %I add column title text not null default ''''',
       table_name
     );
     execute format(
@@ -59,6 +59,6 @@ begin
 end;
 $$;
 
-call add_display_name_and_description_columns();
+call add_title_and_description_columns();
 
-drop procedure add_display_name_and_description_columns();
+drop procedure add_title_and_description_columns();

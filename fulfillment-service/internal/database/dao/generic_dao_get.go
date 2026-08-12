@@ -94,7 +94,7 @@ func (r *GetRequest[O]) do(ctx context.Context) (response *GetResponse[O], err e
 			project,
 			labels,
 			annotations,
-			display_name,
+			title,
 			description,
 			version,
 			data
@@ -122,7 +122,7 @@ func (r *GetRequest[O]) do(ctx context.Context) (response *GetResponse[O], err e
 		project         string
 		labelsData      []byte
 		annotationsData []byte
-		displayName     string
+		title           string
 		description     string
 		version         int32
 		data            []byte
@@ -143,7 +143,7 @@ func (r *GetRequest[O]) do(ctx context.Context) (response *GetResponse[O], err e
 			&project,
 			&labelsData,
 			&annotationsData,
-			&displayName,
+			&title,
 			&description,
 			&version,
 			&data,
@@ -187,7 +187,7 @@ func (r *GetRequest[O]) do(ctx context.Context) (response *GetResponse[O], err e
 		name:        name,
 		labels:      labels,
 		annotations: annotations,
-		displayName: displayName,
+		title:       title,
 		description: description,
 		version:     version,
 	})

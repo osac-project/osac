@@ -61,7 +61,7 @@ type GenericDAOBuilder[O Object] struct {
 //   - `project` - The project that the object is assigned to.
 //   - `labels` - The labels assigned to the object.
 //   - `annotations` - The annotations assigned to the object.
-//   - `display_name` - The human friendly display name of the object.
+//   - `title` - The human friendly title of the object.
 //   - `description` - The human friendly description of the object.
 //   - `version` - The version number, automatically incremented on every update.
 //   - `data` - The serialized object, using the protocol buffers JSON serialization.
@@ -108,8 +108,8 @@ type metadataIface interface {
 	SetLabels(map[string]string)
 	GetAnnotations() map[string]string
 	SetAnnotations(map[string]string)
-	GetDisplayName() string
-	SetDisplayName(string)
+	GetTitle() string
+	SetTitle(string)
 	GetDescription() string
 	SetDescription(string)
 	GetVersion() int32

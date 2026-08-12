@@ -75,7 +75,7 @@ func (r *CreateRequest[O]) do(ctx context.Context) (response *CreateResponse[O],
 		name        string
 		labels      map[string]string
 		annotations map[string]string
-		displayName string
+		title       string
 		description string
 		tenant      string
 		project     string
@@ -85,7 +85,7 @@ func (r *CreateRequest[O]) do(ctx context.Context) (response *CreateResponse[O],
 		name = metadata.GetName()
 		labels = metadata.GetLabels()
 		annotations = metadata.GetAnnotations()
-		displayName = metadata.GetDisplayName()
+		title = metadata.GetTitle()
 		description = metadata.GetDescription()
 		tenant = metadata.GetTenant()
 		project = metadata.GetProject()
@@ -122,7 +122,7 @@ func (r *CreateRequest[O]) do(ctx context.Context) (response *CreateResponse[O],
 			project,
 			labels,
 			annotations,
-			display_name,
+			title,
 			description,
 			data
 		) values (
@@ -164,7 +164,7 @@ func (r *CreateRequest[O]) do(ctx context.Context) (response *CreateResponse[O],
 			project,
 			labelsData,
 			annotationsData,
-			displayName,
+			title,
 			description,
 			data,
 		)
@@ -192,7 +192,7 @@ func (r *CreateRequest[O]) do(ctx context.Context) (response *CreateResponse[O],
 		name:        name,
 		labels:      labels,
 		annotations: annotations,
-		displayName: displayName,
+		title:       title,
 		description: description,
 		version:     version,
 	})

@@ -192,6 +192,9 @@ class OsacCLI:
             args.extend(["--network-attachment", f"subnet={subnet}"])
         return self._parse_uuid(self._run(*args))
 
+    def scale_cluster(self, *, uuid: str, node_set: str, size: int) -> None:
+        self._run("scale", "cluster", uuid, "--node-set", node_set, "--size", str(size))
+
     def delete_cluster(self, *, uuid: str) -> None:
         self._run("delete", "cluster", uuid)
 

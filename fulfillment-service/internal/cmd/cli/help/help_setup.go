@@ -16,8 +16,10 @@ package help
 import (
 	"bytes"
 	"embed"
+	"encoding/json"
 	"log/slog"
 	"os"
+	"path/filepath"
 
 	"charm.land/glamour/v2"
 	"charm.land/glamour/v2/ansi"
@@ -105,6 +107,9 @@ func Setup(cmd *cobra.Command) {
 		style.Code.Prefix = ""
 		style.Code.Suffix = ""
 
+		// Hide private-API subcommands when the user is not in private mode:
+		hidePrivateSubcommands(c)
+
 		// Render the help output:
 		var buffer bytes.Buffer
 		err = engine.Execute(&buffer, "command_help.md", c)
@@ -143,6 +148,71 @@ func flagsFunc(fs *pflag.FlagSet) []*pflag.Flag {
 		}
 	})
 	return result
+}
+
+const (
+	privateAPIAnnotationKey   = "api"
+	privateAPIAnnotationValue = "private"
+)
+
+// MarkPrivateAPI annotates a command as belonging to the private API. The help system uses this
+// to hide such commands from non-admin users who have not logged in with --private.
+func MarkPrivateAPI(cmd *cobra.Command) *cobra.Command {
+	if cmd.Annotations == nil {
+		cmd.Annotations = map[string]string{}
+	}
+	cmd.Annotations[privateAPIAnnotationKey] = privateAPIAnnotationValue
+	return cmd
+}
+
+func isPrivateAPICommand(cmd *cobra.Command) bool {
+	return cmd.Annotations != nil && cmd.Annotations[privateAPIAnnotationKey] == privateAPIAnnotationValue
+}
+
+// hidePrivateSubcommands checks the user's config file to determine whether private-API mode is
+// enabled, and hides subcommands annotated with api=private when it is not. This runs at
+// help-render time because PersistentPreRunE does not execute for --help.
+func hidePrivateSubcommands(c *cobra.Command) {
+	hasPrivate := false
+	for _, sub := range c.Commands() {
+		if isPrivateAPICommand(sub) {
+			hasPrivate = true
+			break
+		}
+	}
+	if !hasPrivate {
+		return
+	}
+
+	isPrivate := false
+	configDir := ""
+	if f := c.Root().PersistentFlags().Lookup("config"); f != nil {
+		configDir = f.Value.String()
+		if !f.Changed {
+			if envVal := os.Getenv("OSAC_CONFIG"); envVal != "" {
+				configDir = envVal
+			}
+		}
+	}
+	if configDir != "" {
+		if absDir, err := filepath.Abs(configDir); err == nil {
+			data, err := os.ReadFile(filepath.Clean(filepath.Join(absDir, "config.json")))
+			if err == nil {
+				var cfg struct {
+					Private bool `json:"private,omitempty"`
+				}
+				if json.Unmarshal(data, &cfg) == nil {
+					isPrivate = cfg.Private
+				}
+			}
+		}
+	}
+
+	for _, sub := range c.Commands() {
+		if isPrivateAPICommand(sub) {
+			sub.Hidden = !isPrivate
+		}
+	}
 }
 
 // maxReadableWidth is the maximum width for help output that we consider readable.

@@ -30,6 +30,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/storagetier"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/subnet"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/virtualnetwork"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/help"
 )
 
 func Cmd() *cobra.Command {
@@ -50,8 +51,8 @@ func Cmd() *cobra.Command {
 	result.AddCommand(virtualnetwork.Cmd())
 	result.AddCommand(subnet.Cmd())
 	result.AddCommand(securitygroup.Cmd())
-	result.AddCommand(storagebackend.Cmd())
-	result.AddCommand(storagetier.Cmd())
+	result.AddCommand(help.MarkPrivateAPI(storagebackend.Cmd()))
+	result.AddCommand(help.MarkPrivateAPI(storagetier.Cmd()))
 	return result
 }
 

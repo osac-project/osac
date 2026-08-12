@@ -15,6 +15,8 @@ package help
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"regexp"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
@@ -93,5 +95,74 @@ var _ = Describe("Help output", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(ansiPattern.FindString(output.String())).To(BeEmpty(),
 			"subcommand help output should not contain ANSI escape codes when writing to a non-TTY")
+	})
+})
+
+var _ = Describe("hidePrivateSubcommands", func() {
+	var (
+		root       *cobra.Command
+		parent     *cobra.Command
+		publicSub  *cobra.Command
+		privateSub *cobra.Command
+	)
+
+	BeforeEach(func() {
+		root = &cobra.Command{Use: "osac"}
+		parent = &cobra.Command{Use: "create"}
+		publicSub = &cobra.Command{Use: "cluster", Short: "Create a cluster"}
+		privateSub = &cobra.Command{
+			Use:         "hub",
+			Short:       "Create a hub",
+			Annotations: map[string]string{"api": "private"},
+		}
+		parent.AddCommand(publicSub)
+		parent.AddCommand(privateSub)
+		root.AddCommand(parent)
+	})
+
+	It("hides private subcommands when config has private=false", func() {
+		tmpDir := GinkgoT().TempDir()
+		err := os.WriteFile(filepath.Join(tmpDir, "config.json"), []byte(`{"private": false}`), 0600)
+		Expect(err).ToNot(HaveOccurred())
+		root.PersistentFlags().String("config", tmpDir, "")
+
+		hidePrivateSubcommands(parent)
+
+		Expect(privateSub.Hidden).To(BeTrue())
+		Expect(publicSub.Hidden).To(BeFalse())
+	})
+
+	It("shows private subcommands when config has private=true", func() {
+		tmpDir := GinkgoT().TempDir()
+		err := os.WriteFile(filepath.Join(tmpDir, "config.json"), []byte(`{"private": true}`), 0600)
+		Expect(err).ToNot(HaveOccurred())
+		root.PersistentFlags().String("config", tmpDir, "")
+
+		hidePrivateSubcommands(parent)
+
+		Expect(privateSub.Hidden).To(BeFalse())
+		Expect(publicSub.Hidden).To(BeFalse())
+	})
+
+	It("hides private subcommands when no config file exists", func() {
+		tmpDir := GinkgoT().TempDir()
+		root.PersistentFlags().String("config", tmpDir, "")
+
+		hidePrivateSubcommands(parent)
+
+		Expect(privateSub.Hidden).To(BeTrue())
+		Expect(publicSub.Hidden).To(BeFalse())
+	})
+
+	It("does nothing when no subcommands have private annotation", func() {
+		cmd := &cobra.Command{Use: "get"}
+		sub := &cobra.Command{Use: "cluster"}
+		cmd.AddCommand(sub)
+		root.AddCommand(cmd)
+		root.PersistentFlags().String("config", GinkgoT().TempDir(), "")
+
+		hidePrivateSubcommands(cmd)
+
+		Expect(sub.Hidden).To(BeFalse())
 	})
 })

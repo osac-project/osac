@@ -46,6 +46,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/storagetier"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/subnet"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/virtualnetwork"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/help"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
@@ -65,19 +66,19 @@ func Cmd() *cobra.Command {
 	result.AddCommand(baremetalinstancecatalogitem.Cmd())
 	result.AddCommand(cluster.Cmd())
 	result.AddCommand(clustercatalogitem.Cmd())
-	result.AddCommand(clusterversion.Cmd())
+	result.AddCommand(help.MarkPrivateAPI(clusterversion.Cmd()))
 	result.AddCommand(computeinstance.Cmd())
 	result.AddCommand(computeinstancecatalogitem.Cmd())
 	result.AddCommand(externalip.Cmd())
 	result.AddCommand(externalipattachment.Cmd())
-	result.AddCommand(hub.Cmd())
-	result.AddCommand(instancetype.Cmd())
+	result.AddCommand(help.MarkPrivateAPI(hub.Cmd()))
+	result.AddCommand(help.MarkPrivateAPI(instancetype.Cmd()))
 	result.AddCommand(natgateway.Cmd())
 	result.AddCommand(virtualnetwork.Cmd())
 	result.AddCommand(subnet.Cmd())
 	result.AddCommand(securitygroup.Cmd())
-	result.AddCommand(storagebackend.Cmd())
-	result.AddCommand(storagetier.Cmd())
+	result.AddCommand(help.MarkPrivateAPI(storagebackend.Cmd()))
+	result.AddCommand(help.MarkPrivateAPI(storagetier.Cmd()))
 	flags := result.Flags()
 	flags.StringVarP(
 		&runner.args.file,

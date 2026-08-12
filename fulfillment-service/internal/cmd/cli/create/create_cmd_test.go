@@ -66,4 +66,25 @@ var _ = Describe("Create command", func() {
 			Expect(subcommandNames).To(ContainElements("baremetalinstancecatalogitem", "cluster", "clustercatalogitem", "clusterversion", "computeinstance", "computeinstancecatalogitem", "hub", "virtualnetwork", "subnet", "securitygroup"))
 		})
 	})
+
+	Describe("Private API annotations", func() {
+		It("should annotate private-API subcommands", func() {
+			cmd := Cmd()
+			privateNames := map[string]bool{
+				"hub": true, "instancetype": true, "clusterversion": true,
+				"storagebackend": true, "storagetier": true,
+			}
+			for _, sub := range cmd.Commands() {
+				if privateNames[sub.Name()] {
+					Expect(sub.Annotations).To(HaveKeyWithValue("api", "private"),
+						"subcommand %s should be annotated as private", sub.Name())
+				} else {
+					if sub.Annotations != nil {
+						Expect(sub.Annotations).ToNot(HaveKey("api"),
+							"subcommand %s should not be annotated as private", sub.Name())
+					}
+				}
+			}
+		})
+	})
 })

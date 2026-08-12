@@ -135,7 +135,7 @@ run_wrapper() {
 seed_vendor() {
   local ws="$1"
   local vendor="${ws}/.osac-ai-skills"
-  mkdir -p "${vendor}/.git" "${vendor}/tools" "${vendor}/skills"
+  mkdir -p "${vendor}/tools" "${vendor}/skills"
   cp "$VENDOR_FANOUT" "${vendor}/tools/link-agent-skills.sh"
   chmod +x "${vendor}/tools/link-agent-skills.sh"
 
@@ -177,27 +177,6 @@ test_missing_vendor_fails() {
   run_wrapper "$ws" --claude >/dev/null 2>&1 || rc=$?
   [[ "$rc" -ne 0 ]] || fail "expected non-zero exit when vendor missing"
   pass "missing vendor dir fails loudly"
-}
-
-test_non_git_vendor_rejected() {
-  local ws
-  ws=$(mktemp -d "${TMPDIR_ROOT}/nongit.XXXXXX")
-  install_wrapper "$ws"
-  local vendor="${ws}/.osac-ai-skills"
-  mkdir -p "${vendor}/tools" "${vendor}/skills/create-pr"
-  cp "$VENDOR_FANOUT" "${vendor}/tools/link-agent-skills.sh"
-  chmod +x "${vendor}/tools/link-agent-skills.sh"
-  echo "# stub" >"${vendor}/skills/create-pr/SKILL.md"
-  # Deliberately no .git dir: mirrors a stale/non-clone vendor tree, which
-  # bootstrap.sh's osac_ai_skills_vendor_ok() also rejects.
-
-  local rc=0
-  local err
-  err=$(run_wrapper "$ws" --claude 2>&1) || rc=$?
-  [[ "$rc" -ne 0 ]] || fail "expected failure when vendor dir has no .git"
-  echo "$err" | grep -qi 'not found\|git clone' \
-    || fail "expected vendor-not-found message, got: $err"
-  pass "rejects a vendor dir without .git (matches bootstrap.sh validity check)"
 }
 
 test_materialize_and_link() {
@@ -274,7 +253,6 @@ test_prunes_removed_vendor_skill() {
 }
 
 test_missing_vendor_fails
-test_non_git_vendor_rejected
 test_materialize_and_link
 test_refuse_real_skill_directory
 test_prunes_removed_vendor_skill

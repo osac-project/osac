@@ -5,8 +5,7 @@
 # Usage: tools/link-agent-skills.sh [--claude] [--cursor] [--gemini] [--all]
 #          [--with-ai-workflows] [--verify]
 #
-# Vendor resolution (first match; must be a git clone with skills/ and an
-# executable tools/link-agent-skills.sh, matching bootstrap.sh's validity check):
+# Vendor resolution (first match):
 #   ~/.osac-ai-skills
 #   $REPO/.osac-ai-skills
 #
@@ -32,7 +31,7 @@ EOF
 resolve_osac_ai_skills_dir() {
   local dir
   for dir in "${HOME}/.osac-ai-skills" "${REPO_ROOT}/.osac-ai-skills"; do
-    if [[ -d "${dir}/.git" && -d "${dir}/skills" && -x "${dir}/tools/link-agent-skills.sh" ]]; then
+    if [[ -d "${dir}/skills" && -x "${dir}/tools/link-agent-skills.sh" ]]; then
       (cd "${dir}" && pwd -P)
       return 0
     fi
@@ -100,7 +99,7 @@ done
 
 VENDOR_DIR="$(resolve_osac_ai_skills_dir)" || {
   echo "ERROR: osac-ai-skills vendor not found." >&2
-  echo "Expected ~/.osac-ai-skills or ${REPO_ROOT}/.osac-ai-skills to be a git clone with skills/ and tools/link-agent-skills.sh." >&2
+  echo "Expected ~/.osac-ai-skills or ${REPO_ROOT}/.osac-ai-skills with skills/ and tools/link-agent-skills.sh." >&2
   echo "Run tools/bootstrap.sh (or clone osac-project/osac-ai-skills into .osac-ai-skills)." >&2
   exit 1
 }

@@ -41,12 +41,22 @@ resolve_osac_ai_skills_dir() {
 
 # Absolute symlink skills/<name> -> <vendor>/skills/<name>.
 # Refuses to replace a real (non-symlink) path.
-# Prunes stale symlinks that still point into ${vendor}/skills/ after removals.
+# Prunes stale symlinks that still point into either candidate vendor root
+# (not just the currently-active one) after removals — resolution can flip
+# between ~/.osac-ai-skills and ${REPO_ROOT}/.osac-ai-skills across runs, and
+# a symlink materialized from the previously-active vendor must still be
+# recognized as vendor-managed even after the active vendor changes.
 materialize_osac_skills() {
   local vendor="$1"
   local skill_dir name link_path target vendor_skills existing link_target
+  local candidate managed_root known_roots=()
 
   vendor_skills="$(cd "${vendor}/skills" && pwd -P)"
+  for candidate in "${HOME}/.osac-ai-skills/skills" "${REPO_ROOT}/.osac-ai-skills/skills"; do
+    known_roots+=("${candidate}")
+    [[ -d "${candidate}" ]] && known_roots+=("$(cd "${candidate}" && pwd -P)")
+  done
+
   mkdir -p "${REPO_ROOT}/skills"
   for skill_dir in "${vendor}/skills"/*/; do
     [[ -d "${skill_dir}" ]] || continue
@@ -73,10 +83,13 @@ materialize_osac_skills() {
       bugfix|design|e2e|implement|prd|_shared) continue ;;
     esac
     link_target="$(readlink "${existing}")"
-    case "${link_target}" in
-      "${vendor_skills}"/*) ;;
-      *) continue ;;
-    esac
+    managed_root=false
+    for candidate in "${known_roots[@]}"; do
+      case "${link_target}" in
+        "${candidate}"/*) managed_root=true; break ;;
+      esac
+    done
+    [[ "${managed_root}" == true ]] || continue
     if [[ ! -d "${vendor_skills}/${name}" ]]; then
       rm -f "${existing}"
     fi

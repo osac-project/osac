@@ -252,7 +252,40 @@ test_prunes_removed_vendor_skill() {
   pass "prunes stale vendor skill symlinks"
 }
 
+test_prunes_after_vendor_switch() {
+  local ws
+  ws=$(mktemp -d "${TMPDIR_ROOT}/switch.XXXXXX")
+  seed_vendor "$ws"
+  install_wrapper "$ws"
+
+  # A skill that only exists in the project-local vendor, absent from the
+  # home vendor seeded below — reproduces resolution flipping between the
+  # two candidate vendor roots across runs (e.g. ~/.osac-ai-skills appears
+  # after an earlier run resolved to the project-local fallback).
+  mkdir -p "${ws}/.osac-ai-skills/skills/old-only-skill"
+  echo '# old-only-skill' >"${ws}/.osac-ai-skills/skills/old-only-skill/SKILL.md"
+
+  run_wrapper "$ws" --claude >/dev/null || fail "initial (project-local vendor) wrapper run failed"
+  [[ -L "${ws}/skills/old-only-skill" ]] || fail "expected old-only-skill link from project-local vendor"
+  [[ -L "${ws}/skills/create-pr" ]] || fail "expected create-pr link from project-local vendor"
+
+  local home_vendor="${ws}/home/.osac-ai-skills"
+  mkdir -p "${home_vendor}/tools" "${home_vendor}/skills/create-pr"
+  cp "$VENDOR_FANOUT" "${home_vendor}/tools/link-agent-skills.sh"
+  chmod +x "${home_vendor}/tools/link-agent-skills.sh"
+  echo '# stub create-pr (home vendor)' >"${home_vendor}/skills/create-pr/SKILL.md"
+
+  run_wrapper "$ws" --claude >/dev/null || fail "second (home vendor) wrapper run failed"
+
+  [[ ! -e "${ws}/skills/old-only-skill" && ! -L "${ws}/skills/old-only-skill" ]] \
+    || fail "expected old-only-skill (project-local-only) to be pruned once resolution switched to the home vendor"
+  grep -q "home vendor" "${ws}/skills/create-pr/SKILL.md" \
+    || fail "expected create-pr to now resolve through the home vendor"
+  pass "prunes symlinks left over from a prior, now-inactive vendor after resolution switches"
+}
+
 test_missing_vendor_fails
+test_prunes_after_vendor_switch
 test_materialize_and_link
 test_refuse_real_skill_directory
 test_prunes_removed_vendor_skill

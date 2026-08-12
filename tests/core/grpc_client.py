@@ -384,15 +384,6 @@ class GRPCClient:
             },
         )
 
-    def update_baremetal_instance_restart_trigger(self, *, bmi_id: str, restart_trigger: int) -> dict[str, Any]:
-        return self.call(
-            service=f"{PUBLIC_API}.BareMetalInstances/Update",
-            data={
-                "object": {"id": bmi_id, "spec": {"restart_trigger": restart_trigger}},
-                "updateMask": {"paths": ["spec.restart_trigger"]},
-            },
-        )
-
     def delete_baremetal_instance(self, *, bmi_id: str) -> None:
         self.call(service=f"{PUBLIC_API}.BareMetalInstances/Delete", data={"id": bmi_id})
 

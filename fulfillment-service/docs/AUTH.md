@@ -594,6 +594,7 @@ The authorization policy allows:
      - Role Bindings: `Get`, `List`
      - Roles: `Get`, `List`
      - Security Groups: `Create`, `Delete`, `Get`, `List`, `Update`
+     - Storage Tiers: `Get`, `List`
      - Subnets: `Create`, `Delete`, `Get`, `List`, `Update`
      - Virtual Networks: `Create`, `Delete`, `Get`, `List`, `Update`
 

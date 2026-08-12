@@ -370,6 +370,12 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 				{ClusterName: clusterName, Ready: false, Reason: v1alpha1.TenantReasonNotFound},
 			}
 
+			if r.TiersClient != nil && len(tierDefinitions) == 0 {
+				log.Info("no storage tier definitions registered yet, requeueing",
+					"tenant", tenantName, "requeueAfter", r.StatusPollInterval)
+				return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+			}
+
 			return r.handleClusterStorageProvisioning(ctx, instance, hubSecretReady)
 		}
 

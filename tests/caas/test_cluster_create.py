@@ -109,6 +109,7 @@ def test_cluster_create(
 
         wait_for_cluster_deletion(k8s=k8s_hub_client, name=co_name)
         wait_for_cluster_grpc_removal(grpc=grpc, uuid=uuid)
+        metering.verify()
     finally:
         with contextlib.suppress(subprocess.CalledProcessError):
             cli.delete_cluster(uuid=uuid)

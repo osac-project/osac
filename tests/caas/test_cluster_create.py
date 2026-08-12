@@ -51,17 +51,26 @@ def test_cluster_create(
 
         wait_for_cluster_ready(k8s=k8s_hub_client, name=co_name)
 
-        # Verify N+1 heartbeat decomposition: control_plane + worker(s)
+        # Derive expected N+1 count from cluster spec
+        cluster = grpc.get_cluster(cluster_id=uuid)
+        node_sets = cluster.get("object", {}).get("spec", {}).get("nodeSets", {})
+        expected_components = 1 + len(node_sets)
+
+        # Verify N+1 heartbeat decomposition
         metering.expect("osac.resource.heartbeat.v1", resource_id=uuid, timeout=180)
         metering.verify()
 
         heartbeats = metering.get_all_events("osac.resource.heartbeat.v1", resource_id=uuid)
-        components = {ev.get("data", {}).get("billing_dimensions", {}).get("component") for ev in heartbeats}
-        assert "control_plane" in components, (
-            f"Expected control_plane heartbeat, got components: {components}"
+        hb_components = [ev.get("data", {}).get("billing_dimensions", {}).get("component") for ev in heartbeats]
+        cp_count = sum(1 for c in hb_components if c == "control_plane")
+        worker_count = sum(1 for c in hb_components if c == "worker")
+        assert cp_count >= 1, f"Expected at least 1 control_plane heartbeat, got {cp_count}"
+        assert worker_count >= len(node_sets), (
+            f"Expected at least {len(node_sets)} worker heartbeat(s), got {worker_count}"
         )
-        assert "worker" in components, (
-            f"Expected worker heartbeat, got components: {components}"
+        assert len(heartbeats) >= expected_components, (
+            f"Expected at least {expected_components} heartbeat events (1 cp + {len(node_sets)} workers), "
+            f"got {len(heartbeats)}"
         )
 
         # Verify started.v1 carries correct resource type and cluster template

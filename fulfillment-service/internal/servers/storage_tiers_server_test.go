@@ -326,7 +326,7 @@ var _ = Describe("Storage tiers server", func() {
 			Expect(st.Code()).To(Equal(codes.InvalidArgument))
 		})
 
-		It("Get and List return Internal for a tier with zero backend associations", func() {
+		It("Get returns Internal, and List omits, a tier with zero backend associations", func() {
 			// Bypass the private server's Create validation (which requires exactly one backend
 			// association) by inserting directly via the DAO, simulating already-corrupted data:
 			tierDAO, err := dao.NewGenericDAO[*privatev1.StorageTier]().
@@ -358,13 +358,14 @@ var _ = Describe("Storage tiers server", func() {
 			Expect(ok).To(BeTrue())
 			Expect(getSt.Code()).To(Equal(codes.Internal))
 
-			_, err = publicServer.List(ctx, publicv1.StorageTiersListRequest_builder{
+			// A tenant can't fix a malformed tier — that's a cloud-provider-admin data problem — so
+			// List logs and omits it rather than failing the whole listing for every caller:
+			listResponse, err := publicServer.List(ctx, publicv1.StorageTiersListRequest_builder{
 				Filter: new(fmt.Sprintf("this.id == '%s'", malformedID)),
 			}.Build())
-			Expect(err).To(HaveOccurred())
-			listSt, ok := status.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(listSt.Code()).To(Equal(codes.Internal))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(listResponse.GetItems()).To(BeEmpty())
+			Expect(listResponse.GetSize()).To(Equal(int32(0)))
 		})
 
 		It("Get returns Internal for a tier with more than one backend association", func() {

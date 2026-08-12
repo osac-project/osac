@@ -210,21 +210,23 @@ func (s *StorageTiersServer) List(ctx context.Context,
 		return nil, err
 	}
 
-	// Map private response to public format:
+	// Map private response to public format. A tenant can't do anything about a malformed tier —
+	// that's a cloud-provider-admin data problem — so List logs and omits it rather than failing the
+	// whole listing for every caller (toPublicTier already logs the specific cause). Get, below,
+	// still fails the single request it was asked for.
 	privateItems := privateResponse.GetItems()
-	publicItems := make([]*publicv1.StorageTier, len(privateItems))
-	for i, privateItem := range privateItems {
-		var publicItem *publicv1.StorageTier
-		publicItem, err = s.toPublicTier(ctx, privateItem, "failed to process storage tiers")
-		if err != nil {
-			return nil, err
+	publicItems := make([]*publicv1.StorageTier, 0, len(privateItems))
+	for _, privateItem := range privateItems {
+		publicItem, itemErr := s.toPublicTier(ctx, privateItem, "failed to process storage tiers")
+		if itemErr != nil {
+			continue
 		}
-		publicItems[i] = publicItem
+		publicItems = append(publicItems, publicItem)
 	}
 
 	// Create the public response:
 	response = &publicv1.StorageTiersListResponse{}
-	response.SetSize(privateResponse.GetSize())
+	response.SetSize(int32(len(publicItems)))
 	response.SetTotal(privateResponse.GetTotal())
 	response.SetItems(publicItems)
 	return

@@ -13,7 +13,7 @@
 ## Commands
 {{ range .Commands }}
 {{ if .IsAvailableCommand }}
-* **{{ .Name }}** - {{ .Short }}.
+* **{{ .Name }}** - {{ .Short }}
 {{ end }}
 {{ end }}
 {{ end }}

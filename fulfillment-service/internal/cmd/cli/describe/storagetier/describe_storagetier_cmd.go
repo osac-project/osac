@@ -117,7 +117,7 @@ func renderStorageTier(w io.Writer, st *privatev1.StorageTier) {
 	writer.Flush()
 }
 
-const shortHelp = `Describe a storage tier.`
+const shortHelp = `Describe a storage tier`
 
 const longHelp = `
 Describe a storage tier.

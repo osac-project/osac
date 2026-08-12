@@ -128,7 +128,7 @@ func RenderVirtualNetwork(w io.Writer, vn *publicv1.VirtualNetwork) {
 	writer.Flush()
 }
 
-const shortHelp = `Describe a virtual network.`
+const shortHelp = `Describe a virtual network`
 
 const longHelp = `
 Display detailed information about a virtual network, referenced by identifier or name.

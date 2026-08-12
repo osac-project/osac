@@ -169,7 +169,7 @@ func renderCluster(w io.Writer, cluster *publicv1.Cluster, version *publicv1.Clu
 	}
 }
 
-const shortHelp = `Describe a cluster.`
+const shortHelp = `Describe a cluster`
 
 const longHelp = `
 Describe a cluster.

@@ -131,7 +131,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-const shortHelp = `Create a hub.`
+const shortHelp = `Create a hub`
 
 const longHelp = `
 Create a hub.

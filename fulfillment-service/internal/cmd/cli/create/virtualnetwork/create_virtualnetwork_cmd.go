@@ -139,7 +139,7 @@ func validateNetworkClass(networkClass string) error {
 	return nil
 }
 
-const shortHelp = `Create a virtual network.`
+const shortHelp = `Create a virtual network`
 
 const longHelp = `
 Create a virtual network with the specified network class and IP addressing

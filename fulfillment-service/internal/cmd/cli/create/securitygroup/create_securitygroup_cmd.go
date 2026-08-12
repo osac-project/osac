@@ -282,7 +282,7 @@ func parsePort(value string) (int32, error) {
 	return int32(n), nil
 }
 
-const shortHelp = `Create a security group.`
+const shortHelp = `Create a security group`
 
 const longHelp = `
 Create a security group with optional ingress and egress firewall rules.

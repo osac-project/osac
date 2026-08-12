@@ -964,7 +964,7 @@ func (c *runnerContext) validTemplateParameters(template *publicv1.ComputeInstan
 	return results
 }
 
-const shortHelp = `Create a compute instance.`
+const shortHelp = `Create a compute instance`
 
 const longHelp = `
 Create a compute instance.

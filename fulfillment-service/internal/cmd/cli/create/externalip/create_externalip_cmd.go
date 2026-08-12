@@ -120,7 +120,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-const shortHelp = `Create an external IP.`
+const shortHelp = `Create an external IP`
 
 const longHelp = `
 Allocate an external IP address from an ExternalIPPool.

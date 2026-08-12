@@ -174,7 +174,7 @@ func parseProtocol(value string) (privatev1.StorageProtocol, error) {
 	}
 }
 
-const shortHelp = `Create a storage tier.`
+const shortHelp = `Create a storage tier`
 
 const longHelp = `
 Create a storage tier.

@@ -146,7 +146,7 @@ func renderInstanceType(w io.Writer, it *publicv1.InstanceType) {
 	writer.Flush()
 }
 
-const shortHelp = `Describe an instance type.`
+const shortHelp = `Describe an instance type`
 
 const longHelp = `
 Describe an instance type.

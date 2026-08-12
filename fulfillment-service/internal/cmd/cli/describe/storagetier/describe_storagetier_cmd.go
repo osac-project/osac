@@ -88,26 +88,34 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 func renderStorageTier(w io.Writer, st *publicv1.StorageTier) {
 	writer := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 
-	fmt.Fprintf(writer, "ID:\t%s\n", st.GetId())
-	fmt.Fprintf(writer, "Name:\t%s\n", st.GetMetadata().GetName())
-
-	state := strings.TrimPrefix(st.GetStatus().GetState().String(), "STORAGE_TIER_STATE_")
-	fmt.Fprintf(writer, "State:\t%s\n", state)
-
-	if v := st.GetStatus().GetMessage(); v != "" {
-		fmt.Fprintf(writer, "Message:\t%s\n", v)
+	name := "-"
+	if v := st.GetMetadata().GetName(); v != "" {
+		name = v
 	}
 
-	if desc := st.GetSpec().GetDescription(); desc != "" {
-		fmt.Fprintf(writer, "Description:\t%s\n", desc)
+	description := "-"
+	if v := st.GetSpec().GetDescription(); v != "" {
+		description = v
 	}
 
 	protocol := strings.TrimPrefix(st.GetSpec().GetProtocol().String(), "STORAGE_PROTOCOL_")
+	state := strings.TrimPrefix(st.GetStatus().GetState().String(), "STORAGE_TIER_STATE_")
+
+	message := "-"
+	if v := st.GetStatus().GetMessage(); v != "" {
+		message = v
+	}
+
+	fmt.Fprintf(writer, "ID:\t%s\n", st.GetId())
+	fmt.Fprintf(writer, "Name:\t%s\n", name)
+	fmt.Fprintf(writer, "Description:\t%s\n", description)
 	fmt.Fprintf(writer, "Protocol:\t%s\n", protocol)
 	fmt.Fprintf(writer, "Max Read BW (MB/s):\t%d\n", st.GetSpec().GetMaxReadBandwidthMbs())
 	fmt.Fprintf(writer, "Max Write BW (MB/s):\t%d\n", st.GetSpec().GetMaxWriteBandwidthMbs())
-	fmt.Fprintf(writer, "Quota (GiB):\t%d\n", st.GetSpec().GetQuotaGib())
-	fmt.Fprintf(writer, "Encryption:\t%t\n", st.GetSpec().GetEncryptionEnabled())
+	fmt.Fprintf(writer, "Quota:\t%d GiB\n", st.GetSpec().GetQuotaGib())
+	fmt.Fprintf(writer, "Encryption Enabled:\t%t\n", st.GetSpec().GetEncryptionEnabled())
+	fmt.Fprintf(writer, "State:\t%s\n", state)
+	fmt.Fprintf(writer, "Message:\t%s\n", message)
 
 	writer.Flush()
 }

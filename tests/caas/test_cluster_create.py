@@ -81,6 +81,26 @@ def test_cluster_create(
             f"cluster_template mismatch: {started_bd.get('cluster_template')!r} != {cluster_template!r}"
         )
 
+        # Scale a worker node set and verify updated.v1
+        worker_node_set = next(iter(node_sets))
+        original_size = node_sets[worker_node_set].get("count", 1)
+        scaled_size = original_size + 1
+        cli.scale_cluster(uuid=uuid, node_set=worker_node_set, size=scaled_size)
+        metering.expect("osac.resource.updated.v1", resource_id=uuid, timeout=120)
+        metering.verify()
+
+        updated = metering.get_event("osac.resource.updated.v1", resource_id=uuid)
+        updated_bd = updated.get("data", {}).get("billing_dimensions", {})
+        assert updated_bd.get("node_set") == worker_node_set, (
+            f"updated.v1 node_set mismatch: {updated_bd.get('node_set')!r} != {worker_node_set!r}"
+        )
+        assert updated_bd.get("node_count") == scaled_size, (
+            f"updated.v1 node_count should be {scaled_size}, got {updated_bd.get('node_count')}"
+        )
+
+        # Scale back before deletion
+        cli.scale_cluster(uuid=uuid, node_set=worker_node_set, size=original_size)
+
         cli.delete_cluster(uuid=uuid)
         metering.expect("osac.resource.deleted.v1", resource_id=uuid)
 

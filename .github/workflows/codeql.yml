@@ -55,7 +55,7 @@ jobs:
       # repo had no CodeQL workflow at all. A human security read to confirm
       # and either suppress in-code or fix is tracked separately rather than
       # mixed into a code-relocation PR. Remove this carve-out once resolved.
-      - uses: github/codeql-action/init@f205ea1c3313d32999d8d6a48b4f6530d4437b38  # v4.37.4
+      - uses: github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3  # v4.37.6
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}

@@ -16,7 +16,6 @@ package servers
 import (
 	"fmt"
 
-	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc/codes"
@@ -347,7 +346,7 @@ var _ = Describe("Private storage tiers server", func() {
 			Expect(st.Code()).To(Equal(codes.NotFound))
 		})
 
-		It("Generates UUID for id ignoring caller-provided value", func() {
+		It("Sets id from metadata.name ignoring caller-provided value", func() {
 			callerProvidedId := "my-custom-id"
 			response, err := server.Create(ctx, privatev1.StorageTiersCreateRequest_builder{
 				Object: privatev1.StorageTier_builder{
@@ -366,9 +365,8 @@ var _ = Describe("Private storage tiers server", func() {
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().GetId()).To(Equal("test-tier"))
 			Expect(response.GetObject().GetId()).ToNot(Equal(callerProvidedId))
-			_, err = uuid.Parse(response.GetObject().GetId())
-			Expect(err).ToNot(HaveOccurred())
 		})
 
 		It("Create always sets state to ACTIVE regardless of caller-provided state", func() {
@@ -697,7 +695,7 @@ var _ = Describe("Private storage tiers server", func() {
 				Expect(err).ToNot(HaveOccurred())
 
 				second := createStorageTierWithName("reusable-name")
-				Expect(second.GetId()).ToNot(Equal(created.GetId()))
+				Expect(second.GetId()).To(Equal("reusable-name"))
 				Expect(second.GetMetadata().GetName()).To(Equal("reusable-name"))
 			})
 		})

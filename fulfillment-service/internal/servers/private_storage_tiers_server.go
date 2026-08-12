@@ -140,7 +140,8 @@ func (s *PrivateStorageTiersServer) Create(ctx context.Context,
 		State: privatev1.StorageTierState_STORAGE_TIER_STATE_ACTIVE,
 	}.Build())
 
-	st.SetId("")
+	// Set id from metadata.name (name-as-primary-key, aligns with InstanceType pattern):
+	st.SetId(st.GetMetadata().GetName())
 
 	// StorageTier is platform-scoped; force tenant to "shared" so all authenticated users can see it.
 	if st.GetMetadata() == nil {

@@ -93,8 +93,14 @@ fi
 
 # Umbrella .*/skills -> ../skills must exist before install.sh, which mkdir -p's
 # those paths and writes workflow symlinks into them (through the umbrellas).
+#
+# Export the vendor dir this script just resolved/updated/cloned above so the
+# wrapper uses that exact directory instead of independently re-resolving one
+# — the wrapper's resolve_osac_ai_skills_dir() uses a weaker, content-only
+# check (see its own comment) and could otherwise pick a different, possibly
+# stale, ~/.osac-ai-skills that this script already rejected for git updates.
 echo "Linking agent skill directories..."
-"${PROJECT_ROOT}/tools/link-agent-skills.sh"
+OSAC_AI_SKILLS_VENDOR_DIR="${OSAC_AI_SKILLS_DIR}" "${PROJECT_ROOT}/tools/link-agent-skills.sh"
 
 echo "Installing ai-workflows skills..."
 AI_WORKFLOWS="bugfix,implement,prd,design,e2e"

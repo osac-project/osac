@@ -5,9 +5,11 @@
 # Usage: tools/link-agent-skills.sh [--claude] [--cursor] [--gemini] [--all]
 #          [--with-ai-workflows] [--verify]
 #
-# Vendor resolution (first match):
-#   ~/.osac-ai-skills
-#   $REPO/.osac-ai-skills
+# Vendor resolution:
+#   $OSAC_AI_SKILLS_VENDOR_DIR, if set (tools/bootstrap.sh sets this to the
+#     vendor it already resolved/cloned, so this wrapper can't independently
+#     pick a different, possibly stale, directory)
+#   otherwise, first match: ~/.osac-ai-skills | $REPO/.osac-ai-skills
 #
 # Default flags when none given: --all --with-ai-workflows
 set -euo pipefail
@@ -36,8 +38,22 @@ EOF
 # (neither checks .git), and leaves room for the non-git vendoring mechanisms
 # ADR 0001 Decision item 3 still has open (git subtree / copy-bot) for
 # automated-framework consumption.
+#
+# When $OSAC_AI_SKILLS_VENDOR_DIR is set, it is authoritative and is not
+# re-validated against the two-candidate search below: bootstrap.sh sets it
+# to the exact directory it already resolved (or just cloned), specifically
+# to prevent this function from re-resolving independently and picking a
+# different candidate — e.g. a content-valid-but-non-git ~/.osac-ai-skills
+# that bootstrap.sh already rejected in favor of a fresh project-local clone.
 resolve_osac_ai_skills_dir() {
   local dir
+  if [[ -n "${OSAC_AI_SKILLS_VENDOR_DIR:-}" ]]; then
+    if [[ -d "${OSAC_AI_SKILLS_VENDOR_DIR}/skills" && -x "${OSAC_AI_SKILLS_VENDOR_DIR}/tools/link-agent-skills.sh" ]]; then
+      (cd "${OSAC_AI_SKILLS_VENDOR_DIR}" && pwd -P)
+      return 0
+    fi
+    return 1
+  fi
   for dir in "${HOME}/.osac-ai-skills" "${REPO_ROOT}/.osac-ai-skills"; do
     if [[ -d "${dir}/skills" && -x "${dir}/tools/link-agent-skills.sh" ]]; then
       (cd "${dir}" && pwd -P)
@@ -119,9 +135,13 @@ for arg in "${ARGS[@]}"; do
 done
 
 VENDOR_DIR="$(resolve_osac_ai_skills_dir)" || {
-  echo "ERROR: osac-ai-skills vendor not found." >&2
-  echo "Expected ~/.osac-ai-skills or ${REPO_ROOT}/.osac-ai-skills with skills/ and tools/link-agent-skills.sh." >&2
-  echo "Run tools/bootstrap.sh (or clone osac-project/osac-ai-skills into .osac-ai-skills)." >&2
+  if [[ -n "${OSAC_AI_SKILLS_VENDOR_DIR:-}" ]]; then
+    echo "ERROR: OSAC_AI_SKILLS_VENDOR_DIR=${OSAC_AI_SKILLS_VENDOR_DIR} is not a usable osac-ai-skills vendor (missing skills/ or tools/link-agent-skills.sh)." >&2
+  else
+    echo "ERROR: osac-ai-skills vendor not found." >&2
+    echo "Expected ~/.osac-ai-skills or ${REPO_ROOT}/.osac-ai-skills with skills/ and tools/link-agent-skills.sh." >&2
+    echo "Run tools/bootstrap.sh (or clone osac-project/osac-ai-skills into .osac-ai-skills)." >&2
+  fi
   exit 1
 }
 

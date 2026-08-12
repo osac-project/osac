@@ -284,8 +284,47 @@ test_prunes_after_vendor_switch() {
   pass "prunes symlinks left over from a prior, now-inactive vendor after resolution switches"
 }
 
+test_vendor_override_env_var_is_authoritative() {
+  local ws
+  ws=$(mktemp -d "${TMPDIR_ROOT}/override.XXXXXX")
+  seed_vendor "$ws"
+  install_wrapper "$ws"
+
+  # Seed a second, distinguishable vendor at the home path — the wrapper's own
+  # default resolution checks HOME first, so without the override it would
+  # pick this one instead of the project-local vendor passed via the env var.
+  # Reproduces the bug where tools/bootstrap.sh resolves/clones one vendor
+  # dir but the wrapper it invokes independently re-resolves and silently
+  # picks a different one (e.g. a content-valid-but-non-git ~/.osac-ai-skills
+  # that bootstrap.sh already rejected for git updates).
+  local home_vendor="${ws}/home/.osac-ai-skills"
+  mkdir -p "${home_vendor}/tools" "${home_vendor}/skills/create-pr"
+  cp "$VENDOR_FANOUT" "${home_vendor}/tools/link-agent-skills.sh"
+  chmod +x "${home_vendor}/tools/link-agent-skills.sh"
+  echo '# stub create-pr (home vendor — must NOT be used)' >"${home_vendor}/skills/create-pr/SKILL.md"
+
+  local project_vendor="${ws}/.osac-ai-skills"
+  (cd "$ws" && HOME="${ws}/home" OSAC_AI_SKILLS_VENDOR_DIR="${project_vendor}" \
+    ./tools/link-agent-skills.sh --claude >/dev/null) \
+    || fail "wrapper run with OSAC_AI_SKILLS_VENDOR_DIR override failed"
+
+  grep -q "home vendor" "${ws}/skills/create-pr/SKILL.md" \
+    && fail "override was ignored — wrapper used the home vendor instead of OSAC_AI_SKILLS_VENDOR_DIR"
+  [[ -r "${ws}/skills/create-pr/SKILL.md" ]] || fail "expected create-pr to resolve via the overridden vendor"
+
+  local rc=0
+  local err
+  err=$(cd "$ws" && HOME="${ws}/home" OSAC_AI_SKILLS_VENDOR_DIR="${ws}/no-such-vendor" \
+    ./tools/link-agent-skills.sh --claude 2>&1) || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "expected failure for an invalid OSAC_AI_SKILLS_VENDOR_DIR (no silent fallback)"
+  echo "$err" | grep -qi 'OSAC_AI_SKILLS_VENDOR_DIR' \
+    || fail "expected error to reference OSAC_AI_SKILLS_VENDOR_DIR, got: $err"
+  pass "OSAC_AI_SKILLS_VENDOR_DIR override is authoritative (no independent re-resolution, no silent fallback)"
+}
+
 test_missing_vendor_fails
 test_prunes_after_vendor_switch
+test_vendor_override_env_var_is_authoritative
 test_materialize_and_link
 test_refuse_real_skill_directory
 test_prunes_removed_vendor_skill

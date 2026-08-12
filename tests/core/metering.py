@@ -102,9 +102,17 @@ class MeteringCollector:
             "since": self._start_time,
         })
         url = f"{self._base_url}/events?{params}"
-        req = Request(url)
-        with urlopen(req, timeout=10) as resp:  # noqa: S310
-            return json.loads(resp.read().decode("utf-8"))
+        last_exc: OSError | None = None
+        for attempt in range(3):
+            try:
+                req = Request(url)
+                with urlopen(req, timeout=10) as resp:  # noqa: S310
+                    return json.loads(resp.read().decode("utf-8"))
+            except (urllib.error.URLError, OSError) as exc:
+                last_exc = exc
+                logger.warning("Transient HTTP error fetching events (attempt %d/3): %s", attempt + 1, exc)
+                time.sleep(2)
+        raise last_exc  # type: ignore[misc]
 
     def _poll_for_event(self, expected: ExpectedEvent) -> dict[str, Any]:
         result: list[dict[str, Any]] = []

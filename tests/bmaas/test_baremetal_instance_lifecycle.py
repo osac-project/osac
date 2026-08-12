@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from tests.core.grpc_client import GRPCClient
 from tests.core.helpers import (
     wait_for_bmh_available,
@@ -14,6 +16,7 @@ from tests.core.osac_cli import OsacCLI
 from tests.core.runner import poll_until
 
 
+@pytest.mark.xdist_group("bmaas")
 def test_baremetal_instance_lifecycle(
     cli: OsacCLI,
     grpc: GRPCClient,

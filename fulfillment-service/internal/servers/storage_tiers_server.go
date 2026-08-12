@@ -226,7 +226,7 @@ func (s *StorageTiersServer) List(ctx context.Context,
 
 	// Create the public response:
 	response = &publicv1.StorageTiersListResponse{}
-	response.SetSize(int32(len(publicItems)))
+	response.SetSize(int32(len(publicItems))) // #nosec G115 -- bounded by page size
 	response.SetTotal(privateResponse.GetTotal())
 	response.SetItems(publicItems)
 	return

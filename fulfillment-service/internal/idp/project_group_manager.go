@@ -70,20 +70,22 @@ func (b *ProjectGroupManagerBuilder) Build() (result *ProjectGroupManager, err e
 }
 
 // DeleteProjectGroups deletes tenant authorization groups for a project.
-func (m *ProjectGroupManager) DeleteProjectGroups(ctx context.Context, tenant, projectName string) error {
+// The projectPath argument uses the same format as CreateProjectGroups: slash-separated hierarchy
+// without a leading slash (for example "parent/child"), or empty for the default project.
+func (m *ProjectGroupManager) DeleteProjectGroups(ctx context.Context, tenant, projectPath string) error {
 	if tenant == "" {
 		return fmt.Errorf("tenant is required")
 	}
 	// Validate inputs to prevent path traversal attacks
-	if strings.Contains(projectName, "..") {
-		return fmt.Errorf("project name cannot contain '..' sequence")
-	}
-	if strings.Contains(projectName, "/") {
-		return fmt.Errorf("project name cannot contain '/' character")
+	if strings.Contains(projectPath, "..") {
+		return fmt.Errorf("project path cannot contain '..' sequence")
 	}
 
-	// Delete the parent project group, which will cascade delete the system:viewers and system:managers subgroups
-	projectGroupPath := fmt.Sprintf("/%s", projectName)
+	// Make sure the project path starts with a slash:
+	if !strings.HasPrefix(projectPath, "/") {
+		projectPath = fmt.Sprintf("/%s", projectPath)
+	}
+	projectGroupPath := projectPath
 
 	projectGroupID, err := m.getGroupIDByPath(ctx, tenant, projectGroupPath)
 	if err != nil {
@@ -114,7 +116,6 @@ func (m *ProjectGroupManager) DeleteProjectGroups(ctx context.Context, tenant, p
 
 	m.logger.InfoContext(ctx, "Deleted project group and subgroups",
 		slog.String("group_path", projectGroupPath),
-		slog.String("project_name", projectName),
 		slog.String("tenant", tenant),
 	)
 

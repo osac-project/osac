@@ -247,12 +247,13 @@ When adding new proto fields, always include `buf.validate` annotations for any 
 
 ### Resource-Specific Validation
 
-To override embedded message validation (e.g., Projects allowing dots in names while Metadata doesn't):
+To override embedded message validation (e.g., Projects allowing an empty name for the default
+project while Metadata requires a non-empty DNS label):
 1. Use `[(buf.validate.field).ignore = IGNORE_ALWAYS]` on the embedded field to skip its standard validation
 2. Add message-level CEL to validate the field with resource-specific rules:
    ```protobuf
    option (buf.validate.message).cel = {
-     expression: "this.metadata.name == '' || this.metadata.name.split('.').all(...)"
+     expression: "this.metadata.name == '' || this.metadata.name.matches('^[a-z0-9]...')"
    };
    ```
 

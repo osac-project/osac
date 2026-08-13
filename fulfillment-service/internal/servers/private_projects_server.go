@@ -131,8 +131,9 @@ func (s *PrivateProjectsServer) Get(ctx context.Context,
 
 func (s *PrivateProjectsServer) Create(ctx context.Context,
 	request *privatev1.ProjectsCreateRequest) (response *privatev1.ProjectsCreateResponse, err error) {
-	// To avoid potential issues with the length of full project names we limit the number of segments of a
-	// full project path.
+	// To avoid potential issues with the length of full project names we limit the number of segments of a full
+	// project path. The API accepts a leaf name in 'metadata.name' and the parent full path in 'metadata.project';
+	// the composed path is what is stored and constrained here.
 	const max = 4
 	object := request.GetObject()
 	metadata := object.GetMetadata()
@@ -144,35 +145,27 @@ func (s *PrivateProjectsServer) Create(ctx context.Context,
 		return
 	}
 	name := metadata.GetName()
-	path := strings.Split(name, ".")
+	project := metadata.GetProject()
+	if name == "" && project != "" {
+		err = grpcstatus.Errorf(
+			grpccodes.InvalidArgument,
+			"field 'metadata.project' must be empty when 'metadata.name' is empty",
+		)
+		return
+	}
+	path := strings.Split(project, ".")
 	count := len(path)
+	if name != "" {
+		count++
+	}
 	if count > max {
 		err = grpcstatus.Errorf(
 			grpccodes.InvalidArgument,
-			"field 'metadata.name' must have at most %d segments, but it has %d",
+			"full project name must have at most %d segments, but it has %d",
 			max, count,
 		)
 		return
 	}
-
-	// When a project is created, the 'metadata.name' field must be the full name of the project, and the
-	// 'metadata.project' field must be the name of the parent project. If the parent project is not specified
-	// then it will be calculated from the the name, removing the last component.
-	var project string
-	if count > 1 {
-		project = strings.Join(path[:count-1], ".")
-	}
-	input := metadata.GetProject()
-	if input != "" && input != project {
-		err = grpcstatus.Errorf(
-			grpccodes.InvalidArgument,
-			"field 'metadata.project' must be left empty to be derived automatically from "+
-				"'metadata.name', or set to '%s' to match the parent prefix, but it is '%s'",
-			project, input,
-		)
-		return
-	}
-	metadata.SetProject(project)
 
 	// Call the generic server to create the project:
 	err = s.generic.Create(ctx, request, &response)

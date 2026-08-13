@@ -31,7 +31,8 @@ are resolved from the JSON representation stored in the database.
 
 The metadata sub-object exposes the following fields:
 
-`this.metadata.name` is the human-readable name of the object.
+`this.metadata.name` is the human-readable name of the object. For projects this is the leaf
+segment of the hierarchy (plain text); the parent path is in `this.metadata.project`.
 
 `this.metadata.creation_timestamp` is the time the object was created.
 

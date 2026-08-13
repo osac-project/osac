@@ -2646,4 +2646,63 @@ var _ = Describe("Generic DAO", func() {
 			Expect(project.GetMetadata().GetName()).To(Equal("my-a-project"))
 		})
 	})
+
+	Describe("Nested project names", func() {
+		It("Stores leaf as text in name and full path in the generated path column", func() {
+			// Create a nested project using leaf name and parent project:
+			createResponse, err := projectsDao.Create().
+				SetObject(privatev1.Project_builder{
+					Metadata: privatev1.Metadata_builder{
+						Tenant:  "my-tenant",
+						Name:    "child",
+						Project: "my-project",
+					}.Build(),
+				}.Build()).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			created := createResponse.GetObject()
+			Expect(created.GetMetadata().GetName()).To(Equal("child"))
+			Expect(created.GetMetadata().GetProject()).To(Equal("my-project"))
+
+			// Verify the database stores the leaf as text in name and the composed path in path:
+			var storedName, storedPath, nameType string
+			row := tx.QueryRow(
+				ctx,
+				`
+				select
+					p.name,
+					p.path::text,
+					format_type(a.atttypid, a.atttypmod)
+				from
+					projects p
+				join
+					pg_attribute a on a.attrelid = 'projects'::regclass and a.attname = 'name'
+				where
+					p.id = $1
+				`,
+				created.GetId(),
+			)
+			err = row.Scan(&storedName, &storedPath, &nameType)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(storedName).To(Equal("child"))
+			Expect(storedPath).To(Equal("my-project.child"))
+			Expect(nameType).To(Equal("text"))
+
+			// Get returns the leaf name:
+			getResponse, err := projectsDao.Get().
+				SetId(created.GetId()).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(getResponse.GetObject().GetMetadata().GetName()).To(Equal("child"))
+			Expect(getResponse.GetObject().GetMetadata().GetProject()).To(Equal("my-project"))
+
+			// List returns the leaf name:
+			listResponse, err := projectsDao.List().
+				SetFilter("this.metadata.name == 'child' && this.metadata.project == 'my-project'").
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(listResponse.GetItems()).To(HaveLen(1))
+			Expect(listResponse.GetItems()[0].GetMetadata().GetName()).To(Equal("child"))
+		})
+	})
 })

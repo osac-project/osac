@@ -32,8 +32,6 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
-
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 )
 
 // FilterTranslatorBuilder contains the data and logic needed to create a filter translator. Don't create instances of
@@ -44,11 +42,10 @@ type FilterTranslatorBuilder[O proto.Message] struct {
 
 // FilterTranslator knows how to translate filter expressions into SQL where clauses.
 type FilterTranslator[O proto.Message] struct {
-	logger      *slog.Logger
-	tsDesc      protoreflect.MessageDescriptor
-	thisDesc    protoreflect.MessageDescriptor
-	projectDesc protoreflect.MessageDescriptor
-	celEnv      *cel.Env
+	logger   *slog.Logger
+	tsDesc   protoreflect.MessageDescriptor
+	thisDesc protoreflect.MessageDescriptor
+	celEnv   *cel.Env
 }
 
 // filterTranslatorResultKind is the type of the result inferred during the translation process.
@@ -202,9 +199,6 @@ func (b *FilterTranslatorBuilder[O]) Build() (result *FilterTranslator[O], err e
 	var thisTempl O
 	thisDesc := thisTempl.ProtoReflect().Descriptor()
 
-	var projectTempl *privatev1.Project
-	projectDesc := projectTempl.ProtoReflect().Descriptor()
-
 	// Create the CEL environment:
 	celEnv, err := b.createCelEnv()
 	if err != nil {
@@ -214,11 +208,10 @@ func (b *FilterTranslatorBuilder[O]) Build() (result *FilterTranslator[O], err e
 
 	// Create and populate the object:
 	result = &FilterTranslator[O]{
-		logger:      b.logger,
-		tsDesc:      tsDesc,
-		thisDesc:    thisDesc,
-		projectDesc: projectDesc,
-		celEnv:      celEnv,
+		logger:   b.logger,
+		tsDesc:   tsDesc,
+		thisDesc: thisDesc,
+		celEnv:   celEnv,
 	}
 	return
 }
@@ -908,11 +901,7 @@ func (t *FilterTranslator[O]) translateSelectThisMdField(fieldName string,
 			result.precedence = filterTranslatorMaxPrecedence
 		} else {
 			result.sql = fieldName
-			if t.thisDesc == t.projectDesc {
-				result.kind = filterTranslatorLtreeKind
-			} else {
-				result.kind = filterTranslatorStringKind
-			}
+			result.kind = filterTranslatorStringKind
 			result.precedence = filterTranslatorMaxPrecedence
 		}
 	case "project":

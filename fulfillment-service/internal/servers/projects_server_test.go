@@ -163,6 +163,100 @@ var _ = Describe("Public projects server", func() {
 			Expect(response.Object.Spec.Description).To(HaveValue(Equal("Test project")))
 		})
 
+		It("Creates a nested project", func() {
+			// Create the parent project:
+			parentResponse, err := publicServer.Create(ctx, publicv1.ProjectsCreateRequest_builder{
+				Object: publicv1.Project_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name:   "parent",
+						Tenant: "my-tenant",
+					}.Build(),
+					Spec: publicv1.ProjectSpec_builder{
+						Title: "Parent",
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(parentResponse.GetObject().GetMetadata().GetName()).To(Equal("parent"))
+			Expect(parentResponse.GetObject().GetMetadata().GetProject()).To(BeEmpty())
+
+			// Create a child under the parent using the leaf name and the parent path:
+			childResponse, err := publicServer.Create(ctx, publicv1.ProjectsCreateRequest_builder{
+				Object: publicv1.Project_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name:    "child",
+						Project: "parent",
+						Tenant:  "my-tenant",
+					}.Build(),
+					Spec: publicv1.ProjectSpec_builder{
+						Title: "Child",
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			child := childResponse.GetObject()
+			Expect(child).ToNot(BeNil())
+			Expect(child.GetId()).ToNot(BeEmpty())
+			Expect(child.GetMetadata().GetName()).To(Equal("child"))
+			Expect(child.GetMetadata().GetProject()).To(Equal("parent"))
+			Expect(child.GetSpec().GetTitle()).To(Equal("Child"))
+
+			// Get returns the same leaf name and parent path:
+			getResponse, err := publicServer.Get(ctx, publicv1.ProjectsGetRequest_builder{
+				Id: child.GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(getResponse.GetObject().GetMetadata().GetName()).To(Equal("child"))
+			Expect(getResponse.GetObject().GetMetadata().GetProject()).To(Equal("parent"))
+		})
+
+		It("Creates a multi-level nested project", func() {
+			_, err := publicServer.Create(ctx, publicv1.ProjectsCreateRequest_builder{
+				Object: publicv1.Project_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name:   "parent",
+						Tenant: "my-tenant",
+					}.Build(),
+					Spec: publicv1.ProjectSpec_builder{
+						Title: "Parent",
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = publicServer.Create(ctx, publicv1.ProjectsCreateRequest_builder{
+				Object: publicv1.Project_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name:    "child",
+						Project: "parent",
+						Tenant:  "my-tenant",
+					}.Build(),
+					Spec: publicv1.ProjectSpec_builder{
+						Title: "Child",
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			// Create a grandchild; metadata.project is the parent's full path:
+			grandchildResponse, err := publicServer.Create(ctx, publicv1.ProjectsCreateRequest_builder{
+				Object: publicv1.Project_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name:    "grandchild",
+						Project: "parent.child",
+						Tenant:  "my-tenant",
+					}.Build(),
+					Spec: publicv1.ProjectSpec_builder{
+						Title: "Grandchild",
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			grandchild := grandchildResponse.GetObject()
+			Expect(grandchild.GetMetadata().GetName()).To(Equal("grandchild"))
+			Expect(grandchild.GetMetadata().GetProject()).To(Equal("parent.child"))
+		})
+
 		It("Updates a project", func() {
 			// Create the project:
 			createResponse, err := publicServer.Create(ctx, publicv1.ProjectsCreateRequest_builder{
@@ -237,8 +331,9 @@ var _ = Describe("Public projects server", func() {
 			_, err = publicServer.Create(ctx, publicv1.ProjectsCreateRequest_builder{
 				Object: publicv1.Project_builder{
 					Metadata: publicv1.Metadata_builder{
-						Name:   "parent.child",
-						Tenant: "my-tenant",
+						Name:    "child",
+						Project: "parent",
+						Tenant:  "my-tenant",
 					}.Build(),
 					Spec: publicv1.ProjectSpec_builder{
 						Title: "Child",
@@ -253,7 +348,7 @@ var _ = Describe("Public projects server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(listResp.GetSize()).To(Equal(int32(1)))
-			Expect(listResp.GetItems()[0].GetMetadata().GetName()).To(Equal("parent.child"))
+			Expect(listResp.GetItems()[0].GetMetadata().GetName()).To(Equal("child"))
 		})
 	})
 })

@@ -174,11 +174,10 @@ var _ = Describe("Protovalidate validation", func() {
 		})
 	})
 
-	It("Accepts Project with dot-separated hierarchical name", func() {
-		// Projects use field-level CEL validation that allows dot-separated names
-		// like "org.team.project" (each segment is a DNS label, connected with dots)
+	It("Accepts Project with nested parent via metadata.project", func() {
+		// Projects use leaf names; the parent full path is in metadata.project.
 
-		// Create parent project hierarchy first: org -> org.team-a -> org.team-a.frontend
+		// Create parent project hierarchy first: org -> team-a -> frontend
 		orgProject, err := projectsClient.Create(ctx, privatev1.ProjectsCreateRequest_builder{
 			Object: privatev1.Project_builder{
 				Metadata: privatev1.Metadata_builder{
@@ -200,8 +199,9 @@ var _ = Describe("Protovalidate validation", func() {
 		teamProject, err := projectsClient.Create(ctx, privatev1.ProjectsCreateRequest_builder{
 			Object: privatev1.Project_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name:   "org.team-a",
-					Tenant: tenantName,
+					Name:    "team-a",
+					Project: "org",
+					Tenant:  tenantName,
 				}.Build(),
 				Spec: privatev1.ProjectSpec_builder{
 					Title: "Team A",
@@ -215,12 +215,12 @@ var _ = Describe("Protovalidate validation", func() {
 			}.Build())
 		})
 
-		hierarchicalName := "org.team-a.frontend"
 		response, err := projectsClient.Create(ctx, privatev1.ProjectsCreateRequest_builder{
 			Object: privatev1.Project_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name:   hierarchicalName,
-					Tenant: tenantName,
+					Name:    "frontend",
+					Project: "org.team-a",
+					Tenant:  tenantName,
 				}.Build(),
 				Spec: privatev1.ProjectSpec_builder{
 					Title: "Frontend Team",
@@ -230,8 +230,7 @@ var _ = Describe("Protovalidate validation", func() {
 
 		Expect(err).ToNot(HaveOccurred())
 		Expect(response).ToNot(BeNil())
-		Expect(response.Object.Metadata.Name).To(Equal(hierarchicalName))
-		// Server should derive parent project from the hierarchical name:
+		Expect(response.Object.Metadata.Name).To(Equal("frontend"))
 		Expect(response.Object.Metadata.Project).To(Equal("org.team-a"))
 
 		// Clean up:
@@ -242,9 +241,8 @@ var _ = Describe("Protovalidate validation", func() {
 		})
 	})
 
-	It("Rejects Project with invalid segment in hierarchical name", func() {
-		// Each dot-separated segment must be a valid DNS label
-		invalidName := "org.Team-A.frontend" // "Team-A" has uppercase
+	It("Rejects Project with dots in the leaf name", func() {
+		invalidName := "org.team-a"
 
 		_, err := projectsClient.Create(ctx, privatev1.ProjectsCreateRequest_builder{
 			Object: privatev1.Project_builder{
@@ -262,14 +260,11 @@ var _ = Describe("Protovalidate validation", func() {
 		status, ok := grpcstatus.FromError(err)
 		Expect(ok).To(BeTrue())
 		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-		// Should be rejected by CEL validation (project_name_segments)
 		Expect(status.Message()).To(ContainSubstring("validation failed"))
-		Expect(status.Message()).To(ContainSubstring("project name must be dot-separated DNS labels"))
+		Expect(status.Message()).To(ContainSubstring("project name must be empty"))
 	})
 
-	It("Rejects Tenant with dots (proves IGNORE_ALWAYS is working for Projects)", func() {
-		// Tenants DON'T use IGNORE_ALWAYS, so dots should be rejected by Metadata pattern.
-		// This proves that when Projects accept dots, it's because IGNORE_ALWAYS is working.
+	It("Rejects Tenant with dots", func() {
 		nameWithDots := "org.team"
 
 		_, err := tenantClient.Create(ctx, privatev1.TenantsCreateRequest_builder{
@@ -284,13 +279,12 @@ var _ = Describe("Protovalidate validation", func() {
 		status, ok := grpcstatus.FromError(err)
 		Expect(ok).To(BeTrue())
 		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-		// Should be rejected by Metadata.name pattern (doesn't allow dots)
 		Expect(status.Message()).To(ContainSubstring("validation failed"))
 		Expect(status.Message()).To(ContainSubstring("metadata.name"))
 		Expect(status.Message()).To(ContainSubstring("does not match regex pattern"))
 	})
 
-	It("Rejects Project Update with invalid segment in hierarchical name", func() {
+	It("Rejects Project Update with invalid leaf name", func() {
 		// Create a valid project first
 		validProject, err := projectsClient.Create(ctx, privatev1.ProjectsCreateRequest_builder{
 			Object: privatev1.Project_builder{
@@ -329,9 +323,8 @@ var _ = Describe("Protovalidate validation", func() {
 		status, ok := grpcstatus.FromError(err)
 		Expect(ok).To(BeTrue())
 		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-		// Should be rejected by message-level CEL validation
 		Expect(status.Message()).To(ContainSubstring("validation failed"))
-		Expect(status.Message()).To(ContainSubstring("project name must be dot-separated DNS labels"))
+		Expect(status.Message()).To(ContainSubstring("project name must be empty"))
 	})
 
 	It("Accepts partial Update with empty name not in mask (update_mask bypass)", func() {
@@ -431,9 +424,8 @@ var _ = Describe("Protovalidate validation", func() {
 		status, ok := grpcstatus.FromError(err)
 		Expect(ok).To(BeTrue())
 		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-		// Should be rejected by message-level CEL validation
 		Expect(status.Message()).To(ContainSubstring("validation failed"))
-		Expect(status.Message()).To(ContainSubstring("project name must be dot-separated DNS labels"))
+		Expect(status.Message()).To(ContainSubstring("project name must be empty"))
 	})
 
 	It("Rejects Update with invalid label in mask (Go validation on labels)", func() {

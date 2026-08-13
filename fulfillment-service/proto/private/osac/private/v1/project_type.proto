@@ -25,7 +25,8 @@ import "osac/private/v1/metadata_type.proto";
 // can be nested to create hierarchical resource organization, allowing for flexible multi-level resource grouping.
 //
 // For nested projects, the parent is identified by the `metadata.project` field, which contains the full name of the
-// parent project. Tenant isolation is enforced via the standard `metadata.tenant` field.
+// parent project. The `metadata.name` field is the leaf name of this project only (a single DNS label). Tenant
+// isolation is enforced via the standard `metadata.tenant` field.
 //
 // Projects support the following use cases:
 // - Organizing resources by team, department, or application
@@ -34,11 +35,14 @@ import "osac/private/v1/metadata_type.proto";
 //
 // The system validates the project hierarchy during reconciliation:
 // - Circular dependencies are prevented
+//
+// Note: Uses (buf.validate.field).ignore = IGNORE_ALWAYS to skip standard Metadata.name min_len validation so the
+// default (root) project can be re-created with an empty name. Non-empty names must still be valid DNS labels.
 message Project {
   option (buf.validate.message).cel = {
-    id: "project_name_segments"
-    message: "project name must be dot-separated DNS labels (each segment: max 63 chars, lowercase a-z/0-9/hyphen, alphanumeric start/end)"
-    expression: "this.metadata.name.size() > 0 && this.metadata.name.split('.').all(segment, segment.size() > 0 && segment.size() <= 63 && segment.matches('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'))"
+    id: "project_name"
+    message: "project name must be empty (default project) or a single DNS label (max 63 chars, lowercase a-z/0-9/hyphen, alphanumeric start/end)"
+    expression: "this.metadata.name == '' || (this.metadata.name.size() <= 63 && this.metadata.name.matches('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'))"
   };
 
   // Unique identifier of the project.
@@ -46,12 +50,11 @@ message Project {
 
   // Metadata of the project, including name, labels, finalizers, and timestamps.
   //
-  // Project names follow a hierarchical dot-separated DNS label format (e.g., "org.team.project").
-  // Each segment must be a valid DNS label: max 63 characters, lowercase letters (a-z), digits (0-9),
-  // and hyphens, with alphanumeric start and end.
+  // The name is a single DNS label (the leaf of the project hierarchy). The parent project, if any, is specified in
+  // `metadata.project`. For example, a project with name `frontend` and project `team-a` has full path
+  // `team-a.frontend`.
   //
-  // Note: Uses (buf.validate.field).ignore = IGNORE_ALWAYS to skip standard Metadata.name pattern
-  // validation (which doesn't allow dots). Project-specific validation is handled by message-level CEL.
+  // An empty name is reserved for the tenant's default project.
   Metadata metadata = 2 [(buf.validate.field).ignore = IGNORE_ALWAYS];
 
   // Desired configuration of the project (user-modifiable).
@@ -163,7 +166,7 @@ enum ProjectState {
   // The deletion operation encountered an error and could not complete.
   // Common failure reasons include:
   // - Failed to delete child projects
-  // - Resources still attached to the project
+  // - Resources still attached to project
   // - Access control cleanup failure
   //
   // The status.message field will contain specific error details.

@@ -462,16 +462,17 @@ var _ = Describe("Protovalidate interceptor", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		It("Rejects project with empty name", func() {
+		It("Accepts project with empty name (default project)", func() {
 			project := privatev1.Project_builder{
 				Metadata: privatev1.Metadata_builder{
 					Name: "",
 				}.Build(),
 			}.Build()
 
+			handlerCalled := false
 			mockHandler := func(ctx context.Context, req any) (any, error) {
-				Fail("Handler should not be called for invalid request")
-				return nil, nil
+				handlerCalled = true
+				return "response", nil
 			}
 
 			response, err := interceptor.UnaryServer(
@@ -481,11 +482,9 @@ var _ = Describe("Protovalidate interceptor", func() {
 				mockHandler,
 			)
 
-			Expect(err).To(HaveOccurred())
-			Expect(response).To(BeNil())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(handlerCalled).To(BeTrue())
+			Expect(response).To(Equal("response"))
 		})
 
 		It("Accepts project with single DNS label name", func() {
@@ -513,7 +512,7 @@ var _ = Describe("Protovalidate interceptor", func() {
 			Expect(response).To(Equal("response"))
 		})
 
-		It("Accepts project with dot-separated name", func() {
+		It("Rejects project with dots in the name", func() {
 			project := privatev1.Project_builder{
 				Metadata: privatev1.Metadata_builder{
 					Name: "team.dev",
@@ -533,9 +532,13 @@ var _ = Describe("Protovalidate interceptor", func() {
 				mockHandler,
 			)
 
-			Expect(err).ToNot(HaveOccurred())
-			Expect(handlerCalled).To(BeTrue())
-			Expect(response).To(Equal("response"))
+			Expect(err).To(HaveOccurred())
+			Expect(response).To(BeNil())
+			Expect(handlerCalled).To(BeFalse())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(ContainSubstring("validation failed"))
 		})
 	})
 

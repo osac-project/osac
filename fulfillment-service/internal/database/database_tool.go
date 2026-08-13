@@ -589,10 +589,10 @@ func (t *tool) checkObjectTable(ctx context.Context, pool *pgxpool.Pool, table s
 	// original map:
 	objectColumns := maps.Clone(toolObjectColumns)
 
-	// The 'projects' table is special because the 'name' column is of type 'ltree' instead of 'text' like in all
-	// the other tables:
+	// The 'projects' table stores the leaf name as text (like other tables) and has an extra generated 'path'
+	// column of type 'ltree' that holds the full hierarchical identity used as the primary key and by foreign keys.
 	if table == "projects" {
-		objectColumns["name"] = "ltree"
+		objectColumns["path"] = "ltree"
 	}
 
 	// Perform the consistency checks:
@@ -602,12 +602,12 @@ func (t *tool) checkObjectTable(ctx context.Context, pool *pgxpool.Pool, table s
 	issues += t.checkColumns(ctx, pool, table, objectColumns)
 
 	// Check the primary key. The 'tenants' table uses the 'name' column as its primary key, and the projects table
-	// uses the 'tenant' and 'name' columns. All the other tables, for now, use just the 'id'.
+	// uses the 'tenant' and 'path' columns. All the other tables, for now, use just the 'id'.
 	switch table {
 	case "tenants":
 		issues += t.checkPrimaryKey(ctx, pool, table, "name")
 	case "projects":
-		issues += t.checkPrimaryKey(ctx, pool, table, "tenant", "name")
+		issues += t.checkPrimaryKey(ctx, pool, table, "tenant", "path")
 	default:
 		issues += t.checkPrimaryKey(ctx, pool, table, "id")
 	}

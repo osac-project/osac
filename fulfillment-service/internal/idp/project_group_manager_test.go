@@ -121,10 +121,23 @@ var _ = Describe("ProjectGroupManager", func() {
 			Expect(err.Error()).To(ContainSubstring("tenant is required"))
 		})
 
-		It("should reject project name with dot-dot sequence", func() {
+		It("should reject project path with dot-dot sequence", func() {
 			err := manager.DeleteProjectGroups(ctx, "test-org", "../malicious")
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("project name cannot contain '..' sequence"))
+			Expect(err.Error()).To(ContainSubstring("project path cannot contain '..' sequence"))
+		})
+
+		It("should delete nested project groups", func() {
+			mockClient.EXPECT().
+				GetGroupIDByPath(gomock.Any(), "test-org", "/parent/child").
+				Return("group-id-123", nil)
+
+			mockClient.EXPECT().
+				DeleteGroup(gomock.Any(), "test-org", "group-id-123").
+				Return(nil)
+
+			err := manager.DeleteProjectGroups(ctx, "test-org", "parent/child")
+			Expect(err).ToNot(HaveOccurred())
 		})
 	})
 

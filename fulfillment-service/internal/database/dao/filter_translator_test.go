@@ -397,8 +397,8 @@ var _ = Describe("Filter translator", func() {
 		)
 	})
 
-	// Projects need special translation because the type of the 'name' column is 'ltree', and that can't be
-	// compared directly to strings using the 'like' operator.
+	// Project 'metadata.project' is ltree (full parent path). Leaf 'metadata.name' is plain text, same as
+	// other object types.
 	Describe("Project translation", func() {
 		var translator *FilterTranslator[*privatev1.Project]
 
@@ -425,18 +425,28 @@ var _ = Describe("Filter translator", func() {
 			),
 			Entry(
 				"Name starts with string",
-				`this.metadata.name.startsWith('my_project.')`,
-				`cast(name as text) like 'my\_project.%'`,
+				`this.metadata.name.startsWith('my')`,
+				`name like 'my%'`,
 			),
 			Entry(
 				"Name ends with string",
-				`this.metadata.name.endsWith('.my_project')`,
-				`cast(name as text) like '%.my\_project'`,
+				`this.metadata.name.endsWith('project')`,
+				`name like '%project'`,
 			),
 			Entry(
 				"Name contains string",
 				`this.metadata.name.contains('my')`,
-				`cast(name as text) like '%my%'`,
+				`name like '%my%'`,
+			),
+			Entry(
+				"Compare project to string",
+				`this.metadata.project == 'parent'`,
+				`project = 'parent'`,
+			),
+			Entry(
+				"Project starts with string",
+				`this.metadata.project.startsWith('parent.')`,
+				`cast(project as text) like 'parent.%'`,
 			),
 		)
 	})

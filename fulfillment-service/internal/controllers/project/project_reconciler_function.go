@@ -212,12 +212,11 @@ func (t *task) validateAndActivate(ctx context.Context) error {
 		}
 	}
 
-	// Project names are dot-separated label sequences (for example 'parent.child') where an empty string represents
-	// the tenant's default project. Keycloak expects a hierarchical path, so we convert dots to slashes to
-	// produce the group path. For example, 'parent.child' becomes 'parent/child').
+	// The API exposes leaf names; Keycloak groups use the full hierarchical path with dots converted to
+	// slashes. For example, parent project `team-a` and leaf `frontend` become `/team-a/frontend`.
 	projectTenant := t.project.GetMetadata().GetTenant()
-	projectName := t.project.GetMetadata().GetName()
-	projectPath := strings.ReplaceAll(projectName, ".", "/")
+	fullName := projectFullName(t.project.GetMetadata())
+	projectPath := strings.ReplaceAll(fullName, ".", "/")
 
 	// Create Keycloak groups for project authorization
 	// Returns the system:managers group ID to avoid timing issues with group lookup
@@ -321,11 +320,16 @@ func (t *task) validateAndActivate(ctx context.Context) error {
 	return nil
 }
 
-// findProjectByName looks up a project by its metadata.name. Returns nil if not found.
-func (t *task) findProjectByName(ctx context.Context, name string) (*privatev1.Project, error) {
+// findProjectByFullName looks up a project by its full hierarchical path (parent path + leaf name).
+// Returns nil if not found.
+func (t *task) findProjectByName(ctx context.Context, fullName string) (*privatev1.Project, error) {
+	parent, leaf := splitProjectFullName(fullName)
 	listResp, err := t.r.projectsClient.List(ctx, privatev1.ProjectsListRequest_builder{
-		Filter: new(fmt.Sprintf("this.metadata.name == %q", name)),
-		Limit:  new(int32(1)),
+		Filter: new(fmt.Sprintf(
+			"this.metadata.project == %q && this.metadata.name == %q",
+			parent, leaf,
+		)),
+		Limit: new(int32(1)),
 	}.Build())
 	if err != nil {
 		return nil, err
@@ -339,10 +343,13 @@ func (t *task) findProjectByName(ctx context.Context, name string) (*privatev1.P
 
 // delete performs the deletion cleanup for a project.
 func (t *task) delete(ctx context.Context) error {
-	// Check for child projects before deletion
+	fullName := projectFullName(t.project.GetMetadata())
+
+	// Check for child projects before deletion. Children reference this project's full path in
+	// metadata.project.
 	listFilter := fmt.Sprintf(
-		"this.metadata.tenant == %q && this.metadata.project == %q && this.metadata.name != %q",
-		t.project.GetMetadata().GetTenant(), t.project.GetMetadata().GetName(), t.project.GetMetadata().GetName(),
+		"this.metadata.tenant == %q && this.metadata.project == %q",
+		t.project.GetMetadata().GetTenant(), fullName,
 	)
 	listResp, err := t.r.projectsClient.List(ctx, privatev1.ProjectsListRequest_builder{
 		Filter: new(listFilter),
@@ -383,15 +390,16 @@ func (t *task) delete(ctx context.Context) error {
 		return nil
 	}
 
-	// Clean up Keycloak groups
+	// Clean up Keycloak groups using the same slash path used at creation time.
+	projectPath := strings.ReplaceAll(fullName, ".", "/")
 	err = t.r.projectGroupManager.DeleteProjectGroups(ctx,
 		t.project.GetMetadata().GetTenant(),
-		t.project.GetMetadata().GetName())
+		projectPath)
 	if err != nil {
 		t.r.logger.ErrorContext(ctx, "Failed to delete Keycloak groups",
 			slog.String("project_id", t.project.GetId()),
 			slog.String("tenant", t.project.GetMetadata().GetTenant()),
-			slog.String("project_name", t.project.GetMetadata().GetName()),
+			slog.String("project_name", fullName),
 			slog.Any("error", err),
 		)
 		return fmt.Errorf("failed to delete Keycloak groups: %w", err)
@@ -412,12 +420,12 @@ func (t *task) delete(ctx context.Context) error {
 // deletion, and waits for them to be fully removed before returning. This prevents orphaned
 // memberships and ensures the project can complete its own deletion.
 func (t *task) deleteProjectMemberships(ctx context.Context) (bool, error) {
-	projectName := t.project.GetMetadata().GetName()
+	fullName := projectFullName(t.project.GetMetadata())
 	tenant := t.project.GetMetadata().GetTenant()
 
 	membershipFilter := fmt.Sprintf(
 		"this.metadata.tenant == %q && this.metadata.project == %q",
-		tenant, projectName,
+		tenant, fullName,
 	)
 	listResp, err := t.r.projectMembershipsClient.List(ctx, privatev1.ProjectMembershipsListRequest_builder{
 		Filter: new(membershipFilter),
@@ -570,4 +578,32 @@ func (t *task) updateCondition(conditionType privatev1.ProjectConditionType, sta
 		}.Build())
 	}
 	t.project.GetStatus().SetConditions(conditions)
+}
+
+// projectFullName returns the full hierarchical project path from metadata. The API stores the leaf
+// in metadata.name and the parent path in metadata.project.
+func projectFullName(metadata *privatev1.Metadata) string {
+	if metadata == nil {
+		return ""
+	}
+	name := metadata.GetName()
+	project := metadata.GetProject()
+	if project == "" {
+		return name
+	}
+	if name == "" {
+		return project
+	}
+	return project + "." + name
+}
+
+// splitProjectFullName splits a full hierarchical path into the parent path and leaf name.
+func splitProjectFullName(fullName string) (parent, leaf string) {
+	if fullName == "" {
+		return "", ""
+	}
+	if i := strings.LastIndex(fullName, "."); i >= 0 {
+		return fullName[:i], fullName[i+1:]
+	}
+	return "", fullName
 }

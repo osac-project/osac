@@ -23,7 +23,8 @@ import "osac/public/v1/metadata_type.proto";
 // can be nested to create hierarchical resource organization, allowing for flexible multi-level resource grouping.
 //
 // For nested projects, the parent is identified by the `metadata.project` field, which contains the full name of the
-// parent project. Tenant isolation is enforced via the standard `metadata.tenant` field.
+// parent project. The `metadata.name` field is the leaf name of this project only (a single DNS label). Tenant
+// isolation is enforced via the standard `metadata.tenant` field.
 //
 // Projects support the following use cases:
 // - Organizing resources by team, department, or application

@@ -296,7 +296,7 @@ var _ = Describe("Validation and Activation", func() {
 			project := privatev1.Project_builder{
 				Id: "project-1",
 				Metadata: privatev1.Metadata_builder{
-					Name:    "parent-project.child-project",
+					Name:    "child-project",
 					Project: "parent-project",
 					Tenant:  "acme",
 				}.Build(),
@@ -353,7 +353,7 @@ var _ = Describe("Validation and Activation", func() {
 			project := privatev1.Project_builder{
 				Id: "child-id",
 				Metadata: privatev1.Metadata_builder{
-					Name:    "parent.child",
+					Name:    "child",
 					Project: "parent",
 					Tenant:  "acme",
 				}.Build(),
@@ -407,7 +407,7 @@ var _ = Describe("Validation and Activation", func() {
 			project := privatev1.Project_builder{
 				Id: "project-1",
 				Metadata: privatev1.Metadata_builder{
-					Name:    "nonexistent-parent.child",
+					Name:    "child",
 					Project: "nonexistent-parent",
 				}.Build(),
 				Spec: privatev1.ProjectSpec_builder{
@@ -455,7 +455,7 @@ var _ = Describe("Validation and Activation", func() {
 			project := privatev1.Project_builder{
 				Id: "project-1",
 				Metadata: privatev1.Metadata_builder{
-					Name:    "my-parent.child",
+					Name:    "child",
 					Project: "my-parent",
 				}.Build(),
 				Spec: privatev1.ProjectSpec_builder{
@@ -503,7 +503,7 @@ var _ = Describe("Validation and Activation", func() {
 			project := privatev1.Project_builder{
 				Id: "project-1",
 				Metadata: privatev1.Metadata_builder{
-					Name:    "my-parent.child",
+					Name:    "child",
 					Project: "my-parent",
 				}.Build(),
 				Spec: privatev1.ProjectSpec_builder{

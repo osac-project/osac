@@ -198,14 +198,19 @@ func (t *task) getProjectByNameOrID(ctx context.Context, nameOrID string) (*priv
 		return nil, fmt.Errorf("failed to get project: %w", err)
 	}
 
-	// If not found by ID, try listing by name
+	// If not found by ID, try listing by full hierarchical path. metadata.name is the leaf segment and
+	// metadata.project is the parent path, so a full path like "org.team-a" must be split.
 	t.r.logger.DebugContext(ctx, "Project not found by ID, trying by name",
 		slog.String("!name_or_id", nameOrID),
 	)
 
-	// Escape single quotes in the name to prevent CEL injection
-	escapedName := strings.ReplaceAll(nameOrID, "'", "\\'")
-	filter := fmt.Sprintf("this.metadata.name == '%s'", escapedName)
+	parent, leaf := splitProjectFullName(nameOrID)
+	escapedParent := strings.ReplaceAll(parent, "'", "\\'")
+	escapedLeaf := strings.ReplaceAll(leaf, "'", "\\'")
+	filter := fmt.Sprintf(
+		"this.metadata.project == '%s' && this.metadata.name == '%s'",
+		escapedParent, escapedLeaf,
+	)
 	listResponse, err := t.r.projectsClient.List(ctx, privatev1.ProjectsListRequest_builder{
 		Filter: &filter,
 	}.Build())
@@ -222,6 +227,17 @@ func (t *task) getProjectByNameOrID(ctx context.Context, nameOrID string) (*priv
 	}
 
 	return projects[0], nil
+}
+
+// splitProjectFullName splits a full hierarchical path into the parent path and leaf name.
+func splitProjectFullName(fullName string) (parent, leaf string) {
+	if fullName == "" {
+		return "", ""
+	}
+	if i := strings.LastIndex(fullName, "."); i >= 0 {
+		return fullName[:i], fullName[i+1:]
+	}
+	return "", fullName
 }
 
 func (t *task) addFinalizer() bool {

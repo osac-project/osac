@@ -162,8 +162,8 @@ string name = 1 [(buf.validate.field).cel = {
 ```protobuf
 message Project {
   option (buf.validate.message).cel = {
-    id: "hierarchical_name"
-    expression: "this.metadata.name.split('.').all(segment, segment.matches('^[a-z0-9]...'))"
+    id: "project_name"
+    expression: "this.metadata.name == '' || this.metadata.name.matches('^[a-z0-9]...')"
   };
 
   Metadata metadata = 2;
@@ -176,11 +176,11 @@ To skip standard validation on an embedded message and apply resource-specific r
 1. Use `ignore: IGNORE_ALWAYS` on the field to skip its embedded validation
 2. Add message-level CEL to validate with custom logic
 
-Example (Projects allow dots in names, other resources don't):
+Example (Projects allow an empty name for the default project, while other resources require a non-empty DNS label):
 ```protobuf
 message Project {
   option (buf.validate.message).cel = {
-    expression: "this.metadata.name.split('.').all(segment, segment.matches(...))"
+    expression: "this.metadata.name == '' || this.metadata.name.matches(...)"
   };
 
   Metadata metadata = 2 [(buf.validate.field).ignore = IGNORE_ALWAYS];

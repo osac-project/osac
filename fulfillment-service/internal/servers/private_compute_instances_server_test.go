@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
@@ -78,6 +79,27 @@ var _ = Describe("Private compute instances server", func() {
 		}.Build()
 
 		_, err = subnetsDao.Create().SetObject(subnet).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+
+		// Create a default DiskImage for tests that reference "test-disk-image" in template spec_defaults:
+		diskImagesDao, err := dao.NewGenericDAO[*privatev1.DiskImage]().
+			SetLogger(logger).
+			SetTenancyLogic(tenancy).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		_, err = diskImagesDao.Create().SetObject(
+			privatev1.DiskImage_builder{
+				Id: "test-disk-image",
+				Metadata: privatev1.Metadata_builder{
+					Name:   "test-disk-image",
+					Tenant: auth.SharedTenant,
+				}.Build(),
+				Spec: privatev1.DiskImageSpec_builder{
+					Lifecycle: privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE,
+				}.Build(),
+			}.Build(),
+		).Do(ctx)
 		Expect(err).ToNot(HaveOccurred())
 	})
 
@@ -927,6 +949,47 @@ var _ = Describe("Private compute instances server", func() {
 			Expect(updateResponse).ToNot(BeNil())
 			Expect(updateResponse.GetObject().GetSpec().GetTemplate().GetId()).To(Equal("same-template"))
 			Expect(updateResponse.GetObject().GetStatus().GetState()).To(Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING))
+		})
+
+		It("Rejects changing disk_image on update", func() {
+			createTemplate("di-immut-template")
+
+			createResponse, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
+				Object: privatev1.ComputeInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-compute-instance",
+					}.Build(),
+					Spec: privatev1.ComputeInstanceSpec_builder{
+						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "di-immut-template"}.Build(),
+						NetworkAttachments: []*privatev1.NetworkAttachment{
+							privatev1.NetworkAttachment_builder{
+								Subnet: privatev1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			id := createResponse.GetObject().GetId()
+
+			updateResponse, err := server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+				Object: privatev1.ComputeInstance_builder{
+					Id: id,
+					Spec: privatev1.ComputeInstanceSpec_builder{
+						DiskImage: &privatev1.DiskImageReference{Id: "different-disk-image"},
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{
+					Paths: []string{"spec.disk_image"},
+				},
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			Expect(updateResponse).To(BeNil())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(ContainSubstring("disk image is immutable"))
 		})
 
 		It("Validates template ID is not empty", func() {
@@ -2904,6 +2967,181 @@ var _ = Describe("Private compute instances server", func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(response).ToNot(BeNil())
 				Expect(response.GetWarnings()).To(BeEmpty())
+			})
+		})
+
+		Context("disk_image validation", func() {
+			createDiskImageWithLifecycle := func(name string, lifecycle privatev1.DiskImageLifecycle, deprecation *privatev1.DiskImageDeprecation) {
+				diskImagesDao, err := dao.NewGenericDAO[*privatev1.DiskImage]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = diskImagesDao.Create().SetObject(
+					privatev1.DiskImage_builder{
+						Id: name,
+						Metadata: privatev1.Metadata_builder{
+							Name:   name,
+							Tenant: auth.SharedTenant,
+						}.Build(),
+						Spec: privatev1.DiskImageSpec_builder{
+							Lifecycle:   lifecycle,
+							Deprecation: deprecation,
+						}.Build(),
+					}.Build(),
+				).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+			}
+
+			createRequestWithDiskImage := func(diskImageKey string) *privatev1.ComputeInstancesCreateRequest {
+				templatesDao, err := dao.NewGenericDAO[*privatev1.ComputeInstanceTemplate]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+
+				templateID := fmt.Sprintf("bare-template-di-%s", diskImageKey)
+				_, err = templatesDao.Create().SetObject(
+					privatev1.ComputeInstanceTemplate_builder{
+						Id:          templateID,
+						Title:       "Bare Template",
+						Description: "Template without defaults",
+						Metadata: privatev1.Metadata_builder{
+							Name:   templateID,
+							Tenant: auth.SharedTenant,
+						}.Build(),
+					}.Build(),
+				).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+
+				return privatev1.ComputeInstancesCreateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
+						Spec: privatev1.ComputeInstanceSpec_builder{
+							Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: templateID}.Build(),
+							InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
+							DiskImage:    &privatev1.DiskImageReference{Id: diskImageKey},
+							BootDisk: privatev1.ComputeInstanceDisk_builder{
+								SizeGib: 20,
+							}.Build(),
+							RunStrategy: new("Always"),
+							NetworkAttachments: []*privatev1.NetworkAttachment{
+								privatev1.NetworkAttachment_builder{
+									Subnet: privatev1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+				}.Build()
+			}
+
+			It("Rejects creation when disk_image references a non-existent image", func() {
+				request := createRequestWithDiskImage("nonexistent-disk-image")
+				response, err := server.Create(ctx, request)
+				Expect(err).To(HaveOccurred())
+				Expect(response).To(BeNil())
+				status, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(status.Code()).To(Equal(grpccodes.NotFound))
+				Expect(status.Message()).To(ContainSubstring("nonexistent-disk-image"))
+			})
+
+			It("Rejects creation when disk_image references an OBSOLETE image", func() {
+				createDiskImageWithLifecycle("obsolete-image",
+					privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_OBSOLETE, nil)
+
+				request := createRequestWithDiskImage("obsolete-image")
+				response, err := server.Create(ctx, request)
+				Expect(err).To(HaveOccurred())
+				Expect(response).To(BeNil())
+				status, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+				Expect(status.Message()).To(ContainSubstring("obsolete"))
+			})
+
+			It("Returns warning when disk_image references a DEPRECATED image", func() {
+				createDiskImageWithLifecycle("deprecated-image",
+					privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_DEPRECATED,
+					privatev1.DiskImageDeprecation_builder{
+						ObsolescenceTimestamp: timestamppb.New(
+							time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)),
+					}.Build())
+
+				request := createRequestWithDiskImage("deprecated-image")
+				response, err := server.Create(ctx, request)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response).ToNot(BeNil())
+				Expect(response.GetWarnings()).To(HaveLen(1))
+				Expect(response.GetWarnings()[0]).To(ContainSubstring("deprecated"))
+				Expect(response.GetWarnings()[0]).To(ContainSubstring("2027"))
+			})
+
+			It("Succeeds when disk_image references an AVAILABLE image", func() {
+				createDiskImageWithLifecycle("available-image",
+					privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE, nil)
+
+				request := createRequestWithDiskImage("available-image")
+				response, err := server.Create(ctx, request)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response).ToNot(BeNil())
+				Expect(response.GetWarnings()).To(BeEmpty())
+			})
+
+			It("Resolves disk_image by name and backfills id+name", func() {
+				createDiskImageWithLifecycle("di-by-name",
+					privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE, nil)
+
+				templatesDao, err := dao.NewGenericDAO[*privatev1.ComputeInstanceTemplate]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = templatesDao.Create().SetObject(
+					privatev1.ComputeInstanceTemplate_builder{
+						Id:          "bare-template-di-by-name",
+						Title:       "Bare Template",
+						Description: "Template without defaults",
+						Metadata: privatev1.Metadata_builder{
+							Name:   "bare-template-di-by-name",
+							Tenant: auth.SharedTenant,
+						}.Build(),
+					}.Build(),
+				).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+
+				request := privatev1.ComputeInstancesCreateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
+						Spec: privatev1.ComputeInstanceSpec_builder{
+							Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "bare-template-di-by-name"}.Build(),
+							InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
+							DiskImage:    &privatev1.DiskImageReference{Name: "di-by-name"},
+							BootDisk: privatev1.ComputeInstanceDisk_builder{
+								SizeGib: 20,
+							}.Build(),
+							RunStrategy: new("Always"),
+							NetworkAttachments: []*privatev1.NetworkAttachment{
+								privatev1.NetworkAttachment_builder{
+									Subnet: privatev1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+				}.Build()
+
+				response, err := server.Create(ctx, request)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response).ToNot(BeNil())
+				diskImageRef := response.GetObject().GetSpec().GetDiskImage()
+				Expect(diskImageRef.GetId()).ToNot(BeEmpty())
+				Expect(diskImageRef.GetName()).To(Equal("di-by-name"))
 			})
 		})
 	})

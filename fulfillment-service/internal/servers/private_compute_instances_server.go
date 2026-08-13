@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"time"
 
 	"maps"
 
@@ -61,6 +62,7 @@ type PrivateComputeInstancesServer struct {
 	securityGroupsDao       *dao.GenericDAO[*privatev1.SecurityGroup]
 	instanceTypesDao        *dao.GenericDAO[*privatev1.InstanceType]
 	storageTiersDao         *dao.GenericDAO[*privatev1.StorageTier]
+	diskImagesDao           *dao.GenericDAO[*privatev1.DiskImage]
 	externalIPPoolDao       *dao.GenericDAO[*privatev1.ExternalIPPool]
 	externalIPDao           *dao.GenericDAO[*privatev1.ExternalIP]
 	externalIPAttachmentDao *dao.GenericDAO[*privatev1.ExternalIPAttachment]
@@ -168,6 +170,15 @@ func (b *PrivateComputeInstancesServerBuilder) Build() (result *PrivateComputeIn
 		return
 	}
 
+	diskImagesDao, err := dao.NewGenericDAO[*privatev1.DiskImage]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
 	externalIPPoolDao, err := dao.NewGenericDAO[*privatev1.ExternalIPPool]().
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
@@ -219,6 +230,7 @@ func (b *PrivateComputeInstancesServerBuilder) Build() (result *PrivateComputeIn
 		securityGroupsDao:       securityGroupsDao,
 		instanceTypesDao:        instanceTypesDao,
 		storageTiersDao:         storageTiersDao,
+		diskImagesDao:           diskImagesDao,
 		externalIPPoolDao:       externalIPPoolDao,
 		externalIPDao:           externalIPDao,
 		externalIPAttachmentDao: externalIPAttachmentDao,
@@ -352,6 +364,14 @@ func (s *PrivateComputeInstancesServer) Create(ctx context.Context,
 	if err != nil {
 		return
 	}
+
+	// Validate disk image existence, lifecycle state, and backfill id+name.
+	var diskImageWarnings []string
+	diskImageWarnings, err = s.validateDiskImage(ctx, request.GetObject())
+	if err != nil {
+		return
+	}
+	warnings = append(warnings, diskImageWarnings...)
 
 	err = s.generic.Create(ctx, request, &response)
 	if err != nil {
@@ -599,6 +619,96 @@ func (s *PrivateComputeInstancesServer) validateStorageTiers(
 	return nil
 }
 
+// lookupDiskImage resolves a DiskImage by id or name. The DAO's tenancy filter
+// automatically includes the shared tenant, so both tenant-local and globally
+// visible DiskImages are found.
+func (s *PrivateComputeInstancesServer) lookupDiskImage(ctx context.Context,
+	key string) (result *privatev1.DiskImage, err error) {
+	if key == "" {
+		return
+	}
+	response, err := s.diskImagesDao.List().
+		SetFilter(fmt.Sprintf("this.id == %[1]s || this.metadata.name == %[1]s", strconv.Quote(key))).
+		SetLimit(1).
+		Do(ctx)
+	if err != nil {
+		var deniedErr *dao.ErrDenied
+		if errors.As(err, &deniedErr) {
+			err = grpcstatus.Errorf(grpccodes.PermissionDenied, "%s", deniedErr.Reason)
+			return
+		}
+		s.logger.ErrorContext(ctx, "Failed to lookup disk image",
+			slog.String("key", key),
+			slog.Any("error", err))
+		err = grpcstatus.Errorf(grpccodes.Internal, "failed to lookup disk image")
+		return
+	}
+	switch response.GetTotal() {
+	case 0:
+		err = grpcstatus.Errorf(
+			grpccodes.NotFound,
+			"there is no disk image with identifier or name '%s'",
+			key,
+		)
+	case 1:
+		result = response.GetItems()[0]
+	default:
+		err = grpcstatus.Errorf(
+			grpccodes.InvalidArgument,
+			"there are multiple disk images with identifier or name '%s'",
+			key,
+		)
+	}
+	return
+}
+
+// validateDiskImage resolves the disk_image reference, validates lifecycle state, and
+// backfills id+name on the stored reference. Returns warnings for DEPRECATED images.
+func (s *PrivateComputeInstancesServer) validateDiskImage(
+	ctx context.Context,
+	ci *privatev1.ComputeInstance,
+) ([]string, error) {
+	spec := ci.GetSpec()
+	diskImageRef := spec.GetDiskImage()
+	if diskImageRef == nil {
+		return nil, nil
+	}
+
+	key := refKey(diskImageRef)
+	if key == "" {
+		return nil, nil
+	}
+
+	diskImage, err := s.lookupDiskImage(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+
+	// Backfill id and name so the stored reference is complete.
+	diskImageRef.Id = diskImage.GetId()
+	diskImageRef.Name = diskImage.GetMetadata().GetName()
+	diskImageRef.Shared = diskImage.GetMetadata().GetTenant() == "shared"
+
+	lifecycle := diskImage.GetSpec().GetLifecycle()
+	var warnings []string
+
+	switch lifecycle {
+	case privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_OBSOLETE:
+		return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"disk image '%s' is obsolete and cannot be used", key)
+	case privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_DEPRECATED:
+		warning := fmt.Sprintf("Disk image '%s' is deprecated", key)
+		dep := diskImage.GetSpec().GetDeprecation()
+		if dep != nil && dep.GetObsolescenceTimestamp() != nil {
+			warning += fmt.Sprintf(" and will become obsolete on %s",
+				dep.GetObsolescenceTimestamp().AsTime().Format(time.RFC3339))
+		}
+		warnings = append(warnings, warning)
+	}
+
+	return warnings, nil
+}
+
 // validateTemplateImmutability ensures that the template and template_parameters fields
 // cannot be changed after compute instance creation.
 func (s *PrivateComputeInstancesServer) validateTemplateImmutability(ctx context.Context,
@@ -608,9 +718,10 @@ func (s *PrivateComputeInstancesServer) validateTemplateImmutability(ctx context
 	updatingTemplateParams := hasMaskPrefix(updateMask, "spec.template_parameters")
 	updatingCatalogItem := hasMaskPrefix(updateMask, "spec.catalog_item")
 	updatingInstanceType := hasMaskPrefix(updateMask, "spec.instance_type")
+	updatingDiskImage := hasMaskPrefix(updateMask, "spec.disk_image")
 	updatingAutoExternalIP := hasMaskPrefix(updateMask, "spec.auto_external_ip_attachment")
 
-	if !updatingTemplate && !updatingTemplateParams && !updatingCatalogItem && !updatingInstanceType && !updatingAutoExternalIP {
+	if !updatingTemplate && !updatingTemplateParams && !updatingCatalogItem && !updatingInstanceType && !updatingDiskImage && !updatingAutoExternalIP {
 		return nil
 	}
 
@@ -668,6 +779,15 @@ func (s *PrivateComputeInstancesServer) validateTemplateImmutability(ctx context
 			"cannot change spec.instance_type from '%s' to '%s': instance type is immutable",
 			refKey(existingSpec.GetInstanceType()),
 			refKey(newSpec.GetInstanceType()),
+		)
+	}
+
+	if updatingDiskImage && refKey(existingSpec.GetDiskImage()) != refKey(newSpec.GetDiskImage()) {
+		return grpcstatus.Errorf(
+			grpccodes.InvalidArgument,
+			"cannot change spec.disk_image from '%s' to '%s': disk image is immutable",
+			refKey(existingSpec.GetDiskImage()),
+			refKey(newSpec.GetDiskImage()),
 		)
 	}
 

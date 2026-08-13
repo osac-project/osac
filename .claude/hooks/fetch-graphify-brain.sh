@@ -12,6 +12,11 @@
 # single-machine view.
 
 set -uo pipefail
+# Belt-and-suspenders: any unguarded command failure not already routed
+# through an explicit check below still exits clean rather than continuing
+# in an unknown state. Exempt from the same cases -e itself is (if/while
+# conditions, &&/||, negation), so this doesn't fire on expected failures.
+trap 'exit 0' ERR
 
 # Anchor to the project root regardless of the caller's cwd, so the
 # settings.json hook command can stay a plain `bash .../fetch-graphify-brain.sh`
@@ -39,6 +44,7 @@ fall_back_to_local() {
     if [[ -f "${GRAPH_DIR}/.last-fetch-at" ]]; then
       local last_fetch now age_h
       last_fetch="$(cat "${GRAPH_DIR}/.last-fetch-at" 2>/dev/null || echo 0)"
+      [[ "${last_fetch}" =~ ^[0-9]+$ ]] || last_fetch=0
       now="$(date -u +%s)"
       age_h=$(( (now - last_fetch) / 3600 ))
       age_note=" (~${age_h}h old)"
@@ -96,8 +102,14 @@ if tar tvzf "${TMP_DIR}/graphify-bundle.tar.gz" 2>/dev/null | grep -qE '^[lh]'; 
 fi
 
 mkdir -p "${TMP_DIR}/extracted"
-if ! tar xzf "${TMP_DIR}/graphify-bundle.tar.gz" -C "${TMP_DIR}/extracted" 2>/dev/null; then
+if ! tar xzf "${TMP_DIR}/graphify-bundle.tar.gz" -C "${TMP_DIR}/extracted" --no-same-owner 2>/dev/null; then
   fall_back_to_local "Downloaded bundle is corrupt (failed to extract)"
+fi
+# Second-layer guard, independent of tar's own listing-output format (the
+# pre-extraction check above parses one specific tar implementation's
+# verbose listing): inspect what actually landed on disk.
+if find "${TMP_DIR}/extracted" -type l 2>/dev/null | grep -q .; then
+  fall_back_to_local "Extracted bundle contains symlink entries (rejected for safety)"
 fi
 
 # --- Step 3: validate graph.json AND metadata.json before touching local state ---
@@ -160,11 +172,24 @@ fi
 # simply missing.
 date -u +%s > "${TMP_DIR}/extracted/.last-fetch-at"
 rm -rf "${GRAPH_DIR}.tmp" "${GRAPH_DIR}.old"
-mv "${TMP_DIR}/extracted" "${GRAPH_DIR}.tmp"
-if [[ -d "${GRAPH_DIR}" ]]; then
-  mv "${GRAPH_DIR}" "${GRAPH_DIR}.old"
+if ! mv "${TMP_DIR}/extracted" "${GRAPH_DIR}.tmp"; then
+  # Nothing under GRAPH_DIR has been touched yet -- safe to just bail.
+  fall_back_to_local "Failed to stage new graph directory"
 fi
-mv "${GRAPH_DIR}.tmp" "${GRAPH_DIR}"
+if [[ -d "${GRAPH_DIR}" ]]; then
+  if ! mv "${GRAPH_DIR}" "${GRAPH_DIR}.old"; then
+    fall_back_to_local "Failed to preserve existing graph before swap"
+  fi
+fi
+if ! mv "${GRAPH_DIR}.tmp" "${GRAPH_DIR}"; then
+  # The live copy (if any) is safely under GRAPH_DIR.old, not deleted --
+  # restore it before falling back so a failed swap never leaves
+  # graphify-out/ missing.
+  if [[ -d "${GRAPH_DIR}.old" ]]; then
+    mv "${GRAPH_DIR}.old" "${GRAPH_DIR}" 2>/dev/null || true
+  fi
+  fall_back_to_local "Failed to activate new graph directory"
+fi
 rm -rf "${GRAPH_DIR}.old"
 
 warn "Fetched graph (source ${BUNDLE_SHA:0:12}, graphify ${BUNDLE_GRAPHIFY_VERSION}) into ${GRAPH_DIR}/."

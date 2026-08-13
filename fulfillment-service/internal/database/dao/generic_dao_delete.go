@@ -95,7 +95,7 @@ func (r *DeleteRequest[O]) do(ctx context.Context) (response *DeleteResponse, er
 			project,
 			labels,
 			annotations,
-			title,
+			display_name,
 			description,
 			version,
 			data
@@ -116,7 +116,7 @@ func (r *DeleteRequest[O]) do(ctx context.Context) (response *DeleteResponse, er
 		project         string
 		labelsData      []byte
 		annotationsData []byte
-		title           string
+		displayName     string
 		description     string
 		version         int32
 		data            []byte
@@ -137,7 +137,7 @@ func (r *DeleteRequest[O]) do(ctx context.Context) (response *DeleteResponse, er
 			&project,
 			&labelsData,
 			&annotationsData,
-			&title,
+			&displayName,
 			&description,
 			&version,
 			&data,
@@ -176,7 +176,7 @@ func (r *DeleteRequest[O]) do(ctx context.Context) (response *DeleteResponse, er
 		name:        name,
 		labels:      labels,
 		annotations: annotations,
-		title:       title,
+		displayName: displayName,
 		description: description,
 		version:     version,
 	})
@@ -203,7 +203,7 @@ func (r *DeleteRequest[O]) do(ctx context.Context) (response *DeleteResponse, er
 		name:            name,
 		labelsData:      labelsData,
 		annotationsData: annotationsData,
-		title:           title,
+		displayName:     displayName,
 		description:     description,
 		version:         version,
 		data:            data,

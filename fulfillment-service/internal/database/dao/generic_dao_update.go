@@ -82,7 +82,7 @@ func (r *UpdateRequest[O]) do(ctx context.Context) (response *UpdateResponse[O],
 		name        string
 		labels      map[string]string
 		annotations map[string]string
-		title       string
+		displayName string
 		description string
 		tenant      string
 		project     string
@@ -91,7 +91,7 @@ func (r *UpdateRequest[O]) do(ctx context.Context) (response *UpdateResponse[O],
 		name = metadata.GetName()
 		labels = metadata.GetLabels()
 		annotations = metadata.GetAnnotations()
-		title = metadata.GetTitle()
+		displayName = metadata.GetDisplayName()
 		description = metadata.GetDescription()
 		tenant = metadata.GetTenant()
 		project = metadata.GetProject()
@@ -129,7 +129,7 @@ func (r *UpdateRequest[O]) do(ctx context.Context) (response *UpdateResponse[O],
 	addColumn("finalizers", finalizers)
 	addColumn("labels", labelsData)
 	addColumn("annotations", annotationsData)
-	addColumn("title", title)
+	addColumn("display_name", displayName)
 	addColumn("description", description)
 	addColumn("tenant", tenant)
 	addColumn("project", project)
@@ -184,7 +184,7 @@ func (r *UpdateRequest[O]) do(ctx context.Context) (response *UpdateResponse[O],
 		name:        name,
 		labels:      labels,
 		annotations: annotations,
-		title:       title,
+		displayName: displayName,
 		description: description,
 		version:     version,
 	})
@@ -213,7 +213,7 @@ func (r *UpdateRequest[O]) do(ctx context.Context) (response *UpdateResponse[O],
 			name:            name,
 			labelsData:      labelsData,
 			annotationsData: annotationsData,
-			title:           title,
+			displayName:     displayName,
 			description:     description,
 			version:         version,
 			data:            data,

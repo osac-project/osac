@@ -448,6 +448,77 @@ var _ = Describe("Private volumes server", func() {
 			})
 		})
 
+		Describe("Spec immutability", func() {
+			It("Rejects update that changes storage_tier", func() {
+				created := createVolume()
+
+				_, err := server.Update(ctx, privatev1.VolumesUpdateRequest_builder{
+					Object: privatev1.Volume_builder{
+						Id: created.GetId(),
+						Spec: privatev1.VolumeSpec_builder{
+							StorageTier: "silver",
+							SizeGib:     100,
+							AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.storage_tier"}},
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				st, ok := status.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(st.Code()).To(Equal(codes.InvalidArgument))
+				Expect(st.Message()).To(ContainSubstring("storage_tier"))
+			})
+
+			It("Rejects update that changes size_gib and preserves the original value", func() {
+				created := createVolume()
+
+				_, err := server.Update(ctx, privatev1.VolumesUpdateRequest_builder{
+					Object: privatev1.Volume_builder{
+						Id: created.GetId(),
+						Spec: privatev1.VolumeSpec_builder{
+							StorageTier: "gold",
+							SizeGib:     999,
+							AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.size_gib"}},
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				st, ok := status.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(st.Code()).To(Equal(codes.InvalidArgument))
+				Expect(st.Message()).To(ContainSubstring("size_gib"))
+
+				getResponse, err := server.Get(ctx, privatev1.VolumesGetRequest_builder{
+					Id: created.GetId(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(getResponse.GetObject().GetSpec().GetSizeGib()).To(Equal(int64(100)))
+			})
+
+			It("Rejects update that changes access_mode", func() {
+				created := createVolume()
+
+				_, err := server.Update(ctx, privatev1.VolumesUpdateRequest_builder{
+					Object: privatev1.Volume_builder{
+						Id: created.GetId(),
+						Spec: privatev1.VolumeSpec_builder{
+							StorageTier: "gold",
+							SizeGib:     100,
+							AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_MANY,
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.access_mode"}},
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				st, ok := status.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(st.Code()).To(Equal(codes.InvalidArgument))
+				Expect(st.Message()).To(ContainSubstring("access_mode"))
+			})
+		})
+
 		Describe("Signal", func() {
 			It("Signal succeeds for existing volume", func() {
 				created := createVolume()

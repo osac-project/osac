@@ -102,10 +102,8 @@ jobs:
       - name: Extract or update graph
         run: |
           set -euo pipefail
-          # `update` has no --code-only flag (it's already a no-LLM,
-          # code-only re-extraction by design -- confirmed directly against
-          # the real installed CLI, `graphify update --code-only` errors
-          # with "unknown update option"). Only `extract` accepts it.
+          # update has no --code-only flag (already no-LLM by default; only
+          # extract accepts it) -- confirmed against the real CLI.
           if [[ -f graphify-out/graph.json && -f graphify-out/manifest.json ]]; then
             echo "Prior graph found -- running incremental update."
             graphify update .
@@ -113,14 +111,8 @@ jobs:
             echo "No usable prior graph -- running full extraction."
             graphify extract . --code-only
           fi
-          # Neither extract nor update reliably writes GRAPH_REPORT.md on
-          # its own -- confirmed directly: a fresh `extract` explicitly
-          # prints "next: run `graphify cluster-only <path>` to generate
-          # GRAPH_REPORT.md and name communities" and does not write it,
-          # while `update` sometimes does and sometimes doesn't depending
-          # on what changed. Run cluster-only unconditionally so the report
-          # this workflow bundles always actually exists -- confirmed
-          # idempotent/safe to run even when update already produced one.
+          # extract doesn't write GRAPH_REPORT.md itself; update sometimes
+          # does. Always (re)generate it explicitly.
           graphify cluster-only .
 
       - name: Write metadata.json
@@ -213,13 +205,8 @@ jobs:
         with:
           persist-credentials: false
 
-      # osac-ci is a self-hosted runner pool, not GH-hosted ubuntu-latest --
-      # confirmed directly (first real production run) that gh isn't
-      # preinstalled on at least one instance in the pool ("gh: command not
-      # found"), unlike ubuntu-latest where it's always present. Installing
-      # a portable copy here makes this job self-sufficient regardless of
-      # which pool instance it lands on, rather than depending on
-      # runner-fleet provisioning this workflow doesn't control.
+      # osac-ci doesn't reliably have gh preinstalled (confirmed: first
+      # prod run hit "gh: command not found"). Install a portable copy.
       - name: Ensure gh CLI is available
         run: |
           set -euo pipefail

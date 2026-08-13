@@ -19,6 +19,7 @@ This file contains only frequently-needed commands and non-obvious rules. For de
   - Public/private server delegation
   - Builder pattern for server configuration
 - **Testing patterns**: See `*_suite_test.go` files for Ginkgo/Gomega setup
+- **CLI design guidelines**: [`internal/cmd/cli/.claude/rules/cli-ux.md`](internal/cmd/cli/.claude/rules/cli-ux.md)
 - **Dev tooling**: [dev/README.md](dev/README.md) for extending `dev.py`
 - **Linter configuration**:
   - Go: `.golangci.yml`
@@ -241,7 +242,9 @@ Before making any API design or implementation decision (adding or modifying `.p
 services, messages, or REST transcoding), read [docs/API.md](docs/API.md). That document contains
 the full set of conventions and rules for the API, including object structure, naming, services,
 request/response patterns, REST transcoding, enums, conditions, object references, and
-documentation requirements.
+documentation requirements. OSAC follows [Kubernetes API
+conventions](https://github.com/kubernetes/community/blob/main/contributors/devel/sig-architecture/api-conventions.md)
+adapted for protobuf.
 
 ## Validation Constraints
 

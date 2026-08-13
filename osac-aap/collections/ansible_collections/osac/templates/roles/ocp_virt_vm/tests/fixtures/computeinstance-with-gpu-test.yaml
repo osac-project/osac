@@ -8,14 +8,8 @@ spec:
   templateID: osac.templates.ocp_virt_vm
   networkAttachments:
     - subnetRef: test-subnet
-  cores: 2
-  memoryGiB: 4
-  bootDisk:
-    sizeGiB: 20
-  image:
-    sourceType: registry
-    sourceRef: "quay.io/containerdisks/fedora:latest"
-  runStrategy: "Always"
+  cores: 4
+  memoryGiB: 8
   gpu:
     pciDeviceSelector: "10DE:2901"
     resourceName: "nvidia.com/GB100"

@@ -2,23 +2,17 @@
 apiVersion: osac.openshift.io/v1alpha1
 kind: ComputeInstance
 metadata:
-  name: test-vm-gpu
+  name: test-vm-gpu-many
   namespace: osac-system
 spec:
   templateID: osac.templates.ocp_virt_vm
   networkAttachments:
     - subnetRef: test-subnet
-  cores: 2
-  memoryGiB: 4
-  bootDisk:
-    sizeGiB: 20
-  image:
-    sourceType: registry
-    sourceRef: "quay.io/containerdisks/fedora:latest"
-  runStrategy: "Always"
+  cores: 8
+  memoryGiB: 16
   gpu:
     pciDeviceSelector: "10DE:2901"
     resourceName: "nvidia.com/GB100"
-    count: 1
+    count: 3
 status:
   desiredConfigVersion: "1"

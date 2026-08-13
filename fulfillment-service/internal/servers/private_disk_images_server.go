@@ -177,6 +177,12 @@ func (s *PrivateDiskImagesServer) Update(ctx context.Context,
 		return
 	}
 
+	if len(merged.GetSpec().GetArchitecture()) == 0 {
+		err = grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'spec.architecture' must contain at least one architecture")
+		return
+	}
+
 	lifecycleChanged := handleDiskImageLifecycleTransition(existing, merged)
 
 	if lifecycleChanged && len(request.GetUpdateMask().GetPaths()) > 0 {

@@ -367,6 +367,39 @@ var _ = Describe("Private disk images server", func() {
 			Expect(updateResponse.GetObject().GetSpec().GetArchitecture()).To(HaveLen(1))
 		})
 
+		It("Rejects masked update that empties architecture list", func() {
+			createResponse, err := server.Create(ctx, privatev1.DiskImagesCreateRequest_builder{
+				Object: privatev1.DiskImage_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "empty-arch-update-test",
+					}.Build(),
+					Spec: privatev1.DiskImageSpec_builder{
+						SourceType: privatev1.SourceType_SOURCE_TYPE_REGISTRY,
+						SourceRef:  "quay.io/test:empty-arch",
+						Architecture: []privatev1.Architecture{
+							privatev1.Architecture_ARCHITECTURE_AMD64,
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = server.Update(ctx, privatev1.DiskImagesUpdateRequest_builder{
+				Object: privatev1.DiskImage_builder{
+					Id: createResponse.GetObject().GetId(),
+					Spec: privatev1.DiskImageSpec_builder{
+						Architecture: []privatev1.Architecture{},
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.architecture"}},
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(ContainSubstring("architecture"))
+		})
+
 		It("Masked update with UNSPECIFIED lifecycle preserves existing lifecycle", func() {
 			createResponse, err := server.Create(ctx, privatev1.DiskImagesCreateRequest_builder{
 				Object: privatev1.DiskImage_builder{
@@ -585,6 +618,32 @@ var _ = Describe("Private disk images server", func() {
 				Expect(dep.GetDeprecationTimestamp()).ToNot(BeNil())
 				Expect(dep.GetDeprecationTimestamp().AsTime()).To(BeTemporally(">=", before))
 				Expect(dep.HasObsolescenceTimestamp()).To(BeFalse())
+			})
+
+			It("Transitions AVAILABLE to OBSOLETE directly", func() {
+				object := createWithLifecycle("avail-to-obsolete",
+					privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE)
+
+				before := time.Now()
+				updateResponse, err := server.Update(ctx, privatev1.DiskImagesUpdateRequest_builder{
+					Object: privatev1.DiskImage_builder{
+						Id: object.GetId(),
+						Spec: privatev1.DiskImageSpec_builder{
+							Lifecycle: privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_OBSOLETE,
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.lifecycle"}},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				updated := updateResponse.GetObject()
+				Expect(updated.GetSpec().GetLifecycle()).To(Equal(
+					privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_OBSOLETE))
+				dep := updated.GetSpec().GetDeprecation()
+				Expect(dep).ToNot(BeNil())
+				Expect(dep.HasDeprecationTimestamp()).To(BeFalse())
+				Expect(dep.GetObsolescenceTimestamp()).ToNot(BeNil())
+				Expect(dep.GetObsolescenceTimestamp().AsTime()).To(BeTemporally(">=", before))
 			})
 
 			It("Transitions DEPRECATED to OBSOLETE", func() {

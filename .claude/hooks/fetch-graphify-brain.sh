@@ -86,7 +86,12 @@ fi
 if grep -qE '^/|(^|/)\.\.(/|$)' "${TMP_DIR}/members.txt"; then
   fall_back_to_local "Downloaded bundle contains unsafe path entries (path traversal guard)"
 fi
-if tar tvzf "${TMP_DIR}/graphify-bundle.tar.gz" 2>/dev/null | grep -qE -- '-> |link to'; then
+# GNU tar's verbose listing leads each line with a type character (like
+# `ls -l`): '-' regular, 'l' symlink, 'h' hardlink (verified directly:
+# `l` and `h` are real leading characters, not just human-readable "->"/
+# "link to" text) -- match on that instead of the arrow/text, which could
+# false-positive on a filename that happens to contain those substrings.
+if tar tvzf "${TMP_DIR}/graphify-bundle.tar.gz" 2>/dev/null | grep -qE '^[lh]'; then
   fall_back_to_local "Downloaded bundle contains symlink/hardlink entries (rejected for safety)"
 fi
 
@@ -133,8 +138,18 @@ fi
 # fix in the graph-refresh workflow that writes graphify_version).
 LOCAL_GRAPHIFY_VERSION="$(graphify --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
 if [[ -n "${LOCAL_GRAPHIFY_VERSION}" && "${LOCAL_GRAPHIFY_VERSION}" != "${BUNDLE_GRAPHIFY_VERSION}" ]]; then
-  warn "graphify version mismatch: published graph was generated with ${BUNDLE_GRAPHIFY_VERSION}, local install is ${LOCAL_GRAPHIFY_VERSION}. Refusing to load -- upgrade with: uv tool install --upgrade graphifyy (or: pipx upgrade graphifyy)."
-  fall_back_to_local "Version mismatch"
+  # Direction matters: a local install *older* than what generated the graph
+  # is a real compatibility risk worth refusing over. A local install
+  # *newer* than the bundle isn't -- telling that developer to "upgrade"
+  # would be backwards. `sort -V` (real version-aware ordering, not a
+  # hand-rolled semver comparator) decides which case this is.
+  newest="$(printf '%s\n%s\n' "${LOCAL_GRAPHIFY_VERSION}" "${BUNDLE_GRAPHIFY_VERSION}" | sort -V | tail -1)"
+  if [[ "${newest}" == "${BUNDLE_GRAPHIFY_VERSION}" ]]; then
+    warn "graphify version mismatch: published graph was generated with ${BUNDLE_GRAPHIFY_VERSION}, local install (${LOCAL_GRAPHIFY_VERSION}) is older. Refusing to load -- upgrade with: uv tool install --upgrade graphifyy (or: pipx upgrade graphifyy)."
+    fall_back_to_local "Version mismatch"
+  else
+    warn "Note: local graphify (${LOCAL_GRAPHIFY_VERSION}) is newer than the version that generated the published graph (${BUNDLE_GRAPHIFY_VERSION}) -- loading anyway, no action needed."
+  fi
 fi
 
 # --- Step 6: atomic swap ---

@@ -1,0 +1,14 @@
+# graphify structural extraction scope (OSAC-1732 knowledge-graph brain).
+#
+# Test directories are excluded: they bloat node/relationship count 3-4x on
+# information already covered by the production code they test, without
+# adding new cross-component edges. Infra/config files (.github/, charts/,
+# values/) are deliberately NOT excluded -- that's exactly where this
+# mono-repo's cross-component dependency information lives (e.g. which
+# component's chart another component's umbrella chart depends on).
+**/tests/**
+**/test/**
+**/*_test.go
+**/test_*.py
+**/*_test.py
+**/it/**

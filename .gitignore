@@ -7,6 +7,10 @@ skills/
 .cursor/
 .gemini/
 
+# graphify knowledge-graph output -- fetched from the published CI bundle
+# (see .github/workflows/graphify-brain-refresh.yaml), never committed.
+graphify-out/
+
 # Binaries for programs and plugins
 *.exe
 *.exe~

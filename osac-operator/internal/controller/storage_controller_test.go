@@ -482,6 +482,34 @@ var _ = Describe("Storage Controller", func() {
 			Expect(clusterCond.Status).To(Equal(metav1.ConditionFalse))
 		})
 
+		It("should requeue without firing a job when TiersClient is set but tier resolution fails", func() {
+			name := "storage-test-tier-error"
+			createReadyTenantForStorage(ctx, name, testNamespace)
+			createHubSecret(ctx, name, secretsNamespace)
+
+			clusterProvider := &mockProvisioningProvider{name: "cluster-storage-mock"}
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, clusterProvider, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+			r.TiersClient = &mockStorageTiersLister{
+				listFunc: func(_ context.Context, _ *privatev1.StorageTiersListRequest, _ ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return nil, fmt.Errorf("tiers API unavailable")
+				},
+			}
+			r.BackendsClient = registeredBackendsClient(1)
+
+			nn := types.NamespacedName{Name: name, Namespace: testNamespace}
+			result, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(pollInterval))
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			Expect(tenant.Status.ClusterStorageJobs).To(BeEmpty())
+		})
+
 		It("should trigger cluster storage provisioning when Stage 1 complete but no SCs", func() {
 			name := "storage-test-no-sc"
 			createReadyTenantForStorage(ctx, name, testNamespace)

@@ -124,7 +124,8 @@ var _ = Describe("hidePrivateSubcommands", func() {
 		tmpDir := GinkgoT().TempDir()
 		err := os.WriteFile(filepath.Join(tmpDir, "config.json"), []byte(`{"private": false}`), 0600)
 		Expect(err).ToNot(HaveOccurred())
-		root.PersistentFlags().String("config", tmpDir, "")
+		root.PersistentFlags().String("config", "", "")
+		Expect(root.PersistentFlags().Set("config", tmpDir)).To(Succeed())
 
 		hidePrivateSubcommands(parent)
 
@@ -136,7 +137,8 @@ var _ = Describe("hidePrivateSubcommands", func() {
 		tmpDir := GinkgoT().TempDir()
 		err := os.WriteFile(filepath.Join(tmpDir, "config.json"), []byte(`{"private": true}`), 0600)
 		Expect(err).ToNot(HaveOccurred())
-		root.PersistentFlags().String("config", tmpDir, "")
+		root.PersistentFlags().String("config", "", "")
+		Expect(root.PersistentFlags().Set("config", tmpDir)).To(Succeed())
 
 		hidePrivateSubcommands(parent)
 
@@ -146,7 +148,8 @@ var _ = Describe("hidePrivateSubcommands", func() {
 
 	It("hides private subcommands when no config file exists", func() {
 		tmpDir := GinkgoT().TempDir()
-		root.PersistentFlags().String("config", tmpDir, "")
+		root.PersistentFlags().String("config", "", "")
+		Expect(root.PersistentFlags().Set("config", tmpDir)).To(Succeed())
 
 		hidePrivateSubcommands(parent)
 
@@ -159,7 +162,8 @@ var _ = Describe("hidePrivateSubcommands", func() {
 		sub := &cobra.Command{Use: "cluster"}
 		cmd.AddCommand(sub)
 		root.AddCommand(cmd)
-		root.PersistentFlags().String("config", GinkgoT().TempDir(), "")
+		root.PersistentFlags().String("config", "", "")
+		Expect(root.PersistentFlags().Set("config", GinkgoT().TempDir())).To(Succeed())
 
 		hidePrivateSubcommands(cmd)
 

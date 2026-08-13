@@ -219,6 +219,19 @@ For flag help, start with a short type hint in italics (e.g. `_[BOOLEAN]_`, `_UR
 Refer to existing commands such as `internal/cmd/cli/login/login_cmd.go` for style and examples of
 how help text is structured.
 
+### Private-API Subcommands
+
+Subcommands that use the private API (`privatev1`) must be annotated so they are hidden from
+`--help` when private mode (--private) is disabled or configuration is unavailable. Wrap the `AddCommand` call with
+`help.MarkPrivateAPI`:
+
+```go
+result.AddCommand(help.MarkPrivateAPI(mysubcommand.Cmd()))
+```
+
+Add the subcommand name to the `privateNames` map in the corresponding `*_cmd_test.go` annotation
+test (e.g. `create_cmd_test.go`, `describe_cmd_test.go`).
+
 ## API Design Guidelines
 
 Before making any API design or implementation decision (adding or modifying `.proto` files,

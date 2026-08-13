@@ -58,8 +58,32 @@ def test_cluster_create(
 
         wait_for_cluster_ready(k8s=k8s_hub_client, name=co_name)
 
-        # Derive expected N+1 count from cluster spec
+        # Verify version resolved and propagated end-to-end:
+        # fulfillment-service default resolution -> ClusterOrder releaseImage -> HostedCluster image
         cluster = grpc.get_cluster(cluster_id=uuid)
+        version_name = cluster.get("object", {}).get("spec", {}).get("version", {}).get("name", "")
+        assert version_name, "Cluster should have a resolved version name"
+
+        co_release_image = k8s_hub_client.get_cluster_order_spec(name=co_name).get("releaseImage", "")
+        assert co_release_image, "ClusterOrder should have a resolved releaseImage"
+
+        hosted_cluster_name = k8s_hub_client.get_cluster_order_hosted_cluster_name(name=co_name)
+        hosted_cluster_ns = k8s_hub_client.get_cluster_order_namespace(name=co_name)
+        hosted_cluster_image = run(
+            *k8s_hub_client._base(),
+            "get",
+            "hostedcluster",
+            hosted_cluster_name,
+            "-n",
+            hosted_cluster_ns,
+            "-o",
+            "jsonpath={.spec.release.image}",
+        )
+        assert hosted_cluster_image == co_release_image, (
+            f"HostedCluster image {hosted_cluster_image!r} != ClusterOrder releaseImage {co_release_image!r}"
+        )
+
+        # Derive expected N+1 count from cluster spec
         node_sets = cluster.get("object", {}).get("spec", {}).get("nodeSets", {})
         expected_components = 1 + len(node_sets)
 
@@ -131,10 +155,11 @@ def test_cluster_create_with_version(
     pull_secret_path: str,
     ssh_public_key_path: str,
 ) -> None:
-    """Verify that an explicit --version resolves end-to-end: the Cluster API
-    resource stores the version reference, the ClusterOrder CR's releaseImage
-    is resolved from the matching ClusterVersion, and the provisioned
-    HostedCluster uses that release image."""
+    """Verify explicit --version resolution: the Cluster API resource stores the
+    version reference, the ClusterVersion cannot be deleted while referenced,
+    and the ClusterOrder CR's releaseImage is resolved from the matching
+    ClusterVersion. Does not wait for full provisioning — the HostedCluster
+    image propagation is covered by test_cluster_create."""
     version = private_grpc.ensure_cluster_version(version="4.20.0-e2e", image=TEST_RELEASE_IMAGE)
 
     name = unique_name("e2e-cluster-version")
@@ -152,6 +177,15 @@ def test_cluster_create_with_version(
         cluster = grpc.get_cluster(cluster_id=uuid)
         assert cluster["object"]["spec"]["version"]["name"] == version["name"]
 
+        # While the cluster references this version, deletion must be rejected
+        output, rc = private_grpc.call_unchecked(
+            service="osac.private.v1.ClusterVersions/Delete", data={"id": version["id"]}
+        )
+        assert rc != 0, f"Expected delete to be rejected for referenced version, got: {output}"
+        assert "FailedPrecondition" in output or "referenced" in output.lower(), (
+            f"Expected FailedPrecondition or 'referenced' in rejection, got: {output}"
+        )
+
         release_image = poll_until(
             fn=lambda: k8s_hub_client.get_cluster_order_spec(name=co_name).get("releaseImage", ""),
             until=lambda v: v != "",
@@ -160,22 +194,6 @@ def test_cluster_create_with_version(
             description=f"{co_name} ClusterOrder releaseImage resolution",
         )
         assert release_image == TEST_RELEASE_IMAGE
-
-        wait_for_cluster_ready(k8s=k8s_hub_client, name=co_name)
-
-        hosted_cluster_name = k8s_hub_client.get_cluster_order_hosted_cluster_name(name=co_name)
-        hosted_cluster_ns = k8s_hub_client.get_cluster_order_namespace(name=co_name)
-        hosted_cluster_image = run(
-            *k8s_hub_client._base(),
-            "get",
-            "hostedcluster",
-            hosted_cluster_name,
-            "-n",
-            hosted_cluster_ns,
-            "-o",
-            "jsonpath={.spec.release.image}",
-        )
-        assert hosted_cluster_image == TEST_RELEASE_IMAGE
 
         cli.delete_cluster(uuid=uuid)
 

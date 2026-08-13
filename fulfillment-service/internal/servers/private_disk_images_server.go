@@ -190,7 +190,13 @@ func (s *PrivateDiskImagesServer) Update(ctx context.Context,
 		mask.Paths = append(mask.Paths, "spec.deprecation")
 	}
 
+	// SetObject(merged) instead of SetSpec(merged.GetSpec()): GenericServer's no-mask
+	// path does tmpObject = requestObject, so the request needs complete metadata from
+	// the DB clone — SetSpec would leave metadata empty, triggering check_immutable_columns.
+	// Restore the client's original version so optimistic locking still works.
+	clientVersion := request.GetObject().GetMetadata().GetVersion()
 	request.SetObject(merged)
+	request.GetObject().GetMetadata().SetVersion(clientVersion)
 
 	err = s.generic.Update(ctx, request, &response)
 	return

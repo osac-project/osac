@@ -367,6 +367,97 @@ var _ = Describe("Private disk images server", func() {
 			Expect(updateResponse.GetObject().GetSpec().GetArchitecture()).To(HaveLen(1))
 		})
 
+		It("No-mask update without metadata preserves name and succeeds", func() {
+			createResponse, err := server.Create(ctx, privatev1.DiskImagesCreateRequest_builder{
+				Object: privatev1.DiskImage_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "nomask-metadata-test",
+					}.Build(),
+					Spec: privatev1.DiskImageSpec_builder{
+						SourceType: privatev1.SourceType_SOURCE_TYPE_REGISTRY,
+						SourceRef:  "quay.io/test:nomask-meta",
+						Architecture: []privatev1.Architecture{
+							privatev1.Architecture_ARCHITECTURE_AMD64,
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			object := createResponse.GetObject()
+
+			updateResponse, err := server.Update(ctx, privatev1.DiskImagesUpdateRequest_builder{
+				Object: privatev1.DiskImage_builder{
+					Id: object.GetId(),
+					Spec: privatev1.DiskImageSpec_builder{
+						SourceType: privatev1.SourceType_SOURCE_TYPE_REGISTRY,
+						SourceRef:  "quay.io/test:nomask-meta",
+						Architecture: []privatev1.Architecture{
+							privatev1.Architecture_ARCHITECTURE_AMD64,
+							privatev1.Architecture_ARCHITECTURE_ARM64,
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updateResponse.GetObject().GetMetadata().GetName()).To(Equal("nomask-metadata-test"))
+			Expect(updateResponse.GetObject().GetSpec().GetArchitecture()).To(ConsistOf(
+				privatev1.Architecture_ARCHITECTURE_AMD64,
+				privatev1.Architecture_ARCHITECTURE_ARM64,
+			))
+		})
+
+		It("Masked update with stale version and lock returns ABORTED", func() {
+			createResponse, err := server.Create(ctx, privatev1.DiskImagesCreateRequest_builder{
+				Object: privatev1.DiskImage_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "lock-test",
+					}.Build(),
+					Spec: privatev1.DiskImageSpec_builder{
+						SourceType: privatev1.SourceType_SOURCE_TYPE_REGISTRY,
+						SourceRef:  "quay.io/test:lock",
+						Architecture: []privatev1.Architecture{
+							privatev1.Architecture_ARCHITECTURE_AMD64,
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			object := createResponse.GetObject()
+			initialVersion := object.GetMetadata().GetVersion()
+
+			_, err = server.Update(ctx, privatev1.DiskImagesUpdateRequest_builder{
+				Object: privatev1.DiskImage_builder{
+					Id: object.GetId(),
+					Spec: privatev1.DiskImageSpec_builder{
+						Lifecycle: privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_DEPRECATED,
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.lifecycle"}},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = server.Update(ctx, privatev1.DiskImagesUpdateRequest_builder{
+				Object: privatev1.DiskImage_builder{
+					Id: object.GetId(),
+					Metadata: privatev1.Metadata_builder{
+						Version: initialVersion,
+					}.Build(),
+					Spec: privatev1.DiskImageSpec_builder{
+						Architecture: []privatev1.Architecture{
+							privatev1.Architecture_ARCHITECTURE_AMD64,
+							privatev1.Architecture_ARCHITECTURE_ARM64,
+						},
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.architecture"}},
+				Lock:       true,
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.Aborted))
+		})
+
 		It("Rejects masked update that empties architecture list", func() {
 			createResponse, err := server.Create(ctx, privatev1.DiskImagesCreateRequest_builder{
 				Object: privatev1.DiskImage_builder{

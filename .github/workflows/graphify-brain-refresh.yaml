@@ -47,7 +47,7 @@ jobs:
 
       - name: Install graphify
         run: |
-          pip install --user "graphifyy==${GRAPHIFY_VERSION}"
+          pip install --user "graphifyy[sql]==${GRAPHIFY_VERSION}"
           echo "${HOME}/.local/bin" >> "$GITHUB_PATH"
 
       - name: Restore prior graphify-out/ state (fast path)

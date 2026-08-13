@@ -43,9 +43,9 @@ For deployment coordination (image tags, submodules), see `osac-installer/AGENTS
 
 ## Knowledge Graph (graphify brain)
 
-CI keeps a structural code graph of this mono-repo fresh (`.github/workflows/graphify-brain-refresh.yaml`) and a `SessionStart` hook (`.claude/hooks/fetch-graphify-brain.sh`) pulls the latest published bundle into `graphify-out/` automatically at the start of every session — no manual step, and it fails open (falls back to normal cold exploration with a one-line warning) if the fetch fails or the graph is unavailable.
+CI keeps a structural code graph of this mono-repo fresh (`.github/workflows/graphify-brain-refresh.yaml`) and publishes it for pickup. After `graphify` is installed (see below), a `SessionStart` hook (`.claude/hooks/fetch-graphify-brain.sh`) fetches the latest published bundle into `graphify-out/` automatically at the start of every session — no manual fetch step — and it fails open (falls back to normal cold exploration with a one-line warning) if the fetch fails, `graphify` isn't installed, or the graph is otherwise unavailable.
 
-To actually make use of the fetched graph, `graphify` itself needs to be installed once per developer machine:
+`graphify` itself needs to be installed once per developer machine before any of this does anything useful:
 
 ```bash
 uv tool install graphifyy   # recommended

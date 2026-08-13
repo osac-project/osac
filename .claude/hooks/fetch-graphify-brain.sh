@@ -13,6 +13,13 @@
 
 set -uo pipefail
 
+# Anchor to the project root regardless of the caller's cwd, so the
+# settings.json hook command can stay a plain `bash .../fetch-graphify-brain.sh`
+# -- consistent with the existing update-ai-context.sh hook -- rather than
+# needing its own `cd` wrapper.
+PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+cd "${PROJECT_DIR}" || { echo "[graphify-brain] Could not cd to project dir ${PROJECT_DIR} -- skipping." >&2; exit 0; }
+
 REPO="osac-project/osac"
 RELEASE_TAG="graph-latest"
 GRAPH_DIR="graphify-out"
@@ -60,10 +67,27 @@ if ! command -v jq >/dev/null 2>&1; then
   fall_back_to_local "jq not available (needed to validate the pulled bundle)"
 fi
 
-# --- Step 2: pull the latest published bundle (public repo, no auth needed) ---
+# --- Step 2: pull the latest published bundle. osac-project/osac is public
+# so no token is required -- gh may still pick up an ambient local token if
+# the developer is already logged in, but none is needed for this to work. ---
 if ! gh release download "${RELEASE_TAG}" --repo "${REPO}" \
       --pattern 'graphify-bundle.tar.gz' --dir "${TMP_DIR}" >/dev/null 2>&1; then
   fall_back_to_local "Could not fetch latest graph bundle (network/404/rate-limit)"
+fi
+
+# Defense-in-depth path-traversal/symlink guard before extracting anything.
+# Low severity in practice (exploiting this needs write access to the GH
+# Release, the same trust boundary as pushing source code), but cheap to
+# check: reject absolute paths, '..' components, and symlink/hardlink
+# entries rather than trusting GNU tar's leading-'/' stripping alone.
+if ! tar tzf "${TMP_DIR}/graphify-bundle.tar.gz" > "${TMP_DIR}/members.txt" 2>/dev/null; then
+  fall_back_to_local "Downloaded bundle is corrupt (failed to list contents)"
+fi
+if grep -qE '^/|(^|/)\.\.(/|$)' "${TMP_DIR}/members.txt"; then
+  fall_back_to_local "Downloaded bundle contains unsafe path entries (path traversal guard)"
+fi
+if tar tvzf "${TMP_DIR}/graphify-bundle.tar.gz" 2>/dev/null | grep -qE -- '-> |link to'; then
+  fall_back_to_local "Downloaded bundle contains symlink/hardlink entries (rejected for safety)"
 fi
 
 mkdir -p "${TMP_DIR}/extracted"
@@ -90,7 +114,10 @@ BUNDLE_GRAPHIFY_VERSION="$(jq -r '.graphify_version' "${META_JSON}")"
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1 && \
    git cat-file -e "${BUNDLE_SHA}" 2>/dev/null; then
   if git merge-base --is-ancestor "${BUNDLE_SHA}" HEAD 2>/dev/null; then
-    : # bundle's source is an ancestor of HEAD -- normal, no staleness note needed.
+    behind_count="$(git rev-list --count "${BUNDLE_SHA}..HEAD" 2>/dev/null || echo 0)"
+    if [[ "${behind_count}" -gt 0 ]]; then
+      warn "Note: published graph is ${behind_count} commit(s) behind local HEAD -- it doesn't yet reflect your most recent local commits."
+    fi
   else
     warn "Note: published graph's source (${BUNDLE_SHA:0:12}) is not an ancestor of local HEAD -- local checkout may be on a branch ahead of or diverged from what generated this graph."
   fi
@@ -99,18 +126,31 @@ else
 fi
 
 # --- Step 5: version check ---
-LOCAL_GRAPHIFY_VERSION="$(graphify --version 2>/dev/null | tr -d '[:space:]')"
+# graphify --version's output includes non-numeric text (e.g. "graphify
+# 0.9.41"); stripping whitespace alone leaves "graphify0.9.41", which would
+# never equal metadata.json's bare-number graphify_version and would refuse
+# every fetch. Extract just the numeric version on both sides (see the same
+# fix in the graph-refresh workflow that writes graphify_version).
+LOCAL_GRAPHIFY_VERSION="$(graphify --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
 if [[ -n "${LOCAL_GRAPHIFY_VERSION}" && "${LOCAL_GRAPHIFY_VERSION}" != "${BUNDLE_GRAPHIFY_VERSION}" ]]; then
   warn "graphify version mismatch: published graph was generated with ${BUNDLE_GRAPHIFY_VERSION}, local install is ${LOCAL_GRAPHIFY_VERSION}. Refusing to load -- upgrade with: uv tool install --upgrade graphifyy (or: pipx upgrade graphifyy)."
   fall_back_to_local "Version mismatch"
 fi
 
 # --- Step 6: atomic swap ---
+# Rename-based, never delete-before-replace: at every point in time either
+# the old graphify-out/ or the new one exists on disk. If this script is
+# killed (e.g. by its own hook timeout) between the two `mv`s, the old graph
+# is still there under GRAPH_DIR -- there is no window where GRAPH_DIR is
+# simply missing.
 date -u +%s > "${TMP_DIR}/extracted/.last-fetch-at"
-rm -rf "${GRAPH_DIR}.tmp"
+rm -rf "${GRAPH_DIR}.tmp" "${GRAPH_DIR}.old"
 mv "${TMP_DIR}/extracted" "${GRAPH_DIR}.tmp"
-rm -rf "${GRAPH_DIR}"
+if [[ -d "${GRAPH_DIR}" ]]; then
+  mv "${GRAPH_DIR}" "${GRAPH_DIR}.old"
+fi
 mv "${GRAPH_DIR}.tmp" "${GRAPH_DIR}"
+rm -rf "${GRAPH_DIR}.old"
 
 warn "Fetched graph (source ${BUNDLE_SHA:0:12}, graphify ${BUNDLE_GRAPHIFY_VERSION}) into ${GRAPH_DIR}/."
 exit 0

@@ -33,7 +33,7 @@
           },
           {
             "type": "command",
-            "command": "cd \"${CLAUDE_PROJECT_DIR}\" && bash \"${CLAUDE_PROJECT_DIR}/.claude/hooks/fetch-graphify-brain.sh\"",
+            "command": "bash \"${CLAUDE_PROJECT_DIR}/.claude/hooks/fetch-graphify-brain.sh\"",
             "timeout": 30
           }
         ]

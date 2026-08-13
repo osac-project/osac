@@ -348,7 +348,7 @@ var _ = Describe("Private storage backends server", func() {
 		Describe("Validation", func() {
 			// Field-level validation (provider, endpoint, credentials) is enforced by the
 			// protovalidate interceptor, not the server handler. Unit tests bypass the
-			// interceptor chain, so those constraints are tested via integration tests.
+			// interceptor chain, so those constraints cannot be covered here.
 		})
 
 		Describe("Immutability", func() {

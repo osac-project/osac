@@ -195,6 +195,9 @@ func (s *PrivateStorageBackendsServer) Delete(ctx context.Context,
 func (s *PrivateStorageBackendsServer) validateStorageBackendCreate(_ context.Context,
 	sb *privatev1.StorageBackend) error {
 
+	if sb == nil {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "storage backend is mandatory")
+	}
 	if sb.GetMetadata() == nil || sb.GetMetadata().GetName() == "" {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'metadata.name' is required")
 	}

@@ -306,10 +306,7 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 						SizeGib:     20,
 						StorageTier: &storageTierId,
 					}.Build(),
-					Image: publicv1.ComputeInstanceImage_builder{
-						SourceType: "registry",
-						SourceRef:  "quay.io/containerdisks/fedora:latest",
-					}.Build(),
+					DiskImage: &publicv1.DiskImageReference{Id: "test-disk-image"},
 					NetworkAttachments: []*publicv1.NetworkAttachment{
 						publicv1.NetworkAttachment_builder{
 							Subnet: publicv1.SubnetLocalReference_builder{Id: subnetId}.Build(),
@@ -347,10 +344,7 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 						SizeGib:     20,
 						StorageTier: &storageTierId,
 					}.Build(),
-					Image: publicv1.ComputeInstanceImage_builder{
-						SourceType: "registry",
-						SourceRef:  "quay.io/containerdisks/fedora:latest",
-					}.Build(),
+					DiskImage: &publicv1.DiskImageReference{Id: "test-disk-image"},
 					NetworkAttachments: []*publicv1.NetworkAttachment{
 						publicv1.NetworkAttachment_builder{
 							Subnet: publicv1.SubnetLocalReference_builder{Name: "non-existent-subnet"}.Build(),

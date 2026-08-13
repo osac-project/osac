@@ -99,16 +99,10 @@ func Cmd() *cobra.Command {
 		instanceTypeFlagHelp,
 	)
 	flags.StringVar(
-		&runner.args.imageSourceRef,
-		"image",
+		&runner.args.diskImage,
+		"disk-image",
 		"",
-		imageFlagHelp,
-	)
-	flags.StringVar(
-		&runner.args.imageSourceType,
-		"image-source-type",
-		"registry",
-		imageSourceTypeFlagHelp,
+		diskImageFlagHelp,
 	)
 	flags.StringVar(
 		&runner.args.sshPublicKey,
@@ -153,12 +147,6 @@ func Cmd() *cobra.Command {
 		networkAttachmentFlagHelp,
 	)
 	flags.BoolVar(
-		&runner.args.windows,
-		"windows",
-		false,
-		windowsFlagHelp,
-	)
-	flags.BoolVar(
 		&runner.args.externalIPAttachment,
 		"external-ip-attachment",
 		false,
@@ -185,8 +173,7 @@ type runnerContext struct {
 		templateParameterFiles  []string
 		setFields               []string
 		instanceType            string
-		imageSourceRef          string
-		imageSourceType         string
+		diskImage               string
 		sshPublicKey            string
 		bootDiskSizeGiB         int32
 		bootDiskStorageTier     string
@@ -194,7 +181,6 @@ type runnerContext struct {
 		runStrategy             string
 		userData                string
 		networkAttachments      []string
-		windows                 bool
 		externalIPAttachment    bool
 	}
 	logger                 *slog.Logger
@@ -733,11 +719,8 @@ func (c *runnerContext) buildSpec(templateID string,
 		Template:           &publicv1.ComputeInstanceTemplateReference{Id: templateID},
 		TemplateParameters: templateParams,
 	}
-	if c.args.imageSourceRef != "" {
-		spec.Image = publicv1.ComputeInstanceImage_builder{
-			SourceType: c.args.imageSourceType,
-			SourceRef:  c.args.imageSourceRef,
-		}.Build()
+	if c.args.diskImage != "" {
+		spec.DiskImage = &publicv1.DiskImageReference{Name: c.args.diskImage}
 	}
 	if c.args.instanceType != "" {
 		spec.InstanceType = &publicv1.InstanceTypeReference{Name: c.args.instanceType}
@@ -760,9 +743,6 @@ func (c *runnerContext) buildSpec(templateID string,
 	}
 	if c.args.userData != "" {
 		spec.UserData = proto.String(c.args.userData)
-	}
-	if c.args.windows {
-		spec.IsWindows = proto.Bool(true)
 	}
 	spec.AutoExternalIpAttachment = c.args.externalIPAttachment
 	if err := c.applyNetworkingFlags(&spec); err != nil {
@@ -872,11 +852,8 @@ func (c *runnerContext) buildSpecFromCatalogItem(catalogItemID string) (*publicv
 	spec := publicv1.ComputeInstanceSpec_builder{
 		CatalogItem: &publicv1.ComputeInstanceCatalogItemReference{Id: catalogItemID},
 	}
-	if c.args.imageSourceRef != "" {
-		spec.Image = publicv1.ComputeInstanceImage_builder{
-			SourceType: c.args.imageSourceType,
-			SourceRef:  c.args.imageSourceRef,
-		}.Build()
+	if c.args.diskImage != "" {
+		spec.DiskImage = &publicv1.DiskImageReference{Name: c.args.diskImage}
 	}
 	if c.args.instanceType != "" {
 		spec.InstanceType = &publicv1.InstanceTypeReference{Name: c.args.instanceType}
@@ -899,9 +876,6 @@ func (c *runnerContext) buildSpecFromCatalogItem(catalogItemID string) (*publicv
 	}
 	if c.args.userData != "" {
 		spec.UserData = proto.String(c.args.userData)
-	}
-	if c.args.windows {
-		spec.IsWindows = proto.Bool(true)
 	}
 	spec.AutoExternalIpAttachment = c.args.externalIPAttachment
 	if err := c.applyNetworkingFlags(&spec); err != nil {
@@ -1073,12 +1047,8 @@ _NAME_ - Instance type name. Specifies the compute resource
 configuration for this instance.
 `
 
-const imageFlagHelp = `
-_URL_ - Image reference, for example an OCI image URL.
-`
-
-const imageSourceTypeFlagHelp = `
-_TYPE_ - Image source type.
+const diskImageFlagHelp = `
+_NAME_ - DiskImage resource name to use for this compute instance.
 `
 
 const sshPublicKeyFlagHelp = `
@@ -1116,10 +1086,6 @@ _SPEC_ - Per-NIC network attachment. The value can be a plain subnet ID, or a
 comma-separated specification in the format
 {{ bt }}subnet=ID[,security-groups=ID,ID...]{{ bt }}. Can be
 specified multiple times to attach multiple NICs.
-`
-
-const windowsFlagHelp = `
-_[BOOLEAN]_ - Create a Windows VM. Defaults to {{ bt }}false{{ bt }} (Linux VM).
 `
 
 const externalIPAttachmentFlagHelp = `

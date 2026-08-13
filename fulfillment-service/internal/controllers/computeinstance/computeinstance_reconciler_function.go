@@ -723,12 +723,7 @@ func (t *task) addExplicitFields(ctx context.Context, spec *osacv1alpha1.Compute
 			Name: t.userDataSecretName,
 		}
 	}
-	if ciSpec.HasImage() {
-		spec.Image = osacv1alpha1.ImageSpec{
-			SourceType: osacv1alpha1.ImageSourceType(ciSpec.GetImage().GetSourceType()),
-			SourceRef:  ciSpec.GetImage().GetSourceRef(),
-		}
-	}
+	// DiskImage resolution is handled in Task 3 (OSAC-3724).
 	if ciSpec.HasBootDisk() {
 		spec.BootDisk = osacv1alpha1.DiskSpec{
 			SizeGiB:     ciSpec.GetBootDisk().GetSizeGib(),
@@ -744,13 +739,6 @@ func (t *task) addExplicitFields(ctx context.Context, spec *osacv1alpha1.Compute
 			})
 		}
 		spec.AdditionalDisks = disks
-	}
-
-	// Map is_windows boolean to guestOSFamily string
-	if ciSpec.HasIsWindows() && ciSpec.GetIsWindows() {
-		spec.GuestOSFamily = "windows"
-	} else {
-		spec.GuestOSFamily = "linux"
 	}
 
 	return nil

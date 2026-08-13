@@ -172,10 +172,7 @@ var _ = Describe("buildSpec", func() {
 						InstanceType: &privatev1.InstanceTypeReference{Name: "standard-4-8"},
 						RunStrategy:  new("Always"),
 						SshPublicKey: new("ssh-rsa AAAA..."),
-						Image: privatev1.ComputeInstanceImage_builder{
-							SourceType: "registry",
-							SourceRef:  "quay.io/fedora/fedora:latest",
-						}.Build(),
+						DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 						BootDisk: privatev1.ComputeInstanceDisk_builder{
 							SizeGib:     20,
 							StorageTier: new("fast"),
@@ -208,8 +205,7 @@ var _ = Describe("buildSpec", func() {
 			Expect(spec.RunStrategy).To(Equal(osacv1alpha1.RunStrategyType("Always")))
 			Expect(spec.SSHKey).To(Equal("ssh-rsa AAAA..."))
 
-			Expect(string(spec.Image.SourceType)).To(Equal("registry"))
-			Expect(spec.Image.SourceRef).To(Equal("quay.io/fedora/fedora:latest"))
+			// DiskImage resolution is tested in Task 3 (OSAC-3724).
 
 			Expect(spec.BootDisk.SizeGiB).To(Equal(int32(20)))
 			Expect(spec.BootDisk.StorageTier).To(Equal("fast"))
@@ -224,186 +220,8 @@ var _ = Describe("buildSpec", func() {
 			Expect(spec.UserDataSecretRef.Name).To(Equal("test-explicit-fields-user-data"))
 		})
 
-		Describe("Guest OS Family Mapping", func() {
-			It("Maps is_windows=true to GuestOSFamily='windows'", func() {
-				ctx := context.Background()
-				ctrl := gomock.NewController(GinkgoT())
-				DeferCleanup(ctrl.Finish)
-				template := "osac.templates.ocp_virt_vm"
-
-				// Set up fake client with subnet CR
-				hubNamespace := "test-hub"
-				subnetID := "test-subnet"
-				subnetCR := &osacv1alpha1.Subnet{
-					ObjectMeta: metav1.ObjectMeta{
-						Namespace: hubNamespace,
-						Name:      "test-sn",
-						Labels:    map[string]string{labels.SubnetUuid: subnetID},
-					},
-				}
-				scheme := runtime.NewScheme()
-				Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
-				Expect(corev1.AddToScheme(scheme)).To(Succeed())
-				fakeClient := fake.NewClientBuilder().
-					WithScheme(scheme).
-					WithObjects(subnetCR).
-					Build()
-
-				mockInstanceTypesClient := NewMockInstanceTypesClient(ctrl)
-				mockInstanceTypesClient.EXPECT().
-					Get(gomock.Any(), gomock.Any()).
-					Return(privatev1.InstanceTypesGetResponse_builder{
-						Object: privatev1.InstanceType_builder{
-							Spec: privatev1.InstanceTypeSpec_builder{}.Build(),
-						}.Build(),
-					}.Build(), nil)
-
-				// Create task with is_windows=true
-				isWindows := true
-				task := &task{
-					r: &function{
-						logger:              logger,
-						instanceTypesClient: mockInstanceTypesClient,
-					},
-					computeInstance: privatev1.ComputeInstance_builder{
-						Id: "test-windows-vm",
-						Spec: privatev1.ComputeInstanceSpec_builder{
-							Template:     &privatev1.ComputeInstanceTemplateReference{Name: template},
-							InstanceType: &privatev1.InstanceTypeReference{Name: "test-type"},
-							IsWindows:    &isWindows,
-							NetworkAttachments: []*privatev1.NetworkAttachment{
-								privatev1.NetworkAttachment_builder{Subnet: &privatev1.SubnetLocalReference{Id: subnetID}}.Build(),
-							},
-						}.Build(),
-					}.Build(),
-					hubNamespace: hubNamespace,
-					hubClient:    fakeClient,
-				}
-
-				spec, err := task.buildSpec(ctx)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(spec.GuestOSFamily).To(Equal("windows"))
-			})
-
-			It("Maps is_windows=false to GuestOSFamily='linux'", func() {
-				ctx := context.Background()
-				ctrl := gomock.NewController(GinkgoT())
-				DeferCleanup(ctrl.Finish)
-				template := "osac.templates.ocp_virt_vm"
-
-				// Set up fake client with subnet CR
-				hubNamespace := "test-hub"
-				subnetID := "test-subnet"
-				subnetCR := &osacv1alpha1.Subnet{
-					ObjectMeta: metav1.ObjectMeta{
-						Namespace: hubNamespace,
-						Name:      "test-sn",
-						Labels:    map[string]string{labels.SubnetUuid: subnetID},
-					},
-				}
-				scheme := runtime.NewScheme()
-				Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
-				Expect(corev1.AddToScheme(scheme)).To(Succeed())
-				fakeClient := fake.NewClientBuilder().
-					WithScheme(scheme).
-					WithObjects(subnetCR).
-					Build()
-
-				mockInstanceTypesClient := NewMockInstanceTypesClient(ctrl)
-				mockInstanceTypesClient.EXPECT().
-					Get(gomock.Any(), gomock.Any()).
-					Return(privatev1.InstanceTypesGetResponse_builder{
-						Object: privatev1.InstanceType_builder{
-							Spec: privatev1.InstanceTypeSpec_builder{}.Build(),
-						}.Build(),
-					}.Build(), nil)
-
-				// Create task with is_windows=false
-				isWindows := false
-				task := &task{
-					r: &function{
-						logger:              logger,
-						instanceTypesClient: mockInstanceTypesClient,
-					},
-					computeInstance: privatev1.ComputeInstance_builder{
-						Id: "test-linux-vm",
-						Spec: privatev1.ComputeInstanceSpec_builder{
-							Template:     &privatev1.ComputeInstanceTemplateReference{Name: template},
-							InstanceType: &privatev1.InstanceTypeReference{Name: "test-type"},
-							IsWindows:    &isWindows,
-							NetworkAttachments: []*privatev1.NetworkAttachment{
-								privatev1.NetworkAttachment_builder{Subnet: &privatev1.SubnetLocalReference{Id: subnetID}}.Build(),
-							},
-						}.Build(),
-					}.Build(),
-					hubNamespace: hubNamespace,
-					hubClient:    fakeClient,
-				}
-
-				spec, err := task.buildSpec(ctx)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(spec.GuestOSFamily).To(Equal("linux"))
-			})
-
-			It("Maps is_windows not set (omitted) to GuestOSFamily='linux'", func() {
-				ctx := context.Background()
-				ctrl := gomock.NewController(GinkgoT())
-				DeferCleanup(ctrl.Finish)
-				template := "osac.templates.ocp_virt_vm"
-
-				// Set up fake client with subnet CR
-				hubNamespace := "test-hub"
-				subnetID := "test-subnet"
-				subnetCR := &osacv1alpha1.Subnet{
-					ObjectMeta: metav1.ObjectMeta{
-						Namespace: hubNamespace,
-						Name:      "test-sn",
-						Labels:    map[string]string{labels.SubnetUuid: subnetID},
-					},
-				}
-				scheme := runtime.NewScheme()
-				Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
-				Expect(corev1.AddToScheme(scheme)).To(Succeed())
-				fakeClient := fake.NewClientBuilder().
-					WithScheme(scheme).
-					WithObjects(subnetCR).
-					Build()
-
-				mockInstanceTypesClient := NewMockInstanceTypesClient(ctrl)
-				mockInstanceTypesClient.EXPECT().
-					Get(gomock.Any(), gomock.Any()).
-					Return(privatev1.InstanceTypesGetResponse_builder{
-						Object: privatev1.InstanceType_builder{
-							Spec: privatev1.InstanceTypeSpec_builder{}.Build(),
-						}.Build(),
-					}.Build(), nil)
-
-				// Create task WITHOUT is_windows field (omitted entirely)
-				task := &task{
-					r: &function{
-						logger:              logger,
-						instanceTypesClient: mockInstanceTypesClient,
-					},
-					computeInstance: privatev1.ComputeInstance_builder{
-						Id: "test-default-linux-vm",
-						Spec: privatev1.ComputeInstanceSpec_builder{
-							Template:     &privatev1.ComputeInstanceTemplateReference{Name: template},
-							InstanceType: &privatev1.InstanceTypeReference{Name: "test-type"},
-							// IsWindows is NOT set - omitted
-							NetworkAttachments: []*privatev1.NetworkAttachment{
-								privatev1.NetworkAttachment_builder{Subnet: &privatev1.SubnetLocalReference{Id: subnetID}}.Build(),
-							},
-						}.Build(),
-					}.Build(),
-					hubNamespace: hubNamespace,
-					hubClient:    fakeClient,
-				}
-
-				spec, err := task.buildSpec(ctx)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(spec.GuestOSFamily).To(Equal("linux"))
-			})
-		})
+		// Guest OS Family mapping tests removed — is_windows field replaced by disk_image.
+		// DiskImage → GuestOSFamily mapping will be tested in Task 3 (OSAC-3724).
 
 		It("Excludes explicit fields from spec map when not set", func() {
 			ctx := context.Background()

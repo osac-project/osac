@@ -339,10 +339,7 @@ var _ = Describe("Private compute instances server", func() {
 				},
 				SpecDefaults: privatev1.ComputeInstanceTemplateSpecDefaults_builder{
 					InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
-					Image: privatev1.ComputeInstanceImage_builder{
-						SourceType: "registry",
-						SourceRef:  "quay.io/containerdisks/fedora:latest",
-					}.Build(),
+					DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 					BootDisk: privatev1.ComputeInstanceDisk_builder{
 						SizeGib:     10,
 						StorageTier: new("standard"),
@@ -978,8 +975,7 @@ var _ = Describe("Private compute instances server", func() {
 			// Template defaults should be stored:
 			Expect(spec.GetInstanceType().GetId()).To(Equal("standard-4-16"))
 			Expect(spec.GetRunStrategy()).To(Equal("Always"))
-			Expect(spec.GetImage().GetSourceType()).To(Equal("registry"))
-			Expect(spec.GetImage().GetSourceRef()).To(Equal("quay.io/containerdisks/fedora:latest"))
+			Expect(spec.GetDiskImage().GetId()).To(Equal("test-disk-image"))
 			Expect(spec.GetBootDisk().GetSizeGib()).To(Equal(int32(10)))
 			// Template reference should be preserved:
 			Expect(spec.GetTemplate().GetId()).To(Equal("defaults-template"))
@@ -1013,8 +1009,7 @@ var _ = Describe("Private compute instances server", func() {
 			Expect(spec.GetRunStrategy()).To(Equal("Halted"))
 			// Template defaults should be stored:
 			Expect(spec.GetInstanceType().GetId()).To(Equal("standard-4-16"))
-			Expect(spec.GetImage().GetSourceType()).To(Equal("registry"))
-			Expect(spec.GetImage().GetSourceRef()).To(Equal("quay.io/containerdisks/fedora:latest"))
+			Expect(spec.GetDiskImage().GetId()).To(Equal("test-disk-image"))
 			Expect(spec.GetBootDisk().GetSizeGib()).To(Equal(int32(10)))
 		})
 
@@ -1095,10 +1090,7 @@ var _ = Describe("Private compute instances server", func() {
 					Spec: privatev1.ComputeInstanceSpec_builder{
 						Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "bare-template"}.Build(),
 						InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
-						Image: privatev1.ComputeInstanceImage_builder{
-							SourceType: "registry",
-							SourceRef:  "quay.io/containerdisks/fedora:latest",
-						}.Build(),
+						DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 						BootDisk: privatev1.ComputeInstanceDisk_builder{
 							SizeGib:     20,
 							StorageTier: new("standard"),
@@ -1148,11 +1140,8 @@ var _ = Describe("Private compute instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.ComputeInstanceSpec_builder{
-						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "partial-defaults-template"}.Build(),
-						Image: privatev1.ComputeInstanceImage_builder{
-							SourceType: "registry",
-							SourceRef:  "quay.io/containerdisks/fedora:latest",
-						}.Build(),
+						Template:  privatev1.ComputeInstanceTemplateReference_builder{Id: "partial-defaults-template"}.Build(),
+						DiskImage: &privatev1.DiskImageReference{Id: "test-disk-image"},
 						BootDisk: privatev1.ComputeInstanceDisk_builder{
 							SizeGib:     20,
 							StorageTier: new("standard"),
@@ -1173,7 +1162,7 @@ var _ = Describe("Private compute instances server", func() {
 			Expect(spec.GetInstanceType().GetId()).To(Equal("standard-4-16"))
 			Expect(spec.GetRunStrategy()).To(Equal("Always"))
 			// User-provided fields should be stored:
-			Expect(spec.GetImage().GetSourceRef()).To(Equal("quay.io/containerdisks/fedora:latest"))
+			Expect(spec.GetDiskImage().GetId()).To(Equal("test-disk-image"))
 			Expect(spec.GetBootDisk().GetSizeGib()).To(Equal(int32(20)))
 		})
 
@@ -1609,10 +1598,7 @@ var _ = Describe("Private compute instances server", func() {
 						}.Build(),
 						SpecDefaults: privatev1.ComputeInstanceTemplateSpecDefaults_builder{
 							InstanceType: privatev1.InstanceTypeReference_builder{Id: "nonexistent-instance-type"}.Build(),
-							Image: privatev1.ComputeInstanceImage_builder{
-								SourceType: "registry",
-								SourceRef:  "quay.io/containerdisks/fedora:latest",
-							}.Build(),
+							DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 							BootDisk: privatev1.ComputeInstanceDisk_builder{
 								SizeGib:     10,
 								StorageTier: new("standard"),
@@ -1680,10 +1666,7 @@ var _ = Describe("Private compute instances server", func() {
 						}.Build(),
 						SpecDefaults: privatev1.ComputeInstanceTemplateSpecDefaults_builder{
 							InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
-							Image: privatev1.ComputeInstanceImage_builder{
-								SourceType: "registry",
-								SourceRef:  "quay.io/containerdisks/fedora:latest",
-							}.Build(),
+							DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 							BootDisk: privatev1.ComputeInstanceDisk_builder{
 								SizeGib:     10,
 								StorageTier: new("standard"),
@@ -1836,10 +1819,7 @@ var _ = Describe("Private compute instances server", func() {
 				},
 				SpecDefaults: privatev1.ComputeInstanceTemplateSpecDefaults_builder{
 					InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
-					Image: privatev1.ComputeInstanceImage_builder{
-						SourceType: "registry",
-						SourceRef:  "quay.io/containerdisks/fedora:latest",
-					}.Build(),
+					DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 					BootDisk: privatev1.ComputeInstanceDisk_builder{
 						SizeGib:     10,
 						StorageTier: new("standard"),
@@ -2862,10 +2842,7 @@ var _ = Describe("Private compute instances server", func() {
 						Spec: privatev1.ComputeInstanceSpec_builder{
 							Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: templateID}.Build(),
 							InstanceType: privatev1.InstanceTypeReference_builder{Id: instanceTypeName}.Build(),
-							Image: privatev1.ComputeInstanceImage_builder{
-								SourceType: "registry",
-								SourceRef:  "quay.io/containerdisks/fedora:latest",
-							}.Build(),
+							DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 							BootDisk: privatev1.ComputeInstanceDisk_builder{
 								SizeGib:     20,
 								StorageTier: new("standard"),
@@ -2982,10 +2959,7 @@ var _ = Describe("Private compute instances server", func() {
 					},
 					SpecDefaults: privatev1.ComputeInstanceTemplateSpecDefaults_builder{
 						InstanceType: privatev1.InstanceTypeReference_builder{Id: "auto-eip-it"}.Build(),
-						Image: privatev1.ComputeInstanceImage_builder{
-							SourceType: "registry",
-							SourceRef:  "quay.io/test:latest",
-						}.Build(),
+						DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 						BootDisk: privatev1.ComputeInstanceDisk_builder{
 							SizeGib:     10,
 							StorageTier: new("standard"),

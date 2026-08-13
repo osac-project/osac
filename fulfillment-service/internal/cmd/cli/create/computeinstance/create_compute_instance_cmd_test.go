@@ -83,23 +83,23 @@ var _ = Describe("buildSpec", func() {
 		Expect(proto.Equal(spec, want)).To(BeTrue(), "spec should equal expected spec")
 	})
 
-	It("should set IsWindows when windows flag is true", func() {
+	It("should set disk_image when disk-image flag is provided", func() {
 		c := &runnerContext{}
-		c.args.windows = true
+		c.args.diskImage = "my-disk-image"
 		spec, err := c.buildSpec("tmpl", nil)
 		Expect(err).NotTo(HaveOccurred())
 
-		Expect(spec.HasIsWindows()).To(BeTrue())
-		Expect(spec.GetIsWindows()).To(BeTrue())
+		Expect(spec.HasDiskImage()).To(BeTrue())
+		Expect(spec.GetDiskImage().GetName()).To(Equal("my-disk-image"))
 	})
 
-	It("should leave IsWindows nil when windows flag is false", func() {
+	It("should leave disk_image unset when disk-image flag is empty", func() {
 		c := &runnerContext{}
-		c.args.windows = false
+		c.args.diskImage = ""
 		spec, err := c.buildSpec("tmpl", nil)
 		Expect(err).NotTo(HaveOccurred())
 
-		Expect(spec.HasIsWindows()).To(BeFalse())
+		Expect(spec.HasDiskImage()).To(BeFalse())
 	})
 })
 
@@ -141,23 +141,23 @@ var _ = Describe("buildSpecFromCatalogItem", func() {
 		Expect(err).To(HaveOccurred())
 	})
 
-	It("should set IsWindows when windows flag is true", func() {
+	It("should set disk_image when disk-image flag is provided", func() {
 		c := &runnerContext{}
-		c.args.windows = true
+		c.args.diskImage = "my-disk-image"
 		spec, err := c.buildSpecFromCatalogItem("cat-004")
 		Expect(err).NotTo(HaveOccurred())
 
-		Expect(spec.HasIsWindows()).To(BeTrue())
-		Expect(spec.GetIsWindows()).To(BeTrue())
+		Expect(spec.HasDiskImage()).To(BeTrue())
+		Expect(spec.GetDiskImage().GetName()).To(Equal("my-disk-image"))
 	})
 
-	It("should leave IsWindows nil when windows flag is false", func() {
+	It("should leave disk_image unset when disk-image flag is empty", func() {
 		c := &runnerContext{}
-		c.args.windows = false
+		c.args.diskImage = ""
 		spec, err := c.buildSpecFromCatalogItem("cat-005")
 		Expect(err).NotTo(HaveOccurred())
 
-		Expect(spec.HasIsWindows()).To(BeFalse())
+		Expect(spec.HasDiskImage()).To(BeFalse())
 	})
 })
 
@@ -197,13 +197,12 @@ var _ = Describe("Create computeinstance flag registration", func() {
 		Expect(flag.Shorthand).To(Equal("t"))
 	})
 
-	It("should register --windows flag with default value false", func() {
+	It("should register --disk-image flag", func() {
 		cmd := Cmd()
 		cmd.SetOut(GinkgoWriter)
 		cmd.SetErr(GinkgoWriter)
-		flag := cmd.Flags().Lookup("windows")
+		flag := cmd.Flags().Lookup("disk-image")
 		Expect(flag).NotTo(BeNil())
-		Expect(flag.DefValue).To(Equal("false"))
 	})
 })
 

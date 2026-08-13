@@ -26,8 +26,8 @@ columns:
   value: this.spec.template.id
   type: osac.private.v1.ComputeInstanceTemplate
 
-- header: OS
-  value: "has(this.spec.is_windows) && this.spec.is_windows ? 'windows' : 'linux'"
+- header: DISK IMAGE
+  value: "has(this.spec.disk_image) ? this.spec.disk_image.name : '-'"
 
 - header: STATE
   value: this.status.state

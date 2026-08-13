@@ -217,13 +217,22 @@ jobs:
           echo "gh not found on this runner -- installing a portable copy."
           GH_VERSION="2.97.0"
           case "$(uname -m)" in
-            x86_64) GH_ARCH="amd64" ;;
-            aarch64) GH_ARCH="arm64" ;;
+            x86_64)
+              GH_ARCH="amd64"
+              GH_SHA256="a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112"
+              ;;
+            aarch64)
+              GH_ARCH="arm64"
+              GH_SHA256="73ea440ecad9c9e284429997ee6f93577bc6f7bc6fba357ef62c53ad8fb641a5"
+              ;;
             *) echo "::error::Unsupported architecture $(uname -m) for gh CLI install"; exit 1 ;;
           esac
           mkdir -p /tmp/gh-install
           curl -sSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${GH_ARCH}.tar.gz" \
             -o /tmp/gh-install/gh.tar.gz
+          # Pinned checksum (from gh's own published gh_${GH_VERSION}_checksums.txt)
+          # -- verify before extracting, not after.
+          echo "${GH_SHA256}  /tmp/gh-install/gh.tar.gz" | sha256sum -c -
           tar xzf /tmp/gh-install/gh.tar.gz -C /tmp/gh-install --strip-components=1
           echo "/tmp/gh-install/bin" >> "$GITHUB_PATH"
 

@@ -104,7 +104,7 @@ fi
 GRAPH_JSON="${TMP_DIR}/extracted/graph.json"
 META_JSON="${TMP_DIR}/extracted/metadata.json"
 
-if [[ ! -f "${GRAPH_JSON}" ]] || ! jq -e 'has("nodes") and has("edges")' "${GRAPH_JSON}" >/dev/null 2>&1; then
+if [[ ! -f "${GRAPH_JSON}" ]] || ! jq -e 'has("nodes") and has("links")' "${GRAPH_JSON}" >/dev/null 2>&1; then
   fall_back_to_local "Downloaded graph.json is missing or malformed"
 fi
 

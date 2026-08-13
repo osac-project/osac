@@ -658,3 +658,154 @@
             fail_msg: >-
               Expected create_validate to fail when spec.cores/spec.memoryGiB
               are not set on the ComputeInstance
+
+# ──────────────────────────────────────────────────────────────
+# Test 13: GPU with count=1 produces exactly one hostDevices entry
+# Expected: vm_template_spec.domain.devices.hostDevices has 1 entry
+#           with name=gpu-0 and deviceName matching spec.gpu.resourceName
+# ──────────────────────────────────────────────────────────────
+- name: "Test ocp_virt_vm -- GPU single device produces one hostDevices entry"
+  hosts: localhost
+
+  collections:
+    - osac.templates
+
+  vars:
+    compute_instance_label: "osac.openshift.io/computeinstance"
+
+  tasks:
+    - when: test_create_gpu_single | default(false) | bool
+      block:
+        - name: Read ComputeInstance fixture with GPU (count=1)
+          ansible.builtin.set_fact:
+            compute_instance: "{{ lookup('file', 'fixtures/computeinstance-with-gpu-test.yaml') | from_yaml }}"
+
+        - name: Set compute instance name
+          ansible.builtin.set_fact:
+            compute_instance_name: "{{ compute_instance.metadata.name }}"
+
+        - name: Run create_validate to extract VM config
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: create_validate.yaml
+
+        - name: Run create_build_spec to build VM template spec
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: create_build_spec.yaml
+
+        - name: Verify exactly one hostDevices entry
+          ansible.builtin.assert:
+            that:
+              - vm_template_spec.domain.devices.hostDevices is defined
+              - vm_template_spec.domain.devices.hostDevices | length == 1
+            fail_msg: >-
+              Expected 1 hostDevices entry, got
+              {{ vm_template_spec.domain.devices.hostDevices | default([]) | length }}
+
+        - name: Verify hostDevices entry has correct name and deviceName
+          ansible.builtin.assert:
+            that:
+              - vm_template_spec.domain.devices.hostDevices[0].name == 'gpu-0'
+              - vm_template_spec.domain.devices.hostDevices[0].deviceName == 'nvidia.com/GB100'
+            fail_msg: >-
+              Expected hostDevices[0] name='gpu-0' deviceName='nvidia.com/GB100',
+              got {{ vm_template_spec.domain.devices.hostDevices[0] }}
+
+# ──────────────────────────────────────────────────────────────
+# Test 14: GPU with count=3 produces three hostDevices entries
+# Expected: vm_template_spec.domain.devices.hostDevices has 3 entries
+#           with sequential names (gpu-0, gpu-1, gpu-2) and same deviceName
+# ──────────────────────────────────────────────────────────────
+- name: "Test ocp_virt_vm -- GPU many devices produces correct hostDevices entries"
+  hosts: localhost
+
+  collections:
+    - osac.templates
+
+  vars:
+    compute_instance_label: "osac.openshift.io/computeinstance"
+
+  tasks:
+    - when: test_create_gpu_many | default(false) | bool
+      block:
+        - name: Read ComputeInstance fixture with GPU (count=3)
+          ansible.builtin.set_fact:
+            compute_instance: "{{ lookup('file', 'fixtures/computeinstance-with-many-gpu-test.yaml') | from_yaml }}"
+
+        - name: Set compute instance name
+          ansible.builtin.set_fact:
+            compute_instance_name: "{{ compute_instance.metadata.name }}"
+
+        - name: Run create_validate to extract VM config
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: create_validate.yaml
+
+        - name: Run create_build_spec to build VM template spec
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: create_build_spec.yaml
+
+        - name: Verify exactly three hostDevices entries
+          ansible.builtin.assert:
+            that:
+              - vm_template_spec.domain.devices.hostDevices is defined
+              - vm_template_spec.domain.devices.hostDevices | length == 3
+            fail_msg: >-
+              Expected 3 hostDevices entries, got
+              {{ vm_template_spec.domain.devices.hostDevices | default([]) | length }}
+
+        - name: Verify hostDevices entries have sequential names and correct deviceName
+          ansible.builtin.assert:
+            that:
+              - vm_template_spec.domain.devices.hostDevices[0].name == 'gpu-0'
+              - vm_template_spec.domain.devices.hostDevices[1].name == 'gpu-1'
+              - vm_template_spec.domain.devices.hostDevices[2].name == 'gpu-2'
+              - vm_template_spec.domain.devices.hostDevices[0].deviceName == 'nvidia.com/GB100'
+              - vm_template_spec.domain.devices.hostDevices[1].deviceName == 'nvidia.com/GB100'
+              - vm_template_spec.domain.devices.hostDevices[2].deviceName == 'nvidia.com/GB100'
+            fail_msg: >-
+              hostDevices entries incorrect: {{ vm_template_spec.domain.devices.hostDevices }}
+
+# ──────────────────────────────────────────────────────────────
+# Test 15: No GPU (spec.gpu absent) produces no hostDevices
+# Expected: vm_template_spec.domain.devices.hostDevices is not defined
+# ──────────────────────────────────────────────────────────────
+- name: "Test ocp_virt_vm -- no GPU produces no hostDevices"
+  hosts: localhost
+
+  collections:
+    - osac.templates
+
+  vars:
+    compute_instance_label: "osac.openshift.io/computeinstance"
+
+  tasks:
+    - when: test_create_no_gpu | default(false) | bool
+      block:
+        - name: Read ComputeInstance fixture without GPU
+          ansible.builtin.set_fact:
+            compute_instance: "{{ lookup('file', 'fixtures/computeinstance-defaults-test.yaml') | from_yaml }}"
+
+        - name: Set compute instance name
+          ansible.builtin.set_fact:
+            compute_instance_name: "{{ compute_instance.metadata.name }}"
+
+        - name: Run create_validate to extract VM config
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: create_validate.yaml
+
+        - name: Run create_build_spec to build VM template spec
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: create_build_spec.yaml
+
+        - name: Verify no hostDevices in template spec
+          ansible.builtin.assert:
+            that:
+              - vm_template_spec.domain.devices.hostDevices is not defined
+            fail_msg: >-
+              Expected no hostDevices when spec.gpu is absent, but found
+              {{ vm_template_spec.domain.devices.hostDevices | default('(key not present)') }}

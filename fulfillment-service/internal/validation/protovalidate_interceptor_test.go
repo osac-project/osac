@@ -539,6 +539,236 @@ var _ = Describe("Protovalidate interceptor", func() {
 		})
 	})
 
+	Describe("StorageBackend spec validation", func() {
+		BeforeEach(func() {
+			var err error
+			interceptor, err = NewProtovalidateInterceptor().
+				SetLogger(logger).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		mockHandler := func(ctx context.Context, req any) (any, error) {
+			Fail("Handler should not be called for invalid request")
+			return nil, nil
+		}
+
+		It("Rejects create request with missing spec", func() {
+			request := privatev1.StorageBackendsCreateRequest_builder{
+				Object: privatev1.StorageBackend_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "my-backend",
+					}.Build(),
+				}.Build(),
+			}.Build()
+
+			response, err := interceptor.UnaryServer(
+				context.Background(),
+				request,
+				&grpc.UnaryServerInfo{FullMethod: "/osac.private.v1.StorageBackendsService/Create"},
+				mockHandler,
+			)
+
+			Expect(err).To(HaveOccurred())
+			Expect(response).To(BeNil())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(ContainSubstring("validation failed"))
+		})
+
+		It("Rejects create request with empty provider", func() {
+			request := privatev1.StorageBackendsCreateRequest_builder{
+				Object: privatev1.StorageBackend_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "my-backend",
+					}.Build(),
+					Spec: privatev1.StorageBackendSpec_builder{
+						Provider: "",
+						Endpoint: "https://storage.example.com",
+						Credentials: privatev1.StorageBackendCredentials_builder{
+							Username: "admin",
+							Password: "secret",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build()
+
+			response, err := interceptor.UnaryServer(
+				context.Background(),
+				request,
+				&grpc.UnaryServerInfo{FullMethod: "/osac.private.v1.StorageBackendsService/Create"},
+				mockHandler,
+			)
+
+			Expect(err).To(HaveOccurred())
+			Expect(response).To(BeNil())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(ContainSubstring("validation failed"))
+		})
+
+		It("Rejects create request with empty endpoint", func() {
+			request := privatev1.StorageBackendsCreateRequest_builder{
+				Object: privatev1.StorageBackend_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "my-backend",
+					}.Build(),
+					Spec: privatev1.StorageBackendSpec_builder{
+						Provider: "ceph",
+						Endpoint: "",
+						Credentials: privatev1.StorageBackendCredentials_builder{
+							Username: "admin",
+							Password: "secret",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build()
+
+			response, err := interceptor.UnaryServer(
+				context.Background(),
+				request,
+				&grpc.UnaryServerInfo{FullMethod: "/osac.private.v1.StorageBackendsService/Create"},
+				mockHandler,
+			)
+
+			Expect(err).To(HaveOccurred())
+			Expect(response).To(BeNil())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(ContainSubstring("validation failed"))
+		})
+
+		It("Rejects create request with missing credentials", func() {
+			request := privatev1.StorageBackendsCreateRequest_builder{
+				Object: privatev1.StorageBackend_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "my-backend",
+					}.Build(),
+					Spec: privatev1.StorageBackendSpec_builder{
+						Provider: "ceph",
+						Endpoint: "https://storage.example.com",
+					}.Build(),
+				}.Build(),
+			}.Build()
+
+			response, err := interceptor.UnaryServer(
+				context.Background(),
+				request,
+				&grpc.UnaryServerInfo{FullMethod: "/osac.private.v1.StorageBackendsService/Create"},
+				mockHandler,
+			)
+
+			Expect(err).To(HaveOccurred())
+			Expect(response).To(BeNil())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(ContainSubstring("validation failed"))
+		})
+
+		It("Rejects create request with empty credentials username", func() {
+			request := privatev1.StorageBackendsCreateRequest_builder{
+				Object: privatev1.StorageBackend_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "my-backend",
+					}.Build(),
+					Spec: privatev1.StorageBackendSpec_builder{
+						Provider: "ceph",
+						Endpoint: "https://storage.example.com",
+						Credentials: privatev1.StorageBackendCredentials_builder{
+							Username: "",
+							Password: "secret",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build()
+
+			response, err := interceptor.UnaryServer(
+				context.Background(),
+				request,
+				&grpc.UnaryServerInfo{FullMethod: "/osac.private.v1.StorageBackendsService/Create"},
+				mockHandler,
+			)
+
+			Expect(err).To(HaveOccurred())
+			Expect(response).To(BeNil())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(ContainSubstring("validation failed"))
+		})
+
+		It("Rejects create request with empty credentials password", func() {
+			request := privatev1.StorageBackendsCreateRequest_builder{
+				Object: privatev1.StorageBackend_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "my-backend",
+					}.Build(),
+					Spec: privatev1.StorageBackendSpec_builder{
+						Provider: "ceph",
+						Endpoint: "https://storage.example.com",
+						Credentials: privatev1.StorageBackendCredentials_builder{
+							Username: "admin",
+							Password: "",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build()
+
+			response, err := interceptor.UnaryServer(
+				context.Background(),
+				request,
+				&grpc.UnaryServerInfo{FullMethod: "/osac.private.v1.StorageBackendsService/Create"},
+				mockHandler,
+			)
+
+			Expect(err).To(HaveOccurred())
+			Expect(response).To(BeNil())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(ContainSubstring("validation failed"))
+		})
+
+		It("Accepts valid create request", func() {
+			request := privatev1.StorageBackendsCreateRequest_builder{
+				Object: privatev1.StorageBackend_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "my-backend",
+					}.Build(),
+					Spec: privatev1.StorageBackendSpec_builder{
+						Provider: "ceph",
+						Endpoint: "https://storage.example.com",
+						Credentials: privatev1.StorageBackendCredentials_builder{
+							Username: "admin",
+							Password: "secret",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build()
+
+			handlerCalled := false
+			validHandler := func(ctx context.Context, req any) (any, error) {
+				handlerCalled = true
+				return "response", nil
+			}
+
+			response, err := interceptor.UnaryServer(
+				context.Background(),
+				request,
+				&grpc.UnaryServerInfo{FullMethod: "/osac.private.v1.StorageBackendsService/Create"},
+				validHandler,
+			)
+
+			Expect(err).ToNot(HaveOccurred())
+			Expect(handlerCalled).To(BeTrue())
+			Expect(response).To(Equal("response"))
+		})
+	})
+
 	Describe("Stream server validation", func() {
 		BeforeEach(func() {
 			var err error

@@ -345,11 +345,10 @@ var _ = Describe("Private storage backends server", func() {
 			Expect(response.GetObject().GetMetadata().GetTenant()).To(Equal(auth.SharedTenant))
 		})
 
-		Describe("Validation", func() {
-			// Field-level validation (provider, endpoint, credentials) is enforced by the
-			// protovalidate interceptor, not the server handler. Unit tests bypass the
-			// interceptor chain, so those constraints cannot be covered here.
-		})
+		// Field-level validation (provider, endpoint, credentials) is enforced by the
+		// protovalidate interceptor, not the server handler. Unit tests bypass the
+		// interceptor chain, so those constraints cannot be covered here. See
+		// internal/validation/protovalidate_interceptor_test.go for coverage.
 
 		Describe("Immutability", func() {
 			It("Update changing provider fails", func() {

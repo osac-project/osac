@@ -157,6 +157,28 @@ var _ = Describe("hidePrivateSubcommands", func() {
 		Expect(publicSub.Hidden).To(BeFalse())
 	})
 
+	It("reads config from OSAC_CONFIG env var when flag is not explicitly set", func() {
+		tmpDir := GinkgoT().TempDir()
+		err := os.WriteFile(filepath.Join(tmpDir, "config.json"), []byte(`{"private": true}`), 0600)
+		Expect(err).ToNot(HaveOccurred())
+		root.PersistentFlags().String("config", "/nonexistent", "")
+
+		original := os.Getenv("OSAC_CONFIG")
+		os.Setenv("OSAC_CONFIG", tmpDir)
+		DeferCleanup(func() {
+			if original == "" {
+				os.Unsetenv("OSAC_CONFIG")
+			} else {
+				os.Setenv("OSAC_CONFIG", original)
+			}
+		})
+
+		hidePrivateSubcommands(parent)
+
+		Expect(privateSub.Hidden).To(BeFalse())
+		Expect(publicSub.Hidden).To(BeFalse())
+	})
+
 	It("does nothing when no subcommands have private annotation", func() {
 		cmd := &cobra.Command{Use: "get"}
 		sub := &cobra.Command{Use: "cluster"}

@@ -216,6 +216,8 @@ inline code and `{{ bt 3 }}` for fenced code blocks.
 For flag help, start with a short type hint in italics (e.g. `_[BOOLEAN]_`, `_URL_`,
 `_FILE|DIRECTORY_`) followed by a dash and the description.
 
+Do not end `shortHelp` strings with a trailing period — the help template does not append one.
+
 Refer to existing commands such as `internal/cmd/cli/login/login_cmd.go` for style and examples of
 how help text is structured.
 

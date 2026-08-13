@@ -517,6 +517,27 @@ var _ = Describe("Private volumes server", func() {
 				Expect(st.Code()).To(Equal(codes.InvalidArgument))
 				Expect(st.Message()).To(ContainSubstring("access_mode"))
 			})
+
+			It("Allows update that sends unchanged spec values", func() {
+				created := createVolume()
+
+				_, err := server.Update(ctx, privatev1.VolumesUpdateRequest_builder{
+					Object: privatev1.Volume_builder{
+						Id: created.GetId(),
+						Spec: privatev1.VolumeSpec_builder{
+							StorageTier: "gold",
+							SizeGib:     100,
+							AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+						"spec.storage_tier",
+						"spec.size_gib",
+						"spec.access_mode",
+					}},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+			})
 		})
 
 		Describe("Signal", func() {

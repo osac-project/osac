@@ -161,12 +161,14 @@ func (s *PrivateVolumesServer) validateVolumeCreate(vol *privatev1.Volume) error
 
 func (s *PrivateVolumesServer) Update(ctx context.Context,
 	request *privatev1.VolumesUpdateRequest) (response *privatev1.VolumesUpdateResponse, err error) {
+	// Get the object identifier:
 	id := request.GetObject().GetId()
 	if id == "" {
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object identifier is mandatory")
 		return
 	}
 
+	// Fetch the existing object:
 	getRequest := &privatev1.VolumesGetRequest{}
 	getRequest.SetId(id)
 	var getResponse *privatev1.VolumesGetResponse
@@ -176,18 +178,32 @@ func (s *PrivateVolumesServer) Update(ctx context.Context,
 	}
 
 	existing := getResponse.GetObject()
-	merged := proto.Clone(existing).(*privatev1.Volume)
+
+	// Merge the update into a clone of the existing object:
+	merged := cloneVolume(existing)
 	applyVolumeUpdate(merged, request.GetObject(), request.GetUpdateMask())
 
-	err = validateVolumeSpecImmutability(merged, existing)
+	// Validate immutable fields:
+	err = validateVolumeImmutability(merged, existing)
 	if err != nil {
 		return
 	}
+
+	// Set the merged spec back into the request for the generic update:
+	request.GetObject().SetSpec(merged.GetSpec())
 
 	err = s.generic.Update(ctx, request, &response)
 	return
 }
 
+// cloneVolume creates a deep copy of a Volume.
+func cloneVolume(v *privatev1.Volume) *privatev1.Volume {
+	return proto.Clone(v).(*privatev1.Volume)
+}
+
+// applyVolumeUpdate applies the update fields onto the base object, respecting the field mask.
+// If no mask is provided, all fields from the update are applied.
+// Field mask paths use the spec/status prefix (e.g., "spec.storage_tier", "status.state") per API conventions.
 func applyVolumeUpdate(base, update *privatev1.Volume, mask *fieldmaskpb.FieldMask) {
 	if mask == nil || len(mask.GetPaths()) == 0 {
 		proto.Merge(base, update)
@@ -202,12 +218,18 @@ func applyVolumeUpdate(base, update *privatev1.Volume, mask *fieldmaskpb.FieldMa
 		case "spec.access_mode":
 			base.GetSpec().SetAccessMode(update.GetSpec().GetAccessMode())
 		case "spec.pvc_ref":
+			// pvc_ref is intentionally mutable: set by the CSI driver post-creation.
 			base.GetSpec().SetPvcRef(update.GetSpec().GetPvcRef())
+		default:
+			// Unknown paths are handled by the generic update layer.
 		}
 	}
 }
 
-func validateVolumeSpecImmutability(merged, existing *privatev1.Volume) error {
+// validateVolumeImmutability checks that immutable spec fields have not been changed.
+// storage_tier, size_gib, and access_mode are immutable after creation because they are
+// provisioned directly into the vendor CSI call and cannot be modified post-creation.
+func validateVolumeImmutability(merged, existing *privatev1.Volume) error {
 	if merged.GetSpec().GetStorageTier() != existing.GetSpec().GetStorageTier() {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'spec.storage_tier' is immutable and cannot be changed after creation")

@@ -128,7 +128,7 @@ func renderDiskImage(w io.Writer, di *publicv1.DiskImage) {
 	writer.Flush()
 }
 
-const shortHelp = `Describe a disk image.`
+const shortHelp = `Describe a disk image`
 
 const longHelp = `
 Describe a disk image.

@@ -180,7 +180,7 @@ func parseEnum[T ~int32](value string, mapping map[string]T, flagName string) (T
 	return result, nil
 }
 
-const shortHelp = `Create a disk image.`
+const shortHelp = `Create a disk image`
 
 const longHelp = `
 Create a disk image.

@@ -36,6 +36,7 @@ type PrivateSecretsServerBuilder struct {
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
 	secretStore       vault.SecretStore
+	hubSecretFetcher  HubSecretFetcher
 }
 
 var _ privatev1.SecretsServer = (*PrivateSecretsServer)(nil)
@@ -43,10 +44,11 @@ var _ privatev1.SecretsServer = (*PrivateSecretsServer)(nil)
 type PrivateSecretsServer struct {
 	privatev1.UnimplementedSecretsServer
 
-	logger       *slog.Logger
-	generic      *GenericServer[*privatev1.Secret]
-	secretStore  vault.SecretStore
-	tenancyLogic auth.TenancyLogic
+	logger           *slog.Logger
+	generic          *GenericServer[*privatev1.Secret]
+	secretStore      vault.SecretStore
+	hubSecretFetcher HubSecretFetcher
+	tenancyLogic     auth.TenancyLogic
 }
 
 func NewPrivateSecretsServer() *PrivateSecretsServerBuilder {
@@ -83,6 +85,11 @@ func (b *PrivateSecretsServerBuilder) SetSecretStore(value vault.SecretStore) *P
 	return b
 }
 
+func (b *PrivateSecretsServerBuilder) SetHubSecretFetcher(value HubSecretFetcher) *PrivateSecretsServerBuilder {
+	b.hubSecretFetcher = value
+	return b
+}
+
 func (b *PrivateSecretsServerBuilder) Build() (result *PrivateSecretsServer, err error) {
 	if b.logger == nil {
 		err = errors.New("logger is mandatory")
@@ -94,9 +101,10 @@ func (b *PrivateSecretsServerBuilder) Build() (result *PrivateSecretsServer, err
 	}
 
 	s := &PrivateSecretsServer{
-		logger:       b.logger,
-		secretStore:  b.secretStore,
-		tenancyLogic: b.tenancyLogic,
+		logger:           b.logger,
+		secretStore:      b.secretStore,
+		hubSecretFetcher: b.hubSecretFetcher,
+		tenancyLogic:     b.tenancyLogic,
 	}
 
 	s.generic, err = NewGenericServer[*privatev1.Secret]().
@@ -151,6 +159,21 @@ func (s *PrivateSecretsServer) Get(ctx context.Context,
 		data, fetchErr := s.secretStore.Fetch(ctx, tenant, project, name)
 		if fetchErr != nil {
 			err = vault.ToGrpcError(fetchErr)
+			return
+		}
+
+		status := obj.GetStatus()
+		if status == nil {
+			status = privatev1.SecretStatus_builder{}.Build()
+			obj.SetStatus(status)
+		}
+		status.SetResolvedData(data)
+	}
+
+	if s.hubSecretFetcher != nil && obj.GetSpec().GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_HUB {
+		data, fetchErr := s.hubSecretFetcher.Fetch(ctx, obj.GetSpec().GetCoordinates())
+		if fetchErr != nil {
+			err = fetchErr
 			return
 		}
 

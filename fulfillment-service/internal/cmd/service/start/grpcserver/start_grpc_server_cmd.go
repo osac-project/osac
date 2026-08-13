@@ -1136,6 +1136,18 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		}
 	}
 
+	// Create the hub secret fetcher for on-demand retrieval of hub-backed secrets:
+	hubLookup := servers.NewPrivateServerHubLookup(privateHubsServer)
+	hubClientFactory := servers.NewDefaultHubClientFactory(hubScheme)
+	hubSecretFetcher, err := servers.NewHubSecretFetcher().
+		SetLogger(c.logger).
+		SetHubLookup(hubLookup).
+		SetHubClientFactory(hubClientFactory).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create hub secret fetcher: %w", err)
+	}
+
 	// Create the private secrets server:
 	c.logger.InfoContext(ctx, "Creating private secrets server")
 	privateSecretsServer, err := servers.NewPrivateSecretsServer().
@@ -1144,6 +1156,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		SetAttributionLogic(privateAttributionLogic).
 		SetTenancyLogic(tenancyLogic).
 		SetMetricsRegisterer(metricsRegisterer).
+		SetHubSecretFetcher(hubSecretFetcher).
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create private secrets server: %w", err)
@@ -1158,6 +1171,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		SetAttributionLogic(publicAttributionLogic).
 		SetTenancyLogic(tenancyLogic).
 		SetMetricsRegisterer(metricsRegisterer).
+		SetHubSecretFetcher(hubSecretFetcher).
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create public secrets server: %w", err)
@@ -1539,12 +1553,11 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	publicv1.RegisterJsonWebKeySetServer(grpcServer, jsonWebKeySetServer)
 
 	// Build the console target resolver (lookup/policy only):
-	hubLookup := servers.NewPrivateServerHubLookup(privateHubsServer)
 	consoleResolver, err := servers.NewConsoleTargetResolver().
 		SetLogger(c.logger).
 		SetComputeInstanceLookup(servers.NewPrivateServerCILookup(privateComputeInstancesServer)).
 		SetHubLookup(hubLookup).
-		SetHubClientFactory(servers.NewDefaultHubClientFactory(hubScheme)).
+		SetHubClientFactory(hubClientFactory).
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create console target resolver: %w", err)

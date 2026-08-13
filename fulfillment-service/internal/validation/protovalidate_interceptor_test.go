@@ -548,11 +548,6 @@ var _ = Describe("Protovalidate interceptor", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		mockHandler := func(ctx context.Context, req any) (any, error) {
-			Fail("Handler should not be called for invalid request")
-			return nil, nil
-		}
-
 		It("Rejects create request with missing spec", func() {
 			request := privatev1.StorageBackendsCreateRequest_builder{
 				Object: privatev1.StorageBackend_builder{
@@ -561,6 +556,11 @@ var _ = Describe("Protovalidate interceptor", func() {
 					}.Build(),
 				}.Build(),
 			}.Build()
+
+			mockHandler := func(ctx context.Context, req any) (any, error) {
+				Fail("Handler should not be called for invalid request")
+				return nil, nil
+			}
 
 			response, err := interceptor.UnaryServer(
 				context.Background(),
@@ -594,6 +594,11 @@ var _ = Describe("Protovalidate interceptor", func() {
 				}.Build(),
 			}.Build()
 
+			mockHandler := func(ctx context.Context, req any) (any, error) {
+				Fail("Handler should not be called for invalid request")
+				return nil, nil
+			}
+
 			response, err := interceptor.UnaryServer(
 				context.Background(),
 				request,
@@ -626,6 +631,11 @@ var _ = Describe("Protovalidate interceptor", func() {
 				}.Build(),
 			}.Build()
 
+			mockHandler := func(ctx context.Context, req any) (any, error) {
+				Fail("Handler should not be called for invalid request")
+				return nil, nil
+			}
+
 			response, err := interceptor.UnaryServer(
 				context.Background(),
 				request,
@@ -653,6 +663,11 @@ var _ = Describe("Protovalidate interceptor", func() {
 					}.Build(),
 				}.Build(),
 			}.Build()
+
+			mockHandler := func(ctx context.Context, req any) (any, error) {
+				Fail("Handler should not be called for invalid request")
+				return nil, nil
+			}
 
 			response, err := interceptor.UnaryServer(
 				context.Background(),
@@ -686,6 +701,11 @@ var _ = Describe("Protovalidate interceptor", func() {
 				}.Build(),
 			}.Build()
 
+			mockHandler := func(ctx context.Context, req any) (any, error) {
+				Fail("Handler should not be called for invalid request")
+				return nil, nil
+			}
+
 			response, err := interceptor.UnaryServer(
 				context.Background(),
 				request,
@@ -717,6 +737,11 @@ var _ = Describe("Protovalidate interceptor", func() {
 					}.Build(),
 				}.Build(),
 			}.Build()
+
+			mockHandler := func(ctx context.Context, req any) (any, error) {
+				Fail("Handler should not be called for invalid request")
+				return nil, nil
+			}
 
 			response, err := interceptor.UnaryServer(
 				context.Background(),

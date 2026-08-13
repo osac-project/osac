@@ -91,7 +91,8 @@ var _ = Describe("Private disk images server", func() {
 			Expect(response).ToNot(BeNil())
 			object := response.GetObject()
 			Expect(object).ToNot(BeNil())
-			Expect(object.GetId()).To(Equal("fedora-41"))
+			Expect(object.GetId()).ToNot(BeEmpty())
+			Expect(object.GetId()).ToNot(Equal("fedora-41"))
 			Expect(object.GetSpec().GetLifecycle()).To(Equal(
 				privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE))
 			Expect(object.GetSpec().GetGuestOsFamily()).To(Equal(
@@ -125,6 +126,44 @@ var _ = Describe("Private disk images server", func() {
 				privatev1.GuestOSFamily_GUEST_OS_FAMILY_WINDOWS))
 			Expect(response.GetObject().GetSpec().GetLifecycle()).To(Equal(
 				privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE))
+		})
+
+		It("Allows same name across different tenants", func() {
+			response1, err := server.Create(ctx, privatev1.DiskImagesCreateRequest_builder{
+				Object: privatev1.DiskImage_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:   "fedora-41",
+						Tenant: "system",
+					}.Build(),
+					Spec: privatev1.DiskImageSpec_builder{
+						SourceType: privatev1.SourceType_SOURCE_TYPE_REGISTRY,
+						SourceRef:  "quay.io/containerdisks/fedora:41",
+						Architecture: []privatev1.Architecture{
+							privatev1.Architecture_ARCHITECTURE_AMD64,
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			response2, err := server.Create(ctx, privatev1.DiskImagesCreateRequest_builder{
+				Object: privatev1.DiskImage_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:   "fedora-41",
+						Tenant: "shared",
+					}.Build(),
+					Spec: privatev1.DiskImageSpec_builder{
+						SourceType: privatev1.SourceType_SOURCE_TYPE_REGISTRY,
+						SourceRef:  "quay.io/containerdisks/fedora:41",
+						Architecture: []privatev1.Architecture{
+							privatev1.Architecture_ARCHITECTURE_AMD64,
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			Expect(response1.GetObject().GetId()).ToNot(Equal(response2.GetObject().GetId()))
 		})
 
 		It("Rejects create with unspecified source type", func() {

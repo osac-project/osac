@@ -144,7 +144,7 @@ var _ = Describe("Disk images server", func() {
 			Expect(response.GetItems()).To(HaveLen(2))
 			names := make([]string, len(response.GetItems()))
 			for i, item := range response.GetItems() {
-				names[i] = item.GetId()
+				names[i] = item.GetMetadata().GetName()
 			}
 			Expect(names).To(ConsistOf("image-available", "image-deprecated"))
 		})
@@ -156,7 +156,7 @@ var _ = Describe("Disk images server", func() {
 			response, err := server.List(ctx, request)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(response.GetItems()).To(HaveLen(1))
-			Expect(response.GetItems()[0].GetId()).To(Equal("image-obsolete"))
+			Expect(response.GetItems()[0].GetMetadata().GetName()).To(Equal("image-obsolete"))
 		})
 
 		It("Returns DEPRECATED and OBSOLETE when user filter references lifecycle", func() {
@@ -168,7 +168,7 @@ var _ = Describe("Disk images server", func() {
 			Expect(response.GetItems()).To(HaveLen(2))
 			names := make([]string, len(response.GetItems()))
 			for i, item := range response.GetItems() {
-				names[i] = item.GetId()
+				names[i] = item.GetMetadata().GetName()
 			}
 			Expect(names).To(ConsistOf("image-deprecated", "image-obsolete"))
 		})

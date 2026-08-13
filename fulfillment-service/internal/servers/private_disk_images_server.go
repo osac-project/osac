@@ -135,8 +135,6 @@ func (s *PrivateDiskImagesServer) Create(ctx context.Context,
 		return
 	}
 
-	request.GetObject().SetId(request.GetObject().GetMetadata().GetName())
-
 	if spec.GetLifecycle() == privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_UNSPECIFIED {
 		spec.SetLifecycle(privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE)
 	}

@@ -31,7 +31,10 @@ env:
 jobs:
   refresh:
     name: Refresh and publish graph
-    runs-on: osac-ci
+    # Ephemeral GH-hosted runner is sufficient here -- this job only ever
+    # uses GITHUB_TOKEN, no Vault/self-hosted-only access. osac-ci is
+    # reserved for alert-on-repeated-failure below, which does need it.
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
       contents: write  # gh release create/upload against this same repo
@@ -52,14 +55,20 @@ jobs:
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
           path: graphify-out/
-          key: graphify-brain-cache
+          # Cache keys are immutable in GH Actions -- a static key would make
+          # every save after the first a silent no-op. Save under a per-run
+          # key and restore via restore-keys prefix match so the fast path
+          # always finds the most recent entry.
+          key: graphify-brain-cache-${{ github.run_id }}
+          restore-keys: |
+            graphify-brain-cache-
 
       - name: Re-pull last published bundle (authoritative)
         id: repull
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -uo pipefail
+          set -euo pipefail
           rm -rf /tmp/graphify-repull && mkdir -p /tmp/graphify-repull
           if gh release download "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
                --pattern 'graphify-bundle.tar.gz' --dir /tmp/graphify-repull; then
@@ -75,9 +84,14 @@ jobs:
       - name: Determine restore path taken
         id: restore-path
         run: |
+          # cache-hit is only true on an exact primary-key match, which never
+          # happens now that the save key is per-run (see restore step above)
+          # -- cache-matched-key is set on both exact and restore-keys/prefix
+          # matches, so it's the correct signal for "did the fast path find
+          # anything at all".
           if [[ "${{ steps.repull.outputs.ok }}" == "true" ]]; then
             path="artifact-repull"
-          elif [[ "${{ steps.cache.outputs.cache-hit }}" == "true" ]]; then
+          elif [[ -n "${{ steps.cache.outputs.cache-matched-key }}" ]]; then
             path="cache-hit"
           else
             path="full-rebuild"
@@ -99,7 +113,11 @@ jobs:
       - name: Write metadata.json
         run: |
           set -euo pipefail
-          graphify_version="$(graphify --version | tr -d '\n')"
+          # Extract just the bare numeric version (graphify --version prints
+          # non-numeric text too, e.g. "graphify 0.9.41") so this matches
+          # exactly what the fetch script's own version check expects to
+          # compare against -- see fetch-graphify-brain.sh's Step 5.
+          graphify_version="$(graphify --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
           generated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           jq -n \
             --arg source_sha "${GITHUB_SHA}" \
@@ -145,9 +163,17 @@ jobs:
             assets+=(graphify-obsidian-export.tar.gz)
           fi
           if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            # `gh release upload --clobber` replaces assets in place but does
+            # not move the release's own tag -- move it explicitly so
+            # graph-latest's git ref (not just metadata.json's source_sha)
+            # points at this run's commit too. `gh release edit --target`
+            # cannot move an existing tag; the Git refs API can.
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${RELEASE_TAG}" \
+              -f sha="${GITHUB_SHA}" -F force=true
             gh release upload "${RELEASE_TAG}" "${assets[@]}" --repo "${GITHUB_REPOSITORY}" --clobber
           else
             gh release create "${RELEASE_TAG}" "${assets[@]}" --repo "${GITHUB_REPOSITORY}" \
+              --target "${GITHUB_SHA}" \
               --title "graphify brain (latest)" \
               --notes "Auto-published by graphify-brain-refresh.yaml. Always points at the most recent successful run -- not a versioned release."
           fi
@@ -157,7 +183,7 @@ jobs:
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
           path: graphify-out/
-          key: graphify-brain-cache
+          key: graphify-brain-cache-${{ github.run_id }}
 
   alert-on-repeated-failure:
     name: Alert on repeated publish failure
@@ -167,6 +193,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read  # only needed to resolve the local ./.github/actions/vault-slack-webhook path
+      actions: read   # needed for `gh run list` below
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -179,13 +206,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # This job only runs when the current run already failed (if:
+          # failure() above) -- that's one confirmed failure already, and its
+          # own conclusion is still null/in-progress if queried from inside
+          # itself. Query the two prior COMPLETED runs instead and alert only
+          # if both were also failures -- 3-in-a-row once the current run is
+          # counted.
           conclusions="$(gh run list --repo "${GITHUB_REPOSITORY}" \
             --workflow graphify-brain-refresh.yaml \
-            --json conclusion --limit 3 -q '[.[].conclusion] | join(",")')"
-          echo "Last 3 run conclusions: ${conclusions}"
-          # Alert only once the last 3 runs (including this one) all failed --
-          # avoids paging on a single transient blip.
-          if [[ "${conclusions}" == "failure,failure,failure" ]]; then
+            --status completed --limit 2 \
+            --json conclusion -q '[.[].conclusion] | join(",")')"
+          echo "Prior 2 completed run conclusions: ${conclusions}"
+          if [[ "${conclusions}" == "failure,failure" ]]; then
             echo "should-alert=true" >> "$GITHUB_OUTPUT"
           else
             echo "should-alert=false" >> "$GITHUB_OUTPUT"

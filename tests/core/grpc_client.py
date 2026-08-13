@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -13,15 +14,23 @@ PRIVATE_API: str = "osac.private.v1"
 
 
 class GRPCClient:
+    _TOKEN_TTL: float = 60.0
+
     def __init__(self, *, address: str, token: str = "", token_factory: Callable[[], str] | None = None) -> None:
         self.address: str = address
         self._static_token: str = token
         self._token_factory: Callable[[], str] | None = token_factory
+        self._cached_token: str = ""
+        self._cached_at: float = 0.0
 
     @property
     def token(self) -> str:
         if self._token_factory is not None:
-            return self._token_factory()
+            now = time.monotonic()
+            if not self._cached_token or (now - self._cached_at) >= self._TOKEN_TTL:
+                self._cached_token = self._token_factory()
+                self._cached_at = now
+            return self._cached_token
         return self._static_token
 
     def _build_args(self, *, service: str, data: dict[str, Any] | None = None) -> list[str]:

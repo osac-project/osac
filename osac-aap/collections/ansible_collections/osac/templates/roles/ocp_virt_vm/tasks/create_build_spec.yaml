@@ -115,9 +115,7 @@
       domain:
         devices:
           hostDevices:
-            - name: "gpu-{{ idx }}"
-              deviceName: "{{ item.resource_name }}"
-  loop: "{{ gpu_devices | default([]) }}"
-  loop_control:
-    index_var: idx
-  when: gpu_devices | default([]) | length > 0
+            - name: "gpu-{{ item }}"
+              deviceName: "{{ compute_instance.spec.gpu.resourceName }}"
+  loop: "{{ range(compute_instance.spec.gpu.count | int) | list }}"
+  when: compute_instance.spec.gpu is defined

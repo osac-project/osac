@@ -1,13 +1,10 @@
 ---
-- name: Build desired pciHostDevices entries from gpu_devices
+- name: Build desired pciHostDevices entry from compute_instance.spec.gpu
   ansible.builtin.set_fact:
-    desired_pci_host_devices: >-
-      [{% for dev in gpu_devices %}
-        {"pciDeviceSelector": "{{ dev.pci_device_selector }}",
-         "resourceName": "{{ dev.resource_name }}"}
-        {{ "," if not loop.last }}
-      {% endfor %}]
-  when: gpu_devices | default([]) | length > 0
+    desired_pci_host_devices:
+      - pciDeviceSelector: "{{ compute_instance.spec.gpu.pciDeviceSelector }}"
+        resourceName: "{{ compute_instance.spec.gpu.resourceName }}"
+  when: compute_instance.spec.gpu is defined
 
 - name: Read current HyperConverged CR (v1)
   kubernetes.core.k8s_info:
@@ -18,7 +15,7 @@
     namespace: openshift-cnv
   register: hyperconverged_cr_v1
   ignore_errors: true
-  when: gpu_devices | default([]) | length > 0
+  when: compute_instance.spec.gpu is defined
 
 - name: Read current HyperConverged CR (v1beta1 fallback)
   kubernetes.core.k8s_info:
@@ -29,7 +26,7 @@
     namespace: openshift-cnv
   register: hyperconverged_cr_v1beta1
   when:
-    - gpu_devices | default([]) | length > 0
+    - compute_instance.spec.gpu is defined
     - hyperconverged_cr_v1 is failed or (hyperconverged_cr_v1.resources | default([]) | length == 0)
 
 - name: Select HyperConverged CR read result
@@ -49,7 +46,7 @@
          if not (hyperconverged_cr_v1 is failed)
            and (hyperconverged_cr_v1.resources | default([]) | length > 0)
          else (hyperconverged_cr_v1beta1.resources[0].spec.virtualization is defined) }}
-  when: gpu_devices | default([]) | length > 0
+  when: compute_instance.spec.gpu is defined
 
 - name: Compute merged pciHostDevices preserving existing entries
   ansible.builtin.set_fact:
@@ -67,7 +64,7 @@
       {{ desired_pci_host_devices
          | rejectattr('pciDeviceSelector', 'in', _existing_selectors)
          | list }}
-  when: gpu_devices | default([]) | length > 0
+  when: compute_instance.spec.gpu is defined
 
 - name: Patch HyperConverged CR with merged pciHostDevices (virtualization path)
   kubernetes.core.k8s:
@@ -83,7 +80,7 @@
           permittedHostDevices:
             pciHostDevices: "{{ merged_pci_host_devices }}"
   when:
-    - gpu_devices | default([]) | length > 0
+    - compute_instance.spec.gpu is defined
     - hyperconverged_pci_devices_use_virtualization | bool
 
 - name: Patch HyperConverged CR with merged pciHostDevices (legacy path)
@@ -99,5 +96,5 @@
         permittedHostDevices:
           pciHostDevices: "{{ merged_pci_host_devices }}"
   when:
-    - gpu_devices | default([]) | length > 0
+    - compute_instance.spec.gpu is defined
     - not hyperconverged_pci_devices_use_virtualization | bool

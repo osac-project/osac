@@ -33,7 +33,7 @@ message StorageBackend {
   Metadata metadata = 2;
 
   // Desired configuration of the storage backend (user-modifiable).
-  StorageBackendSpec spec = 3;
+  StorageBackendSpec spec = 3 [(buf.validate.field).required = true];
 
   // Current operational status of the storage backend.
   StorageBackendStatus status = 4;

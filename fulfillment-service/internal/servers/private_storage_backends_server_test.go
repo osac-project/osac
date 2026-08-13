@@ -450,7 +450,7 @@ var _ = Describe("Private storage backends server", func() {
 				st, ok := status.FromError(err)
 				Expect(ok).To(BeTrue())
 				Expect(st.Code()).To(Equal(codes.InvalidArgument))
-				Expect(st.Message()).To(ContainSubstring("credentials.username"))
+				Expect(st.Message()).To(ContainSubstring("credentials"))
 			})
 		})
 

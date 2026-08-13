@@ -15,6 +15,7 @@ syntax = "proto3";
 
 package osac.private.v1;
 
+import "buf/validate/validate.proto";
 import "osac/private/v1/metadata_type.proto";
 
 // Represents a registered storage backend in the OSAC platform.
@@ -43,25 +44,25 @@ message StorageBackendSpec {
   // Storage provider identifier. For example: "vast", "ceph", "pure".
   //
   // This value is immutable once the StorageBackend is created.
-  string provider = 1;
+  string provider = 1 [(buf.validate.field).string.min_len = 1];
 
   // Human-readable description of the storage backend.
   string description = 2;
 
   // Management endpoint for the storage array. Accepts a URL or host:port format.
-  string endpoint = 3;
+  string endpoint = 3 [(buf.validate.field).string.min_len = 1];
 
   // Credentials for authenticating with the storage management API.
-  StorageBackendCredentials credentials = 4;
+  StorageBackendCredentials credentials = 4 [(buf.validate.field).required = true];
 }
 
 // Credentials for authenticating with a storage backend's management API.
 message StorageBackendCredentials {
   // Username for storage management API authentication.
-  string username = 1;
+  string username = 1 [(buf.validate.field).string.min_len = 1];
 
   // Password for storage management API authentication.
-  string password = 2;
+  string password = 2 [(buf.validate.field).string.min_len = 1];
 }
 
 // Represents the current operational state of a StorageBackend.

@@ -195,27 +195,8 @@ func (s *PrivateStorageBackendsServer) Delete(ctx context.Context,
 func (s *PrivateStorageBackendsServer) validateStorageBackendCreate(_ context.Context,
 	sb *privatev1.StorageBackend) error {
 
-	if sb == nil {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, "storage backend is mandatory")
-	}
 	if sb.GetMetadata() == nil || sb.GetMetadata().GetName() == "" {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'metadata.name' is required")
-	}
-	spec := sb.GetSpec()
-	if spec == nil {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec' is required")
-	}
-	if spec.GetProvider() == "" {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.provider' is required")
-	}
-	if spec.GetEndpoint() == "" {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.endpoint' is required")
-	}
-	if spec.GetCredentials() == nil || spec.GetCredentials().GetUsername() == "" {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.credentials.username' is required")
-	}
-	if spec.GetCredentials().GetPassword() == "" {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.credentials.password' is required")
 	}
 	return nil
 }

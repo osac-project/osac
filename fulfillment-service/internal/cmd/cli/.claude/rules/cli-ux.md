@@ -1,6 +1,6 @@
 # CLI UX Guidelines
 
-The OSAC CLI is a tenant-facing tool for managing infrastructure resources. It is NOT a Kubernetes admin tool - end users should not need to know k8s.
+The OSAC CLI (`internal/cmd/cli/`) is a tenant-facing tool for managing infrastructure resources. It is NOT a Kubernetes admin tool - end users should not need to know k8s.
 
 ## Design Inspiration
 
@@ -10,7 +10,7 @@ The OSAC CLI is a tenant-facing tool for managing infrastructure resources. It i
 
 ## Existing Verbs
 
-`create`, `get`, `describe`, `edit`, `delete`, `annotate`, `label`, `login`, `logout`, `lookup`, `console`, `whoami`, `version`
+`create`, `get`, `describe`, `edit`, `delete`, `annotate`, `label`, `login`, `logout`, `console`, `scale`, `tenant`, `whoami`, `version`
 
 ## When Adding New CLI Commands
 

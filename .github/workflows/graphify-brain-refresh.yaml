@@ -194,7 +194,7 @@ jobs:
     name: Alert on repeated publish failure
     needs: refresh
     if: failure()
-    runs-on: osac-ci
+    runs-on: graphify-builder
     timeout-minutes: 10
     permissions:
       contents: read  # only needed to resolve the local ./.github/actions/vault-slack-webhook path

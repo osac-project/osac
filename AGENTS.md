@@ -40,3 +40,20 @@ fulfillment-service (proto)
 ```
 
 For deployment coordination (image tags, submodules), see `osac-installer/AGENTS.md`.
+
+## Knowledge Graph (graphify brain)
+
+CI keeps a structural code graph of this mono-repo fresh (`.github/workflows/graphify-brain-refresh.yaml`) and a `SessionStart` hook (`.claude/hooks/fetch-graphify-brain.sh`) pulls the latest published bundle into `graphify-out/` automatically at the start of every session — no manual step, and it fails open (falls back to normal cold exploration with a one-line warning) if the fetch fails or the graph is unavailable.
+
+To actually make use of the fetched graph, `graphify` itself needs to be installed once per developer machine:
+
+```bash
+uv tool install graphifyy   # recommended
+# or: pipx install graphifyy
+```
+
+Note the package name is `graphifyy` (double "y") — the CLI command itself is `graphify`, not a typo.
+
+Once installed, run `graphify claude install` once per checkout. This installs the `## graphify` CLAUDE.md directive and PreToolUse hook that make Claude Code actually consult the graph before Glob/Grep calls — the fetch hook above only keeps the graph's *data* current, it doesn't install the consumption side. **This has not been run against this repo yet** (no `graphify` binary was available to generate and verify its real output while wiring up the fetch pipeline) — whoever runs it first should commit the resulting CLAUDE.md/`.claude/settings.json` changes so the whole team inherits them, the same way this repo's other shared Claude Code configuration is committed.
+
+Do **not** run `graphify hook install` or `graphify --watch` in this repo — those enable local-generation automation that rebuilds the graph from your own uncommitted local state, which would clobber the CI-fetched, org-wide graph with an incomplete single-machine view. Generation is centralized in CI by design.

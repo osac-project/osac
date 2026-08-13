@@ -102,13 +102,26 @@ jobs:
       - name: Extract or update graph
         run: |
           set -euo pipefail
+          # `update` has no --code-only flag (it's already a no-LLM,
+          # code-only re-extraction by design -- confirmed directly against
+          # the real installed CLI, `graphify update --code-only` errors
+          # with "unknown update option"). Only `extract` accepts it.
           if [[ -f graphify-out/graph.json && -f graphify-out/manifest.json ]]; then
             echo "Prior graph found -- running incremental update."
-            graphify update . --code-only
+            graphify update .
           else
             echo "No usable prior graph -- running full extraction."
             graphify extract . --code-only
           fi
+          # Neither extract nor update reliably writes GRAPH_REPORT.md on
+          # its own -- confirmed directly: a fresh `extract` explicitly
+          # prints "next: run `graphify cluster-only <path>` to generate
+          # GRAPH_REPORT.md and name communities" and does not write it,
+          # while `update` sometimes does and sometimes doesn't depending
+          # on what changed. Run cluster-only unconditionally so the report
+          # this workflow bundles always actually exists -- confirmed
+          # idempotent/safe to run even when update already produced one.
+          graphify cluster-only .
 
       - name: Write metadata.json
         run: |
@@ -199,6 +212,33 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+
+      # osac-ci is a self-hosted runner pool, not GH-hosted ubuntu-latest --
+      # confirmed directly (first real production run) that gh isn't
+      # preinstalled on at least one instance in the pool ("gh: command not
+      # found"), unlike ubuntu-latest where it's always present. Installing
+      # a portable copy here makes this job self-sufficient regardless of
+      # which pool instance it lands on, rather than depending on
+      # runner-fleet provisioning this workflow doesn't control.
+      - name: Ensure gh CLI is available
+        run: |
+          set -euo pipefail
+          if command -v gh >/dev/null 2>&1; then
+            echo "gh already available: $(gh --version | head -1)"
+            exit 0
+          fi
+          echo "gh not found on this runner -- installing a portable copy."
+          GH_VERSION="2.97.0"
+          case "$(uname -m)" in
+            x86_64) GH_ARCH="amd64" ;;
+            aarch64) GH_ARCH="arm64" ;;
+            *) echo "::error::Unsupported architecture $(uname -m) for gh CLI install"; exit 1 ;;
+          esac
+          mkdir -p /tmp/gh-install
+          curl -sSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${GH_ARCH}.tar.gz" \
+            -o /tmp/gh-install/gh.tar.gz
+          tar xzf /tmp/gh-install/gh.tar.gz -C /tmp/gh-install --strip-components=1
+          echo "/tmp/gh-install/bin" >> "$GITHUB_PATH"
 
       - name: Check recent run history
         id: history

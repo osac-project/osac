@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "file_path=$(cat - | jq -r '.tool_input.file_path // .tool_input.filePath // empty') && case \"$file_path\" in *.proto) cd \"$CLAUDE_PROJECT_DIR\" && buf lint && buf generate ;; *go.mod) cd \"$CLAUDE_PROJECT_DIR\" && go mod tidy ;; esac"
+            "command": "file_path=$(cat - | jq -r '.tool_input.file_path // .tool_input.filePath // empty') && case \"$file_path\" in *.proto) cd \"$CLAUDE_PROJECT_DIR\" && uv run dev.py lint proto && buf generate ;; *go.mod) cd \"$CLAUDE_PROJECT_DIR\" && go mod tidy ;; esac"
           }
         ]
       }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cmd=$(cat - | jq -r '.tool_input.command // empty') && case \"$cmd\" in *'git commit'*) cd \"$CLAUDE_PROJECT_DIR\" && buf lint ;; *'gh pr create'*) cd \"$CLAUDE_PROJECT_DIR\" && gofmt -s -w . && test -z \\\"$(git diff --name-only)\\\" && buf lint && ginkgo run -r internal ;; esac"
+            "command": "cmd=$(cat - | jq -r '.tool_input.command // empty') && case \"$cmd\" in *'git commit'*) cd \"$CLAUDE_PROJECT_DIR\" && uv run dev.py lint proto ;; *'gh pr create'*) cd \"$CLAUDE_PROJECT_DIR\" && gofmt -s -w . && test -z \\\"$(git diff --name-only)\\\" && uv run dev.py lint proto && ginkgo run -r internal ;; esac"
           }
         ]
       }

@@ -38,9 +38,9 @@
         that:
           - vm_template_spec is defined
           - vm_template_spec.domain.devices.hostDevices is defined
-          - vm_template_spec.domain.devices.hostDevices | length == 1
+          - vm_template_spec.domain.devices.hostDevices | length == (test_compute_instance.spec.gpu.count | int)
           - vm_template_spec.domain.devices.hostDevices[0].name == 'gpu-0'
-          - vm_template_spec.domain.devices.hostDevices[0].deviceName == 'nvidia.com/GB100'
+          - vm_template_spec.domain.devices.hostDevices[0].deviceName == test_compute_instance.spec.gpu.resourceName
         fail_msg: "GPU devices not found in VM template spec: {{ vm_template_spec }}"
 
     - name: Read HyperConverged CR
@@ -71,8 +71,8 @@
         hc_matching_gpu_devices: >-
           {{
             hc_pci_host_devices
-            | selectattr('pciDeviceSelector', 'equalto', '10DE:2901')
-            | selectattr('resourceName', 'equalto', 'nvidia.com/GB100')
+            | selectattr('pciDeviceSelector', 'equalto', test_compute_instance.spec.gpu.pciDeviceSelector)
+            | selectattr('resourceName', 'equalto', test_compute_instance.spec.gpu.resourceName)
             | list
           }}
 

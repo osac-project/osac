@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from collections.abc import Callable
 from typing import Any
 
 from tests.core.runner import run, run_unchecked
@@ -12,9 +13,16 @@ PRIVATE_API: str = "osac.private.v1"
 
 
 class GRPCClient:
-    def __init__(self, *, address: str, token: str) -> None:
+    def __init__(self, *, address: str, token: str = "", token_factory: Callable[[], str] | None = None) -> None:
         self.address: str = address
-        self.token: str = token
+        self._static_token: str = token
+        self._token_factory: Callable[[], str] | None = token_factory
+
+    @property
+    def token(self) -> str:
+        if self._token_factory is not None:
+            return self._token_factory()
+        return self._static_token
 
     def _build_args(self, *, service: str, data: dict[str, Any] | None = None) -> list[str]:
         args: list[str] = ["grpcurl", "-insecure", "-H", f"Authorization: Bearer {self.token}"]

@@ -105,15 +105,16 @@ jobs:
         echo "Nightly version: ${VERSION} (base: ${BASE_VERSION})"
 
     - name: Stamp and package sub-charts
+      env:
+        NIGHTLY_VERSION: ${{ steps.version.outputs.version }}
       run: |
         set -euo pipefail
 
         # Ensure target packaging directory exists
         mkdir -p ./packaged-charts
 
-        NIGHTLY_SUFFIX="${{ steps.version.outputs.version }}"
         # Extract just the nightly suffix portion (.nightly.YYYYMMDD...)
-        SUFFIX_ONLY="${NIGHTLY_SUFFIX#*-}"
+        SUFFIX_ONLY="${NIGHTLY_VERSION#*-}"
 
         # Define sub-component map (component_dir -> chart_paths)
         declare -A SUB_CHARTS=(

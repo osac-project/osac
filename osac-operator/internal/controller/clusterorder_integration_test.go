@@ -198,7 +198,6 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 			result, err := reconciler.handleDeprovisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(statusPollInterval))
-			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
 
 			job := provisioning.FindLatestJobByType(instance.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision)
 			Expect(job).NotTo(BeNil())
@@ -212,6 +211,73 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 			Expect(result.RequeueAfter).To(BeZero(), "should proceed with deletion")
 		})
 
+		It("should detect non-terminal deprovision job via API server (stale cache guard)", func() {
+			const name = "cluster-order-deprovision-stale-guard"
+			instance := newTestClusterOrder(name)
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, instance) })
+
+			// First reconcile triggers deprovision; statusFlush persists the job to the API server
+			result, err := reconciler.handleDeprovisioning(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(statusPollInterval))
+
+			// Simulate stale cache: in-memory object has no deprovision jobs
+			staleInstance := &osacv1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      name,
+					Namespace: clusterOrderTestNamespace,
+				},
+			}
+
+			// CheckAPIServerForNonTerminalDeprovisionJob should read the API server
+			// and find the pending deprovision job that the stale cache missed
+			detected := provisioning.CheckAPIServerForNonTerminalDeprovisionJob(
+				ctx, k8sClient, client.ObjectKeyFromObject(staleInstance),
+				&osacv1alpha1.ClusterOrder{},
+				func(obj client.Object) []osacv1alpha1.JobStatus {
+					return obj.(*osacv1alpha1.ClusterOrder).Status.ProvisioningJobs
+				},
+			)
+			Expect(detected).To(BeTrue(), "should detect non-terminal deprovision job via API server")
+		})
+
+		It("should not trigger duplicate deprovision jobs on rapid reconciles (race condition guard)", func() {
+			const name = "cluster-order-deprovision-no-duplicate"
+			instance := newTestClusterOrder(name)
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, instance) })
+
+			// Reconciliation A: triggers deprovision; statusFlush persists the job
+			result, err := reconciler.handleDeprovisioning(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(statusPollInterval))
+
+			// Verify server has the deprovision job persisted by statusFlush
+			serverInstance := getClusterOrder(name)
+			job := provisioning.FindLatestJobByType(serverInstance.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision)
+			Expect(job).NotTo(BeNil(), "statusFlush should have persisted the deprovision job")
+
+			// Reconciliation B: informer cache hasn't caught up — sees no jobs
+			staleInstance := newTestClusterOrder(name)
+
+			// handleDeprovisioning should detect the in-flight job via checkAPIServer
+			// and requeue instead of triggering a duplicate
+			result, err = reconciler.handleDeprovisioning(ctx, staleInstance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(statusPollInterval), "should requeue instead of triggering duplicate")
+
+			// Verify still exactly one deprovision job on the server
+			serverInstance = getClusterOrder(name)
+			deprovisionCount := 0
+			for _, j := range serverInstance.Status.ProvisioningJobs {
+				if j.Type == osacv1alpha1.JobTypeDeprovision {
+					deprovisionCount++
+				}
+			}
+			Expect(deprovisionCount).To(Equal(1), "should have exactly one deprovision job, not duplicates")
+		})
+
 		It("should block deletion when deprovision fails with BlockDeletionOnFailure", func() {
 			const name = "cluster-order-deprovision-blocked"
 			instance := newTestClusterOrder(name)
@@ -220,7 +286,6 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 
 			_, err := reconciler.handleDeprovisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
 
 			provider.setDeprovisionJobState(osacv1alpha1.JobStateFailed, "Cleanup failed")
 			instance = getClusterOrder(name)

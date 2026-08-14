@@ -121,9 +121,9 @@ jobs:
         # Components without a release tag yet (currently osac-metering and
         # osac-csi-driver) are skipped here with a ::warning:: — they are not
         # published to GHCR until their first <component>/vX.Y.Z tag exists. The
-        # umbrella chart still lists them as conditional file:// dependencies; when
-        # enabled in values, helm dependency build resolves them from the local
-        # checkout at their Chart.yaml placeholder versions (not nightly-stamped).
+        # umbrella chart still embeds them via file:// at Chart.yaml placeholder
+        # versions (0.0.0); installs work, but those sub-charts are not
+        # independently pullable from the OCI registry until published.
         declare -A SUB_CHARTS=(
           ["osac-operator"]="osac-operator/charts/operator osac-operator/charts/operator-crds"
           ["fulfillment-service"]="fulfillment-service/charts/service"
@@ -133,7 +133,7 @@ jobs:
           ["osac-csi-driver"]="osac-csi-driver/charts/csi-driver osac-csi-driver/charts/csi-backends"
         )
 
-        for COMPONENT in "${!SUB_CHARTS[@]}"; do
+        for COMPONENT in $(printf '%s\n' "${!SUB_CHARTS[@]}" | sort); do
           if ! BASE_TAG=$(resolve_release_tag . "${COMPONENT}"); then
             echo "::warning::Skipping ${COMPONENT} sub-charts — no ${COMPONENT}/vX.Y.Z release tag found yet"
             continue

@@ -145,10 +145,14 @@ jobs:
                 # Push individual sub-chart to OCI registry (GHCR)
                 CHART_NAME=$(yq eval '.name' "${CHART_DIR}/Chart.yaml")
                 helm push "./packaged-charts/${CHART_NAME}-${SUB_VERSION}.tgz" "oci://${REGISTRY}/${CHARTS_REPO}"
+              else
+                echo "::error::Chart manifest '${CHART_DIR}/Chart.yaml' not found!"
+                exit 1
               fi
             done
           else
-            echo "WARNING: ${COMPONENT}/version not found, skipping..."
+            echo "::error::Version file '${COMPONENT}/version' missing for component '${COMPONENT}'! Aborting build."
+            exit 1
           fi
         done
 
@@ -156,9 +160,11 @@ jobs:
       working-directory: osac-installer
       run: |
         set -euo pipefail
-        # Update local file:// dependency version constraints to >=0.0.0-0
+        # Update local file:// dependency version constraints to >=0.0.0-0 using documented regex matching
         # so Helm SemVer matching permits nightly pre-release sub-chart versions
-        yq eval -i '(.dependencies[] | select(.repository == "file://*") | .version) = ">=0.0.0-0"' charts/osac/Chart.yaml
+        # Note: Dynamic yq rewrite acts as CI safeguard in case static Chart.yaml constraints are modified.
+        # Uses documented regex test("^file://") instead of glob syntax for yq version stability.
+        yq eval -i '(.dependencies[] | select(.repository | test("^file://")) | .version) = ">=0.0.0-0"' charts/osac/Chart.yaml
         helm dependency build charts/osac/
 
     - name: Lint chart

@@ -153,13 +153,13 @@ See `README.md` for complete script documentation. Most commonly used:
 - **oc.sh** -- Wraps `oc` with `--as` impersonation when `OC_IMPERSONATE` is set
 - **refresh-after-snapshot.py** -- Refreshes Helm-deployed cluster after booting from cold snapshot
 - **setup-caas-agents.sh** -- Sets up CaaS agent infrastructure (InfraEnv + agent VM + label + approve)
-- **lib.sh** -- Shared shell functions: `retry_until`, `wait_for_resource`, `wait_for_namespace_cleanup`, `retry_command`, `http_retry`, `http_json`, `resolve_release_tag`, `check_postgres_prerequisites`
+- **lib.sh** -- Shared shell functions: `retry_until`, `wait_for_resource`, `wait_for_namespace_cleanup`, `retry_command`, `http_retry`, `http_json`, `resolve_release_tag(path, [tag_prefix])` (nearest `<prefix>/vX.Y.Z` git tag; default prefix `osac`), `check_postgres_prerequisites`
 
 ### CI Workflows
 
 GitHub Actions only discovers workflows under the repo root's `.github/workflows/`,
 so osac-installer-specific CI now lives there (not under `osac-installer/.github/`):
-`nightly-build.yaml` (nightly umbrella chart build+publish, tested via e2e against
+`nightly-build.yaml` (nightly build: versions and publishes per-component sub-charts to GHCR, then builds and publishes the umbrella chart; tested via e2e against
 the current commit directly -- no submodule bump step) and
 `publish-osac-installer-chart.yaml` (manual-dispatch umbrella chart release; takes
 one mono-repo release `version` plus an independent `ui_version` for osac-ui).

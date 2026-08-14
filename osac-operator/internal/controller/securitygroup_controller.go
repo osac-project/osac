@@ -289,7 +289,16 @@ func (r *SecurityGroupReconciler) handleDeprovisioning(ctx context.Context, sg *
 		return ctrl.Result{}, nil
 	}
 	result, done, err := provisioning.RunDeprovisioningLifecycle(ctx, r.ProvisioningProvider, sg,
-		&sg.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval)
+		&sg.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval,
+		func() bool {
+			return provisioning.CheckAPIServerForNonTerminalDeprovisionJob(ctx, r.APIReader, client.ObjectKeyFromObject(sg), &v1alpha1.SecurityGroup{}, func(obj client.Object) []v1alpha1.JobStatus {
+				return obj.(*v1alpha1.SecurityGroup).Status.ProvisioningJobs
+			})
+		},
+		func() error {
+			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(sg), sg.Status)
+		},
+	)
 	if err != nil || !done {
 		return result, err
 	}

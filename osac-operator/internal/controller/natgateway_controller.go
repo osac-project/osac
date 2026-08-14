@@ -284,7 +284,16 @@ func (r *NATGatewayReconciler) handleDeprovisioning(ctx context.Context, natgw *
 		return ctrl.Result{}, nil
 	}
 	result, done, err := provisioning.RunDeprovisioningLifecycle(ctx, r.ProvisioningProvider, natgw,
-		&natgw.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval)
+		&natgw.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval,
+		func() bool {
+			return provisioning.CheckAPIServerForNonTerminalDeprovisionJob(ctx, r.APIReader, client.ObjectKeyFromObject(natgw), &v1alpha1.NATGateway{}, func(obj client.Object) []v1alpha1.JobStatus {
+				return obj.(*v1alpha1.NATGateway).Status.ProvisioningJobs
+			})
+		},
+		func() error {
+			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(natgw), natgw.Status)
+		},
+	)
 	if err != nil || !done {
 		return result, err
 	}

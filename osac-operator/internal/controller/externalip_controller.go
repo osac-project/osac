@@ -377,7 +377,17 @@ func (r *ExternalIPReconciler) handleDeprovisioning(ctx context.Context, externa
 		return ctrl.Result{}, nil
 	}
 	result, done, err := provisioning.RunDeprovisioningLifecycle(ctx, r.ProvisioningProvider, externalIP,
-		&externalIP.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval)
+		&externalIP.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval,
+		func() bool {
+			return provisioning.CheckAPIServerForNonTerminalDeprovisionJob(
+				ctx, r.APIReader, client.ObjectKeyFromObject(externalIP), &v1alpha1.ExternalIP{}, func(obj client.Object) []v1alpha1.JobStatus {
+					return obj.(*v1alpha1.ExternalIP).Status.ProvisioningJobs
+				})
+		},
+		func() error {
+			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(externalIP), externalIP.Status)
+		},
+	)
 	if err != nil || !done {
 		return result, err
 	}

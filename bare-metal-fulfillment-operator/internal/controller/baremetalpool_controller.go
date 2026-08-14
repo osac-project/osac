@@ -558,6 +558,7 @@ func (r *BareMetalPoolReconciler) reconcileDeprovisioning(ctx context.Context, b
 	result, done, err := provisioning.RunDeprovisioningLifecycle(
 		ctx, r.provider, bareMetalPool,
 		&bareMetalPool.Status.ProvisioningJobs, r.MaxJobHistory, r.ProvisionJobPollIntervalDuration,
+		nil, nil,
 	)
 	// DeprovisionSkipped is represented as !done + zero result + nil error; treat as done.
 	if !done && result.IsZero() && err == nil {

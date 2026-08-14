@@ -380,7 +380,16 @@ func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, in
 	}
 
 	result, done, err := provisioning.RunDeprovisioningLifecycle(ctx, r.ProvisioningProvider, instance,
-		&instance.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval)
+		&instance.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval,
+		func() bool {
+			return provisioning.CheckAPIServerForNonTerminalDeprovisionJob(ctx, r.mgr.GetLocalManager().GetAPIReader(), client.ObjectKeyFromObject(instance), &v1alpha1.ComputeInstance{}, func(obj client.Object) []v1alpha1.JobStatus {
+				return obj.(*v1alpha1.ComputeInstance).Status.ProvisioningJobs
+			})
+		},
+		func() error {
+			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(instance), instance.Status)
+		},
+	)
 	if err != nil || !done {
 		return result, err
 	}

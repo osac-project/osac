@@ -883,7 +883,17 @@ func (r *ExternalIPAttachmentReconciler) handleDeprovisioning(ctx context.Contex
 		return ctrl.Result{}, nil
 	}
 	result, done, err := provisioning.RunDeprovisioningLifecycle(ctx, r.ProvisioningProvider, attachment,
-		&attachment.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval)
+		&attachment.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval,
+		func() bool {
+			return provisioning.CheckAPIServerForNonTerminalDeprovisionJob(
+				ctx, r.APIReader, client.ObjectKeyFromObject(attachment), &v1alpha1.ExternalIPAttachment{}, func(obj client.Object) []v1alpha1.JobStatus {
+					return obj.(*v1alpha1.ExternalIPAttachment).Status.ProvisioningJobs
+				})
+		},
+		func() error {
+			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(attachment), attachment.Status)
+		},
+	)
 	if err != nil || !done {
 		return result, err
 	}

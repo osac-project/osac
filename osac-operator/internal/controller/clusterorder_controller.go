@@ -616,7 +616,16 @@ func (r *ClusterOrderReconciler) handleDeprovisioning(ctx context.Context, insta
 		return ctrl.Result{}, nil
 	}
 	result, done, err := provisioning.RunDeprovisioningLifecycle(ctx, r.ProvisioningProvider, instance,
-		&instance.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval)
+		&instance.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval,
+		func() bool {
+			return provisioning.CheckAPIServerForNonTerminalDeprovisionJob(ctx, r.apiReader, client.ObjectKeyFromObject(instance), &v1alpha1.ClusterOrder{}, func(obj client.Object) []v1alpha1.JobStatus {
+				return obj.(*v1alpha1.ClusterOrder).Status.ProvisioningJobs
+			})
+		},
+		func() error {
+			return r.patchStatusWithRetry(ctx, client.ObjectKeyFromObject(instance), instance.Status)
+		},
+	)
 	if err != nil || !done {
 		return result, err
 	}

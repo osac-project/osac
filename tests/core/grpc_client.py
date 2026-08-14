@@ -176,12 +176,25 @@ class GRPCClient:
 
     # Tenant operations
 
-    def ensure_tenant(self, *, name: str) -> None:
-        try:
-            self.call(service=f"{PRIVATE_API}.Tenants/Create", data={"object": {"metadata": {"name": name}}})
-        except subprocess.CalledProcessError as e:
-            output = (e.stdout or "") + (e.stderr or "")
-            if not re.search(r"Code:\s*AlreadyExists", output):
+    def ensure_tenant(self, *, name: str, retries: int = 10, delay: int = 5) -> None:
+        # OSAC-3553: retry the transient `code = Unavailable` / connection-refused
+        # transport failure the first call can hit after `helm --wait` returns,
+        # before the route converges. AlreadyExists is idempotent success; any
+        # other error still fails fast. Note the two error shapes are matched
+        # differently: a completed RPC prints grpcurl's `Code: <Name>` block
+        # (AlreadyExists), while a transport failure prints the Go status string
+        # `code = Unavailable desc = ...` -- see tests/vmaas/external_ip/conftest.py.
+        for attempt in range(retries):
+            try:
+                self.call(service=f"{PRIVATE_API}.Tenants/Create", data={"object": {"metadata": {"name": name}}})
+                return
+            except subprocess.CalledProcessError as e:
+                output = (e.stdout or "") + (e.stderr or "")
+                if re.search(r"Code:\s*AlreadyExists", output):
+                    return
+                if attempt < retries - 1 and ("Unavailable" in output or "connection refused" in output.lower()):
+                    time.sleep(delay)
+                    continue
                 raise RuntimeError(f"Failed to create tenant '{name}': {output}") from e
 
     # ExternalIPPool operations (private API only)

@@ -106,6 +106,7 @@ jobs:
         echo "Nightly version: ${VERSION} (base: ${BASE_VERSION})"
 
     - name: Stamp and package sub-charts
+      # Repo root (not osac-installer/) — sub-charts live under component directories.
       env:
         NIGHTLY_SUFFIX: ${{ steps.version.outputs.nightly-suffix }}
       run: |
@@ -143,8 +144,12 @@ jobs:
           echo "Stamping ${COMPONENT} sub-charts to version ${SUB_VERSION} (from tag ${BASE_TAG})..."
 
           for CHART_DIR in ${SUB_CHARTS[$COMPONENT]}; do
-            if [ -f "${CHART_DIR}/Chart.yaml" ]; then
+            if [[ -f "${CHART_DIR}/Chart.yaml" ]]; then
               CHART_NAME=$(yq eval '.name' "${CHART_DIR}/Chart.yaml")
+              if [[ -z "${CHART_NAME}" || "${CHART_NAME}" == "null" ]]; then
+                echo "::error::Chart name missing in ${CHART_DIR}/Chart.yaml"
+                exit 1
+              fi
 
               # Update Chart.yaml version field using yq
               yq eval -i ".version = \"${SUB_VERSION}\"" "${CHART_DIR}/Chart.yaml"

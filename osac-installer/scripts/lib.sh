@@ -152,13 +152,16 @@ resolve_release_tag() {
     local path="$1"
     local prefix="${2:-osac}"
     local tag
-    local match_pattern="${prefix}/v[0-9]*.[0-9]*.[0-9]*"
-    local validate_regex="^${prefix}/v[0-9]+\\.[0-9]+\\.[0-9]+$"
+    local match_pattern
+    local validate_regex
 
     if [[ ! "${prefix}" =~ ^[a-zA-Z0-9_-]+$ ]]; then
         echo "ERROR: invalid tag prefix '${prefix}' — must match [a-zA-Z0-9_-]+" >&2
         return 1
     fi
+
+    match_pattern="${prefix}/v[0-9]*.[0-9]*.[0-9]*"
+    validate_regex="^${prefix}/v[0-9]+\\.[0-9]+\\.[0-9]+$"
 
     if ! tag=$(git -C "${path}" describe --tags --abbrev=0 --match "${match_pattern}" --exclude '*-nightly*' 2>/dev/null); then
         echo "ERROR: no real (non-nightly) ${prefix}/vX.Y.Z release tag reachable from ${path} — refusing to guess a version" >&2

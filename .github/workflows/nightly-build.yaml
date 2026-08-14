@@ -102,11 +102,12 @@ jobs:
         echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
         echo "base-version=${BASE_VERSION}" >> "$GITHUB_OUTPUT"
         echo "short-sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+        echo "nightly-suffix=${NIGHTLY_SUFFIX}" >> "$GITHUB_OUTPUT"
         echo "Nightly version: ${VERSION} (base: ${BASE_VERSION})"
 
     - name: Stamp and package sub-charts
       env:
-        NIGHTLY_VERSION: ${{ steps.version.outputs.version }}
+        NIGHTLY_SUFFIX: ${{ steps.version.outputs.nightly-suffix }}
       run: |
         set -euo pipefail
         source osac-installer/scripts/lib.sh
@@ -114,13 +115,14 @@ jobs:
         # Ensure target packaging directory exists
         mkdir -p ./packaged-charts
 
-        # Extract just the nightly suffix portion (.nightly.YYYYMMDD...)
-        # Base versions are plain X.Y.Z from resolve_release_tag, so the first
-        # hyphen always separates base from the nightly suffix.
-        SUFFIX_ONLY="${NIGHTLY_VERSION#*-}"
-
         # Define sub-component map (component_dir -> chart_paths). Version baselines
         # come from per-component git tags (<component>/vX.Y.Z), not static files.
+        # Components without a release tag yet (currently osac-metering and
+        # osac-csi-driver) are skipped here with a ::warning:: — they are not
+        # published to GHCR until their first <component>/vX.Y.Z tag exists. The
+        # umbrella chart still lists them as conditional file:// dependencies; when
+        # enabled in values, helm dependency build resolves them from the local
+        # checkout at their Chart.yaml placeholder versions (not nightly-stamped).
         declare -A SUB_CHARTS=(
           ["osac-operator"]="osac-operator/charts/operator osac-operator/charts/operator-crds"
           ["fulfillment-service"]="fulfillment-service/charts/service"
@@ -136,7 +138,7 @@ jobs:
             continue
           fi
           BASE_VER="${BASE_TAG#${COMPONENT}/v}"
-          SUB_VERSION="${BASE_VER}-${SUFFIX_ONLY}"
+          SUB_VERSION="${BASE_VER}-${NIGHTLY_SUFFIX}"
 
           echo "Stamping ${COMPONENT} sub-charts to version ${SUB_VERSION} (from tag ${BASE_TAG})..."
 

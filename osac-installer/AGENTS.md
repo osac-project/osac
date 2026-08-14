@@ -163,6 +163,9 @@ so osac-installer-specific CI now lives there (not under `osac-installer/.github
 the current commit directly -- no submodule bump step) and
 `publish-osac-installer-chart.yaml` (manual-dispatch umbrella chart release; takes
 one mono-repo release `version` plus an independent `ui_version` for osac-ui).
+Nightly sub-chart OCI publishing uses `resolve_release_tag()` per component;
+components without a `<component>/vX.Y.Z` tag yet (e.g. osac-metering,
+osac-csi-driver) are skipped until their first release tag is cut.
 osac-installer's own `e2e-*-full-install.yml`, `helm-lint.yaml`, and
 `integration-tests.yml` coverage is also at root (matrixed/composed alongside the
 other components). See root `.github/workflows/` for the full list.

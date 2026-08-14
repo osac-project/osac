@@ -19,6 +19,7 @@ import (
 	"log/slog"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/collections"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 )
 
 // DefaultTenancyLogicBuilder contains the data and logic needed to create default tenancy logic.
@@ -102,5 +103,66 @@ func (p *DefaultTenancyLogic) DetermineVisibleTenants(ctx context.Context) (resu
 	if result.Finite() {
 		result = SharedTenants.Union(result)
 	}
+	return
+}
+
+// DetermineVisibility extracts the subject from the auth context and returns the set of project names that the
+// current user has permission to see for each visible tenant. The returned visibility is frozen and must not be
+// modified.
+func (p *DefaultTenancyLogic) DetermineVisibility(ctx context.Context) (result *Visibility, err error) {
+	subject := SubjectFromContext(ctx)
+
+	// If the subject has access to all tenants (e.g. an admin), return a total visibility that grants access
+	// to everything:
+	if !subject.Tenants.Finite() {
+		result = TotalVisibility()
+		return
+	}
+
+	// Start by adding the shared tenant and the tenants from the subject. Tenants from the subject are visible even
+	// when the user has no project memberships in them; memberships only grant additional projects.
+	builder := NewVisibility()
+	builder.AddVisibleTenant(SharedTenant)
+	builder.AddVisibleTenants(subject.Tenants.Inclusions()...)
+
+	// Add the projects that the user has access to according to the project membership table:
+	tx, err := database.TxFromContext(ctx)
+	if err != nil {
+		return
+	}
+	rows, err := tx.Query(
+		ctx,
+		`
+		select
+			tenant,
+			project
+		from
+			project_membership_subjects
+		where
+			tenant = any($1) and
+			"user" = $2
+		`,
+		subject.Tenants.Inclusions(),
+		subject.User,
+	)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var tenant, project string
+		err = rows.Scan(&tenant, &project)
+		if err != nil {
+			return
+		}
+		builder.AddVisibleProject(tenant, project)
+	}
+	err = rows.Err()
+	if err != nil {
+		return
+	}
+
+	// Build and return the visibility:
+	result, err = builder.Build()
 	return
 }

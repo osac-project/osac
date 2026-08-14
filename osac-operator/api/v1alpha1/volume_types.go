@@ -117,7 +117,6 @@ type VolumeStatus struct {
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Enum=Block;NFS
 	Protocol VolumeProtocol `json:"protocol,omitempty"`
-
 }
 
 // +kubebuilder:object:root=true

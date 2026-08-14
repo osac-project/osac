@@ -35,6 +35,9 @@ type TenancyLogic interface {
 	// to see. Database queries will be filtered to only return objects where the tenants column has a non-empty
 	// intersection with the values returned by this method.
 	DetermineVisibleTenants(ctx context.Context) (collections.Set[string], error)
+
+	// DetermineVisibility calculates and returns the visibility of the current user.
+	DetermineVisibility(ctx context.Context) (*Visibility, error)
 }
 
 // SystemTenant is the tenant that is assigned to objects that are only visible to the system.

@@ -541,8 +541,8 @@ type ClusterTemplateSpecDefaults struct {
 	Version *ClusterVersionReference `protobuf:"bytes,5,opt,name=version,proto3" json:"version,omitempty"`
 	// Default Secret reference for pull secret credentials.
 	//
-	// When set, clusters created from this template will use this secret reference unless the user provides an
-	// explicit pull_secret or pull_secret_secret.
+	// Mutually exclusive with `pull_secret`. When set, clusters created from this template will use this secret
+	// reference unless the user provides an explicit pull_secret or pull_secret_secret.
 	PullSecretSecret *SecretLocalReference `protobuf:"bytes,6,opt,name=pull_secret_secret,json=pullSecretSecret,proto3" json:"pull_secret_secret,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
@@ -675,8 +675,8 @@ type ClusterTemplateSpecDefaults_builder struct {
 	Version *ClusterVersionReference
 	// Default Secret reference for pull secret credentials.
 	//
-	// When set, clusters created from this template will use this secret reference unless the user provides an
-	// explicit pull_secret or pull_secret_secret.
+	// Mutually exclusive with `pull_secret`. When set, clusters created from this template will use this secret
+	// reference unless the user provides an explicit pull_secret or pull_secret_secret.
 	PullSecretSecret *SecretLocalReference
 }
 

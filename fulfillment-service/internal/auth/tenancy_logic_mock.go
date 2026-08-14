@@ -71,6 +71,21 @@ func (mr *MockTenancyLogicMockRecorder) DetermineDefaultTenant(ctx any) *gomock.
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DetermineDefaultTenant", reflect.TypeOf((*MockTenancyLogic)(nil).DetermineDefaultTenant), ctx)
 }
 
+// DetermineVisibility mocks base method.
+func (m *MockTenancyLogic) DetermineVisibility(ctx context.Context) (*Visibility, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DetermineVisibility", ctx)
+	ret0, _ := ret[0].(*Visibility)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// DetermineVisibility indicates an expected call of DetermineVisibility.
+func (mr *MockTenancyLogicMockRecorder) DetermineVisibility(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DetermineVisibility", reflect.TypeOf((*MockTenancyLogic)(nil).DetermineVisibility), ctx)
+}
+
 // DetermineVisibleTenants mocks base method.
 func (m *MockTenancyLogic) DetermineVisibleTenants(ctx context.Context) (collections.Set[string], error) {
 	m.ctrl.T.Helper()

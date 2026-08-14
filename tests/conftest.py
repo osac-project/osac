@@ -220,6 +220,20 @@ def jwt_cli_admin(namespace: str, fulfillment_address: str, keycloak_url: str, j
 
 
 @pytest.fixture(scope="session")
+def jwt_grpc_tenant1_admin(fulfillment_address: str, keycloak_url: str, jwt_password: str) -> GRPCClient:
+    return GRPCClient(
+        address=fulfillment_address,
+        token_factory=lambda: get_jwt(
+            keycloak_url=keycloak_url,
+            realm="osac",
+            client_id="osac-cli",
+            username="tenant1_admin",
+            password=jwt_password,
+        ),
+    )
+
+
+@pytest.fixture(scope="session")
 def jwt_grpc_tenant1(fulfillment_address: str, keycloak_url: str, jwt_password: str) -> GRPCClient:
     return GRPCClient(
         address=fulfillment_address,

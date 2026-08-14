@@ -16,7 +16,9 @@ package migrations
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
 )
@@ -124,5 +126,89 @@ var _ = DescribeMigration("Update triggers for typed references", func() {
 		vnObj := spec["virtual_network"].(map[string]interface{})
 		Expect(vnObj["id"]).To(Equal("vn-id"))
 		Expect(vnObj["name"]).To(Equal("vn-name"))
+	})
+
+	It("Prevents soft-deleting a virtual network referenced by a subnet with typed reference", func(ctx context.Context) {
+		err := tool.Migrate(ctx, 90)
+		Expect(err).ToNot(HaveOccurred())
+
+		// Insert a VirtualNetwork
+		_, err = conn.Exec(ctx,
+			`insert into virtual_networks (id, tenant, data)
+			 values ('vn-typed', 'system', '{}')`)
+		Expect(err).ToNot(HaveOccurred())
+
+		// Insert a Subnet with typed reference format
+		_, err = conn.Exec(ctx,
+			`insert into subnets (id, tenant, data)
+			 values ('subnet-typed', 'system', $1::jsonb)`,
+			`{"spec":{"virtual_network":{"id":"vn-typed","name":"vn-typed"},"ipv4_cidr":"10.0.2.0/24"}}`)
+		Expect(err).ToNot(HaveOccurred())
+
+		// Attempt to soft-delete the VirtualNetwork should fail
+		_, err = conn.Exec(ctx,
+			`update virtual_networks set deletion_timestamp = now() where id = 'vn-typed'`)
+		Expect(err).To(HaveOccurred())
+		var pgErr *pgconn.PgError
+		Expect(errors.As(err, &pgErr)).To(BeTrue())
+		Expect(pgErr.Code).To(Equal("Z0003"))
+		Expect(pgErr.Message).To(ContainSubstring("vn-typed"))
+		Expect(pgErr.Message).To(ContainSubstring("Subnet"))
+	})
+
+	It("Prevents soft-deleting a virtual network referenced by a security group with typed reference", func(ctx context.Context) {
+		err := tool.Migrate(ctx, 90)
+		Expect(err).ToNot(HaveOccurred())
+
+		// Insert a VirtualNetwork
+		_, err = conn.Exec(ctx,
+			`insert into virtual_networks (id, tenant, data)
+			 values ('vn-sg-typed', 'system', '{}')`)
+		Expect(err).ToNot(HaveOccurred())
+
+		// Insert a SecurityGroup with typed reference format
+		_, err = conn.Exec(ctx,
+			`insert into security_groups (id, tenant, data)
+			 values ('sg-typed', 'system', $1::jsonb)`,
+			`{"spec":{"virtual_network":{"id":"vn-sg-typed","name":"vn-sg-typed"}}}`)
+		Expect(err).ToNot(HaveOccurred())
+
+		// Attempt to soft-delete the VirtualNetwork should fail
+		_, err = conn.Exec(ctx,
+			`update virtual_networks set deletion_timestamp = now() where id = 'vn-sg-typed'`)
+		Expect(err).To(HaveOccurred())
+		var pgErr *pgconn.PgError
+		Expect(errors.As(err, &pgErr)).To(BeTrue())
+		Expect(pgErr.Code).To(Equal("Z0003"))
+		Expect(pgErr.Message).To(ContainSubstring("vn-sg-typed"))
+		Expect(pgErr.Message).To(ContainSubstring("SecurityGroup"))
+	})
+
+	It("Prevents soft-deleting a virtual network referenced by a NAT gateway with typed reference", func(ctx context.Context) {
+		err := tool.Migrate(ctx, 90)
+		Expect(err).ToNot(HaveOccurred())
+
+		// Insert a VirtualNetwork
+		_, err = conn.Exec(ctx,
+			`insert into virtual_networks (id, tenant, data)
+			 values ('vn-ng-typed', 'system', '{}')`)
+		Expect(err).ToNot(HaveOccurred())
+
+		// Insert a NATGateway with typed reference format
+		_, err = conn.Exec(ctx,
+			`insert into nat_gateways (id, tenant, data)
+			 values ('ng-typed', 'system', $1::jsonb)`,
+			`{"spec":{"virtual_network":{"id":"vn-ng-typed","name":"vn-ng-typed"}}}`)
+		Expect(err).ToNot(HaveOccurred())
+
+		// Attempt to soft-delete the VirtualNetwork should fail
+		_, err = conn.Exec(ctx,
+			`update virtual_networks set deletion_timestamp = now() where id = 'vn-ng-typed'`)
+		Expect(err).To(HaveOccurred())
+		var pgErr *pgconn.PgError
+		Expect(errors.As(err, &pgErr)).To(BeTrue())
+		Expect(pgErr.Code).To(Equal("Z0003"))
+		Expect(pgErr.Message).To(ContainSubstring("vn-ng-typed"))
+		Expect(pgErr.Message).To(ContainSubstring("NATGateway"))
 	})
 })

@@ -175,6 +175,32 @@ var _ = Describe("Compute instances server", func() {
 				}.Build(),
 			).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
+
+			diskImagesDao, err := dao.NewGenericDAO[*privatev1.DiskImage]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = diskImagesDao.Create().SetObject(
+				privatev1.DiskImage_builder{
+					Id: "test-disk-image",
+					Metadata: privatev1.Metadata_builder{
+						Name:   "test-disk-image",
+						Tenant: auth.SharedTenant,
+					}.Build(),
+					Spec: privatev1.DiskImageSpec_builder{
+						SourceType:    privatev1.SourceType_SOURCE_TYPE_REGISTRY,
+						SourceRef:     "quay.io/containerdisks/fedora:41",
+						GuestOsFamily: privatev1.GuestOSFamily_GUEST_OS_FAMILY_LINUX,
+						Lifecycle:     privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE,
+						Architecture: []privatev1.Architecture{
+							privatev1.Architecture_ARCHITECTURE_AMD64,
+						},
+					}.Build(),
+				}.Build(),
+			).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
 		})
 
 		// Helper function to create a template

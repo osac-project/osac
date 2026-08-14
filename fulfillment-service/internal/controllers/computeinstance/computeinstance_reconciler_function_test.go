@@ -160,10 +160,25 @@ var _ = Describe("buildSpec", func() {
 					}.Build(),
 				}.Build(), nil)
 
+			mockDiskImagesClient := NewMockDiskImagesClient(ctrl)
+			mockDiskImagesClient.EXPECT().
+				Get(gomock.Any(), gomock.Any()).
+				Return(privatev1.DiskImagesGetResponse_builder{
+					Object: privatev1.DiskImage_builder{
+						Id: "test-disk-image",
+						Spec: privatev1.DiskImageSpec_builder{
+							SourceType:    privatev1.SourceType_SOURCE_TYPE_REGISTRY,
+							SourceRef:     "quay.io/osac/rhel9:latest",
+							GuestOsFamily: privatev1.GuestOSFamily_GUEST_OS_FAMILY_LINUX,
+						}.Build(),
+					}.Build(),
+				}.Build(), nil)
+
 			task := &task{
 				r: &function{
 					logger:              logger,
 					instanceTypesClient: mockInstanceTypesClient,
+					diskImagesClient:    mockDiskImagesClient,
 				},
 				computeInstance: privatev1.ComputeInstance_builder{
 					Id: "test-explicit-fields",
@@ -205,7 +220,9 @@ var _ = Describe("buildSpec", func() {
 			Expect(spec.RunStrategy).To(Equal(osacv1alpha1.RunStrategyType("Always")))
 			Expect(spec.SSHKey).To(Equal("ssh-rsa AAAA..."))
 
-			// DiskImage resolution is tested in Task 3 (OSAC-3724).
+			Expect(spec.Image.SourceType).To(Equal(osacv1alpha1.ImageSourceTypeRegistry))
+			Expect(spec.Image.SourceRef).To(Equal("quay.io/osac/rhel9:latest"))
+			Expect(spec.GuestOSFamily).To(Equal("linux"))
 
 			Expect(spec.BootDisk.SizeGiB).To(Equal(int32(20)))
 			Expect(spec.BootDisk.StorageTier).To(Equal("fast"))
@@ -220,8 +237,146 @@ var _ = Describe("buildSpec", func() {
 			Expect(spec.UserDataSecretRef.Name).To(Equal("test-explicit-fields-user-data"))
 		})
 
-		// Guest OS Family mapping tests removed — is_windows field replaced by disk_image.
-		// DiskImage → GuestOSFamily mapping will be tested in Task 3 (OSAC-3724).
+		It("Maps GuestOSFamily WINDOWS to 'windows' on CRD spec", func() {
+			ctx := context.Background()
+			ctrl := gomock.NewController(GinkgoT())
+			DeferCleanup(ctrl.Finish)
+			template := "osac.templates.ocp_virt_vm"
+
+			hubNamespace := "test-hub"
+			subnetID := "test-subnet"
+			subnetCR := &osacv1alpha1.Subnet{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: hubNamespace,
+					Name:      "test-sn",
+					Labels:    map[string]string{labels.SubnetUuid: subnetID},
+				},
+			}
+			scheme := runtime.NewScheme()
+			Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+			Expect(corev1.AddToScheme(scheme)).To(Succeed())
+			fakeClient := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(subnetCR).
+				Build()
+
+			mockInstanceTypesClient := NewMockInstanceTypesClient(ctrl)
+			mockInstanceTypesClient.EXPECT().
+				Get(gomock.Any(), gomock.Any()).
+				Return(privatev1.InstanceTypesGetResponse_builder{
+					Object: privatev1.InstanceType_builder{
+						Spec: privatev1.InstanceTypeSpec_builder{
+							Cores:     4,
+							MemoryGib: 8,
+						}.Build(),
+					}.Build(),
+				}.Build(), nil)
+
+			mockDiskImagesClient := NewMockDiskImagesClient(ctrl)
+			mockDiskImagesClient.EXPECT().
+				Get(gomock.Any(), gomock.Any()).
+				Return(privatev1.DiskImagesGetResponse_builder{
+					Object: privatev1.DiskImage_builder{
+						Id: "windows-image",
+						Spec: privatev1.DiskImageSpec_builder{
+							SourceType:    privatev1.SourceType_SOURCE_TYPE_REGISTRY,
+							SourceRef:     "quay.io/osac/win2022:latest",
+							GuestOsFamily: privatev1.GuestOSFamily_GUEST_OS_FAMILY_WINDOWS,
+						}.Build(),
+					}.Build(),
+				}.Build(), nil)
+
+			task := &task{
+				r: &function{
+					logger:              logger,
+					instanceTypesClient: mockInstanceTypesClient,
+					diskImagesClient:    mockDiskImagesClient,
+				},
+				computeInstance: privatev1.ComputeInstance_builder{
+					Id: "test-windows-guest",
+					Spec: privatev1.ComputeInstanceSpec_builder{
+						Template:     &privatev1.ComputeInstanceTemplateReference{Name: template},
+						InstanceType: &privatev1.InstanceTypeReference{Name: "standard-4-8"},
+						DiskImage:    &privatev1.DiskImageReference{Id: "windows-image"},
+						NetworkAttachments: []*privatev1.NetworkAttachment{
+							privatev1.NetworkAttachment_builder{Subnet: &privatev1.SubnetLocalReference{Id: subnetID}}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+				hubNamespace: hubNamespace,
+				hubClient:    fakeClient,
+			}
+
+			spec, err := task.buildSpec(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(spec.GuestOSFamily).To(Equal("windows"))
+			Expect(spec.Image.SourceType).To(Equal(osacv1alpha1.ImageSourceTypeRegistry))
+			Expect(spec.Image.SourceRef).To(Equal("quay.io/osac/win2022:latest"))
+		})
+
+		It("Returns error when DiskImage Get fails", func() {
+			ctx := context.Background()
+			ctrl := gomock.NewController(GinkgoT())
+			DeferCleanup(ctrl.Finish)
+			template := "osac.templates.ocp_virt_vm"
+
+			hubNamespace := "test-hub"
+			subnetID := "test-subnet"
+			subnetCR := &osacv1alpha1.Subnet{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: hubNamespace,
+					Name:      "test-sn",
+					Labels:    map[string]string{labels.SubnetUuid: subnetID},
+				},
+			}
+			scheme := runtime.NewScheme()
+			Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+			Expect(corev1.AddToScheme(scheme)).To(Succeed())
+			fakeClient := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(subnetCR).
+				Build()
+
+			mockInstanceTypesClient := NewMockInstanceTypesClient(ctrl)
+			mockInstanceTypesClient.EXPECT().
+				Get(gomock.Any(), gomock.Any()).
+				Return(privatev1.InstanceTypesGetResponse_builder{
+					Object: privatev1.InstanceType_builder{
+						Spec: privatev1.InstanceTypeSpec_builder{}.Build(),
+					}.Build(),
+				}.Build(), nil)
+
+			mockDiskImagesClient := NewMockDiskImagesClient(ctrl)
+			mockDiskImagesClient.EXPECT().
+				Get(gomock.Any(), gomock.Any()).
+				Return(nil, errors.New("not found"))
+
+			task := &task{
+				r: &function{
+					logger:              logger,
+					instanceTypesClient: mockInstanceTypesClient,
+					diskImagesClient:    mockDiskImagesClient,
+				},
+				computeInstance: privatev1.ComputeInstance_builder{
+					Id: "test-disk-image-error",
+					Spec: privatev1.ComputeInstanceSpec_builder{
+						Template:     &privatev1.ComputeInstanceTemplateReference{Name: template},
+						InstanceType: &privatev1.InstanceTypeReference{Name: "test-type"},
+						DiskImage:    &privatev1.DiskImageReference{Id: "missing-image"},
+						NetworkAttachments: []*privatev1.NetworkAttachment{
+							privatev1.NetworkAttachment_builder{Subnet: &privatev1.SubnetLocalReference{Id: subnetID}}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+				hubNamespace: hubNamespace,
+				hubClient:    fakeClient,
+			}
+
+			_, err := task.buildSpec(ctx)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("failed to resolve disk image 'missing-image'"))
+			Expect(err.Error()).To(ContainSubstring("not found"))
+		})
 
 		It("Excludes explicit fields from spec map when not set", func() {
 			ctx := context.Background()

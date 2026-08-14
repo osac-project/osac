@@ -15,6 +15,7 @@ package computeinstance
 
 //go:generate mockgen -source=../../api/osac/private/v1/compute_instances_service_grpc.pb.go -destination=compute_instances_client_mock.go -package=computeinstance ComputeInstancesClient
 //go:generate mockgen -source=../../api/osac/private/v1/instance_types_service_grpc.pb.go -destination=instance_types_client_mock.go -package=computeinstance InstanceTypesClient
+//go:generate mockgen -source=../../api/osac/private/v1/disk_images_service_grpc.pb.go -destination=disk_images_client_mock.go -package=computeinstance DiskImagesClient
 
 import (
 	"context"
@@ -72,6 +73,7 @@ type function struct {
 	computeInstancesClient privatev1.ComputeInstancesClient
 	hubsClient             privatev1.HubsClient
 	instanceTypesClient    privatev1.InstanceTypesClient
+	diskImagesClient       privatev1.DiskImagesClient
 	maskCalculator         *masks.Calculator
 }
 
@@ -129,6 +131,7 @@ func (b *FunctionBuilder) Build() (result controllers.ReconcilerFunction[*privat
 		computeInstancesClient: privatev1.NewComputeInstancesClient(b.connection),
 		hubsClient:             privatev1.NewHubsClient(b.connection),
 		instanceTypesClient:    privatev1.NewInstanceTypesClient(b.connection),
+		diskImagesClient:       privatev1.NewDiskImagesClient(b.connection),
 		hubCache:               b.hubCache,
 		maskCalculator:         masks.NewCalculator().Build(),
 	}
@@ -723,7 +726,22 @@ func (t *task) addExplicitFields(ctx context.Context, spec *osacv1alpha1.Compute
 			Name: t.userDataSecretName,
 		}
 	}
-	// DiskImage resolution is handled in Task 3 (OSAC-3724).
+	diskImageRef := ciSpec.GetDiskImage()
+	if diskImageRef != nil {
+		diskImageKey := controllers.RefKeyStr(diskImageRef)
+		diResponse, diErr := t.r.diskImagesClient.Get(ctx, privatev1.DiskImagesGetRequest_builder{
+			Id: diskImageKey,
+		}.Build())
+		if diErr != nil {
+			return fmt.Errorf("failed to resolve disk image '%s': %w", diskImageKey, diErr)
+		}
+		diSpec := diResponse.GetObject().GetSpec()
+		spec.Image = osacv1alpha1.ImageSpec{
+			SourceType: mapSourceType(diSpec.GetSourceType()),
+			SourceRef:  diSpec.GetSourceRef(),
+		}
+		spec.GuestOSFamily = mapGuestOSFamily(diSpec.GetGuestOsFamily())
+	}
 	if ciSpec.HasBootDisk() {
 		spec.BootDisk = osacv1alpha1.DiskSpec{
 			SizeGiB:     ciSpec.GetBootDisk().GetSizeGib(),
@@ -788,4 +806,22 @@ func (t *task) ensureUserDataSecret(ctx context.Context, owner *osacv1alpha1.Com
 		slog.String("name", secret.GetName()),
 	)
 	return nil
+}
+
+func mapSourceType(st privatev1.SourceType) osacv1alpha1.ImageSourceType {
+	switch st {
+	case privatev1.SourceType_SOURCE_TYPE_REGISTRY:
+		return osacv1alpha1.ImageSourceTypeRegistry
+	default:
+		return osacv1alpha1.ImageSourceTypeRegistry
+	}
+}
+
+func mapGuestOSFamily(gof privatev1.GuestOSFamily) string {
+	switch gof {
+	case privatev1.GuestOSFamily_GUEST_OS_FAMILY_WINDOWS:
+		return "windows"
+	default:
+		return "linux"
+	}
 }

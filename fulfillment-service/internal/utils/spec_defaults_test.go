@@ -407,7 +407,7 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
 			Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
 			InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
-			DiskImage: &privatev1.DiskImageReference{Id: "test-disk-image"},
+			DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
 				StorageTier: new("standard"),
 			}.Build(),
@@ -424,7 +424,7 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
 			Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
 			InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
-			DiskImage: &privatev1.DiskImageReference{Id: "test-disk-image"},
+			DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
 				SizeGib:     20,
 				StorageTier: new(""),
@@ -439,7 +439,7 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
 			Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
 			InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
-			DiskImage: &privatev1.DiskImageReference{Id: "test-disk-image"},
+			DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
 				SizeGib: 20,
 			}.Build(),
@@ -453,7 +453,7 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
 			Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
 			InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
-			DiskImage: &privatev1.DiskImageReference{Id: "test-disk-image"},
+			DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
 				SizeGib:     20,
 				StorageTier: new("standard"),
@@ -478,7 +478,7 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
 			Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
 			InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
-			DiskImage: &privatev1.DiskImageReference{Id: "test-disk-image"},
+			DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
 				SizeGib:     20,
 				StorageTier: new("standard"),

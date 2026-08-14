@@ -154,7 +154,12 @@ jobs:
 
     - name: Build umbrella chart dependencies
       working-directory: osac-installer
-      run: helm dependency build charts/osac/
+      run: |
+        set -euo pipefail
+        # Update local file:// dependency version constraints to >=0.0.0-0
+        # so Helm SemVer matching permits nightly pre-release sub-chart versions
+        yq eval -i '(.dependencies[] | select(.repository == "file://*") | .version) = ">=0.0.0-0"' charts/osac/Chart.yaml
+        helm dependency build charts/osac/
 
     - name: Lint chart
       working-directory: osac-installer

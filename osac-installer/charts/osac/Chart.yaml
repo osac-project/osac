@@ -6,27 +6,27 @@ version: 0.0.1
 
 dependencies:
   - name: osac-operator-crds
-    version: ">=0.0.0"
+    version: ">=0.0.0-0"
     repository: "file://../../../osac-operator/charts/operator-crds"
     alias: operatorCrds
   - name: osac-operator
-    version: ">=0.0.0"
+    version: ">=0.0.0-0"
     repository: "file://../../../osac-operator/charts/operator"
     alias: operator
   - name: fulfillment-service
-    version: ">=0.0.0"
+    version: ">=0.0.0-0"
     repository: "file://../../../fulfillment-service/charts/service"
     alias: service
   - name: osac-aap
-    version: ">=0.0.0"
+    version: ">=0.0.0-0"
     repository: "file://../../../osac-aap/charts/aap"
     alias: aap
   - name: bare-metal-fulfillment-operator-crds
-    version: ">=0.0.0"
+    version: ">=0.0.0-0"
     repository: "file://../../../bare-metal-fulfillment-operator/charts/operator-crds"
     alias: bmfCrds
   - name: bare-metal-fulfillment-operator
-    version: ">=0.0.0"
+    version: ">=0.0.0-0"
     repository: "file://../../../bare-metal-fulfillment-operator/charts/operator"
     alias: bmf
     condition: bmf.enabled
@@ -36,17 +36,17 @@ dependencies:
     alias: ui
     condition: ui.enabled
   - name: osac-metering
-    version: ">=0.0.0"
+    version: ">=0.0.0-0"
     repository: "file://../../../osac-metering/charts/osac-metering"
     alias: metering
     condition: metering.enabled
   - name: csi-driver
-    version: ">=0.0.0"
+    version: ">=0.0.0-0"
     repository: "file://../../../osac-csi-driver/charts/csi-driver"
     alias: csiDriver
     condition: csiDriver.enabled
   - name: csi-backends
-    version: ">=0.0.0"
+    version: ">=0.0.0-0"
     repository: "file://../../../osac-csi-driver/charts/csi-backends"
     alias: csiBackends
     condition: csiDriver.enabled

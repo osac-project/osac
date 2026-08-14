@@ -39,6 +39,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/diskimage"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/externalip"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/externalipattachment"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/hosttype"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/hub"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/instancetype"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/natgateway"
@@ -73,6 +74,7 @@ func Cmd() *cobra.Command {
 	result.AddCommand(diskimage.Cmd())
 	result.AddCommand(externalip.Cmd())
 	result.AddCommand(externalipattachment.Cmd())
+	result.AddCommand(help.MarkPrivateAPI(hosttype.Cmd()))
 	result.AddCommand(help.MarkPrivateAPI(hub.Cmd()))
 	result.AddCommand(help.MarkPrivateAPI(instancetype.Cmd()))
 	result.AddCommand(natgateway.Cmd())

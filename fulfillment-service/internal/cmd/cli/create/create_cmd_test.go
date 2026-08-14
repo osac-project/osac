@@ -28,6 +28,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/clusterversion"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/computeinstance"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/computeinstancecatalogitem"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/hosttype"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/hub"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/securitygroup"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/subnet"
@@ -47,6 +48,7 @@ var _ = Describe("Create command", func() {
 		Entry("clusterversion", clusterversion.Cmd, (*privatev1.ClusterVersion)(nil)),
 		Entry("computeinstance", computeinstance.Cmd, (*publicv1.ComputeInstance)(nil)),
 		Entry("computeinstancecatalogitem", computeinstancecatalogitem.Cmd, (*publicv1.ComputeInstanceCatalogItem)(nil)),
+		Entry("hosttype", hosttype.Cmd, (*privatev1.HostType)(nil)),
 		Entry("hub", hub.Cmd, (*privatev1.Hub)(nil)),
 		Entry("virtualnetwork", virtualnetwork.Cmd, (*publicv1.VirtualNetwork)(nil)),
 		Entry("subnet", subnet.Cmd, (*publicv1.Subnet)(nil)),
@@ -63,7 +65,7 @@ var _ = Describe("Create command", func() {
 				subcommandNames = append(subcommandNames, subcmd.Name())
 			}
 
-			Expect(subcommandNames).To(ContainElements("baremetalinstancecatalogitem", "cluster", "clustercatalogitem", "clusterversion", "computeinstance", "computeinstancecatalogitem", "hub", "virtualnetwork", "subnet", "securitygroup"))
+			Expect(subcommandNames).To(ContainElements("baremetalinstancecatalogitem", "cluster", "clustercatalogitem", "clusterversion", "computeinstance", "computeinstancecatalogitem", "hosttype", "hub", "virtualnetwork", "subnet", "securitygroup"))
 		})
 	})
 
@@ -71,7 +73,7 @@ var _ = Describe("Create command", func() {
 		It("should annotate private-API subcommands", func() {
 			cmd := Cmd()
 			privateNames := map[string]bool{
-				"hub": true, "instancetype": true, "clusterversion": true,
+				"hosttype": true, "hub": true, "instancetype": true, "clusterversion": true,
 				"storagebackend": true, "storagetier": true,
 			}
 			for _, sub := range cmd.Commands() {

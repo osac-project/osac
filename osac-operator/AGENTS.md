@@ -16,6 +16,7 @@ OSAC operator is a Kubernetes operator that reconciles infrastructure resources 
 - **ExternalIP** — external IP allocated from ExternalIPPool
 - **ExternalIPAttachment** — attachment of ExternalIP to ComputeInstance
 - **NATGateway** — outbound SNAT for a VirtualNetwork
+- **Volume** (`vol`) — block storage on vendor arrays via CSI
 
 ## Critical Rules
 

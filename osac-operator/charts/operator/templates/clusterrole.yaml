@@ -92,6 +92,7 @@ rules:
   - subnets
   - tenants
   - virtualnetworks
+  - volumes
   verbs:
   - create
   - delete
@@ -114,6 +115,7 @@ rules:
   - subnets/finalizers
   - tenants/finalizers
   - virtualnetworks/finalizers
+  - volumes/finalizers
   verbs:
   - update
 - apiGroups:
@@ -130,6 +132,7 @@ rules:
   - subnets/status
   - tenants/status
   - virtualnetworks/status
+  - volumes/status
   verbs:
   - get
   - patch

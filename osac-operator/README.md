@@ -21,6 +21,8 @@ custom resources and reconciles them to their desired state:
 - **Subnet** (`subnet`) — represents a subnet within a VirtualNetwork.
 - **SecurityGroup** (`sg`) — defines network security (firewall) rules with
   ingress/egress rules, protocols, port ranges, and CIDR blocks.
+- **Volume** (`vol`) — provisions block storage on vendor arrays via the
+  VendorProvisioner interface (vendor CSI controllers).
 
 ## Configuration
 

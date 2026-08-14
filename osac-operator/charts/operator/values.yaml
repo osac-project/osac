@@ -31,6 +31,7 @@ controllers:
   networking: true
   bareMetalInstance: true
   storage: true
+  volume: true
 
 configSecret:
   name: "osac-config"

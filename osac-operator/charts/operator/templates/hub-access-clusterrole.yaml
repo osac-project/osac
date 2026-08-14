@@ -22,6 +22,7 @@ rules:
   - subnets
   - tenants
   - virtualnetworks
+  - volumes
   verbs:
   - create
   - delete
@@ -44,6 +45,7 @@ rules:
   - subnets/status
   - tenants/status
   - virtualnetworks/status
+  - volumes/status
   verbs:
   - get
 - apiGroups:

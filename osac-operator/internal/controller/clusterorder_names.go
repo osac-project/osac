@@ -30,8 +30,7 @@ func generateNamespaceName(instance *v1alpha1.ClusterOrder) string {
 }
 
 // hubAccessClusterRoleName returns the ClusterRole name, accounting for the
-// kustomize prefix transformer that prepends "{namespace}-" to cluster-scoped
-// resources in CI/production overlays.
+// Helm chart's namespace prefix on cluster-scoped resources.
 func (r *ClusterOrderReconciler) hubAccessClusterRoleName() string {
 	return fmt.Sprintf("%s-%s", r.ClusterOrderNamespace, hubAccessClusterRoleBaseName)
 }

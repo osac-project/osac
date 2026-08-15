@@ -27,13 +27,13 @@ make fmt && make vet           # Format and vet
 
 make manifests                 # Generate CRD manifests + RBAC via controller-gen
 make generate                  # Generate DeepCopy methods via controller-gen
-make helm-crds                 # Sync CRDs to operator-crds chart + operator manifests to operator chart
+make helm-crds                 # Sync CRDs to operator-crds chart
 make check-helm-crds           # Runs helm-crds then verifies no drift (may modify generated files)
 
 make run                       # Run controller locally
-make install                   # Install CRDs via kustomize
-make deploy IMG=<registry>/bare-metal-fulfillment-operator:tag
-make undeploy                  # Remove operator from cluster
+make install                   # Install CRDs into cluster
+make deploy IMG=<registry>/bare-metal-fulfillment-operator:tag  # Deploy via Helm
+make undeploy                  # Remove operator from cluster via Helm
 make uninstall                 # Remove CRDs from cluster
 
 make image-build IMG=<registry>/bare-metal-fulfillment-operator:tag  # Build with Podman
@@ -121,7 +121,7 @@ Two charts in `charts/`:
 - **operator-crds** — CRD definitions only, for installing CRDs independently
 - **operator** — operator deployment, RBAC, service account, metrics
 
-CRDs must stay in sync: after `make manifests`, run `make helm-crds` (uses `hack/sync-helm-crds.py` and `hack/sync-helm-operator.py`). CI enforces sync via `make check-helm-crds`.
+CRDs must stay in sync: after `make manifests`, run `make helm-crds` (uses `hack/sync-helm-crds.py`). CI enforces sync via `make check-helm-crds`.
 
 ## CI Workflows
 

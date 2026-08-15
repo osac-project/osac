@@ -35,8 +35,8 @@ OSAC operator is a Kubernetes operator that reconciles infrastructure resources 
 # Build and test (requires Go 1.26.3)
 make build                    # Build manager + console-proxy (runs 'make test' first, then builds)
 make test                     # Unit tests only (excludes e2e)
-make test-integration         # Runs test + test-kustomize + test-smoke
-make test-kustomize           # Validate all kustomization.yaml configs (catches missing files)
+make test-integration         # Runs test + helm-validate + test-smoke
+make helm-validate            # Validate Helm chart templates render without errors
 make test-smoke               # Create kind cluster 'osac-test', apply CRDs + samples, verify ComputeInstance
 make test-integration-kind    # Go integration tests against a running kind cluster
 make lint                     # golangci-lint v2.12.1 (strict — always run before commit)
@@ -112,9 +112,6 @@ config/
   crd/                     # Generated CRD manifests (DO NOT EDIT)
   rbac/                    # Generated RBAC rules
   samples/                 # Example CRs and config Secret
-  testing/                 # Testing configurations
-    default/               # Default testing kustomization
-    console-proxy/         # Console proxy testing kustomization
 charts/
   operator/                # Helm chart for operator
   operator-crds/           # Helm chart for CRDs
@@ -125,12 +122,12 @@ hack/sync-helm-crds.py     # Script invoked by `make helm-crds` to sync CRDs to 
 ## Testing
 
 - **Unit tests**: Ginkgo + Gomega with `envtest` (real etcd + kube-apiserver)
-- **Integration**: `make test-kustomize` (manifest validation) + `make test-smoke` (kind cluster)
+- **Integration**: `make helm-validate` (Helm chart validation) + `make test-smoke` (kind cluster)
 - **Go integration tests**: `test/integration/` (console_proxy_test.go, integration_suite_test.go, networking_test.go) — run against an already-running kind cluster via `make test-integration-kind` (`go test ./test/integration/ -v -ginkgo.v`)
 - **E2E tests**: pytest-based, live in the separate `osac-test-infra` repo; triggered by the root-level `.github/workflows/e2e-vmaas-full-install.yml`, which builds and deploys both `osac-operator` and `fulfillment-service` together
 - Kind cluster defaults to `osac` (`KIND_CLUSTER_NAME` in Makefile line 81), but smoke tests create `osac-test`
 - Clean up: `kind delete cluster --name osac-test`
-- `test-kustomize` catches missing files in kustomization.yaml — always run before committing manifest changes
+- `helm-validate` catches broken Helm templates — always run before committing chart changes
 
 ## Code Quality
 
@@ -161,7 +158,7 @@ Hooks are configured in `.claude/settings.json` and run automatically during age
 - [ ] `make helm-crds` run after CRD regeneration
 - [ ] `make lint` passes (enforced by CI)
 - [ ] `make test` passes
-- [ ] `make test-kustomize` passes (catches missing files)
+- [ ] `make helm-validate` passes (catches broken templates)
 - [ ] CRD changes tested against a cluster
 - [ ] Cross-repo dependencies documented in PR description
 - [ ] PR title includes Jira key (e.g., "OSAC-12345: fix subnet race")
@@ -169,7 +166,7 @@ Hooks are configured in `.claude/settings.json` and run automatically during age
 
 ## CI Workflows
 
-- **build-image.yaml**: Runs `make test`, `make test-kustomize`, `make test-smoke`, then builds and pushes container + manifest container
+- **build-image.yaml**: Runs `make test`, `make helm-validate`, `make test-smoke`, then builds and pushes container + manifest container
 - **check-generated-code.yaml** (repo root, matrixed across components): Validates `buf generate` output unchanged (ensures gRPC client is up-to-date)
 - **helm-lint.yaml**: Checks CRD sync (`hack/sync-helm-crds.py`) and lints Helm charts
 - **e2e-vmaas-full-install.yml** (repo root, shared with fulfillment-service): builds both components and runs E2E tests in a VMaaS environment

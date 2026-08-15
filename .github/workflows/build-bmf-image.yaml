@@ -147,32 +147,17 @@ jobs:
           echo "Full SHA tag: $FULL_SHA_TAG"
           echo "Manifest tag: $SHA_TAG-manifests"
 
-      # Set up Go for kustomize operations
-      - name: Set up Go for manifest generation
-        if: github.event_name != 'pull_request'
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: 'bare-metal-fulfillment-operator/go.mod'
-
-      # Generate manifests with kustomize pointing to the SHA-tagged image
-      - name: Generate manifests with kustomize
+      - name: Generate manifests with Helm
         if: github.event_name != 'pull_request'
         working-directory: bare-metal-fulfillment-operator
         run: |
-          # Install kustomize
-          make kustomize
-
-          # Create dist directory
           mkdir -p dist
+          helm template bmf-operator charts/operator \
+            --set image.repository=ghcr.io/osac-project/bare-metal-fulfillment-operator \
+            --set image.tag=${{ steps.sha-tag.outputs.sha-tag }} \
+            > dist/install.yaml
 
-          # Set the manager image to the SHA-tagged version
-          cd config/manager && ../../bin/kustomize edit set image controller=${{ steps.sha-tag.outputs.full-sha-tag }}
-
-          # Generate the complete manifest
-          cd ../..
-          ./bin/kustomize build config/default > dist/install.yaml
-
-          echo "Generated manifest with image: ${{ steps.sha-tag.outputs.full-sha-tag }}"
+          echo "Generated manifest with tag: ${{ steps.sha-tag.outputs.sha-tag }}"
           echo "Manifest content preview:"
           head -20 dist/install.yaml
 

@@ -198,7 +198,7 @@ make deploy IMG=<some-registry>/bare-metal-fulfillment-operator:tag
 You can apply the samples (examples) from the config/sample:
 
 ``` sh
-kubectl apply -k config/samples/
+kubectl apply -f config/samples/
 ```
 
 > **NOTE**: Ensure that the samples has default values to test it out.

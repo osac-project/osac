@@ -3,7 +3,6 @@ kind: VirtualNetwork
 metadata:
   labels:
     app.kubernetes.io/name: osac-operator
-    app.kubernetes.io/managed-by: kustomize
     osac.openshift.io/virtualnetwork-uuid: 00000000-0000-0000-0000-000000000000
   name: virtualnetwork-sample
 spec:

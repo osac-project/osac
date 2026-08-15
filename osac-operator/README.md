@@ -244,7 +244,7 @@ make deploy IMG=<some-registry>/osac-operator:tag
 You can apply the samples (examples) from the config/sample:
 
 ``` sh
-kubectl apply -k config/samples/
+kubectl apply -f config/samples/
 ```
 
 > **NOTE**: Ensure that the samples has default values to test it out.

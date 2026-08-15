@@ -10,7 +10,6 @@ kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/name: bare-metal-fulfillment-operator
-    app.kubernetes.io/managed-by: kustomize
     rbac.authorization.k8s.io/aggregate-to-view: "true"
   name: baremetalpool-viewer-role
 rules:

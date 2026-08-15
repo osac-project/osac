@@ -3,10 +3,8 @@ kind: APIService
 metadata:
   name: v1alpha1.console.osac.openshift.io
   annotations:
-    # Hardcoded namespace: kustomize's namespace transformer does not update
-    # embedded references in annotations or spec fields. The installer's
-    # overlay-level replacements propagate the actual namespace into both
-    # this annotation and spec.service.namespace.
+    # Namespace is hardcoded here; the Helm chart template overrides it
+    # with {{ .Release.Namespace }}.
     cert-manager.io/inject-ca-from: osac/osac-console-proxy
 spec:
   group: console.osac.openshift.io

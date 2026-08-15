@@ -3,7 +3,6 @@ kind: SecurityGroup
 metadata:
   labels:
     app.kubernetes.io/name: osac-operator
-    app.kubernetes.io/managed-by: kustomize
   name: securitygroup-sample
 spec:
   virtualNetwork: 00000000-0000-0000-0000-000000000000

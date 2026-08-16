@@ -92,11 +92,11 @@ def test_instance_type_lifecycle(cli: OsacCLI, private_grpc: GRPCClient) -> None
                 raise
 
 
-def test_create_instance_type_via_cli(cli: OsacCLI, private_grpc: GRPCClient) -> None:
+def test_create_instance_type_via_cli(private_cli: OsacCLI, private_grpc: GRPCClient) -> None:
     it_name: str = f"e2e-cli-it-{uuid4().hex[:8]}"
 
     try:
-        cli.create_instance_type(
+        private_cli.create_instance_type(
             name=it_name,
             cores=TEST_CORES,
             memory_gib=TEST_MEMORY_GIB,

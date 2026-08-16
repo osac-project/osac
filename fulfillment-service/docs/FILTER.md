@@ -113,6 +113,37 @@ field is present. The metadata fields `id`, `name` and `creation_timestamp` are 
 present. The `deletion_timestamp` field is considered present only when the object has actually
 been marked for deletion.
 
+## Filtering on reference fields
+
+Object references are typed messages (see [API.md — Object references](API.md#object-references)),
+so filter expressions must access their sub-fields rather than comparing the reference directly as
+a string. Every reference has at least `id` and `name`; full references additionally have `project`
+and `shared`.
+
+Select subnets belonging to a specific virtual network by name:
+
+```cel
+this.spec.virtual_network.name == "my-vnet"
+```
+
+Select subnets belonging to a specific virtual network by id:
+
+```cel
+this.spec.virtual_network.id == "672c0827-ef03-48d0-b825-689f83ff296b"
+```
+
+Select clusters using a specific catalog item:
+
+```cel
+this.spec.catalog_item.name == "dev-sandbox"
+```
+
+Select virtual networks using a specific network class:
+
+```cel
+this.spec.network_class.name == "default"
+```
+
 ## Examples
 
 Select objects whose name starts with `prod`:

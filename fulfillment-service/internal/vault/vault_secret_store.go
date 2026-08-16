@@ -40,7 +40,7 @@ type SecretStore interface {
 type VaultSecretStoreBuilder struct {
 	logger          *slog.Logger
 	address         string
-	token           string
+	tokenSource     VaultTokenSource
 	parentNamespace string
 	kvMountPath     string
 	caPool          *x509.CertPool
@@ -49,6 +49,7 @@ type VaultSecretStoreBuilder struct {
 type VaultSecretStore struct {
 	logger          *slog.Logger
 	client          *vaultapi.Client
+	tokenSource     VaultTokenSource
 	parentNamespace string
 	kvMountPath     string
 }
@@ -69,8 +70,8 @@ func (b *VaultSecretStoreBuilder) SetAddress(value string) *VaultSecretStoreBuil
 	return b
 }
 
-func (b *VaultSecretStoreBuilder) SetToken(value string) *VaultSecretStoreBuilder {
-	b.token = value
+func (b *VaultSecretStoreBuilder) SetTokenSource(value VaultTokenSource) *VaultSecretStoreBuilder {
+	b.tokenSource = value
 	return b
 }
 
@@ -98,8 +99,8 @@ func (b *VaultSecretStoreBuilder) Build() (result *VaultSecretStore, err error) 
 		err = errors.New("address is mandatory")
 		return
 	}
-	if b.token == "" {
-		err = errors.New("token is mandatory")
+	if b.tokenSource == nil {
+		err = errors.New("token source is mandatory")
 		return
 	}
 	if b.parentNamespace == "" {
@@ -126,12 +127,11 @@ func (b *VaultSecretStoreBuilder) Build() (result *VaultSecretStore, err error) 
 		err = fmt.Errorf("failed to create vault client: %w", err)
 		return
 	}
-	client.SetToken(b.token)
-	client.SetCloneToken(true)
 
 	result = &VaultSecretStore{
 		logger:          b.logger,
 		client:          client,
+		tokenSource:     b.tokenSource,
 		parentNamespace: b.parentNamespace,
 		kvMountPath:     b.kvMountPath,
 	}
@@ -152,7 +152,7 @@ func (s *VaultSecretStore) Store(ctx context.Context, tenant, project, name stri
 		return err
 	}
 
-	client, err := s.tenantClient(tenant)
+	client, err := s.tenantClient(ctx, tenant)
 	if err != nil {
 		return err
 	}
@@ -190,7 +190,7 @@ func (s *VaultSecretStore) Fetch(ctx context.Context, tenant, project, name stri
 		return nil, err
 	}
 
-	client, err := s.tenantClient(tenant)
+	client, err := s.tenantClient(ctx, tenant)
 	if err != nil {
 		return nil, err
 	}
@@ -235,7 +235,7 @@ func (s *VaultSecretStore) Delete(ctx context.Context, tenant, project, name str
 		return err
 	}
 
-	client, err := s.tenantClient(tenant)
+	client, err := s.tenantClient(ctx, tenant)
 	if err != nil {
 		return err
 	}
@@ -254,11 +254,16 @@ func (s *VaultSecretStore) Delete(ctx context.Context, tenant, project, name str
 	return nil
 }
 
-func (s *VaultSecretStore) tenantClient(tenant string) (*vaultapi.Client, error) {
+func (s *VaultSecretStore) tenantClient(ctx context.Context, tenant string) (*vaultapi.Client, error) {
+	token, err := s.tokenSource.VaultToken(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to obtain vault token: %w", err)
+	}
 	client, err := s.client.Clone()
 	if err != nil {
 		return nil, fmt.Errorf("failed to clone vault client: %w", err)
 	}
+	client.SetToken(token)
 	client.SetNamespace(path.Join(s.parentNamespace, tenant))
 	return client, nil
 }

@@ -31,11 +31,13 @@ import (
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/baremetalinstance"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/baremetalinstancecatalogitem"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/baremetalinstancetype"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/cluster"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/clustercatalogitem"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/clusterversion"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/computeinstance"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/computeinstancecatalogitem"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/diskimage"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/externalip"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/externalipattachment"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/hub"
@@ -46,6 +48,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/storagetier"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/subnet"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/virtualnetwork"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/help"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
@@ -63,21 +66,23 @@ func Cmd() *cobra.Command {
 	}
 	result.AddCommand(baremetalinstance.Cmd())
 	result.AddCommand(baremetalinstancecatalogitem.Cmd())
+	result.AddCommand(help.MarkPrivateAPI(baremetalinstancetype.Cmd()))
 	result.AddCommand(cluster.Cmd())
 	result.AddCommand(clustercatalogitem.Cmd())
-	result.AddCommand(clusterversion.Cmd())
+	result.AddCommand(help.MarkPrivateAPI(clusterversion.Cmd()))
 	result.AddCommand(computeinstance.Cmd())
 	result.AddCommand(computeinstancecatalogitem.Cmd())
+	result.AddCommand(diskimage.Cmd())
 	result.AddCommand(externalip.Cmd())
 	result.AddCommand(externalipattachment.Cmd())
-	result.AddCommand(hub.Cmd())
-	result.AddCommand(instancetype.Cmd())
+	result.AddCommand(help.MarkPrivateAPI(hub.Cmd()))
+	result.AddCommand(help.MarkPrivateAPI(instancetype.Cmd()))
 	result.AddCommand(natgateway.Cmd())
 	result.AddCommand(virtualnetwork.Cmd())
 	result.AddCommand(subnet.Cmd())
 	result.AddCommand(securitygroup.Cmd())
-	result.AddCommand(storagebackend.Cmd())
-	result.AddCommand(storagetier.Cmd())
+	result.AddCommand(help.MarkPrivateAPI(storagebackend.Cmd()))
+	result.AddCommand(help.MarkPrivateAPI(storagetier.Cmd()))
 	flags := result.Flags()
 	flags.StringVarP(
 		&runner.args.file,

@@ -148,7 +148,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-const shortHelp = `Create a subnet.`
+const shortHelp = `Create a subnet`
 
 const longHelp = `
 Create a subnet within an existing virtual network. At least one of

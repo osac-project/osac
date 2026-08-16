@@ -554,7 +554,7 @@ var _ = Describe("Private clusters server", func() {
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.AlreadyExists))
-			Expect(status.Message()).To(Equal(fmt.Sprintf("object with identifier '%s' and name '%s' already exists", id, name)))
+			Expect(status.Message()).To(Equal(fmt.Sprintf("cluster with identifier '%s' and name '%s' already exists", id, name)))
 		})
 
 		It("List objects", func() {

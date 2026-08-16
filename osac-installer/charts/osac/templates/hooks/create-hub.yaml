@@ -70,7 +70,7 @@ spec:
             NAMESPACE="{{ .Release.Namespace }}"
 
             echo "Reading hub-access token..."
-            HUB_TOKEN=$(oc get secret hub-access -n "${NAMESPACE}" \
+            HUB_TOKEN=$(kubectl get secret hub-access -n "${NAMESPACE}" \
               -o jsonpath='{.data.token}' | base64 -d)
             [[ -n "${HUB_TOKEN}" ]] || { echo "ERROR: hub-access secret has no token"; exit 1; }
             echo "  hub-access token: ${#HUB_TOKEN} chars"

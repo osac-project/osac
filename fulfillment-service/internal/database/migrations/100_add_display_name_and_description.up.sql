@@ -48,11 +48,11 @@ begin
       t.table_name
   loop
     execute format(
-      'alter table %I add column display_name text not null default ''''',
+      'alter table public.%I add column display_name text not null default ''''',
       table_name
     );
     execute format(
-      'alter table %I add column description text not null default ''''',
+      'alter table public.%I add column description text not null default ''''',
       table_name
     );
   end loop;

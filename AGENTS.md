@@ -40,3 +40,20 @@ fulfillment-service (proto)
 ```
 
 For deployment coordination (image tags, submodules), see `osac-installer/AGENTS.md`.
+
+## Knowledge Graph (graphify brain)
+
+CI keeps a structural code graph of this mono-repo fresh (`.github/workflows/graphify-brain-refresh.yaml`) and publishes it for pickup. After `graphify` is installed (see below), a `SessionStart` hook (`.claude/hooks/fetch-graphify-brain.sh`) fetches the latest published bundle into `graphify-out/` automatically at the start of every session — no manual fetch step — and it fails open (falls back to normal cold exploration with a one-line warning) if the fetch fails, `graphify` isn't installed, or the graph is otherwise unavailable.
+
+`graphify` itself needs to be installed once per developer machine before any of this does anything useful:
+
+```bash
+uv tool install graphifyy   # recommended
+# or: pipx install graphifyy
+```
+
+Note the package name is `graphifyy` (double "y") — the CLI command itself is `graphify`, not a typo.
+
+`graphify claude install` has already been run against this repo and its output committed (the `## graphify` section in `CLAUDE.md` and the `PreToolUse` hooks in `.claude/settings.json`) — the whole team inherits the consumption side by default, nothing to run yourself. It installs the CLAUDE.md directive and PreToolUse hook that *nudge* Claude Code to consult the graph before Bash/Grep/Read/Glob calls — an advisory reminder injected into context, not an enforced block; Claude Code can still proceed with a raw read if it chooses to (that would need `--strict` mode, not used in this install). The fetch hook above only keeps the graph's *data* current — this is what prompts something to actually read it.
+
+Do **not** run `graphify hook install` or `graphify --watch` in this repo — those enable local-generation automation that rebuilds the graph from your own uncommitted local state, which would clobber the CI-fetched, org-wide graph with an incomplete single-machine view. Generation is centralized in CI by design.

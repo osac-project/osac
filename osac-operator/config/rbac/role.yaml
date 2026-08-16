@@ -77,6 +77,15 @@ rules:
   - list
   - watch
 - apiGroups:
+  - metallb.io
+  resources:
+  - ipaddresspools
+  verbs:
+  - create
+  - delete
+  - get
+  - update
+- apiGroups:
   - osac.openshift.io
   resources:
   - baremetalinstances

@@ -15,6 +15,9 @@ keycloak:
   enabled: true
   realmOverwrite: true
   hostname: "keycloak.keycloak.svc.cluster.local"
+  adminUsername: admin
+  adminPassword: admin
+  defaultUserPassword: foobar
   route:
     hostname: ""
   images:

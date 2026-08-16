@@ -1520,6 +1520,14 @@ var _ = Describe("Deletion Cleanup", func() {
 			RemoveUserFromGroup(gomock.Any(), "acme", "keycloak-alice-id", "group-id").
 			Return(nil)
 
+		mockProjectsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(&privatev1.ProjectsGetResponse{Object: project}, nil)
+
+		mockProjectsClient.EXPECT().
+			Signal(gomock.Any(), gomock.Any()).
+			Return(privatev1.ProjectsSignalResponse_builder{}.Build(), nil)
+
 		task := &task{
 			r:          functionObj,
 			membership: membership,
@@ -1590,6 +1598,14 @@ var _ = Describe("Deletion Cleanup", func() {
 			RemoveUserFromGroup(gomock.Any(), "acme", "keycloak-alice-id", "group-id").
 			Return(nil)
 
+		mockProjectsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(&privatev1.ProjectsGetResponse{Object: childProject}, nil)
+
+		mockProjectsClient.EXPECT().
+			Signal(gomock.Any(), gomock.Any()).
+			Return(privatev1.ProjectsSignalResponse_builder{}.Build(), nil)
+
 		task := &task{
 			r:          functionObj,
 			membership: membership,
@@ -1622,6 +1638,14 @@ var _ = Describe("Deletion Cleanup", func() {
 		mockProjectsClient.EXPECT().
 			List(gomock.Any(), gomock.Any()).
 			Return(&privatev1.ProjectsListResponse{Items: []*privatev1.Project{}}, nil)
+
+		// signalProject: project still not found by name
+		mockProjectsClient.EXPECT().
+			List(gomock.Any(), gomock.Any()).
+			Return(&privatev1.ProjectsListResponse{}, nil)
+		mockProjectsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(nil, status.Error(codes.NotFound, "project not found"))
 
 		task := &task{
 			r:          functionObj,
@@ -1664,6 +1688,14 @@ var _ = Describe("Deletion Cleanup", func() {
 			GetGroupIDByPath(gomock.Any(), "acme", "/my-project/system:managers").
 			Return("", status.Error(codes.NotFound, "group not found"))
 
+		mockProjectsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(&privatev1.ProjectsGetResponse{Object: project}, nil)
+
+		mockProjectsClient.EXPECT().
+			Signal(gomock.Any(), gomock.Any()).
+			Return(privatev1.ProjectsSignalResponse_builder{}.Build(), nil)
+
 		task := &task{
 			r:          functionObj,
 			membership: membership,
@@ -1704,6 +1736,155 @@ var _ = Describe("Deletion Cleanup", func() {
 		mockIdpClient.EXPECT().
 			GetGroupIDByPath(gomock.Any(), "acme", "/my-project/system:viewers").
 			Return("", fmt.Errorf("wrapped error: group not found in keycloak"))
+
+		mockProjectsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(&privatev1.ProjectsGetResponse{Object: project}, nil)
+		mockProjectsClient.EXPECT().
+			Signal(gomock.Any(), gomock.Any()).
+			Return(privatev1.ProjectsSignalResponse_builder{}.Build(), nil)
+
+		task := &task{
+			r:          functionObj,
+			membership: membership,
+		}
+
+		err := task.delete(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(membership.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.ProjectMembershipFinalizer))
+	})
+})
+
+var _ = Describe("Signal Project on Deletion", func() {
+	var (
+		ctrl                         *gomock.Controller
+		mockProjectsClient           *MockProjectsClient
+		mockProjectMembershipsClient *MockProjectMembershipsClient
+		mockUsersClient              *MockUsersClient
+		mockIdpClient                *idp.MockClientInterface
+		ctx                          context.Context
+		functionObj                  *function
+	)
+
+	BeforeEach(func() {
+		ctrl = gomock.NewController(GinkgoT())
+		mockProjectsClient = NewMockProjectsClient(ctrl)
+		mockProjectMembershipsClient = NewMockProjectMembershipsClient(ctrl)
+		mockUsersClient = NewMockUsersClient(ctrl)
+		mockIdpClient = idp.NewMockClientInterface(ctrl)
+		ctx = context.Background()
+
+		functionObj = &function{
+			logger:                   logger,
+			projectMembershipsClient: mockProjectMembershipsClient,
+			projectsClient:           mockProjectsClient,
+			usersClient:              mockUsersClient,
+			idpClient:                mockIdpClient,
+		}
+	})
+
+	AfterEach(func() {
+		ctrl.Finish()
+	})
+
+	It("should not signal when project name is empty", func() {
+		membership := privatev1.ProjectMembership_builder{
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.ProjectMembershipFinalizer},
+			}.Build(),
+			Spec: privatev1.ProjectMembershipSpec_builder{
+				Role: privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_MANAGER,
+			}.Build(),
+		}.Build()
+
+		task := &task{
+			r:          functionObj,
+			membership: membership,
+		}
+
+		err := task.delete(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(membership.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.ProjectMembershipFinalizer))
+	})
+
+	It("should continue delete when project Get fails during signaling", func() {
+		membership := privatev1.ProjectMembership_builder{
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.ProjectMembershipFinalizer},
+				Project:    "my-project",
+			}.Build(),
+			Spec: privatev1.ProjectMembershipSpec_builder{
+				Role: privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_MANAGER,
+			}.Build(),
+		}.Build()
+
+		mockProjectsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(nil, status.Errorf(codes.Unavailable, "service unavailable"))
+
+		task := &task{
+			r:          functionObj,
+			membership: membership,
+		}
+
+		err := task.delete(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(membership.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.ProjectMembershipFinalizer))
+	})
+
+	It("should skip signaling when project is not found by name", func() {
+		membership := privatev1.ProjectMembership_builder{
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.ProjectMembershipFinalizer},
+				Project:    "nonexistent-project",
+			}.Build(),
+			Spec: privatev1.ProjectMembershipSpec_builder{
+				Role: privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_MANAGER,
+			}.Build(),
+		}.Build()
+
+		mockProjectsClient.EXPECT().
+			List(gomock.Any(), gomock.Any()).
+			Return(&privatev1.ProjectsListResponse{}, nil)
+		mockProjectsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(nil, status.Error(codes.NotFound, "project not found"))
+
+		task := &task{
+			r:          functionObj,
+			membership: membership,
+		}
+
+		err := task.delete(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(membership.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.ProjectMembershipFinalizer))
+	})
+
+	It("should continue delete when Signal RPC fails", func() {
+		project := privatev1.Project_builder{
+			Metadata: privatev1.Metadata_builder{
+				Name:   "my-project",
+				Tenant: "acme",
+			}.Build(),
+			Spec: privatev1.ProjectSpec_builder{}.Build(),
+		}.Build()
+		membership := privatev1.ProjectMembership_builder{
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.ProjectMembershipFinalizer},
+				Project:    "my-project",
+			}.Build(),
+			Spec: privatev1.ProjectMembershipSpec_builder{
+				Role: privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_MANAGER,
+			}.Build(),
+		}.Build()
+
+		mockProjectsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(&privatev1.ProjectsGetResponse{Object: project}, nil)
+
+		mockProjectsClient.EXPECT().
+			Signal(gomock.Any(), gomock.Any()).
+			Return(nil, status.Errorf(codes.Unavailable, "service unavailable"))
 
 		task := &task{
 			r:          functionObj,

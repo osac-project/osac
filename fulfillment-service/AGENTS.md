@@ -10,6 +10,7 @@ This file contains only frequently-needed commands and non-obvious rules. For de
 - **API design conventions**: [docs/API.md](docs/API.md)
 - **Authentication & authorization**: [docs/AUTH.md](docs/AUTH.md)
 - **Installation & deployment**: [docs/INSTALL.md](docs/INSTALL.md)
+- **Console access architecture**: [docs/VM_CONSOLE.md](docs/VM_CONSOLE.md)
 - **Database patterns**: See examples in `internal/database/migrations/*.up.sql` for:
   - Materialized helper tables with triggers (cross-object constraints)
   - Backfill patterns (`update table set data = data`)
@@ -18,6 +19,7 @@ This file contains only frequently-needed commands and non-obvious rules. For de
   - Public/private server delegation
   - Builder pattern for server configuration
 - **Testing patterns**: See `*_suite_test.go` files for Ginkgo/Gomega setup
+- **CLI design guidelines**: [`internal/cmd/cli/.claude/rules/cli-ux.md`](internal/cmd/cli/.claude/rules/cli-ux.md)
 - **Dev tooling**: [dev/README.md](dev/README.md) for extending `dev.py`
 - **Linter configuration**:
   - Go: `.golangci.yml`
@@ -61,7 +63,7 @@ ginkgo run -r internal --skip="database"
 uv run dev.py lint
 
 # Proto: lint and generate
-buf lint
+uv run dev.py lint proto
 buf generate
 
 # Run all tests including integration (requires kind cluster)
@@ -96,7 +98,7 @@ Requires `/etc/hosts` entries:
 uv run dev.py lint
 
 # Lint proto files
-buf lint
+uv run dev.py lint proto
 
 # Generate Go code from proto
 buf generate
@@ -111,7 +113,7 @@ uv run ruff check
 go mod tidy
 ```
 
-**CRITICAL**: Always run `buf lint && buf generate` after any `.proto` file change. Generated code lands in `internal/api/` (never edit manually). Buf is installed via `buf-action` in CI (see the root-level `.github/workflows/check-pull-request.yaml`); for local use, install buf separately following the [official installation guide](https://buf.build/docs/installation).
+**CRITICAL**: Always run `uv run dev.py lint proto && buf generate` after any `.proto` file change. Generated code lands in `internal/api/` (never edit manually). Buf is installed via `buf-action` in CI (see the root-level `.github/workflows/check-pull-request.yaml`); for local use, install buf separately following the [official installation guide](https://buf.build/docs/installation).
 
 For extending `dev.py` with new commands, see [dev/README.md](dev/README.md).
 
@@ -216,8 +218,23 @@ inline code and `{{ bt 3 }}` for fenced code blocks.
 For flag help, start with a short type hint in italics (e.g. `_[BOOLEAN]_`, `_URL_`,
 `_FILE|DIRECTORY_`) followed by a dash and the description.
 
+Do not end `shortHelp` strings with a trailing period — the help template does not append one.
+
 Refer to existing commands such as `internal/cmd/cli/login/login_cmd.go` for style and examples of
 how help text is structured.
+
+### Private-API Subcommands
+
+Subcommands that use the private API (`privatev1`) must be annotated so they are hidden from
+`--help` when private mode (--private) is disabled or configuration is unavailable. Wrap the `AddCommand` call with
+`help.MarkPrivateAPI`:
+
+```go
+result.AddCommand(help.MarkPrivateAPI(mysubcommand.Cmd()))
+```
+
+Add the subcommand name to the `privateNames` map in the corresponding `*_cmd_test.go` annotation
+test (e.g. `create_cmd_test.go`, `describe_cmd_test.go`).
 
 ## API Design Guidelines
 
@@ -225,7 +242,9 @@ Before making any API design or implementation decision (adding or modifying `.p
 services, messages, or REST transcoding), read [docs/API.md](docs/API.md). That document contains
 the full set of conventions and rules for the API, including object structure, naming, services,
 request/response patterns, REST transcoding, enums, conditions, object references, and
-documentation requirements.
+documentation requirements. OSAC follows [Kubernetes API
+conventions](https://github.com/kubernetes/community/blob/main/contributors/devel/sig-architecture/api-conventions.md)
+adapted for protobuf.
 
 ## Validation Constraints
 
@@ -258,7 +277,7 @@ To override embedded message validation (e.g., Projects allowing dots in names w
 
 Do not implement validation in Go code that can be expressed declaratively in proto.
 
-As with any proto change, run `buf lint && buf generate` afterward (see [Linting and Code Generation](#linting-and-code-generation)).
+As with any proto change, run `uv run dev.py lint proto && buf generate` afterward (see [Linting and Code Generation](#linting-and-code-generation)).
 
 ## Common Pitfalls
 
@@ -267,7 +286,7 @@ As with any proto change, run `buf lint && buf generate` afterward (see [Linting
 - CI timeout: 1 hour for unit and integration test runs
 - Integration test logs uploaded as `logs-helm` and `logs-kustomize` artifacts (always, even on failure)
 
-See [Linting and Code Generation](#linting-and-code-generation) for the required `buf lint && buf generate` step, and [Files Requiring Extra Caution](#files-requiring-extra-caution) for generated paths that must never be hand-edited.
+See [Linting and Code Generation](#linting-and-code-generation) for the required `uv run dev.py lint proto && buf generate` step, and [Files Requiring Extra Caution](#files-requiring-extra-caution) for generated paths that must never be hand-edited.
 
 ## Files Requiring Extra Caution
 

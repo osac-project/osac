@@ -22,7 +22,7 @@ import (
 
 var _ = DescribeMigration("Add display_name and description columns", func() {
 	BeforeEach(func(ctx context.Context) {
-		err := tool.Migrate(ctx, 97)
+		err := tool.Migrate(ctx, 100)
 		Expect(err).ToNot(HaveOccurred())
 	})
 

@@ -3,6 +3,12 @@ set -euo pipefail
 
 KAFKA_NS=osac-kafka
 
+# Idempotency guard: skip all work if Kafka is already healthy.
+if oc wait kafka/osac-kafka -n "${KAFKA_NS}" --for=condition=Ready --timeout=5s 2>/dev/null; then
+  echo "Kafka cluster already ready, nothing to do."
+  exit 0
+fi
+
 echo "Waiting for AMQ Streams install plan..."
 until INSTALL_PLAN=$(oc get subscription amq-streams -n "${KAFKA_NS}" -o jsonpath='{.status.installPlanRef.name}' 2>/dev/null) && [[ -n "${INSTALL_PLAN}" ]]; do
   sleep 10

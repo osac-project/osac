@@ -23,6 +23,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
+	"go.uber.org/mock/gomock"
 
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
@@ -37,13 +38,21 @@ var _ = Describe("VaultSecretStore", func() {
 		ctx = context.Background()
 	})
 
+	newMockTokenSource := func(token string) *MockVaultTokenSource {
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+		mock := NewMockVaultTokenSource(ctrl)
+		mock.EXPECT().VaultToken(gomock.Any()).Return(token, nil).AnyTimes()
+		return mock
+	}
+
 	newTestStore := func(handler http.HandlerFunc, opts ...func(*VaultSecretStoreBuilder)) (*VaultSecretStore, *httptest.Server) {
 		server := httptest.NewServer(handler)
 		DeferCleanup(server.Close)
 		builder := NewVaultSecretStore().
 			SetLogger(logger).
 			SetAddress(server.URL).
-			SetToken("test-token").
+			SetTokenSource(newMockTokenSource("test-token")).
 			SetParentNamespace("osac")
 		for _, opt := range opts {
 			opt(builder)
@@ -57,7 +66,7 @@ var _ = Describe("VaultSecretStore", func() {
 		It("fails without logger", func() {
 			_, err := NewVaultSecretStore().
 				SetAddress("http://localhost:8200").
-				SetToken("token").
+				SetTokenSource(newMockTokenSource("token")).
 				SetParentNamespace("osac").
 				Build()
 			Expect(err).To(HaveOccurred())
@@ -67,28 +76,28 @@ var _ = Describe("VaultSecretStore", func() {
 		It("fails without address", func() {
 			_, err := NewVaultSecretStore().
 				SetLogger(logger).
-				SetToken("token").
+				SetTokenSource(newMockTokenSource("token")).
 				SetParentNamespace("osac").
 				Build()
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("address"))
 		})
 
-		It("fails without token", func() {
+		It("fails without token source", func() {
 			_, err := NewVaultSecretStore().
 				SetLogger(logger).
 				SetAddress("http://localhost:8200").
 				SetParentNamespace("osac").
 				Build()
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("token"))
+			Expect(err.Error()).To(ContainSubstring("token source"))
 		})
 
 		It("fails without parent namespace", func() {
 			_, err := NewVaultSecretStore().
 				SetLogger(logger).
 				SetAddress("http://localhost:8200").
-				SetToken("token").
+				SetTokenSource(newMockTokenSource("token")).
 				Build()
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("parent namespace"))
@@ -304,7 +313,7 @@ var _ = Describe("VaultSecretStore", func() {
 			store, err := NewVaultSecretStore().
 				SetLogger(logger).
 				SetAddress("http://localhost:1").
-				SetToken("test-token").
+				SetTokenSource(newMockTokenSource("test-token")).
 				SetParentNamespace("osac").
 				Build()
 			Expect(err).ToNot(HaveOccurred())

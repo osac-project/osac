@@ -25,6 +25,11 @@ import (
 
 const (
 	httpTimeout = 30 * time.Second
+	// healthCheckTimeout is derived from httpTimeout so the invariant
+	// (healthCheckTimeout < httpTimeout) is structural. Capped at 3s to
+	// stay well below the K8s readiness probe timeoutSeconds (5s) even if
+	// httpTimeout is increased.
+	healthCheckTimeout = min(httpTimeout/10, 3*time.Second)
 	// maxBodyLog caps M360 response body excerpts in error messages
 	// to avoid leaking large payloads into logs.
 	maxBodyLog = 256
@@ -100,26 +105,26 @@ func (c *m360Client) post(ctx context.Context, endpoint string, payload map[stri
 	return errors.New(errMsg)
 }
 
-// healthCheck verifies connectivity to the M360 API.
+// healthCheck verifies TCP/TLS connectivity to the M360 base URL.
+// Any HTTP response (regardless of status code) means M360 is reachable.
+// Only connection-level errors (timeout, refused, DNS) cause failure.
+// Auth and API route failures surface as post() errors /
+// osac_adapter_events_failed_total, not here.
 func (c *m360Client) healthCheck(ctx context.Context) error {
-	url := fmt.Sprintf("%s/api/%s/external/run", c.baseURL, c.apiVersion)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	ctx, cancel := context.WithTimeout(ctx, healthCheckTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, c.baseURL, nil)
 	if err != nil {
 		return fmt.Errorf("create health check request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("M360 health check: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	_, _ = io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1 MB cap
-
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return nil
-	}
-	return fmt.Errorf("M360 health check returned %d", resp.StatusCode)
+	return nil
 }
 
 // logResponse extracts event_id from a successful M360 response for debug logging.

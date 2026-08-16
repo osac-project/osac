@@ -143,6 +143,13 @@ enum TenantConditionType {
   // - True: All default networking resources are ready, or no default networking is configured
   // - False: One or more default networking resources are pending or failed
   TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY = 1;
+
+  // Indicates whether the tenant's vault namespace has been successfully provisioned.
+  //
+  // Status meanings:
+  // - True: Vault namespace is provisioned and ready
+  // - False: Vault namespace provisioning is pending, has not yet succeeded, or is not applicable
+  TENANT_CONDITION_TYPE_VAULT_READY = 2;
 }
 
 // Lifecycle states for Tenant resources.

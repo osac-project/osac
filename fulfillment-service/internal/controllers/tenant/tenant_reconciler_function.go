@@ -41,13 +41,15 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/idp"
 	"github.com/osac-project/osac/fulfillment-service/internal/masks"
+	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 )
 
 // FunctionBuilder contains the data needed to build instances of the reconciler function.
 type FunctionBuilder struct {
-	logger     *slog.Logger
-	connection *grpc.ClientConn
-	idpManager *idp.TenantManager
+	logger         *slog.Logger
+	connection     *grpc.ClientConn
+	idpManager     *idp.TenantManager
+	vaultLifecycle vault.LifecycleClient
 }
 
 // NewFunction creates a builder that can be used to configure and create reconciler functions.
@@ -70,6 +72,13 @@ func (b *FunctionBuilder) SetConnection(value *grpc.ClientConn) *FunctionBuilder
 // SetIdpManager sets the IDP manager that the reconciler will use to manage tenants in the identity provider.
 func (b *FunctionBuilder) SetIdpManager(value *idp.TenantManager) *FunctionBuilder {
 	b.idpManager = value
+	return b
+}
+
+// SetVaultLifecycle sets the vault lifecycle client that the reconciler will use to manage tenant namespaces
+// in the secret store.
+func (b *FunctionBuilder) SetVaultLifecycle(value vault.LifecycleClient) *FunctionBuilder {
+	b.vaultLifecycle = value
 	return b
 }
 
@@ -100,6 +109,7 @@ func (b *FunctionBuilder) Build() (result *function, err error) {
 		externalIPPoolsClient: privatev1.NewExternalIPPoolsClient(b.connection),
 		externalIPsClient:     privatev1.NewExternalIPsClient(b.connection),
 		idpManager:            b.idpManager,
+		vaultLifecycle:        b.vaultLifecycle,
 		maskCalculator:        masks.NewCalculator().Build(),
 	}
 	return
@@ -118,6 +128,7 @@ type function struct {
 	externalIPPoolsClient privatev1.ExternalIPPoolsClient
 	externalIPsClient     privatev1.ExternalIPsClient
 	idpManager            *idp.TenantManager
+	vaultLifecycle        vault.LifecycleClient
 	maskCalculator        *masks.Calculator
 }
 
@@ -179,13 +190,16 @@ func (t *task) update(ctx context.Context) error {
 		return nil
 	}
 
-	// For synced tenants, update IDP and check default networking readiness.
+	// For synced tenants, update IDP, ensure vault namespace, and check default networking readiness.
 	if state == privatev1.TenantState_TENANT_STATE_SYNCED {
 		if err := t.updateIDP(ctx); err != nil {
 			return err
 		}
 		if t.tenant.GetStatus().GetState() == privatev1.TenantState_TENANT_STATE_FAILED {
 			return nil
+		}
+		if err := t.ensureVaultNamespace(ctx); err != nil {
+			return err
 		}
 		return t.checkDefaultNetworkingReadiness(ctx)
 	}
@@ -326,8 +340,11 @@ func (t *task) delete(ctx context.Context) error {
 		return fmt.Errorf("tenant still has %d project(s) pending deletion", remaining)
 	}
 
-	// Skip if not synced to IDP yet
+	// Skip IDP cleanup if not synced to IDP yet, but still clean up vault.
 	if t.tenant.GetStatus().GetState() != privatev1.TenantState_TENANT_STATE_SYNCED {
+		if err := t.deleteVaultNamespace(ctx); err != nil {
+			return err
+		}
 		t.removeFinalizer()
 		return nil
 	}
@@ -335,8 +352,15 @@ func (t *task) delete(ctx context.Context) error {
 	// Delete from IDP
 	tenantName := t.tenant.GetStatus().GetIdpTenantName()
 	if tenantName == "" {
+		if err := t.deleteVaultNamespace(ctx); err != nil {
+			return err
+		}
 		t.removeFinalizer()
 		return nil
+	}
+
+	if err := t.deleteVaultNamespace(ctx); err != nil {
+		return err
 	}
 
 	err = t.r.idpManager.DeleteTenant(ctx, tenantName)
@@ -370,6 +394,7 @@ func (t *task) countRemainingProjects(ctx context.Context) (int32, error) {
 
 var tenantConditionTypes = []privatev1.TenantConditionType{
 	privatev1.TenantConditionType_TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY,
+	privatev1.TenantConditionType_TENANT_CONDITION_TYPE_VAULT_READY,
 }
 
 // setConditionDefaults ensures every known condition type has an entry in the tenant's conditions list.
@@ -421,6 +446,75 @@ func (t *task) updateCondition(conditionType privatev1.TenantConditionType, stat
 		LastTransitionTime: timestamppb.Now(),
 	}.Build())
 	t.tenant.GetStatus().SetConditions(conditions)
+}
+
+func (t *task) isConditionTrue(conditionType privatev1.TenantConditionType) bool {
+	for _, c := range t.tenant.GetStatus().GetConditions() {
+		if c.GetType() == conditionType {
+			return c.GetStatus() == privatev1.ConditionStatus_CONDITION_STATUS_TRUE
+		}
+	}
+	return false
+}
+
+func (t *task) ensureVaultNamespace(ctx context.Context) error {
+	condType := privatev1.TenantConditionType_TENANT_CONDITION_TYPE_VAULT_READY
+
+	if t.r.vaultLifecycle == nil {
+		return nil
+	}
+	if t.isBuiltin() {
+		return nil
+	}
+	if t.isConditionTrue(condType) {
+		return nil
+	}
+
+	tenantName := t.tenant.GetMetadata().GetName()
+	err := t.r.vaultLifecycle.EnsureTenantNamespace(ctx, tenantName)
+	if err != nil {
+		t.r.logger.ErrorContext(ctx, "Failed to provision vault namespace for tenant",
+			slog.String("tenant_id", t.tenant.GetId()),
+			slog.String("tenant_name", tenantName),
+			slog.Any("error", err),
+		)
+		return fmt.Errorf("failed to provision vault namespace: %w", err)
+	}
+
+	t.updateCondition(condType, privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+		"NamespaceReady", "Vault namespace provisioned successfully")
+
+	t.r.logger.DebugContext(ctx, "Vault namespace provisioned for tenant",
+		slog.String("tenant_id", t.tenant.GetId()),
+		slog.String("tenant_name", tenantName),
+	)
+	return nil
+}
+
+func (t *task) deleteVaultNamespace(ctx context.Context) error {
+	if t.r.vaultLifecycle == nil {
+		return nil
+	}
+	if t.isBuiltin() {
+		return nil
+	}
+
+	tenantName := t.tenant.GetMetadata().GetName()
+	err := t.r.vaultLifecycle.DeleteTenantNamespace(ctx, tenantName)
+	if err != nil {
+		t.r.logger.ErrorContext(ctx, "Failed to delete vault namespace for tenant",
+			slog.String("tenant_id", t.tenant.GetId()),
+			slog.String("tenant_name", tenantName),
+			slog.Any("error", err),
+		)
+		return fmt.Errorf("failed to delete vault namespace: %w", err)
+	}
+
+	t.r.logger.DebugContext(ctx, "Vault namespace deleted for tenant",
+		slog.String("tenant_id", t.tenant.GetId()),
+		slog.String("tenant_name", tenantName),
+	)
+	return nil
 }
 
 const (

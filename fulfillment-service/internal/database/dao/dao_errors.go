@@ -44,8 +44,8 @@ func (e *ErrNotFound) Error() string {
 
 // ErrAlreadyExists is an error type that indicates that an object can't be created because it already exists.
 type ErrAlreadyExists struct {
-	// Table is the name of the table.
-	Table string
+	// Kind is the human-readable resource kind name (e.g. "compute instance", "external IP").
+	Kind string
 
 	// ID is the identifier of the object that already exists.
 	ID string
@@ -66,14 +66,9 @@ func (e *ErrAlreadyExists) Error() string {
 		return e.Reason
 	}
 
-	// If no reason has been provided then build the error message according to the table, identifier and name:
-	var kind string
-	switch e.Table {
-	case "projects":
-		kind = "project"
-	case "tenants":
-		kind = "tenant"
-	default:
+	// If no reason has been provided then build the error message according to the kind, identifier and name:
+	kind := e.Kind
+	if kind == "" {
 		kind = "object"
 	}
 	switch {

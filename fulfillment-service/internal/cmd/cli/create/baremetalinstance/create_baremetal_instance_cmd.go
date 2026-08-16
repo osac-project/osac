@@ -216,7 +216,7 @@ func (c *runnerContext) run(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
-const shortHelp = `Create a bare metal instance.`
+const shortHelp = `Create a bare metal instance`
 
 const longHelp = `
 Create a bare metal instance.

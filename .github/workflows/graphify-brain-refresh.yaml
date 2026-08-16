@@ -1,0 +1,295 @@
+name: Graphify Brain Refresh
+
+on:
+  # Hourly, offset off the top/half of the hour -- GitHub Actions' shared
+  # cron scheduler queues everyone's on-the-hour schedules together and can
+  # delay/drop them under load (same reasoning as this repo's e2e-*-full-install
+  # workflows and osac-test-infra's e2e-caas-netris-caller.yml).
+  schedule:
+    - cron: "21 * * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  # No cancel-in-progress: graph.json is never committed/merged, so there's
+  # no conflict to resolve by cancelling -- runs are queued, not raced, and
+  # each successive run naturally reflects a HEAD at least as new as the one
+  # it queued behind (main only moves forward). This alone is sufficient
+  # race safety; no separate ancestry guard is needed.
+  group: graphify-brain-refresh
+  cancel-in-progress: false
+
+permissions: {}
+
+env:
+  # Pin deliberately -- bump only with an intentional review, same as this
+  # repo pins action SHAs and Helm/tool versions elsewhere. Confirmed current
+  # on PyPI at the time this workflow was written; the CLI command is
+  # `graphify` despite the package itself being named with a double "y".
+  GRAPHIFY_VERSION: "0.9.41"
+  RELEASE_TAG: graph-latest
+
+jobs:
+  refresh:
+    name: Refresh and publish graph
+    # Ephemeral GH-hosted runner is sufficient here -- this job only ever
+    # uses GITHUB_TOKEN, no Vault/self-hosted-only access. osac-ci is
+    # reserved for alert-on-repeated-failure below, which does need it.
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write  # gh release create/upload against this same repo
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install graphify
+        run: |
+          pip install --user "graphifyy[sql]==${GRAPHIFY_VERSION}"
+          echo "${HOME}/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Restore prior graphify-out/ state (fast path)
+        id: cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: graphify-out/
+          # Cache keys are immutable in GH Actions -- a static key would make
+          # every save after the first a silent no-op. Save under a per-run
+          # key and restore via restore-keys prefix match so the fast path
+          # always finds the most recent entry.
+          key: graphify-brain-cache-${{ github.run_id }}
+          restore-keys: |
+            graphify-brain-cache-
+
+      - name: Re-pull last published bundle (authoritative)
+        id: repull
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/graphify-repull && mkdir -p /tmp/graphify-repull
+          if gh release download "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
+               --pattern 'graphify-bundle.tar.gz' --dir /tmp/graphify-repull; then
+            rm -rf graphify-out
+            mkdir -p graphify-out
+            tar xzf /tmp/graphify-repull/graphify-bundle.tar.gz -C graphify-out
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No published bundle to re-pull yet (first run, or release missing)."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Determine restore path taken
+        id: restore-path
+        run: |
+          # cache-hit is only true on an exact primary-key match, which never
+          # happens now that the save key is per-run (see restore step above)
+          # -- cache-matched-key is set on both exact and restore-keys/prefix
+          # matches, so it's the correct signal for "did the fast path find
+          # anything at all".
+          if [[ "${{ steps.repull.outputs.ok }}" == "true" ]]; then
+            path="artifact-repull"
+          elif [[ -n "${{ steps.cache.outputs.cache-matched-key }}" ]]; then
+            path="cache-hit"
+          else
+            path="full-rebuild"
+          fi
+          echo "path=${path}" >> "$GITHUB_OUTPUT"
+          echo "::notice::graphify-brain-refresh restore path: ${path}"
+
+      - name: Extract or update graph
+        run: |
+          set -euo pipefail
+          # update has no --code-only flag (already no-LLM by default; only
+          # extract accepts it) -- confirmed against the real CLI.
+          if [[ -f graphify-out/graph.json && -f graphify-out/manifest.json ]]; then
+            echo "Prior graph found -- running incremental update."
+            graphify update .
+          else
+            echo "No usable prior graph -- running full extraction."
+            graphify extract . --code-only
+          fi
+          # extract doesn't write GRAPH_REPORT.md itself; update sometimes
+          # does. Always (re)generate it explicitly.
+          graphify cluster-only .
+
+      - name: Write metadata.json
+        run: |
+          set -euo pipefail
+          # Extract just the bare numeric version (graphify --version prints
+          # non-numeric text too, e.g. "graphify 0.9.41") so this matches
+          # exactly what the fetch script's own version check expects to
+          # compare against -- see fetch-graphify-brain.sh's Step 5.
+          graphify_version="$(graphify --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+          generated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          jq -n \
+            --arg source_sha "${GITHUB_SHA}" \
+            --arg graphify_version "${graphify_version}" \
+            --arg generated_at "${generated_at}" \
+            '{source_sha: $source_sha, graphify_version: $graphify_version, generated_at: $generated_at}' \
+            > graphify-out/metadata.json
+
+      - name: Export Obsidian vault (best-effort, independent asset)
+        id: obsidian
+        run: |
+          set -uo pipefail
+          if graphify export obsidian 2>/tmp/obsidian-export.log; then
+            if [[ -d graphify-out/obsidian ]]; then
+              tar czf graphify-obsidian-export.tar.gz -C graphify-out obsidian
+              echo "ok=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "obsidian export reported success but produced no output directory -- skipping asset."
+              echo "ok=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "Obsidian export failed (non-fatal, mechanical export only):"
+            cat /tmp/obsidian-export.log || true
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Bundle core artifacts (single archive for atomic publish)
+        run: |
+          set -euo pipefail
+          # graph.json + GRAPH_REPORT.md + manifest.json + metadata.json travel
+          # together in one archive so a consumer always gets the whole matched
+          # set or a clean 404 -- never a mismatched pair from two publishes.
+          tar czf graphify-bundle.tar.gz -C graphify-out \
+            graph.json GRAPH_REPORT.md manifest.json metadata.json
+
+      - name: Publish to GH Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          assets=(graphify-bundle.tar.gz)
+          if [[ "${{ steps.obsidian.outputs.ok }}" == "true" ]]; then
+            assets+=(graphify-obsidian-export.tar.gz)
+          fi
+          if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            # `gh release upload --clobber` replaces assets in place but does
+            # not move the release's own tag -- move it explicitly so
+            # graph-latest's git ref (not just metadata.json's source_sha)
+            # points at this run's commit too. `gh release edit --target`
+            # cannot move an existing tag; the Git refs API can.
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${RELEASE_TAG}" \
+              -f sha="${GITHUB_SHA}" -F force=true
+            gh release upload "${RELEASE_TAG}" "${assets[@]}" --repo "${GITHUB_REPOSITORY}" --clobber
+          else
+            gh release create "${RELEASE_TAG}" "${assets[@]}" --repo "${GITHUB_REPOSITORY}" \
+              --target "${GITHUB_SHA}" \
+              --title "graphify brain (latest)" \
+              --notes "Auto-published by graphify-brain-refresh.yaml. Always points at the most recent successful run -- not a versioned release."
+          fi
+
+      - name: Save graphify-out/ for next run's fast path
+        if: success()
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: graphify-out/
+          key: graphify-brain-cache-${{ github.run_id }}
+
+  alert-on-repeated-failure:
+    name: Alert on repeated publish failure
+    needs: refresh
+    if: failure()
+    runs-on: graphify-builder
+    timeout-minutes: 10
+    permissions:
+      contents: read  # only needed to resolve the local ./.github/actions/vault-slack-webhook path
+      actions: read   # needed for `gh run list` below
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      # osac-ci doesn't reliably have gh preinstalled (confirmed: first
+      # prod run hit "gh: command not found"). Install a portable copy.
+      - name: Ensure gh CLI is available
+        run: |
+          set -euo pipefail
+          if command -v gh >/dev/null 2>&1; then
+            echo "gh already available: $(gh --version | head -1)"
+            exit 0
+          fi
+          echo "gh not found on this runner -- installing a portable copy."
+          GH_VERSION="2.97.0"
+          case "$(uname -m)" in
+            x86_64)
+              GH_ARCH="amd64"
+              GH_SHA256="a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112"
+              ;;
+            aarch64)
+              GH_ARCH="arm64"
+              GH_SHA256="73ea440ecad9c9e284429997ee6f93577bc6f7bc6fba357ef62c53ad8fb641a5"
+              ;;
+            *) echo "::error::Unsupported architecture $(uname -m) for gh CLI install"; exit 1 ;;
+          esac
+          mkdir -p /tmp/gh-install
+          curl -sSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${GH_ARCH}.tar.gz" \
+            -o /tmp/gh-install/gh.tar.gz
+          # Pinned checksum (from gh's own published gh_${GH_VERSION}_checksums.txt)
+          # -- verify before extracting, not after.
+          echo "${GH_SHA256}  /tmp/gh-install/gh.tar.gz" | sha256sum -c -
+          tar xzf /tmp/gh-install/gh.tar.gz -C /tmp/gh-install --strip-components=1
+          echo "/tmp/gh-install/bin" >> "$GITHUB_PATH"
+
+      - name: Check recent run history
+        id: history
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # This job only runs when the current run already failed (if:
+          # failure() above) -- that's one confirmed failure already, and its
+          # own conclusion is still null/in-progress if queried from inside
+          # itself. Query the two prior COMPLETED runs instead and alert only
+          # if both were also failures -- 3-in-a-row once the current run is
+          # counted.
+          conclusions="$(gh run list --repo "${GITHUB_REPOSITORY}" \
+            --workflow graphify-brain-refresh.yaml \
+            --status completed --limit 2 \
+            --json conclusion -q '[.[].conclusion] | join(",")')"
+          echo "Prior 2 completed run conclusions: ${conclusions}"
+          if [[ "${conclusions}" == "failure,failure" ]]; then
+            echo "should-alert=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should-alert=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Retrieve Slack webhook from Vault
+        if: steps.history.outputs.should-alert == 'true'
+        id: vault
+        uses: ./.github/actions/vault-slack-webhook
+
+      - name: Notify Slack
+        if: steps.history.outputs.should-alert == 'true'
+        env:
+          SLACK_WEBHOOK_URL: ${{ steps.vault.outputs.webhook-url }}
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg workflow_url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            '{
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {"type": "plain_text", "text": ":red_jenkins_circle: Graphify Brain Refresh: 3 consecutive publish failures"}
+                },
+                {
+                  "type": "section",
+                  "text": {"type": "mrkdwn", "text": "The published graph bundle may now be stale for every developer session and the ci-select-facing consumers. See run for details."}
+                },
+                {
+                  "type": "actions",
+                  "elements": [
+                    {"type": "button", "text": {"type": "plain_text", "text": "View Run"}, "url": $workflow_url}
+                  ]
+                }
+              ]
+            }' > /tmp/slack-payload.json
+          curl -sf --max-time 15 -X POST "${SLACK_WEBHOOK_URL}" \
+            -H "Content-Type: application/json" \
+            -d @/tmp/slack-payload.json

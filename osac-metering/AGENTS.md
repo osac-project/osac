@@ -90,7 +90,7 @@ The `adapters/` package is a standalone Go module that provides everything a bil
 - `NonRetryableError` / `RetryableError` error classification
 - Graceful shutdown: final flush with 30s timeout, adapter close with 10s timeout
 
-**Kafka configuration** (`kafka.go`) — TLS with custom CA, SASL/SCRAM-SHA-512 authentication
+**Kafka configuration** (`kafka.go`, `kafka_env.go`) — TLS with custom CA, SASL/SCRAM-SHA-512 authentication; `KafkaConfigFromEnv()` reads `KAFKA_*` env vars with TLS enabled by default
 
 **Prometheus metrics** (`metrics.go`):
 - `osac_adapter_events_submitted_total` (provider, topic)
@@ -112,6 +112,8 @@ The `adapters/` package is a standalone Go module that provides everything a bil
 - `GET /healthz` — health check
 - `GET /metrics` — Prometheus metrics
 
+Kafka TLS is enabled by default (via `KafkaConfigFromEnv()`); set `KAFKA_TLS_ENABLED=false` for local development without TLS.
+
 Deployed via Helm with `echoAdapter.enabled: true` (disabled by default; enabled in CI values profiles).
 
 ### M360 Adapter
@@ -123,7 +125,7 @@ Deployed via Helm with `echoAdapter.enabled: true` (disabled by default; enabled
 - Error classification: 4xx → non-retryable (except 408/429), 5xx → retryable
 - TLS enabled by default, configurable API version (default `v1`)
 - `GET /healthz` — liveness probe (always 200)
-- `GET /readyz` — readiness probe (M360 connectivity check)
+- `GET /readyz` — readiness probe (TCP/TLS reachability check to M360 base URL)
 - `GET /metrics` — Prometheus metrics
 
 Deployed via Helm with `m360Adapter.enabled: true` (disabled by default).

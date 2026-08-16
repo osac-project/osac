@@ -25,6 +25,7 @@ import "osac/private/v1/cluster_type.proto";
 import "osac/private/v1/compute_instance_catalog_item_type.proto";
 import "osac/private/v1/compute_instance_template_type.proto";
 import "osac/private/v1/compute_instance_type.proto";
+import "osac/private/v1/disk_image_type.proto";
 import "osac/private/v1/external_ip_attachment_type.proto";
 import "osac/private/v1/external_ip_pool_type.proto";
 import "osac/private/v1/external_ip_type.proto";
@@ -92,6 +93,7 @@ message Event {
     StorageTier storage_tier = 39;
     Secret secret = 40;
     Volume volume = 41;
+    DiskImage disk_image = 42;
   }
 }
 

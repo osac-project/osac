@@ -882,10 +882,15 @@ deploy_osac() {
     --namespace "${OSAC_NAMESPACE}"
     --create-namespace
     --values "${SCRIPT_DIR}/values-kind.yaml"
+    --timeout 15m
   )
   if [[ -n "${FULFILLMENT_IMAGE:-}" ]]; then
     helm_args+=(--set "service.images.service=${FULFILLMENT_IMAGE}")
     log "Using custom fulfillment image: ${FULFILLMENT_IMAGE}"
+  fi
+  if [[ "$(uname -m)" == "arm64" ]]; then
+    helm_args+=(--set "cliImage=bitnami/kubectl:latest")
+    log "ARM64 detected — using bitnami/kubectl for hook jobs"
   fi
   helm "${helm_args[@]}"
 

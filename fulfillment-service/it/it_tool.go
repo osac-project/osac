@@ -421,6 +421,12 @@ func (t *Tool) Setup(ctx context.Context) error {
 		return err
 	}
 
+	// Wait for vault ready conditions to be satisfied by the controller:
+	err = t.waitForVaultReady(ctx)
+	if err != nil {
+		return err
+	}
+
 	// Add users to Keycloak Organizations:
 	err = t.addUsersToKeycloakOrganizations(ctx)
 	if err != nil {
@@ -1447,40 +1453,101 @@ func (t *Tool) deployOpenBao(ctx context.Context) error {
 	return nil
 }
 
-// configureOpenBao sets up the parent namespace in the OpenBao secret store using kubectl exec to run the bao CLI
-// inside the pod.
+// configureOpenBao sets up the parent namespace and JWT auth in the OpenBao secret store
+// so that the controller can authenticate via Keycloak and manage per-tenant namespaces.
 func (t *Tool) configureOpenBao(ctx context.Context) error {
 	t.logger.DebugContext(ctx, "Configuring OpenBao")
+
+	// Create the parent namespace:
+	if err := t.execBao(ctx, "bao", "namespace", "create", "osac"); err != nil {
+		return fmt.Errorf("failed to create osac namespace in OpenBao: %w", err)
+	}
+
+	// Enable JWT auth in the parent namespace:
+	if err := t.execBao(ctx, "bao", "auth", "enable", "-ns=osac", "jwt"); err != nil {
+		return fmt.Errorf("failed to enable JWT auth in osac namespace: %w", err)
+	}
+
+	// Configure JWT auth with Keycloak OIDC discovery. The CA cert file is
+	// mounted into the OpenBao pod by the chart from the ca-bundle ConfigMap.
+	if err := t.execBao(ctx,
+		"bao", "write", "-ns=osac", "auth/jwt/config",
+		fmt.Sprintf("oidc_discovery_url=https://%s/realms/osac", keycloakAddr),
+		"oidc_discovery_ca_pem=@/etc/openbao/ca/bundle.pem",
+		"default_role=lifecycle",
+	); err != nil {
+		return fmt.Errorf("failed to configure JWT auth in osac namespace: %w", err)
+	}
+
+	// Create a policy granting the lifecycle role control over child
+	// namespaces. The "+" glob matches any single child namespace segment,
+	// allowing the parent-scoped token to manage mounts, auth methods,
+	// policies, and roles inside each tenant namespace.
+	lifecyclePolicy := strings.Join([]string{
+		`path "sys/namespaces/*"      { capabilities = ["create","read","update","delete","list"] }`,
+		`path "+/sys/mounts/*"        { capabilities = ["create","read","update","delete","list","sudo"] }`,
+		`path "+/sys/mounts"          { capabilities = ["read"] }`,
+		`path "+/sys/policies/acl/*"  { capabilities = ["create","read","update","delete","list"] }`,
+		`path "+/sys/auth/*"          { capabilities = ["create","read","update","delete","list","sudo"] }`,
+		`path "+/auth/*"              { capabilities = ["create","read","update","delete","list"] }`,
+	}, " ")
+	if err := t.execBao(ctx,
+		"bao", "write", "-ns=osac", "sys/policy/lifecycle",
+		fmt.Sprintf("policy=%s", lifecyclePolicy),
+	); err != nil {
+		return fmt.Errorf("failed to create lifecycle policy in osac namespace: %w", err)
+	}
+
+	// Create the lifecycle role bound to the osac-api audience:
+	if err := t.execBao(ctx,
+		"bao", "write", "-ns=osac", "auth/jwt/role/lifecycle",
+		"role_type=jwt",
+		"bound_audiences=osac-api",
+		"user_claim=sub",
+		"policies=lifecycle",
+	); err != nil {
+		return fmt.Errorf("failed to create lifecycle role in osac namespace: %w", err)
+	}
+
+	t.logger.InfoContext(ctx, "Configured OpenBao with parent namespace and JWT auth")
+	return nil
+}
+
+// execBao runs a bao CLI command inside the OpenBao pod via kubectl exec.
+func (t *Tool) execBao(ctx context.Context, baoArgs ...string) error {
+	args := []string{
+		"exec", "openbao",
+		"--namespace", "openbao",
+		"--kubeconfig", t.kcFile,
+		"--",
+		"env",
+		"BAO_ADDR=http://127.0.0.1:8200",
+		fmt.Sprintf("BAO_TOKEN=%s", t.secret),
+	}
+	args = append(args, baoArgs...)
 
 	cmd, err := testing.NewCommand().
 		SetLogger(t.logger).
 		SetHome(t.projectDir).
 		SetDir(t.projectDir).
 		SetName(kubectlCmd).
-		SetArgs(
-			"exec", "openbao",
-			"--namespace", "openbao",
-			"--kubeconfig", t.kcFile,
-			"--",
-			"env",
-			"BAO_ADDR=http://127.0.0.1:8200",
-			fmt.Sprintf("BAO_TOKEN=%s", t.secret),
-			"bao", "namespace", "create", "osac",
-		).
+		SetArgs(args...).
 		Build()
 	if err != nil {
-		return fmt.Errorf("failed to create command to configure OpenBao: %w", err)
+		return err
 	}
-	stdout, _, err := cmd.Evaluate(ctx)
+	stdout, stderr, err := cmd.Evaluate(ctx)
 	if err != nil {
-		if strings.Contains(string(stdout), "already exists") {
-			t.logger.DebugContext(ctx, "OpenBao osac namespace already exists")
-		} else {
-			return fmt.Errorf("failed to create osac namespace in OpenBao: %w", err)
+		combined := string(stdout) + string(stderr)
+		if strings.Contains(combined, "already exists") ||
+			strings.Contains(combined, "existing mount") ||
+			strings.Contains(combined, "path is already in use") {
+			t.logger.DebugContext(ctx, "OpenBao resource already exists",
+				slog.String("command", strings.Join(baoArgs, " ")))
+			return nil
 		}
+		return fmt.Errorf("%s: %w", combined, err)
 	}
-
-	t.logger.InfoContext(ctx, "Configured OpenBao with parent namespace")
 	return nil
 }
 
@@ -1596,9 +1663,26 @@ func (t *Tool) deployService(ctx context.Context, imageRef string) error {
 			},
 		},
 		"vault": map[string]any{
-			"endpoint":    fmt.Sprintf("http://%s", openbaoAddr),
-			"namespace":   "osac",
-			"kvMountPath": "secret",
+			"endpoint":              fmt.Sprintf("http://%s", openbaoAddr),
+			"namespace":             "osac",
+			"kvMountPath":           "secret",
+			"lifecycleRole":         "lifecycle",
+			"lifecycleMountPath":    "jwt",
+			"keycloakTokenEndpoint": fmt.Sprintf("https://%s/realms/osac/protocol/openid-connect/token", keycloakAddr),
+			"keycloakClientId":      "osac-controller",
+			"keycloakIssuerUrl":     fmt.Sprintf("https://%s/realms/osac", keycloakAddr),
+			"keycloakAudience":      "osac-api",
+			"caCertFile":            "/etc/fulfillment-controller/tls/cas/bundle.pem",
+			"credentials": []map[string]any{
+				{
+					"secret": map[string]any{
+						"name": "fulfillment-controller-credentials",
+						"items": []map[string]string{
+							{"key": "client-secret", "param": "client-secret"},
+						},
+					},
+				},
+			},
 		},
 	}
 	valuesBytes, err := yaml.Marshal(valuesData)
@@ -1762,6 +1846,55 @@ func (t *Tool) createTenants(ctx context.Context) error {
 			return err
 		}
 	}
+	return nil
+}
+
+func (t *Tool) waitForVaultReady(ctx context.Context) error {
+	t.logger.InfoContext(ctx, "Waiting for vault ready conditions")
+
+	uniqueTenants := make(map[string]bool)
+	uniqueTenants[usersGroup] = true
+	for _, tenants := range OIDCTenants {
+		for _, tenant := range tenants {
+			uniqueTenants[tenant] = true
+		}
+	}
+
+	tenantsClient := privatev1.NewTenantsClient(t.internalView.adminConn)
+	for tenant := range uniqueTenants {
+		backOff := backoff.NewExponentialBackOff()
+		backOff.InitialInterval = 1 * time.Second
+		backOff.MaxInterval = 5 * time.Second
+		backOff.MaxElapsedTime = 120 * time.Second
+		tenantName := tenant
+		err := backoff.Retry(func() error {
+			filter := fmt.Sprintf("this.metadata.name == %q", tenantName)
+			resp, listErr := tenantsClient.List(ctx, privatev1.TenantsListRequest_builder{
+				Filter: &filter,
+			}.Build())
+			if listErr != nil {
+				return fmt.Errorf("failed to list tenant %q: %w", tenantName, listErr)
+			}
+			if len(resp.GetItems()) == 0 {
+				return fmt.Errorf("tenant %q not found", tenantName)
+			}
+			for _, c := range resp.GetItems()[0].GetStatus().GetConditions() {
+				if c.GetType() == privatev1.TenantConditionType_TENANT_CONDITION_TYPE_VAULT_READY {
+					if c.GetStatus() == privatev1.ConditionStatus_CONDITION_STATUS_TRUE {
+						return nil
+					}
+					return fmt.Errorf("tenant %q vault not yet ready (reason: %s)", tenantName, c.GetReason())
+				}
+			}
+			return fmt.Errorf("tenant %q vault ready condition not yet present", tenantName)
+		}, backoff.WithContext(backOff, ctx))
+		if err != nil {
+			return fmt.Errorf("timed out waiting for vault ready for tenant %q: %w", tenant, err)
+		}
+		t.logger.DebugContext(ctx, "Vault ready for tenant", slog.String("tenant", tenant))
+	}
+
+	t.logger.InfoContext(ctx, "All vault ready conditions satisfied")
 	return nil
 }
 

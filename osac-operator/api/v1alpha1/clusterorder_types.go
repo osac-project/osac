@@ -61,6 +61,14 @@ type ClusterOrderSpec struct {
 	// Network contains cluster networking configuration.
 	// +kubebuilder:validation:Optional
 	Network *ClusterNetworkSpec `json:"network,omitempty"`
+
+	// NetworkAttachment connects this cluster to a tenant subnet.
+	// All node sets share the same subnet; the fabric interface for each
+	// node set is resolved from the node set's host type.
+	// When omitted, the system populates the field from the tenant's
+	// default subnet and security groups during creation.
+	// +kubebuilder:validation:Optional
+	NetworkAttachment *ClusterNetworkAttachment `json:"networkAttachment,omitempty"`
 }
 
 // ClusterNetworkSpec defines networking configuration for a cluster.
@@ -77,6 +85,24 @@ type ClusterNetworkSpec struct {
 	// Coarse format check only — full CIDR validation (e.g. net.ParseCIDR) is done server-side.
 	// +kubebuilder:validation:Pattern=`^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$`
 	ServiceCIDR string `json:"serviceCIDR,omitempty"`
+}
+
+// ClusterNetworkAttachment defines the network attachment for a cluster,
+// connecting it to a tenant subnet with optional security groups.
+type ClusterNetworkAttachment struct {
+	// SubnetRef is the name of the Subnet CR that the cluster connects to.
+	// The subnet must be in Ready state at creation time.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="subnetRef is immutable"
+	SubnetRef string `json:"subnetRef"`
+
+	// SecurityGroupRefs lists SecurityGroup CR names to apply to the cluster's
+	// network attachment. All security groups must belong to the same virtual
+	// network as the subnet.
+	// +kubebuilder:validation:Optional
+	SecurityGroupRefs []string `json:"securityGroupRefs,omitempty"`
 }
 
 type NodeRequest struct {
@@ -179,6 +205,55 @@ type ClusterOrderStatus struct {
 	// Written by the CaaS template after VIP discovery.
 	// +kubebuilder:validation:Optional
 	IngressEndpoint string `json:"ingressEndpoint,omitempty"`
+
+	// NodeSets holds per-node-set networking status, populated by the
+	// operator during agent selection and networking reconciliation.
+	// +kubebuilder:validation:Optional
+	// +listType=map
+	// +listMapKey=name
+	NodeSets []NodeSetStatus `json:"nodeSets,omitempty"`
+}
+
+// NodeSetStatus holds networking status for a single node set.
+type NodeSetStatus struct {
+	// Name is the node set identifier (matches the ClusterNodeSet key).
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+
+	// FabricInterface is the host NIC used for tenant network traffic,
+	// resolved from the node set's HostType NetworkInterface list.
+	// +kubebuilder:validation:Optional
+	FabricInterface string `json:"fabricInterface,omitempty"`
+
+	// Agents holds per-agent networking status within this node set.
+	// +kubebuilder:validation:Optional
+	// +listType=map
+	// +listMapKey=agentName
+	Agents []AgentStatus `json:"agents,omitempty"`
+}
+
+// AgentStatus holds networking status for a single agent (bare-metal host)
+// within a node set.
+type AgentStatus struct {
+	// AgentName is the name of the Agent CR, used for NodePool targeting.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	AgentName string `json:"agentName"`
+
+	// HostName is the bare-metal server name used by the network dispatcher.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	HostName string `json:"hostName"`
+
+	// SubnetRef is the name of the Subnet CR the agent is connected to.
+	// +kubebuilder:validation:Optional
+	SubnetRef string `json:"subnetRef,omitempty"`
+
+	// IPAddress is the agent's IPv4 address on the tenant subnet,
+	// discovered from the Agent CR status after DHCP assignment.
+	// +kubebuilder:validation:Optional
+	IPAddress string `json:"ipAddress,omitempty"`
 }
 
 // +kubebuilder:object:root=true

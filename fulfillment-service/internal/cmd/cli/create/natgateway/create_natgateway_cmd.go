@@ -144,7 +144,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-const shortHelp = `Create a NAT gateway.`
+const shortHelp = `Create a NAT gateway`
 
 const longHelp = `
 Create a NAT gateway for outbound traffic (SNAT) from a virtual network.

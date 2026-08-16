@@ -166,7 +166,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-const shortHelp = `Create an instance type.`
+const shortHelp = `Create an instance type`
 
 const longHelp = `
 Create an instance type.

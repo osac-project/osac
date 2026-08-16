@@ -24,12 +24,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/go-logr/stdr"
 	"github.com/osac-project/osac-metering/adapters"
+	"github.com/osac-project/osac-metering/adapters/envutil"
 )
 
 type m360Adapter struct {
@@ -57,22 +57,22 @@ func (a *m360Adapter) HealthCheck(ctx context.Context) error {
 func (a *m360Adapter) Close() error { return nil }
 
 func main() {
-	brokers := requireEnv("KAFKA_BROKERS")
-	m360URL := requireEnv("M360_API_URL")
-	apiKeyFile := requireEnv("M360_API_KEY_FILE")
+	brokers := envutil.RequireEnv("KAFKA_BROKERS")
+	m360URL := envutil.RequireEnv("M360_API_URL")
+	apiKeyFile := envutil.RequireEnv("M360_API_KEY_FILE")
 
-	apiKey := readFileOrFatal(apiKeyFile)
-	apiVersion := envOrDefault("M360_API_VERSION", "v1")
+	apiKey := envutil.ReadFileOrFatal(apiKeyFile)
+	apiVersion := envutil.EnvOrDefault("M360_API_VERSION", "v1")
 
 	topics := adapters.AllTopics
 	if v := os.Getenv("KAFKA_TOPICS"); v != "" {
-		topics = splitAndTrim(v, ",")
+		topics = envutil.SplitAndTrim(v, ",")
 		if len(topics) == 0 {
 			log.Fatal("KAFKA_TOPICS must contain at least one topic")
 		}
 	}
 
-	group := envOrDefault("KAFKA_CONSUMER_GROUP", "m360-adapter")
+	group := envutil.EnvOrDefault("KAFKA_CONSUMER_GROUP", "m360-adapter")
 
 	var flushInterval time.Duration
 	if v := os.Getenv("FLUSH_INTERVAL"); v != "" {
@@ -86,12 +86,7 @@ func main() {
 		flushInterval = d
 	}
 
-	metricsAddr := envOrDefault("METRICS_ADDR", ":2112")
-
-	// TLS defaults to true (!= "false") — safer for production.
-	// Note: echo-adapter uses == "true" (defaults off) since it runs in
-	// development/CI where Kafka may not have TLS configured.
-	tlsEnabled := os.Getenv("KAFKA_TLS_ENABLED") != "false"
+	metricsAddr := envutil.EnvOrDefault("METRICS_ADDR", ":2112")
 
 	logger := stdr.New(log.New(os.Stderr, "", log.LstdFlags))
 
@@ -104,12 +99,7 @@ func main() {
 		ConsumerGroup: group,
 		Topics:        topics,
 		FlushInterval: flushInterval,
-		Kafka: adapters.KafkaConfig{
-			TLSEnabled:   tlsEnabled,
-			TLSCACert:    os.Getenv("KAFKA_TLS_CA_CERT"),
-			SASLUser:     os.Getenv("KAFKA_SASL_USERNAME"),
-			SASLPassFile: os.Getenv("KAFKA_SASL_PASSWORD_FILE"),
-		},
+		Kafka:         adapters.KafkaConfigFromEnv(),
 	}, logger)
 
 	mux := http.NewServeMux()
@@ -156,42 +146,4 @@ func main() {
 	}
 
 	log.Print("m360 adapter shut down cleanly")
-}
-
-func requireEnv(key string) string {
-	v := os.Getenv(key)
-	if v == "" {
-		log.Fatalf("%s is required", key)
-	}
-	return v
-}
-
-func envOrDefault(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
-
-func readFileOrFatal(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		log.Fatalf("reading %s: %v", path, err)
-	}
-	trimmed := strings.TrimSpace(string(data))
-	if trimmed == "" {
-		log.Fatalf("%s is empty", path)
-	}
-	return trimmed
-}
-
-func splitAndTrim(s, sep string) []string {
-	parts := strings.Split(s, sep)
-	result := parts[:0]
-	for _, p := range parts {
-		if trimmed := strings.TrimSpace(p); trimmed != "" {
-			result = append(result, trimmed)
-		}
-	}
-	return result
 }

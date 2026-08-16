@@ -117,18 +117,13 @@ func (b *PrivateSecretsServerBuilder) Build() (result *PrivateSecretsServer, err
 }
 
 func (s *PrivateSecretsServer) redact(object *privatev1.Secret) *privatev1.Secret {
-	if spec := object.GetSpec(); spec != nil {
-		spec.SetData(nil)
-	}
-	if status := object.GetStatus(); status != nil {
-		status.SetResolvedData(nil)
-	}
+	object.SetData(nil)
 	return object
 }
 
 // List fetches a list of secret objects from postgres.
 // Secret data itself should never be included in the response, and users should use Get
-// to fetch individual secrets with populated status.resolved_data.
+// to fetch individual secrets with populated data.
 func (s *PrivateSecretsServer) List(ctx context.Context,
 	request *privatev1.SecretsListRequest) (response *privatev1.SecretsListResponse, err error) {
 	err = s.generic.List(ctx, request, &response)
@@ -143,7 +138,7 @@ func (s *PrivateSecretsServer) Get(ctx context.Context,
 	}
 
 	obj := response.GetObject()
-	if s.secretStore != nil && obj.GetSpec().GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT {
+	if s.secretStore != nil && obj.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT {
 		tenant := obj.GetMetadata().GetTenant()
 		project := obj.GetMetadata().GetProject()
 		name := obj.GetMetadata().GetName()
@@ -154,12 +149,7 @@ func (s *PrivateSecretsServer) Get(ctx context.Context,
 			return
 		}
 
-		status := obj.GetStatus()
-		if status == nil {
-			status = privatev1.SecretStatus_builder{}.Build()
-			obj.SetStatus(status)
-		}
-		status.SetResolvedData(data)
+		obj.SetData(data)
 	}
 
 	return
@@ -178,11 +168,11 @@ func (s *PrivateSecretsServer) Create(ctx context.Context,
 	secret.SetId("")
 
 	// Default unspecified backend to Vault.
-	if secret.GetSpec().GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_UNSPECIFIED {
-		secret.GetSpec().SetBackend(privatev1.SecretBackend_SECRET_BACKEND_VAULT)
+	if secret.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_UNSPECIFIED {
+		secret.SetBackend(privatev1.SecretBackend_SECRET_BACKEND_VAULT)
 	}
 
-	if s.secretStore != nil && secret.GetSpec().GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT {
+	if s.secretStore != nil && secret.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT {
 		tenant, tenantErr := s.determineTenant(ctx, secret)
 		if tenantErr != nil {
 			err = tenantErr
@@ -191,13 +181,13 @@ func (s *PrivateSecretsServer) Create(ctx context.Context,
 		project := secret.GetMetadata().GetProject()
 		name := secret.GetMetadata().GetName()
 
-		err = s.secretStore.Store(ctx, tenant, project, name, secret.GetSpec().GetData())
+		err = s.secretStore.Store(ctx, tenant, project, name, secret.GetData())
 		if err != nil {
 			err = vault.ToGrpcError(err)
 			return
 		}
 
-		secret.GetSpec().SetData(nil)
+		secret.SetData(nil)
 	}
 
 	err = s.generic.Create(ctx, request, &response)
@@ -228,20 +218,20 @@ func (s *PrivateSecretsServer) Update(ctx context.Context,
 	}
 
 	if s.secretStore != nil &&
-		existingSecret.GetSpec().GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT &&
-		len(request.GetObject().GetSpec().GetData()) > 0 {
+		existingSecret.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT &&
+		len(request.GetObject().GetData()) > 0 {
 
 		tenant := existingSecret.GetMetadata().GetTenant()
 		project := existingSecret.GetMetadata().GetProject()
 		name := existingSecret.GetMetadata().GetName()
 
-		err = s.secretStore.Store(ctx, tenant, project, name, request.GetObject().GetSpec().GetData())
+		err = s.secretStore.Store(ctx, tenant, project, name, request.GetObject().GetData())
 		if err != nil {
 			err = vault.ToGrpcError(err)
 			return
 		}
 
-		request.GetObject().GetSpec().SetData(nil)
+		request.GetObject().SetData(nil)
 	}
 
 	err = s.generic.Update(ctx, request, &response)
@@ -273,7 +263,7 @@ func (s *PrivateSecretsServer) Delete(ctx context.Context,
 		return
 	}
 
-	if obj != nil && obj.GetSpec().GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT {
+	if obj != nil && obj.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT {
 		tenant := obj.GetMetadata().GetTenant()
 		project := obj.GetMetadata().GetProject()
 		name := obj.GetMetadata().GetName()
@@ -301,37 +291,30 @@ func (s *PrivateSecretsServer) validateSecretCreate(secret *privatev1.Secret) er
 	if secret.GetMetadata() == nil || secret.GetMetadata().GetName() == "" {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'metadata.name' is required")
 	}
-	spec := secret.GetSpec()
-	if spec == nil {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec' is required")
-	}
 
-	switch spec.GetBackend() {
+	switch secret.GetBackend() {
 	case privatev1.SecretBackend_SECRET_BACKEND_HUB:
-		if err := s.validateHubSecretCreate(spec); err != nil {
+		if err := s.validateHubSecretCreate(secret); err != nil {
 			return err
 		}
 	default:
-		if len(spec.GetData()) == 0 {
+		if len(secret.GetData()) == 0 {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"field 'spec.data' is required")
+				"field 'data' is required")
 		}
 	}
 
 	return nil
 }
 
-// Hub secret data is created by external sources and fully managed elsewhere - the Secret type
-// only manages the metadata and provides utility for fetching the secret data and
-// is not the source of truth for the data itself - hence why we reject spec.data
-func (s *PrivateSecretsServer) validateHubSecretCreate(spec *privatev1.SecretSpec) error {
-	if len(spec.GetCoordinates()) == 0 {
+func (s *PrivateSecretsServer) validateHubSecretCreate(secret *privatev1.Secret) error {
+	if len(secret.GetCoordinates()) == 0 {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"field 'spec.coordinates' is required when backend is HUB")
+			"field 'coordinates' is required when backend is HUB")
 	}
-	if len(spec.GetData()) > 0 {
+	if len(secret.GetData()) > 0 {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"field 'spec.data' must be empty when backend is HUB")
+			"field 'data' must be empty when backend is HUB")
 	}
 	return nil
 }
@@ -349,16 +332,16 @@ func (s *PrivateSecretsServer) determineTenant(ctx context.Context, secret *priv
 
 func (s *PrivateSecretsServer) validateSecretUpdate(_ context.Context,
 	newSecret *privatev1.Secret, existingSecret *privatev1.Secret) error {
-	if newSecret.GetSpec().GetBackend() != privatev1.SecretBackend_SECRET_BACKEND_UNSPECIFIED &&
-		newSecret.GetSpec().GetBackend() != existingSecret.GetSpec().GetBackend() {
+	if newSecret.GetBackend() != privatev1.SecretBackend_SECRET_BACKEND_UNSPECIFIED &&
+		newSecret.GetBackend() != existingSecret.GetBackend() {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"field 'spec.backend' is immutable and cannot be changed from '%s' to '%s'",
-			existingSecret.GetSpec().GetBackend(), newSecret.GetSpec().GetBackend())
+			"field 'backend' is immutable and cannot be changed from '%s' to '%s'",
+			existingSecret.GetBackend(), newSecret.GetBackend())
 	}
-	if existingSecret.GetSpec().GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_HUB &&
-		len(newSecret.GetSpec().GetData()) > 0 {
+	if existingSecret.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_HUB &&
+		len(newSecret.GetData()) > 0 {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"field 'spec.data' must be empty when backend is HUB")
+			"field 'data' must be empty when backend is HUB")
 	}
 	return nil
 }

@@ -1,6 +1,3 @@
 ---
-bm_host_metal3_default_image_url: >-
-  https://download.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2
-bm_host_metal3_default_image_checksum: "28680fe5b371a5a82ebf43a31926e086a168e59949d03969c5093e7071f90b7f"
-bm_host_metal3_default_checksum_type: "sha256"
+bm_host_metal3_default_image_url: "oci://quay.io/osac-project/fedora-cloud-bmi:44"
 bm_host_openstack_external_network: "external"

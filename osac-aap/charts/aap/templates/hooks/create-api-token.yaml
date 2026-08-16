@@ -12,72 +12,37 @@ metadata:
     "helm.sh/hook-delete-policy": before-hook-creation
 spec:
   backoffLimit: 5
-  activeDeadlineSeconds: 3600
+  # Cumulative across all backoffLimit retries; must exceed both init containers'
+  # combined worst-case runtime (see _helpers.tpl) so a stuck attempt exits
+  # cleanly instead of being SIGKILLed.
+  activeDeadlineSeconds: 8400
   template:
     metadata:
       labels:
         {{- include "osac-aap.labels" . | nindent 8 }}
     spec:
+      # osac-sa's cluster-admin binding resolves to the anyuid SCC (no auto-assigned
+      # non-root UID like bootstrap-job.yaml's SA gets), so the init containers'
+      # runAsNonRoot: true needs an explicit UID here or admission fails outright.
+      securityContext:
+        runAsUser: 1000
       initContainers:
+      - name: wait-for-admin-secret
+        image: {{ .Values.bootstrap.cliImage }}
+        command:
+          - /bin/bash
+          - -c
+          - |
+            {{- include "osac-aap.waitForAdminSecretScript" . | nindent 12 }}
+        {{- include "osac-aap.waitForAdminSecretContainerSpec" . | nindent 8 }}
       - name: wait-for-aap
         image: {{ .Values.bootstrap.cliImage }}
         command:
           - /bin/bash
           - -c
           - |
-            echo "Gateway: ${AAP_GATEWAY_HOSTNAME}"
-            echo "Waiting for AAP controller to be ready..."
-            for i in {1..60}; do
-              echo "Attempt $i: Checking AAP controller readiness..."
-              curl -sf --connect-timeout 5 --max-time 15 \
-                http://${AAP_GATEWAY_HOSTNAME}/api/gateway/v1/ping/ \
-                | grep -q 'good';
-              GATEWAY=$?
-
-              curl -sf --connect-timeout 5 --max-time 15 \
-                http://${AAP_CONTROLLER_GATEWAY_HOSTNAME}/api/v2/ping/ \
-                | grep -q 'version';
-              CONTROLLER_GATEWAY=$?
-
-              auth_code=$(curl -s --connect-timeout 5 --max-time 15 \
-                -o /dev/null -w "%{http_code}" -X POST \
-                http://${AAP_GATEWAY_HOSTNAME}/api/gateway/v1/tokens/ \
-                -d "username=admin&password=dummy")
-              [ "$auth_code" != "503" ] && [ "$auth_code" != "000" ];
-              AUTH_UPSTREAM=$?
-
-              if [ $GATEWAY -eq 0 ] && [ $CONTROLLER_GATEWAY -eq 0 ] && [ $AUTH_UPSTREAM -eq 0 ];
-              then
-                echo "AAP controller is ready!"
-                exit 0
-              fi
-              echo "AAP is not ready, waiting 60 seconds..."
-              sleep 60
-            done
-            echo "Timeout waiting for AAP."
-            exit 1
-        env:
-        - name: HOME
-          value: /tmp
-        - name: AAP_GATEWAY_HOSTNAME
-          value: {{ include "osac-aap.gatewayHostname" . | quote }}
-        - name: AAP_CONTROLLER_GATEWAY_HOSTNAME
-          value: {{ include "osac-aap.controllerHostname" . | quote }}
-        volumeMounts:
-        - name: tmp
-          mountPath: /tmp
-        resources:
-          requests:
-            cpu: 50m
-            memory: 128Mi
-          limits:
-            cpu: 200m
-            memory: 256Mi
-        securityContext:
-          allowPrivilegeEscalation: false
-          readOnlyRootFilesystem: true
-          capabilities:
-            drop: ["ALL"]
+            {{- include "osac-aap.waitForAapScript" . | nindent 12 }}
+        {{- include "osac-aap.waitForAapContainerSpec" . | nindent 8 }}
       containers:
       - name: create-token
         image: {{ .Values.bootstrap.cliImage }}
@@ -87,12 +52,15 @@ spec:
           - |
             set -euo pipefail
             AAP_PASSWORD=$(cat /var/run/secrets/aap-admin/password)
+            # netrc avoids leaking the password via curl -u's process args.
+            trap 'rm -f /tmp/.netrc' EXIT
+            ( umask 077; printf 'machine %s\nlogin admin\npassword %s\n' "${AAP_GATEWAY_HOSTNAME}" "${AAP_PASSWORD}" > /tmp/.netrc )
             echo "Creating AAP API token..."
             TOKEN=$(curl -s --connect-timeout 5 --max-time 30 -X POST \
-              -u "admin:${AAP_PASSWORD}" \
+              --netrc-file /tmp/.netrc \
               -H "Content-Type: application/json" \
               -d '{"description": "osac-operator", "scope": "write"}' \
-              "http://{{ include "osac-aap.gatewayHostname" . }}/api/gateway/v1/tokens/" \
+              "http://${AAP_GATEWAY_HOSTNAME}/api/gateway/v1/tokens/" \
               | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
             [[ -n "${TOKEN}" ]] || { echo "ERROR: Token was empty"; exit 1; }
             echo "Storing token in secret osac-aap-api-token..."
@@ -120,6 +88,8 @@ spec:
         env:
         - name: HOME
           value: /tmp
+        - name: AAP_GATEWAY_HOSTNAME
+          value: {{ include "osac-aap.gatewayHostname" . | quote }}
         volumeMounts:
         - name: aap-admin-password
           mountPath: /var/run/secrets/aap-admin

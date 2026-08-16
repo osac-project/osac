@@ -21,6 +21,14 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
   - services
   verbs:
   - get
@@ -40,6 +48,14 @@ rules:
   - get
   - list
   - watch
+# hostedcontrolplanes: get only — storage controller reads the kubeconfig secret name,
+# no watch/list needed (looked up by name from the ClusterOrder).
+- apiGroups:
+  - hypershift.openshift.io
+  resources:
+  - hostedcontrolplanes
+  verbs:
+  - get
 - apiGroups:
   - k8s.ovn.org
   resources:

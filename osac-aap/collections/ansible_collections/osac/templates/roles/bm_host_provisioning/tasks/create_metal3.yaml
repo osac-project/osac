@@ -1,9 +1,7 @@
 ---
 - name: Apply image defaults to template parameters
   ansible.builtin.set_fact:
-    template_params: "{{ {'imageURL': bm_host_metal3_default_image_url,
-                          'imageChecksum': bm_host_metal3_default_image_checksum,
-                          'checksumType': bm_host_metal3_default_checksum_type}
+    template_params: "{{ {'imageURL': bm_host_metal3_default_image_url}
                         | combine(template_params) }}"
 
 - name: Parse externalHostID into namespace and name

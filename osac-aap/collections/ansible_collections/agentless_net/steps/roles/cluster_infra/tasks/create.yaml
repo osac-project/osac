@@ -1,4 +1,12 @@
 ---
+- name: Validate agentless-net interface configuration
+  ansible.builtin.assert:
+    that:
+      - agentless_net_data_interface | length > 0
+      - agentless_net_mgmt_interface | length > 0
+    fail_msg: >-
+      AGENTLESS_NET_DATA_INTERFACE and AGENTLESS_NET_MGMT_INTERFACE must be set.
+
 - name: Load agentless-net inventory hosts
   ansible.builtin.include_vars:
     file: "{{ agentless_net_inventory_file }}"
@@ -263,6 +271,47 @@
       -e snat_external_subnet={{ cluster_infra_external_peer_ip | ansible.utils.ipaddr('network/prefix') }}
       -e snat_external_interface={{ agentless_net_external_interface }}
       {{ role_path }}/playbooks/l3_create_snat.yaml
+
+# --- Configure worker NICs via NMStateConfig ---
+#
+# The worker has two NICs: a data NIC (switch fabric, VLAN access port) and a
+# management NIC (libvirt bridge, flat L2). NMStateConfig tells the assisted-
+# installer how to configure both NICs during RHCOS installation:
+#   Data NIC:  static IP on the VLAN subnet, net-node as default gateway
+#   Mgmt NIC:  DHCP (libvirt), specific route to management subnet
+
+- name: Create NMStateConfig CRs and apply live to agents
+  ansible.builtin.include_role:
+    name: osac.service.nmstate_config
+  vars:
+    nmstate_config_state: present
+    nmstate_config_cluster_name: "{{ cluster_infra_name }}"
+    nmstate_config_agents: "{{ cluster_infra_selected_agents.resources }}"
+    nmstate_config_gateway_cidr: "{{ cluster_infra_subnet_gateway }}/{{ agentless_net_subnet_cidr | ansible.utils.ipaddr('prefix') }}"
+    nmstate_config_interface_names:
+      - "{{ agentless_net_data_interface }}"
+    nmstate_config_server_interfaces:
+      - "{{ agentless_net_data_interface }}"
+    nmstate_config_mgmt_interface: "{{ agentless_net_mgmt_interface }}"
+
+# Shared namespace-wide label instead of netris's per-cluster label pattern.
+# The assisted-installer matches NMStateConfigs to agents by MAC address, so
+# matching all configs is safe. merge_type: merge replaces the entire matchLabels
+# map, so per-cluster labels would overwrite each other on concurrent pipelines.
+- name: Set InfraEnv nmStateConfigLabelSelector to match all NMStateConfigs
+  kubernetes.core.k8s:
+    state: present
+    merge_type: merge
+    definition:
+      apiVersion: agent-install.openshift.io/v1beta1
+      kind: InfraEnv
+      metadata:
+        name: "{{ hosted_cluster_default_infraenv }}"
+        namespace: "{{ default_agent_namespace }}"
+      spec:
+        nmStateConfigLabelSelector:
+          matchLabels:
+            infraenv: "{{ default_agent_namespace }}"
 
 # --- Approve agents and attach to cluster ---
 

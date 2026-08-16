@@ -66,6 +66,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/network"
 	"github.com/osac-project/osac/fulfillment-service/internal/oauth"
 	shtdwn "github.com/osac-project/osac/fulfillment-service/internal/shutdown"
+	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 	"github.com/osac-project/osac/fulfillment-service/internal/version"
 )
 
@@ -160,6 +161,8 @@ func Cmd() *cobra.Command {
 		"",
 		idpClientSecretFlagHelp,
 	)
+	vault.AddBaseFlags(flags)
+	vault.AddLifecycleFlags(flags)
 	network.AddGrpcClientFlags(flags, network.GrpcClientName, network.DefaultGrpcAddress)
 	network.AddListenerFlags(flags, network.GrpcListenerName, network.DefaultGrpcAddress)
 	network.AddListenerFlags(flags, network.MetricsListenerName, network.DefaultMetricsAddress)
@@ -184,6 +187,8 @@ type runnerContext struct {
 		idpClientIdFile      string
 		idpClientSecret      string
 		idpClientSecretFile  string
+		vaultBase            vault.BaseConfig
+		vaultLifecycle       vault.LifecycleConfig
 	}
 	client *grpc.ClientConn
 }
@@ -824,12 +829,45 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		}
 	}()
 
+	// Read the vault flags:
+	r.args.vaultBase, err = vault.BaseConfigFromFlags(r.flags)
+	if err != nil {
+		return fmt.Errorf("failed to read vault flags: %w", err)
+	}
+
+	// Create the vault lifecycle client:
+	var vaultLifecycleClient vault.LifecycleClient
+	if r.args.vaultBase.Endpoint != "" {
+		r.args.vaultLifecycle, err = vault.LifecycleConfigFromFlags(r.flags)
+		if err != nil {
+			return fmt.Errorf("failed to read vault lifecycle flags: %w", err)
+		}
+		vaultCaPool := caPool
+		if r.args.vaultBase.CaCertFile != "" {
+			vaultCaPool, err = network.NewCertPool().
+				SetLogger(r.logger).
+				AddFiles(r.args.caFiles...).
+				AddFile(r.args.vaultBase.CaCertFile).
+				Build()
+			if err != nil {
+				return fmt.Errorf("failed to load vault CA certificates: %w", err)
+			}
+		}
+		vaultLifecycleClient, err = vault.NewLifecycleClientFromConfig(
+			r.logger, r.args.vaultBase, r.args.vaultLifecycle, vaultCaPool,
+		)
+		if err != nil {
+			return err
+		}
+	}
+
 	// Create the tenant reconciler:
 	r.logger.InfoContext(ctx, "Creating tenant reconciler")
 	tenantReconcilerFunction, err := tenant.NewFunction().
 		SetLogger(r.logger).
 		SetConnection(r.client).
 		SetIdpManager(idpManager).
+		SetVaultLifecycle(vaultLifecycleClient).
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create tenant reconciler function: %w", err)

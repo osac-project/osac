@@ -61,8 +61,8 @@ var _ = Describe("Errors", func() {
 
 		It("Returns expected message for a tenant with a name", func() {
 			err := &ErrAlreadyExists{
-				Table: "tenants",
-				Name:  "my-tenant",
+				Kind: "tenant",
+				Name: "my-tenant",
 			}
 			Expect(err.Error()).To(Equal("tenant 'my-tenant' already exists"))
 		})
@@ -87,12 +87,103 @@ var _ = Describe("Errors", func() {
 			Expect(err.Error()).To(Equal("object already exists"))
 		})
 
-		It("Returns custom message for projects", func() {
+		It("Returns kind in error message for projects", func() {
 			err := &ErrAlreadyExists{
-				Table: "projects",
-				Name:  "my-name",
+				Kind: "project",
+				Name: "my-name",
 			}
 			Expect(err.Error()).To(Equal("project 'my-name' already exists"))
+		})
+
+		It("Returns kind in error message for virtual networks", func() {
+			err := &ErrAlreadyExists{
+				Kind: "virtual network",
+				Name: "my-vnet",
+			}
+			Expect(err.Error()).To(Equal("virtual network 'my-vnet' already exists"))
+		})
+
+		It("Returns kind in error message for cluster orders", func() {
+			err := &ErrAlreadyExists{
+				Kind: "cluster order",
+				Name: "my-cluster",
+			}
+			Expect(err.Error()).To(Equal("cluster order 'my-cluster' already exists"))
+		})
+
+		It("Returns kind in error message for security groups", func() {
+			err := &ErrAlreadyExists{
+				Kind: "security group",
+				ID:   "sg-123",
+				Name: "my-sg",
+			}
+			Expect(err.Error()).To(Equal(
+				"security group with identifier 'sg-123' and name 'my-sg' already exists",
+			))
+		})
+
+		It("Returns kind in error message for NAT gateways", func() {
+			err := &ErrAlreadyExists{
+				Kind: "NAT gateway",
+				Name: "my-natgw",
+			}
+			Expect(err.Error()).To(Equal("NAT gateway 'my-natgw' already exists"))
+		})
+
+		It("Returns kind in error message for external IP pools", func() {
+			err := &ErrAlreadyExists{
+				Kind: "external IP pool",
+				Name: "my-pool",
+			}
+			Expect(err.Error()).To(Equal("external IP pool 'my-pool' already exists"))
+		})
+
+		It("Returns kind in error message for compute instances", func() {
+			err := &ErrAlreadyExists{
+				Kind: "compute instance",
+				Name: "my-ci",
+			}
+			Expect(err.Error()).To(Equal("compute instance 'my-ci' already exists"))
+		})
+
+		It("Returns kind in error message for compute instance templates", func() {
+			err := &ErrAlreadyExists{
+				Kind: "compute instance template",
+				Name: "my-template",
+			}
+			Expect(err.Error()).To(Equal("compute instance template 'my-template' already exists"))
+		})
+
+		It("Returns kind in error message for host types", func() {
+			err := &ErrAlreadyExists{
+				Kind: "host type",
+				Name: "my-host-type",
+			}
+			Expect(err.Error()).To(Equal("host type 'my-host-type' already exists"))
+		})
+
+		It("Returns kind in error message for hubs", func() {
+			err := &ErrAlreadyExists{
+				Kind: "hub",
+				Name: "my-hub",
+			}
+			Expect(err.Error()).To(Equal("hub 'my-hub' already exists"))
+		})
+
+		It("Returns custom reason verbatim when set, ignoring kind", func() {
+			err := &ErrAlreadyExists{
+				Kind:   "compute instance",
+				ID:     "ci-123",
+				Reason: "custom trigger message",
+			}
+			Expect(err.Error()).To(Equal("custom trigger message"))
+		})
+
+		It("Falls back to 'object' when kind is empty", func() {
+			err := &ErrAlreadyExists{
+				Name: "my-thing",
+			}
+			Expect(err.Error()).To(Equal("object 'my-thing' already exists"))
 		})
 	})
 

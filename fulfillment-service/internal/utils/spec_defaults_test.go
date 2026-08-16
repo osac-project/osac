@@ -195,6 +195,87 @@ var _ = Describe("ApplySpecDefaults", func() {
 		Expect(spec.GetBootDisk().GetSizeGib()).To(Equal(int32(20)))
 	})
 
+	It("Merges default boot_disk storage_tier when user provides boot_disk without storage_tier", func() {
+		spec := privatev1.ComputeInstanceSpec_builder{
+			Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
+			BootDisk: privatev1.ComputeInstanceDisk_builder{
+				SizeGib: 50,
+			}.Build(),
+		}.Build()
+
+		defaults := privatev1.ComputeInstanceTemplateSpecDefaults_builder{
+			BootDisk: privatev1.ComputeInstanceDisk_builder{
+				SizeGib:     20,
+				StorageTier: new("standard"),
+			}.Build(),
+		}.Build()
+
+		ApplySpecDefaults(spec, defaults)
+
+		Expect(spec.GetBootDisk().GetSizeGib()).To(Equal(int32(50)))
+		Expect(spec.GetBootDisk().GetStorageTier()).To(Equal("standard"))
+	})
+
+	It("Does not override user-provided boot_disk storage_tier with template default", func() {
+		spec := privatev1.ComputeInstanceSpec_builder{
+			Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
+			BootDisk: privatev1.ComputeInstanceDisk_builder{
+				SizeGib:     50,
+				StorageTier: new("fast"),
+			}.Build(),
+		}.Build()
+
+		defaults := privatev1.ComputeInstanceTemplateSpecDefaults_builder{
+			BootDisk: privatev1.ComputeInstanceDisk_builder{
+				SizeGib:     20,
+				StorageTier: new("standard"),
+			}.Build(),
+		}.Build()
+
+		ApplySpecDefaults(spec, defaults)
+
+		Expect(spec.GetBootDisk().GetStorageTier()).To(Equal("fast"))
+	})
+
+	It("Merges default boot_disk size when user provides only storage_tier", func() {
+		spec := privatev1.ComputeInstanceSpec_builder{
+			Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
+			BootDisk: privatev1.ComputeInstanceDisk_builder{
+				StorageTier: new("fast"),
+			}.Build(),
+		}.Build()
+
+		defaults := privatev1.ComputeInstanceTemplateSpecDefaults_builder{
+			BootDisk: privatev1.ComputeInstanceDisk_builder{
+				SizeGib:     20,
+				StorageTier: new("standard"),
+			}.Build(),
+		}.Build()
+
+		ApplySpecDefaults(spec, defaults)
+
+		Expect(spec.GetBootDisk().GetSizeGib()).To(Equal(int32(20)))
+		Expect(spec.GetBootDisk().GetStorageTier()).To(Equal("fast"))
+	})
+
+	It("Clones entire boot_disk default including storage_tier when user provides no boot_disk", func() {
+		spec := privatev1.ComputeInstanceSpec_builder{
+			Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
+		}.Build()
+
+		defaults := privatev1.ComputeInstanceTemplateSpecDefaults_builder{
+			BootDisk: privatev1.ComputeInstanceDisk_builder{
+				SizeGib:     20,
+				StorageTier: new("standard"),
+			}.Build(),
+		}.Build()
+
+		ApplySpecDefaults(spec, defaults)
+
+		Expect(spec.GetBootDisk().GetSizeGib()).To(Equal(int32(20)))
+		Expect(spec.GetBootDisk().GetStorageTier()).To(Equal("standard"))
+	})
+
 	It("Applies instance_type default when user provides no compute fields", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
 			Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
@@ -361,7 +442,8 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 				SourceRef:  "quay.io/containerdisks/fedora:latest",
 			}.Build(),
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
-				SizeGib: 20,
+				SizeGib:     20,
+				StorageTier: new("standard"),
 			}.Build(),
 			RunStrategy: new("Always"),
 		}.Build()
@@ -378,7 +460,8 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 				SourceRef:  "quay.io/containerdisks/fedora:latest",
 			}.Build(),
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
-				SizeGib: 20,
+				SizeGib:     20,
+				StorageTier: new("standard"),
 			}.Build(),
 			RunStrategy: new("Always"),
 		}.Build()
@@ -413,7 +496,8 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 				SourceRef:  "quay.io/containerdisks/fedora:latest",
 			}.Build(),
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
-				SizeGib: 20,
+				SizeGib:     20,
+				StorageTier: new("standard"),
 			}.Build(),
 			RunStrategy: new("always"),
 		}.Build()
@@ -432,7 +516,8 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 			InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
 			Image:        privatev1.ComputeInstanceImage_builder{}.Build(),
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
-				SizeGib: 20,
+				SizeGib:     20,
+				StorageTier: new("standard"),
 			}.Build(),
 			RunStrategy: new("Always"),
 		}.Build()
@@ -452,7 +537,8 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 				SourceType: "registry",
 			}.Build(),
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
-				SizeGib: 20,
+				SizeGib:     20,
+				StorageTier: new("standard"),
 			}.Build(),
 			RunStrategy: new("Always"),
 		}.Build()
@@ -472,7 +558,9 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 				SourceType: "registry",
 				SourceRef:  "quay.io/containerdisks/fedora:latest",
 			}.Build(),
-			BootDisk:    privatev1.ComputeInstanceDisk_builder{}.Build(),
+			BootDisk: privatev1.ComputeInstanceDisk_builder{
+				StorageTier: new("standard"),
+			}.Build(),
 			RunStrategy: new("Always"),
 		}.Build()
 
@@ -480,5 +568,95 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 		Expect(err.Error()).To(ContainSubstring("boot_disk.size_gib"))
+	})
+
+	It("Accepts boot_disk with empty storage_tier", func() {
+		spec := privatev1.ComputeInstanceSpec_builder{
+			Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
+			InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
+			Image: privatev1.ComputeInstanceImage_builder{
+				SourceType: "registry",
+				SourceRef:  "quay.io/containerdisks/fedora:latest",
+			}.Build(),
+			BootDisk: privatev1.ComputeInstanceDisk_builder{
+				SizeGib:     20,
+				StorageTier: new(""),
+			}.Build(),
+			RunStrategy: new("Always"),
+		}.Build()
+
+		Expect(ValidateRequiredSpecFields(spec)).To(Succeed())
+	})
+
+	It("Accepts boot_disk without storage_tier", func() {
+		spec := privatev1.ComputeInstanceSpec_builder{
+			Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
+			InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
+			Image: privatev1.ComputeInstanceImage_builder{
+				SourceType: "registry",
+				SourceRef:  "quay.io/containerdisks/fedora:latest",
+			}.Build(),
+			BootDisk: privatev1.ComputeInstanceDisk_builder{
+				SizeGib: 20,
+			}.Build(),
+			RunStrategy: new("Always"),
+		}.Build()
+
+		Expect(ValidateRequiredSpecFields(spec)).To(Succeed())
+	})
+
+	It("Accepts additional_disk with empty storage_tier", func() {
+		spec := privatev1.ComputeInstanceSpec_builder{
+			Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
+			InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
+			Image: privatev1.ComputeInstanceImage_builder{
+				SourceType: "registry",
+				SourceRef:  "quay.io/containerdisks/fedora:latest",
+			}.Build(),
+			BootDisk: privatev1.ComputeInstanceDisk_builder{
+				SizeGib:     20,
+				StorageTier: new("standard"),
+			}.Build(),
+			AdditionalDisks: []*privatev1.ComputeInstanceDisk{
+				privatev1.ComputeInstanceDisk_builder{
+					SizeGib:     100,
+					StorageTier: new("standard"),
+				}.Build(),
+				privatev1.ComputeInstanceDisk_builder{
+					SizeGib:     200,
+					StorageTier: new(""),
+				}.Build(),
+			},
+			RunStrategy: new("Always"),
+		}.Build()
+
+		Expect(ValidateRequiredSpecFields(spec)).To(Succeed())
+	})
+
+	It("Accepts additional_disk without storage_tier", func() {
+		spec := privatev1.ComputeInstanceSpec_builder{
+			Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
+			InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
+			Image: privatev1.ComputeInstanceImage_builder{
+				SourceType: "registry",
+				SourceRef:  "quay.io/containerdisks/fedora:latest",
+			}.Build(),
+			BootDisk: privatev1.ComputeInstanceDisk_builder{
+				SizeGib:     20,
+				StorageTier: new("standard"),
+			}.Build(),
+			AdditionalDisks: []*privatev1.ComputeInstanceDisk{
+				privatev1.ComputeInstanceDisk_builder{
+					SizeGib:     100,
+					StorageTier: new("standard"),
+				}.Build(),
+				privatev1.ComputeInstanceDisk_builder{
+					SizeGib: 200,
+				}.Build(),
+			},
+			RunStrategy: new("Always"),
+		}.Build()
+
+		Expect(ValidateRequiredSpecFields(spec)).To(Succeed())
 	})
 })

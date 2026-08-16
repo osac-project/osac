@@ -68,7 +68,9 @@
   ansible.builtin.raw: |
     ip netns exec {{ router_name }} ip link set lo up
     ip netns exec {{ router_name }} ip link set {{ router_trunk_interface }}.{{ router_vlan_id }} up
-    ip netns exec {{ router_name }} ip addr replace {{ router_internal_gateway }}/{{ router_internal_subnet | ansible.utils.ipaddr('prefix') }} dev {{ router_trunk_interface }}.{{ router_vlan_id }}
+    ip netns exec {{ router_name }} ip addr replace \
+      {{ router_internal_gateway }}/{{ router_internal_subnet | ansible.utils.ipaddr('prefix') }} \
+      dev {{ router_trunk_interface }}.{{ router_vlan_id }}
   changed_when: true
 
 - name: Check if veth pair exists

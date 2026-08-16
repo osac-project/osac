@@ -70,6 +70,35 @@ spec:
                     pattern: ^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$
                     type: string
                 type: object
+              networkAttachment:
+                description: |-
+                  NetworkAttachment connects this cluster to a tenant subnet.
+                  All node sets share the same subnet; the fabric interface for each
+                  node set is resolved from the node set's host type.
+                  When omitted, the system populates the field from the tenant's
+                  default subnet and security groups during creation.
+                properties:
+                  securityGroupRefs:
+                    description: |-
+                      SecurityGroupRefs lists SecurityGroup CR names to apply to the cluster's
+                      network attachment. All security groups must belong to the same virtual
+                      network as the subnet.
+                    items:
+                      type: string
+                    type: array
+                  subnetRef:
+                    description: |-
+                      SubnetRef is the name of the Subnet CR that the cluster connects to.
+                      The subnet must be in Ready state at creation time.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                    x-kubernetes-validations:
+                    - message: subnetRef is immutable
+                      rule: self == oldSelf
+                required:
+                - subnetRef
+                type: object
               nodeRequests:
                 description: |-
                   NodeRequests defines the types of nodes and number of each type of node that will be used
@@ -300,6 +329,66 @@ spec:
                   - resourceClass
                   type: object
                 type: array
+              nodeSets:
+                description: |-
+                  NodeSets holds per-node-set networking status, populated by the
+                  operator during agent selection and networking reconciliation.
+                items:
+                  description: NodeSetStatus holds networking status for a single
+                    node set.
+                  properties:
+                    agents:
+                      description: Agents holds per-agent networking status within
+                        this node set.
+                      items:
+                        description: |-
+                          AgentStatus holds networking status for a single agent (bare-metal host)
+                          within a node set.
+                        properties:
+                          agentName:
+                            description: AgentName is the name of the Agent CR, used
+                              for NodePool targeting.
+                            minLength: 1
+                            type: string
+                          hostName:
+                            description: HostName is the bare-metal server name used
+                              by the network dispatcher.
+                            minLength: 1
+                            type: string
+                          ipAddress:
+                            description: |-
+                              IPAddress is the agent's IPv4 address on the tenant subnet,
+                              discovered from the Agent CR status after DHCP assignment.
+                            type: string
+                          subnetRef:
+                            description: SubnetRef is the name of the Subnet CR the
+                              agent is connected to.
+                            type: string
+                        required:
+                        - agentName
+                        - hostName
+                        type: object
+                      type: array
+                      x-kubernetes-list-map-keys:
+                      - agentName
+                      x-kubernetes-list-type: map
+                    fabricInterface:
+                      description: |-
+                        FabricInterface is the host NIC used for tenant network traffic,
+                        resolved from the node set's HostType NetworkInterface list.
+                      type: string
+                    name:
+                      description: Name is the node set identifier (matches the ClusterNodeSet
+                        key).
+                      minLength: 1
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               phase:
                 description: Phase provides a single-value overview of the state of
                   the ClusterOrder

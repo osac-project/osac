@@ -438,11 +438,13 @@ fulfillment service. Valid values are `default` and `guest`.
 1. **Shared Tenant**: The `shared` tenant is a special tenant that is always included in the visible
    tenants for all users. Resources assigned to the `shared` tenant are visible to **everyone**.
    This is useful for templates, shared configurations, or other resources that should be accessible
-   across all tenants.
+   across all tenants. Note that certain resource types — specifically **projects** and **identity
+   providers** — cannot be created in the `shared` tenant and must be scoped to a specific tenant.
 
 2. **System Tenant**: The `system` tenant is a special tenant used for objects that are only visible
    to the system itself. Resources assigned to the `system` tenant are not visible to regular users.
-   This is used internally for system-level resources.
+   This is used internally for system-level resources. As with the `shared` tenant, **projects** and
+   **identity providers** cannot be created in the `system` tenant.
 
 3. **Single-Organization Limitation**: In Keycloak, a user can only be a member of one organization
    at a time. This means JWT users have access to exactly one tenant (plus the `shared` tenant for
@@ -475,7 +477,10 @@ JWT token claims (see [Subject Resolution](#subject-resolution)).
 - **Assignable Tenants**: All tenants from the subject
 - **Default Tenant**: First tenant from the subject. When the subject has access to all tenants
   (e.g., an admin with the universal set `["*"]`), the default tenant is `shared` because a
-  universal set cannot be stored as the tenant of an object.
+  universal set cannot be stored as the tenant of an object. For resource types that cannot belong
+  to the `shared` tenant (projects and identity providers), admin users must explicitly specify
+  `metadata.tenant` in the create request; otherwise the request will be rejected with
+  `InvalidArgument`.
 - **Visible Tenants**: All subject's tenants plus the `shared` tenant. For admins with the
   universal set, all tenants are visible.
 
@@ -579,6 +584,7 @@ The authorization policy allows:
      - Cluster Catalog Items: `Get`, `List`
      - Compute Instances: `Create`, `Delete`, `Get`, `List`, `Update`
      - Compute Instance Templates: `Get`, `List`
+     - Disk Images: `Create`, `Delete`, `Get`, `List`, `Update`
      - Console Sessions: `Create`
      - Events: `Watch`
      - Host Types: `Get`, `List`
@@ -667,7 +673,7 @@ The fulfillment service implements a comprehensive authorization model that comb
 **Tenancy:** Scoped to their assigned tenant(s) + shared tenant
 
 **Permissions:** Read/write access to infrastructure resources:
-- Bare-metal instances, clusters, compute instances
+- Bare-metal instances, clusters, compute instances, disk images
 - Networking (virtual networks, subnets, network classes, security groups)
 - IPs (external IPs and their attachments/pools)
 - Templates and catalog items (read-only)

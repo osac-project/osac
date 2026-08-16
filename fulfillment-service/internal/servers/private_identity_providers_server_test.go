@@ -25,6 +25,7 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/events"
 )
@@ -428,6 +429,55 @@ var _ = Describe("Private identity providers server", func() {
 		})
 
 		Describe("Tenant Validation", func() {
+			It("Rejects creation when no tenant is specified and default tenant is invalid", func() {
+				// Use a dedicated transaction to verify the write is rolled back
+				createTx, err := tm.Begin(context.Background())
+				Expect(err).ToNot(HaveOccurred())
+				createCtx := database.TxIntoContext(context.Background(), createTx)
+
+				_, err = server.Create(createCtx, privatev1.IdentityProvidersCreateRequest_builder{
+					Object: privatev1.IdentityProvider_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: "test-oidc",
+						}.Build(),
+						Spec: privatev1.IdentityProviderSpec_builder{
+							Title:   "Test OIDC",
+							Enabled: true,
+							Oidc: privatev1.OidcConfig_builder{
+								AuthorizationUrl: "https://example.com/auth",
+								TokenUrl:         "https://example.com/token",
+								ClientId:         "client-id",
+								ClientSecret:     testOidcClientSecret,
+								Issuer:           "https://example.com",
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				status, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+				Expect(status.Message()).To(ContainSubstring("must be assigned to a specific tenant"))
+
+				// End the transaction — the reported error triggers rollback
+				err = createTx.End(createCtx)
+				Expect(err).ToNot(HaveOccurred())
+
+				// Verify the identity provider was not persisted after rollback
+				verifyTx, err := tm.Begin(context.Background())
+				Expect(err).ToNot(HaveOccurred())
+				verifyCtx := database.TxIntoContext(context.Background(), verifyTx)
+				DeferCleanup(func() {
+					_ = verifyTx.End(verifyCtx)
+				})
+
+				listResp, err := server.List(verifyCtx, privatev1.IdentityProvidersListRequest_builder{
+					Filter: new("this.metadata.name == 'test-oidc'"),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(listResp.GetItems()).To(BeEmpty())
+			})
+
 			It("Rejects creation when tenant is explicitly set to 'shared'", func() {
 				request := privatev1.IdentityProvidersCreateRequest_builder{
 					Object: privatev1.IdentityProvider_builder{

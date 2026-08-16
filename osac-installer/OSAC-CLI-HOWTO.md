@@ -488,9 +488,12 @@ User-Agent: grpc-go/1.70.0
 
 # Request body (protobuf)
 {
-  "template": "simple",
-  "name": "cluster-001",
-  "parameters": {}
+  "spec": {
+    "template": { "name": "simple" }
+  },
+  "metadata": {
+    "name": "cluster-001"
+  }
 }
 
 # Response
@@ -501,8 +504,12 @@ grpc-status: 0
 # Response body (protobuf)
 {
   "id": "672c0827-ef03-48d0-b825-689f83ff296b",
-  "template": "simple",
-  "state": "PROVISIONING"
+  "spec": {
+    "template": { "id": "osac.templates.simple", "name": "simple" }
+  },
+  "status": {
+    "state": "CLUSTER_STATE_PROGRESSING"
+  }
 }
 ```
 

@@ -118,7 +118,7 @@ func renderStorageBackend(w io.Writer, sb *privatev1.StorageBackend) {
 	writer.Flush()
 }
 
-const shortHelp = `Describe a storage backend.`
+const shortHelp = `Describe a storage backend`
 
 const longHelp = `
 Describe a storage backend.

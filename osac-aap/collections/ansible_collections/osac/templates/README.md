@@ -191,6 +191,7 @@ template role with the filtered tier subset.
      supports_nfs: true
      provisioning_targets:
        - vmaas
+       # Add caas only when this provider implements guest-cluster provisioning.
    ```
 
 3. Implement the three required action task files. Each receives `_provider_tiers`
@@ -214,16 +215,16 @@ template role with the filtered tier subset.
    osac-operator from the Tier API and keyed by `backend_id`) — there is no
    env-var or K8s Secret fallback for admin credentials.
 
-6. **Provisioning targets:** Each provider handles both VMaaS and CaaS provisioning
-   targets via the `_provisioning_target` parameter. Currently supported: `vmaas`.
-   CaaS targets (`hcp_control_plane`, `hcp_worker_root`, `hcp_data_plane`) are
-   defined in the enum but not yet implemented.
+6. **Provisioning targets:** Each provider declares only the targets it implements
+   via `meta/osac.yaml`. `caas` is currently supported by the `lvms_storage`
+   provider (installs LVMS on the guest cluster, creates per-tenant StorageClasses).
+   HCP-level targets (`hcp_control_plane`, `hcp_worker_root`, `hcp_data_plane`)
+   are defined but not yet implemented by any provider.
 
-**CaaS provisioning targets:** `hcp_control_plane`, `hcp_worker_root`, and
-`hcp_data_plane` are defined in the provisioning target enum but not yet implemented.
-When implemented, `hcp_data_plane` will support provisioning multiple StorageClasses
-into the guest HCP cluster (e.g., separate tiers for databases and general workloads).
-Currently, all CaaS targets return an explicit "not yet implemented" error.
+**CaaS provisioning targets:** `caas` is supported by the `lvms_storage` provider
+(OSAC-3234). `hcp_control_plane`, `hcp_worker_root`, and `hcp_data_plane` remain
+unimplemented — they are defined in the provisioning target enum for future
+network-attached storage providers that serve HCP worker nodes directly.
 
 **Configuration:** Storage tiers arrive via the `osac_job_vars.storage_tier_definitions`
 extra_var, populated by osac-operator from the Tier API:

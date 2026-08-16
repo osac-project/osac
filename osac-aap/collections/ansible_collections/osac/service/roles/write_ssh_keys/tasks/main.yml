@@ -12,8 +12,14 @@
   ansible.builtin.assert:
     that:
       - lookup('env', 'SERVER_SSH_KEY') | length > 0
+    fail_msg: "SERVER_SSH_KEY env var is empty"
+
+- name: Validate bastion SSH key env var
+  ansible.builtin.assert:
+    that:
       - lookup('env', 'SERVER_SSH_BASTION_KEY') | length > 0
-    fail_msg: "SERVER_SSH_KEY and/or SERVER_SSH_BASTION_KEY env vars are empty"
+    fail_msg: "SERVER_SSH_BASTION_KEY env var is empty (required when SERVER_SSH_BASTION_HOST is set)"
+  when: lookup('env', 'SERVER_SSH_BASTION_HOST') | length > 0
 
 - name: Write server SSH key from env var
   ansible.builtin.copy:
@@ -28,3 +34,4 @@
     dest: "{{ server_ssh_bastion_key }}"
     mode: "0400"
   no_log: true
+  when: lookup('env', 'SERVER_SSH_BASTION_HOST') | length > 0

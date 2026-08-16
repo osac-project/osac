@@ -20,6 +20,10 @@ import (
 	"fmt"
 )
 
+const (
+	osacVIPCIDRAnnotation = osacPrefix + "/vip-cidr"
+)
+
 var (
 	osacSubnetIDLabel           string = fmt.Sprintf("%s/subnet-uuid", osacPrefix)
 	osacSubnetFeedbackFinalizer string = fmt.Sprintf("%s/subnet-feedback", osacPrefix)

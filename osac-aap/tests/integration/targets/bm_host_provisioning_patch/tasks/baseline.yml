@@ -4,10 +4,7 @@
   gather_facts: false
 
   vars:
-    bm_host_metal3_default_image_url: >-
-      https://download.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2
-    bm_host_metal3_default_image_checksum: "28680fe5b371a5a82ebf43a31926e086a168e59949d03969c5093e7071f90b7f"
-    bm_host_metal3_default_checksum_type: "sha256"
+    bm_host_metal3_default_image_url: "oci://quay.io/osac-project/fedora-cloud-bmi:44"
 
   tasks:
     - name: Test OCI image - set template_params with oci:// URL
@@ -18,9 +15,7 @@
 
     - name: Apply image defaults to template parameters
       ansible.builtin.set_fact:
-        template_params: "{{ {'imageURL': bm_host_metal3_default_image_url,
-                              'imageChecksum': bm_host_metal3_default_image_checksum,
-                              'checksumType': bm_host_metal3_default_checksum_type}
+        template_params: "{{ {'imageURL': bm_host_metal3_default_image_url}
                             | combine(template_params) }}"
 
     - name: Set variables expected by build_bmh_patch
@@ -48,10 +43,7 @@
   gather_facts: false
 
   vars:
-    bm_host_metal3_default_image_url: >-
-      https://download.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2
-    bm_host_metal3_default_image_checksum: "28680fe5b371a5a82ebf43a31926e086a168e59949d03969c5093e7071f90b7f"
-    bm_host_metal3_default_checksum_type: "sha256"
+    bm_host_metal3_default_image_url: "oci://quay.io/osac-project/fedora-cloud-bmi:44"
 
   tasks:
     - name: Test qcow2 image - set template_params with https URL
@@ -63,9 +55,7 @@
 
     - name: Apply image defaults to template parameters
       ansible.builtin.set_fact:
-        template_params: "{{ {'imageURL': bm_host_metal3_default_image_url,
-                              'imageChecksum': bm_host_metal3_default_image_checksum,
-                              'checksumType': bm_host_metal3_default_checksum_type}
+        template_params: "{{ {'imageURL': bm_host_metal3_default_image_url}
                             | combine(template_params) }}"
 
     - name: Set variables expected by build_bmh_patch
@@ -87,44 +77,3 @@
           - bmh_patch.spec.image.checksum == "deadbeef1234"
           - bmh_patch.spec.image.checksumType == "md5"
         fail_msg: "Non-OCI image BMH patch must contain checksum and checksumType"
-
-- name: BMH Patch Construction - Default image includes checksum
-  hosts: localhost
-  gather_facts: false
-
-  vars:
-    bm_host_metal3_default_image_url: >-
-      https://download.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2
-    bm_host_metal3_default_image_checksum: "28680fe5b371a5a82ebf43a31926e086a168e59949d03969c5093e7071f90b7f"
-    bm_host_metal3_default_checksum_type: "sha256"
-
-  tasks:
-    - name: Test default image - set empty template_params
-      ansible.builtin.set_fact:
-        template_params: {}
-
-    - name: Apply image defaults to template parameters
-      ansible.builtin.set_fact:
-        template_params: "{{ {'imageURL': bm_host_metal3_default_image_url,
-                              'imageChecksum': bm_host_metal3_default_image_checksum,
-                              'checksumType': bm_host_metal3_default_checksum_type}
-                            | combine(template_params) }}"
-
-    - name: Set variables expected by build_bmh_patch
-      ansible.builtin.set_fact:
-        ssh_key: ""
-        user_data_secret_ref: ""
-        bmh_name: "test-bmh"
-        bmh_namespace: "test-ns"
-
-    - name: Build BMH patch using actual role code
-      ansible.builtin.include_role:
-        name: osac.templates.bm_host_provisioning
-        tasks_from: build_bmh_patch.yaml
-
-    - name: Assert default image patch includes checksum fields
-      ansible.builtin.assert:
-        that:
-          - bmh_patch.spec.image.checksum == bm_host_metal3_default_image_checksum
-          - bmh_patch.spec.image.checksumType == bm_host_metal3_default_checksum_type
-        fail_msg: "Default (non-OCI) image BMH patch must contain checksum and checksumType from defaults"

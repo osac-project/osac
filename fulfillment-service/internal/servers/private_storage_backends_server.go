@@ -201,22 +201,6 @@ func (s *PrivateStorageBackendsServer) validateStorageBackendCreate(_ context.Co
 	if sb.GetMetadata() == nil || sb.GetMetadata().GetName() == "" {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'metadata.name' is required")
 	}
-	spec := sb.GetSpec()
-	if spec == nil {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec' is required")
-	}
-	if spec.GetProvider() == "" {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.provider' is required")
-	}
-	if spec.GetEndpoint() == "" {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.endpoint' is required")
-	}
-	if spec.GetCredentials() == nil || spec.GetCredentials().GetUsername() == "" {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.credentials.username' is required")
-	}
-	if spec.GetCredentials().GetPassword() == "" {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.credentials.password' is required")
-	}
 	return nil
 }
 

@@ -130,12 +130,7 @@ func (b *SecretsServerBuilder) Build() (result *SecretsServer, err error) {
 }
 
 func (s *SecretsServer) redactPublicSecret(secret *publicv1.Secret) {
-	if spec := secret.GetSpec(); spec != nil {
-		spec.SetData(nil)
-	}
-	if status := secret.GetStatus(); status != nil {
-		status.SetResolvedData(nil)
-	}
+	secret.SetData(nil)
 }
 
 func (s *SecretsServer) Create(ctx context.Context,
@@ -148,9 +143,7 @@ func (s *SecretsServer) Create(ctx context.Context,
 	}
 
 	// Public API always uses the Vault backend.
-	if spec := privateObject.GetSpec(); spec != nil {
-		spec.SetBackend(privatev1.SecretBackend_SECRET_BACKEND_VAULT)
-	}
+	privateObject.SetBackend(privatev1.SecretBackend_SECRET_BACKEND_VAULT)
 
 	privateRequest := &privatev1.SecretsCreateRequest{}
 	privateRequest.SetObject(privateObject)
@@ -240,8 +233,8 @@ func (s *SecretsServer) Update(ctx context.Context,
 	}
 
 	existing := getResponse.GetObject()
-	if existing.GetSpec().GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_HUB &&
-		len(request.GetObject().GetSpec().GetData()) > 0 {
+	if existing.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_HUB &&
+		len(request.GetObject().GetData()) > 0 {
 		return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition,
 			"cannot update data for hub-backed secrets via public API")
 	}
@@ -254,12 +247,7 @@ func (s *SecretsServer) Update(ctx context.Context,
 	}
 
 	// Preserve the existing backend (public API has no backend field).
-	spec := privateObject.GetSpec()
-	if spec == nil {
-		privateObject.SetSpec(privatev1.SecretSpec_builder{}.Build())
-		spec = privateObject.GetSpec()
-	}
-	spec.SetBackend(existing.GetSpec().GetBackend())
+	privateObject.SetBackend(existing.GetBackend())
 
 	privateRequest := &privatev1.SecretsUpdateRequest{}
 	privateRequest.SetObject(privateObject)
@@ -294,7 +282,7 @@ func (s *SecretsServer) Delete(ctx context.Context,
 	}
 
 	existing := getResponse.GetObject()
-	if existing.GetSpec().GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_HUB {
+	if existing.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_HUB {
 		return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition,
 			"cannot delete hub-backed secrets via public API")
 	}

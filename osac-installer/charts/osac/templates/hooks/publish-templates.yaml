@@ -29,7 +29,7 @@ spec:
           - pipefail
           - -c
           - |
-            AAP_TOKEN=$(oc get secret osac-aap-api-token -n {{ .Release.Namespace }} \
+            AAP_TOKEN=$(kubectl get secret osac-aap-api-token -n {{ .Release.Namespace }} \
               -o jsonpath='{.data.token}' | base64 -d)
             [[ -n "${AAP_TOKEN}" ]] || { echo "ERROR: osac-aap-api-token secret is empty"; exit 1; }
 

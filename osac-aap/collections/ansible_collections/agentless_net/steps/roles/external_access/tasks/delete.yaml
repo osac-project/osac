@@ -43,8 +43,14 @@
 
     - name: Parse public IPs for this cluster
       ansible.builtin.set_fact:
-        external_access_api_public_ip: "{{ (external_access_ipam_state_raw.content | b64decode | from_json).public_ips[external_access_state_key + '-api'][0] | default('') }}"
-        external_access_ingress_public_ip: "{{ (external_access_ipam_state_raw.content | b64decode | from_json).public_ips[external_access_state_key + '-ingress'][0] | default('') }}"
+        external_access_api_public_ip: >-
+          {{ (external_access_ipam_state_raw.content | b64decode
+          | from_json).public_ips[external_access_state_key + '-api'][0]
+          | default('') }}
+        external_access_ingress_public_ip: >-
+          {{ (external_access_ipam_state_raw.content | b64decode
+          | from_json).public_ips[external_access_state_key + '-ingress'][0]
+          | default('') }}
   rescue:
     - name: Default to empty IPs on missing or corrupt state
       ansible.builtin.set_fact:
@@ -63,8 +69,14 @@
   block:
     - name: Extract API internal IP and port from state file
       ansible.builtin.set_fact:
-        external_access_api_internal_ip: "{{ (external_access_ipam_state_raw.content | b64decode | from_json).dnat_state[external_access_state_key].api_internal_ip | default('') }}"
-        external_access_kube_apiserver_port: "{{ (external_access_ipam_state_raw.content | b64decode | from_json).dnat_state[external_access_state_key].api_port | default('') }}"
+        external_access_api_internal_ip: >-
+          {{ (external_access_ipam_state_raw.content | b64decode
+          | from_json).dnat_state[external_access_state_key].api_internal_ip
+          | default('') }}
+        external_access_kube_apiserver_port: >-
+          {{ (external_access_ipam_state_raw.content | b64decode
+          | from_json).dnat_state[external_access_state_key].api_port
+          | default('') }}
   rescue:
     - name: Default to empty API DNAT state
       ansible.builtin.set_fact:
@@ -83,7 +95,10 @@
   block:
     - name: Extract veth namespace-side IP from state file
       ansible.builtin.set_fact:
-        external_access_bgp_next_hop: "{{ (external_access_ipam_state_raw.content | b64decode | from_json).veth_state[external_access_state_key].ns_ip | ansible.utils.ipaddr('address') }}"
+        external_access_bgp_next_hop: >-
+          {{ (external_access_ipam_state_raw.content | b64decode
+          | from_json).veth_state[external_access_state_key].ns_ip
+          | ansible.utils.ipaddr('address') }}
   rescue:
     - name: Default to empty BGP next-hop
       ansible.builtin.set_fact:

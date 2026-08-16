@@ -106,6 +106,30 @@ var _ = Describe("ComputeInstanceSpec", func() {
 			Expect(spec.UserDataSecretRef.Name).To(Equal("my-cloud-init"))
 		})
 
+		It("should support GPU spec", func() {
+			spec := v1alpha1.ComputeInstanceSpec{
+				TemplateID: "test-template",
+				Image: v1alpha1.ImageSpec{
+					SourceType: v1alpha1.ImageSourceTypeRegistry,
+					SourceRef:  "test-image:latest",
+				},
+				Cores:     8,
+				MemoryGiB: 64,
+				BootDisk:  v1alpha1.DiskSpec{SizeGiB: 100},
+				Gpu: &v1alpha1.GpuSpec{
+					PciDeviceSelector: "10DE:20B0",
+					ResourceName:      "nvidia.com/A100",
+					Count:             2,
+				},
+				RunStrategy: v1alpha1.RunStrategyAlways,
+			}
+
+			Expect(spec.Gpu).ToNot(BeNil())
+			Expect(spec.Gpu.PciDeviceSelector).To(Equal("10DE:20B0"))
+			Expect(spec.Gpu.ResourceName).To(Equal("nvidia.com/A100"))
+			Expect(spec.Gpu.Count).To(Equal(int32(2)))
+		})
+
 		It("should support SSH key", func() {
 			sshKey := "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQ..."
 			spec := v1alpha1.ComputeInstanceSpec{

@@ -155,7 +155,7 @@ var _ = Describe("m360Client", func() {
 	})
 
 	Describe("healthCheck", func() {
-		It("returns nil on 200", func() {
+		It("returns nil when server responds with 200", func() {
 			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusOK)
 			}))
@@ -165,13 +165,50 @@ var _ = Describe("m360Client", func() {
 			Expect(err).NotTo(HaveOccurred())
 		})
 
-		It("returns error on non-2xx", func() {
+		It("returns nil when server responds with non-2xx (reachable)", func() {
 			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusServiceUnavailable)
+				w.WriteHeader(http.StatusInternalServerError)
 			}))
 			client = newM360Client(server.URL, "v1", "key")
 
 			err := client.healthCheck(context.Background())
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("sends HEAD to the base URL", func() {
+			var capturedMethod string
+			var capturedPath string
+			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				capturedMethod = r.Method
+				capturedPath = r.URL.Path
+				w.WriteHeader(http.StatusOK)
+			}))
+			client = newM360Client(server.URL, "v1", "key")
+
+			err := client.healthCheck(context.Background())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(capturedMethod).To(Equal("HEAD"))
+			Expect(capturedPath).To(Equal("/"))
+		})
+
+		It("returns error when server is unreachable", func() {
+			client = newM360Client("http://127.0.0.1:1", "v1", "key")
+
+			err := client.healthCheck(context.Background())
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("M360 health check"))
+		})
+
+		It("returns error when context is cancelled", func() {
+			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}))
+			client = newM360Client(server.URL, "v1", "key")
+
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+
+			err := client.healthCheck(ctx)
 			Expect(err).To(HaveOccurred())
 		})
 	})

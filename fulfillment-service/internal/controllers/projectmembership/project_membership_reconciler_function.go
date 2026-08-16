@@ -603,6 +603,7 @@ func (t *task) delete(ctx context.Context) error {
 		if err := t.cleanupProjectMembership(ctx); err != nil {
 			return err
 		}
+		t.signalProject(ctx)
 	}
 
 	metadata.SetFinalizers(updated)
@@ -663,4 +664,32 @@ func (t *task) cleanupProjectMembership(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// signalProject looks up the project by name and signals it so that the
+// project reconciler re-runs. This is used when the project membership is deleted to
+// unblock the project's own deletion.
+func (t *task) signalProject(ctx context.Context) {
+	projectName := t.membership.GetMetadata().GetProject()
+	if projectName == "" {
+		return
+	}
+	project, err := t.getProjectByNameOrID(ctx, projectName)
+	if err != nil {
+		t.r.logger.WarnContext(ctx, "Failed to look up project for signaling",
+			slog.String("project_name", projectName),
+			slog.Any("error", err),
+		)
+		return
+	}
+
+	_, err = t.r.projectsClient.Signal(ctx, privatev1.ProjectsSignalRequest_builder{
+		Id: project.GetId(),
+	}.Build())
+	if err != nil {
+		t.r.logger.WarnContext(ctx, "Failed to signal project for membership deletion",
+			slog.String("project_name", projectName),
+			slog.Any("error", err),
+		)
+	}
 }

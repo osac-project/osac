@@ -249,10 +249,12 @@ func (r *UpdateRequest[O]) translateError(ctx context.Context, id, name, tenant 
 			return &ErrAlreadyExists{
 				ID:   id,
 				Name: name,
+				Kind: r.dao.kind,
 			}
 		}
 		return &ErrAlreadyExists{
-			ID: id,
+			ID:   id,
+			Kind: r.dao.kind,
 		}
 	case pgerrcode.ForeignKeyViolation:
 		switch {
@@ -322,12 +324,14 @@ func (r *UpdateRequest[O]) translateError(ctx context.Context, id, name, tenant 
 		// If no message is provided, fall back to ID.
 		if pgErr.Message != "" {
 			return &ErrAlreadyExists{
+				Kind:   r.dao.kind,
 				ID:     id,
 				Reason: pgErr.Message,
 			}
 		}
 		return &ErrAlreadyExists{
-			ID: id,
+			Kind: r.dao.kind,
+			ID:   id,
 		}
 	case pgerrcode.DeadlockDetected:
 		return &ErrDeadlock{}

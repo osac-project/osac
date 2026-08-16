@@ -21,6 +21,7 @@ import (
 	. "github.com/onsi/gomega"
 	"github.com/spf13/cobra"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/baremetalinstancetype"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/cluster"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/clusterversion"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/computeinstance"
@@ -36,6 +37,7 @@ var _ = Describe("Describe command", func() {
 			cmd := cmdFunc()
 			Expect(cmd.Aliases).To(ContainElement(expectedAlias))
 		},
+		Entry("baremetalinstancetype", baremetalinstancetype.Cmd, "baremetalinstancetypes"),
 		Entry("cluster", cluster.Cmd, "clusters"),
 		Entry("clusterversion", clusterversion.Cmd, "clusterversions"),
 		Entry("computeinstance", computeinstance.Cmd, "computeinstances"),
@@ -55,7 +57,27 @@ var _ = Describe("Describe command", func() {
 				subcommandNames = append(subcommandNames, subcmd.Name())
 			}
 
-			Expect(subcommandNames).To(ContainElements("cluster", "clusterversion", "computeinstance", "networkclass", "virtualnetwork", "subnet", "securitygroup"))
+			Expect(subcommandNames).To(ContainElements("baremetalinstancetype", "cluster", "clusterversion", "computeinstance", "networkclass", "virtualnetwork", "subnet", "securitygroup"))
+		})
+	})
+
+	Describe("Private API annotations", func() {
+		It("should annotate private-API subcommands", func() {
+			cmd := Cmd()
+			privateNames := map[string]bool{
+				"storagebackend": true, "storagetier": true,
+			}
+			for _, sub := range cmd.Commands() {
+				if privateNames[sub.Name()] {
+					Expect(sub.Annotations).To(HaveKeyWithValue("api", "private"),
+						"subcommand %s should be annotated as private", sub.Name())
+				} else {
+					if sub.Annotations != nil {
+						Expect(sub.Annotations).ToNot(HaveKey("api"),
+							"subcommand %s should not be annotated as private", sub.Name())
+					}
+				}
+			}
 		})
 	})
 

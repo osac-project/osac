@@ -1,0 +1,16 @@
+# graphify structural extraction scope (mono-repo knowledge-graph brain).
+#
+# Test files are intentionally included in the corpus -- real usage found
+# genuine value in "which tests cover this function" questions and
+# source-to-test edges, worth the extra node/link count. See the design
+# doc's Premise 5 for the measured numbers behind this decision.
+#
+# Vendored third-party trees are excluded, not just deprioritized: real
+# measurement (generic YAML/JSON coverage, not yet shipped) found a single
+# vendored Ansible collection tree responsible for the large majority of a
+# real node-count/query-time ceiling breach -- content previously invisible
+# to the graph (YAML was doc-classified) that becomes noise, not signal,
+# once extracted. Confirmed via a full-repo search that this is currently
+# the only vendor/-style tree in the mono-repo -- osac-aap/collections/ is
+# this org's own first-party Ansible content and stays in scope.
+osac-aap/vendor/**

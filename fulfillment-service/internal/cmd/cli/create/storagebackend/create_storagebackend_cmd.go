@@ -146,7 +146,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-const shortHelp = `Create a storage backend.`
+const shortHelp = `Create a storage backend`
 
 const longHelp = `
 Create a storage backend.

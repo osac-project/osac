@@ -31,6 +31,13 @@
   loop_control:
     label: "{{ item.key }}"
 
+- name: Delete NMStateConfig CRs for cluster agents
+  ansible.builtin.include_role:
+    name: osac.service.nmstate_config
+  vars:
+    nmstate_config_state: absent
+    nmstate_config_cluster_name: "{{ cluster_infra_name }}"
+
 - name: Detach agents from cluster
   ansible.builtin.include_role:
     name: osac.service.manage_agents
@@ -50,9 +57,18 @@
 
     - name: Parse cluster state from state file
       ansible.builtin.set_fact:
-        cluster_infra_vlan_id: "{{ (cluster_infra_ipam_state_raw.content | b64decode | from_json).vlans[cluster_infra_state_key] | default('') }}"
-        cluster_infra_allocated_host_ids: "{{ (cluster_infra_ipam_state_raw.content | b64decode | from_json).host_allocations[cluster_infra_state_key] | default([]) }}"
-        cluster_infra_external_peer_ip: "{{ (cluster_infra_ipam_state_raw.content | b64decode | from_json).veth_state[cluster_infra_state_key].host_ip | default('') }}"
+        cluster_infra_vlan_id: >-
+          {{ (cluster_infra_ipam_state_raw.content | b64decode
+          | from_json).vlans[cluster_infra_state_key]
+          | default('') }}
+        cluster_infra_allocated_host_ids: >-
+          {{ (cluster_infra_ipam_state_raw.content | b64decode
+          | from_json).host_allocations[cluster_infra_state_key]
+          | default([]) }}
+        cluster_infra_external_peer_ip: >-
+          {{ (cluster_infra_ipam_state_raw.content | b64decode
+          | from_json).veth_state[cluster_infra_state_key].host_ip
+          | default('') }}
   rescue:
     - name: Default to empty state on missing or corrupt file
       ansible.builtin.set_fact:

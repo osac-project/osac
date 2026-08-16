@@ -7,7 +7,6 @@ metadata:
 resources:
   - aap.yaml
   - osac-sa.yaml
-  - job.yaml
   - template-publisher.yaml
 
 labels:

@@ -79,7 +79,9 @@
 
 - name: Set API public IP
   ansible.builtin.set_fact:
-    external_access_api_public_ip: "{{ (external_access_api_ipam_raw.content | b64decode | from_json).public_ips[external_access_state_key + '-api'][0] }}"
+    external_access_api_public_ip: >-
+      {{ (external_access_api_ipam_raw.content | b64decode
+      | from_json).public_ips[external_access_state_key + '-api'][0] }}
 
 - name: Allocate public IP for ingress  # noqa: no-changed-when
   environment:
@@ -103,7 +105,9 @@
 
 - name: Set ingress public IP
   ansible.builtin.set_fact:
-    external_access_ingress_public_ip: "{{ (external_access_ingress_ipam_raw.content | b64decode | from_json).public_ips[external_access_state_key + '-ingress'][0] }}"
+    external_access_ingress_public_ip: >-
+      {{ (external_access_ingress_ipam_raw.content | b64decode
+      | from_json).public_ips[external_access_state_key + '-ingress'][0] }}
 
 - name: Display allocated public IPs
   ansible.builtin.debug:
@@ -159,7 +163,10 @@
 
 - name: Read veth namespace-side IP from state file
   ansible.builtin.set_fact:
-    external_access_bgp_next_hop: "{{ (external_access_api_ipam_raw.content | b64decode | from_json).veth_state[external_access_state_key].ns_ip | ansible.utils.ipaddr('address') }}"
+    external_access_bgp_next_hop: >-
+      {{ (external_access_api_ipam_raw.content | b64decode
+      | from_json).veth_state[external_access_state_key].ns_ip
+      | ansible.utils.ipaddr('address') }}
 
 - name: Announce API PublicIP route  # noqa: no-changed-when
   environment:
@@ -284,4 +291,3 @@
       -e dnat_internal_port=443
       -e dnat_protocol=tcp
       {{ role_path }}/playbooks/l3_create_dnat.yaml
-

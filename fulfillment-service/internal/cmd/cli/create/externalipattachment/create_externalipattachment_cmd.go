@@ -235,7 +235,7 @@ func parseTargetEndpoint(value string) (publicv1.ExternalIPAttachmentEndpoint, e
 	}
 }
 
-const shortHelp = `Attach an external IP to a resource.`
+const shortHelp = `Attach an external IP to a resource`
 
 const longHelp = `
 Create an external IP attachment to bind an external IP to a target resource.

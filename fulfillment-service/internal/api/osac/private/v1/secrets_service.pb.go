@@ -52,7 +52,7 @@ type SecretsListRequest struct {
 	// expression evaluates to `true` the object is included in the results. For example, to retrieve all secrets with
 	// a Vault backend:
 	//
-	//	this.spec.backend == SECRET_BACKEND_VAULT
+	//	this.backend == SECRET_BACKEND_VAULT
 	//
 	// If this isn't provided, or if the value is empty, then all the secrets that the user has permission to see will be
 	// returned. Not all CEL constructs are currently supported for implementation reasons; see the filter documentation
@@ -201,7 +201,7 @@ type SecretsListRequest_builder struct {
 	// expression evaluates to `true` the object is included in the results. For example, to retrieve all secrets with
 	// a Vault backend:
 	//
-	//	this.spec.backend == SECRET_BACKEND_VAULT
+	//	this.backend == SECRET_BACKEND_VAULT
 	//
 	// If this isn't provided, or if the value is empty, then all the secrets that the user has permission to see will be
 	// returned. Not all CEL constructs are currently supported for implementation reasons; see the filter documentation

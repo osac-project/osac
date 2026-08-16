@@ -132,7 +132,7 @@ func renderClusterVersion(w io.Writer, cv *publicv1.ClusterVersion) {
 	writer.Flush()
 }
 
-const shortHelp = `Describe a cluster version.`
+const shortHelp = `Describe a cluster version`
 
 const longHelp = `
 Describe a cluster version.

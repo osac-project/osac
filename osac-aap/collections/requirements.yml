@@ -28,4 +28,4 @@ collections:
   - name: ansible_network.network_runner
     type: git
     source: https://github.com/ybettan/network-runner
-    version: 0.3.7
+    version: 0.3.8

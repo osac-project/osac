@@ -20,8 +20,10 @@ parameters:
     title: Pull Secret
     description: >
       The pull secret contains credentials for authenticating to image repositories.
+      Resolved automatically from spec.pullSecret or the provider default Secret
+      when not provided as a template parameter.
     type: string
-    required: true
+    required: false
   - name: ssh_public_key
     title: SSH Public Key
     description: >

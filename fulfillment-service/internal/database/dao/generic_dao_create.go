@@ -224,9 +224,9 @@ func (r *CreateRequest[O]) translateError(ctx context.Context, id, tenant, proje
 	switch pgErr.Code {
 	case pgerrcode.UniqueViolation:
 		return &ErrAlreadyExists{
-			Table: r.dao.table,
-			ID:    id,
-			Name:  name,
+			Kind: r.dao.kind,
+			ID:   id,
+			Name: name,
 		}
 	case errReferenceCode:
 		return &ErrReference{
@@ -259,12 +259,14 @@ func (r *CreateRequest[O]) translateError(ctx context.Context, id, tenant, proje
 		// If no message is provided, fall back to ID.
 		if pgErr.Message != "" {
 			return &ErrAlreadyExists{
+				Kind:   r.dao.kind,
 				ID:     id,
 				Reason: pgErr.Message,
 			}
 		}
 		return &ErrAlreadyExists{
-			ID: id,
+			Kind: r.dao.kind,
+			ID:   id,
 		}
 	case pgerrcode.DeadlockDetected:
 		return &ErrDeadlock{}

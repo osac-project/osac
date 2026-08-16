@@ -30,7 +30,7 @@ spec:
 
           # Check that cert-manager CRDs exist
           echo "Checking for cert-manager CRDs..."
-          if oc get crd certificates.cert-manager.io >/dev/null; then
+          if kubectl get crd certificates.cert-manager.io >/dev/null; then
             echo "  cert-manager CRDs found."
           else
             echo "ERROR: cert-manager CRDs not found."
@@ -40,7 +40,7 @@ spec:
 
           # Check that a default StorageClass exists
           echo "Checking for default StorageClass..."
-          DEFAULT_SC=$(oc get sc -o jsonpath='{.items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")].metadata.name}')
+          DEFAULT_SC=$(kubectl get sc -o jsonpath='{.items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")].metadata.name}')
           if [ -n "$DEFAULT_SC" ]; then
             echo "  Default StorageClass found: $DEFAULT_SC"
           else

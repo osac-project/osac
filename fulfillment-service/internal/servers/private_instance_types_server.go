@@ -152,6 +152,10 @@ func (s *PrivateInstanceTypesServer) Create(ctx context.Context,
 	if spec.GetState() == privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_UNSPECIFIED {
 		spec.SetState(privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_ACTIVE)
 	}
+	if spec.GetState() != privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_ACTIVE {
+		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.state' must be ACTIVE on create")
+		return
+	}
 
 	err = s.generic.Create(ctx, request, &response)
 	return
@@ -192,7 +196,7 @@ func (s *PrivateInstanceTypesServer) Update(ctx context.Context,
 
 	// If state changed, ensure the deprecation fields are included in the update mask
 	// so the generic server persists the timestamps set by handleInstanceTypeStateTransition.
-	if stateChanged && request.GetUpdateMask() != nil {
+	if stateChanged && len(request.GetUpdateMask().GetPaths()) > 0 {
 		mask := request.GetUpdateMask()
 		mask.Paths = append(mask.Paths, "spec.deprecation")
 	}

@@ -514,12 +514,16 @@ func setupNetworkingControllers(
 	// nil otherwise, in which case those controllers always use the legacy
 	// implementation-strategy path.
 	var resolver *dispatcher.Resolver
+	var networkClassesClient privatev1.NetworkClassesClient
+
 	if grpcConn != nil && networkingNamespace != "" {
+		networkClassesClient = privatev1.NewNetworkClassesClient(grpcConn)
+
 		disc, err := networkmanager.NewDiscovery(localMgr.GetClient(), networkingNamespace)
 		if err != nil {
 			return fmt.Errorf("network manager discovery: %w", err)
 		}
-		networkClassAdapter := dispatcheradapter.NewNetworkClassAdapter(privatev1.NewNetworkClassesClient(grpcConn))
+		networkClassAdapter := dispatcheradapter.NewNetworkClassAdapter(networkClassesClient)
 		resolver = dispatcher.NewResolver(networkClassAdapter, disc)
 
 		if err := setupNetworkClassCapabilitiesController(
@@ -535,9 +539,11 @@ func setupNetworkingControllers(
 	); err != nil {
 		return err
 	}
+
 	if err := setupSubnetControllers(
 		mgr, localMgr, grpcConn, networkingNamespace,
 		networkingProvider, statusPollInterval, maxJobHistory, targetCluster, resolver,
+		networkClassesClient,
 	); err != nil {
 		return err
 	}
@@ -630,6 +636,7 @@ func setupSubnetControllers(
 	networkingNamespace string, provider provisioning.ProvisioningProvider,
 	statusPollInterval time.Duration, maxJobHistory int, targetCluster multicluster.ClusterName,
 	resolver *dispatcher.Resolver,
+	networkClassesClient privatev1.NetworkClassesClient,
 ) error {
 	if grpcConn != nil {
 		if err := controller.NewSubnetFeedbackReconciler(
@@ -640,6 +647,7 @@ func setupSubnetControllers(
 	}
 	if err := controller.NewSubnetReconciler(
 		mgr, networkingNamespace, provider, statusPollInterval, maxJobHistory, targetCluster, resolver,
+		networkClassesClient,
 	).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("subnet controller: %w", err)
 	}

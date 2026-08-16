@@ -17,9 +17,11 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/baremetalinstance"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/baremetalinstancetype"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/cluster"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/clusterversion"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/computeinstance"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/diskimage"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/externalip"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/externalipattachment"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/instancetype"
@@ -30,6 +32,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/storagetier"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/subnet"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/virtualnetwork"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/help"
 )
 
 func Cmd() *cobra.Command {
@@ -39,9 +42,11 @@ func Cmd() *cobra.Command {
 		Long:  longHelp,
 	}
 	result.AddCommand(baremetalinstance.Cmd())
+	result.AddCommand(baremetalinstancetype.Cmd())
 	result.AddCommand(cluster.Cmd())
 	result.AddCommand(clusterversion.Cmd())
 	result.AddCommand(computeinstance.Cmd())
+	result.AddCommand(diskimage.Cmd())
 	result.AddCommand(externalip.Cmd())
 	result.AddCommand(externalipattachment.Cmd())
 	result.AddCommand(instancetype.Cmd())
@@ -50,8 +55,8 @@ func Cmd() *cobra.Command {
 	result.AddCommand(virtualnetwork.Cmd())
 	result.AddCommand(subnet.Cmd())
 	result.AddCommand(securitygroup.Cmd())
-	result.AddCommand(storagebackend.Cmd())
-	result.AddCommand(storagetier.Cmd())
+	result.AddCommand(help.MarkPrivateAPI(storagebackend.Cmd()))
+	result.AddCommand(help.MarkPrivateAPI(storagetier.Cmd()))
 	return result
 }
 

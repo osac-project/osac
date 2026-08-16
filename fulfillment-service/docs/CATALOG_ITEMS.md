@@ -102,7 +102,8 @@ title: Sandbox Cluster
 description: Small sandbox cluster template with networking parameters.
 node_sets:
   workers:
-    host_type: fc430
+    host_type:
+      name: fc430
     size: 1
 parameters:
   - name: vpc_id
@@ -131,7 +132,9 @@ metadata:
   name: sandbox
 title: Sandbox Cluster
 description: Small development cluster.
-template: "osac.templates.sandbox"
+template:
+  name: sandbox
+  shared: true
 published: true
 field_definitions:
   # Typed proto fields
@@ -193,7 +196,9 @@ metadata:
   name: standard-vm
 title: Standard Virtual Machine
 description: General-purpose virtual machine with KubeVirt.
-template: "osac.templates.ocp_virt_vm"
+template:
+  name: ocp_virt_vm
+  shared: true
 published: true
 field_definitions:
   - path: ssh_public_key

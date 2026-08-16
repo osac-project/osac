@@ -23,6 +23,7 @@ import (
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/baremetalinstancecatalogitem"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/baremetalinstancetype"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/cluster"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/clustercatalogitem"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/clusterversion"
@@ -42,6 +43,7 @@ var _ = Describe("Create command", func() {
 			Expect(cmd.Aliases).To(ContainElement(expectedAlias))
 		},
 		Entry("baremetalinstancecatalogitem", baremetalinstancecatalogitem.Cmd, (*publicv1.BareMetalInstanceCatalogItem)(nil)),
+		Entry("baremetalinstancetype", baremetalinstancetype.Cmd, (*privatev1.BareMetalInstanceType)(nil)),
 		Entry("cluster", cluster.Cmd, (*publicv1.Cluster)(nil)),
 		Entry("clustercatalogitem", clustercatalogitem.Cmd, (*publicv1.ClusterCatalogItem)(nil)),
 		Entry("clusterversion", clusterversion.Cmd, (*privatev1.ClusterVersion)(nil)),
@@ -63,7 +65,28 @@ var _ = Describe("Create command", func() {
 				subcommandNames = append(subcommandNames, subcmd.Name())
 			}
 
-			Expect(subcommandNames).To(ContainElements("baremetalinstancecatalogitem", "cluster", "clustercatalogitem", "clusterversion", "computeinstance", "computeinstancecatalogitem", "hub", "virtualnetwork", "subnet", "securitygroup"))
+			Expect(subcommandNames).To(ContainElements("baremetalinstancecatalogitem", "baremetalinstancetype", "cluster", "clustercatalogitem", "clusterversion", "computeinstance", "computeinstancecatalogitem", "hub", "virtualnetwork", "subnet", "securitygroup"))
+		})
+	})
+
+	Describe("Private API annotations", func() {
+		It("should annotate private-API subcommands", func() {
+			cmd := Cmd()
+			privateNames := map[string]bool{
+				"baremetalinstancetype": true, "hub": true, "instancetype": true, "clusterversion": true,
+				"storagebackend": true, "storagetier": true,
+			}
+			for _, sub := range cmd.Commands() {
+				if privateNames[sub.Name()] {
+					Expect(sub.Annotations).To(HaveKeyWithValue("api", "private"),
+						"subcommand %s should be annotated as private", sub.Name())
+				} else {
+					if sub.Annotations != nil {
+						Expect(sub.Annotations).ToNot(HaveKey("api"),
+							"subcommand %s should not be annotated as private", sub.Name())
+					}
+				}
+			}
 		})
 	})
 })

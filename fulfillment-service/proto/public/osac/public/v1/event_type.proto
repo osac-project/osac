@@ -21,6 +21,7 @@ import "osac/public/v1/cluster_type.proto";
 import "osac/public/v1/cluster_version_type.proto";
 import "osac/public/v1/compute_instance_template_type.proto";
 import "osac/public/v1/compute_instance_type.proto";
+import "osac/public/v1/disk_image_type.proto";
 import "osac/public/v1/host_type_type.proto";
 import "osac/public/v1/instance_type_type.proto";
 import "osac/public/v1/role_binding_type.proto";
@@ -52,6 +53,7 @@ message Event {
     ClusterVersion cluster_version = 14;
     BareMetalInstance bare_metal_instance = 15;
     Secret secret = 16;
+    DiskImage disk_image = 17;
   }
 }
 

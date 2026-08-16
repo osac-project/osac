@@ -83,11 +83,9 @@ var _ = Describe("Private secrets server", func() {
 					Metadata: privatev1.Metadata_builder{
 						Name: "my-secret",
 					}.Build(),
-					Spec: privatev1.SecretSpec_builder{
-						Data: map[string][]byte{
-							"key": []byte("value"),
-						},
-					}.Build(),
+					Data: map[string][]byte{
+						"key": []byte("value"),
+					},
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -100,11 +98,9 @@ var _ = Describe("Private secrets server", func() {
 					Metadata: privatev1.Metadata_builder{
 						Name: name,
 					}.Build(),
-					Spec: privatev1.SecretSpec_builder{
-						Data: map[string][]byte{
-							"key": []byte("value"),
-						},
-					}.Build(),
+					Data: map[string][]byte{
+						"key": []byte("value"),
+					},
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -117,14 +113,12 @@ var _ = Describe("Private secrets server", func() {
 					Metadata: privatev1.Metadata_builder{
 						Name: "hub-secret",
 					}.Build(),
-					Spec: privatev1.SecretSpec_builder{
-						Backend: privatev1.SecretBackend_SECRET_BACKEND_HUB,
-						Coordinates: map[string]string{
-							"cluster":   "hub-1",
-							"namespace": "default",
-							"name":      "my-k8s-secret",
-						},
-					}.Build(),
+					Backend: privatev1.SecretBackend_SECRET_BACKEND_HUB,
+					Coordinates: map[string]string{
+						"cluster":   "hub-1",
+						"namespace": "default",
+						"name":      "my-k8s-secret",
+					},
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -135,9 +129,9 @@ var _ = Describe("Private secrets server", func() {
 			created := createVaultSecret()
 
 			Expect(created.GetId()).ToNot(BeEmpty())
-			Expect(created.GetSpec().GetBackend()).To(Equal(
+			Expect(created.GetBackend()).To(Equal(
 				privatev1.SecretBackend_SECRET_BACKEND_VAULT))
-			Expect(created.GetSpec().GetData()).To(HaveKeyWithValue("key", []byte("value")))
+			Expect(created.GetData()).To(HaveKeyWithValue("key", []byte("value")))
 
 			getResponse, err := server.Get(ctx, privatev1.SecretsGetRequest_builder{
 				Id: created.GetId(),
@@ -145,13 +139,13 @@ var _ = Describe("Private secrets server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			obj := getResponse.GetObject()
 			Expect(obj.GetId()).To(Equal(created.GetId()))
-			Expect(obj.GetSpec().GetBackend()).To(Equal(
+			Expect(obj.GetBackend()).To(Equal(
 				privatev1.SecretBackend_SECRET_BACKEND_VAULT))
 		})
 
 		It("Defaults unspecified backend to Vault", func() {
 			created := createVaultSecret()
-			Expect(created.GetSpec().GetBackend()).To(Equal(
+			Expect(created.GetBackend()).To(Equal(
 				privatev1.SecretBackend_SECRET_BACKEND_VAULT))
 		})
 
@@ -159,10 +153,10 @@ var _ = Describe("Private secrets server", func() {
 			created := createHubSecret()
 
 			Expect(created.GetId()).ToNot(BeEmpty())
-			Expect(created.GetSpec().GetBackend()).To(Equal(
+			Expect(created.GetBackend()).To(Equal(
 				privatev1.SecretBackend_SECRET_BACKEND_HUB))
-			Expect(created.GetSpec().GetCoordinates()).To(HaveKeyWithValue("cluster", "hub-1"))
-			Expect(created.GetSpec().GetData()).To(BeEmpty())
+			Expect(created.GetCoordinates()).To(HaveKeyWithValue("cluster", "hub-1"))
+			Expect(created.GetData()).To(BeEmpty())
 		})
 
 		It("List secrets", func() {
@@ -239,16 +233,14 @@ var _ = Describe("Private secrets server", func() {
 			updateResponse, err := server.Update(ctx, privatev1.SecretsUpdateRequest_builder{
 				Object: privatev1.Secret_builder{
 					Id: created.GetId(),
-					Spec: privatev1.SecretSpec_builder{
-						Data: map[string][]byte{
-							"new-key": []byte("new-value"),
-						},
-					}.Build(),
+					Data: map[string][]byte{
+						"new-key": []byte("new-value"),
+					},
 				}.Build(),
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.data"}},
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"data"}},
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(updateResponse.GetObject().GetSpec().GetData()).To(
+			Expect(updateResponse.GetObject().GetData()).To(
 				HaveKeyWithValue("new-key", []byte("new-value")))
 		})
 
@@ -277,11 +269,9 @@ var _ = Describe("Private secrets server", func() {
 					Metadata: privatev1.Metadata_builder{
 						Name: "my-secret",
 					}.Build(),
-					Spec: privatev1.SecretSpec_builder{
-						Data: map[string][]byte{
-							"key": []byte("value"),
-						},
-					}.Build(),
+					Data: map[string][]byte{
+						"key": []byte("value"),
+					},
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -297,11 +287,9 @@ var _ = Describe("Private secrets server", func() {
 						Metadata: privatev1.Metadata_builder{
 							Name: "",
 						}.Build(),
-						Spec: privatev1.SecretSpec_builder{
-							Data: map[string][]byte{
-								"key": []byte("value"),
-							},
-						}.Build(),
+						Data: map[string][]byte{
+							"key": []byte("value"),
+						},
 					}.Build(),
 				}.Build())
 				Expect(err).To(HaveOccurred())
@@ -311,7 +299,7 @@ var _ = Describe("Private secrets server", func() {
 				Expect(st.Message()).To(ContainSubstring("metadata.name"))
 			})
 
-			It("Create without spec fails", func() {
+			It("Create without data fails", func() {
 				_, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{
 					Object: privatev1.Secret_builder{
 						Metadata: privatev1.Metadata_builder{
@@ -323,7 +311,7 @@ var _ = Describe("Private secrets server", func() {
 				st, ok := status.FromError(err)
 				Expect(ok).To(BeTrue())
 				Expect(st.Code()).To(Equal(codes.InvalidArgument))
-				Expect(st.Message()).To(ContainSubstring("spec"))
+				Expect(st.Message()).To(ContainSubstring("data"))
 			})
 
 			It("Create Vault secret without data fails", func() {
@@ -332,16 +320,14 @@ var _ = Describe("Private secrets server", func() {
 						Metadata: privatev1.Metadata_builder{
 							Name: "my-secret",
 						}.Build(),
-						Spec: privatev1.SecretSpec_builder{
-							Backend: privatev1.SecretBackend_SECRET_BACKEND_VAULT,
-						}.Build(),
+						Backend: privatev1.SecretBackend_SECRET_BACKEND_VAULT,
 					}.Build(),
 				}.Build())
 				Expect(err).To(HaveOccurred())
 				st, ok := status.FromError(err)
 				Expect(ok).To(BeTrue())
 				Expect(st.Code()).To(Equal(codes.InvalidArgument))
-				Expect(st.Message()).To(ContainSubstring("spec.data"))
+				Expect(st.Message()).To(ContainSubstring("data"))
 			})
 
 			It("Create unspecified backend without data fails", func() {
@@ -350,14 +336,13 @@ var _ = Describe("Private secrets server", func() {
 						Metadata: privatev1.Metadata_builder{
 							Name: "my-secret",
 						}.Build(),
-						Spec: privatev1.SecretSpec_builder{}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).To(HaveOccurred())
 				st, ok := status.FromError(err)
 				Expect(ok).To(BeTrue())
 				Expect(st.Code()).To(Equal(codes.InvalidArgument))
-				Expect(st.Message()).To(ContainSubstring("spec.data"))
+				Expect(st.Message()).To(ContainSubstring("data"))
 			})
 
 			It("Create Hub secret without coordinates fails", func() {
@@ -366,16 +351,14 @@ var _ = Describe("Private secrets server", func() {
 						Metadata: privatev1.Metadata_builder{
 							Name: "my-secret",
 						}.Build(),
-						Spec: privatev1.SecretSpec_builder{
-							Backend: privatev1.SecretBackend_SECRET_BACKEND_HUB,
-						}.Build(),
+						Backend: privatev1.SecretBackend_SECRET_BACKEND_HUB,
 					}.Build(),
 				}.Build())
 				Expect(err).To(HaveOccurred())
 				st, ok := status.FromError(err)
 				Expect(ok).To(BeTrue())
 				Expect(st.Code()).To(Equal(codes.InvalidArgument))
-				Expect(st.Message()).To(ContainSubstring("spec.coordinates"))
+				Expect(st.Message()).To(ContainSubstring("coordinates"))
 			})
 
 			It("Create Hub secret with data fails", func() {
@@ -384,22 +367,20 @@ var _ = Describe("Private secrets server", func() {
 						Metadata: privatev1.Metadata_builder{
 							Name: "my-secret",
 						}.Build(),
-						Spec: privatev1.SecretSpec_builder{
-							Backend: privatev1.SecretBackend_SECRET_BACKEND_HUB,
-							Coordinates: map[string]string{
-								"cluster": "hub-1",
-							},
-							Data: map[string][]byte{
-								"key": []byte("value"),
-							},
-						}.Build(),
+						Backend: privatev1.SecretBackend_SECRET_BACKEND_HUB,
+						Coordinates: map[string]string{
+							"cluster": "hub-1",
+						},
+						Data: map[string][]byte{
+							"key": []byte("value"),
+						},
 					}.Build(),
 				}.Build())
 				Expect(err).To(HaveOccurred())
 				st, ok := status.FromError(err)
 				Expect(ok).To(BeTrue())
 				Expect(st.Code()).To(Equal(codes.InvalidArgument))
-				Expect(st.Message()).To(ContainSubstring("spec.data"))
+				Expect(st.Message()).To(ContainSubstring("data"))
 			})
 		})
 
@@ -409,12 +390,10 @@ var _ = Describe("Private secrets server", func() {
 
 				_, err := server.Update(ctx, privatev1.SecretsUpdateRequest_builder{
 					Object: privatev1.Secret_builder{
-						Id: created.GetId(),
-						Spec: privatev1.SecretSpec_builder{
-							Backend: privatev1.SecretBackend_SECRET_BACKEND_HUB,
-						}.Build(),
+						Id:      created.GetId(),
+						Backend: privatev1.SecretBackend_SECRET_BACKEND_HUB,
 					}.Build(),
-					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.backend"}},
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"backend"}},
 				}.Build())
 				Expect(err).To(HaveOccurred())
 				st, ok := status.FromError(err)
@@ -430,19 +409,17 @@ var _ = Describe("Private secrets server", func() {
 				_, err := server.Update(ctx, privatev1.SecretsUpdateRequest_builder{
 					Object: privatev1.Secret_builder{
 						Id: created.GetId(),
-						Spec: privatev1.SecretSpec_builder{
-							Data: map[string][]byte{
-								"key": []byte("should-not-be-allowed"),
-							},
-						}.Build(),
+						Data: map[string][]byte{
+							"key": []byte("should-not-be-allowed"),
+						},
 					}.Build(),
-					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.data"}},
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"data"}},
 				}.Build())
 				Expect(err).To(HaveOccurred())
 				st, ok := status.FromError(err)
 				Expect(ok).To(BeTrue())
 				Expect(st.Code()).To(Equal(codes.InvalidArgument))
-				Expect(st.Message()).To(ContainSubstring("spec.data"))
+				Expect(st.Message()).To(ContainSubstring("data"))
 			})
 
 			It("Update with metadata.tenant in update_mask fails", func() {
@@ -476,13 +453,11 @@ var _ = Describe("Private secrets server", func() {
 				_, err := server.Update(ctx, privatev1.SecretsUpdateRequest_builder{
 					Object: privatev1.Secret_builder{
 						Id: created.GetId(),
-						Spec: privatev1.SecretSpec_builder{
-							Data: map[string][]byte{
-								"key": []byte("first-update"),
-							},
-						}.Build(),
+						Data: map[string][]byte{
+							"key": []byte("first-update"),
+						},
 					}.Build(),
-					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.data"}},
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"data"}},
 					Lock:       true,
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -490,11 +465,9 @@ var _ = Describe("Private secrets server", func() {
 				_, err = server.Update(ctx, privatev1.SecretsUpdateRequest_builder{
 					Object: privatev1.Secret_builder{
 						Id: created.GetId(),
-						Spec: privatev1.SecretSpec_builder{
-							Data: map[string][]byte{
-								"key": []byte("second-update"),
-							},
-						}.Build(),
+						Data: map[string][]byte{
+							"key": []byte("second-update"),
+						},
 						Metadata: privatev1.Metadata_builder{
 							Version: created.GetMetadata().GetVersion(),
 						}.Build(),
@@ -508,11 +481,9 @@ var _ = Describe("Private secrets server", func() {
 		It("Update without id fails", func() {
 			_, err := server.Update(ctx, privatev1.SecretsUpdateRequest_builder{
 				Object: privatev1.Secret_builder{
-					Spec: privatev1.SecretSpec_builder{
-						Data: map[string][]byte{
-							"key": []byte("updated"),
-						},
-					}.Build(),
+					Data: map[string][]byte{
+						"key": []byte("updated"),
+					},
 				}.Build(),
 			}.Build())
 			Expect(err).To(HaveOccurred())
@@ -542,7 +513,7 @@ var _ = Describe("Private secrets server", func() {
 		})
 
 		Describe("Create", func() {
-			It("Stores data in vault and clears spec.data before DB write", func() {
+			It("Stores data in vault and clears data before DB write", func() {
 				mockStore.EXPECT().
 					Store(gomock.Any(), auth.SystemTenant, "", "my-secret",
 						map[string][]byte{"key": []byte("value")}).
@@ -553,19 +524,17 @@ var _ = Describe("Private secrets server", func() {
 						Metadata: privatev1.Metadata_builder{
 							Name: "my-secret",
 						}.Build(),
-						Spec: privatev1.SecretSpec_builder{
-							Data: map[string][]byte{
-								"key": []byte("value"),
-							},
-						}.Build(),
+						Data: map[string][]byte{
+							"key": []byte("value"),
+						},
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 
 				obj := response.GetObject()
-				Expect(obj.GetSpec().GetBackend()).To(Equal(
+				Expect(obj.GetBackend()).To(Equal(
 					privatev1.SecretBackend_SECRET_BACKEND_VAULT))
-				Expect(obj.GetSpec().GetData()).To(BeEmpty())
+				Expect(obj.GetData()).To(BeEmpty())
 			})
 
 			It("Vault failure prevents DB record creation", func() {
@@ -578,11 +547,9 @@ var _ = Describe("Private secrets server", func() {
 						Metadata: privatev1.Metadata_builder{
 							Name: "fail-secret",
 						}.Build(),
-						Spec: privatev1.SecretSpec_builder{
-							Data: map[string][]byte{
-								"key": []byte("value"),
-							},
-						}.Build(),
+						Data: map[string][]byte{
+							"key": []byte("value"),
+						},
 					}.Build(),
 				}.Build())
 				Expect(err).To(HaveOccurred())
@@ -598,24 +565,22 @@ var _ = Describe("Private secrets server", func() {
 						Metadata: privatev1.Metadata_builder{
 							Name: "hub-secret",
 						}.Build(),
-						Spec: privatev1.SecretSpec_builder{
-							Backend: privatev1.SecretBackend_SECRET_BACKEND_HUB,
-							Coordinates: map[string]string{
-								"cluster":   "hub-1",
-								"namespace": "default",
-								"name":      "my-k8s-secret",
-							},
-						}.Build(),
+						Backend: privatev1.SecretBackend_SECRET_BACKEND_HUB,
+						Coordinates: map[string]string{
+							"cluster":   "hub-1",
+							"namespace": "default",
+							"name":      "my-k8s-secret",
+						},
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
-				Expect(response.GetObject().GetSpec().GetBackend()).To(Equal(
+				Expect(response.GetObject().GetBackend()).To(Equal(
 					privatev1.SecretBackend_SECRET_BACKEND_HUB))
 			})
 		})
 
 		Describe("Get", func() {
-			It("Fetches resolved data from vault", func() {
+			It("Fetches data from vault", func() {
 				mockStore.EXPECT().
 					Store(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 					Return(nil)
@@ -625,11 +590,9 @@ var _ = Describe("Private secrets server", func() {
 						Metadata: privatev1.Metadata_builder{
 							Name: "get-secret",
 						}.Build(),
-						Spec: privatev1.SecretSpec_builder{
-							Data: map[string][]byte{
-								"password": []byte("secret-value"),
-							},
-						}.Build(),
+						Data: map[string][]byte{
+							"password": []byte("secret-value"),
+						},
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -642,7 +605,7 @@ var _ = Describe("Private secrets server", func() {
 					Id: created.GetObject().GetId(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
-				Expect(getResponse.GetObject().GetStatus().GetResolvedData()).To(
+				Expect(getResponse.GetObject().GetData()).To(
 					HaveKeyWithValue("password", []byte("secret-value")))
 			})
 
@@ -656,11 +619,9 @@ var _ = Describe("Private secrets server", func() {
 						Metadata: privatev1.Metadata_builder{
 							Name: "fail-get-secret",
 						}.Build(),
-						Spec: privatev1.SecretSpec_builder{
-							Data: map[string][]byte{
-								"key": []byte("value"),
-							},
-						}.Build(),
+						Data: map[string][]byte{
+							"key": []byte("value"),
+						},
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -684,12 +645,10 @@ var _ = Describe("Private secrets server", func() {
 						Metadata: privatev1.Metadata_builder{
 							Name: "hub-get-secret",
 						}.Build(),
-						Spec: privatev1.SecretSpec_builder{
-							Backend: privatev1.SecretBackend_SECRET_BACKEND_HUB,
-							Coordinates: map[string]string{
-								"cluster": "hub-1",
-							},
-						}.Build(),
+						Backend: privatev1.SecretBackend_SECRET_BACKEND_HUB,
+						Coordinates: map[string]string{
+							"cluster": "hub-1",
+						},
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -698,7 +657,7 @@ var _ = Describe("Private secrets server", func() {
 					Id: created.GetObject().GetId(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
-				Expect(getResponse.GetObject().GetSpec().GetBackend()).To(Equal(
+				Expect(getResponse.GetObject().GetBackend()).To(Equal(
 					privatev1.SecretBackend_SECRET_BACKEND_HUB))
 			})
 		})
@@ -715,11 +674,9 @@ var _ = Describe("Private secrets server", func() {
 						Metadata: privatev1.Metadata_builder{
 							Name: "update-secret",
 						}.Build(),
-						Spec: privatev1.SecretSpec_builder{
-							Data: map[string][]byte{
-								"key": []byte("value"),
-							},
-						}.Build(),
+						Data: map[string][]byte{
+							"key": []byte("value"),
+						},
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -732,16 +689,14 @@ var _ = Describe("Private secrets server", func() {
 				updateResponse, err := server.Update(ctx, privatev1.SecretsUpdateRequest_builder{
 					Object: privatev1.Secret_builder{
 						Id: created.GetObject().GetId(),
-						Spec: privatev1.SecretSpec_builder{
-							Data: map[string][]byte{
-								"key": []byte("new-value"),
-							},
-						}.Build(),
+						Data: map[string][]byte{
+							"key": []byte("new-value"),
+						},
 					}.Build(),
-					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.data"}},
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"data"}},
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
-				Expect(updateResponse.GetObject().GetSpec().GetData()).To(BeEmpty())
+				Expect(updateResponse.GetObject().GetData()).To(BeEmpty())
 			})
 
 			It("Vault store failure on update returns error", func() {
@@ -754,11 +709,9 @@ var _ = Describe("Private secrets server", func() {
 						Metadata: privatev1.Metadata_builder{
 							Name: "fail-update-secret",
 						}.Build(),
-						Spec: privatev1.SecretSpec_builder{
-							Data: map[string][]byte{
-								"key": []byte("value"),
-							},
-						}.Build(),
+						Data: map[string][]byte{
+							"key": []byte("value"),
+						},
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -770,13 +723,11 @@ var _ = Describe("Private secrets server", func() {
 				_, err = server.Update(ctx, privatev1.SecretsUpdateRequest_builder{
 					Object: privatev1.Secret_builder{
 						Id: created.GetObject().GetId(),
-						Spec: privatev1.SecretSpec_builder{
-							Data: map[string][]byte{
-								"key": []byte("updated"),
-							},
-						}.Build(),
+						Data: map[string][]byte{
+							"key": []byte("updated"),
+						},
 					}.Build(),
-					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.data"}},
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"data"}},
 				}.Build())
 				Expect(err).To(HaveOccurred())
 			})
@@ -793,11 +744,9 @@ var _ = Describe("Private secrets server", func() {
 						Metadata: privatev1.Metadata_builder{
 							Name: "delete-secret",
 						}.Build(),
-						Spec: privatev1.SecretSpec_builder{
-							Data: map[string][]byte{
-								"key": []byte("value"),
-							},
-						}.Build(),
+						Data: map[string][]byte{
+							"key": []byte("value"),
+						},
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -830,11 +779,9 @@ var _ = Describe("Private secrets server", func() {
 						Metadata: privatev1.Metadata_builder{
 							Name: "fail-delete-secret",
 						}.Build(),
-						Spec: privatev1.SecretSpec_builder{
-							Data: map[string][]byte{
-								"key": []byte("value"),
-							},
-						}.Build(),
+						Data: map[string][]byte{
+							"key": []byte("value"),
+						},
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -865,11 +812,9 @@ var _ = Describe("Private secrets server", func() {
 						Metadata: privatev1.Metadata_builder{
 							Name: "rollback-secret",
 						}.Build(),
-						Spec: privatev1.SecretSpec_builder{
-							Data: map[string][]byte{
-								"key": []byte("value"),
-							},
-						}.Build(),
+						Data: map[string][]byte{
+							"key": []byte("value"),
+						},
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -920,12 +865,10 @@ var _ = Describe("Private secrets server", func() {
 						Metadata: privatev1.Metadata_builder{
 							Name: "hub-delete-secret",
 						}.Build(),
-						Spec: privatev1.SecretSpec_builder{
-							Backend: privatev1.SecretBackend_SECRET_BACKEND_HUB,
-							Coordinates: map[string]string{
-								"cluster": "hub-1",
-							},
-						}.Build(),
+						Backend: privatev1.SecretBackend_SECRET_BACKEND_HUB,
+						Coordinates: map[string]string{
+							"cluster": "hub-1",
+						},
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -965,11 +908,9 @@ var _ = Describe("Private secrets server", func() {
 					Metadata: privatev1.Metadata_builder{
 						Name: "redact-test",
 					}.Build(),
-					Spec: privatev1.SecretSpec_builder{
-						Data: map[string][]byte{
-							"password": []byte("super-secret"),
-						},
-					}.Build(),
+					Data: map[string][]byte{
+						"password": []byte("super-secret"),
+					},
 				}.Build(),
 			}.Build(),
 		)
@@ -979,6 +920,6 @@ var _ = Describe("Private secrets server", func() {
 		Expect(event.GetType()).To(Equal(privatev1.EventType_EVENT_TYPE_OBJECT_CREATED))
 		object := event.GetSecret()
 		Expect(object).ToNot(BeNil())
-		Expect(object.GetSpec().GetData()).To(BeEmpty())
+		Expect(object.GetData()).To(BeEmpty())
 	})
 })

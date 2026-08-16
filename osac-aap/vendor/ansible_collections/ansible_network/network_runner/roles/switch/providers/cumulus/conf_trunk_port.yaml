@@ -1,5 +1,7 @@
 ---
 - name: "cumulus: configure trunk port using nvue"
   raw: |
-    nv set interface {{ port_name }} bridge domain br_default
-    nv config apply -y
+    flock /tmp/nvue.lock -c '
+      nv set interface {{ port_name }} bridge domain br_default
+      nv config diff --quiet 2>/dev/null && nv config apply -y
+    '

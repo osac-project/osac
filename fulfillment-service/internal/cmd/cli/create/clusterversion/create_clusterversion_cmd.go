@@ -159,7 +159,7 @@ func parseState(value string) (privatev1.ClusterVersionState, error) {
 	}
 }
 
-const shortHelp = `Create a cluster version.`
+const shortHelp = `Create a cluster version`
 
 const longHelp = `
 Create a cluster version.

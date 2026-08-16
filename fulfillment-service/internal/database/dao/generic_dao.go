@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 
 	"github.com/gobuffalo/flect"
 	"github.com/prometheus/client_golang/prometheus"
@@ -71,6 +72,7 @@ type GenericDAO[O Object] struct {
 	// Basic fields:
 	logger           *slog.Logger
 	table            string
+	kind             string
 	defaultLimit     int32
 	maxLimit         int32
 	timestampDesc    protoreflect.MessageDescriptor
@@ -299,6 +301,7 @@ func (b *GenericDAOBuilder[O]) Build() (result *GenericDAO[O], err error) {
 	result = &GenericDAO[O]{
 		logger:           b.logger,
 		table:            b.resolveTableName(),
+		kind:             b.kindName(),
 		defaultLimit:     b.defaultLimit,
 		maxLimit:         b.maxLimit,
 		timestampDesc:    timestampDesc,
@@ -331,6 +334,20 @@ func (b *GenericDAOBuilder[O]) resolveTableName() string {
 func (b *GenericDAOBuilder[O]) tableName() string {
 	var object O
 	return flect.Pluralize(flect.Underscore(string(object.ProtoReflect().Descriptor().Name())))
+}
+
+var kindAcronyms = strings.NewReplacer("nat ", "NAT ", " nat", " NAT", "ip ", "IP ", " ip", " IP")
+
+// kindName returns a human-readable singular resource kind derived from the table name.
+// For example, `compute_instances` becomes `compute instance` and `external_ips` becomes `external IP`.
+func (b *GenericDAOBuilder[O]) kindName() string {
+	table := b.resolveTableName()
+	if strings.HasSuffix(table, "_ips") {
+		table = strings.TrimSuffix(table, "s")
+	} else {
+		table = flect.Singularize(table)
+	}
+	return kindAcronyms.Replace(strings.ReplaceAll(table, "_", " "))
 }
 
 func (b *GenericDAOBuilder[O]) registerOpDurationMetric() (result *prometheus.HistogramVec, err error) {

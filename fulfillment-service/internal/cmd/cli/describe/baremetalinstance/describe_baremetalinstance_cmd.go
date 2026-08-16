@@ -96,7 +96,7 @@ func renderBareMetalInstance(w io.Writer, bmi *publicv1.BareMetalInstance) {
 	writer.Flush()
 }
 
-const shortHelp = `Describe a bare metal instance.`
+const shortHelp = `Describe a bare metal instance`
 
 const longHelp = `
 Describe a bare metal instance.

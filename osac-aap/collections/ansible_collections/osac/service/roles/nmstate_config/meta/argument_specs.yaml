@@ -121,16 +121,19 @@ argument_specs:
         description: "Route metric for the VPC default route."
       nmstate_config_ssh_bastion_host:
         type: str
-        required: true
-        description: "Bastion host to proxy SSH through to reach agent mgmt IPs."
+        required: false
+        default: ""
+        description: "Bastion host to proxy SSH through to reach agent mgmt IPs. When empty, SSH connects directly."
       nmstate_config_ssh_bastion_user:
         type: str
-        required: true
+        required: false
+        default: ""
         description: "SSH user for the bastion host."
       nmstate_config_ssh_bastion_key:
         type: str
-        required: true
-        description: "SSH private key file for local -> bastion connection."
+        required: false
+        default: ""
+        description: "SSH private key file for the local -> bastion proxy hop. Required only when nmstate_config_ssh_bastion_host is set."
       nmstate_config_ssh_user:
         type: str
         default: core
@@ -138,7 +141,7 @@ argument_specs:
       nmstate_config_ssh_key:
         type: str
         required: true
-        description: "SSH private key file for bastion -> agent connection."
+        description: "SSH private key file for authenticating to agents (used for both direct and bastion-proxied connections)."
 
   delete:
     options:

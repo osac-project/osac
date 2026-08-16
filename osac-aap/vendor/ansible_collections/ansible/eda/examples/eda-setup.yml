@@ -1,0 +1,153 @@
+# Example playbook that demonstrates how to use the Ansible EDA collection to perform a basic setup.
+#
+# Authentication:
+#   When connecting through AAP Gateway (AAP 2.5+), only OAuth token
+#   authentication is supported. Use aap_token instead of
+#   aap_username/aap_password. See the "Gateway token authentication"
+#   play below for an example.
+#
+#   When connecting directly to EDA Controller (not through Gateway),
+#   both basic auth and token auth are supported.
+
+# --- Direct EDA Controller connection (basic auth) ---
+- name: Example playbook for Ansible EDA collection (basic auth)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    aap_hostname: your eda controller url, e.g. https://eda-controller.example.com
+    aap_username: your eda controller username
+    aap_password: your eda controller password
+
+    github_username: your github username
+    github_token: your github token
+
+    quay_username: your quay.io username
+    quay_password: your quay.io password
+
+    organization_name: Default
+    aap_validate_certs: false
+  module_defaults:
+    group/ansible.eda.eda:
+      aap_hostname: "{{ aap_hostname }}"
+      aap_username: "{{ aap_username }}"
+      aap_password: "{{ aap_password }}"
+      aap_validate_certs: "{{ aap_validate_certs }}"
+  tasks:
+    - name: Create a credential for AAP controller
+      ansible.eda.credential:
+        organization_name: "{{ organization_name }}"
+        name: My AAP controller credential
+        credential_type_name: Red Hat Ansible Automation Platform
+        inputs:
+          host: "{{ aap_hostname }}"
+          username: "{{ aap_username }}"
+          password: "{{ aap_password }}"
+          verify_ssl: "{{ aap_validate_certs }}"
+
+    - name: Create a credential for github
+      ansible.eda.credential:
+        organization_name: "{{ organization_name }}"
+        name: github credential
+        credential_type_name: Source Control
+        inputs:
+          username: "{{ github_username }}"
+          password: "{{ github_token }}"
+
+    - name: Create a credential for quay.io
+      ansible.eda.credential:
+        organization_name: "{{ organization_name }}"
+        name: quay.io credential
+        credential_type_name: Container Registry
+        inputs:
+          username: "{{ quay_username }}"
+          password: "{{ quay_password }}"
+
+    - name: Create a credential for a basic event stream
+      ansible.eda.credential:
+        organization_name: "{{ organization_name }}"
+        name: basic event stream credential
+        credential_type_name: Basic Event Stream
+        inputs:
+          username: secret
+          password: secret
+
+    - name: Import a project
+      ansible.eda.project:
+        organization_name: "{{ organization_name }}"
+        url: https://github.com/ansible/eda-sample-project
+        name: test project
+        credential: github credential
+
+    - name: Create a decision environment
+      ansible.eda.decision_environment:
+        organization_name: "{{ organization_name }}"
+        name: upstream decision environment
+        credential: quay.io credential
+        image_url: quay.io/ansible/ansible-rulebook:main
+        pull_policy: "missing"  # Optional: only pull if image not available locally
+
+    - name: Create a basic event stream
+      ansible.eda.event_stream:
+        organization_name: "{{ organization_name }}"
+        name: basic event stream
+        credential_name: basic event stream credential
+
+    - name: Get the event stream generated
+      register: event_stream_data
+      ansible.eda.event_stream_info:
+        name: basic event stream
+
+    - name: Print the event stream url
+      ansible.builtin.debug:
+        msg: "Event Stream URL: {{ event_stream_data.event_streams[0].url }}"
+
+    - name: Remove the activation if it exists
+      ansible.eda.rulebook_activation:
+        organization_name: "{{ organization_name }}"
+        name: activation-example
+        state: absent
+
+    - name: Activate a rulebook
+      ansible.eda.rulebook_activation:
+        organization_name: "{{ organization_name }}"
+        decision_environment_name: upstream decision environment
+        project_name: test project
+        rulebook_name: hello_echo.yml
+        name: activation-example
+        eda_credentials:
+          - My AAP controller credential
+
+    - name: Wait for the activation to be running
+      register: activation_status
+      until: activation_status.activations | length > 0 and activation_status.activations[0].status == "running"
+      retries: 30
+      delay: 2
+      ansible.eda.rulebook_activation_info:
+        name: activation-example
+
+# --- Gateway connection (token auth, required for AAP 2.5+) ---
+- name: Gateway token authentication example
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    # Generate a token in the AAP UI (User > Tokens) or via:
+    #   POST /api/gateway/v1/tokens/
+    aap_hostname: your gateway url, e.g. https://aap-gateway.example.com
+    aap_token: your oauth token
+    # Set to false only in lab environments with self-signed certificates.
+    aap_validate_certs: true
+  module_defaults:
+    group/ansible.eda.eda:
+      aap_hostname: "{{ aap_hostname }}"
+      aap_token: "{{ aap_token }}"
+      aap_validate_certs: "{{ aap_validate_certs }}"
+  tasks:
+    - name: List projects via Gateway
+      ansible.eda.project_info:
+      register: projects
+
+    - name: Show projects
+      ansible.builtin.debug:
+        var: projects

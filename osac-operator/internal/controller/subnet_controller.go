@@ -22,7 +22,11 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -34,22 +38,31 @@ import (
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/helpers"
+	privatev1 "github.com/osac-project/osac/osac-operator/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/osac-operator/pkg/dispatcher"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 )
 
 const (
-	// osacSubnetFinalizer is the finalizer for Subnet resources
 	osacSubnetFinalizer = "osac.openshift.io/subnet-finalizer"
 )
+
+var ipAddressPoolGVK = schema.GroupVersionKind{
+	Group:   "metallb.io",
+	Version: "v1beta1",
+	Kind:    "IPAddressPool",
+}
 
 // SubnetReconciler reconciles a Subnet object
 type SubnetReconciler struct {
 	client.Client
 	APIReader client.Reader
 	Scheme    *runtime.Scheme
-	// mgr and targetCluster are stored for future multi-cluster target client resolution
-	mgr                  mcmanager.Manager
+	mgr       mcmanager.Manager
+	// networkClassesClient fetches NetworkClass from the fulfillment-service
+	// to read vip_prefix_length. Nil when gRPC is not configured.
+	networkClassesClient privatev1.NetworkClassesClient
 	NetworkingNamespace  string
 	ProvisioningProvider provisioning.ProvisioningProvider
 	StatusPollInterval   time.Duration
@@ -70,6 +83,7 @@ func NewSubnetReconciler(
 	maxJobHistory int,
 	targetCluster mc.ClusterName,
 	resolver *dispatcher.Resolver,
+	networkClassesClient privatev1.NetworkClassesClient,
 ) *SubnetReconciler {
 	if mgr == nil {
 		panic("mgr must not be nil")
@@ -85,6 +99,7 @@ func NewSubnetReconciler(
 		APIReader:            mgr.GetLocalManager().GetAPIReader(),
 		Scheme:               mgr.GetLocalManager().GetScheme(),
 		mgr:                  mgr,
+		networkClassesClient: networkClassesClient,
 		NetworkingNamespace:  networkingNamespace,
 		ProvisioningProvider: provisioningProvider,
 		StatusPollInterval:   statusPollInterval,
@@ -98,6 +113,7 @@ func NewSubnetReconciler(
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=subnets/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=subnets/finalizers,verbs=update
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=virtualnetworks,verbs=get;list;watch
+// +kubebuilder:rbac:groups=metallb.io,resources=ipaddresspools,verbs=get;create;update;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -210,14 +226,36 @@ func (r *SubnetReconciler) handleUpdate(ctx context.Context, subnet *v1alpha1.Su
 		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
 
-	// Add implementation-strategy annotation if not present or different
-	// This allows AAP playbooks to select the appropriate role without doing lookups
+	// Resolve VIP prefix length from NetworkClass (if gRPC is available)
+	vipCIDR := ""
+	if r.networkClassesClient != nil && vnet.Spec.NetworkClass != "" && subnet.Spec.IPv4CIDR != "" {
+		var resolveErr error
+		vipCIDR, resolveErr = r.resolveVIPCIDR(ctx, vnet.Spec.NetworkClass, subnet.Spec.IPv4CIDR)
+		if resolveErr != nil {
+			log.Error(resolveErr, "failed to resolve VIP CIDR from NetworkClass, requeueing",
+				"networkClass", vnet.Spec.NetworkClass)
+			return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+		}
+	}
+
+	// Stamp annotations for AAP playbooks (implementation strategy + VIP CIDR)
 	if subnet.Annotations == nil {
 		subnet.Annotations = make(map[string]string)
 	}
+	annotationsChanged := false
 	if subnet.Annotations[osacImplementationStrategyAnnotation] != implementationStrategy {
 		subnet.Annotations[osacImplementationStrategyAnnotation] = implementationStrategy
-		log.Info("setting implementation-strategy annotation", "strategy", implementationStrategy)
+		annotationsChanged = true
+	}
+	if vipCIDR != "" && subnet.Annotations[osacVIPCIDRAnnotation] != vipCIDR {
+		subnet.Annotations[osacVIPCIDRAnnotation] = vipCIDR
+		annotationsChanged = true
+	} else if vipCIDR == "" && subnet.Annotations[osacVIPCIDRAnnotation] != "" {
+		delete(subnet.Annotations, osacVIPCIDRAnnotation)
+		annotationsChanged = true
+	}
+	if annotationsChanged {
+		log.Info("updating annotations", "strategy", implementationStrategy, "vipCIDR", vipCIDR)
 		if err := r.Update(ctx, subnet); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -256,6 +294,11 @@ func (r *SubnetReconciler) handleDelete(ctx context.Context, subnet *v1alpha1.Su
 		return ctrl.Result{}, nil
 	}
 
+	// Remove MetalLB IPAddressPool before AAP deprovisioning (which removes the CUDN)
+	if err := r.deleteMetalLBIPAddressPool(ctx, subnet); err != nil {
+		return ctrl.Result{}, fmt.Errorf("deleting MetalLB IPAddressPool: %w", err)
+	}
+
 	// Handle deprovisioning
 	result, err := r.handleDeprovisioning(ctx, subnet)
 	if err != nil {
@@ -285,7 +328,7 @@ func (r *SubnetReconciler) handleProvisioning(ctx context.Context, subnet *v1alp
 		return ctrl.Result{}, nil
 	}
 
-	return provisioning.RunProvisioningLifecycle(ctx, r.ProvisioningProvider, subnet,
+	result, err := provisioning.RunProvisioningLifecycle(ctx, r.ProvisioningProvider, subnet,
 		&provisioning.State{Jobs: &subnet.Status.ProvisioningJobs, DesiredConfigVersion: subnet.Status.DesiredConfigVersion},
 		r.MaxJobHistory, r.StatusPollInterval,
 		&provisioning.PollCallbacks{
@@ -305,6 +348,19 @@ func (r *SubnetReconciler) handleProvisioning(ctx context.Context, subnet *v1alp
 			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(subnet), subnet.Status)
 		},
 	)
+	if err != nil {
+		return result, err
+	}
+
+	// Create MetalLB IPAddressPool after provisioning succeeds, outside the
+	// callback so errors are returned to the reconcile loop for retry.
+	if subnet.Status.Phase == v1alpha1.SubnetPhaseReady {
+		if poolErr := r.ensureMetalLBIPAddressPool(ctx, subnet); poolErr != nil {
+			return ctrl.Result{}, fmt.Errorf("creating MetalLB IPAddressPool: %w", poolErr)
+		}
+	}
+
+	return result, nil
 }
 
 // handleDeprovisioning manages the deprovisioning job lifecycle for a Subnet.
@@ -320,4 +376,112 @@ func (r *SubnetReconciler) handleDeprovisioning(ctx context.Context, subnet *v1a
 		return result, err
 	}
 	return ctrl.Result{}, nil
+}
+
+// resolveVIPCIDR fetches the NetworkClass from the fulfillment-service and
+// computes the VIP sub-range CIDR from the subnet's IPv4 CIDR and the
+// NetworkClass's vip_prefix_length. Returns empty string if vip_prefix_length
+// is not set.
+func (r *SubnetReconciler) resolveVIPCIDR(ctx context.Context, networkClassID, subnetIPv4CIDR string) (string, error) {
+	resp, err := r.networkClassesClient.Get(ctx, &privatev1.NetworkClassesGetRequest{Id: networkClassID})
+	if err != nil {
+		return "", fmt.Errorf("fetching NetworkClass %q: %w", networkClassID, err)
+	}
+	nc := resp.GetObject()
+	if nc == nil || nc.GetSpec() == nil || !nc.GetSpec().HasVipPrefixLength() {
+		return "", nil
+	}
+	vipPrefixLength := int(nc.GetSpec().GetVipPrefixLength())
+	return helpers.FormatVIPRangeCIDR(subnetIPv4CIDR, vipPrefixLength)
+}
+
+func ipAddressPoolName(subnetName string) string {
+	return "osac-subnet-" + subnetName
+}
+
+// ensureMetalLBIPAddressPool creates or updates the MetalLB IPAddressPool on
+// the target cluster. Skipped when no VIP CIDR annotation is set or when the
+// multi-cluster manager is not configured.
+func (r *SubnetReconciler) ensureMetalLBIPAddressPool(ctx context.Context, subnet *v1alpha1.Subnet) error {
+	vipCIDR := subnet.Annotations[osacVIPCIDRAnnotation]
+	if vipCIDR == "" || r.mgr == nil {
+		return nil
+	}
+
+	targetClient, err := getTargetClient(ctx, r.mgr, r.targetCluster)
+	if err != nil {
+		return fmt.Errorf("getting target cluster client: %w", err)
+	}
+
+	pool := &unstructured.Unstructured{}
+	pool.SetGroupVersionKind(ipAddressPoolGVK)
+	pool.SetName(ipAddressPoolName(subnet.Name))
+	pool.SetNamespace(externalIPDefaultMetalLBNamespace)
+	pool.SetLabels(map[string]string{
+		osacPrefix + "/subnet": subnet.Name,
+	})
+
+	if err := unstructured.SetNestedField(pool.Object, false, "spec", "autoAssign"); err != nil {
+		return fmt.Errorf("setting autoAssign: %w", err)
+	}
+	if err := unstructured.SetNestedField(pool.Object, true, "spec", "avoidBuggyIPs"); err != nil {
+		return fmt.Errorf("setting avoidBuggyIPs: %w", err)
+	}
+	if err := unstructured.SetNestedSlice(pool.Object, []interface{}{vipCIDR}, "spec", "addresses"); err != nil {
+		return fmt.Errorf("setting addresses: %w", err)
+	}
+
+	existing := &unstructured.Unstructured{}
+	existing.SetGroupVersionKind(ipAddressPoolGVK)
+	err = targetClient.Get(ctx, types.NamespacedName{Namespace: externalIPDefaultMetalLBNamespace, Name: pool.GetName()}, existing)
+	if apierrors.IsNotFound(err) {
+		ctrllog.FromContext(ctx).Info("creating MetalLB IPAddressPool", "name", pool.GetName(), "addresses", vipCIDR)
+		return targetClient.Create(ctx, pool)
+	}
+	if err != nil {
+		return fmt.Errorf("checking existing IPAddressPool: %w", err)
+	}
+
+	// Update if addresses changed
+	existingAddrs, found, nestedErr := unstructured.NestedStringSlice(existing.Object, "spec", "addresses")
+	if nestedErr != nil {
+		return fmt.Errorf("reading existing IPAddressPool addresses: %w", nestedErr)
+	}
+	if !found || len(existingAddrs) != 1 || existingAddrs[0] != vipCIDR {
+		existing.Object["spec"] = pool.Object["spec"]
+		existing.SetLabels(pool.GetLabels())
+		ctrllog.FromContext(ctx).Info("updating MetalLB IPAddressPool", "name", pool.GetName(), "addresses", vipCIDR)
+		return targetClient.Update(ctx, existing)
+	}
+
+	return nil
+}
+
+// deleteMetalLBIPAddressPool removes the MetalLB IPAddressPool from the target
+// cluster. NotFound errors are ignored. Skipped when the multi-cluster manager
+// is not configured.
+func (r *SubnetReconciler) deleteMetalLBIPAddressPool(ctx context.Context, subnet *v1alpha1.Subnet) error {
+	if r.mgr == nil || subnet.Annotations[osacVIPCIDRAnnotation] == "" {
+		return nil
+	}
+
+	targetClient, err := getTargetClient(ctx, r.mgr, r.targetCluster)
+	if err != nil {
+		return fmt.Errorf("getting target cluster client: %w", err)
+	}
+
+	pool := &unstructured.Unstructured{}
+	pool.SetGroupVersionKind(ipAddressPoolGVK)
+	pool.SetName(ipAddressPoolName(subnet.Name))
+	pool.SetNamespace(externalIPDefaultMetalLBNamespace)
+
+	err = targetClient.Delete(ctx, pool)
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("deleting IPAddressPool %q: %w", pool.GetName(), err)
+	}
+	ctrllog.FromContext(ctx).Info("deleted MetalLB IPAddressPool", "name", pool.GetName())
+	return nil
 }

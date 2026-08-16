@@ -75,7 +75,7 @@ The `Metadata` message is shared by all object types and contains the following 
 | `creation_timestamp`   | `google.protobuf.Timestamp`  | Time the object was created.                     |
 | `deletion_timestamp`   | `google.protobuf.Timestamp`  | Time the object was marked for deletion.         |
 | `creator`              | `string`                     | Identity that created the object.                |
-| `name`                 | `string`                     | Human-friendly name (DNS label rules, optional). |
+| `name`                 | `string`                     | Required, immutable identifier (RFC 1123 DNS label format). |
 | `tenant`               | `string`                     | Tenant that owns the object.                     |
 | `labels`               | `map<string, string>`        | Indexed key-value pairs for organizing objects.  |
 | `annotations`          | `map<string, string>`        | Arbitrary user-controlled metadata.              |
@@ -84,6 +84,53 @@ The `Metadata` message is shared by all object types and contains the following 
 | `description`          | `string`                     | Optional Markdown description (max 256, not unique). Clients that display it MUST render Markdown (sanitized). |
 
 The private API adds a `finalizers` field (`repeated string`) that is not exposed in the public API.
+
+### Resource names
+
+Every object must have a `metadata.name`. The name is **mandatory** at creation time, **immutable**
+after creation, and **unique** within its scope.
+
+#### Format
+
+Names follow the RFC 1123 DNS label format:
+
+- Lowercase letters (`a`–`z`), digits (`0`–`9`), and hyphens (`-`) only
+- Must start and end with an alphanumeric character
+- 1 to 63 characters long
+
+The proto validation rule is:
+
+```
+min_len: 1, max_len: 63, pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+```
+
+Valid names: `my-cluster`, `prod-net-01`, `a`, `web-3`
+
+Invalid names: `My-Cluster` (uppercase), `-starts-with-hyphen` (leading hyphen),
+`ends-with-hyphen-` (trailing hyphen), `has_underscores` (underscores),
+`name-that-is-way-too-long-and-exceeds-the-sixty-three-character-maximum-allowed` (too long),
+`""` (empty)
+
+#### Uniqueness
+
+Names are unique per (tenant, project, resource type). Two different resource types may have objects
+with the same name within the same tenant and project, but two objects of the same type cannot.
+A name remains reserved while the object exists, including while deletion is pending (between
+`deletion_timestamp` being set and archival completing).
+
+#### Immutability
+
+Once an object is created, its `metadata.name` cannot be changed. Updates that include
+`metadata.name` in the field mask are accepted only if the value is identical to the existing name.
+
+#### Error responses
+
+| Scenario | gRPC code | Example message |
+|---|---|---|
+| Name missing or empty on create | `InvalidArgument` | Validation error on `metadata.name` (protovalidate) |
+| Name fails RFC 1123 format | `InvalidArgument` | Validation error on `metadata.name` (protovalidate) |
+| Name already taken in scope | `AlreadyExists` | `virtual network 'prod-net' already exists` |
+| Update attempts to change name | `InvalidArgument` | `field 'metadata.name' is immutable` |
 
 ### Spec and status ownership
 
@@ -140,7 +187,7 @@ This ensures validation always runs on the actual final state, not partial input
 Common validation patterns:
 
 - **Required string fields**: `[(buf.validate.field).string.min_len = 1]`
-- **DNS labels** (like `metadata.name`): `max_len: 63`, `pattern: "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)?$"`
+- **DNS labels** (like `metadata.name`): `min_len: 1`, `max_len: 63`, `pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"`
 - **Enum fields**: `[(buf.validate.field).enum.defined_only = true]` to reject unknown values
 - **Numeric ranges**: `[(buf.validate.field).int32.gte = 0]`
 - **Map constraints**: Use `[(buf.validate.field).map.keys...]` and `[(buf.validate.field).map.values...]`
@@ -200,7 +247,8 @@ expressed in proto annotations and must be implemented in server logic. Examples
 - Custom business rules that depend on multiple objects or system state
 
 For these cases, implement validation in the server's `Create` or `Update` methods and return
-`InvalidArgument` errors with descriptive messages.
+appropriate gRPC errors (`AlreadyExists` for uniqueness violations, `InvalidArgument` for other
+constraint failures) with descriptive messages.
 
 ## Declarative, intent-based design
 
@@ -431,7 +479,7 @@ The URL space must never be deeper than a collection and its members. For exampl
 belongs to a `VirtualNetwork`, do not define a nested URL like
 `/api/fulfillment/v1/virtual_networks/123/subnets`. Instead, `Subnet` has its own top-level
 collection at `/api/fulfillment/v1/subnets`, and users find the subnets of a virtual network using
-the filter capability with a CEL expression like `this.spec.virtual_network == "123"`.
+the filter capability with a CEL expression like `this.spec.virtual_network.name == "my-vnet"`.
 
 ### HTTP verb mapping
 
@@ -492,30 +540,138 @@ top-level `state` enum.
 
 ## Object references
 
-When an object needs to reference another object, define a `string` field named after the
-relationship or the type of the referenced object. The value of the field is the unique identifier
-of the referenced object.
+When an object needs to reference another object, the API uses typed reference messages instead of
+plain string fields. Each referenced type has its own message, giving the schema full type safety
+and enabling automatic server-side validation and resolution.
 
-For example, when a `Cluster` references a template:
+There are two kinds of references:
+
+### Full references
+
+Full references can point to objects in a different project or in the shared tenant. They have
+four fields:
 
 ```protobuf
-message ClusterSpec {
-  string template = 1;
+message ClusterTemplateReference {
+  string id = 1;
+  string name = 2;
+  string project = 3;
+  bool shared = 4;
 }
 ```
 
-Note that the field name is `template`, not `template_id`. The convention is to name the field
-after the relationship, without an `_id` suffix.
+| Field     | Description |
+|-----------|-------------|
+| `id`      | Unique identifier of the referenced object. |
+| `name`    | Human-readable name of the referenced object. |
+| `project` | Project where the referenced object lives. Defaults to the caller's project when omitted. |
+| `shared`  | When `true`, the lookup targets the `shared` tenant (overrides the caller's tenant). |
 
-Other examples from the codebase:
+Callers may supply `id`, `name`, or both. When both are provided they must refer to the same
+object; otherwise the server returns `InvalidArgument`. The server auto-populates whichever field
+is missing after a successful lookup.
 
-- `SubnetSpec.virtual_network` references a `VirtualNetwork` by its `id`.
-- `RoleBindingSpec.role` references a `Role` by its `id`.
-- `ProjectSpec.parent` references a parent `Project` by its `id`.
+Full references are used when the target object may live outside the caller's project — for
+example, cluster templates, catalog items, host types, instance types, network classes, IP pools,
+roles, and users.
 
-In the future the project plans to introduce a typed `Reference` message to make these references
-type-safe. Until then, references are plain `string` fields and the relationship must be documented
-in the proto comments.
+### Local references
+
+Local references are scoped to the same tenant and project as the parent object. They have only
+two fields:
+
+```protobuf
+message VirtualNetworkLocalReference {
+  string id = 1;
+  string name = 2;
+}
+```
+
+As with full references, callers may supply `id`, `name`, or both, and the server auto-populates
+the other.
+
+Local references are used when the target is always co-located — for example, a `Subnet`
+referencing its parent `VirtualNetwork`, or a `NetworkAttachment` referencing a `Subnet` and
+`SecurityGroup`.
+
+### Naming convention
+
+Each reference type is named `<TargetType>Reference` or `<TargetType>LocalReference` and is
+defined in the target type's `*_type.proto` file. The spec field that uses it is named after the
+relationship (e.g., `template`, `virtual_network`, `role`), not after the reference type itself.
+
+### JSON representation
+
+In the JSON representation used by the REST gateway, reference fields are nested objects:
+
+```json
+{
+  "spec": {
+    "template": { "name": "sandbox" },
+    "version": { "name": "4-17-0" }
+  }
+}
+```
+
+For local references the format is identical but without `project` and `shared`:
+
+```json
+{
+  "spec": {
+    "virtual_network": { "name": "my-vnet" }
+  }
+}
+```
+
+Repeated references (e.g., security groups in a network attachment) are arrays of objects:
+
+```json
+{
+  "subnet": { "name": "my-subnet" },
+  "security_groups": [
+    { "name": "sg-web" },
+    { "name": "sg-ssh" }
+  ]
+}
+```
+
+### Cross-project references
+
+To reference an object in a different project within the same tenant, set the `project` field:
+
+```json
+{
+  "spec": {
+    "template": { "name": "shared-tpl", "project": "templates" }
+  }
+}
+```
+
+To reference an object owned by the shared tenant (e.g., a globally available template), set
+`shared` to `true`:
+
+```json
+{
+  "spec": {
+    "template": { "name": "sandbox", "shared": true }
+  }
+}
+```
+
+### Server-side validation and resolution
+
+The server validates references automatically via a gRPC interceptor on `Create` and `Update`
+requests. For each reference field the interceptor:
+
+1. Determines the lookup scope (caller's tenant/project for local references; explicit
+   `project`/`shared` overrides for full references).
+2. Looks up the referenced object by `id`, `name`, or both.
+3. If both `id` and `name` are provided, verifies they refer to the same object.
+4. Auto-populates whichever of `id` or `name` was not provided by the caller.
+
+Invalid references produce an `InvalidArgument` error with `google.rpc.BadRequest` details
+containing one `FieldViolation` per invalid reference. The `field` value is the dot-separated
+path to the reference field (e.g., `object.spec.template`, `object.spec.network_attachments[0].subnet`).
 
 ## Documentation
 

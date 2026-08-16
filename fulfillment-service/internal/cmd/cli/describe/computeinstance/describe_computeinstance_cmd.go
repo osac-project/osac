@@ -113,7 +113,7 @@ func renderComputeInstance(w io.Writer, ci *publicv1.ComputeInstance) {
 	writer.Flush()
 }
 
-const shortHelp = `Describe a compute instance.`
+const shortHelp = `Describe a compute instance`
 
 const longHelp = `
 Describe a compute instance.

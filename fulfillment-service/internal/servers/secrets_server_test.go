@@ -163,9 +163,7 @@ var _ = Describe("Secrets Server", func() {
 						Metadata: privatev1.Metadata_builder{
 							Name: "my-secret",
 						}.Build(),
-						Spec: privatev1.SecretSpec_builder{
-							Backend: privatev1.SecretBackend_SECRET_BACKEND_VAULT,
-						}.Build(),
+						Backend: privatev1.SecretBackend_SECRET_BACKEND_VAULT,
 					}.Build())
 					return resp, nil
 				},
@@ -177,15 +175,13 @@ var _ = Describe("Secrets Server", func() {
 					Metadata: publicv1.Metadata_builder{
 						Name: "my-secret",
 					}.Build(),
-					Spec: publicv1.SecretSpec_builder{
-						Data: map[string][]byte{"key": []byte("value")},
-					}.Build(),
+					Data: map[string][]byte{"key": []byte("value")},
 				}.Build(),
 			}.Build())
 
 			Expect(err).ToNot(HaveOccurred())
 			Expect(capturedRequest).ToNot(BeNil())
-			Expect(capturedRequest.GetObject().GetSpec().GetBackend()).
+			Expect(capturedRequest.GetObject().GetBackend()).
 				To(Equal(privatev1.SecretBackend_SECRET_BACKEND_VAULT))
 		})
 
@@ -199,14 +195,9 @@ var _ = Describe("Secrets Server", func() {
 						Metadata: privatev1.Metadata_builder{
 							Name: "my-secret",
 						}.Build(),
-						Spec: privatev1.SecretSpec_builder{
-							Data:        map[string][]byte{"key": []byte("value")},
-							Backend:     privatev1.SecretBackend_SECRET_BACKEND_VAULT,
-							Coordinates: map[string]string{"path": "/secret/data/test"},
-						}.Build(),
-						Status: privatev1.SecretStatus_builder{
-							ResolvedData: map[string][]byte{"key": []byte("resolved")},
-						}.Build(),
+						Data:        map[string][]byte{"key": []byte("value")},
+						Backend:     privatev1.SecretBackend_SECRET_BACKEND_VAULT,
+						Coordinates: map[string]string{"path": "/secret/data/test"},
 					}.Build())
 					return resp, nil
 				},
@@ -218,21 +209,18 @@ var _ = Describe("Secrets Server", func() {
 					Metadata: publicv1.Metadata_builder{
 						Name: "my-secret",
 					}.Build(),
-					Spec: publicv1.SecretSpec_builder{
-						Data: map[string][]byte{"key": []byte("value")},
-					}.Build(),
+					Data: map[string][]byte{"key": []byte("value")},
 				}.Build(),
 			}.Build())
 
 			Expect(err).ToNot(HaveOccurred())
 			Expect(resp.GetObject().GetId()).To(Equal("secret-1"))
-			Expect(resp.GetObject().GetSpec().GetData()).To(BeEmpty())
-			Expect(resp.GetObject().GetStatus().GetResolvedData()).To(BeEmpty())
+			Expect(resp.GetObject().GetData()).To(BeEmpty())
 		})
 	})
 
 	Describe("List", func() {
-		It("strips spec.data and status.resolved_data from all items", func() {
+		It("strips data from all items", func() {
 			mock := &mockPrivateSecretsServer{
 				listFunc: func(_ context.Context,
 					_ *privatev1.SecretsListRequest) (*privatev1.SecretsListResponse, error) {
@@ -241,24 +229,14 @@ var _ = Describe("Secrets Server", func() {
 					resp.SetTotal(2)
 					resp.SetItems([]*privatev1.Secret{
 						privatev1.Secret_builder{
-							Id: "secret-1",
-							Spec: privatev1.SecretSpec_builder{
-								Data:    map[string][]byte{"key1": []byte("val1")},
-								Backend: privatev1.SecretBackend_SECRET_BACKEND_VAULT,
-							}.Build(),
-							Status: privatev1.SecretStatus_builder{
-								ResolvedData: map[string][]byte{"key1": []byte("resolved1")},
-							}.Build(),
+							Id:      "secret-1",
+							Data:    map[string][]byte{"key1": []byte("val1")},
+							Backend: privatev1.SecretBackend_SECRET_BACKEND_VAULT,
 						}.Build(),
 						privatev1.Secret_builder{
-							Id: "secret-2",
-							Spec: privatev1.SecretSpec_builder{
-								Data:    map[string][]byte{"key2": []byte("val2")},
-								Backend: privatev1.SecretBackend_SECRET_BACKEND_VAULT,
-							}.Build(),
-							Status: privatev1.SecretStatus_builder{
-								ResolvedData: map[string][]byte{"key2": []byte("resolved2")},
-							}.Build(),
+							Id:      "secret-2",
+							Data:    map[string][]byte{"key2": []byte("val2")},
+							Backend: privatev1.SecretBackend_SECRET_BACKEND_VAULT,
 						}.Build(),
 					})
 					return resp, nil
@@ -271,8 +249,7 @@ var _ = Describe("Secrets Server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(resp.GetItems()).To(HaveLen(2))
 			for _, item := range resp.GetItems() {
-				Expect(item.GetSpec().GetData()).To(BeEmpty())
-				Expect(item.GetStatus().GetResolvedData()).To(BeEmpty())
+				Expect(item.GetData()).To(BeEmpty())
 			}
 		})
 
@@ -306,7 +283,7 @@ var _ = Describe("Secrets Server", func() {
 	})
 
 	Describe("Get", func() {
-		It("returns data and resolved_data in response", func() {
+		It("returns data in response", func() {
 			mock := &mockPrivateSecretsServer{
 				getFunc: func(_ context.Context,
 					_ *privatev1.SecretsGetRequest) (*privatev1.SecretsGetResponse, error) {
@@ -316,16 +293,11 @@ var _ = Describe("Secrets Server", func() {
 						Metadata: privatev1.Metadata_builder{
 							Name: "my-secret",
 						}.Build(),
-						Spec: privatev1.SecretSpec_builder{
-							Data:    map[string][]byte{"key": []byte("value")},
-							Backend: privatev1.SecretBackend_SECRET_BACKEND_VAULT,
-						}.Build(),
-						Status: privatev1.SecretStatus_builder{
-							ResolvedData: map[string][]byte{
-								"tls.crt": []byte("cert-data"),
-								"tls.key": []byte("key-data"),
-							},
-						}.Build(),
+						Data: map[string][]byte{
+							"tls.crt": []byte("cert-data"),
+							"tls.key": []byte("key-data"),
+						},
+						Backend: privatev1.SecretBackend_SECRET_BACKEND_VAULT,
 					}.Build())
 					return resp, nil
 				},
@@ -337,10 +309,9 @@ var _ = Describe("Secrets Server", func() {
 			}.Build())
 
 			Expect(err).ToNot(HaveOccurred())
-			Expect(resp.GetObject().GetSpec().GetData()).To(HaveKeyWithValue("key", []byte("value")))
-			Expect(resp.GetObject().GetStatus().GetResolvedData()).To(HaveLen(2))
-			Expect(resp.GetObject().GetStatus().GetResolvedData()).To(HaveKeyWithValue("tls.crt", []byte("cert-data")))
-			Expect(resp.GetObject().GetStatus().GetResolvedData()).To(HaveKeyWithValue("tls.key", []byte("key-data")))
+			Expect(resp.GetObject().GetData()).To(HaveLen(2))
+			Expect(resp.GetObject().GetData()).To(HaveKeyWithValue("tls.crt", []byte("cert-data")))
+			Expect(resp.GetObject().GetData()).To(HaveKeyWithValue("tls.key", []byte("key-data")))
 		})
 	})
 
@@ -351,10 +322,8 @@ var _ = Describe("Secrets Server", func() {
 					_ *privatev1.SecretsGetRequest) (*privatev1.SecretsGetResponse, error) {
 					resp := &privatev1.SecretsGetResponse{}
 					resp.SetObject(privatev1.Secret_builder{
-						Id: "hub-secret",
-						Spec: privatev1.SecretSpec_builder{
-							Backend: privatev1.SecretBackend_SECRET_BACKEND_HUB,
-						}.Build(),
+						Id:      "hub-secret",
+						Backend: privatev1.SecretBackend_SECRET_BACKEND_HUB,
 					}.Build())
 					return resp, nil
 				},
@@ -363,10 +332,8 @@ var _ = Describe("Secrets Server", func() {
 			server := newTestSecretsServer(mock)
 			_, err := server.Update(ctx, publicv1.SecretsUpdateRequest_builder{
 				Object: publicv1.Secret_builder{
-					Id: "hub-secret",
-					Spec: publicv1.SecretSpec_builder{
-						Data: map[string][]byte{"key": []byte("value")},
-					}.Build(),
+					Id:   "hub-secret",
+					Data: map[string][]byte{"key": []byte("value")},
 				}.Build(),
 			}.Build())
 
@@ -389,9 +356,7 @@ var _ = Describe("Secrets Server", func() {
 						Metadata: privatev1.Metadata_builder{
 							Name: "hub-secret",
 						}.Build(),
-						Spec: privatev1.SecretSpec_builder{
-							Backend: privatev1.SecretBackend_SECRET_BACKEND_HUB,
-						}.Build(),
+						Backend: privatev1.SecretBackend_SECRET_BACKEND_HUB,
 					}.Build())
 					return resp, nil
 				},
@@ -404,9 +369,7 @@ var _ = Describe("Secrets Server", func() {
 						Metadata: privatev1.Metadata_builder{
 							Name: "hub-secret-updated",
 						}.Build(),
-						Spec: privatev1.SecretSpec_builder{
-							Backend: privatev1.SecretBackend_SECRET_BACKEND_HUB,
-						}.Build(),
+						Backend: privatev1.SecretBackend_SECRET_BACKEND_HUB,
 					}.Build())
 					return resp, nil
 				},
@@ -425,7 +388,7 @@ var _ = Describe("Secrets Server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(resp.GetObject().GetMetadata().GetName()).To(Equal("hub-secret-updated"))
 			Expect(capturedRequest).ToNot(BeNil())
-			Expect(capturedRequest.GetObject().GetSpec().GetBackend()).
+			Expect(capturedRequest.GetObject().GetBackend()).
 				To(Equal(privatev1.SecretBackend_SECRET_BACKEND_HUB))
 		})
 
@@ -437,10 +400,8 @@ var _ = Describe("Secrets Server", func() {
 					_ *privatev1.SecretsGetRequest) (*privatev1.SecretsGetResponse, error) {
 					resp := &privatev1.SecretsGetResponse{}
 					resp.SetObject(privatev1.Secret_builder{
-						Id: "vault-secret",
-						Spec: privatev1.SecretSpec_builder{
-							Backend: privatev1.SecretBackend_SECRET_BACKEND_VAULT,
-						}.Build(),
+						Id:      "vault-secret",
+						Backend: privatev1.SecretBackend_SECRET_BACKEND_VAULT,
 					}.Build())
 					return resp, nil
 				},
@@ -449,14 +410,9 @@ var _ = Describe("Secrets Server", func() {
 					capturedRequest = req
 					resp := &privatev1.SecretsUpdateResponse{}
 					resp.SetObject(privatev1.Secret_builder{
-						Id: "vault-secret",
-						Spec: privatev1.SecretSpec_builder{
-							Data:    map[string][]byte{"key": []byte("new-value")},
-							Backend: privatev1.SecretBackend_SECRET_BACKEND_VAULT,
-						}.Build(),
-						Status: privatev1.SecretStatus_builder{
-							ResolvedData: map[string][]byte{"key": []byte("resolved")},
-						}.Build(),
+						Id:      "vault-secret",
+						Data:    map[string][]byte{"key": []byte("new-value")},
+						Backend: privatev1.SecretBackend_SECRET_BACKEND_VAULT,
 					}.Build())
 					return resp, nil
 				},
@@ -465,20 +421,17 @@ var _ = Describe("Secrets Server", func() {
 			server := newTestSecretsServer(mock)
 			resp, err := server.Update(ctx, publicv1.SecretsUpdateRequest_builder{
 				Object: publicv1.Secret_builder{
-					Id: "vault-secret",
-					Spec: publicv1.SecretSpec_builder{
-						Data: map[string][]byte{"key": []byte("new-value")},
-					}.Build(),
+					Id:   "vault-secret",
+					Data: map[string][]byte{"key": []byte("new-value")},
 				}.Build(),
 			}.Build())
 
 			Expect(err).ToNot(HaveOccurred())
 			Expect(resp.GetObject().GetId()).To(Equal("vault-secret"))
 			Expect(capturedRequest).ToNot(BeNil())
-			Expect(capturedRequest.GetObject().GetSpec().GetBackend()).
+			Expect(capturedRequest.GetObject().GetBackend()).
 				To(Equal(privatev1.SecretBackend_SECRET_BACKEND_VAULT))
-			Expect(resp.GetObject().GetSpec().GetData()).To(BeEmpty())
-			Expect(resp.GetObject().GetStatus().GetResolvedData()).To(BeEmpty())
+			Expect(resp.GetObject().GetData()).To(BeEmpty())
 		})
 	})
 
@@ -489,10 +442,8 @@ var _ = Describe("Secrets Server", func() {
 					_ *privatev1.SecretsGetRequest) (*privatev1.SecretsGetResponse, error) {
 					resp := &privatev1.SecretsGetResponse{}
 					resp.SetObject(privatev1.Secret_builder{
-						Id: "hub-secret",
-						Spec: privatev1.SecretSpec_builder{
-							Backend: privatev1.SecretBackend_SECRET_BACKEND_HUB,
-						}.Build(),
+						Id:      "hub-secret",
+						Backend: privatev1.SecretBackend_SECRET_BACKEND_HUB,
 					}.Build())
 					return resp, nil
 				},
@@ -518,10 +469,8 @@ var _ = Describe("Secrets Server", func() {
 					_ *privatev1.SecretsGetRequest) (*privatev1.SecretsGetResponse, error) {
 					resp := &privatev1.SecretsGetResponse{}
 					resp.SetObject(privatev1.Secret_builder{
-						Id: "vault-secret",
-						Spec: privatev1.SecretSpec_builder{
-							Backend: privatev1.SecretBackend_SECRET_BACKEND_VAULT,
-						}.Build(),
+						Id:      "vault-secret",
+						Backend: privatev1.SecretBackend_SECRET_BACKEND_VAULT,
 					}.Build())
 					return resp, nil
 				},

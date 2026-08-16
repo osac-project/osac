@@ -87,6 +87,31 @@ spec:
               {{- end }}
           {{- end }}
           {{- end }}
+      {{- if and .Values.vault.endpoint .Values.vault.credentials }}
+      - name: vault-credentials
+        projected:
+          sources:
+          {{- range .Values.vault.credentials }}
+          {{- if .configMap }}
+          - configMap:
+              name: {{ .configMap.name }}
+              items:
+              {{- range .configMap.items }}
+              - key: {{ .key }}
+                path: {{ .param }}
+              {{- end }}
+          {{- end }}
+          {{- if .secret }}
+          - secret:
+              name: {{ .secret.name }}
+              items:
+              {{- range .secret.items }}
+              - key: {{ .key }}
+                path: {{ .param }}
+              {{- end }}
+          {{- end }}
+          {{- end }}
+      {{- end }}
       containers:
       - name: controller
         image: {{ .Values.images.service }}
@@ -101,6 +126,11 @@ spec:
         - name: idp-credentials
           mountPath: /etc/fulfillment-controller/idp
           readOnly: true
+        {{- if and .Values.vault.endpoint .Values.vault.credentials }}
+        - name: vault-credentials
+          mountPath: /etc/fulfillment-controller/vault
+          readOnly: true
+        {{- end }}
         command:
         {{ if .Values.debug }}
         - dlv
@@ -134,6 +164,21 @@ spec:
         - --grpc-listener-tls-crt=/etc/fulfillment-controller/tls/tls.crt
         - --grpc-listener-tls-key=/etc/fulfillment-controller/tls/tls.key
         - --metrics-listener-address=0.0.0.0:8002
+        {{- if and .Values.vault.endpoint .Values.vault.credentials }}
+        - --vault-endpoint={{ .Values.vault.endpoint }}
+        - --vault-namespace={{ .Values.vault.namespace }}
+        - --vault-kv-mount-path={{ .Values.vault.kvMountPath }}
+        - --vault-lifecycle-role={{ .Values.vault.lifecycleRole }}
+        - --vault-lifecycle-mount-path={{ .Values.vault.lifecycleMountPath }}
+        - --vault-keycloak-token-endpoint={{ .Values.vault.keycloakTokenEndpoint }}
+        - --vault-keycloak-client-id={{ .Values.vault.keycloakClientId }}
+        - --vault-keycloak-client-secret-file=/etc/fulfillment-controller/vault/client-secret
+        - --vault-keycloak-issuer-url={{ .Values.vault.keycloakIssuerUrl }}
+        - --vault-keycloak-audience={{ .Values.vault.keycloakAudience }}
+        {{- if .Values.vault.caCertFile }}
+        - --vault-ca-cert-file={{ .Values.vault.caCertFile }}
+        {{- end }}
+        {{- end }}
         ports:
         - name: grpc
           containerPort: 8000

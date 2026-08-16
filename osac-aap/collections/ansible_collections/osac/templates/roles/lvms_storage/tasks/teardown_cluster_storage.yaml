@@ -1,5 +1,5 @@
 ---
-# LVMS teardown_cluster_storage: remove per-tenant StorageClasses from the hub cluster.
+# LVMS teardown_cluster_storage: remove per-tenant StorageClasses from the target cluster.
 # Finds SCs by label selector. The target cluster may be unreachable (being destroyed)
 # so failures are tolerated and reported rather than fatal.
 

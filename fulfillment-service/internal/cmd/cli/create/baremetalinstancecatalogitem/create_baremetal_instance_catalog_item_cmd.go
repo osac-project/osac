@@ -128,7 +128,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-const shortHelp = `Create a bare metal instance catalog item.`
+const shortHelp = `Create a bare metal instance catalog item`
 
 const longHelp = `
 Create a bare metal instance catalog item. A catalog item defines a curated

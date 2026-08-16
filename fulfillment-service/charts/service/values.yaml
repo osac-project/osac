@@ -197,3 +197,29 @@ vault:
 
   # KV v2 secret engine mount path within tenant namespaces.
   kvMountPath: secret
+
+  # Vault role name used when authenticating with JWT for lifecycle operations.
+  lifecycleRole: ""
+
+  # Auth method mount path in the Vault parent namespace for lifecycle JWT authentication.
+  lifecycleMountPath: "jwt"
+
+  # Keycloak token endpoint URL used by the controller to obtain JWTs for Vault authentication.
+  keycloakTokenEndpoint: ""
+
+  # Keycloak client identifier used by the controller for Vault authentication.
+  keycloakClientId: ""
+
+  # Keycloak OIDC issuer URL (e.g. https://keycloak/realms/osac) used to configure
+  # JWT auth in tenant Vault namespaces.
+  keycloakIssuerUrl: ""
+
+  # Expected audience claim in Keycloak JWTs for Vault JWT auth role configuration.
+  keycloakAudience: "osac-api"
+
+  # File containing CA certificates for TLS connections to the Vault-compatible secret store.
+  # When empty, the shared CA pool is used.
+  caCertFile: ""
+
+  # Volume sources for the Keycloak client secret used for Vault authentication.
+  credentials: []

@@ -23,7 +23,7 @@ operator:
     computeInstance: true
     tenant: true
     networking: true
-    bareMetalInstance: false
+    bareMetalInstance: true
   certs:
     issuerRef:
       name: default-ca
@@ -96,6 +96,18 @@ service:
     endpoint: "http://openbao.openbao.svc.cluster.local:8200"
     namespace: osac
     kvMountPath: secret
+    lifecycleRole: "lifecycle"
+    lifecycleMountPath: "jwt"
+    keycloakTokenEndpoint: "https://keycloak.keycloak.svc.cluster.local:8000/realms/osac/protocol/openid-connect/token"
+    keycloakClientId: "osac-controller"
+    keycloakIssuerUrl: "https://keycloak.keycloak.svc.cluster.local:8000/realms/osac"
+    keycloakAudience: "osac-api"
+    credentials:
+    - secret:
+        name: fulfillment-controller-credentials
+        items:
+        - key: client-secret
+          param: client-secret
 
 # --- AAP (disabled for kind) ---
 aap:

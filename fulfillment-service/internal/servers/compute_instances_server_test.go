@@ -152,6 +152,29 @@ var _ = Describe("Compute instances server", func() {
 				}.Build(),
 			).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
+
+			storageTiersDao, err := dao.NewGenericDAO[*privatev1.StorageTier]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = storageTiersDao.Create().SetObject(
+				privatev1.StorageTier_builder{
+					Id: "standard",
+					Metadata: privatev1.Metadata_builder{
+						Name:   "standard",
+						Tenant: auth.SharedTenant,
+					}.Build(),
+					Spec: privatev1.StorageTierSpec_builder{
+						Description: "Standard storage tier",
+					}.Build(),
+					Status: privatev1.StorageTierStatus_builder{
+						State: privatev1.StorageTierState_STORAGE_TIER_STATE_ACTIVE,
+					}.Build(),
+				}.Build(),
+			).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
 		})
 
 		// Helper function to create a template
@@ -202,7 +225,8 @@ var _ = Describe("Compute instances server", func() {
 						SourceRef:  "quay.io/containerdisks/fedora:latest",
 					}.Build(),
 					BootDisk: privatev1.ComputeInstanceDisk_builder{
-						SizeGib: 10,
+						SizeGib:     10,
+						StorageTier: new("standard"),
 					}.Build(),
 					RunStrategy: new("Always"),
 				}.Build(),
@@ -428,7 +452,8 @@ var _ = Describe("Compute instances server", func() {
 							SourceRef:  "quay.io/test:latest",
 						}.Build(),
 						BootDisk: publicv1.ComputeInstanceDisk_builder{
-							SizeGib: 20,
+							SizeGib:     20,
+							StorageTier: new("standard"),
 						}.Build(),
 						NetworkAttachments: []*publicv1.NetworkAttachment{
 							publicv1.NetworkAttachment_builder{

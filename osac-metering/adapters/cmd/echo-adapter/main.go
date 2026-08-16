@@ -21,9 +21,12 @@ in compliance with the License. You may obtain a copy of the License at
 //	export KAFKA_BROKERS="localhost:9092"
 //	go run ./cmd/echo-adapter/
 //
+// TLS is enabled by default. For local development without TLS:
+//
+//	export KAFKA_TLS_ENABLED="false"
+//
 // Optional TLS/SASL (for cluster-deployed Kafka):
 //
-//	export KAFKA_TLS_ENABLED="true"
 //	export KAFKA_TLS_CA_CERT="/path/to/ca.crt"
 //	export KAFKA_SASL_USERNAME="metering-user"
 //	export KAFKA_SASL_PASSWORD_FILE="/path/to/password"
@@ -45,6 +48,7 @@ import (
 	"github.com/go-logr/stdr"
 
 	"github.com/osac-project/osac-metering/adapters"
+	"github.com/osac-project/osac-metering/adapters/envutil"
 )
 
 // echoAdapter logs every event to stdout, stores it in a ring buffer
@@ -86,15 +90,9 @@ func (a *echoAdapter) Close() error {
 }
 
 func main() {
-	brokers := os.Getenv("KAFKA_BROKERS")
-	if brokers == "" {
-		log.Fatal("KAFKA_BROKERS is required (comma-separated broker list)")
-	}
+	brokers := envutil.RequireEnv("KAFKA_BROKERS")
 
-	group := os.Getenv("KAFKA_CONSUMER_GROUP")
-	if group == "" {
-		group = "echo-adapter-smoke-test"
-	}
+	group := envutil.EnvOrDefault("KAFKA_CONSUMER_GROUP", "echo-adapter-smoke-test")
 
 	flushInterval := 5 * time.Second
 	if v := os.Getenv("FLUSH_INTERVAL"); v != "" {
@@ -105,10 +103,7 @@ func main() {
 		flushInterval = d
 	}
 
-	metricsAddr := os.Getenv("METRICS_ADDR")
-	if metricsAddr == "" {
-		metricsAddr = ":2112"
-	}
+	metricsAddr := envutil.EnvOrDefault("METRICS_ADDR", ":2112")
 
 	bufferSize := defaultMaxEvents
 	if v := os.Getenv("ECHO_BUFFER_SIZE"); v != "" {
@@ -128,12 +123,7 @@ func main() {
 		ConsumerGroup: group,
 		Topics:        adapters.AllTopics,
 		FlushInterval: flushInterval,
-		Kafka: adapters.KafkaConfig{
-			TLSEnabled:   os.Getenv("KAFKA_TLS_ENABLED") == "true",
-			TLSCACert:    os.Getenv("KAFKA_TLS_CA_CERT"),
-			SASLUser:     os.Getenv("KAFKA_SASL_USERNAME"),
-			SASLPassFile: os.Getenv("KAFKA_SASL_PASSWORD_FILE"),
-		},
+		Kafka:         adapters.KafkaConfigFromEnv(),
 	}, logger)
 
 	// Serve metrics, health, and event query endpoints.

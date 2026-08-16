@@ -1,4 +1,41 @@
 {{- if .Values.bootstrap.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "osac-aap.fullname" . }}-bootstrap
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-aap.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "osac-aap.fullname" . }}-read-admin-secret
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-aap.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["{{ include "osac-aap.instanceName" . }}-admin-password"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "osac-aap.fullname" . }}-read-admin-secret
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-aap.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "osac-aap.fullname" . }}-read-admin-secret
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "osac-aap.fullname" . }}-bootstrap
+    namespace: {{ .Release.Namespace }}
+---
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -12,54 +49,33 @@ metadata:
     "helm.sh/hook-delete-policy": before-hook-creation
 spec:
   backoffLimit: {{ .Values.bootstrap.backoffLimit }}
+  # Cumulative across all backoffLimit retries; must exceed both init containers'
+  # combined worst-case runtime (see _helpers.tpl) so a stuck attempt exits
+  # cleanly instead of being SIGKILLed.
+  activeDeadlineSeconds: 8400
   template:
     metadata:
       labels:
         {{- include "osac-aap.labels" . | nindent 8 }}
     spec:
+      serviceAccountName: {{ include "osac-aap.fullname" . }}-bootstrap
       initContainers:
+      - name: wait-for-admin-secret
+        image: {{ .Values.bootstrap.cliImage }}
+        command:
+          - /bin/bash
+          - -c
+          - |
+            {{- include "osac-aap.waitForAdminSecretScript" . | nindent 12 }}
+        {{- include "osac-aap.waitForAdminSecretContainerSpec" . | nindent 8 }}
       - name: wait-for-aap
         image: {{ .Values.bootstrap.cliImage }}
         command:
           - /bin/bash
           - -c
           - |
-            echo "Gateway: ${AAP_GATEWAY_HOSTNAME}"
-            echo "Waiting for AAP controller to be ready..."
-            for i in {1..60}; do
-              echo "Attempt $i: Checking AAP controller readiness..."
-              curl -sf http://${AAP_GATEWAY_HOSTNAME}/api/gateway/v1/ping/ \
-                | grep -q 'good';
-              GATEWAY=$?
-              echo "GATEWAY exit code: $GATEWAY"
-
-              curl -sf http://${AAP_CONTROLLER_GATEWAY_HOSTNAME}/api/v2/ping/ \
-                | grep -q 'version';
-              CONTROLLER_GATEWAY=$?
-              echo "CONTROLLER_GATEWAY exit code: $CONTROLLER_GATEWAY"
-
-              auth_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-                http://${AAP_GATEWAY_HOSTNAME}/api/gateway/v1/tokens/ \
-                -d "username=admin&password=dummy")
-              [ "$auth_code" != "503" ] && [ "$auth_code" != "000" ];
-              AUTH_UPSTREAM=$?
-              echo "AUTH_UPSTREAM exit code: $AUTH_UPSTREAM (HTTP $auth_code)"
-
-              if [ $GATEWAY -eq 0 ] && [ $CONTROLLER_GATEWAY -eq 0 ] && [ $AUTH_UPSTREAM -eq 0 ];
-              then
-                echo "AAP controller is ready!"
-                exit 0
-              fi
-              echo "AAP is not ready, waiting 60 seconds..."
-              sleep 60
-            done
-            echo "Timeout waiting for AAP."
-            exit 1
-        env:
-        - name: AAP_GATEWAY_HOSTNAME
-          value: {{ include "osac-aap.gatewayHostname" . | quote }}
-        - name: AAP_CONTROLLER_GATEWAY_HOSTNAME
-          value: {{ include "osac-aap.controllerHostname" . | quote }}
+            {{- include "osac-aap.waitForAapScript" . | nindent 12 }}
+        {{- include "osac-aap.waitForAapContainerSpec" . | nindent 8 }}
       containers:
       - name: bootstrap
         image: {{ .Values.bootstrap.image }}
@@ -88,5 +104,7 @@ spec:
       - name: config-as-code-manifest-volume
         secret:
           secretName: {{ .Values.configAsCode.manifestSecret }}
+      - name: tmp
+        emptyDir: {}
       restartPolicy: Never
 {{- end }}

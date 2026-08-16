@@ -1,9 +1,13 @@
 ---
 # Idempotent, provider-agnostic install of the OSAC CSI driver (csi-driver +
-# csi-backends Helm charts). Invoked once per storage_provider dispatch call
-# regardless of how many providers are configured — see
-# osac.service.storage_provider's tasks/main.yaml for the single include
-# point. Installed alongside, not instead of, each provider's existing
+# csi-backends Helm charts). Invoked directly from the hub-targeting storage
+# playbooks (playbook_osac_create_tenant_storage_backend.yml, and the Tenant
+# call site of playbook_osac_create_tenant_cluster_storage.yml), before their
+# own osac.service.storage_provider include — not from storage_provider's own
+# dispatcher, so that storage_provider/tests/test.yml's zero-live-I/O
+# validation guarantee stays intact. Never invoked for the CaaS/guest-cluster
+# call site, since this role always targets the hub's default kubeconfig
+# context. Installed alongside, not instead of, each provider's existing
 # CSI-operator install (e.g. vast_storage's ensure_csi_operator.yaml) until a
 # follow-up story cuts StorageClasses over to this driver.
 #

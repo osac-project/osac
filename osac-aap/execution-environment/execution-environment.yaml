@@ -44,3 +44,4 @@ additional_build_steps:
   append_final:
     - COPY --from=quay.io/openshift/origin-cli:4.19 /usr/bin/oc /usr/local/bin/
     - COPY --from=quay.io/openshift/origin-cli:4.19 /usr/bin/kubectl /usr/local/bin/
+    - COPY --from=docker.io/alpine/helm:3.17.0 /usr/bin/helm /usr/local/bin/

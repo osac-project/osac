@@ -226,6 +226,36 @@ if [ "${STORAGE_TESTS_ENABLED:-}" = "true" ]; then
   done
 fi
 
+# csi_driver_install tests (conditional) -- gated separately from
+# STORAGE_TESTS_ENABLED: this target needs a real, published
+# osac-csi-driver/vX.Y.Z chart tag in oci://ghcr.io/osac-project/charts
+# (no chart-publishing changes required, just a release), which does not
+# exist yet. Flip to "true" once one has been cut. Does not need the mock
+# VMS server -- csi_driver_install never calls the VAST VMS API directly.
+if [ "${CSI_DRIVER_TESTS_ENABLED:-}" = "true" ]; then
+  echo "=== Running CSI Driver Install Tests ==="
+  echo ""
+
+  CSI_DRIVER_TESTS=(
+    "csi_driver_install"
+  )
+
+  for csi_driver_test in "${CSI_DRIVER_TESTS[@]}"; do
+    echo "  Running: $csi_driver_test"
+    log_file="/tmp/osac_storage_test_${csi_driver_test}.log"
+    if ansible-playbook "targets/${csi_driver_test}/tasks/main.yml" -v > "${log_file}" 2>&1; then
+      echo "  ✓ ${csi_driver_test} passed"
+      PASSED+=("$csi_driver_test:baseline")
+    else
+      echo "  ✗ ${csi_driver_test} failed (see ${log_file})"
+      echo "  --- ${csi_driver_test} failure log (last 60 lines) ---"
+      tail -60 "${log_file}" 2>/dev/null || true
+      echo "  --- end ${csi_driver_test} failure log ---"
+      FAILED+=("$csi_driver_test:baseline")
+    fi
+  done
+fi
+
 echo "========================================"
 echo "Test Results"
 echo "========================================"

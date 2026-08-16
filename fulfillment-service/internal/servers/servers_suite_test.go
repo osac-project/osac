@@ -34,6 +34,8 @@ func TestServers(t *testing.T) {
 	RunSpecs(t, "Servers package")
 }
 
+const testTenant = "test-tenant"
+
 var (
 	ctx         context.Context
 	ctrl        *gomock.Controller
@@ -70,7 +72,7 @@ var _ = BeforeSuite(func() {
 		Return(auth.AllTenants, nil).
 		AnyTimes()
 	tenancy.EXPECT().DetermineDefaultTenant(gomock.Any()).
-		Return(auth.SystemTenant, nil).
+		Return(testTenant, nil).
 		AnyTimes()
 	tenancy.EXPECT().DetermineVisibleTenants(gomock.Any()).
 		Return(auth.AllTenants, nil).

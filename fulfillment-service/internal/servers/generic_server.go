@@ -788,45 +788,7 @@ func (s *GenericServer[O]) Update(ctx context.Context, request any, response any
 			SetObject(tmpObject).
 			Do(ctx)
 		if err != nil {
-			var conflictErr *dao.ErrConflict
-			if errors.As(err, &conflictErr) {
-				return grpcstatus.Errorf(grpccodes.Aborted, "%s", conflictErr.Error())
-			}
-			var alreadyExistsErr *dao.ErrAlreadyExists
-			if errors.As(err, &alreadyExistsErr) {
-				return grpcstatus.Errorf(grpccodes.AlreadyExists, "%s", alreadyExistsErr.Error())
-			}
-			var referenceErr *dao.ErrReference
-			if errors.As(err, &referenceErr) {
-				return grpcstatus.Errorf(grpccodes.FailedPrecondition, "%s", referenceErr.Error())
-			}
-			var notUniqueErr *dao.ErrNotUnique
-			if errors.As(err, &notUniqueErr) {
-				return grpcstatus.Errorf(grpccodes.AlreadyExists, "%s", notUniqueErr.Error())
-			}
-			var deniedErr *dao.ErrDenied
-			if errors.As(err, &deniedErr) {
-				return grpcstatus.Errorf(grpccodes.PermissionDenied, "%s", deniedErr.Error())
-			}
-			var immutableErr *dao.ErrImmutable
-			if errors.As(err, &immutableErr) {
-				return grpcstatus.Errorf(grpccodes.InvalidArgument, "%s", immutableErr.Error())
-			}
-			var deadlockErr *dao.ErrDeadlock
-			if errors.As(err, &deadlockErr) {
-				return grpcstatus.Errorf(grpccodes.Aborted, "%s", deadlockErr.Error())
-			}
-			s.logger.ErrorContext(
-				ctx,
-				"Failed to update object",
-				slog.String("id", requestId),
-				slog.Any("error", err),
-			)
-			return grpcstatus.Errorf(
-				grpccodes.Internal,
-				"failed to update object with identifier '%s'",
-				requestId,
-			)
+			return s.translateUpdateError(ctx, requestId, err)
 		}
 		responseObject = updateResponse.GetObject()
 	} else {
@@ -842,6 +804,48 @@ func (s *GenericServer[O]) Update(ctx context.Context, request any, response any
 	s.setPointer(response, responseMsg)
 
 	return nil
+}
+
+func (s *GenericServer[O]) translateUpdateError(ctx context.Context, requestId string, err error) error {
+	var conflictErr *dao.ErrConflict
+	if errors.As(err, &conflictErr) {
+		return grpcstatus.Errorf(grpccodes.Aborted, "%s", conflictErr.Error())
+	}
+	var alreadyExistsErr *dao.ErrAlreadyExists
+	if errors.As(err, &alreadyExistsErr) {
+		return grpcstatus.Errorf(grpccodes.AlreadyExists, "%s", alreadyExistsErr.Error())
+	}
+	var referenceErr *dao.ErrReference
+	if errors.As(err, &referenceErr) {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "%s", referenceErr.Error())
+	}
+	var notUniqueErr *dao.ErrNotUnique
+	if errors.As(err, &notUniqueErr) {
+		return grpcstatus.Errorf(grpccodes.AlreadyExists, "%s", notUniqueErr.Error())
+	}
+	var deniedErr *dao.ErrDenied
+	if errors.As(err, &deniedErr) {
+		return grpcstatus.Errorf(grpccodes.PermissionDenied, "%s", deniedErr.Error())
+	}
+	var immutableErr *dao.ErrImmutable
+	if errors.As(err, &immutableErr) {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "%s", immutableErr.Error())
+	}
+	var deadlockErr *dao.ErrDeadlock
+	if errors.As(err, &deadlockErr) {
+		return grpcstatus.Errorf(grpccodes.Aborted, "%s", deadlockErr.Error())
+	}
+	s.logger.ErrorContext(
+		ctx,
+		"Failed to update object",
+		slog.String("id", requestId),
+		slog.Any("error", err),
+	)
+	return grpcstatus.Errorf(
+		grpccodes.Internal,
+		"failed to update object with identifier '%s'",
+		requestId,
+	)
 }
 
 func (s *GenericServer[O]) compilePaths(paths []string) (result []*masks.Path[O], err error) {

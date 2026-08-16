@@ -1,20 +1,7 @@
 name: Check generated code
 
 on:
-  pull_request:
-    paths:
-      - 'fulfillment-service/**'
-      - '!fulfillment-service/OWNERS'
-      - '!fulfillment-service/LICENSE'
-      - '!fulfillment-service/**/*.md'
-      - '!fulfillment-service/docs/**'
-      - '!fulfillment-service/.claude/**'
-      - 'osac-operator/**'
-      - '!osac-operator/OWNERS'
-      - '!osac-operator/LICENSE'
-      - '!osac-operator/**/*.md'
-      - '!osac-operator/docs/**'
-      - '!osac-operator/.claude/**'
+  workflow_call:
 
 permissions:
   contents: read

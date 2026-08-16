@@ -5,20 +5,21 @@ permissions:
   contents: read
 
 on:
-  pull_request:
-    types: [opened, labeled, unlabeled, synchronize, reopened]
-    branches: [main]
-  merge_group:
+  workflow_call:
+    inputs:
+      caller-event:
+        type: string
+        required: true
 
 jobs:
   check-labels:
     runs-on: ubuntu-latest
     steps:
       - name: Auto-pass for merge queue
-        if: github.event_name == 'merge_group'
+        if: inputs.caller-event == 'merge_group'
         run: echo "Labels already validated on PR"
       - name: Check required Prow labels
-        if: github.event_name == 'pull_request'
+        if: inputs.caller-event != 'merge_group'
         env:
           LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         run: |

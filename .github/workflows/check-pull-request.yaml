@@ -15,15 +15,7 @@
 name: Check pull request
 
 on:
-  pull_request:
-    branches:
-    - main
-    paths:
-      - 'fulfillment-service/**'
-      - '!fulfillment-service/OWNERS'
-      - '!fulfillment-service/LICENSE'
-      - '!fulfillment-service/**/*.md'
-      - '!fulfillment-service/docs/**'
+  workflow_call:
 
 permissions:
   contents: read

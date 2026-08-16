@@ -5,8 +5,7 @@ permissions:
   contents: read
 
 on:
-  pull_request:
-    branches: [main]
+  workflow_call:
 
 jobs:
   dependency-review:

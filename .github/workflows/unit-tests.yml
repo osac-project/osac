@@ -15,16 +15,8 @@
 name: Unit Tests
 
 on:
-  pull_request:
-    branches:
-    - main
+  workflow_call:
   workflow_dispatch:
-  # 2x/day (every 12h). Offset 13 minutes past the hour, not on the hour --
-  # GitHub Actions' shared cron scheduler queues everyone's on-the-hour
-  # schedules together and can delay/drop them under load (see
-  # osac-test-infra's e2e-caas-netris-caller.yml for the same reasoning).
-  # Staggered from the other periodic workflows in this repo too, so they
-  # don't all land on the same offset simultaneously.
   schedule:
     - cron: '13 */12 * * *'
 

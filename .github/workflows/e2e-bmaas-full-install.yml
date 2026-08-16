@@ -5,17 +5,7 @@ permissions:
   contents: read
 
 on:
-  pull_request:
-    branches: [main]
-  merge_group:
-  # 10x/day. Offset 23 minutes past the hour, not on the hour -- GitHub
-  # Actions' shared cron scheduler queues everyone's on-the-hour
-  # schedules together and can delay/drop them under load (see
-  # osac-test-infra's e2e-caas-netris-caller.yml for the same reasoning).
-  # Staggered from the other periodic workflows in this repo too, so they
-  # don't all land on the same offset simultaneously. 24 doesn't divide
-  # evenly by 10, so this lists 10 explicit hours (roughly every 2-3h)
-  # instead of a bare */N pattern.
+  workflow_call:
   schedule:
     - cron: "23 0,2,5,7,10,12,14,17,19,22 * * *"
   workflow_dispatch:
@@ -33,96 +23,17 @@ on:
         required: false
         default: "main"
 
-concurrency:
-  group: e2e-bmaas-full-install-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 jobs:
-  changes:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: read
-    outputs:
-      # Same ignore list for pull_request and merge_group (OSAC-3879).
-      # schedule / workflow_dispatch always run. e2e-*-gate still if: always()
-      # so ruleset-required checks report when expensive E2E is skipped.
-      should-run: ${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group') || steps.filter.outputs.code == 'true' }}
-    steps:
-      # dorny/paths-filter uses git diff on merge_group (not the PR Files API),
-      # so the repo must be checked out with enough history for base..head.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        if: github.event_name == 'merge_group'
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706  # v4.0.2
-        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
-        id: filter
-        with:
-          predicate-quantifier: 'every'
-          filters: |
-            code:
-              - '**'
-              - '!**/OWNERS'
-              - '!**/LICENSE'
-              - '!**/*.md'
-              - '!**/docs/**'
-              - '!**/.claude/**'
-              - '!**/.cursor/**'
-              - '!**/.gemini/**'
-              - '!.design/**'
-              - '!.skillsaw.yaml'
-              - '!.pre-commit-config.yaml'
-
-  # Builds fulfillment-service, osac-operator, osac-aap's execution
-  # environment (twice -- once each for aap.bootstrap.image and
-  # aap.configAsCode.eeImage, see OSAC-3546), and bare-metal-fulfillment-operator
-  # from this PR's current code and installs them together in one cluster --
-  # not one "component under test" plus stale pinned images for the others.
-  # Runs for any change touching any component (see `changes` above) rather
-  # than being path-scoped per component; splitting this by component to
-  # avoid running both suites when only one changed is deferred to the future
-  # full path-based CI matrix, once its skip-logic pattern is verified.
   e2e-bmaas-full-install:
-    needs: changes
-    if: needs.changes.outputs.should-run == 'true'
     uses: osac-project/osac-test-infra/.github/workflows/e2e-bmaas-full-install.yml@main
     with:
       test-suite: ${{ inputs.test-suite || 'bmaas' }}
       test-filter: ${{ inputs.test-filter || '' }}
-      # osac-installer now lives as a subdirectory of this same monorepo checkout
-      # (its Chart.yaml deps resolve fulfillment-service/osac-operator/osac-aap/BMF
-      # as ../../../<name> siblings within it), so a PR touching those components
-      # must deploy from this PR's own fork/ref, not the reusable workflow's
-      # standalone-repo default.
       installer-repo: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
       installer-ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
-      # Build all component images from the PR's fork/branch (same monorepo checkout).
-      # osac-aap's execution-environment is built twice (aap.bootstrap.image and
-      # aap.configAsCode.eeImage): the two are logically the same image but the
-      # override mechanism keys strictly off imageKey, one build per key, so this
-      # is the only way to get both fields covered without changing that mechanism
-      # (which lives in osac-test-infra, not here). See OSAC-3546.
       components: '[{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.ref_name }}","containerfile":"fulfillment-service/Containerfile","context":".","imageKey":"service.images.service"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.ref_name }}","containerfile":"osac-operator/Containerfile","context":".","imageKey":"operator.image.repository"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.ref_name }}","containerfile":"osac-aap/execution-environment/execution-environment.yaml","imageKey":"aap.bootstrap.image","buildType":"ansible-builder"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.ref_name }}","containerfile":"osac-aap/execution-environment/execution-environment.yaml","imageKey":"aap.configAsCode.eeImage","buildType":"ansible-builder"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.ref_name }}","containerfile":"bare-metal-fulfillment-operator/Containerfile","context":".","imageKey":"bmf.image.repository"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.ref_name }}","containerfile":"osac-metering/metering-service/Containerfile","imageKey":"metering.image.repository"},{"repo":"${{ github.event.pull_request.head.repo.full_name || github.repository }}","ref":"${{ github.event.pull_request.head.ref || github.ref_name }}","containerfile":"osac-csi-driver/Containerfile","context":".","imageKey":"csiDriver.image.repository"}]'
-      # Pass author_association for fork PR authorization (empty for non-fork PRs)
       fork-pr-author-association: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.author_association || '' }}
       fork-pr-author: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.user.login || '' }}
       pr-number: ${{ github.event.pull_request.number }}
-      # Checkout osac-test-infra for tests/Containerfile (not the caller repo)
       test-infra-repository: osac-project/osac-test-infra
       test-infra-ref: ${{ inputs.test-infra-ref || 'main' }}
-
-  e2e-bmaas-gate:
-    if: always()
-    needs: [changes, e2e-bmaas-full-install]
-    runs-on: ubuntu-latest
-    steps:
-      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
-        run: |
-          echo "Upstream job results:"
-          echo "  changes: ${{ needs.changes.result }}"
-          echo "  e2e-bmaas-full-install: ${{ needs.e2e-bmaas-full-install.result }}"
-          echo ""
-          echo "One or more upstream jobs failed or were cancelled."
-          exit 1

@@ -1,26 +1,7 @@
 name: Helm Lint
 
 on:
-  pull_request:
-    paths:
-      - 'osac-operator/api/**'
-      - 'osac-operator/charts/**'
-      - 'osac-operator/config/crd/bases/**'
-      - 'osac-operator/hack/sync-helm-crds.py'
-      - 'osac-operator/Makefile'
-      - 'bare-metal-fulfillment-operator/api/**'
-      - 'bare-metal-fulfillment-operator/charts/**'
-      - 'bare-metal-fulfillment-operator/config/crd/bases/**'
-      - 'bare-metal-fulfillment-operator/hack/sync-helm-crds.py'
-      - 'bare-metal-fulfillment-operator/Makefile'
-      - 'fulfillment-service/charts/**'
-      - 'osac-aap/charts/**'
-      - 'osac-csi-driver/charts/**'
-      - 'osac-metering/charts/**'
-      - 'osac-installer/charts/**'
-      - 'osac-installer/values/**'
-      - 'osac-installer/ct.yaml'
-      - '.github/workflows/helm-lint.yaml'
+  workflow_call:
 
 permissions:
   contents: read

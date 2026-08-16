@@ -1,22 +1,10 @@
 name: Check Floating Image Tags
 
 on:
-  pull_request:
-    paths:
-      - 'fulfillment-service/charts/**/values.yaml'
-      - 'osac-operator/charts/**/values.yaml'
-      - 'bare-metal-fulfillment-operator/charts/**/values.yaml'
-      - 'osac-installer/charts/**/values.yaml'
-      - 'osac-aap/charts/**/values.yaml'
-      - '.github/scripts/check-floating-tags.sh'
-      - '.github/workflows/check-floating-tags.yaml'
+  workflow_call:
 
 permissions:
   contents: read
-
-concurrency:
-  group: check-floating-tags-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
 
 jobs:
   changes:

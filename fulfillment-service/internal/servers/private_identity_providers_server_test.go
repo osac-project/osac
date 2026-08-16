@@ -25,6 +25,7 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/events"
@@ -37,8 +38,8 @@ var _ = Describe("Private identity providers server", func() {
 	)
 
 	BeforeEach(func() {
-		// The default tenant mock returns 'system', which is invalid for identity providers, so we need to
-		// create a valid tenant, and use it explicitly in the tests.
+		// The global default tenant mock returns testTenant. We create a valid tenant here
+		// and use it explicitly in the tests.
 		tenantsDao, err := dao.NewGenericDAO[*privatev1.Tenant]().
 			SetLogger(logger).
 			SetTenancyLogic(tenancy).
@@ -430,6 +431,10 @@ var _ = Describe("Private identity providers server", func() {
 
 		Describe("Tenant Validation", func() {
 			It("Rejects creation when no tenant is specified and default tenant is invalid", func() {
+				tenancy.EXPECT().DetermineDefaultTenant(gomock.Any()).
+					Return(auth.SystemTenant, nil).
+					Times(1)
+
 				// Use a dedicated transaction to verify the write is rolled back
 				createTx, err := tm.Begin(context.Background())
 				Expect(err).ToNot(HaveOccurred())
@@ -457,7 +462,7 @@ var _ = Describe("Private identity providers server", func() {
 				status, ok := grpcstatus.FromError(err)
 				Expect(ok).To(BeTrue())
 				Expect(status.Code()).To(Equal(grpccodes.PermissionDenied))
-				Expect(status.Message()).To(ContainSubstring("cannot be created in the 'system' tenant"))
+				Expect(status.Message()).To(ContainSubstring("cannot be placed in the 'system' tenant"))
 
 				// End the transaction — the reported error triggers rollback
 				err = createTx.End(createCtx)
@@ -504,7 +509,7 @@ var _ = Describe("Private identity providers server", func() {
 				status, ok := grpcstatus.FromError(err)
 				Expect(ok).To(BeTrue())
 				Expect(status.Code()).To(Equal(grpccodes.PermissionDenied))
-				Expect(status.Message()).To(ContainSubstring("cannot be created in the 'shared' tenant"))
+				Expect(status.Message()).To(ContainSubstring("cannot be placed in the 'shared' tenant"))
 			})
 
 			It("Rejects creation when tenant is explicitly set to 'system'", func() {
@@ -533,7 +538,7 @@ var _ = Describe("Private identity providers server", func() {
 				status, ok := grpcstatus.FromError(err)
 				Expect(ok).To(BeTrue())
 				Expect(status.Code()).To(Equal(grpccodes.PermissionDenied))
-				Expect(status.Message()).To(ContainSubstring("cannot be created in the 'system' tenant"))
+				Expect(status.Message()).To(ContainSubstring("cannot be placed in the 'system' tenant"))
 			})
 		})
 	})

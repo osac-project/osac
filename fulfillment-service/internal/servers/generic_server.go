@@ -604,7 +604,7 @@ func (s *GenericServer[O]) checkAllowedTenant(tenant string) error {
 	if !s.allowedTenants.Contains(tenant) {
 		return grpcstatus.Errorf(
 			grpccodes.PermissionDenied,
-			"objects cannot be created in the '%s' tenant",
+			"objects cannot be placed in the '%s' tenant",
 			tenant,
 		)
 	}

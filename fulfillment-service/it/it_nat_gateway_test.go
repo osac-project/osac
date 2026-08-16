@@ -39,7 +39,9 @@ var _ = Describe("NATGateway lifecycle", func() {
 		poolsClient              privatev1.ExternalIPPoolsClient
 		virtualNetworksClient    privatev1.VirtualNetworksClient
 		networkClassesClient     privatev1.NetworkClassesClient
+		tenantsClient            privatev1.TenantsClient
 
+		tenantName       string
 		networkClassId   string
 		virtualNetworkId string
 		poolId           string
@@ -55,6 +57,23 @@ var _ = Describe("NATGateway lifecycle", func() {
 		poolsClient = privatev1.NewExternalIPPoolsClient(tool.InternalView().AdminConn())
 		virtualNetworksClient = privatev1.NewVirtualNetworksClient(tool.InternalView().AdminConn())
 		networkClassesClient = privatev1.NewNetworkClassesClient(tool.InternalView().AdminConn())
+		tenantsClient = privatev1.NewTenantsClient(tool.InternalView().AdminConn())
+
+		tenantName = fmt.Sprintf("natgw-test-%s", uuid.New())
+		createTenantResp, err := tenantsClient.Create(ctx, privatev1.TenantsCreateRequest_builder{
+			Object: privatev1.Tenant_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: tenantName,
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		tenantID := createTenantResp.GetObject().GetId()
+		DeferCleanup(func() {
+			_, _ = tenantsClient.Delete(ctx, privatev1.TenantsDeleteRequest_builder{
+				Id: tenantID,
+			}.Build())
+		})
 
 		// Create NetworkClass
 		ncName := fmt.Sprintf("cudn-natgw-%s", uuid.New())
@@ -75,7 +94,8 @@ var _ = Describe("NATGateway lifecycle", func() {
 			Object: privatev1.VirtualNetwork_builder{
 				Id: virtualNetworkId,
 				Metadata: privatev1.Metadata_builder{
-					Name: fmt.Sprintf("test-vnet-%s", uuid.New()[24:32]),
+					Name:   fmt.Sprintf("test-vnet-%s", uuid.New()[24:32]),
+					Tenant: tenantName,
 				}.Build(),
 				Spec: privatev1.VirtualNetworkSpec_builder{
 					NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClassId}.Build(),
@@ -351,7 +371,8 @@ var _ = Describe("NATGateway lifecycle", func() {
 			Object: privatev1.VirtualNetwork_builder{
 				Id: vn2Id,
 				Metadata: privatev1.Metadata_builder{
-					Name: fmt.Sprintf("test-vnet-%s", uuid.New()[24:32]),
+					Name:   fmt.Sprintf("test-vnet-%s", uuid.New()[24:32]),
+					Tenant: tenantName,
 				}.Build(),
 				Spec: privatev1.VirtualNetworkSpec_builder{
 					NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClassId}.Build(),
@@ -406,7 +427,8 @@ var _ = Describe("NATGateway lifecycle", func() {
 			Object: privatev1.VirtualNetwork_builder{
 				Id: k8sOnlyVNId,
 				Metadata: privatev1.Metadata_builder{
-					Name: fmt.Sprintf("test-vnet-%s", uuid.New()[24:32]),
+					Name:   fmt.Sprintf("test-vnet-%s", uuid.New()[24:32]),
+					Tenant: tenantName,
 				}.Build(),
 				Spec: privatev1.VirtualNetworkSpec_builder{
 					NetworkClass: privatev1.NetworkClassReference_builder{Id: k8sOnlyNC.GetObject().GetId()}.Build(),

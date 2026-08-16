@@ -1,0 +1,317 @@
+---
+# Integration test for osac.service.csi_driver_install.
+# Tests the idempotent, provider-agnostic OSAC CSI driver Helm install: first-call
+# install, second-call idempotency, cross-dispatch vendor accumulation, and a pinned
+# chart-version bump triggering a real upgrade.
+#
+# Requires: kind cluster (provided by setup_test_env.sh), network access to
+# oci://ghcr.io/osac-project/charts, and a real osac-csi-driver/vX.Y.Z release tag
+# (no chart exists yet as of this test's authoring -- see 02-plan.md Risk Assessment
+# item 1). Gated behind CSI_DRIVER_TESTS_ENABLED (default false) in run_tests.sh;
+# the version pins below (CSI_DRIVER_INSTALL_TEST_VERSION_1/2) are placeholders that
+# must be updated to real published tags before flipping that gate to true.
+#
+# Does NOT require the mock VMS server: this role never calls the VAST VMS API
+# directly (only osac.templates.vast_storage does) -- it only threads
+# storage_provider_backend_connections' endpoint through to vast.config.vmsHost as
+# an opaque connection string, so a fake, unreachable endpoint is sufficient here.
+
+# ── Setup: clean slate ──
+- name: "CSI Driver Install - Setup (clean slate)"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    csi_driver_install_test_namespace: "osac-csi"
+    csi_driver_install_test_backends_namespace: "osac-csi-backends"
+
+  tasks:
+    - name: Uninstall any pre-existing csi-driver/csi-backends releases
+      kubernetes.core.helm:
+        name: "{{ item.name }}"
+        release_namespace: "{{ item.namespace }}"
+        state: absent
+      loop:
+        - {name: csi-driver, namespace: "{{ csi_driver_install_test_namespace }}"}
+        - {name: csi-backends, namespace: "{{ csi_driver_install_test_backends_namespace }}"}
+      failed_when: false
+
+    - name: Delete csi-driver/csi-backends namespaces if they exist
+      kubernetes.core.k8s:
+        state: absent
+        kind: Namespace
+        name: "{{ item }}"
+      loop:
+        - "{{ csi_driver_install_test_namespace }}"
+        - "{{ csi_driver_install_test_backends_namespace }}"
+      failed_when: false
+
+# ── Test 1: First dispatch installs both Helm releases ──
+- name: "CSI Driver Install - First dispatch (vast)"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    # PLACEHOLDER -- update to a real published osac-csi-driver chart tag before
+    # enabling CSI_DRIVER_TESTS_ENABLED.
+    csi_driver_install_chart_version: "0.1.0"
+    _storage_provider_tiers:
+      - name: default
+        protocol: nfs
+        provider: vast
+        backend_id: be-test
+    _unique_providers: ["vast"]
+    storage_provider_backend_connections:
+      be-test:
+        endpoint: "vast-mock.example.com:443"
+        username: "admin"
+        password: "mock-admin-password"
+
+  tasks:
+    - name: Call csi_driver_install role (vast dispatch)
+      ansible.builtin.include_role:
+        name: osac.service.csi_driver_install
+
+    - name: Read CSIDriver object
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: CSIDriver
+        name: "csi.osac.openshift.io"
+      register: _csidriver_result
+
+    - name: Assert CSIDriver exists
+      ansible.builtin.assert:
+        that:
+          - _csidriver_result.resources | length == 1
+        fail_msg: "CSIDriver 'csi.osac.openshift.io' was not created"
+        success_msg: "CSIDriver exists"
+
+    - name: Read controller Deployment
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: "csi-driver-controller"
+        namespace: "osac-csi"
+      register: _controller_deployment_result
+
+    - name: Assert controller Deployment exists
+      ansible.builtin.assert:
+        that:
+          - _controller_deployment_result.resources | length == 1
+        fail_msg: "Deployment 'csi-driver-controller' was not created in namespace 'osac-csi'"
+        success_msg: "Controller Deployment exists"
+
+    - name: Read node DaemonSet
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: DaemonSet
+        name: "csi-driver-node"
+        namespace: "osac-csi"
+      register: _node_daemonset_result
+
+    - name: Assert node DaemonSet exists
+      ansible.builtin.assert:
+        that:
+          - _node_daemonset_result.resources | length == 1
+        fail_msg: "DaemonSet 'csi-driver-node' was not created in namespace 'osac-csi'"
+        success_msg: "Node DaemonSet exists"
+
+    - name: Read csi-backends vast controller Deployment
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: "vast-csi-controller"
+        namespace: "osac-csi-backends"
+      register: _vast_backend_deployment_result
+
+    - name: Assert csi-backends vast controller Deployment exists
+      ansible.builtin.assert:
+        that:
+          - _vast_backend_deployment_result.resources | length == 1
+        fail_msg: "Deployment 'vast-csi-controller' was not created in namespace 'osac-csi-backends'"
+        success_msg: "csi-backends vast controller Deployment exists"
+
+    - name: Read csi-backends vast controller Service
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Service
+        name: "vast-csi-controller"
+        namespace: "osac-csi-backends"
+      register: _vast_backend_service_result
+
+    - name: Assert csi-backends vast controller Service exists
+      ansible.builtin.assert:
+        that:
+          - _vast_backend_service_result.resources | length == 1
+        fail_msg: "Service 'vast-csi-controller' was not created in namespace 'osac-csi-backends'"
+        success_msg: "csi-backends vast controller Service exists"
+
+    - name: Read installed csi-driver release
+      kubernetes.core.helm_info:
+        name: csi-driver
+        release_namespace: osac-csi
+      register: _driver_release_info
+
+    - name: Assert vendors.vast.enabled is true on the csi-driver release
+      ansible.builtin.assert:
+        that:
+          - _driver_release_info.status.values.vendors.vast.enabled | bool
+          - "'vast=' in _driver_release_info.status.values.controller.vendorSockets"
+          - "'vast=' in _driver_release_info.status.values.node.vendorSockets"
+        fail_msg: "csi-driver release values did not reflect the dispatched vast vendor: {{ _driver_release_info.status.values }}"
+        success_msg: "csi-driver release correctly enables vast with both socket strings populated"
+
+    - name: Read installed csi-backends release
+      kubernetes.core.helm_info:
+        name: csi-backends
+        release_namespace: osac-csi-backends
+      register: _backends_release_info
+
+    - name: Assert vast.enabled and vast.config.vmsHost on the csi-backends release
+      ansible.builtin.assert:
+        that:
+          - _backends_release_info.status.values.vast.enabled | bool
+          - _backends_release_info.status.values.vast.config.vmsHost == "vast-mock.example.com:443"
+        fail_msg: "csi-backends release values did not reflect the dispatched vast vendor: {{ _backends_release_info.status.values }}"
+        success_msg: "csi-backends release correctly enables vast with the resolved vmsHost"
+
+# ── Test 2: Second, identical dispatch is idempotent ──
+- name: "CSI Driver Install - Second dispatch (idempotent no-op)"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    csi_driver_install_chart_version: "0.1.0"
+    _storage_provider_tiers:
+      - name: default
+        protocol: nfs
+        provider: vast
+        backend_id: be-test
+    _unique_providers: ["vast"]
+    storage_provider_backend_connections:
+      be-test:
+        endpoint: "vast-mock.example.com:443"
+        username: "admin"
+        password: "mock-admin-password"
+
+  tasks:
+    - name: Call csi_driver_install role again with identical inputs
+      ansible.builtin.include_role:
+        name: osac.service.csi_driver_install
+
+    - name: Assert both Helm releases reported no change on the identical re-dispatch
+      ansible.builtin.assert:
+        that:
+          - not _csi_driver_install_driver_result.changed
+          - not _csi_driver_install_backends_result.changed
+        fail_msg: >-
+          Expected an idempotent no-op re-dispatch, but a Helm release reported changed=true:
+          csi-driver={{ _csi_driver_install_driver_result.changed }},
+          csi-backends={{ _csi_driver_install_backends_result.changed }}
+        success_msg: "Both Helm releases correctly reported no change on the identical re-dispatch"
+
+# ── Test 3: A dispatch adding a second provider accumulates, does not clear the first ──
+- name: "CSI Driver Install - Third dispatch adds pure, vast wiring survives"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    csi_driver_install_chart_version: "0.1.0"
+    _storage_provider_tiers:
+      - name: default
+        protocol: nfs
+        provider: pure
+    _unique_providers: ["pure"]
+    storage_provider_backend_connections: {}
+
+  tasks:
+    - name: Call csi_driver_install role for a different provider (pure)
+      ansible.builtin.include_role:
+        name: osac.service.csi_driver_install
+
+    - name: Read installed csi-driver release after the pure dispatch
+      kubernetes.core.helm_info:
+        name: csi-driver
+        release_namespace: osac-csi
+      register: _driver_release_after_pure
+
+    - name: Assert both vast (from the first dispatch) and pure (this dispatch) remain enabled
+      ansible.builtin.assert:
+        that:
+          - _driver_release_after_pure.status.values.vendors.vast.enabled | bool
+          - _driver_release_after_pure.status.values.vendors.pure.enabled | bool
+          - "'vast=' in _driver_release_after_pure.status.values.controller.vendorSockets"
+          - "'pure=' in _driver_release_after_pure.status.values.controller.vendorSockets"
+          - "'vast=' in _driver_release_after_pure.status.values.node.vendorSockets"
+          - "'pure=' in _driver_release_after_pure.status.values.node.vendorSockets"
+        fail_msg: >-
+          Dispatching a second provider must not clear the first provider's wiring:
+          {{ _driver_release_after_pure.status.values }}
+        success_msg: "vast wiring survived the pure dispatch; both vendors are enabled"
+
+# ── Test 4: A pinned chart-version bump between dispatches triggers a real upgrade ──
+- name: "CSI Driver Install - Chart version bump triggers upgrade"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    # PLACEHOLDER -- must be a second real published tag, newer than
+    # csi_driver_install_chart_version above, before enabling CSI_DRIVER_TESTS_ENABLED.
+    csi_driver_install_chart_version: "0.1.1"
+    _storage_provider_tiers:
+      - name: default
+        protocol: nfs
+        provider: vast
+        backend_id: be-test
+    _unique_providers: ["vast"]
+    storage_provider_backend_connections:
+      be-test:
+        endpoint: "vast-mock.example.com:443"
+        username: "admin"
+        password: "mock-admin-password"
+
+  tasks:
+    - name: Call csi_driver_install role with a bumped chart version
+      ansible.builtin.include_role:
+        name: osac.service.csi_driver_install
+
+    - name: Read installed csi-driver release after the version bump
+      kubernetes.core.helm_info:
+        name: csi-driver
+        release_namespace: osac-csi
+      register: _driver_release_after_bump
+
+    - name: Assert the installed release's chart version actually changed
+      ansible.builtin.assert:
+        that:
+          - "'0.1.1' in _driver_release_after_bump.status.chart"
+        fail_msg: >-
+          Pinning a new csi_driver_install_chart_version did not trigger a real upgrade
+          -- installed chart is still: {{ _driver_release_after_bump.status.chart }}
+        success_msg: "Chart version bump correctly triggered a real Helm upgrade"
+
+# ── Cleanup ──
+- name: "CSI Driver Install - Cleanup"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Uninstall csi-driver/csi-backends releases
+      kubernetes.core.helm:
+        name: "{{ item.name }}"
+        release_namespace: "{{ item.namespace }}"
+        state: absent
+      loop:
+        - {name: csi-driver, namespace: "osac-csi"}
+        - {name: csi-backends, namespace: "osac-csi-backends"}
+      failed_when: false
+
+    - name: Delete csi-driver/csi-backends namespaces
+      kubernetes.core.k8s:
+        state: absent
+        kind: Namespace
+        name: "{{ item }}"
+      loop:
+        - "osac-csi"
+        - "osac-csi-backends"
+      failed_when: false

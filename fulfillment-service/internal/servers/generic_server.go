@@ -34,6 +34,7 @@ import (
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/collections"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	"github.com/osac-project/osac/fulfillment-service/internal/masks"
@@ -51,6 +52,7 @@ type GenericServerBuilder[O dao.Object] struct {
 	redactFunc        func(O) O
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
+	allowedTenants    collections.Set[string]
 	metricsRegisterer prometheus.Registerer
 }
 
@@ -62,6 +64,7 @@ type GenericServer[O dao.Object] struct {
 	dao              *dao.GenericDAO[O]
 	attributionLogic auth.AttributionLogic
 	tenancyLogic     auth.TenancyLogic
+	allowedTenants   collections.Set[string]
 	template         proto.Message
 	metadataField    protoreflect.FieldDescriptor
 	listRequest      proto.Message
@@ -101,7 +104,9 @@ type metadataIface interface {
 
 // NewGenericServer creates a builder that can then be used to configure and create a new generic server.
 func NewGenericServer[O dao.Object]() *GenericServerBuilder[O] {
-	return &GenericServerBuilder[O]{}
+	return &GenericServerBuilder[O]{
+		allowedTenants: auth.DefaultAllowedTenants,
+	}
 }
 
 // SetLogger sets the logger. This is mandatory.
@@ -166,6 +171,21 @@ func (b *GenericServerBuilder[O]) SetTenancyLogic(value auth.TenancyLogic) *Gene
 	return b
 }
 
+// AddAllowedTenants adds tenant names to the set of tenants where objects can be created or moved
+// into. By default the shared and system tenants are excluded. Use this to opt in platform-scoped
+// resource servers that legitimately need to create objects in those tenants.
+func (b *GenericServerBuilder[O]) AddAllowedTenants(values ...string) *GenericServerBuilder[O] {
+	b.allowedTenants = b.allowedTenants.Union(collections.NewSet(values...))
+	return b
+}
+
+// RemoveAllowedTenants removes tenant names from the set of tenants where objects can be created
+// or moved into.
+func (b *GenericServerBuilder[O]) RemoveAllowedTenants(values ...string) *GenericServerBuilder[O] {
+	b.allowedTenants = b.allowedTenants.Difference(collections.NewSet(values...))
+	return b
+}
+
 // SetMetricsRegisterer sets the Prometheus registerer used to register the metrics. This is optional. If not set, no
 // metrics will be recorded.
 func (b *GenericServerBuilder[O]) SetMetricsRegisterer(value prometheus.Registerer) *GenericServerBuilder[O] {
@@ -215,6 +235,7 @@ func (b *GenericServerBuilder[O]) Build() (result *GenericServer[O], err error) 
 		service:          b.service,
 		attributionLogic: b.attributionLogic,
 		tenancyLogic:     b.tenancyLogic,
+		allowedTenants:   b.allowedTenants,
 		notifier:         b.notifier,
 		pathCompiler:     pathCompiler,
 		pathCache:        map[string]*masks.Path[O]{},
@@ -572,8 +593,22 @@ func (s *GenericServer[O]) prepareForCreate(ctx context.Context, request any) (O
 	if err = s.setTenant(ctx, requestObject, assignedTenant); err != nil {
 		return nilObject, err
 	}
+	if err = s.checkAllowedTenant(assignedTenant); err != nil {
+		return nilObject, err
+	}
 
 	return requestObject, nil
+}
+
+func (s *GenericServer[O]) checkAllowedTenant(tenant string) error {
+	if !s.allowedTenants.Contains(tenant) {
+		return grpcstatus.Errorf(
+			grpccodes.PermissionDenied,
+			"objects cannot be created in the '%s' tenant",
+			tenant,
+		)
+	}
+	return nil
 }
 
 func (s *GenericServer[O]) createDryRun(ctx context.Context, request any, response any) error {
@@ -738,6 +773,12 @@ func (s *GenericServer[O]) Update(ctx context.Context, request any, response any
 	err = s.setTenant(ctx, tmpObject, assignedTenant)
 	if err != nil {
 		return err
+	}
+	currentTenant := s.getMetadata(currentObject).GetTenant()
+	if assignedTenant != currentTenant {
+		if err = s.checkAllowedTenant(assignedTenant); err != nil {
+			return err
+		}
 	}
 
 	// Save the object only if there is any actual difference:

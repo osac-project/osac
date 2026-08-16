@@ -456,8 +456,8 @@ var _ = Describe("Private identity providers server", func() {
 				Expect(err).To(HaveOccurred())
 				status, ok := grpcstatus.FromError(err)
 				Expect(ok).To(BeTrue())
-				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-				Expect(status.Message()).To(ContainSubstring("must be assigned to a specific tenant"))
+				Expect(status.Code()).To(Equal(grpccodes.PermissionDenied))
+				Expect(status.Message()).To(ContainSubstring("cannot be created in the 'system' tenant"))
 
 				// End the transaction — the reported error triggers rollback
 				err = createTx.End(createCtx)
@@ -503,8 +503,8 @@ var _ = Describe("Private identity providers server", func() {
 				Expect(err).To(HaveOccurred())
 				status, ok := grpcstatus.FromError(err)
 				Expect(ok).To(BeTrue())
-				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-				Expect(status.Message()).To(ContainSubstring("cannot belong to 'shared' tenant"))
+				Expect(status.Code()).To(Equal(grpccodes.PermissionDenied))
+				Expect(status.Message()).To(ContainSubstring("cannot be created in the 'shared' tenant"))
 			})
 
 			It("Rejects creation when tenant is explicitly set to 'system'", func() {
@@ -532,8 +532,8 @@ var _ = Describe("Private identity providers server", func() {
 				Expect(err).To(HaveOccurred())
 				status, ok := grpcstatus.FromError(err)
 				Expect(ok).To(BeTrue())
-				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-				Expect(status.Message()).To(ContainSubstring("cannot belong to 'system' tenant"))
+				Expect(status.Code()).To(Equal(grpccodes.PermissionDenied))
+				Expect(status.Message()).To(ContainSubstring("cannot be created in the 'system' tenant"))
 			})
 		})
 	})

@@ -103,6 +103,7 @@ func (b *PrivateStorageTiersServerBuilder) Build() (result *PrivateStorageTiersS
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		AddAllowedTenants(auth.SharedTenant).
 		Build()
 	if err != nil {
 		return

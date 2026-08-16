@@ -98,6 +98,7 @@ func (b *PrivateRolesServerBuilder) Build() (result *PrivateRolesServer, err err
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		AddAllowedTenants(auth.SharedTenant).
 		Build()
 	if err != nil {
 		return

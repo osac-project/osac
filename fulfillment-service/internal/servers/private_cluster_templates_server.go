@@ -104,6 +104,7 @@ func (b *PrivateClusterTemplatesServerBuilder) Build() (result *PrivateClusterTe
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		AddAllowedTenants(auth.SharedTenant).
 		Build()
 	if err != nil {
 		return

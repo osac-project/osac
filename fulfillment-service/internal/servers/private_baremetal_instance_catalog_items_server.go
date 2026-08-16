@@ -102,6 +102,7 @@ func (b *PrivateBareMetalInstanceCatalogItemsServerBuilder) Build() (result *Pri
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		AddAllowedTenants(auth.SharedTenant).
 		Build()
 	if err != nil {
 		return

@@ -93,6 +93,7 @@ func (b *PrivateDiskImagesServerBuilder) Build() (result *PrivateDiskImagesServe
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		AddAllowedTenants(auth.SharedTenant).
 		Build()
 	if err != nil {
 		return

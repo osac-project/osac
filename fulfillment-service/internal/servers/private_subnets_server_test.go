@@ -25,7 +25,6 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 )
 
@@ -78,7 +77,7 @@ var _ = Describe("Private subnets server", func() {
 		nc := privatev1.NetworkClass_builder{
 			ImplementationStrategy: "test-strategy",
 			Metadata: privatev1.Metadata_builder{
-				Tenant: auth.SharedTenant,
+				Tenant: testTenant,
 				Name:   name,
 			}.Build(),
 			Capabilities: privatev1.NetworkClassCapabilities_builder{
@@ -113,7 +112,7 @@ var _ = Describe("Private subnets server", func() {
 
 		builder := privatev1.VirtualNetwork_builder{
 			Metadata: privatev1.Metadata_builder{
-				Tenant: auth.SharedTenant,
+				Tenant: testTenant,
 				Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 			}.Build(),
 			Spec: privatev1.VirtualNetworkSpec_builder{
@@ -389,7 +388,7 @@ var _ = Describe("Private subnets server", func() {
 					Object: privatev1.Subnet_builder{
 						Metadata: privatev1.Metadata_builder{
 							Name:   "test-subnet",
-							Tenant: auth.SharedTenant,
+							Tenant: testTenant,
 						}.Build(),
 						Spec: privatev1.SubnetSpec_builder{
 							Ipv4Cidr:       new("10.0.1.5/24"),
@@ -517,7 +516,7 @@ var _ = Describe("Private subnets server", func() {
 
 				vn := privatev1.VirtualNetwork_builder{
 					Metadata: privatev1.Metadata_builder{
-						Tenant: auth.SharedTenant,
+						Tenant: testTenant,
 					}.Build(),
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr:     new("10.0.0.0/16"),
@@ -562,7 +561,7 @@ var _ = Describe("Private subnets server", func() {
 
 				vn := privatev1.VirtualNetwork_builder{
 					Metadata: privatev1.Metadata_builder{
-						Tenant: auth.SharedTenant,
+						Tenant: testTenant,
 					}.Build(),
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr:     new("10.0.0.0/16"),
@@ -777,7 +776,7 @@ var _ = Describe("Private subnets server", func() {
 
 				subnet := privatev1.Subnet_builder{
 					Metadata: privatev1.Metadata_builder{
-						Tenant: auth.SharedTenant,
+						Tenant: testTenant,
 					}.Build(),
 					Spec: privatev1.SubnetSpec_builder{
 						Ipv4Cidr:       new("10.0.1.0/24"),
@@ -1110,7 +1109,7 @@ var _ = Describe("Private subnets server", func() {
 					Object: privatev1.Subnet_builder{
 						Metadata: privatev1.Metadata_builder{
 							Name:   "test-subnet",
-							Tenant: auth.SharedTenant,
+							Tenant: testTenant,
 						}.Build(),
 						Spec: privatev1.SubnetSpec_builder{
 							Ipv4Cidr:       new("10.0.1.0/24"),
@@ -1156,7 +1155,7 @@ var _ = Describe("Private subnets server", func() {
 				subnet := privatev1.Subnet_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name:   name,
-						Tenant: auth.SharedTenant,
+						Tenant: testTenant,
 					}.Build(),
 					Spec: builder.Build(),
 				}.Build()
@@ -1298,7 +1297,7 @@ var _ = Describe("Private subnets server", func() {
 					Object: privatev1.Subnet_builder{
 						Metadata: privatev1.Metadata_builder{
 							Name:   "test-subnet",
-							Tenant: auth.SharedTenant,
+							Tenant: testTenant,
 						}.Build(),
 						Spec: privatev1.SubnetSpec_builder{
 							Ipv4Cidr:       new("10.0.1.0/24"),
@@ -1312,7 +1311,7 @@ var _ = Describe("Private subnets server", func() {
 				_, err = computeInstancesDao.Create().
 					SetObject(privatev1.ComputeInstance_builder{
 						Metadata: privatev1.Metadata_builder{
-							Tenant: auth.SharedTenant,
+							Tenant: testTenant,
 						}.Build(),
 						Spec: privatev1.ComputeInstanceSpec_builder{
 							NetworkAttachments: []*privatev1.NetworkAttachment{
@@ -1342,7 +1341,7 @@ var _ = Describe("Private subnets server", func() {
 					Object: privatev1.Subnet_builder{
 						Metadata: privatev1.Metadata_builder{
 							Name:   "test-subnet",
-							Tenant: auth.SharedTenant,
+							Tenant: testTenant,
 						}.Build(),
 						Spec: privatev1.SubnetSpec_builder{
 							Ipv4Cidr:       new("10.0.1.0/24"),
@@ -1371,7 +1370,7 @@ var _ = Describe("Private subnets server", func() {
 					Object: privatev1.Subnet_builder{
 						Metadata: privatev1.Metadata_builder{
 							Name:   "test-subnet",
-							Tenant: auth.SharedTenant,
+							Tenant: testTenant,
 						}.Build(),
 						Spec: privatev1.SubnetSpec_builder{
 							Ipv4Cidr:       new("10.0.1.0/24"),
@@ -1394,7 +1393,7 @@ var _ = Describe("Private subnets server", func() {
 				_, err = computeInstancesDao.Create().
 					SetObject(privatev1.ComputeInstance_builder{
 						Metadata: privatev1.Metadata_builder{
-							Tenant: auth.SharedTenant,
+							Tenant: testTenant,
 						}.Build(),
 						Spec: privatev1.ComputeInstanceSpec_builder{
 							NetworkAttachments: []*privatev1.NetworkAttachment{
@@ -1415,7 +1414,7 @@ var _ = Describe("Private subnets server", func() {
 					Object: privatev1.Subnet_builder{
 						Metadata: privatev1.Metadata_builder{
 							Name:   "test-subnet",
-							Tenant: auth.SharedTenant,
+							Tenant: testTenant,
 						}.Build(),
 						Spec: privatev1.SubnetSpec_builder{
 							Ipv4Cidr:       new("10.0.1.0/24"),
@@ -1429,7 +1428,7 @@ var _ = Describe("Private subnets server", func() {
 				ciCreateResponse, err := computeInstancesDao.Create().
 					SetObject(privatev1.ComputeInstance_builder{
 						Metadata: privatev1.Metadata_builder{
-							Tenant: auth.SharedTenant,
+							Tenant: testTenant,
 						}.Build(),
 						Spec: privatev1.ComputeInstanceSpec_builder{
 							NetworkAttachments: []*privatev1.NetworkAttachment{
@@ -1462,7 +1461,7 @@ var _ = Describe("Private subnets server", func() {
 					Object: privatev1.Subnet_builder{
 						Metadata: privatev1.Metadata_builder{
 							Name:   "test-subnet",
-							Tenant: auth.SharedTenant,
+							Tenant: testTenant,
 							Labels: map[string]string{
 								"osac.openshift.io/default": "true",
 							},
@@ -1507,7 +1506,7 @@ var _ = Describe("Private subnets server", func() {
 
 			subnet := privatev1.Subnet_builder{
 				Metadata: privatev1.Metadata_builder{
-					Tenant: auth.SharedTenant,
+					Tenant: testTenant,
 				}.Build(),
 				Spec: privatev1.SubnetSpec_builder{
 					Ipv4Cidr:       new("10.0.1.0/24"),
@@ -1530,7 +1529,7 @@ var _ = Describe("Private subnets server", func() {
 
 			subnet := privatev1.Subnet_builder{
 				Metadata: privatev1.Metadata_builder{
-					Tenant: auth.SharedTenant,
+					Tenant: testTenant,
 				}.Build(),
 				Spec: privatev1.SubnetSpec_builder{
 					Ipv4Cidr:       new("10.0.1.0/24"),
@@ -1561,7 +1560,7 @@ var _ = Describe("Private subnets server", func() {
 				subnet := privatev1.Subnet_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name:   fmt.Sprintf("subnet-%d", i),
-						Tenant: auth.SharedTenant,
+						Tenant: testTenant,
 					}.Build(),
 					Spec: privatev1.SubnetSpec_builder{
 						Ipv4Cidr:       new(fmt.Sprintf("10.%d.0.0/16", i)),
@@ -1593,7 +1592,7 @@ var _ = Describe("Private subnets server", func() {
 				subnet := privatev1.Subnet_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name:   fmt.Sprintf("vn1-subnet-%d", i),
-						Tenant: auth.SharedTenant,
+						Tenant: testTenant,
 					}.Build(),
 					Spec: privatev1.SubnetSpec_builder{
 						Ipv4Cidr:       new(fmt.Sprintf("10.0.%d.0/24", i)),
@@ -1612,7 +1611,7 @@ var _ = Describe("Private subnets server", func() {
 				subnet := privatev1.Subnet_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name:   fmt.Sprintf("vn2-subnet-%d", i),
-						Tenant: auth.SharedTenant,
+						Tenant: testTenant,
 					}.Build(),
 					Spec: privatev1.SubnetSpec_builder{
 						Ipv4Cidr:       new(fmt.Sprintf("192.168.%d.0/24", i)),
@@ -1643,7 +1642,7 @@ var _ = Describe("Private subnets server", func() {
 			subnet := privatev1.Subnet_builder{
 				Metadata: privatev1.Metadata_builder{
 					Name:   "original-name",
-					Tenant: auth.SharedTenant,
+					Tenant: testTenant,
 				}.Build(),
 				Spec: privatev1.SubnetSpec_builder{
 					Ipv4Cidr:       new("10.0.1.0/24"),
@@ -1672,7 +1671,7 @@ var _ = Describe("Private subnets server", func() {
 			subnet := privatev1.Subnet_builder{
 				Metadata: privatev1.Metadata_builder{
 					Finalizers: []string{"test-finalizer"},
-					Tenant:     auth.SharedTenant,
+					Tenant:     testTenant,
 				}.Build(),
 				Spec: privatev1.SubnetSpec_builder{
 					Ipv4Cidr:       new("10.0.1.0/24"),

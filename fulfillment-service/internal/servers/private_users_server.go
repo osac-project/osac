@@ -90,8 +90,8 @@ func (b *PrivateUsersServerBuilder) Build() (result *PrivateUsersServer, err err
 		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
-		AddAllowedTenants(auth.SharedTenant).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		AddAllowedTenants(auth.SharedTenant).
 		Build()
 	if err != nil {
 		return

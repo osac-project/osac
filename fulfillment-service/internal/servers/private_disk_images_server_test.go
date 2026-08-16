@@ -133,7 +133,7 @@ var _ = Describe("Private disk images server", func() {
 				Object: privatev1.DiskImage_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name:   "fedora-41",
-						Tenant: "system",
+						Tenant: testTenant,
 					}.Build(),
 					Spec: privatev1.DiskImageSpec_builder{
 						SourceType: privatev1.SourceType_SOURCE_TYPE_REGISTRY,

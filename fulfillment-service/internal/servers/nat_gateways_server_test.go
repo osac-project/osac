@@ -22,7 +22,6 @@ import (
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
-	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 )
 
@@ -113,7 +112,7 @@ var _ = Describe("Public NAT gateways server", func() {
 			poolResp, err := externalIPPoolDao.Create().SetObject(
 				privatev1.ExternalIPPool_builder{
 					Metadata: privatev1.Metadata_builder{
-						Tenant: auth.SharedTenant,
+						Tenant: testTenant,
 						Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.ExternalIPPoolSpec_builder{
@@ -137,7 +136,7 @@ var _ = Describe("Public NAT gateways server", func() {
 					ImplementationStrategy: "test-strategy",
 					FabricManager:          new("netris"),
 					Metadata: privatev1.Metadata_builder{
-						Tenant: auth.SharedTenant,
+						Tenant: testTenant,
 						Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 				}.Build(),
@@ -147,7 +146,7 @@ var _ = Describe("Public NAT gateways server", func() {
 			resp, err := vnDao.Create().SetObject(
 				privatev1.VirtualNetwork_builder{
 					Metadata: privatev1.Metadata_builder{
-						Tenant: auth.SharedTenant,
+						Tenant: testTenant,
 						Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.VirtualNetworkSpec_builder{
@@ -169,7 +168,7 @@ var _ = Describe("Public NAT gateways server", func() {
 			eip := createAllocatedExternalIP()
 			createResp, err := publicServer.Create(ctx, publicv1.NATGatewaysCreateRequest_builder{
 				Object: publicv1.NATGateway_builder{
-					Metadata: publicv1.Metadata_builder{Tenant: auth.SharedTenant,
+					Metadata: publicv1.Metadata_builder{Tenant: testTenant,
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: publicv1.NATGatewaySpec_builder{
@@ -194,7 +193,7 @@ var _ = Describe("Public NAT gateways server", func() {
 				eip := createAllocatedExternalIP()
 				_, err := publicServer.Create(ctx, publicv1.NATGatewaysCreateRequest_builder{
 					Object: publicv1.NATGateway_builder{
-						Metadata: publicv1.Metadata_builder{Tenant: auth.SharedTenant,
+						Metadata: publicv1.Metadata_builder{Tenant: testTenant,
 							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 						}.Build(),
 						Spec: publicv1.NATGatewaySpec_builder{
@@ -217,7 +216,7 @@ var _ = Describe("Public NAT gateways server", func() {
 			createResp, err := publicServer.Create(ctx, publicv1.NATGatewaysCreateRequest_builder{
 				Object: publicv1.NATGateway_builder{
 					Metadata: publicv1.Metadata_builder{
-						Tenant: auth.SharedTenant,
+						Tenant: testTenant,
 						Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: publicv1.NATGatewaySpec_builder{
@@ -243,7 +242,7 @@ var _ = Describe("Public NAT gateways server", func() {
 			createResp, err := publicServer.Create(ctx, publicv1.NATGatewaysCreateRequest_builder{
 				Object: publicv1.NATGateway_builder{
 					Metadata: publicv1.Metadata_builder{
-						Tenant: auth.SharedTenant,
+						Tenant: testTenant,
 						Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: publicv1.NATGatewaySpec_builder{

@@ -25,7 +25,6 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 )
 
@@ -39,7 +38,7 @@ func createExternalIPInState(
 	resp, err := externalIPDao.Create().SetObject(
 		privatev1.ExternalIP_builder{
 			Metadata: privatev1.Metadata_builder{
-				Tenant: auth.SharedTenant,
+				Tenant: testTenant,
 				Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 			}.Build(),
 			Spec: privatev1.ExternalIPSpec_builder{
@@ -63,7 +62,7 @@ func createClusterInState(
 	resp, err := clusterDao.Create().SetObject(
 		privatev1.Cluster_builder{
 			Metadata: privatev1.Metadata_builder{
-				Tenant: auth.SharedTenant,
+				Tenant: testTenant,
 				Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 			}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
@@ -82,7 +81,7 @@ func createBareMetalInstanceInState(
 	resp, err := bareMetalInstanceDao.Create().SetObject(
 		privatev1.BareMetalInstance_builder{
 			Metadata: privatev1.Metadata_builder{
-				Tenant: auth.SharedTenant,
+				Tenant: testTenant,
 				Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 			}.Build(),
 			Spec: privatev1.BareMetalInstanceSpec_builder{
@@ -141,7 +140,7 @@ var _ = Describe("Private external IP attachments server", func() {
 		poolResp, err := externalIPPoolDao.Create().SetObject(
 			privatev1.ExternalIPPool_builder{
 				Metadata: privatev1.Metadata_builder{
-					Tenant: auth.SharedTenant,
+					Tenant: testTenant,
 				}.Build(),
 				Spec: privatev1.ExternalIPPoolSpec_builder{
 					Cidrs: []string{"203.0.113.0/24"},

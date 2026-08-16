@@ -179,13 +179,6 @@ func (b *GenericServerBuilder[O]) AddAllowedTenants(values ...string) *GenericSe
 	return b
 }
 
-// RemoveAllowedTenants removes tenant names from the set of tenants where objects can be created
-// or moved into.
-func (b *GenericServerBuilder[O]) RemoveAllowedTenants(values ...string) *GenericServerBuilder[O] {
-	b.allowedTenants = b.allowedTenants.Difference(collections.NewSet(values...))
-	return b
-}
-
 // SetMetricsRegisterer sets the Prometheus registerer used to register the metrics. This is optional. If not set, no
 // metrics will be recorded.
 func (b *GenericServerBuilder[O]) SetMetricsRegisterer(value prometheus.Registerer) *GenericServerBuilder[O] {
@@ -774,6 +767,8 @@ func (s *GenericServer[O]) Update(ctx context.Context, request any, response any
 	if err != nil {
 		return err
 	}
+	// Only check the tenant restriction when the tenant is changing — existing objects
+	// in reserved tenants can be updated in place but cannot be moved into them.
 	currentTenant := s.getMetadata(currentObject).GetTenant()
 	if assignedTenant != currentTenant {
 		if err = s.checkAllowedTenant(assignedTenant); err != nil {

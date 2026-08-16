@@ -14,10 +14,13 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
+	"errors"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 )
 
 var _ = Describe("Default networking provisioner", func() {
@@ -57,7 +60,12 @@ var _ = Describe("Default networking provisioner", func() {
 		}.Build()
 		tenant.SetId(name)
 		_, err := tenantDao.Create().SetObject(tenant).Do(ctx)
-		Expect(err).ToNot(HaveOccurred())
+		if err != nil {
+			var alreadyExists *dao.ErrAlreadyExists
+			if !errors.As(err, &alreadyExists) {
+				Expect(err).ToNot(HaveOccurred())
+			}
+		}
 	}
 
 	createExternalIPPool := func(name, tenant string, available int64) *privatev1.ExternalIPPool {
@@ -89,7 +97,6 @@ var _ = Describe("Default networking provisioner", func() {
 
 	Context("when no default NetworkClass exists", func() {
 		It("returns nil without creating any resources", func() {
-			createTenant("test-tenant")
 			err := provisioner.Provision(ctx, "test-tenant")
 			Expect(err).ToNot(HaveOccurred())
 
@@ -103,7 +110,6 @@ var _ = Describe("Default networking provisioner", func() {
 
 	Context("when default NetworkClass exists with defaults", func() {
 		BeforeEach(func() {
-			createTenant("test-tenant")
 			createNetworkClass(privatev1.NetworkDefaults_builder{
 				VirtualNetworkIpv4Cidr: "10.0.0.0/16",
 				VirtualNetworkIpv6Cidr: "fd00::/48",
@@ -357,7 +363,6 @@ var _ = Describe("Default networking provisioner", func() {
 
 	Context("when NetworkClass defaults are partially populated", func() {
 		It("creates only IPv4 subnet when IPv6 CIDRs are empty", func() {
-			createTenant("test-tenant")
 			createNetworkClass(privatev1.NetworkDefaults_builder{
 				VirtualNetworkIpv4Cidr: "10.0.0.0/16",
 				SubnetIpv4Cidr:         "10.0.1.0/24",
@@ -384,7 +389,6 @@ var _ = Describe("Default networking provisioner", func() {
 
 	Context("when NetworkClass has no defaults", func() {
 		It("returns nil without creating any resources", func() {
-			createTenant("test-tenant")
 			createNetworkClass(nil)
 
 			err := provisioner.Provision(ctx, "test-tenant")

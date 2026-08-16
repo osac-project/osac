@@ -401,7 +401,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 				privatev1.ComputeInstance_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name:   "ref-ci",
-						Tenant: "system",
+						Tenant: testTenant,
 					}.Build(),
 					Spec: privatev1.ComputeInstanceSpec_builder{
 						CatalogItem: privatev1.ComputeInstanceCatalogItemReference_builder{Id: catalogItem.GetId()}.Build(),
@@ -454,9 +454,9 @@ var _ = Describe("Private compute instance catalog items server", func() {
 				Object: privatev1.ComputeInstanceCatalogItem_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name:   "dev-sandbox",
-						Tenant: "system",
+						Tenant: testTenant,
 					}.Build(),
-					Title:    "CI catalog item for system tenant",
+					Title:    "CI catalog item for test tenant",
 					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 				}.Build(),
 			}.Build())

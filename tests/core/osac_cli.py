@@ -17,17 +17,22 @@ class OsacCLI:
         token_script: str,
         namespace: str,
         default_instance_type: str | None = None,
+        private: bool = False,
     ) -> None:
         self.binary: str = binary
         self.namespace: str = namespace
         self._address: str = address
         self._token_script: str = token_script
+        self._private: bool = private
         self.default_instance_type: str | None = default_instance_type
         # Each OsacCLI instance gets its own config directory so that parallel
         # xdist workers (or multiple CLI fixtures) don't overwrite each other's
         # login credentials via the shared ~/.config/osac/config.json.
         self._config_dir: str = tempfile.mkdtemp(prefix="osac-config-")
-        self._run("login", "--address", address, "--insecure", "--token-script", token_script)
+        login_args = ["login", "--address", address, "--insecure", "--token-script", token_script]
+        if self._private:
+            login_args.append("--private")
+        self._run(*login_args)
 
     def close(self) -> None:
         shutil.rmtree(self._config_dir, ignore_errors=True)
@@ -43,7 +48,10 @@ class OsacCLI:
         return run_unchecked(self.binary, "--config", self._config_dir, *args, timeout=timeout)
 
     def relogin(self) -> None:
-        self._run("login", "--address", self._address, "--insecure", "--token-script", self._token_script)
+        login_args = ["login", "--address", self._address, "--insecure", "--token-script", self._token_script]
+        if self._private:
+            login_args.append("--private")
+        self._run(*login_args)
 
     @staticmethod
     def _parse_uuid(stdout: str) -> str:

@@ -164,6 +164,19 @@ def cli(namespace: str, fulfillment_address: str, service_account: str) -> Itera
 
 
 @pytest.fixture(scope="session")
+def private_cli(namespace: str, fulfillment_private_address: str, service_account: str) -> Iterator[OsacCLI]:
+    instance = OsacCLI(
+        binary=env("OSAC_CLI_PATH", "osac"),
+        address=f"https://{fulfillment_private_address.rsplit(':', 1)[0]}",
+        token_script=f"oc create token -n {namespace} {service_account} --as system:admin",
+        namespace=namespace,
+        private=True,
+    )
+    yield instance
+    instance.close()
+
+
+@pytest.fixture(scope="session")
 def keycloak_url(cluster_domain: str) -> str:
     return env("OSAC_KEYCLOAK_URL", f"https://keycloak-keycloak.{cluster_domain}")
 

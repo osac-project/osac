@@ -262,7 +262,10 @@
     # no-ops when nothing changed) — not a manual existence-only skip. reuse_values
     # means a later dispatch enabling a second vendor doesn't clear the first (see
     # the vendorSockets accumulation above for the one case reuse_values alone
-    # doesn't cover).
+    # doesn't cover). reset_values must be explicitly false: the module's own
+    # default (true) takes precedence over reuse_values and would silently
+    # discard it, per the module's own documentation ("If reset_values is set
+    # to True, [reuse_values] is ignored").
     - name: Install/upgrade csi-driver Helm release
       kubernetes.core.helm:
         name: csi-driver
@@ -271,6 +274,7 @@
         release_namespace: "{{ csi_driver_install_namespace }}"
         state: present
         reuse_values: true
+        reset_values: false
         values: "{{ _csi_driver_install_driver_values }}"
       register: _csi_driver_install_driver_result
 
@@ -282,6 +286,7 @@
         release_namespace: "{{ csi_driver_install_backends_namespace }}"
         state: present
         reuse_values: true
+        reset_values: false
         values: "{{ _csi_driver_install_backends_values }}"
       register: _csi_driver_install_backends_result
 

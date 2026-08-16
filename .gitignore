@@ -11,6 +11,9 @@ skills/
 # (see .github/workflows/graphify-brain-refresh.yaml), never committed.
 graphify-out/
 
+# Shared tool binaries (tools/golangci-lint.mk), downloaded once for all components
+/tools/bin/
+
 # Binaries for programs and plugins
 *.exe
 *.exe~

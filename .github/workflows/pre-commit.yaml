@@ -24,9 +24,6 @@ jobs:
     - uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3  # v1
       with:
         setup_only: true
-    - run: make -C osac-operator golangci-lint
-    - run: make -C bare-metal-fulfillment-operator golangci-lint
-    - run: make -C osac-csi-driver golangci-lint
     # gitleaks hook is --staged only (no-op with empty index). CI secret gate is
     # the docker PR-diff steps below (base-branch config + --ignore-gitleaks-allow).
     - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd  # v3.0.1

@@ -60,13 +60,13 @@ repos:
     name: osac-operator golangci-lint
     language: system
     files: ^osac-operator/.*\.go$
-    entry: bash -c "cd osac-operator && bin/golangci-lint run --fix"
+    entry: make -C osac-operator lint-fix
   - id: bare-metal-fulfillment-operator-golangci-lint
     pass_filenames: false
     name: bare-metal-fulfillment-operator golangci-lint
     language: system
     files: ^bare-metal-fulfillment-operator/.*\.go$
-    entry: bash -c "cd bare-metal-fulfillment-operator && bin/golangci-lint run --fix"
+    entry: make -C bare-metal-fulfillment-operator lint-fix
   - id: osac-csi-driver-golangci-lint
     pass_filenames: false
     name: osac-csi-driver golangci-lint

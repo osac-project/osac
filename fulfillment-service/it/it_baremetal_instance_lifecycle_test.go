@@ -179,24 +179,6 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		networkClassesClient := privatev1.NewNetworkClassesClient(tool.InternalView().AdminConn())
 		virtualNetworksClient := privatev1.NewVirtualNetworksClient(tool.InternalView().AdminConn())
 		subnetsClient := privatev1.NewSubnetsClient(tool.InternalView().AdminConn())
-		tenantsClient := privatev1.NewTenantsClient(tool.InternalView().AdminConn())
-
-		tenantName := fmt.Sprintf("bmi-test-%s", uuid.New())
-		createTenantResp, err := tenantsClient.Create(ctx, privatev1.TenantsCreateRequest_builder{
-			Object: privatev1.Tenant_builder{
-				Metadata: privatev1.Metadata_builder{
-					Name: tenantName,
-				}.Build(),
-			}.Build(),
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		tenantID := createTenantResp.GetObject().GetId()
-		DeferCleanup(func(ctx context.Context) {
-			_, _ = tenantsClient.Delete(ctx, privatev1.TenantsDeleteRequest_builder{
-				Id: tenantID,
-			}.Build())
-		})
-
 		// Create a k8s-only NetworkClass (no fabric_manager):
 		ncResp, err := networkClassesClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 			Object: privatev1.NetworkClass_builder{
@@ -220,7 +202,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				Id: virtualNetworkId,
 				Metadata: privatev1.Metadata_builder{
 					Name:   fmt.Sprintf("test-vnet-%s", uuid.New()[24:32]),
-					Tenant: tenantName,
+					Tenant: usersGroup,
 				}.Build(),
 				Spec: privatev1.VirtualNetworkSpec_builder{
 					NetworkClass: privatev1.NetworkClassReference_builder{Id: networkClassId}.Build(),
@@ -269,7 +251,8 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			Object: privatev1.Subnet_builder{
 				Id: subnetId,
 				Metadata: privatev1.Metadata_builder{
-					Tenant: tenantName,
+					Name:   fmt.Sprintf("test-subnet-%s", uuid.New()[24:32]),
+					Tenant: usersGroup,
 				}.Build(),
 				Spec: privatev1.SubnetSpec_builder{
 					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkId}.Build(),

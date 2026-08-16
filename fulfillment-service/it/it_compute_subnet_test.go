@@ -39,9 +39,7 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 		storageTiersClient             privatev1.StorageTiersClient
 		storageBackendsClient          privatev1.StorageBackendsClient
 		diskImagesClient               privatev1.DiskImagesClient
-		tenantsClient                  privatev1.TenantsClient
 
-		tenantName                string
 		networkClassId            string
 		virtualNetworkId          string
 		subnetId                  string
@@ -66,23 +64,6 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 		storageTiersClient = privatev1.NewStorageTiersClient(tool.InternalView().AdminConn())
 		storageBackendsClient = privatev1.NewStorageBackendsClient(tool.InternalView().AdminConn())
 		diskImagesClient = privatev1.NewDiskImagesClient(tool.InternalView().AdminConn())
-		tenantsClient = privatev1.NewTenantsClient(tool.InternalView().AdminConn())
-
-		tenantName = fmt.Sprintf("subnet-test-%s", uuid.New())
-		createTenantResp, err := tenantsClient.Create(ctx, privatev1.TenantsCreateRequest_builder{
-			Object: privatev1.Tenant_builder{
-				Metadata: privatev1.Metadata_builder{
-					Name: tenantName,
-				}.Build(),
-			}.Build(),
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		tenantID := createTenantResp.GetObject().GetId()
-		DeferCleanup(func() {
-			_, _ = tenantsClient.Delete(ctx, privatev1.TenantsDeleteRequest_builder{
-				Id: tenantID,
-			}.Build())
-		})
 
 		// Create StorageBackend
 		sbResp, err := storageBackendsClient.Create(ctx, privatev1.StorageBackendsCreateRequest_builder{
@@ -190,7 +171,7 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 			Object: privatev1.VirtualNetwork_builder{
 				Metadata: privatev1.Metadata_builder{
 					Name:   fmt.Sprintf("test-vnet-%s", uuid.New()[24:32]),
-					Tenant: tenantName,
+					Tenant: usersGroup,
 				}.Build(),
 				Id: virtualNetworkId,
 				Spec: privatev1.VirtualNetworkSpec_builder{
@@ -235,7 +216,7 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 			Object: privatev1.Subnet_builder{
 				Metadata: privatev1.Metadata_builder{
 					Name:   fmt.Sprintf("test-subnet-%s", uuid.New()[24:32]),
-					Tenant: tenantName,
+					Tenant: usersGroup,
 				}.Build(),
 				Id: subnetId,
 				Spec: privatev1.SubnetSpec_builder{

@@ -97,6 +97,7 @@ func (b *PrivateRoleBindingsServerBuilder) Build() (result *PrivateRoleBindingsS
 		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
+		AddAllowedTenants(auth.SharedTenant).
 		SetMetricsRegisterer(b.metricsRegisterer).
 		Build()
 	if err != nil {

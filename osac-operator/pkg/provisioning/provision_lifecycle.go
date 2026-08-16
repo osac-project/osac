@@ -483,15 +483,18 @@ func updateProvisionJobFromDeprovisionResultForTarget(jobs *[]v1alpha1.JobStatus
 	UpdateJob(*jobs, updatedJob)
 }
 
-// CheckAPIServerForNonTerminalDeprovisionJob reads the resource directly from
-// the API server and returns true if a non-terminal deprovision job exists.
-// This is the deprovisioning counterpart of CheckAPIServerForNonTerminalProvisionJob.
+// CheckAPIServerForNonTerminalDeprovisionJob reads the resource directly from the API server
+// and returns true if a non-terminal deprovision job exists. The extract parameter (a JobsExtractor)
+// determines which jobs array to check — each controller passes a typed extractor for its CRD.
 func CheckAPIServerForNonTerminalDeprovisionJob(ctx context.Context, apiReader client.Reader, key client.ObjectKey, fresh client.Object, extract JobsExtractor) bool {
 	return CheckAPIServerForNonTerminalDeprovisionJobAndTarget(ctx, apiReader, key, fresh, extract, "")
 }
 
 // CheckAPIServerForNonTerminalDeprovisionJobAndTarget is
-// CheckAPIServerForNonTerminalDeprovisionJob scoped to a single job target.
+// CheckAPIServerForNonTerminalDeprovisionJob scoped to a single job target —
+// required when populating DeprovisionTarget.CheckAPIServer for a non-"" target,
+// since the untargeted form only ever checks untagged (target == "") job
+// history.
 func CheckAPIServerForNonTerminalDeprovisionJobAndTarget(ctx context.Context, apiReader client.Reader, key client.ObjectKey, fresh client.Object, extract JobsExtractor, target string) bool {
 	log := ctrllog.FromContext(ctx)
 	if err := apiReader.Get(ctx, key, fresh); err != nil {

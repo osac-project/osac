@@ -431,16 +431,31 @@ var _ = Describe("Private identity providers server", func() {
 
 		Describe("Tenant Validation", func() {
 			It("Rejects creation when no tenant is specified and default tenant is invalid", func() {
-				tenancy.EXPECT().DetermineDefaultTenant(gomock.Any()).
+				// Build a server with a tenancy mock that returns SystemTenant as default,
+				// simulating an admin whose default tenant is a reserved tenant.
+				localTenancy := auth.NewMockTenancyLogic(ctrl)
+				localTenancy.EXPECT().DetermineAssignableTenants(gomock.Any()).
+					Return(auth.AllTenants, nil).
+					AnyTimes()
+				localTenancy.EXPECT().DetermineDefaultTenant(gomock.Any()).
 					Return(auth.SystemTenant, nil).
-					Times(1)
+					AnyTimes()
+				localTenancy.EXPECT().DetermineVisibleTenants(gomock.Any()).
+					Return(auth.AllTenants, nil).
+					AnyTimes()
+				localServer, err := NewPrivateIdentityProvidersServer().
+					SetLogger(logger).
+					SetAttributionLogic(attribution).
+					SetTenancyLogic(localTenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
 
 				// Use a dedicated transaction to verify the write is rolled back
 				createTx, err := tm.Begin(context.Background())
 				Expect(err).ToNot(HaveOccurred())
 				createCtx := database.TxIntoContext(context.Background(), createTx)
 
-				_, err = server.Create(createCtx, privatev1.IdentityProvidersCreateRequest_builder{
+				_, err = localServer.Create(createCtx, privatev1.IdentityProvidersCreateRequest_builder{
 					Object: privatev1.IdentityProvider_builder{
 						Metadata: privatev1.Metadata_builder{
 							Name: "test-oidc",
@@ -476,7 +491,7 @@ var _ = Describe("Private identity providers server", func() {
 					_ = verifyTx.End(verifyCtx)
 				})
 
-				listResp, err := server.List(verifyCtx, privatev1.IdentityProvidersListRequest_builder{
+				listResp, err := localServer.List(verifyCtx, privatev1.IdentityProvidersListRequest_builder{
 					Filter: new("this.metadata.name == 'test-oidc'"),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())

@@ -321,16 +321,31 @@ var _ = Describe("Private projects server", func() {
 		})
 
 		It("Rejects creation when no tenant is specified and default tenant is invalid", func() {
-			tenancy.EXPECT().DetermineDefaultTenant(gomock.Any()).
+			// Build a server with a tenancy mock that returns SystemTenant as default,
+			// simulating an admin whose default tenant is a reserved tenant.
+			localTenancy := auth.NewMockTenancyLogic(ctrl)
+			localTenancy.EXPECT().DetermineAssignableTenants(gomock.Any()).
+				Return(auth.AllTenants, nil).
+				AnyTimes()
+			localTenancy.EXPECT().DetermineDefaultTenant(gomock.Any()).
 				Return(auth.SystemTenant, nil).
-				Times(1)
+				AnyTimes()
+			localTenancy.EXPECT().DetermineVisibleTenants(gomock.Any()).
+				Return(auth.AllTenants, nil).
+				AnyTimes()
+			localServer, err := NewPrivateProjectsServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(localTenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
 
 			// Use a dedicated transaction to verify the write is rolled back
 			createTx, err := tm.Begin(context.Background())
 			Expect(err).ToNot(HaveOccurred())
 			createCtx := database.TxIntoContext(context.Background(), createTx)
 
-			_, err = privateServer.Create(createCtx, privatev1.ProjectsCreateRequest_builder{
+			_, err = localServer.Create(createCtx, privatev1.ProjectsCreateRequest_builder{
 				Object: privatev1.Project_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name: "my-project",
@@ -358,7 +373,7 @@ var _ = Describe("Private projects server", func() {
 				_ = verifyTx.End(verifyCtx)
 			})
 
-			listResp, err := privateServer.List(verifyCtx, privatev1.ProjectsListRequest_builder{
+			listResp, err := localServer.List(verifyCtx, privatev1.ProjectsListRequest_builder{
 				Filter: new("this.metadata.name == 'my-project'"),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())

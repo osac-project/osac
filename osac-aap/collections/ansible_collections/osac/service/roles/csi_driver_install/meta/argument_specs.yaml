@@ -4,25 +4,32 @@ argument_specs:
     short_description: OSAC CSI driver Helm chart install
     description: >
       Idempotently installs the OSAC CSI driver (csi-driver + csi-backends Helm
-      charts) once per storage_provider dispatch, regardless of how many
-      providers are configured in the dispatched tier list. Called from
-      osac.service.storage_provider's tasks/main.yaml — this role should not
-      be included directly from a playbook.
+      charts) once per hub-targeting storage playbook invocation, regardless
+      of how many providers are configured in the dispatched tier list. Called
+      directly from playbook_osac_create_tenant_storage_backend.yml and the
+      Tenant (hub) call site of playbook_osac_create_tenant_cluster_storage.yml
+      — deliberately not from osac.service.storage_provider's own dispatcher,
+      to keep storage_provider/tests/test.yml's zero-live-I/O validation
+      guarantee intact.
     options:
       _unique_providers:
         type: list
         elements: str
         required: true
         description: >
-          Provider names dispatched this call (e.g. ['vast']), as computed by
-          storage_provider/tasks/main.yaml's "Extract unique providers from
-          tier list" step.
+          Provider names referenced by the dispatched tier list (e.g.
+          ['vast']), computed by the calling playbook the same way
+          storage_provider/tasks/main.yaml's own "Extract unique providers
+          from tier list" step does.
       _storage_provider_tiers:
         type: list
         required: true
         description: >
-          The dispatcher's full, qos_policy-defaulted tier list. Used to
-          resolve which backend_id(s) belong to each dispatched provider.
+          The tier list for this dispatch (osac_job_vars.storage_tier_definitions
+          as received by the calling playbook). Only the provider and
+          backend_id fields are read — untouched by storage_provider's own
+          qos_policy derivation, so the raw, pre-derivation list is equivalent
+          for this role's purposes.
       storage_provider_backend_connections:
         type: dict
         required: false

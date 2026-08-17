@@ -106,11 +106,11 @@ jobs:
         echo "Nightly version: ${VERSION} (base: ${BASE_VERSION})"
 
     - name: Stamp and package sub-charts
-      # Repo root (not osac-installer/) — sub-charts live under component directories.
       env:
         NIGHTLY_SUFFIX: ${{ steps.version.outputs.nightly-suffix }}
       run: |
         set -euo pipefail
+        # Repo root (not osac-installer/) — sub-charts live under component directories.
         source osac-installer/scripts/lib.sh
 
         # Ensure target packaging directory exists
@@ -138,8 +138,9 @@ jobs:
             echo "::warning::Skipping ${COMPONENT} sub-charts — no ${COMPONENT}/vX.Y.Z release tag found yet"
             continue
           fi
-          BASE_VER="${BASE_TAG#${COMPONENT}/v}"
-          SUB_VERSION="${BASE_VER}-${NIGHTLY_SUFFIX}"
+          # Per-component base semver (independent of umbrella BASE_VERSION in the version step).
+          BASE_VERSION="${BASE_TAG#${COMPONENT}/v}"
+          SUB_VERSION="${BASE_VERSION}-${NIGHTLY_SUFFIX}"
 
           echo "Stamping ${COMPONENT} sub-charts to version ${SUB_VERSION} (from tag ${BASE_TAG})..."
 

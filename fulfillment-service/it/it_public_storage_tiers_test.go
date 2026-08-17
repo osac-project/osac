@@ -77,13 +77,12 @@ var _ = Describe("Public storage tiers", func() {
 				}.Build(),
 				Spec: privatev1.StorageTierSpec_builder{
 					Description: "Public IT test storage tier.",
+					Protocol:    protocol,
 					Backends: []*privatev1.BackendAssociation{
 						privatev1.BackendAssociation_builder{
 							BackendId:            privateBackendID,
-							Protocol:             protocol,
 							MaxReadBandwidthMbs:  1000,
 							MaxWriteBandwidthMbs: 500,
-							QuotaGib:             1024,
 							EncryptionEnabled:    true,
 						}.Build(),
 					},
@@ -124,7 +123,6 @@ var _ = Describe("Public storage tiers", func() {
 		Expect(object.GetSpec().GetProtocol()).To(Equal(publicv1.StorageProtocol_STORAGE_PROTOCOL_NFS))
 		Expect(object.GetSpec().GetMaxReadBandwidthMbs()).To(Equal(int32(1000)))
 		Expect(object.GetSpec().GetMaxWriteBandwidthMbs()).To(Equal(int32(500)))
-		Expect(object.GetSpec().GetQuotaGib()).To(Equal(int64(1024)))
 		Expect(object.GetSpec().GetEncryptionEnabled()).To(BeTrue())
 		Expect(object.GetStatus().GetState()).To(Equal(publicv1.StorageTierState_STORAGE_TIER_STATE_ACTIVE))
 	})
@@ -203,7 +201,7 @@ var _ = Describe("Public storage tiers", func() {
 	It("Rejects a filter referencing a field at a private-mismatched path", func() {
 		createViaPrivate("mismatch", privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS)
 
-		filter := "this.spec.protocol == 1"
+		filter := "this.spec.max_read_bandwidth_mbs == 1000"
 		_, err := publicClient.List(ctx, publicv1.StorageTiersListRequest_builder{
 			Filter: &filter,
 		}.Build())
@@ -211,6 +209,19 @@ var _ = Describe("Public storage tiers", func() {
 		status, ok := grpcstatus.FromError(err)
 		Expect(ok).To(BeTrue())
 		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+	})
+
+	It("Filters storage tiers by protocol now that the path is shared with the private schema", func() {
+		id1 := createViaPrivate("protocol1", privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS)
+		createViaPrivate("protocol2", privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK)
+
+		filter := "this.metadata.name.contains('protocol') && this.spec.protocol == 1"
+		response, err := publicClient.List(ctx, publicv1.StorageTiersListRequest_builder{
+			Filter: &filter,
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(response.GetItems()).To(HaveLen(1))
+		Expect(response.GetItems()[0].GetId()).To(Equal(id1))
 	})
 
 	It("Passes through a tier with UNSPECIFIED protocol as-is (BUG-005 current behavior)", func() {

@@ -23,7 +23,9 @@ documentation:
   fulfillment service.
 
 See each subdirectory's `README.md` (and `docs/`, where present) for setup, build, test, and
-deployment instructions specific to that component.
+deployment instructions specific to that component. This repo's own top-level
+**[docs/](docs/README.md)** holds hand-trimmed cross-component architecture and
+conventions content that doesn't belong in any single component's docs.
 
 ## Local development with go.work
 

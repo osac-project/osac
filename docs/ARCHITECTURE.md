@@ -23,11 +23,26 @@ section.
 
 **Resource Provisioning (Fulfillment to Operator):**
 
-1. Controller polls or watches fulfillment service via Reconciler
-2. Reconciler calls GetCluster with filter/watch expressions
-3. Fulfillment service returns resource with current status
-4. Controller reconciles spec vs status (checks conditions)
-5. If action needed, controller triggers provisioning provider
+This spans two separate control loops in two separate processes/binaries —
+fulfillment-service's internal reconciler projects DB state into a
+Kubernetes CR; osac-operator's controller-runtime controller, watching that
+CR independently, is what actually drives provisioning:
+
+1. fulfillment-service's own internal `Controller (Fulfillment)` (a
+   separate process from the gRPC/REST servers) polls its own private API
+   via the generic `Reconciler[O]` framework (`internal/controllers/reconciler.go`)
+2. The reconciler calls the resource type's generic `Get`/`List` RPC
+   (discovered via protobuf reflection — not a resource-specific method
+   like `GetCluster`) with filter/watch expressions
+3. Fulfillment service returns the resource with its current DB-backed
+   spec/status; the reconciler's per-resource task then creates or patches
+   the corresponding Kubernetes custom resource on the hub cluster (e.g.,
+   `cluster`'s task builds and applies a `ClusterOrder` CR) — this is the
+   boundary between the two control loops
+4. Separately, osac-operator's Kubernetes controller (controller-runtime,
+   a different binary/process — see Operator Controllers below) watches
+   that CR and reconciles spec vs status (checks conditions)
+5. If action needed, the operator controller triggers a provisioning provider
 6. Provider (AAP) executes Ansible jobs or webhooks
 
 **Provisioning Feedback (Operator to Fulfillment):**
@@ -82,7 +97,7 @@ section.
 
 **Operator Controllers (osac-operator):**
 - Location: `osac-operator/internal/controller/`
-- Pattern: Most resource types have a primary controller and a feedback controller, both built on a shared generic `feedback.Bridge[T,R]` abstraction. Most feedback controllers get their own dedicated, per-resource-named file (e.g., `computeinstance_controller.go` + `computeinstance_feedback_controller.go`). `ClusterOrder` also has both — its feedback controller (type `FeedbackReconciler`, registered as `clusterorder-feedback`, sends the real gRPC `Signal` RPC to fulfillment-service) predates that per-resource naming convention and lives in the generically-named `feedback_controller.go` instead of a `clusterorder_feedback_controller.go` file; `clusterorder_controller.go`'s own `Status().Patch` call is a separate, in-cluster Kubernetes status write, not the feedback signal. True exceptions to the pairing itself: BaremetalInstance has a feedback controller only (no primary controller file in this package); Storage has a standalone controller with no feedback pair.
+- Pattern: Most resource types have a primary controller and a feedback controller, both built on a shared generic `feedback.Bridge[T,R]` abstraction. Most feedback controllers get their own dedicated, per-resource-named file (e.g., `computeinstance_controller.go` + `computeinstance_feedback_controller.go`). `ClusterOrder` also has both — its feedback controller (type `FeedbackReconciler`, registered as `clusterorder-feedback`, sends the real gRPC `Signal` RPC to fulfillment-service) predates that per-resource naming convention and lives in the generically-named `feedback_controller.go` instead of a `clusterorder_feedback_controller.go` file; `clusterorder_controller.go`'s own `Status().Patch` call is a separate, in-cluster Kubernetes status write, not the feedback signal. Notable exceptions to the pairing itself, verified directly against every `Named(...)` controller registration in the package (not necessarily exhaustive if new controllers are added later): BaremetalInstance has a feedback controller only (no primary controller file in this package); Storage, Tenant, and NetworkClassCapabilities each have a standalone primary controller with no feedback pair.
 - See `osac-operator/AGENTS.md`'s "Resources Managed" and "Dual-Controller Pattern" sections for the per-resource-type controller list and behavior.
 - Triggers: Resource created/updated in Kubernetes or fulfillment service
 - Responsibilities: Reconcile spec vs status, trigger provisioning providers, send feedback signals

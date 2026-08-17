@@ -67,7 +67,9 @@ var _ = Describe("SecurityGroupReconciler", func() {
 		Expect(osacv1alpha1.AddToScheme(testScheme)).To(Succeed())
 		Expect(scheme.AddToScheme(testScheme)).To(Succeed())
 
-		// Create parent VirtualNetwork fixture with ImplementationStrategy
+		// Create parent VirtualNetwork fixture. SecurityGroupReconciler only reads the
+		// parent's Spec.NetworkClass (to resolve a dispatch plan); it never reads a
+		// VirtualNetwork-level implementation strategy.
 		vnet = &osacv1alpha1.VirtualNetwork{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "test-vnet",
@@ -77,9 +79,8 @@ var _ = Describe("SecurityGroupReconciler", func() {
 				},
 			},
 			Spec: osacv1alpha1.VirtualNetworkSpec{
-				Region:                 "us-west-1",
-				NetworkClass:           "cudn-net",
-				ImplementationStrategy: "cudn-net",
+				Region:       "us-west-1",
+				NetworkClass: "cudn-net",
 			},
 		}
 
@@ -767,31 +768,6 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			Expect(err).To(HaveOccurred())
 		})
 
-		It("returns a reconcile error when multiple VirtualNetworks share the parent uuid label", func() {
-			// Create a second VirtualNetwork with the same osacVirtualNetworkIDLabel as
-			// the fixture "vnet" created in BeforeEach, simulating an ambiguous parent lookup.
-			duplicateVnet := &osacv1alpha1.VirtualNetwork{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-vnet-duplicate",
-					Namespace: "test-namespace",
-					Labels: map[string]string{
-						osacVirtualNetworkIDLabel: "test-vnet-uuid",
-					},
-				},
-				Spec: osacv1alpha1.VirtualNetworkSpec{
-					Region:                 "us-west-1",
-					NetworkClass:           "cudn-net",
-					ImplementationStrategy: "cudn-net",
-				},
-			}
-			Expect(fakeClient.Create(ctx, duplicateVnet)).To(Succeed())
-
-			key := types.NamespacedName{Name: sg.Name, Namespace: sg.Namespace}
-			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("expected exactly one parent VirtualNetwork"))
-		})
-
 		It("falls back to legacy strategy when the parent VirtualNetwork cannot be found", func() {
 			disc, err := networkmanager.NewDiscovery(fakeClient, "test-namespace")
 			Expect(err).NotTo(HaveOccurred())
@@ -835,9 +811,8 @@ var _ = Describe("SecurityGroupReconciler", func() {
 					},
 				},
 				Spec: osacv1alpha1.VirtualNetworkSpec{
-					Region:                 "us-west-1",
-					NetworkClass:           "cudn-net",
-					ImplementationStrategy: "cudn-net",
+					Region:       "us-west-1",
+					NetworkClass: "cudn-net",
 				},
 			}
 			Expect(fakeClient.Create(ctx, duplicateVnet)).To(Succeed())
@@ -848,6 +823,7 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			// (unlike VirtualNetwork/Subnet, finalizer-add doesn't return early here).
 			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("expected exactly one parent VirtualNetwork"))
 		})
 	})
 

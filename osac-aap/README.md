@@ -90,11 +90,13 @@ osac-aap/
 
 ### Key design pattern
 
-Every template role declares its capabilities in `meta/osac.yaml`:
+Every template role declares its capabilities in `meta/osac.yaml`. Network
+roles identify themselves via `fabric_manager`/`k8s_manager` (the dispatcher's
+routing keys); other template types still use `implementation_strategy`:
 
 ```yaml
 template_type: network
-implementation_strategy: cudn_net
+fabric_manager: cudn_net
 capabilities:
   supports_ipv4: true
   supports_ipv6: true

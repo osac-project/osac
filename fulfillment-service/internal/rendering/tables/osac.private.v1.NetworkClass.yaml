@@ -28,5 +28,8 @@ columns:
 - header: DEFAULT
   value: "has(this.is_default) && this.is_default? 'yes': '-'"
 
-- header: STRATEGY
-  value: this.implementation_strategy
+- header: FABRIC-MANAGER
+  value: "has(this.fabric_manager)? this.fabric_manager: '-'"
+
+- header: K8S-MANAGER
+  value: "has(this.k8s_manager)? this.k8s_manager: '-'"

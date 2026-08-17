@@ -45,17 +45,15 @@ var _ = Describe("buildSpec", func() {
 		ipv6 := "2001:db8::/48"
 		region := "us-east-1"
 		networkClass := "cudn-net"
-		implementationStrategy := "cudn"
 
 		task := &task{
 			virtualNetwork: privatev1.VirtualNetwork_builder{
 				Id: "vnet-test-123",
 				Spec: privatev1.VirtualNetworkSpec_builder{
-					Region:                 region,
-					NetworkClass:           privatev1.NetworkClassReference_builder{Name: networkClass}.Build(),
-					ImplementationStrategy: implementationStrategy,
-					Ipv4Cidr:               &ipv4,
-					Ipv6Cidr:               &ipv6,
+					Region:       region,
+					NetworkClass: privatev1.NetworkClassReference_builder{Name: networkClass}.Build(),
+					Ipv4Cidr:     &ipv4,
+					Ipv6Cidr:     &ipv6,
 				}.Build(),
 			}.Build(),
 		}
@@ -64,7 +62,6 @@ var _ = Describe("buildSpec", func() {
 
 		Expect(spec.Region).To(Equal(region))
 		Expect(spec.NetworkClass).To(Equal(networkClass))
-		Expect(spec.ImplementationStrategy).To(Equal(implementationStrategy))
 		Expect(spec.IPv4CIDR).To(Equal(ipv4))
 		Expect(spec.IPv6CIDR).To(Equal(ipv6))
 	})
@@ -73,16 +70,14 @@ var _ = Describe("buildSpec", func() {
 		ipv4 := "192.168.0.0/16"
 		region := "eu-west-1"
 		networkClass := "phys-net"
-		implementationStrategy := "physnet"
 
 		task := &task{
 			virtualNetwork: privatev1.VirtualNetwork_builder{
 				Id: "vnet-test-456",
 				Spec: privatev1.VirtualNetworkSpec_builder{
-					Region:                 region,
-					NetworkClass:           privatev1.NetworkClassReference_builder{Name: networkClass}.Build(),
-					ImplementationStrategy: implementationStrategy,
-					Ipv4Cidr:               &ipv4,
+					Region:       region,
+					NetworkClass: privatev1.NetworkClassReference_builder{Name: networkClass}.Build(),
+					Ipv4Cidr:     &ipv4,
 				}.Build(),
 			}.Build(),
 		}
@@ -91,7 +86,6 @@ var _ = Describe("buildSpec", func() {
 
 		Expect(spec.Region).To(Equal(region))
 		Expect(spec.NetworkClass).To(Equal(networkClass))
-		Expect(spec.ImplementationStrategy).To(Equal(implementationStrategy))
 		Expect(spec.IPv4CIDR).To(Equal(ipv4))
 		Expect(spec.IPv6CIDR).To(BeEmpty())
 	})
@@ -100,16 +94,14 @@ var _ = Describe("buildSpec", func() {
 		ipv6 := "fd00:1234::/32"
 		region := "ap-south-1"
 		networkClass := "ovn-kubernetes"
-		implementationStrategy := "ovn"
 
 		task := &task{
 			virtualNetwork: privatev1.VirtualNetwork_builder{
 				Id: "vnet-test-789",
 				Spec: privatev1.VirtualNetworkSpec_builder{
-					Region:                 region,
-					NetworkClass:           privatev1.NetworkClassReference_builder{Name: networkClass}.Build(),
-					ImplementationStrategy: implementationStrategy,
-					Ipv6Cidr:               &ipv6,
+					Region:       region,
+					NetworkClass: privatev1.NetworkClassReference_builder{Name: networkClass}.Build(),
+					Ipv6Cidr:     &ipv6,
 				}.Build(),
 			}.Build(),
 		}
@@ -118,7 +110,6 @@ var _ = Describe("buildSpec", func() {
 
 		Expect(spec.Region).To(Equal(region))
 		Expect(spec.NetworkClass).To(Equal(networkClass))
-		Expect(spec.ImplementationStrategy).To(Equal(implementationStrategy))
 		Expect(spec.IPv4CIDR).To(BeEmpty())
 		Expect(spec.IPv6CIDR).To(Equal(ipv6))
 	})
@@ -127,16 +118,14 @@ var _ = Describe("buildSpec", func() {
 		ipv4 := "172.16.0.0/12"
 		region := "us-west-2"
 		networkClass := "cudn-net"
-		implementationStrategy := "cudn"
 
 		task := &task{
 			virtualNetwork: privatev1.VirtualNetwork_builder{
 				Id: "vnet-test-no-caps",
 				Spec: privatev1.VirtualNetworkSpec_builder{
-					Region:                 region,
-					NetworkClass:           privatev1.NetworkClassReference_builder{Name: networkClass}.Build(),
-					ImplementationStrategy: implementationStrategy,
-					Ipv4Cidr:               &ipv4,
+					Region:       region,
+					NetworkClass: privatev1.NetworkClassReference_builder{Name: networkClass}.Build(),
+					Ipv4Cidr:     &ipv4,
 				}.Build(),
 			}.Build(),
 		}
@@ -145,7 +134,6 @@ var _ = Describe("buildSpec", func() {
 
 		Expect(spec.Region).To(Equal(region))
 		Expect(spec.NetworkClass).To(Equal(networkClass))
-		Expect(spec.ImplementationStrategy).To(Equal(implementationStrategy))
 		Expect(spec.IPv4CIDR).To(Equal(ipv4))
 	})
 })

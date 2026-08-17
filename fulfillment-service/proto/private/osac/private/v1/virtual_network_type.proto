@@ -67,9 +67,9 @@ message VirtualNetworkSpec {
   // The NetworkClass for this VirtualNetwork. If omitted on creation, the default NetworkClass is used.
   // Once set (either explicitly or via default), this field is immutable.
   //
-  // The selected NetworkClass determines the network backend (implementation_strategy) and the available
-  // capabilities. The NetworkClass must support the IP addressing mode implied by whichever of ipv4_cidr
-  // and ipv6_cidr are set below.
+  // The selected NetworkClass determines the network backend (via its fabric_manager/k8s_manager) and the
+  // available capabilities. The NetworkClass must support the IP addressing mode implied by whichever of
+  // ipv4_cidr and ipv6_cidr are set below.
   NetworkClassReference network_class = 2 [
     (google.api.field_behavior) = OPTIONAL,
     (google.api.field_behavior) = IMMUTABLE
@@ -96,22 +96,8 @@ message VirtualNetworkSpec {
   optional string ipv6_cidr = 4 [(google.api.field_behavior) = IMMUTABLE];
 
   // Reserved field numbers for removed fields (do not reuse).
-  reserved 5;
-  reserved "capabilities";
-
-  // Implementation strategy for provisioning this network.
-  //
-  // This determines the underlying network backend and Ansible role to use (e.g., "cudn" uses cudn_virtual_network
-  // role). The value is derived from the NetworkClass at creation time and stored here for direct access by
-  // controllers and provisioning systems.
-  //
-  // This field is set by the system based on the selected network_class and is immutable after creation.
-  //
-  // Example: "cudn", "physnet", "ovn"
-  string implementation_strategy = 6 [
-    (google.api.field_behavior) = OUTPUT_ONLY,
-    (google.api.field_behavior) = IMMUTABLE
-  ];
+  reserved 5, 6;
+  reserved "capabilities", "implementation_strategy";
 }
 
 // Represents the current operational state of a VirtualNetwork.

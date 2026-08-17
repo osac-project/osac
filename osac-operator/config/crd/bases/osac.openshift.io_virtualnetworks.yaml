@@ -51,15 +51,6 @@ spec:
           spec:
             description: spec defines the desired state of VirtualNetwork
             properties:
-              implementationStrategy:
-                description: |-
-                  ImplementationStrategy determines the underlying network backend and Ansible role to use.
-                  This value is derived from the NetworkClass at creation time and stored here for direct
-                  access by controllers and provisioning systems.
-                type: string
-                x-kubernetes-validations:
-                - message: implementationStrategy is immutable
-                  rule: self == oldSelf
               ipv4Cidr:
                 description: IPv4CIDR is the IPv4 CIDR block for this virtual network
                 type: string

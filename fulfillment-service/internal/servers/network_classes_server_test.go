@@ -86,8 +86,8 @@ var _ = Describe("Network classes server", func() {
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 
-			// Create a private server for test data setup (private API requires
-			// implementation_strategy which is not exposed in public API):
+			// Create a private server for test data setup (private API accepts
+			// fabric_manager/k8s_manager which are not exposed in public API):
 			privateServer, err = NewPrivateNetworkClassesServer().
 				SetLogger(logger).
 				SetAttributionLogic(attribution).
@@ -97,14 +97,13 @@ var _ = Describe("Network classes server", func() {
 		})
 
 		// createNetworkClass creates a NetworkClass via the private server (which accepts
-		// implementation_strategy) and returns the created object.
+		// fabric_manager/k8s_manager) and returns the created object.
 		createNetworkClass := func() *privatev1.NetworkClass {
 			response, err := privateServer.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 				Object: privatev1.NetworkClass_builder{
-					Metadata:               privatev1.Metadata_builder{Name: fmt.Sprintf("test-nc-%s", uuid.NewString()[:8])}.Build(),
-					Title:                  "Test Network Class",
-					ImplementationStrategy: fmt.Sprintf("ovn-%s", uuid.NewString()[:8]),
-					FabricManager:          new("netris"),
+					Metadata:      privatev1.Metadata_builder{Name: fmt.Sprintf("test-nc-%s", uuid.NewString()[:8])}.Build(),
+					Title:         "Test Network Class",
+					FabricManager: new("netris"),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -115,11 +114,10 @@ var _ = Describe("Network classes server", func() {
 		createDefaultNetworkClass := func() *privatev1.NetworkClass {
 			response, err := privateServer.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 				Object: privatev1.NetworkClass_builder{
-					Metadata:               privatev1.Metadata_builder{Name: fmt.Sprintf("test-default-nc-%s", uuid.NewString()[:8])}.Build(),
-					Title:                  "Default Network Class",
-					ImplementationStrategy: fmt.Sprintf("ovn-%s", uuid.NewString()[:8]),
-					FabricManager:          new("netris"),
-					IsDefault:              new(true),
+					Metadata:      privatev1.Metadata_builder{Name: fmt.Sprintf("test-default-nc-%s", uuid.NewString()[:8])}.Build(),
+					Title:         "Default Network Class",
+					FabricManager: new("netris"),
+					IsDefault:     new(true),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -267,11 +265,10 @@ var _ = Describe("Network classes server", func() {
 			callerProvidedId := "my-custom-id"
 			response, err := privateServer.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 				Object: privatev1.NetworkClass_builder{
-					Id:                     callerProvidedId,
-					Metadata:               privatev1.Metadata_builder{Name: "test-nc"}.Build(),
-					Title:                  "Test Network Class",
-					ImplementationStrategy: "ovn-kubernetes",
-					FabricManager:          new("netris"),
+					Id:            callerProvidedId,
+					Metadata:      privatev1.Metadata_builder{Name: "test-nc"}.Build(),
+					Title:         "Test Network Class",
+					FabricManager: new("netris"),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -489,10 +486,9 @@ var _ = Describe("Network classes server", func() {
 
 				createResponseA, ncErr := ncDao.Create().
 					SetObject(privatev1.NetworkClass_builder{
-						Title:                  "NC-A",
-						ImplementationStrategy: "ovn-kubernetes",
-						FabricManager:          new("netris"),
-						IsDefault:              new(true),
+						Title:         "NC-A",
+						FabricManager: new("netris"),
+						IsDefault:     new(true),
 						Metadata: privatev1.Metadata_builder{
 							Name:   "test-nc-a",
 							Tenant: auth.SharedTenant,
@@ -507,10 +503,9 @@ var _ = Describe("Network classes server", func() {
 
 				createResponseB, ncErr := ncDao.Create().SetObject(
 					privatev1.NetworkClass_builder{
-						Title:                  "NC-B",
-						ImplementationStrategy: "ovn-kubernetes",
-						FabricManager:          new("netris"),
-						IsDefault:              new(true),
+						Title:         "NC-B",
+						FabricManager: new("netris"),
+						IsDefault:     new(true),
 						Metadata: privatev1.Metadata_builder{
 							Name:   "test-nc-b",
 							Tenant: auth.SharedTenant,
@@ -587,10 +582,9 @@ var _ = Describe("Network classes server", func() {
 				// Create a NC where dual_stack is validly supported (both ipv4 and ipv6 true):
 				response, err := privateServer.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
-						Metadata:               privatev1.Metadata_builder{Name: "test-nc"}.Build(),
-						Title:                  "NC with capabilities",
-						ImplementationStrategy: "ovn-kubernetes",
-						FabricManager:          new("netris"),
+						Metadata:      privatev1.Metadata_builder{Name: "test-nc"}.Build(),
+						Title:         "NC with capabilities",
+						FabricManager: new("netris"),
 						Capabilities: privatev1.NetworkClassCapabilities_builder{
 							SupportsIpv4:      true,
 							SupportsIpv6:      true,
@@ -611,11 +605,10 @@ var _ = Describe("Network classes server", func() {
 				// let this invalid update pass validation.
 				_, err = privateServer.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
-						Id:                     nc.GetId(),
-						Title:                  nc.GetTitle(),
-						Metadata:               privatev1.Metadata_builder{Name: name}.Build(),
-						ImplementationStrategy: nc.GetImplementationStrategy(),
-						FabricManager:          new(nc.GetFabricManager()),
+						Id:            nc.GetId(),
+						Title:         nc.GetTitle(),
+						Metadata:      privatev1.Metadata_builder{Name: name}.Build(),
+						FabricManager: new(nc.GetFabricManager()),
 						Capabilities: privatev1.NetworkClassCapabilities_builder{
 							SupportsDualStack: true,
 						}.Build(),
@@ -683,10 +676,9 @@ var _ = Describe("Network classes server", func() {
 				Expect(ncErr).ToNot(HaveOccurred())
 
 				ncA := privatev1.NetworkClass_builder{
-					Title:                  "NC-A",
-					ImplementationStrategy: "ovn-kubernetes",
-					FabricManager:          new("netris"),
-					IsDefault:              new(true),
+					Title:         "NC-A",
+					FabricManager: new("netris"),
+					IsDefault:     new(true),
 					Metadata: privatev1.Metadata_builder{
 						Name:   "test-nc-a",
 						Tenant: auth.SharedTenant,
@@ -731,10 +723,9 @@ var _ = Describe("Network classes server", func() {
 				Expect(ncErr).ToNot(HaveOccurred())
 
 				ncA := privatev1.NetworkClass_builder{
-					Title:                  "NC-A",
-					ImplementationStrategy: "ovn-kubernetes",
-					FabricManager:          new("netris"),
-					IsDefault:              new(true),
+					Title:         "NC-A",
+					FabricManager: new("netris"),
+					IsDefault:     new(true),
 					Metadata: privatev1.Metadata_builder{
 						Name:   "test-nc-a",
 						Tenant: auth.SharedTenant,
@@ -748,10 +739,9 @@ var _ = Describe("Network classes server", func() {
 
 				// Second default NC via DAO should fail with unique violation:
 				ncB := privatev1.NetworkClass_builder{
-					Title:                  "NC-B",
-					ImplementationStrategy: "ovn-kubernetes",
-					FabricManager:          new("netris"),
-					IsDefault:              new(true),
+					Title:         "NC-B",
+					FabricManager: new("netris"),
+					IsDefault:     new(true),
 					Metadata: privatev1.Metadata_builder{
 						Name:   "test-nc-b",
 						Tenant: auth.SharedTenant,
@@ -778,10 +768,9 @@ var _ = Describe("Network classes server", func() {
 				/// works correctly.
 				ncDeletedResponse, err := ncDao.Create().
 					SetObject(privatev1.NetworkClass_builder{
-						Title:                  "Deleted Default",
-						ImplementationStrategy: "ovn-kubernetes",
-						FabricManager:          new("netris"),
-						IsDefault:              new(true),
+						Title:         "Deleted Default",
+						FabricManager: new("netris"),
+						IsDefault:     new(true),
 						Metadata: privatev1.Metadata_builder{
 							Name:       "test-nc-deleted",
 							Finalizers: []string{"a"},
@@ -801,10 +790,9 @@ var _ = Describe("Network classes server", func() {
 				// Create another default network class:
 				ncActiveResponse, err := ncDao.Create().
 					SetObject(privatev1.NetworkClass_builder{
-						Title:                  "Active Default",
-						ImplementationStrategy: "ovn-kubernetes",
-						FabricManager:          new("netris"),
-						IsDefault:              new(true),
+						Title:         "Active Default",
+						FabricManager: new("netris"),
+						IsDefault:     new(true),
 						Metadata: privatev1.Metadata_builder{
 							Name:   "test-nc-active",
 							Tenant: auth.SharedTenant,
@@ -849,10 +837,9 @@ var _ = Describe("Network classes server", func() {
 			It("Create with fabric_manager persists the value", func() {
 				response, err := privateServer.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
-						Metadata:               privatev1.Metadata_builder{Name: "test-nc"}.Build(),
-						Title:                  "NC with fabric manager",
-						ImplementationStrategy: "ovn-kubernetes",
-						FabricManager:          new("netris"),
+						Metadata:      privatev1.Metadata_builder{Name: "test-nc"}.Build(),
+						Title:         "NC with fabric manager",
+						FabricManager: new("netris"),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -868,9 +855,8 @@ var _ = Describe("Network classes server", func() {
 			It("Create with neither fabric_manager nor k8s_manager fails", func() {
 				_, err := privateServer.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
-						Metadata:               privatev1.Metadata_builder{Name: "test-nc"}.Build(),
-						Title:                  "NC without any manager",
-						ImplementationStrategy: "ovn-kubernetes",
+						Metadata: privatev1.Metadata_builder{Name: "test-nc"}.Build(),
+						Title:    "NC without any manager",
 					}.Build(),
 				}.Build())
 				Expect(err).To(HaveOccurred())
@@ -881,9 +867,8 @@ var _ = Describe("Network classes server", func() {
 			It("Create with explicitly empty fabric_manager and no k8s_manager fails", func() {
 				_, err := privateServer.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
-						Title:                  "NC with empty fabric manager",
-						ImplementationStrategy: "ovn-kubernetes",
-						FabricManager:          new(""),
+						Title:         "NC with empty fabric manager",
+						FabricManager: new(""),
 					}.Build(),
 				}.Build())
 				Expect(err).To(HaveOccurred())
@@ -894,10 +879,9 @@ var _ = Describe("Network classes server", func() {
 			It("Create with explicitly empty fabric_manager and k8s_manager fails", func() {
 				_, err := privateServer.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
-						Title:                  "NC with both managers empty",
-						ImplementationStrategy: "ovn-kubernetes",
-						FabricManager:          new(""),
-						K8SManager:             new(""),
+						Title:         "NC with both managers empty",
+						FabricManager: new(""),
+						K8SManager:    new(""),
 					}.Build(),
 				}.Build())
 				Expect(err).To(HaveOccurred())
@@ -908,9 +892,8 @@ var _ = Describe("Network classes server", func() {
 			It("Create without fabric_manager but with k8s_manager succeeds", func() {
 				response, err := privateServer.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
-						Title:                  "NC k8s-only",
-						ImplementationStrategy: "ovn-kubernetes",
-						K8SManager:             new("cudn_localnet"),
+						Title:      "NC k8s-only",
+						K8SManager: new("cudn_localnet"),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -921,11 +904,10 @@ var _ = Describe("Network classes server", func() {
 			It("Create with k8s_manager persists the value", func() {
 				response, err := privateServer.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
-						Metadata:               privatev1.Metadata_builder{Name: "test-nc"}.Build(),
-						Title:                  "NC with k8s manager",
-						ImplementationStrategy: "ovn-kubernetes",
-						FabricManager:          new("netris"),
-						K8SManager:             new("cudn_localnet"),
+						Metadata:      privatev1.Metadata_builder{Name: "test-nc"}.Build(),
+						Title:         "NC with k8s manager",
+						FabricManager: new("netris"),
+						K8SManager:    new("cudn_localnet"),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -941,10 +923,9 @@ var _ = Describe("Network classes server", func() {
 			It("Create without k8s_manager succeeds", func() {
 				response, err := privateServer.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
-						Metadata:               privatev1.Metadata_builder{Name: "test-nc"}.Build(),
-						Title:                  "NC without k8s manager",
-						ImplementationStrategy: "ovn-kubernetes",
-						FabricManager:          new("netris"),
+						Metadata:      privatev1.Metadata_builder{Name: "test-nc"}.Build(),
+						Title:         "NC without k8s manager",
+						FabricManager: new("netris"),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -990,9 +971,8 @@ var _ = Describe("Network classes server", func() {
 				// Create a k8s-only NC (no fabric_manager):
 				response, err := privateServer.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
-						Title:                  "NC gaining a fabric manager",
-						ImplementationStrategy: "ovn-kubernetes",
-						K8SManager:             new("cudn_localnet"),
+						Title:      "NC gaining a fabric manager",
+						K8SManager: new("cudn_localnet"),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -1016,11 +996,10 @@ var _ = Describe("Network classes server", func() {
 			It("Update changing k8s_manager fails with immutability error", func() {
 				response, err := privateServer.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
-						Metadata:               privatev1.Metadata_builder{Name: "test-nc"}.Build(),
-						Title:                  "NC for k8s update",
-						ImplementationStrategy: "ovn-kubernetes",
-						FabricManager:          new("netris"),
-						K8SManager:             new("cudn_localnet"),
+						Metadata:      privatev1.Metadata_builder{Name: "test-nc"}.Build(),
+						Title:         "NC for k8s update",
+						FabricManager: new("netris"),
+						K8SManager:    new("cudn_localnet"),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -1042,11 +1021,10 @@ var _ = Describe("Network classes server", func() {
 			It("Update with field mask preserves unmasked manager fields", func() {
 				response, err := privateServer.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
-						Metadata:               privatev1.Metadata_builder{Name: "test-nc"}.Build(),
-						Title:                  "NC for mask test",
-						ImplementationStrategy: "ovn-kubernetes",
-						FabricManager:          new("netris"),
-						K8SManager:             new("cudn_localnet"),
+						Metadata:      privatev1.Metadata_builder{Name: "test-nc"}.Build(),
+						Title:         "NC for mask test",
+						FabricManager: new("netris"),
+						K8SManager:    new("cudn_localnet"),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -1098,6 +1076,43 @@ var _ = Describe("Network classes server", func() {
 			})
 		})
 
+		Describe("Name derivation", func() {
+			It("Auto-derives metadata.name from fabric_manager when name is omitted", func() {
+				response, err := privateServer.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
+					Object: privatev1.NetworkClass_builder{
+						Title:         "NC without explicit name",
+						FabricManager: new("netris"),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetMetadata().GetName()).To(Equal("netris"))
+			})
+
+			It("Auto-derives metadata.name from k8s_manager when fabric_manager is absent", func() {
+				response, err := privateServer.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
+					Object: privatev1.NetworkClass_builder{
+						Title:      "NC k8s-only without explicit name",
+						K8SManager: new("cudn_localnet"),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				// toDNSLabel replaces underscores with hyphens.
+				Expect(response.GetObject().GetMetadata().GetName()).To(Equal("cudn-localnet"))
+			})
+
+			It("Does not override an explicitly-provided metadata.name", func() {
+				response, err := privateServer.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
+					Object: privatev1.NetworkClass_builder{
+						Metadata:      privatev1.Metadata_builder{Name: "explicit-name"}.Build(),
+						Title:         "NC with explicit name",
+						FabricManager: new("netris"),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetMetadata().GetName()).To(Equal("explicit-name"))
+			})
+		})
+
 		Describe("Defaults", func() {
 			validDefaults := func() *privatev1.NetworkDefaults {
 				return privatev1.NetworkDefaults_builder{
@@ -1123,11 +1138,10 @@ var _ = Describe("Network classes server", func() {
 			createNetworkClassWithDefaults := func(defaults *privatev1.NetworkDefaults) *privatev1.NetworkClass {
 				response, err := privateServer.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
-						Metadata:               privatev1.Metadata_builder{Name: "test-nc"}.Build(),
-						Title:                  "NC with defaults",
-						ImplementationStrategy: "ovn-kubernetes",
-						FabricManager:          new("netris"),
-						Spec:                   privatev1.NetworkClassSpec_builder{Defaults: defaults}.Build(),
+						Metadata:      privatev1.Metadata_builder{Name: "test-nc"}.Build(),
+						Title:         "NC with defaults",
+						FabricManager: new("netris"),
+						Spec:          privatev1.NetworkClassSpec_builder{Defaults: defaults}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -1245,11 +1259,10 @@ var _ = Describe("Network classes server", func() {
 				}.Build()
 				_, err := privateServer.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
-						Metadata:               privatev1.Metadata_builder{Name: "test-nc"}.Build(),
-						Title:                  "NC invalid VN CIDR",
-						ImplementationStrategy: "ovn-kubernetes",
-						FabricManager:          new("netris"),
-						Spec:                   privatev1.NetworkClassSpec_builder{Defaults: defaults}.Build(),
+						Metadata:      privatev1.Metadata_builder{Name: "test-nc"}.Build(),
+						Title:         "NC invalid VN CIDR",
+						FabricManager: new("netris"),
+						Spec:          privatev1.NetworkClassSpec_builder{Defaults: defaults}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).To(HaveOccurred())
@@ -1263,11 +1276,10 @@ var _ = Describe("Network classes server", func() {
 				}.Build()
 				_, err := privateServer.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
-						Metadata:               privatev1.Metadata_builder{Name: "test-nc"}.Build(),
-						Title:                  "NC invalid subnet CIDR",
-						ImplementationStrategy: "ovn-kubernetes",
-						FabricManager:          new("netris"),
-						Spec:                   privatev1.NetworkClassSpec_builder{Defaults: defaults}.Build(),
+						Metadata:      privatev1.Metadata_builder{Name: "test-nc"}.Build(),
+						Title:         "NC invalid subnet CIDR",
+						FabricManager: new("netris"),
+						Spec:          privatev1.NetworkClassSpec_builder{Defaults: defaults}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).To(HaveOccurred())
@@ -1281,11 +1293,10 @@ var _ = Describe("Network classes server", func() {
 				}.Build()
 				_, err := privateServer.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
-						Metadata:               privatev1.Metadata_builder{Name: "test-nc"}.Build(),
-						Title:                  "NC subnet outside VN",
-						ImplementationStrategy: "ovn-kubernetes",
-						FabricManager:          new("netris"),
-						Spec:                   privatev1.NetworkClassSpec_builder{Defaults: defaults}.Build(),
+						Metadata:      privatev1.Metadata_builder{Name: "test-nc"}.Build(),
+						Title:         "NC subnet outside VN",
+						FabricManager: new("netris"),
+						Spec:          privatev1.NetworkClassSpec_builder{Defaults: defaults}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).To(HaveOccurred())
@@ -1298,11 +1309,10 @@ var _ = Describe("Network classes server", func() {
 				}.Build()
 				_, err := privateServer.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
-						Metadata:               privatev1.Metadata_builder{Name: "test-nc"}.Build(),
-						Title:                  "NC subnet without VN",
-						ImplementationStrategy: "ovn-kubernetes",
-						FabricManager:          new("netris"),
-						Spec:                   privatev1.NetworkClassSpec_builder{Defaults: defaults}.Build(),
+						Metadata:      privatev1.Metadata_builder{Name: "test-nc"}.Build(),
+						Title:         "NC subnet without VN",
+						FabricManager: new("netris"),
+						Spec:          privatev1.NetworkClassSpec_builder{Defaults: defaults}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).To(HaveOccurred())
@@ -1321,11 +1331,10 @@ var _ = Describe("Network classes server", func() {
 				}.Build()
 				_, err := privateServer.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
-						Metadata:               privatev1.Metadata_builder{Name: "test-nc"}.Build(),
-						Title:                  "NC invalid rule protocol",
-						ImplementationStrategy: "ovn-kubernetes",
-						FabricManager:          new("netris"),
-						Spec:                   privatev1.NetworkClassSpec_builder{Defaults: defaults}.Build(),
+						Metadata:      privatev1.Metadata_builder{Name: "test-nc"}.Build(),
+						Title:         "NC invalid rule protocol",
+						FabricManager: new("netris"),
+						Spec:          privatev1.NetworkClassSpec_builder{Defaults: defaults}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).To(HaveOccurred())
@@ -1344,11 +1353,10 @@ var _ = Describe("Network classes server", func() {
 				}.Build()
 				_, err := privateServer.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
-						Metadata:               privatev1.Metadata_builder{Name: "test-nc"}.Build(),
-						Title:                  "NC TCP missing port_to",
-						ImplementationStrategy: "ovn-kubernetes",
-						FabricManager:          new("netris"),
-						Spec:                   privatev1.NetworkClassSpec_builder{Defaults: defaults}.Build(),
+						Metadata:      privatev1.Metadata_builder{Name: "test-nc"}.Build(),
+						Title:         "NC TCP missing port_to",
+						FabricManager: new("netris"),
+						Spec:          privatev1.NetworkClassSpec_builder{Defaults: defaults}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).To(HaveOccurred())
@@ -1366,11 +1374,10 @@ var _ = Describe("Network classes server", func() {
 				}.Build()
 				_, err := privateServer.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
-						Metadata:               privatev1.Metadata_builder{Name: "test-nc"}.Build(),
-						Title:                  "NC invalid rule CIDR",
-						ImplementationStrategy: "ovn-kubernetes",
-						FabricManager:          new("netris"),
-						Spec:                   privatev1.NetworkClassSpec_builder{Defaults: defaults}.Build(),
+						Metadata:      privatev1.Metadata_builder{Name: "test-nc"}.Build(),
+						Title:         "NC invalid rule CIDR",
+						FabricManager: new("netris"),
+						Spec:          privatev1.NetworkClassSpec_builder{Defaults: defaults}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).To(HaveOccurred())
@@ -1477,10 +1484,9 @@ var _ = Describe("Network classes server", func() {
 			createWithDisableCapabilities := func(caps *privatev1.NetworkClassCapabilities) *privatev1.NetworkClass {
 				response, err := privateServer.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
-						Metadata:               privatev1.Metadata_builder{Name: "test-nc"}.Build(),
-						Title:                  "NC with disable_capabilities",
-						ImplementationStrategy: "ovn-kubernetes",
-						FabricManager:          new("netris"),
+						Metadata:      privatev1.Metadata_builder{Name: "test-nc"}.Build(),
+						Title:         "NC with disable_capabilities",
+						FabricManager: new("netris"),
 						Spec: privatev1.NetworkClassSpec_builder{
 							DisableCapabilities: caps,
 						}.Build(),
@@ -1565,11 +1571,10 @@ var _ = Describe("Network classes server", func() {
 				// supports_ipv6 would still be true here alongside dpu_support.
 				updateResponse, err := privateServer.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
-						Id:                     nc.GetId(),
-						Title:                  nc.GetTitle(),
-						Metadata:               privatev1.Metadata_builder{Name: name}.Build(),
-						ImplementationStrategy: nc.GetImplementationStrategy(),
-						FabricManager:          new(nc.GetFabricManager()),
+						Id:            nc.GetId(),
+						Title:         nc.GetTitle(),
+						Metadata:      privatev1.Metadata_builder{Name: name}.Build(),
+						FabricManager: new(nc.GetFabricManager()),
 						Spec: privatev1.NetworkClassSpec_builder{
 							DisableCapabilities: privatev1.NetworkClassCapabilities_builder{
 								DpuSupport: true,
@@ -1656,10 +1661,9 @@ var _ = Describe("Network classes server", func() {
 			It("Update via spec.disable_capabilities mask preserves defaults", func() {
 				response, err := privateServer.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 					Object: privatev1.NetworkClass_builder{
-						Metadata:               privatev1.Metadata_builder{Name: "test-nc"}.Build(),
-						Title:                  "NC with both",
-						ImplementationStrategy: "ovn-kubernetes",
-						FabricManager:          new("netris"),
+						Metadata:      privatev1.Metadata_builder{Name: "test-nc"}.Build(),
+						Title:         "NC with both",
+						FabricManager: new("netris"),
 						Spec: privatev1.NetworkClassSpec_builder{
 							Defaults: privatev1.NetworkDefaults_builder{
 								VirtualNetworkIpv4Cidr: "10.0.0.0/16",

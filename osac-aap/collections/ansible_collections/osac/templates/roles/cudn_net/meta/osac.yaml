@@ -13,7 +13,6 @@ template_type: network
 # separate physical fabric to bridge into, so this NetworkClass is fabric-only.
 # A future k8sManager (e.g. cudn_localnet, bridging OVN to a physical VLAN via
 # LocalNet topology) does not exist yet; see OSAC-1511.
-implementation_strategy: cudn_net
 fabric_manager: cudn_net
 is_default: true
 capabilities:

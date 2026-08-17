@@ -49,7 +49,7 @@ instead. Write the PR description to `.ai-bot/pr.md`.
 2. Key rules to remember:
    - FQCN for all modules (`ansible.builtin.*`, `kubernetes.core.*`)
    - Every task needs a `name:` field
-   - Underscores in role names and `implementation_strategy`
+   - Underscores in role names, `implementation_strategy`, and `fabric_manager`/`k8s_manager`
    - Include `osac.service.common` before remote K8s operations
 3. If adding a new template role, create `meta/osac.yaml`
 4. Write implementation notes to `.ai-bot/implementation-notes.md`

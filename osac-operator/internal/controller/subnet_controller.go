@@ -176,6 +176,30 @@ func (r *SubnetReconciler) SetupWithManager(mgr mcmanager.Manager) error {
 		Complete(r)
 }
 
+// getParentVirtualNetwork looks up the Subnet's parent VirtualNetwork by UUID label. A nil
+// VirtualNetwork with a nil error means the caller should requeue (parent not found yet); a
+// nil VirtualNetwork with a non-nil error means the caller should propagate the error.
+func (r *SubnetReconciler) getParentVirtualNetwork(ctx context.Context, subnet *v1alpha1.Subnet) (*v1alpha1.VirtualNetwork, ctrl.Result, error) {
+	vnetList := &v1alpha1.VirtualNetworkList{}
+	err := r.List(ctx, vnetList,
+		client.InNamespace(subnet.Namespace),
+		client.MatchingLabels{osacVirtualNetworkIDLabel: subnet.Spec.VirtualNetwork},
+	)
+	if err != nil {
+		return nil, ctrl.Result{}, err
+	}
+	if len(vnetList.Items) == 0 {
+		ctrllog.FromContext(ctx).Info("parent VirtualNetwork not found, requeueing", "uuid", subnet.Spec.VirtualNetwork)
+		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+	}
+	if len(vnetList.Items) > 1 {
+		return nil, ctrl.Result{}, fmt.Errorf(
+			"expected exactly one parent VirtualNetwork with uuid %q but found %d",
+			subnet.Spec.VirtualNetwork, len(vnetList.Items))
+	}
+	return &vnetList.Items[0], ctrl.Result{}, nil
+}
+
 func (r *SubnetReconciler) handleUpdate(ctx context.Context, subnet *v1alpha1.Subnet) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
@@ -194,35 +218,22 @@ func (r *SubnetReconciler) handleUpdate(ctx context.Context, subnet *v1alpha1.Su
 	}
 
 	// Get parent VirtualNetwork by UUID label to read implementation strategy
-	vnetList := &v1alpha1.VirtualNetworkList{}
-	err := r.List(ctx, vnetList,
-		client.InNamespace(subnet.Namespace),
-		client.MatchingLabels{osacVirtualNetworkIDLabel: subnet.Spec.VirtualNetwork},
-	)
-	if err != nil {
-		return ctrl.Result{}, err
+	vnet, result, err := r.getParentVirtualNetwork(ctx, subnet)
+	if err != nil || vnet == nil {
+		return result, err
 	}
-	if len(vnetList.Items) == 0 {
-		log.Info("parent VirtualNetwork not found, requeueing", "uuid", subnet.Spec.VirtualNetwork)
-		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
-	}
-	if len(vnetList.Items) > 1 {
-		return ctrl.Result{}, fmt.Errorf(
-			"expected exactly one parent VirtualNetwork with uuid %q but found %d",
-			subnet.Spec.VirtualNetwork, len(vnetList.Items))
-	}
-	vnet := &vnetList.Items[0]
 
 	// Resolve the dispatch plan: dispatcher path when the parent VirtualNetwork's
-	// NetworkClass has a fabricManager registered (plan non-nil), else the legacy
-	// implementation_strategy annotation path (from the parent VirtualNetwork spec,
-	// plan nil). Subnet is the only resource kind whose plan can carry a k8s target
-	// alongside the fabric one — see pkg/dispatcher's dispatch table.
+	// NetworkClass has a fabricManager registered (plan non-nil), else fall back to
+	// whatever implementation-strategy annotation the parent VirtualNetwork's own
+	// controller has already resolved and written onto it. Subnet is the only
+	// resource kind whose plan can carry a k8s target alongside the fabric one — see
+	// pkg/dispatcher's dispatch table.
 	plan, err := resolveDispatchPlan(ctx, r.Resolver, "Subnet", vnet.Spec.NetworkClass)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	implementationStrategy := vnet.Spec.ImplementationStrategy
+	implementationStrategy := vnet.Annotations[osacImplementationStrategyAnnotation]
 	if fabricTarget := plan.FabricTarget(); fabricTarget != nil {
 		implementationStrategy = fabricTarget.Manager.Name
 	}
@@ -243,16 +254,6 @@ func (r *SubnetReconciler) handleUpdate(ctx context.Context, subnet *v1alpha1.Su
 		}
 	}
 
-	// Add implementation-strategy annotation(s) if not present or different, plus the
-	// VIP CIDR annotation for AAP playbooks and MetalLB IPAddressPool creation.
-	// osacImplementationStrategyAnnotation always holds the fabric manager's name; when
-	// the plan also resolves a k8s target (dual-dispatch), osacK8sImplementationStrategyAnnotation
-	// persists the k8s manager's name so handleDeprovisioning can build its
-	// DeprovisionTarget without re-resolving the plan against a parent VirtualNetwork
-	// that may already be gone at delete time. The k8s annotation is compared and, when
-	// absent from the plan, removed unconditionally (not just when present) so a Subnet
-	// that transitions from dual-dispatch to fabric-only (NetworkClass drops its
-	// k8sManager) doesn't leave a stale k8s target for handleDeprovisioning to act on.
 	if subnet.Annotations == nil {
 		subnet.Annotations = make(map[string]string)
 	}
@@ -261,6 +262,28 @@ func (r *SubnetReconciler) handleUpdate(ctx context.Context, subnet *v1alpha1.Su
 	if k8sTarget != nil {
 		k8sStrategy = k8sTarget.Manager.Name
 	}
+
+	// The NetworkClass has dropped its k8sManager since the last reconcile (plan no
+	// longer has a k8s target, but osacK8sImplementationStrategyAnnotation still names
+	// one). Drain that target's provisioned resource via a scoped deprovision before
+	// clearing the annotation, since dispatchTargetProvider needs the stale manager's
+	// name (only available while the annotation still holds it) to route the AAP
+	// teardown job. Without this, the k8s-manager resource would be silently orphaned
+	// the moment the annotation is cleared.
+	if k8sTarget == nil && r.ProvisioningProvider != nil {
+		if result, draining, err := r.drainStaleK8sTarget(ctx, subnet); draining {
+			return result, err
+		}
+	}
+
+	// Add implementation-strategy annotation(s) if not present or different, plus the
+	// VIP CIDR annotation for AAP playbooks and MetalLB IPAddressPool creation.
+	// osacImplementationStrategyAnnotation always holds the fabric manager's name; when
+	// the plan also resolves a k8s target (dual-dispatch), osacK8sImplementationStrategyAnnotation
+	// persists the k8s manager's name so handleDeprovisioning can build its
+	// DeprovisionTarget without re-resolving the plan against a parent VirtualNetwork
+	// that may already be gone at delete time. By this point any stale k8s target has
+	// already been drained above, so it's safe to compare/clear the k8s annotation here.
 	annotationsChanged := subnet.Annotations[osacImplementationStrategyAnnotation] != implementationStrategy ||
 		subnet.Annotations[osacK8sImplementationStrategyAnnotation] != k8sStrategy
 	if vipCIDR != "" && subnet.Annotations[osacVIPCIDRAnnotation] != vipCIDR {
@@ -303,6 +326,37 @@ func (r *SubnetReconciler) handleUpdate(ctx context.Context, subnet *v1alpha1.Su
 
 	// Handle provisioning
 	return r.handleProvisioning(ctx, subnet, plan)
+}
+
+// drainStaleK8sTarget deprovisions a k8s-manager target that osacK8sImplementationStrategyAnnotation
+// still names but the current dispatch plan no longer has, then clears the annotation once the
+// drain job reaches a terminal, non-blocking state. The second return value reports whether a
+// stale target was found (i.e. whether the caller should return the first two values directly);
+// it is false when there is nothing to drain, in which case handleUpdate continues its own flow.
+func (r *SubnetReconciler) drainStaleK8sTarget(ctx context.Context, subnet *v1alpha1.Subnet) (ctrl.Result, bool, error) {
+	staleK8sStrategy := subnet.Annotations[osacK8sImplementationStrategyAnnotation]
+	if staleK8sStrategy == "" {
+		return ctrl.Result{}, false, nil
+	}
+
+	drainResult, drained, drainErr := provisioning.RunMultiTargetDeprovisioningLifecycle(ctx,
+		[]provisioning.DeprovisionTarget{
+			{Name: string(dispatcher.ManagerRoleK8s), Provider: newDispatchTargetProvider(r.ProvisioningProvider, staleK8sStrategy)},
+		},
+		subnet, &subnet.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval)
+	if drainErr != nil {
+		return ctrl.Result{}, true, fmt.Errorf("draining stale k8s-manager target %q: %w", staleK8sStrategy, drainErr)
+	}
+	if !drained {
+		return drainResult, true, nil
+	}
+
+	delete(subnet.Annotations, osacK8sImplementationStrategyAnnotation)
+	ctrllog.FromContext(ctx).Info("drained stale k8s-manager target after NetworkClass dropped k8sManager", "strategy", staleK8sStrategy)
+	if err := r.Update(ctx, subnet); err != nil {
+		return ctrl.Result{}, true, err
+	}
+	return ctrl.Result{}, true, nil
 }
 
 func (r *SubnetReconciler) handleDelete(ctx context.Context, subnet *v1alpha1.Subnet) (ctrl.Result, error) {

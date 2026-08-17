@@ -29,8 +29,8 @@ import "osac/private/v1/security_rule_type.proto";
 // concept used by cloud providers for compute resources.
 //
 // Users query available NetworkClasses to discover which network implementation strategies they can choose when
-// creating VirtualNetworks. The `implementation_strategy` field is the key identifier that VirtualNetwork resources
-// reference to select their network backend.
+// creating VirtualNetworks. The `fabric_manager` and `k8s_manager` fields are the routing keys that determine which
+// manager handles provisioning for VirtualNetwork resources that reference this class.
 //
 // buf:lint:ignore OSAC_OBJECT_SHAPE
 message NetworkClass {
@@ -49,11 +49,9 @@ message NetworkClass {
   // guarantees, and any limitations or requirements.
   string description = 4;
 
-  // Implementation strategy identifier for this network class. This is the discriminator that VirtualNetwork
-  // resources use to select which network backend to use. For example: "udn-net", "phys-net", "ovn-kubernetes".
-  //
-  // This value is system-defined and immutable once the NetworkClass is created.
-  string implementation_strategy = 5;
+  // Reserved field numbers for removed fields (do not reuse).
+  reserved 5;
+  reserved "implementation_strategy";
 
   // Class-specific configuration constraints and options. These define implementation-specific parameters that
   // networks using this class must or may configure.

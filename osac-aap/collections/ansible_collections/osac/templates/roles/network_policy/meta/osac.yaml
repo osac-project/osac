@@ -6,7 +6,6 @@ description: >
   Reusable across any K8s-based NetworkClass (CUDN, Netris, etc.).
 
 template_type: network
-implementation_strategy: network_policy
 fabric_manager: network_policy
 capabilities:
   supports_security_groups: true

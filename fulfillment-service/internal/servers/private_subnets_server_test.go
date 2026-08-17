@@ -76,7 +76,7 @@ var _ = Describe("Private subnets server", func() {
 		Expect(err).ToNot(HaveOccurred())
 
 		nc := privatev1.NetworkClass_builder{
-			ImplementationStrategy: "test-strategy",
+			FabricManager: new("test-strategy"),
 			Metadata: privatev1.Metadata_builder{
 				Tenant: auth.SharedTenant,
 				Name:   name,
@@ -117,7 +117,7 @@ var _ = Describe("Private subnets server", func() {
 				Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 			}.Build(),
 			Spec: privatev1.VirtualNetworkSpec_builder{
-				NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetImplementationStrategy()}.Build(),
+				NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 				Region:       "us-west-1",
 			}.Build(),
 			Status: privatev1.VirtualNetworkStatus_builder{
@@ -521,7 +521,7 @@ var _ = Describe("Private subnets server", func() {
 					}.Build(),
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetImplementationStrategy()}.Build(),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 						Region:       "us-west-1",
 					}.Build(),
 					Status: privatev1.VirtualNetworkStatus_builder{
@@ -566,7 +566,7 @@ var _ = Describe("Private subnets server", func() {
 					}.Build(),
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetImplementationStrategy()}.Build(),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 						Region:       "us-west-1",
 					}.Build(),
 					Status: privatev1.VirtualNetworkStatus_builder{
@@ -735,7 +735,7 @@ var _ = Describe("Private subnets server", func() {
 					}.Build(),
 					Spec: privatev1.VirtualNetworkSpec_builder{
 						Ipv4Cidr:     new("10.0.0.0/16"),
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetImplementationStrategy()}.Build(),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 						Region:       "us-west-1",
 					}.Build(),
 					Status: privatev1.VirtualNetworkStatus_builder{

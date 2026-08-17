@@ -62,9 +62,10 @@ func resolveDispatchPlan(
 // write into osacImplementationStrategyAnnotation for AAP playbook selection.
 //
 // When the dispatcher path is active (see resolveDispatchPlan) it returns the resolved
-// plan's fabric manager name. Otherwise it returns legacyStrategy unchanged — this is
-// the behavior for deployments without the two-manager model configured, or resources
-// using the platform-default NetworkClass (which has no ID to resolve against).
+// plan's fabric manager name. Otherwise it returns legacyStrategy unchanged. Most
+// callers pass "" for legacyStrategy now that NetworkClass/VirtualNetwork no longer
+// carry a stored implementation_strategy field; the parameter remains for callers
+// that still have a caller-specific fallback (e.g. a resource-level default).
 func resolveImplementationStrategy(
 	ctx context.Context,
 	resolver *dispatcher.Resolver,

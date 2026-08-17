@@ -40,6 +40,15 @@
 #
 #   Test 12 (Missing spec.cores/memoryGiB rejected):
 #     ansible-playbook ... -e test_create_missing_cores_fails=true
+#
+#   Test 13 (GPU single device, count=1):
+#     ansible-playbook ... -e test_create_gpu_single=true
+#
+#   Test 14 (GPU multiple devices, count=3):
+#     ansible-playbook ... -e test_create_gpu_many=true
+#
+#   Test 15 (No GPU -- no hostDevices in template spec):
+#     ansible-playbook ... -e test_create_no_gpu=true
 
 # ──────────────────────────────────────────────────────────────
 # Test 1: Verify spec defaults are merged into a minimal fixture

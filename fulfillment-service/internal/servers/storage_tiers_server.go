@@ -32,12 +32,11 @@ import (
 // storageTierUnforwardableFilterFields lists public StorageTierSpec field paths that don't exist at
 // the same path in the private schema — they live at `this.spec.backends[0].<field>` privately, not
 // `this.spec.<field>`. Filters referencing any of these are rejected rather than forwarded, since the
-// private FilterTranslator has no matching path for them.
+// private FilterTranslator has no matching path for them. `this.spec.protocol` is not listed here: it
+// now lives at the same path (`this.spec.protocol`) on both schemas, so it forwards correctly.
 var storageTierUnforwardableFilterFields = []string{
-	"this.spec.protocol",
 	"this.spec.max_read_bandwidth_mbs",
 	"this.spec.max_write_bandwidth_mbs",
-	"this.spec.quota_gib",
 	"this.spec.encryption_enabled",
 }
 
@@ -193,7 +192,7 @@ func (s *StorageTiersServer) List(ctx context.Context,
 		}
 		if unforwardable {
 			return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"filtering by protocol, bandwidth, quota, or encryption is not yet supported")
+				"filtering by bandwidth or encryption is not yet supported")
 		}
 	}
 
@@ -278,10 +277,9 @@ func (s *StorageTiersServer) toPublicTier(ctx context.Context, privateTier *priv
 	backend := backends[0]
 	publicTier.SetSpec(publicv1.StorageTierSpec_builder{
 		Description:          privateTier.GetSpec().GetDescription(),
-		Protocol:             s.toPublicStorageProtocol(ctx, backend.GetProtocol()),
+		Protocol:             s.toPublicStorageProtocol(ctx, privateTier.GetSpec().GetProtocol()),
 		MaxReadBandwidthMbs:  backend.GetMaxReadBandwidthMbs(),
 		MaxWriteBandwidthMbs: backend.GetMaxWriteBandwidthMbs(),
-		QuotaGib:             backend.GetQuotaGib(),
 		EncryptionEnabled:    backend.GetEncryptionEnabled(),
 	}.Build())
 	return publicTier, nil

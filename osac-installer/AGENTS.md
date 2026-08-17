@@ -104,8 +104,8 @@ Phase 3: charts/osac/                   # OSAC platform (umbrella chart)
       bare-metal-fulfillment-operator (conditional: bmf.enabled)
       -- mono-repo-resident sibling directories, via file:// references
     csi-driver, csi-backends (conditional: csiDriver.enabled)
-      -- osac-csi-driver, the one remaining real submodule under base/,
-      also via a file:// reference
+      -- osac-csi-driver, a mono-repo-resident sibling directory checked
+      out at the repository root, also via a file:// reference
     osac-ui (conditional: ui.enabled)
       -- a real external chart, via an oci:// reference pinned to a
       released version in Chart.yaml
@@ -127,10 +127,11 @@ values/
 Pull secrets and AAP license files are stored alongside values files (e.g.,
 `values/<env>/pull-secret.json`, `values/<env>/license.zip`).
 
-osac-operator, fulfillment-service, osac-aap, and bare-metal-fulfillment-operator
-are mono-repo-resident directories, not submodules -- they share this repo's own
-commit history with osac-installer itself (only osac-csi-driver, under `base/`,
-remains a real submodule). There is deliberately no image-tag pinning/syncing
+osac-operator, fulfillment-service, osac-aap, bare-metal-fulfillment-operator,
+and osac-csi-driver are all mono-repo-resident directories checked out at the
+repository root, not submodules -- they share this repo's own commit history
+with osac-installer itself (there are no submodules under `base/` any longer).
+There is deliberately no image-tag pinning/syncing
 for these four in `values/*/values.yaml`: CI values files use the live tag
 published by each component's own workflow -- `main` for fulfillment-service
 (the only one of the four that doesn't publish a current `latest`) and

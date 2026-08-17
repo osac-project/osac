@@ -25,7 +25,9 @@ documentation:
 See each subdirectory's `README.md` (and `docs/`, where present) for setup, build, test, and
 deployment instructions specific to that component. This repo's own top-level
 **[docs/](docs/README.md)** holds hand-trimmed cross-component architecture and
-conventions content that doesn't belong in any single component's docs.
+conventions content that doesn't belong in any single component's docs (not to be confused
+with the external [osac-project/docs](https://github.com/osac-project/docs) repo, which
+covers broader project-level architecture guides and diagrams).
 
 ## Local development with go.work
 

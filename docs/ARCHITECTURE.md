@@ -83,7 +83,7 @@ CR independently, is what actually drives provisioning:
 - Location: `fulfillment-service/internal/cmd/service/start/controller/`
 - Triggers: `fulfillment-service start controller` CLI command
 - Responsibilities: Run reconcilers for in-process resource monitoring and feedback
-- Controllers: 18 resource-specific controllers in `internal/controllers/` covering baremetalinstance, cluster, computeinstance, externalip, externalipattachment, externalippool, identityprovider, natgateway, onboarding (tenant), project, projectmembership, role, rolebinding, securitygroup, subnet, tenant, user, virtualnetwork, plus shared finalizer management
+- Controllers: 18 resource-specific controllers in `internal/controllers/` covering baremetalinstance, cluster, computeinstance, externalip, externalipattachment, externalippool, identityprovider, natgateway, onboarding (tenant onboarding tasks — a separate reconciler from `tenant` below), project, projectmembership, role, rolebinding, securitygroup, subnet, tenant, user, virtualnetwork, plus shared finalizer management
 
 **Console Proxy (Fulfillment):**
 - Location: `fulfillment-service/internal/cmd/service/start/consoleproxy/`

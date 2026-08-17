@@ -14,7 +14,7 @@ OSAC (Open Sovereign AI Cloud) is a fulfillment system for provisioning Kubernet
 | `osac-csi-driver/` | CSI meta-driver aggregating vendor storage drivers |
 | `osac-metering/` | Metering pipeline — collects usage events via gRPC Watch, publishes CloudEvents to Kafka, and provides Provider Adapters framework for billing integrations |
 
-See also [`docs/`](docs/) for hand-trimmed cross-component architecture and
+See also [`docs/`](docs/README.md) for hand-trimmed cross-component architecture and
 conventions content with no home in any single component's own `AGENTS.md`
 (not to be confused with the external `docs` repo in the table below, which
 covers broader project-level architecture guides and diagrams).

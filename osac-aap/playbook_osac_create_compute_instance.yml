@@ -78,8 +78,7 @@
       ansible.builtin.include_role:
         name: osac.service.csi_driver_install
       vars:
-        _unique_providers: "{{ _jit_storage_tiers | map(attribute='provider') | unique | sort | list }}"
-        _storage_provider_tiers: "{{ _jit_storage_tiers }}"
+        csi_driver_install_tiers: "{{ _jit_storage_tiers }}"
         storage_provider_backend_connections: "{{ osac_job_vars.storage_backend_connections | default({}) }}"
 
     - name: Ensure storage is provisioned for tenant (JIT)

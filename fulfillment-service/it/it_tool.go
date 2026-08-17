@@ -2492,6 +2492,9 @@ func (t *Tool) RunCLI(ctx context.Context, homeDir string, args ...string) (stdo
 
 // RunCLIWithEnv executes the osac binary with additional environment variables beyond the HOME
 // override. Each entry in extraEnv should be in "KEY=VALUE" format. Use "KEY=" to unset a variable.
+// OSAC_SECRET_STORE is the one exception: any entry for it in extraEnv is stripped, since cliEnv's
+// own OSAC_SECRET_STORE decision (forced file-based storage locally, none in CI) must not be
+// overridable by callers.
 func (t *Tool) RunCLIWithEnv(ctx context.Context, homeDir string, extraEnv []string, args ...string) (stdout, stderr string, exitCode int) {
 	return t.runCLI(ctx, homeDir, extraEnv, args...)
 }

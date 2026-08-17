@@ -41,6 +41,14 @@ var _ = Describe("Secret store", func() {
 	})
 
 	Describe("Store selection", func() {
+		BeforeEach(func() {
+			// Ensure a clean baseline: an OSAC_SECRET_STORE inherited from the host shell (e.g. a
+			// developer working around the exact keychain issue this override exists for) would
+			// otherwise make these tests silently select the wrong store.
+			err := os.Unsetenv("OSAC_SECRET_STORE")
+			Expect(err).ToNot(HaveOccurred())
+		})
+
 		It("Selects the keyring store when the keyring is available", func() {
 			keyring.MockInit()
 			store, err := NewSecretStore().

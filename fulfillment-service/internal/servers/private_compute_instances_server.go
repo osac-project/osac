@@ -170,6 +170,7 @@ func (b *PrivateComputeInstancesServerBuilder) Build() (result *PrivateComputeIn
 		return
 	}
 
+	// Create the DiskImages DAO for disk image validation:
 	diskImagesDao, err := dao.NewGenericDAO[*privatev1.DiskImage]().
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).

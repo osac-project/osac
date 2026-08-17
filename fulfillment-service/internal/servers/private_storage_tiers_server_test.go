@@ -135,13 +135,12 @@ var _ = Describe("Private storage tiers server", func() {
 					}.Build(),
 					Spec: privatev1.StorageTierSpec_builder{
 						Description: "A test storage tier",
+						Protocol:    privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS,
 						Backends: []*privatev1.BackendAssociation{
 							privatev1.BackendAssociation_builder{
 								BackendId:            backendID,
-								Protocol:             privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS,
 								MaxReadBandwidthMbs:  1000,
 								MaxWriteBandwidthMbs: 500,
-								QuotaGib:             1024,
 								EncryptionEnabled:    true,
 							}.Build(),
 						},
@@ -160,13 +159,12 @@ var _ = Describe("Private storage tiers server", func() {
 					}.Build(),
 					Spec: privatev1.StorageTierSpec_builder{
 						Description: "A test storage tier",
+						Protocol:    privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS,
 						Backends: []*privatev1.BackendAssociation{
 							privatev1.BackendAssociation_builder{
 								BackendId:            backendID,
-								Protocol:             privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS,
 								MaxReadBandwidthMbs:  1000,
 								MaxWriteBandwidthMbs: 500,
-								QuotaGib:             1024,
 							}.Build(),
 						},
 					}.Build(),
@@ -183,11 +181,10 @@ var _ = Describe("Private storage tiers server", func() {
 			Expect(created.GetSpec().GetDescription()).To(Equal("A test storage tier"))
 			Expect(created.GetSpec().GetBackends()).To(HaveLen(1))
 			Expect(created.GetSpec().GetBackends()[0].GetBackendId()).To(Equal(backendID))
-			Expect(created.GetSpec().GetBackends()[0].GetProtocol()).To(Equal(
+			Expect(created.GetSpec().GetProtocol()).To(Equal(
 				privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS))
 			Expect(created.GetSpec().GetBackends()[0].GetMaxReadBandwidthMbs()).To(Equal(int32(1000)))
 			Expect(created.GetSpec().GetBackends()[0].GetMaxWriteBandwidthMbs()).To(Equal(int32(500)))
-			Expect(created.GetSpec().GetBackends()[0].GetQuotaGib()).To(Equal(int64(1024)))
 			Expect(created.GetSpec().GetBackends()[0].GetEncryptionEnabled()).To(BeTrue())
 			Expect(created.GetStatus().GetState()).To(Equal(
 				privatev1.StorageTierState_STORAGE_TIER_STATE_ACTIVE))
@@ -307,26 +304,24 @@ var _ = Describe("Private storage tiers server", func() {
 				Object: privatev1.StorageTier_builder{
 					Id: created.GetId(),
 					Spec: privatev1.StorageTierSpec_builder{
+						Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
 						Backends: []*privatev1.BackendAssociation{
 							privatev1.BackendAssociation_builder{
 								BackendId:            backendID,
-								Protocol:             privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
 								MaxReadBandwidthMbs:  2000,
 								MaxWriteBandwidthMbs: 1000,
-								QuotaGib:             2048,
 								EncryptionEnabled:    false,
 							}.Build(),
 						},
 					}.Build(),
 				}.Build(),
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.backends"}},
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.backends", "spec.protocol"}},
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(updateResponse.GetObject().GetSpec().GetBackends()).To(HaveLen(1))
-			Expect(updateResponse.GetObject().GetSpec().GetBackends()[0].GetProtocol()).To(Equal(
+			Expect(updateResponse.GetObject().GetSpec().GetProtocol()).To(Equal(
 				privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK))
 			Expect(updateResponse.GetObject().GetSpec().GetBackends()[0].GetMaxReadBandwidthMbs()).To(Equal(int32(2000)))
-			Expect(updateResponse.GetObject().GetSpec().GetBackends()[0].GetQuotaGib()).To(Equal(int64(2048)))
 		})
 
 		It("Delete removes the object", func() {
@@ -355,10 +350,10 @@ var _ = Describe("Private storage tiers server", func() {
 						Name: "test-tier",
 					}.Build(),
 					Spec: privatev1.StorageTierSpec_builder{
+						Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS,
 						Backends: []*privatev1.BackendAssociation{
 							privatev1.BackendAssociation_builder{
 								BackendId: backendID,
-								Protocol:  privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS,
 							}.Build(),
 						},
 					}.Build(),
@@ -376,10 +371,10 @@ var _ = Describe("Private storage tiers server", func() {
 						Name: "test-tier",
 					}.Build(),
 					Spec: privatev1.StorageTierSpec_builder{
+						Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS,
 						Backends: []*privatev1.BackendAssociation{
 							privatev1.BackendAssociation_builder{
 								BackendId: backendID,
-								Protocol:  privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS,
 							}.Build(),
 						},
 					}.Build(),
@@ -401,10 +396,10 @@ var _ = Describe("Private storage tiers server", func() {
 						Tenant: "some-other-tenant",
 					}.Build(),
 					Spec: privatev1.StorageTierSpec_builder{
+						Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS,
 						Backends: []*privatev1.BackendAssociation{
 							privatev1.BackendAssociation_builder{
 								BackendId: backendID,
-								Protocol:  privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS,
 							}.Build(),
 						},
 					}.Build(),
@@ -422,10 +417,10 @@ var _ = Describe("Private storage tiers server", func() {
 							Name: "",
 						}.Build(),
 						Spec: privatev1.StorageTierSpec_builder{
+							Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS,
 							Backends: []*privatev1.BackendAssociation{
 								privatev1.BackendAssociation_builder{
 									BackendId: backendID,
-									Protocol:  privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS,
 								}.Build(),
 							},
 						}.Build(),
@@ -460,10 +455,9 @@ var _ = Describe("Private storage tiers server", func() {
 							Name: "test-tier",
 						}.Build(),
 						Spec: privatev1.StorageTierSpec_builder{
+							Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS,
 							Backends: []*privatev1.BackendAssociation{
-								privatev1.BackendAssociation_builder{
-									Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS,
-								}.Build(),
+								privatev1.BackendAssociation_builder{}.Build(),
 							},
 						}.Build(),
 					}.Build(),
@@ -491,10 +485,10 @@ var _ = Describe("Private storage tiers server", func() {
 							Name: "test-tier",
 						}.Build(),
 						Spec: privatev1.StorageTierSpec_builder{
+							Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS,
 							Backends: []*privatev1.BackendAssociation{
 								privatev1.BackendAssociation_builder{
 									BackendId: "no-such-backend",
-									Protocol:  privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS,
 								}.Build(),
 							},
 						}.Build(),
@@ -514,14 +508,13 @@ var _ = Describe("Private storage tiers server", func() {
 							Name: "test-tier",
 						}.Build(),
 						Spec: privatev1.StorageTierSpec_builder{
+							Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS,
 							Backends: []*privatev1.BackendAssociation{
 								privatev1.BackendAssociation_builder{
 									BackendId: backendID,
-									Protocol:  privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS,
 								}.Build(),
 								privatev1.BackendAssociation_builder{
 									BackendId: backendID,
-									Protocol:  privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
 								}.Build(),
 							},
 						}.Build(),
@@ -544,7 +537,6 @@ var _ = Describe("Private storage tiers server", func() {
 							Backends: []*privatev1.BackendAssociation{
 								privatev1.BackendAssociation_builder{
 									BackendId: "no-such-backend",
-									Protocol:  privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS,
 								}.Build(),
 							},
 						}.Build(),
@@ -568,11 +560,9 @@ var _ = Describe("Private storage tiers server", func() {
 							Backends: []*privatev1.BackendAssociation{
 								privatev1.BackendAssociation_builder{
 									BackendId: backendID,
-									Protocol:  privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS,
 								}.Build(),
 								privatev1.BackendAssociation_builder{
 									BackendId: backendID,
-									Protocol:  privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
 								}.Build(),
 							},
 						}.Build(),
@@ -671,10 +661,10 @@ var _ = Describe("Private storage tiers server", func() {
 							Name: "unique-name",
 						}.Build(),
 						Spec: privatev1.StorageTierSpec_builder{
+							Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
 							Backends: []*privatev1.BackendAssociation{
 								privatev1.BackendAssociation_builder{
 									BackendId: backendID,
-									Protocol:  privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
 								}.Build(),
 							},
 						}.Build(),

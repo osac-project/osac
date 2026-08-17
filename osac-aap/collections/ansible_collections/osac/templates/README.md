@@ -56,7 +56,7 @@ Minimal OpenShift cluster configuration.
 ### VM Templates
 
 #### `ocp_virt_vm`
-Virtual machine template for OpenShift Virtualization: **Linux and Windows** guests use the same template ID. Linux is the default. Windows is selected when any of the following is true (in order): role var `guest_os_family: windows` (e.g. extra vars), annotation `osac.openshift.io/guest-os-family: windows` on the `ComputeInstance`, or `spec.image.sourceRef` contains the substring `containerdisks/windows` (an informal convention in some community Windows disk images — not a Microsoft-official image catalog). **Windows requires** `spec.image.sourceRef` to point at **your** Windows container disk (golden image or registry path you maintain); this template does not ship a default. Windows uses sysprep / CloudBase-Init paths, Hyper-V domain defaults, and matching delete cleanup.
+Virtual machine template for OpenShift Virtualization: **Linux and Windows** guests use the same template ID. Linux is the default. Windows is selected when any of the following is true (in order): role var `guest_os_family: windows` (e.g. extra vars), annotation `osac.openshift.io/guest-os-family: windows` on the `ComputeInstance`, or the referenced DiskImage resource has `guest_os_family: GUEST_OS_FAMILY_WINDOWS`. **Windows requires** a DiskImage pointing at **your** Windows container disk (golden image or registry path you maintain); this template does not ship a default. Windows uses sysprep / CloudBase-Init paths, Hyper-V domain defaults, and matching delete cleanup.
 
 **Parameters:**
 
@@ -72,7 +72,7 @@ The following are read from the `ComputeInstance` spec:
 | `spec.cores` | Number of CPU cores |
 | `spec.memoryGiB` | Memory allocation in GiB |
 | `spec.bootDisk.sizeGiB` | Root disk size in GiB |
-| `spec.image.sourceRef` | Container disk image |
+| `spec.diskImage` | DiskImage reference (name or id) |
 | `spec.runStrategy` | VM run strategy (Always, Halted, etc.) |
 | `spec.sshKey` | SSH public key for VM access |
 | `spec.userDataSecretRef.name` | Secret containing cloud-init user data |
@@ -144,9 +144,7 @@ single file: `meta/osac.yaml`.
      # always pass instance_type explicitly.
      boot_disk:
        size_gib: 10
-     image:
-       source_type: registry
-       source_ref: "quay.io/containerdisks/fedora:latest"
+     disk_image: "fedora"
      run_strategy: "Always"
 
    parameters:

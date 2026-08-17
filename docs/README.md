@@ -3,16 +3,14 @@
 Hand-trimmed, cross-component-only excerpts of what used to be
 `osac-workspace/reference/ARCHITECTURE.md` and
 `osac-workspace/reference/CONVENTIONS.md` —
-not raw regenerated codebase-analysis snapshots. Per
-[ADR 0001](https://github.com/osac-project/osac-workspace/blob/main/decisions/0001-dedicated-ai-skills-repo.md)'s
-exit-criterion (e) (OSAC-4008): these two files ([ARCHITECTURE.md](ARCHITECTURE.md),
-[CONVENTIONS.md](CONVENTIONS.md)) were trimmed down to only the content with
-no equivalent in any single component's own `AGENTS.md`, and relocated
-here, co-located with the code they analyze. The other five `reference/*.md`
-siblings (`CONCERNS.md`, `INTEGRATIONS.md`, `STACK.md`, `STRUCTURE.md`,
-`TESTING.md`) had zero live consumers and will be deleted (rather than
-relocated) as part of the companion `osac-workspace` cleanup PR referenced
-above.
+not raw regenerated codebase-analysis snapshots. Per OSAC-4008: these two
+files ([ARCHITECTURE.md](ARCHITECTURE.md), [CONVENTIONS.md](CONVENTIONS.md))
+were trimmed down to only the content with no equivalent in any single
+component's own `AGENTS.md`, and relocated here, co-located with the code
+they analyze. The other five `reference/*.md` siblings (`CONCERNS.md`,
+`INTEGRATIONS.md`, `STACK.md`, `STRUCTURE.md`, `TESTING.md`) had zero live
+consumers and will be deleted (rather than relocated) as part of the
+companion `osac-workspace` cleanup PR referenced below.
 
 `ARCHITECTURE.md` says "Cross-Component" and `CONVENTIONS.md` says
 "Cross-Repo Dependencies" — used interchangeably for this directory's

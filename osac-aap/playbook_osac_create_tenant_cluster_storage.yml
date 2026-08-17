@@ -85,13 +85,12 @@
     # _remote_kubeconfig. Skipping for ClusterOrder (CaaS) avoids installing the
     # OSAC CSI driver on a tenant's guest cluster, which is out of scope here.
     - name: Install OSAC CSI driver on the hub (once per dispatch, regardless of provider count)
+      when: osac_job_vars.resource.kind == 'Tenant'
       ansible.builtin.include_role:
         name: osac.service.csi_driver_install
       vars:
-        _unique_providers: "{{ osac_job_vars.storage_tier_definitions | map(attribute='provider') | unique | sort | list }}"
-        _storage_provider_tiers: "{{ osac_job_vars.storage_tier_definitions }}"
+        csi_driver_install_tiers: "{{ osac_job_vars.storage_tier_definitions }}"
         storage_provider_backend_connections: "{{ osac_job_vars.storage_backend_connections | default({}) }}"
-      when: osac_job_vars.resource.kind == 'Tenant'
 
     - name: Provision StorageClasses for all configured tiers
       block:

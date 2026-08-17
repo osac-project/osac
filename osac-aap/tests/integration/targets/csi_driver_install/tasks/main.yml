@@ -58,12 +58,11 @@
     # PLACEHOLDER -- update to a real published osac-csi-driver chart tag before
     # enabling CSI_DRIVER_TESTS_ENABLED.
     csi_driver_install_chart_version: "0.1.0"
-    _storage_provider_tiers:
+    csi_driver_install_tiers:
       - name: default
         protocol: nfs
         provider: vast
         backend_id: be-test
-    _unique_providers: ["vast"]
     storage_provider_backend_connections:
       be-test:
         endpoint: "vast-mock.example.com:443"
@@ -185,12 +184,11 @@
 
   vars:
     csi_driver_install_chart_version: "0.1.0"
-    _storage_provider_tiers:
+    csi_driver_install_tiers:
       - name: default
         protocol: nfs
         provider: vast
         backend_id: be-test
-    _unique_providers: ["vast"]
     storage_provider_backend_connections:
       be-test:
         endpoint: "vast-mock.example.com:443"
@@ -220,11 +218,10 @@
 
   vars:
     csi_driver_install_chart_version: "0.1.0"
-    _storage_provider_tiers:
+    csi_driver_install_tiers:
       - name: default
         protocol: nfs
         provider: pure
-    _unique_providers: ["pure"]
     storage_provider_backend_connections: {}
 
   tasks:
@@ -261,12 +258,11 @@
     # PLACEHOLDER -- must be a second real published tag, newer than
     # csi_driver_install_chart_version above, before enabling CSI_DRIVER_TESTS_ENABLED.
     csi_driver_install_chart_version: "0.1.1"
-    _storage_provider_tiers:
+    csi_driver_install_tiers:
       - name: default
         protocol: nfs
         provider: vast
         backend_id: be-test
-    _unique_providers: ["vast"]
     storage_provider_backend_connections:
       be-test:
         endpoint: "vast-mock.example.com:443"
@@ -301,12 +297,11 @@
   gather_facts: false
 
   vars:
-    _storage_provider_tiers:
+    csi_driver_install_tiers:
       - name: default
         protocol: nfs
         provider: vast
         backend_id: be-missing
-    _unique_providers: ["vast"]
     storage_provider_backend_connections: {}
 
   tasks:
@@ -343,7 +338,7 @@
 
   vars:
     csi_driver_install_chart_version: "0.1.1"
-    _storage_provider_tiers:
+    csi_driver_install_tiers:
       - name: gold
         protocol: nfs
         provider: vast
@@ -352,7 +347,6 @@
         protocol: nfs
         provider: vast
         backend_id: be-other
-    _unique_providers: ["vast"]
     storage_provider_backend_connections:
       be-test:
         endpoint: "vast-mock.example.com:443"

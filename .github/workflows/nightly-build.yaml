@@ -145,15 +145,15 @@ jobs:
 
           for CHART_DIR in ${SUB_CHARTS[$COMPONENT]}; do
             if [[ -f "${CHART_DIR}/Chart.yaml" ]]; then
-              CHART_NAME=$(yq eval '.name' "${CHART_DIR}/Chart.yaml")
+              CHART_NAME=$(yq -r '.name' "${CHART_DIR}/Chart.yaml")
               if [[ -z "${CHART_NAME}" || "${CHART_NAME}" == "null" ]]; then
                 echo "::error::Chart name missing in ${CHART_DIR}/Chart.yaml"
                 exit 1
               fi
 
               # Update Chart.yaml version field using yq
-              yq eval -i ".version = \"${SUB_VERSION}\"" "${CHART_DIR}/Chart.yaml"
-              yq eval -i ".appVersion = \"${SUB_VERSION}\"" "${CHART_DIR}/Chart.yaml"
+              yq -i ".version = \"${SUB_VERSION}\"" "${CHART_DIR}/Chart.yaml"
+              yq -i ".appVersion = \"${SUB_VERSION}\"" "${CHART_DIR}/Chart.yaml"
 
               # Package sub-chart
               helm package "${CHART_DIR}" --destination ./packaged-charts

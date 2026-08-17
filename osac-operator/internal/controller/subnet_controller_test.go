@@ -598,10 +598,27 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(dual.Annotations[osacK8sImplementationStrategyAnnotation]).To(Equal("cudn_net"))
 
 			// NetworkClass drops its k8sManager (e.g. migrated to fabric-only). The next
-			// reconcile resolves a fabric-only plan and should remove the now-stale k8s
-			// annotation while keeping the fabric one intact.
+			// reconcile resolves a fabric-only plan, but must not immediately drop the
+			// k8s annotation: it should first deprovision the now-stale k8s target so
+			// the k8s manager's resource isn't orphaned. Deprovisioning triggers on this
+			// reconcile and hasn't reached a terminal state yet, so both annotations —
+			// and the pending k8s deprovision job — are still present.
 			transitionNetworkClass.K8SManager = nil
 
+			_, err = reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			midTransition := &osacv1alpha1.Subnet{}
+			Expect(k8sClient.Get(ctx, key, midTransition)).To(Succeed())
+			Expect(midTransition.Annotations[osacImplementationStrategyAnnotation]).To(Equal("netris"))
+			Expect(midTransition.Annotations[osacK8sImplementationStrategyAnnotation]).To(Equal("cudn_net"))
+			k8sDeprovisionJob := provisioning.FindLatestJobByTypeAndTarget(midTransition.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision, "k8s")
+			Expect(k8sDeprovisionJob).NotTo(BeNil())
+			Expect(k8sDeprovisionJob.State.IsTerminal()).To(BeFalse())
+
+			// Once the k8s target's deprovision job reaches a terminal, successful state
+			// (polled on the next reconcile), the k8s annotation is finally removed while
+			// the fabric one remains intact.
 			_, err = reconciler.Reconcile(ctx, req)
 			Expect(err).NotTo(HaveOccurred())
 

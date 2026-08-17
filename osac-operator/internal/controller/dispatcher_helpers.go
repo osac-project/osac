@@ -105,6 +105,8 @@ type dispatchTargetProvider struct {
 	managerName string
 }
 
+var _ provisioning.ProvisioningProvider = (*dispatchTargetProvider)(nil)
+
 // newDispatchTargetProvider creates a dispatchTargetProvider that routes jobs for
 // managerName through base.
 func newDispatchTargetProvider(base provisioning.ProvisioningProvider, managerName string) *dispatchTargetProvider {

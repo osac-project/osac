@@ -223,6 +223,10 @@ func (r *SubnetReconciler) handleUpdate(ctx context.Context, subnet *v1alpha1.Su
 		return ctrl.Result{}, err
 	}
 	implementationStrategy := vnet.Spec.ImplementationStrategy
+	// plan may be nil here (no-dispatcher legacy path); FabricTarget/K8sTarget have
+	// nil-receiver-safe implementations that return nil in that case, so this — unlike
+	// sibling controllers' resolveImplementationStrategy — deliberately calls the
+	// DispatchPlan accessors directly rather than guarding with a nil check.
 	if fabricTarget := plan.FabricTarget(); fabricTarget != nil {
 		implementationStrategy = fabricTarget.Manager.Name
 	}
@@ -252,47 +256,37 @@ func (r *SubnetReconciler) handleUpdate(ctx context.Context, subnet *v1alpha1.Su
 	// absent from the plan, removed unconditionally (not just when present) so a Subnet
 	// that transitions from dual-dispatch to fabric-only (NetworkClass drops its
 	// k8sManager) doesn't leave a stale k8s target for handleDeprovisioning to act on.
-	if subnet.Annotations == nil {
-		subnet.Annotations = make(map[string]string)
-	}
 	k8sTarget := plan.K8sTarget()
 	k8sStrategy := ""
 	if k8sTarget != nil {
 		k8sStrategy = k8sTarget.Manager.Name
 	}
-	annotationsChanged := false
-	if subnet.Annotations[osacImplementationStrategyAnnotation] != implementationStrategy {
-		subnet.Annotations[osacImplementationStrategyAnnotation] = implementationStrategy
-		annotationsChanged = true
+
+	// Reverse migration: deprovision a k8s target the NetworkClass has since dropped,
+	// before dropping its annotation. See deprovisionStaleK8sTarget's doc comment.
+	if requeue, deprovErr := r.deprovisionStaleK8sTarget(ctx, subnet, k8sTarget); deprovErr != nil {
+		return ctrl.Result{}, deprovErr
+	} else if requeue != nil {
+		return *requeue, nil
 	}
-	if subnet.Annotations[osacK8sImplementationStrategyAnnotation] != k8sStrategy {
-		if k8sTarget != nil {
-			subnet.Annotations[osacK8sImplementationStrategyAnnotation] = k8sStrategy
-		} else {
-			delete(subnet.Annotations, osacK8sImplementationStrategyAnnotation)
-		}
-		annotationsChanged = true
+
+	updated, err := r.updateSubnetStrategyAnnotations(ctx, subnet, implementationStrategy, k8sStrategy, vipCIDR, k8sTarget != nil)
+	if err != nil {
+		return ctrl.Result{}, err
 	}
-	if vipCIDR != "" && subnet.Annotations[osacVIPCIDRAnnotation] != vipCIDR {
-		subnet.Annotations[osacVIPCIDRAnnotation] = vipCIDR
-		annotationsChanged = true
-	} else if vipCIDR == "" && subnet.Annotations[osacVIPCIDRAnnotation] != "" {
-		delete(subnet.Annotations, osacVIPCIDRAnnotation)
-		annotationsChanged = true
-	}
-	if annotationsChanged {
-		log.Info("updating annotations", "strategy", implementationStrategy, "k8sStrategy", k8sStrategy, "vipCIDR", vipCIDR)
-		if err := r.Update(ctx, subnet); err != nil {
-			return ctrl.Result{}, err
-		}
+	if updated {
 		return ctrl.Result{}, nil
 	}
 
-	// Compute desired config version from spec and inherited implementation strategy
+	// Compute desired config version from spec and inherited implementation strategy(ies).
+	// K8sImplementationStrategy is included alongside the fabric one so that a
+	// NetworkClass's k8sManager changing (with no other spec change) still bumps the
+	// version and triggers re-provisioning of the k8s target.
 	desiredVersion, err := provisioning.ComputeDesiredConfigVersion(struct {
-		Spec                   v1alpha1.SubnetSpec
-		ImplementationStrategy string
-	}{subnet.Spec, implementationStrategy})
+		Spec                      v1alpha1.SubnetSpec
+		ImplementationStrategy    string
+		K8sImplementationStrategy string
+	}{subnet.Spec, implementationStrategy, k8sStrategy})
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to compute desired config version: %w", err)
 	}
@@ -300,13 +294,92 @@ func (r *SubnetReconciler) handleUpdate(ctx context.Context, subnet *v1alpha1.Su
 
 	// Set phase to Progressing only on first provision (empty phase) or when spec changed
 	// after a previous success. Don't override Failed during backoff.
-	if subnet.Status.Phase == "" || (subnet.Status.Phase == v1alpha1.SubnetPhaseReady &&
-		!provisioning.IsConfigApplied(&subnet.Status.ProvisioningJobs, subnet.Status.DesiredConfigVersion)) {
+	if subnet.Status.Phase == "" ||
+		(subnet.Status.Phase == v1alpha1.SubnetPhaseReady && !isSubnetConfigApplied(subnet.Status.ProvisioningJobs, subnet.Status.DesiredConfigVersion, plan)) {
 		subnet.Status.Phase = v1alpha1.SubnetPhaseProgressing
 	}
 
 	// Handle provisioning
 	return r.handleProvisioning(ctx, subnet, plan)
+}
+
+// updateSubnetStrategyAnnotations stamps the implementation-strategy, k8s
+// implementation-strategy, and VIP CIDR annotations AAP playbooks rely on, persisting
+// subnet if anything changed. The k8s annotation is compared and, when hasK8sTarget is
+// false, removed unconditionally (not just when previously present) so a Subnet
+// transitioning from dual-dispatch to fabric-only doesn't leave a stale k8s target for
+// handleDeprovisioning to act on. Returns true when it persisted a change — the caller
+// should return immediately in that case, since the change itself triggers a fresh
+// reconcile that resumes with up-to-date annotations.
+func (r *SubnetReconciler) updateSubnetStrategyAnnotations(ctx context.Context, subnet *v1alpha1.Subnet, implementationStrategy, k8sStrategy, vipCIDR string, hasK8sTarget bool) (bool, error) {
+	if subnet.Annotations == nil {
+		subnet.Annotations = make(map[string]string)
+	}
+	changed := false
+	if subnet.Annotations[osacImplementationStrategyAnnotation] != implementationStrategy {
+		subnet.Annotations[osacImplementationStrategyAnnotation] = implementationStrategy
+		changed = true
+	}
+	if subnet.Annotations[osacK8sImplementationStrategyAnnotation] != k8sStrategy {
+		if hasK8sTarget {
+			subnet.Annotations[osacK8sImplementationStrategyAnnotation] = k8sStrategy
+		} else {
+			delete(subnet.Annotations, osacK8sImplementationStrategyAnnotation)
+		}
+		changed = true
+	}
+	if vipCIDR != "" && subnet.Annotations[osacVIPCIDRAnnotation] != vipCIDR {
+		subnet.Annotations[osacVIPCIDRAnnotation] = vipCIDR
+		changed = true
+	} else if vipCIDR == "" && subnet.Annotations[osacVIPCIDRAnnotation] != "" {
+		delete(subnet.Annotations, osacVIPCIDRAnnotation)
+		changed = true
+	}
+	if !changed {
+		return false, nil
+	}
+	ctrllog.FromContext(ctx).Info("updating annotations", "strategy", implementationStrategy, "k8sStrategy", k8sStrategy, "vipCIDR", vipCIDR)
+	if err := r.Update(ctx, subnet); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// deprovisionStaleK8sTarget handles the reverse-migration case: the NetworkClass
+// dropped its k8sManager (currentK8sTarget is nil) while subnet still carries
+// osacK8sImplementationStrategyAnnotation from a prior dual-dispatch reconcile. It
+// deprovisions that now-stale k8s target and keeps both implementation-strategy
+// annotations in place until deprovisioning completes — the mirror image of
+// AbsorbsLegacyHistory's forward-migration story — so the k8s manager's resource
+// isn't silently orphaned once the annotation (and with it, handleDeprovisioning's
+// only record of the target) would otherwise be gone.
+//
+// Returns a non-nil result when the caller should return immediately (deprovisioning
+// still in progress, or a status flush failed); a nil result and nil error mean the
+// caller should proceed with its normal annotation bookkeeping.
+func (r *SubnetReconciler) deprovisionStaleK8sTarget(ctx context.Context, subnet *v1alpha1.Subnet, currentK8sTarget *dispatcher.DispatchTarget) (*ctrl.Result, error) {
+	existingK8sStrategy := subnet.Annotations[osacK8sImplementationStrategyAnnotation]
+	if currentK8sTarget != nil || existingK8sStrategy == "" || r.ProvisioningProvider == nil {
+		return nil, nil
+	}
+
+	_, done, err := provisioning.RunMultiTargetDeprovisioningLifecycle(ctx,
+		[]provisioning.DeprovisionTarget{
+			{Name: string(dispatcher.ManagerRoleK8s), Provider: newDispatchTargetProvider(r.ProvisioningProvider, existingK8sStrategy)},
+		},
+		subnet, &subnet.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval)
+	if err != nil {
+		return nil, fmt.Errorf("deprovisioning stale k8s target for subnet %s/%s: %w", subnet.Namespace, subnet.Name, err)
+	}
+	if done {
+		return nil, nil
+	}
+
+	if err := r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(subnet), subnet.Status); err != nil {
+		return nil, err
+	}
+	result := ctrl.Result{RequeueAfter: r.StatusPollInterval}
+	return &result, nil
 }
 
 func (r *SubnetReconciler) handleDelete(ctx context.Context, subnet *v1alpha1.Subnet) (ctrl.Result, error) {
@@ -354,15 +427,20 @@ func subnetProvisioningJobsExtractor(obj client.Object) []v1alpha1.JobStatus {
 }
 
 // handleProvisioning manages the provisioning job lifecycle for a Subnet. When plan
-// has no k8s target (fabric-only dispatch or the no-dispatcher legacy path), this is
-// the single-target RunProvisioningLifecycle unchanged. When plan has both a fabric
-// and a k8s target (dual-dispatch), it drives both targets in parallel via
-// RunMultiTargetProvisioningLifecycle: each target triggers/polls its own AAP job
-// through a dispatchTargetProvider routing to that target's manager, and the Subnet
-// only reaches Ready once allProvisionTargetsSucceeded reports both targets'
-// latest jobs succeeded at the current desired config version — one target
-// succeeding does not flip Ready on its own, and one target failing/backing off
-// does not block the other target's independent retry.
+// has no fabric target (the no-dispatcher legacy path), this is the single-target
+// RunProvisioningLifecycle unchanged, using fully untargeted ("") job history. When
+// plan has a fabric target — with or without an accompanying k8s target — it drives
+// each resolved target independently via RunMultiTargetProvisioningLifecycle, always
+// tagging the fabric target's jobs "fabric" (never leaving it untargeted). Keeping the
+// fabric target consistently tagged, whether or not a k8s target is currently present,
+// means transitioning into or out of dual-dispatch (a NetworkClass gaining or dropping
+// a k8sManager) reuses the fabric target's existing job history and config version
+// instead of re-triggering a duplicate job — see AbsorbsLegacyHistory below for the one
+// exception (the initial migration off pre-dispatcher untargeted history). The Subnet
+// only reaches Ready once allProvisionTargetsSucceeded reports every resolved target's
+// latest job succeeded at the current desired config version — one target succeeding
+// does not flip Ready on its own, and one target failing/backing off does not block
+// another target's independent retry.
 func (r *SubnetReconciler) handleProvisioning(ctx context.Context, subnet *v1alpha1.Subnet, plan *dispatcher.DispatchPlan) (ctrl.Result, error) {
 	if r.ProvisioningProvider == nil {
 		ctrllog.FromContext(ctx).Info("no provisioning provider configured, skipping provisioning")
@@ -371,8 +449,12 @@ func (r *SubnetReconciler) handleProvisioning(ctx context.Context, subnet *v1alp
 
 	var result ctrl.Result
 	var err error
-	k8sTarget := plan.K8sTarget()
-	if k8sTarget == nil {
+	fabricTarget := plan.FabricTarget()
+	if fabricTarget == nil {
+		// No-dispatcher legacy path: implementationStrategy came from the parent
+		// VirtualNetwork spec's annotation rather than a resolved DispatchPlan. Job
+		// history for these Subnets has always been untargeted, so keep using the
+		// fully single-target lifecycle unchanged.
 		result, err = provisioning.RunProvisioningLifecycle(ctx, r.ProvisioningProvider, subnet,
 			&provisioning.State{Jobs: &subnet.Status.ProvisioningJobs, DesiredConfigVersion: subnet.Status.DesiredConfigVersion},
 			r.MaxJobHistory, r.StatusPollInterval,
@@ -394,15 +476,14 @@ func (r *SubnetReconciler) handleProvisioning(ctx context.Context, subnet *v1alp
 			},
 		)
 	} else {
-		fabricTarget := plan.FabricTarget()
-		if fabricTarget == nil {
-			// Defensive: pkg/dispatcher's dispatch table always requests the fabric role
-			// for Subnet, so a resolved plan with a k8s target always has a fabric target too.
-			return ctrl.Result{}, fmt.Errorf("dispatch plan for subnet %s/%s has a k8s target but no fabric target", subnet.Namespace, subnet.Name)
-		}
-
+		k8sTarget := plan.K8sTarget()
 		fabricName := string(dispatcher.ManagerRoleFabric)
 		k8sName := string(dispatcher.ManagerRoleK8s)
+
+		targetNames := []string{fabricName}
+		if k8sTarget != nil {
+			targetNames = append(targetNames, k8sName)
+		}
 
 		onFailedFor := func(targetName string) func(string) {
 			return func(message string) {
@@ -411,7 +492,7 @@ func (r *SubnetReconciler) handleProvisioning(ctx context.Context, subnet *v1alp
 			}
 		}
 		onSuccess := func(_ provisioning.ProvisionStatus) {
-			if allProvisionTargetsSucceeded(subnet.Status.ProvisioningJobs, subnet.Status.DesiredConfigVersion, fabricName, k8sName) {
+			if allProvisionTargetsSucceeded(subnet.Status.ProvisioningJobs, subnet.Status.DesiredConfigVersion, targetNames...) {
 				subnet.Status.Phase = v1alpha1.SubnetPhaseReady
 				setReadyConditionTrue(&subnet.Status.Conditions)
 			}
@@ -429,17 +510,19 @@ func (r *SubnetReconciler) handleProvisioning(ctx context.Context, subnet *v1alp
 				Provider:       newDispatchTargetProvider(r.ProvisioningProvider, fabricTarget.Manager.Name),
 				Callbacks:      &provisioning.PollCallbacks{OnFailed: onFailedFor(fabricName), OnSuccess: onSuccess},
 				CheckAPIServer: checkAPIServerFor(fabricName),
-				// Subnet was fabric-only (single, untargeted job history) before
-				// dual-dispatch existed, so fabric inherits any pre-existing
-				// Target=="" jobs when a NetworkClass gains a k8sManager.
+				// Subnet was fabric-only (single, untargeted job history) before the
+				// dispatcher path existed, so fabric inherits any pre-existing
+				// Target=="" jobs the first time this NetworkClass resolves a plan.
 				AbsorbsLegacyHistory: true,
 			},
-			{
+		}
+		if k8sTarget != nil {
+			targets = append(targets, provisioning.JobTarget{
 				Name:           k8sName,
 				Provider:       newDispatchTargetProvider(r.ProvisioningProvider, k8sTarget.Manager.Name),
 				Callbacks:      &provisioning.PollCallbacks{OnFailed: onFailedFor(k8sName), OnSuccess: onSuccess},
 				CheckAPIServer: checkAPIServerFor(k8sName),
-			},
+			})
 		}
 
 		result, err = provisioning.RunMultiTargetProvisioningLifecycle(ctx, targets, subnet,
@@ -465,6 +548,26 @@ func (r *SubnetReconciler) handleProvisioning(ctx context.Context, subnet *v1alp
 	return result, nil
 }
 
+// isSubnetConfigApplied reports whether the current desired config version has been
+// successfully applied to every target the plan resolves. On the dispatcher path,
+// provision jobs are tagged by target ("fabric"/"k8s") rather than left untagged, so
+// this must delegate to allProvisionTargetsSucceeded — the untargeted
+// provisioning.IsConfigApplied would never find a match against tagged job history
+// and would regress Ready back to Progressing on every reconcile. Falls back to
+// provisioning.IsConfigApplied for the no-dispatcher legacy path (plan has no fabric
+// target), whose job history has always been untargeted.
+func isSubnetConfigApplied(jobs []v1alpha1.JobStatus, desiredVersion string, plan *dispatcher.DispatchPlan) bool {
+	fabricTarget := plan.FabricTarget()
+	if fabricTarget == nil {
+		return provisioning.IsConfigApplied(&jobs, desiredVersion)
+	}
+	targetNames := []string{string(dispatcher.ManagerRoleFabric)}
+	if plan.K8sTarget() != nil {
+		targetNames = append(targetNames, string(dispatcher.ManagerRoleK8s))
+	}
+	return allProvisionTargetsSucceeded(jobs, desiredVersion, targetNames...)
+}
+
 // allProvisionTargetsSucceeded reports whether every named target's most recent
 // provision job succeeded at desiredVersion (or is a pre-Target legacy success with
 // ConfigVersion == "" — mirrors IsConfigApplied's same accommodation). Used from
@@ -472,6 +575,9 @@ func (r *SubnetReconciler) handleProvisioning(ctx context.Context, subnet *v1alp
 // flip to Ready: Ready requires ALL targets independently confirmed successful, not
 // just the one whose callback just fired.
 func allProvisionTargetsSucceeded(jobs []v1alpha1.JobStatus, desiredVersion string, targetNames ...string) bool {
+	if len(targetNames) == 0 {
+		return false
+	}
 	for _, name := range targetNames {
 		job := provisioning.FindLatestJobByTypeAndTarget(jobs, v1alpha1.JobTypeProvision, name)
 		if job == nil || job.State != v1alpha1.JobStateSucceeded {

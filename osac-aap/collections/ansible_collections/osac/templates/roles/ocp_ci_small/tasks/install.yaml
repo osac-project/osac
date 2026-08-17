@@ -40,6 +40,7 @@
       ssh_public_key: "{{ template_parameters.ssh_public_key }}"
     hosted_cluster_node_requests: "{{ cluster_order.spec.nodeRequests | unique(attribute='resourceClass') }}"
     hosted_cluster_state: present
+    hosted_cluster_infrastructure_availability_policy: "{{ lookup('env', 'HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY', default='SingleReplica') }}"
 
 - name: Step - Create cluster infrastructure
   ansible.builtin.include_role:

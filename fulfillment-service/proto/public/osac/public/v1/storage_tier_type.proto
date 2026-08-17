@@ -76,8 +76,9 @@ message StorageTierSpec {
   // Maximum write bandwidth in megabytes per second.
   int32 max_write_bandwidth_mbs = 4;
 
-  // Storage quota in gibibytes (GiB) allocated to this tier.
-  int64 quota_gib = 5;
+  // Reserved field numbers for removed fields (do not reuse).
+  reserved 5;
+  reserved "quota_gib";
 
   // Whether data at rest is encrypted on this tier.
   bool encryption_enabled = 6;

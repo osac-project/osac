@@ -74,12 +74,6 @@ func Cmd() *cobra.Command {
 		0,
 		maxWriteBandwidthFlagHelp,
 	)
-	flags.Int64Var(
-		&runner.quotaGiB,
-		"quota-gib",
-		0,
-		quotaGibFlagHelp,
-	)
 	flags.BoolVar(
 		&runner.encryptionEnabled,
 		"encryption-enabled",
@@ -97,7 +91,6 @@ type runnerContext struct {
 	protocol             string
 	maxReadBandwidthMbs  int32
 	maxWriteBandwidthMbs int32
-	quotaGiB             int64
 	encryptionEnabled    bool
 }
 
@@ -136,13 +129,12 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		}.Build(),
 		Spec: privatev1.StorageTierSpec_builder{
 			Description: c.description,
+			Protocol:    protocolValue,
 			Backends: []*privatev1.BackendAssociation{
 				privatev1.BackendAssociation_builder{
 					BackendId:            c.backendID,
-					Protocol:             protocolValue,
 					MaxReadBandwidthMbs:  c.maxReadBandwidthMbs,
 					MaxWriteBandwidthMbs: c.maxWriteBandwidthMbs,
-					QuotaGib:             c.quotaGiB,
 					EncryptionEnabled:    c.encryptionEnabled,
 				}.Build(),
 			},
@@ -179,7 +171,7 @@ const shortHelp = `Create a storage tier`
 const longHelp = `
 Create a storage tier.
 
-A storage tier groups a storage backend with protocol, bandwidth, quota, and encryption settings.
+A storage tier groups a storage backend with protocol, bandwidth, and encryption settings.
 Storage tiers are managed by Cloud Provider Admins via the private API and are consumed indirectly
 by tenants when provisioning storage-enabled resources.
 
@@ -191,7 +183,6 @@ To create a storage tier:
   --protocol NFS \
   --max-read-bandwidth-mbs 2000 \
   --max-write-bandwidth-mbs 1000 \
-  --quota-gib 4096 \
   --encryption-enabled
 {{ bt 3 }}
 `
@@ -219,10 +210,6 @@ _MBS_ - Maximum read bandwidth in megabytes per second.
 
 const maxWriteBandwidthFlagHelp = `
 _MBS_ - Maximum write bandwidth in megabytes per second.
-`
-
-const quotaGibFlagHelp = `
-_GIB_ - Storage quota in gibibytes (GiB).
 `
 
 const encryptionEnabledFlagHelp = `

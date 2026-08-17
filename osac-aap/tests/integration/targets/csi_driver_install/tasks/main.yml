@@ -1,8 +1,11 @@
 ---
 # Integration test for osac.service.csi_driver_install.
 # Tests the idempotent, provider-agnostic OSAC CSI driver Helm install: first-call
-# install, second-call idempotency, cross-dispatch vendor accumulation, and a pinned
-# chart-version bump triggering a real upgrade.
+# install, second-call idempotency, cross-dispatch vendor accumulation, a pinned
+# chart-version bump triggering a real upgrade, and two fail-fast validation paths
+# (missing backend_id connection details; ambiguous multi-backend_id vast dispatch)
+# -- the second of which also proves a later dispatch's validation failure does not
+# disturb an already-installed, shared release from an earlier dispatch.
 #
 # Requires: kind cluster (provided by setup_test_env.sh), network access to
 # oci://ghcr.io/osac-project/charts, and a real osac-csi-driver/vX.Y.Z release tag
@@ -289,6 +292,125 @@
           Pinning a new csi_driver_install_chart_version did not trigger a real upgrade
           -- installed chart is still: {{ _driver_release_after_bump.status.chart }}
         success_msg: "Chart version bump correctly triggered a real Helm upgrade"
+
+# ── Test 5: A dispatched provider's backend_id has no connection details -- fail-fast,
+# no side effects (this fires in the pre-block validation, before any namespace or
+# Helm call, so nothing needs to be reverted) ──
+- name: "CSI Driver Install - Missing backend_id connection details (should fail)"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    _storage_provider_tiers:
+      - name: default
+        protocol: nfs
+        provider: vast
+        backend_id: be-missing
+    _unique_providers: ["vast"]
+    storage_provider_backend_connections: {}
+
+  tasks:
+    - name: Attempt dispatch with a backend_id absent from storage_provider_backend_connections (expected to fail)
+      block:
+        - name: Call csi_driver_install role
+          ansible.builtin.include_role:
+            name: osac.service.csi_driver_install
+
+        - name: This task should not be reached -- role should have failed
+          ansible.builtin.fail:
+            msg: "Role did not fail as expected when a dispatched backend_id has no connection details"
+
+      rescue:
+        # The failing task is a looped `fail`, so ansible_failed_result.msg is the
+        # generic "One or more items failed" -- the real per-item message only lives
+        # in ansible_failed_result.results[].msg.
+        - name: Assert role failed with the expected missing-connection message
+          ansible.builtin.assert:
+            that:
+              - >-
+                "No entry for backend_id 'be-missing'" in
+                (ansible_failed_result.results | default([]) | map(attribute='msg') | join(' | '))
+            fail_msg: >-
+              Role failed but with unexpected message: {{ ansible_failed_result.results | default(ansible_failed_result.msg) | default('unknown') }}
+            success_msg: "Role correctly rejected a dispatched backend_id with no connection details"
+
+# ── Test 6: Multiple vast backend_ids dispatched together -- fail-fast inside the
+# block (after existed_before tracking, before any Helm install call), proving the
+# already-installed releases from earlier tests are untouched by this failure ──
+- name: "CSI Driver Install - Multiple vast backend_ids (should fail, existing releases survive)"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    csi_driver_install_chart_version: "0.1.1"
+    _storage_provider_tiers:
+      - name: gold
+        protocol: nfs
+        provider: vast
+        backend_id: be-test
+      - name: silver
+        protocol: nfs
+        provider: vast
+        backend_id: be-other
+    _unique_providers: ["vast"]
+    storage_provider_backend_connections:
+      be-test:
+        endpoint: "vast-mock.example.com:443"
+        username: "admin"
+        password: "mock-admin-password"
+      be-other:
+        endpoint: "vast-mock-2.example.com:443"
+        username: "admin"
+        password: "mock-admin-password"
+
+  tasks:
+    - name: Attempt dispatch with two vast tiers referencing different backend_ids (expected to fail)
+      block:
+        - name: Call csi_driver_install role
+          ansible.builtin.include_role:
+            name: osac.service.csi_driver_install
+
+        - name: This task should not be reached -- role should have failed
+          ansible.builtin.fail:
+            msg: "Role did not fail as expected when vast tiers reference multiple backend_ids"
+
+      rescue:
+        - name: Assert role failed with the expected ambiguous-backend_id message
+          ansible.builtin.assert:
+            that:
+              - "'Expected exactly one backend_id' in (ansible_failed_result.msg | default(''))"
+            fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
+            success_msg: "Role correctly rejected vast tiers referencing multiple backend_ids"
+
+    - name: Read csi-driver/csi-backends releases after the failed dispatch
+      kubernetes.core.helm_info:
+        name: "{{ item.name }}"
+        release_namespace: "{{ item.namespace }}"
+      loop:
+        - {name: csi-driver, namespace: osac-csi}
+        - {name: csi-backends, namespace: osac-csi-backends}
+      register: _releases_after_failure
+
+    - name: Assert the pre-existing csi-driver release survived the failed dispatch unchanged
+      ansible.builtin.assert:
+        that:
+          - _releases_after_failure.results[0].status is not none
+          - "'0.1.1' in _releases_after_failure.results[0].status.chart"
+          - _releases_after_failure.results[0].status.values.vendors.vast.enabled | bool
+        fail_msg: >-
+          The pre-existing csi-driver release (from earlier tests) did not survive a
+          later dispatch's validation failure intact: {{ _releases_after_failure.results[0].status }}
+        success_msg: "Pre-existing csi-driver release survived the failed dispatch untouched"
+
+    - name: Assert the pre-existing csi-backends release survived the failed dispatch unchanged
+      ansible.builtin.assert:
+        that:
+          - _releases_after_failure.results[1].status is not none
+          - _releases_after_failure.results[1].status.values.vast.enabled | bool
+        fail_msg: >-
+          The pre-existing csi-backends release (from earlier tests) did not survive a
+          later dispatch's validation failure intact: {{ _releases_after_failure.results[1].status }}
+        success_msg: "Pre-existing csi-backends release survived the failed dispatch untouched"
 
 # ── Cleanup ──
 - name: "CSI Driver Install - Cleanup"

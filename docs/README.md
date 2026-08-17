@@ -1,7 +1,8 @@
 # Cross-Component Docs
 
 Hand-trimmed, cross-component-only excerpts of what used to be
-`osac-workspace/reference/ARCHITECTURE.md` and `reference/CONVENTIONS.md` —
+`osac-workspace/reference/ARCHITECTURE.md` and
+`osac-workspace/reference/CONVENTIONS.md` —
 not raw regenerated codebase-analysis snapshots. Per
 [ADR 0001](https://github.com/osac-project/osac-workspace/blob/main/decisions/0001-dedicated-ai-skills-repo.md)'s
 exit-criterion (e) (OSAC-4008): these two files ([ARCHITECTURE.md](ARCHITECTURE.md),

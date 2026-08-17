@@ -530,6 +530,46 @@ class GRPCClient:
     def delete_disk_image(self, *, disk_image_id: str) -> None:
         self.call(service=f"{PUBLIC_API}.DiskImages/Delete", data={"id": disk_image_id})
 
+    # ComputeInstance creation with explicit DiskImage (public API)
+
+    def create_compute_instance_with_disk_image(
+        self,
+        *,
+        template: str,
+        disk_image_name: str,
+        subnet_ids: list[str],
+        instance_type: str | None = None,
+        name: str | None = None,
+    ) -> dict[str, Any]:
+        attachments = [{"subnet": {"id": sid}} for sid in subnet_ids]
+        spec: dict[str, Any] = {
+            "template": {"name": template},
+            "disk_image": {"name": disk_image_name},
+            "network_attachments": attachments,
+        }
+        if instance_type is not None:
+            spec["instance_type"] = {"name": instance_type}
+        obj: dict[str, Any] = {"spec": spec}
+        if name is not None:
+            obj["metadata"] = {"name": name}
+        return self.call(service=f"{PUBLIC_API}.ComputeInstances/Create", data={"object": obj})
+
+    # ComputeInstanceTemplate operations (private API)
+
+    def create_compute_instance_template(
+        self, *, name: str, title: str, description: str, spec_defaults: dict[str, Any] | None = None
+    ) -> str:
+        obj: dict[str, Any] = {"metadata": {"name": name}, "title": title, "description": description}
+        if spec_defaults is not None:
+            obj["spec_defaults"] = spec_defaults
+        response: dict[str, Any] = self.call(
+            service=f"{PRIVATE_API}.ComputeInstanceTemplates/Create", data={"object": obj}
+        )
+        return response["object"]["id"]
+
+    def delete_compute_instance_template(self, *, template_id: str) -> None:
+        self.call(service=f"{PRIVATE_API}.ComputeInstanceTemplates/Delete", data={"id": template_id})
+
     # Generic filtered list
 
     def list_with_filter(self, *, service: str, filter_expr: str) -> list[dict[str, Any]]:

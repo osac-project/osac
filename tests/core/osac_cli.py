@@ -17,6 +17,7 @@ class OsacCLI:
         token_script: str,
         namespace: str,
         default_instance_type: str | None = None,
+        default_disk_image: str | None = None,
         private: bool = False,
     ) -> None:
         self.binary: str = binary
@@ -25,6 +26,7 @@ class OsacCLI:
         self._token_script: str = token_script
         self._private: bool = private
         self.default_instance_type: str | None = default_instance_type
+        self.default_disk_image: str | None = default_disk_image
         # Each OsacCLI instance gets its own config directory so that parallel
         # xdist workers (or multiple CLI fixtures) don't overwrite each other's
         # login credentials via the shared ~/.config/osac/config.json.
@@ -69,8 +71,7 @@ class OsacCLI:
         name: str | None = None,
         network_attachments: list[dict[str, Any]] | None = None,
         boot_disk_size: int = 20,
-        image: str = "quay.io/containerdisks/fedora:latest",
-        image_source_type: str = "registry",
+        disk_image: str | None = None,
         run_strategy: str = "Always",
         user_data_secret_ref: str | None = None,
         instance_type: str | None = None,
@@ -82,10 +83,6 @@ class OsacCLI:
             template,
             "--boot-disk-size",
             str(boot_disk_size),
-            "--image",
-            image,
-            "--image-source-type",
-            image_source_type,
             "--run-strategy",
             run_strategy,
         ]
@@ -97,6 +94,12 @@ class OsacCLI:
             args.extend(["--instance-type", effective_instance_type])
         else:
             raise ValueError("instance_type or default_instance_type must be set")
+
+        effective_disk_image = disk_image if disk_image is not None else self.default_disk_image
+        if effective_disk_image is not None:
+            args.extend(["--disk-image", effective_disk_image])
+        else:
+            raise ValueError("disk_image or default_disk_image must be set")
 
         # Add network attachments
         if network_attachments is not None:

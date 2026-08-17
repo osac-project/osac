@@ -303,6 +303,17 @@
       ansible.builtin.set_fact:
         _csi_driver_install_oauth_secret_existed_before: "{{ _csi_driver_install_oauth_secret_check.resources | length > 0 }}"
 
+    - name: Warn if OAuth client credentials are not configured
+      ansible.builtin.debug:
+        msg: >-
+          CSI_DRIVER_OAUTH_CLIENT_ID/CSI_DRIVER_OAUTH_CLIENT_SECRET are not set —
+          the '{{ csi_driver_install_oauth_secret_name }}' Secret will be created/updated
+          with blank client-id/client-secret. The vast-csi-controller init-container
+          (once it exists) will not be able to authenticate to fulfillment-service's
+          private API until a real OAuth client is registered and these are configured
+          as AAP Credential Type / vault-backed environment variables.
+      when: (csi_driver_install_oauth_client_id | length == 0) or (csi_driver_install_oauth_client_secret | length == 0)
+
     - name: Create OAuth client-credentials Secret for the vast-csi-controller init-container
       kubernetes.core.k8s:
         state: present

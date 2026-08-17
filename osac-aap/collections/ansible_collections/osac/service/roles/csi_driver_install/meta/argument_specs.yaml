@@ -4,32 +4,29 @@ argument_specs:
     short_description: OSAC CSI driver Helm chart install
     description: >
       Idempotently installs the OSAC CSI driver (csi-driver + csi-backends Helm
-      charts) once per hub-targeting storage playbook invocation, regardless
-      of how many providers are configured in the dispatched tier list. Called
-      directly from playbook_osac_create_tenant_storage_backend.yml and the
-      Tenant (hub) call site of playbook_osac_create_tenant_cluster_storage.yml
-      — deliberately not from osac.service.storage_provider's own dispatcher,
-      to keep storage_provider/tests/test.yml's zero-live-I/O validation
+      charts) once per hub-targeting storage dispatch, regardless of how many
+      providers are configured in the dispatched tier list. Called directly
+      from every hub-targeting storage dispatch point —
+      playbook_osac_create_tenant_storage_backend.yml, the Tenant (hub) call
+      site of playbook_osac_create_tenant_cluster_storage.yml, and
+      playbook_osac_create_compute_instance.yml's JIT storage path —
+      deliberately not from osac.service.storage_provider's own dispatcher, to
+      keep storage_provider/tests/test.yml's zero-live-I/O validation
       guarantee intact.
     options:
-      _unique_providers:
-        type: list
-        elements: str
-        required: true
-        description: >
-          Provider names referenced by the dispatched tier list (e.g.
-          ['vast']), computed by the calling playbook the same way
-          storage_provider/tasks/main.yaml's own "Extract unique providers
-          from tier list" step does.
-      _storage_provider_tiers:
+      csi_driver_install_tiers:
         type: list
         required: true
         description: >
           The tier list for this dispatch (osac_job_vars.storage_tier_definitions
-          as received by the calling playbook). Only the provider and
-          backend_id fields are read — untouched by storage_provider's own
-          qos_policy derivation, so the raw, pre-derivation list is equivalent
-          for this role's purposes.
+          or, for the JIT compute-instance path, the filtered _jit_storage_tiers).
+          Only the provider and backend_id fields are read — untouched by
+          storage_provider's own qos_policy derivation, so the raw,
+          pre-derivation list is equivalent for this role's purposes. Unique
+          providers are derived from this list internally, the same way
+          storage_provider/tasks/main.yaml's own "Extract unique providers
+          from tier list" step does — callers do not compute or pass that
+          separately.
       storage_provider_backend_connections:
         type: dict
         required: false

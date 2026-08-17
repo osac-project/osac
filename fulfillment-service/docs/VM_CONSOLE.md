@@ -491,7 +491,7 @@ osac create computeinstance \
   --catalog-item <catalog-item-id> \
   --name my-vm \
   --boot-disk-size 20 \
-  --image quay.io/containerdisks/fedora:latest \
+  --disk-image fedora \
   --run-strategy Always \
   -p cloud_init_config="$(base64 < cloud-init.yaml | tr -d '\n')"
 ```

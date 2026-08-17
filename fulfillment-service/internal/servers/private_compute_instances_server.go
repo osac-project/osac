@@ -687,7 +687,7 @@ func (s *PrivateComputeInstancesServer) validateDiskImage(
 	// Backfill id and name so the stored reference is complete.
 	diskImageRef.Id = diskImage.GetId()
 	diskImageRef.Name = diskImage.GetMetadata().GetName()
-	diskImageRef.Shared = diskImage.GetMetadata().GetTenant() == "shared"
+	diskImageRef.Shared = diskImage.GetMetadata().GetTenant() == auth.SharedTenant
 
 	lifecycle := diskImage.GetSpec().GetLifecycle()
 	var warnings []string

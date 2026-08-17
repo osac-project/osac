@@ -246,7 +246,7 @@ var _ = Describe("Compute instances server", func() {
 				},
 				SpecDefaults: privatev1.ComputeInstanceTemplateSpecDefaults_builder{
 					InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
-					DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
+					DiskImage:    privatev1.DiskImageReference_builder{Id: "test-disk-image"}.Build(),
 					BootDisk: privatev1.ComputeInstanceDisk_builder{
 						SizeGib:     10,
 						StorageTier: new("standard"),
@@ -470,7 +470,7 @@ var _ = Describe("Compute instances server", func() {
 						Template:     publicv1.ComputeInstanceTemplateReference_builder{Id: "general.small"}.Build(),
 						InstanceType: publicv1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
 						RunStrategy:  new("Always"),
-						DiskImage:    &publicv1.DiskImageReference{Id: "test-disk-image"},
+						DiskImage:    publicv1.DiskImageReference_builder{Id: "test-disk-image"}.Build(),
 						BootDisk: publicv1.ComputeInstanceDisk_builder{
 							SizeGib:     20,
 							StorageTier: new("standard"),

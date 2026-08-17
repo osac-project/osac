@@ -106,7 +106,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 // renderTierTable writes a compact table of storage tiers — used when listing all tiers.
 func renderTierTable(w *terminal.Console, tiers []*publicv1.StorageTier) {
 	writer := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(writer, "ID\tNAME\tDESCRIPTION\tPROTOCOL\tQUOTA\tSTATE")
+	fmt.Fprintln(writer, "ID\tNAME\tDESCRIPTION\tPROTOCOL\tSTATE")
 	for _, t := range tiers {
 		name := t.GetMetadata().GetName()
 		if name == "" {
@@ -117,9 +117,8 @@ func renderTierTable(w *terminal.Console, tiers []*publicv1.StorageTier) {
 			description = "-"
 		}
 		protocol := strings.TrimPrefix(t.GetSpec().GetProtocol().String(), "STORAGE_PROTOCOL_")
-		quota := fmt.Sprintf("%d GiB", t.GetSpec().GetQuotaGib())
 		state := strings.TrimPrefix(t.GetStatus().GetState().String(), "STORAGE_TIER_STATE_")
-		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\n", t.GetId(), name, description, protocol, quota, state)
+		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\n", t.GetId(), name, description, protocol, state)
 	}
 	writer.Flush()
 }
@@ -152,7 +151,6 @@ func renderTierDetail(w *terminal.Console, t *publicv1.StorageTier) {
 	fmt.Fprintf(writer, "Protocol:\t%s\n", protocol)
 	fmt.Fprintf(writer, "Max Read BW (MB/s):\t%d\n", t.GetSpec().GetMaxReadBandwidthMbs())
 	fmt.Fprintf(writer, "Max Write BW (MB/s):\t%d\n", t.GetSpec().GetMaxWriteBandwidthMbs())
-	fmt.Fprintf(writer, "Quota:\t%d GiB\n", t.GetSpec().GetQuotaGib())
 	fmt.Fprintf(writer, "Encryption Enabled:\t%t\n", t.GetSpec().GetEncryptionEnabled())
 	fmt.Fprintf(writer, "State:\t%s\n", state)
 	fmt.Fprintf(writer, "Message:\t%s\n", message)

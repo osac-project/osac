@@ -112,7 +112,6 @@ func renderStorageTier(w io.Writer, st *publicv1.StorageTier) {
 	fmt.Fprintf(writer, "Protocol:\t%s\n", protocol)
 	fmt.Fprintf(writer, "Max Read BW (MB/s):\t%d\n", st.GetSpec().GetMaxReadBandwidthMbs())
 	fmt.Fprintf(writer, "Max Write BW (MB/s):\t%d\n", st.GetSpec().GetMaxWriteBandwidthMbs())
-	fmt.Fprintf(writer, "Quota:\t%d GiB\n", st.GetSpec().GetQuotaGib())
 	fmt.Fprintf(writer, "Encryption Enabled:\t%t\n", st.GetSpec().GetEncryptionEnabled())
 	fmt.Fprintf(writer, "State:\t%s\n", state)
 	fmt.Fprintf(writer, "Message:\t%s\n", message)
@@ -126,7 +125,7 @@ const longHelp = `
 Describe a storage tier.
 
 Displays detailed information about a storage tier, including protocol, QoS settings (bandwidth
-limits, quota), and encryption configuration.
+limits), and encryption configuration.
 
 To describe a storage tier by name:
 

@@ -1288,6 +1288,42 @@ seed_catalog() {
   admin_token=$(kubectl -n "${OSAC_NAMESPACE}" create token admin)
   api_base="https://internal-api.${OSAC_NAMESPACE}.localhost:${EXTERNAL_INGRESS_PORT}"
 
+  # Seed DiskImages (must exist before ComputeInstance creation)
+  # Format: name:source_ref:os_family:arch
+  local disk_images=(
+    'fedora:quay.io/containerdisks/fedora:latest:GUEST_OS_FAMILY_LINUX:ARCHITECTURE_AMD64'
+  )
+
+  for entry in "${disk_images[@]}"; do
+    local di_name di_source_ref di_os_family di_arch
+    di_name="${entry%%:*}"; entry="${entry#*:}"
+    # source_ref contains colons, so parse arch and os_family from the end
+    di_arch="${entry##*:}"; entry="${entry%:*}"
+    di_os_family="${entry##*:}"
+    di_source_ref="${entry%:*}"
+
+    local di_response
+    di_response=$(curl -sk -X POST "${api_base}/api/private/v1/disk_images" \
+      -H "Authorization: Bearer ${admin_token}" \
+      -H "Content-Type: application/json" \
+      -d "{
+        \"metadata\": {\"name\": \"${di_name}\", \"tenant\": \"shared\"},
+        \"spec\": {
+          \"source_type\": \"SOURCE_TYPE_REGISTRY\",
+          \"source_ref\": \"${di_source_ref}\",
+          \"guest_os_family\": \"${di_os_family}\",
+          \"architecture\": [\"${di_arch}\"],
+          \"lifecycle\": \"DISK_IMAGE_LIFECYCLE_AVAILABLE\"
+        }
+      }")
+
+    if echo "$di_response" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if 'id' in d else 1)" 2>/dev/null; then
+      log "  disk-image: ${di_name} (${di_source_ref})"
+    else
+      warn "  disk-image ${di_name} creation failed (may already exist)"
+    fi
+  done
+
   # Seed ComputeInstance template (osac.templates.ocp_virt_vm)
   local tpl_response
   tpl_response=$(curl -sk -X POST "${api_base}/api/private/v1/compute_instance_templates" \
@@ -1298,10 +1334,7 @@ seed_catalog() {
       "title": "Virtual Machine Template (Linux and Windows)",
       "description": "VM template for OpenShift Virtualization supporting Linux and Windows guests.",
       "spec_defaults": {
-        "cores": 2,
-        "memory_gib": 2,
         "boot_disk": {"size_gib": 10},
-        "image": {"source_type": "registry", "source_ref": "quay.io/containerdisks/fedora:latest"},
         "run_strategy": "Always"
       },
       "parameters": [

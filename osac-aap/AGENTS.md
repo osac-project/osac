@@ -101,15 +101,11 @@ capabilities:
 ```yaml
 template_type: compute_instance
 spec_defaults:
-  # cores/memory_gib are reserved (removed) on ComputeInstanceTemplateSpecDefaults —
+  # cores/memory_gib/image are reserved (removed) on ComputeInstanceTemplateSpecDefaults —
   # instance_type is now the sole, mandatory way to size a ComputeInstance.
-  # Set spec_defaults.instance_type here to give the template a default, or
-  # omit it to require callers to always pass instance_type explicitly.
+  # Use disk_image for image source and ref
   boot_disk:
     size_gib: 10
-  image:
-    source_type: registry
-    source_ref: "quay.io/containerdisks/fedora:latest"
 parameters:
   - name: exposed_ports
     title: Exposed Ports

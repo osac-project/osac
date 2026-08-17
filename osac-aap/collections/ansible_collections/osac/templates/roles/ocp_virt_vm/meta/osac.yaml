@@ -12,9 +12,6 @@ template_type: compute_instance
 spec_defaults:
   boot_disk:
     size_gib: 10
-  image:
-    source_type: registry
-    source_ref: "quay.io/containerdisks/fedora:latest"
   run_strategy: "Always"
 
 parameters:

@@ -961,7 +961,7 @@ func newDAOTierResolver(
 		selected := backends[0]
 		return &servers.TierResolution{
 			BackendID: selected.GetBackendId(),
-			Protocol:  selected.GetProtocol(),
+			Protocol:  tier.GetSpec().GetProtocol(),
 		}, nil
 	}
 }

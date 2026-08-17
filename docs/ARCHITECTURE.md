@@ -45,13 +45,13 @@ section.
 - Metadata: creation_timestamp, deletion_timestamp, labels, annotations
 - Controller duty: Reconcile observed state toward desired state
 - Database as source of truth: Controllers read from DB via gRPC, write back via Signal RPC
-- Tenancy enforcement: All queries filtered by tenant ID in annotations
+- Tenancy enforcement: see Cross-Cutting Concerns → Multi-tenancy, below
 
 ## Entry Points
 
 **fulfillment-service binary:**
 - Location: `fulfillment-service/cmd/fulfillment-service/main.go` → `internal/cmd/service/Root()`
-- Triggers: Service start commands (grpc-server, rest-gateway, controller), dev/probe commands
+- Triggers: Service start commands (grpc-server, rest-gateway, controller, console-proxy), dev/probe commands
 - Responsibilities: Service initialization, subcommand routing, logging setup
 
 **gRPC Server:**
@@ -95,7 +95,7 @@ section.
 **Console Proxy (Operator):**
 - Location: `osac-operator/cmd/console-proxy/main.go`
 - Triggers: Deployed as a Kubernetes aggregated API server alongside the operator
-- See `osac-operator/AGENTS.md`'s "Console Proxy" section for implementation details (auth, discovery, subresource routing, TLS config)
+- Responsibilities: Proxies KubeVirt VM console/VNC access; see `osac-operator/AGENTS.md`'s "Console Proxy" section for implementation details (auth, discovery, subresource routing, TLS config)
 
 **bare-metal-fulfillment-operator:**
 - Location: `bare-metal-fulfillment-operator/`

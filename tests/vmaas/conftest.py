@@ -25,6 +25,10 @@ from tests.core.runner import env
 DEFAULT_IT_CORES: int = 2
 DEFAULT_IT_MEMORY_GIB: int = 4
 
+# Shared DiskImage source for CLI-based ComputeInstance scaffolding. Pinned (not
+# :latest) to match the source_ref the gRPC AC tests provision and for CI stability.
+DEFAULT_DISK_IMAGE_SOURCE_REF: str = "quay.io/containerdisks/fedora:41"
+
 
 @pytest.fixture(scope="session")
 def k8s_virt_client(namespace: str) -> K8sClient:
@@ -173,6 +177,33 @@ def default_instance_type(private_grpc: GRPCClient, test_run_id: str) -> Iterato
             raise
 
 
+@pytest.fixture(scope="session")
+def default_disk_image(grpc: GRPCClient, test_run_id: str) -> Iterator[str]:
+    """Create a default AVAILABLE Linux DiskImage for CLI-based VM tests; clean up after.
+
+    Mirrors ``default_instance_type`` but diverges in two API-driven ways:
+    DiskImages/Create is a PUBLIC API (uses ``grpc``, not ``private_grpc``), and a
+    DiskImage carries its own UUID distinct from its name — so we capture the id
+    returned at create and delete by id, while yielding the name the CLI's
+    ``--disk-image`` flag needs.
+    """
+    di_name = f"e2e-default-di-{test_run_id}"
+    di_id = grpc.create_disk_image(
+        name=di_name,
+        source_ref=DEFAULT_DISK_IMAGE_SOURCE_REF,
+        guest_os_family="GUEST_OS_FAMILY_LINUX",
+        architecture=["ARCHITECTURE_AMD64"],
+    )
+    yield di_name
+    try:
+        grpc.delete_disk_image(disk_image_id=di_id)
+    except subprocess.CalledProcessError as e:
+        output = ((e.stdout or "") + (e.stderr or "")).lower()
+        # Tolerate not-found (already gone) and in-use (a leaked CI still references it).
+        if not any(term in output for term in ("not found", "in use", "failedprecondition")):
+            raise
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _wait_for_tenant_storage_ready(
     k8s_hub_client: K8sClient,
@@ -216,3 +247,9 @@ def _wait_for_tenant_storage_ready(
 def _set_cli_default_instance_type(cli: OsacCLI, default_instance_type: str) -> None:
     """Wire the session-scoped default instance type into the shared CLI fixture."""
     cli.default_instance_type = default_instance_type
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _set_cli_default_disk_image(cli: OsacCLI, default_disk_image: str) -> None:
+    """Wire the session-scoped default disk image into the shared CLI fixture."""
+    cli.default_disk_image = default_disk_image

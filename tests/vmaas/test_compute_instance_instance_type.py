@@ -23,6 +23,7 @@ def _build_create_ci_args(
     vm_template: str,
     default_subnet: str,
     it_name: str,
+    disk_image: str,
     ci_name: str | None = None,
 ) -> list[str]:
     args = [cli.binary, "--config", cli.config_dir, "create", "computeinstance"]
@@ -33,8 +34,7 @@ def _build_create_ci_args(
         "--network-attachment", f"subnet={default_subnet}",
         "--instance-type", it_name,
         "--boot-disk-size", "20",
-        "--image", "quay.io/containerdisks/fedora:latest",
-        "--image-source-type", "registry",
+        "--disk-image", disk_image,
         "--run-strategy", "Always",
     ]
     return args
@@ -152,6 +152,7 @@ def test_compute_instance_deprecated_warning(
     default_subnet: str,
     vm_template: str,
     active_instance_type: str,
+    default_disk_image: str,
 ) -> None:
     deprecated_ci_uuid: str | None = None
     deprecated_ci_name: str | None = None
@@ -162,7 +163,10 @@ def test_compute_instance_deprecated_warning(
         )
 
         dep_output, dep_rc = run_unchecked(
-            *_build_create_ci_args(cli, vm_template, default_subnet, active_instance_type, ci_name=unique_name("e2e-ci")),
+            *_build_create_ci_args(
+                cli, vm_template, default_subnet, active_instance_type, default_disk_image,
+                ci_name=unique_name("e2e-ci"),
+            ),
         )
         assert dep_rc == 0, f"create with DEPRECATED type should succeed, got: {dep_output}"
         assert "deprecat" in dep_output.lower() or "warning" in dep_output.lower(), (
@@ -185,12 +189,13 @@ def test_compute_instance_nonexistent_instance_type(
     k8s_hub_client: K8sClient,
     default_subnet: str,
     vm_template: str,
+    default_disk_image: str,
 ) -> None:
     missing_it_name = f"nonexistent-it-{uuid4().hex[:8]}"
     ci_name = f"e2e-neg-{uuid4().hex[:8]}"
     output, rc = run_unchecked(
         *_build_create_ci_args(
-            cli, vm_template, default_subnet, missing_it_name, ci_name=ci_name,
+            cli, vm_template, default_subnet, missing_it_name, default_disk_image, ci_name=ci_name,
         ),
     )
     if rc == 0:
@@ -218,6 +223,7 @@ def test_compute_instance_obsolete_instance_type(
     default_subnet: str,
     vm_template: str,
     active_instance_type: str,
+    default_disk_image: str,
 ) -> None:
     private_grpc.update_instance_type(
         name=active_instance_type, state="INSTANCE_TYPE_STATE_DEPRECATED",
@@ -229,7 +235,7 @@ def test_compute_instance_obsolete_instance_type(
     ci_name = f"e2e-obs-{uuid4().hex[:8]}"
     output, rc = run_unchecked(
         *_build_create_ci_args(
-            cli, vm_template, default_subnet, active_instance_type, ci_name=ci_name,
+            cli, vm_template, default_subnet, active_instance_type, default_disk_image, ci_name=ci_name,
         ),
     )
     if rc == 0:

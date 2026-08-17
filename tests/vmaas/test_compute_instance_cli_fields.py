@@ -11,8 +11,6 @@ from tests.core.osac_cli import OsacCLI
 from tests.vmaas.conftest import DEFAULT_IT_CORES, DEFAULT_IT_MEMORY_GIB
 
 TEST_BOOT_DISK_SIZE: int = 20
-TEST_IMAGE: str = "quay.io/containerdisks/fedora:latest"
-TEST_IMAGE_SOURCE_TYPE: str = "registry"
 TEST_RUN_STRATEGY: str = "Always"
 TEST_USER_DATA: str = "#cloud-config\npackages:\n  - vim\n"
 
@@ -30,8 +28,6 @@ def test_compute_instance_cli_explicit_fields(
         name=name,
         network_attachments=[{"subnet": default_subnet}],
         boot_disk_size=TEST_BOOT_DISK_SIZE,
-        image=TEST_IMAGE,
-        image_source_type=TEST_IMAGE_SOURCE_TYPE,
         run_strategy=TEST_RUN_STRATEGY,
         user_data_secret_ref=TEST_USER_DATA,
     )
@@ -58,7 +54,6 @@ def test_compute_instance_cli_explicit_fields(
     assert spec["bootDisk"]["sizeGiB"] == TEST_BOOT_DISK_SIZE, (
         f"bootDisk.sizeGiB mismatch: {spec['bootDisk']['sizeGiB']} != {TEST_BOOT_DISK_SIZE}"
     )
-    assert spec["image"]["sourceRef"] == TEST_IMAGE, f"image.sourceRef mismatch: {spec['image']['sourceRef']}"
     assert spec["runStrategy"] == TEST_RUN_STRATEGY, f"runStrategy mismatch: {spec['runStrategy']}"
 
     expected_secret_name: str = f"{uuid}-user-data"

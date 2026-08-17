@@ -7,8 +7,6 @@ from tests.core.k8s_client import K8sClient
 from tests.core.osac_cli import OsacCLI
 from tests.core.runner import poll_until
 
-TEST_IMAGE_REF: str = "quay.io/containerdisks/fedora:latest"
-TEST_IMAGE_SOURCE_TYPE: str = "registry"
 TEST_BOOT_DISK_SIZE: int = 20
 TEST_RUN_STRATEGY: str = "Always"
 
@@ -26,8 +24,6 @@ def test_compute_instance_api_fields(
         name=unique_name("e2e-api"),
         network_attachments=[{"subnet": default_subnet}],
         boot_disk_size=TEST_BOOT_DISK_SIZE,
-        image=TEST_IMAGE_REF,
-        image_source_type=TEST_IMAGE_SOURCE_TYPE,
         run_strategy=TEST_RUN_STRATEGY,
     )
 

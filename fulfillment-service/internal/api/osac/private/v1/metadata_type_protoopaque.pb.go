@@ -296,10 +296,11 @@ type Metadata_builder struct {
 	// For organization objects this field is always empty, as organizations don't belong to a project.
 	Project string
 	// Human-friendly display name. Optional, not unique, mutable.
-	// Not constrained to DNS-label format.
+	// Not constrained to DNS-label format. Distinct from identity `name`.
 	DisplayName string
-	// Optional human-friendly description. Opaque string; clients may
-	// treat content as Markdown. Not unique, mutable.
+	// Human-friendly long description in Markdown. Optional, not unique,
+	// mutable. Clients that display this field MUST render it as Markdown
+	// (with safe sanitization).
 	Description string
 }
 

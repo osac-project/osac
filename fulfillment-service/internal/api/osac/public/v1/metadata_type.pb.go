@@ -95,10 +95,11 @@ type Metadata struct {
 	// For organization objects this field is always empty, as organizations don't belong to a project.
 	Project string `protobuf:"bytes,10,opt,name=project,proto3" json:"project,omitempty"`
 	// Human-friendly display name. Optional, not unique, mutable.
-	// Not constrained to DNS-label format.
+	// Not constrained to DNS-label format. Distinct from identity `name`.
 	DisplayName string `protobuf:"bytes,11,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
-	// Optional human-friendly description. Opaque string; clients may
-	// treat content as Markdown. Not unique, mutable.
+	// Human-friendly long description in Markdown. Optional, not unique,
+	// mutable. Clients that display this field MUST render it as Markdown
+	// (with safe sanitization).
 	Description   string `protobuf:"bytes,12,opt,name=description,proto3" json:"description,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -330,10 +331,11 @@ type Metadata_builder struct {
 	// For organization objects this field is always empty, as organizations don't belong to a project.
 	Project string
 	// Human-friendly display name. Optional, not unique, mutable.
-	// Not constrained to DNS-label format.
+	// Not constrained to DNS-label format. Distinct from identity `name`.
 	DisplayName string
-	// Optional human-friendly description. Opaque string; clients may
-	// treat content as Markdown. Not unique, mutable.
+	// Human-friendly long description in Markdown. Optional, not unique,
+	// mutable. Clients that display this field MUST render it as Markdown
+	// (with safe sanitization).
 	Description string
 }
 

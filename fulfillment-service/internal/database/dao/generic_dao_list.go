@@ -123,6 +123,8 @@ func (r *ListRequest[O]) do(ctx context.Context) (response *ListResponse[O], err
 			project,
 			labels,
 			annotations,
+			display_name,
+			description,
 			version,
 			data
 		from
@@ -181,6 +183,8 @@ func (r *ListRequest[O]) do(ctx context.Context) (response *ListResponse[O], err
 				project         string
 				labelsData      []byte
 				annotationsData []byte
+				displayName     string
+				description     string
 				version         int32
 				data            []byte
 			)
@@ -195,6 +199,8 @@ func (r *ListRequest[O]) do(ctx context.Context) (response *ListResponse[O], err
 				&project,
 				&labelsData,
 				&annotationsData,
+				&displayName,
+				&description,
 				&version,
 				&data,
 			)
@@ -226,6 +232,8 @@ func (r *ListRequest[O]) do(ctx context.Context) (response *ListResponse[O], err
 				name:        name,
 				labels:      labels,
 				annotations: annotations,
+				displayName: displayName,
+				description: description,
 				version:     version,
 			})
 			item.SetId(id)

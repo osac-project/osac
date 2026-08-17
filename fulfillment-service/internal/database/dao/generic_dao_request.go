@@ -56,6 +56,8 @@ type archiveArgs struct {
 	name            string
 	labelsData      []byte
 	annotationsData []byte
+	displayName     string
+	description     string
 	version         int32
 	data            []byte
 }
@@ -86,6 +88,8 @@ func (r *request[O]) archive(ctx context.Context, args archiveArgs) error {
 			project,
 			labels,
 			annotations,
+			display_name,
+			description,
 			version,
 			data
 		) values (
@@ -99,7 +103,9 @@ func (r *request[O]) archive(ctx context.Context, args archiveArgs) error {
 			$8,
 			$9,
 			$10,
-			$11
+			$11,
+			$12,
+			$13
 		)
 		`,
 		r.dao.table,
@@ -117,6 +123,8 @@ func (r *request[O]) archive(ctx context.Context, args archiveArgs) error {
 		args.project,
 		args.labelsData,
 		args.annotationsData,
+		args.displayName,
+		args.description,
 		args.version,
 		args.data,
 	)
@@ -191,6 +199,8 @@ type makeMetadataArgs struct {
 	name        string
 	labels      map[string]string
 	annotations map[string]string
+	displayName string
+	description string
 	version     int32
 }
 
@@ -209,6 +219,8 @@ func (r *request[O]) makeMetadata(args makeMetadataArgs) metadataIface {
 	result.SetProject(args.project)
 	result.SetLabels(args.labels)
 	result.SetAnnotations(args.annotations)
+	result.SetDisplayName(args.displayName)
+	result.SetDescription(args.description)
 	result.SetVersion(args.version)
 	return result
 }

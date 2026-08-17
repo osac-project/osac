@@ -75,13 +75,15 @@ func (r *UpdateRequest[O]) do(ctx context.Context) (response *UpdateResponse[O],
 	}
 	fmt.Fprintf(&r.sql.filter, ` id = $%d`, len(r.sql.params))
 
-	// Get the requested finalizers, name, labels, annotations and tenant:
+	// Get the requested finalizers, name, labels, annotations, display name, description and tenant:
 	metadata := r.getMetadata(r.object)
 	finalizers := r.getFinalizers(metadata)
 	var (
 		name        string
 		labels      map[string]string
 		annotations map[string]string
+		displayName string
+		description string
 		tenant      string
 		project     string
 	)
@@ -89,6 +91,8 @@ func (r *UpdateRequest[O]) do(ctx context.Context) (response *UpdateResponse[O],
 		name = metadata.GetName()
 		labels = metadata.GetLabels()
 		annotations = metadata.GetAnnotations()
+		displayName = metadata.GetDisplayName()
+		description = metadata.GetDescription()
 		tenant = metadata.GetTenant()
 		project = metadata.GetProject()
 	}
@@ -125,6 +129,8 @@ func (r *UpdateRequest[O]) do(ctx context.Context) (response *UpdateResponse[O],
 	addColumn("finalizers", finalizers)
 	addColumn("labels", labelsData)
 	addColumn("annotations", annotationsData)
+	addColumn("display_name", displayName)
+	addColumn("description", description)
 	addColumn("tenant", tenant)
 	addColumn("project", project)
 	addColumn("data", data)
@@ -178,6 +184,8 @@ func (r *UpdateRequest[O]) do(ctx context.Context) (response *UpdateResponse[O],
 		name:        name,
 		labels:      labels,
 		annotations: annotations,
+		displayName: displayName,
+		description: description,
 		version:     version,
 	})
 	object.SetId(id)
@@ -205,6 +213,8 @@ func (r *UpdateRequest[O]) do(ctx context.Context) (response *UpdateResponse[O],
 			name:            name,
 			labelsData:      labelsData,
 			annotationsData: annotationsData,
+			displayName:     displayName,
+			description:     description,
 			version:         version,
 			data:            data,
 		})

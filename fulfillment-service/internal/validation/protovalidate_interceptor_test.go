@@ -372,7 +372,7 @@ var _ = Describe("Protovalidate interceptor", func() {
 			Expect(response).To(Equal("response"))
 		})
 
-		DescribeTable("Accepts display_name and description within length limits",
+		DescribeTable("Accepts display name and description within length limits",
 			func(msg proto.Message) {
 				handlerCalled := false
 				mockHandler := func(ctx context.Context, req any) (any, error) {
@@ -413,7 +413,7 @@ var _ = Describe("Protovalidate interceptor", func() {
 			}),
 		)
 
-		DescribeTable("Rejects over-long display_name and description",
+		DescribeTable("Rejects over-long display name and description",
 			func(msg proto.Message) {
 				mockHandler := func(ctx context.Context, req any) (any, error) {
 					Fail("Handler should not be called for invalid request")

@@ -171,10 +171,8 @@ var _ = Describe("Storage tiers server", func() {
 		defaultBackend := func() *privatev1.BackendAssociation {
 			return privatev1.BackendAssociation_builder{
 				BackendId:            backendID,
-				Protocol:             privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS,
 				MaxReadBandwidthMbs:  1000,
 				MaxWriteBandwidthMbs: 500,
-				QuotaGib:             1024,
 				EncryptionEnabled:    true,
 			}.Build()
 		}
@@ -187,6 +185,7 @@ var _ = Describe("Storage tiers server", func() {
 					Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 					Spec: privatev1.StorageTierSpec_builder{
 						Description: "A test storage tier",
+						Protocol:    privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS,
 						Backends:    []*privatev1.BackendAssociation{backend},
 					}.Build(),
 				}.Build(),
@@ -209,7 +208,6 @@ var _ = Describe("Storage tiers server", func() {
 			Expect(obj.GetSpec().GetProtocol()).To(Equal(publicv1.StorageProtocol_STORAGE_PROTOCOL_NFS))
 			Expect(obj.GetSpec().GetMaxReadBandwidthMbs()).To(Equal(int32(1000)))
 			Expect(obj.GetSpec().GetMaxWriteBandwidthMbs()).To(Equal(int32(500)))
-			Expect(obj.GetSpec().GetQuotaGib()).To(Equal(int64(1024)))
 			Expect(obj.GetSpec().GetEncryptionEnabled()).To(BeTrue())
 			Expect(obj.GetStatus().GetState()).To(Equal(publicv1.StorageTierState_STORAGE_TIER_STATE_ACTIVE))
 		})
@@ -235,7 +233,6 @@ var _ = Describe("Storage tiers server", func() {
 			Expect(response.GetItems()).To(HaveLen(count))
 			for _, item := range response.GetItems() {
 				Expect(item.GetSpec().GetProtocol()).To(Equal(publicv1.StorageProtocol_STORAGE_PROTOCOL_NFS))
-				Expect(item.GetSpec().GetQuotaGib()).To(Equal(int64(1024)))
 			}
 		})
 
@@ -309,12 +306,39 @@ var _ = Describe("Storage tiers server", func() {
 				Expect(st.Message()).To(ContainSubstring("not yet supported"))
 				Expect(response).To(BeNil())
 			},
-			Entry("protocol", "this.spec.protocol == 1"),
 			Entry("max_read_bandwidth_mbs", "this.spec.max_read_bandwidth_mbs == 1000"),
 			Entry("max_write_bandwidth_mbs", "this.spec.max_write_bandwidth_mbs == 500"),
-			Entry("quota_gib", "this.spec.quota_gib == 1024"),
 			Entry("encryption_enabled", "this.spec.encryption_enabled == true"),
 		)
+
+		It("List forwards a filter on this.spec.protocol now that the path is shared with the private schema", func() {
+			nfsTier := createTier("nfs-tier", defaultBackend())
+
+			blockResponse, err := privateServer.Create(ctx, privatev1.StorageTiersCreateRequest_builder{
+				Object: privatev1.StorageTier_builder{
+					Metadata: privatev1.Metadata_builder{Name: "block-tier"}.Build(),
+					Spec: privatev1.StorageTierSpec_builder{
+						Description: "A test storage tier",
+						Protocol:    privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
+						Backends: []*privatev1.BackendAssociation{
+							privatev1.BackendAssociation_builder{
+								BackendId: secondBackendID,
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			blockID := blockResponse.GetObject().GetId()
+
+			response, err := publicServer.List(ctx, publicv1.StorageTiersListRequest_builder{
+				Filter: new("this.spec.protocol == 1"),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetItems()).To(HaveLen(1))
+			Expect(response.GetItems()[0].GetId()).To(Equal(nfsTier.GetId()))
+			Expect(response.GetItems()[0].GetId()).ToNot(Equal(blockID))
+		})
 
 		It("List rejects a filter that fails to compile", func() {
 			_, err := publicServer.List(ctx, publicv1.StorageTiersListRequest_builder{
@@ -382,14 +406,13 @@ var _ = Describe("Storage tiers server", func() {
 				}.Build(),
 				Spec: privatev1.StorageTierSpec_builder{
 					Description: "two backends",
+					Protocol:    privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS,
 					Backends: []*privatev1.BackendAssociation{
 						defaultBackend(),
 						privatev1.BackendAssociation_builder{
 							BackendId:            secondBackendID,
-							Protocol:             privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
 							MaxReadBandwidthMbs:  2000,
 							MaxWriteBandwidthMbs: 1000,
-							QuotaGib:             2048,
 							EncryptionEnabled:    false,
 						}.Build(),
 					},
@@ -412,7 +435,7 @@ var _ = Describe("Storage tiers server", func() {
 	})
 
 	Describe("Schema drift regression", func() {
-		It("Every StorageTierSpec field except description is covered by the Layer 2 rejection list", func() {
+		It("Every StorageTierSpec field except description and protocol is covered by the Layer 2 rejection list", func() {
 			descriptor := (&publicv1.StorageTierSpec{}).ProtoReflect().Descriptor()
 			fields := descriptor.Fields()
 
@@ -423,7 +446,9 @@ var _ = Describe("Storage tiers server", func() {
 
 			for i := range fields.Len() {
 				field := fields.Get(i)
-				if field.Name() == "description" {
+				// description and protocol share the same path publicly and privately, so they're
+				// forwardable and intentionally absent from storageTierUnforwardableFilterFields.
+				if field.Name() == "description" || field.Name() == "protocol" {
 					continue
 				}
 				path := fmt.Sprintf("this.spec.%s", field.Name())

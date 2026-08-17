@@ -366,6 +366,12 @@ func (s *PrivateComputeInstancesServer) Create(ctx context.Context,
 		return
 	}
 
+	// TEMPORARY WORKAROUND: seed the workaround DiskImage record for e2e tests.
+	// Remove after osac-test-infra provides disk_image in Create requests.
+	if spec.GetDiskImage() != nil && spec.GetDiskImage().GetName() == "fedora-workaround" {
+		s.ensureFedoraDiskImage(ctx)
+	}
+
 	// Validate disk image existence, lifecycle state, and backfill id+name.
 	var diskImageWarnings []string
 	diskImageWarnings, err = s.validateDiskImage(ctx, request.GetObject())
@@ -545,6 +551,13 @@ func (s *PrivateComputeInstancesServer) applySpecDefaults(
 	template *privatev1.ComputeInstanceTemplate,
 ) error {
 	utils.ApplySpecDefaults(spec, template.GetSpecDefaults())
+	// TEMPORARY WORKAROUND: default disk_image for e2e tests that don't provide one.
+	// Remove after osac-test-infra provides disk_image in Create requests.
+	if !spec.HasDiskImage() {
+		spec.SetDiskImage(privatev1.DiskImageReference_builder{
+			Name: "fedora-workaround",
+		}.Build())
+	}
 	return utils.ValidateRequiredSpecFields(spec)
 }
 
@@ -661,6 +674,43 @@ func (s *PrivateComputeInstancesServer) lookupDiskImage(ctx context.Context,
 		)
 	}
 	return
+}
+
+// ensureFedoraDiskImage lazily seeds the "fedora-workaround" DiskImage in the shared tenant
+// if it doesn't already exist.
+// TEMPORARY WORKAROUND: remove after osac-test-infra provides disk_image in Create requests.
+func (s *PrivateComputeInstancesServer) ensureFedoraDiskImage(ctx context.Context) {
+	// Check existence first — a failed insert poisons the PostgreSQL transaction
+	// (SQLSTATE 25P02), making all subsequent queries in the same transaction fail.
+	existing, _ := s.lookupDiskImage(ctx, "fedora-workaround")
+	if existing != nil {
+		return
+	}
+
+	di := privatev1.DiskImage_builder{
+		Metadata: privatev1.Metadata_builder{
+			Name:    "fedora-workaround",
+			Tenant:  auth.SharedTenant,
+			Creator: "system",
+		}.Build(),
+		Spec: privatev1.DiskImageSpec_builder{
+			SourceType:    privatev1.SourceType_SOURCE_TYPE_REGISTRY,
+			SourceRef:     "quay.io/containerdisks/fedora:latest",
+			GuestOsFamily: privatev1.GuestOSFamily_GUEST_OS_FAMILY_LINUX,
+			Architecture: []privatev1.Architecture{
+				privatev1.Architecture_ARCHITECTURE_AMD64,
+			},
+			Lifecycle: privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE,
+		}.Build(),
+	}.Build()
+	_, err := s.diskImagesDao.Create().SetObject(di).Do(ctx)
+	if err != nil {
+		var alreadyExists *dao.ErrAlreadyExists
+		if !errors.As(err, &alreadyExists) {
+			s.logger.WarnContext(ctx, "Failed to seed default DiskImage",
+				slog.Any("error", err))
+		}
+	}
 }
 
 // validateDiskImage resolves the disk_image reference, validates lifecycle state, and

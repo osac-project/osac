@@ -242,7 +242,7 @@ if [ "${CSI_DRIVER_TESTS_ENABLED:-}" = "true" ]; then
 
   for csi_driver_test in "${CSI_DRIVER_TESTS[@]}"; do
     echo "  Running: $csi_driver_test"
-    log_file="/tmp/osac_storage_test_${csi_driver_test}.log"
+    log_file="/tmp/osac_csi_driver_test_${csi_driver_test}.log"
     if ansible-playbook "targets/${csi_driver_test}/tasks/main.yml" -v > "${log_file}" 2>&1; then
       echo "  ✓ ${csi_driver_test} passed"
       PASSED+=("$csi_driver_test:baseline")

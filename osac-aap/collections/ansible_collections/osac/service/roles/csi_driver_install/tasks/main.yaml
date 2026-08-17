@@ -1,8 +1,9 @@
 ---
 # Idempotent, provider-agnostic install of the OSAC CSI driver (csi-driver +
-# csi-backends Helm charts). Invoked directly from the hub-targeting storage
-# playbooks (playbook_osac_create_tenant_storage_backend.yml, and the Tenant
-# call site of playbook_osac_create_tenant_cluster_storage.yml), before their
+# csi-backends Helm charts). Invoked directly from every hub-targeting storage
+# dispatch point (playbook_osac_create_tenant_storage_backend.yml; the Tenant
+# call site of playbook_osac_create_tenant_cluster_storage.yml;
+# playbook_osac_create_compute_instance.yml's JIT storage path), before their
 # own osac.service.storage_provider include — not from storage_provider's own
 # dispatcher, so that storage_provider/tests/test.yml's zero-live-I/O
 # validation guarantee stays intact. Never invoked for the CaaS/guest-cluster
@@ -21,24 +22,28 @@
 # this role reads back each release's previously-deployed vendorSockets via
 # helm_info and merges this dispatch's vendors into it before reinstalling.
 
+- name: Extract unique providers from the dispatched tier list
+  ansible.builtin.set_fact:
+    _csi_driver_install_unique_providers: "{{ csi_driver_install_tiers | map(attribute='provider') | unique | sort | list }}"
+
 - name: Determine dispatched providers supported by the csi-driver/csi-backends charts
   ansible.builtin.set_fact:
-    _csi_driver_install_dispatched_vendors: "{{ _unique_providers | intersect(csi_driver_install_supported_vendors) }}"
+    _csi_driver_install_dispatched_vendors: "{{ _csi_driver_install_unique_providers | intersect(csi_driver_install_supported_vendors) }}"
 
 - name: Warn about dispatched providers the csi-driver chart does not support
   ansible.builtin.debug:
     msg: >-
-      Provider(s) {{ _unique_providers | difference(_csi_driver_install_dispatched_vendors) | join(', ') }}
+      Provider(s) {{ _csi_driver_install_unique_providers | difference(_csi_driver_install_dispatched_vendors) | join(', ') }}
       dispatched but not present in csi_driver_install_supported_vendors
       ({{ csi_driver_install_supported_vendors | join(', ') }}) — the OSAC CSI
       driver will not be enabled for them.
-  when: (_unique_providers | difference(_csi_driver_install_dispatched_vendors)) | length > 0
+  when: (_csi_driver_install_unique_providers | difference(_csi_driver_install_dispatched_vendors)) | length > 0
 
 - name: Resolve backend_id(s) referenced by dispatched, CSI-driver-supported providers' tiers
   ansible.builtin.set_fact:
     _csi_driver_install_required_backend_ids: >-
       {{
-        _storage_provider_tiers
+        csi_driver_install_tiers
         | selectattr('provider', 'in', _csi_driver_install_dispatched_vendors)
         | selectattr('backend_id', 'defined')
         | map(attribute='backend_id')
@@ -219,7 +224,7 @@
     - name: Resolve vast provider's backend_id(s) among dispatched tiers
       ansible.builtin.set_fact:
         _csi_driver_install_vast_backend_ids: >-
-          {{ _storage_provider_tiers | selectattr('provider', 'equalto', 'vast') | map(attribute='backend_id') | unique | list }}
+          {{ csi_driver_install_tiers | selectattr('provider', 'equalto', 'vast') | map(attribute='backend_id') | unique | list }}
       when: "'vast' in _csi_driver_install_dispatched_vendors"
 
     - name: Fail if the dispatched vast tiers reference more than one backend_id

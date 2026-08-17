@@ -1,100 +1,96 @@
 ---
-- name: Build desired pciHostDevices entry from compute_instance.spec.gpu
-  ansible.builtin.set_fact:
-    desired_pci_host_devices:
-      - pciDeviceSelector: "{{ compute_instance.spec.gpu.pciDeviceSelector }}"
-        resourceName: "{{ compute_instance.spec.gpu.resourceName }}"
+- name: Configure permitted host devices for GPU passthrough
   when: compute_instance.spec.gpu is defined
+  block:
+    - name: Build desired pciHostDevices entry from compute_instance.spec.gpu
+      ansible.builtin.set_fact:
+        desired_pci_host_devices:
+          - pciDeviceSelector: "{{ compute_instance.spec.gpu.pciDeviceSelector }}"
+            resourceName: "{{ compute_instance.spec.gpu.resourceName }}"
 
-- name: Read current HyperConverged CR (v1)
-  kubernetes.core.k8s_info:
-    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
-    api_version: hco.kubevirt.io/v1
-    kind: HyperConverged
-    name: kubevirt-hyperconverged
-    namespace: openshift-cnv
-  register: hyperconverged_cr_v1
-  ignore_errors: true
-  when: compute_instance.spec.gpu is defined
+    - name: Read current HyperConverged CR (v1)
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+        api_version: hco.kubevirt.io/v1
+        kind: HyperConverged
+        name: kubevirt-hyperconverged
+        namespace: openshift-cnv
+      register: hyperconverged_cr_v1
+      ignore_errors: true
 
-- name: Read current HyperConverged CR (v1beta1 fallback)
-  kubernetes.core.k8s_info:
-    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
-    api_version: hco.kubevirt.io/v1beta1
-    kind: HyperConverged
-    name: kubevirt-hyperconverged
-    namespace: openshift-cnv
-  register: hyperconverged_cr_v1beta1
-  when:
-    - compute_instance.spec.gpu is defined
-    - hyperconverged_cr_v1 is failed or (hyperconverged_cr_v1.resources | default([]) | length == 0)
+    - name: Read current HyperConverged CR (v1beta1 fallback)
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+        api_version: hco.kubevirt.io/v1beta1
+        kind: HyperConverged
+        name: kubevirt-hyperconverged
+        namespace: openshift-cnv
+      register: hyperconverged_cr_v1beta1
+      when:
+        - hyperconverged_cr_v1 is failed or (hyperconverged_cr_v1.resources | default([]) | length == 0)
 
-- name: Select HyperConverged CR read result
-  ansible.builtin.set_fact:
-    hyperconverged_cr: >-
-      {{ hyperconverged_cr_v1
-         if not (hyperconverged_cr_v1 is failed)
-           and (hyperconverged_cr_v1.resources | default([]) | length > 0)
-         else hyperconverged_cr_v1beta1 }}
-    hyperconverged_api_version: >-
-      {{ 'hco.kubevirt.io/v1'
-         if not (hyperconverged_cr_v1 is failed)
-           and (hyperconverged_cr_v1.resources | default([]) | length > 0)
-         else 'hco.kubevirt.io/v1beta1' }}
-    hyperconverged_pci_devices_use_virtualization: >-
-      {{ (hyperconverged_cr_v1.resources[0].spec.virtualization is defined)
-         if not (hyperconverged_cr_v1 is failed)
-           and (hyperconverged_cr_v1.resources | default([]) | length > 0)
-         else (hyperconverged_cr_v1beta1.resources[0].spec.virtualization is defined) }}
-  when: compute_instance.spec.gpu is defined
+    - name: Select HyperConverged CR read result
+      ansible.builtin.set_fact:
+        hyperconverged_cr: >-
+          {{ hyperconverged_cr_v1
+             if not (hyperconverged_cr_v1 is failed)
+               and (hyperconverged_cr_v1.resources | default([]) | length > 0)
+             else hyperconverged_cr_v1beta1 }}
+        hyperconverged_api_version: >-
+          {{ 'hco.kubevirt.io/v1'
+             if not (hyperconverged_cr_v1 is failed)
+               and (hyperconverged_cr_v1.resources | default([]) | length > 0)
+             else 'hco.kubevirt.io/v1beta1' }}
+        hyperconverged_pci_devices_use_virtualization: >-
+          {{ (hyperconverged_cr_v1.resources[0].spec.virtualization is defined)
+             if not (hyperconverged_cr_v1 is failed)
+               and (hyperconverged_cr_v1.resources | default([]) | length > 0)
+             else (hyperconverged_cr_v1beta1.resources[0].spec.virtualization is defined) }}
 
-- name: Compute merged pciHostDevices preserving existing entries
-  ansible.builtin.set_fact:
-    merged_pci_host_devices: "{{ _existing_pci_host_devices + _new_only }}"
-  vars:
-    _hc_spec: "{{ hyperconverged_cr.resources[0].spec }}"
-    _existing_pci_host_devices: >-
-      {{
-        (_hc_spec.virtualization.permittedHostDevices.pciHostDevices | default([]))
-        if hyperconverged_pci_devices_use_virtualization | bool
-        else (_hc_spec.permittedHostDevices.pciHostDevices | default([]))
-      }}
-    _existing_selectors: "{{ _existing_pci_host_devices | map(attribute='pciDeviceSelector') | list }}"
-    _new_only: >-
-      {{ desired_pci_host_devices
-         | rejectattr('pciDeviceSelector', 'in', _existing_selectors)
-         | list }}
-  when: compute_instance.spec.gpu is defined
+    - name: Compute merged pciHostDevices preserving existing entries
+      ansible.builtin.set_fact:
+        merged_pci_host_devices: "{{ _existing_pci_host_devices + _new_only }}"
+      vars:
+        _hc_spec: "{{ hyperconverged_cr.resources[0].spec }}"
+        _existing_pci_host_devices: >-
+          {{
+            (_hc_spec.virtualization.permittedHostDevices.pciHostDevices | default([]))
+            if hyperconverged_pci_devices_use_virtualization | bool
+            else (_hc_spec.permittedHostDevices.pciHostDevices | default([]))
+          }}
+        _existing_selectors: "{{ _existing_pci_host_devices | map(attribute='pciDeviceSelector') | list }}"
+        _new_only: >-
+          {{ desired_pci_host_devices
+             | rejectattr('pciDeviceSelector', 'in', _existing_selectors)
+             | list }}
 
-- name: Patch HyperConverged CR with merged pciHostDevices (virtualization path)
-  kubernetes.core.k8s:
-    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
-    api_version: "{{ hyperconverged_api_version }}"
-    kind: HyperConverged
-    name: kubevirt-hyperconverged
-    namespace: openshift-cnv
-    state: patched
-    definition:
-      spec:
-        virtualization:
-          permittedHostDevices:
-            pciHostDevices: "{{ merged_pci_host_devices }}"
-  when:
-    - compute_instance.spec.gpu is defined
-    - hyperconverged_pci_devices_use_virtualization | bool
+    - name: Patch HyperConverged CR with merged pciHostDevices (virtualization path)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+        api_version: "{{ hyperconverged_api_version }}"
+        kind: HyperConverged
+        name: kubevirt-hyperconverged
+        namespace: openshift-cnv
+        state: patched
+        definition:
+          spec:
+            virtualization:
+              permittedHostDevices:
+                pciHostDevices: "{{ merged_pci_host_devices }}"
+      when:
+        - hyperconverged_pci_devices_use_virtualization | bool
 
-- name: Patch HyperConverged CR with merged pciHostDevices (legacy path)
-  kubernetes.core.k8s:
-    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
-    api_version: "{{ hyperconverged_api_version }}"
-    kind: HyperConverged
-    name: kubevirt-hyperconverged
-    namespace: openshift-cnv
-    state: patched
-    definition:
-      spec:
-        permittedHostDevices:
-          pciHostDevices: "{{ merged_pci_host_devices }}"
-  when:
-    - compute_instance.spec.gpu is defined
-    - not hyperconverged_pci_devices_use_virtualization | bool
+    - name: Patch HyperConverged CR with merged pciHostDevices (legacy path)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+        api_version: "{{ hyperconverged_api_version }}"
+        kind: HyperConverged
+        name: kubevirt-hyperconverged
+        namespace: openshift-cnv
+        state: patched
+        definition:
+          spec:
+            permittedHostDevices:
+              pciHostDevices: "{{ merged_pci_host_devices }}"
+      when:
+        - not hyperconverged_pci_devices_use_virtualization | bool

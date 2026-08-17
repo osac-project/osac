@@ -28,7 +28,7 @@ echo "Installing OSAC CRDs..."
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 kubectl apply -f "${REPO_ROOT}/osac-operator/config/crd/bases/"
 
-# 2.5. Install external CRDs needed by workflows
+# 2.1. Install external CRDs needed by workflows
 echo "Installing KubeVirt operator..."
 kubectl apply -f https://github.com/kubevirt/kubevirt/releases/download/v1.1.0/kubevirt-operator.yaml
 
@@ -53,7 +53,7 @@ kubectl apply -f https://github.com/kubevirt/containerized-data-importer/release
 echo "Waiting for DataVolume CRD to be created..."
 timeout 60 bash -c 'until kubectl get crd datavolumes.cdi.kubevirt.io 2>/dev/null; do echo "Waiting for DataVolume CRD..."; sleep 2; done' || echo "Timeout waiting for DataVolume CRD"
 
-# 2.6. Scale down all deployments (keep CRs and CRDs)
+# 2.2. Scale down all deployments (keep CRs and CRDs)
 echo "Scaling down all KubeVirt and CDI deployments to save resources..."
 kubectl scale deployment -n kubevirt --all --replicas=0 || echo "Could not scale kubevirt deployments"
 kubectl scale deployment -n cdi --all --replicas=0 || echo "Could not scale cdi deployments"
@@ -109,7 +109,7 @@ kubectl apply -f "${SCRIPT_DIR}/fixtures/clusterorder-test.yaml"
 kubectl apply -f "${SCRIPT_DIR}/fixtures/computeinstance-test.yaml"
 kubectl apply -f "${SCRIPT_DIR}/fixtures/computeinstance-with-gpu-test.yaml"
 
-# 5.5. Apply storage test fixtures and CRDs (conditional)
+# 5.1. Apply storage test fixtures and CRDs (conditional)
 if [ "${STORAGE_TESTS_ENABLED:-}" = "true" ]; then
   echo "Installing VolumeSnapshot CRDs for storage tests..."
   kubectl apply -f https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/v8.5.0/client/config/crd/snapshot.storage.k8s.io_volumesnapshotclasses.yaml 2>/dev/null || echo "VolumeSnapshotClass CRD may already exist"

@@ -70,6 +70,11 @@ section.
 - Responsibilities: Run reconcilers for in-process resource monitoring and feedback
 - Controllers: 18 resource-specific controllers in `internal/controllers/` covering baremetalinstance, cluster, computeinstance, externalip, externalipattachment, externalippool, identityprovider, natgateway, onboarding (tenant), project, projectmembership, role, rolebinding, securitygroup, subnet, tenant, user, virtualnetwork, plus shared finalizer management
 
+**Console Proxy (Fulfillment):**
+- Location: `fulfillment-service/internal/cmd/service/start/consoleproxy/`
+- Triggers: `fulfillment-service start console-proxy` CLI command
+- Responsibilities: Issues and validates console-session tickets, proxies gRPC/WebSocket console traffic toward the management cluster's console proxy (see `fulfillment-service/docs/VM_CONSOLE.md` for the full request path); runs as its own Kubernetes Deployment, separate from the gRPC/REST/controller processes
+
 **osac-operator binary:**
 - Location: `osac-operator/cmd/main.go`
 - Triggers: Kubernetes operator deployment (helm/kustomize)
@@ -88,9 +93,9 @@ section.
 - Responsibilities: Provide kubectl-like CLI interface, call fulfillment service gRPC APIs
 
 **Console Proxy (Operator):**
-- Location: `osac-operator/cmd/console-proxy/main.go` → `internal/consoleproxy/`
+- Location: `osac-operator/cmd/console-proxy/main.go`
 - Triggers: Deployed as a Kubernetes aggregated API server alongside the operator
-- Responsibilities: Provides WebSocket proxy for KubeVirt VM console and VNC access; handles authentication, discovery, health checks, and subresource routing
+- See `osac-operator/AGENTS.md`'s "Console Proxy" section for implementation details (auth, discovery, subresource routing, TLS config)
 
 **bare-metal-fulfillment-operator:**
 - Location: `bare-metal-fulfillment-operator/`

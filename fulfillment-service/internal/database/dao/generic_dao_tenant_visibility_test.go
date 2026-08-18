@@ -351,6 +351,62 @@ var _ = Describe("Tenant visibility", func() {
 		Expect(getResponse.GetObject().GetMyString()).To(Equal("updated"))
 	})
 
+	It("Does not leak cross-tenant rows when filter has a top-level OR", func() {
+		// Create an unrestricted tenancy to seed objects in different tenants:
+		tenancyAll := auth.NewMockTenancyLogic(ctrl)
+		tenancyAll.EXPECT().DetermineVisibleTenants(gomock.Any()).
+			Return(collections.NewUniversalSet[string](), nil).
+			AnyTimes()
+		daoAll, err := NewGenericDAO[*testsv1.Object]().
+			SetLogger(logger).
+			SetTenancyLogic(tenancyAll).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		// Create an object in tenant-a (will be visible):
+		_, err = daoAll.Create().
+			SetObject(testsv1.Object_builder{
+				Metadata: testsv1.Metadata_builder{
+					Tenant: "tenant-a",
+					Name:   "shared-name",
+				}.Build(),
+			}.Build()).
+			Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+
+		// Create an object in tenant-b with the same name (should be invisible to tenant-a):
+		_, err = daoAll.Create().
+			SetObject(testsv1.Object_builder{
+				Metadata: testsv1.Metadata_builder{
+					Tenant: "tenant-b",
+					Name:   "shared-name",
+				}.Build(),
+			}.Build()).
+			Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+
+		// Create a restricted DAO that can only see tenant-a:
+		tenancyRestricted := auth.NewMockTenancyLogic(ctrl)
+		tenancyRestricted.EXPECT().DetermineVisibleTenants(gomock.Any()).
+			Return(collections.NewSet("tenant-a"), nil).
+			AnyTimes()
+		daoRestricted, err := NewGenericDAO[*testsv1.Object]().
+			SetLogger(logger).
+			SetTenancyLogic(tenancyRestricted).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		// List with a top-level OR filter (id-or-name pattern). The tenancy clause
+		// must apply to the entire filter, not just the first branch:
+		listResponse, err := daoRestricted.List().
+			SetFilter(`this.id == "nonexistent" || this.metadata.name == "shared-name"`).
+			Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(listResponse.GetTotal()).To(Equal(int32(1)))
+		Expect(listResponse.GetItems()).To(HaveLen(1))
+		Expect(listResponse.GetItems()[0].GetMetadata().GetTenant()).To(Equal("tenant-a"))
+	})
+
 	It("Rejects update of an object belonging to an invisible tenant as not found", func() {
 		// Create a tenancy logic that makes all tenants visible, used to create the object:
 		tenancyA := auth.NewMockTenancyLogic(ctrl)

@@ -91,7 +91,9 @@ func (r *ListRequest[O]) do(ctx context.Context) (response *ListResponse[O], err
 		if r.sql.filter.Len() > 0 {
 			r.sql.filter.WriteString(` and `)
 		}
+		r.sql.filter.WriteString(`(`)
 		r.sql.filter.WriteString(filter)
+		r.sql.filter.WriteString(`)`)
 	}
 
 	// Calculate the order clause:

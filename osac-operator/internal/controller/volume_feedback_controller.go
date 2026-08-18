@@ -115,7 +115,7 @@ func (r *VolumeFeedbackReconciler) Reconcile(ctx context.Context, request ctrl.R
 // the PVC/PV references that the operator populates after provisioning.
 func syncVolumeUpdate(ctx context.Context, obj *v1alpha1.Volume, remote *privatev1.Volume) error {
 	syncVolumePhase(ctx, obj, remote)
-	syncVolumeVendorFields(obj, remote)
+	syncVolumeVendorFields(ctx, obj, remote)
 	return nil
 }
 
@@ -156,7 +156,7 @@ func syncVolumePhase(ctx context.Context, obj *v1alpha1.Volume, remote *privatev
 // syncVolumeVendorFields copies the vendor-assigned identifiers from the CR
 // status to the proto status so the fulfillment-service inventory reflects
 // the actual storage array state.
-func syncVolumeVendorFields(obj *v1alpha1.Volume, remote *privatev1.Volume) {
+func syncVolumeVendorFields(ctx context.Context, obj *v1alpha1.Volume, remote *privatev1.Volume) {
 	if obj.Status.VendorVolumeID != "" {
 		remote.GetStatus().SetVendorVolumeId(obj.Status.VendorVolumeID)
 	}
@@ -164,7 +164,18 @@ func syncVolumeVendorFields(obj *v1alpha1.Volume, remote *privatev1.Volume) {
 		remote.GetStatus().SetBackend(obj.Status.Backend)
 	}
 	if obj.Status.Protocol != "" {
-		remote.GetStatus().SetProtocol(crdProtocolToProto(obj.Status.Protocol))
+		// Only sync a protocol the switch recognizes. An unrecognized CRD value
+		// maps to UNSPECIFIED; writing that would silently overwrite a valid
+		// protocol the fulfillment-service already recorded (losing inventory
+		// data is worse than skipping the field until the switch learns it). A
+		// value reaching here that the switch doesn't know means the CRD enum
+		// was extended without updating crdProtocolToProto, so log it.
+		if protocol := crdProtocolToProto(obj.Status.Protocol); protocol != privatev1.StorageProtocol_STORAGE_PROTOCOL_UNSPECIFIED {
+			remote.GetStatus().SetProtocol(protocol)
+		} else {
+			log := ctrllog.FromContext(ctx)
+			log.Info("Unknown volume protocol, not syncing to fulfillment-service", "protocol", obj.Status.Protocol)
+		}
 	}
 }
 

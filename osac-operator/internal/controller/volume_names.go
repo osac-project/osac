@@ -26,6 +26,5 @@ const (
 
 var (
 	osacVolumeIDLabel           string = fmt.Sprintf("%s/volume-uuid", osacPrefix)
-	osacVolumeFinalizer         string = fmt.Sprintf("%s/volume-finalizer", osacPrefix)
 	osacVolumeFeedbackFinalizer string = fmt.Sprintf("%s/volume-feedback", osacPrefix)
 )

@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -35,6 +36,12 @@ import (
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
+
+// osacVolumeFinalizer is the finalizer the Volume resource controller adds so
+// it can deprovision the backend volume before the CR is deleted. It is owned
+// by this controller only, so it lives here rather than in volume_names.go
+// (which holds identifiers shared with the feedback controller).
+const osacVolumeFinalizer = "osac.openshift.io/volume-finalizer"
 
 // VendorProvisioner abstracts vendor storage array operations. Unlike other
 // OSAC resources that provision through AAP (RunProvisioningLifecycle), volumes
@@ -141,8 +148,11 @@ func (r *VolumeReconciler) Reconcile(ctx context.Context, req mcreconcile.Reques
 
 	if !equality.Semantic.DeepEqual(vol.Status, *oldstatus) {
 		log.Info("status requires update")
-		if err := r.Status().Update(ctx, vol); err != nil {
-			return res, err
+		if updateErr := r.Status().Update(ctx, vol); updateErr != nil {
+			// On the delete path the object may already be gone once its last
+			// finalizer was removed; tolerate NotFound and preserve any
+			// reconcile error alongside a genuine status-update failure.
+			return res, errors.Join(err, client.IgnoreNotFound(updateErr))
 		}
 	}
 
@@ -179,10 +189,11 @@ func (r *VolumeReconciler) handleUpdate(ctx context.Context, vol *v1alpha1.Volum
 		return ctrl.Result{}, nil
 	}
 
-	// Failed volumes are not auto-retried to avoid spamming the vendor API
-	// with a persistent configuration error. The admin fixes the issue, then
-	// a Signal or periodic sync triggers re-reconciliation. At that point the
-	// phase is reset to Progressing below so provisioning is attempted again.
+	// Failed is terminal: vendor provisioning is not auto-retried, to avoid
+	// spamming the vendor API with a persistent configuration error. Recovery
+	// requires recreating the Volume (the fulfillment-service reconciler creates
+	// a fresh CR), which starts over from an empty phase. There is no in-place
+	// reset to Progressing here.
 	if vol.Status.Phase == v1alpha1.VolumePhaseFailed {
 		return ctrl.Result{}, nil
 	}

@@ -385,6 +385,63 @@ var _ = Describe("VolumeFeedbackController", func() {
 	})
 })
 
+var _ = Describe("crdProtocolToProto", func() {
+	// allVolumeProtocols must list every v1alpha1.VolumeProtocol enum value.
+	// Keep it in sync with the CRD enum in api/v1alpha1/volume_types.go and the
+	// switch in crdProtocolToProto. The coverage spec below fails if any listed
+	// protocol maps to UNSPECIFIED, i.e. a value was added to the enum without a
+	// matching case in the switch.
+	allVolumeProtocols := []v1alpha1.VolumeProtocol{
+		v1alpha1.VolumeProtocolBlock,
+		v1alpha1.VolumeProtocolNFS,
+	}
+
+	DescribeTable("maps known CRD protocols to their proto enum",
+		func(in v1alpha1.VolumeProtocol, expected privatev1.StorageProtocol) {
+			Expect(crdProtocolToProto(in)).To(Equal(expected))
+		},
+		Entry("Block", v1alpha1.VolumeProtocolBlock, privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK),
+		Entry("NFS", v1alpha1.VolumeProtocolNFS, privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS),
+		Entry("unrecognized value", v1alpha1.VolumeProtocol("iSCSI"), privatev1.StorageProtocol_STORAGE_PROTOCOL_UNSPECIFIED),
+		Entry("empty value", v1alpha1.VolumeProtocol(""), privatev1.StorageProtocol_STORAGE_PROTOCOL_UNSPECIFIED),
+	)
+
+	It("maps every VolumeProtocol enum value to a defined proto protocol", func() {
+		for _, protocol := range allVolumeProtocols {
+			Expect(crdProtocolToProto(protocol)).ToNot(
+				Equal(privatev1.StorageProtocol_STORAGE_PROTOCOL_UNSPECIFIED),
+				"VolumeProtocol %q maps to UNSPECIFIED; add a case to crdProtocolToProto", protocol,
+			)
+		}
+	})
+})
+
+var _ = Describe("syncVolumeVendorFields", func() {
+	It("does not overwrite an existing remote protocol with an unrecognized value", func() {
+		remote := newRemoteVolume("vol-1", privatev1.VolumeState_VOLUME_STATE_AVAILABLE)
+		remote.GetStatus().SetProtocol(privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK)
+
+		obj := &v1alpha1.Volume{}
+		obj.Status.Protocol = v1alpha1.VolumeProtocol("iSCSI") // not known to the switch
+
+		syncVolumeVendorFields(context.Background(), obj, remote)
+
+		// The previously recorded protocol must be preserved, not clobbered.
+		Expect(remote.GetStatus().GetProtocol()).To(Equal(privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK))
+	})
+
+	It("syncs a recognized protocol to the remote", func() {
+		remote := newRemoteVolume("vol-2", privatev1.VolumeState_VOLUME_STATE_AVAILABLE)
+
+		obj := &v1alpha1.Volume{}
+		obj.Status.Protocol = v1alpha1.VolumeProtocolNFS
+
+		syncVolumeVendorFields(context.Background(), obj, remote)
+
+		Expect(remote.GetStatus().GetProtocol()).To(Equal(privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS))
+	})
+})
+
 // Helper to create a Volume CR for feedback controller tests.
 func newVolumeFeedbackCR(name, namespace, id string, phase v1alpha1.VolumePhaseType, finalizers []string) *v1alpha1.Volume {
 	cr := &v1alpha1.Volume{

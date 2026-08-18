@@ -174,16 +174,21 @@ func registerControllerFlags() *controllerFlags {
 }
 
 // enableAllIfNoneSet enables all controllers if none are explicitly enabled.
+//
+// The Volume controller is intentionally excluded: its VendorProvisioner is a
+// nil stub until OSAC-4138 wires the real vendor CSI client, so enabling it
+// would only leave Volumes stuck in Progressing/CREATING with no path to
+// success. It stays opt-in (--enable-volume-controller) until then. OSAC-4138
+// adds it back here and flips controllers.volume to true in the Helm values.
 func (f *controllerFlags) enableAllIfNoneSet() {
 	if !f.Tenant && !f.Storage && !f.Volume && !f.ComputeInstance && !f.Cluster && !f.Networking && !f.BareMetalInstance {
 		f.Tenant = true
 		f.Storage = true
-		f.Volume = true
 		f.ComputeInstance = true
 		f.Cluster = true
 		f.Networking = true
 		f.BareMetalInstance = true
-		setupLog.Info("no controller flags set, enabling all controllers")
+		setupLog.Info("no controller flags set, enabling all controllers except volume (no vendor provisioner configured)")
 	}
 }
 

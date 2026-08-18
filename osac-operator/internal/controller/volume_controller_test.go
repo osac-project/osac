@@ -108,7 +108,9 @@ var _ = Describe("VolumeReconciler", func() {
 	It("should provision volume and set status fields on success", func() {
 		Expect(k8sClient.Create(testCtx, vol)).To(Succeed())
 
-		// First reconcile adds finalizer
+		// A single reconcile adds the finalizer and provisions to Ready:
+		// handleUpdate adds the finalizer, then falls through to
+		// handleProvisioning in the same pass.
 		_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{
 			Request: reconcile.Request{
 				NamespacedName: types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace},
@@ -116,7 +118,7 @@ var _ = Describe("VolumeReconciler", func() {
 		})
 		Expect(err).ToNot(HaveOccurred())
 
-		// Second reconcile provisions
+		// A second reconcile is idempotent (phase is already Ready).
 		_, err = reconciler.Reconcile(testCtx, mcreconcile.Request{
 			Request: reconcile.Request{
 				NamespacedName: types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace},
@@ -144,14 +146,9 @@ var _ = Describe("VolumeReconciler", func() {
 
 		Expect(k8sClient.Create(testCtx, vol)).To(Succeed())
 
-		// First reconcile adds finalizer
-		_, _ = reconciler.Reconcile(testCtx, mcreconcile.Request{
-			Request: reconcile.Request{
-				NamespacedName: types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace},
-			},
-		})
-
-		// Second reconcile attempts provisioning
+		// A single reconcile adds the finalizer and attempts provisioning,
+		// which fails and transitions the phase to Failed (no error returned;
+		// the failure is recorded in the condition).
 		_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{
 			Request: reconcile.Request{
 				NamespacedName: types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace},
@@ -169,6 +166,39 @@ var _ = Describe("VolumeReconciler", func() {
 		Expect(cond.Status).To(Equal(metav1.ConditionFalse))
 		Expect(cond.Reason).To(Equal("ProvisioningFailed"))
 		Expect(cond.Message).To(ContainSubstring("vendor array unreachable"))
+	})
+
+	It("does not auto-retry provisioning once Failed (terminal phase)", func() {
+		mockProv.CreateErr = fmt.Errorf("vendor array unreachable")
+
+		Expect(k8sClient.Create(testCtx, vol)).To(Succeed())
+
+		// First reconcile provisions, fails, and lands in Failed.
+		_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{
+			Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace},
+			},
+		})
+		Expect(err).ToNot(HaveOccurred())
+
+		updated := &osacv1alpha1.Volume{}
+		Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace}, updated)).To(Succeed())
+		Expect(updated.Status.Phase).To(Equal(osacv1alpha1.VolumePhaseFailed))
+		countAfterFailure := mockProv.CreateCallCount()
+
+		// Clear the vendor error: a later reconcile must NOT retry provisioning,
+		// because Failed is terminal (recovery requires recreating the Volume).
+		mockProv.CreateErr = nil
+		_, err = reconciler.Reconcile(testCtx, mcreconcile.Request{
+			Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace},
+			},
+		})
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace}, updated)).To(Succeed())
+		Expect(updated.Status.Phase).To(Equal(osacv1alpha1.VolumePhaseFailed))
+		Expect(mockProv.CreateCallCount()).To(Equal(countAfterFailure))
 	})
 
 	It("should not re-provision when already Ready", func() {
@@ -305,13 +335,15 @@ var _ = Describe("VolumeReconciler", func() {
 
 		Expect(k8sClient.Create(testCtx, vol)).To(Succeed())
 
-		// Reconcile adds finalizer + sets Progressing
+		// Reconcile adds finalizer + sets Progressing. The nil-provisioner path
+		// is expected to succeed without error.
 		for range 2 {
-			_, _ = reconciler.Reconcile(testCtx, mcreconcile.Request{
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{
 				Request: reconcile.Request{
 					NamespacedName: types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace},
 				},
 			})
+			Expect(err).ToNot(HaveOccurred())
 		}
 
 		updated := &osacv1alpha1.Volume{}

@@ -56,6 +56,10 @@ const (
 )
 
 // VolumeProtocol defines valid storage protocols for volumes.
+// When adding a value here, also add it to the kubebuilder Enum below, to the
+// crdProtocolToProto switch in internal/controller/volume_feedback_controller.go,
+// and to allVolumeProtocols in that controller's test (which fails if the switch
+// is left incomplete).
 // +kubebuilder:validation:Enum=Block;NFS
 type VolumeProtocol string
 

@@ -199,8 +199,8 @@ def default_disk_image(grpc: GRPCClient, test_run_id: str) -> Iterator[str]:
         grpc.delete_disk_image(disk_image_id=di_id)
     except subprocess.CalledProcessError as e:
         output = ((e.stdout or "") + (e.stderr or "")).lower()
-        # Tolerate not-found (already gone) and in-use (a leaked CI still references it).
-        if not any(term in output for term in ("not found", "in use", "failedprecondition")):
+        # Tolerate only an already-deleted DiskImage; surface in-use/failedprecondition (leaked CI).
+        if "not found" not in output:
             raise
 
 

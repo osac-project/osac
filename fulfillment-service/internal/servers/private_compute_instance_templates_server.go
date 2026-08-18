@@ -41,6 +41,7 @@ type PrivateComputeInstanceTemplatesServer struct {
 	logger           *slog.Logger
 	generic          *GenericServer[*privatev1.ComputeInstanceTemplate]
 	instanceTypesDao *dao.GenericDAO[*privatev1.InstanceType]
+	diskImagesDao    *dao.GenericDAO[*privatev1.DiskImage]
 }
 
 func NewPrivateComputeInstanceTemplatesServer() *PrivateComputeInstanceTemplatesServerBuilder {
@@ -95,6 +96,16 @@ func (b *PrivateComputeInstanceTemplatesServerBuilder) Build() (result *PrivateC
 		return
 	}
 
+	// Create the DiskImages DAO for spec_defaults disk image validation:
+	diskImagesDao, err := dao.NewGenericDAO[*privatev1.DiskImage]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
 	// Create the generic server:
 	generic, err := NewGenericServer[*privatev1.ComputeInstanceTemplate]().
 		SetLogger(b.logger).
@@ -113,6 +124,7 @@ func (b *PrivateComputeInstanceTemplatesServerBuilder) Build() (result *PrivateC
 		logger:           b.logger,
 		generic:          generic,
 		instanceTypesDao: instanceTypesDao,
+		diskImagesDao:    diskImagesDao,
 	}
 	return
 }
@@ -139,13 +151,20 @@ func (s *PrivateComputeInstanceTemplatesServer) Create(ctx context.Context,
 		obj.GetMetadata().SetName(templateNameFromID(obj.GetId()))
 	}
 
-	// Validate instance type in spec_defaults before creating (D-14, D-17).
+	// Validate instance type and disk image in spec_defaults before creating (D-14, D-17).
 	var warnings []string
 	if request.GetObject() != nil {
-		warnings, err = s.validateSpecDefaultsInstanceType(ctx, request.GetObject().GetSpecDefaults())
+		specDefaults := request.GetObject().GetSpecDefaults()
+		warnings, err = s.validateSpecDefaultsInstanceType(ctx, specDefaults)
 		if err != nil {
 			return
 		}
+		var diskImageWarnings []string
+		diskImageWarnings, err = s.validateSpecDefaultsDiskImage(ctx, specDefaults)
+		if err != nil {
+			return
+		}
+		warnings = append(warnings, diskImageWarnings...)
 	}
 	err = s.generic.Create(ctx, request, &response)
 	if err != nil {
@@ -159,13 +178,20 @@ func (s *PrivateComputeInstanceTemplatesServer) Create(ctx context.Context,
 
 func (s *PrivateComputeInstanceTemplatesServer) Update(ctx context.Context,
 	request *privatev1.ComputeInstanceTemplatesUpdateRequest) (response *privatev1.ComputeInstanceTemplatesUpdateResponse, err error) {
-	// Validate instance type in spec_defaults before updating (D-14, D-17).
+	// Validate instance type and disk image in spec_defaults before updating (D-14, D-17).
 	var warnings []string
 	if request.GetObject() != nil {
-		warnings, err = s.validateSpecDefaultsInstanceType(ctx, request.GetObject().GetSpecDefaults())
+		specDefaults := request.GetObject().GetSpecDefaults()
+		warnings, err = s.validateSpecDefaultsInstanceType(ctx, specDefaults)
 		if err != nil {
 			return
 		}
+		var diskImageWarnings []string
+		diskImageWarnings, err = s.validateSpecDefaultsDiskImage(ctx, specDefaults)
+		if err != nil {
+			return
+		}
+		warnings = append(warnings, diskImageWarnings...)
 	}
 	err = s.generic.Update(ctx, request, &response)
 	if err != nil {
@@ -203,4 +229,22 @@ func (s *PrivateComputeInstanceTemplatesServer) validateSpecDefaultsInstanceType
 
 	// Look up the instance type and validate its state.
 	return validateInstanceTypeState(ctx, s.instanceTypesDao, instanceTypeName, " in spec_defaults")
+}
+
+// validateSpecDefaultsDiskImage validates the optional disk_image reference in template
+// spec_defaults. Existence and tenant visibility of the DiskImageReference (and backfill of
+// its id) are already enforced by the gRPC reference-validation interceptor; this handler adds
+// the lifecycle check: OBSOLETE is rejected, DEPRECATED yields a warning.
+func (s *PrivateComputeInstanceTemplatesServer) validateSpecDefaultsDiskImage(
+	ctx context.Context,
+	specDefaults *privatev1.ComputeInstanceTemplateSpecDefaults,
+) ([]string, error) {
+	if specDefaults == nil || !specDefaults.HasDiskImage() || specDefaults.GetDiskImage() == nil {
+		return nil, nil
+	}
+
+	diskImageKey := refKey(specDefaults.GetDiskImage())
+
+	// Look up the disk image and validate its state.
+	return validateDiskImageState(ctx, s.diskImagesDao, diskImageKey, " in spec_defaults")
 }

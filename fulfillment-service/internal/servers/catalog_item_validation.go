@@ -377,3 +377,70 @@ func validateInstanceTypeState(
 
 	return warnings, nil
 }
+
+// validateDiskImageState looks up a DiskImage by id or name through the tenant-filtered
+// DAO and validates its lifecycle. Returns a warning for DEPRECATED images, an error for
+// OBSOLETE or not-found images. The source parameter provides context for error messages
+// (e.g. " in spec_defaults", " in field_definitions"); pass an empty string when
+// validating directly on a ComputeInstance.
+//
+// Error-code convention: this deliberately follows the existing instance_type / ComputeInstance
+// handlers (NotFound for missing, FailedPrecondition for OBSOLETE, warning for DEPRECATED)
+// rather than the InvalidArgument codes named in the OSAC-3728 acceptance criteria. Because
+// the DAO applies the caller's tenancy filter, a cross-tenant reference resolves to zero rows
+// and collapses into the not-found case — which both matches the missing-reference handling and
+// avoids leaking cross-tenant resource existence.
+func validateDiskImageState(
+	ctx context.Context,
+	diskImagesDao *dao.GenericDAO[*privatev1.DiskImage],
+	key string,
+	source string,
+) ([]string, error) {
+	if key == "" {
+		return nil, nil
+	}
+
+	response, err := diskImagesDao.List().
+		SetFilter(fmt.Sprintf("this.id == %[1]s || this.metadata.name == %[1]s", strconv.Quote(key))).
+		SetLimit(1).
+		Do(ctx)
+	if err != nil {
+		var deniedErr *dao.ErrDenied
+		if errors.As(err, &deniedErr) {
+			return nil, grpcstatus.Errorf(grpccodes.PermissionDenied, "%s", deniedErr.Reason)
+		}
+		return nil, grpcstatus.Errorf(grpccodes.Internal,
+			"failed to retrieve disk image '%s'", key)
+	}
+
+	switch response.GetTotal() {
+	case 0:
+		return nil, grpcstatus.Errorf(grpccodes.NotFound,
+			"disk image '%s'%s not found", key, source)
+	case 1:
+		// Single match: continue with lifecycle validation below.
+	default:
+		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"there are multiple disk images with identifier or name '%s'", key)
+	}
+
+	diskImage := response.GetItems()[0]
+	lifecycle := diskImage.GetSpec().GetLifecycle()
+	var warnings []string
+
+	switch lifecycle {
+	case privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_OBSOLETE:
+		return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"disk image '%s'%s is obsolete and cannot be used", key, source)
+	case privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_DEPRECATED:
+		warning := fmt.Sprintf("Disk image '%s'%s is deprecated", key, source)
+		dep := diskImage.GetSpec().GetDeprecation()
+		if dep != nil && dep.GetObsolescenceTimestamp() != nil {
+			warning += fmt.Sprintf(" and will become obsolete on %s",
+				dep.GetObsolescenceTimestamp().AsTime().Format(time.RFC3339))
+		}
+		warnings = append(warnings, warning)
+	}
+
+	return warnings, nil
+}

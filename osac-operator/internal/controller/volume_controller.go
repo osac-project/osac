@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
 	"k8s.io/apimachinery/pkg/api/equality"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -239,9 +240,19 @@ func (r *VolumeReconciler) handleDelete(ctx context.Context, vol *v1alpha1.Volum
 		return ctrl.Result{}, nil
 	}
 
-	// Only call vendor if there is a volume to delete; volumes that failed
-	// before vendor provisioning have no VendorVolumeID.
-	if r.VendorProvisioner != nil && vol.Status.VendorVolumeID != "" {
+	// A provisioned volume (VendorVolumeID set) must be deprovisioned on the
+	// vendor array before the finalizer is removed. If no provisioner is
+	// configured we refuse to remove the finalizer; otherwise the backend
+	// volume would leak silently. The reconcile requeues until a provisioner
+	// is available. Volumes that failed before vendor provisioning have no
+	// VendorVolumeID, so they fall through to finalizer removal.
+	if vol.Status.VendorVolumeID != "" {
+		if r.VendorProvisioner == nil {
+			return ctrl.Result{}, fmt.Errorf(
+				"volume %q has vendorVolumeID %q but no vendor provisioner is configured; "+
+					"refusing to remove finalizer to avoid leaking the backend volume",
+				vol.Name, vol.Status.VendorVolumeID)
+		}
 		err := r.VendorProvisioner.DeleteVolume(ctx, VendorDeleteVolumeRequest{
 			VendorVolumeID: vol.Status.VendorVolumeID,
 			Backend:        vol.Status.Backend,

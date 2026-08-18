@@ -259,6 +259,38 @@ var _ = Describe("VolumeReconciler", func() {
 		Expect(still.Status.Phase).To(Equal(osacv1alpha1.VolumePhaseDeleting))
 	})
 
+	It("should keep finalizer when provisioned but no VendorProvisioner is configured", func() {
+		Expect(k8sClient.Create(testCtx, vol)).To(Succeed())
+
+		// Reconcile to Ready so the volume has a VendorVolumeID.
+		for range 3 {
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{
+				Request: reconcile.Request{
+					NamespacedName: types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace},
+				},
+			})
+			Expect(err).ToNot(HaveOccurred())
+		}
+
+		// Simulate a misconfigured restart: provisioner is gone but the volume
+		// was already provisioned on the array.
+		reconciler.VendorProvisioner = nil
+
+		Expect(k8sClient.Delete(testCtx, vol)).To(Succeed())
+
+		_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{
+			Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace},
+			},
+		})
+		// Must error and retain the finalizer so the backend volume is not leaked.
+		Expect(err).To(HaveOccurred())
+
+		still := &osacv1alpha1.Volume{}
+		Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace}, still)).To(Succeed())
+		Expect(still.Finalizers).To(ContainElement(osacVolumeFinalizer))
+	})
+
 	It("should return not-found gracefully when volume is already deleted", func() {
 		_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{
 			Request: reconcile.Request{

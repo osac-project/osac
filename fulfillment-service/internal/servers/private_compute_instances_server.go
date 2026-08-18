@@ -20,7 +20,6 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
-	"time"
 
 	"maps"
 
@@ -620,51 +619,11 @@ func (s *PrivateComputeInstancesServer) validateStorageTiers(
 	return nil
 }
 
-// lookupDiskImage resolves a DiskImage by id or name. The DAO's tenancy filter
-// automatically includes the shared tenant, so both tenant-local and globally
-// visible DiskImages are found.
-func (s *PrivateComputeInstancesServer) lookupDiskImage(ctx context.Context,
-	key string) (result *privatev1.DiskImage, err error) {
-	if key == "" {
-		return
-	}
-	response, err := s.diskImagesDao.List().
-		SetFilter(fmt.Sprintf("this.id == %[1]s || this.metadata.name == %[1]s", strconv.Quote(key))).
-		SetLimit(1).
-		Do(ctx)
-	if err != nil {
-		var deniedErr *dao.ErrDenied
-		if errors.As(err, &deniedErr) {
-			err = grpcstatus.Errorf(grpccodes.PermissionDenied, "%s", deniedErr.Reason)
-			return
-		}
-		s.logger.ErrorContext(ctx, "Failed to lookup disk image",
-			slog.String("key", key),
-			slog.Any("error", err))
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to lookup disk image")
-		return
-	}
-	switch response.GetTotal() {
-	case 0:
-		err = grpcstatus.Errorf(
-			grpccodes.NotFound,
-			"there is no disk image with identifier or name '%s'",
-			key,
-		)
-	case 1:
-		result = response.GetItems()[0]
-	default:
-		err = grpcstatus.Errorf(
-			grpccodes.InvalidArgument,
-			"there are multiple disk images with identifier or name '%s'",
-			key,
-		)
-	}
-	return
-}
-
-// validateDiskImage resolves the disk_image reference, validates lifecycle state, and
-// backfills id+name on the stored reference. Returns warnings for DEPRECATED images.
+// validateDiskImage resolves the disk_image reference via the shared
+// validateDiskImageState helper (catalog_item_validation.go), which performs the
+// id-or-name lookup and lifecycle validation shared with the Template and CatalogItem
+// servers. On success it backfills id/name/shared on the stored reference so it is
+// complete, and returns warnings for DEPRECATED images.
 func (s *PrivateComputeInstancesServer) validateDiskImage(
 	ctx context.Context,
 	ci *privatev1.ComputeInstance,
@@ -680,32 +639,15 @@ func (s *PrivateComputeInstancesServer) validateDiskImage(
 		return nil, nil
 	}
 
-	diskImage, err := s.lookupDiskImage(ctx, key)
+	diskImage, warnings, err := validateDiskImageState(ctx, s.diskImagesDao, key, "")
 	if err != nil {
 		return nil, err
 	}
 
-	// Backfill id and name so the stored reference is complete.
+	// Backfill id, name, and shared so the stored reference is complete.
 	diskImageRef.Id = diskImage.GetId()
 	diskImageRef.Name = diskImage.GetMetadata().GetName()
 	diskImageRef.Shared = diskImage.GetMetadata().GetTenant() == auth.SharedTenant
-
-	lifecycle := diskImage.GetSpec().GetLifecycle()
-	var warnings []string
-
-	switch lifecycle {
-	case privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_OBSOLETE:
-		return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition,
-			"disk image '%s' is obsolete and cannot be used", key)
-	case privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_DEPRECATED:
-		warning := fmt.Sprintf("Disk image '%s' is deprecated", key)
-		dep := diskImage.GetSpec().GetDeprecation()
-		if dep != nil && dep.GetObsolescenceTimestamp() != nil {
-			warning += fmt.Sprintf(" and will become obsolete on %s",
-				dep.GetObsolescenceTimestamp().AsTime().Format(time.RFC3339))
-		}
-		warnings = append(warnings, warning)
-	}
 
 	return warnings, nil
 }

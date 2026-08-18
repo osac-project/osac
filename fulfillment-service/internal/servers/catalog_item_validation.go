@@ -379,10 +379,16 @@ func validateInstanceTypeState(
 }
 
 // validateDiskImageState looks up a DiskImage by id or name through the tenant-filtered
-// DAO and validates its lifecycle. Returns a warning for DEPRECATED images, an error for
-// OBSOLETE or not-found images. The source parameter provides context for error messages
-// (e.g. " in spec_defaults", " in field_definitions"); pass an empty string when
-// validating directly on a ComputeInstance.
+// DAO and validates its lifecycle. On success it returns the resolved DiskImage (so callers
+// that need it — e.g. the ComputeInstance handler backfilling id/name/shared on the stored
+// reference — can use it) together with a warning for DEPRECATED images. It returns an error
+// for OBSOLETE or not-found images, and (nil, nil, nil) when key is empty. The source
+// parameter provides context for error messages (e.g. " in spec_defaults",
+// " in field_definitions"); pass an empty string when validating directly on a ComputeInstance.
+//
+// This is the single shared lookup+lifecycle helper for disk_image, delegated to by the
+// ComputeInstance, ComputeInstanceTemplate, and CatalogItem servers — mirroring how
+// validateInstanceTypeState is shared. Callers that don't need the resolved object discard it.
 //
 // Error-code convention: this deliberately follows the existing instance_type / ComputeInstance
 // handlers (NotFound for missing, FailedPrecondition for OBSOLETE, warning for DEPRECATED)
@@ -395,9 +401,9 @@ func validateDiskImageState(
 	diskImagesDao *dao.GenericDAO[*privatev1.DiskImage],
 	key string,
 	source string,
-) ([]string, error) {
+) (*privatev1.DiskImage, []string, error) {
 	if key == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	response, err := diskImagesDao.List().
@@ -407,20 +413,20 @@ func validateDiskImageState(
 	if err != nil {
 		var deniedErr *dao.ErrDenied
 		if errors.As(err, &deniedErr) {
-			return nil, grpcstatus.Errorf(grpccodes.PermissionDenied, "%s", deniedErr.Reason)
+			return nil, nil, grpcstatus.Errorf(grpccodes.PermissionDenied, "%s", deniedErr.Reason)
 		}
-		return nil, grpcstatus.Errorf(grpccodes.Internal,
+		return nil, nil, grpcstatus.Errorf(grpccodes.Internal,
 			"failed to retrieve disk image '%s'", key)
 	}
 
 	switch response.GetTotal() {
 	case 0:
-		return nil, grpcstatus.Errorf(grpccodes.NotFound,
+		return nil, nil, grpcstatus.Errorf(grpccodes.NotFound,
 			"disk image '%s'%s not found", key, source)
 	case 1:
 		// Single match: continue with lifecycle validation below.
 	default:
-		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
+		return nil, nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"there are multiple disk images with identifier or name '%s'", key)
 	}
 
@@ -430,7 +436,7 @@ func validateDiskImageState(
 
 	switch lifecycle {
 	case privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_OBSOLETE:
-		return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition,
+		return nil, nil, grpcstatus.Errorf(grpccodes.FailedPrecondition,
 			"disk image '%s'%s is obsolete and cannot be used", key, source)
 	case privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_DEPRECATED:
 		warning := fmt.Sprintf("Disk image '%s'%s is deprecated", key, source)
@@ -442,5 +448,5 @@ func validateDiskImageState(
 		warnings = append(warnings, warning)
 	}
 
-	return warnings, nil
+	return diskImage, warnings, nil
 }

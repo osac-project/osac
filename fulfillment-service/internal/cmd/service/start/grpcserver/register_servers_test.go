@@ -42,12 +42,15 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	hubscheme "github.com/osac-project/osac/fulfillment-service/internal/kubernetes/scheme"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 	"github.com/osac-project/osac/fulfillment-service/internal/packages"
 	"github.com/osac-project/osac/fulfillment-service/internal/recovery"
+	"github.com/osac-project/osac/fulfillment-service/internal/servers"
 	itesting "github.com/osac-project/osac/fulfillment-service/internal/testing"
 )
 
@@ -157,6 +160,28 @@ var _ = BeforeSuite(func() {
 
 	hubScheme, err := hubscheme.NewHub()
 	Expect(err).ToNot(HaveOccurred())
+	metricsRegisterer := prometheus.NewRegistry()
+
+	// Create the storage tiers DAO and tier resolver, exactly as production wires them in
+	// start_grpc_server_cmd.go's run(), for the private volumes server's mandatory SetTierResolver dependency.
+	storageTiersDAO, err := dao.NewGenericDAO[*privatev1.StorageTier]().
+		SetLogger(logger).
+		SetTenancyLogic(tenancy).
+		Build()
+	Expect(err).ToNot(HaveOccurred())
+	tierResolver := newDAOTierResolver(storageTiersDAO)
+
+	// Create the private users server, exactly as production does in start_grpc_server_cmd.go's run(). It's
+	// constructed outside RegisterResourceServers there because the JIT provisioning interceptor needs it before
+	// the interceptor chain is built — see ResourceServerDeps.PrivateUsersServer's doc comment.
+	privateUsersServer, err := servers.NewPrivateUsersServer().
+		SetLogger(logger).
+		SetNotifier(notifier).
+		SetAttributionLogic(attribution).
+		SetTenancyLogic(tenancy).
+		SetMetricsRegisterer(metricsRegisterer).
+		Build()
+	Expect(err).ToNot(HaveOccurred())
 
 	// Start a real gRPC server, with the same transaction interceptor production uses, and register every
 	// filterable resource through the exact same function production calls:
@@ -171,8 +196,10 @@ var _ = BeforeSuite(func() {
 		PrivateAttributionLogic: attribution,
 		PublicAttributionLogic:  attribution,
 		TenancyLogic:            tenancy,
-		MetricsRegisterer:       prometheus.NewRegistry(),
+		MetricsRegisterer:       metricsRegisterer,
 		HubScheme:               hubScheme,
+		TierResolver:            tierResolver,
+		PrivateUsersServer:      privateUsersServer,
 	})
 	Expect(err).ToNot(HaveOccurred())
 	server.Start()

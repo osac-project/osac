@@ -43,6 +43,12 @@ type ResourceServerDeps struct {
 	MetricsRegisterer       prometheus.Registerer
 	HubScheme               *runtime.Scheme
 	SecretStore             vault.SecretStore
+	TierResolver            servers.TierResolverFunc
+
+	// PrivateUsersServer is already constructed by the caller — the JIT provisioning interceptor needs it
+	// before the gRPC server's interceptor chain is built, which happens before RegisterResourceServers is
+	// called. It's threaded through here so registration still happens in one place.
+	PrivateUsersServer privatev1.UsersServer
 }
 
 // ResourceServers exposes the constructed servers that code outside the registration block still needs directly.
@@ -941,6 +947,38 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		return nil, fmt.Errorf("failed to create private projects server: %w", err)
 	}
 	privatev1.RegisterProjectsServer(registrar, privateProjectsServer)
+
+	// Create the private volumes server:
+	deps.Logger.InfoContext(ctx, "Creating private volumes server")
+	privateVolumesServer, err := servers.NewPrivateVolumesServer().
+		SetLogger(deps.Logger).
+		SetNotifier(deps.Notifier).
+		SetAttributionLogic(deps.PrivateAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetTierResolver(deps.TierResolver).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create private volumes server: %w", err)
+	}
+	privatev1.RegisterVolumesServer(registrar, privateVolumesServer)
+
+	// Create the public users server:
+	deps.Logger.InfoContext(ctx, "Creating public users server")
+	publicUsersServer, err := servers.NewUsersServer().
+		SetLogger(deps.Logger).
+		SetNotifier(deps.Notifier).
+		SetAttributionLogic(deps.PublicAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create public users server: %w", err)
+	}
+	publicv1.RegisterUsersServer(registrar, publicUsersServer)
+
+	// Register the private users server. It's already constructed — see the PrivateUsersServer doc comment.
+	privatev1.RegisterUsersServer(registrar, deps.PrivateUsersServer)
 
 	return &ResourceServers{
 		PrivateHubsServer:             privateHubsServer,

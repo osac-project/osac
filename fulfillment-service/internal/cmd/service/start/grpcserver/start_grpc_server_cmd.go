@@ -576,6 +576,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	if err != nil {
 		return fmt.Errorf("failed to create public capabilities server: %w", err)
 	}
+	// filterable-resource-exempt: static introspection endpoint, no List RPC or CEL filter field
 	publicv1.RegisterCapabilitiesServer(grpcServer, capabilitiesServer)
 	privateCapabilitiesServer, err := servers.NewPrivateCapabilitiesServer().
 		SetLogger(c.logger).
@@ -584,6 +585,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	if err != nil {
 		return fmt.Errorf("failed to create private capabilities server: %w", err)
 	}
+	// filterable-resource-exempt: static introspection endpoint, no List RPC or CEL filter field
 	privatev1.RegisterCapabilitiesServer(grpcServer, privateCapabilitiesServer)
 
 	// Create the runtime scheme for typed OSAC API objects:
@@ -654,23 +656,6 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		}
 	}
 
-	// Register all filterable resources' public and private servers:
-	resourceServers, err := RegisterResourceServers(ctx, grpcServer, ResourceServerDeps{
-		Logger:                  c.logger,
-		Notifier:                notifier,
-		PrivateAttributionLogic: privateAttributionLogic,
-		PublicAttributionLogic:  publicAttributionLogic,
-		TenancyLogic:            tenancyLogic,
-		MetricsRegisterer:       metricsRegisterer,
-		HubScheme:               hubScheme,
-		SecretStore:             secretStore,
-	})
-	if err != nil {
-		return err
-	}
-	privateHubsServer := resourceServers.PrivateHubsServer
-	privateComputeInstancesServer := resourceServers.PrivateComputeInstancesServer
-
 	// Create the tier resolver for the volumes server. The resolver looks up a
 	// StorageTier by name and returns the first backend association.
 	storageTiersDAO, err := dao.NewGenericDAO[*privatev1.StorageTier]().
@@ -682,37 +667,24 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	}
 	tierResolver := newDAOTierResolver(storageTiersDAO)
 
-	// Create the private volumes server:
-	c.logger.InfoContext(ctx, "Creating private volumes server")
-	privateVolumesServer, err := servers.NewPrivateVolumesServer().
-		SetLogger(c.logger).
-		SetNotifier(notifier).
-		SetAttributionLogic(privateAttributionLogic).
-		SetTenancyLogic(tenancyLogic).
-		SetMetricsRegisterer(metricsRegisterer).
-		SetTierResolver(tierResolver).
-		Build()
+	// Register all filterable resources' public and private servers:
+	resourceServers, err := RegisterResourceServers(ctx, grpcServer, ResourceServerDeps{
+		Logger:                  c.logger,
+		Notifier:                notifier,
+		PrivateAttributionLogic: privateAttributionLogic,
+		PublicAttributionLogic:  publicAttributionLogic,
+		TenancyLogic:            tenancyLogic,
+		MetricsRegisterer:       metricsRegisterer,
+		HubScheme:               hubScheme,
+		SecretStore:             secretStore,
+		TierResolver:            tierResolver,
+		PrivateUsersServer:      privateUsersServer,
+	})
 	if err != nil {
-		return fmt.Errorf("failed to create private volumes server: %w", err)
+		return err
 	}
-	privatev1.RegisterVolumesServer(grpcServer, privateVolumesServer)
-
-	// Create the public users server:
-	c.logger.InfoContext(ctx, "Creating public users server")
-	publicUsersServer, err := servers.NewUsersServer().
-		SetLogger(c.logger).
-		SetNotifier(notifier).
-		SetAttributionLogic(publicAttributionLogic).
-		SetTenancyLogic(tenancyLogic).
-		SetMetricsRegisterer(metricsRegisterer).
-		Build()
-	if err != nil {
-		return fmt.Errorf("failed to create public users server: %w", err)
-	}
-	publicv1.RegisterUsersServer(grpcServer, publicUsersServer)
-
-	// Register the private users server:
-	privatev1.RegisterUsersServer(grpcServer, privateUsersServer)
+	privateHubsServer := resourceServers.PrivateHubsServer
+	privateComputeInstancesServer := resourceServers.PrivateComputeInstancesServer
 
 	// Create the token sealer (sign + encrypt infrastructure):
 	c.logger.InfoContext(ctx, "Creating token sealer")
@@ -739,6 +711,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	if err != nil {
 		return fmt.Errorf("failed to create JSON Web Key Set server: %w", err)
 	}
+	// filterable-resource-exempt: singleton JWKS fetch, no List RPC or CEL filter field
 	publicv1.RegisterJsonWebKeySetServer(grpcServer, jsonWebKeySetServer)
 
 	// Build the console target resolver (lookup/policy only):
@@ -772,6 +745,8 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	if err != nil {
 		return fmt.Errorf("failed to create console server: %w", err)
 	}
+	// filterable-resource-exempt: session/action RPC, no List RPC or CEL filter field; also depends on
+	// privateHubsServer/privateComputeInstancesServer from RegisterResourceServers, so it must be built after
 	publicv1.RegisterConsoleSessionsServer(grpcServer, consoleServer)
 
 	// Create the events server:
@@ -804,6 +779,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 			)
 		}
 	}()
+	// filterable-resource-exempt: streaming Watch RPC, no List RPC or CEL filter field
 	publicv1.RegisterEventsServer(grpcServer, eventsServer)
 
 	// Create the private events server:
@@ -835,6 +811,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 			)
 		}
 	}()
+	// filterable-resource-exempt: streaming Watch RPC, no List RPC or CEL filter field
 	privatev1.RegisterEventsServer(grpcServer, privateEventsServer)
 
 	// Create the metrics listener:

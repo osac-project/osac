@@ -141,21 +141,23 @@ _build_slack_charts_table() {
         (( ${#ver} > version_w )) && version_w=${#ver}
     done
 
-    table="┌$(_slack_table_hline "${name_w}")┬$(_slack_table_hline "${version_w}")┐"
+    local name_border=$(( name_w + 2 )) version_border=$(( version_w + 2 ))
+
+    table="┌$(_slack_table_hline "${name_border}")┬$(_slack_table_hline "${version_border}")┐"
     if [[ "${linked}" == true ]]; then
         table="${table}"$'\n'"│ $(_slack_name_cell "${name_w}" "Chart") │ $(_slack_version_cell_linked "${version_w}" "Version" "") │"
-        table="${table}"$'\n'"├$(_slack_table_hline "${name_w}")┼$(_slack_table_hline "${version_w}")┤"
+        table="${table}"$'\n'"├$(_slack_table_hline "${name_border}")┼$(_slack_table_hline "${version_border}")┤"
         for i in "${!names[@]}"; do
             table="${table}"$'\n'"│ $(_slack_name_cell "${name_w}" "${names[$i]}") │ $(_slack_version_cell_linked "${version_w}" "${versions[$i]}" "${urls[$i]}") │"
         done
     else
         table="${table}"$'\n'"│ $(_slack_name_cell "${name_w}" "Chart") │ $(_slack_version_cell_plain "${version_w}" "Version") │"
-        table="${table}"$'\n'"├$(_slack_table_hline "${name_w}")┼$(_slack_table_hline "${version_w}")┤"
+        table="${table}"$'\n'"├$(_slack_table_hline "${name_border}")┼$(_slack_table_hline "${version_border}")┤"
         for i in "${!names[@]}"; do
             table="${table}"$'\n'"│ $(_slack_name_cell "${name_w}" "${names[$i]}") │ $(_slack_version_cell_plain "${version_w}" "${versions[$i]}") │"
         done
     fi
-    table="${table}"$'\n'"└$(_slack_table_hline "${name_w}")┴$(_slack_table_hline "${version_w}")┘"
+    table="${table}"$'\n'"└$(_slack_table_hline "${name_border}")┴$(_slack_table_hline "${version_border}")┘"
     printf '%s' "${table}"
 }
 
@@ -165,15 +167,20 @@ build_slack_charts_table() {
 
 rewrite_umbrella_osac_ui_dependency() {
     local chart_yaml=$1 ui_version=$2 oci_repo=$3
-    yq -i "(.dependencies[] | select(.name == \"osac-ui\")).version = \"${ui_version}\"" "${chart_yaml}"
-    yq -i "(.dependencies[] | select(.name == \"osac-ui\")).repository = \"${oci_repo}\"" "${chart_yaml}"
+    UI_VERSION="${ui_version}" yq -i \
+        '(.dependencies[] | select(.name == "osac-ui")).version = strenv(UI_VERSION)' \
+        "${chart_yaml}"
+    UI_REPO="${oci_repo}" yq -i \
+        '(.dependencies[] | select(.name == "osac-ui")).repository = strenv(UI_REPO)' \
+        "${chart_yaml}"
 }
 
 stamp_osac_ui_chart() {
     local chart_dir=$1 sub_version=$2 image_ref=$3
-    yq -i ".version = \"${sub_version}\"" "${chart_dir}/Chart.yaml"
-    yq -i ".appVersion = \"${sub_version}\"" "${chart_dir}/Chart.yaml"
-    yq -i ".images.ui = \"${image_ref}\"" "${chart_dir}/values.yaml"
+    # osac-ui/charts/ui/templates/deployment.yaml reads .Values.images.ui
+    SUB_VERSION="${sub_version}" yq -i '.version = strenv(SUB_VERSION)' "${chart_dir}/Chart.yaml"
+    SUB_VERSION="${sub_version}" yq -i '.appVersion = strenv(SUB_VERSION)' "${chart_dir}/Chart.yaml"
+    IMAGE_REF="${image_ref}" yq -i '.images.ui = strenv(IMAGE_REF)' "${chart_dir}/values.yaml"
 }
 
 chart_version_url() {

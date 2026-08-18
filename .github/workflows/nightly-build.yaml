@@ -169,6 +169,10 @@ jobs:
                 echo "::error::Chart name missing in ${CHART_DIR}/Chart.yaml"
                 exit 1
               fi
+              if [[ ! "${CHART_NAME}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+                echo "::error::Invalid chart name in ${CHART_DIR}/Chart.yaml: ${CHART_NAME}"
+                exit 1
+              fi
 
               # Update Chart.yaml version field using yq
               yq -i ".version = \"${SUB_VERSION}\"" "${CHART_DIR}/Chart.yaml"

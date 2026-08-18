@@ -20,10 +20,14 @@ runtime behavior:
    ansible-lint enforces this.
 2. **Every task must have a `name:` field.** No unnamed tasks.
 3. **Use underscores in role names, `implementation_strategy`, and
-   `fabric_manager`/`k8s_manager`**, never hyphens. Role directory name,
-   `meta/osac.yaml`, and CR annotation must all match. Network roles
-   identify themselves via `fabric_manager`/`k8s_manager`; other template
-   types (compute, storage, cluster) still use `implementation_strategy`.
+   `fabric_manager`/`k8s_manager` values**, never hyphens. Role directory
+   name, `meta/osac.yaml`, and the value stamped into the CR annotation must
+   all match. This underscore convention applies to those *values*, not to
+   the fixed, hyphenated annotation **key** itself
+   (`osac.openshift.io/implementation-strategy`) — never rename that key.
+   Network roles identify themselves via `fabric_manager`/`k8s_manager`;
+   other template types (compute, storage, cluster) still use
+   `implementation_strategy`.
 4. **Always include `osac.service.common`** (with
    `tasks_from: get_remote_cluster_kubeconfig`) before creating K8s resources
    on remote clusters.

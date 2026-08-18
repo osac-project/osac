@@ -337,8 +337,12 @@ class Metadata(Base):
     allowed_resource_classes: list[str] | None = None
     # Network-specific fields. implementation_strategy is no longer forwarded to the
     # NetworkClass API (fulfillment-service reserved the field) — fabric_manager/
-    # k8s_manager are now the identity source, but the key is tolerated (and ignored)
-    # if still present in a role's osac.yaml for backwards compatibility.
+    # k8s_manager are now the identity source. An implementation_strategy key left
+    # over in a role's osac.yaml is silently dropped rather than rejected, but only
+    # because Base's model_config above doesn't set extra="forbid" (Pydantic v2
+    # defaults to extra="ignore"). If that config is ever tightened, either add
+    # implementation_strategy back here as a deprecated no-op field or strip it from
+    # osac.yaml files first.
     fabric_manager: str | None = None
     k8s_manager: str | None = None
     is_default: bool = False

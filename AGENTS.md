@@ -41,6 +41,19 @@ fulfillment-service (proto)
 
 For deployment coordination (image tags, submodules), see `osac-installer/AGENTS.md`.
 
+## Jira Conventions
+
+OSAC requires a **Component** on every created issue — Jira rejects creates
+without one. Any automation creating an OSAC issue must set it:
+
+- Inherit from the parent: epics/stories take the parent Feature's component(s)
+  (parent has multiple → give each child the matching subset from the parent's
+  set; confirm with the driver before creating).
+- **Never invent a component** or use one the parent lacks. If none fits, or the
+  parent has none, stop and ask the driver.
+- Set on create — MCP `fields: {"components": [{"name": "<name>"}]}` / `jira` CLI
+  `-C "<name>"`; match component strings exactly.
+
 ## Knowledge Graph (graphify brain)
 
 CI keeps a structural code graph of this mono-repo fresh (`.github/workflows/graphify-brain-refresh.yaml`) and publishes it for pickup. After `graphify` is installed (see below), a `SessionStart` hook (`.claude/hooks/fetch-graphify-brain.sh`) fetches the latest published bundle into `graphify-out/` automatically at the start of every session — no manual fetch step — and it fails open (falls back to normal cold exploration with a one-line warning) if the fetch fails, `graphify` isn't installed, or the graph is otherwise unavailable.

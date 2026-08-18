@@ -690,6 +690,116 @@ var _ = Describe("ClusterOrder Controller", func() {
 			Expect(cond.Message).To(Equal("provisioning in progress"))
 		})
 
+		It("should adopt orphaned HostedCluster when no provision job is tracked (OSAC-4076)", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Status: v1alpha1.ClusterOrderStatus{
+					Phase:                v1alpha1.ClusterOrderPhaseProgressing,
+					DesiredConfigVersion: "abc123",
+					ClusterReference:     &v1alpha1.ClusterOrderClusterReferenceType{HostedClusterName: "orphaned-hc"},
+				},
+			}
+
+			reconciler := &ClusterOrderReconciler{MaxJobHistory: provisioning.DefaultMaxJobHistory}
+			reconciler.adoptOrphanedHostedCluster(context.Background(), instance)
+
+			Expect(instance.Status.ProvisioningJobs).To(HaveLen(1))
+			job := instance.Status.ProvisioningJobs[0]
+			Expect(job.JobID).To(Equal("adopted-orphan"))
+			Expect(job.State).To(Equal(v1alpha1.JobStateSucceeded))
+			Expect(job.Type).To(Equal(v1alpha1.JobTypeProvision))
+			Expect(job.ConfigVersion).To(Equal("abc123"))
+			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseProgressing),
+				"adoption only inserts a job — phase transition is handled by handleHostedCluster")
+		})
+
+		It("should not adopt when a provision job already exists (OSAC-4076)", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Status: v1alpha1.ClusterOrderStatus{
+					Phase: v1alpha1.ClusterOrderPhaseProgressing,
+					ProvisioningJobs: []v1alpha1.JobStatus{
+						{
+							Type:  v1alpha1.JobTypeProvision,
+							JobID: "real-job",
+							State: v1alpha1.JobStateSucceeded,
+						},
+					},
+					ClusterReference: &v1alpha1.ClusterOrderClusterReferenceType{HostedClusterName: "some-hc"},
+				},
+			}
+
+			reconciler := &ClusterOrderReconciler{MaxJobHistory: provisioning.DefaultMaxJobHistory}
+			reconciler.adoptOrphanedHostedCluster(context.Background(), instance)
+
+			Expect(instance.Status.ProvisioningJobs).To(HaveLen(1))
+			Expect(instance.Status.ProvisioningJobs[0].JobID).To(Equal("real-job"))
+		})
+
+		It("should set Phase=Ready when HC becomes ready after adoption (OSAC-4076)", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Status: v1alpha1.ClusterOrderStatus{
+					Phase: v1alpha1.ClusterOrderPhaseProgressing,
+					ProvisioningJobs: []v1alpha1.JobStatus{
+						{
+							Type:  v1alpha1.JobTypeProvision,
+							JobID: "adopted-orphan",
+							State: v1alpha1.JobStateSucceeded,
+						},
+					},
+				},
+			}
+			hc := &hypershiftv1beta1.HostedCluster{
+				Status: hypershiftv1beta1.HostedClusterStatus{
+					Conditions: []metav1.Condition{
+						{Type: "Available", Status: metav1.ConditionTrue, Reason: "AsExpected", LastTransitionTime: metav1.Now()},
+						{Type: "ClusterVersionSucceeding", Status: metav1.ConditionTrue, Reason: "AsExpected", LastTransitionTime: metav1.Now()},
+						{Type: "Degraded", Status: metav1.ConditionFalse, Reason: "AsExpected", LastTransitionTime: metav1.Now()},
+					},
+				},
+			}
+			hc.SetName("adopted-hc")
+
+			reconciler := &ClusterOrderReconciler{Client: k8sClient, MaxJobHistory: provisioning.DefaultMaxJobHistory}
+			err := reconciler.handleHostedCluster(context.Background(), instance, hc)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseReady))
+			cond := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		})
+
+		It("should NOT set Phase=Ready in handleHostedCluster for normal (non-adopted) jobs (OSAC-2024 preservation)", func() {
+			instance := &v1alpha1.ClusterOrder{
+				Status: v1alpha1.ClusterOrderStatus{
+					Phase: v1alpha1.ClusterOrderPhaseProgressing,
+					ProvisioningJobs: []v1alpha1.JobStatus{
+						{
+							Type:  v1alpha1.JobTypeProvision,
+							JobID: "real-aap-job-42",
+							State: v1alpha1.JobStateSucceeded,
+						},
+					},
+				},
+			}
+			hc := &hypershiftv1beta1.HostedCluster{
+				Status: hypershiftv1beta1.HostedClusterStatus{
+					Conditions: []metav1.Condition{
+						{Type: "Available", Status: metav1.ConditionTrue, Reason: "AsExpected", LastTransitionTime: metav1.Now()},
+						{Type: "ClusterVersionSucceeding", Status: metav1.ConditionTrue, Reason: "AsExpected", LastTransitionTime: metav1.Now()},
+						{Type: "Degraded", Status: metav1.ConditionFalse, Reason: "AsExpected", LastTransitionTime: metav1.Now()},
+					},
+				},
+			}
+			hc.SetName("real-hc")
+
+			reconciler := &ClusterOrderReconciler{Client: k8sClient, MaxJobHistory: provisioning.DefaultMaxJobHistory}
+			err := reconciler.handleHostedCluster(context.Background(), instance, hc)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseProgressing),
+				"handleHostedCluster must NOT set Ready for normal jobs — OnSuccess handles that")
+		})
+
 		It("should set Phase=Ready and Progressing=False on OnSuccess", func() {
 			instance := &v1alpha1.ClusterOrder{
 				Status: v1alpha1.ClusterOrderStatus{

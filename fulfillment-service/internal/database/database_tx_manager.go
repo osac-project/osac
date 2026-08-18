@@ -194,6 +194,25 @@ func (t *managedTx) Run(ctx context.Context, task any, args ...any) error {
 	return taskErr
 }
 
+func (t *managedTx) Savepoint(ctx context.Context, fn func(ctx context.Context) error) error {
+	err := t.ensureReal(ctx)
+	if err != nil {
+		return err
+	}
+	spTx, err := t.real.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to create savepoint: %w", err)
+	}
+	spManaged := &managedTx{manager: t.manager, real: spTx}
+	spCtx := TxIntoContext(ctx, spManaged)
+	err = fn(spCtx)
+	if err != nil {
+		_ = spTx.Rollback(ctx)
+		return err
+	}
+	return spTx.Commit(ctx)
+}
+
 // ensureReal makes sure that the real transaction exists, creating it if needed.
 func (t *managedTx) ensureReal(ctx context.Context) error {
 	if t.real != nil {

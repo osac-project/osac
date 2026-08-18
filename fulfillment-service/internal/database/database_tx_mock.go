@@ -127,6 +127,20 @@ func (mr *MockTxMockRecorder) ReportError(err any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReportError", reflect.TypeOf((*MockTx)(nil).ReportError), err)
 }
 
+// Savepoint mocks base method.
+func (m *MockTx) Savepoint(ctx context.Context, fn func(context.Context) error) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Savepoint", ctx, fn)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Savepoint indicates an expected call of Savepoint.
+func (mr *MockTxMockRecorder) Savepoint(ctx, fn any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Savepoint", reflect.TypeOf((*MockTx)(nil).Savepoint), ctx, fn)
+}
+
 // Run mocks base method.
 func (m *MockTx) Run(ctx context.Context, task any, args ...any) error {
 	m.ctrl.T.Helper()

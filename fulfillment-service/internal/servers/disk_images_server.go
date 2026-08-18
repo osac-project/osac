@@ -119,6 +119,7 @@ func (b *DiskImagesServerBuilder) Build() (result *DiskImagesServer, err error) 
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetFilterDesc((*publicv1.DiskImage)(nil).ProtoReflect().Descriptor()).
 		Build()
 	if err != nil {
 		return

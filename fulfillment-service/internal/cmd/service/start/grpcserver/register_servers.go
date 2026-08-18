@@ -379,7 +379,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	privatev1.RegisterBareMetalInstancesServer(registrar, privateBareMetalInstancesServer)
 
 	// Create the private hubs server:
-	deps.Logger.InfoContext(ctx, "Creating hubs server")
+	deps.Logger.InfoContext(ctx, "Creating private hubs server")
 	privateHubsServer, err := servers.NewPrivateHubsServer().
 		SetLogger(deps.Logger).
 		SetNotifier(deps.Notifier).

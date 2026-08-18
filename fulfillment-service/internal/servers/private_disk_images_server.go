@@ -22,6 +22,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -36,6 +37,7 @@ type PrivateDiskImagesServerBuilder struct {
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
+	filterDesc        protoreflect.MessageDescriptor
 }
 
 var _ privatev1.DiskImagesServer = (*PrivateDiskImagesServer)(nil)
@@ -76,6 +78,13 @@ func (b *PrivateDiskImagesServerBuilder) SetMetricsRegisterer(value prometheus.R
 	return b
 }
 
+// SetFilterDesc sets the protobuf message descriptor used to validate and translate CEL filter
+// expressions. This is optional. When unset, the descriptor of this server's own private message type is used.
+func (b *PrivateDiskImagesServerBuilder) SetFilterDesc(value protoreflect.MessageDescriptor) *PrivateDiskImagesServerBuilder {
+	b.filterDesc = value
+	return b
+}
+
 func (b *PrivateDiskImagesServerBuilder) Build() (result *PrivateDiskImagesServer, err error) {
 	if b.logger == nil {
 		err = errors.New("logger is mandatory")
@@ -93,6 +102,7 @@ func (b *PrivateDiskImagesServerBuilder) Build() (result *PrivateDiskImagesServe
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetFilterDesc(b.filterDesc).
 		Build()
 	if err != nil {
 		return

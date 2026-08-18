@@ -351,7 +351,7 @@ var _ = Describe("Tenant visibility", func() {
 		Expect(getResponse.GetObject().GetMyString()).To(Equal("updated"))
 	})
 
-	It("Does not leak cross-tenant rows when filter has a top-level OR", func() {
+	It("Isolates tenant rows when filter has a top-level OR", func() {
 		// Create an unrestricted tenancy to seed objects in different tenants:
 		tenancyAll := auth.NewMockTenancyLogic(ctrl)
 		tenancyAll.EXPECT().DetermineVisibleTenants(gomock.Any()).

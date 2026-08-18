@@ -17,24 +17,27 @@ NIGHTLY_CHART_SLACK_ORDER=(
     osac
 )
 
+# Usage: append_chart_version <manifest_file> <chart_name> <version>
 append_chart_version() {
-    local manifest_file=$1 chart_name=$2 version=$3
+    local manifest_file="$1" chart_name="$2" version="$3"
     printf '%s %s\n' "${chart_name}" "${version}" >> "${manifest_file}"
 }
 
+# Usage: compute_nightly_chart_version <base_tag> <nightly_suffix>
 compute_nightly_chart_version() {
-    local base_tag=$1 nightly_suffix=$2
+    local base_tag="$1" nightly_suffix="$2"
     local base_version="${base_tag#v}"
     printf '%s-%s' "${base_version}" "${nightly_suffix}"
 }
 
+# Usage: osac_ui_nightly_image_ref <image_repo> <short_sha>
 osac_ui_nightly_image_ref() {
-    local image_repo=$1 short_sha=$2
+    local image_repo="$1" short_sha="$2"
     printf '%s:sha-%s' "${image_repo}" "${short_sha}"
 }
 
 _chart_slack_rank() {
-    local chart_name=$1
+    local chart_name="$1"
     local i
     for i in "${!NIGHTLY_CHART_SLACK_ORDER[@]}"; do
         if [[ "${NIGHTLY_CHART_SLACK_ORDER[$i]}" == "${chart_name}" ]]; then
@@ -46,7 +49,7 @@ _chart_slack_rank() {
 }
 
 _sort_chart_manifest() {
-    local manifest_file=$1
+    local manifest_file="$1"
     local -a rows=()
     local chart_name version rank
     while read -r chart_name version; do
@@ -65,7 +68,7 @@ _sort_chart_manifest() {
 }
 
 _slack_display_name() {
-    local chart_name=$1
+    local chart_name="$1"
     if [[ "${chart_name}" == "osac" ]]; then
         echo "osac (umbrella)"
     else
@@ -82,14 +85,14 @@ _slack_name_cell() {
 }
 
 _slack_version_cell_plain() {
-    local version_w=$1 ver=$2
+    local version_w="$1" ver="$2"
     local pad=$(( version_w - ${#ver} ))
     (( pad < 0 )) && pad=0
     printf '%s%*s' "${ver}" "${pad}" ""
 }
 
 _format_slack_linked_version() {
-    local version=$1 url=$2
+    local version="$1" url="$2"
     if [[ -n "${url}" ]]; then
         printf '<%s|%s>' "${url}" "${version}"
     else
@@ -98,7 +101,7 @@ _format_slack_linked_version() {
 }
 
 _slack_version_cell_linked() {
-    local version_w=$1 ver=$2 url=$3
+    local version_w="$1" ver="$2" url="$3"
     local linked pad
     linked=$(_format_slack_linked_version "${ver}" "${url}")
     pad=$(( version_w - ${#ver} ))
@@ -107,10 +110,10 @@ _slack_version_cell_linked() {
 }
 
 _build_slack_charts_table() {
-    local manifest_file=$1
-    local linked=${2:-false}
-    local repo_owner=${3:-}
-    local gh_token=${4:-}
+    local manifest_file="$1"
+    local linked="${2:-false}"
+    local repo_owner="${3:-}"
+    local gh_token="${4:-}"
     local -a names=() versions=() urls=()
     local chart_name version display_name url
     local name_w=5 version_w=7
@@ -161,12 +164,14 @@ _build_slack_charts_table() {
     printf '%s' "${table}"
 }
 
+# Usage: build_slack_charts_table <manifest_file>
 build_slack_charts_table() {
     _build_slack_charts_table "$1" false
 }
 
+# Usage: rewrite_umbrella_osac_ui_dependency <chart_yaml> <ui_version> <oci_repo>
 rewrite_umbrella_osac_ui_dependency() {
-    local chart_yaml=$1 ui_version=$2 oci_repo=$3
+    local chart_yaml="$1" ui_version="$2" oci_repo="$3"
     UI_VERSION="${ui_version}" yq -i \
         '(.dependencies[] | select(.name == "osac-ui")).version = strenv(UI_VERSION)' \
         "${chart_yaml}"
@@ -175,16 +180,18 @@ rewrite_umbrella_osac_ui_dependency() {
         "${chart_yaml}"
 }
 
+# Usage: stamp_osac_ui_chart <chart_dir> <sub_version> <image_ref>
 stamp_osac_ui_chart() {
-    local chart_dir=$1 sub_version=$2 image_ref=$3
+    local chart_dir="$1" sub_version="$2" image_ref="$3"
     # osac-ui/charts/ui/templates/deployment.yaml reads .Values.images.ui
     SUB_VERSION="${sub_version}" yq -i '.version = strenv(SUB_VERSION)' "${chart_dir}/Chart.yaml"
     SUB_VERSION="${sub_version}" yq -i '.appVersion = strenv(SUB_VERSION)' "${chart_dir}/Chart.yaml"
     IMAGE_REF="${image_ref}" yq -i '.images.ui = strenv(IMAGE_REF)' "${chart_dir}/values.yaml"
 }
 
+# Usage: chart_version_url <chart_name> <version> <repo_owner> <gh_token>
 chart_version_url() {
-    local chart_name=$1 version=$2 repo_owner=$3 gh_token=$4
+    local chart_name="$1" version="$2" repo_owner="$3" gh_token="$4"
     local encoded_version response url
 
     encoded_version=$(jq -rn --arg v "${version}" '$v|@uri')
@@ -210,8 +217,9 @@ chart_version_url() {
     echo "${url}?tag=${encoded_version}"
 }
 
+# Usage: build_slack_charts_published_summary <manifest_file> <repo_owner> <gh_token>
 build_slack_charts_published_summary() {
-    local manifest_file=$1 repo_owner=$2 gh_token=$3
+    local manifest_file="$1" repo_owner="$2" gh_token="$3"
     local table
 
     table=$(_build_slack_charts_table "${manifest_file}" true "${repo_owner}" "${gh_token}")

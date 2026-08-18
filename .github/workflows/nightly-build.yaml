@@ -59,7 +59,6 @@ jobs:
       uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v6
       with:
         ref: ${{ github.sha }}
-        submodules: recursive
         fetch-depth: 0
         persist-credentials: false
 
@@ -170,7 +169,7 @@ jobs:
                 exit 1
               fi
               if [[ ! "${CHART_NAME}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
-                echo "::error::Invalid chart name in ${CHART_DIR}/Chart.yaml: ${CHART_NAME}"
+                echo "::error::Invalid chart name in ${CHART_DIR}/Chart.yaml (name must match [a-zA-Z0-9._-]+)"
                 exit 1
               fi
 

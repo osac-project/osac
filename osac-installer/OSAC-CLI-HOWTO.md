@@ -129,18 +129,17 @@ For development work, set up the environment:
 mkdir -p ~/workspace/fulfillment
 cd ~/workspace/fulfillment
 
-# Clone related repositories
-git clone https://github.com/osac-project/fulfillment-service.git
-git clone https://github.com/osac-project/osac-installer.git
+# Clone the osac mono-repo (fulfillment-service and osac-installer live inside it)
+git clone https://github.com/osac-project/osac.git
 
 # Set up development environment variables
-export OSAC_CLI_ROOT=~/workspace/fulfillment/fulfillment-service
-export OSAC_INSTALLER_ROOT=~/workspace/fulfillment/osac-installer
+export OSAC_CLI_ROOT=~/workspace/fulfillment/osac/fulfillment-service
+export OSAC_INSTALLER_ROOT=~/workspace/fulfillment/osac/osac-installer
 export KUBECONFIG=~/workspace/fulfillment/kubeconfig
 
 # Add to ~/.bashrc for persistence
-echo 'export OSAC_CLI_ROOT=~/workspace/fulfillment/fulfillment-service' >> ~/.bashrc
-echo 'export OSAC_INSTALLER_ROOT=~/workspace/fulfillment/osac-installer' >> ~/.bashrc
+echo 'export OSAC_CLI_ROOT=~/workspace/fulfillment/osac/fulfillment-service' >> ~/.bashrc
+echo 'export OSAC_INSTALLER_ROOT=~/workspace/fulfillment/osac/osac-installer' >> ~/.bashrc
 ```
 
 ## Configuration

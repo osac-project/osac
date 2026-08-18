@@ -133,7 +133,7 @@ CR independently, is what actually drives provisioning:
 
 ## Cross-Cutting Concerns
 
-**Logging:** slog (Go's structured logging); each layer logs with context (request ID, resource ID, tenant ID); configuration via CLI flags (`--log-level`, `--log-format`)
+**Logging:** `fulfillment-service` uses `slog` (Go's structured logging), with each layer logging context (request ID, resource ID, tenant ID) and configuration via CLI flags (`--log-level`, `--log-format`); the Kubernetes operators (`osac-operator`, `bare-metal-fulfillment-operator`) and `osac-metering` use `zap` via controller-runtime's/`logr`'s logging interface instead
 
 **Validation:** Protocol Buffer field presence/constraints at message definition; server-side validation before storage (see `fulfillment-service/AGENTS.md`'s Database Layer section for CEL-based query filtering)
 

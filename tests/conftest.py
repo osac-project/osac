@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import contextlib
 import os
+import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
-from tests.core.grpc_client import GRPCClient
+from tests.core.grpc_client import PRIVATE_API, GRPCClient
 from tests.core.k8s_client import K8sClient
 from tests.core.keycloak import get_jwt
 from tests.core.keycloak_admin import (
@@ -63,15 +65,17 @@ def service_account() -> str:
 
 
 @pytest.fixture(scope="session")
-def grpc(fulfillment_address: str, namespace: str, service_account: str) -> GRPCClient:
-    # wait_for_cluster_ready's own budget alone can run up to 120min on cold
-    # EC2 hardware, plus deletion/verification steps after it -- a token this
-    # short can expire mid-session, failing every subsequent grpcurl call
-    # with UNAUTHENTICATED. Stay safely above the worst-case session length.
-    token: str = run(
-        "oc", "create", "token", service_account, "-n", namespace, "--duration", "4h", "--as", "system:admin"
+def grpc(fulfillment_address: str, keycloak_url: str, jwt_password: str) -> GRPCClient:
+    return GRPCClient(
+        address=fulfillment_address,
+        token_factory=lambda: get_jwt(
+            keycloak_url=keycloak_url,
+            realm="osac",
+            client_id="osac-cli",
+            username="tenant1_admin",
+            password=jwt_password,
+        ),
     )
-    return GRPCClient(address=fulfillment_address, token=token)
 
 
 @pytest.fixture(scope="session")
@@ -86,6 +90,28 @@ def private_grpc(fulfillment_private_address: str, namespace: str, service_accou
 def ensure_tenants(private_grpc: GRPCClient) -> None:
     for name in ("tenant1", "tenant2"):
         private_grpc.ensure_tenant(name=name)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def ensure_jwt_users(ensure_tenants: None, private_grpc: GRPCClient) -> None:
+    """Pre-create users that JWT fixtures authenticate as, so JIT provisioning
+    doesn't race on concurrent first requests from xdist workers."""
+    for username, tenant in [
+        ("tenant1_admin", "tenant1"),
+        ("tenant1_user", "tenant1"),
+        ("tenant2_user", "tenant2"),
+        ("tenant2_admin", "tenant2"),
+    ]:
+        with contextlib.suppress(subprocess.CalledProcessError):
+            private_grpc.call(
+                service=f"{PRIVATE_API}.Users/Create",
+                data={
+                    "object": {
+                        "metadata": {"name": username.replace("_", "-"), "tenant": tenant},
+                        "spec": {"username": username, "enabled": True},
+                    }
+                },
+            )
 
 
 @pytest.fixture(scope="session")
@@ -152,11 +178,11 @@ def k8s_hub_client(namespace: str) -> K8sClient:
 
 
 @pytest.fixture(scope="session")
-def cli(namespace: str, fulfillment_address: str, service_account: str) -> Iterator[OsacCLI]:
+def cli(namespace: str, fulfillment_address: str, keycloak_url: str, jwt_password: str) -> Iterator[OsacCLI]:
     instance = OsacCLI(
         binary=env("OSAC_CLI_PATH", "osac"),
         address=f"https://{fulfillment_address.rsplit(':', 1)[0]}",
-        token_script=f"oc create token -n {namespace} {service_account} --as system:admin",
+        token_script=_make_jwt_token_script(keycloak_url, "tenant1_admin", jwt_password),
         namespace=namespace,
     )
     yield instance

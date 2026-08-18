@@ -63,6 +63,13 @@ jobs:
         fetch-depth: 0
         persist-credentials: false
 
+    # osac-ui is an external repo (not in the osac mono-repo). Nightly intentionally
+    # tracks osac-ui@main rather than a pinned SHA so each nightly picks up the
+    # latest UI chart sources. Reproducibility is enforced by:
+    #   - resolve_bare_release_tag() for the chart semver baseline (latest vX.Y.Z tag)
+    #   - image pin ghcr.io/.../osac-ui:sha-<short-sha-of-main-at-checkout>
+    # Pinning the checkout SHA would lag UI fixes until someone bumps the pin;
+    # review this trade-off before changing ref away from main.
     - name: Checkout osac-ui
       uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v6
       with:
@@ -181,6 +188,10 @@ jobs:
         done
 
         echo "Stamping osac-ui chart from osac-project/osac-ui@main..."
+        # osac-ui is required for nightly umbrella installs (ui.enabled). Mono-repo
+        # components without a <component>/vX.Y.Z tag are skipped with ::warning::
+        # because the umbrella embeds them via file:// placeholders; osac-ui is pulled
+        # via OCI and must have a real baseline tag — a missing tag is fatal here.
         if ! UI_BASE_TAG=$(resolve_bare_release_tag osac-ui); then
           echo "::error::osac-ui has no reachable vX.Y.Z release tag — cannot publish nightly UI chart"
           exit 1
@@ -315,9 +326,21 @@ jobs:
 
     - name: Create nightly tag
       run: |
+        set -euo pipefail
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
         TAG="osac/v${VERSION}"
+
+        if git fetch origin "refs/tags/${TAG}:refs/tags/${TAG}" 2>/dev/null; then
+          EXISTING_SHA=$(git rev-parse "${TAG}^{commit}")
+          if [[ "${EXISTING_SHA}" == "${GITHUB_SHA}" ]]; then
+            echo "Tag ${TAG} already exists at ${GITHUB_SHA}; skipping create/push"
+            exit 0
+          fi
+          echo "::error::Tag ${TAG} already exists at ${EXISTING_SHA}, expected ${GITHUB_SHA}; refusing to move tag"
+          exit 1
+        fi
+
         git tag "${TAG}" -m "Nightly build ${VERSION}"
         git push origin "${TAG}"
         echo "Tagged: ${TAG}"

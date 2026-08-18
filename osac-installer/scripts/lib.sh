@@ -176,6 +176,7 @@ resolve_release_tag() {
 
 # Resolve the nearest real (non-nightly) bare vX.Y.Z release tag reachable from an
 # external repo path (e.g. osac-ui, which tags v0.0.5 rather than osac-ui/v0.0.5).
+# Pre-release-only tags (e.g. v0.0.1-rc1) are ignored; repos with no stable tag fail loud.
 # Usage: resolve_bare_release_tag <repo_path>
 resolve_bare_release_tag() {
     local path="$1"
@@ -194,7 +195,6 @@ resolve_bare_release_tag() {
     echo "ERROR: no real (non-nightly) vX.Y.Z release tag reachable from ${path} — refusing to guess a version" >&2
     return 1
 }
-
 
 readonly POSTGRES_INSTALL_DOC="../fulfillment-service/docs/INSTALL.md"
 

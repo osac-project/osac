@@ -89,7 +89,7 @@ target Hub cluster.
 | **Storage** | Dynamic storage class available (e.g., `ocs-storagecluster-cephfs`, `lvms-storage`) | Required for persistence of operator and AAP components. |
 | **Permissions** | Cluster-admin access to deploy operators and create CRDs | Limited access users can only deploy into namespaces configured by the admin. |
 | **License Files** | `license.zip` (AAP subscription) | Must be placed in your values directory (e.g., `values/<env>/license.zip`). |
-| **Internet Access** | Outbound access to GitHub (for fetching submodules, releases) | Required during installation and updates. |
+| **Internet Access** | Outbound access to GitHub (for fetching chart dependencies and releases) | Required during installation and updates. |
 
 
 ## Installation
@@ -111,12 +111,13 @@ Place the downloaded `license.zip` file in your values directory (e.g., `values/
 
 ### Pre-Installation Steps
 
-#### 1. Initialize Submodules
+#### 1. Build Chart Dependencies
 
-The OSAC installer uses Git submodules for version tracking:
+In the `osac` mono-repo, component charts are sibling directories referenced via
+`file://` in the umbrella `Chart.yaml`. Build dependencies before installing:
 
 ```bash
-$ git submodule update --init --recursive
+make helm-deps
 ```
 
 #### 2. Populate Local Secrets
@@ -231,7 +232,7 @@ make helm-deps           # Build chart dependencies
 make helm-lint           # Lint all charts
 make helm-template       # Dry-run render all templates
 make helm-validate       # Lint + template (full validation)
-make sync-charts         # Update submodules + rebuild dependencies
+make sync-charts         # Rebuild chart dependencies (legacy alias; runs helm dependency build)
 ```
 
 ### Monitor Progress

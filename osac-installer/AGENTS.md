@@ -2,13 +2,19 @@
 
 Helm-based deployment orchestrator for OSAC components. No Go code, no builds, no unit tests — only structural validation.
 
-Helm-based deployment system for the OSAC platform. Component repos (osac-operator, osac-fulfillment-service, osac-aap, bare-metal-fulfillment-operator, osac-ui) are aggregated as Git submodules under `base/` for version tracking. Deployment uses three Helm charts in sequence: `charts/osac-operators/` (Phase 1), `charts/osac-prereqs/` (Phase 2), `charts/osac/` (Phase 3).
+Helm-based deployment system for the OSAC platform in the `osac` mono-repo.
+osac-operator, fulfillment-service, osac-aap, bare-metal-fulfillment-operator,
+osac-csi-driver, and osac-metering are sibling directories at the repository
+root (referenced via `file://` in `charts/osac/Chart.yaml`). **osac-ui** is an
+external OCI chart dependency. Deployment uses three Helm charts in sequence:
+`charts/osac-operators/` (Phase 1), `charts/osac-prereqs/` (Phase 2),
+`charts/osac/` (Phase 3).
 
 ## Quick Start
 
 ```bash
-# Initialize submodules
-git submodule update --init --recursive
+# Build umbrella chart dependencies
+make helm-deps
 
 # Validate changes
 yamllint --strict .
@@ -20,17 +26,14 @@ make helm-validate
 ## Common Commands
 
 ```bash
-# Initialize submodules
-git submodule update --init --recursive
-
 # Helm lint (all three charts)
 make helm-lint
 
 # Helm template render (dry-run validation against all values files)
 make helm-validate
 
-# Sync submodules and rebuild chart dependencies
-make sync-charts
+# Rebuild chart dependencies
+make helm-deps
 
 # Deploy to OpenShift (three-phase Helm install)
 make install VALUES_FILE=values/<env>/values.yaml
@@ -46,10 +49,14 @@ make uninstall
 
 ## Critical Rules
 
-**Submodules (READ ONLY):**
-- Never modify any `base/*/` directories (discover submodules with: `git submodule status`)
-- Changes belong in component repos
-- All git commands must run from installer root — never `cd` into submodule directories or use `git -C base/...`
+**Mono-repo components (READ ONLY from osac-installer paths):**
+- osac-operator, fulfillment-service, osac-aap, bare-metal-fulfillment-operator,
+  osac-csi-driver, and osac-metering live as sibling directories at the `osac`
+  repo root — edit them there and land one mono-repo PR; do not treat
+  `osac-installer/` as the source of truth for component code.
+- **osac-ui** is external (OCI chart); the installer references a released
+  version in `charts/osac/Chart.yaml` unless a workflow overrides it (e.g.
+  nightly `rewrite_umbrella_osac_ui_dependency()`).
 
 **Helm Schema:**
 - Every value in `charts/osac/values.yaml` **must** have matching `values.schema.json` entry
@@ -71,7 +78,7 @@ make uninstall
 
 See `docs/helm-deployment-guide.md` for complete architecture details, including:
 - Helm chart structure and dependencies
-- Submodule organization and version tracking
+- Mono-repo component layout and version tracking (per-component git tags)
 - Prerequisites and operator deployment patterns
 - Values file organization per environment
 
@@ -80,7 +87,6 @@ charts/osac/           # Helm umbrella chart (Chart.yaml, values.yaml, values.sc
 charts/osac-operators/ # Phase 1: OLM operator subscriptions
 charts/osac-prereqs/   # Phase 2: CRD instances, certs, Keycloak
 values/<env>/          # Environment values (development, vmaas-ci, caas-ci)
-base/                  # Git submodules — discover with: git submodule status
 prerequisites/         # Reference manifests for manual prerequisite installation
 scripts/               # Automation scripts (see README.md for full list)
 ```
@@ -131,11 +137,12 @@ osac-operator, fulfillment-service, osac-aap, bare-metal-fulfillment-operator,
 and osac-csi-driver are all mono-repo-resident directories checked out at the
 repository root, not submodules -- they share this repo's own commit history
 with osac-installer itself (there are no submodules under `base/` any longer).
-There is deliberately no image-tag pinning/syncing
-for these four in `values/*/values.yaml`: CI values files use the live tag
-published by each component's own workflow -- `main` for fulfillment-service
-(the only one of the four that doesn't publish a current `latest`) and
-`latest` for osac-operator, osac-aap, and bare-metal-fulfillment-operator.
+There is deliberately no image-tag pinning/syncing in `values/*/values.yaml` for
+fulfillment-service, osac-operator, osac-aap, and bare-metal-fulfillment-operator:
+CI values files use the live tag published by each component's own workflow --
+`main` for fulfillment-service (the only one of the four that doesn't publish a
+current `latest`) and `latest` for osac-operator, osac-aap, and
+bare-metal-fulfillment-operator.
 There is no separate commit/tag to keep in sync and no bump-bot involved.
 
 Prerequisites are installed via Phase 1 (`make install-operators`) and Phase 2
@@ -168,13 +175,21 @@ one mono-repo release `version` plus an independent `ui_version` for osac-ui).
 Nightly sub-chart OCI publishing uses `resolve_release_tag()` per monorepo
 component; components without a `<component>/vX.Y.Z` tag yet (e.g.
 osac-metering, osac-csi-driver) are skipped from GHCR publish until their
-first release tag is cut. **osac-ui** is external: the workflow checks out
-`osac-project/osac-ui@main`, resolves the baseline from the latest bare `v*`
-tag via `resolve_bare_release_tag()`, stamps a nightly chart version, pins
-the chart image to `ghcr.io/osac-project/osac-ui:sha-<main-short-sha>`, and
-rewrites the umbrella `osac-ui` OCI dependency to that nightly version before
-`helm dependency build`. Slack success notifications list all published charts
-(including osac-ui) in a box table.
+first release tag is cut.
+
+**osac-ui nightly source strategy** (external repo; see `nightly-build.yaml`
+`Checkout osac-ui` step):
+
+| Choice | Rationale |
+|--------|-----------|
+| Checkout `ref: main` (not a pinned SHA) | Nightly should exercise the latest UI chart on each run; a frozen SHA would require manual bumps and would lag UI fixes. |
+| Baseline semver from `resolve_bare_release_tag()` | Chart `version`/`appVersion` derive from the newest reachable bare `vX.Y.Z` tag on that checkout, not a static file. |
+| Image `ghcr.io/.../osac-ui:sha-<short-sha>` | The deployed UI image is pinned to the exact commit checked out from `main`, so installs are reproducible even though the git ref floats. |
+| Umbrella OCI dep rewritten to nightly chart | `rewrite_umbrella_osac_ui_dependency()` points `charts/osac` at the freshly published nightly `osac-ui` chart before `helm dependency build`. |
+
+Slack success notifications list all published charts (including osac-ui) in a
+box table. `chart_version_url()` emits `::warning::` when a GHCR package page
+lookup fails so unlinked versions in Slack are visible in the Actions log.
 osac-installer's own `e2e-*-full-install.yml`, `helm-lint.yaml`, and
 `integration-tests.yml` coverage is also at root (matrixed/composed alongside the
 other components). See root `.github/workflows/` for the full list.
@@ -196,5 +211,6 @@ Detailed information moved from this file to specialized docs:
 - **Architecture & deployment:** `docs/helm-deployment-guide.md`
 - **Script reference:** `README.md`
 - **CLI usage:** `OSAC-CLI-HOWTO.md`
-- **Component repos:** `base/*/AGENTS.md` (discover with: `git submodule status`)
+- **Component conventions:** sibling dirs at repo root (e.g.
+  `../fulfillment-service/AGENTS.md`, `../osac-operator/AGENTS.md`)
 - **Design docs:** [osac-project/docs/architecture](https://github.com/osac-project/docs/tree/main/architecture)

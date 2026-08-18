@@ -15,9 +15,9 @@ Helm install.
 ## Quick Start
 
 ```bash
-git clone https://github.com/osac-project/osac-installer.git
-cd osac-installer
-git submodule update --init --recursive
+git clone https://github.com/osac-project/osac.git
+cd osac/osac-installer
+make helm-deps
 
 # Place your AAP license file
 cp /path/to/license.zip values/vmaas-ci/
@@ -129,7 +129,7 @@ These are top-level values, disabled by default. Enable only in CI/dev:
 | `make uninstall` | Full uninstall (reverse order) |
 | `make helm-lint` | Lint all charts |
 | `make helm-deps` | Build chart dependencies |
-| `make sync-charts` | Update submodules + rebuild deps |
+| `make sync-charts` | Rebuild chart dependencies (legacy alias) |
 
 ## Uninstall
 

@@ -10,10 +10,9 @@ to understand the prior session's decisions and changes.
 
 ## Feedback Handling Rules
 
-1. **Submodule boundaries**: If feedback asks you to change a file inside
-   any `base/*/` directory (discover submodules with: `git submodule status`),
-   explain that these are submodules and the change belongs in the component
-   repo. Suggest what the reviewer should do instead.
+1. **Mono-repo boundaries**: If feedback asks you to change a file in a sibling
+   component directory (e.g. `../osac-operator/`), make the change there and land
+   one PR at the `osac` repo root. **osac-ui** is external (OCI chart).
 
 2. **Values consistency**: If feedback applies to one values file, check
    whether other values files (development, vmaas-ci, caas-ci)

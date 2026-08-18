@@ -298,6 +298,27 @@ aap:
     key: ""
 
 # ---------------------
+# Bare Metal Fulfillment Operator — Metal3 Backend
+# ---------------------
+# Metal3 inventory and management backend configuration for the BMF operator.
+# When enabled, the chart creates osac-inventory-config and osac-management-config
+# Secrets with Metal3 backend type. The BMF operator mounts these at
+# /etc/osac/inventory/inventory.yaml and /etc/osac/management/management.yaml.
+bmf:
+  metal3:
+    # Set to true to create Metal3 config secrets via Helm.
+    # When false (default), secrets must be created manually.
+    enabled: false
+    # [REQUIRED when enabled] Namespace where BareMetalHost CRs are located.
+    # This is the namespace Metal3 uses for bare metal host management.
+    # Example: "hardware-inventory"
+    namespace: ""
+    # Host class identifier written to the inventory config.
+    hostClass: "metal3"
+    # Network class identifier written to the inventory config.
+    networkClass: "metal3"
+
+# ---------------------
 # Bundled PostgreSQL (dev/test)
 # ---------------------
 bundledPostgres:

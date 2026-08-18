@@ -122,6 +122,7 @@ def test_deprecated_disk_image_allows_creation_with_warning(
             disk_image_name=di_name,
             subnet_ids=[default_subnet],
             instance_type=default_instance_type,
+            name=_unique_name("e2e-ci"),
         )
         ci_id = response["object"]["id"]
         assert ci_id, "CI creation with DEPRECATED DiskImage should succeed"
@@ -159,12 +160,20 @@ def test_template_disk_image_default(
         )
 
         attachments = [{"subnet": {"id": default_subnet}}]
+        # disk_image is deliberately omitted here — it must be inherited from the
+        # template's spec_defaults. boot_disk/run_strategy are supplied directly
+        # because the custom template intentionally defaults only disk_image.
         spec: dict[str, Any] = {
             "template": {"name": template_name},
             "instance_type": {"name": default_instance_type},
             "network_attachments": attachments,
+            "boot_disk": {"size_gib": 20},
+            "run_strategy": "Always",
         }
-        response = grpc.call(service=f"{PUBLIC_API}.ComputeInstances/Create", data={"object": {"spec": spec}})
+        response = grpc.call(
+            service=f"{PUBLIC_API}.ComputeInstances/Create",
+            data={"object": {"metadata": {"name": _unique_name("e2e-ci")}, "spec": spec}},
+        )
         ci_id = response["object"]["id"]
         assert ci_id, "CI creation from template should succeed"
 
@@ -200,6 +209,7 @@ def test_disk_image_deletion_protection(
             disk_image_name=di_name,
             subnet_ids=[default_subnet],
             instance_type=default_instance_type,
+            name=_unique_name("e2e-ci"),
         )
         ci_id = response["object"]["id"]
         ci_name = wait_for_cr(k8s=k8s_hub_client, uuid=ci_id)

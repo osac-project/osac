@@ -32,3 +32,9 @@ env:
   aapTokenSecretName: "osac-aap-api-token"
   aapTokenSecretKey: "token"
   aapInsecureSkipVerify: ""
+
+metal3:
+  enabled: false
+  namespace: ""
+  hostClass: "metal3"
+  networkClass: "metal3"

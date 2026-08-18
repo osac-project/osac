@@ -1173,7 +1173,13 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(result.RequeueAfter).To(Equal(0 * time.Second))
 		})
 
-		It("only deprovisions the fabric target when the k8s manager was never dispatched to", func() {
+		It("tags the fabric-only deprovision job with the fabric target, not an untargeted job, when the k8s manager was never dispatched to", func() {
+			// Regression test: fabric-only Subnets on the dispatcher path (fabric
+			// annotation set, no k8s annotation) must still go through the
+			// "fabric"-tagged multi-target lifecycle, matching handleProvisioning's
+			// job history. Falling back to the untargeted single-target lifecycle
+			// here would blind the provider to the fabric target's existing job
+			// history (see handleDeprovisioning's doc comment).
 			subnet.Annotations = map[string]string{
 				osacImplementationStrategyAnnotation: "netris",
 			}
@@ -1189,8 +1195,39 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(result.RequeueAfter).To(Equal(1 * time.Second))
 
 			Expect(triggerCount).To(Equal(1))
-			Expect(provisioning.FindLatestJobByTypeAndTarget(subnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision, "")).NotTo(BeNil())
+			Expect(provisioning.FindLatestJobByTypeAndTarget(subnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision, "fabric")).NotTo(BeNil())
+			Expect(provisioning.FindLatestJobByTypeAndTarget(subnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision, "")).To(BeNil())
 			Expect(provisioning.FindLatestJobByTypeAndTarget(subnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision, "k8s")).To(BeNil())
+		})
+
+		It("absorbs pre-existing untargeted deprovision history into the fabric target instead of triggering a duplicate", func() {
+			// A Subnet that was already deprovisioning via the untargeted legacy path
+			// (e.g. it started deprovisioning before this fix landed) must not have
+			// that in-flight job orphaned and re-triggered once fabric-tagging kicks in.
+			subnet.Annotations = map[string]string{
+				osacImplementationStrategyAnnotation: "netris",
+			}
+			subnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
+				{JobID: "legacy-deprov-1", Type: osacv1alpha1.JobTypeDeprovision, Target: "", State: osacv1alpha1.JobStateRunning, Timestamp: metav1.NewTime(time.Now().UTC())},
+			}
+			mockProvider.getDeprovisionStatusFunc = func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{JobID: jobID, State: osacv1alpha1.JobStateSucceeded}, nil
+			}
+			triggerCount := 0
+			mockProvider.triggerDeprovisionFunc = func(_ context.Context, resource client.Object, _ []osacv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
+				triggerCount++
+				return &provisioning.DeprovisionResult{Action: provisioning.DeprovisionTriggered, JobID: "should-not-be-used"}, nil
+			}
+
+			result, err := reconciler.handleDeprovisioning(ctx, subnet)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(0 * time.Second))
+
+			Expect(triggerCount).To(Equal(0))
+			backfilled := provisioning.FindLatestJobByTypeAndTarget(subnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision, "fabric")
+			Expect(backfilled).NotTo(BeNil())
+			Expect(backfilled.JobID).To(Equal("legacy-deprov-1"))
+			Expect(provisioning.FindLatestJobByTypeAndTarget(subnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision, "")).To(BeNil())
 		})
 	})
 })

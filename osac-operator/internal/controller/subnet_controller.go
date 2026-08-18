@@ -594,19 +594,26 @@ func allProvisionTargetsSucceeded(jobs []v1alpha1.JobStatus, desiredVersion stri
 // trusts the annotations persisted by handleUpdate rather than re-resolving the
 // DispatchPlan against the parent VirtualNetwork's NetworkClass, since the parent
 // may already be gone or deleting concurrently by the time a Subnet is deleted.
-// When osacK8sImplementationStrategyAnnotation is absent (fabric-only dispatch, the
-// no-dispatcher legacy path, or a Subnet that predates this feature), this is the
-// single-target RunDeprovisioningLifecycle unchanged. When present, both managers
-// are torn down in parallel via RunMultiTargetDeprovisioningLifecycle, and the
-// finalizer is only removed once both reach a terminal, non-blocking state.
+// Branches on osacImplementationStrategyAnnotation (fabric), not the k8s one: once
+// handleProvisioning has run at least once, fabric's job history is always tagged
+// "fabric" (never left untargeted, even fabric-only — see its doc comment), so
+// deprovisioning must go through the same "fabric"-tagged multi-target path to find
+// it, regardless of whether a k8s target is currently also present. Only a Subnet
+// that predates this feature and was deleted before ever being updated again — i.e.
+// osacImplementationStrategyAnnotation was never stamped — falls back to the
+// original single-target, fully untargeted RunDeprovisioningLifecycle. The fabric
+// target's AbsorbsLegacyHistory absorbs any such untargeted history that does exist,
+// so it's found rather than orphaned into a separate, disconnected Target=="" job.
+// When the k8s annotation is also present, both managers are torn down in parallel,
+// and the finalizer is only removed once both reach a terminal, non-blocking state.
 func (r *SubnetReconciler) handleDeprovisioning(ctx context.Context, subnet *v1alpha1.Subnet) (ctrl.Result, error) {
 	if r.ProvisioningProvider == nil {
 		ctrllog.FromContext(ctx).Info("no provisioning provider configured, skipping deprovisioning")
 		return ctrl.Result{}, nil
 	}
 
-	k8sStrategy := subnet.Annotations[osacK8sImplementationStrategyAnnotation]
-	if k8sStrategy == "" {
+	fabricStrategy := subnet.Annotations[osacImplementationStrategyAnnotation]
+	if fabricStrategy == "" {
 		result, done, err := provisioning.RunDeprovisioningLifecycle(ctx, r.ProvisioningProvider, subnet,
 			&subnet.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval)
 		if err != nil || !done {
@@ -615,19 +622,12 @@ func (r *SubnetReconciler) handleDeprovisioning(ctx context.Context, subnet *v1a
 		return ctrl.Result{}, nil
 	}
 
-	fabricStrategy := subnet.Annotations[osacImplementationStrategyAnnotation]
-	if fabricStrategy == "" {
-		// Defensive: handleUpdate always sets the fabric annotation whenever it sets the
-		// k8s one, so this should not happen in practice. An empty manager name would
-		// otherwise route the fabric deprovision job to an undefined AAP role.
-		return ctrl.Result{}, fmt.Errorf(
-			"subnet %s/%s has %s set but %s is empty", subnet.Namespace, subnet.Name,
-			osacK8sImplementationStrategyAnnotation, osacImplementationStrategyAnnotation)
-	}
 	targets := []provisioning.DeprovisionTarget{
 		// AbsorbsLegacyHistory: true — see the matching comment in handleProvisioning.
 		{Name: string(dispatcher.ManagerRoleFabric), Provider: newDispatchTargetProvider(r.ProvisioningProvider, fabricStrategy), AbsorbsLegacyHistory: true},
-		{Name: string(dispatcher.ManagerRoleK8s), Provider: newDispatchTargetProvider(r.ProvisioningProvider, k8sStrategy)},
+	}
+	if k8sStrategy := subnet.Annotations[osacK8sImplementationStrategyAnnotation]; k8sStrategy != "" {
+		targets = append(targets, provisioning.DeprovisionTarget{Name: string(dispatcher.ManagerRoleK8s), Provider: newDispatchTargetProvider(r.ProvisioningProvider, k8sStrategy)})
 	}
 
 	result, done, err := provisioning.RunMultiTargetDeprovisioningLifecycle(ctx, targets, subnet,

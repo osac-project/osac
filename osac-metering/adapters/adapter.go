@@ -34,7 +34,8 @@ type SubmitResult struct {
 type ProviderAdapter interface {
 	// Name returns the provider name used as a Prometheus label.
 	Name() string
-	// Submit processes a single metering event.
+	// Submit processes a single metering event. Error messages may be
+	// stored in DLQ record headers — do not include secrets.
 	Submit(ctx context.Context, event MeteringEvent) error
 	// Flush uploads any buffered events. Called on the flush ticker
 	// (default 10s) and on graceful shutdown.

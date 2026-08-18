@@ -7,7 +7,7 @@
   (dict "name" "osac.metering.heartbeat"    "partitions" 3 "retentionDays" 30)
   (dict "name" "osac.metering.inference"    "partitions" 3 "retentionDays" 30)
   (dict "name" "osac.metering.corrections"  "partitions" 3 "retentionDays" 30)
-  (dict "name" "osac.metering.dlq"          "partitions" 1 "retentionDays" 90)
+  (dict "name" "osac.metering.dlq"          "partitions" 6 "retentionDays" 90)
 }}
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaTopic

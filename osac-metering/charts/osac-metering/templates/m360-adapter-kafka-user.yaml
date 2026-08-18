@@ -21,6 +21,20 @@ spec:
           - Describe
         host: "*"
       - resource:
+          type: topic
+          name: osac.metering.dlq
+          patternType: literal
+        operations:
+          - Write
+        host: "*"
+      - resource:
+          type: cluster
+          name: kafka-cluster
+          patternType: literal
+        operations:
+          - IdempotentWrite
+        host: "*"
+      - resource:
           type: group
           name: osac-metering-m360-adapter
           patternType: literal

@@ -90,6 +90,23 @@ func main() {
 
 	logger := stdr.New(log.New(os.Stderr, "", log.LstdFlags))
 
+	kafkaCfg := adapters.KafkaConfigFromEnv()
+
+	dlqOpt, dlqClose, err := adapters.DLQOptionFromEnv(brokers, kafkaCfg)
+	if err != nil {
+		log.Fatalf("setting up DLQ: %v", err)
+	}
+	defer func() {
+		if err := dlqClose(); err != nil {
+			log.Printf("DLQ producer close failed: %v", err)
+		}
+	}()
+	var opts []adapters.RunnerOption
+	if dlqOpt != nil {
+		opts = append(opts, dlqOpt)
+		log.Printf("DLQ enabled: topic=%s", envutil.EnvOrDefault("DLQ_TOPIC", adapters.TopicDLQ))
+	}
+
 	client := newM360Client(m360URL, apiVersion, apiKey)
 	client.logger = logger
 
@@ -99,8 +116,8 @@ func main() {
 		ConsumerGroup: group,
 		Topics:        topics,
 		FlushInterval: flushInterval,
-		Kafka:         adapters.KafkaConfigFromEnv(),
-	}, logger)
+		Kafka:         kafkaCfg,
+	}, logger, opts...)
 
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", runner.MetricsHandler())
@@ -118,6 +135,9 @@ func main() {
 		Addr:              metricsAddr,
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 	go func() {
 		log.Print("HTTP server listening")

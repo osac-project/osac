@@ -14,6 +14,7 @@ const (
 	TopicHeartbeat   = "osac.metering.heartbeat"
 	TopicCorrections = "osac.metering.corrections"
 	TopicInference   = "osac.metering.inference"
+	TopicDLQ         = "osac.metering.dlq"
 )
 
 var AllTopics = []string{TopicLifecycle, TopicHeartbeat, TopicCorrections, TopicInference}

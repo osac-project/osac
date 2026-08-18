@@ -105,6 +105,10 @@ spec:
               value: osac-metering-echo-adapter
             - name: KAFKA_SASL_PASSWORD_FILE
               value: /etc/kafka-secrets/password
+            - name: DLQ_TOPIC
+              value: "osac.metering.dlq"
+            - name: DLQ_ENABLED
+              value: "true"
             - name: METRICS_ADDR
               value: ":8080"
           volumeMounts:

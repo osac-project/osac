@@ -24,6 +24,11 @@ type adapterMetrics struct {
 	outOfOrderEvents     *prometheus.CounterVec
 	flushDuration        *prometheus.HistogramVec
 	flushErrors          *prometheus.CounterVec
+	eventsDropped        *prometheus.CounterVec
+	dlqEventsTotal       *prometheus.CounterVec
+	dlqSendErrors        *prometheus.CounterVec
+	dlqDepth             *prometheus.GaugeVec
+	dlqSize              *prometheus.CounterVec
 	registry             *prometheus.Registry
 }
 
@@ -61,6 +66,26 @@ func newAdapterMetrics() *adapterMetrics {
 			Name: "osac_adapter_flush_errors_total",
 			Help: "Total flush operation failures.",
 		}, []string{"provider"}),
+		eventsDropped: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "osac_adapter_events_dropped_total",
+			Help: "Total events permanently dropped (no DLQ configured).",
+		}, []string{"provider"}),
+		dlqEventsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "osac_adapter_dlq_events_total",
+			Help: "Total events sent to the dead letter queue.",
+		}, []string{"provider"}),
+		dlqSendErrors: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "osac_adapter_dlq_send_errors_total",
+			Help: "Total DLQ send failures.",
+		}, []string{"provider"}),
+		dlqDepth: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "osac_adapter_dlq_depth",
+			Help: "Events this adapter process has sent to the DLQ.",
+		}, []string{"provider"}),
+		dlqSize: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "osac_adapter_dlq_bytes_total",
+			Help: "Total payload bytes sent to the DLQ.",
+		}, []string{"provider"}),
 		registry: reg,
 	}
 
@@ -68,6 +93,8 @@ func newAdapterMetrics() *adapterMetrics {
 		m.eventsSubmitted, m.eventsFailed, m.retryDuration,
 		m.duplicatesSuppressed, m.outOfOrderEvents,
 		m.flushDuration, m.flushErrors,
+		m.eventsDropped, m.dlqEventsTotal, m.dlqSendErrors,
+		m.dlqDepth, m.dlqSize,
 	)
 
 	return m

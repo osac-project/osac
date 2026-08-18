@@ -114,6 +114,10 @@ spec:
               value: /etc/m360/api-key
             - name: M360_API_VERSION
               value: {{ .Values.m360Adapter.m360.apiVersion | default "v1" | quote }}
+            - name: DLQ_TOPIC
+              value: "osac.metering.dlq"
+            - name: DLQ_ENABLED
+              value: "true"
             - name: METRICS_ADDR
               value: ":8080"
           volumeMounts:

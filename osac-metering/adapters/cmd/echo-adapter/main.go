@@ -116,6 +116,23 @@ func main() {
 
 	logger := stdr.New(log.New(os.Stderr, "", log.LstdFlags))
 
+	kafkaCfg := adapters.KafkaConfigFromEnv()
+
+	dlqOpt, dlqClose, err := adapters.DLQOptionFromEnv(brokers, kafkaCfg)
+	if err != nil {
+		log.Fatalf("setting up DLQ: %v", err)
+	}
+	defer func() {
+		if err := dlqClose(); err != nil {
+			log.Printf("DLQ producer close failed: %v", err)
+		}
+	}()
+	var opts []adapters.RunnerOption
+	if dlqOpt != nil {
+		opts = append(opts, dlqOpt)
+		log.Printf("DLQ enabled: topic=%s", envutil.EnvOrDefault("DLQ_TOPIC", adapters.TopicDLQ))
+	}
+
 	store := newEventStore(bufferSize)
 	adapter := &echoAdapter{store: store}
 	runner := adapters.NewRunner(adapter, adapters.RunnerConfig{
@@ -123,8 +140,8 @@ func main() {
 		ConsumerGroup: group,
 		Topics:        adapters.AllTopics,
 		FlushInterval: flushInterval,
-		Kafka:         adapters.KafkaConfigFromEnv(),
-	}, logger)
+		Kafka:         kafkaCfg,
+	}, logger, opts...)
 
 	// Serve metrics, health, and event query endpoints.
 	go func() {
@@ -141,8 +158,16 @@ func main() {
 		mux.HandleFunc("DELETE /events", store.handleDeleteEvents)
 		mux.HandleFunc("GET /events/count", store.handleCount)
 		mux.HandleFunc("GET /events/{id}", store.handleEventByID)
+		httpServer := &http.Server{
+			Addr:              metricsAddr,
+			Handler:           mux,
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       10 * time.Second,
+			WriteTimeout:      10 * time.Second,
+			IdleTimeout:       60 * time.Second,
+		}
 		log.Printf("HTTP server listening on %s", metricsAddr)
-		if err := http.ListenAndServe(metricsAddr, mux); err != nil {
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Printf("metrics server error: %v", err)
 		}
 	}()

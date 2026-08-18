@@ -63,6 +63,15 @@ jobs:
         fetch-depth: 0
         persist-credentials: false
 
+    - name: Checkout osac-ui
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v6
+      with:
+        repository: osac-project/osac-ui
+        ref: main
+        path: osac-ui
+        fetch-depth: 0
+        persist-credentials: false
+
     - name: Set up Helm
       uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
       with:
@@ -112,9 +121,11 @@ jobs:
         set -euo pipefail
         # Repo root (not osac-installer/) — sub-charts live under component directories.
         source osac-installer/scripts/lib.sh
+        source osac-installer/scripts/nightly-charts.sh
 
         # Ensure target packaging directory exists
         mkdir -p ./packaged-charts
+        : > chart-versions.txt
 
         # Define sub-component map (component_dir -> chart_paths). Version baselines
         # come from per-component git tags (<component>/vX.Y.Z), not static files.
@@ -161,6 +172,7 @@ jobs:
 
               # Push individual sub-chart to OCI registry (GHCR)
               helm push "./packaged-charts/${CHART_NAME}-${SUB_VERSION}.tgz" "oci://${REGISTRY}/${CHARTS_REPO}"
+              append_chart_version chart-versions.txt "${CHART_NAME}" "${SUB_VERSION}"
             else
               echo "::error::Chart manifest '${CHART_DIR}/Chart.yaml' not found!"
               exit 1
@@ -168,9 +180,31 @@ jobs:
           done
         done
 
+        echo "Stamping osac-ui chart from osac-project/osac-ui@main..."
+        if ! UI_BASE_TAG=$(resolve_bare_release_tag osac-ui); then
+          echo "::error::osac-ui has no reachable vX.Y.Z release tag — cannot publish nightly UI chart"
+          exit 1
+        fi
+        UI_SUB_VERSION=$(compute_nightly_chart_version "${UI_BASE_TAG}" "${NIGHTLY_SUFFIX}")
+        UI_SHA=$(git -C osac-ui rev-parse --short=7 HEAD)
+        UI_IMAGE_REF=$(osac_ui_nightly_image_ref "${REGISTRY}/${GITHUB_REPOSITORY_OWNER}/osac-ui" "${UI_SHA}")
+        stamp_osac_ui_chart osac-ui/charts/ui "${UI_SUB_VERSION}" "${UI_IMAGE_REF}"
+        helm package osac-ui/charts/ui --destination ./packaged-charts
+        helm push "./packaged-charts/osac-ui-${UI_SUB_VERSION}.tgz" "oci://${REGISTRY}/${CHARTS_REPO}"
+        append_chart_version chart-versions.txt osac-ui "${UI_SUB_VERSION}"
+        echo "${UI_SUB_VERSION}" > osac-ui-nightly-version.txt
+
     - name: Build umbrella chart dependencies
-      working-directory: osac-installer
-      run: helm dependency build charts/osac/
+      env:
+        OCI_REPO: oci://${{ env.REGISTRY }}/${{ env.CHARTS_REPO }}
+      run: |
+        set -euo pipefail
+        source osac-installer/scripts/nightly-charts.sh
+        if [[ -f osac-ui-nightly-version.txt ]]; then
+          UI_SUB_VERSION=$(<osac-ui-nightly-version.txt)
+          rewrite_umbrella_osac_ui_dependency osac-installer/charts/osac/Chart.yaml "${UI_SUB_VERSION}" "${OCI_REPO}"
+        fi
+        helm dependency build osac-installer/charts/osac/
 
     - name: Lint chart
       working-directory: osac-installer
@@ -201,6 +235,14 @@ jobs:
       run: |
         echo "Verifying umbrella chart was published successfully..."
         helm show chart "${OCI_REPO}/osac" --version "${VERSION}"
+
+    - name: Record umbrella chart in manifest
+      env:
+        VERSION: ${{ steps.version.outputs.version }}
+      run: |
+        set -euo pipefail
+        source osac-installer/scripts/nightly-charts.sh
+        append_chart_version chart-versions.txt osac "${VERSION}"
 
     - name: Generate images.txt
       env:
@@ -242,6 +284,7 @@ jobs:
         path: |
           osac-installer/osac-${{ steps.version.outputs.version }}.tgz
           images.txt
+          chart-versions.txt
         retention-days: 14
 
   # -------------------------------------------------------------------
@@ -258,6 +301,8 @@ jobs:
       contents: write
       # Look up the package version URL for the Slack notification
       packages: read
+      # Download chart-versions.txt from the publish job
+      actions: read
     env:
       VERSION: ${{ needs.publish.outputs.version }}
 
@@ -277,6 +322,12 @@ jobs:
         git push origin "${TAG}"
         echo "Tagged: ${TAG}"
 
+    - name: Download chart manifest
+      uses: actions/download-artifact@65a9edc588058a7f27ea910f833ef1ec12f0aefd  # v4.1.8
+      with:
+        name: nightly-${{ env.VERSION }}
+        path: nightly-artifacts
+
     - name: Retrieve Slack webhook from Vault
       id: vault
       uses: ./.github/actions/vault-slack-webhook
@@ -291,42 +342,14 @@ jobs:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         set -euo pipefail
-
-        # Package version pages are keyed by numeric version id, not the
-        # tag -- look the id up via the Packages API. Versions are returned
-        # newest-first, so the one we just pushed is always near the top of
-        # the first page. Without ?tag=, GitHub's UI shows the page titled
-        # by digest instead of the human-readable tag (tag is URL-encoded
-        # since it ends up in a query string).
-        #
-        # Best-effort only: never let a failed/empty lookup take down the
-        # whole notification -- degrade to a plain, unlinked version
-        # instead. `|| true` at each call site absorbs curl/jq failures
-        # under `set -e`.
-        chart_version_url() {
-          local version=$1
-          local encoded_version url
-          encoded_version=$(jq -rn --arg v "${version}" '$v|@uri')
-          url=$(curl -sf --max-time 15 \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/orgs/${REPO_OWNER}/packages/container/charts%2Fosac/versions?per_page=100" \
-          | jq -r --arg v "${version}" '.[] | select(.metadata.container.tags | index($v)) | .html_url' \
-          | head -1) || true
-          [ -n "${url}" ] && echo "${url}?tag=${encoded_version}"
-        }
+        source osac-installer/scripts/nightly-charts.sh
 
         WORKFLOW_URL="${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
-        URL=$(chart_version_url "${VERSION}" || true)
-        if [ -n "${URL}" ]; then
-          VERSION_LINE="<${URL}|${VERSION}>"
-        else
-          VERSION_LINE="${VERSION}"
-        fi
+        SUMMARY_TEXT=$(build_slack_charts_published_summary nightly-artifacts/chart-versions.txt "${REPO_OWNER}" "${GH_TOKEN}")
 
         jq -n \
           --arg version "${VERSION}" \
-          --arg summary "*Chart published:* \`osac\` ${VERSION_LINE}" \
+          --arg summary "${SUMMARY_TEXT}" \
           --arg workflow_url "${WORKFLOW_URL}" \
           '{
             "blocks": [

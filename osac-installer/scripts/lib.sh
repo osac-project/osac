@@ -174,6 +174,28 @@ resolve_release_tag() {
     echo "${tag}"
 }
 
+# Resolve the nearest real (non-nightly) bare vX.Y.Z release tag reachable from an
+# external repo path (e.g. osac-ui, which tags v0.0.5 rather than osac-ui/v0.0.5).
+# Usage: resolve_bare_release_tag <repo_path>
+resolve_bare_release_tag() {
+    local path="$1"
+    local tag
+    local validate_regex='^v[0-9]+\.[0-9]+\.[0-9]+$'
+
+    while IFS= read -r tag; do
+        [[ -z "${tag}" ]] && continue
+        [[ "${tag}" == *-nightly* ]] && continue
+        if [[ "${tag}" =~ ${validate_regex} ]]; then
+            echo "${tag}"
+            return 0
+        fi
+    done < <(git -C "${path}" tag -l 'v[0-9]*.[0-9]*.[0-9]*' --merged HEAD --sort=-v:refname 2>/dev/null)
+
+    echo "ERROR: no real (non-nightly) vX.Y.Z release tag reachable from ${path} — refusing to guess a version" >&2
+    return 1
+}
+
+
 readonly POSTGRES_INSTALL_DOC="../fulfillment-service/docs/INSTALL.md"
 
 # PostgreSQL prerequisite helpers (production install via setup.sh).

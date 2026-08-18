@@ -154,7 +154,8 @@ See `README.md` for complete script documentation. Most commonly used:
 - **oc.sh** -- Wraps `oc` with `--as` impersonation when `OC_IMPERSONATE` is set
 - **refresh-after-snapshot.py** -- Refreshes Helm-deployed cluster after booting from cold snapshot
 - **setup-caas-agents.sh** -- Sets up CaaS agent infrastructure (InfraEnv + agent VM + label + approve)
-- **lib.sh** -- Shared shell functions: `retry_until`, `wait_for_resource`, `wait_for_namespace_cleanup`, `retry_command`, `http_retry`, `http_json`, `resolve_release_tag(path, [tag_prefix])` (nearest `<prefix>/vX.Y.Z` git tag; default prefix `osac`), `check_postgres_prerequisites`
+- **lib.sh** -- Shared shell functions: `retry_until`, `wait_for_resource`, `wait_for_namespace_cleanup`, `retry_command`, `http_retry`, `http_json`, `resolve_release_tag(path, [tag_prefix])` (nearest `<prefix>/vX.Y.Z` git tag; default prefix `osac`), `resolve_bare_release_tag(path)` (nearest bare `vX.Y.Z` tag for external repos like osac-ui), `check_postgres_prerequisites`
+- **nightly-charts.sh** -- Nightly chart manifest + Slack table helpers (`append_chart_version`, `build_slack_charts_published_summary`, `stamp_osac_ui_chart`, `rewrite_umbrella_osac_ui_dependency`)
 
 ### CI Workflows
 
@@ -164,11 +165,16 @@ so osac-installer-specific CI now lives there (not under `osac-installer/.github
 the current commit directly -- no submodule bump step) and
 `publish-osac-installer-chart.yaml` (manual-dispatch umbrella chart release; takes
 one mono-repo release `version` plus an independent `ui_version` for osac-ui).
-Nightly sub-chart OCI publishing uses `resolve_release_tag()` per component;
-components without a `<component>/vX.Y.Z` tag yet (e.g. osac-metering,
-osac-csi-driver) are skipped from GHCR publish until their first release tag
-is cut; the nightly umbrella still embeds them from the local checkout at
-placeholder Chart.yaml versions (not independently pullable from OCI).
+Nightly sub-chart OCI publishing uses `resolve_release_tag()` per monorepo
+component; components without a `<component>/vX.Y.Z` tag yet (e.g.
+osac-metering, osac-csi-driver) are skipped from GHCR publish until their
+first release tag is cut. **osac-ui** is external: the workflow checks out
+`osac-project/osac-ui@main`, resolves the baseline from the latest bare `v*`
+tag via `resolve_bare_release_tag()`, stamps a nightly chart version, pins
+the chart image to `ghcr.io/osac-project/osac-ui:sha-<main-short-sha>`, and
+rewrites the umbrella `osac-ui` OCI dependency to that nightly version before
+`helm dependency build`. Slack success notifications list all published charts
+(including osac-ui) in a box table.
 osac-installer's own `e2e-*-full-install.yml`, `helm-lint.yaml`, and
 `integration-tests.yml` coverage is also at root (matrixed/composed alongside the
 other components). See root `.github/workflows/` for the full list.

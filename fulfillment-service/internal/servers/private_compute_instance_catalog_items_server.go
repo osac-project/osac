@@ -41,6 +41,7 @@ type PrivateComputeInstanceCatalogItemsServer struct {
 	logger           *slog.Logger
 	generic          *GenericServer[*privatev1.ComputeInstanceCatalogItem]
 	instanceTypesDao *dao.GenericDAO[*privatev1.InstanceType]
+	diskImagesDao    *dao.GenericDAO[*privatev1.DiskImage]
 }
 
 func NewPrivateComputeInstanceCatalogItemsServer() *PrivateComputeInstanceCatalogItemsServerBuilder {
@@ -92,6 +93,16 @@ func (b *PrivateComputeInstanceCatalogItemsServerBuilder) Build() (result *Priva
 		return
 	}
 
+	// Create the DiskImages DAO for field_definitions disk image validation:
+	diskImagesDao, err := dao.NewGenericDAO[*privatev1.DiskImage]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
 	generic, err := NewGenericServer[*privatev1.ComputeInstanceCatalogItem]().
 		SetLogger(b.logger).
 		SetService(privatev1.ComputeInstanceCatalogItems_ServiceDesc.ServiceName).
@@ -108,6 +119,7 @@ func (b *PrivateComputeInstanceCatalogItemsServerBuilder) Build() (result *Priva
 		logger:           b.logger,
 		generic:          generic,
 		instanceTypesDao: instanceTypesDao,
+		diskImagesDao:    diskImagesDao,
 	}
 	return
 }
@@ -135,6 +147,12 @@ func (s *PrivateComputeInstanceCatalogItemsServer) Create(ctx context.Context,
 		if err != nil {
 			return
 		}
+		var diskImageWarnings []string
+		diskImageWarnings, err = s.validateFieldDefinitionsDiskImage(ctx, request.GetObject().GetFieldDefinitions())
+		if err != nil {
+			return
+		}
+		warnings = append(warnings, diskImageWarnings...)
 	}
 	err = s.generic.Create(ctx, request, &response)
 	if err != nil {
@@ -157,6 +175,12 @@ func (s *PrivateComputeInstanceCatalogItemsServer) Update(ctx context.Context,
 		if err != nil {
 			return
 		}
+		var diskImageWarnings []string
+		diskImageWarnings, err = s.validateFieldDefinitionsDiskImage(ctx, request.GetObject().GetFieldDefinitions())
+		if err != nil {
+			return
+		}
+		warnings = append(warnings, diskImageWarnings...)
 	}
 	err = s.generic.Update(ctx, request, &response)
 	if err != nil {
@@ -204,4 +228,34 @@ func (s *PrivateComputeInstanceCatalogItemsServer) validateFieldDefinitionsInsta
 
 	// Look up the instance type and validate its state.
 	return validateInstanceTypeState(ctx, s.instanceTypesDao, instanceTypeName, " in field_definitions")
+}
+
+// validateFieldDefinitionsDiskImage validates disk_image constraints in field_definitions.
+// Rejects OBSOLETE (and not-found) disk images, warns on DEPRECATED. Tenant visibility is
+// enforced by the DiskImages DAO's tenancy filter (a cross-tenant reference resolves to
+// not-found), mirroring how validateFieldDefinitionsInstanceType relies on the DAO.
+func (s *PrivateComputeInstanceCatalogItemsServer) validateFieldDefinitionsDiskImage(
+	ctx context.Context,
+	fieldDefinitions []*privatev1.FieldDefinition,
+) ([]string, error) {
+	// Scan field_definitions to extract the spec.disk_image default value (stored as a plain
+	// name string, as with instance_type).
+	var diskImageKey string
+	for _, fd := range fieldDefinitions {
+		if fd.GetPath() == "spec.disk_image" {
+			defaultValue := fd.GetDefault()
+			if defaultValue != nil {
+				diskImageKey = defaultValue.GetStringValue()
+			}
+			break
+		}
+	}
+
+	if diskImageKey == "" {
+		return nil, nil
+	}
+
+	// Look up the disk image and validate its state. The resolved object is not needed here.
+	_, warnings, err := validateDiskImageState(ctx, s.diskImagesDao, diskImageKey, " in field_definitions")
+	return warnings, err
 }

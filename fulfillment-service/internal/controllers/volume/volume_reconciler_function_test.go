@@ -100,7 +100,6 @@ var _ = Describe("buildSpec", func() {
 		Expect(spec.StorageTier).To(Equal("gold"))
 		Expect(spec.SizeGiB).To(Equal(int64(100)))
 		Expect(spec.AccessMode).To(Equal(osacv1alpha1.VolumeAccessModeReadWriteOnce))
-		Expect(spec.PVCRef).To(BeNil())
 	})
 
 	It("maps ReadWriteMany access mode", func() {

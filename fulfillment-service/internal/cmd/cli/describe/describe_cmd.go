@@ -56,7 +56,7 @@ func Cmd() *cobra.Command {
 	result.AddCommand(secret.Cmd())
 	result.AddCommand(securitygroup.Cmd())
 	result.AddCommand(help.MarkPrivateAPI(storagebackend.Cmd()))
-	result.AddCommand(help.MarkPrivateAPI(storagetier.Cmd()))
+	result.AddCommand(storagetier.Cmd())
 	return result
 }
 

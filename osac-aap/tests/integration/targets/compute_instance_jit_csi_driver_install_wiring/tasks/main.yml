@@ -1,0 +1,418 @@
+---
+# Integration test for the playbook-level wiring of osac.service.csi_driver_install
+# into playbook_osac_create_compute_instance.yml's JIT storage path -- the real AAP entry
+# point. Deliberately not osac.workflows.compute_instance.create: that workflow is an
+# internal implementation detail invoked via import_playbook and explicitly does NOT
+# perform JIT storage provisioning (see its own "Fail if tenant_storage_class_name is not
+# set" guard, which documents that direct invocation bypasses JIT entirely).
+#
+# Verifies the playbook's own when: _jit_storage_tiers | length > 0 gate and vars: mapping
+# into csi_driver_install by stubbing the real Helm install via csi_driver_install_override
+# (same override mechanism csi_driver_install_playbook_wiring already tests for the tenant
+# storage backend call site) and template_id (osac.test_overrides.noop_template, so no real
+# KubeVirt VM is created), then runs the rest of the playbook (the real
+# osac.service.storage_provider ensure_storage_class dispatch) for real against the mock
+# VMS server -- proving composition, not just that csi_driver_install's own wiring point is
+# reached in isolation. Also covers the negative case: a dispatch whose only tier does not
+# match the requested tier (the same "requested tier not registered" shape osac-installer's
+# register-local-storage.yaml exercises with 'lvms' in production today) must not fire
+# csi_driver_install at all.
+#
+# _cluster_name is pre-set to bypass vast_storage's OpenShift Infrastructure-object
+# discovery (this kind-based test cluster is vanilla Kubernetes, not OpenShift) -- the same
+# workaround storage_provider_ensure_sc already uses.
+#
+# Requires: mock VMS server on 127.0.0.1:18443, kind cluster with osac-system namespace,
+# ComputeInstance CRD installed (same requirements as compute_instance_create, which this
+# test's fixture shape mirrors). Does NOT require a published osac-csi-driver chart tag or
+# the local chart registry setup_test_env.sh stands up for csi_driver_install's own
+# role-level test -- the real Helm install is stubbed out entirely here.
+
+# ── Positive case: JIT tier matches the requested tier -- csi_driver_install must fire ──
+- name: "Compute Instance JIT CSI Driver Install Wiring - Setup (positive case)"
+  hosts: localhost
+  gather_facts: true
+
+  tasks:
+    # Must be facts (set_fact), not an `environment:` block: the imported playbook below
+    # runs in a separate play, and only host facts -- not play-level vars -- cross that
+    # boundary. `environment:` is a stricter trap than vars: -- it only wraps module
+    # subprocess execution and never affects lookup('env', ...) calls at all (those read
+    # the controller process's real OS environment directly), even within the SAME play.
+    # vast_storage_config_namespace/vast_storage_validate_certs' defaults are exactly such
+    # lookup('env', ...) expressions.
+    - name: Set vast_storage_* config as cross-play facts
+      ansible.builtin.set_fact:
+        vast_storage_config_namespace: "osac-system"
+        vast_storage_validate_certs: false
+
+    - name: Delete any pre-existing test resources (clean slate)
+      block:
+        - name: Delete hub Secret if exists
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Secret
+            name: "vast-tenant-config-test-ci-jit-wiring"
+            namespace: "osac-system"
+          failed_when: false
+
+        - name: Delete CSI Secret if exists
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Secret
+            name: "vast-csi-test-ci-jit-wiring"
+            namespace: "ci-jit-wiring-work"
+          failed_when: false
+
+        - name: Delete NFS StorageClass if exists
+          kubernetes.core.k8s:
+            state: absent
+            api_version: storage.k8s.io/v1
+            kind: StorageClass
+            name: "vast-nfs-test-ci-jit-wiring-local"
+          failed_when: false
+
+        - name: Delete ComputeInstance CR if exists
+          kubernetes.core.k8s:
+            state: absent
+            api_version: osac.openshift.io/v1alpha1
+            kind: ComputeInstance
+            name: "test-ci-jit-wiring"
+            namespace: "osac-system"
+          failed_when: false
+
+    # A real dispatch always has the ComputeInstance CR already persisted (osac-operator
+    # creates it before triggering the AAP job) -- osac.service.finalizer's own "target not
+    # found" lookup path only exists to tolerate races, not the normal case. Without a real
+    # CR here, that lookup finds nothing and osac.service.finalizer's "Add finalizer" task
+    # (gated on `finalizer_target_resource is not none`) still runs, since the role sets
+    # finalizer_target_resource to an empty string rather than None on a missing target --
+    # the task then attempts to k8s-create a bare object with only metadata.finalizers and
+    # no spec:, which the CRD schema rejects. Pre-creating the CR (matching every other
+    # passing test in this suite, which all dispatch against real, pre-applied fixtures)
+    # avoids exercising that unrelated, pre-existing gap.
+    - name: Create ComputeInstance CR fixture
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: osac.openshift.io/v1alpha1
+          kind: ComputeInstance
+          metadata:
+            name: test-ci-jit-wiring
+            namespace: osac-system
+          spec:
+            templateID: osac.test_overrides.noop_template
+            cores: 2
+            memoryGiB: 4
+            bootDisk:
+              sizeGiB: 20
+            image:
+              sourceType: registry
+              sourceRef: "quay.io/containerdisks/fedora:latest"
+            runStrategy: "Always"
+
+    - name: Create hub Secret fixture (simulates output from setup action)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "vast-tenant-config-test-ci-jit-wiring"
+            namespace: "osac-system"
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/tenant: "test-ci-jit-wiring"
+          type: Opaque
+          stringData:
+            tenant_uid_hash: "a1b2c3d4"
+            vast_tenant_id: "111"
+            vip_pool_name: "osac-test-pool"
+            vast_endpoint: "127.0.0.1:18443"
+            tenant_manager_username: "osac-test-ci-jit-wiring"
+            tenant_manager_password: "test-csi-password"
+            view_policy_name: "osac-test-ci-jit-wiring-nfs"
+
+    - name: Clear override log
+      ansible.builtin.file:
+        path: /tmp/osac_test_overrides.log
+        state: absent
+
+    - name: Create empty override log
+      ansible.builtin.file:
+        path: /tmp/osac_test_overrides.log
+        state: touch
+
+    - name: Set test variables (JIT dispatch, csi_driver_install and VM creation stubbed)
+      ansible.builtin.set_fact:
+        osac_job_vars:
+          resource:
+            apiVersion: osac.openshift.io/v1alpha1
+            kind: ComputeInstance
+            metadata:
+              name: test-ci-jit-wiring
+              namespace: osac-system
+            spec:
+              templateID: osac.test_overrides.noop_template
+              cores: 2
+              memoryGiB: 4
+              bootDisk:
+                sizeGiB: 20
+              image:
+                sourceType: registry
+                sourceRef: "quay.io/containerdisks/fedora:latest"
+              runStrategy: "Always"
+            status:
+              tenantReference:
+                name: test-ci-jit-wiring
+                namespace: osac-system
+          storage_tier_definitions:
+            - name: local
+              protocol: nfs
+              provider: vast
+              backend_id: be-jit
+          storage_backend_connections:
+            be-jit:
+              endpoint: "127.0.0.1:18443"
+              username: "admin"
+              password: "mock-admin-password"
+        tenant_target_namespace: "ci-jit-wiring-work"
+        # Bypasses vast_storage's OpenShift Infrastructure-object discovery -- see the
+        # file-level comment above.
+        _cluster_name: "test-cluster"
+        csi_driver_install_override:
+          name: osac.test_overrides.csi_driver_install_hooks
+          tasks_from: install.yaml
+
+- name: Run compute instance playbook with csi_driver_install stubbed (positive case)
+  ansible.builtin.import_playbook: ../../../../../playbook_osac_create_compute_instance.yml
+
+- name: "Compute Instance JIT CSI Driver Install Wiring - Verify results (positive case)"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Read override log
+      ansible.builtin.slurp:
+        path: /tmp/osac_test_overrides.log
+      register: _override_log_content
+
+    - name: Parse override log
+      ansible.builtin.set_fact:
+        _override_log: "{{ _override_log_content.content | b64decode }}"
+
+    - name: "Assert csi_driver_install's override fired with the playbook's JIT-filtered tiers"
+      ansible.builtin.assert:
+        that:
+          - "'csi_driver_install' in _override_log"
+          - >-
+            'tiers=' ~ (osac_job_vars.storage_tier_definitions | to_json) in _override_log
+          - >-
+            'backend_ids=' ~ (osac_job_vars.storage_backend_connections | list | to_json) in _override_log
+        fail_msg: >-
+          csi_driver_install override did not fire with the expected JIT-filtered tiers/backend_ids.
+          Log: {{ _override_log }}
+        success_msg: "csi_driver_install override fired with the correct JIT tiers/backend_ids"
+
+    - name: Read StorageClass created by the real storage_provider dispatch that followed
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "vast-nfs-test-ci-jit-wiring-local"
+      register: _jit_storage_class
+
+    - name: Assert the real storage_provider dispatch after the stubbed csi_driver_install step succeeded
+      ansible.builtin.assert:
+        that:
+          - _jit_storage_class.resources | length == 1
+        fail_msg: >-
+          StorageClass 'vast-nfs-test-ci-jit-wiring-local' was not created -- the real
+          storage_provider ensure_storage_class dispatch that runs after the stubbed
+          csi_driver_install step did not complete successfully.
+        success_msg: "storage_provider's real ensure_storage_class dispatch succeeded immediately after the stubbed csi_driver_install step"
+
+# ── Cleanup (positive case) ──
+- name: "Compute Instance JIT CSI Driver Install Wiring - Cleanup (positive case)"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Delete NFS StorageClass
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "vast-nfs-test-ci-jit-wiring-local"
+      failed_when: false
+
+    - name: Delete CSI Secret
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "vast-csi-test-ci-jit-wiring"
+        namespace: "ci-jit-wiring-work"
+      failed_when: false
+
+    - name: Delete hub Secret
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "vast-tenant-config-test-ci-jit-wiring"
+        namespace: "osac-system"
+      failed_when: false
+
+    - name: Delete ComputeInstance CR
+      kubernetes.core.k8s:
+        state: absent
+        api_version: osac.openshift.io/v1alpha1
+        kind: ComputeInstance
+        name: "test-ci-jit-wiring"
+        namespace: "osac-system"
+      failed_when: false
+
+    - name: Delete override log
+      ansible.builtin.file:
+        path: /tmp/osac_test_overrides.log
+        state: absent
+
+# ── Negative case: JIT tier does not match the requested tier -- csi_driver_install must NOT fire ──
+- name: "Compute Instance JIT CSI Driver Install Wiring - Setup (negative case)"
+  hosts: localhost
+  gather_facts: true
+
+  tasks:
+    - name: Delete ComputeInstance CR if exists
+      kubernetes.core.k8s:
+        state: absent
+        api_version: osac.openshift.io/v1alpha1
+        kind: ComputeInstance
+        name: "test-ci-jit-wiring-neg"
+        namespace: "osac-system"
+      failed_when: false
+
+    # See the positive case's Setup play above for why this must be a real, pre-existing
+    # CR rather than just an in-memory osac_job_vars.resource.
+    - name: Create ComputeInstance CR fixture
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: osac.openshift.io/v1alpha1
+          kind: ComputeInstance
+          metadata:
+            name: test-ci-jit-wiring-neg
+            namespace: osac-system
+          spec:
+            templateID: osac.test_overrides.noop_template
+            cores: 2
+            memoryGiB: 4
+            bootDisk:
+              sizeGiB: 20
+            image:
+              sourceType: registry
+              sourceRef: "quay.io/containerdisks/fedora:latest"
+            runStrategy: "Always"
+
+    - name: Clear override log
+      ansible.builtin.file:
+        path: /tmp/osac_test_overrides.log
+        state: absent
+
+    - name: Create empty override log
+      ansible.builtin.file:
+        path: /tmp/osac_test_overrides.log
+        state: touch
+
+    - name: Set test variables (JIT tier present but not matching the requested tier)
+      ansible.builtin.set_fact:
+        osac_job_vars:
+          resource:
+            apiVersion: osac.openshift.io/v1alpha1
+            kind: ComputeInstance
+            metadata:
+              name: test-ci-jit-wiring-neg
+              namespace: osac-system
+            spec:
+              templateID: osac.test_overrides.noop_template
+              cores: 2
+              memoryGiB: 4
+              bootDisk:
+                sizeGiB: 20
+              image:
+                sourceType: registry
+                sourceRef: "quay.io/containerdisks/fedora:latest"
+              runStrategy: "Always"
+            status:
+              tenantReference:
+                name: test-ci-jit-wiring-neg
+                namespace: osac-system
+          # Tier name deliberately does not match _requested_storage_tier's default
+          # ('local'), so the playbook's own tier-filtering yields an empty
+          # _jit_storage_tiers list -- the same "requested tier not registered" shape
+          # osac-installer's register-local-storage.yaml exercises with 'lvms' today.
+          storage_tier_definitions:
+            - name: other-tier
+              protocol: nfs
+              provider: vast
+              backend_id: be-jit-neg
+          storage_backend_connections: {}
+          # Bypasses the unrelated "no tenant storage classes available" fail path below
+          # the JIT block -- irrelevant to what this scenario tests (whether
+          # csi_driver_install fires), which is decided entirely by the _jit_storage_tiers
+          # filtering above it.
+          tenant_storage_classes:
+            - "existing-storage-class"
+        tenant_target_namespace: "ci-jit-wiring-neg-work"
+        csi_driver_install_override:
+          name: osac.test_overrides.csi_driver_install_hooks
+          tasks_from: install.yaml
+
+- name: Run compute instance playbook with a non-matching JIT tier (negative case)
+  ansible.builtin.import_playbook: ../../../../../playbook_osac_create_compute_instance.yml
+
+- name: "Compute Instance JIT CSI Driver Install Wiring - Verify results (negative case)"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Read override log
+      ansible.builtin.slurp:
+        path: /tmp/osac_test_overrides.log
+      register: _override_log_content_neg
+
+    - name: Parse override log
+      ansible.builtin.set_fact:
+        _override_log_neg: "{{ _override_log_content_neg.content | b64decode }}"
+
+    - name: "Assert csi_driver_install's override did NOT fire when no JIT tier matches the requested tier"
+      ansible.builtin.assert:
+        that:
+          - "'csi_driver_install' not in _override_log_neg"
+        fail_msg: >-
+          csi_driver_install override fired even though no JIT tier matched the requested
+          tier -- the playbook's when: _jit_storage_tiers | length > 0 gate should have
+          skipped it entirely. Log: {{ _override_log_neg }}
+        success_msg: "csi_driver_install correctly skipped when no JIT tier matches the requested tier"
+
+# ── Cleanup (negative case) ──
+- name: "Compute Instance JIT CSI Driver Install Wiring - Cleanup (negative case)"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Delete ComputeInstance CR
+      kubernetes.core.k8s:
+        state: absent
+        api_version: osac.openshift.io/v1alpha1
+        kind: ComputeInstance
+        name: "test-ci-jit-wiring-neg"
+        namespace: "osac-system"
+      failed_when: false
+
+    - name: Delete override log
+      ansible.builtin.file:
+        path: /tmp/osac_test_overrides.log
+        state: absent

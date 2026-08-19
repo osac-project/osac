@@ -289,6 +289,17 @@ bundledPostgres:
       cpu: 50m
       memory: 128Mi
 
+bundledVault:
+  enabled: false
+  image: "ghcr.io/openbao/openbao:2.6.1"
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
 clusterVersions:
   enabled: false
   versions: []

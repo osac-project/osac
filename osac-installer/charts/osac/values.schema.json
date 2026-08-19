@@ -1413,6 +1413,42 @@
           "default": false
         }
       }
+    },
+    "bundledVault": {
+      "type": "object",
+      "description": "Bundled OpenBao (Vault-compatible) secret store for dev/CI environments. When enabled, deploys a single-replica OpenBao instance in dev mode with emptyDir storage.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Deploy a bundled OpenBao instance for development/CI use",
+          "default": false
+        },
+        "image": {
+          "type": "string",
+          "description": "OpenBao container image (must be 2.5+ for namespace support)",
+          "default": "docker.io/openbao/openbao:2.5"
+        },
+        "resources": {
+          "type": "object",
+          "description": "Container resource requests and limits",
+          "properties": {
+            "requests": {
+              "type": "object",
+              "properties": {
+                "cpu": { "type": "string" },
+                "memory": { "type": "string" }
+              }
+            },
+            "limits": {
+              "type": "object",
+              "properties": {
+                "cpu": { "type": "string" },
+                "memory": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
     }
   }
 }

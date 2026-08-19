@@ -1,0 +1,245 @@
+{{- if .Values.bundledVault.enabled }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: openbao-server
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+spec:
+  issuerRef:
+    kind: {{ .Values.service.certs.issuerRef.kind }}
+    name: {{ .Values.service.certs.issuerRef.name }}
+  dnsNames:
+  - openbao
+  - openbao.{{ .Release.Namespace }}
+  - openbao.{{ .Release.Namespace }}.svc.cluster.local
+  - localhost
+  secretName: openbao-server-cert
+  privateKey:
+    rotationPolicy: Always
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openbao-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+data:
+  config.hcl: |
+    ui = false
+    disable_mlock = true
+
+    listener "tcp" {
+      address     = "0.0.0.0:8200"
+      tls_cert_file = "/vault/tls/tls.crt"
+      tls_key_file  = "/vault/tls/tls.key"
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openbao-init
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+data:
+  init.sh: |
+    #!/usr/bin/env sh
+    set -eu
+
+    export BAO_ADDR="https://localhost:8200"
+    export BAO_TOKEN="root"
+    export BAO_CACERT="/vault/tls/ca.crt"
+
+    echo "Waiting for OpenBao to become ready..."
+    until bao status >/dev/null 2>&1; do
+      sleep 1
+    done
+    echo "OpenBao is ready."
+
+    echo "Creating parent namespace 'osac'..."
+    bao namespace create osac 2>/dev/null || echo "Namespace 'osac' already exists."
+
+    echo "Enabling JWT auth in osac namespace..."
+    bao auth enable -namespace=osac -path=jwt jwt 2>/dev/null || echo "JWT auth already enabled."
+
+    echo "Writing lifecycle policy..."
+    bao policy write -namespace=osac lifecycle - <<'POLICY'
+    path "sys/namespaces/*" {
+      capabilities = ["create", "read", "update", "delete", "list"]
+    }
+    path "sys/namespaces" {
+      capabilities = ["list"]
+    }
+    path "sys/mounts/*" {
+      capabilities = ["create", "read", "update", "delete"]
+    }
+    path "sys/mounts" {
+      capabilities = ["read", "list"]
+    }
+    path "auth/*" {
+      capabilities = ["create", "read", "update", "delete", "list", "sudo"]
+    }
+    POLICY
+
+    {{- if .Values.service.vault.keycloakIssuerUrl }}
+    echo "Configuring JWT auth with Keycloak OIDC discovery..."
+    {{- if .Values.service.certs.caBundle.configMap }}
+    export BAO_CACERT="/vault/ca/bundle.pem"
+    {{- end }}
+    bao write -namespace=osac auth/jwt/config \
+      oidc_discovery_url="${KEYCLOAK_ISSUER_URL}" \
+      oidc_discovery_ca_pem=@/vault/ca/bundle.pem \
+      default_role="lifecycle"
+
+    echo "Creating lifecycle role..."
+    bao write -namespace=osac auth/jwt/role/lifecycle \
+      role_type="jwt" \
+      bound_audiences="${KEYCLOAK_AUDIENCE}" \
+      user_claim="sub" \
+      policies="lifecycle" \
+      token_ttl="1h"
+    {{- end }}
+
+    echo "OpenBao bootstrap complete."
+    sleep infinity
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openbao
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: openbao
+  ports:
+  - name: api
+    port: 8200
+    targetPort: api
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openbao
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: openbao
+    {{- include "osac.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: openbao
+  template:
+    metadata:
+      labels:
+        app: openbao
+        {{- include "osac.labels" . | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      volumes:
+      - name: server-cert
+        secret:
+          secretName: openbao-server-cert
+          defaultMode: 0444
+      - name: config
+        configMap:
+          name: openbao-config
+      - name: init-script
+        configMap:
+          name: openbao-init
+          defaultMode: 0755
+      {{- if .Values.service.certs.caBundle.configMap }}
+      - name: ca-bundle
+        configMap:
+          name: {{ .Values.service.certs.caBundle.configMap }}
+      {{- end }}
+      - name: data
+        emptyDir: {}
+      containers:
+      - name: server
+        image: {{ .Values.bundledVault.image | default "ghcr.io/openbao/openbao:2.6.1" }}
+        imagePullPolicy: IfNotPresent
+        resources:
+          {{- toYaml .Values.bundledVault.resources | nindent 10 }}
+        command:
+        - bao
+        - server
+        - -dev
+        - -dev-root-token-id=root
+        - -dev-listen-address=127.0.0.1:8202
+        - -config=/vault/config/config.hcl
+        env:
+        - name: BAO_ADDR
+          value: "https://127.0.0.1:8200"
+        - name: BAO_CACERT
+          {{- if .Values.service.certs.caBundle.configMap }}
+          value: "/vault/ca/bundle.pem"
+          {{- else }}
+          value: "/vault/tls/ca.crt"
+          {{- end }}
+        - name: SKIP_SETCAP
+          value: "true"
+        volumeMounts:
+        - name: server-cert
+          mountPath: /vault/tls
+        - name: config
+          mountPath: /vault/config
+        {{- if .Values.service.certs.caBundle.configMap }}
+        - name: ca-bundle
+          mountPath: /vault/ca
+        {{- end }}
+        - name: data
+          mountPath: /vault/data
+        ports:
+        - name: api
+          protocol: TCP
+          containerPort: 8200
+        livenessProbe:
+          httpGet:
+            path: /v1/sys/health
+            port: api
+            scheme: HTTPS
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /v1/sys/health
+            port: api
+            scheme: HTTPS
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      - name: bootstrap
+        image: {{ .Values.bundledVault.image | default "ghcr.io/openbao/openbao:2.6.1" }}
+        imagePullPolicy: IfNotPresent
+        command:
+        - /bin/sh
+        - /scripts/init.sh
+        env:
+        - name: KEYCLOAK_ISSUER_URL
+          value: {{ .Values.service.vault.keycloakIssuerUrl | default "" | quote }}
+        - name: KEYCLOAK_AUDIENCE
+          value: {{ .Values.service.vault.keycloakAudience | default "" | quote }}
+        volumeMounts:
+        - name: init-script
+          mountPath: /scripts
+        - name: server-cert
+          mountPath: /vault/tls
+        {{- if .Values.service.certs.caBundle.configMap }}
+        - name: ca-bundle
+          mountPath: /vault/ca
+        {{- end }}
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+{{- end }}

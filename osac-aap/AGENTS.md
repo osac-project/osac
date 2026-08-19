@@ -229,6 +229,7 @@ Test targets in `tests/integration/targets/`:
 - `cluster_*` — ClusterOrder lifecycle (create, delete, post_install, status_reporting)
 - `compute_instance_*` — ComputeInstance lifecycle (create, delete, with_gpu)
 - `storage_provider_*` — Storage onboarding, setup, teardown, rollback
+- `csi_driver_install*`, `tenant_cluster_storage_csi_driver_install_gate`, `compute_instance_jit_csi_driver_install_wiring` — OSAC CSI driver Helm install: role behavior, playbook wiring, per-call-site JIT-install gating
 - `finalizer`, `lease`, `tenant_target_namespace` — Service role tests
 - `config_as_code_pod_specs` — AAP configuration validation
 

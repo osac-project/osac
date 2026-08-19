@@ -4,8 +4,10 @@ argument_specs:
     short_description: OSAC CSI driver Helm chart install
     description: >
       Idempotently installs the OSAC CSI driver (csi-driver + csi-backends Helm
-      charts) once per hub-targeting storage dispatch, regardless of how many
-      providers are configured in the dispatched tier list. Called directly
+      charts) once per hub-targeting storage dispatch that includes at least
+      one CSI-driver-supported provider (regardless of how many such providers
+      are configured in the dispatched tier list) -- a dispatch with zero
+      supported providers is a no-op. Called directly
       from every hub-targeting storage dispatch point —
       playbook_osac_create_tenant_storage_backend.yml, the Tenant (hub) call
       site of playbook_osac_create_tenant_cluster_storage.yml, and
@@ -27,7 +29,7 @@ argument_specs:
           storage_provider/tasks/main.yaml's own "Extract unique providers
           from tier list" step does — callers do not compute or pass that
           separately.
-      storage_provider_backend_connections:
+      csi_driver_install_backend_connections:
         type: dict
         required: false
         default: {}

@@ -198,6 +198,7 @@ bundledPostgres:
 # testing. Dev mode — data is lost on restart. Not for production.
 bundledVault:
   enabled: true
+  devRootToken: "dev-root-token"
 
 # --- Kafka (metering infrastructure) ---
 kafka:

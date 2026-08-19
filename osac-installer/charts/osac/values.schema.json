@@ -1423,10 +1423,14 @@
           "description": "Deploy a bundled OpenBao instance for development/CI use",
           "default": false
         },
+        "devRootToken": {
+          "type": "string",
+          "description": "Root token for OpenBao dev mode (required when enabled)"
+        },
         "image": {
           "type": "string",
           "description": "OpenBao container image (must be 2.5+ for namespace support)",
-          "default": "docker.io/openbao/openbao:2.5"
+          "default": "ghcr.io/openbao/openbao:2.6.1"
         },
         "resources": {
           "type": "object",

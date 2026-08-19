@@ -291,6 +291,7 @@ bundledPostgres:
 
 bundledVault:
   enabled: false
+  devRootToken: ""
   image: "ghcr.io/openbao/openbao:2.6.1"
   resources:
     requests:

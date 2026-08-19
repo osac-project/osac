@@ -50,7 +50,7 @@ data:
     set -eu
 
     export BAO_ADDR="https://localhost:8200"
-    export BAO_TOKEN="root"
+    export BAO_TOKEN="{{ .Values.bundledVault.devRootToken }}"
     export BAO_CACERT="/vault/tls/ca.crt"
 
     echo "Waiting for OpenBao to become ready..."
@@ -88,11 +88,15 @@ data:
     echo "Configuring JWT auth with Keycloak OIDC discovery..."
     {{- if .Values.service.certs.caBundle.configMap }}
     export BAO_CACERT="/vault/ca/bundle.pem"
-    {{- end }}
     bao write -namespace=osac auth/jwt/config \
       oidc_discovery_url="${KEYCLOAK_ISSUER_URL}" \
       oidc_discovery_ca_pem=@/vault/ca/bundle.pem \
       default_role="lifecycle"
+    {{- else }}
+    bao write -namespace=osac auth/jwt/config \
+      oidc_discovery_url="${KEYCLOAK_ISSUER_URL}" \
+      default_role="lifecycle"
+    {{- end }}
 
     echo "Creating lifecycle role..."
     bao write -namespace=osac auth/jwt/role/lifecycle \
@@ -164,7 +168,7 @@ spec:
         emptyDir: {}
       containers:
       - name: server
-        image: {{ .Values.bundledVault.image | default "ghcr.io/openbao/openbao:2.6.1" }}
+        image: {{ .Values.bundledVault.image }}
         imagePullPolicy: IfNotPresent
         resources:
           {{- toYaml .Values.bundledVault.resources | nindent 10 }}
@@ -172,7 +176,7 @@ spec:
         - bao
         - server
         - -dev
-        - -dev-root-token-id=root
+        - -dev-root-token-id={{ required "bundledVault.devRootToken must be set" .Values.bundledVault.devRootToken }}
         - -dev-listen-address=127.0.0.1:8202
         - -config=/vault/config/config.hcl
         env:
@@ -216,7 +220,7 @@ spec:
           initialDelaySeconds: 5
           periodSeconds: 5
       - name: bootstrap
-        image: {{ .Values.bundledVault.image | default "ghcr.io/openbao/openbao:2.6.1" }}
+        image: {{ .Values.bundledVault.image }}
         imagePullPolicy: IfNotPresent
         command:
         - /bin/sh

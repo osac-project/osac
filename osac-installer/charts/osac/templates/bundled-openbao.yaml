@@ -189,6 +189,7 @@ spec:
         - bao
         - server
         - -dev
+        - -dev-no-store-token
         - -dev-root-token-id={{ required "bundledVault.devRootToken must be set" .Values.bundledVault.devRootToken }}
         - -dev-listen-address=127.0.0.1:8202
         - -config=/vault/config/config.hcl

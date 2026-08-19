@@ -229,8 +229,6 @@ build_slack_charts_published_summary() {
 
     table=$(_build_slack_charts_table "${manifest_file}" true "${repo_owner}" "${gh_token}")
 
-    printf '*Charts published:*
-```
-%s
-```' "${table}"
+    # Plain mrkdwn (no code fence): linked version cells use <url|text> markup.
+    printf '*Charts published:*\n%s' "${table}"
 }

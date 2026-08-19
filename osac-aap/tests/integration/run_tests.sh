@@ -208,6 +208,26 @@ if [ "${STORAGE_TESTS_ENABLED:-}" = "true" ]; then
     "storage_provider_ensure_sc"
     "storage_provider_onboarding"
     "storage_provider_setup_rollback"
+    # Playbook-level wiring tests for osac.service.csi_driver_install (stub the
+    # real Helm install via csi_driver_install_override, run the real
+    # storage_provider dispatch after it) -- share this gate/mock server since
+    # they need the same infrastructure. One target per hub-targeting dispatch
+    # point: tenant storage backend (setup), compute-instance JIT storage
+    # (ensure_storage_class), and tenant/cluster storage's Tenant-vs-ClusterOrder
+    # gate (ensure_storage_class).
+    "csi_driver_install_playbook_wiring"
+    "compute_instance_jit_csi_driver_install_wiring"
+    "tenant_cluster_storage_csi_driver_install_gate"
+    # csi_driver_install's own role-level test. Runs unconditionally alongside the
+    # rest of STORAGE_TESTS -- setup_test_env.sh's "local TLS OCI registry" section
+    # (same STORAGE_TESTS_ENABLED gate) packages and pushes the real
+    # osac-csi-driver/charts/{csi-driver,csi-backends} charts at versions
+    # 0.1.0/0.1.1, so this no longer needs a real oci://ghcr.io/osac-project/charts
+    # release tag (none has been cut yet -- OSAC-3290 Risk Assessment item 1).
+    # Does not need the mock VMS server itself -- csi_driver_install never calls
+    # the VAST VMS API directly -- but shares this array/gate since it now shares
+    # the same local-registry setup step.
+    "csi_driver_install"
   )
 
   for storage_test in "${STORAGE_TESTS[@]}"; do
@@ -222,36 +242,6 @@ if [ "${STORAGE_TESTS_ENABLED:-}" = "true" ]; then
       tail -60 "${log_file}" 2>/dev/null || true
       echo "  --- end ${storage_test} failure log ---"
       FAILED+=("$storage_test:baseline")
-    fi
-  done
-fi
-
-# csi_driver_install tests (conditional) -- gated separately from
-# STORAGE_TESTS_ENABLED: this target needs a real, published
-# osac-csi-driver/vX.Y.Z chart tag in oci://ghcr.io/osac-project/charts
-# (no chart-publishing changes required, just a release), which does not
-# exist yet. Flip to "true" once one has been cut. Does not need the mock
-# VMS server -- csi_driver_install never calls the VAST VMS API directly.
-if [ "${CSI_DRIVER_TESTS_ENABLED:-}" = "true" ]; then
-  echo "=== Running CSI Driver Install Tests ==="
-  echo ""
-
-  CSI_DRIVER_TESTS=(
-    "csi_driver_install"
-  )
-
-  for csi_driver_test in "${CSI_DRIVER_TESTS[@]}"; do
-    echo "  Running: $csi_driver_test"
-    log_file="/tmp/osac_csi_driver_test_${csi_driver_test}.log"
-    if ansible-playbook "targets/${csi_driver_test}/tasks/main.yml" -v > "${log_file}" 2>&1; then
-      echo "  ✓ ${csi_driver_test} passed"
-      PASSED+=("$csi_driver_test:baseline")
-    else
-      echo "  ✗ ${csi_driver_test} failed (see ${log_file})"
-      echo "  --- ${csi_driver_test} failure log (last 60 lines) ---"
-      tail -60 "${log_file}" 2>/dev/null || true
-      echo "  --- end ${csi_driver_test} failure log ---"
-      FAILED+=("$csi_driver_test:baseline")
     fi
   done
 fi

@@ -260,10 +260,6 @@ jobs:
         run: uv run make test
         env:
           STORAGE_TESTS_ENABLED: "true"
-          # No osac-csi-driver/vX.Y.Z release tag has been cut yet, so no chart
-          # exists at oci://ghcr.io/osac-project/charts for this target to install.
-          # Flip to "true" once one has been published.
-          CSI_DRIVER_TESTS_ENABLED: "false"
 
   # osac-installer's own smoke test: deploy the umbrella chart (which
   # composes every other component's chart via file:// dependencies, plus

@@ -21,6 +21,10 @@
 # comma-joined vendorSockets strings — Helm replaces scalars outright — so
 # this role reads back each release's previously-deployed vendorSockets via
 # helm_info and merges this dispatch's vendors into it before reinstalling.
+# Because multiple AAP jobs can dispatch this role concurrently against these
+# same shared releases (e.g. two ComputeInstance creations at once), the
+# read-modify-write of vendorSockets is additionally serialized by an
+# osac.service.lease lock around the whole install block below.
 
 - name: Extract unique providers from the dispatched tier list
   ansible.builtin.set_fact:
@@ -54,56 +58,63 @@
 - name: Fail if any dispatched provider's backend_id has no connection details
   ansible.builtin.fail:
     msg: >-
-      No entry for backend_id '{{ item }}' in storage_provider_backend_connections.
+      No entry for backend_id '{{ item }}' in csi_driver_install_backend_connections.
       osac-operator must resolve and pass connection details for every backend_id
       referenced by the dispatched providers' tiers.
   loop: "{{ _csi_driver_install_required_backend_ids }}"
-  when: item not in storage_provider_backend_connections
+  when: item not in csi_driver_install_backend_connections
 
-- name: Install OSAC CSI driver
+# Both vast checks below are fail-fast, pre-block validation — same rationale
+# as the check immediately above: their inputs (csi_driver_install_tiers,
+# _csi_driver_install_dispatched_vendors) are available before the block
+# starts, so an invalid dispatch (multiple vast backend_ids) is rejected
+# before any Namespace/Helm/Secret state is touched, consistent with the
+# sibling check above rather than failing mid-block.
+#
+# Reset explicitly on every invocation, same rationale as
+# _csi_driver_install_lock_acquired's reset below: a stale value left over from an
+# earlier vast dispatch targeting this same host (facts persist across plays) must
+# never leak into a LATER, non-vast dispatch. Every current consumer of this fact is
+# independently gated on the same 'vast' in _csi_driver_install_dispatched_vendors
+# condition, so a stale value causes no live bug today -- but that's incidental to
+# how those consumers happen to be written, not a property this fact's own lifecycle
+# guarantees.
+- name: Reset vast backend_id resolution before conditionally resolving it
+  ansible.builtin.set_fact:
+    _csi_driver_install_vast_backend_ids: []
+
+- name: Resolve vast provider's backend_id(s) among dispatched tiers
+  ansible.builtin.set_fact:
+    _csi_driver_install_vast_backend_ids: >-
+      {{ csi_driver_install_tiers | selectattr('provider', 'equalto', 'vast')
+         | selectattr('backend_id', 'defined') | map(attribute='backend_id') | unique | list }}
+  when: "'vast' in _csi_driver_install_dispatched_vendors"
+
+- name: Fail if the dispatched vast tiers reference more than one backend_id
+  ansible.builtin.fail:
+    msg: >-
+      Expected exactly one backend_id across the dispatched vast tiers for the
+      csi-backends vmsHost config, got {{ _csi_driver_install_vast_backend_ids | length }}:
+      {{ _csi_driver_install_vast_backend_ids | to_json }}. Multiple VAST backends
+      dispatched together in one call are not yet supported.
+  when:
+    - "'vast' in _csi_driver_install_dispatched_vendors"
+    - _csi_driver_install_vast_backend_ids | length != 1
+
+- name: Default csi-driver/csi-backends chart values to empty maps (overwritten below when vendors are dispatched)
+  ansible.builtin.set_fact:
+    _csi_driver_install_chart_defaults: {}
+    _csi_driver_install_backends_defaults: {}
+
+# Pure function of static role config (chart_registry/chart_version) and the
+# dispatched-vendor count -- reads/writes nothing the install lock below
+# protects (that lock exists for the vendorSockets read-modify-write against
+# the live Helm release, not for OCI registry reads), so it runs before lock
+# acquisition rather than needlessly extending the critical section with two
+# external network round trips.
+- name: Fetch and parse csi-driver/csi-backends charts' default values (skipped when no supported vendor is dispatched)
+  when: _csi_driver_install_dispatched_vendors | length > 0
   block:
-    - name: Pre-create csi-driver namespace
-      kubernetes.core.k8s:
-        state: present
-        kind: Namespace
-        name: "{{ csi_driver_install_namespace }}"
-
-    - name: Pre-create csi-backends namespace
-      kubernetes.core.k8s:
-        state: present
-        kind: Namespace
-        name: "{{ csi_driver_install_backends_namespace }}"
-
-    - name: Check currently installed csi-driver/csi-backends releases
-      kubernetes.core.helm_info:
-        name: "{{ item }}"
-        release_namespace: >-
-          {{ csi_driver_install_namespace if item == 'csi-driver' else csi_driver_install_backends_namespace }}
-      loop:
-        - csi-driver
-        - csi-backends
-      register: _csi_driver_install_release_info
-
-    - name: Log installed release chart versions
-      ansible.builtin.debug:
-        msg: >-
-          {{ item.item }} release:
-          {{ 'not installed' if item.status is none
-             else (item.status.chart ~ ' (pinned: ' ~ csi_driver_install_chart_version ~ ')') }}
-      loop: "{{ _csi_driver_install_release_info.results }}"
-      loop_control:
-        label: "{{ item.item }}"
-
-    # Used by the rescue block below to decide whether a release is safe to roll
-    # back: only a release THIS run installed from nothing may be torn down on
-    # failure — never a release that was already serving other tenants.
-    - name: Track whether csi-driver/csi-backends releases existed before this run
-      ansible.builtin.set_fact:
-        _csi_driver_install_driver_existed_before: >-
-          {{ (_csi_driver_install_release_info.results | selectattr('item', 'equalto', 'csi-driver') | first).status is not none }}
-        _csi_driver_install_backends_existed_before: >-
-          {{ (_csi_driver_install_release_info.results | selectattr('item', 'equalto', 'csi-backends') | first).status is not none }}
-
     - name: Fetch csi-driver chart's default values (single source for vendor node socketPath)
       ansible.builtin.command:
         argv:
@@ -136,10 +147,126 @@
       ansible.builtin.set_fact:
         _csi_driver_install_backends_defaults: "{{ _csi_driver_install_backends_defaults_raw.stdout | from_yaml }}"
 
+# Skipped entirely when zero CSI-driver-supported vendors are dispatched --
+# e.g. every JIT compute-instance dispatch today, which sends the
+# not-yet-supported 'lvms' provider (see register-local-storage.yaml in
+# osac-installer). There is nothing to reconcile in that case, so this avoids
+# paying for the install lock plus two Helm install/upgrade calls on every
+# such dispatch just to leave csi-driver/csi-backends unchanged.
+- name: Install OSAC CSI driver
+  when: _csi_driver_install_dispatched_vendors | length > 0
+  block:
+    - name: Set CSI driver install lock holder identity
+      ansible.builtin.set_fact:
+        _csi_driver_install_lock_holder: >-
+          csi-driver-install-{{ awx_job_id | default('unknown') }}-{{
+            lookup('community.general.random_string', special=false, numbers=false, upper=false)
+          }}
+        # Reset explicitly on every invocation: a stale `true` left over from an
+        # earlier successful dispatch targeting this same host (e.g. an earlier
+        # scenario in a role-level test, where facts persist across plays) must
+        # never be read by a LATER invocation whose own acquire attempt fails
+        # before reaching the "Mark the lock as acquired" task below -- that
+        # would make `always:` believe this run holds the lock when it never
+        # acquired one, triggering the exact wrongful-release this guard exists
+        # to prevent.
+        _csi_driver_install_lock_acquired: false
+
+    # csi-driver/csi-backends are cluster-wide, shared Helm releases (see the
+    # module docstring above): every hub-targeting dispatch point reads then
+    # rewrites the same two releases' vendorSockets state, and that
+    # read-modify-write has no natural atomicity across concurrently-running
+    # AAP jobs. A single global lock name (not per-tenant/per-provider, since
+    # the underlying releases are singletons) serializes these dispatches,
+    # using the same osac.service.lease primitive already used elsewhere in
+    # this repo to serialize cluster-order provisioning
+    # (playbook_osac_create_hosted_cluster.yml) and global agent-pool
+    # selection (manage_agents/select_and_label_new_agents.yml).
+    - name: Acquire CSI driver install lock
+      ansible.builtin.include_role:
+        name: osac.service.lease
+      vars:
+        lease_state: present
+        lease_name: "csi-driver-install-lock"
+        lease_holder: "{{ _csi_driver_install_lock_holder }}"
+        lease_retries: 20
+        lease_delay: 5
+
+    # Only mark the lock as ours to release once acquisition genuinely
+    # succeeded. `always:` runs even when the block fails on its very first
+    # task -- if acquisition itself failed (e.g. contention timeout, another
+    # dispatch still holds it), unconditionally deleting the lease by name in
+    # `always:` would tear down a lock a DIFFERENT, still-running dispatch
+    # legitimately holds, since the lease role's own delete task does not
+    # check current holder identity before deleting.
+    - name: Mark the lock as acquired by this dispatch
+      ansible.builtin.set_fact:
+        _csi_driver_install_lock_acquired: true
+
+    # Looped: Ansible attempts every item regardless of an earlier item's
+    # failure, so if csi-driver's namespace apply fails, csi-backends' is
+    # still attempted before the task (and therefore the whole block) fails
+    # -- unlike two separate tasks, which would stop at the first failure.
+    # Either way the block fails and rescue: rolls back identically; this
+    # only affects whether the second namespace ends up created before that
+    # happens, not which cleanup path runs.
+    - name: Pre-create csi-driver/csi-backends namespaces with Helm release ownership metadata
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: >-
+              {{ csi_driver_install_namespace if item == 'csi-driver' else csi_driver_install_backends_namespace }}
+            labels:
+              app.kubernetes.io/managed-by: Helm
+            annotations:
+              meta.helm.sh/release-name: "{{ item }}"
+              meta.helm.sh/release-namespace: >-
+                {{ csi_driver_install_namespace if item == 'csi-driver' else csi_driver_install_backends_namespace }}
+      loop:
+        - csi-driver
+        - csi-backends
+
+    - name: Check currently installed csi-driver/csi-backends releases
+      kubernetes.core.helm_info:
+        name: "{{ item }}"
+        release_namespace: >-
+          {{ csi_driver_install_namespace if item == 'csi-driver' else csi_driver_install_backends_namespace }}
+      loop:
+        - csi-driver
+        - csi-backends
+      register: _csi_driver_install_release_info
+
+    - name: Log installed release chart versions
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.item }} release:
+          {{ 'not installed' if (item.status | default(none, true)) is none
+             else ((item.status | default(none, true)).chart ~ ' (pinned: ' ~ csi_driver_install_chart_version ~ ')') }}
+      loop: "{{ _csi_driver_install_release_info.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    # Used by the rescue block below to decide whether a release is safe to roll
+    # back: only a release THIS run installed from nothing may be torn down on
+    # failure — never a release that was already serving other tenants.
+    # helm_info omits the `status` key entirely (rather than returning it as
+    # null) when a release doesn't exist yet, so `| default(none, true)` is
+    # required before the `is not none`/`is none` checks below — a bare
+    # `.status` access on a nonexistent release raises an Undefined error.
+    - name: Track whether csi-driver/csi-backends releases existed before this run
+      ansible.builtin.set_fact:
+        _csi_driver_install_driver_existed_before: >-
+          {{ ((_csi_driver_install_release_info.results | selectattr('item', 'equalto', 'csi-driver') | first).status | default(none, true)) is not none }}
+        _csi_driver_install_backends_existed_before: >-
+          {{ ((_csi_driver_install_release_info.results | selectattr('item', 'equalto', 'csi-backends') | first).status | default(none, true)) is not none }}
+
     - name: Extract csi-driver's previously-deployed status (None if not yet installed)
       ansible.builtin.set_fact:
         _csi_driver_install_prior_driver_status: >-
-          {{ (_csi_driver_install_release_info.results | selectattr('item', 'equalto', 'csi-driver') | first).status }}
+          {{ (_csi_driver_install_release_info.results | selectattr('item', 'equalto', 'csi-driver') | first).status | default(none, true) }}
 
     # Bracket notation (['values']) is required here, not dot notation: the
     # release dict has a real key literally named "values", which collides
@@ -221,26 +348,9 @@
           {% endfor -%}
           {{ _pairs | sort | join(',') }}
 
-    - name: Resolve vast provider's backend_id(s) among dispatched tiers
-      ansible.builtin.set_fact:
-        _csi_driver_install_vast_backend_ids: >-
-          {{ csi_driver_install_tiers | selectattr('provider', 'equalto', 'vast') | map(attribute='backend_id') | unique | list }}
-      when: "'vast' in _csi_driver_install_dispatched_vendors"
-
-    - name: Fail if the dispatched vast tiers reference more than one backend_id
-      ansible.builtin.fail:
-        msg: >-
-          Expected exactly one backend_id across the dispatched vast tiers for the
-          csi-backends vmsHost config, got {{ _csi_driver_install_vast_backend_ids | length }}:
-          {{ _csi_driver_install_vast_backend_ids | to_json }}. Multiple VAST backends
-          dispatched together in one call are not yet supported.
-      when:
-        - "'vast' in _csi_driver_install_dispatched_vendors"
-        - _csi_driver_install_vast_backend_ids | length != 1
-
     - name: Resolve vast VMS host from the dispatched backend connection (non-secret connection detail only)
       ansible.builtin.set_fact:
-        _csi_driver_install_vast_vms_host: "{{ storage_provider_backend_connections[_csi_driver_install_vast_backend_ids[0]].endpoint }}"
+        _csi_driver_install_vast_vms_host: "{{ csi_driver_install_backend_connections[_csi_driver_install_vast_backend_ids[0]].endpoint }}"
       when: "'vast' in _csi_driver_install_dispatched_vendors"
 
     - name: Build csi-driver chart values for this dispatch
@@ -319,6 +429,10 @@
           as AAP Credential Type / vault-backed environment variables.
       when: (csi_driver_install_oauth_client_id | length == 0) or (csi_driver_install_oauth_client_secret | length == 0)
 
+    # A dispatch running without CSI_DRIVER_OAUTH_CLIENT_ID/_SECRET configured must
+    # never blank out a previously-real client-id/client-secret: only write when the
+    # secret doesn't exist yet (initial bootstrap, blank creds acceptable per the
+    # design above) or this dispatch actually supplies real, non-blank credentials.
     - name: Create OAuth client-credentials Secret for the vast-csi-controller init-container
       kubernetes.core.k8s:
         state: present
@@ -333,6 +447,9 @@
             client-id: "{{ csi_driver_install_oauth_client_id }}"
             client-secret: "{{ csi_driver_install_oauth_client_secret }}"
       no_log: true
+      when: >-
+        not (_csi_driver_install_oauth_secret_existed_before | bool)
+        or (csi_driver_install_oauth_client_id | length > 0 and csi_driver_install_oauth_client_secret | length > 0)
       register: _csi_driver_install_oauth_secret_result
 
   rescue:
@@ -383,6 +500,17 @@
           Rollback attempted for any Helm release/Secret this run created fresh.
 
   always:
+    # Guarded by _csi_driver_install_lock_acquired -- see the "Mark the lock
+    # as acquired" task above for why this must not release unconditionally.
+    - name: Release CSI driver install lock
+      when: _csi_driver_install_lock_acquired | default(false)
+      ansible.builtin.include_role:
+        name: osac.service.lease
+      vars:
+        lease_state: absent
+        lease_name: "csi-driver-install-lock"
+        lease_holder: "{{ _csi_driver_install_lock_holder }}"
+
     - name: Clear OAuth client-credential facts from play scope
       ansible.builtin.set_fact:
         csi_driver_install_oauth_client_id: ""

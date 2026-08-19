@@ -183,12 +183,13 @@ Shared utilities imported by template roles:
 - `cluster_settings` — Cluster configuration management
 - `cluster_working_namespace` — Cluster namespace utilities
 - `common` — Kubeconfig and credential management (`get_remote_cluster_kubeconfig`)
+- `csi_driver_install` — Idempotent OSAC CSI driver Helm install, called directly from hub-targeting storage dispatch playbooks
 - `enumerate_templates` — Template enumeration
 - `external_access` — External access configuration
 - `extract_template_info` — Template metadata extraction
 - `finalizer` — Kubernetes finalizer lifecycle (`add_finalizer`, `remove_finalizer`)
 - `hosted_cluster` — Hosted cluster management
-- `lease` — Bare metal lease management
+- `lease` — Generic Kubernetes Lease-based mutex (despite the name, not bare-metal-specific — also serializes cluster-order provisioning, agent-pool selection, and CSI driver install dispatches)
 - `manage_agents` — Agent management utilities
 - `metallb_ingress` — MetalLB ingress setup
 - `nmstate_config` — Network configuration with nmstate

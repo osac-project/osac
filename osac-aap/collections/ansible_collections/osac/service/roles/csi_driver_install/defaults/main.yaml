@@ -22,7 +22,7 @@ csi_driver_install_supported_vendors:
 
 # Secret consumed by the (not-yet-implemented) vast-csi-controller
 # init-container to authenticate to fulfillment-service's private API and
-# fetch VMS admin credentials live — see 02-plan.md's "VMS Admin-Credential
+# fetch VMS admin credentials live — see OSAC-3290's "VMS Admin-Credential
 # Resolution" section. Static, registration-time data injected via AAP
 # Credential Type / vault-backed environment variables, not per-dispatch
 # extra_vars.

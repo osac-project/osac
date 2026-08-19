@@ -164,11 +164,6 @@ _build_slack_charts_table() {
     printf '%s' "${table}"
 }
 
-# Usage: build_slack_charts_table <manifest_file>
-build_slack_charts_table() {
-    _build_slack_charts_table "$1" false
-}
-
 # Usage: rewrite_umbrella_osac_ui_dependency <chart_yaml> <ui_version> <oci_repo>
 rewrite_umbrella_osac_ui_dependency() {
     local chart_yaml="$1" ui_version="$2" oci_repo="$3"

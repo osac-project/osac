@@ -84,10 +84,16 @@ class GRPCClient:
 
     # VirtualNetwork operations
 
-    def create_virtual_network(self, *, name: str, ipv4_cidr: str) -> str:
+    def create_virtual_network(self, *, name: str, ipv4_cidr: str, network_class: str | None = None) -> str:
+        spec: dict[str, Any] = {"ipv4_cidr": ipv4_cidr}
+        if network_class is not None:
+            # NetworkClass remains part of the currently deployed public API (pending removal in
+            # OSAC-1980); accept it as optional so callers that still need an explicit class (e.g.
+            # reference/typed-field tests) keep working, while defaulting callers omit it entirely.
+            spec["network_class"] = {"name": network_class}
         response: dict[str, Any] = self.call(
             service=f"{PUBLIC_API}.VirtualNetworks/Create",
-            data={"object": {"metadata": {"name": name}, "spec": {"ipv4_cidr": ipv4_cidr}}},
+            data={"object": {"metadata": {"name": name}, "spec": spec}},
         )
         return response["object"]["id"]
 

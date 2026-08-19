@@ -1,71 +1,133 @@
 ---
 # Deploys vendor CSI controllers on the hub cluster using the csi-backends
-# Helm chart. Enables each vendor whose provider name appears in the tier
-# list. Runs once during setup, before individual provider roles are
-# dispatched — so the chart values reflect all configured vendors, not
-# just the first one.
+# Helm chart, enabling each vendor whose controller is needed on the hub.
 #
-# Uses helm upgrade --install (kubernetes.core.helm state=present) so
-# re-runs add newly configured vendors without clobbering existing ones.
+# WHY THIS IS CUMULATIVE (do not "simplify" back to enabled: <v> in _unique_providers):
+# The csi-backends release is a single, hub-wide (platform) resource, but this
+# task runs once PER TENANT — setup.yaml is invoked by
+# playbook_osac_create_tenant_storage_backend.yml with _unique_providers derived
+# from *that tenant's* resolved storage tiers, i.e. a per-tenant subset. A plain
+# `helm upgrade` replaces the release's values wholesale (it does not merge with
+# the previous release), so setting a vendor's enabled flag straight from
+# _unique_providers would flip other vendors to enabled: false and tear down a
+# controller a different tenant still relies on (e.g. onboarding a trident-only
+# tenant would uninstall the vast controller a vast tenant depends on).
 #
-# Requires (from caller):
-#   _unique_providers — list of provider names from the tier list
+# To prevent that, enablement here only ever GROWS: a vendor is enabled if this
+# tenant needs it OR its controller Deployment already exists on the hub. Disabling
+# a vendor is a separate, deliberate teardown — never a side effect of onboarding
+# another tenant.
+#
+# The whole thing is one block gated on storage_provider_csi_backends_enabled so
+# that when it is disabled (e.g. the storage_provider unit tests, which have no
+# cluster) every task here — including the cluster reads — is skipped and the
+# facts these tasks set are never referenced.
+#
+# Requires (from caller / main.yaml):
+#   _unique_providers — list of provider names from this tenant's tier list
 
-- name: Build csi-backends chart values from provider list
-  ansible.builtin.set_fact:
-    _csi_backends_values:
-      namespace: "{{ storage_provider_csi_backends_namespace }}"
-      vast:
-        enabled: "{{ 'vast' in _unique_providers }}"
-      trident:
-        enabled: "{{ 'trident' in _unique_providers }}"
-      pure:
-        enabled: "{{ 'pure' in _unique_providers }}"
+- name: Ensure vendor CSI controllers are deployed on the hub (cumulative across tenants)
+  when: storage_provider_csi_backends_enabled | default(true) | bool
+  block:
+    - name: Discover vendor controllers already deployed on the hub
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        namespace: "{{ storage_provider_csi_backends_namespace }}"
+      register: _csi_backends_existing
 
-- name: Check if any vendor controller is needed
-  ansible.builtin.set_fact:
-    _csi_backends_any_enabled: >-
-      {{ 'vast' in _unique_providers
-         or 'trident' in _unique_providers
-         or 'pure' in _unique_providers }}
+    - name: Compute this tenant's vendors and the controllers already present
+      ansible.builtin.set_fact:
+        # Vendors this tenant's tiers require, bounded to the chart-managed vendor set.
+        _this_tenant_vendors: "{{ _unique_providers | intersect(['vast', 'trident', 'pure']) }}"
+        # Names of vendor controller Deployments that already exist in the namespace.
+        _existing_controller_names: >-
+          {{ (_csi_backends_existing.resources | default([]))
+             | map(attribute='metadata.name') | list }}
 
-- name: Install or upgrade csi-backends Helm chart
-  when:
-    - _csi_backends_any_enabled | bool
-    - storage_provider_csi_backends_enabled | default(true) | bool
-  kubernetes.core.helm:
-    name: "{{ storage_provider_csi_backends_release_name }}"
-    chart_ref: "{{ storage_provider_csi_backends_chart_ref }}"
-    chart_version: "{{ storage_provider_csi_backends_chart_version | default(omit, true) }}"
-    release_namespace: "{{ storage_provider_csi_backends_namespace }}"
-    create_namespace: true
-    release_state: present
-    release_values: "{{ _csi_backends_values }}"
+    - name: Compute cumulative vendor enablement set (this tenant's vendors ∪ already-deployed)
+      ansible.builtin.set_fact:
+        # A vendor stays/gets enabled if THIS tenant needs it OR its controller already
+        # exists — the union is what keeps a per-tenant run from clobbering others.
+        _csi_backends_enabled_vendors: >-
+          {{
+            (['vast'] if ('vast' in _this_tenant_vendors
+                          or 'vast-csi-controller' in _existing_controller_names) else [])
+            + (['trident'] if ('trident' in _this_tenant_vendors
+                               or 'trident-csi-controller' in _existing_controller_names) else [])
+            + (['pure'] if ('pure' in _this_tenant_vendors
+                            or 'pure-csi-controller' in _existing_controller_names) else [])
+          }}
 
-- name: Wait for enabled vendor controller deployments
-  when:
-    - _csi_backends_any_enabled | bool
-    - storage_provider_csi_backends_enabled | default(true) | bool
-  kubernetes.core.k8s_info:
-    api_version: apps/v1
-    kind: Deployment
-    name: "{{ item }}-csi-controller"
-    namespace: "{{ storage_provider_csi_backends_namespace }}"
-  register: _csi_backends_deploy
-  retries: 30
-  delay: 10
-  until: >-
-    _csi_backends_deploy.resources | length > 0
-    and (_csi_backends_deploy.resources[0].status.availableReplicas | default(0) | int) > 0
-  loop: "{{ _unique_providers | intersect(['vast', 'trident', 'pure']) }}"
-  loop_control:
-    label: "{{ item }}-csi-controller"
+    - name: Build csi-backends chart values from the cumulative vendor set
+      ansible.builtin.set_fact:
+        _csi_backends_values:
+          namespace: "{{ storage_provider_csi_backends_namespace }}"
+          vast:
+            enabled: "{{ 'vast' in _csi_backends_enabled_vendors }}"
+          trident:
+            enabled: "{{ 'trident' in _csi_backends_enabled_vendors }}"
+          pure:
+            enabled: "{{ 'pure' in _csi_backends_enabled_vendors }}"
+        _csi_backends_any_enabled: "{{ _csi_backends_enabled_vendors | length > 0 }}"
 
-- name: Log vendor controller status
-  when:
-    - _csi_backends_any_enabled | bool
-    - storage_provider_csi_backends_enabled | default(true) | bool
-  ansible.builtin.debug:
-    msg: >-
-      Vendor CSI controllers deployed in namespace {{ storage_provider_csi_backends_namespace }}:
-      {{ _unique_providers | intersect(['vast', 'trident', 'pure']) | join(', ') }}
+    - name: Ensure csi-backends namespace exists with privileged Pod Security labels
+      # Vendor CSI controllers require privileged Pod Security Admission (trident runs
+      # runAsNonRoot: false; vast/pure declare no securityContext). The chart no longer
+      # ships a Namespace template, and helm's create_namespace only creates a bare,
+      # unlabeled namespace — under the default restricted PSA that would reject the
+      # vendor pods. Create the namespace here with the required labels (idempotent, so
+      # it also patches the labels onto a namespace a prior create_namespace run left
+      # bare), then install the chart into it with create_namespace: false below.
+      when: _csi_backends_any_enabled | bool
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ storage_provider_csi_backends_namespace }}"
+            labels:
+              pod-security.kubernetes.io/enforce: privileged
+              pod-security.kubernetes.io/warn: privileged
+
+    - name: Install or upgrade csi-backends Helm chart
+      when: _csi_backends_any_enabled | bool
+      kubernetes.core.helm:
+        name: "{{ storage_provider_csi_backends_release_name }}"
+        chart_ref: "{{ storage_provider_csi_backends_chart_ref }}"
+        chart_version: "{{ storage_provider_csi_backends_chart_version | default(omit, true) }}"
+        release_namespace: "{{ storage_provider_csi_backends_namespace }}"
+        # Namespace is created above with the required PSA labels; do not let helm
+        # create a bare, unlabeled one.
+        create_namespace: false
+        release_state: present
+        release_values: "{{ _csi_backends_values }}"
+
+    - name: Wait for enabled vendor controller deployments
+      when: _csi_backends_any_enabled | bool
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: "{{ item }}-csi-controller"
+        namespace: "{{ storage_provider_csi_backends_namespace }}"
+      register: _csi_backends_deploy
+      retries: 30
+      delay: 10
+      until: >-
+        _csi_backends_deploy.resources | length > 0
+        and (_csi_backends_deploy.resources[0].status.availableReplicas | default(0) | int) > 0
+      # Wait on the full enabled set (not just this tenant's vendors): the upgrade
+      # re-renders the shared release, so confirm every controller it should be running
+      # is healthy afterwards.
+      loop: "{{ _csi_backends_enabled_vendors }}"
+      loop_control:
+        label: "{{ item }}-csi-controller"
+
+    - name: Log vendor controller status
+      when: _csi_backends_any_enabled | bool
+      ansible.builtin.debug:
+        msg: >-
+          Vendor CSI controllers running in namespace {{ storage_provider_csi_backends_namespace }}:
+          {{ _csi_backends_enabled_vendors | join(', ') }}
+          (this tenant needs: {{ _this_tenant_vendors | join(', ') | default('none', true) }})

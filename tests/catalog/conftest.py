@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import subprocess
-from typing import Any, Generator
+from typing import Generator
 from uuid import uuid4
 
 import pytest
@@ -35,17 +35,6 @@ def cluster_template() -> str:
 @pytest.fixture(scope="session")
 def compute_instance_template() -> str:
     return env("OSAC_VM_TEMPLATE", "ocp-virt-vm")
-
-
-@pytest.fixture(scope="session")
-def network_class(grpc: GRPCClient) -> str:
-    configured = env("OSAC_NETWORK_CLASS", "")
-    if configured:
-        return configured
-    response: dict[str, Any] = grpc.call(service="osac.public.v1.NetworkClasses/List")
-    items = response.get("items", [])
-    assert items, "No network classes found; set OSAC_NETWORK_CLASS"
-    return items[0]["metadata"]["name"]
 
 
 def _delete_subnet_teardown(
@@ -92,7 +81,6 @@ def _delete_virtual_network_teardown(
 def catalog_networking(
     grpc: GRPCClient,
     k8s_hub_client: K8sClient,
-    network_class: str,
 ) -> Generator[dict[str, str], None, None]:
     """Create VirtualNetwork + Subnet for compute instance catalog item tests."""
     tag = uuid4().hex[:8]
@@ -104,7 +92,6 @@ def catalog_networking(
     try:
         vn_id = grpc.create_virtual_network(
             name=f"e2e-cat-vn-{tag}",
-            network_class=network_class,
             ipv4_cidr="10.200.0.0/16",
         )
         vn_cr_name = wait_for_virtual_network_cr(k8s=k8s_hub_client, uuid=vn_id)

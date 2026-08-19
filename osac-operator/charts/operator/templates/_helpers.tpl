@@ -68,3 +68,35 @@ Service account name
 {{- include "osac-operator.fullname" . }}
 {{- end }}
 {{- end }}
+
+{{/*
+Enable clusterOrder controller based on global profilesList or local override
+*/}}
+{{- define "osac-operator.controller.clusterOrder" -}}
+{{- if .Values.controllers.clusterOrder | kindIs "invalid" | not -}}
+{{- .Values.controllers.clusterOrder -}}
+{{- else -}}
+{{- $profiles := .Values.global.profilesList | default list -}}
+{{- if or (has "caas" $profiles) (has "bmaas" $profiles) -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Enable computeInstance controller based on global profilesList or local override
+*/}}
+{{- define "osac-operator.controller.computeInstance" -}}
+{{- if .Values.controllers.computeInstance | kindIs "invalid" | not -}}
+{{- .Values.controllers.computeInstance -}}
+{{- else -}}
+{{- $profiles := .Values.global.profilesList | default list -}}
+{{- if has "vmaas" $profiles -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
+{{- end }}

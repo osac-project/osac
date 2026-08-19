@@ -1,6 +1,13 @@
 # Open Sovereign AI Cloud - Unified Helm Values
 # This values file configures all OSAC components via the umbrella chart.
 
+
+# Service profiles determine which controllers are enabled
+global:
+  profilesList:
+    - caas
+    - vmaas
+
 cliImage: quay.io/openshift/origin-cli:4.20.0
 
 # --- Operator CRDs ---

@@ -32,3 +32,12 @@ env:
   aapTokenSecretName: "osac-aap-api-token"
   aapTokenSecretKey: "token"
   aapInsecureSkipVerify: ""
+
+bcm:
+  enabled: false
+  url: ""
+  credentialsSecret: ""
+  insecureSkipVerify: false
+  hostClass: "bcm"
+  networkClass: "bcm"
+  metal3Namespace: ""

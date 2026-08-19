@@ -1270,6 +1270,44 @@
               "default": ""
             }
           }
+        },
+        "bcm": {
+          "type": "object",
+          "description": "BCM inventory backend configuration. When enabled, creates osac-inventory-config and osac-management-config Secrets and mounts BCM mTLS credentials.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Create BCM inventory and management config Secrets and mount mTLS credentials",
+              "default": false
+            },
+            "url": {
+              "type": "string",
+              "description": "BCM head node API endpoint (e.g. https://bcm-head:8081)"
+            },
+            "credentialsSecret": {
+              "type": "string",
+              "description": "Name of existing Kubernetes Secret containing BCM mTLS client cert (tls.crt) and key (tls.key)"
+            },
+            "insecureSkipVerify": {
+              "type": "boolean",
+              "description": "Skip TLS verification of BCM server certificate (test environments only)",
+              "default": false
+            },
+            "hostClass": {
+              "type": "string",
+              "description": "Host class identifier for BCM inventory",
+              "default": "bcm"
+            },
+            "networkClass": {
+              "type": "string",
+              "description": "Network class identifier for BCM inventory",
+              "default": "bcm"
+            },
+            "metal3Namespace": {
+              "type": "string",
+              "description": "Kubernetes namespace where BareMetalHost CRs are created for Metal3 power management"
+            }
+          }
         }
       }
     },

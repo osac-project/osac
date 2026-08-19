@@ -71,6 +71,16 @@ aap:
 csiDriver:
   enabled: true
 
+bmf:
+  bcm:
+    enabled: true
+    url: "https://bcm-head.example.com:8081"
+    credentialsSecret: "bcm-client-certs"
+    insecureSkipVerify: false
+    hostClass: "bcm"
+    networkClass: "bcm"
+    metal3Namespace: "hardware-inventory"
+
 validation:
   enabled: true
 

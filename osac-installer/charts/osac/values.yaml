@@ -263,6 +263,14 @@ bmf:
     profiles: "osac-profiles"
   env:
     aapInsecureSkipVerify: "true"
+  bcm:
+    enabled: false
+    url: ""
+    credentialsSecret: ""
+    insecureSkipVerify: false
+    hostClass: "bcm"
+    networkClass: "bcm"
+    metal3Namespace: ""
 
 # --- Validation hooks ---
 validation:

@@ -116,10 +116,10 @@ func resolveTierDefinitions(
 			continue
 		}
 
-		protocol := storageProtocolToString(assoc.GetProtocol())
+		protocol := storageProtocolToString(tier.GetSpec().GetProtocol())
 		if protocol == "" {
 			log.Info("storage tier has unrecognized protocol, emitting empty protocol",
-				"tier", tierName, "protocol", assoc.GetProtocol())
+				"tier", tierName, "protocol", tier.GetSpec().GetProtocol())
 		}
 
 		definitions = append(definitions, provisioning.TierDefinition{
@@ -131,7 +131,6 @@ func resolveTierDefinitions(
 				MaxReadBandwidthMBs:  assoc.GetMaxReadBandwidthMbs(),
 				MaxWriteBandwidthMBs: assoc.GetMaxWriteBandwidthMbs(),
 			},
-			QuotaGiB: assoc.GetQuotaGib(),
 		})
 	}
 

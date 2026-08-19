@@ -154,15 +154,16 @@ func newTestStorageTier(name string, backendIDs ...string) *privatev1.StorageTie
 	for i, id := range backendIDs {
 		backends[i] = privatev1.BackendAssociation_builder{
 			BackendId:            id,
-			Protocol:             privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS,
 			MaxReadBandwidthMbs:  100,
 			MaxWriteBandwidthMbs: 100,
-			QuotaGib:             500,
 		}.Build()
 	}
 	return privatev1.StorageTier_builder{
 		Metadata: privatev1.Metadata_builder{Name: name}.Build(),
-		Spec:     privatev1.StorageTierSpec_builder{Backends: backends}.Build(),
+		Spec: privatev1.StorageTierSpec_builder{
+			Backends: backends,
+			Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS,
+		}.Build(),
 	}.Build()
 }
 
@@ -690,7 +691,6 @@ var _ = Describe("Storage Controller", func() {
 			Expect(defs[0].Protocol).To(Equal("nfs"))
 			Expect(defs[0].Provider).To(Equal("vast"))
 			Expect(defs[0].BackendID).To(Equal("backend-1"))
-			Expect(defs[0].QuotaGiB).To(Equal(int64(500)))
 			Expect(defs[0].QosLimits.MaxReadBandwidthMBs).To(Equal(int32(100)))
 			Expect(defs[0].QosLimits.MaxWriteBandwidthMBs).To(Equal(int32(100)))
 			Expect(conns).To(HaveKeyWithValue("backend-1", provisioning.BackendConnection{

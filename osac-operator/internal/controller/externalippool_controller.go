@@ -281,7 +281,17 @@ func (r *ExternalIPPoolReconciler) handleDeprovisioning(ctx context.Context, poo
 		return ctrl.Result{}, nil
 	}
 	result, done, err := provisioning.RunDeprovisioningLifecycle(ctx, r.ProvisioningProvider, pool,
-		&pool.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval)
+		&pool.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval,
+		func() bool {
+			return provisioning.CheckAPIServerForNonTerminalDeprovisionJob(
+				ctx, r.APIReader, client.ObjectKeyFromObject(pool), &v1alpha1.ExternalIPPool{}, func(obj client.Object) []v1alpha1.JobStatus {
+					return obj.(*v1alpha1.ExternalIPPool).Status.ProvisioningJobs
+				})
+		},
+		func() error {
+			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(pool), pool.Status)
+		},
+	)
 	if err != nil || !done {
 		return result, err
 	}

@@ -276,7 +276,16 @@ func (r *VirtualNetworkReconciler) handleDeprovisioning(ctx context.Context, vne
 		return ctrl.Result{}, nil
 	}
 	result, done, err := provisioning.RunDeprovisioningLifecycle(ctx, r.ProvisioningProvider, vnet,
-		&vnet.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval)
+		&vnet.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval,
+		func() bool {
+			return provisioning.CheckAPIServerForNonTerminalDeprovisionJob(ctx, r.APIReader, client.ObjectKeyFromObject(vnet), &v1alpha1.VirtualNetwork{}, func(obj client.Object) []v1alpha1.JobStatus {
+				return obj.(*v1alpha1.VirtualNetwork).Status.ProvisioningJobs
+			})
+		},
+		func() error {
+			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(vnet), vnet.Status)
+		},
+	)
 	if err != nil || !done {
 		return result, err
 	}

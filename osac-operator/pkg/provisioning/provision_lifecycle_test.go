@@ -1055,6 +1055,7 @@ var _ = ginkgo.Describe("RunMultiTargetDeprovisioningLifecycle", func() {
 	const pollInterval = 30 * time.Second
 	const maxHistory = 5
 	resource := &v1alpha1.Subnet{}
+	noAPIServerJob := func() bool { return false }
 
 	ginkgo.It("triggers every target with no deprovision job yet, tagging each with its target and requiring another pass to finish", func() {
 		fabricProvider := &mockProvider{
@@ -1070,11 +1071,11 @@ var _ = ginkgo.Describe("RunMultiTargetDeprovisioningLifecycle", func() {
 		jobs := []v1alpha1.JobStatus{}
 
 		targets := []DeprovisionTarget{
-			{Name: "fabric", Provider: fabricProvider},
-			{Name: "k8s", Provider: k8sProvider},
+			{Name: "fabric", Provider: fabricProvider, CheckAPIServer: noAPIServerJob},
+			{Name: "k8s", Provider: k8sProvider, CheckAPIServer: noAPIServerJob},
 		}
 
-		result, done, err := RunMultiTargetDeprovisioningLifecycle(ctx, targets, resource, &jobs, maxHistory, pollInterval)
+		result, done, err := RunMultiTargetDeprovisioningLifecycle(ctx, targets, resource, &jobs, maxHistory, pollInterval, nil)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(done).To(BeFalse())
 		Expect(result.RequeueAfter).To(Equal(pollInterval))
@@ -1100,11 +1101,11 @@ var _ = ginkgo.Describe("RunMultiTargetDeprovisioningLifecycle", func() {
 		}
 
 		targets := []DeprovisionTarget{
-			{Name: "fabric", Provider: fabricProvider},
-			{Name: "k8s", Provider: k8sProvider},
+			{Name: "fabric", Provider: fabricProvider, CheckAPIServer: noAPIServerJob},
+			{Name: "k8s", Provider: k8sProvider, CheckAPIServer: noAPIServerJob},
 		}
 
-		result, done, err := RunMultiTargetDeprovisioningLifecycle(ctx, targets, resource, &jobs, maxHistory, pollInterval)
+		result, done, err := RunMultiTargetDeprovisioningLifecycle(ctx, targets, resource, &jobs, maxHistory, pollInterval, nil)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(done).To(BeFalse())
 		Expect(result.RequeueAfter).To(Equal(pollInterval))
@@ -1119,11 +1120,11 @@ var _ = ginkgo.Describe("RunMultiTargetDeprovisioningLifecycle", func() {
 		}
 
 		targets := []DeprovisionTarget{
-			{Name: "fabric", Provider: &mockProvider{}},
-			{Name: "k8s", Provider: &mockProvider{}},
+			{Name: "fabric", Provider: &mockProvider{}, CheckAPIServer: noAPIServerJob},
+			{Name: "k8s", Provider: &mockProvider{}, CheckAPIServer: noAPIServerJob},
 		}
 
-		result, done, err := RunMultiTargetDeprovisioningLifecycle(ctx, targets, resource, &jobs, maxHistory, pollInterval)
+		result, done, err := RunMultiTargetDeprovisioningLifecycle(ctx, targets, resource, &jobs, maxHistory, pollInterval, nil)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(done).To(BeTrue())
 		Expect(result).To(Equal(ctrl.Result{}))
@@ -1151,11 +1152,11 @@ var _ = ginkgo.Describe("RunMultiTargetDeprovisioningLifecycle", func() {
 		}
 
 		targets := []DeprovisionTarget{
-			{Name: "fabric", Provider: fabricProvider},
-			{Name: "k8s", Provider: k8sProvider},
+			{Name: "fabric", Provider: fabricProvider, CheckAPIServer: noAPIServerJob},
+			{Name: "k8s", Provider: k8sProvider, CheckAPIServer: noAPIServerJob},
 		}
 
-		result, done, err := RunMultiTargetDeprovisioningLifecycle(ctx, targets, resource, &jobs, maxHistory, pollInterval)
+		result, done, err := RunMultiTargetDeprovisioningLifecycle(ctx, targets, resource, &jobs, maxHistory, pollInterval, nil)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(done).To(BeFalse())
 		Expect(fabricRetriggered).To(BeFalse(), "backoff has not elapsed yet, should not retrigger immediately")
@@ -1188,11 +1189,11 @@ var _ = ginkgo.Describe("RunMultiTargetDeprovisioningLifecycle", func() {
 		}
 
 		targets := []DeprovisionTarget{
-			{Name: "fabric", Provider: fabricProvider},
-			{Name: "k8s", Provider: k8sProvider},
+			{Name: "fabric", Provider: fabricProvider, CheckAPIServer: noAPIServerJob},
+			{Name: "k8s", Provider: k8sProvider, CheckAPIServer: noAPIServerJob},
 		}
 
-		_, _, err := RunMultiTargetDeprovisioningLifecycle(ctx, targets, resource, &jobs, maxHistory, pollInterval)
+		_, _, err := RunMultiTargetDeprovisioningLifecycle(ctx, targets, resource, &jobs, maxHistory, pollInterval, nil)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(FindLatestJobByTypeAndTarget(jobs, v1alpha1.JobTypeProvision, "fabric").State).To(Equal(v1alpha1.JobStateFailed))
 		Expect(FindLatestJobByTypeAndTarget(jobs, v1alpha1.JobTypeProvision, "k8s").State).To(Equal(v1alpha1.JobStateRunning))
@@ -1212,11 +1213,11 @@ var _ = ginkgo.Describe("RunMultiTargetDeprovisioningLifecycle", func() {
 		jobs := []v1alpha1.JobStatus{}
 
 		targets := []DeprovisionTarget{
-			{Name: "fabric", Provider: fabricProvider},
-			{Name: "k8s", Provider: k8sProvider},
+			{Name: "fabric", Provider: fabricProvider, CheckAPIServer: noAPIServerJob},
+			{Name: "k8s", Provider: k8sProvider, CheckAPIServer: noAPIServerJob},
 		}
 
-		result, done, err := RunMultiTargetDeprovisioningLifecycle(ctx, targets, resource, &jobs, maxHistory, pollInterval)
+		result, done, err := RunMultiTargetDeprovisioningLifecycle(ctx, targets, resource, &jobs, maxHistory, pollInterval, nil)
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("fabric"))
 		Expect(err.Error()).To(ContainSubstring("fabric API unreachable"))
@@ -1227,26 +1228,35 @@ var _ = ginkgo.Describe("RunMultiTargetDeprovisioningLifecycle", func() {
 
 	ginkgo.It("returns an error without panicking when targets is empty", func() {
 		jobs := []v1alpha1.JobStatus{}
-		_, _, err := RunMultiTargetDeprovisioningLifecycle(ctx, []DeprovisionTarget{}, resource, &jobs, maxHistory, pollInterval)
+		_, _, err := RunMultiTargetDeprovisioningLifecycle(ctx, []DeprovisionTarget{}, resource, &jobs, maxHistory, pollInterval, nil)
 		Expect(err).To(HaveOccurred())
 	})
 
 	ginkgo.It("returns an error when target Names are duplicated", func() {
 		jobs := []v1alpha1.JobStatus{}
 		targets := []DeprovisionTarget{
-			{Name: "fabric", Provider: &mockProvider{}},
-			{Name: "fabric", Provider: &mockProvider{}},
+			{Name: "fabric", Provider: &mockProvider{}, CheckAPIServer: noAPIServerJob},
+			{Name: "fabric", Provider: &mockProvider{}, CheckAPIServer: noAPIServerJob},
 		}
-		_, _, err := RunMultiTargetDeprovisioningLifecycle(ctx, targets, resource, &jobs, maxHistory, pollInterval)
+		_, _, err := RunMultiTargetDeprovisioningLifecycle(ctx, targets, resource, &jobs, maxHistory, pollInterval, nil)
+		Expect(err).To(HaveOccurred())
+	})
+
+	ginkgo.It("returns an error when a target has a nil CheckAPIServer", func() {
+		jobs := []v1alpha1.JobStatus{}
+		targets := []DeprovisionTarget{
+			{Name: "fabric", Provider: &mockProvider{}, CheckAPIServer: nil},
+		}
+		_, _, err := RunMultiTargetDeprovisioningLifecycle(ctx, targets, resource, &jobs, maxHistory, pollInterval, nil)
 		Expect(err).To(HaveOccurred())
 	})
 
 	ginkgo.It("returns an error when a target has a nil Provider", func() {
 		jobs := []v1alpha1.JobStatus{}
 		targets := []DeprovisionTarget{
-			{Name: "fabric", Provider: nil},
+			{Name: "fabric", Provider: nil, CheckAPIServer: noAPIServerJob},
 		}
-		_, _, err := RunMultiTargetDeprovisioningLifecycle(ctx, targets, resource, &jobs, maxHistory, pollInterval)
+		_, _, err := RunMultiTargetDeprovisioningLifecycle(ctx, targets, resource, &jobs, maxHistory, pollInterval, nil)
 		Expect(err).To(HaveOccurred())
 	})
 
@@ -1261,10 +1271,10 @@ var _ = ginkgo.Describe("RunMultiTargetDeprovisioningLifecycle", func() {
 		}
 
 		targets := []DeprovisionTarget{
-			{Name: "fabric", Provider: fabricProvider},
+			{Name: "fabric", Provider: fabricProvider, CheckAPIServer: noAPIServerJob},
 		}
 
-		result, done, err := RunMultiTargetDeprovisioningLifecycle(ctx, targets, resource, &jobs, maxHistory, pollInterval)
+		result, done, err := RunMultiTargetDeprovisioningLifecycle(ctx, targets, resource, &jobs, maxHistory, pollInterval, nil)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(done).To(BeTrue())
 		Expect(result).To(Equal(ctrl.Result{}))
@@ -1284,13 +1294,13 @@ var _ = ginkgo.Describe("RunMultiTargetDeprovisioningLifecycle", func() {
 		jobs := []v1alpha1.JobStatus{}
 
 		targets := []DeprovisionTarget{
-			{Name: "fabric", Provider: fabricProvider},
-			{Name: "k8s", Provider: k8sProvider},
+			{Name: "fabric", Provider: fabricProvider, CheckAPIServer: noAPIServerJob},
+			{Name: "k8s", Provider: k8sProvider, CheckAPIServer: noAPIServerJob},
 		}
 
 		// First call: neither target has a job yet — both are triggered
 		// (Pending), so neither can be done in the same call.
-		result, done, err := RunMultiTargetDeprovisioningLifecycle(ctx, targets, resource, &jobs, maxHistory, pollInterval)
+		result, done, err := RunMultiTargetDeprovisioningLifecycle(ctx, targets, resource, &jobs, maxHistory, pollInterval, nil)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(done).To(BeFalse())
 		Expect(result.RequeueAfter).To(Equal(pollInterval))
@@ -1302,7 +1312,7 @@ var _ = ginkgo.Describe("RunMultiTargetDeprovisioningLifecycle", func() {
 		k8sProvider.getDeprovisionStatusFunc = func(_ context.Context, _ client.Object, _ string) (ProvisionStatus, error) {
 			return ProvisionStatus{State: v1alpha1.JobStateSucceeded}, nil
 		}
-		result, done, err = RunMultiTargetDeprovisioningLifecycle(ctx, targets, resource, &jobs, maxHistory, pollInterval)
+		result, done, err = RunMultiTargetDeprovisioningLifecycle(ctx, targets, resource, &jobs, maxHistory, pollInterval, nil)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(done).To(BeTrue())
 		Expect(result).To(Equal(ctrl.Result{}))

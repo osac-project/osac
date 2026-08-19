@@ -22,72 +22,22 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
-	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 )
 
 var _ = Describe("Network classes server", func() {
-	Describe("Creation", func() {
-		It("Can be built if all the required parameters are set", func() {
-			server, err := NewNetworkClassesServer().
-				SetLogger(logger).
-				SetAttributionLogic(attribution).
-				SetTenancyLogic(tenancy).
-				Build()
-			Expect(err).ToNot(HaveOccurred())
-			Expect(server).ToNot(BeNil())
-		})
-
-		It("Fails if logger is not set", func() {
-			server, err := NewNetworkClassesServer().
-				SetAttributionLogic(attribution).
-				SetTenancyLogic(tenancy).
-				Build()
-			Expect(err).To(MatchError("logger is mandatory"))
-			Expect(server).To(BeNil())
-		})
-
-		It("Fails if attribution logic is not set", func() {
-			server, err := NewNetworkClassesServer().
-				SetLogger(logger).
-				SetTenancyLogic(tenancy).
-				Build()
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("attribution logic is mandatory"))
-			Expect(server).To(BeNil())
-		})
-
-		It("Fails if tenancy logic is not set", func() {
-			server, err := NewNetworkClassesServer().
-				SetLogger(logger).
-				SetAttributionLogic(attribution).
-				Build()
-			Expect(err).To(MatchError("tenancy logic is mandatory"))
-			Expect(server).To(BeNil())
-		})
-	})
-
 	Describe("Behaviour", func() {
 		var (
-			publicServer  *NetworkClassesServer
 			privateServer *PrivateNetworkClassesServer
 		)
 
 		BeforeEach(func() {
 			var err error
 
-			// Create the public server:
-			publicServer, err = NewNetworkClassesServer().
-				SetLogger(logger).
-				SetAttributionLogic(attribution).
-				SetTenancyLogic(tenancy).
-				Build()
-			Expect(err).ToNot(HaveOccurred())
-
-			// Create a private server for test data setup (private API requires
-			// implementation_strategy which is not exposed in public API):
+			// NetworkClass is a private-only (provider/system) resource — there is no public
+			// server for it.
 			privateServer, err = NewPrivateNetworkClassesServer().
 				SetLogger(logger).
 				SetAttributionLogic(attribution).
@@ -133,8 +83,8 @@ var _ = Describe("Network classes server", func() {
 				createNetworkClass()
 			}
 
-			// List the objects via public server:
-			response, err := publicServer.List(ctx, publicv1.NetworkClassesListRequest_builder{}.Build())
+			// List the objects via the private server:
+			response, err := privateServer.List(ctx, privatev1.NetworkClassesListRequest_builder{}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(response).ToNot(BeNil())
 			items := response.GetItems()
@@ -148,8 +98,8 @@ var _ = Describe("Network classes server", func() {
 				createNetworkClass()
 			}
 
-			// List the objects via public server:
-			response, err := publicServer.List(ctx, publicv1.NetworkClassesListRequest_builder{
+			// List the objects via the private server:
+			response, err := privateServer.List(ctx, privatev1.NetworkClassesListRequest_builder{
 				Limit: new(int32(1)),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -163,8 +113,8 @@ var _ = Describe("Network classes server", func() {
 				createNetworkClass()
 			}
 
-			// List the objects via public server:
-			response, err := publicServer.List(ctx, publicv1.NetworkClassesListRequest_builder{
+			// List the objects via the private server:
+			response, err := privateServer.List(ctx, privatev1.NetworkClassesListRequest_builder{
 				Offset: new(int32(1)),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -180,9 +130,9 @@ var _ = Describe("Network classes server", func() {
 				ids = append(ids, obj.GetId())
 			}
 
-			// List the objects via public server:
+			// List the objects via the private server:
 			for _, id := range ids {
-				response, err := publicServer.List(ctx, publicv1.NetworkClassesListRequest_builder{
+				response, err := privateServer.List(ctx, privatev1.NetworkClassesListRequest_builder{
 					Filter: new(fmt.Sprintf("this.id == '%s'", id)),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -193,28 +143,28 @@ var _ = Describe("Network classes server", func() {
 
 		It("Get object", func() {
 			// Create the object via the private server:
-			privateObj := createNetworkClass()
+			createdObj := createNetworkClass()
 
-			// Get it via public server:
-			getResponse, err := publicServer.Get(ctx, publicv1.NetworkClassesGetRequest_builder{
-				Id: privateObj.GetId(),
+			// Get it via the private server:
+			getResponse, err := privateServer.Get(ctx, privatev1.NetworkClassesGetRequest_builder{
+				Id: createdObj.GetId(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			publicObj := getResponse.GetObject()
-			Expect(publicObj.GetId()).To(Equal(privateObj.GetId()))
-			Expect(publicObj.GetTitle()).To(Equal(privateObj.GetTitle()))
+			fetchedObj := getResponse.GetObject()
+			Expect(fetchedObj.GetId()).To(Equal(createdObj.GetId()))
+			Expect(fetchedObj.GetTitle()).To(Equal(createdObj.GetTitle()))
 		})
 
 		It("Update object", func() {
 			// Create the object via the private server:
-			privateObj := createNetworkClass()
-			name := privateObj.GetMetadata().GetName()
+			createdObj := createNetworkClass()
+			name := createdObj.GetMetadata().GetName()
 
-			// Update the object via public server:
-			updateResponse, err := publicServer.Update(ctx, publicv1.NetworkClassesUpdateRequest_builder{
-				Object: publicv1.NetworkClass_builder{
-					Id:          privateObj.GetId(),
-					Metadata:    publicv1.Metadata_builder{Name: name}.Build(),
+			// Update the object via the private server:
+			updateResponse, err := privateServer.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
+				Object: privatev1.NetworkClass_builder{
+					Id:          createdObj.GetId(),
+					Metadata:    privatev1.Metadata_builder{Name: name}.Build(),
 					Title:       "Your title",
 					Description: "Your description.",
 				}.Build(),
@@ -223,9 +173,9 @@ var _ = Describe("Network classes server", func() {
 			Expect(updateResponse.GetObject().GetTitle()).To(Equal("Your title"))
 			Expect(updateResponse.GetObject().GetDescription()).To(Equal("Your description."))
 
-			// Get and verify via public server:
-			getResponse, err := publicServer.Get(ctx, publicv1.NetworkClassesGetRequest_builder{
-				Id: privateObj.GetId(),
+			// Get and verify via the private server:
+			getResponse, err := privateServer.Get(ctx, privatev1.NetworkClassesGetRequest_builder{
+				Id: createdObj.GetId(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(getResponse.GetObject().GetTitle()).To(Equal("Your title"))
@@ -234,29 +184,28 @@ var _ = Describe("Network classes server", func() {
 
 		It("Delete object", func() {
 			// Create the object via the private server:
-			privateObj := createNetworkClass()
+			createdObj := createNetworkClass()
 
 			// Add a finalizer, as otherwise the object will be immediately deleted and archived and it
-			// won't be possible to verify the deletion timestamp. This can't be done using the server
-			// because this is a public object, and public objects don't have the finalizers field.
+			// won't be possible to verify the deletion timestamp.
 			tx, err := database.TxFromContext(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			_, err = tx.Exec(
 				ctx,
 				`update network_classes set finalizers = '{"a"}' where id = $1`,
-				privateObj.GetId(),
+				createdObj.GetId(),
 			)
 			Expect(err).ToNot(HaveOccurred())
 
-			// Delete the object via public server:
-			_, err = publicServer.Delete(ctx, publicv1.NetworkClassesDeleteRequest_builder{
-				Id: privateObj.GetId(),
+			// Delete the object via the private server:
+			_, err = privateServer.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{
+				Id: createdObj.GetId(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 
-			// Get and verify via public server:
-			getResponse, err := publicServer.Get(ctx, publicv1.NetworkClassesGetRequest_builder{
-				Id: privateObj.GetId(),
+			// Get and verify via the private server:
+			getResponse, err := privateServer.Get(ctx, privatev1.NetworkClassesGetRequest_builder{
+				Id: createdObj.GetId(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			object := getResponse.GetObject()
@@ -281,13 +230,13 @@ var _ = Describe("Network classes server", func() {
 		})
 
 		Describe("Default NetworkClass", func() {
-			It("Create NC with is_default=true is visible via public Get", func() {
+			It("Create NC with is_default=true is visible via Get", func() {
 				// Create via private server with is_default=true:
 				ncA := createDefaultNetworkClass()
 				Expect(ncA.GetIsDefault()).To(BeTrue())
 
-				// Get via public server and verify is_default is visible:
-				getResponse, err := publicServer.Get(ctx, publicv1.NetworkClassesGetRequest_builder{
+				// Get via private server and verify is_default is visible:
+				getResponse, err := privateServer.Get(ctx, privatev1.NetworkClassesGetRequest_builder{
 					Id: ncA.GetId(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -422,56 +371,6 @@ var _ = Describe("Network classes server", func() {
 				Expect(getResponse.GetObject().GetIsDefault()).To(BeTrue())
 			})
 
-			It("Public Update preserves is_default when changing other fields", func() {
-				// Create NC-A as default via private server:
-				ncA := createDefaultNetworkClass()
-				Expect(ncA.GetIsDefault()).To(BeTrue())
-				name := ncA.GetMetadata().GetName()
-
-				// Do a public Update changing only the title (not touching is_default):
-				_, err := publicServer.Update(ctx, publicv1.NetworkClassesUpdateRequest_builder{
-					Object: publicv1.NetworkClass_builder{
-						Id:       ncA.GetId(),
-						Title:    "Updated Title",
-						Metadata: publicv1.Metadata_builder{Name: name}.Build(),
-					}.Build(),
-				}.Build())
-				Expect(err).ToNot(HaveOccurred())
-
-				// Verify is_default is still true via public Get:
-				getResponse, err := publicServer.Get(ctx, publicv1.NetworkClassesGetRequest_builder{
-					Id: ncA.GetId(),
-				}.Build())
-				Expect(err).ToNot(HaveOccurred())
-				Expect(getResponse.GetObject().GetIsDefault()).To(BeTrue())
-				Expect(getResponse.GetObject().GetTitle()).To(Equal("Updated Title"))
-			})
-
-			It("Public API cannot clear is_default via Update", func() {
-				// Create NC-A as default via private server:
-				ncA := createDefaultNetworkClass()
-				Expect(ncA.GetIsDefault()).To(BeTrue())
-				name := ncA.GetMetadata().GetName()
-
-				// Attempt public Update with is_default=false (AddIgnoredFields should prevent it):
-				_, err := publicServer.Update(ctx, publicv1.NetworkClassesUpdateRequest_builder{
-					Object: publicv1.NetworkClass_builder{
-						Id:        ncA.GetId(),
-						Title:     ncA.GetTitle(),
-						IsDefault: new(false),
-						Metadata:  publicv1.Metadata_builder{Name: name}.Build(),
-					}.Build(),
-				}.Build())
-				Expect(err).ToNot(HaveOccurred())
-
-				// Verify is_default is still true (the public inMapper ignores is_default):
-				getResponse, err := publicServer.Get(ctx, publicv1.NetworkClassesGetRequest_builder{
-					Id: ncA.GetId(),
-				}.Build())
-				Expect(err).ToNot(HaveOccurred())
-				Expect(getResponse.GetObject().GetIsDefault()).To(BeTrue())
-			})
-
 			It("Multiple defaults fallback: newest by creation_timestamp wins", func() {
 				// Drop the unique index to simulate a race condition where creation of two default
 				// network classes succeed.
@@ -549,7 +448,7 @@ var _ = Describe("Network classes server", func() {
 				Expect(getResponseA.GetObject().GetIsDefault()).To(BeFalse())
 
 				// NC-C is the new default:
-				getResponseC, err := publicServer.Get(ctx, publicv1.NetworkClassesGetRequest_builder{
+				getResponseC, err := privateServer.Get(ctx, privatev1.NetworkClassesGetRequest_builder{
 					Id: ncC.GetId(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -831,7 +730,7 @@ var _ = Describe("Network classes server", func() {
 				Expect(ncA.GetIsDefault()).To(BeTrue())
 
 				// Delete NC-A immediately (no finalizers so it is hard-deleted):
-				_, err := publicServer.Delete(ctx, publicv1.NetworkClassesDeleteRequest_builder{
+				_, err := privateServer.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{
 					Id: ncA.GetId(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -1409,68 +1308,6 @@ var _ = Describe("Network classes server", func() {
 				Expect(err).To(HaveOccurred())
 			})
 
-			It("Public API returns defaults as OUTPUT_ONLY", func() {
-				nc := createNetworkClassWithDefaults(validDefaults())
-
-				getResponse, err := publicServer.Get(ctx, publicv1.NetworkClassesGetRequest_builder{
-					Id: nc.GetId(),
-				}.Build())
-				Expect(err).ToNot(HaveOccurred())
-				publicNC := getResponse.GetObject()
-				Expect(publicNC.GetSpec().GetDefaults()).ToNot(BeNil())
-				Expect(publicNC.GetSpec().GetDefaults().GetVirtualNetworkIpv4Cidr()).To(Equal("10.0.0.0/16"))
-				Expect(publicNC.GetSpec().GetDefaults().GetSubnetIpv4Cidr()).To(Equal("10.0.1.0/24"))
-				Expect(publicNC.GetSpec().GetDefaults().GetIngressRules()).To(HaveLen(1))
-			})
-
-			It("Public API cannot set defaults via Update", func() {
-				// Create NC via private API (no defaults):
-				nc := createNetworkClass()
-				Expect(nc.GetSpec().GetDefaults()).To(BeNil())
-				name := nc.GetMetadata().GetName()
-				// Attempt to set defaults via public Update — inMapper should ignore the field:
-				publicDefaults := publicv1.NetworkDefaults_builder{
-					VirtualNetworkIpv4Cidr: "10.0.0.0/16",
-					SubnetIpv4Cidr:         "10.0.1.0/24",
-				}.Build()
-				_, err := publicServer.Update(ctx, publicv1.NetworkClassesUpdateRequest_builder{
-					Object: publicv1.NetworkClass_builder{
-						Id:       nc.GetId(),
-						Title:    nc.GetTitle(),
-						Metadata: publicv1.Metadata_builder{Name: name}.Build(),
-						Spec:     publicv1.NetworkClassSpec_builder{Defaults: publicDefaults}.Build(),
-					}.Build(),
-				}.Build())
-				Expect(err).ToNot(HaveOccurred())
-
-				// Get via private API to confirm defaults were not persisted:
-				getResponse, err := privateServer.Get(ctx, privatev1.NetworkClassesGetRequest_builder{
-					Id: nc.GetId(),
-				}.Build())
-				Expect(err).ToNot(HaveOccurred())
-				Expect(getResponse.GetObject().GetSpec().GetDefaults()).To(BeNil())
-			})
-
-			It("Public Update preserves defaults set via private API", func() {
-				nc := createNetworkClassWithDefaults(validDefaults())
-				name := nc.GetMetadata().GetName()
-				_, err := publicServer.Update(ctx, publicv1.NetworkClassesUpdateRequest_builder{
-					Object: publicv1.NetworkClass_builder{
-						Id:       nc.GetId(),
-						Metadata: publicv1.Metadata_builder{Name: name}.Build(),
-						Title:    "Updated title",
-					}.Build(),
-				}.Build())
-				Expect(err).ToNot(HaveOccurred())
-
-				getResponse, err := publicServer.Get(ctx, publicv1.NetworkClassesGetRequest_builder{
-					Id: nc.GetId(),
-				}.Build())
-				Expect(err).ToNot(HaveOccurred())
-				Expect(getResponse.GetObject().GetSpec().GetDefaults()).ToNot(BeNil())
-				Expect(getResponse.GetObject().GetSpec().GetDefaults().GetVirtualNetworkIpv4Cidr()).To(Equal("10.0.0.0/16"))
-				Expect(getResponse.GetObject().GetTitle()).To(Equal("Updated title"))
-			})
 		})
 
 		Describe("DisableCapabilities", func() {
@@ -1694,69 +1531,6 @@ var _ = Describe("Network classes server", func() {
 					Equal("10.0.0.0/16"))
 			})
 
-			It("Public API returns disable_capabilities as OUTPUT_ONLY", func() {
-				nc := createWithDisableCapabilities(privatev1.NetworkClassCapabilities_builder{
-					SupportsIpv6: true,
-					DpuSupport:   true,
-				}.Build())
-
-				getResponse, err := publicServer.Get(ctx, publicv1.NetworkClassesGetRequest_builder{
-					Id: nc.GetId(),
-				}.Build())
-				Expect(err).ToNot(HaveOccurred())
-				publicNC := getResponse.GetObject()
-				Expect(publicNC.GetSpec().GetDisableCapabilities().GetSupportsIpv6()).To(BeTrue())
-				Expect(publicNC.GetSpec().GetDisableCapabilities().GetDpuSupport()).To(BeTrue())
-			})
-
-			It("Public Update does not overwrite disable_capabilities set via private API", func() {
-				nc := createWithDisableCapabilities(privatev1.NetworkClassCapabilities_builder{
-					SupportsIpv6: true,
-				}.Build())
-				name := nc.GetMetadata().GetName()
-				_, err := publicServer.Update(ctx, publicv1.NetworkClassesUpdateRequest_builder{
-					Object: publicv1.NetworkClass_builder{
-						Id:       nc.GetId(),
-						Title:    nc.GetTitle(),
-						Metadata: publicv1.Metadata_builder{Name: name}.Build(),
-						Spec: publicv1.NetworkClassSpec_builder{
-							DisableCapabilities: publicv1.NetworkClassCapabilities_builder{
-								DpuSupport: true,
-							}.Build(),
-						}.Build(),
-					}.Build(),
-				}.Build())
-				Expect(err).ToNot(HaveOccurred())
-
-				getResponse, err := privateServer.Get(ctx, privatev1.NetworkClassesGetRequest_builder{
-					Id: nc.GetId(),
-				}.Build())
-				Expect(err).ToNot(HaveOccurred())
-				Expect(getResponse.GetObject().GetSpec().GetDisableCapabilities().GetSupportsIpv6()).To(BeTrue())
-				Expect(getResponse.GetObject().GetSpec().GetDisableCapabilities().GetDpuSupport()).To(BeFalse())
-			})
-
-			It("Public Update preserves disable_capabilities when changing other fields", func() {
-				nc := createWithDisableCapabilities(privatev1.NetworkClassCapabilities_builder{
-					SupportsIpv6: true,
-				}.Build())
-				name := nc.GetMetadata().GetName()
-				_, err := publicServer.Update(ctx, publicv1.NetworkClassesUpdateRequest_builder{
-					Object: publicv1.NetworkClass_builder{
-						Id:       nc.GetId(),
-						Metadata: publicv1.Metadata_builder{Name: name}.Build(),
-						Title:    "Updated title",
-					}.Build(),
-				}.Build())
-				Expect(err).ToNot(HaveOccurred())
-
-				getResponse, err := publicServer.Get(ctx, publicv1.NetworkClassesGetRequest_builder{
-					Id: nc.GetId(),
-				}.Build())
-				Expect(err).ToNot(HaveOccurred())
-				Expect(getResponse.GetObject().GetSpec().GetDisableCapabilities().GetSupportsIpv6()).To(BeTrue())
-				Expect(getResponse.GetObject().GetTitle()).To(Equal("Updated title"))
-			})
 		})
 	})
 })

@@ -705,32 +705,33 @@ var _ = Describe("Tenant edge cases and resilience", func() {
 
 var _ = Describe("Multi-tenant resource isolation", func() {
 	var (
-		tenantsClient        privatev1.TenantsClient
-		networkClassesClient privatev1.NetworkClassesClient
-		vnAdminClient        privatev1.VirtualNetworksClient
-		networkClassId       string
+		tenantsClient      privatev1.TenantsClient
+		vnAdminClient      privatev1.VirtualNetworksClient
+		networkClassClient privatev1.NetworkClassesClient
 	)
 
 	BeforeEach(func(ctx context.Context) {
 		tenantsClient = privatev1.NewTenantsClient(tool.InternalView().AdminConn())
-		networkClassesClient = privatev1.NewNetworkClassesClient(tool.InternalView().AdminConn())
 		vnAdminClient = privatev1.NewVirtualNetworksClient(tool.InternalView().AdminConn())
+		networkClassClient = privatev1.NewNetworkClassesClient(tool.InternalView().AdminConn())
 
-		By("Creating a shared NetworkClass prerequisite")
-		ncName := fmt.Sprintf("cudn-tenant-%s", uuid.New())
-		ncResp, err := networkClassesClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
+		// The public VirtualNetworks API no longer accepts a network_class, so creation
+		// falls back to the default NetworkClass. Seed one for the duration of each test.
+		ncResp, err := networkClassClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 			Object: privatev1.NetworkClass_builder{
-				Metadata:               privatev1.Metadata_builder{Name: ncName}.Build(),
-				Title:                  "Phase 4 Isolation Test",
-				ImplementationStrategy: "cudn",
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("test-default-nc-%s", uuid.New()),
+				}.Build(),
+				Title:                  "Default Network Class",
+				ImplementationStrategy: fmt.Sprintf("ovn-%s", uuid.New()),
 				FabricManager:          new("netris"),
+				IsDefault:              new(true),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		networkClassId = ncResp.GetObject().GetId()
 		DeferCleanup(func() {
-			_, _ = networkClassesClient.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{
-				Id: networkClassId,
+			_, _ = networkClassClient.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{
+				Id: ncResp.GetObject().GetId(),
 			}.Build())
 		})
 	})
@@ -765,8 +766,7 @@ var _ = Describe("Multi-tenant resource isolation", func() {
 					Name: fmt.Sprintf("vn-%s", uuid.New()),
 				}.Build(),
 				Spec: publicv1.VirtualNetworkSpec_builder{
-					NetworkClass: publicv1.NetworkClassReference_builder{Id: networkClassId}.Build(),
-					Ipv4Cidr:     &ipv4Cidr,
+					Ipv4Cidr: &ipv4Cidr,
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -834,8 +834,7 @@ var _ = Describe("Multi-tenant resource isolation", func() {
 					Name: fmt.Sprintf("vn-%s", uuid.New()),
 				}.Build(),
 				Spec: publicv1.VirtualNetworkSpec_builder{
-					NetworkClass: publicv1.NetworkClassReference_builder{Id: networkClassId}.Build(),
-					Ipv4Cidr:     &ipv4Cidr,
+					Ipv4Cidr: &ipv4Cidr,
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -892,8 +891,7 @@ var _ = Describe("Multi-tenant resource isolation", func() {
 					Name: fmt.Sprintf("vn-a-%s", uuid.New()),
 				}.Build(),
 				Spec: publicv1.VirtualNetworkSpec_builder{
-					NetworkClass: publicv1.NetworkClassReference_builder{Id: networkClassId}.Build(),
-					Ipv4Cidr:     &ipv4CidrA,
+					Ipv4Cidr: &ipv4CidrA,
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -914,8 +912,7 @@ var _ = Describe("Multi-tenant resource isolation", func() {
 					Name: fmt.Sprintf("vn-b-%s", uuid.New()),
 				}.Build(),
 				Spec: publicv1.VirtualNetworkSpec_builder{
-					NetworkClass: publicv1.NetworkClassReference_builder{Id: networkClassId}.Build(),
-					Ipv4Cidr:     &ipv4CidrB,
+					Ipv4Cidr: &ipv4CidrB,
 				}.Build(),
 			}.Build(),
 		}.Build())

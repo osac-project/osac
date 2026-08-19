@@ -21,7 +21,7 @@ Compute Resources:
   DiskImage → disk image source (registry, URL)
 
 Networking Resources:
-  NetworkClass (platform-defined, read-only for tenants)
+  NetworkClass (platform-defined, internal)
   └── VirtualNetwork (tenant L2 network with CIDR)
         ├── Subnet (CIDR range within VirtualNetwork)
         ├── SecurityGroup (firewall rules scoped to VirtualNetwork)

@@ -52,7 +52,6 @@ func registerReferenceLookups(
 		return fmt.Errorf("failed to create NetworkClass DAO for reference lookups: %w", err)
 	}
 	references.RegisterDAOLookup(validator, "osac.private.v1.NetworkClassReference", networkClassesDAO)
-	references.RegisterDAOLookup(validator, "osac.public.v1.NetworkClassReference", networkClassesDAO)
 
 	subnetsDAO, err := dao.NewGenericDAO[*privatev1.Subnet]().
 		SetLogger(logger).

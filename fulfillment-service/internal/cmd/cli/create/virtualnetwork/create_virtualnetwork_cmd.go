@@ -47,12 +47,6 @@ func Cmd() *cobra.Command {
 		nameFlagHelp,
 	)
 	flags.StringVar(
-		&runner.args.networkClass,
-		"network-class",
-		"",
-		networkClassFlagHelp,
-	)
-	flags.StringVar(
 		&runner.args.ipv4Cidr,
 		"ipv4-cidr",
 		"",
@@ -69,10 +63,9 @@ func Cmd() *cobra.Command {
 
 type runnerContext struct {
 	args struct {
-		name         string
-		networkClass string
-		ipv4Cidr     string
-		ipv6Cidr     string
+		name     string
+		ipv4Cidr string
+		ipv6Cidr string
 	}
 	logger   *slog.Logger
 	console  *terminal.Console
@@ -90,9 +83,6 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("there is no configuration, run the 'login' command")
 	}
 
-	if err := validateNetworkClass(c.args.networkClass); err != nil {
-		return err
-	}
 	if err := netutil.ValidateCIDRs(c.args.ipv4Cidr, c.args.ipv6Cidr); err != nil {
 		return err
 	}
@@ -105,9 +95,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 	client := publicv1.NewVirtualNetworksClient(conn)
 
-	spec := publicv1.VirtualNetworkSpec_builder{
-		NetworkClass: &publicv1.NetworkClassReference{Name: c.args.networkClass},
-	}
+	spec := publicv1.VirtualNetworkSpec_builder{}
 	if c.args.ipv4Cidr != "" {
 		spec.Ipv4Cidr = &c.args.ipv4Cidr
 	}
@@ -132,39 +120,28 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func validateNetworkClass(networkClass string) error {
-	if networkClass == "" {
-		return fmt.Errorf("network class is required")
-	}
-	return nil
-}
-
 const shortHelp = `Create a virtual network`
 
 const longHelp = `
-Create a virtual network with the specified network class and IP addressing
-configuration. At least one of {{ bt }}--ipv4-cidr{{ bt }} or
-{{ bt }}--ipv6-cidr{{ bt }} must be provided.
+Create a virtual network with the specified IP addressing configuration. At
+least one of {{ bt }}--ipv4-cidr{{ bt }} or {{ bt }}--ipv6-cidr{{ bt }} must
+be provided.
 
 To create an IPv4-only virtual network:
 
 {{ bt 3 }}shell
-{{ binary }} create virtualnetwork --name my-network --network-class udn-net --ipv4-cidr 10.0.0.0/16
+{{ binary }} create virtualnetwork --name my-network --ipv4-cidr 10.0.0.0/16
 {{ bt 3 }}
 
 To create a dual-stack virtual network:
 
 {{ bt 3 }}shell
-{{ binary }} create virtualnetwork --name my-network --network-class udn-net --ipv4-cidr 10.0.0.0/16 --ipv6-cidr fd00::/64
+{{ binary }} create virtualnetwork --name my-network --ipv4-cidr 10.0.0.0/16 --ipv6-cidr fd00::/64
 {{ bt 3 }}
 `
 
 const nameFlagHelp = `
 _NAME_ - Name of the virtual network.
-`
-
-const networkClassFlagHelp = `
-_CLASS_ - Network class to use for this virtual network.
 `
 
 const ipv4CidrFlagHelp = `

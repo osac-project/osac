@@ -17,20 +17,17 @@ package osac.public.v1;
 
 import "google/api/field_behavior.proto";
 import "osac/public/v1/metadata_type.proto";
-import "osac/public/v1/network_class_type.proto";
 
 // Represents a tenant-isolated virtual network.
 //
 // VirtualNetwork provides network isolation for compute instances within a region. Each VirtualNetwork is backed
-// by a specific NetworkClass implementation strategy (e.g., "udn-net" for User-Defined Networks, "phys-net" for
-// physical network infrastructure).
+// by a NetworkClass implementation strategy (e.g., "udn-net" for User-Defined Networks, "phys-net" for physical
+// network infrastructure) that is selected and managed by the system; tenants do not see or set it directly.
 //
 // VirtualNetworks support flexible IP addressing:
 // - IPv4-only: Set ipv4_cidr, leave ipv6_cidr empty
 // - IPv6-only: Set ipv6_cidr, leave ipv4_cidr empty
 // - Dual-stack: Set both ipv4_cidr and ipv6_cidr
-//
-// The selected NetworkClass must support the requested IP addressing mode via its capabilities.
 //
 // Tenant isolation is enforced via the standard Metadata tenant field. VirtualNetworks are scoped to
 // a single region and cannot span multiple regions.
@@ -53,18 +50,9 @@ message VirtualNetwork {
 // The spec contains user-specified parameters that define how the network should be configured. These fields
 // follow a declarative model where users specify the desired state and the system reconciles to match it.
 message VirtualNetworkSpec {
-  // NetworkClass to use for this network.
-  //
-  // The selected NetworkClass determines the network type and available capabilities.
-  // The NetworkClass must support the IP addressing mode implied by whichever of ipv4_cidr and ipv6_cidr
-  // are set below.
-  //
-  // If omitted on creation and a default NetworkClass is configured, the default is used;
-  // otherwise creation fails. Once set, this field is immutable.
-  NetworkClassReference network_class = 2 [
-    (google.api.field_behavior) = OPTIONAL,
-    (google.api.field_behavior) = IMMUTABLE
-  ];
+  // Reserved field numbers for removed fields (do not reuse).
+  reserved 2;
+  reserved "network_class";
 
   // IPv4 CIDR block for this network. Optional for IPv6-only networks. Immutable after creation.
   //

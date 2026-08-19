@@ -674,7 +674,7 @@ The fulfillment service implements a comprehensive authorization model that comb
 
 **Permissions:** Read/write access to infrastructure resources:
 - Bare-metal instances, clusters, compute instances, disk images
-- Networking (virtual networks, subnets, network classes, security groups)
+- Networking (virtual networks, subnets, security groups)
 - IPs (external IPs and their attachments/pools)
 - Templates and catalog items (read-only)
 - Console sessions, events, host types, instance types

@@ -38,9 +38,8 @@ var _ = Describe("Describe Virtual Network", func() {
 					Name: "example-vn",
 				}.Build(),
 				Spec: publicv1.VirtualNetworkSpec_builder{
-					NetworkClass: publicv1.NetworkClassReference_builder{Id: "udn-net"}.Build(),
-					Ipv4Cidr:     new("10.0.0.0/16"),
-					Ipv6Cidr:     new("2001:db8::/48"),
+					Ipv4Cidr: new("10.0.0.0/16"),
+					Ipv6Cidr: new("2001:db8::/48"),
 				}.Build(),
 				Status: publicv1.VirtualNetworkStatus_builder{
 					State:   publicv1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
@@ -51,7 +50,6 @@ var _ = Describe("Describe Virtual Network", func() {
 			output := formatVirtualNetwork(vn)
 			Expect(output).To(ContainSubstring("vnet-001"))
 			Expect(output).To(ContainSubstring("example-vn"))
-			Expect(output).To(ContainSubstring("udn-net"))
 			Expect(output).To(ContainSubstring("10.0.0.0/16"))
 			Expect(output).To(ContainSubstring("2001:db8::/48"))
 			Expect(output).To(ContainSubstring("READY"))
@@ -60,10 +58,8 @@ var _ = Describe("Describe Virtual Network", func() {
 
 		It("should show '-' for name, state, and message when status is nil", func() {
 			vn := publicv1.VirtualNetwork_builder{
-				Id: "vnet-002",
-				Spec: publicv1.VirtualNetworkSpec_builder{
-					NetworkClass: publicv1.NetworkClassReference_builder{Id: "udn-net"}.Build(),
-				}.Build(),
+				Id:   "vnet-002",
+				Spec: publicv1.VirtualNetworkSpec_builder{}.Build(),
 			}.Build()
 
 			output := formatVirtualNetwork(vn)
@@ -76,8 +72,7 @@ var _ = Describe("Describe Virtual Network", func() {
 			vn := publicv1.VirtualNetwork_builder{
 				Id: "vnet-003",
 				Spec: publicv1.VirtualNetworkSpec_builder{
-					NetworkClass: publicv1.NetworkClassReference_builder{Id: "udn-net"}.Build(),
-					Ipv6Cidr:     new("2001:db8::/48"),
+					Ipv6Cidr: new("2001:db8::/48"),
 				}.Build(),
 			}.Build()
 
@@ -90,8 +85,7 @@ var _ = Describe("Describe Virtual Network", func() {
 			vn := publicv1.VirtualNetwork_builder{
 				Id: "vnet-004",
 				Spec: publicv1.VirtualNetworkSpec_builder{
-					NetworkClass: publicv1.NetworkClassReference_builder{Id: "udn-net"}.Build(),
-					Ipv4Cidr:     new("10.0.0.0/16"),
+					Ipv4Cidr: new("10.0.0.0/16"),
 				}.Build(),
 			}.Build()
 
@@ -102,10 +96,8 @@ var _ = Describe("Describe Virtual Network", func() {
 
 		It("should strip VIRTUAL_NETWORK_STATE_ prefix from state", func() {
 			vn := publicv1.VirtualNetwork_builder{
-				Id: "vnet-005",
-				Spec: publicv1.VirtualNetworkSpec_builder{
-					NetworkClass: publicv1.NetworkClassReference_builder{Id: "udn-net"}.Build(),
-				}.Build(),
+				Id:   "vnet-005",
+				Spec: publicv1.VirtualNetworkSpec_builder{}.Build(),
 				Status: publicv1.VirtualNetworkStatus_builder{
 					State: publicv1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
 				}.Build(),
@@ -118,10 +110,8 @@ var _ = Describe("Describe Virtual Network", func() {
 
 		It("should show '-' for message when status has no message", func() {
 			vn := publicv1.VirtualNetwork_builder{
-				Id: "vnet-006",
-				Spec: publicv1.VirtualNetworkSpec_builder{
-					NetworkClass: publicv1.NetworkClassReference_builder{Id: "udn-net"}.Build(),
-				}.Build(),
+				Id:   "vnet-006",
+				Spec: publicv1.VirtualNetworkSpec_builder{}.Build(),
 				Status: publicv1.VirtualNetworkStatus_builder{
 					State: publicv1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING,
 				}.Build(),

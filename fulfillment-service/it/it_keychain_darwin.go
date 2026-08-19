@@ -17,13 +17,19 @@ package it
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 )
 
 const testKeychainPassword = "osac-it-test-keychain" // not a secret — keychain is deleted with the per-test $HOME at cleanup
+
+const securityBinPath = "/usr/bin/security" // SIP-protected, stable across macOS versions
+
+const keychainProvisionTimeout = 30 * time.Second
 
 // keychainEnv returns a minimal env slice scoped to the given homeDir, suitable for
 // subprocess calls that must resolve macOS keychain state from that directory.
@@ -68,15 +74,22 @@ func provisionTestKeychain(homeDir string) error {
 
 	keychainPath := filepath.Join(keychainDir, "login.keychain-db")
 
+	ctx, cancel := context.WithTimeout(context.Background(), keychainProvisionTimeout)
+	defer cancel()
+
 	env := keychainEnv(homeDir)
 
-	create := exec.Command("security", "create-keychain", "-p", testKeychainPassword, keychainPath)
+	create := exec.CommandContext(ctx, securityBinPath, "create-keychain", "-p", testKeychainPassword, keychainPath)
 	create.Env = env
 	if out, err := create.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to create test keychain: %w: %s", err, bytes.TrimSpace(out))
 	}
 
-	setDefault := exec.Command("security", "default-keychain", "-s", keychainPath)
+	if err := os.Chmod(keychainPath, 0600); err != nil {
+		return fmt.Errorf("failed to restrict keychain file permissions: %w", err)
+	}
+
+	setDefault := exec.CommandContext(ctx, securityBinPath, "default-keychain", "-s", keychainPath)
 	setDefault.Env = env
 	if out, err := setDefault.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to set default keychain: %w: %s", err, bytes.TrimSpace(out))

@@ -39,7 +39,7 @@ func TestProvisionTestKeychain_CreatesResolvableDefaultKeychain(t *testing.T) {
 		t.Fatalf("provisionTestKeychain: %v", err)
 	}
 
-	cmd := exec.Command("security", "default-keychain")
+	cmd := exec.Command(securityBinPath, "default-keychain")
 	cmd.Env = keychainEnv(dir)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -61,12 +61,12 @@ func TestProvisionTestKeychain_CreatesResolvableDefaultKeychain(t *testing.T) {
 }
 
 func TestProvisionTestKeychain_DoesNotAffectRealDefaultKeychain(t *testing.T) {
-	beforeDefault, err := exec.Command("security", "default-keychain").CombinedOutput()
+	beforeDefault, err := exec.Command(securityBinPath, "default-keychain").CombinedOutput()
 	if err != nil {
 		t.Fatalf("pre-check security default-keychain: %v: %s", err, beforeDefault)
 	}
 
-	beforeList, err := exec.Command("security", "list-keychains", "-d", "user").CombinedOutput()
+	beforeList, err := exec.Command(securityBinPath, "list-keychains", "-d", "user").CombinedOutput()
 	if err != nil {
 		t.Fatalf("pre-check security list-keychains: %v: %s", err, beforeList)
 	}
@@ -76,12 +76,12 @@ func TestProvisionTestKeychain_DoesNotAffectRealDefaultKeychain(t *testing.T) {
 		t.Fatalf("provisionTestKeychain: %v", err)
 	}
 
-	afterDefault, err := exec.Command("security", "default-keychain").CombinedOutput()
+	afterDefault, err := exec.Command(securityBinPath, "default-keychain").CombinedOutput()
 	if err != nil {
 		t.Fatalf("post-check security default-keychain: %v: %s", err, afterDefault)
 	}
 
-	afterList, err := exec.Command("security", "list-keychains", "-d", "user").CombinedOutput()
+	afterList, err := exec.Command(securityBinPath, "list-keychains", "-d", "user").CombinedOutput()
 	if err != nil {
 		t.Fatalf("post-check security list-keychains: %v: %s", err, afterList)
 	}
@@ -104,7 +104,7 @@ func TestProvisionTestKeychain_RoundTrip(t *testing.T) {
 	env := keychainEnv(dir)
 	keychainPath := dir + "/Library/Keychains/login.keychain-db"
 
-	addCmd := exec.Command("security", "add-generic-password",
+	addCmd := exec.Command(securityBinPath, "add-generic-password",
 		"-a", "osac-test-account",
 		"-s", "osac-test-service",
 		"-w", "test-secret-value",
@@ -115,7 +115,7 @@ func TestProvisionTestKeychain_RoundTrip(t *testing.T) {
 		t.Fatalf("security add-generic-password: %v: %s", err, out)
 	}
 
-	findCmd := exec.Command("security", "find-generic-password",
+	findCmd := exec.Command(securityBinPath, "find-generic-password",
 		"-a", "osac-test-account",
 		"-s", "osac-test-service",
 		"-w",

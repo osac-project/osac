@@ -5,10 +5,11 @@ import subprocess
 import time
 import uuid
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
 
-from tests.core.grpc_client import GRPCClient
+from tests.core.grpc_client import PUBLIC_API, GRPCClient
 from tests.core.helpers import (
     wait_for_subnet_cr,
     wait_for_subnet_deletion,
@@ -39,6 +40,24 @@ def k8s_virt_client(namespace: str) -> K8sClient:
 @pytest.fixture(scope="session")
 def vm_template() -> str:
     return env("OSAC_VM_TEMPLATE", "ocp-virt-vm")
+
+
+@pytest.fixture(scope="session")
+def network_class(grpc: GRPCClient) -> str:
+    """Name of an existing NetworkClass, for tests that still need to pass one explicitly.
+
+    NetworkClass is slated for removal from the public API (OSAC-1980); most fixtures/tests
+    in this suite now omit it and rely on the deployment's default. This fixture remains for
+    tests that specifically need a valid, explicit value (e.g. name-validation tests that must
+    keep the rest of the request valid) while the field is still part of the deployed API.
+    """
+    configured = env("OSAC_NETWORK_CLASS", "")
+    if configured:
+        return configured
+    response: dict[str, Any] = grpc.call(service=f"{PUBLIC_API}.NetworkClasses/List")
+    items = response.get("items", [])
+    assert items, "No network classes found; set OSAC_NETWORK_CLASS"
+    return items[0]["metadata"]["name"]
 
 
 @pytest.fixture(scope="session")

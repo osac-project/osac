@@ -232,9 +232,10 @@ func (s *PrivateComputeInstanceTemplatesServer) validateSpecDefaultsInstanceType
 }
 
 // validateSpecDefaultsDiskImage validates the optional disk_image reference in template
-// spec_defaults. Existence and tenant visibility of the DiskImageReference (and backfill of
-// its id) are already enforced by the gRPC reference-validation interceptor; this handler adds
-// the lifecycle check: OBSOLETE is rejected, DEPRECATED yields a warning.
+// spec_defaults. It resolves the reference through the tenant-filtered DiskImages DAO
+// (a missing or cross-tenant image resolves to NotFound) and validates lifecycle:
+// OBSOLETE is rejected, DEPRECATED yields a warning. The gRPC reference-validation
+// interceptor performs the same existence check earlier and backfills the reference id.
 func (s *PrivateComputeInstanceTemplatesServer) validateSpecDefaultsDiskImage(
 	ctx context.Context,
 	specDefaults *privatev1.ComputeInstanceTemplateSpecDefaults,

@@ -2971,29 +2971,6 @@ var _ = Describe("Private compute instances server", func() {
 		})
 
 		Context("disk_image validation", func() {
-			createDiskImageWithLifecycle := func(name string, lifecycle privatev1.DiskImageLifecycle, deprecation *privatev1.DiskImageDeprecation) {
-				diskImagesDao, err := dao.NewGenericDAO[*privatev1.DiskImage]().
-					SetLogger(logger).
-					SetTenancyLogic(tenancy).
-					Build()
-				Expect(err).ToNot(HaveOccurred())
-
-				_, err = diskImagesDao.Create().SetObject(
-					privatev1.DiskImage_builder{
-						Id: name,
-						Metadata: privatev1.Metadata_builder{
-							Name:   name,
-							Tenant: auth.SharedTenant,
-						}.Build(),
-						Spec: privatev1.DiskImageSpec_builder{
-							Lifecycle:   lifecycle,
-							Deprecation: deprecation,
-						}.Build(),
-					}.Build(),
-				).Do(ctx)
-				Expect(err).ToNot(HaveOccurred())
-			}
-
 			createRequestWithDiskImage := func(diskImageKey string) *privatev1.ComputeInstancesCreateRequest {
 				templatesDao, err := dao.NewGenericDAO[*privatev1.ComputeInstanceTemplate]().
 					SetLogger(logger).

@@ -427,7 +427,7 @@ func validateDiskImageState(
 		// Single match: continue with lifecycle validation below.
 	default:
 		return nil, nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"there are multiple disk images with identifier or name '%s'", key)
+			"there are multiple disk images with identifier or name '%s'%s", key, source)
 	}
 
 	diskImage := response.GetItems()[0]

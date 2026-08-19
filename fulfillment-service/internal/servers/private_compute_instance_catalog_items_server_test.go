@@ -1008,39 +1008,6 @@ var _ = Describe("Private compute instance catalog items server", func() {
 		})
 
 		Describe("Disk image validation in field_definitions", func() {
-			// Helper to seed a DiskImage with a given lifecycle. Seeded directly through the
-			// DAO (as a shared/global image) so the catalog server's tenancy-filtered DAO
-			// resolves it. Note: unit tests call the server directly, so the gRPC
-			// reference-validation interceptor is not in the chain — existence is exercised
-			// here by the handler's own lookup. Id and Name are set to the same value so a
-			// string default resolves whether treated as id or name.
-			createDiskImageWithLifecycle := func(
-				name string,
-				lifecycle privatev1.DiskImageLifecycle,
-				deprecation *privatev1.DiskImageDeprecation,
-			) {
-				diskImagesDao, err := dao.NewGenericDAO[*privatev1.DiskImage]().
-					SetLogger(logger).
-					SetTenancyLogic(tenancy).
-					Build()
-				Expect(err).ToNot(HaveOccurred())
-
-				_, err = diskImagesDao.Create().SetObject(
-					privatev1.DiskImage_builder{
-						Id: name,
-						Metadata: privatev1.Metadata_builder{
-							Name:   name,
-							Tenant: auth.SharedTenant,
-						}.Build(),
-						Spec: privatev1.DiskImageSpec_builder{
-							Lifecycle:   lifecycle,
-							Deprecation: deprecation,
-						}.Build(),
-					}.Build(),
-				).Do(ctx)
-				Expect(err).ToNot(HaveOccurred())
-			}
-
 			It("Returns warning when field_definitions default references a DEPRECATED disk image on Create", func() {
 				createDiskImageWithLifecycle("deprecated-di",
 					privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_DEPRECATED,

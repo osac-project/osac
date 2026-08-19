@@ -26,8 +26,6 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 )
 
 var _ = Describe("Private compute instance templates server", func() {
@@ -629,38 +627,6 @@ var _ = Describe("Private compute instance templates server", func() {
 		})
 
 		Describe("Disk image validation in spec_defaults", func() {
-			// Helper to seed a DiskImage with a given lifecycle. Seeded directly through the
-			// DAO (as a shared/global image) so the template server's tenancy-filtered DAO
-			// resolves it. Note: unit tests call the server directly, so the gRPC
-			// reference-validation interceptor is not in the chain — existence is exercised
-			// here by the handler's own lookup.
-			createDiskImageWithLifecycle := func(
-				name string,
-				lifecycle privatev1.DiskImageLifecycle,
-				deprecation *privatev1.DiskImageDeprecation,
-			) {
-				diskImagesDao, err := dao.NewGenericDAO[*privatev1.DiskImage]().
-					SetLogger(logger).
-					SetTenancyLogic(tenancy).
-					Build()
-				Expect(err).ToNot(HaveOccurred())
-
-				_, err = diskImagesDao.Create().SetObject(
-					privatev1.DiskImage_builder{
-						Id: name,
-						Metadata: privatev1.Metadata_builder{
-							Name:   name,
-							Tenant: auth.SharedTenant,
-						}.Build(),
-						Spec: privatev1.DiskImageSpec_builder{
-							Lifecycle:   lifecycle,
-							Deprecation: deprecation,
-						}.Build(),
-					}.Build(),
-				).Do(ctx)
-				Expect(err).ToNot(HaveOccurred())
-			}
-
 			It("Returns warning when spec_defaults references a DEPRECATED disk image on Create", func() {
 				createDiskImageWithLifecycle("deprecated-di",
 					privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_DEPRECATED,

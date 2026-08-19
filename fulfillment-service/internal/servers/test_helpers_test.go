@@ -21,6 +21,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 )
 
@@ -45,4 +46,36 @@ func createComputeInstanceInState(
 	).Do(ctx)
 	ExpectWithOffset(1, err).ToNot(HaveOccurred())
 	return resp.GetObject()
+}
+
+// createDiskImageWithLifecycle seeds a DiskImage with the given lifecycle directly through
+// the DAO as a shared/global image, so a tenancy-filtered DAO resolves it. Id and Name are
+// set to the same value so a string default resolves whether treated as an id or a name.
+// Note: unit tests call servers directly, so the gRPC reference-validation interceptor is
+// not in the chain — existence is exercised by the handler's own lookup.
+func createDiskImageWithLifecycle(
+	name string,
+	lifecycle privatev1.DiskImageLifecycle,
+	deprecation *privatev1.DiskImageDeprecation,
+) {
+	diskImagesDao, err := dao.NewGenericDAO[*privatev1.DiskImage]().
+		SetLogger(logger).
+		SetTenancyLogic(tenancy).
+		Build()
+	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+
+	_, err = diskImagesDao.Create().SetObject(
+		privatev1.DiskImage_builder{
+			Id: name,
+			Metadata: privatev1.Metadata_builder{
+				Name:   name,
+				Tenant: auth.SharedTenant,
+			}.Build(),
+			Spec: privatev1.DiskImageSpec_builder{
+				Lifecycle:   lifecycle,
+				Deprecation: deprecation,
+			}.Build(),
+		}.Build(),
+	).Do(ctx)
+	ExpectWithOffset(1, err).ToNot(HaveOccurred())
 }

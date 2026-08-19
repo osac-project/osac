@@ -194,6 +194,11 @@ chart_version_url() {
     local chart_name="$1" version="$2" repo_owner="$3" gh_token="$4"
     local encoded_version response url
 
+    if [[ ! "${chart_name}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+        echo "::warning::Skipping GHCR package lookup for chart with invalid name; Slack link omitted" >&2
+        return 0
+    fi
+
     encoded_version=$(jq -rn --arg v "${version}" '$v|@uri')
 
     if ! response=$(curl -sf --max-time 15 \

@@ -173,9 +173,9 @@ jobs:
                 exit 1
               fi
 
-              # Update Chart.yaml version field using yq
-              yq -i ".version = \"${SUB_VERSION}\"" "${CHART_DIR}/Chart.yaml"
-              yq -i ".appVersion = \"${SUB_VERSION}\"" "${CHART_DIR}/Chart.yaml"
+              # Update Chart.yaml version fields (strenv avoids shell interpolation in yq)
+              SUB_VERSION="${SUB_VERSION}" yq -i '.version = strenv(SUB_VERSION)' "${CHART_DIR}/Chart.yaml"
+              SUB_VERSION="${SUB_VERSION}" yq -i '.appVersion = strenv(SUB_VERSION)' "${CHART_DIR}/Chart.yaml"
 
               # Package sub-chart
               helm package "${CHART_DIR}" --destination ./packaged-charts
@@ -326,6 +326,7 @@ jobs:
       with:
         ref: ${{ github.sha }}
         fetch-depth: 0
+        # persist-credentials left enabled (default): this job pushes the nightly git tag.
 
     - name: Create nightly tag
       run: |

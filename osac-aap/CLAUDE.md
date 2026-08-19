@@ -29,7 +29,7 @@ Ansible automation for OSAC infrastructure provisioning. See `AGENTS.md` for com
 
 **Adding a new networking implementation:**
 1. osac-aap: Create template role with `meta/osac.yaml`
-2. osac-aap: Run config-as-code to publish NetworkClass
+2. osac-aap: Run config-as-code to publish NetworkClass — only one NetworkClass may exist per deployment (OSAC-4073), so this replaces the existing NetworkClass rather than adding a second one
 3. fulfillment-service: NetworkClass auto-discovered in API
 4. Users: Create VirtualNetwork with new `networkClass`
 

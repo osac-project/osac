@@ -228,27 +228,14 @@ func (s *PrivateNetworkClassesServer) Create(ctx context.Context,
 		}
 	}
 
+	// A concurrent Create can race past checkSingleNetworkClass and hit the
+	// network_classes_singleton unique partial index (migration 102); when creating a
+	// default NC, a concurrent default-swap can also hit network_classes_single_default
+	// (migration 32). GenericServer.Create maps either of those constraint violations to
+	// FailedPrecondition (keyed on the actual PostgreSQL constraint name, not on this
+	// request's is_default flag), so no remapping is needed here. A gRPC AlreadyExists
+	// from this call means the ordinary per-name uniqueness index was violated instead.
 	err = s.generic.Create(ctx, request, &response)
-	if err != nil {
-		// A concurrent Create can race past checkSingleNetworkClass and hit the
-		// network_classes_singleton unique partial index (migration 102); when creating a
-		// default NC, a concurrent default-swap can also hit network_classes_single_default
-		// (migration 32). The error path for either is:
-		//   DAO catches UniqueViolation → wraps as ErrAlreadyExists (discards pgconn.PgError)
-		//   → GenericServer maps ErrAlreadyExists → gRPC AlreadyExists status error.
-		// Since we generate fresh UUIDs (nc.SetId("") above), a primary key
-		// collision is impossible — so a gRPC AlreadyExists here always means one of the two
-		// unique partial indexes above. Remap to FailedPrecondition so it reads consistently
-		// with the non-racing validation errors above instead of a raw AlreadyExists.
-		if st, ok := grpcstatus.FromError(err); ok && st.Code() == grpccodes.AlreadyExists {
-			if nc.GetIsDefault() {
-				return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition,
-					"concurrent default NetworkClass change detected, please retry")
-			}
-			return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition,
-				"only one NetworkClass per deployment is allowed (concurrent create detected, please retry)")
-		}
-	}
 	return
 }
 

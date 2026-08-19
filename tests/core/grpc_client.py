@@ -84,15 +84,10 @@ class GRPCClient:
 
     # VirtualNetwork operations
 
-    def create_virtual_network(self, *, name: str, network_class: str, ipv4_cidr: str) -> str:
+    def create_virtual_network(self, *, name: str, ipv4_cidr: str) -> str:
         response: dict[str, Any] = self.call(
             service=f"{PUBLIC_API}.VirtualNetworks/Create",
-            data={
-                "object": {
-                    "metadata": {"name": name},
-                    "spec": {"network_class": {"name": network_class}, "ipv4_cidr": ipv4_cidr},
-                }
-            },
+            data={"object": {"metadata": {"name": name}, "spec": {"ipv4_cidr": ipv4_cidr}}},
         )
         return response["object"]["id"]
 

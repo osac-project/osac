@@ -86,25 +86,38 @@ data:
 
     {{- if .Values.service.vault.keycloakIssuerUrl }}
     echo "Configuring JWT auth with Keycloak OIDC discovery..."
-    {{- if .Values.service.certs.caBundle.configMap }}
-    export BAO_CACERT="/vault/ca/bundle.pem"
-    bao write -namespace=osac auth/jwt/config \
-      oidc_discovery_url="${KEYCLOAK_ISSUER_URL}" \
-      oidc_discovery_ca_pem=@/vault/ca/bundle.pem \
-      default_role="lifecycle"
-    {{- else }}
-    bao write -namespace=osac auth/jwt/config \
-      oidc_discovery_url="${KEYCLOAK_ISSUER_URL}" \
-      default_role="lifecycle"
-    {{- end }}
-
-    echo "Creating lifecycle role..."
-    bao write -namespace=osac auth/jwt/role/lifecycle \
-      role_type="jwt" \
-      bound_audiences="${KEYCLOAK_AUDIENCE}" \
-      user_claim="sub" \
-      policies="lifecycle" \
-      token_ttl="1h"
+    attempts=0
+    max_attempts=30
+    until [ $attempts -ge $max_attempts ]; do
+      {{- if .Values.service.certs.caBundle.configMap }}
+      if BAO_CACERT="/vault/ca/bundle.pem" bao write -namespace=osac auth/jwt/config \
+        oidc_discovery_url="${KEYCLOAK_ISSUER_URL}" \
+        oidc_discovery_ca_pem=@/vault/ca/bundle.pem \
+        default_role="lifecycle"; then
+        break
+      fi
+      {{- else }}
+      if bao write -namespace=osac auth/jwt/config \
+        oidc_discovery_url="${KEYCLOAK_ISSUER_URL}" \
+        default_role="lifecycle"; then
+        break
+      fi
+      {{- end }}
+      attempts=$((attempts + 1))
+      echo "OIDC discovery not reachable yet (attempt $attempts/$max_attempts), retrying in 10s..."
+      sleep 10
+    done
+    if [ $attempts -ge $max_attempts ]; then
+      echo "WARNING: Failed to configure OIDC discovery after $max_attempts attempts. Continuing without it."
+    else
+      echo "Creating lifecycle role..."
+      bao write -namespace=osac auth/jwt/role/lifecycle \
+        role_type="jwt" \
+        bound_audiences="${KEYCLOAK_AUDIENCE}" \
+        user_claim="sub" \
+        policies="lifecycle" \
+        token_ttl="1h"
+    fi
     {{- end }}
 
     echo "OpenBao bootstrap complete."

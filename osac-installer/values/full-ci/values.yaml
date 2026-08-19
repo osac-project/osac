@@ -117,7 +117,6 @@ service:
     kvMountPath: secret
     lifecycleRole: lifecycle
     lifecycleMountPath: jwt
-    keycloakTokenEndpoint: "https://keycloak.keycloak.svc.cluster.local/realms/osac/protocol/openid-connect/token"
     keycloakClientId: osac-controller
     keycloakIssuerUrl: "https://keycloak.keycloak.svc.cluster.local/realms/osac"
     keycloakAudience: osac-api

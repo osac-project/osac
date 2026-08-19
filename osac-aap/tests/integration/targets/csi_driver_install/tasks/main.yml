@@ -61,7 +61,7 @@
         kind: Namespace
         name: "{{ item }}"
         wait: true
-        wait_timeout: 120
+        wait_timeout: 300
       loop:
         - "{{ csi_driver_install_test_namespace }}"
         - "{{ csi_driver_install_test_backends_namespace }}"
@@ -181,20 +181,15 @@
         namespace: osac-csi-backends
       failed_when: false
 
-    # wait: true is required here: Test 0 does a genuine full install (real
-    # Deployment/DaemonSet/ClusterRole/ClusterRoleBinding/CSIDriver objects) before
-    # rolling it back, so these namespaces take longer to finish terminating than a
-    # bare state: absent waits for by default. Without waiting, Test 1 (the very next
-    # play) can reach its own namespace pre-create/Helm install before termination
-    # completes, and Helm's release Secret creation fails with "unable to create new
-    # content in namespace osac-csi because it is being terminated".
+    # 300s not 120s -- CI's runners need longer to terminate this namespace, and
+    # failed_when: false below was silently swallowing the shorter timeout.
     - name: Delete csi-driver/csi-backends namespaces after the fresh-install-failure scenario
       kubernetes.core.k8s:
         state: absent
         kind: Namespace
         name: "{{ item }}"
         wait: true
-        wait_timeout: 120
+        wait_timeout: 300
       loop:
         - osac-csi
         - osac-csi-backends
@@ -830,7 +825,7 @@
         kind: Namespace
         name: "{{ item }}"
         wait: true
-        wait_timeout: 120
+        wait_timeout: 300
       loop:
         - "osac-csi"
         - "osac-csi-backends"

@@ -333,19 +333,34 @@ func (s *PrivateVirtualNetworksServer) validateNetworkClassReference(ctx context
 		networkClass = defaultNC
 	} else {
 		networkClassKey = refKey(networkClassRef)
-		// Look up NetworkClass by ID or metadata.name using a single List call.
+		id := networkClassRef.GetId()
+		name := networkClassRef.GetName()
+
+		// Look up NetworkClass by ID and/or metadata.name using a single List call.
 		// We avoid Get() here because a NotFound error from Get poisons the shared
 		// database transaction (via ReportError), causing subsequent writes to roll back.
+		//
+		// Filter only on the field(s) the caller actually set, matching the convention in
+		// internal/references/lookups.go. An id == metadata.name OR filter would be
+		// order-dependent when an id happens to collide with a different NetworkClass's
+		// name, silently resolving to the wrong object.
 		//
 		// metadata.name is DNS-label-derived (hyphenated, e.g. "cudn-net"), so a caller
 		// still passing the pre-OSAC-1468 underscore-delimited implementation_strategy
 		// value (e.g. "cudn_net") as network_class will no longer resolve. Tracked as a
 		// follow-up: OSAC-4125.
+		var filter string
+		switch {
+		case id != "" && name != "":
+			filter = fmt.Sprintf("this.id == %q && this.metadata.name == %q", id, name)
+		case id != "":
+			filter = fmt.Sprintf("this.id == %q", id)
+		default:
+			filter = fmt.Sprintf("this.metadata.name == %q", name)
+		}
+
 		listResponse, listErr := s.networkClassDao.List().
-			SetFilter(fmt.Sprintf(
-				"this.id == %[1]q || this.metadata.name == %[1]q",
-				networkClassKey,
-			)).
+			SetFilter(filter).
 			SetLimit(1).
 			Do(ctx)
 		if listErr != nil {
@@ -355,6 +370,10 @@ func (s *PrivateVirtualNetworksServer) validateNetworkClassReference(ctx context
 			return grpcstatus.Errorf(grpccodes.Internal, "failed to validate network_class")
 		}
 		if len(listResponse.GetItems()) == 0 {
+			if id != "" && name != "" {
+				return grpcstatus.Errorf(grpccodes.InvalidArgument,
+					"network_class id '%s' and name '%s' do not both resolve to the same NetworkClass", id, name)
+			}
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"network_class '%s' does not exist", networkClassKey)
 		}

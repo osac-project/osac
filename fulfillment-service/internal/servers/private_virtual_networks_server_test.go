@@ -450,6 +450,79 @@ var _ = Describe("Private virtual networks server", func() {
 				Expect(err.Error()).To(ContainSubstring("does not exist"))
 			})
 
+			It("accepts a NetworkClass reference by metadata.name", func() {
+				nc := createNetworkClass(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
+
+				vn := privatev1.VirtualNetwork_builder{
+					Spec: privatev1.VirtualNetworkSpec_builder{
+						Ipv4Cidr:     new("10.0.0.0/16"),
+						NetworkClass: privatev1.NetworkClassReference_builder{Name: nc.GetMetadata().GetName()}.Build(),
+						Region:       "us-west-1",
+					}.Build(),
+				}.Build()
+
+				err := server.validateVirtualNetwork(ctx, vn, nil)
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			It("resolves by id rather than an unrelated NetworkClass whose name collides with the id", func() {
+				ncDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+
+				// target has an id that happens to equal collider's metadata.name. An id-or-name
+				// OR filter with SetLimit(1) would be order-dependent and could resolve to either
+				// NetworkClass; the lookup must honor the caller-specified field (id) only.
+				target := privatev1.NetworkClass_builder{
+					Id:            "colliding-identifier",
+					FabricManager: new("target-strategy"),
+					Metadata: privatev1.Metadata_builder{
+						Tenant: auth.SharedTenant,
+						Name:   fmt.Sprintf("target-network-class-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Capabilities: privatev1.NetworkClassCapabilities_builder{
+						SupportsIpv4: true,
+					}.Build(),
+					Status: privatev1.NetworkClassStatus_builder{
+						State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+					}.Build(),
+				}.Build()
+				_, err = ncDao.Create().SetObject(target).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+
+				collider := privatev1.NetworkClass_builder{
+					FabricManager: new("collider-strategy"),
+					Metadata: privatev1.Metadata_builder{
+						Tenant: auth.SharedTenant,
+						Name:   "colliding-identifier",
+					}.Build(),
+					Capabilities: privatev1.NetworkClassCapabilities_builder{
+						SupportsIpv4: true,
+					}.Build(),
+					Status: privatev1.NetworkClassStatus_builder{
+						State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_FAILED,
+					}.Build(),
+				}.Build()
+				_, err = ncDao.Create().SetObject(collider).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+
+				vn := privatev1.VirtualNetwork_builder{
+					Spec: privatev1.VirtualNetworkSpec_builder{
+						Ipv4Cidr:     new("10.0.0.0/16"),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: "colliding-identifier"}.Build(),
+						Region:       "us-west-1",
+					}.Build(),
+				}.Build()
+
+				// target (matched by id) is READY, so this must succeed. If the lookup instead
+				// matched collider (FAILED, matched only by the colliding name), it would fail
+				// VN-VAL-05 instead.
+				err = server.validateVirtualNetwork(ctx, vn, nil)
+				Expect(err).ToNot(HaveOccurred())
+			})
+
 			It("rejects empty NetworkClass when no default exists", func() {
 				vn := privatev1.VirtualNetwork_builder{
 					Spec: privatev1.VirtualNetworkSpec_builder{

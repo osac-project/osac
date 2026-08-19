@@ -2490,7 +2490,7 @@ func (t *Tool) NewCLIHomeDir() (string, error) {
 		return "", err
 	}
 	if err := provisionTestKeychain(homeDir); err != nil {
-		os.RemoveAll(homeDir)
+		os.RemoveAll(homeDir) // best-effort cleanup; the provisioning error is what matters
 		return "", fmt.Errorf("failed to provision test keychain: %w", err)
 	}
 	return homeDir, nil

@@ -1,7 +1,7 @@
 //go:build darwin
 
 /*
-Copyright (c) 2025 Red Hat Inc.
+Copyright (c) 2026 Red Hat Inc.
 
 Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the
 License. You may obtain a copy of the License at
@@ -20,23 +20,17 @@ language governing permissions and limitations under the License.
 //
 // A bare `go test ./it/...` or `ginkgo run it` will also sweep in the full TestIntegration
 // Ginkgo suite, which brings up a kind cluster and takes ~15-17 minutes.
+// Do NOT add Ginkgo Describe/It blocks here — they register globally at init time and would
+// run under the full suite regardless of the -run filter, defeating the isolation.
 
 package it
 
 import (
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
-
-func freshKeychainEnv(homeDir string) []string {
-	return []string{
-		"HOME=" + homeDir,
-		"PATH=" + os.Getenv("PATH"),
-	}
-}
 
 func TestProvisionTestKeychain_CreatesResolvableDefaultKeychain(t *testing.T) {
 	dir := t.TempDir()
@@ -46,7 +40,7 @@ func TestProvisionTestKeychain_CreatesResolvableDefaultKeychain(t *testing.T) {
 	}
 
 	cmd := exec.Command("security", "default-keychain")
-	cmd.Env = freshKeychainEnv(dir)
+	cmd.Env = keychainEnv(dir)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("security default-keychain: %v: %s", err, out)
@@ -107,7 +101,7 @@ func TestProvisionTestKeychain_RoundTrip(t *testing.T) {
 		t.Fatalf("provisionTestKeychain: %v", err)
 	}
 
-	env := freshKeychainEnv(dir)
+	env := keychainEnv(dir)
 	keychainPath := dir + "/Library/Keychains/login.keychain-db"
 
 	addCmd := exec.Command("security", "add-generic-password",

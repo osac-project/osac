@@ -1,7 +1,7 @@
 //go:build darwin
 
 /*
-Copyright (c) 2025 Red Hat Inc.
+Copyright (c) 2026 Red Hat Inc.
 
 Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the
 License. You may obtain a copy of the License at
@@ -25,7 +25,21 @@ import (
 
 const testKeychainPassword = "osac-it-test-keychain" // not a secret — keychain is deleted with the per-test $HOME at cleanup
 
+// keychainEnv returns a minimal env slice scoped to the given homeDir, suitable for
+// subprocess calls that must resolve macOS keychain state from that directory.
+func keychainEnv(homeDir string) []string {
+	return []string{
+		"HOME=" + homeDir,
+		"PATH=" + os.Getenv("PATH"),
+	}
+}
+
 // provisionTestKeychain provisions a real macOS keychain scoped to the given homeDir.
+//
+// macOS resolves both the default-keychain setting and the keychain search list through
+// ~/Library/Preferences/com.apple.security.plist, which is scoped per $HOME. Overriding
+// HOME is therefore sufficient to fully sandbox both settings — the throwaway keychain
+// created here is invisible to the real user keychain and vice versa.
 //
 // The fulfillment-service CLI's credential write path (osac login -> go-keyring ->
 // /usr/bin/security) triggers errSecAuthFailed (-60006) and a blocking macOS Keychain
@@ -35,9 +49,9 @@ const testKeychainPassword = "osac-it-test-keychain" // not a secret — keychai
 //
 // Both subprocess calls (create-keychain and default-keychain) use a fresh minimal env
 // slice with HOME=homeDir instead of appending to os.Environ(). This avoids the
-// duplicate-HOME-entry risk (SEC-D-010): os.Environ() already contains the real ambient
-// HOME, and which entry the security subprocess honors is platform/libc-dependent.
-// Mirroring the cliEnv() pattern (it_tool.go) ensures deterministic scoping.
+// duplicate-HOME-entry risk: os.Environ() already contains the real ambient HOME, and
+// which entry the security subprocess honors is platform/libc-dependent. Mirroring the
+// cliEnv() pattern (it_tool.go) ensures deterministic scoping.
 //
 // The real osac login path needs no extra HOME scoping here because go-keyring's darwin
 // backend inherits env from the parent osac process, which cliEnv() already scopes —
@@ -54,10 +68,7 @@ func provisionTestKeychain(homeDir string) error {
 
 	keychainPath := filepath.Join(keychainDir, "login.keychain-db")
 
-	env := []string{
-		"HOME=" + homeDir,
-		"PATH=" + os.Getenv("PATH"),
-	}
+	env := keychainEnv(homeDir)
 
 	create := exec.Command("security", "create-keychain", "-p", testKeychainPassword, keychainPath)
 	create.Env = env

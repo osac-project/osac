@@ -71,7 +71,7 @@ spec:
             # Step 2: Create the local StorageTier referencing the backend by ID.
             # Protocol 2 = STORAGE_PROTOCOL_BLOCK (LVMS provides block volumes). Protocol is a
             # top-level spec field, not nested under backends.
-            TIER_BODY=$(printf '{"metadata":{"name":"local"},"spec":{"protocol":2,"backends":[{"backend_id":"%s"}]}}' "${BACKEND_ID}")
+            TIER_BODY=$(env BACKEND_ID="${BACKEND_ID}" python3 -c "import os, json; print(json.dumps({'metadata':{'name':'local'},'spec':{'protocol':2,'backends':[{'backend_id':os.environ['BACKEND_ID']}]}}))")
             TIER_RESP=$(mktemp)
             TIER_CODE=$(curl -skS \
               --connect-timeout 5 --max-time 30 \

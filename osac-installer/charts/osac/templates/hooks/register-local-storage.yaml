@@ -69,7 +69,7 @@ spec:
             rm -f "${BACKEND_RESP}"
 
             # Step 2: Create the local StorageTier referencing the backend by ID.
-            # Protocol 2 = STORAGE_PROTOCOL_BLOCK (LVMS provides block volumes). protocol is a
+            # Protocol 2 = STORAGE_PROTOCOL_BLOCK (LVMS provides block volumes). Protocol is a
             # top-level spec field, not nested under backends.
             TIER_BODY=$(printf '{"metadata":{"name":"local"},"spec":{"protocol":2,"backends":[{"backend_id":"%s"}]}}' "${BACKEND_ID}")
             TIER_RESP=$(mktemp)

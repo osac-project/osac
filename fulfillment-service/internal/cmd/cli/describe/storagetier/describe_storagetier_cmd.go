@@ -80,12 +80,14 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	renderStorageTier(c.console, matched)
+	RenderStorageTier(c.console, matched)
 
 	return nil
 }
 
-func renderStorageTier(w io.Writer, st *publicv1.StorageTier) {
+// RenderStorageTier writes a detailed key-value description of a storage tier to w. It is shared by both the
+// "get storagetier" and "describe storagetier" commands.
+func RenderStorageTier(w io.Writer, st *publicv1.StorageTier) {
 	writer := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 
 	name := "-"

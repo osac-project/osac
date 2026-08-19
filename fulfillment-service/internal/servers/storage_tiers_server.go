@@ -223,10 +223,26 @@ func (s *StorageTiersServer) List(ctx context.Context,
 		publicItems = append(publicItems, publicItem)
 	}
 
-	// Create the public response:
+	// Create the public response. Total is adjusted down by the number of tiers dropped from this
+	// page, so a page consisting only of malformed tiers doesn't report the misleading
+	// Total=1, Size=0, Items=[] — but ONLY when this page is provably the entire result set
+	// (offset 0 and every matching row fit within it): in that case `dropped` computed from this
+	// page equals the total number of malformed rows across the whole result set, so subtracting
+	// it is exactly correct. When the result set spans multiple pages, we cannot know how many
+	// malformed rows exist outside this page — the private CEL filter language has no
+	// size()/array-length function, so there is no way to ask the DAO for a malformed-only count
+	// without fetching every row — so Total is left as the plain DB row count in that case. This
+	// keeps Total deterministic across every page of the same query (matching the convention used
+	// by every other List endpoint in this codebase) instead of silently reporting a different,
+	// wrong value depending on which page happens to contain the malformed rows.
+	total := privateResponse.GetTotal()
+	if request.GetOffset() <= 0 && len(privateItems) == int(total) {
+		dropped := len(privateItems) - len(publicItems)
+		total -= int32(dropped) // #nosec G115 -- dropped <= len(privateItems) == total in this branch
+	}
 	response = &publicv1.StorageTiersListResponse{}
 	response.SetSize(int32(len(publicItems))) // #nosec G115 -- bounded by page size
-	response.SetTotal(privateResponse.GetTotal())
+	response.SetTotal(total)
 	response.SetItems(publicItems)
 	return
 }

@@ -309,7 +309,10 @@ type StorageTiersListResponse_builder struct {
 	// feasible or convenient for performance reasons.
 	Size int32
 	// Total number of items of the collection that match the search criteria, regardless of the number of results
-	// requested with the `limit` parameter.
+	// requested with the `limit` parameter. When this response covers the entire matching collection in a single
+	// page, `total` excludes items dropped from `items` due to malformed backend data on the tier. When the
+	// collection spans multiple pages, `total` is the raw count of all matching rows, which may include malformed
+	// tiers not present in `items` on any given page.
 	Total int32
 	// List of results.
 	Items []*StorageTier

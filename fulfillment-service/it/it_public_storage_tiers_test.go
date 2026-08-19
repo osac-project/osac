@@ -224,7 +224,12 @@ var _ = Describe("Public storage tiers", func() {
 		Expect(response.GetItems()[0].GetId()).To(Equal(id1))
 	})
 
-	It("Passes through a tier with UNSPECIFIED protocol as-is (BUG-005 current behavior)", func() {
+	// The private CreateStorageTier API has no validation constraint rejecting a protocol left at its
+	// zero value, so a StorageTier can be created today with STORAGE_PROTOCOL_UNSPECIFIED. This is
+	// documented, currently-accepted behavior (not a bug introduced by this PR): the public API passes
+	// the value through as-is rather than filtering it out or rejecting it during the private-to-public
+	// conversion.
+	It("Passes through a tier with an unset (UNSPECIFIED) protocol as-is", func() {
 		id := createViaPrivate("unspecified", privatev1.StorageProtocol_STORAGE_PROTOCOL_UNSPECIFIED)
 
 		response, err := publicClient.Get(ctx, publicv1.StorageTiersGetRequest_builder{

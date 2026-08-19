@@ -42,11 +42,6 @@ def vm_template() -> str:
 
 
 @pytest.fixture(scope="session")
-def network_class() -> str:
-    return env("OSAC_NETWORK_CLASS", "cudn-net")
-
-
-@pytest.fixture(scope="session")
 def test_run_id() -> str:
     """Unique ID for this test run to avoid resource name conflicts."""
     return str(uuid.uuid4())[:8]
@@ -56,7 +51,6 @@ def test_run_id() -> str:
 def default_networking(
     grpc: GRPCClient,
     k8s_hub_client: K8sClient,
-    network_class: str,
     test_run_id: str,
 ) -> dict[str, str]:
     """
@@ -80,7 +74,6 @@ def default_networking(
         print(f"\nCreating VirtualNetwork: {vn_name}")
         vn_id = grpc.create_virtual_network(
             name=vn_name,
-            network_class=network_class,
             ipv4_cidr="10.200.0.0/16",
         )
         vn_cr_name = wait_for_virtual_network_cr(k8s=k8s_hub_client, uuid=vn_id)

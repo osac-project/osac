@@ -12,9 +12,9 @@ from tests.core.k8s_client import K8sClient
 from tests.core.runner import poll_until
 
 
-def test_virtual_network_lifecycle(grpc: GRPCClient, k8s_hub_client: K8sClient, network_class: str) -> None:
+def test_virtual_network_lifecycle(grpc: GRPCClient, k8s_hub_client: K8sClient) -> None:
     vn_name: str = f"test-vnet-{uuid4().hex[:8]}"
-    vn_id: str = grpc.create_virtual_network(name=vn_name, network_class=network_class, ipv4_cidr="10.100.0.0/16")
+    vn_id: str = grpc.create_virtual_network(name=vn_name, ipv4_cidr="10.100.0.0/16")
     cr_name: str = wait_for_virtual_network_cr(k8s=k8s_hub_client, uuid=vn_id)
 
     assert vn_id in grpc.list_virtual_network_ids()

@@ -65,7 +65,17 @@
       loop:
         - "{{ csi_driver_install_test_namespace }}"
         - "{{ csi_driver_install_test_backends_namespace }}"
+      register: _ns_delete_setup
       failed_when: false
+
+    # failed_when: false above also hid a genuine wait timeout -- surface that loudly.
+    - name: Fail if a namespace delete above genuinely timed out
+      ansible.builtin.fail:
+        msg: "{{ item.msg }}"
+      loop: "{{ _ns_delete_setup.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: "'Timed out waiting' in (item.msg | default(''))"
 
 # ── Test 0: A fresh dispatch that fails deep inside the block (after both
 # Helm releases have genuinely installed) proves the rescue block's rollback
@@ -181,8 +191,6 @@
         namespace: osac-csi-backends
       failed_when: false
 
-    # 300s not 120s -- CI's runners need longer to terminate this namespace, and
-    # failed_when: false below was silently swallowing the shorter timeout.
     - name: Delete csi-driver/csi-backends namespaces after the fresh-install-failure scenario
       kubernetes.core.k8s:
         state: absent
@@ -193,7 +201,17 @@
       loop:
         - osac-csi
         - osac-csi-backends
+      register: _ns_delete_test0
       failed_when: false
+
+    # failed_when: false above also hid a genuine wait timeout -- surface that loudly.
+    - name: Fail if a namespace delete above genuinely timed out
+      ansible.builtin.fail:
+        msg: "{{ item.msg }}"
+      loop: "{{ _ns_delete_test0.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: "'Timed out waiting' in (item.msg | default(''))"
 
 # ── Test 1: First dispatch installs both Helm releases ──
 - name: "CSI Driver Install - First dispatch (vast)"
@@ -829,4 +847,14 @@
       loop:
         - "osac-csi"
         - "osac-csi-backends"
+      register: _ns_delete_final
       failed_when: false
+
+    # failed_when: false above also hid a genuine wait timeout -- surface that loudly.
+    - name: Fail if a namespace delete above genuinely timed out
+      ansible.builtin.fail:
+        msg: "{{ item.msg }}"
+      loop: "{{ _ns_delete_final.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: "'Timed out waiting' in (item.msg | default(''))"

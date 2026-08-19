@@ -54,11 +54,14 @@
         - {name: csi-backends, namespace: "{{ csi_driver_install_test_backends_namespace }}"}
       failed_when: false
 
+    # wait: true -- same namespace-termination race as Test 0's cleanup below.
     - name: Delete csi-driver/csi-backends namespaces if they exist
       kubernetes.core.k8s:
         state: absent
         kind: Namespace
         name: "{{ item }}"
+        wait: true
+        wait_timeout: 120
       loop:
         - "{{ csi_driver_install_test_namespace }}"
         - "{{ csi_driver_install_test_backends_namespace }}"
@@ -820,11 +823,14 @@
         - {name: csi-backends, namespace: "osac-csi-backends"}
       failed_when: false
 
+    # wait: true -- same namespace-termination race as Test 0's cleanup above.
     - name: Delete csi-driver/csi-backends namespaces
       kubernetes.core.k8s:
         state: absent
         kind: Namespace
         name: "{{ item }}"
+        wait: true
+        wait_timeout: 120
       loop:
         - "osac-csi"
         - "osac-csi-backends"

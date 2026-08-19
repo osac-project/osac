@@ -1,6 +1,6 @@
 ---
 # VAST setup: multi-tier resource provisioning with per-tenant user credentials.
-# Creates: VAST tenant, per-tier views, per-tier quotas, per-tenant user.
+# Creates: VAST tenant, per-tier views, per-tenant user.
 # Persists tenant config + credentials to hub Secret.
 # Hub Secret write is INSIDE the block so rescue can clean up the user on failure.
 #
@@ -49,18 +49,6 @@
 
 - name: Include shared tier protocol validation
   ansible.builtin.include_tasks: _validate_tier_protocols.yaml
-
-- name: Validate tier quotas (when specified)
-  ansible.builtin.fail:
-    msg: >-
-      Tier '{{ item.name }}' has an invalid quota_bytes: '{{ item.quota_bytes }}'.
-      quota_bytes must be a positive number (bytes).
-  loop: "{{ _provider_tiers }}"
-  loop_control:
-    label: "{{ item.name }}"
-  when:
-    - item.quota_bytes is defined
-    - (item.quota_bytes | int) <= 0
 
 - name: Compute unique protocols from tiers
   ansible.builtin.set_fact:

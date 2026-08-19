@@ -242,9 +242,9 @@ type AgentStatus struct {
 	AgentName string `json:"agentName"`
 
 	// HostName is the bare-metal server name used by the network dispatcher.
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MinLength=1
-	HostName string `json:"hostName"`
+	// Absent when the agent does not carry the netris.server/name label (e.g. CI environments).
+	// +kubebuilder:validation:Optional
+	HostName string `json:"hostName,omitempty"`
 
 	// SubnetRef is the name of the Subnet CR the agent is connected to.
 	// +kubebuilder:validation:Optional

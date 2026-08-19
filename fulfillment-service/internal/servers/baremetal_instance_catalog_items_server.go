@@ -145,7 +145,9 @@ func (s *BareMetalInstanceCatalogItemsServer) List(ctx context.Context,
 	request *publicv1.BareMetalInstanceCatalogItemsListRequest) (response *publicv1.BareMetalInstanceCatalogItemsListResponse, err error) {
 	privateRequest := &privatev1.BareMetalInstanceCatalogItemsListRequest{}
 	privateRequest.SetOffset(request.GetOffset())
-	privateRequest.SetLimit(request.GetLimit())
+	if request.HasLimit() {
+		privateRequest.SetLimit(request.GetLimit())
+	}
 	composedFilter, err := s.addPublishedFilter(request.GetFilter())
 	if err != nil {
 		return nil, err

@@ -207,6 +207,12 @@ func applyDefault(specMap map[string]any, path string, defaultVal *structpb.Valu
 	if strings.HasPrefix(path, "template_parameters.") {
 		parsed = wrapValueAsAny(parsed)
 	}
+	// Catalog defaults store disk_image as a plain string (name), but the proto field is a DiskImageReference.
+	if path == "disk_image" {
+		if s, ok := parsed.(string); ok {
+			parsed = map[string]any{"name": s}
+		}
+	}
 	maputil.SetNestedValue(specMap, path, parsed)
 	return nil
 }

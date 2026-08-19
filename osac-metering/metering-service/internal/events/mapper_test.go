@@ -41,8 +41,8 @@ var _ = Describe("MapWatchEvent", func() {
 				Template:     &privatev1.ComputeInstanceTemplateReference{Name: "tmpl-gpu"},
 				CatalogItem:  &privatev1.ComputeInstanceCatalogItemReference{Name: "catalog-item-1"},
 				InstanceType: &privatev1.InstanceTypeReference{Name: instanceType},
-				Image: &privatev1.ComputeInstanceImage{
-					SourceRef: "rhel-10.2-x86_64",
+				DiskImage: &privatev1.DiskImageReference{
+					Name: "rhel-10.2-x86_64",
 				},
 				BootDisk: &privatev1.ComputeInstanceDisk{
 					SizeGib: 100,
@@ -613,8 +613,8 @@ var _ = Describe("MapWatchEvent", func() {
 			Expect(bd).ToNot(HaveKey("instance_type"))
 		})
 
-		It("handles nil Image gracefully", func() {
-			ci.Spec.Image = nil
+		It("handles nil DiskImage gracefully", func() {
+			ci.Spec.DiskImage = nil
 
 			event := &privatev1.Event{
 				Id:      "evt-1",

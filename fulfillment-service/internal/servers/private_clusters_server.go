@@ -442,7 +442,7 @@ func (s *PrivateClustersServer) lookupTemplate(ctx context.Context,
 		}
 		return
 	}
-	switch response.GetSize() {
+	switch response.GetTotal() {
 	case 0:
 		err = grpcstatus.Errorf(
 			grpccodes.InvalidArgument,
@@ -477,7 +477,7 @@ func (s *PrivateClustersServer) lookupHostType(ctx context.Context,
 		}
 		return
 	}
-	switch response.GetSize() {
+	switch response.GetTotal() {
 	case 0:
 		err = grpcstatus.Errorf(
 			grpccodes.NotFound,

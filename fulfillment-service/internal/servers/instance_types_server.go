@@ -153,7 +153,9 @@ func (s *InstanceTypesServer) List(ctx context.Context,
 	// Create private request with same parameters:
 	privateRequest := &privatev1.InstanceTypesListRequest{}
 	privateRequest.SetOffset(request.GetOffset())
-	privateRequest.SetLimit(request.GetLimit())
+	if request.HasLimit() {
+		privateRequest.SetLimit(request.GetLimit())
+	}
 	composedFilter, err := composeFilterDefaults(request.GetFilter(), instanceTypeFilterDefaults)
 	if err != nil {
 		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "%v", err)

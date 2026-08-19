@@ -170,7 +170,9 @@ func (s *IdentityProvidersServer) List(ctx context.Context,
 	// Create private request with same parameters:
 	privateRequest := &privatev1.IdentityProvidersListRequest{}
 	privateRequest.SetOffset(request.GetOffset())
-	privateRequest.SetLimit(request.GetLimit())
+	if request.HasLimit() {
+		privateRequest.SetLimit(request.GetLimit())
+	}
 	privateRequest.SetFilter(request.GetFilter())
 
 	// Delegate to private server:

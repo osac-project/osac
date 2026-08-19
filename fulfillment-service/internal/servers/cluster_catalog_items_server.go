@@ -138,7 +138,9 @@ func (s *ClusterCatalogItemsServer) List(ctx context.Context,
 	request *publicv1.ClusterCatalogItemsListRequest) (response *publicv1.ClusterCatalogItemsListResponse, err error) {
 	privateRequest := &privatev1.ClusterCatalogItemsListRequest{}
 	privateRequest.SetOffset(request.GetOffset())
-	privateRequest.SetLimit(request.GetLimit())
+	if request.HasLimit() {
+		privateRequest.SetLimit(request.GetLimit())
+	}
 	composedFilter, err := s.addPublishedFilter(request.GetFilter())
 	if err != nil {
 		return nil, err

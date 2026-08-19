@@ -15,15 +15,6 @@ syntax = "proto3";
 
 package osac.public.v1;
 
-// Contains the image configuration for a compute instance.
-message ComputeInstanceImage {
-  // Image source type (e.g. "registry").
-  string source_type = 1;
-
-  // Image reference (e.g. OCI image URL).
-  string source_ref = 2;
-}
-
 // Contains the disk configuration for a compute instance.
 message ComputeInstanceDisk {
   // Disk size in GiB.

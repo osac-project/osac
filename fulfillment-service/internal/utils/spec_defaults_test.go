@@ -18,6 +18,7 @@ import (
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 )
@@ -48,21 +49,17 @@ var _ = Describe("ApplySpecDefaults", func() {
 
 		defaults := privatev1.ComputeInstanceTemplateSpecDefaults_builder{
 			InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
-			Image: privatev1.ComputeInstanceImage_builder{
-				SourceType: "registry",
-				SourceRef:  "quay.io/containerdisks/fedora:latest",
-			}.Build(),
+			DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
 				SizeGib: 10,
 			}.Build(),
-			RunStrategy: new("Always"),
+			RunStrategy: proto.String("Always"),
 		}.Build()
 
 		ApplySpecDefaults(spec, defaults)
 
 		Expect(spec.GetInstanceType().GetId()).To(Equal("standard-4-16"))
-		Expect(spec.GetImage().GetSourceType()).To(Equal("registry"))
-		Expect(spec.GetImage().GetSourceRef()).To(Equal("quay.io/containerdisks/fedora:latest"))
+		Expect(spec.GetDiskImage().GetId()).To(Equal("test-disk-image"))
 		Expect(spec.GetBootDisk().GetSizeGib()).To(Equal(int32(10)))
 		Expect(spec.GetRunStrategy()).To(Equal("Always"))
 	})
@@ -71,28 +68,24 @@ var _ = Describe("ApplySpecDefaults", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
 			Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
 			InstanceType: privatev1.InstanceTypeReference_builder{Id: "user-type"}.Build(),
-			RunStrategy:  new("Halted"),
+			DiskImage:    &privatev1.DiskImageReference{Id: "user-disk-image"},
+			RunStrategy:  proto.String("Halted"),
 		}.Build()
 
 		defaults := privatev1.ComputeInstanceTemplateSpecDefaults_builder{
 			InstanceType: privatev1.InstanceTypeReference_builder{Id: "default-type"}.Build(),
-			Image: privatev1.ComputeInstanceImage_builder{
-				SourceType: "registry",
-				SourceRef:  "quay.io/containerdisks/fedora:latest",
-			}.Build(),
+			DiskImage:    &privatev1.DiskImageReference{Id: "default-disk-image"},
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
 				SizeGib: 10,
 			}.Build(),
-			RunStrategy: new("Always"),
+			RunStrategy: proto.String("Always"),
 		}.Build()
 
 		ApplySpecDefaults(spec, defaults)
 
-		// User-provided values preserved:
 		Expect(spec.GetInstanceType().GetId()).To(Equal("user-type"))
+		Expect(spec.GetDiskImage().GetId()).To(Equal("user-disk-image"))
 		Expect(spec.GetRunStrategy()).To(Equal("Halted"))
-		// Defaults fill the rest:
-		Expect(spec.GetImage().GetSourceRef()).To(Equal("quay.io/containerdisks/fedora:latest"))
 		Expect(spec.GetBootDisk().GetSizeGib()).To(Equal(int32(10)))
 	})
 
@@ -103,79 +96,15 @@ var _ = Describe("ApplySpecDefaults", func() {
 
 		defaults := privatev1.ComputeInstanceTemplateSpecDefaults_builder{
 			InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
-			RunStrategy:  new("Always"),
+			RunStrategy:  proto.String("Always"),
 		}.Build()
 
 		ApplySpecDefaults(spec, defaults)
 
 		Expect(spec.GetInstanceType().GetId()).To(Equal("standard-4-16"))
 		Expect(spec.GetRunStrategy()).To(Equal("Always"))
-		Expect(spec.HasImage()).To(BeFalse())
+		Expect(spec.HasDiskImage()).To(BeFalse())
 		Expect(spec.HasBootDisk()).To(BeFalse())
-	})
-
-	It("Merges default source_type into user-provided partial image", func() {
-		spec := privatev1.ComputeInstanceSpec_builder{
-			Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
-			Image: privatev1.ComputeInstanceImage_builder{
-				SourceRef: "quay.io/my-image:latest",
-			}.Build(),
-		}.Build()
-
-		defaults := privatev1.ComputeInstanceTemplateSpecDefaults_builder{
-			Image: privatev1.ComputeInstanceImage_builder{
-				SourceType: "registry",
-				SourceRef:  "quay.io/containerdisks/fedora:latest",
-			}.Build(),
-		}.Build()
-
-		ApplySpecDefaults(spec, defaults)
-
-		Expect(spec.GetImage().GetSourceType()).To(Equal("registry"))
-		Expect(spec.GetImage().GetSourceRef()).To(Equal("quay.io/my-image:latest"))
-	})
-
-	It("Merges default source_ref into user-provided partial image", func() {
-		spec := privatev1.ComputeInstanceSpec_builder{
-			Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
-			Image: privatev1.ComputeInstanceImage_builder{
-				SourceType: "registry",
-			}.Build(),
-		}.Build()
-
-		defaults := privatev1.ComputeInstanceTemplateSpecDefaults_builder{
-			Image: privatev1.ComputeInstanceImage_builder{
-				SourceType: "registry",
-				SourceRef:  "quay.io/containerdisks/fedora:latest",
-			}.Build(),
-		}.Build()
-
-		ApplySpecDefaults(spec, defaults)
-
-		Expect(spec.GetImage().GetSourceType()).To(Equal("registry"))
-		Expect(spec.GetImage().GetSourceRef()).To(Equal("quay.io/containerdisks/fedora:latest"))
-	})
-
-	It("Does not override user-provided image fields with defaults", func() {
-		spec := privatev1.ComputeInstanceSpec_builder{
-			Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
-			Image: privatev1.ComputeInstanceImage_builder{
-				SourceType: "registry",
-				SourceRef:  "quay.io/my-image:latest",
-			}.Build(),
-		}.Build()
-
-		defaults := privatev1.ComputeInstanceTemplateSpecDefaults_builder{
-			Image: privatev1.ComputeInstanceImage_builder{
-				SourceType: "registry",
-				SourceRef:  "quay.io/containerdisks/fedora:latest",
-			}.Build(),
-		}.Build()
-
-		ApplySpecDefaults(spec, defaults)
-
-		Expect(spec.GetImage().GetSourceType()).To(Equal("registry"))
-		Expect(spec.GetImage().GetSourceRef()).To(Equal("quay.io/my-image:latest"))
 	})
 
 	It("Merges default boot_disk size_gib when user provides empty boot_disk", func() {
@@ -312,11 +241,8 @@ var _ = Describe("ApplySpecDefaults", func() {
 		}.Build()
 
 		defaults := privatev1.ComputeInstanceTemplateSpecDefaults_builder{
-			RunStrategy: new("Always"),
-			Image: privatev1.ComputeInstanceImage_builder{
-				SourceType: "registry",
-				SourceRef:  "quay.io/containerdisks/fedora:latest",
-			}.Build(),
+			RunStrategy: proto.String("Always"),
+			DiskImage:   &privatev1.DiskImageReference{Id: "default-disk-image"},
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
 				SizeGib: 20,
 			}.Build(),
@@ -325,65 +251,41 @@ var _ = Describe("ApplySpecDefaults", func() {
 		ApplySpecDefaults(spec, defaults)
 
 		Expect(spec.GetRunStrategy()).To(Equal("Always"))
-		Expect(spec.GetImage().GetSourceRef()).To(Equal("quay.io/containerdisks/fedora:latest"))
+		Expect(spec.GetDiskImage().GetId()).To(Equal("default-disk-image"))
 		Expect(spec.GetBootDisk().GetSizeGib()).To(Equal(int32(20)))
 	})
 
-	It("Clones message-type defaults to prevent shared state", func() {
+	It("Applies disk_image default when user does not provide value", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
 			Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
 		}.Build()
 
-		defaultImage := privatev1.ComputeInstanceImage_builder{
-			SourceType: "registry",
-			SourceRef:  "quay.io/containerdisks/fedora:latest",
-		}.Build()
-
 		defaults := privatev1.ComputeInstanceTemplateSpecDefaults_builder{
-			Image: defaultImage,
+			DiskImage: &privatev1.DiskImageReference{Id: "template-disk-image"},
 		}.Build()
 
 		ApplySpecDefaults(spec, defaults)
 
-		// Mutating the default should not affect the spec:
-		defaultImage.SetSourceRef("changed")
-		Expect(spec.GetImage().GetSourceRef()).To(Equal("quay.io/containerdisks/fedora:latest"))
+		Expect(spec.HasDiskImage()).To(BeTrue())
+		Expect(spec.GetDiskImage().GetId()).To(Equal("template-disk-image"))
 	})
 
-	It("Applies is_windows default when user does not provide value", func() {
-		spec := privatev1.ComputeInstanceSpec_builder{
-			Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
-		}.Build()
-
-		trueVal := true
-		defaults := privatev1.ComputeInstanceTemplateSpecDefaults_builder{
-			IsWindows: &trueVal,
-		}.Build()
-
-		ApplySpecDefaults(spec, defaults)
-
-		Expect(spec.HasIsWindows()).To(BeTrue())
-		Expect(spec.GetIsWindows()).To(BeTrue())
-	})
-
-	It("Does not override user-provided is_windows value with template default", func() {
-		falseVal := false
+	It("Does not override user-provided disk_image with template default", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
 			Template:  privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
-			IsWindows: &falseVal,
+			DiskImage: &privatev1.DiskImageReference{Id: "user-disk-image"},
 		}.Build()
 
-		trueVal := true
 		defaults := privatev1.ComputeInstanceTemplateSpecDefaults_builder{
-			IsWindows: &trueVal,
+			DiskImage: &privatev1.DiskImageReference{Id: "template-disk-image"},
 		}.Build()
 
 		ApplySpecDefaults(spec, defaults)
 
-		Expect(spec.GetIsWindows()).To(BeFalse())
+		Expect(spec.GetDiskImage().GetId()).To(Equal("user-disk-image"))
 	})
 
-	It("Does nothing when template has no is_windows default", func() {
+	It("Does nothing when template has no disk_image default", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
 			Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
 		}.Build()
@@ -392,7 +294,7 @@ var _ = Describe("ApplySpecDefaults", func() {
 
 		ApplySpecDefaults(spec, defaults)
 
-		Expect(spec.HasIsWindows()).To(BeFalse())
+		Expect(spec.HasDiskImage()).To(BeFalse())
 	})
 })
 
@@ -412,7 +314,7 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 		Expect(err.Error()).To(ContainSubstring("boot_disk"))
-		Expect(err.Error()).To(ContainSubstring("image"))
+		Expect(err.Error()).To(ContainSubstring("disk_image"))
 		Expect(err.Error()).To(ContainSubstring("instance_type"))
 		Expect(err.Error()).To(ContainSubstring("run_strategy"))
 	})
@@ -421,14 +323,14 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
 			Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
 			InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
-			RunStrategy:  new("Always"),
+			RunStrategy:  proto.String("Always"),
 		}.Build()
 
 		err := ValidateRequiredSpecFields(spec)
 		Expect(err).To(HaveOccurred())
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 		Expect(err.Error()).To(ContainSubstring("boot_disk"))
-		Expect(err.Error()).To(ContainSubstring("image"))
+		Expect(err.Error()).To(ContainSubstring("disk_image"))
 		Expect(err.Error()).ToNot(ContainSubstring("instance_type"))
 		Expect(err.Error()).ToNot(ContainSubstring("run_strategy"))
 	})
@@ -437,15 +339,12 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
 			Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
 			InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
-			Image: privatev1.ComputeInstanceImage_builder{
-				SourceType: "registry",
-				SourceRef:  "quay.io/containerdisks/fedora:latest",
-			}.Build(),
+			DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
 				SizeGib:     20,
 				StorageTier: new("standard"),
 			}.Build(),
-			RunStrategy: new("Always"),
+			RunStrategy: proto.String("Always"),
 		}.Build()
 
 		err := ValidateRequiredSpecFields(spec)
@@ -454,16 +353,13 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 
 	It("Requires instance_type when not set", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
-			Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
-			Image: privatev1.ComputeInstanceImage_builder{
-				SourceType: "registry",
-				SourceRef:  "quay.io/containerdisks/fedora:latest",
-			}.Build(),
+			Template:  privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
+			DiskImage: &privatev1.DiskImageReference{Id: "test-disk-image"},
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
 				SizeGib:     20,
 				StorageTier: new("standard"),
 			}.Build(),
-			RunStrategy: new("Always"),
+			RunStrategy: proto.String("Always"),
 		}.Build()
 
 		err := ValidateRequiredSpecFields(spec)
@@ -472,7 +368,7 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 		Expect(err.Error()).To(ContainSubstring("instance_type"))
 	})
 
-	It("Still requires image, boot_disk, run_strategy when instance_type is set", func() {
+	It("Still requires disk_image, boot_disk, run_strategy when instance_type is set", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
 			Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
 			InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
@@ -482,7 +378,7 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 		Expect(err.Error()).To(ContainSubstring("boot_disk"))
-		Expect(err.Error()).To(ContainSubstring("image"))
+		Expect(err.Error()).To(ContainSubstring("disk_image"))
 		Expect(err.Error()).To(ContainSubstring("run_strategy"))
 		Expect(err.Error()).ToNot(ContainSubstring("instance_type"))
 	})
@@ -491,15 +387,12 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
 			Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
 			InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
-			Image: privatev1.ComputeInstanceImage_builder{
-				SourceType: "registry",
-				SourceRef:  "quay.io/containerdisks/fedora:latest",
-			}.Build(),
+			DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
 				SizeGib:     20,
 				StorageTier: new("standard"),
 			}.Build(),
-			RunStrategy: new("always"),
+			RunStrategy: proto.String("always"),
 		}.Build()
 
 		err := ValidateRequiredSpecFields(spec)
@@ -510,54 +403,11 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 		Expect(err.Error()).To(ContainSubstring("Halted"))
 	})
 
-	It("Rejects empty image fields", func() {
-		spec := privatev1.ComputeInstanceSpec_builder{
-			Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
-			InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
-			Image:        privatev1.ComputeInstanceImage_builder{}.Build(),
-			BootDisk: privatev1.ComputeInstanceDisk_builder{
-				SizeGib:     20,
-				StorageTier: new("standard"),
-			}.Build(),
-			RunStrategy: new("Always"),
-		}.Build()
-
-		err := ValidateRequiredSpecFields(spec)
-		Expect(err).To(HaveOccurred())
-		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
-		Expect(err.Error()).To(ContainSubstring("image.source_type"))
-		Expect(err.Error()).To(ContainSubstring("image.source_ref"))
-	})
-
-	It("Rejects image with partial fields", func() {
-		spec := privatev1.ComputeInstanceSpec_builder{
-			Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
-			InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
-			Image: privatev1.ComputeInstanceImage_builder{
-				SourceType: "registry",
-			}.Build(),
-			BootDisk: privatev1.ComputeInstanceDisk_builder{
-				SizeGib:     20,
-				StorageTier: new("standard"),
-			}.Build(),
-			RunStrategy: new("Always"),
-		}.Build()
-
-		err := ValidateRequiredSpecFields(spec)
-		Expect(err).To(HaveOccurred())
-		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
-		Expect(err.Error()).To(ContainSubstring("image.source_ref"))
-		Expect(err.Error()).ToNot(ContainSubstring("image.source_type"))
-	})
-
 	It("Rejects boot_disk with zero size", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
 			Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
 			InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
-			Image: privatev1.ComputeInstanceImage_builder{
-				SourceType: "registry",
-				SourceRef:  "quay.io/containerdisks/fedora:latest",
-			}.Build(),
+			DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
 				StorageTier: new("standard"),
 			}.Build(),
@@ -574,10 +424,7 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
 			Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
 			InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
-			Image: privatev1.ComputeInstanceImage_builder{
-				SourceType: "registry",
-				SourceRef:  "quay.io/containerdisks/fedora:latest",
-			}.Build(),
+			DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
 				SizeGib:     20,
 				StorageTier: new(""),
@@ -592,10 +439,7 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
 			Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
 			InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
-			Image: privatev1.ComputeInstanceImage_builder{
-				SourceType: "registry",
-				SourceRef:  "quay.io/containerdisks/fedora:latest",
-			}.Build(),
+			DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
 				SizeGib: 20,
 			}.Build(),
@@ -609,10 +453,7 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
 			Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
 			InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
-			Image: privatev1.ComputeInstanceImage_builder{
-				SourceType: "registry",
-				SourceRef:  "quay.io/containerdisks/fedora:latest",
-			}.Build(),
+			DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
 				SizeGib:     20,
 				StorageTier: new("standard"),
@@ -637,10 +478,7 @@ var _ = Describe("ValidateRequiredSpecFields", func() {
 		spec := privatev1.ComputeInstanceSpec_builder{
 			Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "test.template"}.Build(),
 			InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
-			Image: privatev1.ComputeInstanceImage_builder{
-				SourceType: "registry",
-				SourceRef:  "quay.io/containerdisks/fedora:latest",
-			}.Build(),
+			DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
 				SizeGib:     20,
 				StorageTier: new("standard"),

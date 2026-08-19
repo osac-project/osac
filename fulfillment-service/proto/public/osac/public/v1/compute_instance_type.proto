@@ -22,6 +22,7 @@ import "osac/public/v1/compute_instance_catalog_item_type.proto";
 import "osac/public/v1/compute_instance_common_type.proto";
 import "osac/public/v1/compute_instance_template_type.proto";
 import "osac/public/v1/condition_status_type.proto";
+import "osac/public/v1/disk_image_type.proto";
 import "osac/public/v1/metadata_type.proto";
 import "osac/public/v1/instance_type_type.proto";
 import "osac/public/v1/security_group_type.proto";
@@ -120,12 +121,9 @@ message ComputeInstanceSpec {
   //
   optional google.protobuf.Timestamp restart_requested_at = 3;
 
-  // VM image configuration.
-  optional ComputeInstanceImage image = 4;
-
   // Reserved field numbers for removed fields (do not reuse).
-  reserved 5, 6;
-  reserved "cores", "memory_gib";
+  reserved 4, 5, 6;
+  reserved "image", "cores", "memory_gib";
 
   // SSH public key.
   optional string ssh_public_key = 7;
@@ -153,23 +151,9 @@ message ComputeInstanceSpec {
   // When set, the server fetches the catalog item and applies its field definitions.
   ComputeInstanceCatalogItemReference catalog_item = 15;
 
-  // IsWindows indicates whether this compute instance runs a Windows guest operating system.
-  //
-  // When `true`, the VM is configured for Windows. When `false` or omitted, the VM runs Linux.
-  //
-  // This field is immutable after creation - the guest OS type cannot be changed after the
-  // compute instance is provisioned.
-  //
-  // Example (when converted to JSON):
-  //
-  //    {
-  //      "spec": {
-  //        "template": "123",
-  //        "is_windows": true
-  //      }
-  //    }
-  //
-  optional bool is_windows = 16;
+  // Reserved field numbers for removed fields (do not reuse).
+  reserved 16;
+  reserved "is_windows";
 
   // Reference to an instance type. Specifies the compute configuration (cores, memory)
   // for this instance. The API validates that the instance type exists and is not OBSOLETE;
@@ -180,6 +164,10 @@ message ComputeInstanceSpec {
   // with an ExternalIPAttachment for this instance atomically during creation.
   // Immutable after creation.
   bool auto_external_ip_attachment = 18 [(google.api.field_behavior) = IMMUTABLE];
+
+  // Reference to a DiskImage resource. Required after template/catalog item
+  // defaults are applied. The server validates existence, lifecycle, and tenant visibility.
+  DiskImageReference disk_image = 19;
 }
 
 

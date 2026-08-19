@@ -195,9 +195,11 @@ If you modified `osac-operator/buf.gen.yaml`, also run `buf generate` (from `osa
   `+kubebuilder:validation:Pattern`, `+kubebuilder:validation:Enum`,
   `+kubebuilder:printcolumn` in type definitions.
 - **AAP integration**: Networking controllers use
-  `provisioning.RunProvisioningLifecycle()` with `OnBeforeProvision`,
-  `OnSuccess`, `OnFailed` callbacks. Template names follow
-  `{prefix}-{action}-{kind}` (e.g., `osac-create-subnet`).
+  `provisioning.RunProvisioningLifecycle()` with `OnSuccess`, `OnFailed`
+  callbacks. Subnet dual-dispatch (fabric + k8s manager) uses
+  `RunMultiTargetProvisioningLifecycle()` / `RunMultiTargetDeprovisioningLifecycle()`
+  instead, driving one `JobTarget`/`DeprovisionTarget` per manager in parallel.
+  Template names follow `{prefix}-{action}-{kind}` (e.g., `osac-create-subnet`).
 - **Linter config**: golangci-lint v2 with `osac-operator/.golangci.yml`. Key enabled
   linters: dupl, errcheck, ginkgolinter, goconst, gocyclo, govet,
   ineffassign, lll, misspell, prealloc, revive, staticcheck, unconvert,

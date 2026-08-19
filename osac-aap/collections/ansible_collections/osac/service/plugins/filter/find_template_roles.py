@@ -201,19 +201,13 @@ class NodeSet(Base):
     size: int
 
 
-class ComputeInstanceImage(Base):
-    """Image configuration for compute instance spec defaults."""
+class DiskImageReference(Base):
+    """Reference to a DiskImage resource."""
 
-    source_type: str = pydantic.Field(
-        default="registry",
-        validation_alias=pydantic.AliasChoices("sourceType", "source_type"),
-        serialization_alias="source_type",
-    )
-    source_ref: str = pydantic.Field(
-        ...,
-        validation_alias=pydantic.AliasChoices("sourceRef", "source_ref"),
-        serialization_alias="source_ref",
-    )
+    id: str | None = None
+    name: str | None = None
+    project: str | None = None
+    shared: bool | None = None
 
 
 class ComputeInstanceDisk(Base):
@@ -231,12 +225,17 @@ class ComputeInstanceTemplateSpecDefaults(Base):
 
     Maps from Ansible camelCase (defaults/main.yaml) to proto snake_case.
 
-    Note: cores/memory_gib are intentionally absent — they are reserved
-    (removed) on the fulfillment-service ComputeInstanceTemplateSpecDefaults
-    proto. instance_type is now the sole way to size a ComputeInstance.
+    Note: cores/memory_gib/image are reserved (removed) on the
+    fulfillment-service ComputeInstanceTemplateSpecDefaults proto.
+    instance_type is the sole way to size a ComputeInstance;
+    disk_image references a DiskImage resource by name or ID.
     """
 
-    image: ComputeInstanceImage | None = None
+    disk_image: DiskImageReference | None = pydantic.Field(
+        default=None,
+        validation_alias=pydantic.AliasChoices("diskImage", "disk_image"),
+        serialization_alias="disk_image",
+    )
     boot_disk: ComputeInstanceDisk | None = pydantic.Field(
         default=None,
         validation_alias=pydantic.AliasChoices("bootDisk", "boot_disk"),

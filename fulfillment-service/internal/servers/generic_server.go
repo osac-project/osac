@@ -379,17 +379,24 @@ func (s *GenericServer[O]) List(ctx context.Context, request any, response any) 
 	type requestIface interface {
 		GetOffset() int32
 		GetLimit() int32
+		HasLimit() bool
 		GetFilter() string
 	}
 	requestMsg := request.(requestIface)
 
 	// List the objects:
-	daoResponse, err := s.dao.List().
+	listRequest := s.dao.List().
 		SetFilter(requestMsg.GetFilter()).
-		SetOffset(requestMsg.GetOffset()).
-		SetLimit(requestMsg.GetLimit()).
-		Do(ctx)
+		SetOffset(requestMsg.GetOffset())
+	if requestMsg.HasLimit() {
+		listRequest.SetLimit(requestMsg.GetLimit())
+	}
+	daoResponse, err := listRequest.Do(ctx)
 	if err != nil {
+		var validationErr *dao.ErrValidation
+		if errors.As(err, &validationErr) {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument, "%s", validationErr.Reason)
+		}
 		var deniedErr *dao.ErrDenied
 		if errors.As(err, &deniedErr) {
 			return grpcstatus.Errorf(grpccodes.PermissionDenied, "%s", deniedErr.Reason)

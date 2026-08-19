@@ -81,6 +81,7 @@ const (
 	envComputeInstanceNamespace   = "OSAC_COMPUTE_INSTANCE_NAMESPACE"
 	envNetworkingNamespace        = "OSAC_NETWORKING_NAMESPACE"
 	envClusterOrderNamespace      = "OSAC_CLUSTER_ORDER_NAMESPACE"
+	envAgentNamespace             = "OSAC_AGENT_NAMESPACE"
 	envBareMetalInstanceNamespace = "OSAC_BARE_METAL_INSTANCE_NAMESPACE"
 
 	// AAP configuration
@@ -334,6 +335,7 @@ func setupClusterControllers(
 			return controller.NewClusterOrderReconciler(
 				localMgr.GetClient(), localMgr.GetAPIReader(), localMgr.GetScheme(),
 				os.Getenv(envClusterOrderNamespace),
+				os.Getenv(envAgentNamespace),
 				provider, pollInterval, maxJobHistory,
 			).SetupWithManager(mgr)
 		},

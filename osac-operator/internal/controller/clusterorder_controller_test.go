@@ -23,9 +23,11 @@ import (
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -890,6 +892,158 @@ var _ = Describe("ClusterOrder Controller", func() {
 			reconcileVIPEndpoints(instance)
 			Expect(instance.Status.ApiEndpoint).To(BeEmpty())
 			Expect(instance.Status.IngressEndpoint).To(BeEmpty())
+		})
+	})
+
+	Context("Agent selection and cleanup", func() {
+		const agentNS = "test-agents"
+
+		var reconciler *ClusterOrderReconciler
+
+		BeforeEach(func() {
+			reconciler = &ClusterOrderReconciler{
+				Client:         k8sClient,
+				apiReader:      k8sClient,
+				Scheme:         k8sClient.Scheme(),
+				AgentNamespace: agentNS,
+			}
+			// Create agent namespace
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: agentNS}}
+			_ = k8sClient.Create(ctx, ns)
+		})
+
+		createAgent := func(name, resourceClass, serverName string) {
+			agent := &unstructured.Unstructured{}
+			agent.SetGroupVersionKind(agentGVK)
+			agent.SetName(name)
+			agent.SetNamespace(agentNS)
+			agent.SetLabels(map[string]string{
+				agentResourceClassLabel: resourceClass,
+				agentServerNameLabel:    serverName,
+			})
+			Expect(k8sClient.Create(ctx, agent)).To(Succeed())
+			DeferCleanup(func() {
+				_ = k8sClient.Delete(ctx, agent)
+			})
+		}
+
+		It("selects available agents and labels them", func() {
+			createAgent("agent-1", "fc430", "server-01")
+			createAgent("agent-2", "fc430", "server-02")
+			createAgent("agent-3", "fc430", "server-03")
+
+			instance := &v1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-cluster"},
+				Spec: v1alpha1.ClusterOrderSpec{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{ResourceClass: "fc430", NumberOfNodes: 2},
+					},
+				},
+			}
+
+			result, err := reconciler.reconcileAgentSelection(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeZero())
+
+			Expect(instance.Status.NodeSets).To(HaveLen(1))
+			Expect(instance.Status.NodeSets[0].Name).To(Equal("fc430"))
+			Expect(instance.Status.NodeSets[0].Agents).To(HaveLen(2))
+
+			// Verify labels were set
+			for _, agentStatus := range instance.Status.NodeSets[0].Agents {
+				agent := &unstructured.Unstructured{}
+				agent.SetGroupVersionKind(agentGVK)
+				Expect(k8sClient.Get(ctx, types.NamespacedName{
+					Name: agentStatus.AgentName, Namespace: agentNS,
+				}, agent)).To(Succeed())
+				Expect(agent.GetLabels()[agentClusterOrderLabel]).To(Equal("test-cluster"))
+			}
+		})
+
+		It("requeues when not enough agents available", func() {
+			createAgent("agent-1", "fc430", "server-01")
+
+			instance := &v1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-cluster"},
+				Spec: v1alpha1.ClusterOrderSpec{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{ResourceClass: "fc430", NumberOfNodes: 3},
+					},
+				},
+			}
+
+			result, err := reconciler.reconcileAgentSelection(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+			Expect(instance.Status.NodeSets).To(BeEmpty())
+		})
+
+		It("is idempotent when agents already selected", func() {
+			instance := &v1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-cluster"},
+				Spec: v1alpha1.ClusterOrderSpec{
+					NodeRequests: []v1alpha1.NodeRequest{
+						{ResourceClass: "fc430", NumberOfNodes: 1},
+					},
+				},
+				Status: v1alpha1.ClusterOrderStatus{
+					NodeSets: []v1alpha1.NodeSetStatus{
+						{Name: "fc430", Agents: []v1alpha1.AgentStatus{
+							{AgentName: "agent-1", HostName: "server-01"},
+						}},
+					},
+				},
+			}
+
+			result, err := reconciler.reconcileAgentSelection(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeZero())
+			Expect(instance.Status.NodeSets).To(HaveLen(1))
+		})
+
+		It("skips when no node requests", func() {
+			instance := &v1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-cluster"},
+			}
+
+			result, err := reconciler.reconcileAgentSelection(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeZero())
+		})
+
+		It("cleans up agent labels on deletion", func() {
+			createAgent("agent-1", "fc430", "server-01")
+			createAgent("agent-2", "fc430", "server-02")
+
+			// Label agents as allocated to this cluster
+			for _, name := range []string{"agent-1", "agent-2"} {
+				agent := &unstructured.Unstructured{}
+				agent.SetGroupVersionKind(agentGVK)
+				Expect(k8sClient.Get(ctx, types.NamespacedName{
+					Name: name, Namespace: agentNS,
+				}, agent)).To(Succeed())
+				labels := agent.GetLabels()
+				labels[agentClusterOrderLabel] = "test-cluster"
+				agent.SetLabels(labels)
+				Expect(k8sClient.Update(ctx, agent)).To(Succeed())
+			}
+
+			instance := &v1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-cluster"},
+			}
+
+			err := reconciler.reconcileAgentCleanup(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify labels were removed
+			for _, name := range []string{"agent-1", "agent-2"} {
+				agent := &unstructured.Unstructured{}
+				agent.SetGroupVersionKind(agentGVK)
+				Expect(k8sClient.Get(ctx, types.NamespacedName{
+					Name: name, Namespace: agentNS,
+				}, agent)).To(Succeed())
+				Expect(agent.GetLabels()).NotTo(HaveKey(agentClusterOrderLabel))
+			}
 		})
 	})
 

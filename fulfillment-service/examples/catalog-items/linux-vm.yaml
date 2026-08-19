@@ -19,16 +19,11 @@ field_definitions:
     editable: true
     default: 120
     validation_schema: '{"type":"integer","minimum":10,"maximum":1024}'
-  - path: image.source_ref
-    display_name: Container Disk Image
+  - path: disk_image
+    display_name: Disk Image
     editable: true
-    default: quay.io/containerdisks/fedora:latest
-    validation_schema: '{"type":"string","pattern":"^[a-z0-9./-]+:[a-z0-9._-]+$"}'
-  - path: image.source_type
-    display_name: Image Source Type
-    editable: false
-    default: registry
-    validation_schema: '{"type":"string"}'
+    default: fedora
+    validation_schema: '{"type":"string","minLength":1}'
   - path: run_strategy
     display_name: Run Strategy
     editable: true

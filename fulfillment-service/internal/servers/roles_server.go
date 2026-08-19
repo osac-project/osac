@@ -135,7 +135,9 @@ func (s *RolesServer) List(ctx context.Context,
 	request *publicv1.RolesListRequest) (response *publicv1.RolesListResponse, err error) {
 	privateRequest := &privatev1.RolesListRequest{}
 	privateRequest.SetOffset(request.GetOffset())
-	privateRequest.SetLimit(request.GetLimit())
+	if request.HasLimit() {
+		privateRequest.SetLimit(request.GetLimit())
+	}
 	privateRequest.SetFilter(request.GetFilter())
 	privateRequest.SetOrder(request.GetOrder())
 

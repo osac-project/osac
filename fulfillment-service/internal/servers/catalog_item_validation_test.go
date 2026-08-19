@@ -153,32 +153,32 @@ var _ = Describe("applyFieldDefinitions", func() {
 		Expect(err.Error()).To(ContainSubstring("pull_secret"))
 	})
 
-	It("applies is_windows field definition default to compute instance spec", func() {
+	It("applies disk_image field definition default to compute instance spec", func() {
 		spec := &privatev1.ComputeInstanceSpec{}
-		defaultVal, err := structpb.NewValue(true)
+		defaultVal, err := structpb.NewValue("my-disk-image")
 		Expect(err).ToNot(HaveOccurred())
 		fieldDefs := []*privatev1.FieldDefinition{{
-			Path:     "is_windows",
+			Path:     "disk_image",
 			Editable: true,
 			Default:  defaultVal,
 		}}
 		err = applyFieldDefinitions(spec, fieldDefs)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(spec.GetIsWindows()).To(BeTrue())
+		Expect(spec.GetDiskImage().GetName()).To(Equal("my-disk-image"))
 	})
 
-	It("applies non-editable default for bool field is_windows on compute instance spec", func() {
+	It("applies non-editable default for string field disk_image on compute instance spec", func() {
 		spec := &privatev1.ComputeInstanceSpec{}
-		defaultVal, err := structpb.NewValue(true)
+		defaultVal, err := structpb.NewValue("my-disk-image")
 		Expect(err).ToNot(HaveOccurred())
 		fieldDefs := []*privatev1.FieldDefinition{{
-			Path:     "is_windows",
+			Path:     "disk_image",
 			Editable: false,
 			Default:  defaultVal,
 		}}
 		err = applyFieldDefinitions(spec, fieldDefs)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(spec.GetIsWindows()).To(BeTrue())
+		Expect(spec.GetDiskImage().GetName()).To(Equal("my-disk-image"))
 	})
 
 	It("rejects user value for non-editable template_parameter", func() {

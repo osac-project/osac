@@ -147,7 +147,9 @@ func (s *VirtualNetworksServer) List(ctx context.Context,
 	// Create private request with same parameters:
 	privateRequest := &privatev1.VirtualNetworksListRequest{}
 	privateRequest.SetOffset(request.GetOffset())
-	privateRequest.SetLimit(request.GetLimit())
+	if request.HasLimit() {
+		privateRequest.SetLimit(request.GetLimit())
+	}
 	privateRequest.SetFilter(request.GetFilter())
 	privateRequest.SetOrder(request.GetOrder())
 

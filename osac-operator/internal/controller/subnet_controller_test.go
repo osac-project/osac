@@ -545,8 +545,8 @@ var _ = Describe("SubnetReconciler", func() {
 
 			final := &osacv1alpha1.Subnet{}
 			Expect(k8sClient.Get(ctx, key, final)).To(Succeed())
-			Expect(provisioning.FindLatestJobByTypeAndTarget(final.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision, string(dispatcher.ManagerRoleFabric))).NotTo(BeNil())
-			Expect(provisioning.FindLatestJobByTypeAndTarget(final.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision, string(dispatcher.ManagerRoleK8s))).NotTo(BeNil())
+			Expect(provisioning.FindLatestJobByTypeAndTarget(final.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision, "fabric")).NotTo(BeNil())
+			Expect(provisioning.FindLatestJobByTypeAndTarget(final.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision, "k8s")).NotTo(BeNil())
 		})
 
 		It("clears the stale k8s implementation-strategy annotation when the NetworkClass later drops its k8sManager", func() {
@@ -602,26 +602,28 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(dual.Annotations[osacImplementationStrategyAnnotation]).To(Equal("netris"))
 			Expect(dual.Annotations[osacK8sImplementationStrategyAnnotation]).To(Equal("cudn_net"))
 
-			// NetworkClass drops its k8sManager (e.g. migrated to fabric-only). The
-			// stale k8s-manager resource must be drained via a scoped deprovision job
-			// before the annotation naming it is cleared — otherwise the resource would
-			// be silently orphaned. The next reconcile resolves a fabric-only plan and
-			// triggers that drain; the annotation stays until the drain job succeeds.
+			// NetworkClass drops its k8sManager (e.g. migrated to fabric-only). The next
+			// reconcile resolves a fabric-only plan, but must not immediately drop the
+			// k8s annotation: it should first deprovision the now-stale k8s target so
+			// the k8s manager's resource isn't orphaned. Deprovisioning triggers on this
+			// reconcile and hasn't reached a terminal state yet, so both annotations —
+			// and the pending k8s deprovision job — are still present.
 			transitionNetworkClass.K8SManager = nil
 
 			_, err = reconciler.Reconcile(ctx, req)
 			Expect(err).NotTo(HaveOccurred())
 
-			draining := &osacv1alpha1.Subnet{}
-			Expect(k8sClient.Get(ctx, key, draining)).To(Succeed())
-			Expect(draining.Annotations[osacImplementationStrategyAnnotation]).To(Equal("netris"))
-			Expect(draining.Annotations[osacK8sImplementationStrategyAnnotation]).To(Equal("cudn_net"),
-				"k8s annotation must survive until the drain job actually succeeds")
-			Expect(provisioning.FindLatestJobByTypeAndTarget(draining.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision, string(dispatcher.ManagerRoleK8s))).NotTo(BeNil())
+			midTransition := &osacv1alpha1.Subnet{}
+			Expect(k8sClient.Get(ctx, key, midTransition)).To(Succeed())
+			Expect(midTransition.Annotations[osacImplementationStrategyAnnotation]).To(Equal("netris"))
+			Expect(midTransition.Annotations[osacK8sImplementationStrategyAnnotation]).To(Equal("cudn_net"))
+			k8sDeprovisionJob := provisioning.FindLatestJobByTypeAndTarget(midTransition.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision, "k8s")
+			Expect(k8sDeprovisionJob).NotTo(BeNil())
+			Expect(k8sDeprovisionJob.State.IsTerminal()).To(BeFalse())
 
-			// Next reconcile polls the drain job (mockSubnetProvider's default
-			// GetDeprovisionStatus reports Succeeded) and, once terminal, clears the
-			// now-safe-to-remove k8s annotation while keeping the fabric one intact.
+			// Once the k8s target's deprovision job reaches a terminal, successful state
+			// (polled on the next reconcile), the k8s annotation is finally removed while
+			// the fabric one remains intact.
 			_, err = reconciler.Reconcile(ctx, req)
 			Expect(err).NotTo(HaveOccurred())
 
@@ -918,14 +920,14 @@ var _ = Describe("SubnetReconciler", func() {
 
 			Expect(triggerCount).To(Equal(2))
 			Expect(seenAnnotations).To(ConsistOf("netris", "cudn_net"))
-			Expect(provisioning.FindLatestJobByTypeAndTarget(subnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision, string(dispatcher.ManagerRoleFabric))).NotTo(BeNil())
-			Expect(provisioning.FindLatestJobByTypeAndTarget(subnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision, string(dispatcher.ManagerRoleK8s))).NotTo(BeNil())
+			Expect(provisioning.FindLatestJobByTypeAndTarget(subnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision, "fabric")).NotTo(BeNil())
+			Expect(provisioning.FindLatestJobByTypeAndTarget(subnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision, "k8s")).NotTo(BeNil())
 		})
 
 		It("sets Ready only once both targets' latest jobs have succeeded", func() {
 			subnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
-				{JobID: "fabric-1", Type: osacv1alpha1.JobTypeProvision, Target: string(dispatcher.ManagerRoleFabric), State: osacv1alpha1.JobStateRunning, Timestamp: metav1.NewTime(time.Now().UTC())},
-				{JobID: "k8s-1", Type: osacv1alpha1.JobTypeProvision, Target: string(dispatcher.ManagerRoleK8s), State: osacv1alpha1.JobStateRunning, Timestamp: metav1.NewTime(time.Now().UTC())},
+				{JobID: "fabric-1", Type: osacv1alpha1.JobTypeProvision, Target: "fabric", State: osacv1alpha1.JobStateRunning, Timestamp: metav1.NewTime(time.Now().UTC())},
+				{JobID: "k8s-1", Type: osacv1alpha1.JobTypeProvision, Target: "k8s", State: osacv1alpha1.JobStateRunning, Timestamp: metav1.NewTime(time.Now().UTC())},
 			}
 			mockProvider.getProvisionStatusFunc = func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatus, error) {
 				return provisioning.ProvisionStatus{JobID: jobID, State: osacv1alpha1.JobStateSucceeded}, nil
@@ -942,8 +944,8 @@ var _ = Describe("SubnetReconciler", func() {
 
 		It("does not set Ready when only one target has succeeded and the other is still running", func() {
 			subnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
-				{JobID: "fabric-1", Type: osacv1alpha1.JobTypeProvision, Target: string(dispatcher.ManagerRoleFabric), State: osacv1alpha1.JobStateSucceeded, Timestamp: metav1.NewTime(time.Now().UTC())},
-				{JobID: "k8s-1", Type: osacv1alpha1.JobTypeProvision, Target: string(dispatcher.ManagerRoleK8s), State: osacv1alpha1.JobStateRunning, Timestamp: metav1.NewTime(time.Now().UTC())},
+				{JobID: "fabric-1", Type: osacv1alpha1.JobTypeProvision, Target: "fabric", State: osacv1alpha1.JobStateSucceeded, Timestamp: metav1.NewTime(time.Now().UTC())},
+				{JobID: "k8s-1", Type: osacv1alpha1.JobTypeProvision, Target: "k8s", State: osacv1alpha1.JobStateRunning, Timestamp: metav1.NewTime(time.Now().UTC())},
 			}
 			mockProvider.getProvisionStatusFunc = func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatus, error) {
 				// Only the k8s job is polled (fabric already succeeded, terminal — Skip).
@@ -958,8 +960,8 @@ var _ = Describe("SubnetReconciler", func() {
 
 		It("sets Failed with a target-scoped message when one target fails, without affecting the other's already-succeeded state", func() {
 			subnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
-				{JobID: "fabric-1", Type: osacv1alpha1.JobTypeProvision, Target: string(dispatcher.ManagerRoleFabric), State: osacv1alpha1.JobStateSucceeded, Timestamp: metav1.NewTime(time.Now().UTC())},
-				{JobID: "k8s-1", Type: osacv1alpha1.JobTypeProvision, Target: string(dispatcher.ManagerRoleK8s), State: osacv1alpha1.JobStateRunning, Timestamp: metav1.NewTime(time.Now().UTC())},
+				{JobID: "fabric-1", Type: osacv1alpha1.JobTypeProvision, Target: "fabric", State: osacv1alpha1.JobStateSucceeded, Timestamp: metav1.NewTime(time.Now().UTC())},
+				{JobID: "k8s-1", Type: osacv1alpha1.JobTypeProvision, Target: "k8s", State: osacv1alpha1.JobStateRunning, Timestamp: metav1.NewTime(time.Now().UTC())},
 			}
 			mockProvider.getProvisionStatusFunc = func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatus, error) {
 				return provisioning.ProvisionStatus{JobID: jobID, State: osacv1alpha1.JobStateFailed, Message: "k8s overlay role failed"}, nil
@@ -975,7 +977,7 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(cond.Message).To(ContainSubstring("k8s"))
 			Expect(cond.Message).To(ContainSubstring("k8s overlay role failed"))
 
-			latestFabricJob := provisioning.FindLatestJobByTypeAndTarget(subnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision, string(dispatcher.ManagerRoleFabric))
+			latestFabricJob := provisioning.FindLatestJobByTypeAndTarget(subnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision, "fabric")
 			Expect(latestFabricJob.State).To(Equal(osacv1alpha1.JobStateSucceeded))
 		})
 	})
@@ -1147,8 +1149,8 @@ var _ = Describe("SubnetReconciler", func() {
 
 			Expect(triggerCount).To(Equal(2))
 			Expect(seenAnnotations).To(ConsistOf("netris", "cudn_net"))
-			Expect(provisioning.FindLatestJobByTypeAndTarget(subnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision, string(dispatcher.ManagerRoleFabric))).NotTo(BeNil())
-			Expect(provisioning.FindLatestJobByTypeAndTarget(subnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision, string(dispatcher.ManagerRoleK8s))).NotTo(BeNil())
+			Expect(provisioning.FindLatestJobByTypeAndTarget(subnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision, "fabric")).NotTo(BeNil())
+			Expect(provisioning.FindLatestJobByTypeAndTarget(subnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision, "k8s")).NotTo(BeNil())
 		})
 
 		It("only removes the finalizer once both dual-dispatch deprovision jobs reach a terminal state", func() {
@@ -1157,8 +1159,8 @@ var _ = Describe("SubnetReconciler", func() {
 				osacK8sImplementationStrategyAnnotation: "cudn_net",
 			}
 			subnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
-				{JobID: "fabric-deprov-1", Type: osacv1alpha1.JobTypeDeprovision, Target: string(dispatcher.ManagerRoleFabric), State: osacv1alpha1.JobStateSucceeded, Timestamp: metav1.NewTime(time.Now().UTC())},
-				{JobID: "k8s-deprov-1", Type: osacv1alpha1.JobTypeDeprovision, Target: string(dispatcher.ManagerRoleK8s), State: osacv1alpha1.JobStateRunning, Timestamp: metav1.NewTime(time.Now().UTC())},
+				{JobID: "fabric-deprov-1", Type: osacv1alpha1.JobTypeDeprovision, Target: "fabric", State: osacv1alpha1.JobStateSucceeded, Timestamp: metav1.NewTime(time.Now().UTC())},
+				{JobID: "k8s-deprov-1", Type: osacv1alpha1.JobTypeDeprovision, Target: "k8s", State: osacv1alpha1.JobStateRunning, Timestamp: metav1.NewTime(time.Now().UTC())},
 			}
 			mockProvider.getDeprovisionStatusFunc = func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatus, error) {
 				return provisioning.ProvisionStatus{JobID: jobID, State: osacv1alpha1.JobStateRunning}, nil
@@ -1176,7 +1178,13 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(result.RequeueAfter).To(Equal(0 * time.Second))
 		})
 
-		It("only deprovisions the fabric target when the k8s manager was never dispatched to", func() {
+		It("tags the fabric-only deprovision job with the fabric target, not an untargeted job, when the k8s manager was never dispatched to", func() {
+			// Regression test: fabric-only Subnets on the dispatcher path (fabric
+			// annotation set, no k8s annotation) must still go through the
+			// "fabric"-tagged multi-target lifecycle, matching handleProvisioning's
+			// job history. Falling back to the untargeted single-target lifecycle
+			// here would blind the provider to the fabric target's existing job
+			// history (see handleDeprovisioning's doc comment).
 			subnet.Annotations = map[string]string{
 				osacImplementationStrategyAnnotation: "netris",
 			}
@@ -1192,8 +1200,39 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(result.RequeueAfter).To(Equal(1 * time.Second))
 
 			Expect(triggerCount).To(Equal(1))
-			Expect(provisioning.FindLatestJobByTypeAndTarget(subnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision, "")).NotTo(BeNil())
-			Expect(provisioning.FindLatestJobByTypeAndTarget(subnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision, string(dispatcher.ManagerRoleK8s))).To(BeNil())
+			Expect(provisioning.FindLatestJobByTypeAndTarget(subnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision, "fabric")).NotTo(BeNil())
+			Expect(provisioning.FindLatestJobByTypeAndTarget(subnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision, "")).To(BeNil())
+			Expect(provisioning.FindLatestJobByTypeAndTarget(subnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision, "k8s")).To(BeNil())
+		})
+
+		It("absorbs pre-existing untargeted deprovision history into the fabric target instead of triggering a duplicate", func() {
+			// A Subnet that was already deprovisioning via the untargeted legacy path
+			// (e.g. it started deprovisioning before this fix landed) must not have
+			// that in-flight job orphaned and re-triggered once fabric-tagging kicks in.
+			subnet.Annotations = map[string]string{
+				osacImplementationStrategyAnnotation: "netris",
+			}
+			subnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{
+				{JobID: "legacy-deprov-1", Type: osacv1alpha1.JobTypeDeprovision, Target: "", State: osacv1alpha1.JobStateRunning, Timestamp: metav1.NewTime(time.Now().UTC())},
+			}
+			mockProvider.getDeprovisionStatusFunc = func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatus, error) {
+				return provisioning.ProvisionStatus{JobID: jobID, State: osacv1alpha1.JobStateSucceeded}, nil
+			}
+			triggerCount := 0
+			mockProvider.triggerDeprovisionFunc = func(_ context.Context, resource client.Object, _ []osacv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
+				triggerCount++
+				return &provisioning.DeprovisionResult{Action: provisioning.DeprovisionTriggered, JobID: "should-not-be-used"}, nil
+			}
+
+			result, err := reconciler.handleDeprovisioning(ctx, subnet)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(0 * time.Second))
+
+			Expect(triggerCount).To(Equal(0))
+			backfilled := provisioning.FindLatestJobByTypeAndTarget(subnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision, "fabric")
+			Expect(backfilled).NotTo(BeNil())
+			Expect(backfilled.JobID).To(Equal("legacy-deprov-1"))
+			Expect(provisioning.FindLatestJobByTypeAndTarget(subnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeDeprovision, "")).To(BeNil())
 		})
 	})
 })

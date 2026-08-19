@@ -353,9 +353,9 @@ spec:
                             minLength: 1
                             type: string
                           hostName:
-                            description: HostName is the bare-metal server name used
-                              by the network dispatcher.
-                            minLength: 1
+                            description: |-
+                              HostName is the bare-metal server name used by the network dispatcher.
+                              Absent when the agent does not carry the netris.server/name label (e.g. CI environments).
                             type: string
                           ipAddress:
                             description: |-
@@ -368,7 +368,6 @@ spec:
                             type: string
                         required:
                         - agentName
-                        - hostName
                         type: object
                       type: array
                       x-kubernetes-list-map-keys:

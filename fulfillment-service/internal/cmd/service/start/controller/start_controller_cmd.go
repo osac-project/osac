@@ -59,6 +59,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/tenant"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/user"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/virtualnetwork"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/volume"
 	internalhealth "github.com/osac-project/osac/fulfillment-service/internal/health"
 	"github.com/osac-project/osac/fulfillment-service/internal/idp"
 	hubscheme "github.com/osac-project/osac/fulfillment-service/internal/kubernetes/scheme"
@@ -751,6 +752,43 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 			r.logger.InfoContext(
 				ctx,
 				"NAT gateway reconciler failed",
+				slog.Any("error", err),
+			)
+		}
+	}()
+
+	// Create the volume reconciler:
+	r.logger.InfoContext(ctx, "Creating volume reconciler")
+	volumeReconcilerFunction, err := volume.NewFunction().
+		SetLogger(r.logger).
+		SetConnection(r.client).
+		SetHubCache(hubCache).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create volume reconciler function: %w", err)
+	}
+	volumeReconciler, err := controllers.NewReconciler[*privatev1.Volume]().
+		SetLogger(r.logger).
+		SetName("volume").
+		SetClient(r.client).
+		SetFunction(volumeReconcilerFunction).
+		SetEventFilter("has(event.volume) || (has(event.hub) && event.type == EVENT_TYPE_OBJECT_CREATED)").
+		SetHealthReporter(healthAggregator).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create volume reconciler: %w", err)
+	}
+
+	// Start the volume reconciler:
+	r.logger.InfoContext(ctx, "Starting volume reconciler")
+	go func() {
+		err := volumeReconciler.Start(ctx)
+		if err == nil || errors.Is(err, context.Canceled) {
+			r.logger.InfoContext(ctx, "Volume reconciler finished")
+		} else {
+			r.logger.InfoContext(
+				ctx,
+				"Volume reconciler failed",
 				slog.Any("error", err),
 			)
 		}

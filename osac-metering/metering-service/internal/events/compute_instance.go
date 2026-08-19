@@ -153,8 +153,8 @@ func ComputeInstanceBillingDimensions(ci *privatev1.ComputeInstance) map[string]
 	if it := spec.GetInstanceType(); it != nil {
 		dims["instance_type"] = it.GetName()
 	}
-	if img := spec.GetImage(); img != nil {
-		dims["image_ref"] = img.GetSourceRef()
+	if di := spec.GetDiskImage(); di != nil {
+		dims["image_ref"] = di.GetName()
 	}
 	if disk := spec.GetBootDisk(); disk != nil {
 		dims["boot_disk_size_gib"] = disk.GetSizeGib()

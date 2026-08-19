@@ -129,7 +129,9 @@ func (s *NATGatewaysServer) List(ctx context.Context,
 	request *publicv1.NATGatewaysListRequest) (response *publicv1.NATGatewaysListResponse, err error) {
 	privateRequest := &privatev1.NATGatewaysListRequest{}
 	privateRequest.SetOffset(request.GetOffset())
-	privateRequest.SetLimit(request.GetLimit())
+	if request.HasLimit() {
+		privateRequest.SetLimit(request.GetLimit())
+	}
 	privateRequest.SetFilter(request.GetFilter())
 	privateRequest.SetOrder(request.GetOrder())
 

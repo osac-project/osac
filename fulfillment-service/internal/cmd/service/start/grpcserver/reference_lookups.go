@@ -145,6 +145,17 @@ func registerReferenceLookups(
 	references.RegisterDAOLookup(validator, "osac.public.v1.InstanceTypeReference", instanceTypesDAO)
 	references.RegisterDAOLookup(validator, "osac.public.v1.InstanceTypeLocalReference", instanceTypesDAO)
 
+	diskImagesDAO, err := dao.NewGenericDAO[*privatev1.DiskImage]().
+		SetLogger(logger).
+		SetTenancyLogic(tenancyLogic).
+		SetMetricsRegisterer(metricsRegisterer).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create DiskImage DAO for reference lookups: %w", err)
+	}
+	references.RegisterDAOLookup(validator, "osac.private.v1.DiskImageReference", diskImagesDAO)
+	references.RegisterDAOLookup(validator, "osac.public.v1.DiskImageReference", diskImagesDAO)
+
 	// Cluster and bare metal references
 	clustersDAO, err := dao.NewGenericDAO[*privatev1.Cluster]().
 		SetLogger(logger).

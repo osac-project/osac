@@ -205,12 +205,9 @@ field_definitions:
     display_name: SSH Key
     editable: true
     default: "ssh-ed25519 AAAA..."
-  - path: image.source_type
-    default: registry
-    display_name: Image Source Type
-  - path: image.source_ref
-    default: quay.io/containerdisks/fedora:latest
-    display_name: Image Reference
+  - path: disk_image
+    default: fedora
+    display_name: Disk Image
   - path: boot_disk.size_gib
     default: 20
     display_name: Boot Disk Size (GiB)
@@ -238,6 +235,21 @@ spec:
   cores: 1
   memory_gib: 2
   state: INSTANCE_TYPE_STATE_ACTIVE
+```
+
+> IMPORTANT: The catalog item also references a disk image by name. DiskImages must be created before they can be used. For example:
+
+```yaml
+'@type': type.googleapis.com/osac.private.v1.DiskImage
+metadata:
+  name: fedora
+  tenant: shared
+spec:
+  source_type: registry
+  source_ref: "quay.io/containerdisks/fedora:latest"
+  guest_os_family: linux
+  architecture:
+    - amd64
 ```
 
 ### Create the catalog item
@@ -290,8 +302,7 @@ catalog item, the server rejects any spec field not listed in `field_definitions
 | `instance_type` | Instance Type includes number of CPU cores, memory, etc. |
 | `run_strategy` | VM run strategy (e.g., `Always`, `Halted`) |
 | `user_data` | Cloud-init or ignition user data |
-| `image.source_type` | Image source type (e.g., `registry`) |
-| `image.source_ref` | Image reference (e.g., OCI image URL) |
+| `disk_image` | DiskImage reference (name or ID) |
 | `boot_disk.size_gib` | Boot disk size in GiB |
 | `additional_disks` | Additional disk configurations |
 | `network_attachments` | Network attachments (subnet + security groups per NIC) |

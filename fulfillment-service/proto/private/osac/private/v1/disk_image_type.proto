@@ -138,3 +138,11 @@ message DiskImageSpec {
 //
 // Currently empty. Reserved for future use.
 message DiskImageStatus {}
+
+// Full reference to a DiskImage resource.
+message DiskImageReference {
+  string id = 1;
+  string name = 2;
+  string project = 3;
+  bool shared = 4;
+}

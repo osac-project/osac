@@ -46,29 +46,10 @@ func ApplySpecDefaults(spec *privatev1.ComputeInstanceSpec, defaults *privatev1.
 	if !spec.HasRunStrategy() && defaults.HasRunStrategy() {
 		spec.SetRunStrategy(defaults.GetRunStrategy())
 	}
-	if !spec.HasIsWindows() && defaults.HasIsWindows() {
-		spec.SetIsWindows(defaults.GetIsWindows())
+	if !spec.HasDiskImage() && defaults.HasDiskImage() {
+		spec.SetDiskImage(defaults.GetDiskImage())
 	}
-	mergeImageDefaults(spec, defaults)
 	mergeBootDiskDefaults(spec, defaults)
-}
-
-func mergeImageDefaults(spec *privatev1.ComputeInstanceSpec, defaults *privatev1.ComputeInstanceTemplateSpecDefaults) {
-	if !defaults.HasImage() {
-		return
-	}
-	if !spec.HasImage() {
-		spec.SetImage(proto.Clone(defaults.GetImage()).(*privatev1.ComputeInstanceImage))
-		return
-	}
-	img := spec.GetImage()
-	defImg := defaults.GetImage()
-	if img.GetSourceType() == "" && defImg.GetSourceType() != "" {
-		img.SetSourceType(defImg.GetSourceType())
-	}
-	if img.GetSourceRef() == "" && defImg.GetSourceRef() != "" {
-		img.SetSourceRef(defImg.GetSourceRef())
-	}
 }
 
 func mergeBootDiskDefaults(spec *privatev1.ComputeInstanceSpec, defaults *privatev1.ComputeInstanceTemplateSpecDefaults) {
@@ -103,8 +84,8 @@ func ValidateRequiredSpecFields(spec *privatev1.ComputeInstanceSpec) error {
 	if spec.GetInstanceType() == nil {
 		missing = append(missing, "instance_type")
 	}
-	if !spec.HasImage() {
-		missing = append(missing, "image")
+	if !spec.HasDiskImage() {
+		missing = append(missing, "disk_image")
 	}
 	if !spec.HasBootDisk() {
 		missing = append(missing, "boot_disk")
@@ -122,9 +103,6 @@ func ValidateRequiredSpecFields(spec *privatev1.ComputeInstanceSpec) error {
 	}
 
 	if err := validateRunStrategy(spec.GetRunStrategy()); err != nil {
-		return err
-	}
-	if err := validateImage(spec.GetImage()); err != nil {
 		return err
 	}
 	if err := validateDisk(spec.GetBootDisk()); err != nil {
@@ -148,27 +126,6 @@ func validateRunStrategy(value string) error {
 		"invalid run_strategy %q: must be one of %s",
 		value, strings.Join(validRunStrategies, ", "),
 	)
-}
-
-func validateImage(image *privatev1.ComputeInstanceImage) error {
-	if image == nil {
-		return nil
-	}
-	var missing []string
-	if image.GetSourceType() == "" {
-		missing = append(missing, "image.source_type")
-	}
-	if image.GetSourceRef() == "" {
-		missing = append(missing, "image.source_ref")
-	}
-	if len(missing) > 0 {
-		return grpcstatus.Errorf(
-			grpccodes.InvalidArgument,
-			"the following required image fields are missing: %s",
-			strings.Join(missing, ", "),
-		)
-	}
-	return nil
 }
 
 func validateDisk(disk *privatev1.ComputeInstanceDisk) error {

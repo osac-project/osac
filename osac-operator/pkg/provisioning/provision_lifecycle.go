@@ -343,7 +343,7 @@ func RunMultiTargetProvisioningLifecycle(
 	if err := validateJobTargets(targets); err != nil {
 		return ctrl.Result{}, err
 	}
-	backfillLegacyJobTargets(provState.Jobs, legacyHistoryOwner(targets))
+	backfillLegacyJobTargets(provState.Jobs, legacyHistoryOwnerForProvision(targets))
 
 	var (
 		errs         []error
@@ -378,7 +378,7 @@ func RunMultiTargetProvisioningLifecycle(
 // impossible: at least one target, every target with a non-empty and unique
 // Name, a non-nil Provider and CheckAPIServer for each (both are
 // unconditionally invoked while evaluating that target's action), and at
-// most one target with AbsorbsLegacyHistory set (see legacyHistoryOwner).
+// most one target with AbsorbsLegacyHistory set (see legacyHistoryOwnerForProvision).
 func validateJobTargets(targets []JobTarget) error {
 	if len(targets) == 0 {
 		return errors.New("at least one JobTarget is required")
@@ -409,10 +409,10 @@ func validateJobTargets(targets []JobTarget) error {
 	return nil
 }
 
-// legacyHistoryOwner returns the Name of the target that set
+// legacyHistoryOwnerForProvision returns the Name of the target that set
 // AbsorbsLegacyHistory, or "" if none did. validateJobTargets guarantees at
 // most one such target.
-func legacyHistoryOwner(targets []JobTarget) string {
+func legacyHistoryOwnerForProvision(targets []JobTarget) string {
 	for _, t := range targets {
 		if t.AbsorbsLegacyHistory {
 			return t.Name

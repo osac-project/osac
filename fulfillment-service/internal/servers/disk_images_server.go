@@ -137,7 +137,9 @@ func (s *DiskImagesServer) List(ctx context.Context,
 	request *publicv1.DiskImagesListRequest) (response *publicv1.DiskImagesListResponse, err error) {
 	privateRequest := &privatev1.DiskImagesListRequest{}
 	privateRequest.SetOffset(request.GetOffset())
-	privateRequest.SetLimit(request.GetLimit())
+	if request.HasLimit() {
+		privateRequest.SetLimit(request.GetLimit())
+	}
 	composedFilter, err := composeFilterDefaults(request.GetFilter(), diskImageFilterDefaults)
 	if err != nil {
 		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "%v", err)

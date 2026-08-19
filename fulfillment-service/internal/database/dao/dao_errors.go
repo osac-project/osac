@@ -183,6 +183,16 @@ func (e *ErrNotUnique) Error() string {
 	return e.Reason
 }
 
+// ErrValidation indicates that a request parameter failed validation.
+type ErrValidation struct {
+	Reason string
+}
+
+// Error returns the error message.
+func (e *ErrValidation) Error() string {
+	return e.Reason
+}
+
 // ErrDeadlock indicates that a PostgreSQL deadlock was detected. The caller should retry the operation.
 type ErrDeadlock struct{}
 

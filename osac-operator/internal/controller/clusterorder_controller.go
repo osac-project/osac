@@ -72,6 +72,7 @@ type ClusterOrderReconciler struct {
 	apiReader             client.Reader
 	Scheme                *runtime.Scheme
 	ClusterOrderNamespace string
+	AgentNamespace        string
 	ProvisioningProvider  provisioning.ProvisioningProvider
 	StatusPollInterval    time.Duration
 	MaxJobHistory         int
@@ -82,6 +83,7 @@ func NewClusterOrderReconciler(
 	apiReader client.Reader,
 	scheme *runtime.Scheme,
 	clusterOrderNamespace string,
+	agentNamespace string,
 	provisioningProvider provisioning.ProvisioningProvider,
 	statusPollInterval time.Duration,
 	maxJobHistory int,
@@ -89,6 +91,10 @@ func NewClusterOrderReconciler(
 
 	if clusterOrderNamespace == "" {
 		clusterOrderNamespace = defaultClusterOrderNamespace
+	}
+
+	if agentNamespace == "" {
+		agentNamespace = defaultAgentNamespace
 	}
 
 	if statusPollInterval <= 0 {
@@ -104,6 +110,7 @@ func NewClusterOrderReconciler(
 		apiReader:             apiReader,
 		Scheme:                scheme,
 		ClusterOrderNamespace: clusterOrderNamespace,
+		AgentNamespace:        agentNamespace,
 		ProvisioningProvider:  provisioningProvider,
 		StatusPollInterval:    statusPollInterval,
 		MaxJobHistory:         maxJobHistory,
@@ -115,6 +122,7 @@ func NewClusterOrderReconciler(
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=clusterorders/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=namespaces;serviceaccounts,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=agent-install.openshift.io,resources=agents,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=hypershift.openshift.io,resources=hostedclusters;nodepools,verbs=get;list;watch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=subnets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=networkclasses,verbs=get;list;watch
@@ -170,6 +178,7 @@ func (r *ClusterOrderReconciler) patchStatusWithRetry(ctx context.Context, key c
 		latest.Status.Phase = computed.Phase
 		latest.Status.ClusterReference = computed.ClusterReference
 		latest.Status.NodeRequests = computed.NodeRequests
+		latest.Status.NodeSets = computed.NodeSets
 		latest.Status.ProvisioningJobs = computed.ProvisioningJobs
 		latest.Status.DesiredConfigVersion = computed.DesiredConfigVersion
 		latest.Status.ApiEndpoint = computed.ApiEndpoint
@@ -329,6 +338,15 @@ func (r *ClusterOrderReconciler) handleUpdate(ctx context.Context, _ reconcile.R
 	provisionResult, err := r.handleProvisioning(ctx, instance)
 	if err != nil {
 		return ctrl.Result{}, err
+	}
+
+	// Select agents for each node set (labels them for HyperShift NodePool claiming)
+	agentResult, err := r.reconcileAgentSelection(ctx, instance)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if agentResult.RequeueAfter > 0 {
+		return agentResult, nil
 	}
 
 	ns, err := r.findNamespace(ctx, instance)
@@ -518,6 +536,11 @@ func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ reconcile.R
 	log.Info("deleting clusterorder")
 
 	instance.Status.Phase = v1alpha1.ClusterOrderPhaseDeleting
+
+	// Release agents allocated to this cluster
+	if err := r.reconcileAgentCleanup(ctx, instance); err != nil {
+		return ctrl.Result{}, err
+	}
 
 	// Handle deprovisioning via provider
 	// Waits for provision job termination and polls deprovision job if needed

@@ -194,6 +194,32 @@ var _ = Describe("Storage tiers server", func() {
 			return response.GetObject()
 		}
 
+		// createMalformedTier bypasses the private server's Create validation to insert a StorageTier
+		// with zero backend associations directly via the DAO, simulating already-corrupted data. It
+		// returns the created tier's id.
+		createMalformedTier := func(name string) string {
+			tierDAO, err := dao.NewGenericDAO[*privatev1.StorageTier]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			response, err := tierDAO.Create().SetObject(privatev1.StorageTier_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   name,
+					Tenant: auth.SharedTenant,
+				}.Build(),
+				Spec: privatev1.StorageTierSpec_builder{
+					Description: "no backends",
+				}.Build(),
+				Status: privatev1.StorageTierStatus_builder{
+					State: privatev1.StorageTierState_STORAGE_TIER_STATE_ACTIVE,
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			return response.GetObject().GetId()
+		}
+
 		It("Get flattens the backend association into the public spec", func() {
 			created := createTier("test-tier", defaultBackend())
 
@@ -351,30 +377,9 @@ var _ = Describe("Storage tiers server", func() {
 		})
 
 		It("Get returns Internal, and List omits, a tier with zero backend associations", func() {
-			// Bypass the private server's Create validation (which requires exactly one backend
-			// association) by inserting directly via the DAO, simulating already-corrupted data:
-			tierDAO, err := dao.NewGenericDAO[*privatev1.StorageTier]().
-				SetLogger(logger).
-				SetTenancyLogic(tenancy).
-				Build()
-			Expect(err).ToNot(HaveOccurred())
+			malformedID := createMalformedTier("malformed-tier")
 
-			createResponse, err := tierDAO.Create().SetObject(privatev1.StorageTier_builder{
-				Metadata: privatev1.Metadata_builder{
-					Name:   "malformed-tier",
-					Tenant: auth.SharedTenant,
-				}.Build(),
-				Spec: privatev1.StorageTierSpec_builder{
-					Description: "no backends",
-				}.Build(),
-				Status: privatev1.StorageTierStatus_builder{
-					State: privatev1.StorageTierState_STORAGE_TIER_STATE_ACTIVE,
-				}.Build(),
-			}.Build()).Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-			malformedID := createResponse.GetObject().GetId()
-
-			_, err = publicServer.Get(ctx, publicv1.StorageTiersGetRequest_builder{
+			_, err := publicServer.Get(ctx, publicv1.StorageTiersGetRequest_builder{
 				Id: malformedID,
 			}.Build())
 			Expect(err).To(HaveOccurred())
@@ -390,6 +395,58 @@ var _ = Describe("Storage tiers server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(listResponse.GetItems()).To(BeEmpty())
 			Expect(listResponse.GetSize()).To(Equal(int32(0)))
+			// Total must be adjusted down along with the drop, not left at the raw DB count (which
+			// would be 1 here, since the malformed tier itself matches the filter) — otherwise a
+			// client would see Total=1, Size=0, Items=[], an inconsistent page.
+			Expect(listResponse.GetTotal()).To(Equal(int32(0)))
+		})
+
+		It("List adjusts Total to exclude tiers dropped for having an unexpected backend count", func() {
+			createTier("valid-tier-1", defaultBackend())
+			createTier("valid-tier-2", defaultBackend())
+			createMalformedTier("malformed-tier-total")
+
+			// The DB-level total across all three tiers is 3, but the malformed one is dropped from
+			// the page, so the client-visible Total must be adjusted down to 2 to match Size and
+			// Items — not left at the raw DB count.
+			listResponse, err := publicServer.List(ctx, publicv1.StorageTiersListRequest_builder{}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(listResponse.GetItems()).To(HaveLen(2))
+			Expect(listResponse.GetSize()).To(Equal(int32(2)))
+			Expect(listResponse.GetTotal()).To(Equal(int32(2)))
+		})
+
+		It("List does not adjust Total when the response does not cover the entire result set", func() {
+			createTier("valid-tier-1", defaultBackend())
+			createMalformedTier("malformed-tier-paginated")
+
+			// Fetch a single-item page starting at offset 1, out of 2 total matching tiers (one
+			// valid, one malformed). Regardless of which tier this page happens to land on (order
+			// is by id, which is server-generated and unpredictable), Total must remain the plain
+			// DB count (2) — not adjusted — because this page provably does not cover the entire
+			// result set, so we cannot know how many malformed rows exist outside it.
+			listResponse, err := publicServer.List(ctx, publicv1.StorageTiersListRequest_builder{
+				Offset: new(int32(1)),
+				Limit:  new(int32(1)),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(listResponse.GetTotal()).To(Equal(int32(2)))
+		})
+
+		It("List does not adjust Total for a truncated first page, even at offset 0", func() {
+			createTier("valid-tier-1", defaultBackend())
+			createTier("valid-tier-2", defaultBackend())
+			createMalformedTier("malformed-tier-first-page")
+
+			// Fetch a 2-item page starting at offset 0, out of 3 total matching tiers (two valid,
+			// one malformed). Offset is 0, but the page still doesn't cover the entire result set
+			// (limit=2 < total=3), so Total must remain the plain DB count (3) regardless of
+			// whether the malformed tier happens to land in this page or be excluded by the limit.
+			listResponse, err := publicServer.List(ctx, publicv1.StorageTiersListRequest_builder{
+				Limit: new(int32(2)),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(listResponse.GetTotal()).To(Equal(int32(3)))
 		})
 
 		It("Get returns Internal for a tier with more than one backend association", func() {
@@ -431,6 +488,13 @@ var _ = Describe("Storage tiers server", func() {
 			st, ok := status.FromError(err)
 			Expect(ok).To(BeTrue())
 			Expect(st.Code()).To(Equal(codes.Internal))
+		})
+
+		It("toPublicStorageProtocol maps an out-of-range private value to UNSPECIFIED", func() {
+			// Simulates a future private StorageProtocol value the public enum doesn't know about yet
+			// — this must hit the defensive `default` branch rather than silently miscasting:
+			result := publicServer.toPublicStorageProtocol(ctx, privatev1.StorageProtocol(99))
+			Expect(result).To(Equal(publicv1.StorageProtocol_STORAGE_PROTOCOL_UNSPECIFIED))
 		})
 	})
 

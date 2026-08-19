@@ -22,6 +22,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	describestoragetier "github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/storagetier"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/lookup"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
@@ -99,7 +100,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	renderTierDetail(c.console, tier)
+	describestoragetier.RenderStorageTier(c.console, tier)
 	return nil
 }
 
@@ -120,39 +121,5 @@ func renderTierTable(w *terminal.Console, tiers []*publicv1.StorageTier) {
 		state := strings.TrimPrefix(t.GetStatus().GetState().String(), "STORAGE_TIER_STATE_")
 		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\n", t.GetId(), name, description, protocol, state)
 	}
-	writer.Flush()
-}
-
-// renderTierDetail writes a detailed key-value view of a single storage tier — used when getting by name/id.
-func renderTierDetail(w *terminal.Console, t *publicv1.StorageTier) {
-	writer := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-
-	name := "-"
-	if v := t.GetMetadata().GetName(); v != "" {
-		name = v
-	}
-
-	description := "-"
-	if v := t.GetSpec().GetDescription(); v != "" {
-		description = v
-	}
-
-	protocol := strings.TrimPrefix(t.GetSpec().GetProtocol().String(), "STORAGE_PROTOCOL_")
-	state := strings.TrimPrefix(t.GetStatus().GetState().String(), "STORAGE_TIER_STATE_")
-
-	message := "-"
-	if v := t.GetStatus().GetMessage(); v != "" {
-		message = v
-	}
-
-	fmt.Fprintf(writer, "ID:\t%s\n", t.GetId())
-	fmt.Fprintf(writer, "Name:\t%s\n", name)
-	fmt.Fprintf(writer, "Description:\t%s\n", description)
-	fmt.Fprintf(writer, "Protocol:\t%s\n", protocol)
-	fmt.Fprintf(writer, "Max Read BW (MB/s):\t%d\n", t.GetSpec().GetMaxReadBandwidthMbs())
-	fmt.Fprintf(writer, "Max Write BW (MB/s):\t%d\n", t.GetSpec().GetMaxWriteBandwidthMbs())
-	fmt.Fprintf(writer, "Encryption Enabled:\t%t\n", t.GetSpec().GetEncryptionEnabled())
-	fmt.Fprintf(writer, "State:\t%s\n", state)
-	fmt.Fprintf(writer, "Message:\t%s\n", message)
 	writer.Flush()
 }

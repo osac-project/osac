@@ -1298,11 +1298,6 @@
               "description": "Host class identifier for BCM inventory",
               "default": "bcm"
             },
-            "networkClass": {
-              "type": "string",
-              "description": "Network class identifier for BCM inventory",
-              "default": "bcm"
-            },
             "metal3Namespace": {
               "type": "string",
               "description": "Kubernetes namespace where BareMetalHost CRs are created for Metal3 power management"

@@ -21,7 +21,6 @@ stringData:
     name: bcm-inventory
     type: bcm
     hostClass: {{ .Values.bcm.hostClass }}
-    networkClass: {{ .Values.bcm.networkClass }}
     options:
       bcm:
         url: {{ .Values.bcm.url }}

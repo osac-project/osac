@@ -322,8 +322,6 @@ bmf:
     insecureSkipVerify: false
     # Host class identifier written to the inventory config.
     hostClass: "bcm"
-    # Network class identifier written to the inventory config.
-    networkClass: "bcm"
     # [REQUIRED when enabled] Namespace where BareMetalHost CRs are created.
     # BCM uses Metal3 for power management via BareMetalHost CRs.
     # Example: "hardware-inventory"

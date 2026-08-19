@@ -39,5 +39,4 @@ bcm:
   credentialsSecret: ""
   insecureSkipVerify: false
   hostClass: "bcm"
-  networkClass: "bcm"
   metal3Namespace: ""

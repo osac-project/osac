@@ -1,22 +1,29 @@
 ---
 # Integration test for osac.service.csi_driver_install.
-# Tests the idempotent, provider-agnostic OSAC CSI driver Helm install: first-call
-# install, second-call idempotency, cross-dispatch vendor accumulation, a pinned
-# chart-version bump triggering a real upgrade, and two fail-fast validation paths
-# (missing backend_id connection details; ambiguous multi-backend_id vast dispatch)
-# -- the second of which also proves a later dispatch's validation failure does not
-# disturb an already-installed, shared release from an earlier dispatch.
+# Tests the idempotent, provider-agnostic OSAC CSI driver Helm install: a fresh
+# install that fails mid-block and rolls back, first-call install, second-call
+# idempotency, cross-dispatch vendor accumulation, a mixed supported/unsupported
+# provider dispatch, a pinned chart-version bump triggering a real upgrade, and
+# two fail-fast validation paths (missing backend_id connection details;
+# ambiguous multi-backend_id vast dispatch) -- the second of which also proves a
+# later dispatch's validation failure does not disturb an already-installed,
+# shared release from an earlier dispatch.
 #
-# Requires: kind cluster (provided by setup_test_env.sh), network access to
-# oci://ghcr.io/osac-project/charts, and a real osac-csi-driver/vX.Y.Z release tag
-# (no chart exists yet as of this test's authoring -- see 02-plan.md Risk Assessment
-# item 1). Gated behind CSI_DRIVER_TESTS_ENABLED (default false) in run_tests.sh;
-# the version pins below (CSI_DRIVER_INSTALL_TEST_VERSION_1/2) are placeholders that
-# must be updated to real published tags before flipping that gate to true.
+# Requires: kind cluster (provided by setup_test_env.sh) and the local TLS OCI registry
+# setup_test_env.sh stands up under STORAGE_TESTS_ENABLED (packages and pushes the real
+# osac-csi-driver/charts/{csi-driver,csi-backends} charts at versions 0.1.0/0.1.1 -- see
+# that script's "local TLS OCI registry" section). No osac-csi-driver/vX.Y.Z release tag
+# has been cut yet at oci://ghcr.io/osac-project/charts (OSAC-3290 Risk Assessment item 1),
+# so csi_driver_install_chart_registry is overridden below (once, in the Setup play; the
+# fact persists across every later play/scenario in this file targeting the same host) to
+# CSI_DRIVER_INSTALL_TEST_REGISTRY, falling back to the real registry only if that env var
+# is unset (e.g. running this file directly without setup_test_env.sh). Runs unconditionally
+# alongside the rest of STORAGE_TESTS in run_tests.sh -- no separate gate needed now that
+# the local registry above removes the dependency on a real published chart tag.
 #
 # Does NOT require the mock VMS server: this role never calls the VAST VMS API
 # directly (only osac.templates.vast_storage does) -- it only threads
-# storage_provider_backend_connections' endpoint through to vast.config.vmsHost as
+# csi_driver_install_backend_connections' endpoint through to vast.config.vmsHost as
 # an opaque connection string, so a fake, unreachable endpoint is sufficient here.
 
 # ── Setup: clean slate ──
@@ -29,6 +36,14 @@
     csi_driver_install_test_backends_namespace: "osac-csi-backends"
 
   tasks:
+    # Set once as a fact rather than repeated in every scenario's own vars: below --
+    # facts persist across every later play in this file targeting the same host, and
+    # a pre-set fact outranks the role's own default (see the file-level comment above).
+    - name: Point csi_driver_install_chart_registry at the local test registry
+      ansible.builtin.set_fact:
+        csi_driver_install_chart_registry: >-
+          {{ lookup('env', 'CSI_DRIVER_INSTALL_TEST_REGISTRY') | default('oci://ghcr.io/osac-project/charts', true) }}
+
     - name: Uninstall any pre-existing csi-driver/csi-backends releases
       kubernetes.core.helm:
         name: "{{ item.name }}"
@@ -49,21 +64,156 @@
         - "{{ csi_driver_install_test_backends_namespace }}"
       failed_when: false
 
+# ── Test 0: A fresh dispatch that fails deep inside the block (after both
+# Helm releases have genuinely installed) proves the rescue block's rollback
+# actually reverts a release THIS run installed from nothing -- not just a
+# release that already existed before the run, which the pre-block fail-fast
+# paths exercised by Test 5/6 can never reach (those fail before the block
+# even starts). Failure is injected deterministically by pre-planting an
+# immutable OAuth Secret: Kubernetes rejects any `data`/`stringData` change to
+# a Secret with `immutable: true` (a documented, versioned API behavior -- not
+# a guess about the not-yet-published csi-backends/csi-driver charts'
+# internals), so the role's own "Create OAuth client-credentials Secret" task
+# fails only after both csi-driver and csi-backends have already installed
+# successfully. Runs between Setup and Test 1, and cleans up fully after
+# itself, so Test 1 still starts from a genuinely fresh cluster ──
+- name: "CSI Driver Install - Fresh install, mid-block failure triggers rollback"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    csi_driver_install_chart_version: "0.1.0"
+    # Real, non-blank OAuth client-id/secret: the Secret-creation task's own
+    # guard (added to stop a dispatch with no configured credentials from
+    # blanking a previously-real secret) would otherwise skip the write
+    # outright when this scenario's pre-planted Secret already exists and no
+    # real credentials are supplied, defeating this scenario's failure
+    # injection (the write must be attempted to hit the immutable Secret).
+    csi_driver_install_oauth_client_id: "test-client-id"
+    csi_driver_install_oauth_client_secret: "test-client-secret"
+    csi_driver_install_tiers:
+      - name: default
+        protocol: nfs
+        provider: vast
+        backend_id: be-test
+    csi_driver_install_backend_connections:
+      be-test:
+        endpoint: "vast-mock.example.com:443"
+        username: "admin"
+        password: "mock-admin-password"
+
+  tasks:
+    - name: Pre-create csi-backends namespace to plant the failure-inducing Secret
+      kubernetes.core.k8s:
+        state: present
+        kind: Namespace
+        name: osac-csi-backends
+
+    - name: Plant an immutable OAuth Secret so the role's own Secret-creation task fails deep inside the block
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: csi-driver-oauth-credentials
+            namespace: osac-csi-backends
+          type: Opaque
+          immutable: true
+          stringData:
+            client-id: preexisting
+            client-secret: preexisting
+      no_log: true
+
+    - name: Attempt a fresh dispatch that fails after both Helm releases install (expected to fail)
+      block:
+        - name: Call csi_driver_install role
+          ansible.builtin.include_role:
+            name: osac.service.csi_driver_install
+
+        - name: This task should not be reached -- role should have failed
+          ansible.builtin.fail:
+            msg: "Role did not fail as expected when the OAuth Secret creation hit a pre-existing immutable Secret"
+
+      rescue:
+        - name: Assert the role failed specifically at OAuth Secret creation, after both Helm releases had already installed
+          ansible.builtin.assert:
+            that:
+              - "'Failed task: Create OAuth client-credentials Secret' in (ansible_failed_result.msg | default(''))"
+            fail_msg: "Role failed but not at the expected task: {{ ansible_failed_result.msg | default('unknown') }}"
+            success_msg: "Role correctly failed at OAuth Secret creation after freshly installing both Helm releases"
+
+    - name: Read csi-driver release after the mid-block failure
+      kubernetes.core.helm_info:
+        name: csi-driver
+        release_namespace: osac-csi
+      register: _driver_release_after_rollback
+
+    - name: Read csi-backends release after the mid-block failure
+      kubernetes.core.helm_info:
+        name: csi-backends
+        release_namespace: osac-csi-backends
+      register: _backends_release_after_rollback
+
+    - name: Assert the rescue block genuinely rolled back both freshly-installed Helm releases
+      ansible.builtin.assert:
+        that:
+          # helm_info omits the `status` key entirely (not `status: null`) once a
+          # release no longer exists -- same guard as everywhere else in this role.
+          - (_driver_release_after_rollback.status | default(none, true)) is none
+          - (_backends_release_after_rollback.status | default(none, true)) is none
+        fail_msg: >-
+          Expected the rescue block to uninstall both csi-driver and csi-backends releases this
+          run installed from nothing: csi-driver status={{ _driver_release_after_rollback.status | default(none, true) }},
+          csi-backends status={{ _backends_release_after_rollback.status | default(none, true) }}
+        success_msg: "Rescue block correctly rolled back both freshly-installed Helm releases"
+
+    # ── Cleanup: leave a genuinely fresh cluster for Test 1, which immediately follows ──
+    - name: Delete the planted immutable OAuth Secret
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: csi-driver-oauth-credentials
+        namespace: osac-csi-backends
+      failed_when: false
+
+    # wait: true is required here: Test 0 does a genuine full install (real
+    # Deployment/DaemonSet/ClusterRole/ClusterRoleBinding/CSIDriver objects) before
+    # rolling it back, so these namespaces take longer to finish terminating than a
+    # bare state: absent waits for by default. Without waiting, Test 1 (the very next
+    # play) can reach its own namespace pre-create/Helm install before termination
+    # completes, and Helm's release Secret creation fails with "unable to create new
+    # content in namespace osac-csi because it is being terminated".
+    - name: Delete csi-driver/csi-backends namespaces after the fresh-install-failure scenario
+      kubernetes.core.k8s:
+        state: absent
+        kind: Namespace
+        name: "{{ item }}"
+        wait: true
+        wait_timeout: 120
+      loop:
+        - osac-csi
+        - osac-csi-backends
+      failed_when: false
+
 # ── Test 1: First dispatch installs both Helm releases ──
 - name: "CSI Driver Install - First dispatch (vast)"
   hosts: localhost
   gather_facts: false
 
   vars:
-    # PLACEHOLDER -- update to a real published osac-csi-driver chart tag before
-    # enabling CSI_DRIVER_TESTS_ENABLED.
+    # Matches one of the two versions setup_test_env.sh packages and pushes to the
+    # local registry (see the file-level comment above) -- not a placeholder for a
+    # real published tag, since csi_driver_install_chart_registry is already
+    # overridden to point at that local registry.
     csi_driver_install_chart_version: "0.1.0"
     csi_driver_install_tiers:
       - name: default
         protocol: nfs
         provider: vast
         backend_id: be-test
-    storage_provider_backend_connections:
+    csi_driver_install_backend_connections:
       be-test:
         endpoint: "vast-mock.example.com:443"
         username: "admin"
@@ -157,10 +307,10 @@
     - name: Assert vendors.vast.enabled is true on the csi-driver release
       ansible.builtin.assert:
         that:
-          - _driver_release_info.status.values.vendors.vast.enabled | bool
-          - "'vast=' in _driver_release_info.status.values.controller.vendorSockets"
-          - "'vast=' in _driver_release_info.status.values.node.vendorSockets"
-        fail_msg: "csi-driver release values did not reflect the dispatched vast vendor: {{ _driver_release_info.status.values }}"
+          - _driver_release_info.status['values'].vendors.vast.enabled | bool
+          - "'vast=' in _driver_release_info.status['values'].controller.vendorSockets"
+          - "'vast=' in _driver_release_info.status['values'].node.vendorSockets"
+        fail_msg: "csi-driver release values did not reflect the dispatched vast vendor: {{ _driver_release_info.status['values'] }}"
         success_msg: "csi-driver release correctly enables vast with both socket strings populated"
 
     - name: Read installed csi-backends release
@@ -172,9 +322,9 @@
     - name: Assert vast.enabled and vast.config.vmsHost on the csi-backends release
       ansible.builtin.assert:
         that:
-          - _backends_release_info.status.values.vast.enabled | bool
-          - _backends_release_info.status.values.vast.config.vmsHost == "vast-mock.example.com:443"
-        fail_msg: "csi-backends release values did not reflect the dispatched vast vendor: {{ _backends_release_info.status.values }}"
+          - _backends_release_info.status['values'].vast.enabled | bool
+          - _backends_release_info.status['values'].vast.config.vmsHost == "vast-mock.example.com:443"
+        fail_msg: "csi-backends release values did not reflect the dispatched vast vendor: {{ _backends_release_info.status['values'] }}"
         success_msg: "csi-backends release correctly enables vast with the resolved vmsHost"
 
 # ── Test 2: Second, identical dispatch is idempotent ──
@@ -189,7 +339,7 @@
         protocol: nfs
         provider: vast
         backend_id: be-test
-    storage_provider_backend_connections:
+    csi_driver_install_backend_connections:
       be-test:
         endpoint: "vast-mock.example.com:443"
         username: "admin"
@@ -222,7 +372,7 @@
       - name: default
         protocol: nfs
         provider: pure
-    storage_provider_backend_connections: {}
+    csi_driver_install_backend_connections: {}
 
   tasks:
     - name: Call csi_driver_install role for a different provider (pure)
@@ -238,15 +388,15 @@
     - name: Assert both vast (from the first dispatch) and pure (this dispatch) remain enabled
       ansible.builtin.assert:
         that:
-          - _driver_release_after_pure.status.values.vendors.vast.enabled | bool
-          - _driver_release_after_pure.status.values.vendors.pure.enabled | bool
-          - "'vast=' in _driver_release_after_pure.status.values.controller.vendorSockets"
-          - "'pure=' in _driver_release_after_pure.status.values.controller.vendorSockets"
-          - "'vast=' in _driver_release_after_pure.status.values.node.vendorSockets"
-          - "'pure=' in _driver_release_after_pure.status.values.node.vendorSockets"
+          - _driver_release_after_pure.status['values'].vendors.vast.enabled | bool
+          - _driver_release_after_pure.status['values'].vendors.pure.enabled | bool
+          - "'vast=' in _driver_release_after_pure.status['values'].controller.vendorSockets"
+          - "'pure=' in _driver_release_after_pure.status['values'].controller.vendorSockets"
+          - "'vast=' in _driver_release_after_pure.status['values'].node.vendorSockets"
+          - "'pure=' in _driver_release_after_pure.status['values'].node.vendorSockets"
         fail_msg: >-
           Dispatching a second provider must not clear the first provider's wiring:
-          {{ _driver_release_after_pure.status.values }}
+          {{ _driver_release_after_pure.status['values'] }}
         success_msg: "vast wiring survived the pure dispatch; both vendors are enabled"
 
 # ── Test 4: A pinned chart-version bump between dispatches triggers a real upgrade ──
@@ -255,15 +405,16 @@
   gather_facts: false
 
   vars:
-    # PLACEHOLDER -- must be a second real published tag, newer than
-    # csi_driver_install_chart_version above, before enabling CSI_DRIVER_TESTS_ENABLED.
+    # The other version setup_test_env.sh packages and pushes locally (see the
+    # file-level comment at the top of this file) -- deliberately newer than
+    # 0.1.0 above, to exercise a real upgrade against the local registry.
     csi_driver_install_chart_version: "0.1.1"
     csi_driver_install_tiers:
       - name: default
         protocol: nfs
         provider: vast
         backend_id: be-test
-    storage_provider_backend_connections:
+    csi_driver_install_backend_connections:
       be-test:
         endpoint: "vast-mock.example.com:443"
         username: "admin"
@@ -289,6 +440,143 @@
           -- installed chart is still: {{ _driver_release_after_bump.status.chart }}
         success_msg: "Chart version bump correctly triggered a real Helm upgrade"
 
+# ── Test 4.5: A dispatch mixing a csi-driver-chart-unsupported provider with a
+# supported one warns and skips the unsupported provider without failing the
+# whole dispatch, and does not disturb the supported provider's own wiring
+# (matches the real-world JIT compute-instance case, which can dispatch a
+# provider -- e.g. lvms -- this chart doesn't yet know about) ──
+- name: "CSI Driver Install - Mixed supported/unsupported provider dispatch (lvms + vast)"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    csi_driver_install_chart_version: "0.1.1"
+    csi_driver_install_tiers:
+      - name: default
+        protocol: nfs
+        provider: vast
+        backend_id: be-test
+      - name: local
+        protocol: block
+        provider: lvms
+    csi_driver_install_backend_connections:
+      be-test:
+        endpoint: "vast-mock.example.com:443"
+        username: "admin"
+        password: "mock-admin-password"
+
+  tasks:
+    - name: Call csi_driver_install role with an unsupported provider (lvms) alongside a supported one (vast)
+      ansible.builtin.include_role:
+        name: osac.service.csi_driver_install
+
+    - name: Read installed csi-driver release after the mixed dispatch
+      kubernetes.core.helm_info:
+        name: csi-driver
+        release_namespace: osac-csi
+      register: _driver_release_after_mixed_dispatch
+
+    - name: Assert the unsupported provider (lvms) was excluded while the supported one (vast) remains enabled
+      ansible.builtin.assert:
+        that:
+          - "'lvms' not in _driver_release_after_mixed_dispatch.status['values'].vendors"
+          - "'lvms=' not in _driver_release_after_mixed_dispatch.status['values'].controller.vendorSockets"
+          - "'lvms=' not in _driver_release_after_mixed_dispatch.status['values'].node.vendorSockets"
+          - _driver_release_after_mixed_dispatch.status['values'].vendors.vast.enabled | bool
+          - "'vast=' in _driver_release_after_mixed_dispatch.status['values'].controller.vendorSockets"
+          - "'vast=' in _driver_release_after_mixed_dispatch.status['values'].node.vendorSockets"
+        fail_msg: >-
+          Dispatching an unsupported provider (lvms) alongside a supported one (vast) must warn
+          and skip lvms while leaving vast enabled: {{ _driver_release_after_mixed_dispatch.status['values'] }}
+        success_msg: "Unsupported provider (lvms) correctly excluded; supported provider (vast) remained enabled"
+
+    - name: Read installed csi-backends release after the mixed dispatch
+      kubernetes.core.helm_info:
+        name: csi-backends
+        release_namespace: osac-csi-backends
+      register: _backends_release_after_mixed_dispatch
+
+    - name: Assert the unsupported provider (lvms) has no vendor block on the csi-backends release
+      ansible.builtin.assert:
+        that:
+          - "'lvms' not in _backends_release_after_mixed_dispatch.status['values']"
+          - _backends_release_after_mixed_dispatch.status['values'].vast.enabled | bool
+        fail_msg: >-
+          csi-backends release values incorrectly include the unsupported provider (lvms) or
+          dropped the supported one (vast): {{ _backends_release_after_mixed_dispatch.status['values'] }}
+        success_msg: "csi-backends release correctly excludes lvms and keeps vast enabled"
+
+# ── Test 4.6: A dispatch with ZERO csi-driver-supported providers is a
+# complete no-op -- the entire install block (lock acquire, namespace
+# pre-create, both Helm calls) is skipped outright, not merely idempotent.
+# Matches the real-world JIT compute-instance case today, where every
+# dispatch sends only the not-yet-supported 'lvms' provider. Proven by
+# reading the install lock's own Lease object's resourceVersion before/after
+# -- acquiring (and releasing) the lock always mutates it via
+# server-side-apply, so an unchanged resourceVersion means the lock was
+# never touched at all, not just a no-op Helm call inside an acquired lock ──
+- name: "CSI Driver Install - Zero supported providers dispatch is a complete no-op (lvms only)"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    csi_driver_install_tiers:
+      - name: local
+        protocol: block
+        provider: lvms
+    csi_driver_install_backend_connections: {}
+
+  tasks:
+    - name: Read the install lock's Lease object before the zero-supported-vendor dispatch
+      kubernetes.core.k8s_info:
+        api_version: coordination.k8s.io/v1
+        kind: Lease
+        name: csi-driver-install-lock
+        namespace: "{{ lookup('env', 'POD_NAMESPACE') }}"
+      register: _lease_before_noop_dispatch
+
+    - name: Call csi_driver_install role with only an unsupported provider (lvms)
+      ansible.builtin.include_role:
+        name: osac.service.csi_driver_install
+
+    - name: Read the install lock's Lease object after the zero-supported-vendor dispatch
+      kubernetes.core.k8s_info:
+        api_version: coordination.k8s.io/v1
+        kind: Lease
+        name: csi-driver-install-lock
+        namespace: "{{ lookup('env', 'POD_NAMESPACE') }}"
+      register: _lease_after_noop_dispatch
+
+    - name: Assert the install lock was never touched (block was skipped, not just a no-op)
+      ansible.builtin.assert:
+        that:
+          - >-
+            (_lease_before_noop_dispatch.resources[0].metadata.resourceVersion | default(''))
+            == (_lease_after_noop_dispatch.resources[0].metadata.resourceVersion | default(''))
+        fail_msg: >-
+          The install lock's Lease resourceVersion changed on a zero-supported-vendor
+          dispatch, meaning the block ran (acquired/released the lock) instead of being
+          skipped entirely: before={{ _lease_before_noop_dispatch.resources[0].metadata.resourceVersion | default('none') }},
+          after={{ _lease_after_noop_dispatch.resources[0].metadata.resourceVersion | default('none') }}
+        success_msg: "Zero-supported-vendor dispatch correctly skipped the entire install block -- lock never touched"
+
+    - name: Read installed csi-driver release after the zero-supported-vendor dispatch
+      kubernetes.core.helm_info:
+        name: csi-driver
+        release_namespace: osac-csi
+      register: _driver_release_after_noop_dispatch
+
+    - name: Assert the csi-driver release is unchanged from the prior (Test 4.5) dispatch
+      ansible.builtin.assert:
+        that:
+          - "'0.1.1' in _driver_release_after_noop_dispatch.status.chart"
+          - _driver_release_after_noop_dispatch.status['values'].vendors.vast.enabled | bool
+          - "'lvms' not in _driver_release_after_noop_dispatch.status['values'].vendors"
+        fail_msg: >-
+          A zero-supported-vendor dispatch must leave the csi-driver release untouched:
+          {{ _driver_release_after_noop_dispatch.status['values'] }}
+        success_msg: "csi-driver release state correctly unchanged after the zero-supported-vendor dispatch"
+
 # ── Test 5: A dispatched provider's backend_id has no connection details -- fail-fast,
 # no side effects (this fires in the pre-block validation, before any namespace or
 # Helm call, so nothing needs to be reverted) ──
@@ -302,10 +590,10 @@
         protocol: nfs
         provider: vast
         backend_id: be-missing
-    storage_provider_backend_connections: {}
+    csi_driver_install_backend_connections: {}
 
   tasks:
-    - name: Attempt dispatch with a backend_id absent from storage_provider_backend_connections (expected to fail)
+    - name: Attempt dispatch with a backend_id absent from csi_driver_install_backend_connections (expected to fail)
       block:
         - name: Call csi_driver_install role
           ansible.builtin.include_role:
@@ -329,9 +617,9 @@
               Role failed but with unexpected message: {{ ansible_failed_result.results | default(ansible_failed_result.msg) | default('unknown') }}
             success_msg: "Role correctly rejected a dispatched backend_id with no connection details"
 
-# ── Test 6: Multiple vast backend_ids dispatched together -- fail-fast inside the
-# block (after existed_before tracking, before any Helm install call), proving the
-# already-installed releases from earlier tests are untouched by this failure ──
+# ── Test 6: Multiple vast backend_ids dispatched together -- fail-fast before the
+# block (before any Namespace/Helm call), proving the already-installed releases
+# from earlier tests are untouched by this failure ──
 - name: "CSI Driver Install - Multiple vast backend_ids (should fail, existing releases survive)"
   hosts: localhost
   gather_facts: false
@@ -347,7 +635,7 @@
         protocol: nfs
         provider: vast
         backend_id: be-other
-    storage_provider_backend_connections:
+    csi_driver_install_backend_connections:
       be-test:
         endpoint: "vast-mock.example.com:443"
         username: "admin"
@@ -390,7 +678,7 @@
         that:
           - _releases_after_failure.results[0].status is not none
           - "'0.1.1' in _releases_after_failure.results[0].status.chart"
-          - _releases_after_failure.results[0].status.values.vendors.vast.enabled | bool
+          - _releases_after_failure.results[0].status['values'].vendors.vast.enabled | bool
         fail_msg: >-
           The pre-existing csi-driver release (from earlier tests) did not survive a
           later dispatch's validation failure intact: {{ _releases_after_failure.results[0].status }}
@@ -400,11 +688,121 @@
       ansible.builtin.assert:
         that:
           - _releases_after_failure.results[1].status is not none
-          - _releases_after_failure.results[1].status.values.vast.enabled | bool
+          - _releases_after_failure.results[1].status['values'].vast.enabled | bool
         fail_msg: >-
           The pre-existing csi-backends release (from earlier tests) did not survive a
           later dispatch's validation failure intact: {{ _releases_after_failure.results[1].status }}
         success_msg: "Pre-existing csi-backends release survived the failed dispatch untouched"
+
+# ── Test 7: The install lock is already held by a DIFFERENT dispatch --
+# acquisition must fail (after exhausting its retry budget) without ever
+# releasing or overwriting the other holder's lock. This is the scenario the
+# _csi_driver_install_lock_acquired guard exists to protect: an unconditional
+# `always:` release would otherwise tear down a lock a still-running,
+# different dispatch legitimately holds. Takes ~100s (20 retries x 5s delay)
+# -- this is the one scenario in this file that genuinely needs that budget
+# exhausted, not shortened, to prove the failure path. ──
+- name: "CSI Driver Install - Lock already held by a different dispatch (should fail, other holder's lock survives)"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    csi_driver_install_chart_version: "0.1.1"
+    csi_driver_install_tiers:
+      - name: default
+        protocol: nfs
+        provider: vast
+        backend_id: be-test
+    csi_driver_install_backend_connections:
+      be-test:
+        endpoint: "vast-mock.example.com:443"
+        username: "admin"
+        password: "mock-admin-password"
+
+  tasks:
+    - name: Acquire the install lock as a different holder, simulating a concurrent dispatch
+      ansible.builtin.include_role:
+        name: osac.service.lease
+      vars:
+        lease_state: present
+        lease_name: "csi-driver-install-lock"
+        lease_holder: "a-different-concurrent-dispatch"
+
+    - name: Attempt dispatch while the lock is held elsewhere (expected to fail after retries exhaust)
+      block:
+        - name: Call csi_driver_install role
+          ansible.builtin.include_role:
+            name: osac.service.csi_driver_install
+
+        - name: This task should not be reached -- role should have failed to acquire the lock
+          ansible.builtin.fail:
+            msg: "Role did not fail as expected when the install lock was already held by a different dispatch"
+
+      rescue:
+        # The role's rescue block always re-raises through its own "Report OSAC CSI
+        # driver install failure" fail task, so ansible_failed_task.name at THIS
+        # (test-level) rescue is always that generic name, never the original
+        # inner task -- matching the pattern Tests 0/5/6 already use, the original
+        # failing task name is only recoverable from ansible_failed_result.msg's own
+        # "Failed task: <name>" text. That name is itself one level deeper than the
+        # role's own "Acquire CSI driver install lock" include_role wrapper task: when
+        # a task fails inside a dynamically included role (osac.service.lease here),
+        # ansible_failed_task/the "Failed task:" text resolves to the INNER task's own
+        # name -- lease/tasks/main.yaml's "Acquire lock {{ lease_name }}", which renders
+        # to "Acquire lock csi-driver-install-lock" -- not the outer wrapper's name.
+        - name: Assert role failed specifically at lock acquisition
+          ansible.builtin.assert:
+            that:
+              - "'Failed task: Acquire lock csi-driver-install-lock' in (ansible_failed_result.msg | default(''))"
+            fail_msg: >-
+              Role failed but not at lock acquisition: error={{ ansible_failed_result.msg | default('unknown') }}
+            success_msg: "Role correctly failed at lock acquisition when the lock was held elsewhere"
+
+    - name: Read the install lock after the failed acquisition attempt
+      kubernetes.core.k8s_info:
+        api_version: coordination.k8s.io/v1
+        kind: Lease
+        name: csi-driver-install-lock
+        namespace: "{{ lookup('env', 'POD_NAMESPACE') }}"
+      register: _lease_after_contention
+
+    - name: Assert the other dispatch's lock was never released or overwritten
+      ansible.builtin.assert:
+        that:
+          - _lease_after_contention.resources | length == 1
+          - _lease_after_contention.resources[0].spec.holderIdentity == "a-different-concurrent-dispatch"
+        fail_msg: >-
+          The other dispatch's lock should survive a failed acquisition attempt untouched:
+          {{ _lease_after_contention.resources }}
+        success_msg: "Other dispatch's lock survived untouched -- no wrongful release occurred"
+
+    - name: Read csi-driver/csi-backends releases after the failed acquisition (no side effects expected)
+      kubernetes.core.helm_info:
+        name: "{{ item.name }}"
+        release_namespace: "{{ item.namespace }}"
+      loop:
+        - {name: csi-driver, namespace: osac-csi}
+        - {name: csi-backends, namespace: osac-csi-backends}
+      register: _releases_after_contention
+
+    - name: Assert no Helm side effects occurred while the lock was contended
+      ansible.builtin.assert:
+        that:
+          - _releases_after_contention.results[0].status is not none
+          - "'0.1.1' in _releases_after_contention.results[0].status.chart"
+          - _releases_after_contention.results[1].status is not none
+        fail_msg: >-
+          Pre-existing releases should be unaffected by a failed lock-acquisition attempt:
+          {{ _releases_after_contention.results }}
+        success_msg: "Pre-existing releases correctly unaffected by the failed lock-acquisition attempt"
+
+    - name: Release the simulated concurrent dispatch's lock (test cleanup)
+      ansible.builtin.include_role:
+        name: osac.service.lease
+      vars:
+        lease_state: absent
+        lease_name: "csi-driver-install-lock"
+        lease_holder: "a-different-concurrent-dispatch"
 
 # ── Cleanup ──
 - name: "CSI Driver Install - Cleanup"

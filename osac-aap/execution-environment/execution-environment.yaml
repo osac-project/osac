@@ -44,4 +44,4 @@ additional_build_steps:
   append_final:
     - COPY --from=quay.io/openshift/origin-cli:4.19 /usr/bin/oc /usr/local/bin/
     - COPY --from=quay.io/openshift/origin-cli:4.19 /usr/bin/kubectl /usr/local/bin/
-    - COPY --from=docker.io/alpine/helm:3.17.0 /usr/bin/helm /usr/local/bin/
+    - RUN curl -fsSL -o /tmp/helm.tar.gz https://get.helm.sh/helm-v3.17.0-linux-amd64.tar.gz && echo "fb5d12662fde6eeff36ac4ccacbf3abed96b0ee2de07afdde4edb14e613aee24  /tmp/helm.tar.gz" | sha256sum -c - && tar -zxf /tmp/helm.tar.gz -C /tmp linux-amd64/helm && mv /tmp/linux-amd64/helm /usr/local/bin/helm && chmod 0755 /usr/local/bin/helm && rm -rf /tmp/helm.tar.gz /tmp/linux-amd64

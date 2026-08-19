@@ -62,6 +62,11 @@ echo "Waiting for pods to terminate..."
 kubectl wait --for=delete pod --all -n kubevirt --timeout=60s 2>/dev/null || echo "Some kubevirt pods still terminating"
 kubectl wait --for=delete pod --all -n cdi --timeout=60s 2>/dev/null || echo "Some cdi pods still terminating"
 
+# Scaled-to-0 deployments leave these APIServices registered but unreachable, which
+# breaks cluster-wide discovery and can wedge any later namespace delete forever.
+echo "Removing stale KubeVirt/CDI APIServices to keep namespace discovery healthy..."
+kubectl delete apiservice v1.subresources.kubevirt.io v1alpha3.subresources.kubevirt.io v1beta1.upload.cdi.kubevirt.io --ignore-not-found 2>/dev/null || echo "Could not remove one or more stale APIServices"
+
 echo "KubeVirt and CDI deployments scaled down. CRs and CRDs remain available for testing."
 
 echo "Installing OLM CRDs..."

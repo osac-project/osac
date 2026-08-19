@@ -2479,10 +2479,21 @@ func (t *Tool) Secret() string {
 }
 
 // NewCLIHomeDir creates an isolated temporary directory suitable for use as a HOME directory
-// during CLI tests. Each test should call this to get credential isolation. The caller is
-// responsible for cleaning up the directory (typically via DeferCleanup).
+// during CLI tests. Each test should call this to get credential isolation. On macOS, this
+// also provisions a real throwaway keychain scoped to the new directory so the CLI's
+// credential write path (osac login) succeeds without triggering a Keychain Access dialog
+// (see it_keychain_darwin.go). The caller is responsible for cleaning up the directory
+// (typically via DeferCleanup).
 func (t *Tool) NewCLIHomeDir() (string, error) {
-	return os.MkdirTemp("", "*.cli-home")
+	homeDir, err := os.MkdirTemp("", "*.cli-home")
+	if err != nil {
+		return "", err
+	}
+	if err := provisionTestKeychain(homeDir); err != nil {
+		os.RemoveAll(homeDir)
+		return "", fmt.Errorf("failed to provision test keychain: %w", err)
+	}
+	return homeDir, nil
 }
 
 // RunCLI executes the osac CLI binary with the given arguments and a custom HOME directory

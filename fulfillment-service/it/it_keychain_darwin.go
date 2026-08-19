@@ -23,7 +23,6 @@ import (
 	"path/filepath"
 )
 
-//nolint:unused // temporary — removed by Task 3 once NewCLIHomeDir calls provisionTestKeychain
 const testKeychainPassword = "osac-it-test-keychain" // not a secret — keychain is deleted with the per-test $HOME at cleanup
 
 // provisionTestKeychain provisions a real macOS keychain scoped to the given homeDir.
@@ -47,8 +46,6 @@ const testKeychainPassword = "osac-it-test-keychain" // not a secret — keychai
 // This function assumes sequential test execution (ginkgo run defaults to
 // --ginkgo.parallel.total=1). If future contributors enable --procs, each parallel
 // process must get its own homeDir to avoid keychain file contention.
-//
-//nolint:unused // temporary — removed by Task 3 once NewCLIHomeDir calls this
 func provisionTestKeychain(homeDir string) error {
 	keychainDir := filepath.Join(homeDir, "Library", "Keychains")
 	if err := os.MkdirAll(keychainDir, 0700); err != nil {

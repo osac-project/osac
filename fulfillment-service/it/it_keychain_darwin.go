@@ -61,7 +61,12 @@ func keychainEnv(homeDir string) []string {
 //
 // The real osac login path needs no extra HOME scoping here because go-keyring's darwin
 // backend inherits env from the parent osac process, which cliEnv() already scopes —
-// this file only needs to scope its OWN two subprocess calls.
+// this file only needs to scope its OWN three subprocess calls.
+//
+// After creating the keychain, auto-lock is disabled (no lock-on-sleep, no idle timeout)
+// to prevent the keychain from locking mid-run if a developer's laptop sleeps during a
+// long-running IT suite, which would otherwise trigger the same auth failures this fix
+// prevents.
 //
 // This function assumes sequential test execution (ginkgo run defaults to
 // --ginkgo.parallel.total=1). If future contributors enable --procs, each parallel
@@ -87,6 +92,12 @@ func provisionTestKeychain(homeDir string) error {
 
 	if err := os.Chmod(keychainPath, 0600); err != nil {
 		return fmt.Errorf("failed to restrict keychain file permissions: %w", err)
+	}
+
+	disableLock := exec.CommandContext(ctx, securityBinPath, "set-keychain-settings", keychainPath)
+	disableLock.Env = env
+	if out, err := disableLock.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to disable keychain auto-lock: %w: %s", err, bytes.TrimSpace(out))
 	}
 
 	setDefault := exec.CommandContext(ctx, securityBinPath, "default-keychain", "-s", keychainPath)

@@ -815,6 +815,72 @@ def find_network_class_roles_filter(requested: list[str]) -> list[dict[str, Any]
         raise AnsibleFilterError(f"Network class discovery failed: {str(e)}")
 
 
+def select_network_class_filter(
+    network_classes: list[dict[str, Any]],
+    implementation_strategy: str = "",
+) -> dict[str, Any] | None:
+    """Select the single NetworkClass to publish.
+
+    The fulfillment-service API only allows one NetworkClass per deployment (OSAC-4073).
+    `find_network_class_roles` may discover several network-typed roles at once (e.g.
+    cudn_net, netris, openstack) -- this filter narrows that list down to the one that
+    should actually be published, instead of leaving every caller to attempt (and fail)
+    publishing all of them.
+
+    Selection order:
+      1. If `implementation_strategy` is given, return the role matching it (error if none
+         match). This is the explicit override, e.g. via OSAC_NETWORK_CLASS_IMPLEMENTATION_STRATEGY.
+      2. If no network class roles were discovered, return None (nothing to publish).
+      3. If exactly one was discovered, return it.
+      4. Otherwise, return the one role marked `is_default: true` in its meta/osac.yaml
+         (error if zero or more than one are marked default -- both are ambiguous and require
+         either fixing the roles' metadata or passing an explicit implementation_strategy).
+
+    Args:
+        network_classes: NetworkClass dictionaries as returned by find_network_class_roles.
+        implementation_strategy: Optional explicit selection override.
+
+    Returns:
+        The single selected NetworkClass dictionary, or None if there is nothing to publish.
+    """
+    if implementation_strategy:
+        for network_class in network_classes:
+            if network_class.get("implementation_strategy") == implementation_strategy:
+                return network_class
+        found = sorted(nc.get("implementation_strategy", "?") for nc in network_classes)
+        raise AnsibleFilterError(
+            f"No discovered NetworkClass role has implementation_strategy '{implementation_strategy}' "
+            f"(found: {found}). Only one NetworkClass may be published per deployment (OSAC-4073)."
+        )
+
+    if not network_classes:
+        return None
+
+    if len(network_classes) == 1:
+        return network_classes[0]
+
+    defaults = [nc for nc in network_classes if nc.get("is_default")]
+    if len(defaults) == 1:
+        return defaults[0]
+
+    found = sorted(nc.get("implementation_strategy", "?") for nc in network_classes)
+    if len(defaults) == 0:
+        raise AnsibleFilterError(
+            f"Multiple NetworkClass roles were discovered ({found}) but none is marked "
+            "'is_default: true' in its meta/osac.yaml, and no explicit implementation_strategy "
+            "was provided. Only one NetworkClass may be published per deployment (OSAC-4073) -- "
+            "mark exactly one role as the default, or set OSAC_NETWORK_CLASS_IMPLEMENTATION_STRATEGY "
+            "to select one explicitly."
+        )
+
+    defaulted = sorted(nc.get("implementation_strategy", "?") for nc in defaults)
+    raise AnsibleFilterError(
+        f"Multiple NetworkClass roles are marked 'is_default: true' ({defaulted}); only one is "
+        "allowed. Fix the conflicting roles' meta/osac.yaml, or set "
+        "OSAC_NETWORK_CLASS_IMPLEMENTATION_STRATEGY to select one explicitly."
+    )
+
+
 class FilterModule:
     """Ansible filter plugin for finding template roles."""
 
@@ -829,6 +895,7 @@ class FilterModule:
             "find_compute_instance_template_roles": find_template_roles_filter(TemplateTypeEnum.compute_instance),
             "find_bare_metal_instance_template_roles": find_template_roles_filter(TemplateTypeEnum.bare_metal_instance),
             "find_network_class_roles": find_network_class_roles_filter,
+            "select_network_class": select_network_class_filter,
         }
 
 

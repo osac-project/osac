@@ -7,6 +7,10 @@
     publish_templates_service_account: "{{ lookup('env', 'OSAC_PUBLISH_TEMPLATES_SERVICE_ACCOUNT', default='template-publisher') }}"
     osac_fulfillment_service_uri: "{{ lookup('env', 'OSAC_FULFILLMENT_SERVICE_URI', default='https://fulfillment-api:8000') }}"
     osac_template_collections: "{{ lookup('env', 'OSAC_TEMPLATE_COLLECTIONS') | default('osac.templates', true) | split(',') }}"
+    # OSAC-4073: only one NetworkClass may exist per deployment. Leave unset to auto-select the
+    # network role marked is_default: true, or set to an implementation_strategy (e.g. "netris")
+    # to override the selection explicitly.
+    osac_network_class_implementation_strategy: "{{ lookup('env', 'OSAC_NETWORK_CLASS_IMPLEMENTATION_STRATEGY') | default('', true) }}"
   tasks:
     - name: Display configuration values
       ansible.builtin.debug:
@@ -15,6 +19,7 @@
           - "publish_templates_service_account: {{ publish_templates_service_account }}"
           - "osac_fulfillment_service_uri: {{ osac_fulfillment_service_uri }}"
           - "osac_template_collections: {{ osac_template_collections }}"
+          - "osac_network_class_implementation_strategy: {{ osac_network_class_implementation_strategy }}"
 
     - name: Get client token
       osac.service.client_token:
@@ -48,3 +53,4 @@
         name: osac.service.publish_templates
       vars:
         osac_fulfillment_service_token: "{{ fulfillment_service_client_token.token }}"
+        publish_templates_network_class_implementation_strategy: "{{ osac_network_class_implementation_strategy }}"

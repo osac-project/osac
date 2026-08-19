@@ -3,6 +3,7 @@ from pathlib import Path
 import pydantic
 import pytest
 import yaml
+from ansible.errors import AnsibleFilterError
 
 from find_template_roles import (
     Metadata,
@@ -17,6 +18,7 @@ from find_template_roles import (
     TemplateTypeEnum,
     TypeMapping,
     find_network_class_roles_filter,
+    select_network_class_filter,
 )
 
 
@@ -374,3 +376,68 @@ class TestRegressions:
         param = TemplateParameter.from_definition(defn)
         assert param.default is not None
         assert param.default.value == {"key": "val"}
+
+
+# ---------------------------------------------------------------------------
+# TestSelectNetworkClass (OSAC-4073: one NetworkClass per deployment)
+# ---------------------------------------------------------------------------
+
+def _nc(implementation_strategy: str, is_default: bool = False) -> dict[str, object]:
+    return {
+        "implementation_strategy": implementation_strategy,
+        "fabric_manager": implementation_strategy,
+        "title": implementation_strategy,
+        "is_default": is_default,
+    }
+
+
+class TestSelectNetworkClass:
+
+    def test_empty_list_returns_none(self):
+        assert select_network_class_filter([]) is None
+
+    def test_single_role_returned_even_without_is_default(self):
+        roles = [_nc("cudn_net")]
+        assert select_network_class_filter(roles) == roles[0]
+
+    def test_multiple_roles_selects_the_default_one(self):
+        roles = [_nc("cudn_net", is_default=True), _nc("netris"), _nc("openstack")]
+        selected = select_network_class_filter(roles)
+        assert selected["implementation_strategy"] == "cudn_net"
+
+    def test_multiple_roles_no_default_raises(self):
+        roles = [_nc("cudn_net"), _nc("netris")]
+        with pytest.raises(AnsibleFilterError, match="is_default"):
+            select_network_class_filter(roles)
+
+    def test_multiple_defaults_raises(self):
+        roles = [_nc("cudn_net", is_default=True), _nc("netris", is_default=True)]
+        with pytest.raises(AnsibleFilterError, match="is_default"):
+            select_network_class_filter(roles)
+
+    def test_explicit_override_selects_non_default_role(self):
+        roles = [_nc("cudn_net", is_default=True), _nc("netris")]
+        selected = select_network_class_filter(roles, "netris")
+        assert selected["implementation_strategy"] == "netris"
+
+    def test_explicit_override_unknown_strategy_raises(self):
+        roles = [_nc("cudn_net", is_default=True)]
+        with pytest.raises(AnsibleFilterError, match="netris"):
+            select_network_class_filter(roles, "netris")
+
+    def test_explicit_override_takes_precedence_over_ambiguity(self):
+        """An explicit override resolves what would otherwise be an ambiguous, no-default case."""
+        roles = [_nc("cudn_net"), _nc("netris"), _nc("openstack")]
+        selected = select_network_class_filter(roles, "openstack")
+        assert selected["implementation_strategy"] == "openstack"
+
+    def test_real_discovery_has_exactly_one_default(self):
+        """Guards against a future new network role forgetting to leave is_default unset."""
+        payloads = find_network_class_roles_filter(["osac.templates"])
+        defaults = [p for p in payloads if p.get("is_default")]
+        assert len(defaults) == 1, (
+            f"Expected exactly one default NetworkClass role, found: "
+            f"{[p['implementation_strategy'] for p in defaults]}"
+        )
+        selected = select_network_class_filter(payloads)
+        assert selected["implementation_strategy"] == "cudn_net"

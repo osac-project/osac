@@ -3,3 +3,8 @@ publish_templates_cluster_api_endpoint: "{{ osac_fulfillment_service_uri }}/api/
 publish_templates_compute_instance_api_endpoint: "{{ osac_fulfillment_service_uri }}/api/private/v1/compute_instance_templates"
 publish_templates_bare_metal_instance_api_endpoint: "{{ osac_fulfillment_service_uri }}/api/private/v1/baremetal_instance_templates"
 publish_templates_network_class_api_endpoint: "{{ osac_fulfillment_service_uri }}/api/private/v1/network_classes"
+
+# Explicit implementation_strategy to publish when osac_network_classes contains more than one
+# discovered role. Leave empty to auto-select the role marked `is_default: true` (OSAC-4073: only
+# one NetworkClass may exist per deployment).
+publish_templates_network_class_implementation_strategy: ""

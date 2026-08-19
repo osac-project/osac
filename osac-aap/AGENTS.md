@@ -273,7 +273,7 @@ Build definition: `execution-environment/execution-environment.yaml`
 - **Base image**: UBI 10.2 (Red Hat Universal Base Image)
 - **Python**: 3.12 in container runtime
 - **System packages**: systemd-libs, systemd-devel, gcc, python3.12-devel, git-core, bind-utils, krb5-devel
-- **CLI tools**: oc and kubectl copied from `quay.io/openshift/origin-cli:4.19`
+- **CLI tools**: oc and kubectl copied from `quay.io/openshift/origin-cli:4.19`; Helm v3.17.0 installed via SHA256-verified download
 - **Build files**: Copies local `collections/` and `vendor/` into container
 
 No compilation step — Ansible playbooks are interpreted at runtime.

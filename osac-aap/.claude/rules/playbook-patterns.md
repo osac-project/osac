@@ -108,7 +108,7 @@ capabilities:  # informational only here -- see the `capabilities` field note be
 |------|---------|-------|
 | `osac.service.common` | Shared utilities (kubeconfig, credentials) | `tasks_from: get_remote_cluster_kubeconfig` |
 | `osac.service.finalizer` | Finalizer management for CRs | `tasks_from: add_finalizer` |
-| `osac.service.lease` | Bare-metal lease management | Used by cluster/compute workflows |
+| `osac.service.lease` | Generic Kubernetes Lease-based mutex | Used by cluster/compute/storage workflows |
 | `osac.service.wait_for` | Polling utilities | Wait for pods, deployments, CRs |
 | `osac.service.tenant_storage_class` | StorageClass discovery | Find tenant-specific storage |
 | `osac.service.publish_templates` | Template registration | Publishes ComputeClass-family resources from `meta/osac.yaml` |

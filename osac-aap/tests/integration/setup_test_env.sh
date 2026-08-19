@@ -179,8 +179,9 @@ export OSAC_CSI_BACKENDS_CHART_REF="${REPO_ROOT}/../osac-csi-driver/charts/csi-b
 ENVEOF
 
   # 5.2. Set up a local, TLS-trusted OCI registry hosting the osac-csi-driver charts at
-  # two versions, so the csi_driver_install role-level test (CSI_DRIVER_TESTS_ENABLED) can
-  # run in CI without a real oci://ghcr.io/osac-project/charts release tag -- no such tag
+  # two versions, so the csi_driver_install role-level test (which now runs unconditionally
+  # under STORAGE_TESTS_ENABLED, not a dedicated gate) can run in CI without a real
+  # oci://ghcr.io/osac-project/charts release tag -- no such tag
   # has been cut yet (OSAC-3290 Risk Assessment item 1). Plain HTTP is not viable: the
   # vendored kubernetes.core.helm module (pinned 5.2.0) has no plain_http or
   # insecure-skip-tls-verify parameter at all, and Helm's own OCI client special-cases

@@ -27,7 +27,7 @@
         msg: >-
           osac_job_vars.storage_tier_definitions must be a non-empty array, populated
           by osac-operator from the Tenant's resolved storage tiers.
-          Example: [{"name":"default","protocol":"nfs","provider":"vast","backend_id":"be-001","quota_bytes":500}]
+          Example: [{"name":"default","protocol":"nfs","provider":"vast","backend_id":"be-001"}]
       when: >-
         osac_job_vars.storage_tier_definitions is not defined or
         osac_job_vars.storage_tier_definitions is not sequence or

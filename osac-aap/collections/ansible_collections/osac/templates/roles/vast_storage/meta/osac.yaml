@@ -3,7 +3,7 @@ name: vast-storage
 title: VAST Data Storage Provider
 description: >
   Provisions VAST Data storage resources for OSAC tenants.
-  Creates VAST tenants, per-tier views/quotas, and per-tenant users via
+  Creates VAST tenants, per-tier views, and per-tenant users via
   vastdata.vms. Uses a globally-shared VIP pool. Manages K8s Secrets and
   StorageClasses with VAST CSI parameters and EP #26 labels. Admin
   credentials never enter tenant-namespace Secrets.

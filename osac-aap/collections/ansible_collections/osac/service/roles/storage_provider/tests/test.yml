@@ -948,7 +948,6 @@
                 protocol: ""
                 provider: vast
                 backend_id: be-001
-                quota_bytes: 536870912000
             storage_provider_action: ensure_storage_class
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"

@@ -102,7 +102,7 @@
     - name: Ensure VAST CSI Operator is installed
       ansible.builtin.include_tasks: ensure_csi_operator.yaml
 
-    # ── Ensure per-tier VMS resources exist (views, quotas, QoS, view policies) ──
+    # ── Ensure per-tier VMS resources exist (views, QoS, view policies) ──
     # These are created here (not just in setup) so JIT tiers get their backing
     # VMS resources. Uses admin creds for VMS API access.
 
@@ -135,9 +135,6 @@
 
     - name: Ensure per-tier QoS policies exist
       ansible.builtin.include_tasks: create_qos_policy.yaml
-
-    - name: Ensure VAST quotas exist per tier
-      ansible.builtin.include_tasks: create_quotas.yaml
 
     # ── K8s resources: CSI Secret, StorageClasses, VolumeSnapshotClasses ──
 

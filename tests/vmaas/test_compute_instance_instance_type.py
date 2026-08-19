@@ -108,6 +108,7 @@ def test_compute_instance_happy_path(
 
 def test_compute_instance_deletion_protection(
     cli: OsacCLI,
+    private_cli: OsacCLI,
     grpc: GRPCClient,
     k8s_hub_client: K8sClient,
     default_subnet: str,
@@ -131,7 +132,7 @@ def test_compute_instance_deletion_protection(
         ci_name = wait_for_cr(k8s=k8s_hub_client, uuid=ci_uuid)
 
         output, rc = run_unchecked(
-            cli.binary, "--config", cli.config_dir, "delete", "instancetype", active_instance_type,
+            private_cli.binary, "--config", private_cli.config_dir, "delete", "instancetype", active_instance_type,
         )
         assert rc != 0, "delete should be rejected when ComputeInstance references instance type"
         error_lower = output.lower()

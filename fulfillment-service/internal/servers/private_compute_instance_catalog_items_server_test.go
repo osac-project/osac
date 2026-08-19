@@ -1025,7 +1025,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 						FieldDefinitions: []*privatev1.FieldDefinition{
 							privatev1.FieldDefinition_builder{
-								Path:     "spec.disk_image",
+								Path:     "disk_image",
 								Editable: true,
 								Default:  structpb.NewStringValue("deprecated-di"),
 							}.Build(),
@@ -1064,7 +1064,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 						FieldDefinitions: []*privatev1.FieldDefinition{
 							privatev1.FieldDefinition_builder{
-								Path:     "spec.disk_image",
+								Path:     "disk_image",
 								Editable: true,
 								Default:  structpb.NewStringValue("deprecated-di-upd"),
 							}.Build(),
@@ -1089,7 +1089,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 						FieldDefinitions: []*privatev1.FieldDefinition{
 							privatev1.FieldDefinition_builder{
-								Path:     "spec.disk_image",
+								Path:     "disk_image",
 								Editable: true,
 								Default:  structpb.NewStringValue("obsolete-di"),
 							}.Build(),
@@ -1127,7 +1127,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 						FieldDefinitions: []*privatev1.FieldDefinition{
 							privatev1.FieldDefinition_builder{
-								Path:     "spec.disk_image",
+								Path:     "disk_image",
 								Editable: true,
 								Default:  structpb.NewStringValue("obsolete-di-upd"),
 							}.Build(),
@@ -1153,7 +1153,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 						FieldDefinitions: []*privatev1.FieldDefinition{
 							privatev1.FieldDefinition_builder{
-								Path:     "spec.disk_image",
+								Path:     "disk_image",
 								Editable: true,
 								Default:  structpb.NewStringValue("available-di"),
 							}.Build(),
@@ -1162,6 +1162,21 @@ var _ = Describe("Private compute instance catalog items server", func() {
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				Expect(response.GetWarnings()).To(BeEmpty())
+
+				// The stored default must be normalized to a {"name": ...} reference object so the
+				// deletion-protection trigger (migration 101) matches it. A bare string was sent;
+				// validation rewrites it in place before persist.
+				var diskImageFd *privatev1.FieldDefinition
+				for _, fd := range response.GetObject().GetFieldDefinitions() {
+					if fd.GetPath() == "disk_image" {
+						diskImageFd = fd
+						break
+					}
+				}
+				Expect(diskImageFd).ToNot(BeNil())
+				normalized := diskImageFd.GetDefault().GetStructValue()
+				Expect(normalized).ToNot(BeNil())
+				Expect(normalized.GetFields()["name"].GetStringValue()).To(Equal("available-di"))
 			})
 
 			It("Rejects Create when field_definitions default references a non-existent disk image", func() {
@@ -1174,7 +1189,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 						FieldDefinitions: []*privatev1.FieldDefinition{
 							privatev1.FieldDefinition_builder{
-								Path:     "spec.disk_image",
+								Path:     "disk_image",
 								Editable: true,
 								Default:  structpb.NewStringValue("nonexistent-di"),
 							}.Build(),
@@ -1261,7 +1276,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 						FieldDefinitions: []*privatev1.FieldDefinition{
 							privatev1.FieldDefinition_builder{
-								Path:     "spec.disk_image",
+								Path:     "disk_image",
 								Editable: true,
 								Default:  structpb.NewStringValue("other-tenant-di"),
 							}.Build(),
@@ -1274,7 +1289,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 				Expect(status.Code()).To(Equal(grpccodes.NotFound))
 			})
 
-			It("Skips validation when field_definitions has no spec.disk_image path", func() {
+			It("Skips validation when field_definitions has no disk_image path", func() {
 				response, err := server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
 					Object: privatev1.ComputeInstanceCatalogItem_builder{
 						Metadata: privatev1.Metadata_builder{

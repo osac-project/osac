@@ -207,7 +207,10 @@ func applyDefault(specMap map[string]any, path string, defaultVal *structpb.Valu
 	if strings.HasPrefix(path, "template_parameters.") {
 		parsed = wrapValueAsAny(parsed)
 	}
-	// Catalog defaults store disk_image as a plain string (name), but the proto field is a DiskImageReference.
+	// The disk_image default is normally already a DiskImageReference object ({"name": ...}) —
+	// normalized on catalog-item create/update (see validateFieldDefinitionsDiskImage) and by
+	// migration 101. This wrap is a defensive fallback for any legacy un-migrated bare-string
+	// default, converting it to the object the proto DiskImageReference field expects.
 	if path == "disk_image" {
 		if s, ok := parsed.(string); ok {
 			parsed = map[string]any{"name": s}

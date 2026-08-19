@@ -27,6 +27,7 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	testsv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/tests/v1"
 )
 
@@ -1228,6 +1229,59 @@ var _ = Describe("Reference validator", func() {
 			Expect(spec.GetAttachment().GetSubnet().GetId()).To(Equal("resolved-nested-subnet"))
 			Expect(spec.GetAttachment().GetSecurityGroups()[0].GetId()).To(Equal("resolved-nested-sg"))
 			Expect(spec.GetOtherTargets()[0].GetId()).To(Equal("resolved-repeated-other"))
+		})
+
+		// Regression guard for the DiskImage deletion-protection invariant (OSAC-3715): the
+		// compute_instance_templates clause of check_disk_image_not_in_use() matches
+		// spec_defaults.disk_image->>'id'. A template may be created referencing a disk image by
+		// name only, so id ends up stored solely because this interceptor backfills it from the
+		// resolved reference before the handler persists the object. The template server handler
+		// does not backfill id itself, so this must hold at the interceptor layer. Uses the real
+		// ComputeInstanceTemplate message and the real registered type name.
+		It("Backfills id on a template's spec_defaults.disk_image referenced by name only", func() {
+			validator.Register("osac.private.v1.DiskImageReference", func(
+				ctx context.Context, tenant, project, id, name string,
+			) (*ResolvedRef, error) {
+				return &ResolvedRef{
+					ID:   "resolved-" + name,
+					Name: name,
+				}, nil
+			})
+
+			request := privatev1.ComputeInstanceTemplatesCreateRequest_builder{
+				Object: privatev1.ComputeInstanceTemplate_builder{
+					Id: "template-1",
+					Metadata: privatev1.Metadata_builder{
+						Tenant:  "tenant-a",
+						Project: "default",
+					}.Build(),
+					SpecDefaults: privatev1.ComputeInstanceTemplateSpecDefaults_builder{
+						DiskImage: privatev1.DiskImageReference_builder{
+							Name: "tmpl-di",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build()
+
+			handlerCalled := false
+			mockHandler := func(ctx context.Context, req any) (any, error) {
+				handlerCalled = true
+				return "response", nil
+			}
+
+			_, err := validator.UnaryServer(
+				context.Background(),
+				request,
+				&grpc.UnaryServerInfo{FullMethod: "/osac.private.v1.ComputeInstanceTemplates/Create"},
+				mockHandler,
+			)
+
+			Expect(err).ToNot(HaveOccurred())
+			Expect(handlerCalled).To(BeTrue())
+
+			diskImage := request.GetObject().GetSpecDefaults().GetDiskImage()
+			Expect(diskImage.GetId()).To(Equal("resolved-tmpl-di"))
+			Expect(diskImage.GetName()).To(Equal("tmpl-di"))
 		})
 	})
 

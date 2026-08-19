@@ -169,7 +169,7 @@ See `README.md` for complete script documentation. Most commonly used:
 GitHub Actions only discovers workflows under the repo root's `.github/workflows/`,
 so osac-installer-specific CI now lives there (not under `osac-installer/.github/`):
 `nightly-build.yaml` (nightly build: versions and publishes per-component sub-charts to GHCR, then builds and publishes the umbrella chart; tested via e2e against
-the current commit directly -- no submodule bump step) and
+the current commit directly) and
 `publish-osac-installer-chart.yaml` (manual-dispatch umbrella chart release; takes
 one mono-repo release `version` plus an independent `ui_version` for osac-ui).
 Nightly sub-chart OCI publishing uses `resolve_release_tag()` per monorepo

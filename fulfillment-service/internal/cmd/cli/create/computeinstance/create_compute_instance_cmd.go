@@ -104,12 +104,6 @@ func Cmd() *cobra.Command {
 		"",
 		diskImageFlagHelp,
 	)
-	// TEMPORARY WORKAROUND: remove after osac-test-infra drops --image flag
-	flags.StringVar(&runner.args.image, "image", "", "Deprecated.")
-	flags.MarkDeprecated("image", "use '--disk-image' instead")
-	flags.StringVar(&runner.args.imageSourceType, "image-source-type", "", "Deprecated.")
-	flags.MarkDeprecated("image-source-type", "no longer needed with '--disk-image'")
-
 	flags.StringVar(
 		&runner.args.sshPublicKey,
 		"ssh-public-key",
@@ -188,8 +182,6 @@ type runnerContext struct {
 		userData                string
 		networkAttachments      []string
 		externalIPAttachment    bool
-		image                   string // TEMPORARY WORKAROUND: remove after osac-test-infra drops --image flag
-		imageSourceType         string // TEMPORARY WORKAROUND: remove after osac-test-infra drops --image flag
 	}
 	logger                 *slog.Logger
 	console                *terminal.Console

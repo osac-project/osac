@@ -1119,8 +1119,7 @@ var _ = Describe("Private compute instances server", func() {
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 			Expect(status.Message()).To(ContainSubstring("boot_disk"))
-			// TEMPORARY: skipped — fedora disk_image workaround (OSAC-3714) injects disk_image before validation
-			// Expect(status.Message()).To(ContainSubstring("image"))
+			Expect(status.Message()).To(ContainSubstring("image"))
 			Expect(status.Message()).To(ContainSubstring("instance_type"))
 			Expect(status.Message()).To(ContainSubstring("run_strategy"))
 		})
@@ -1639,8 +1638,7 @@ var _ = Describe("Private compute instances server", func() {
 				Expect(ok).To(BeTrue())
 				Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 				Expect(status.Message()).To(ContainSubstring("instance_type"))
-				// TEMPORARY: skipped — fedora disk_image workaround (OSAC-3714) injects disk_image before validation
-				// Expect(status.Message()).To(ContainSubstring("image"))
+				Expect(status.Message()).To(ContainSubstring("image"))
 				Expect(status.Message()).To(ContainSubstring("boot_disk"))
 				Expect(status.Message()).To(ContainSubstring("run_strategy"))
 			})

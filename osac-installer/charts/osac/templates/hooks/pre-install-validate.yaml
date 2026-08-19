@@ -48,6 +48,36 @@ spec:
             echo "Some components (PostgreSQL, Keycloak) may fail to create PVCs."
           fi
 
+          {{- if and .Values.bmf .Values.bmf.metal3 .Values.bmf.metal3.enabled }}
+          # Check that Metal3 BareMetalHost CRD exists
+          echo "Checking for Metal3 BareMetalHost CRD..."
+          if kubectl get crd baremetalhosts.metal3.io >/dev/null 2>&1; then
+            echo "  BareMetalHost CRD found."
+          else
+            echo "ERROR: BareMetalHost CRD (baremetalhosts.metal3.io) not found."
+            echo "Metal3 backend is configured but BareMetalOperator is not installed."
+            echo "Install BareMetalOperator before deploying OSAC with Metal3 backend."
+            exit 1
+          fi
+
+          # Check that the Provisioning CR has watchAllNamespaces enabled
+          echo "Checking Provisioning CR watchAllNamespaces setting..."
+          WATCH_ALL=$(kubectl get provisioning -o jsonpath='{.items[0].spec.watchAllNamespaces}' 2>/dev/null)
+          if [ -z "$WATCH_ALL" ]; then
+            echo "ERROR: No Provisioning CR found."
+            echo "Metal3 backend requires a Provisioning CR with watchAllNamespaces: true."
+            echo "Configure BareMetalOperator to watch all namespaces for BareMetalHost resources."
+            exit 1
+          elif [ "$WATCH_ALL" != "true" ]; then
+            echo "ERROR: Provisioning CR has watchAllNamespaces: ${WATCH_ALL}."
+            echo "Metal3 backend requires watchAllNamespaces: true on the Provisioning CR."
+            echo "Set spec.watchAllNamespaces to true so BMO can discover BareMetalHost resources across namespaces."
+            exit 1
+          else
+            echo "  Provisioning CR watchAllNamespaces: true."
+          fi
+          {{- end }}
+
           echo "=== Validation passed ==="
   backoffLimit: 0
 ---
@@ -80,6 +110,11 @@ rules:
 - apiGroups: ["storage.k8s.io"]
   resources: ["storageclasses"]
   verbs: ["list"]
+{{- if and .Values.bmf .Values.bmf.metal3 .Values.bmf.metal3.enabled }}
+- apiGroups: ["metal3.io"]
+  resources: ["provisionings"]
+  verbs: ["list"]
+{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

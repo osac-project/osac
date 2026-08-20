@@ -215,6 +215,7 @@ type HostSelectorSpec struct {
 // BareMetalNICStatus holds the MAC address of a single physical network interface.
 type BareMetalNICStatus struct {
 	// MAC is the hardware MAC address of this interface, lowercased (e.g. "aa:bb:cc:dd:ee:ff").
+	// +kubebuilder:validation:Pattern=`^[0-9a-f]{2}(:[0-9a-f]{2}){5}$`
 	MAC string `json:"mac"`
 }
 

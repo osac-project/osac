@@ -780,6 +780,43 @@ var _ = Describe("BareMetalInstance Controller", func() {
 				Expect(bareMetalInstance.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseReady))
 			})
 		})
+
+		Context("NIC metadata — error and recovery paths through reconcileManagement", func() {
+			BeforeEach(func() {
+				bareMetalInstance.Spec.RunStrategy = v1alpha1.RunStrategyUnspecified
+				mockMgmtClient.getPowerStateFunc = func(_ context.Context, _ string) (*management.PowerStatus, error) {
+					return &management.PowerStatus{State: management.PowerOff}, nil
+				}
+			})
+
+			It("returns error and sets Phase=Progressing when GetHostNICs fails", func() {
+				backendErr := errors.New("inventory backend unavailable")
+				mockInvClient.getHostNICsFunc = func(_ context.Context, _ string) ([]inventory.HostNIC, error) {
+					return nil, backendErr
+				}
+
+				result, err := reconciler.reconcileManagement(ctx, bareMetalInstance)
+
+				Expect(err).To(MatchError(backendErr))
+				Expect(result).To(Equal(ctrl.Result{}))
+				Expect(bareMetalInstance.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseProgressing))
+			})
+
+			It("sets Phase=Ready and populates hardware when GetHostNICs succeeds", func() {
+				mockInvClient.getHostNICsFunc = func(_ context.Context, _ string) ([]inventory.HostNIC, error) {
+					return []inventory.HostNIC{{MAC: "aa:bb:cc:dd:ee:01"}}, nil
+				}
+
+				result, err := reconciler.reconcileManagement(ctx, bareMetalInstance)
+
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result).To(Equal(ctrl.Result{}))
+				Expect(bareMetalInstance.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseReady))
+				Expect(bareMetalInstance.Status.Hardware).NotTo(BeNil())
+				Expect(bareMetalInstance.Status.Hardware.NICs).To(HaveLen(1))
+				Expect(bareMetalInstance.Status.Hardware.NICs[0].MAC).To(Equal("aa:bb:cc:dd:ee:01"))
+			})
+		})
 	})
 
 	Describe("reconcileProvisioning", func() {

@@ -288,6 +288,7 @@ spec:
                         mac:
                           description: MAC is the hardware MAC address of this interface,
                             lowercased (e.g. "aa:bb:cc:dd:ee:ff").
+                          pattern: ^[0-9a-f]{2}(:[0-9a-f]{2}){5}$
                           type: string
                       required:
                       - mac

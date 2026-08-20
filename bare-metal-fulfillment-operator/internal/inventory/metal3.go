@@ -274,12 +274,8 @@ func (m *Metal3Client) GetHostNICs(ctx context.Context, inventoryHostID string) 
 		return nil, fmt.Errorf("failed to get BareMetalHost %s: %w", inventoryHostID, err)
 	}
 
-	if bmh.Status.HardwareDetails == nil {
-		return nil, fmt.Errorf("BareMetalHost %s has no hardware details despite being allocated", inventoryHostID)
-	}
-
-	if len(bmh.Status.HardwareDetails.NIC) == 0 {
-		return nil, fmt.Errorf("BareMetalHost %s has no NIC data despite completed inspection", inventoryHostID)
+	if bmh.Status.HardwareDetails == nil || len(bmh.Status.HardwareDetails.NIC) == 0 {
+		return nil, fmt.Errorf("BareMetalHost %s has no NIC inventory despite being allocated", inventoryHostID)
 	}
 
 	nics := make([]HostNIC, 0, len(bmh.Status.HardwareDetails.NIC))

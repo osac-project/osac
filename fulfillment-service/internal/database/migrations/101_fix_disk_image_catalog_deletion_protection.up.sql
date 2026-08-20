@@ -11,29 +11,27 @@
 -- specific language governing permissions and limitations under the License.
 --
 
--- Fix DiskImage deletion protection for compute instance catalog items.
+-- DiskImage deletion protection for compute instance catalog items, matched by disk image id.
 --
--- Migration 99's check_disk_image_not_in_use() catalog-items clause never matched a real catalog
--- item, on three counts:
---   1. It scanned data->'spec'->'field_definitions', but field_definitions is a top-level field of
---      ComputeInstanceCatalogItem, so real data lives at data->'field_definitions'.
---   2. It matched the path string 'spec.disk_image', but the stored, apply- and UI-facing
---      convention is the prefix-less, spec-relative 'disk_image'.
---   3. It compared the stored default against old.id, but the default holds the disk image name,
---      not its id.
--- As a result a DiskImage referenced by a functional catalog item could be soft-deleted.
+-- DiskImage names are unique only per (name, tenant), so a shared "fedora" and a tenant "fedora"
+-- can coexist. Matching a catalog default on name would over-block: soft-deleting either image
+-- would be refused whenever any catalog item defaults to that name. The id is unique, so the
+-- catalog clause matches the resolved id, like the compute_instances and compute_instance_templates
+-- clauses.
 --
 -- This migration:
---   1. Replaces the function so the catalog-items clause mirrors the cluster version reference
---      clause (migration 94): scan the top-level field_definitions array, match path 'disk_image',
---      and match the reference object default's name (fd->'default'->>'name') against the disk image
---      name. The compute_instances and compute_instance_templates clauses are unchanged from
---      migration 99 (they correctly read spec/spec_defaults and match on ->>'id').
---   2. Normalizes existing compute_instance_catalog_items field_definitions to the settled shape
---      (path 'disk_image', default {"name": <name>}), following the version conversion in
---      migration 93.
+--   1. Defines check_disk_image_not_in_use() so the catalog-items clause scans the top-level
+--      field_definitions array, matches path 'disk_image', and matches the default object's id
+--      (fd->'default'->>'id') against old.id. The compute_instances and compute_instance_templates
+--      clauses match spec/spec_defaults ->>'id'. CREATE OR REPLACE redefines the whole body, so all
+--      three clauses appear here.
+--   2. Normalizes existing compute_instance_catalog_items field_definitions to path 'disk_image'
+--      with a default {"id": <resolved>, "name": <name>}. The id is resolved from the default's name
+--      against disk_images, own tenant first then shared — the precedence the server applies at
+--      authoring time (auth.TenancyLogic.DetermineDefaultTenant). An unresolvable name (image gone)
+--      is left name-only, best-effort.
 
--- 1. Replace the trigger function. The trigger wiring from migration 99 is unchanged.
+-- 1. Define the trigger function (CREATE OR REPLACE; the trigger wiring is defined elsewhere).
 create or replace function check_disk_image_not_in_use() returns trigger as $$
 begin
   if exists (
@@ -75,7 +73,7 @@ begin
     ) as fd
     where compute_instance_catalog_items.deletion_timestamp = 'epoch'
       and fd->>'path' = 'disk_image'
-      and fd->'default'->>'name' = old.name
+      and fd->'default'->>'id' = old.id
   ) then
     raise exception using
       errcode = 'Z0003',
@@ -89,21 +87,38 @@ begin
 end;
 $$ language plpgsql;
 
--- 2. Normalize existing catalog-item field_definitions to path 'disk_image' with a {"name": ...}
---    reference-object default, following the version conversion in migration 93. Handles both the
---    prefix-less 'disk_image' and the legacy 'spec.disk_image' path, and only rewrites string
---    defaults (already-object defaults are left untouched).
+-- 2. Normalize existing catalog-item field_definitions to path 'disk_image' with an id-keyed
+--    reference-object default {"id": <resolved>, "name": <name>}. Handles the prefix-less
+--    'disk_image' and the legacy 'spec.disk_image' path, and both bare-string and {"name": ...}
+--    defaults. The lateral extracts the lookup name once: it is null when the default already
+--    carries an id (nothing to resolve) or has no name, which routes the row to path-only
+--    normalization and avoids jsonb_set's strict-null clobbering the field definition. The id is
+--    resolved with own-tenant-then-shared precedence; unresolvable names are left name-only.
 update compute_instance_catalog_items
 set data = jsonb_set(data, '{field_definitions}',
   (select coalesce(jsonb_agg(
     case
       when fd->>'path' in ('disk_image', 'spec.disk_image') then
         case
-          when fd->'default' is not null and jsonb_typeof(fd->'default') = 'string' then
+          when dn.name is not null and dn.name <> '' then
             jsonb_set(
               jsonb_set(fd, '{path}', '"disk_image"'),
               '{default}',
-              jsonb_build_object('name', fd->>'default')
+              coalesce(
+                (select jsonb_build_object('id', di.id, 'name', dn.name)
+                   from disk_images di
+                  where di.name = dn.name
+                    and di.tenant = compute_instance_catalog_items.tenant
+                    and di.deletion_timestamp = 'epoch'
+                  limit 1),
+                (select jsonb_build_object('id', di.id, 'name', dn.name)
+                   from disk_images di
+                  where di.name = dn.name
+                    and di.tenant = 'shared'
+                    and di.deletion_timestamp = 'epoch'
+                  limit 1),
+                jsonb_build_object('name', dn.name)
+              )
             )
           else
             jsonb_set(fd, '{path}', '"disk_image"')
@@ -111,7 +126,15 @@ set data = jsonb_set(data, '{field_definitions}',
       else fd
     end
   ), '[]'::jsonb)
-  from jsonb_array_elements(data->'field_definitions') as fd)
+  from jsonb_array_elements(data->'field_definitions') as fd
+  cross join lateral (
+    select case
+      when jsonb_typeof(fd->'default') = 'string' then fd->>'default'
+      when jsonb_typeof(fd->'default') = 'object'
+           and coalesce(fd->'default'->>'id', '') = '' then fd->'default'->>'name'
+      else null
+    end as name
+  ) as dn)
 )
 where data->'field_definitions' is not null
   and exists (
@@ -119,18 +142,33 @@ where data->'field_definitions' is not null
     where fd->>'path' in ('disk_image', 'spec.disk_image')
   );
 
--- Archived catalog items: same conversion, for data consistency (mirrors migration 93).
+-- Archived catalog items: same conversion, for data consistency. Their tenant column drives the
+-- same own-tenant-then-shared id resolution.
 update archived_compute_instance_catalog_items
 set data = jsonb_set(data, '{field_definitions}',
   (select coalesce(jsonb_agg(
     case
       when fd->>'path' in ('disk_image', 'spec.disk_image') then
         case
-          when fd->'default' is not null and jsonb_typeof(fd->'default') = 'string' then
+          when dn.name is not null and dn.name <> '' then
             jsonb_set(
               jsonb_set(fd, '{path}', '"disk_image"'),
               '{default}',
-              jsonb_build_object('name', fd->>'default')
+              coalesce(
+                (select jsonb_build_object('id', di.id, 'name', dn.name)
+                   from disk_images di
+                  where di.name = dn.name
+                    and di.tenant = archived_compute_instance_catalog_items.tenant
+                    and di.deletion_timestamp = 'epoch'
+                  limit 1),
+                (select jsonb_build_object('id', di.id, 'name', dn.name)
+                   from disk_images di
+                  where di.name = dn.name
+                    and di.tenant = 'shared'
+                    and di.deletion_timestamp = 'epoch'
+                  limit 1),
+                jsonb_build_object('name', dn.name)
+              )
             )
           else
             jsonb_set(fd, '{path}', '"disk_image"')
@@ -138,7 +176,15 @@ set data = jsonb_set(data, '{field_definitions}',
       else fd
     end
   ), '[]'::jsonb)
-  from jsonb_array_elements(data->'field_definitions') as fd)
+  from jsonb_array_elements(data->'field_definitions') as fd
+  cross join lateral (
+    select case
+      when jsonb_typeof(fd->'default') = 'string' then fd->>'default'
+      when jsonb_typeof(fd->'default') = 'object'
+           and coalesce(fd->'default'->>'id', '') = '' then fd->'default'->>'name'
+      else null
+    end as name
+  ) as dn)
 )
 where data->'field_definitions' is not null
   and exists (

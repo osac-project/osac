@@ -1163,9 +1163,10 @@ var _ = Describe("Private compute instance catalog items server", func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(response.GetWarnings()).To(BeEmpty())
 
-				// The stored default must be normalized to a {"name": ...} reference object so the
-				// deletion-protection trigger (migration 101) matches it. A bare string was sent;
-				// validation rewrites it in place before persist.
+				// The stored default must be normalized to an id-keyed {"id": ..., "name": ...}
+				// reference object so the deletion-protection trigger (migration 101) matches on the
+				// resolved id. A bare string was sent; validation resolves it and rewrites it in place
+				// before persist. createDiskImageWithLifecycle sets Id == Name, so both are "available-di".
 				var diskImageFd *privatev1.FieldDefinition
 				for _, fd := range response.GetObject().GetFieldDefinitions() {
 					if fd.GetPath() == "disk_image" {
@@ -1176,6 +1177,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 				Expect(diskImageFd).ToNot(BeNil())
 				normalized := diskImageFd.GetDefault().GetStructValue()
 				Expect(normalized).ToNot(BeNil())
+				Expect(normalized.GetFields()["id"].GetStringValue()).To(Equal("available-di"))
 				Expect(normalized.GetFields()["name"].GetStringValue()).To(Equal("available-di"))
 			})
 
@@ -1287,6 +1289,159 @@ var _ = Describe("Private compute instance catalog items server", func() {
 				status, ok := grpcstatus.FromError(err)
 				Expect(ok).To(BeTrue())
 				Expect(status.Code()).To(Equal(grpccodes.NotFound))
+			})
+
+			Context("disk_image name-collision precedence", func() {
+				// Disk image names are unique only per (name, tenant), so a shared image and one or
+				// more same-name tenant images can coexist. validateDiskImageState must break the tie
+				// deterministically: the caller's own tenant wins, then the shared tenant, otherwise
+				// the reference is a genuine ambiguity (InvalidArgument). These tests drive the server
+				// directly (the interceptor that id-pins typed refs is not in the unit chain), so the
+				// by-name resolution path is exercised as a real DB lookup.
+
+				// buildCatalogServer wires a catalog server whose caller has the given default tenant
+				// and can see the shared tenant plus the listed extra tenants.
+				buildCatalogServer := func(defaultTenant string, extraVisible ...string) *PrivateComputeInstanceCatalogItemsServer {
+					visible := auth.SharedTenants.Union(collections.NewSet(extraVisible...))
+					mockTenancy := auth.NewMockTenancyLogic(ctrl)
+					mockTenancy.EXPECT().DetermineVisibleTenants(gomock.Any()).
+						Return(visible, nil).AnyTimes()
+					mockTenancy.EXPECT().DetermineAssignableTenants(gomock.Any()).
+						Return(collections.NewSet(defaultTenant), nil).AnyTimes()
+					mockTenancy.EXPECT().DetermineDefaultTenant(gomock.Any()).
+						Return(defaultTenant, nil).AnyTimes()
+					s, err := NewPrivateComputeInstanceCatalogItemsServer().
+						SetLogger(logger).
+						SetAttributionLogic(attribution).
+						SetTenancyLogic(mockTenancy).
+						Build()
+					Expect(err).ToNot(HaveOccurred())
+					return s
+				}
+
+				// storedDiskImageDefault pulls the normalized disk_image field default off a created
+				// catalog item so its resolved id/name can be asserted.
+				storedDiskImageDefault := func(item *privatev1.ComputeInstanceCatalogItem) *structpb.Struct {
+					for _, fd := range item.GetFieldDefinitions() {
+						if fd.GetPath() == "disk_image" {
+							return fd.GetDefault().GetStructValue()
+						}
+					}
+					return nil
+				}
+
+				createCatalogItem := func(
+					s *PrivateComputeInstanceCatalogItemsServer,
+					def *structpb.Value,
+				) (*privatev1.ComputeInstanceCatalogItemsCreateResponse, error) {
+					return s.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
+						Object: privatev1.ComputeInstanceCatalogItem_builder{
+							Metadata: privatev1.Metadata_builder{
+								Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+							}.Build(),
+							Title:    "Catalog item for disk image precedence",
+							Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+							FieldDefinitions: []*privatev1.FieldDefinition{
+								privatev1.FieldDefinition_builder{
+									Path:     "disk_image",
+									Editable: true,
+									Default:  def,
+								}.Build(),
+							},
+						}.Build(),
+					}.Build())
+				}
+
+				It("Resolves a name collision to the caller's own-tenant disk image", func() {
+					createTenant("my-tenant")
+					createAvailableDiskImageInTenant("di-fedora-shared", "fedora", auth.SharedTenant)
+					createAvailableDiskImageInTenant("di-fedora-tenant", "fedora", "my-tenant")
+
+					s := buildCatalogServer("my-tenant", "my-tenant")
+					resp, err := createCatalogItem(s, structpb.NewStringValue("fedora"))
+					Expect(err).ToNot(HaveOccurred())
+					Expect(resp.GetWarnings()).To(BeEmpty())
+
+					def := storedDiskImageDefault(resp.GetObject())
+					Expect(def).ToNot(BeNil())
+					Expect(def.GetFields()["id"].GetStringValue()).To(Equal("di-fedora-tenant"))
+					Expect(def.GetFields()["name"].GetStringValue()).To(Equal("fedora"))
+				})
+
+				It("Falls back to the shared disk image when the caller's tenant has no same-name image", func() {
+					createTenant("my-tenant")
+					createTenant("other-tenant")
+					createAvailableDiskImageInTenant("di-ubuntu-shared", "ubuntu", auth.SharedTenant)
+					createAvailableDiskImageInTenant("di-ubuntu-other", "ubuntu", "other-tenant")
+
+					// The caller sees shared + other-tenant (so the name resolves to >1 row) but its own
+					// default tenant "my-tenant" owns no "ubuntu": the shared image must win the tie.
+					s := buildCatalogServer("my-tenant", "my-tenant", "other-tenant")
+					resp, err := createCatalogItem(s, structpb.NewStringValue("ubuntu"))
+					Expect(err).ToNot(HaveOccurred())
+
+					def := storedDiskImageDefault(resp.GetObject())
+					Expect(def).ToNot(BeNil())
+					Expect(def.GetFields()["id"].GetStringValue()).To(Equal("di-ubuntu-shared"))
+				})
+
+				It("Rejects an ambiguous name with InvalidArgument when multiple tenant images share it and none is shared", func() {
+					createTenant("tenant-a")
+					createTenant("tenant-b")
+					createAvailableDiskImageInTenant("di-fedora-a", "fedora", "tenant-a")
+					createAvailableDiskImageInTenant("di-fedora-b", "fedora", "tenant-b")
+
+					// A provider admin: default tenant is shared, but no shared "fedora" exists and two
+					// tenants own one — an irreducible ambiguity, which must be a deterministic error.
+					s := buildCatalogServer(auth.SharedTenant, "tenant-a", "tenant-b")
+					_, err := createCatalogItem(s, structpb.NewStringValue("fedora"))
+					Expect(err).To(HaveOccurred())
+					status, ok := grpcstatus.FromError(err)
+					Expect(ok).To(BeTrue())
+					Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+				})
+
+				It("Uses the id and ignores the name when the default already carries an id", func() {
+					createTenant("my-tenant")
+					createAvailableDiskImageInTenant("di-fedora-shared", "fedora", auth.SharedTenant)
+					createAvailableDiskImageInTenant("di-fedora-tenant", "fedora", "my-tenant")
+
+					// The default pins the shared image by id even though the name "fedora" collides
+					// with the caller's own-tenant image: the by-id path must win, unambiguously.
+					s := buildCatalogServer("my-tenant", "my-tenant")
+					def := structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
+						"id":   structpb.NewStringValue("di-fedora-shared"),
+						"name": structpb.NewStringValue("fedora"),
+					}})
+					resp, err := createCatalogItem(s, def)
+					Expect(err).ToNot(HaveOccurred())
+
+					stored := storedDiskImageDefault(resp.GetObject())
+					Expect(stored).ToNot(BeNil())
+					Expect(stored.GetFields()["id"].GetStringValue()).To(Equal("di-fedora-shared"))
+					Expect(stored.GetFields()["name"].GetStringValue()).To(Equal("fedora"))
+				})
+
+				It("Is idempotent when re-validating an already-id-normalized default", func() {
+					createDiskImageWithLifecycle("stable-di",
+						privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE, nil)
+
+					// Feed the already-normalized {"id","name"} form (what a prior Create persisted and
+					// migration 101 backfills). diskImageDefaultKey takes the by-id path, so it resolves
+					// to the same image and re-stores the same id-form default.
+					s := buildCatalogServer(auth.SharedTenant)
+					def := structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
+						"id":   structpb.NewStringValue("stable-di"),
+						"name": structpb.NewStringValue("stable-di"),
+					}})
+					resp, err := createCatalogItem(s, def)
+					Expect(err).ToNot(HaveOccurred())
+
+					stored := storedDiskImageDefault(resp.GetObject())
+					Expect(stored).ToNot(BeNil())
+					Expect(stored.GetFields()["id"].GetStringValue()).To(Equal("stable-di"))
+					Expect(stored.GetFields()["name"].GetStringValue()).To(Equal("stable-di"))
+				})
 			})
 
 			It("Skips validation when field_definitions has no disk_image path", func() {

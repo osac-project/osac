@@ -248,6 +248,6 @@ func (s *PrivateComputeInstanceTemplatesServer) validateSpecDefaultsDiskImage(
 
 	// Look up the disk image and validate its state. The resolved object is not needed
 	// here — the interceptor already backfills id/name on the stored reference.
-	_, warnings, err := validateDiskImageState(ctx, s.diskImagesDao, diskImageKey, " in spec_defaults")
+	_, warnings, err := validateDiskImageState(ctx, s.diskImagesDao, diskImageKey, "", " in spec_defaults")
 	return warnings, err
 }

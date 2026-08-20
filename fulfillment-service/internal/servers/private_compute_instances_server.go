@@ -639,7 +639,7 @@ func (s *PrivateComputeInstancesServer) validateDiskImage(
 		return nil, nil
 	}
 
-	diskImage, warnings, err := validateDiskImageState(ctx, s.diskImagesDao, key, "")
+	diskImage, warnings, err := validateDiskImageState(ctx, s.diskImagesDao, key, "", "")
 	if err != nil {
 		return nil, err
 	}

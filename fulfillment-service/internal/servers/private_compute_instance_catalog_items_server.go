@@ -19,6 +19,8 @@ import (
 	"log/slog"
 
 	"github.com/prometheus/client_golang/prometheus"
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
@@ -43,6 +45,7 @@ type PrivateComputeInstanceCatalogItemsServer struct {
 	generic          *GenericServer[*privatev1.ComputeInstanceCatalogItem]
 	instanceTypesDao *dao.GenericDAO[*privatev1.InstanceType]
 	diskImagesDao    *dao.GenericDAO[*privatev1.DiskImage]
+	tenancyLogic     auth.TenancyLogic
 }
 
 func NewPrivateComputeInstanceCatalogItemsServer() *PrivateComputeInstanceCatalogItemsServerBuilder {
@@ -121,6 +124,7 @@ func (b *PrivateComputeInstanceCatalogItemsServerBuilder) Build() (result *Priva
 		generic:          generic,
 		instanceTypesDao: instanceTypesDao,
 		diskImagesDao:    diskImagesDao,
+		tenancyLogic:     b.tenancyLogic,
 	}
 	return
 }
@@ -232,14 +236,14 @@ func (s *PrivateComputeInstanceCatalogItemsServer) validateFieldDefinitionsInsta
 }
 
 // validateFieldDefinitionsDiskImage validates the disk_image constraint in field_definitions and
-// normalizes the stored default to a DiskImageReference object.
+// normalizes the stored default to an id-keyed DiskImageReference object.
 //
 // The path is the prefix-less, spec-relative "disk_image" — the convention the apply mechanism
-// (applyDefault) and the UI already use, and the one the deletion-protection trigger (migration
-// 101) matches. The default is accepted as either a bare name string (the shape clients and the
-// UI send) or an already-normalized {"name": ...} object, and is rewritten in place to the object
-// form keyed by the resolved name, so the persisted default matches the trigger and mirrors the
-// version reference convention (migration 93).
+// (applyDefault) and the UI use, and the one the deletion-protection trigger matches. The default
+// is accepted as a bare name string (the shape clients and the UI send),
+// a {"name": ...} object, or an already-normalized {"id": ..., "name": ...} object, and is rewritten
+// in place to {"id": <resolved>, "name": <resolved>} so the persisted default matches the id-based
+// trigger and is unambiguous under name collisions.
 //
 // Rejects OBSOLETE (and not-found) disk images, warns on DEPRECATED. Tenant visibility is
 // enforced by the DiskImages DAO's tenancy filter (a cross-tenant reference resolves to
@@ -249,7 +253,7 @@ func (s *PrivateComputeInstanceCatalogItemsServer) validateFieldDefinitionsDiskI
 	fieldDefinitions []*privatev1.FieldDefinition,
 ) ([]string, error) {
 	// Scan field_definitions for the disk_image default. It is a name string (as clients and the
-	// UI send it) or an already-normalized {"name": ...} reference object.
+	// UI send it), a {"name": ...} object, or an already-normalized {"id": ..., "name": ...} object.
 	var diskImageFd *privatev1.FieldDefinition
 	var diskImageKey string
 	for _, fd := range fieldDefinitions {
@@ -264,18 +268,28 @@ func (s *PrivateComputeInstanceCatalogItemsServer) validateFieldDefinitionsDiskI
 		return nil, nil
 	}
 
+	// Resolve with the caller's tenant precedence so a name shared between a tenant image and the
+	// shared image resolves deterministically (see validateDiskImageState). DetermineDefaultTenant
+	// returns the caller's own tenant for a tenant-scoped subject and the shared tenant for an admin.
+	preferredTenant, err := s.tenancyLogic.DetermineDefaultTenant(ctx)
+	if err != nil {
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to determine tenant: %v", err)
+	}
+
 	// Look up the disk image and validate its state.
-	diskImage, warnings, err := validateDiskImageState(ctx, s.diskImagesDao, diskImageKey, " in field_definitions")
+	diskImage, warnings, err := validateDiskImageState(ctx, s.diskImagesDao, diskImageKey, preferredTenant, " in field_definitions")
 	if err != nil {
 		return nil, err
 	}
 
-	// Normalize the stored default to a DiskImageReference object keyed by the resolved name, so the
-	// deletion-protection trigger (migration 101) matches it. The resolved name is used rather than
-	// the raw input, so a lookup by id still stores the canonical name.
+	// Persist the resolved reference by id (with the name for readability): the deletion-protection
+	// trigger matches on id, and a name alone cannot distinguish a shared image from a same-name
+	// tenant image. Storing the id also binds the default to the exact image resolved here, so
+	// consuming tenants don't re-resolve the name.
 	if diskImage != nil {
 		diskImageFd.SetDefault(structpb.NewStructValue(&structpb.Struct{
 			Fields: map[string]*structpb.Value{
+				"id":   structpb.NewStringValue(diskImage.GetId()),
 				"name": structpb.NewStringValue(diskImage.GetMetadata().GetName()),
 			},
 		}))
@@ -284,8 +298,10 @@ func (s *PrivateComputeInstanceCatalogItemsServer) validateFieldDefinitionsDiskI
 	return warnings, nil
 }
 
-// diskImageDefaultKey extracts the disk image identifier from a field definition default, which
-// may be a bare name string (client/UI input) or a normalized {"name": ...} reference object.
+// diskImageDefaultKey extracts the disk image lookup key from a field definition default, which may
+// be a bare name string (client/UI input), a {"name": ...} reference object, or a normalized
+// {"id": ..., "name": ...} reference object (the persisted form). The id is preferred when present
+// so re-validating an already-resolved default takes the unambiguous by-id path.
 func diskImageDefaultKey(v *structpb.Value) string {
 	if v == nil {
 		return ""
@@ -294,6 +310,11 @@ func diskImageDefaultKey(v *structpb.Value) string {
 		return s
 	}
 	if st := v.GetStructValue(); st != nil {
+		if idVal, ok := st.GetFields()["id"]; ok {
+			if id := idVal.GetStringValue(); id != "" {
+				return id
+			}
+		}
 		if nameVal, ok := st.GetFields()["name"]; ok {
 			return nameVal.GetStringValue()
 		}

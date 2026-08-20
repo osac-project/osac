@@ -47,12 +47,14 @@ var _ = DescribeMigration("Fix disk image catalog deletion protection", func() {
 		Expect(err).ToNot(HaveOccurred())
 
 		// Real serialized shape: field_definitions is a top-level array (not under spec), the path is
-		// the prefix-less 'disk_image', and the default is a {"name": ...} reference object.
+		// the prefix-less 'disk_image', and the default is an id-keyed {"id": ..., "name": ...}
+		// reference object (what the server persists after resolving the name; see
+		// validateFieldDefinitionsDiskImage). The trigger matches on the id.
 		_, err = conn.Exec(ctx, `
 			insert into compute_instance_catalog_items (id, tenant, data)
 			values ($1, $2, $3::jsonb)`,
 			"cat-1", "test-tenant",
-			`{"field_definitions":[{"path":"disk_image","default":{"name":"cat-ref-image"}}]}`,
+			`{"field_definitions":[{"path":"disk_image","default":{"id":"di-cat-ref","name":"cat-ref-image"}}]}`,
 		)
 		Expect(err).ToNot(HaveOccurred())
 
@@ -94,8 +96,9 @@ var _ = DescribeMigration("Fix disk image catalog deletion protection", func() {
 		err = tool.Migrate(ctx, 101)
 		Expect(err).ToNot(HaveOccurred())
 
-		// The migration must have reshaped the disk_image field_definition to path 'disk_image' with a
-		// {"name": ...} object default, while leaving the unrelated element untouched.
+		// The migration must have reshaped the disk_image field_definition to path 'disk_image' with an
+		// id-keyed {"id": ..., "name": ...} object default (the name resolved to di-legacy's id via the
+		// catalog item's own tenant), while leaving the unrelated element untouched.
 		var data json.RawMessage
 		err = conn.QueryRow(ctx,
 			`select data from compute_instance_catalog_items where id = $1`, "cat-legacy",
@@ -111,6 +114,7 @@ var _ = DescribeMigration("Fix disk image catalog deletion protection", func() {
 		diskImageFd := fieldDefs[0].(map[string]interface{})
 		Expect(diskImageFd["path"]).To(Equal("disk_image"))
 		diskImageDefault := diskImageFd["default"].(map[string]interface{})
+		Expect(diskImageDefault["id"]).To(Equal("di-legacy"))
 		Expect(diskImageDefault["name"]).To(Equal("legacy-image"))
 
 		pullSecretFd := fieldDefs[1].(map[string]interface{})
@@ -150,7 +154,7 @@ var _ = DescribeMigration("Fix disk image catalog deletion protection", func() {
 			insert into compute_instance_catalog_items (id, tenant, data)
 			values ($1, $2, $3::jsonb)`,
 			"cat-b", "test-tenant",
-			`{"field_definitions":[{"path":"disk_image","default":{"name":"image-b"}}]}`,
+			`{"field_definitions":[{"path":"disk_image","default":{"id":"di-b","name":"image-b"}}]}`,
 		)
 		Expect(err).ToNot(HaveOccurred())
 
@@ -251,5 +255,131 @@ var _ = DescribeMigration("Fix disk image catalog deletion protection", func() {
 		Expect(errors.As(err, &pgErr)).To(BeTrue())
 		Expect(pgErr.Code).To(Equal("Z0003"))
 		Expect(pgErr.Message).To(ContainSubstring("di-tmpl-ref"))
+	})
+
+	It("Backfills the catalog default to the own-tenant image id when a same-name shared image also exists", func(ctx context.Context) {
+		// A shared "fedora" and a tenant "fedora" coexist (names are unique only per tenant). The
+		// backfill must resolve the catalog item's name-only default to the item's OWN tenant image,
+		// mirroring the server's own-tenant-then-shared precedence.
+		_, err := conn.Exec(ctx,
+			`insert into tenants (id, name, tenant, creator, data)
+			 values ('test-tenant', 'test-tenant', 'test-tenant', 'system', '{}')
+			 on conflict do nothing`)
+		Expect(err).ToNot(HaveOccurred())
+
+		_, err = conn.Exec(ctx, `
+			insert into disk_images (id, name, tenant, data)
+			values ('di-fedora-shared', 'fedora', 'shared', '{}'),
+			       ('di-fedora-tenant', 'fedora', 'test-tenant', '{}')`,
+		)
+		Expect(err).ToNot(HaveOccurred())
+
+		// Legacy name-only default authored by the tenant.
+		_, err = conn.Exec(ctx, `
+			insert into compute_instance_catalog_items (id, tenant, data)
+			values ($1, $2, $3::jsonb)`,
+			"cat-fedora", "test-tenant",
+			`{"field_definitions":[{"path":"disk_image","default":{"name":"fedora"}}]}`,
+		)
+		Expect(err).ToNot(HaveOccurred())
+
+		err = tool.Migrate(ctx, 101)
+		Expect(err).ToNot(HaveOccurred())
+
+		var data json.RawMessage
+		err = conn.QueryRow(ctx,
+			`select data from compute_instance_catalog_items where id = $1`, "cat-fedora",
+		).Scan(&data)
+		Expect(err).ToNot(HaveOccurred())
+		var parsed map[string]interface{}
+		Expect(json.Unmarshal(data, &parsed)).To(Succeed())
+		diskImageDefault := parsed["field_definitions"].([]interface{})[0].(map[string]interface{})["default"].(map[string]interface{})
+		Expect(diskImageDefault["id"]).To(Equal("di-fedora-tenant"))
+		Expect(diskImageDefault["name"]).To(Equal("fedora"))
+
+		// The shared same-name sibling is NOT over-blocked: it can be soft-deleted.
+		_, err = conn.Exec(ctx, `
+			update disk_images set deletion_timestamp = now() where id = 'di-fedora-shared'`)
+		Expect(err).ToNot(HaveOccurred())
+
+		// The resolved own-tenant image is protected.
+		_, err = conn.Exec(ctx, `
+			update disk_images set deletion_timestamp = now() where id = 'di-fedora-tenant'`)
+		Expect(err).To(HaveOccurred())
+		var pgErr *pgconn.PgError
+		Expect(errors.As(err, &pgErr)).To(BeTrue())
+		Expect(pgErr.Code).To(Equal("Z0003"))
+		Expect(pgErr.Message).To(ContainSubstring("di-fedora-tenant"))
+	})
+
+	It("Backfills the catalog default to the shared image id when the tenant has no same-name image", func(ctx context.Context) {
+		// Only a shared "ubuntu" exists; the tenant's name-only default must fall back to the shared id.
+		_, err := conn.Exec(ctx,
+			`insert into tenants (id, name, tenant, creator, data)
+			 values ('test-tenant', 'test-tenant', 'test-tenant', 'system', '{}')
+			 on conflict do nothing`)
+		Expect(err).ToNot(HaveOccurred())
+
+		_, err = conn.Exec(ctx, `
+			insert into disk_images (id, name, tenant, data)
+			values ('di-ubuntu-shared', 'ubuntu', 'shared', '{}')`,
+		)
+		Expect(err).ToNot(HaveOccurred())
+
+		_, err = conn.Exec(ctx, `
+			insert into compute_instance_catalog_items (id, tenant, data)
+			values ($1, $2, $3::jsonb)`,
+			"cat-ubuntu", "test-tenant",
+			`{"field_definitions":[{"path":"disk_image","default":{"name":"ubuntu"}}]}`,
+		)
+		Expect(err).ToNot(HaveOccurred())
+
+		err = tool.Migrate(ctx, 101)
+		Expect(err).ToNot(HaveOccurred())
+
+		var data json.RawMessage
+		err = conn.QueryRow(ctx,
+			`select data from compute_instance_catalog_items where id = $1`, "cat-ubuntu",
+		).Scan(&data)
+		Expect(err).ToNot(HaveOccurred())
+		var parsed map[string]interface{}
+		Expect(json.Unmarshal(data, &parsed)).To(Succeed())
+		diskImageDefault := parsed["field_definitions"].([]interface{})[0].(map[string]interface{})["default"].(map[string]interface{})
+		Expect(diskImageDefault["id"]).To(Equal("di-ubuntu-shared"))
+		Expect(diskImageDefault["name"]).To(Equal("ubuntu"))
+	})
+
+	It("Leaves the catalog default name-only when the name resolves to no disk image", func(ctx context.Context) {
+		// The referenced image no longer exists: the backfill normalizes the path but leaves the
+		// default name-only (no id), best-effort, rather than dropping it.
+		_, err := conn.Exec(ctx,
+			`insert into tenants (id, name, tenant, creator, data)
+			 values ('test-tenant', 'test-tenant', 'test-tenant', 'system', '{}')
+			 on conflict do nothing`)
+		Expect(err).ToNot(HaveOccurred())
+
+		_, err = conn.Exec(ctx, `
+			insert into compute_instance_catalog_items (id, tenant, data)
+			values ($1, $2, $3::jsonb)`,
+			"cat-ghost", "test-tenant",
+			`{"field_definitions":[{"path":"spec.disk_image","default":"ghost-image"}]}`,
+		)
+		Expect(err).ToNot(HaveOccurred())
+
+		err = tool.Migrate(ctx, 101)
+		Expect(err).ToNot(HaveOccurred())
+
+		var data json.RawMessage
+		err = conn.QueryRow(ctx,
+			`select data from compute_instance_catalog_items where id = $1`, "cat-ghost",
+		).Scan(&data)
+		Expect(err).ToNot(HaveOccurred())
+		var parsed map[string]interface{}
+		Expect(json.Unmarshal(data, &parsed)).To(Succeed())
+		diskImageFd := parsed["field_definitions"].([]interface{})[0].(map[string]interface{})
+		Expect(diskImageFd["path"]).To(Equal("disk_image"))
+		diskImageDefault := diskImageFd["default"].(map[string]interface{})
+		Expect(diskImageDefault).ToNot(HaveKey("id"))
+		Expect(diskImageDefault["name"]).To(Equal("ghost-image"))
 	})
 })

@@ -1,0 +1,85 @@
+---
+- name: Move network attachments
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    resource: "{{ osac_job_vars.resource }}"
+    resource_name: "{{ resource.metadata.name }}"
+    implementation_strategy: >-
+      {{ resource.metadata.annotations
+         ['osac.openshift.io/implementation-strategy']
+         | default('netris', true) }}
+    network_attachments: "{{ resource.spec.networkAttachments | default([]) }}"
+    provisioning_vnet: "{{ netris_bm_provisioning_vnet | default('', true) }}"
+    # A resource carrying a deletionTimestamp is being deprovisioned (offboard:
+    # tenant -> provisioning); otherwise it is being provisioned (onboard: provisioning ->
+    # tenant). Test presence type-agnostically: ansible-core auto-tags an
+    # ISO-8601 deletionTimestamp as a datetime object (not a string), so `length`
+    # would raise; `default(None, true)` maps undefined/empty to None and any
+    # real value passes the `is not none` check.
+    offboard: "{{ (resource.metadata.deletionTimestamp | default(None, true)) is not none }}"
+    host_name: >-
+      {{ (resource.spec.externalHostName
+         | default(resource.spec.externalHostID, true)).split('/')[-1] }}
+
+  pre_tasks:
+    - name: Show resource metadata
+      ansible.builtin.debug:
+        var: resource.metadata
+
+  tasks:
+    - name: Resolve tenant network segment name for each attachment
+      kubernetes.core.k8s_info:
+        api_version: osac.openshift.io/v1alpha1
+        kind: Subnet
+        label_selectors:
+          - "osac.openshift.io/subnet-uuid={{ item.subnetRef }}"
+      register: _subnet_lookups
+      loop: "{{ network_attachments }}"
+      loop_control:
+        label: "{{ item.subnetRef }}"
+      when: network_attachments | length > 0
+
+    - name: Build resolved attachment list (interface + tenant network name)
+      ansible.builtin.set_fact:
+        _resolved_attachments: >-
+          {{ _resolved_attachments | default([]) + [{
+               'interface': item.item.interface,
+               'tenant_vnet': (item.resources[0].metadata.name
+                               if (item.resources | length > 0) else '')
+             }] }}
+      loop: "{{ _subnet_lookups.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.subnetRef }}"
+      when: network_attachments | length > 0
+
+    # Onboard needs the tenant network segment to exist. Offboard tolerates a missing
+    # Subnet CR (subnet already deleted): the tenant detach is skipped and the
+    # port is still returned to the provisioning network.
+    - name: Fail if a tenant Subnet CR is missing (onboard only)
+      ansible.builtin.fail:
+        msg: >-
+          Subnet CR not found for one or more attachments:
+          {{ _resolved_attachments | selectattr('tenant_vnet', 'equalto', '')
+             | list }}
+      when:
+        - not offboard
+        - _resolved_attachments | default([]) | selectattr('tenant_vnet', 'equalto', '') | list | length > 0
+
+    - name: Move each fabric port
+      ansible.builtin.include_role:
+        name: "osac.templates.{{ implementation_strategy }}"
+        tasks_from: move_network_attachment
+      vars:
+        network_attachment:
+          host_name: "{{ host_name }}"
+          logical_interface_name: "{{ item.interface }}"
+          from_vnet_name: "{{ offboard | ternary(item.tenant_vnet, provisioning_vnet) }}"
+          to_vnet_name: "{{ offboard | ternary(provisioning_vnet, item.tenant_vnet) }}"
+      loop: "{{ _resolved_attachments | default([]) }}"
+      loop_control:
+        label: >-
+          {{ item.interface | default('default') }}:
+          {{ offboard | ternary(item.tenant_vnet ~ ' -> ' ~ provisioning_vnet,
+                                provisioning_vnet ~ ' -> ' ~ item.tenant_vnet) }}

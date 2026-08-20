@@ -1,0 +1,31 @@
+---
+# Query IPAM hosts for a specific subnet.
+# Required variables:
+#   ipam_subnet_id — Netris IPAM subnet numeric ID
+# Output facts:
+#   netris_ipam_hosts — list of host entries in the subnet
+
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Query IPAM hosts
+  ansible.builtin.uri:
+    force: true
+    url: "{{ netris_controller_url }}/api/v2/ipam/hosts/{{ ipam_subnet_id }}"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+      Cache-Control: "no-cache"
+      Pragma: "no-cache"
+    return_content: true
+    status_code: 200
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _ipam_hosts_read_resp
+  no_log: true
+
+- name: Set hosts fact
+  ansible.builtin.set_fact:
+    netris_ipam_hosts: "{{ _ipam_hosts_read_resp.json.data | default([]) }}"

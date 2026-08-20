@@ -1,0 +1,37 @@
+---
+# Poll a Netris V-Net by ID until its state becomes "active".
+# Required variables:
+#   vnet_id             — Netris V-Net numeric ID to poll
+# Optional variables:
+#   netris_controller_url, netris_session_cookie — connection (auth role sets these)
+#   netris_vnet_active_retries  — max poll attempts (default: 30)
+#   netris_vnet_active_delay    — seconds between polls (default: 5)
+#   netris_timeout              — HTTP timeout per request (default: 30)
+#   netris_validate_certs       — validate TLS (default: true)
+
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Poll V-Net until active
+  ansible.builtin.uri:
+    force: true
+    url: "{{ netris_controller_url }}/api/v2/vnet/{{ vnet_id }}"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+      Cache-Control: "no-cache"
+      Pragma: "no-cache"
+    return_content: true
+    status_code: [200, 304]
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _vnet_poll_resp
+  until: >-
+    _vnet_poll_resp.status == 200
+    and (_vnet_poll_resp.json.data.state | default('')) == 'active'
+    and not (_vnet_poll_resp.json.data.provisioning | default(false) | bool)
+  retries: "{{ netris_vnet_active_retries | default(30) }}"
+  delay: "{{ netris_vnet_active_delay | default(5) }}"
+  no_log: true

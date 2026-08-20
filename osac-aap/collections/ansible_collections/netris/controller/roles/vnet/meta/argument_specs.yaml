@@ -28,6 +28,16 @@ argument_specs:
       vnet_gateway:
         type: str
         description: "Gateway prefix (e.g. 10.0.0.1/24). Added to gateways list when defined."
+      vnet_dhcp_enabled:
+        type: bool
+        default: false
+        description: "Enable DHCP on the gateway."
+      vnet_dhcp_start_ip:
+        type: str
+        description: "DHCP range start IP. Required when vnet_dhcp_enabled is true."
+      vnet_dhcp_end_ip:
+        type: str
+        description: "DHCP range end IP. Required when vnet_dhcp_enabled is true."
       vnet_vlan_id:
         type: str
         default: auto

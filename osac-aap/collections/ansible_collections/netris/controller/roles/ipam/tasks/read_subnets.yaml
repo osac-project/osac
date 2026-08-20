@@ -1,0 +1,43 @@
+---
+# List all IPAM subnets and optionally find one by name.
+# Optional variables:
+#   ipam_subnet_name — find a specific subnet by name
+# Output facts:
+#   netris_ipam_subnets — full list of IPAM subnets
+#   netris_ipam_subnet  — matched subnet (or none)
+
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Get IPAM subnets
+  ansible.builtin.uri:
+    force: true
+    url: "{{ netris_controller_url }}/api/v2/ipam/subnets"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+      Cache-Control: "no-cache"
+      Pragma: "no-cache"
+    return_content: true
+    status_code: 200
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _ipam_subnets_read_resp
+  no_log: true
+
+- name: Set subnet facts
+  ansible.builtin.set_fact:
+    netris_ipam_subnets: "{{ _ipam_subnets_read_resp.json.data | default([]) }}"
+    netris_ipam_subnet: >-
+      {{ (_ipam_subnets_read_resp.json.data | default([]))
+         | selectattr('name', 'equalto', ipam_subnet_name)
+         | list | first | default(none) }}
+  when: ipam_subnet_name is defined
+
+- name: Set subnet facts (no filter)
+  ansible.builtin.set_fact:
+    netris_ipam_subnets: "{{ _ipam_subnets_read_resp.json.data | default([]) }}"
+    netris_ipam_subnet: "{{ none }}"
+  when: ipam_subnet_name is not defined

@@ -17,24 +17,6 @@
       - "Ingress rules count: {{ ingress_rules | length }}"
       - "Egress rules count: {{ egress_rules | length }}"
 
-- name: Ensure Netris auth
-  ansible.builtin.include_role:
-    name: netris.controller.auth
-  when: netris_session_cookie is not defined
-
-- name: Look up VPC for VirtualNetwork
-  ansible.builtin.uri:
-    url: "{{ netris_controller_url }}/api/v2/vpc"
-    method: GET
-    headers:
-      Cookie: "connect.sid={{ netris_session_cookie }}"
-    return_content: true
-    status_code: 200
-    validate_certs: "{{ netris_validate_certs | default(true) }}"
-  register: _sg_vpc_list_resp
-  no_log: true
-  when: sg_virtual_network | length > 0
-
 - name: Resolve VirtualNetwork UUID to VPC ID
   when: sg_virtual_network | length > 0
   block:
@@ -47,12 +29,17 @@
           - "osac.openshift.io/virtualnetwork-uuid={{ sg_virtual_network }}"
       register: _sg_vn_lookup
 
+    - name: Look up VPC for VirtualNetwork
+      ansible.builtin.include_role:
+        name: netris.controller.vpc
+        tasks_from: read
+      vars:
+        vpc_name: "{{ _sg_vn_lookup.resources[0].metadata.name }}"
+      when: _sg_vn_lookup.resources | length > 0
+
     - name: Set VPC ID and VN CIDR from VirtualNetwork
       ansible.builtin.set_fact:
-        _sg_vpc_id: >-
-          {{ ((_sg_vpc_list_resp.json.data | default([]))
-              | selectattr('name', 'equalto', _sg_vn_lookup.resources[0].metadata.name)
-              | map(attribute='id') | list | first | default(1)) }}
+        _sg_vpc_id: "{{ (netris_vpc.id | default(1)) }}"
         _sg_vn_cidr: "{{ _sg_vn_lookup.resources[0].spec.ipv4Cidr | default('') }}"
       when: _sg_vn_lookup.resources | length > 0
 

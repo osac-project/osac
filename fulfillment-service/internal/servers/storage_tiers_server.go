@@ -64,7 +64,7 @@ type StorageTiersServer struct {
 	// exist publicly (e.g. `backend_id`) would otherwise compile and execute successfully against the
 	// private schema, letting a tenant infer private-only data through List's result count. Do not
 	// remove this as apparently-dead code.
-	filterValidator *dao.FilterTranslator[*publicv1.StorageTier]
+	filterValidator *dao.FilterTranslator
 }
 
 func NewStorageTiersServer() *StorageTiersServerBuilder {
@@ -142,8 +142,9 @@ func (b *StorageTiersServerBuilder) Build() (result *StorageTiersServer, err err
 	}
 
 	// Create the filter validator (see the field comment on StorageTiersServer for why):
-	filterValidator, err := dao.NewFilterTranslator[*publicv1.StorageTier]().
+	filterValidator, err := dao.NewFilterTranslator().
 		SetLogger(b.logger).
+		SetDescriptor((*publicv1.StorageTier)(nil).ProtoReflect().Descriptor()).
 		Build()
 	if err != nil {
 		return
@@ -199,7 +200,9 @@ func (s *StorageTiersServer) List(ctx context.Context,
 	// Create private request with same parameters:
 	privateRequest := &privatev1.StorageTiersListRequest{}
 	privateRequest.SetOffset(request.GetOffset())
-	privateRequest.SetLimit(request.GetLimit())
+	if request.HasLimit() {
+		privateRequest.SetLimit(request.GetLimit())
+	}
 	privateRequest.SetFilter(filter)
 	privateRequest.SetOrder(request.GetOrder())
 

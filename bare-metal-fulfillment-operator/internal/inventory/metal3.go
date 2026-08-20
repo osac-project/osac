@@ -181,7 +181,7 @@ func (m *Metal3Client) FindFreeHost(ctx context.Context, matchExpressions map[st
 		}
 
 		if bmh.Status.HardwareDetails == nil {
-			log.V(1).Info("Skipping BareMetalHost: hardware inspection not yet complete", "host", bmh.Name)
+			log.Error(nil, "Skipping BareMetalHost: available but hardware details absent — host may not have completed inspection", "host", bmh.Name)
 			continue
 		}
 

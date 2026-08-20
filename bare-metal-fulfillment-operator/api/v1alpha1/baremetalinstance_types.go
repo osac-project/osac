@@ -177,7 +177,6 @@ const (
 	// Set condition status True on success.
 	// Set condition status False with reason Progressing or TemplateFailed while not complete.
 	HostConditionDeprovisionTemplateComplete BareMetalInstanceConditionType = "DeprovisionTemplateComplete"
-
 )
 
 // Host condition reason values
@@ -203,7 +202,6 @@ const (
 	// HostConditionReasonPowerSyncRequired indicates a restart is required
 	// Reserved for future use — not set by any current code path
 	HostConditionReasonPowerSyncRequired = "PowerSyncRequired"
-
 )
 
 // HostSelectorSpec defines additional host selection constraints.

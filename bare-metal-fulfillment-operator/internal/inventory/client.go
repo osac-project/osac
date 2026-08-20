@@ -66,7 +66,8 @@ type Client interface {
 	UnassignHost(ctx context.Context, inventoryHostID string, labels []string) error
 
 	// GetHostNICs returns the physical network interfaces for an allocated host.
-	// Returns an empty slice (not an error) when the backend has no NIC data for the host.
+	// Returns nil, nil when the backend does not support NIC discovery for this host class.
+	// Returns an error when NIC data is expected but unavailable (backend failure or unexpected missing data on a supported backend).
 	GetHostNICs(ctx context.Context, inventoryHostID string) ([]HostNIC, error)
 }
 

@@ -90,7 +90,7 @@ data:
     max_attempts=30
     until [ $attempts -ge $max_attempts ]; do
       {{- if .Values.service.certs.caBundle.configMap }}
-      if BAO_CACERT="/vault/ca/bundle.pem" bao write -namespace=osac auth/jwt/config \
+      if bao write -namespace=osac auth/jwt/config \
         oidc_discovery_url="${KEYCLOAK_ISSUER_URL}" \
         oidc_discovery_ca_pem=@/vault/ca/bundle.pem \
         default_role="lifecycle"; then

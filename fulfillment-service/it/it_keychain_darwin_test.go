@@ -81,9 +81,7 @@ func TestProvisionTestKeychain_CreatesResolvableDefaultKeychain(t *testing.T) {
 		t.Errorf("keychain file mode = %o, want %o", perm, 0600)
 	}
 
-	// show-keychain-info's text output is undocumented and could change across macOS
-	// versions; if this assertion starts failing on a newer macos-latest CI image, check
-	// the actual output format before assuming provisionTestKeychain regressed.
+	// show-keychain-info's text output is undocumented and could shift across macOS versions.
 	infoOut, err := exec.Command(securityBinPath, "show-keychain-info", want).CombinedOutput()
 	if err != nil {
 		t.Fatalf("security show-keychain-info: %v: %s", err, infoOut)
@@ -139,11 +137,8 @@ func TestProvisionTestKeychain_RoundTrip(t *testing.T) {
 
 	env := keychainEnv(dir)
 
-	// Matches go-keyring's Set() flag shape: -U (update-if-exists) and no keychain path
-	// argument, relying on default-keychain resolution instead. The real Set() dispatches
-	// via `security -i` with shell-escaped, base64-wrapped stdin input rather than this
-	// direct argv call — but both forms reach the same underlying Keychain Services write
-	// API, which is what this test actually exercises.
+	// Matches go-keyring's Set() flags (-U, no keychain path) though not its stdin-piped
+	// dispatch — both reach the same underlying write API this test exercises.
 	addCmd := exec.Command(securityBinPath, "add-generic-password",
 		"-U",
 		"-a", "osac-test-account",
@@ -187,10 +182,8 @@ func TestProvisionTestKeychain_SubprocessFailures(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			stubDir := t.TempDir()
 			stubPath := filepath.Join(stubDir, "security")
-			// Fails only on the targeted subcommand; otherwise succeeds. On a
-			// non-failing create-keychain, it touches the keychain file so the real
-			// os.Chmod call between create-keychain and set-keychain-settings doesn't
-			// itself fail on a missing file.
+			// Fails only on the targeted subcommand; touches the keychain file on a
+			// non-failing create-keychain so os.Chmod doesn't fail on a missing file.
 			script := fmt.Sprintf(`#!/bin/sh
 if [ "$1" = %q ]; then
 	exit 1

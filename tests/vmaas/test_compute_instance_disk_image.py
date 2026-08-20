@@ -270,8 +270,14 @@ def test_disk_image_deletion_protection_template(grpc: GRPCClient, private_grpc:
         # Remove the referrer, then deletion succeeds — protection is reference-bound, not permanent.
         private_grpc.delete_compute_instance_template(template_id=template_id)
         template_id = None
+        deleted_di_id = di_id
         grpc.delete_disk_image(disk_image_id=di_id)
         di_id = None
+
+        # A successful Delete RPC does not prove absence — confirm the DiskImage is actually gone.
+        with pytest.raises(subprocess.CalledProcessError) as exc_info:
+            grpc.get_disk_image(disk_image_id=deleted_di_id)
+        assert_grpc_rejected(exc_info, "NotFound")
     finally:
         if template_id is not None:
             private_grpc.delete_compute_instance_template(template_id=template_id)

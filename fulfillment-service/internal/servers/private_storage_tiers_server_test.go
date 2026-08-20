@@ -324,6 +324,51 @@ var _ = Describe("Private storage tiers server", func() {
 			Expect(updateResponse.GetObject().GetSpec().GetBackends()[0].GetMaxReadBandwidthMbs()).To(Equal(int32(2000)))
 		})
 
+		It("Update protocol independently of backends via field mask", func() {
+			created := createStorageTier()
+
+			updateResponse, err := server.Update(ctx, privatev1.StorageTiersUpdateRequest_builder{
+				Object: privatev1.StorageTier_builder{
+					Id: created.GetId(),
+					Spec: privatev1.StorageTierSpec_builder{
+						Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.protocol"}},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updateResponse.GetObject().GetSpec().GetProtocol()).To(Equal(
+				privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK))
+			Expect(updateResponse.GetObject().GetSpec().GetBackends()).To(HaveLen(1))
+			Expect(updateResponse.GetObject().GetSpec().GetBackends()[0].GetBackendId()).To(Equal(backendID))
+		})
+
+		It("Update backends alone preserves the existing protocol", func() {
+			created := createStorageTier()
+			Expect(created.GetSpec().GetProtocol()).To(Equal(privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS))
+
+			updateResponse, err := server.Update(ctx, privatev1.StorageTiersUpdateRequest_builder{
+				Object: privatev1.StorageTier_builder{
+					Id: created.GetId(),
+					Spec: privatev1.StorageTierSpec_builder{
+						Backends: []*privatev1.BackendAssociation{
+							privatev1.BackendAssociation_builder{
+								BackendId:            backendID,
+								MaxReadBandwidthMbs:  3000,
+								MaxWriteBandwidthMbs: 1500,
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.backends"}},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updateResponse.GetObject().GetSpec().GetBackends()).To(HaveLen(1))
+			Expect(updateResponse.GetObject().GetSpec().GetBackends()[0].GetMaxReadBandwidthMbs()).To(Equal(int32(3000)))
+			Expect(updateResponse.GetObject().GetSpec().GetProtocol()).To(Equal(
+				privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS))
+		})
+
 		It("Delete removes the object", func() {
 			created := createStorageTier()
 

@@ -68,7 +68,7 @@ message StorageTierSpec {
   string description = 1;
 
   // Storage protocol used by this tier.
-  StorageProtocol protocol = 2;
+  StorageProtocol protocol = 2 [(buf.validate.field).enum.defined_only = true];
 
   // Maximum read bandwidth in megabytes per second.
   int32 max_read_bandwidth_mbs = 3;

@@ -15,6 +15,7 @@ syntax = "proto3";
 
 package osac.private.v1;
 
+import "buf/validate/validate.proto";
 import "cleanapi/cleanapi.proto";
 import "osac/private/v1/metadata_type.proto";
 import "osac/private/v1/storage_common_type.proto";
@@ -81,7 +82,7 @@ message StorageTierSpec {
   repeated BackendAssociation backends = 2;
 
   // Storage protocol used by this storage tier.
-  StorageProtocol protocol = 3;
+  StorageProtocol protocol = 3 [(buf.validate.field).enum.defined_only = true];
 }
 
 // Represents the current operational state of a StorageTier.

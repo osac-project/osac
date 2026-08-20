@@ -60,10 +60,7 @@ message StorageTiersListResponse {
   int32 size = 1;
 
   // Total number of items of the collection that match the search criteria, regardless of the number of results
-  // requested with the `limit` parameter. When this response covers the entire matching collection in a single
-  // page, `total` excludes items dropped from `items` due to malformed backend data on the tier. When the
-  // collection spans multiple pages, `total` is the raw count of all matching rows, which may include malformed
-  // tiers not present in `items` on any given page.
+  // requested with the `limit` parameter.
   int32 total = 2;
 
   // List of results.

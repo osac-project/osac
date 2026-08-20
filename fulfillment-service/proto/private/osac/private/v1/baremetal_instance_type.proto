@@ -121,6 +121,10 @@ message BareMetalInstanceStatus {
   // Runtime networking state for each network attachment.
   // Populated by the operator after DHCP lease discovery and synced via the feedback controller.
   repeated BareMetalNetworkAttachmentStatus network_attachment_statuses = 5;
+
+  // Physical hardware metadata fetched from the inventory backend at allocation time.
+  // Absent until the inventory backend provides NIC data.
+  optional BareMetalHardware hardware = 6;
 }
 
 // Runtime networking state for a single bare metal network attachment.
@@ -136,6 +140,20 @@ message BareMetalNetworkAttachmentStatus {
 
   // Whether this attachment is the primary (default gateway) attachment.
   bool primary = 4;
+}
+
+// Physical NIC MAC address discovered from the inventory backend.
+// buf:lint:ignore OSAC_OBJECT_SHAPE
+message BareMetalNICStatus {
+  // Hardware MAC address, lowercased (e.g. "aa:bb:cc:dd:ee:ff").
+  string mac = 1;
+}
+
+// Physical hardware metadata fetched from the inventory backend at allocation time.
+// buf:lint:ignore OSAC_OBJECT_SHAPE
+message BareMetalHardware {
+  // Physical network interfaces reported by the inventory backend.
+  repeated BareMetalNICStatus nics = 1;
 }
 
 // Run strategy for the bare metal instance.

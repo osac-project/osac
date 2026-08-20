@@ -362,6 +362,10 @@ func extractExtraVars(ctx context.Context, resource client.Object) (map[string]a
 		vars["storage_backend_connections"] = backendConnectionsToExtraVars(conns)
 	}
 
+	if macs := NetworkAttachmentMACsFromContext(ctx); len(macs) > 0 {
+		vars["network_attachment_macs"] = macs
+	}
+
 	return map[string]any{
 		"osac_job_vars": vars,
 	}, nil

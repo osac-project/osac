@@ -23,4 +23,7 @@ import (
 var (
 	osacNATGatewayIDLabel           string = fmt.Sprintf("%s/natgateway-uuid", osacPrefix)
 	osacNATGatewayFeedbackFinalizer string = fmt.Sprintf("%s/natgateway-feedback", osacPrefix)
+	// osacVNIPv4CIDRAnnotation carries the parent VirtualNetwork's IPv4 CIDR to the
+	// AAP job as the SNAT rule's source address.
+	osacVNIPv4CIDRAnnotation string = fmt.Sprintf("%s/vn-ipv4-cidr", osacPrefix)
 )

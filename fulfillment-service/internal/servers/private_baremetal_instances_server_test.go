@@ -115,6 +115,26 @@ var _ = Describe("Private bare metal instances server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			catalogItemID = catalogResp.GetObject().GetId()
+
+			// Create an ExternalIPPool so auto_external_ip_attachment tests can allocate.
+			externalIPPoolDao, err := dao.NewGenericDAO[*privatev1.ExternalIPPool]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = externalIPPoolDao.Create().SetObject(
+				privatev1.ExternalIPPool_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:   fmt.Sprintf("test-pool-%s", uuid.NewString()[:8]),
+						Tenant: auth.SharedTenant,
+					}.Build(),
+					Status: privatev1.ExternalIPPoolStatus_builder{
+						State:     privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY,
+						Available: 10,
+					}.Build(),
+				}.Build(),
+			).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
 		})
 
 		createTemplate := func(id string, params []*privatev1.BareMetalInstanceTemplateParameterDefinition) {
@@ -1329,6 +1349,43 @@ var _ = Describe("Private bare metal instances server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(getResponse.GetObject().GetSpec().GetAutoExternalIpAttachment()).To(BeTrue())
+		})
+
+		It("auto_external_ip_attachment creates ExternalIP and ExternalIPAttachment in DB", func() {
+			response, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						CatalogItem:              privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						AutoExternalIpAttachment: true,
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			bmiID := response.GetObject().GetId()
+
+			eipDao, err := dao.NewGenericDAO[*privatev1.ExternalIP]().
+				SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			eipList, err := eipDao.List().
+				SetFilter(fmt.Sprintf("this.metadata.labels['osac.openshift.io/auto-created-for'] == '%s'", bmiID)).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(eipList.GetItems()).To(HaveLen(1))
+
+			attDao, err := dao.NewGenericDAO[*privatev1.ExternalIPAttachment]().
+				SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			attList, err := attDao.List().
+				SetFilter(fmt.Sprintf("this.metadata.labels['osac.openshift.io/auto-created-for'] == '%s'", bmiID)).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(attList.GetItems()).To(HaveLen(1))
+			Expect(attList.GetItems()[0].GetSpec().GetBaremetalInstance().GetId()).To(Equal(bmiID))
 		})
 
 		It("Rejects PATCH that changes auto_external_ip_attachment", func() {
@@ -2769,5 +2826,110 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
 			Expect(status.Message()).To(ContainSubstring("fabric"))
 		})
+	})
+})
+
+var _ = Describe("BareMetalInstance ExternalIP referential integrity", func() {
+	var (
+		externalIPPoolDao       *dao.GenericDAO[*privatev1.ExternalIPPool]
+		externalIPDao           *dao.GenericDAO[*privatev1.ExternalIP]
+		externalIPAttachmentDao *dao.GenericDAO[*privatev1.ExternalIPAttachment]
+	)
+
+	BeforeEach(func() {
+		var err error
+		externalIPPoolDao, err = dao.NewGenericDAO[*privatev1.ExternalIPPool]().
+			SetLogger(logger).SetTenancyLogic(tenancy).Build()
+		Expect(err).ToNot(HaveOccurred())
+		externalIPDao, err = dao.NewGenericDAO[*privatev1.ExternalIP]().
+			SetLogger(logger).SetTenancyLogic(tenancy).Build()
+		Expect(err).ToNot(HaveOccurred())
+		externalIPAttachmentDao, err = dao.NewGenericDAO[*privatev1.ExternalIPAttachment]().
+			SetLogger(logger).SetTenancyLogic(tenancy).Build()
+		Expect(err).ToNot(HaveOccurred())
+	})
+
+	createPool := func() string {
+		resp, err := externalIPPoolDao.Create().SetObject(
+			privatev1.ExternalIPPool_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("pool-%s", uuid.NewString()[:8]), Tenant: auth.SharedTenant,
+				}.Build(),
+				Status: privatev1.ExternalIPPoolStatus_builder{
+					State: privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY, Available: 10,
+				}.Build(),
+			}.Build(),
+		).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		return resp.GetObject().GetId()
+	}
+
+	createEIP := func(poolID string) string {
+		resp, err := externalIPDao.Create().SetObject(
+			privatev1.ExternalIP_builder{
+				Metadata: privatev1.Metadata_builder{
+					Tenant: auth.SharedTenant,
+				}.Build(),
+				Spec: privatev1.ExternalIPSpec_builder{
+					Pool: privatev1.ExternalIPPoolReference_builder{Id: poolID}.Build(),
+				}.Build(),
+			}.Build(),
+		).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		return resp.GetObject().GetId()
+	}
+
+	It("rejects deleting ExternalIP while ExternalIPAttachment references it", func() {
+		poolID := createPool()
+		eipID := createEIP(poolID)
+
+		_, err := externalIPAttachmentDao.Create().SetObject(
+			privatev1.ExternalIPAttachment_builder{
+				Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+				Spec: privatev1.ExternalIPAttachmentSpec_builder{
+					ExternalIp: privatev1.ExternalIPLocalReference_builder{Id: eipID}.Build(),
+				}.Build(),
+			}.Build(),
+		).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+
+		_, err = externalIPDao.Delete().SetId(eipID).Do(ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("in use"))
+	})
+
+	It("rejects deleting ExternalIPPool while ExternalIPs are allocated", func() {
+		poolID := createPool()
+		_ = createEIP(poolID)
+
+		_, err := externalIPPoolDao.Delete().SetId(poolID).Do(ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("in use"))
+	})
+
+	It("rejects creating ExternalIPAttachment with non-existent ExternalIP", func() {
+		_, err := externalIPAttachmentDao.Create().SetObject(
+			privatev1.ExternalIPAttachment_builder{
+				Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+				Spec: privatev1.ExternalIPAttachmentSpec_builder{
+					ExternalIp: privatev1.ExternalIPLocalReference_builder{Id: "nonexistent-eip-id"}.Build(),
+				}.Build(),
+			}.Build(),
+		).Do(ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("does not exist"))
+	})
+
+	It("rejects creating ExternalIP with non-existent pool", func() {
+		_, err := externalIPDao.Create().SetObject(
+			privatev1.ExternalIP_builder{
+				Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+				Spec: privatev1.ExternalIPSpec_builder{
+					Pool: privatev1.ExternalIPPoolReference_builder{Id: "nonexistent-pool-id"}.Build(),
+				}.Build(),
+			}.Build(),
+		).Do(ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("does not exist"))
 	})
 })

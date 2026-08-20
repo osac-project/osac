@@ -177,6 +177,9 @@ const (
 	// Set condition status True on success.
 	// Set condition status False with reason Progressing or TemplateFailed while not complete.
 	HostConditionDeprovisionTemplateComplete BareMetalInstanceConditionType = "DeprovisionTemplateComplete"
+
+	// HostConditionReady tracks whether the instance is fully ready, including NIC metadata.
+	HostConditionReady BareMetalInstanceConditionType = "Ready"
 )
 
 // Host condition reason values
@@ -202,6 +205,9 @@ const (
 	// HostConditionReasonPowerSyncRequired indicates a restart is required
 	// Reserved for future use — not set by any current code path
 	HostConditionReasonPowerSyncRequired = "PowerSyncRequired"
+
+	// HostConditionReasonNICMetadataUnavailable indicates a transient failure fetching NIC data from the inventory backend.
+	HostConditionReasonNICMetadataUnavailable = "NICMetadataUnavailable"
 )
 
 // HostSelectorSpec defines additional host selection constraints.
@@ -210,6 +216,19 @@ type HostSelectorSpec struct {
 	// (for example managedBy, topology, rack, zone).
 	// +kubebuilder:validation:Optional
 	HostSelector map[string]string `json:"hostSelector,omitempty"`
+}
+
+// BareMetalNICStatus holds the MAC address of a single physical network interface.
+type BareMetalNICStatus struct {
+	// MAC is the hardware MAC address of this interface, lowercased (e.g. "aa:bb:cc:dd:ee:ff").
+	MAC string `json:"mac"`
+}
+
+// BareMetalHardware holds physical hardware metadata discovered from the inventory backend.
+type BareMetalHardware struct {
+	// NICs lists the physical network interfaces reported by the inventory backend.
+	// +kubebuilder:validation:Optional
+	NICs []BareMetalNICStatus `json:"nics,omitempty"`
 }
 
 // BareMetalNetworkAttachmentStatus captures the runtime networking state for a single NIC.
@@ -260,6 +279,10 @@ type BareMetalInstanceStatus struct {
 	// Populated by the operator after DHCP lease discovery.
 	// +kubebuilder:validation:Optional
 	NetworkAttachmentStatuses []BareMetalNetworkAttachmentStatus `json:"networkAttachmentStatuses,omitempty"`
+	// Hardware holds physical hardware metadata fetched from the inventory backend at allocation time.
+	// Absent until the inventory backend provides data.
+	// +kubebuilder:validation:Optional
+	Hardware *BareMetalHardware `json:"hardware,omitempty"`
 }
 
 // GetPoolID returns the owning BareMetalPool UID if the BareMetalInstance is owned by a BareMetalPool.

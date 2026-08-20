@@ -272,6 +272,27 @@ spec:
                 description: DesiredConfigVersion is a hash of the spec, used to detect
                   spec changes and control retry behavior.
                 type: string
+              hardware:
+                description: |-
+                  Hardware holds physical hardware metadata fetched from the inventory backend at allocation time.
+                  Absent until the inventory backend provides data.
+                properties:
+                  nics:
+                    description: NICs lists the physical network interfaces reported
+                      by the inventory backend.
+                    items:
+                      description: BareMetalNICStatus holds the MAC address of a single
+                        physical network interface.
+                      properties:
+                        mac:
+                          description: MAC is the hardware MAC address of this interface,
+                            lowercased (e.g. "aa:bb:cc:dd:ee:ff").
+                          type: string
+                      required:
+                      - mac
+                      type: object
+                    type: array
+                type: object
               networkAttachmentStatuses:
                 description: |-
                   NetworkAttachmentStatuses captures runtime networking state for each NIC.

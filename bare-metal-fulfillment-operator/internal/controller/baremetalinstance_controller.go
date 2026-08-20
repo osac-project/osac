@@ -418,7 +418,7 @@ func (r *BareMetalInstanceReconciler) reconcileManagement(ctx context.Context, b
 }
 
 func (r *BareMetalInstanceReconciler) reconcileNICMetadata(ctx context.Context, bmi *v1alpha1.BareMetalInstance) error {
-	if bmi.Status.Hardware != nil && len(bmi.Status.Hardware.NICs) > 0 {
+	if bmi.Status.Hardware != nil {
 		return nil
 	}
 	nics, err := r.InventoryClient.GetHostNICs(ctx, bmi.Spec.ExternalHostID)

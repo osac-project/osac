@@ -117,6 +117,9 @@ func (c *BCMClient) UnassignHost(_ context.Context, _ string, _ []string) error 
 	return fmt.Errorf("bcm UnassignHost not implemented")
 }
 
+// GetHostNICs returns nil for BCM hosts. NIC metadata discovery is not yet
+// supported for this backend; returning nil allows the controller to proceed
+// to Ready without blocking on an unimplemented inventory call.
 func (c *BCMClient) GetHostNICs(_ context.Context, _ string) ([]HostNIC, error) {
 	return nil, nil
 }

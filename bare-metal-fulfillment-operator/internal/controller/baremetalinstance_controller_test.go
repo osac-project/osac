@@ -1492,7 +1492,7 @@ var _ = Describe("BareMetalInstance Controller", func() {
 		})
 
 		Context("when GetHostNICs returns NICs", func() {
-			It("populates Status.Hardware.NICs with lowercased MACs", func() {
+			It("populates Status.Hardware.NICs from the inventory client response", func() {
 				invClient.getHostNICsFunc = func(_ context.Context, _ string) ([]inventory.HostNIC, error) {
 					return []inventory.HostNIC{
 						{MAC: "aa:bb:cc:dd:ee:01"},
@@ -1535,8 +1535,8 @@ var _ = Describe("BareMetalInstance Controller", func() {
 			})
 		})
 
-		Context("when Hardware is already populated with NICs", func() {
-			It("skips GetHostNICs (idempotency guard)", func() {
+		Context("when Hardware is already set", func() {
+			It("skips GetHostNICs when Hardware has NICs (idempotency guard)", func() {
 				bmi.Status.Hardware = &v1alpha1.BareMetalHardware{
 					NICs: []v1alpha1.BareMetalNICStatus{{MAC: "aa:bb:cc:dd:ee:01"}},
 				}
@@ -1546,6 +1546,15 @@ var _ = Describe("BareMetalInstance Controller", func() {
 				Expect(err).NotTo(HaveOccurred())
 				Expect(invClient.getHostNICsCalled).To(Equal(0))
 				Expect(bmi.Status.Hardware.NICs).To(HaveLen(1))
+			})
+
+			It("skips GetHostNICs when Hardware is set but NICs is empty (e.g. BCM backend)", func() {
+				bmi.Status.Hardware = &v1alpha1.BareMetalHardware{}
+
+				err := reconcilerForNICs.reconcileNICMetadata(ctx, bmi)
+
+				Expect(err).NotTo(HaveOccurred())
+				Expect(invClient.getHostNICsCalled).To(Equal(0))
 			})
 		})
 

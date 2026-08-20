@@ -413,6 +413,9 @@ func getNestedLabel(node *nodes.Node, labelKey string) (string, bool) {
 	return "", false
 }
 
+// GetHostNICs returns nil for OpenStack hosts. NIC metadata discovery via
+// Ironic ports is implemented in OSAC-4202; returning nil allows the controller
+// to proceed to Ready without blocking on the unimplemented call.
 func (c *OpenStackClient) GetHostNICs(_ context.Context, _ string) ([]HostNIC, error) {
 	return nil, nil
 }

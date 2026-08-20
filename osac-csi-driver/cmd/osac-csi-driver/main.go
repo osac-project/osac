@@ -33,7 +33,11 @@ func main() {
 		"Path to a file containing the bearer token for fulfillment-service authentication")
 	grpcInsecure := flag.Bool("grpc-insecure", false, "Skip TLS server certificate verification")
 	vendorSocketsFlag := flag.String("vendor-sockets", "",
-		"Comma-separated backend=socketpath pairs (e.g. ontap=/csi/trident/csi.sock)")
+		"Comma-separated backend=socketpath pairs for vendor node CSI sockets (e.g. ontap=/csi/trident/csi.sock)")
+	vendorControllersFlag := flag.String("vendor-controllers", "",
+		"Comma-separated backend=endpoint pairs for vendor CSI controllers, keyed "+
+			"by StorageBackend name (e.g. ontap=trident-csi-controller.osac-csi-backends.svc:50051). "+
+			"Use the value 'none' for node-local backends that need no attach (e.g. local=none)")
 	driverName := flag.String("driver-name", "csi.osac.openshift.io", "CSI driver name")
 
 	flag.Parse()
@@ -43,9 +47,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	vendorSockets, err := parseVendorSockets(*vendorSocketsFlag)
+	vendorSockets, err := parseBackendMap(*vendorSocketsFlag)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error parsing --vendor-sockets: %v\n", err)
+		os.Exit(1)
+	}
+
+	vendorControllers, err := parseBackendMap(*vendorControllersFlag)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing --vendor-controllers: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -53,9 +63,9 @@ func main() {
 	klog.Infof("CSI endpoint: %s", *csiEndpoint)
 	klog.Infof("Node ID: %s", *nodeID)
 	klog.Infof("Vendor sockets: %v", vendorSockets)
+	klog.Infof("Vendor controllers: %v", vendorControllers)
 
 	var volumeClient fulfillment.VolumeClient
-	var controlPlaneClient fulfillment.ControlPlaneClient
 
 	if *fulfillmentEndpoint != "" {
 		// Establish the gRPC connection to the fulfillment-service and back the
@@ -77,13 +87,9 @@ func main() {
 		volumeClient = fulfillment.NewVolumeStub("default-backend", "nfs")
 	}
 
-	// Attach/publish still goes through the stub; the control-plane attach API
-	// is out of scope for OSAC-4109 (tracked separately in OSAC-3278/OSAC-4187).
-	controlPlaneClient = &fulfillment.ControlPlaneStub{}
-
 	d, err := driver.NewDriver(
 		*driverName, version, *csiEndpoint, *nodeID, *clusterID,
-		volumeClient, controlPlaneClient, vendorSockets,
+		volumeClient, vendorSockets, vendorControllers,
 	)
 	if err != nil {
 		klog.Fatalf("Failed to create driver: %v", err)
@@ -130,7 +136,9 @@ func (f *fileTokenSource) Token() (*oauth2.Token, error) {
 	}, nil
 }
 
-func parseVendorSockets(s string) (map[string]string, error) {
+// parseBackendMap parses a comma-separated list of backend=value pairs into a
+// map. It is used for both --vendor-sockets and --vendor-controllers.
+func parseBackendMap(s string) (map[string]string, error) {
 	result := make(map[string]string)
 	if s == "" {
 		return result, nil
@@ -145,17 +153,17 @@ func parseVendorSockets(s string) (map[string]string, error) {
 
 		parts := strings.SplitN(pair, "=", 2)
 		if len(parts) != 2 {
-			return nil, fmt.Errorf("invalid vendor socket pair %q: expected format backend=socketpath", pair)
+			return nil, fmt.Errorf("invalid pair %q: expected format backend=value", pair)
 		}
 
 		backend := strings.TrimSpace(parts[0])
-		socketPath := strings.TrimSpace(parts[1])
+		value := strings.TrimSpace(parts[1])
 
-		if backend == "" || socketPath == "" {
-			return nil, fmt.Errorf("invalid vendor socket pair %q: backend and socketpath must not be empty", pair)
+		if backend == "" || value == "" {
+			return nil, fmt.Errorf("invalid pair %q: backend and value must not be empty", pair)
 		}
 
-		result[backend] = socketPath
+		result[backend] = value
 	}
 
 	return result, nil

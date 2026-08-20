@@ -2,12 +2,17 @@ package driver
 
 import (
 	"context"
+	"net"
+	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	csi "github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/osac-project/osac/osac-csi-driver/pkg/fulfillment"
+	"github.com/osac-project/osac/osac-csi-driver/pkg/proxy"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -37,26 +42,95 @@ func (m *mockVolumeClient) DeleteVolume(ctx context.Context, volumeID string) er
 	return m.deleteVolumeFn(ctx, volumeID)
 }
 
-type mockControlPlaneClient struct {
-	publishVolumeFn   func(ctx context.Context, volumeID, nodeID string) error
-	unpublishVolumeFn func(ctx context.Context, volumeID, nodeID string) error
+// fakeVendorController is an in-process CSI controller used to exercise the
+// controller-side vendor proxy. It records the requests it receives and can be
+// configured to return a specific response or error.
+type fakeVendorController struct {
+	csi.UnimplementedControllerServer
+
+	mu            sync.Mutex
+	publishReqs   []*csi.ControllerPublishVolumeRequest
+	unpublishReqs []*csi.ControllerUnpublishVolumeRequest
+
+	publishResp  *csi.ControllerPublishVolumeResponse
+	publishErr   error
+	unpublishErr error
 }
 
-func (m *mockControlPlaneClient) PublishVolume(ctx context.Context, volumeID, nodeID string) error {
-	return m.publishVolumeFn(ctx, volumeID, nodeID)
+func (f *fakeVendorController) ControllerPublishVolume(_ context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
+	f.mu.Lock()
+	f.publishReqs = append(f.publishReqs, req)
+	resp, err := f.publishResp, f.publishErr
+	f.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	if resp != nil {
+		return resp, nil
+	}
+	return &csi.ControllerPublishVolumeResponse{}, nil
 }
 
-func (m *mockControlPlaneClient) UnpublishVolume(ctx context.Context, volumeID, nodeID string) error {
-	return m.unpublishVolumeFn(ctx, volumeID, nodeID)
+func (f *fakeVendorController) ControllerUnpublishVolume(_ context.Context, req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
+	f.mu.Lock()
+	f.unpublishReqs = append(f.unpublishReqs, req)
+	err := f.unpublishErr
+	f.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return &csi.ControllerUnpublishVolumeResponse{}, nil
+}
+
+func (f *fakeVendorController) lastPublish() *csi.ControllerPublishVolumeRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.publishReqs) == 0 {
+		return nil
+	}
+	return f.publishReqs[len(f.publishReqs)-1]
+}
+
+func (f *fakeVendorController) lastUnpublish() *csi.ControllerUnpublishVolumeRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.unpublishReqs) == 0 {
+		return nil
+	}
+	return f.unpublishReqs[len(f.unpublishReqs)-1]
+}
+
+// startFakeVendorController serves the given controller on a unix socket and
+// returns the socket path. The server is stopped when the test finishes.
+func startFakeVendorController(t *testing.T, vendor csi.ControllerServer) string {
+	t.Helper()
+	socketPath := filepath.Join(t.TempDir(), "vendor.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("listening on vendor socket: %v", err)
+	}
+	srv := grpc.NewServer()
+	csi.RegisterControllerServer(srv, vendor)
+	go func() { _ = srv.Serve(listener) }()
+	t.Cleanup(srv.Stop)
+	return socketPath
 }
 
 // --- helpers ---
 
-func newTestController(vc fulfillment.VolumeClient, cpc fulfillment.ControlPlaneClient) *ControllerServer {
-	cs := NewControllerServer(vc, cpc, "test-cluster")
+func newTestController(vc fulfillment.VolumeClient) *ControllerServer {
+	return newTestControllerWithVendor(vc, nil)
+}
+
+func newTestControllerWithVendor(vc fulfillment.VolumeClient, vendorControllers map[string]string) *ControllerServer {
+	cs := NewControllerServer(vc, proxy.NewManager(nil), vendorControllers, "test-cluster")
 	cs.pollInitialInterval = 1 * time.Millisecond
 	cs.pollMaxInterval = 5 * time.Millisecond
 	return cs
+}
+
+func singleCap() *csi.VolumeCapability {
+	return defaultCaps()[0]
 }
 
 func defaultCaps() []*csi.VolumeCapability {
@@ -122,7 +196,7 @@ func TestCreateVolume_Success(t *testing.T) {
 			return vol, nil
 		},
 	}
-	cs := newTestController(vc, &mockControlPlaneClient{})
+	cs := newTestController(vc)
 
 	resp, err := cs.CreateVolume(context.Background(), &csi.CreateVolumeRequest{
 		Name:               "pvc-123",
@@ -157,7 +231,7 @@ func TestCreateVolume_DefaultTenant(t *testing.T) {
 			return availableVolume("vol-1", "pvc-123"), nil
 		},
 	}
-	cs := newTestController(vc, &mockControlPlaneClient{})
+	cs := newTestController(vc)
 
 	_, err := cs.CreateVolume(context.Background(), &csi.CreateVolumeRequest{
 		Name:               "pvc-123",
@@ -190,7 +264,7 @@ func TestCreateVolume_PollsUntilAvailable(t *testing.T) {
 			return availableVolume(volumeID, "pvc-123"), nil
 		},
 	}
-	cs := newTestController(vc, &mockControlPlaneClient{})
+	cs := newTestController(vc)
 
 	resp, err := cs.CreateVolume(context.Background(), &csi.CreateVolumeRequest{
 		Name:               "pvc-123",
@@ -221,7 +295,7 @@ func TestCreateVolume_AlreadyExists(t *testing.T) {
 			return []*fulfillment.VolumeInfo{vol}, nil
 		},
 	}
-	cs := newTestController(vc, &mockControlPlaneClient{})
+	cs := newTestController(vc)
 
 	resp, err := cs.CreateVolume(context.Background(), &csi.CreateVolumeRequest{
 		Name:               "pvc-123",
@@ -247,7 +321,7 @@ func TestCreateVolume_AlreadyExistsDifferentCapacity(t *testing.T) {
 			return []*fulfillment.VolumeInfo{vol}, nil
 		},
 	}
-	cs := newTestController(vc, &mockControlPlaneClient{})
+	cs := newTestController(vc)
 
 	_, err := cs.CreateVolume(context.Background(), &csi.CreateVolumeRequest{
 		Name:               "pvc-123",
@@ -269,7 +343,7 @@ func TestCreateVolume_AlreadyExistsCompatibleCapacityRange(t *testing.T) {
 			return []*fulfillment.VolumeInfo{vol}, nil
 		},
 	}
-	cs := newTestController(vc, &mockControlPlaneClient{})
+	cs := newTestController(vc)
 
 	resp, err := cs.CreateVolume(context.Background(), &csi.CreateVolumeRequest{
 		Name:               "pvc-123",
@@ -294,7 +368,7 @@ func TestCreateVolume_AlreadyExistsNotFoundViaList(t *testing.T) {
 			return nil, nil
 		},
 	}
-	cs := newTestController(vc, &mockControlPlaneClient{})
+	cs := newTestController(vc)
 
 	_, err := cs.CreateVolume(context.Background(), &csi.CreateVolumeRequest{
 		Name:               "pvc-123",
@@ -319,7 +393,7 @@ func TestCreateVolume_ErrorState(t *testing.T) {
 			}, nil
 		},
 	}
-	cs := newTestController(vc, &mockControlPlaneClient{})
+	cs := newTestController(vc)
 
 	_, err := cs.CreateVolume(context.Background(), &csi.CreateVolumeRequest{
 		Name:               "pvc-123",
@@ -344,7 +418,7 @@ func TestCreateVolume_ContextCancelled(t *testing.T) {
 			}, nil
 		},
 	}
-	cs := newTestController(vc, &mockControlPlaneClient{})
+	cs := newTestController(vc)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
@@ -358,7 +432,7 @@ func TestCreateVolume_ContextCancelled(t *testing.T) {
 }
 
 func TestCreateVolume_MissingName(t *testing.T) {
-	cs := newTestController(&mockVolumeClient{}, &mockControlPlaneClient{})
+	cs := newTestController(&mockVolumeClient{})
 
 	_, err := cs.CreateVolume(context.Background(), &csi.CreateVolumeRequest{
 		VolumeCapabilities: defaultCaps(),
@@ -368,7 +442,7 @@ func TestCreateVolume_MissingName(t *testing.T) {
 }
 
 func TestCreateVolume_MissingCapabilities(t *testing.T) {
-	cs := newTestController(&mockVolumeClient{}, &mockControlPlaneClient{})
+	cs := newTestController(&mockVolumeClient{})
 
 	_, err := cs.CreateVolume(context.Background(), &csi.CreateVolumeRequest{
 		Name:       "pvc-123",
@@ -378,7 +452,7 @@ func TestCreateVolume_MissingCapabilities(t *testing.T) {
 }
 
 func TestCreateVolume_MissingTier(t *testing.T) {
-	cs := newTestController(&mockVolumeClient{}, &mockControlPlaneClient{})
+	cs := newTestController(&mockVolumeClient{})
 
 	_, err := cs.CreateVolume(context.Background(), &csi.CreateVolumeRequest{
 		Name:               "pvc-123",
@@ -394,7 +468,7 @@ func TestCreateVolume_CreateError(t *testing.T) {
 			return nil, status.Error(codes.Unavailable, "connection refused")
 		},
 	}
-	cs := newTestController(vc, &mockControlPlaneClient{})
+	cs := newTestController(vc)
 
 	_, err := cs.CreateVolume(context.Background(), &csi.CreateVolumeRequest{
 		Name:               "pvc-123",
@@ -414,7 +488,7 @@ func TestDeleteVolume_Success(t *testing.T) {
 			return nil
 		},
 	}
-	cs := newTestController(vc, &mockControlPlaneClient{})
+	cs := newTestController(vc)
 
 	_, err := cs.DeleteVolume(context.Background(), &csi.DeleteVolumeRequest{
 		VolumeId: "vol-1",
@@ -428,7 +502,7 @@ func TestDeleteVolume_Success(t *testing.T) {
 }
 
 func TestDeleteVolume_MissingVolumeID(t *testing.T) {
-	cs := newTestController(&mockVolumeClient{}, &mockControlPlaneClient{})
+	cs := newTestController(&mockVolumeClient{})
 
 	_, err := cs.DeleteVolume(context.Background(), &csi.DeleteVolumeRequest{})
 	assertCode(t, err, codes.InvalidArgument)
@@ -440,7 +514,7 @@ func TestDeleteVolume_NotFoundIsSuccess(t *testing.T) {
 			return status.Error(codes.NotFound, "volume not found")
 		},
 	}
-	cs := newTestController(vc, &mockControlPlaneClient{})
+	cs := newTestController(vc)
 
 	_, err := cs.DeleteVolume(context.Background(), &csi.DeleteVolumeRequest{
 		VolumeId: "vol-1",
@@ -456,7 +530,7 @@ func TestDeleteVolume_Error(t *testing.T) {
 			return status.Error(codes.Unavailable, "service down")
 		},
 	}
-	cs := newTestController(vc, &mockControlPlaneClient{})
+	cs := newTestController(vc)
 
 	_, err := cs.DeleteVolume(context.Background(), &csi.DeleteVolumeRequest{
 		VolumeId: "vol-1",
@@ -467,69 +541,91 @@ func TestDeleteVolume_Error(t *testing.T) {
 // --- ControllerPublishVolume tests ---
 
 func TestControllerPublishVolume_Success(t *testing.T) {
-	var gotVolumeID, gotNodeID string
-	cpc := &mockControlPlaneClient{
-		publishVolumeFn: func(_ context.Context, volumeID, nodeID string) error {
-			gotVolumeID = volumeID
-			gotNodeID = nodeID
-			return nil
+	vendor := &fakeVendorController{
+		publishResp: &csi.ControllerPublishVolumeResponse{
+			PublishContext: map[string]string{"vendor.device": "/dev/sdx"},
 		},
 	}
-	cs := newTestController(&mockVolumeClient{}, cpc)
+	socket := startFakeVendorController(t, vendor)
+	cs := newTestControllerWithVendor(&mockVolumeClient{}, map[string]string{"test-backend": socket})
 
-	_, err := cs.ControllerPublishVolume(context.Background(), &csi.ControllerPublishVolumeRequest{
-		VolumeId: "vol-1",
-		NodeId:   "node-1",
-		VolumeCapability: &csi.VolumeCapability{
-			AccessType: &csi.VolumeCapability_Mount{
-				Mount: &csi.VolumeCapability_MountVolume{},
-			},
-			AccessMode: &csi.VolumeCapability_AccessMode{
-				Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
-			},
+	resp, err := cs.ControllerPublishVolume(context.Background(), &csi.ControllerPublishVolumeRequest{
+		VolumeId:         "vol-1",
+		NodeId:           "node-1",
+		VolumeCapability: singleCap(),
+		VolumeContext: map[string]string{
+			"osac.backend":   "test-backend",
+			"osac.volume-id": "vendor-vol-1",
 		},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if gotVolumeID != "vol-1" {
-		t.Errorf("expected volume ID 'vol-1', got %q", gotVolumeID)
+	// The vendor's publish context must be forwarded back to the CO.
+	if resp.GetPublishContext()["vendor.device"] != "/dev/sdx" {
+		t.Errorf("expected vendor publish context to be forwarded, got %v", resp.GetPublishContext())
 	}
-	if gotNodeID != "node-1" {
-		t.Errorf("expected node ID 'node-1', got %q", gotNodeID)
+	last := vendor.lastPublish()
+	if last == nil {
+		t.Fatal("vendor did not receive a publish request")
+	}
+	// The fulfillment volume id must be translated to the vendor volume id.
+	if last.GetVolumeId() != "vendor-vol-1" {
+		t.Errorf("expected vendor volume ID 'vendor-vol-1', got %q", last.GetVolumeId())
+	}
+	if last.GetNodeId() != "node-1" {
+		t.Errorf("expected node ID 'node-1', got %q", last.GetNodeId())
+	}
+}
+
+// When the request carries no volume context (or partial context), the backend
+// and vendor volume id are resolved from the fulfillment service.
+func TestControllerPublishVolume_ResolvesViaVolumeClient(t *testing.T) {
+	vendor := &fakeVendorController{}
+	socket := startFakeVendorController(t, vendor)
+	vc := &mockVolumeClient{
+		getVolumeFn: func(_ context.Context, volumeID string) (*fulfillment.VolumeInfo, error) {
+			return availableVolume(volumeID, "pvc-123"), nil
+		},
+	}
+	cs := newTestControllerWithVendor(vc, map[string]string{"test-backend": socket})
+
+	_, err := cs.ControllerPublishVolume(context.Background(), &csi.ControllerPublishVolumeRequest{
+		VolumeId:         "vol-1",
+		NodeId:           "node-1",
+		VolumeCapability: singleCap(),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	last := vendor.lastPublish()
+	if last == nil || last.GetVolumeId() != "vendor-vol-1" {
+		t.Fatalf("expected vendor volume ID 'vendor-vol-1' resolved via GetVolume, got %v", last)
 	}
 }
 
 func TestControllerPublishVolume_MissingVolumeID(t *testing.T) {
-	cs := newTestController(&mockVolumeClient{}, &mockControlPlaneClient{})
+	cs := newTestController(&mockVolumeClient{})
 
 	_, err := cs.ControllerPublishVolume(context.Background(), &csi.ControllerPublishVolumeRequest{
-		NodeId: "node-1",
-		VolumeCapability: &csi.VolumeCapability{
-			AccessType: &csi.VolumeCapability_Mount{
-				Mount: &csi.VolumeCapability_MountVolume{},
-			},
-		},
+		NodeId:           "node-1",
+		VolumeCapability: singleCap(),
 	})
 	assertCode(t, err, codes.InvalidArgument)
 }
 
 func TestControllerPublishVolume_MissingNodeID(t *testing.T) {
-	cs := newTestController(&mockVolumeClient{}, &mockControlPlaneClient{})
+	cs := newTestController(&mockVolumeClient{})
 
 	_, err := cs.ControllerPublishVolume(context.Background(), &csi.ControllerPublishVolumeRequest{
-		VolumeId: "vol-1",
-		VolumeCapability: &csi.VolumeCapability{
-			AccessType: &csi.VolumeCapability_Mount{
-				Mount: &csi.VolumeCapability_MountVolume{},
-			},
-		},
+		VolumeId:         "vol-1",
+		VolumeCapability: singleCap(),
 	})
 	assertCode(t, err, codes.InvalidArgument)
 }
 
 func TestControllerPublishVolume_MissingCapability(t *testing.T) {
-	cs := newTestController(&mockVolumeClient{}, &mockControlPlaneClient{})
+	cs := newTestController(&mockVolumeClient{})
 
 	_, err := cs.ControllerPublishVolume(context.Background(), &csi.ControllerPublishVolumeRequest{
 		VolumeId: "vol-1",
@@ -538,24 +634,53 @@ func TestControllerPublishVolume_MissingCapability(t *testing.T) {
 	assertCode(t, err, codes.InvalidArgument)
 }
 
-func TestControllerPublishVolume_AlreadyExistsIsSuccess(t *testing.T) {
-	cpc := &mockControlPlaneClient{
-		publishVolumeFn: func(_ context.Context, _, _ string) error {
-			return status.Error(codes.AlreadyExists, "already published")
-		},
-	}
-	cs := newTestController(&mockVolumeClient{}, cpc)
+// An unknown backend has no configured vendor controller to route to.
+func TestControllerPublishVolume_UnknownBackend(t *testing.T) {
+	cs := newTestControllerWithVendor(&mockVolumeClient{}, map[string]string{})
 
 	_, err := cs.ControllerPublishVolume(context.Background(), &csi.ControllerPublishVolumeRequest{
-		VolumeId: "vol-1",
-		NodeId:   "node-1",
-		VolumeCapability: &csi.VolumeCapability{
-			AccessType: &csi.VolumeCapability_Mount{
-				Mount: &csi.VolumeCapability_MountVolume{},
-			},
-			AccessMode: &csi.VolumeCapability_AccessMode{
-				Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
-			},
+		VolumeId:         "vol-1",
+		NodeId:           "node-1",
+		VolumeCapability: singleCap(),
+		VolumeContext: map[string]string{
+			"osac.backend":   "test-backend",
+			"osac.volume-id": "vendor-vol-1",
+		},
+	})
+	assertCode(t, err, codes.NotFound)
+}
+
+// A nonexistent volume with no context cannot be resolved for publish.
+func TestControllerPublishVolume_VolumeNotFound(t *testing.T) {
+	vc := &mockVolumeClient{
+		getVolumeFn: func(_ context.Context, _ string) (*fulfillment.VolumeInfo, error) {
+			return nil, status.Error(codes.NotFound, "not found")
+		},
+	}
+	cs := newTestControllerWithVendor(vc, map[string]string{"test-backend": "unused"})
+
+	_, err := cs.ControllerPublishVolume(context.Background(), &csi.ControllerPublishVolumeRequest{
+		VolumeId:         "vol-1",
+		NodeId:           "node-1",
+		VolumeCapability: singleCap(),
+	})
+	assertCode(t, err, codes.NotFound)
+}
+
+func TestControllerPublishVolume_AlreadyExistsIsSuccess(t *testing.T) {
+	vendor := &fakeVendorController{
+		publishErr: status.Error(codes.AlreadyExists, "already published"),
+	}
+	socket := startFakeVendorController(t, vendor)
+	cs := newTestControllerWithVendor(&mockVolumeClient{}, map[string]string{"test-backend": socket})
+
+	_, err := cs.ControllerPublishVolume(context.Background(), &csi.ControllerPublishVolumeRequest{
+		VolumeId:         "vol-1",
+		NodeId:           "node-1",
+		VolumeCapability: singleCap(),
+		VolumeContext: map[string]string{
+			"osac.backend":   "test-backend",
+			"osac.volume-id": "vendor-vol-1",
 		},
 	})
 	if err != nil {
@@ -563,41 +688,81 @@ func TestControllerPublishVolume_AlreadyExistsIsSuccess(t *testing.T) {
 	}
 }
 
-func TestControllerPublishVolume_Error(t *testing.T) {
-	cpc := &mockControlPlaneClient{
-		publishVolumeFn: func(_ context.Context, _, _ string) error {
-			return status.Error(codes.Unavailable, "service down")
-		},
+// NFS-style vendors that do not implement controller attach are treated as a no-op.
+func TestControllerPublishVolume_UnimplementedIsSuccess(t *testing.T) {
+	vendor := &fakeVendorController{
+		publishErr: status.Error(codes.Unimplemented, "not implemented"),
 	}
-	cs := newTestController(&mockVolumeClient{}, cpc)
+	socket := startFakeVendorController(t, vendor)
+	cs := newTestControllerWithVendor(&mockVolumeClient{}, map[string]string{"test-backend": socket})
 
 	_, err := cs.ControllerPublishVolume(context.Background(), &csi.ControllerPublishVolumeRequest{
-		VolumeId: "vol-1",
-		NodeId:   "node-1",
-		VolumeCapability: &csi.VolumeCapability{
-			AccessType: &csi.VolumeCapability_Mount{
-				Mount: &csi.VolumeCapability_MountVolume{},
-			},
-			AccessMode: &csi.VolumeCapability_AccessMode{
-				Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
-			},
+		VolumeId:         "vol-1",
+		NodeId:           "node-1",
+		VolumeCapability: singleCap(),
+		VolumeContext: map[string]string{
+			"osac.backend":   "test-backend",
+			"osac.volume-id": "vendor-vol-1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected success for Unimplemented, got: %v", err)
+	}
+}
+
+func TestControllerPublishVolume_Error(t *testing.T) {
+	vendor := &fakeVendorController{
+		publishErr: status.Error(codes.Unavailable, "service down"),
+	}
+	socket := startFakeVendorController(t, vendor)
+	cs := newTestControllerWithVendor(&mockVolumeClient{}, map[string]string{"test-backend": socket})
+
+	_, err := cs.ControllerPublishVolume(context.Background(), &csi.ControllerPublishVolumeRequest{
+		VolumeId:         "vol-1",
+		NodeId:           "node-1",
+		VolumeCapability: singleCap(),
+		VolumeContext: map[string]string{
+			"osac.backend":   "test-backend",
+			"osac.volume-id": "vendor-vol-1",
 		},
 	})
 	assertCode(t, err, codes.Unavailable)
 }
 
+// A backend mapped to the "none" sentinel (node-local storage such as lvms)
+// needs no controller-side attach, so publish is a no-op and no vendor
+// controller is dialed.
+func TestControllerPublishVolume_NoAttachBackendIsNoop(t *testing.T) {
+	cs := newTestControllerWithVendor(&mockVolumeClient{}, map[string]string{"local": noAttachEndpoint})
+
+	resp, err := cs.ControllerPublishVolume(context.Background(), &csi.ControllerPublishVolumeRequest{
+		VolumeId:         "vol-1",
+		NodeId:           "node-1",
+		VolumeCapability: singleCap(),
+		VolumeContext: map[string]string{
+			"osac.backend":   "local",
+			"osac.volume-id": "vendor-vol-1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.GetPublishContext()) != 0 {
+		t.Errorf("expected empty publish context for no-attach backend, got %v", resp.GetPublishContext())
+	}
+}
+
 // --- ControllerUnpublishVolume tests ---
 
 func TestControllerUnpublishVolume_Success(t *testing.T) {
-	var gotVolumeID, gotNodeID string
-	cpc := &mockControlPlaneClient{
-		unpublishVolumeFn: func(_ context.Context, volumeID, nodeID string) error {
-			gotVolumeID = volumeID
-			gotNodeID = nodeID
-			return nil
+	vendor := &fakeVendorController{}
+	socket := startFakeVendorController(t, vendor)
+	vc := &mockVolumeClient{
+		getVolumeFn: func(_ context.Context, volumeID string) (*fulfillment.VolumeInfo, error) {
+			return availableVolume(volumeID, "pvc-123"), nil
 		},
 	}
-	cs := newTestController(&mockVolumeClient{}, cpc)
+	cs := newTestControllerWithVendor(vc, map[string]string{"test-backend": socket})
 
 	_, err := cs.ControllerUnpublishVolume(context.Background(), &csi.ControllerUnpublishVolumeRequest{
 		VolumeId: "vol-1",
@@ -606,16 +771,22 @@ func TestControllerUnpublishVolume_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if gotVolumeID != "vol-1" {
-		t.Errorf("expected volume ID 'vol-1', got %q", gotVolumeID)
+	last := vendor.lastUnpublish()
+	if last == nil {
+		t.Fatal("vendor did not receive an unpublish request")
 	}
-	if gotNodeID != "node-1" {
-		t.Errorf("expected node ID 'node-1', got %q", gotNodeID)
+	// The backend and vendor volume id are resolved from the fulfillment service
+	// because the unpublish request carries no volume context.
+	if last.GetVolumeId() != "vendor-vol-1" {
+		t.Errorf("expected vendor volume ID 'vendor-vol-1', got %q", last.GetVolumeId())
+	}
+	if last.GetNodeId() != "node-1" {
+		t.Errorf("expected node ID 'node-1', got %q", last.GetNodeId())
 	}
 }
 
 func TestControllerUnpublishVolume_MissingVolumeID(t *testing.T) {
-	cs := newTestController(&mockVolumeClient{}, &mockControlPlaneClient{})
+	cs := newTestController(&mockVolumeClient{})
 
 	_, err := cs.ControllerUnpublishVolume(context.Background(), &csi.ControllerUnpublishVolumeRequest{
 		NodeId: "node-1",
@@ -623,13 +794,35 @@ func TestControllerUnpublishVolume_MissingVolumeID(t *testing.T) {
 	assertCode(t, err, codes.InvalidArgument)
 }
 
-func TestControllerUnpublishVolume_NotFoundIsSuccess(t *testing.T) {
-	cpc := &mockControlPlaneClient{
-		unpublishVolumeFn: func(_ context.Context, _, _ string) error {
-			return status.Error(codes.NotFound, "not published")
+// A volume the fulfillment service no longer knows about is already detached.
+func TestControllerUnpublishVolume_VolumeNotFoundIsSuccess(t *testing.T) {
+	vc := &mockVolumeClient{
+		getVolumeFn: func(_ context.Context, _ string) (*fulfillment.VolumeInfo, error) {
+			return nil, status.Error(codes.NotFound, "volume not found")
 		},
 	}
-	cs := newTestController(&mockVolumeClient{}, cpc)
+	cs := newTestControllerWithVendor(vc, nil)
+
+	_, err := cs.ControllerUnpublishVolume(context.Background(), &csi.ControllerUnpublishVolumeRequest{
+		VolumeId: "vol-1",
+		NodeId:   "node-1",
+	})
+	if err != nil {
+		t.Fatalf("expected success when volume not found, got: %v", err)
+	}
+}
+
+func TestControllerUnpublishVolume_VendorNotFoundIsSuccess(t *testing.T) {
+	vendor := &fakeVendorController{
+		unpublishErr: status.Error(codes.NotFound, "not published"),
+	}
+	socket := startFakeVendorController(t, vendor)
+	vc := &mockVolumeClient{
+		getVolumeFn: func(_ context.Context, volumeID string) (*fulfillment.VolumeInfo, error) {
+			return availableVolume(volumeID, "pvc-123"), nil
+		},
+	}
+	cs := newTestControllerWithVendor(vc, map[string]string{"test-backend": socket})
 
 	_, err := cs.ControllerUnpublishVolume(context.Background(), &csi.ControllerUnpublishVolumeRequest{
 		VolumeId: "vol-1",
@@ -640,19 +833,80 @@ func TestControllerUnpublishVolume_NotFoundIsSuccess(t *testing.T) {
 	}
 }
 
-func TestControllerUnpublishVolume_Error(t *testing.T) {
-	cpc := &mockControlPlaneClient{
-		unpublishVolumeFn: func(_ context.Context, _, _ string) error {
-			return status.Error(codes.Unavailable, "service down")
+func TestControllerUnpublishVolume_UnimplementedIsSuccess(t *testing.T) {
+	vendor := &fakeVendorController{
+		unpublishErr: status.Error(codes.Unimplemented, "not implemented"),
+	}
+	socket := startFakeVendorController(t, vendor)
+	vc := &mockVolumeClient{
+		getVolumeFn: func(_ context.Context, volumeID string) (*fulfillment.VolumeInfo, error) {
+			return availableVolume(volumeID, "pvc-123"), nil
 		},
 	}
-	cs := newTestController(&mockVolumeClient{}, cpc)
+	cs := newTestControllerWithVendor(vc, map[string]string{"test-backend": socket})
+
+	_, err := cs.ControllerUnpublishVolume(context.Background(), &csi.ControllerUnpublishVolumeRequest{
+		VolumeId: "vol-1",
+		NodeId:   "node-1",
+	})
+	if err != nil {
+		t.Fatalf("expected success for Unimplemented, got: %v", err)
+	}
+}
+
+func TestControllerUnpublishVolume_UnknownBackend(t *testing.T) {
+	vc := &mockVolumeClient{
+		getVolumeFn: func(_ context.Context, volumeID string) (*fulfillment.VolumeInfo, error) {
+			return availableVolume(volumeID, "pvc-123"), nil
+		},
+	}
+	cs := newTestControllerWithVendor(vc, map[string]string{})
+
+	_, err := cs.ControllerUnpublishVolume(context.Background(), &csi.ControllerUnpublishVolumeRequest{
+		VolumeId: "vol-1",
+		NodeId:   "node-1",
+	})
+	assertCode(t, err, codes.NotFound)
+}
+
+func TestControllerUnpublishVolume_Error(t *testing.T) {
+	vendor := &fakeVendorController{
+		unpublishErr: status.Error(codes.Unavailable, "service down"),
+	}
+	socket := startFakeVendorController(t, vendor)
+	vc := &mockVolumeClient{
+		getVolumeFn: func(_ context.Context, volumeID string) (*fulfillment.VolumeInfo, error) {
+			return availableVolume(volumeID, "pvc-123"), nil
+		},
+	}
+	cs := newTestControllerWithVendor(vc, map[string]string{"test-backend": socket})
 
 	_, err := cs.ControllerUnpublishVolume(context.Background(), &csi.ControllerUnpublishVolumeRequest{
 		VolumeId: "vol-1",
 		NodeId:   "node-1",
 	})
 	assertCode(t, err, codes.Unavailable)
+}
+
+// A backend mapped to the "none" sentinel needs no controller-side detach, so
+// unpublish is a no-op and no vendor controller is dialed.
+func TestControllerUnpublishVolume_NoAttachBackendIsNoop(t *testing.T) {
+	vc := &mockVolumeClient{
+		getVolumeFn: func(_ context.Context, volumeID string) (*fulfillment.VolumeInfo, error) {
+			vol := availableVolume(volumeID, "pvc-123")
+			vol.Backend = "local"
+			return vol, nil
+		},
+	}
+	cs := newTestControllerWithVendor(vc, map[string]string{"local": noAttachEndpoint})
+
+	_, err := cs.ControllerUnpublishVolume(context.Background(), &csi.ControllerUnpublishVolumeRequest{
+		VolumeId: "vol-1",
+		NodeId:   "node-1",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 }
 
 // --- ValidateVolumeCapabilities tests ---
@@ -663,7 +917,7 @@ func TestValidateVolumeCapabilities_Success(t *testing.T) {
 			return availableVolume(volumeID, "pvc-123"), nil
 		},
 	}
-	cs := newTestController(vc, &mockControlPlaneClient{})
+	cs := newTestController(vc)
 
 	resp, err := cs.ValidateVolumeCapabilities(context.Background(), &csi.ValidateVolumeCapabilitiesRequest{
 		VolumeId:           "vol-1",
@@ -683,7 +937,7 @@ func TestValidateVolumeCapabilities_VolumeNotFound(t *testing.T) {
 			return nil, status.Errorf(codes.NotFound, "not found")
 		},
 	}
-	cs := newTestController(vc, &mockControlPlaneClient{})
+	cs := newTestController(vc)
 
 	_, err := cs.ValidateVolumeCapabilities(context.Background(), &csi.ValidateVolumeCapabilitiesRequest{
 		VolumeId:           "vol-1",
@@ -695,7 +949,7 @@ func TestValidateVolumeCapabilities_VolumeNotFound(t *testing.T) {
 // --- ControllerGetCapabilities tests ---
 
 func TestControllerGetCapabilities(t *testing.T) {
-	cs := newTestController(&mockVolumeClient{}, &mockControlPlaneClient{})
+	cs := newTestController(&mockVolumeClient{})
 
 	resp, err := cs.ControllerGetCapabilities(context.Background(), &csi.ControllerGetCapabilitiesRequest{})
 	if err != nil {

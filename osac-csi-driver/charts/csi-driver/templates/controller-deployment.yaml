@@ -43,6 +43,9 @@ spec:
             {{- if .Values.controller.vendorSockets }}
             - "--vendor-sockets={{ .Values.controller.vendorSockets }}"
             {{- end }}
+            {{- if .Values.controller.vendorControllers }}
+            - "--vendor-controllers={{ .Values.controller.vendorControllers }}"
+            {{- end }}
             - "--v=2"
           volumeMounts:
             - name: osac-socket-dir

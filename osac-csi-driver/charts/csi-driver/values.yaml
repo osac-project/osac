@@ -11,6 +11,20 @@ controller:
   replicas: 1
   clusterID: ""
   vendorSockets: ""
+  # Comma-separated backend=endpoint pairs for vendor CSI controllers, used to
+  # proxy attach/detach (ControllerPublish/UnpublishVolume). The routing key is
+  # the "osac.backend" volume-context value, which is the StorageBackend name
+  # resolved from the volume's StorageTier — so each key MUST match a
+  # StorageBackend's metadata.name that a Cloud Provider Admin created. The names
+  # below are the expected convention; align them with your actual backends.
+  # Endpoints for network-attached vendors are the Services created by the
+  # csi-backends chart (namespace osac-csi-backends, gRPC port 50051). Use the
+  # special value "none" for node-local backends (e.g. lvms/topolvm) that need no
+  # controller-side attach — publish/unpublish become a no-op for those.
+  # An entry for a backend that is not deployed is harmless — it is only dialed
+  # when a volume names it.
+  # OSAC-4187 (0.2, temporary): direct vendor-controller proxying; reworked in 0.3.
+  vendorControllers: "local=none,vast=vast-csi-controller.osac-csi-backends.svc:50051,pure=pure-csi-controller.osac-csi-backends.svc:50051,ontap=trident-csi-controller.osac-csi-backends.svc:50051"
   # Connection to the OSAC fulfillment-service (runs on the hub / control plane cluster).
   # The CSI driver runs on tenant clusters and needs credentials that the
   # fulfillment-service recognises. AAP provisions a Secret with a bearer token

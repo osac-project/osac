@@ -14,8 +14,10 @@ import (
 )
 
 // metaDriverSkips lists CSI sanity tests that don't apply to the OSAC
-// controller. The controller delegates publish/unpublish to the control
-// plane stub which does not validate volume or node existence.
+// controller. Publish/unpublish are proxied to the fake vendor controller, a
+// permissive test double that accepts any volume and node id (volume creation
+// is decoupled from attach in stub mode), so it does not reproduce the
+// volume/node existence failures these tests expect.
 var metaDriverSkips = []string{
 	"ControllerPublishVolume.*should fail when the volume does not exist",
 	"ControllerPublishVolume.*should fail when the node does not exist",
@@ -45,9 +47,13 @@ func TestSanity(t *testing.T) {
 	defer vendorSrv.GracefulStop()
 
 	vc := fulfillment.NewVolumeStub(backendName, "nfs")
-	cpc := &fulfillment.ControlPlaneStub{}
 
 	vendorSockets := map[string]string{
+		backendName: vendorSocket,
+	}
+	// The controller proxies publish/unpublish to the same fake vendor, which
+	// serves the CSI controller service on this socket alongside the node service.
+	vendorControllers := map[string]string{
 		backendName: vendorSocket,
 	}
 
@@ -58,8 +64,8 @@ func TestSanity(t *testing.T) {
 		nodeID,
 		"test-cluster",
 		vc,
-		cpc,
 		vendorSockets,
+		vendorControllers,
 	)
 	if err != nil {
 		t.Fatalf("creating driver: %v", err)

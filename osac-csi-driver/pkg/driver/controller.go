@@ -6,6 +6,7 @@ import (
 
 	csi "github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/osac-project/osac/osac-csi-driver/pkg/fulfillment"
+	"github.com/osac-project/osac/osac-csi-driver/pkg/proxy"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/klog/v2"
@@ -14,26 +15,38 @@ import (
 const (
 	defaultPollInitialInterval = 1 * time.Second
 	defaultPollMaxInterval     = 30 * time.Second
+
+	// noAttachEndpoint is the sentinel vendor-controller endpoint for backends
+	// that need no controller-side attach/detach — node-local storage such as
+	// lvms/topolvm, whose CSIDriver sets attachRequired=false and exposes no
+	// network-reachable CSI controller. A backend mapped to this value makes
+	// ControllerPublish/UnpublishVolume a no-op instead of dialing a vendor.
+	noAttachEndpoint = "none"
 )
 
 // ControllerServer implements the CSI Controller service.
-// It delegates volume lifecycle to the OSAC fulfillment service and
-// publish/unpublish operations to the OSAC control plane.
+// It delegates volume lifecycle to the OSAC fulfillment service and proxies
+// publish/unpublish operations to vendor CSI controllers.
 type ControllerServer struct {
 	csi.UnimplementedControllerServer
-	volumes      fulfillment.VolumeClient
-	controlPlane fulfillment.ControlPlaneClient
-	clusterID    string
+	volumes  fulfillment.VolumeClient
+	proxyMgr *proxy.Manager
+	// vendorControllers maps an "osac.backend" name to the gRPC endpoint of that
+	// vendor's CSI controller, used to proxy publish/unpublish operations.
+	vendorControllers map[string]string
+	clusterID         string
 
 	pollInitialInterval time.Duration
 	pollMaxInterval     time.Duration
 }
 
-// NewControllerServer creates a new CSI controller server.
-func NewControllerServer(vc fulfillment.VolumeClient, cpc fulfillment.ControlPlaneClient, clusterID string) *ControllerServer {
+// NewControllerServer creates a new CSI controller server. vendorControllers maps
+// an "osac.backend" name to the gRPC endpoint of that vendor's CSI controller.
+func NewControllerServer(vc fulfillment.VolumeClient, proxyMgr *proxy.Manager, vendorControllers map[string]string, clusterID string) *ControllerServer {
 	return &ControllerServer{
 		volumes:             vc,
-		controlPlane:        cpc,
+		proxyMgr:            proxyMgr,
+		vendorControllers:   vendorControllers,
 		clusterID:           clusterID,
 		pollInitialInterval: defaultPollInitialInterval,
 		pollMaxInterval:     defaultPollMaxInterval,
@@ -154,7 +167,13 @@ func (c *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVolu
 	return &csi.DeleteVolumeResponse{}, nil
 }
 
-// ControllerPublishVolume publishes a volume to a node via the control plane.
+// ControllerPublishVolume attaches a volume to a node by proxying to the vendor
+// CSI controller for the volume's backend.
+//
+// OSAC-4187 (0.2, temporary): the controller talks to the vendor CSI controller
+// directly, routed by "osac.backend", instead of going through a fulfillment
+// control-plane attach API. This is a stop-gap for milestone 0.2 and is expected
+// to be reworked in 0.3.
 func (c *ControllerServer) ControllerPublishVolume(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
 	klog.Infof("ControllerPublishVolume called: volumeId=%s nodeId=%s", req.GetVolumeId(), req.GetNodeId())
 
@@ -168,20 +187,55 @@ func (c *ControllerServer) ControllerPublishVolume(ctx context.Context, req *csi
 		return nil, status.Error(codes.InvalidArgument, "volume capability is required")
 	}
 
-	if err := c.controlPlane.PublishVolume(ctx, req.GetVolumeId(), req.GetNodeId()); err != nil {
+	backend, vendorVolumeID, err := c.resolvePublishTarget(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	vendorClient, err := c.vendorControllerClient(backend)
+	if err != nil {
+		return nil, err
+	}
+	if vendorClient == nil {
+		klog.Infof("Backend %q needs no controller attach (node-local), ControllerPublishVolume is a no-op: volumeId=%s", backend, req.GetVolumeId())
+		return &csi.ControllerPublishVolumeResponse{}, nil
+	}
+
+	// Translate the fulfillment volume id to the vendor-side volume id and
+	// forward the remaining fields (including secrets) unchanged.
+	vendorReq := &csi.ControllerPublishVolumeRequest{
+		VolumeId:         vendorVolumeID,
+		NodeId:           req.GetNodeId(),
+		VolumeCapability: req.GetVolumeCapability(),
+		Readonly:         req.GetReadonly(),
+		Secrets:          req.GetSecrets(),
+		VolumeContext:    req.GetVolumeContext(),
+	}
+
+	resp, err := vendorClient.ControllerPublishVolume(ctx, vendorReq)
+	if err != nil {
 		if st, ok := status.FromError(err); ok && st.Code() == codes.AlreadyExists {
 			klog.Infof("Volume %s already published to node %s", req.GetVolumeId(), req.GetNodeId())
 			return &csi.ControllerPublishVolumeResponse{}, nil
 		}
-		klog.Errorf("Failed to publish volume %s to node %s: %v", req.GetVolumeId(), req.GetNodeId(), err)
+		if isUnimplemented(err) {
+			klog.Infof("Vendor does not implement ControllerPublishVolume, treating as no-op: volumeId=%s", req.GetVolumeId())
+			return &csi.ControllerPublishVolumeResponse{}, nil
+		}
+		klog.Errorf("Vendor ControllerPublishVolume failed for volume %s (vendor id %s): %v", req.GetVolumeId(), vendorVolumeID, err)
 		return nil, err
 	}
 
 	klog.Infof("ControllerPublishVolume succeeded: volumeId=%s nodeId=%s", req.GetVolumeId(), req.GetNodeId())
-	return &csi.ControllerPublishVolumeResponse{}, nil
+	return resp, nil
 }
 
-// ControllerUnpublishVolume unpublishes a volume from a node via the control plane.
+// ControllerUnpublishVolume detaches a volume from a node by proxying to the
+// vendor CSI controller for the volume's backend.
+//
+// OSAC-4187 (0.2, temporary): see ControllerPublishVolume. The unpublish request
+// carries no volume context, so the backend and vendor-side volume id are
+// resolved from the fulfillment service.
 func (c *ControllerServer) ControllerUnpublishVolume(ctx context.Context, req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
 	klog.Infof("ControllerUnpublishVolume called: volumeId=%s nodeId=%s", req.GetVolumeId(), req.GetNodeId())
 
@@ -189,17 +243,103 @@ func (c *ControllerServer) ControllerUnpublishVolume(ctx context.Context, req *c
 		return nil, status.Error(codes.InvalidArgument, "volume ID is required")
 	}
 
-	if err := c.controlPlane.UnpublishVolume(ctx, req.GetVolumeId(), req.GetNodeId()); err != nil {
+	vol, err := c.volumes.GetVolume(ctx, req.GetVolumeId())
+	if err != nil {
+		if st, ok := status.FromError(err); ok && st.Code() == codes.NotFound {
+			klog.Infof("Volume %s not found, treating unpublish as no-op", req.GetVolumeId())
+			return &csi.ControllerUnpublishVolumeResponse{}, nil
+		}
+		return nil, err
+	}
+
+	vendorClient, err := c.vendorControllerClient(vol.Backend)
+	if err != nil {
+		return nil, err
+	}
+	if vendorClient == nil {
+		klog.Infof("Backend %q needs no controller attach (node-local), ControllerUnpublishVolume is a no-op: volumeId=%s", vol.Backend, req.GetVolumeId())
+		return &csi.ControllerUnpublishVolumeResponse{}, nil
+	}
+
+	vendorReq := &csi.ControllerUnpublishVolumeRequest{
+		VolumeId: vol.VendorVolumeID,
+		NodeId:   req.GetNodeId(),
+		Secrets:  req.GetSecrets(),
+	}
+
+	if _, err := vendorClient.ControllerUnpublishVolume(ctx, vendorReq); err != nil {
 		if st, ok := status.FromError(err); ok && st.Code() == codes.NotFound {
 			klog.Infof("Volume %s already unpublished from node %s", req.GetVolumeId(), req.GetNodeId())
 			return &csi.ControllerUnpublishVolumeResponse{}, nil
 		}
-		klog.Errorf("Failed to unpublish volume %s from node %s: %v", req.GetVolumeId(), req.GetNodeId(), err)
+		if isUnimplemented(err) {
+			klog.Infof("Vendor does not implement ControllerUnpublishVolume, treating as no-op: volumeId=%s", req.GetVolumeId())
+			return &csi.ControllerUnpublishVolumeResponse{}, nil
+		}
+		klog.Errorf("Vendor ControllerUnpublishVolume failed for volume %s (vendor id %s): %v", req.GetVolumeId(), vol.VendorVolumeID, err)
 		return nil, err
 	}
 
 	klog.Infof("ControllerUnpublishVolume succeeded: volumeId=%s nodeId=%s", req.GetVolumeId(), req.GetNodeId())
 	return &csi.ControllerUnpublishVolumeResponse{}, nil
+}
+
+// resolvePublishTarget determines the backend and vendor-side volume id for a
+// publish request. It prefers the volume context (present on publish requests)
+// and falls back to the fulfillment service for any missing value.
+func (c *ControllerServer) resolvePublishTarget(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (backend, vendorVolumeID string, err error) {
+	vctx := req.GetVolumeContext()
+	backend = vctx["osac.backend"]
+	vendorVolumeID = vctx["osac.volume-id"]
+
+	if backend != "" && vendorVolumeID != "" {
+		return backend, vendorVolumeID, nil
+	}
+
+	vol, err := c.volumes.GetVolume(ctx, req.GetVolumeId())
+	if err != nil {
+		return "", "", err
+	}
+	if backend == "" {
+		backend = vol.Backend
+	}
+	if vendorVolumeID == "" {
+		vendorVolumeID = vol.VendorVolumeID
+	}
+	return backend, vendorVolumeID, nil
+}
+
+// vendorControllerClient resolves the vendor CSI controller endpoint for a
+// backend and returns a client connected to it. It returns a nil client (and nil
+// error) when the backend is configured with the noAttachEndpoint sentinel,
+// signalling that the caller should treat attach/detach as a no-op.
+func (c *ControllerServer) vendorControllerClient(backend string) (csi.ControllerClient, error) {
+	endpoint, err := c.resolveVendorController(backend)
+	if err != nil {
+		return nil, err
+	}
+	if endpoint == noAttachEndpoint {
+		return nil, nil
+	}
+	conn, err := c.proxyMgr.GetConnection(endpoint)
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable,
+			"failed to connect to vendor CSI controller for backend %q: %v", backend, err)
+	}
+	return csi.NewControllerClient(conn), nil
+}
+
+func (c *ControllerServer) resolveVendorController(backend string) (string, error) {
+	if backend == "" {
+		return "", status.Error(codes.InvalidArgument,
+			"cannot resolve vendor controller: backend is empty")
+	}
+	endpoint, ok := c.vendorControllers[backend]
+	if !ok {
+		return "", status.Errorf(codes.NotFound,
+			"no vendor controller configured for backend %q", backend)
+	}
+	return endpoint, nil
 }
 
 // ValidateVolumeCapabilities confirms volume existence and capabilities.

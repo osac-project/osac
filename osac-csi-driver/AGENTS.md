@@ -46,7 +46,6 @@ osac-csi-driver/
 │   │   └── node.go              # NodeServer (Stage/Unstage, Publish/Unpublish, vendor proxy)
 │   ├── fulfillment/
 │   │   ├── volume.go            # VolumeClient interface, VolumeInfo, CreateVolumeParams
-│   │   ├── controlplane.go      # ControlPlaneClient interface (Publish/Unpublish)
 │   │   └── stubs.go             # In-memory stubs for development (no fulfillment-service needed)
 │   └── proxy/
 │       └── proxy.go             # gRPC connection manager for vendor CSI sockets (lazy, cached)
@@ -73,41 +72,44 @@ Kubernetes PVC
 ControllerServer ──→ fulfillment-service Volume API
                        (policy check, tier resolution, vendor dispatch)
   ↓ (CSI ControllerPublishVolume / ControllerUnpublishVolume)
-ControllerServer ──→ fulfillment-service ControlPlane API
+ControllerServer ──→ proxy Manager ──→ vendor CSI controller
+                     (routed by "osac.backend"; OSAC-4187, 0.2 temporary)
 
   ↓ (CSI NodeStageVolume / NodePublishVolume)
 NodeServer ──→ proxy Manager ──→ vendor CSI node plugin
                (routed by "osac.backend" volume context key)
 ```
 
-The controller plugin **never talks to vendor CSI drivers directly** — all volume lifecycle and publish/unpublish operations go through the fulfillment-service, which handles policy checks, storage tier resolution, and vendor dispatch. Only the node plugin communicates directly with vendor CSI sockets for mount operations.
+The controller plugin delegates **volume lifecycle** (CreateVolume, DeleteVolume) to the fulfillment-service, which handles policy checks, storage tier resolution, and vendor dispatch. For **attach/detach** (ControllerPublish/UnpublishVolume) the controller proxies directly to the vendor CSI controller selected by the `osac.backend` volume-context key — a temporary arrangement for milestone 0.2 (OSAC-4187), expected to be reworked in 0.3. The node plugin communicates directly with vendor CSI sockets for mount operations.
+
+`osac.backend` carries the **StorageBackend name** resolved from the volume's StorageTier, so the controller's `--vendor-controllers` map (and the node's `--vendor-sockets` map) are keyed by StorageBackend name. A backend whose vendor-controller endpoint is the sentinel `none` (e.g. node-local `lvms`/`topolvm`, which sets `attachRequired=false` and exposes no network CSI controller) makes attach/detach a no-op instead of dialing a vendor.
 
 ### Key Subsystems
 
 | Package | Purpose |
 |---------|---------|
 | `pkg/driver/` | CSI gRPC server (Identity, Controller, Node) implementing the meta-driver pattern |
-| `pkg/fulfillment/` | Interfaces and stubs for fulfillment-service volume and control plane operations |
+| `pkg/fulfillment/` | VolumeClient interface and in-memory stubs for fulfillment-service volume operations |
 | `pkg/proxy/` | Lazy gRPC connection manager for vendor CSI sockets (unix + TCP) |
 
 ### Volume Context Keys
 
-The controller sets these keys in volume context at creation time, consumed by the node plugin:
+The controller sets these keys in volume context at creation time, consumed by the node plugin (and, for attach/detach, by the controller itself):
 
 | Key | Purpose |
 |-----|---------|
-| `osac.backend` | Routing key — identifies which vendor CSI socket to proxy to |
+| `osac.backend` | Routing key (StorageBackend name) — selects the vendor CSI socket (node) and vendor CSI controller (controller attach/detach) to proxy to |
 | `osac.volume-id` | Vendor-side volume ID |
 | `osac.protocol` | Storage protocol (e.g., `nfs`) |
 
 ### Dual-Plugin Topology
 
-- **Controller plugin** (Deployment): `CreateVolume`, `DeleteVolume`, `ControllerPublishVolume`, `ControllerUnpublishVolume` — delegates all operations to the fulfillment-service volume and control plane APIs
+- **Controller plugin** (Deployment): `CreateVolume`, `DeleteVolume` via the fulfillment-service volume API; `ControllerPublishVolume`, `ControllerUnpublishVolume` proxied to the vendor CSI controller routed by `osac.backend` (OSAC-4187, 0.2 temporary)
 - **Node plugin** (DaemonSet): `NodeStageVolume`, `NodePublishVolume`, `NodeUnstageVolume`, `NodeUnpublishVolume` — routes to vendor node sockets via `osac.backend`; maintains in-memory `volumeBackends` map to track which vendor handled each volume's stage
 
 ### Stub Mode
 
-The real gRPC fulfillment client is not yet implemented. If `--fulfillment-endpoint` is not set, the driver uses in-memory stubs (`VolumeStub`, `ControlPlaneStub`) for development. Setting `--fulfillment-endpoint` currently exits with an error.
+The real gRPC fulfillment client is not yet implemented. If `--fulfillment-endpoint` is not set, the driver uses an in-memory `VolumeStub` for development, which reports the `local` backend so attach/detach no-op against the chart's default `local=none` mapping. Setting `--fulfillment-endpoint` currently exits with an error.
 
 ## Configuration
 

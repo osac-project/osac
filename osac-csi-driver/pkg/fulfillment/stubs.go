@@ -94,16 +94,3 @@ func (s *VolumeStub) DeleteVolume(_ context.Context, volumeID string) error {
 	delete(s.volumes, volumeID)
 	return nil
 }
-
-// ControlPlaneStub is a no-op ControlPlaneClient used during development.
-type ControlPlaneStub struct{}
-
-func (s *ControlPlaneStub) PublishVolume(_ context.Context, volumeID, nodeID string) error {
-	klog.Infof("control plane stub: PublishVolume(volumeID=%q, nodeID=%q)", volumeID, nodeID)
-	return nil
-}
-
-func (s *ControlPlaneStub) UnpublishVolume(_ context.Context, volumeID, nodeID string) error {
-	klog.Infof("control plane stub: UnpublishVolume(volumeID=%q, nodeID=%q)", volumeID, nodeID)
-	return nil
-}

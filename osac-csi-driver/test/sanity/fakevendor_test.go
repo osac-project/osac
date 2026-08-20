@@ -197,20 +197,10 @@ func (f *fakeVendor) ControllerPublishVolume(
 		return nil, status.Error(codes.InvalidArgument, "node ID is required")
 	}
 
-	f.mu.Lock()
-	_, exists := f.volumes[req.GetVolumeId()]
-	f.mu.Unlock()
-
-	if !exists {
-		return nil, status.Errorf(codes.NotFound,
-			"volume %q not found", req.GetVolumeId())
-	}
-
-	if req.GetNodeId() != f.nodeID {
-		return nil, status.Errorf(codes.NotFound,
-			"node %q not found", req.GetNodeId())
-	}
-
+	// The OSAC meta-driver creates volumes through the fulfillment service, not
+	// through this vendor, so the vendor-side volume id it forwards on publish is
+	// one this double never saw via CreateVolume. Accept any volume/node id — the
+	// existence semantics are exercised against the real vendor, not here.
 	return &csi.ControllerPublishVolumeResponse{
 		PublishContext: map[string]string{
 			"fake.device": "/dev/fake0",

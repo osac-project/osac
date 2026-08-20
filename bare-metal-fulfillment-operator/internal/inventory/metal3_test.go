@@ -387,6 +387,19 @@ func TestFindFreeHost(t *testing.T) {
 		}
 	})
 
+	t.Run("skips host with empty NIC list", func(t *testing.T) {
+		bmh := withHardwareDetails(newBMH("host-empty-nics", defaultLabels(), metal3api.OperationalStatusOK, metal3api.StateAvailable))
+
+		m := newMetal3ClientForTest(bmh)
+		host, err := m.FindFreeHost(ctx, map[string]string{"hostType": "gpu-node"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if host != nil {
+			t.Errorf("expected nil (HardwareDetails has no NICs), got %+v", host)
+		}
+	})
+
 	t.Run("selects host with HardwareDetails when multiple candidates exist", func(t *testing.T) {
 		noHardware := newBMH("host-no-hw", defaultLabels(), metal3api.OperationalStatusOK, metal3api.StateAvailable)
 		withHW := withHardwareDetails(newBMH("host-with-hw", defaultLabels(), metal3api.OperationalStatusOK, metal3api.StateAvailable), testNIC("AA:BB:CC:DD:EE:01"))
@@ -601,16 +614,13 @@ func TestGetHostNICs(t *testing.T) {
 		}
 	})
 
-	t.Run("returns empty slice when NIC list is empty", func(t *testing.T) {
+	t.Run("returns error when NIC list is empty despite completed inspection", func(t *testing.T) {
 		bmh := withHardwareDetails(newBMH("host-empty-nics", defaultLabels(), metal3api.OperationalStatusOK, metal3api.StateAvailable))
 
 		m := newMetal3ClientForTest(bmh)
-		nics, err := m.GetHostNICs(ctx, testNamespace+"/host-empty-nics")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if len(nics) != 0 {
-			t.Errorf("expected empty NIC list, got %v", nics)
+		_, err := m.GetHostNICs(ctx, testNamespace+"/host-empty-nics")
+		if err == nil {
+			t.Fatal("expected error for empty NIC list, got nil")
 		}
 	})
 

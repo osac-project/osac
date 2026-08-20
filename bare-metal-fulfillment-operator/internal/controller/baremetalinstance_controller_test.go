@@ -1511,7 +1511,7 @@ var _ = Describe("BareMetalInstance Controller", func() {
 		})
 
 		Context("when GetHostNICs returns an error", func() {
-			It("sets Ready=False,Reason=NICMetadataUnavailable and returns the error", func() {
+			It("returns the error and leaves Hardware nil", func() {
 				backendErr := errors.New("inventory backend unavailable")
 				invClient.getHostNICsFunc = func(_ context.Context, _ string) ([]inventory.HostNIC, error) {
 					return nil, backendErr
@@ -1521,11 +1521,6 @@ var _ = Describe("BareMetalInstance Controller", func() {
 
 				Expect(err).To(MatchError(backendErr))
 				Expect(bmi.Status.Hardware).To(BeNil())
-				cond := bmi.GetStatusCondition(v1alpha1.HostConditionReady)
-				Expect(cond).NotTo(BeNil())
-				Expect(cond.Status).To(Equal(metav1.ConditionFalse))
-				Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonNICMetadataUnavailable))
-				Expect(cond.Message).To(ContainSubstring(backendErr.Error()))
 			})
 
 			It("leaves Status.Phase as Progressing (not Ready)", func() {
@@ -1554,14 +1549,8 @@ var _ = Describe("BareMetalInstance Controller", func() {
 			})
 		})
 
-		Context("when GetHostNICs resolves after prior NICMetadataUnavailable condition", func() {
+		Context("when GetHostNICs succeeds after a prior transient failure", func() {
 			It("populates NICs and does not return an error", func() {
-				bmi.SetStatusCondition(
-					v1alpha1.HostConditionReady,
-					metav1.ConditionFalse,
-					v1alpha1.HostConditionReasonNICMetadataUnavailable,
-					"prior failure",
-				)
 				invClient.getHostNICsFunc = func(_ context.Context, _ string) ([]inventory.HostNIC, error) {
 					return []inventory.HostNIC{{MAC: "aa:bb:cc:dd:ee:01"}}, nil
 				}

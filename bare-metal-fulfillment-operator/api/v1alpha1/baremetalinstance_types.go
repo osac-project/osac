@@ -178,8 +178,6 @@ const (
 	// Set condition status False with reason Progressing or TemplateFailed while not complete.
 	HostConditionDeprovisionTemplateComplete BareMetalInstanceConditionType = "DeprovisionTemplateComplete"
 
-	// HostConditionReady tracks whether the instance is fully ready, including NIC metadata.
-	HostConditionReady BareMetalInstanceConditionType = "Ready"
 )
 
 // Host condition reason values
@@ -206,8 +204,6 @@ const (
 	// Reserved for future use — not set by any current code path
 	HostConditionReasonPowerSyncRequired = "PowerSyncRequired"
 
-	// HostConditionReasonNICMetadataUnavailable indicates a transient failure fetching NIC data from the inventory backend.
-	HostConditionReasonNICMetadataUnavailable = "NICMetadataUnavailable"
 )
 
 // HostSelectorSpec defines additional host selection constraints.

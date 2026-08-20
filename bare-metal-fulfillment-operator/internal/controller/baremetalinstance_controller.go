@@ -423,12 +423,6 @@ func (r *BareMetalInstanceReconciler) reconcileNICMetadata(ctx context.Context, 
 	}
 	nics, err := r.InventoryClient.GetHostNICs(ctx, bmi.Spec.ExternalHostID)
 	if err != nil {
-		bmi.SetStatusCondition(
-			v1alpha1.HostConditionReady,
-			metav1.ConditionFalse,
-			v1alpha1.HostConditionReasonNICMetadataUnavailable,
-			err.Error(),
-		)
 		return err
 	}
 	hw := &v1alpha1.BareMetalHardware{}

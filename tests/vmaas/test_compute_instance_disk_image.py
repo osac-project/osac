@@ -238,3 +238,42 @@ def test_disk_image_deletion_protection(
             wait_for_grpc_removal(grpc=grpc, uuid=ci_id)
         if di_id is not None:
             grpc.delete_disk_image(disk_image_id=di_id)
+
+
+def test_disk_image_deletion_protection_template(grpc: GRPCClient, private_grpc: GRPCClient) -> None:
+    """TC-FR12-02: Cannot delete a DiskImage referenced by a ComputeInstanceTemplate."""
+    di_name = _unique_name("e2e-di")
+    di_id: str | None = None
+    template_id: str | None = None
+
+    try:
+        di_id = grpc.create_disk_image(name=di_name, source_ref=SOURCE_REF)
+
+        # spec_defaults.disk_image is a DiskImageReference proto — the reference-validator
+        # interceptor resolves the NAME to an id and backfills it before storage.
+        template_id = private_grpc.create_compute_instance_template(
+            name=_unique_name("e2e-tmpl"),
+            title="E2E DiskImage deletion protection test",
+            description="Template referencing a disk_image via spec_defaults",
+            spec_defaults={"disk_image": {"name": di_name}},
+        )
+
+        # Deletion is blocked while the template references the disk image.
+        with pytest.raises(subprocess.CalledProcessError) as exc_info:
+            grpc.delete_disk_image(disk_image_id=di_id)
+        assert_grpc_rejected(exc_info, "FailedPrecondition")
+        combined = (exc_info.value.stderr or "") + (exc_info.value.stdout or "")
+        assert "compute instance template" in combined.lower(), (
+            f"Error should identify the referencing template, got: {combined.strip()}"
+        )
+
+        # Remove the referrer, then deletion succeeds — protection is reference-bound, not permanent.
+        private_grpc.delete_compute_instance_template(template_id=template_id)
+        template_id = None
+        grpc.delete_disk_image(disk_image_id=di_id)
+        di_id = None
+    finally:
+        if template_id is not None:
+            private_grpc.delete_compute_instance_template(template_id=template_id)
+        if di_id is not None:
+            grpc.delete_disk_image(disk_image_id=di_id)

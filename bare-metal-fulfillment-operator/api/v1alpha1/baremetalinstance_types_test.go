@@ -21,13 +21,6 @@ import (
 )
 
 func TestHostConditionTypeValues(t *testing.T) {
-	expected := map[BareMetalInstanceConditionType]bool{
-		HostConditionAllocated:                   true,
-		HostConditionPowerSynced:                 true,
-		HostConditionProvisionTemplateComplete:   true,
-		HostConditionDeprovisionTemplateComplete: true,
-	}
-
 	if HostConditionAllocated != "Allocated" {
 		t.Errorf("HostConditionAllocated = %q, want %q", HostConditionAllocated, "Allocated")
 	}
@@ -39,10 +32,6 @@ func TestHostConditionTypeValues(t *testing.T) {
 	}
 	if HostConditionDeprovisionTemplateComplete != "DeprovisionTemplateComplete" {
 		t.Errorf("HostConditionDeprovisionTemplateComplete = %q, want %q", HostConditionDeprovisionTemplateComplete, "DeprovisionTemplateComplete")
-	}
-
-	if len(expected) != 4 {
-		t.Errorf("expected exactly 4 condition types, got %d", len(expected))
 	}
 }
 

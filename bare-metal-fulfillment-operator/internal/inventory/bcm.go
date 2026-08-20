@@ -116,3 +116,7 @@ func (c *BCMClient) AssignHost(_ context.Context, _ string, _ string, _ map[stri
 func (c *BCMClient) UnassignHost(_ context.Context, _ string, _ []string) error {
 	return fmt.Errorf("bcm UnassignHost not implemented")
 }
+
+func (c *BCMClient) GetHostNICs(_ context.Context, _ string) ([]HostNIC, error) {
+	return nil, nil
+}

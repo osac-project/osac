@@ -412,3 +412,7 @@ func getNestedLabel(node *nodes.Node, labelKey string) (string, bool) {
 	}
 	return "", false
 }
+
+func (c *OpenStackClient) GetHostNICs(_ context.Context, _ string) ([]HostNIC, error) {
+	return nil, nil
+}

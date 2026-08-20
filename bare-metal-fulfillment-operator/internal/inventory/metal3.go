@@ -253,6 +253,10 @@ func (m *Metal3Client) AssignHost(ctx context.Context, inventoryHostID string, b
 	return bmhToHost(bmh, m.hostClass), nil
 }
 
+func (m *Metal3Client) GetHostNICs(ctx context.Context, inventoryHostID string) ([]HostNIC, error) {
+	return nil, nil
+}
+
 func (m *Metal3Client) UnassignHost(ctx context.Context, inventoryHostID string, labels []string) error {
 	namespace, name, err := ParseHostID(inventoryHostID)
 	if err != nil {

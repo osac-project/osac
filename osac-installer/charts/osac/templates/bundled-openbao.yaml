@@ -54,7 +54,7 @@ data:
     set -eu
 
     export BAO_ADDR="https://localhost:8200"
-    export BAO_TOKEN="{{ .Values.bundledVault.devRootToken }}"
+    export BAO_TOKEN="{{ required "bundledVault.devRootToken must be set" .Values.bundledVault.devRootToken }}"
     export BAO_CACERT="/vault/tls/ca.crt"
 
     echo "Waiting for OpenBao to become ready..."

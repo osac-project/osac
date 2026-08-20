@@ -31,6 +31,10 @@ data:
     ui = false
     disable_mlock = true
 
+    # No storage stanza: this deployment relies on `bao server -dev`
+    # (see the Deployment command) for its in-memory storage backend.
+    # Do not add a storage stanza here without also dropping -dev.
+
     listener "tcp" {
       address     = "0.0.0.0:8200"
       tls_cert_file = "/vault/tls/tls.crt"
@@ -121,6 +125,7 @@ data:
     {{- end }}
 
     echo "OpenBao bootstrap complete."
+    unset BAO_TOKEN
     sleep infinity
 ---
 apiVersion: v1

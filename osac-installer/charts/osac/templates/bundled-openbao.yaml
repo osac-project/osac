@@ -160,6 +160,8 @@ spec:
         {{- include "osac.labels" . | nindent 8 }}
     spec:
       automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
       volumes:
       - name: server-cert
         secret:
@@ -179,12 +181,15 @@ spec:
       {{- end }}
       - name: data
         emptyDir: {}
+      - name: tmp
+        emptyDir: {}
       containers:
       - name: server
         image: {{ .Values.bundledVault.image }}
         imagePullPolicy: IfNotPresent
         securityContext:
           allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
           capabilities:
             drop:
             - ALL
@@ -220,6 +225,8 @@ spec:
         {{- end }}
         - name: data
           mountPath: /vault/data
+        - name: tmp
+          mountPath: /tmp
         ports:
         - name: api
           protocol: TCP
@@ -243,6 +250,7 @@ spec:
         imagePullPolicy: IfNotPresent
         securityContext:
           allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
           capabilities:
             drop:
             - ALL
@@ -263,6 +271,8 @@ spec:
         - name: ca-bundle
           mountPath: /vault/ca
         {{- end }}
+        - name: tmp
+          mountPath: /tmp
         resources:
           requests:
             cpu: 50m

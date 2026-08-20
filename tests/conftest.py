@@ -65,14 +65,36 @@ def service_account() -> str:
 
 
 @pytest.fixture(scope="session")
-def grpc(fulfillment_address: str, keycloak_url: str, jwt_password: str) -> GRPCClient:
+def keycloak_realm() -> str:
+    return env("OSAC_KEYCLOAK_REALM", "osac")
+
+
+@pytest.fixture(scope="session")
+def keycloak_client_id() -> str:
+    return env("OSAC_KEYCLOAK_CLIENT_ID", "osac-cli")
+
+
+@pytest.fixture(scope="session")
+def jwt_username() -> str:
+    return env("OSAC_JWT_USERNAME", "tenant1_admin")
+
+
+@pytest.fixture(scope="session")
+def grpc(
+    fulfillment_address: str,
+    keycloak_url: str,
+    keycloak_realm: str,
+    keycloak_client_id: str,
+    jwt_username: str,
+    jwt_password: str,
+) -> GRPCClient:
     return GRPCClient(
         address=fulfillment_address,
         token_factory=lambda: get_jwt(
             keycloak_url=keycloak_url,
-            realm="osac",
-            client_id="osac-cli",
-            username="tenant1_admin",
+            realm=keycloak_realm,
+            client_id=keycloak_client_id,
+            username=jwt_username,
             password=jwt_password,
         ),
     )
@@ -178,11 +200,11 @@ def k8s_hub_client(namespace: str) -> K8sClient:
 
 
 @pytest.fixture(scope="session")
-def cli(namespace: str, fulfillment_address: str, keycloak_url: str, jwt_password: str) -> Iterator[OsacCLI]:
+def cli(namespace: str, fulfillment_address: str, keycloak_url: str, jwt_username: str, jwt_password: str) -> Iterator[OsacCLI]:  # noqa: E501
     instance = OsacCLI(
         binary=env("OSAC_CLI_PATH", "osac"),
         address=f"https://{fulfillment_address.rsplit(':', 1)[0]}",
-        token_script=_make_jwt_token_script(keycloak_url, "tenant1_admin", jwt_password),
+        token_script=_make_jwt_token_script(keycloak_url, jwt_username, jwt_password),
         namespace=namespace,
     )
     yield instance

@@ -180,8 +180,13 @@ func (m *Metal3Client) FindFreeHost(ctx context.Context, matchExpressions map[st
 			continue
 		}
 
-		if bmh.Status.HardwareDetails == nil || len(bmh.Status.HardwareDetails.NIC) == 0 {
-			log.V(1).Info("Skipping BareMetalHost: hardware inspection not yet complete or no NICs discovered", "host", bmh.Name)
+		if bmh.Status.HardwareDetails == nil {
+			log.V(1).Info("Skipping BareMetalHost: hardware inspection not yet complete", "host", bmh.Name)
+			continue
+		}
+
+		if len(bmh.Status.HardwareDetails.NIC) == 0 {
+			log.V(1).Info("Skipping BareMetalHost: inspection complete but no NICs discovered", "host", bmh.Name)
 			continue
 		}
 

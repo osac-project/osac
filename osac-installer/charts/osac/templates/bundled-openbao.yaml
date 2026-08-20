@@ -183,6 +183,11 @@ spec:
       - name: server
         image: {{ .Values.bundledVault.image }}
         imagePullPolicy: IfNotPresent
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
         resources:
           {{- toYaml .Values.bundledVault.resources | nindent 10 }}
         command:
@@ -236,6 +241,11 @@ spec:
       - name: bootstrap
         image: {{ .Values.bundledVault.image }}
         imagePullPolicy: IfNotPresent
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
         command:
         - /bin/sh
         - /scripts/init.sh

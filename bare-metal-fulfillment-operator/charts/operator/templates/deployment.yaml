@@ -108,11 +108,6 @@ spec:
             mountPath: /etc/openstack/
           - name: profiles
             mountPath: /etc/osac/profile/
-          {{- if and .Values.bcm.enabled .Values.bcm.credentialsSecret }}
-          - name: bcm-certs
-            mountPath: /etc/osac/certs/{{ .Values.bcm.credentialsSecret }}
-            readOnly: true
-          {{- end }}
       volumes:
         - name: inventory-config
           secret:
@@ -128,10 +123,5 @@ spec:
           configMap:
             name: {{ .Values.configMaps.profiles }}
             optional: true
-        {{- if and .Values.bcm.enabled .Values.bcm.credentialsSecret }}
-        - name: bcm-certs
-          secret:
-            secretName: {{ .Values.bcm.credentialsSecret }}
-        {{- end }}
       serviceAccountName: {{ include "bare-metal-fulfillment-operator.serviceAccountName" . }}
       terminationGracePeriodSeconds: 10

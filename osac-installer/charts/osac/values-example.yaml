@@ -314,10 +314,12 @@ bmf:
     # [REQUIRED when enabled] BCM head node API endpoint.
     # Example: "https://bcm-head.example.com:8081"
     url: ""
-    # [REQUIRED when enabled] Name of existing K8s Secret containing BCM mTLS
-    # client certificate (tls.crt) and private key (tls.key).
-    # This Secret must be pre-created in the install namespace.
-    credentialsSecret: ""
+    # [REQUIRED when enabled] PEM-encoded client certificate for BCM mTLS
+    # authentication. The chart creates a Secret from this value.
+    cert: ""
+    # [REQUIRED when enabled] PEM-encoded client private key for BCM mTLS
+    # authentication.
+    key: ""
     # Skip TLS verification of BCM server certificate. Test environments only.
     insecureSkipVerify: false
     # Host class identifier written to the inventory config.

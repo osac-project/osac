@@ -1284,10 +1284,6 @@
               "type": "string",
               "description": "BCM head node API endpoint (e.g. https://bcm-head:8081)"
             },
-            "credentialsSecret": {
-              "type": "string",
-              "description": "Name of existing Kubernetes Secret containing BCM mTLS client cert (tls.crt) and key (tls.key)"
-            },
             "insecureSkipVerify": {
               "type": "boolean",
               "description": "Skip TLS verification of BCM server certificate (test environments only)",
@@ -1301,6 +1297,14 @@
             "bmhNamespace": {
               "type": "string",
               "description": "Kubernetes namespace where BareMetalHost CRs are created for Metal3 power management"
+            },
+            "cert": {
+              "type": "string",
+              "description": "PEM-encoded client certificate for BCM mTLS authentication"
+            },
+            "key": {
+              "type": "string",
+              "description": "PEM-encoded client private key for BCM mTLS authentication"
             }
           }
         }

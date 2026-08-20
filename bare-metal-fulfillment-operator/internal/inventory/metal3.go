@@ -176,10 +176,12 @@ func (m *Metal3Client) FindFreeHost(ctx context.Context, matchExpressions map[st
 		}
 
 		if bmh.Annotations["inspect.metal3.io"] == "disabled" {
+			log.V(1).Info("Skipping BareMetalHost: hardware inspection disabled", "host", bmh.Name)
 			continue
 		}
 
 		if bmh.Status.HardwareDetails == nil {
+			log.V(1).Info("Skipping BareMetalHost: hardware inspection not yet complete", "host", bmh.Name)
 			continue
 		}
 

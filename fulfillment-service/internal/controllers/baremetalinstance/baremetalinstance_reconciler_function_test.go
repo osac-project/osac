@@ -1995,6 +1995,26 @@ var _ = Describe("syncStatus", func() {
 		t.syncStatus(object)
 		Expect(t.bareMetalInstance.GetStatus().HasHardware()).To(BeFalse())
 	})
+
+	It("should clear previously-set hardware when CRD Hardware becomes nil", func() {
+		t := newTask(0)
+		// First sync: hardware present
+		withHardware := &bmfov1alpha1.BareMetalInstance{
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				Hardware: &bmfov1alpha1.BareMetalHardware{
+					NICs: []bmfov1alpha1.BareMetalNICStatus{{MAC: "aa:bb:cc:dd:ee:01"}},
+				},
+			},
+		}
+		t.syncStatus(withHardware)
+		Expect(t.bareMetalInstance.GetStatus().HasHardware()).To(BeTrue())
+
+		// Second sync: hardware nil — must clear stale data
+		t.syncStatus(&bmfov1alpha1.BareMetalInstance{
+			Status: bmfov1alpha1.BareMetalInstanceStatus{Hardware: nil},
+		})
+		Expect(t.bareMetalInstance.GetStatus().HasHardware()).To(BeFalse())
+	})
 })
 
 var _ = Describe("sanitizeConditionMessage", func() {

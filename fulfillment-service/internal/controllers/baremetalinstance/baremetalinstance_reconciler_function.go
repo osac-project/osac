@@ -480,6 +480,8 @@ func (t *task) syncStatus(object *bmfov1alpha1.BareMetalInstance) {
 		t.bareMetalInstance.GetStatus().SetHardware(privatev1.BareMetalHardware_builder{
 			Nics: protoNICs,
 		}.Build())
+	} else {
+		t.bareMetalInstance.GetStatus().ClearHardware()
 	}
 
 	restartPending := t.bareMetalInstance.GetSpec().GetRestartTrigger() != t.bareMetalInstance.GetStatus().GetRestartTrigger()

@@ -57,8 +57,12 @@ func createMetal3BMH(name string, labels map[string]string, opStatus metal3api.O
 
 	// Status is a subresource — Create does not persist it. Re-set and update
 	// separately so envtest stores the desired operational/provisioning state.
+	// HardwareDetails is required so FindFreeHost does not skip this host.
 	bmh.Status.OperationalStatus = opStatus
 	bmh.Status.Provisioning.State = provState
+	bmh.Status.HardwareDetails = &metal3api.HardwareDetails{
+		NIC: []metal3api.NIC{{MAC: "aa:bb:cc:dd:ee:01"}},
+	}
 	ExpectWithOffset(1, k8sClient.Status().Update(ctx, bmh)).To(Succeed())
 	return bmh
 }

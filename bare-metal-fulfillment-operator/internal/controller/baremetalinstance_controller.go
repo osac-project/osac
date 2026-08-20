@@ -407,9 +407,36 @@ func (r *BareMetalInstanceReconciler) reconcileManagement(ctx context.Context, b
 		}
 	}
 
+	if err := r.reconcileNICMetadata(ctx, bareMetalInstance); err != nil {
+		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
+		return ctrl.Result{}, err
+	}
+
 	bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseReady
 	log.Info("BareMetalInstance reconcile completed; status changes pending persistence", "bareMetalInstance", bareMetalInstance.Name)
 	return ctrl.Result{}, nil
+}
+
+func (r *BareMetalInstanceReconciler) reconcileNICMetadata(ctx context.Context, bmi *v1alpha1.BareMetalInstance) error {
+	if bmi.Status.Hardware != nil && len(bmi.Status.Hardware.NICs) > 0 {
+		return nil
+	}
+	nics, err := r.InventoryClient.GetHostNICs(ctx, bmi.Spec.ExternalHostID)
+	if err != nil {
+		bmi.SetStatusCondition(
+			v1alpha1.HostConditionReady,
+			metav1.ConditionFalse,
+			v1alpha1.HostConditionReasonNICMetadataUnavailable,
+			err.Error(),
+		)
+		return err
+	}
+	hw := &v1alpha1.BareMetalHardware{}
+	for _, n := range nics {
+		hw.NICs = append(hw.NICs, v1alpha1.BareMetalNICStatus{MAC: n.MAC})
+	}
+	bmi.Status.Hardware = hw
+	return nil
 }
 
 // reconcilePower drives the host's power state toward the desired RunStrategy.

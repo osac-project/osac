@@ -39,9 +39,11 @@ import (
 
 // mockInventoryClient implements inventory.Client for testing
 type mockInventoryClient struct {
-	findFreeHostFunc func(ctx context.Context, matchExpressions map[string]string) (*inventory.Host, error)
-	assignHostFunc   func(ctx context.Context, inventoryHostID string, bareMetalInstanceID string, labels map[string]string) (*inventory.Host, error)
-	unassignHostFunc func(ctx context.Context, inventoryHostID string, labels []string) error
+	findFreeHostFunc  func(ctx context.Context, matchExpressions map[string]string) (*inventory.Host, error)
+	assignHostFunc    func(ctx context.Context, inventoryHostID string, bareMetalInstanceID string, labels map[string]string) (*inventory.Host, error)
+	unassignHostFunc  func(ctx context.Context, inventoryHostID string, labels []string) error
+	getHostNICsFunc   func(ctx context.Context, inventoryHostID string) ([]inventory.HostNIC, error)
+	getHostNICsCalled int
 }
 
 func (m *mockInventoryClient) FindFreeHost(ctx context.Context, matchExpressions map[string]string) (*inventory.Host, error) {
@@ -63,6 +65,14 @@ func (m *mockInventoryClient) UnassignHost(ctx context.Context, inventoryHostID 
 		return m.unassignHostFunc(ctx, inventoryHostID, labels)
 	}
 	return nil
+}
+
+func (m *mockInventoryClient) GetHostNICs(ctx context.Context, inventoryHostID string) ([]inventory.HostNIC, error) {
+	m.getHostNICsCalled++
+	if m.getHostNICsFunc != nil {
+		return m.getHostNICsFunc(ctx, inventoryHostID)
+	}
+	return nil, nil
 }
 
 // mockManagementClient implements management.Client for testing
@@ -1444,6 +1454,123 @@ var _ = Describe("BareMetalInstance Controller", func() {
 					Expect(err).To(Equal(expectedErr))
 					Expect(result).To(Equal(ctrl.Result{}))
 				})
+			})
+		})
+	})
+
+	Describe("reconcileNICMetadata", func() {
+		var (
+			ctx               context.Context
+			bmi               *v1alpha1.BareMetalInstance
+			reconcilerForNICs *BareMetalInstanceReconciler
+			invClient         *mockInventoryClient
+		)
+
+		BeforeEach(func() {
+			ctx = context.Background()
+			invClient = &mockInventoryClient{}
+			reconcilerForNICs = NewBareMetalInstanceReconciler(
+				k8sClient,
+				k8sClient.Scheme(),
+				invClient,
+				&mockManagementClient{},
+				nil,
+				0, 0, 0, 0,
+			)
+			bmi = &v1alpha1.BareMetalInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "nic-test-bmi",
+					Namespace: "default",
+				},
+				Spec: v1alpha1.BareMetalInstanceSpec{
+					ExternalHostID: "test-ns/test-host",
+					HostClass:      "metal3",
+					HostType:       "gpu-node",
+					TemplateID:     shared.OsacNoopTemplate,
+				},
+			}
+		})
+
+		Context("when GetHostNICs returns NICs", func() {
+			It("populates Status.Hardware.NICs with lowercased MACs", func() {
+				invClient.getHostNICsFunc = func(_ context.Context, _ string) ([]inventory.HostNIC, error) {
+					return []inventory.HostNIC{
+						{MAC: "aa:bb:cc:dd:ee:01"},
+						{MAC: "ff:00:11:22:33:44"},
+					}, nil
+				}
+
+				err := reconcilerForNICs.reconcileNICMetadata(ctx, bmi)
+
+				Expect(err).NotTo(HaveOccurred())
+				Expect(bmi.Status.Hardware).NotTo(BeNil())
+				Expect(bmi.Status.Hardware.NICs).To(HaveLen(2))
+				Expect(bmi.Status.Hardware.NICs[0].MAC).To(Equal("aa:bb:cc:dd:ee:01"))
+				Expect(bmi.Status.Hardware.NICs[1].MAC).To(Equal("ff:00:11:22:33:44"))
+			})
+		})
+
+		Context("when GetHostNICs returns an error", func() {
+			It("sets Ready=False,Reason=NICMetadataUnavailable and returns the error", func() {
+				backendErr := errors.New("inventory backend unavailable")
+				invClient.getHostNICsFunc = func(_ context.Context, _ string) ([]inventory.HostNIC, error) {
+					return nil, backendErr
+				}
+
+				err := reconcilerForNICs.reconcileNICMetadata(ctx, bmi)
+
+				Expect(err).To(MatchError(backendErr))
+				Expect(bmi.Status.Hardware).To(BeNil())
+				cond := bmi.GetStatusCondition(v1alpha1.HostConditionReady)
+				Expect(cond).NotTo(BeNil())
+				Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+				Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonNICMetadataUnavailable))
+				Expect(cond.Message).To(ContainSubstring(backendErr.Error()))
+			})
+
+			It("leaves Status.Phase as Progressing (not Ready)", func() {
+				invClient.getHostNICsFunc = func(_ context.Context, _ string) ([]inventory.HostNIC, error) {
+					return nil, errors.New("transient error")
+				}
+				bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
+
+				_ = reconcilerForNICs.reconcileNICMetadata(ctx, bmi)
+
+				Expect(bmi.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseProgressing))
+			})
+		})
+
+		Context("when Hardware is already populated with NICs", func() {
+			It("skips GetHostNICs (idempotency guard)", func() {
+				bmi.Status.Hardware = &v1alpha1.BareMetalHardware{
+					NICs: []v1alpha1.BareMetalNICStatus{{MAC: "aa:bb:cc:dd:ee:01"}},
+				}
+
+				err := reconcilerForNICs.reconcileNICMetadata(ctx, bmi)
+
+				Expect(err).NotTo(HaveOccurred())
+				Expect(invClient.getHostNICsCalled).To(Equal(0))
+				Expect(bmi.Status.Hardware.NICs).To(HaveLen(1))
+			})
+		})
+
+		Context("when GetHostNICs resolves after prior NICMetadataUnavailable condition", func() {
+			It("populates NICs and does not return an error", func() {
+				bmi.SetStatusCondition(
+					v1alpha1.HostConditionReady,
+					metav1.ConditionFalse,
+					v1alpha1.HostConditionReasonNICMetadataUnavailable,
+					"prior failure",
+				)
+				invClient.getHostNICsFunc = func(_ context.Context, _ string) ([]inventory.HostNIC, error) {
+					return []inventory.HostNIC{{MAC: "aa:bb:cc:dd:ee:01"}}, nil
+				}
+
+				err := reconcilerForNICs.reconcileNICMetadata(ctx, bmi)
+
+				Expect(err).NotTo(HaveOccurred())
+				Expect(bmi.Status.Hardware).NotTo(BeNil())
+				Expect(bmi.Status.Hardware.NICs).To(HaveLen(1))
 			})
 		})
 	})

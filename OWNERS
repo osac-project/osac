@@ -28,6 +28,10 @@ filters:
     - danielerez
     - htayrie-rh
     - minmzzhang
+    - slintes
+    - clobrano
+    - Tzif-Morgen
+    - udis
     reviewers:
     - jhernand
     - adriengentil
@@ -56,3 +60,7 @@ filters:
     - danielerez
     - htayrie-rh
     - minmzzhang
+    - slintes
+    - clobrano
+    - Tzif-Morgen
+    - udis

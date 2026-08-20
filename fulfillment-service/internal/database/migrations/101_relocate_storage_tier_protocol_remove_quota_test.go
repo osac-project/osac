@@ -28,7 +28,7 @@ var _ = DescribeMigration("Relocate storage tier protocol and remove quota", fun
 			`{"spec":{"backends":[{"backend_id":"sb-1","protocol":"STORAGE_PROTOCOL_NFS","quota_gib":500,"max_read_bandwidth_mbs":100}]}}`)
 		Expect(err).ToNot(HaveOccurred())
 
-		err = tool.Migrate(ctx, 100)
+		err = tool.Migrate(ctx, 101)
 		Expect(err).ToNot(HaveOccurred())
 
 		var protocol string
@@ -62,7 +62,7 @@ var _ = DescribeMigration("Relocate storage tier protocol and remove quota", fun
 			`{"spec":{"backends":[]}}`)
 		Expect(err).ToNot(HaveOccurred())
 
-		err = tool.Migrate(ctx, 100)
+		err = tool.Migrate(ctx, 101)
 		Expect(err).ToNot(HaveOccurred())
 
 		var hasProtocol bool
@@ -85,7 +85,7 @@ var _ = DescribeMigration("Relocate storage tier protocol and remove quota", fun
 			`{"spec":{"backends":[{"backend_id":"sb-2","protocol":"STORAGE_PROTOCOL_BLOCK","quota_gib":200}]},"status":{"state":1}}`)
 		Expect(err).ToNot(HaveOccurred())
 
-		err = tool.Migrate(ctx, 100)
+		err = tool.Migrate(ctx, 101)
 		Expect(err).ToNot(HaveOccurred())
 
 		var protocol string
@@ -105,7 +105,7 @@ var _ = DescribeMigration("Relocate storage tier protocol and remove quota", fun
 			`{"description":"legacy tier","backends":[{"backend_id":"sb-3","protocol":"STORAGE_PROTOCOL_NFS","quota_gib":50,"encryption_enabled":true}],"state":"STORAGE_TIER_STATE_ACTIVE"}`)
 		Expect(err).ToNot(HaveOccurred())
 
-		err = tool.Migrate(ctx, 100)
+		err = tool.Migrate(ctx, 101)
 		Expect(err).ToNot(HaveOccurred())
 
 		var data string
@@ -146,7 +146,7 @@ var _ = DescribeMigration("Relocate storage tier protocol and remove quota", fun
 			`{"description":"never provisioned","backends":[]}`)
 		Expect(err).ToNot(HaveOccurred())
 
-		err = tool.Migrate(ctx, 100)
+		err = tool.Migrate(ctx, 101)
 		Expect(err).ToNot(HaveOccurred())
 
 		var protocolText, stateText string

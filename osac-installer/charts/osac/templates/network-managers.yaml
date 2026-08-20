@@ -1,0 +1,22 @@
+{{- if .Values.networkManagers }}
+{{- range .Values.networkManagers }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $.Release.Name }}-network-{{ .role }}-manager-{{ .name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- if eq .role "fabric" }}
+    osac.openshift.io/network-fabric-manager: "true"
+    {{- else if eq .role "k8s" }}
+    osac.openshift.io/network-k8s-manager: "true"
+    {{- end }}
+data:
+  name: {{ .name | quote }}
+  {{- if .description }}
+  description: {{ .description | quote }}
+  {{- end }}
+  capabilities: {{ .capabilities | default "ipv4" | quote }}
+{{- end }}
+{{- end }}

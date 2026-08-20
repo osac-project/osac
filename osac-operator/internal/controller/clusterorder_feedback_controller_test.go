@@ -606,6 +606,29 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 			Expect(mockClient.lastUpdate.GetStatus().GetState()).To(Equal(privatev1.ClusterState_CLUSTER_STATE_FAILED))
 		})
 
+		It("should sync VIP endpoints to Cluster proto when set in status", func() {
+			co := &osacv1alpha1.ClusterOrder{}
+			Expect(k8sClient.Get(testCtx, typeNamespacedName, co)).To(Succeed())
+			co.Status.ApiEndpoint = "10.0.0.1"
+			co.Status.IngressEndpoint = "10.0.0.2"
+			Expect(k8sClient.Status().Update(testCtx, co)).To(Succeed())
+
+			request := reconcile.Request{NamespacedName: typeNamespacedName}
+			_, err := reconciler.Reconcile(testCtx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockClient.updateCalled).To(BeTrue())
+			Expect(mockClient.lastUpdate.GetStatus().GetApiEndpoint()).To(Equal("10.0.0.1"))
+			Expect(mockClient.lastUpdate.GetStatus().GetIngressEndpoint()).To(Equal("10.0.0.2"))
+		})
+
+		It("should not sync VIP endpoints when status fields are empty", func() {
+			request := reconcile.Request{NamespacedName: typeNamespacedName}
+			_, err := reconciler.Reconcile(testCtx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockClient.lastUpdate.GetStatus().GetApiEndpoint()).To(BeEmpty())
+			Expect(mockClient.lastUpdate.GetStatus().GetIngressEndpoint()).To(BeEmpty())
+		})
+
 		It("should not call update when reconciled twice with same data", func() {
 			co := &osacv1alpha1.ClusterOrder{}
 			Expect(k8sClient.Get(testCtx, typeNamespacedName, co)).To(Succeed())

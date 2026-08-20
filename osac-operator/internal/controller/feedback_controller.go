@@ -120,7 +120,20 @@ func newClusterOrderSyncUpdate(hubClient clnt.Client) func(context.Context, *ckv
 			return err
 		}
 		syncClusterOrderNodeRequests(ctx, obj, remote)
+		syncClusterOrderVIPEndpoints(obj, remote)
 		return nil
+	}
+}
+
+// syncClusterOrderVIPEndpoints copies MetalLB VIP addresses from ClusterOrder status
+// to the Cluster proto. The VIPs are written by the CaaS template and consumed by the
+// ExternalIPAttachment controller and the fulfillment-service API surface.
+func syncClusterOrderVIPEndpoints(obj *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) {
+	if obj.Status.ApiEndpoint != "" {
+		remote.GetStatus().SetApiEndpoint(obj.Status.ApiEndpoint)
+	}
+	if obj.Status.IngressEndpoint != "" {
+		remote.GetStatus().SetIngressEndpoint(obj.Status.IngressEndpoint)
 	}
 }
 

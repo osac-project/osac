@@ -79,6 +79,15 @@ func defaultLabels() map[string]string {
 	}
 }
 
+func withHardwareDetails(bmh *metal3api.BareMetalHost, nics ...metal3api.NIC) *metal3api.BareMetalHost {
+	bmh.Status.HardwareDetails = &metal3api.HardwareDetails{NIC: nics}
+	return bmh
+}
+
+func testNIC(mac string) metal3api.NIC {
+	return metal3api.NIC{MAC: mac}
+}
+
 // --- ParseHostID ---
 
 func TestParseHostID(t *testing.T) {
@@ -152,7 +161,7 @@ func TestFindFreeHost(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("returns matching unassigned host", func(t *testing.T) {
-		bmh := newBMH("host-1", defaultLabels(), metal3api.OperationalStatusOK, metal3api.StateAvailable)
+		bmh := withHardwareDetails(newBMH("host-1", defaultLabels(), metal3api.OperationalStatusOK, metal3api.StateAvailable), testNIC("AA:BB:CC:DD:EE:01"))
 
 		m := newMetal3ClientForTest(bmh)
 		host, err := m.FindFreeHost(ctx, map[string]string{"hostType": "gpu-node"})
@@ -225,8 +234,8 @@ func TestFindFreeHost(t *testing.T) {
 	t.Run("filters by host type label", func(t *testing.T) {
 		gpuLabels := map[string]string{Metal3HostTypeLabel: "gpu-node", Metal3ManagedByLabel: "baremetal"}
 		cpuLabels := map[string]string{Metal3HostTypeLabel: "cpu-node", Metal3ManagedByLabel: "baremetal"}
-		gpuHost := newBMH("host-gpu", gpuLabels, metal3api.OperationalStatusOK, metal3api.StateAvailable)
-		cpuHost := newBMH("host-cpu", cpuLabels, metal3api.OperationalStatusOK, metal3api.StateAvailable)
+		gpuHost := withHardwareDetails(newBMH("host-gpu", gpuLabels, metal3api.OperationalStatusOK, metal3api.StateAvailable), testNIC("AA:BB:CC:DD:EE:01"))
+		cpuHost := withHardwareDetails(newBMH("host-cpu", cpuLabels, metal3api.OperationalStatusOK, metal3api.StateAvailable), testNIC("AA:BB:CC:DD:EE:02"))
 
 		m := newMetal3ClientForTest(gpuHost, cpuHost)
 		host, err := m.FindFreeHost(ctx, map[string]string{"hostType": "gpu-node"})
@@ -257,7 +266,7 @@ func TestFindFreeHost(t *testing.T) {
 
 	t.Run("filters by explicit managed-by match expression", func(t *testing.T) {
 		labels := map[string]string{Metal3HostTypeLabel: "gpu-node", Metal3ManagedByLabel: "agent"}
-		bmh := newBMH("host-agent", labels, metal3api.OperationalStatusOK, metal3api.StateAvailable)
+		bmh := withHardwareDetails(newBMH("host-agent", labels, metal3api.OperationalStatusOK, metal3api.StateAvailable), testNIC("AA:BB:CC:DD:EE:01"))
 
 		m := newMetal3ClientForTest(bmh)
 		host, err := m.FindFreeHost(ctx, map[string]string{
@@ -285,7 +294,7 @@ func TestFindFreeHost(t *testing.T) {
 
 	t.Run("matches hosts without hostType filter", func(t *testing.T) {
 		labels := map[string]string{Metal3ManagedByLabel: "baremetal"}
-		bmh := newBMH("host-any", labels, metal3api.OperationalStatusOK, metal3api.StateAvailable)
+		bmh := withHardwareDetails(newBMH("host-any", labels, metal3api.OperationalStatusOK, metal3api.StateAvailable), testNIC("AA:BB:CC:DD:EE:01"))
 
 		m := newMetal3ClientForTest(bmh)
 		host, err := m.FindFreeHost(ctx, map[string]string{})
@@ -299,7 +308,7 @@ func TestFindFreeHost(t *testing.T) {
 
 	t.Run("defaults managed-by to baremetal when label is absent", func(t *testing.T) {
 		labels := map[string]string{Metal3HostTypeLabel: "gpu-node"}
-		bmh := newBMH("host-no-managed-by", labels, metal3api.OperationalStatusOK, metal3api.StateAvailable)
+		bmh := withHardwareDetails(newBMH("host-no-managed-by", labels, metal3api.OperationalStatusOK, metal3api.StateAvailable), testNIC("AA:BB:CC:DD:EE:01"))
 
 		m := newMetal3ClientForTest(bmh)
 		host, err := m.FindFreeHost(ctx, map[string]string{"hostType": "gpu-node"})
@@ -328,6 +337,70 @@ func TestFindFreeHost(t *testing.T) {
 		}
 		if host != nil {
 			t.Errorf("expected nil (managed-by defaults to baremetal, not agent), got %+v", host)
+		}
+	})
+
+	t.Run("skips host with inspect.metal3.io disabled annotation", func(t *testing.T) {
+		bmh := withHardwareDetails(newBMH("host-inspect-disabled", defaultLabels(), metal3api.OperationalStatusOK, metal3api.StateAvailable), testNIC("AA:BB:CC:DD:EE:01"))
+		if bmh.Annotations == nil {
+			bmh.Annotations = map[string]string{}
+		}
+		bmh.Annotations["inspect.metal3.io"] = "disabled"
+
+		m := newMetal3ClientForTest(bmh)
+		host, err := m.FindFreeHost(ctx, map[string]string{"hostType": "gpu-node"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if host != nil {
+			t.Errorf("expected nil (inspection disabled), got %+v", host)
+		}
+	})
+
+	t.Run("includes host when inspect.metal3.io annotation has non-disabled value", func(t *testing.T) {
+		bmh := withHardwareDetails(newBMH("host-inspect-other", defaultLabels(), metal3api.OperationalStatusOK, metal3api.StateAvailable), testNIC("AA:BB:CC:DD:EE:01"))
+		if bmh.Annotations == nil {
+			bmh.Annotations = map[string]string{}
+		}
+		bmh.Annotations["inspect.metal3.io"] = "metadata"
+
+		m := newMetal3ClientForTest(bmh)
+		host, err := m.FindFreeHost(ctx, map[string]string{"hostType": "gpu-node"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if host == nil {
+			t.Fatal("expected host (inspect annotation is not disabled), got nil")
+		}
+	})
+
+	t.Run("skips host with nil HardwareDetails", func(t *testing.T) {
+		bmh := newBMH("host-no-hardware", defaultLabels(), metal3api.OperationalStatusOK, metal3api.StateAvailable)
+
+		m := newMetal3ClientForTest(bmh)
+		host, err := m.FindFreeHost(ctx, map[string]string{"hostType": "gpu-node"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if host != nil {
+			t.Errorf("expected nil (HardwareDetails is nil), got %+v", host)
+		}
+	})
+
+	t.Run("selects host with HardwareDetails when multiple candidates exist", func(t *testing.T) {
+		noHardware := newBMH("host-no-hw", defaultLabels(), metal3api.OperationalStatusOK, metal3api.StateAvailable)
+		withHW := withHardwareDetails(newBMH("host-with-hw", defaultLabels(), metal3api.OperationalStatusOK, metal3api.StateAvailable), testNIC("AA:BB:CC:DD:EE:01"))
+
+		m := newMetal3ClientForTest(noHardware, withHW)
+		host, err := m.FindFreeHost(ctx, map[string]string{"hostType": "gpu-node"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if host == nil {
+			t.Fatal("expected host (one candidate has HardwareDetails), got nil")
+		}
+		if host.Name != "host-with-hw" {
+			t.Errorf("expected host-with-hw, got %q", host.Name)
 		}
 	})
 }
@@ -482,6 +555,78 @@ func TestUnassignHost(t *testing.T) {
 		err := m.UnassignHost(ctx, "invalid-id", nil)
 		if err == nil {
 			t.Fatal("expected error for invalid hostID, got nil")
+		}
+	})
+}
+
+// --- GetHostNICs ---
+
+func TestGetHostNICs(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("returns lowercased MACs from HardwareDetails NIC list", func(t *testing.T) {
+		bmh := withHardwareDetails(
+			newBMH("host-1", defaultLabels(), metal3api.OperationalStatusOK, metal3api.StateAvailable),
+			testNIC("AA:BB:CC:DD:EE:01"),
+			testNIC("aa:bb:cc:dd:ee:02"),
+			testNIC("FF:00:11:22:33:44"),
+		)
+
+		m := newMetal3ClientForTest(bmh)
+		nics, err := m.GetHostNICs(ctx, testNamespace+"/host-1")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(nics) != 3 {
+			t.Fatalf("expected 3 NICs, got %d", len(nics))
+		}
+		wantMACs := []string{"aa:bb:cc:dd:ee:01", "aa:bb:cc:dd:ee:02", "ff:00:11:22:33:44"}
+		for i, want := range wantMACs {
+			if nics[i].MAC != want {
+				t.Errorf("NIC[%d].MAC = %q, want %q", i, nics[i].MAC, want)
+			}
+		}
+	})
+
+	t.Run("returns empty slice when HardwareDetails is nil", func(t *testing.T) {
+		bmh := newBMH("host-no-hw", defaultLabels(), metal3api.OperationalStatusOK, metal3api.StateAvailable)
+
+		m := newMetal3ClientForTest(bmh)
+		nics, err := m.GetHostNICs(ctx, testNamespace+"/host-no-hw")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(nics) != 0 {
+			t.Errorf("expected empty NIC list, got %v", nics)
+		}
+	})
+
+	t.Run("returns empty slice when NIC list is empty", func(t *testing.T) {
+		bmh := withHardwareDetails(newBMH("host-empty-nics", defaultLabels(), metal3api.OperationalStatusOK, metal3api.StateAvailable))
+
+		m := newMetal3ClientForTest(bmh)
+		nics, err := m.GetHostNICs(ctx, testNamespace+"/host-empty-nics")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(nics) != 0 {
+			t.Errorf("expected empty NIC list, got %v", nics)
+		}
+	})
+
+	t.Run("returns error for invalid inventoryHostID format", func(t *testing.T) {
+		m := newMetal3ClientForTest()
+		_, err := m.GetHostNICs(ctx, "invalid-no-slash")
+		if err == nil {
+			t.Fatal("expected error for invalid hostID, got nil")
+		}
+	})
+
+	t.Run("returns error when BareMetalHost not found", func(t *testing.T) {
+		m := newMetal3ClientForTest()
+		_, err := m.GetHostNICs(ctx, testNamespace+"/nonexistent-host")
+		if err == nil {
+			t.Fatal("expected error for missing BMH, got nil")
 		}
 	})
 }

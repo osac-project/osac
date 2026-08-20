@@ -409,7 +409,7 @@ func (r *BareMetalInstanceReconciler) reconcileManagement(ctx context.Context, b
 
 	if err := r.reconcileNICMetadata(ctx, bareMetalInstance); err != nil {
 		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
-		return ctrl.Result{}, err
+		return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, err
 	}
 
 	bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseReady

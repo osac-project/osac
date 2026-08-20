@@ -16,5 +16,5 @@ stringData:
     type: metal3
     options:
       metal3:
-        namespace: {{ .Values.bcm.bmhNamespace }}
+        namespace: {{ .Values.bcm.bmhNamespace | quote }}
 {{- end }}

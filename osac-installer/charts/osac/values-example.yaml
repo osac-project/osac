@@ -301,11 +301,9 @@ aap:
 # Bare Metal Fulfillment Operator — BCM Backend
 # ---------------------
 # BCM (NVIDIA Base Command Manager) inventory backend configuration for BMaaS.
-# When enabled, the chart creates osac-inventory-config and osac-management-config
-# Secrets with BCM backend type, and mounts the mTLS credentials volume into the
-# BMF operator pod at /etc/osac/certs/<credentialsSecret>/.
-# The BCM mTLS credentials Secret (tls.crt + tls.key) must be pre-created in the
-# install namespace before deploying.
+# When enabled, the chart creates osac-inventory-config, osac-management-config,
+# and osac-bcm-certs Secrets with BCM backend configuration.
+# The cert volume mount is handled by the operator wiring PR (#354).
 bmf:
   bcm:
     # Set to true to create BCM config secrets via Helm and mount mTLS certs.

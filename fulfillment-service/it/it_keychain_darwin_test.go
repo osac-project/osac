@@ -16,7 +16,7 @@ language governing permissions and limitations under the License.
 // WARNING: This file contains plain (non-Ginkgo) Go tests — the first in the it package.
 // Run ONLY with:
 //
-//	go test -run TestProvisionTestKeychain ./it/...
+//	go test -run 'TestProvisionTestKeychain|TestNewCLIHomeDir' ./it/...
 //
 // A bare `go test ./it/...` or `ginkgo run it` will also sweep in the full TestIntegration
 // Ginkgo suite, which brings up a kind cluster and takes ~15-17 minutes.
@@ -26,11 +26,40 @@ language governing permissions and limitations under the License.
 package it
 
 import (
+	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// currentDefaultKeychainPath runs `security default-keychain` scoped to dir's HOME and
+// returns the unquoted path it reports.
+func currentDefaultKeychainPath(t *testing.T, dir string) string {
+	t.Helper()
+
+	cmd := exec.Command(securityBinPath, "default-keychain")
+	cmd.Env = keychainEnv(dir)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("security default-keychain: %v: %s", err, out)
+	}
+	return strings.Trim(strings.TrimSpace(string(out)), "\"")
+}
+
+// expectedKeychainPath returns the path provisionTestKeychain is expected to have set as
+// dir's default keychain.
+func expectedKeychainPath(t *testing.T, dir string) string {
+	t.Helper()
+
+	// macOS resolves /var -> /private/var via symlink; normalize both sides.
+	resolvedDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%q): %v", dir, err)
+	}
+	return filepath.Join(resolvedDir, "Library", "Keychains", "login.keychain-db")
+}
 
 func TestProvisionTestKeychain_CreatesResolvableDefaultKeychain(t *testing.T) {
 	dir := t.TempDir()
@@ -39,24 +68,31 @@ func TestProvisionTestKeychain_CreatesResolvableDefaultKeychain(t *testing.T) {
 		t.Fatalf("provisionTestKeychain: %v", err)
 	}
 
-	cmd := exec.Command(securityBinPath, "default-keychain")
-	cmd.Env = keychainEnv(dir)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("security default-keychain: %v: %s", err, out)
-	}
-
-	got := strings.TrimSpace(string(out))
-	got = strings.Trim(got, "\"")
-
-	// macOS resolves /var -> /private/var via symlink; normalize both sides.
-	resolvedDir, err := filepath.EvalSymlinks(dir)
-	if err != nil {
-		t.Fatalf("EvalSymlinks(%q): %v", dir, err)
-	}
-	want := resolvedDir + "/Library/Keychains/login.keychain-db"
+	got, want := currentDefaultKeychainPath(t, dir), expectedKeychainPath(t, dir)
 	if got != want {
 		t.Errorf("default keychain = %q, want %q", got, want)
+	}
+
+	info, err := os.Stat(want)
+	if err != nil {
+		t.Fatalf("os.Stat(%q): %v", want, err)
+	}
+	if perm := info.Mode().Perm(); perm != 0600 {
+		t.Errorf("keychain file mode = %o, want %o", perm, 0600)
+	}
+
+	// show-keychain-info's text output is undocumented and could change across macOS
+	// versions; if this assertion starts failing on a newer macos-latest CI image, check
+	// the actual output format before assuming provisionTestKeychain regressed.
+	infoOut, err := exec.Command(securityBinPath, "show-keychain-info", want).CombinedOutput()
+	if err != nil {
+		t.Fatalf("security show-keychain-info: %v: %s", err, infoOut)
+	}
+	if strings.Contains(string(infoOut), "lock-on-sleep") {
+		t.Errorf("keychain settings report lock-on-sleep enabled: %s", infoOut)
+	}
+	if strings.Contains(string(infoOut), "timeout=") {
+		t.Errorf("keychain settings report a lock timeout: %s", infoOut)
 	}
 }
 
@@ -102,13 +138,17 @@ func TestProvisionTestKeychain_RoundTrip(t *testing.T) {
 	}
 
 	env := keychainEnv(dir)
-	keychainPath := dir + "/Library/Keychains/login.keychain-db"
 
+	// Matches go-keyring's Set() flag shape: -U (update-if-exists) and no keychain path
+	// argument, relying on default-keychain resolution instead. The real Set() dispatches
+	// via `security -i` with shell-escaped, base64-wrapped stdin input rather than this
+	// direct argv call — but both forms reach the same underlying Keychain Services write
+	// API, which is what this test actually exercises.
 	addCmd := exec.Command(securityBinPath, "add-generic-password",
+		"-U",
 		"-a", "osac-test-account",
 		"-s", "osac-test-service",
 		"-w", "test-secret-value",
-		keychainPath,
 	)
 	addCmd.Env = env
 	if out, err := addCmd.CombinedOutput(); err != nil {
@@ -119,7 +159,6 @@ func TestProvisionTestKeychain_RoundTrip(t *testing.T) {
 		"-a", "osac-test-account",
 		"-s", "osac-test-service",
 		"-w",
-		keychainPath,
 	)
 	findCmd.Env = env
 	out, err := findCmd.CombinedOutput()
@@ -130,5 +169,110 @@ func TestProvisionTestKeychain_RoundTrip(t *testing.T) {
 	got := strings.TrimSpace(string(out))
 	if got != "test-secret-value" {
 		t.Errorf("round-trip value = %q, want %q", got, "test-secret-value")
+	}
+}
+
+func TestProvisionTestKeychain_SubprocessFailures(t *testing.T) {
+	tests := []struct {
+		name       string
+		failOn     string
+		wantErrMsg string
+	}{
+		{"CreateKeychain", "create-keychain", "failed to create test keychain"},
+		{"DisableAutoLock", "set-keychain-settings", "failed to disable keychain auto-lock"},
+		{"SetDefaultKeychain", "default-keychain", "failed to set default keychain"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stubDir := t.TempDir()
+			stubPath := filepath.Join(stubDir, "security")
+			// Fails only on the targeted subcommand; otherwise succeeds. On a
+			// non-failing create-keychain, it touches the keychain file so the real
+			// os.Chmod call between create-keychain and set-keychain-settings doesn't
+			// itself fail on a missing file.
+			script := fmt.Sprintf(`#!/bin/sh
+if [ "$1" = %q ]; then
+	exit 1
+fi
+if [ "$1" = "create-keychain" ]; then
+	for arg in "$@"; do :; done
+	touch "$arg"
+fi
+exit 0
+`, tt.failOn)
+			if err := os.WriteFile(stubPath, []byte(script), 0755); err != nil {
+				t.Fatalf("os.WriteFile(%q): %v", stubPath, err)
+			}
+
+			original := securityBinPath
+			securityBinPath = stubPath
+			t.Cleanup(func() { securityBinPath = original })
+
+			dir := t.TempDir()
+			err := provisionTestKeychain(dir)
+			if err == nil {
+				t.Fatal("provisionTestKeychain: expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.wantErrMsg) {
+				t.Errorf("provisionTestKeychain error = %q, want substring %q", err.Error(), tt.wantErrMsg)
+			}
+		})
+	}
+}
+
+func TestNewCLIHomeDir_ProvisionsResolvableKeychain(t *testing.T) {
+	tool := &Tool{}
+
+	dir, err := tool.NewCLIHomeDir()
+	if err != nil {
+		t.Fatalf("NewCLIHomeDir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("returned dir does not exist: %v", err)
+	}
+
+	got, want := currentDefaultKeychainPath(t, dir), expectedKeychainPath(t, dir)
+	if got != want {
+		t.Errorf("default keychain = %q, want %q", got, want)
+	}
+}
+
+func TestNewCLIHomeDir_ProvisioningFailureCleansUp(t *testing.T) {
+	stubDir := t.TempDir()
+	stubPath := filepath.Join(stubDir, "security")
+	if err := os.WriteFile(stubPath, []byte("#!/bin/sh\nexit 1\n"), 0755); err != nil {
+		t.Fatalf("os.WriteFile(%q): %v", stubPath, err)
+	}
+
+	original := securityBinPath
+	securityBinPath = stubPath
+	t.Cleanup(func() { securityBinPath = original })
+
+	before, err := filepath.Glob(filepath.Join(os.TempDir(), "*.cli-home"))
+	if err != nil {
+		t.Fatalf("filepath.Glob (before): %v", err)
+	}
+
+	tool := &Tool{}
+	dir, err := tool.NewCLIHomeDir()
+	if err == nil {
+		t.Fatalf("NewCLIHomeDir: expected error, got nil (dir=%q)", dir)
+	}
+	if !strings.Contains(err.Error(), "failed to provision test keychain") {
+		t.Errorf("NewCLIHomeDir error = %q, want substring %q", err.Error(), "failed to provision test keychain")
+	}
+	if dir != "" {
+		t.Errorf("NewCLIHomeDir dir = %q, want empty string on error", dir)
+	}
+
+	after, err := filepath.Glob(filepath.Join(os.TempDir(), "*.cli-home"))
+	if err != nil {
+		t.Fatalf("filepath.Glob (after): %v", err)
+	}
+	if len(after) != len(before) {
+		t.Errorf("leaked *.cli-home temp dir(s): before=%d after=%d", len(before), len(after))
 	}
 }

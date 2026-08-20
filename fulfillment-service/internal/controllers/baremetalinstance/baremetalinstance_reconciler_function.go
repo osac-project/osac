@@ -470,6 +470,18 @@ func (t *task) syncStatus(object *bmfov1alpha1.BareMetalInstance) {
 	}
 	t.bareMetalInstance.GetStatus().SetNetworkAttachmentStatuses(protoStatuses)
 
+	if hw := object.Status.Hardware; hw != nil {
+		protoNICs := make([]*privatev1.BareMetalNICStatus, 0, len(hw.NICs))
+		for _, n := range hw.NICs {
+			protoNICs = append(protoNICs, privatev1.BareMetalNICStatus_builder{
+				Mac: n.MAC,
+			}.Build())
+		}
+		t.bareMetalInstance.GetStatus().SetHardware(privatev1.BareMetalHardware_builder{
+			Nics: protoNICs,
+		}.Build())
+	}
+
 	restartPending := t.bareMetalInstance.GetSpec().GetRestartTrigger() != t.bareMetalInstance.GetStatus().GetRestartTrigger()
 
 	for _, cond := range object.Status.Conditions {

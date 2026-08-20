@@ -5,8 +5,8 @@
 {{- if not .Values.bcm.credentialsSecret }}
 {{- fail "bcm.enabled is true but bcm.credentialsSecret is not set" }}
 {{- end }}
-{{- if not .Values.bcm.metal3Namespace }}
-{{- fail "bcm.enabled is true but bcm.metal3Namespace is not set" }}
+{{- if not .Values.bcm.bmhNamespace }}
+{{- fail "bcm.enabled is true but bcm.bmhNamespace is not set" }}
 {{- end }}
 apiVersion: v1
 kind: Secret

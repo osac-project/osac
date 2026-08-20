@@ -325,7 +325,7 @@ bmf:
     # [REQUIRED when enabled] Namespace where BareMetalHost CRs are created.
     # BCM uses Metal3 for power management via BareMetalHost CRs.
     # Example: "hardware-inventory"
-    metal3Namespace: ""
+    bmhNamespace: ""
 
 # ---------------------
 # Bundled PostgreSQL (dev/test)

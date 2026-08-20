@@ -269,7 +269,7 @@ bmf:
     credentialsSecret: ""
     insecureSkipVerify: false
     hostClass: "bcm"
-    metal3Namespace: ""
+    bmhNamespace: ""
 
 # --- Validation hooks ---
 validation:

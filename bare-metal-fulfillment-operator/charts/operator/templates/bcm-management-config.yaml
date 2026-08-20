@@ -1,6 +1,6 @@
 {{- if .Values.bcm.enabled }}
-{{- if not .Values.bcm.metal3Namespace }}
-{{- fail "bcm.enabled is true but bcm.metal3Namespace is not set" }}
+{{- if not .Values.bcm.bmhNamespace }}
+{{- fail "bcm.enabled is true but bcm.bmhNamespace is not set" }}
 {{- end }}
 apiVersion: v1
 kind: Secret
@@ -16,5 +16,5 @@ stringData:
     type: metal3
     options:
       metal3:
-        namespace: {{ .Values.bcm.metal3Namespace }}
+        namespace: {{ .Values.bcm.bmhNamespace }}
 {{- end }}

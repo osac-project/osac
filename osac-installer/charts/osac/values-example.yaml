@@ -303,7 +303,7 @@ aap:
 # BCM (NVIDIA Base Command Manager) inventory backend configuration for BMaaS.
 # When enabled, the chart creates osac-inventory-config, osac-management-config,
 # and osac-bcm-certs Secrets with BCM backend configuration.
-# The cert volume mount is handled by the operator wiring PR (#354).
+# The cert volume mount is handled by the operator wiring and sync script.
 bmf:
   bcm:
     # Set to true to create BCM config secrets via Helm and mount mTLS certs.

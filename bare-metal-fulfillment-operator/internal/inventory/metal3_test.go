@@ -53,25 +53,6 @@ func newMetal3ClientForTest(objects ...client.Object) *Metal3Client {
 	}
 }
 
-func newBMH(name string, labels map[string]string, opStatus metal3api.OperationalStatus, provState metal3api.ProvisioningState) *metal3api.BareMetalHost {
-	if labels == nil {
-		labels = map[string]string{}
-	}
-	return &metal3api.BareMetalHost{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: testNamespace,
-			Labels:    labels,
-		},
-		Status: metal3api.BareMetalHostStatus{
-			OperationalStatus: opStatus,
-			Provisioning: metal3api.ProvisionStatus{
-				State: provState,
-			},
-		},
-	}
-}
-
 func defaultLabels() map[string]string {
 	return map[string]string{
 		Metal3HostTypeLabel:  "gpu-node",
@@ -79,13 +60,87 @@ func defaultLabels() map[string]string {
 	}
 }
 
-func withHardwareDetails(bmh *metal3api.BareMetalHost, nics ...metal3api.NIC) *metal3api.BareMetalHost {
-	bmh.Status.HardwareDetails = &metal3api.HardwareDetails{NIC: nics}
-	return bmh
-}
-
 func testNIC(mac string) metal3api.NIC {
 	return metal3api.NIC{MAC: mac}
+}
+
+type bmhBuilder struct {
+	name               string
+	labels             map[string]string
+	annotations        map[string]string
+	opStatus           metal3api.OperationalStatus
+	provState          metal3api.ProvisioningState
+	consumerRef        *corev1.ObjectReference
+	nics               []metal3api.NIC
+	hasHardwareDetails bool
+}
+
+func newBMHBuilder(name string) *bmhBuilder {
+	return &bmhBuilder{
+		name:      name,
+		labels:    defaultLabels(),
+		opStatus:  metal3api.OperationalStatusOK,
+		provState: metal3api.StateAvailable,
+	}
+}
+
+func (b *bmhBuilder) WithLabels(labels map[string]string) *bmhBuilder {
+	b.labels = labels
+	return b
+}
+
+func (b *bmhBuilder) WithAnnotations(annotations map[string]string) *bmhBuilder {
+	b.annotations = annotations
+	return b
+}
+
+func (b *bmhBuilder) WithOpStatus(opStatus metal3api.OperationalStatus) *bmhBuilder {
+	b.opStatus = opStatus
+	return b
+}
+
+func (b *bmhBuilder) WithProvState(provState metal3api.ProvisioningState) *bmhBuilder {
+	b.provState = provState
+	return b
+}
+
+func (b *bmhBuilder) WithConsumerRef(ref *corev1.ObjectReference) *bmhBuilder {
+	b.consumerRef = ref
+	return b
+}
+
+func (b *bmhBuilder) WithNICs(nics ...metal3api.NIC) *bmhBuilder {
+	b.hasHardwareDetails = true
+	b.nics = nics
+	return b
+}
+
+func (b *bmhBuilder) Build() *metal3api.BareMetalHost {
+	labels := b.labels
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	bmh := &metal3api.BareMetalHost{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        b.name,
+			Namespace:   testNamespace,
+			Labels:      labels,
+			Annotations: b.annotations,
+		},
+		Spec: metal3api.BareMetalHostSpec{
+			ConsumerRef: b.consumerRef,
+		},
+		Status: metal3api.BareMetalHostStatus{
+			OperationalStatus: b.opStatus,
+			Provisioning: metal3api.ProvisionStatus{
+				State: b.provState,
+			},
+		},
+	}
+	if b.hasHardwareDetails {
+		bmh.Status.HardwareDetails = &metal3api.HardwareDetails{NIC: b.nics}
+	}
+	return bmh
 }
 
 // --- ParseHostID ---
@@ -161,7 +216,7 @@ func TestFindFreeHost(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("returns matching unassigned host", func(t *testing.T) {
-		bmh := withHardwareDetails(newBMH("host-1", defaultLabels(), metal3api.OperationalStatusOK, metal3api.StateAvailable), testNIC("AA:BB:CC:DD:EE:01"))
+		bmh := newBMHBuilder("host-1").WithNICs(testNIC("AA:BB:CC:DD:EE:01")).Build()
 
 		m := newMetal3ClientForTest(bmh)
 		host, err := m.FindFreeHost(ctx, map[string]string{"hostType": "gpu-node"})
@@ -192,8 +247,7 @@ func TestFindFreeHost(t *testing.T) {
 	})
 
 	t.Run("excludes hosts with consumerRef set", func(t *testing.T) {
-		bmh := newBMH("host-consumed", defaultLabels(), metal3api.OperationalStatusOK, metal3api.StateAvailable)
-		bmh.Spec.ConsumerRef = &corev1.ObjectReference{Name: "some-consumer"}
+		bmh := newBMHBuilder("host-consumed").WithConsumerRef(&corev1.ObjectReference{Name: "some-consumer"}).Build()
 
 		m := newMetal3ClientForTest(bmh)
 		host, err := m.FindFreeHost(ctx, map[string]string{"hostType": "gpu-node"})
@@ -206,7 +260,7 @@ func TestFindFreeHost(t *testing.T) {
 	})
 
 	t.Run("excludes hosts with non-ok operational status", func(t *testing.T) {
-		bmh := newBMH("host-error", defaultLabels(), metal3api.OperationalStatusError, metal3api.StateAvailable)
+		bmh := newBMHBuilder("host-error").WithOpStatus(metal3api.OperationalStatusError).Build()
 
 		m := newMetal3ClientForTest(bmh)
 		host, err := m.FindFreeHost(ctx, map[string]string{"hostType": "gpu-node"})
@@ -219,7 +273,7 @@ func TestFindFreeHost(t *testing.T) {
 	})
 
 	t.Run("excludes hosts with unacceptable provisioning state", func(t *testing.T) {
-		bmh := newBMH("host-provisioning", defaultLabels(), metal3api.OperationalStatusOK, metal3api.StateProvisioning)
+		bmh := newBMHBuilder("host-provisioning").WithProvState(metal3api.StateProvisioning).Build()
 
 		m := newMetal3ClientForTest(bmh)
 		host, err := m.FindFreeHost(ctx, map[string]string{"hostType": "gpu-node"})
@@ -234,8 +288,8 @@ func TestFindFreeHost(t *testing.T) {
 	t.Run("filters by host type label", func(t *testing.T) {
 		gpuLabels := map[string]string{Metal3HostTypeLabel: "gpu-node", Metal3ManagedByLabel: "baremetal"}
 		cpuLabels := map[string]string{Metal3HostTypeLabel: "cpu-node", Metal3ManagedByLabel: "baremetal"}
-		gpuHost := withHardwareDetails(newBMH("host-gpu", gpuLabels, metal3api.OperationalStatusOK, metal3api.StateAvailable), testNIC("AA:BB:CC:DD:EE:01"))
-		cpuHost := withHardwareDetails(newBMH("host-cpu", cpuLabels, metal3api.OperationalStatusOK, metal3api.StateAvailable), testNIC("AA:BB:CC:DD:EE:02"))
+		gpuHost := newBMHBuilder("host-gpu").WithLabels(gpuLabels).WithNICs(testNIC("AA:BB:CC:DD:EE:01")).Build()
+		cpuHost := newBMHBuilder("host-cpu").WithLabels(cpuLabels).WithNICs(testNIC("AA:BB:CC:DD:EE:02")).Build()
 
 		m := newMetal3ClientForTest(gpuHost, cpuHost)
 		host, err := m.FindFreeHost(ctx, map[string]string{"hostType": "gpu-node"})
@@ -252,7 +306,7 @@ func TestFindFreeHost(t *testing.T) {
 
 	t.Run("filters by managed-by label mismatch", func(t *testing.T) {
 		labels := map[string]string{Metal3HostTypeLabel: "gpu-node", Metal3ManagedByLabel: "agent"}
-		bmh := newBMH("host-agent", labels, metal3api.OperationalStatusOK, metal3api.StateAvailable)
+		bmh := newBMHBuilder("host-agent").WithLabels(labels).Build()
 
 		m := newMetal3ClientForTest(bmh)
 		host, err := m.FindFreeHost(ctx, map[string]string{"hostType": "gpu-node"})
@@ -266,7 +320,7 @@ func TestFindFreeHost(t *testing.T) {
 
 	t.Run("filters by explicit managed-by match expression", func(t *testing.T) {
 		labels := map[string]string{Metal3HostTypeLabel: "gpu-node", Metal3ManagedByLabel: "agent"}
-		bmh := withHardwareDetails(newBMH("host-agent", labels, metal3api.OperationalStatusOK, metal3api.StateAvailable), testNIC("AA:BB:CC:DD:EE:01"))
+		bmh := newBMHBuilder("host-agent").WithLabels(labels).WithNICs(testNIC("AA:BB:CC:DD:EE:01")).Build()
 
 		m := newMetal3ClientForTest(bmh)
 		host, err := m.FindFreeHost(ctx, map[string]string{
@@ -294,7 +348,7 @@ func TestFindFreeHost(t *testing.T) {
 
 	t.Run("matches hosts without hostType filter", func(t *testing.T) {
 		labels := map[string]string{Metal3ManagedByLabel: "baremetal"}
-		bmh := withHardwareDetails(newBMH("host-any", labels, metal3api.OperationalStatusOK, metal3api.StateAvailable), testNIC("AA:BB:CC:DD:EE:01"))
+		bmh := newBMHBuilder("host-any").WithLabels(labels).WithNICs(testNIC("AA:BB:CC:DD:EE:01")).Build()
 
 		m := newMetal3ClientForTest(bmh)
 		host, err := m.FindFreeHost(ctx, map[string]string{})
@@ -308,7 +362,7 @@ func TestFindFreeHost(t *testing.T) {
 
 	t.Run("defaults managed-by to baremetal when label is absent", func(t *testing.T) {
 		labels := map[string]string{Metal3HostTypeLabel: "gpu-node"}
-		bmh := withHardwareDetails(newBMH("host-no-managed-by", labels, metal3api.OperationalStatusOK, metal3api.StateAvailable), testNIC("AA:BB:CC:DD:EE:01"))
+		bmh := newBMHBuilder("host-no-managed-by").WithLabels(labels).WithNICs(testNIC("AA:BB:CC:DD:EE:01")).Build()
 
 		m := newMetal3ClientForTest(bmh)
 		host, err := m.FindFreeHost(ctx, map[string]string{"hostType": "gpu-node"})
@@ -325,7 +379,7 @@ func TestFindFreeHost(t *testing.T) {
 
 	t.Run("excludes hosts with no managed-by label when explicit managedBy filter differs", func(t *testing.T) {
 		labels := map[string]string{Metal3HostTypeLabel: "gpu-node"}
-		bmh := newBMH("host-no-managed-by", labels, metal3api.OperationalStatusOK, metal3api.StateAvailable)
+		bmh := newBMHBuilder("host-no-managed-by").WithLabels(labels).Build()
 
 		m := newMetal3ClientForTest(bmh)
 		host, err := m.FindFreeHost(ctx, map[string]string{
@@ -341,11 +395,10 @@ func TestFindFreeHost(t *testing.T) {
 	})
 
 	t.Run("skips host with inspect.metal3.io disabled annotation", func(t *testing.T) {
-		bmh := withHardwareDetails(newBMH("host-inspect-disabled", defaultLabels(), metal3api.OperationalStatusOK, metal3api.StateAvailable), testNIC("AA:BB:CC:DD:EE:01"))
-		if bmh.Annotations == nil {
-			bmh.Annotations = map[string]string{}
-		}
-		bmh.Annotations["inspect.metal3.io"] = "disabled"
+		bmh := newBMHBuilder("host-inspect-disabled").
+			WithAnnotations(map[string]string{"inspect.metal3.io": "disabled"}).
+			WithNICs(testNIC("AA:BB:CC:DD:EE:01")).
+			Build()
 
 		m := newMetal3ClientForTest(bmh)
 		host, err := m.FindFreeHost(ctx, map[string]string{"hostType": "gpu-node"})
@@ -358,11 +411,10 @@ func TestFindFreeHost(t *testing.T) {
 	})
 
 	t.Run("includes host when inspect.metal3.io annotation has non-disabled value", func(t *testing.T) {
-		bmh := withHardwareDetails(newBMH("host-inspect-other", defaultLabels(), metal3api.OperationalStatusOK, metal3api.StateAvailable), testNIC("AA:BB:CC:DD:EE:01"))
-		if bmh.Annotations == nil {
-			bmh.Annotations = map[string]string{}
-		}
-		bmh.Annotations["inspect.metal3.io"] = "metadata"
+		bmh := newBMHBuilder("host-inspect-other").
+			WithAnnotations(map[string]string{"inspect.metal3.io": "metadata"}).
+			WithNICs(testNIC("AA:BB:CC:DD:EE:01")).
+			Build()
 
 		m := newMetal3ClientForTest(bmh)
 		host, err := m.FindFreeHost(ctx, map[string]string{"hostType": "gpu-node"})
@@ -375,7 +427,7 @@ func TestFindFreeHost(t *testing.T) {
 	})
 
 	t.Run("skips host with nil HardwareDetails", func(t *testing.T) {
-		bmh := newBMH("host-no-hardware", defaultLabels(), metal3api.OperationalStatusOK, metal3api.StateAvailable)
+		bmh := newBMHBuilder("host-no-hardware").Build()
 
 		m := newMetal3ClientForTest(bmh)
 		host, err := m.FindFreeHost(ctx, map[string]string{"hostType": "gpu-node"})
@@ -388,7 +440,7 @@ func TestFindFreeHost(t *testing.T) {
 	})
 
 	t.Run("skips host with empty NIC list", func(t *testing.T) {
-		bmh := withHardwareDetails(newBMH("host-empty-nics", defaultLabels(), metal3api.OperationalStatusOK, metal3api.StateAvailable))
+		bmh := newBMHBuilder("host-empty-nics").WithNICs().Build()
 
 		m := newMetal3ClientForTest(bmh)
 		host, err := m.FindFreeHost(ctx, map[string]string{"hostType": "gpu-node"})
@@ -401,8 +453,8 @@ func TestFindFreeHost(t *testing.T) {
 	})
 
 	t.Run("selects host with HardwareDetails when multiple candidates exist", func(t *testing.T) {
-		noHardware := newBMH("host-no-hw", defaultLabels(), metal3api.OperationalStatusOK, metal3api.StateAvailable)
-		withHW := withHardwareDetails(newBMH("host-with-hw", defaultLabels(), metal3api.OperationalStatusOK, metal3api.StateAvailable), testNIC("AA:BB:CC:DD:EE:01"))
+		noHardware := newBMHBuilder("host-no-hw").Build()
+		withHW := newBMHBuilder("host-with-hw").WithNICs(testNIC("AA:BB:CC:DD:EE:01")).Build()
 
 		m := newMetal3ClientForTest(noHardware, withHW)
 		host, err := m.FindFreeHost(ctx, map[string]string{"hostType": "gpu-node"})
@@ -424,7 +476,7 @@ func TestAssignHost(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("assigns host with labels and consumerRef", func(t *testing.T) {
-		bmh := newBMH("host-1", defaultLabels(), metal3api.OperationalStatusOK, metal3api.StateAvailable)
+		bmh := newBMHBuilder("host-1").Build()
 
 		m := newMetal3ClientForTest(bmh)
 		host, err := m.AssignHost(ctx, testNamespace+"/host-1", "instance-123", map[string]string{
@@ -456,8 +508,7 @@ func TestAssignHost(t *testing.T) {
 	})
 
 	t.Run("returns nil if host has consumerRef for a different consumer", func(t *testing.T) {
-		bmh := newBMH("host-taken", defaultLabels(), metal3api.OperationalStatusOK, metal3api.StateAvailable)
-		bmh.Spec.ConsumerRef = &corev1.ObjectReference{Name: "other-instance"}
+		bmh := newBMHBuilder("host-taken").WithConsumerRef(&corev1.ObjectReference{Name: "other-instance"}).Build()
 
 		m := newMetal3ClientForTest(bmh)
 		host, err := m.AssignHost(ctx, testNamespace+"/host-taken", "my-instance", nil)
@@ -470,8 +521,7 @@ func TestAssignHost(t *testing.T) {
 	})
 
 	t.Run("succeeds if host is already assigned to the same instance", func(t *testing.T) {
-		bmh := newBMH("host-mine", defaultLabels(), metal3api.OperationalStatusOK, metal3api.StateAvailable)
-		bmh.Spec.ConsumerRef = &corev1.ObjectReference{Name: "my-instance"}
+		bmh := newBMHBuilder("host-mine").WithConsumerRef(&corev1.ObjectReference{Name: "my-instance"}).Build()
 
 		m := newMetal3ClientForTest(bmh)
 		host, err := m.AssignHost(ctx, testNamespace+"/host-mine", "my-instance", nil)
@@ -514,12 +564,14 @@ func TestUnassignHost(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("removes labels and clears consumerRef", func(t *testing.T) {
-		bmh := newBMH("host-1", map[string]string{
-			Metal3HostTypeLabel:               "gpu-node",
-			Metal3ManagedByLabel:              "baremetal",
-			metal3LabelPrefix + "profileName": "myProfile",
-		}, metal3api.OperationalStatusOK, metal3api.StateAvailable)
-		bmh.Spec.ConsumerRef = &corev1.ObjectReference{Name: "instance-123"}
+		bmh := newBMHBuilder("host-1").
+			WithLabels(map[string]string{
+				Metal3HostTypeLabel:               "gpu-node",
+				Metal3ManagedByLabel:              "baremetal",
+				metal3LabelPrefix + "profileName": "myProfile",
+			}).
+			WithConsumerRef(&corev1.ObjectReference{Name: "instance-123"}).
+			Build()
 
 		m := newMetal3ClientForTest(bmh)
 		err := m.UnassignHost(ctx, testNamespace+"/host-1", []string{"profileName"})
@@ -543,10 +595,10 @@ func TestUnassignHost(t *testing.T) {
 	})
 
 	t.Run("handles no additional labels to remove", func(t *testing.T) {
-		bmh := newBMH("host-2", map[string]string{
-			Metal3ManagedByLabel: "baremetal",
-		}, metal3api.OperationalStatusOK, metal3api.StateAvailable)
-		bmh.Spec.ConsumerRef = &corev1.ObjectReference{Name: "instance-456"}
+		bmh := newBMHBuilder("host-2").
+			WithLabels(map[string]string{Metal3ManagedByLabel: "baremetal"}).
+			WithConsumerRef(&corev1.ObjectReference{Name: "instance-456"}).
+			Build()
 
 		m := newMetal3ClientForTest(bmh)
 		err := m.UnassignHost(ctx, testNamespace+"/host-2", nil)
@@ -578,12 +630,11 @@ func TestGetHostNICs(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("returns lowercased MACs from HardwareDetails NIC list", func(t *testing.T) {
-		bmh := withHardwareDetails(
-			newBMH("host-1", defaultLabels(), metal3api.OperationalStatusOK, metal3api.StateAvailable),
+		bmh := newBMHBuilder("host-1").WithNICs(
 			testNIC("AA:BB:CC:DD:EE:01"),
 			testNIC("aa:bb:cc:dd:ee:02"),
 			testNIC("FF:00:11:22:33:44"),
-		)
+		).Build()
 
 		m := newMetal3ClientForTest(bmh)
 		nics, err := m.GetHostNICs(ctx, testNamespace+"/host-1")
@@ -602,7 +653,7 @@ func TestGetHostNICs(t *testing.T) {
 	})
 
 	t.Run("returns error when HardwareDetails is nil", func(t *testing.T) {
-		bmh := newBMH("host-no-hw", defaultLabels(), metal3api.OperationalStatusOK, metal3api.StateAvailable)
+		bmh := newBMHBuilder("host-no-hw").Build()
 
 		m := newMetal3ClientForTest(bmh)
 		_, err := m.GetHostNICs(ctx, testNamespace+"/host-no-hw")
@@ -612,7 +663,7 @@ func TestGetHostNICs(t *testing.T) {
 	})
 
 	t.Run("returns error when NIC list is empty despite completed inspection", func(t *testing.T) {
-		bmh := withHardwareDetails(newBMH("host-empty-nics", defaultLabels(), metal3api.OperationalStatusOK, metal3api.StateAvailable))
+		bmh := newBMHBuilder("host-empty-nics").WithNICs().Build()
 
 		m := newMetal3ClientForTest(bmh)
 		_, err := m.GetHostNICs(ctx, testNamespace+"/host-empty-nics")

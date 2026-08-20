@@ -275,7 +275,7 @@ func (m *Metal3Client) GetHostNICs(ctx context.Context, inventoryHostID string) 
 	}
 
 	if bmh.Status.HardwareDetails == nil {
-		return nil, nil
+		return nil, fmt.Errorf("BareMetalHost %s has no hardware details despite being allocated", inventoryHostID)
 	}
 
 	if len(bmh.Status.HardwareDetails.NIC) == 0 {

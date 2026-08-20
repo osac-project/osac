@@ -601,16 +601,13 @@ func TestGetHostNICs(t *testing.T) {
 		}
 	})
 
-	t.Run("returns empty slice when HardwareDetails is nil", func(t *testing.T) {
+	t.Run("returns error when HardwareDetails is nil", func(t *testing.T) {
 		bmh := newBMH("host-no-hw", defaultLabels(), metal3api.OperationalStatusOK, metal3api.StateAvailable)
 
 		m := newMetal3ClientForTest(bmh)
-		nics, err := m.GetHostNICs(ctx, testNamespace+"/host-no-hw")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if len(nics) != 0 {
-			t.Errorf("expected empty NIC list, got %v", nics)
+		_, err := m.GetHostNICs(ctx, testNamespace+"/host-no-hw")
+		if err == nil {
+			t.Fatal("expected error for nil HardwareDetails, got nil")
 		}
 	})
 

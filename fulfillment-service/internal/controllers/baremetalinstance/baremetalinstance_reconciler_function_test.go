@@ -1968,13 +1968,13 @@ var _ = Describe("syncStatus", func() {
 		Expect(cond.GetStatus()).ToNot(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
 	})
 
-	It("should propagate hardware.nics when CRD Hardware is non-nil", func() {
+	It("should propagate hardware.nics when CRD Hardware is non-nil and lowercase MACs", func() {
 		t := newTask(0)
 		object := &bmfov1alpha1.BareMetalInstance{
 			Status: bmfov1alpha1.BareMetalInstanceStatus{
 				Hardware: &bmfov1alpha1.BareMetalHardware{
 					NICs: []bmfov1alpha1.BareMetalNICStatus{
-						{MAC: "aa:bb:cc:dd:ee:01"},
+						{MAC: "AA:BB:CC:DD:EE:01"}, // uppercase input — must be lowercased
 					},
 				},
 			},

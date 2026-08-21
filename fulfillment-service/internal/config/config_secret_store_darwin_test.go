@@ -13,8 +13,9 @@ Unless required by applicable law or agreed to in writing, software distributed 
 language governing permissions and limitations under the License.
 */
 
-// WARNING: This file contains plain (non-Ginkgo) Go tests, matching it_keychain_darwin_test.go's precedent. Do not
-// add t.Parallel() to these tests while they rely on mutating the package-level securityBinPath var.
+// WARNING: This file contains plain (non-Ginkgo) Go tests, since it must be //go:build darwin-gated and the
+// existing Ginkgo suite in this package is unconditional. Do not add t.Parallel() to these tests while they rely
+// on mutating the package-level securityBinPath var.
 
 package config
 

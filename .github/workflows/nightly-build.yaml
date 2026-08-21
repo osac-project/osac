@@ -285,15 +285,15 @@ jobs:
         # already stamped on the temp branch; subchart values stamp is defense-in-depth.
         echo "Stamping osac-ui chart from pinned SHA ${UI_SHORT_SHA}..."
         if ! UI_BASE_TAG=$(resolve_bare_release_tag_at osac-ui "${UI_SHA}"); then
-          echo "::error::osac-ui has no reachable vX.Y.Z release tag at pinned SHA — cannot publish nightly UI chart"
-          exit 1
+          echo "::warning title=osac-ui::No vX.Y.Z release tag found for osac-ui — skipping sub-chart stamping"
+        else
+          UI_SUB_VERSION=$(compute_nightly_chart_version "${UI_BASE_TAG}" "${NIGHTLY_SUFFIX}")
+          stamp_osac_ui_chart osac-ui/charts/ui "${UI_SUB_VERSION}" "${UI_IMAGE_REF}"
+          helm package osac-ui/charts/ui --destination ./packaged-charts
+          helm push "./packaged-charts/osac-ui-${UI_SUB_VERSION}.tgz" "oci://${REGISTRY}/${CHARTS_REPO}"
+          append_chart_version chart-versions.txt osac-ui "${UI_SUB_VERSION}" "${UI_SHORT_SHA}" "${UI_SHA}"
+          echo "${UI_SUB_VERSION}" > osac-ui-nightly-version.txt
         fi
-        UI_SUB_VERSION=$(compute_nightly_chart_version "${UI_BASE_TAG}" "${NIGHTLY_SUFFIX}")
-        stamp_osac_ui_chart osac-ui/charts/ui "${UI_SUB_VERSION}" "${UI_IMAGE_REF}"
-        helm package osac-ui/charts/ui --destination ./packaged-charts
-        helm push "./packaged-charts/osac-ui-${UI_SUB_VERSION}.tgz" "oci://${REGISTRY}/${CHARTS_REPO}"
-        append_chart_version chart-versions.txt osac-ui "${UI_SUB_VERSION}" "${UI_SHORT_SHA}" "${UI_SHA}"
-        echo "${UI_SUB_VERSION}" > osac-ui-nightly-version.txt
 
     - name: Build umbrella chart dependencies
       env:
@@ -559,3 +559,26 @@ jobs:
         curl -sf --max-time 15 -X POST "${SLACK_WEBHOOK_URL}" \
           -H "Content-Type: application/json" \
           -d @/tmp/slack-payload.json
+
+  # -------------------------------------------------------------------
+  # Job 6: Cleanup — delete temp branch (always, success or failure)
+  # -------------------------------------------------------------------
+  cleanup:
+    name: Cleanup temp branch
+    needs: [prepare, e2e-test, publish, tag-and-notify, notify-failure]
+    runs-on: ubuntu-latest
+    if: always()
+    permissions:
+      contents: write
+    env:
+      NIGHTLY_BRANCH: ${{ needs.prepare.outputs.temp-branch }}
+
+    steps:
+    - name: Delete temporary branch
+      run: |
+        set -euo pipefail
+        if [[ -z "${NIGHTLY_BRANCH}" ]]; then
+          echo "No temp branch to delete (prepare may not have pushed one)"
+          exit 0
+        fi
+        git push origin --delete "${NIGHTLY_BRANCH}" || true

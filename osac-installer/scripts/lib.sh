@@ -204,7 +204,7 @@ resolve_bare_release_tag_at() {
     local tag
     local validate_regex='^v[0-9]+\.[0-9]+\.[0-9]+$'
 
-    if ! tag=$(git -C "${path}" describe --tags --match 'v[0-9]*' --abbrev=0 --exclude '*-nightly*' "${ref}" 2>/dev/null); then
+    if ! tag=$(git -C "${path}" describe --tags --match 'v[0-9]*.[0-9]*.[0-9]*' --abbrev=0 --exclude '*-nightly*' "${ref}" 2>/dev/null); then
         echo "ERROR: no vX.Y.Z release tag reachable from ${ref} in ${path}" >&2
         return 1
     fi

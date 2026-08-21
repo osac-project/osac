@@ -138,11 +138,11 @@ and osac-csi-driver are all mono-repo-resident directories checked out at the
 repository root, not submodules -- they share this repo's own commit history
 with osac-installer itself (there are no submodules under `base/` any longer).
 There is deliberately no image-tag pinning/syncing in `values/*/values.yaml` for
-fulfillment-service, osac-operator, osac-aap, and bare-metal-fulfillment-operator:
-CI values files use the live tag published by each component's own workflow --
-`main` for fulfillment-service (the only one of the four that doesn't publish a
-current `latest`) and `latest` for osac-operator, osac-aap, and
-bare-metal-fulfillment-operator.
+fulfillment-service, osac-operator, osac-aap, bare-metal-fulfillment-operator,
+and osac-csi-driver: CI values files use the live tag published by each
+component's own workflow -- `main` for fulfillment-service (the only one of the
+five that doesn't publish a current `latest`) and `latest` for osac-operator,
+osac-aap, bare-metal-fulfillment-operator, and osac-csi-driver.
 There is no separate commit/tag to keep in sync and no bump-bot involved.
 
 Prerequisites are installed via Phase 1 (`make install-operators`) and Phase 2

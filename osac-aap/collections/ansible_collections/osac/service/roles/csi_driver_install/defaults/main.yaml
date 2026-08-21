@@ -11,21 +11,11 @@ csi_driver_install_chart_version: "0.0.0"
 csi_driver_install_namespace: "osac-csi"
 csi_driver_install_backends_namespace: "osac-csi-backends"
 
-# Vendors the csi-driver/csi-backends charts know how to enable. Dispatched
-# providers outside this list are logged and skipped rather than failing the
-# whole install, since storage_provider's own provider validation is separate
+# Vendors the csi-driver chart knows how to enable. Dispatched providers
+# outside this list are logged and skipped rather than failing the whole
+# install, since storage_provider's own provider validation is separate
 # from what this chart happens to support today.
 csi_driver_install_supported_vendors:
   - vast
   - pure
   - trident
-
-# Secret consumed by the (not-yet-implemented) vast-csi-controller
-# init-container to authenticate to fulfillment-service's private API and
-# fetch VMS admin credentials live — see OSAC-3290's "VMS Admin-Credential
-# Resolution" section. Static, registration-time data injected via AAP
-# Credential Type / vault-backed environment variables, not per-dispatch
-# extra_vars.
-csi_driver_install_oauth_secret_name: "csi-driver-oauth-credentials"
-csi_driver_install_oauth_client_id: "{{ lookup('env', 'CSI_DRIVER_OAUTH_CLIENT_ID') | default('', true) }}"
-csi_driver_install_oauth_client_secret: "{{ lookup('env', 'CSI_DRIVER_OAUTH_CLIENT_SECRET') | default('', true) }}"

@@ -208,6 +208,13 @@ if [ "${STORAGE_TESTS_ENABLED:-}" = "true" ]; then
     "storage_provider_ensure_sc"
     "storage_provider_onboarding"
     "storage_provider_setup_rollback"
+    # ensure_csi_backends.yaml's own role-level test (sole owner of the csi-backends
+    # release as of OSAC-3290) -- verified before the csi_driver_install* entries
+    # below, which depend on the vendor controller Service it creates. Uses the same
+    # OSAC_CSI_BACKENDS_CHART_REF local-filesystem chart path storage_provider_setup
+    # above already relies on -- no OCI registry needed, unlike csi_driver_install's
+    # own role-level test further down.
+    "storage_provider_ensure_csi_backends"
     # Playbook-level wiring tests for osac.service.csi_driver_install (stub the
     # real Helm install via csi_driver_install_override, run the real
     # storage_provider dispatch after it) -- share this gate/mock server since

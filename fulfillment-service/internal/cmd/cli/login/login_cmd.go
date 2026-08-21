@@ -447,8 +447,17 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to save configuration: %w", err)
 	}
+	c.warnIfUsingFileSecretStore(ctx, cfg)
 
 	return nil
+}
+
+// warnIfUsingFileSecretStore renders a warning when the just-completed save wrote secrets to the file fallback
+// instead of the OS keyring.
+func (c *runnerContext) warnIfUsingFileSecretStore(ctx context.Context, cfg *config.Settings) {
+	if cfg.UsingFileSecretStore() {
+		c.console.Render(ctx, "file_secret_store_fallback.txt", nil)
+	}
 }
 
 // parseAddress parses the address and returns the address and whether accoding to that address the connection should

@@ -147,7 +147,14 @@ class OsacCLI:
         gpu_count: int = 0,
     ) -> str:
         args: list[str] = [
-            "create", "instancetype", "--name", name, "--cores", str(cores), "--memory-gib", str(memory_gib),
+            "create",
+            "instancetype",
+            "--name",
+            name,
+            "--cores",
+            str(cores),
+            "--memory-gib",
+            str(memory_gib),
         ]
         if description:
             args.extend(["--description", description])
@@ -206,9 +213,7 @@ class OsacCLI:
     def get_unchecked(self, resource: str) -> tuple[str, int]:
         return self._run_unchecked("get", resource)
 
-    def create_cluster_with_catalog_item(
-        self, *, catalog_item: str, name: str, version: str | None = None
-    ) -> str:
+    def create_cluster_with_catalog_item(self, *, catalog_item: str, name: str, version: str | None = None) -> str:
         args = ["create", "cluster", "--catalog-item", catalog_item, "--name", name]
         if version is not None:
             args.extend(["--version", version])
@@ -239,6 +244,9 @@ class OsacCLI:
         if user_data is not None:
             args.extend(["--user-data", user_data])
         return self._parse_uuid(self._run(*args))
+
+    def describe_baremetal_instance(self, *, name: str) -> str:
+        return self._run("describe", "baremetalinstance", name)
 
     def delete_baremetal_instance(self, *, uuid: str) -> None:
         self._run("delete", "baremetalinstance", uuid)

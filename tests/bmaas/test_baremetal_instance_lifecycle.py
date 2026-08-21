@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import logging
+import os
+import re
+import subprocess
 from typing import Any
+
+import pytest
 
 from tests.core.grpc_client import GRPCClient
 from tests.core.helpers import (
+    assert_grpc_rejected,
     wait_for_bmh_available,
     wait_for_bmh_provisioned,
     wait_for_bmi_cr,
@@ -20,6 +26,25 @@ logger = logging.getLogger(__name__)
 
 _RESTART_IN_PROGRESS: str = "BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_IN_PROGRESS"
 _RESTART_FAILED: str = "BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_FAILED"
+_MAC_PATTERN: re.Pattern[str] = re.compile(r"^([0-9a-f]{2}:){5}[0-9a-f]{2}$")
+
+
+def _assert_nic_metadata(*, grpc: GRPCClient, bmi_id: str, cli: OsacCLI, bmi_cr_name: str) -> None:
+    """Assert NIC metadata is populated and valid in both API and CLI output."""
+    response: dict[str, Any] = grpc.get_baremetal_instance(bmi_id=bmi_id)
+    nics: list[dict[str, Any]] = response.get("object", {}).get("status", {}).get("hardware", {}).get("nics", [])
+    assert nics, f"Expected non-empty status.hardware.nics for BMI {bmi_id}"
+    for nic in nics:
+        mac = nic.get("mac", "")
+        assert _MAC_PATTERN.match(mac), f"MAC '{mac}' does not match expected lowercase colon-separated format"
+
+    describe_output: str = cli.describe_baremetal_instance(name=bmi_cr_name)
+    assert "Network Interfaces:" in describe_output, (
+        "osac describe baremetalinstance output missing 'Network Interfaces:' section"
+    )
+    assert _MAC_PATTERN.search(describe_output), (
+        "osac describe baremetalinstance 'Network Interfaces:' section contains no valid MAC address"
+    )
 
 
 def _get_condition_status(grpc: GRPCClient, bmi_id: str, condition_type: str) -> str:
@@ -54,6 +79,9 @@ def test_baremetal_instance_lifecycle(
 
         bmi_cr_name: str = wait_for_bmi_cr(k8s=k8s_hub_client, uuid=bmi_id)
         wait_for_bmi_running(grpc=grpc, bmi_id=bmi_id)
+
+        # Verify NIC metadata is populated (OSAC-3254)
+        _assert_nic_metadata(grpc=grpc, bmi_id=bmi_id, cli=cli, bmi_cr_name=bmi_cr_name)
 
         external_host_id: str = k8s_hub_client.get_baremetal_instance_external_host_id(name=bmi_cr_name)
         assert "/" in external_host_id, f"Expected namespace/name format, got: {external_host_id}"
@@ -203,3 +231,37 @@ def test_baremetal_instance_restart(
             except Exception:
                 logger.exception("Failed to delete BMI %s during cleanup", bmi_id)
         raise
+
+
+def test_baremetal_instance_nic_invariant(grpc: GRPCClient) -> None:
+    """All RUNNING BareMetalInstances must have status.hardware.nics populated (OSAC-3254)."""
+    bmi_ids = grpc.list_baremetal_instance_ids()
+    for bmi_id in bmi_ids:
+        data: dict[str, Any] = grpc.get_baremetal_instance(bmi_id=bmi_id)
+        state: str = data.get("object", {}).get("status", {}).get("state", "")
+        if state != "BARE_METAL_INSTANCE_STATE_RUNNING":
+            continue
+        nics: list[dict[str, Any]] = data.get("object", {}).get("status", {}).get("hardware", {}).get("nics", [])
+        assert nics, f"Running BMI {bmi_id} has no status.hardware.nics"
+        for nic in nics:
+            mac = nic.get("mac", "")
+            assert _MAC_PATTERN.match(mac), f"BMI {bmi_id} has invalid MAC format: '{mac}'"
+
+
+@pytest.mark.skipif(
+    not os.getenv("OSAC_TENANT2_BMI_ID"),
+    reason="Requires OSAC_TENANT2_BMI_ID env var pointing to a BMI owned by tenant2",
+)
+def test_baremetal_instance_tenant_isolation(grpc: GRPCClient, jwt_grpc_tenant1: GRPCClient) -> None:
+    """Tenant 1 user cannot read a BMI belonging to tenant 2; admin can read NICs cross-tenant."""
+    tenant2_bmi_id = os.environ["OSAC_TENANT2_BMI_ID"]
+
+    # Admin can read the BMI and see NICs
+    bmi_data: dict[str, Any] = grpc.get_baremetal_instance(bmi_id=tenant2_bmi_id)
+    nics: list[dict[str, Any]] = bmi_data.get("object", {}).get("status", {}).get("hardware", {}).get("nics", [])
+    assert nics, f"Admin expected non-empty status.hardware.nics on tenant2 BMI {tenant2_bmi_id}"
+
+    # Tenant 1 user must be denied access to tenant 2's BMI
+    with pytest.raises(subprocess.CalledProcessError) as exc_info:
+        jwt_grpc_tenant1.get_baremetal_instance(bmi_id=tenant2_bmi_id)
+    assert_grpc_rejected(exc_info, "PermissionDenied")

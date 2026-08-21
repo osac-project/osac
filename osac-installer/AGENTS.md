@@ -161,15 +161,16 @@ See `README.md` for complete script documentation. Most commonly used:
 - **oc.sh** -- Wraps `oc` with `--as` impersonation when `OC_IMPERSONATE` is set
 - **refresh-after-snapshot.py** -- Refreshes Helm-deployed cluster after booting from cold snapshot
 - **setup-caas-agents.sh** -- Sets up CaaS agent infrastructure (InfraEnv + agent VM + label + approve)
-- **lib.sh** -- Shared shell functions: `retry_until`, `wait_for_resource`, `wait_for_namespace_cleanup`, `retry_command`, `http_retry`, `http_json`, `resolve_release_tag(path, [tag_prefix])` (nearest `<prefix>/vX.Y.Z` git tag; default prefix `osac`), `resolve_bare_release_tag(path)` (nearest bare `vX.Y.Z` tag for external repos like osac-ui), `check_postgres_prerequisites`
-- **nightly-charts.sh** -- Nightly chart manifest + Slack table helpers (`append_chart_version`, `build_slack_charts_published_summary`, `stamp_osac_ui_chart`, `rewrite_umbrella_osac_ui_dependency`)
+- **lib.sh** -- Shared shell functions: `retry_until`, `wait_for_resource`, `wait_for_namespace_cleanup`, `retry_command`, `http_retry`, `http_json`, `resolve_release_tag(path, [tag_prefix])` (nearest `<prefix>/vX.Y.Z` git tag; default prefix `osac`), `resolve_bare_release_tag(path)` (nearest bare `vX.Y.Z` tag for external repos like osac-ui), `resolve_bare_release_tag_at(path, ref)` (nearest ancestor bare tag at a pinned commit), `check_postgres_prerequisites`
+- **nightly-charts.sh** -- Nightly chart manifest + Slack helpers (`check_osac_ui_image`, `append_chart_version`, `build_slack_charts_published_summary`, `stamp_osac_ui_chart`, `stamp_umbrella_ui_image_ref`, `stamp_umbrella_ui_values`, `rewrite_umbrella_osac_ui_dependency`, `rewrite_umbrella_osac_ui_dependency_and_rebuild`)
 
 ### CI Workflows
 
 GitHub Actions only discovers workflows under the repo root's `.github/workflows/`,
 so osac-installer-specific CI now lives there (not under `osac-installer/.github/`):
-`nightly-build.yaml` (nightly build: versions and publishes per-component sub-charts to GHCR, then builds and publishes the umbrella chart; tested via e2e against
-the current commit directly) and
+`nightly-build.yaml` (nightly build: `prepare` resolves a gated osac-ui SHA and
+pushes a temp branch; E2E runs against that branch; publish stamps sub-charts,
+publishes osac-ui + umbrella charts to GHCR) and
 `publish-osac-installer-chart.yaml` (manual-dispatch umbrella chart release; takes
 one mono-repo release `version` plus an independent `ui_version` for osac-ui).
 Nightly sub-chart OCI publishing uses `resolve_release_tag()` per monorepo
@@ -178,14 +179,15 @@ osac-metering, osac-csi-driver) are skipped from GHCR publish until their
 first release tag is cut.
 
 **osac-ui nightly source strategy** (external repo; see `nightly-build.yaml`
-`Checkout osac-ui` step):
+`prepare` and `Resolve gated osac-ui SHA` steps):
 
-| Choice | Rationale |
-|--------|-----------|
-| Checkout `ref: main` (not a pinned SHA) | Nightly should exercise the latest UI chart on each run; a frozen SHA would require manual bumps and would lag UI fixes. |
-| Baseline semver from `resolve_bare_release_tag()` | Chart `version`/`appVersion` derive from the newest reachable bare `vX.Y.Z` tag on that checkout, not a static file. |
-| Image `ghcr.io/.../osac-ui:sha-<short-sha>` | The deployed UI image is pinned to the exact commit checked out from `main`, so installs are reproducible even though the git ref floats. |
-| Umbrella OCI dep rewritten to nightly chart | `rewrite_umbrella_osac_ui_dependency()` points `charts/osac` at the freshly published nightly `osac-ui` chart before `helm dependency build`. |
+| Step | Behavior |
+|------|----------|
+| `check_osac_ui_image()` | `ls-remote osac-ui@main` → verify `ghcr.io/.../osac-ui:sha-<7>` manifest exists (HTTP 200); fail if image not published yet |
+| Pin once per run | Full SHA written to `pinned/osac-ui.sha` on temp branch; publish checks out that exact commit |
+| Baseline semver | `resolve_bare_release_tag_at()` uses `git describe` on the pinned SHA (nearest ancestor `vX.Y.Z`) |
+| Umbrella image | `stamp_umbrella_ui_values()` sets `ui.images.ui` to `ghcr.io/.../osac-ui:sha-<7>` on umbrella + CI values (parent values win over subchart defaults) |
+| OCI chart dep | `rewrite_umbrella_osac_ui_dependency_and_rebuild()` rewrites Chart.yaml, deletes Chart.lock, runs `helm dependency build` |
 
 Slack success notifications list all published charts (including osac-ui) in a
 box table. `chart_version_url()` emits `::warning::` when a GHCR package page

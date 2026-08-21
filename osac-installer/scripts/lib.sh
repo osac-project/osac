@@ -196,6 +196,25 @@ resolve_bare_release_tag() {
     return 1
 }
 
+# Resolve the nearest real (non-nightly) bare vX.Y.Z tag that is an ancestor of ref
+# (e.g. a pinned osac-ui commit). Matches archived submodule git describe behavior.
+# Usage: resolve_bare_release_tag_at <repo_path> <ref>
+resolve_bare_release_tag_at() {
+    local path="$1" ref="$2"
+    local tag
+    local validate_regex='^v[0-9]+\.[0-9]+\.[0-9]+$'
+
+    if ! tag=$(git -C "${path}" describe --tags --match 'v[0-9]*' --abbrev=0 "${ref}" 2>/dev/null); then
+        echo "ERROR: no vX.Y.Z release tag reachable from ${ref} in ${path}" >&2
+        return 1
+    fi
+    if [[ "${tag}" == *-nightly* ]] || [[ ! "${tag}" =~ ${validate_regex} ]]; then
+        echo "ERROR: nearest tag '${tag}' at ${ref} in ${path} is not a plain vX.Y.Z tag" >&2
+        return 1
+    fi
+    echo "${tag}"
+}
+
 readonly POSTGRES_INSTALL_DOC="../fulfillment-service/docs/INSTALL.md"
 
 # PostgreSQL prerequisite helpers (production install via setup.sh).

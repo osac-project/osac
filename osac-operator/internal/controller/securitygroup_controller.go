@@ -171,6 +171,28 @@ func (r *SecurityGroupReconciler) handleUpdate(ctx context.Context, sg *v1alpha1
 			sg.Spec.VirtualNetwork, len(vnetList.Items))
 	} else if len(vnetList.Items) == 1 {
 		networkClassID = vnetList.Items[0].Spec.NetworkClass
+
+		// Gate: at least one subnet must be Ready before creating SG ACL rules,
+		// because the ACL fan-out uses per-subnet CIDRs.
+		subnetList := &v1alpha1.SubnetList{}
+		if err := r.List(ctx, subnetList,
+			client.InNamespace(sg.Namespace),
+			client.MatchingLabels{osacVirtualNetworkIDLabel: sg.Spec.VirtualNetwork},
+		); err != nil {
+			return ctrl.Result{}, err
+		}
+		hasReadySubnet := false
+		for i := range subnetList.Items {
+			if subnetList.Items[i].Status.Phase == v1alpha1.SubnetPhaseReady {
+				hasReadySubnet = true
+				break
+			}
+		}
+		if !hasReadySubnet {
+			log.Info("no Ready subnets in parent VirtualNetwork, requeueing",
+				"virtualNetwork", vnetList.Items[0].Name)
+			return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+		}
 	} else {
 		log.Info("parent VirtualNetwork not found, using legacy implementation strategy", "uuid", sg.Spec.VirtualNetwork)
 	}

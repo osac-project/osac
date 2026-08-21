@@ -87,29 +87,29 @@ _gha_sanitize_for_message() {
     value="${value//::/ }"
     value="${value//%0A/}"
     value="${value//%0D/}"
-    echo "${value}"
+    printf '%s' "${value}"
 }
 
 # Usage: read_validated_chart_name <chart_dir>
-# Print chart name from Chart.yaml; exit 1 with sanitized ::error if invalid.
+# Print chart name from Chart.yaml; return 1 with sanitized ::error if invalid.
 read_validated_chart_name() {
     local chart_dir="$1"
     local chart_name safe_name
 
     if [[ ! -f "${chart_dir}/Chart.yaml" ]]; then
         echo "::error::Chart manifest '${chart_dir}/Chart.yaml' not found!" >&2
-        exit 1
+        return 1
     fi
 
     chart_name=$(yq -r '.name' "${chart_dir}/Chart.yaml")
     if [[ -z "${chart_name}" || "${chart_name}" == "null" ]]; then
         echo "::error::Chart name missing in ${chart_dir}/Chart.yaml" >&2
-        exit 1
+        return 1
     fi
     if [[ ! "${chart_name}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
         safe_name=$(_gha_sanitize_for_message "${chart_name}")
         echo "::error title=${safe_name}::Invalid chart name in ${chart_dir}/Chart.yaml (name must match [a-zA-Z0-9._-]+)" >&2
-        exit 1
+        return 1
     fi
     echo "${chart_name}"
 }

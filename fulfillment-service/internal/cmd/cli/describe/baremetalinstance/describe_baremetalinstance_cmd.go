@@ -94,6 +94,15 @@ func renderBareMetalInstance(w io.Writer, bmi *publicv1.BareMetalInstance) {
 	fmt.Fprintf(writer, "Catalog Item:\t%s\n", catalogItem)
 	fmt.Fprintf(writer, "State:\t%s\n", state)
 	writer.Flush()
+
+	fmt.Fprintf(w, "\nNetwork Interfaces:\n")
+	if !bmi.GetStatus().HasHardware() || len(bmi.GetStatus().GetHardware().GetNics()) == 0 {
+		fmt.Fprintf(w, "  N/A\n")
+	} else {
+		for _, nic := range bmi.GetStatus().GetHardware().GetNics() {
+			fmt.Fprintf(w, "  %s\n", nic.GetMac())
+		}
+	}
 }
 
 const shortHelp = `Describe a bare metal instance`

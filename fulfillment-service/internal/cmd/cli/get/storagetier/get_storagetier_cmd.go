@@ -33,18 +33,11 @@ func Cmd() *cobra.Command {
 	result := &cobra.Command{
 		Use:     "storagetier [ID_OR_NAME]",
 		Aliases: []string{"storagetiers"},
-		Short:   "List or get storage tiers",
-		Long:    "List all available storage tiers, or display details for a specific tier by ID or name.",
-		Example: `  # List all available storage tiers
-  osac get storagetier
-
-  # Get a specific storage tier by name
-  osac get storagetier gold
-
-  # Get a specific storage tier by ID
-  osac get storagetier tier-abc123`,
-		Args: cobra.MaximumNArgs(1),
-		RunE: runner.run,
+		Short:   shortHelp,
+		Long:    longHelp,
+		Example: example,
+		Args:    cobra.MaximumNArgs(1),
+		RunE:    runner.run,
 	}
 	return result
 }
@@ -102,6 +95,21 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	renderTierTable(c.console, []*publicv1.StorageTier{tier})
 	return nil
 }
+
+const shortHelp = `List or get storage tiers`
+
+const longHelp = `
+List all available storage tiers, or display details for a specific tier by ID or name.
+`
+
+const example = `  # List all available storage tiers
+  osac get storagetier
+
+  # Get a specific storage tier by name
+  osac get storagetier gold
+
+  # Get a specific storage tier by ID
+  osac get storagetier tier-abc123`
 
 // renderTierTable writes a compact table of storage tiers — used when listing all tiers.
 func renderTierTable(w *terminal.Console, tiers []*publicv1.StorageTier) {

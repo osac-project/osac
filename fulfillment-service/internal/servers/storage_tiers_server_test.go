@@ -114,7 +114,7 @@ var _ = Describe("Storage tiers server", func() {
 						Endpoint: "https://storage.example.com:8443",
 						Credentials: privatev1.StorageBackendCredentials_builder{
 							Username: "admin",
-							Password: "secret",
+							Password: testBackendPassword,
 						}.Build(),
 					}.Build(),
 				}.Build(),
@@ -135,7 +135,7 @@ var _ = Describe("Storage tiers server", func() {
 						Endpoint: "https://storage2.example.com:8443",
 						Credentials: privatev1.StorageBackendCredentials_builder{
 							Username: "admin",
-							Password: "secret",
+							Password: testBackendPassword,
 						}.Build(),
 					}.Build(),
 				}.Build(),

@@ -58,20 +58,15 @@ def _assert_nic_metadata(
         f"BareMetalHost hardware.nics {sorted(bmh_macs)}"
     )
 
-    # 4. CLI describe output must list all BMH MACs under the Network Interfaces section.
-    # This assertion depends on OSAC-4204 being deployed. Skip gracefully if the deployed
-    # osac binary predates the Network Interfaces section.
+    # 4. CLI describe output must list all BMH MACs under the Network Interfaces section
     describe_output: str = cli.describe_baremetal_instance(name=bmi_name)
-    if "Network Interfaces:" not in describe_output:
-        logger.warning(
-            "osac describe baremetalinstance output has no 'Network Interfaces:' section — "
-            "OSAC-4204 may not be deployed in this environment (skipping CLI assertion)"
+    assert "Network Interfaces:" in describe_output, (
+        "osac describe baremetalinstance output missing 'Network Interfaces:' section"
+    )
+    for mac in bmh_macs:
+        assert mac in describe_output, (
+            f"osac describe baremetalinstance output missing MAC '{mac}' from BMH hardware inventory"
         )
-    else:
-        for mac in bmh_macs:
-            assert mac in describe_output, (
-                f"osac describe baremetalinstance output missing MAC '{mac}' from BMH hardware inventory"
-            )
 
 
 def _get_condition_status(grpc: GRPCClient, bmi_id: str, condition_type: str) -> str:

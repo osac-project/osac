@@ -222,7 +222,7 @@ func (c *OpenStackClient) findFreeHost(ctx context.Context, matchExpressions map
 			}
 
 			// Skip nodes without registered Ironic ports
-			portPages, portErr := ports.ListDetail(c.client, ports.ListOpts{NodeUUID: node.UUID}).AllPages(ctx)
+			portList, portErr := c.listNodePorts(ctx, node.UUID)
 			if portErr != nil {
 				if isAuthError(portErr) {
 					return false, portErr
@@ -230,13 +230,8 @@ func (c *OpenStackClient) findFreeHost(ctx context.Context, matchExpressions map
 				log.V(1).Info("Skipping node: port lookup failed", "node", node.UUID, "error", portErr)
 				continue
 			}
-			portList, portErr := ports.ExtractPorts(portPages)
-			if portErr != nil || len(portList) == 0 {
-				if portErr != nil {
-					log.Error(portErr, "Skipping node: failed to extract ports", "node", node.UUID)
-				} else {
-					log.Error(nil, "Skipping node: no registered ports", "node", node.UUID)
-				}
+			if len(portList) == 0 {
+				log.Error(nil, "Skipping node: no registered ports", "node", node.UUID)
 				continue
 			}
 
@@ -450,14 +445,24 @@ func (c *OpenStackClient) GetHostNICs(ctx context.Context, inventoryHostID strin
 	return nics, err
 }
 
-func (c *OpenStackClient) getHostNICs(ctx context.Context, inventoryHostID string) ([]HostNIC, error) {
-	portPages, err := ports.ListDetail(c.client, ports.ListOpts{NodeUUID: inventoryHostID}).AllPages(ctx)
+// listNodePorts fetches and extracts the Ironic ports for the given node UUID.
+// Returns an empty slice (not an error) when the node has no registered ports.
+func (c *OpenStackClient) listNodePorts(ctx context.Context, nodeUUID string) ([]ports.Port, error) {
+	portPages, err := ports.ListDetail(c.client, ports.ListOpts{NodeUUID: nodeUUID}).AllPages(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("listing ports for node %s: %w", inventoryHostID, err)
+		return nil, fmt.Errorf("listing ports for node %s: %w", nodeUUID, err)
 	}
 	portList, err := ports.ExtractPorts(portPages)
 	if err != nil {
-		return nil, fmt.Errorf("extracting ports for node %s: %w", inventoryHostID, err)
+		return nil, fmt.Errorf("extracting ports for node %s: %w", nodeUUID, err)
+	}
+	return portList, nil
+}
+
+func (c *OpenStackClient) getHostNICs(ctx context.Context, inventoryHostID string) ([]HostNIC, error) {
+	portList, err := c.listNodePorts(ctx, inventoryHostID)
+	if err != nil {
+		return nil, err
 	}
 	if len(portList) == 0 {
 		return nil, fmt.Errorf("node %s has no NIC inventory despite being allocated", inventoryHostID)

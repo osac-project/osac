@@ -100,8 +100,14 @@ echo "=== Running Role Integration Tests ==="
 echo ""
 
 # Create a real pod for lease ownerReference tests (prevents K8s GC).
-# Scoped to role tests only -- workflow tests use the placeholder UID
-# so leases get GC'd between baseline and override runs.
+# Scoped to role and storage tests -- workflow tests use the placeholder UID
+# so leases get GC'd between baseline and override runs. Kept alive through
+# the STORAGE_TESTS loop below (storage_provider_ensure_csi_backends and
+# csi_driver_install each have their own lock-contention scenario that also
+# needs a live owner pod matching POD_NAME/POD_UID) -- deleting it right
+# after the role-tests loops orphans any Lease those later tests create,
+# and Kubernetes garbage-collects an orphaned Lease almost immediately,
+# which silently defeats the whole point of those scenarios.
 echo "Creating test-runner pod for lease role tests..."
 kubectl run lease-test-pod --image=registry.k8s.io/pause:3.9 --restart=Never -n osac-system 2>/dev/null || true
 kubectl wait --for=condition=Ready pod/lease-test-pod -n osac-system --timeout=60s 2>/dev/null || true
@@ -147,9 +153,6 @@ for entry in "${ROLE_SCENARIO_TESTS[@]}"; do
 
   echo ""
 done
-
-# Clean up lease test pod
-kubectl delete pod lease-test-pod -n osac-system --ignore-not-found 2>/dev/null || true
 
 echo "=== Running Storage Provider Dispatcher Unit Tests ==="
 echo ""
@@ -252,6 +255,10 @@ if [ "${STORAGE_TESTS_ENABLED:-}" = "true" ]; then
     fi
   done
 fi
+
+# Clean up lease test pod -- kept alive through both the role-tests and
+# storage-tests loops above (see the creation comment for why).
+kubectl delete pod lease-test-pod -n osac-system --ignore-not-found 2>/dev/null || true
 
 echo "========================================"
 echo "Test Results"

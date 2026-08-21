@@ -15,6 +15,7 @@ syntax = "proto3";
 
 package osac.public.v1;
 
+import "buf/validate/validate.proto";
 import "google/protobuf/any.proto";
 import "osac/public/v1/compute_instance_common_type.proto";
 import "osac/public/v1/disk_image_type.proto";
@@ -26,8 +27,12 @@ import "osac/public/v1/instance_type_type.proto";
 //
 // buf:lint:ignore OSAC_OBJECT_SHAPE
 message ComputeInstanceTemplate {
-  // Unique identifier of the template.
-  string id = 1;
+  // Unique identifier of the template. Must match the CRD kubebuilder pattern: letters, digits,
+  // underscores, and dots, starting with a letter or underscore (e.g., "osac.templates.vm_provisioning").
+  string id = 1 [(buf.validate.field).string = {
+    min_len: 1,
+    pattern: "^[a-zA-Z_][a-zA-Z0-9._]*$"
+  }];
 
   Metadata metadata = 2;
 

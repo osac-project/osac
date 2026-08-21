@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
@@ -39,7 +40,7 @@ var _ = Describe("Emergency access", func() {
 		client := privatev1.NewClusterTemplatesClient(tool.InternalView().EmergencyConn())
 
 		// Create the object:
-		id := fmt.Sprintf("emergency_grpc_%s", uuid.New())
+		id := fmt.Sprintf("emergency_grpc_%s", strings.ReplaceAll(uuid.New(), "-", "_"))
 		_, err := client.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
 				Id:          id,
@@ -58,7 +59,7 @@ var _ = Describe("Emergency access", func() {
 
 	It("Can create objects using REST and the emergency admin service account", func() {
 		// Prepare the request body:
-		id := fmt.Sprintf("emergency_rest_%s", uuid.New())
+		id := fmt.Sprintf("emergency_rest_%s", strings.ReplaceAll(uuid.New(), "-", "_"))
 		requestBody := map[string]any{
 			"id":          id,
 			"title":       "Emergency REST template",

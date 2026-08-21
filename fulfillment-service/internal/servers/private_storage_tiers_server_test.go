@@ -27,6 +27,10 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 )
 
+// testBackendPassword is a dummy credential for a StorageBackend that only ever exists for the
+// duration of a test and is never used to reach a real system.
+const testBackendPassword = "secret"
+
 var _ = Describe("Private storage tiers server", func() {
 	Describe("Creation", func() {
 		It("Can be built if all the required parameters are set", func() {
@@ -102,7 +106,7 @@ var _ = Describe("Private storage tiers server", func() {
 						Endpoint: "https://storage.example.com:8443",
 						Credentials: privatev1.StorageBackendCredentials_builder{
 							Username: "admin",
-							Password: "secret",
+							Password: testBackendPassword,
 						}.Build(),
 					}.Build(),
 				}.Build(),

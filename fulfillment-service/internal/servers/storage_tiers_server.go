@@ -171,7 +171,8 @@ func (s *StorageTiersServer) List(ctx context.Context,
 		// is the fix for the CEL-filter oracle described on the filterValidator field.
 		_, err = s.filterValidator.Translate(ctx, filter)
 		if err != nil {
-			return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "invalid filter: %v", err)
+			err = grpcstatus.Errorf(grpccodes.InvalidArgument, "invalid filter: %v", err)
+			return
 		}
 
 		// Layer 2 (correctness): reject filters that compile publicly but reference a field whose
@@ -179,11 +180,12 @@ func (s *StorageTiersServer) List(ctx context.Context,
 		var unforwardable bool
 		unforwardable, err = filterReferencesAnyField(filter, storageTierUnforwardableFilterFields...)
 		if err != nil {
-			return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "invalid filter: %v", err)
+			err = grpcstatus.Errorf(grpccodes.InvalidArgument, "invalid filter: %v", err)
+			return
 		}
 		if unforwardable {
-			return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"filtering by bandwidth or encryption is not yet supported")
+			err = grpcstatus.Errorf(grpccodes.InvalidArgument, "filtering by bandwidth or encryption is not yet supported")
+			return
 		}
 	}
 
@@ -199,7 +201,7 @@ func (s *StorageTiersServer) List(ctx context.Context,
 	// Delegate to private server:
 	privateResponse, err := s.delegate.List(ctx, privateRequest)
 	if err != nil {
-		return nil, err
+		return
 	}
 
 	// A malformed tier is a cloud-provider-admin data problem, not something a tenant can act on, so
@@ -237,13 +239,13 @@ func (s *StorageTiersServer) Get(ctx context.Context,
 	// Delegate to private server:
 	privateResponse, err := s.delegate.Get(ctx, privateRequest)
 	if err != nil {
-		return nil, err
+		return
 	}
 
 	// Map private response to public format:
 	publicTier, err := s.toPublicTier(ctx, privateResponse.GetObject(), "failed to process storage tier")
 	if err != nil {
-		return nil, err
+		return
 	}
 
 	// Create the public response:

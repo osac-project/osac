@@ -27,6 +27,10 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 )
 
+// testBackendPassword is a dummy credential for a StorageBackend that only ever exists for the
+// duration of a test and is never used to reach a real system.
+const testBackendPassword = "secret"
+
 var _ = Describe("Public storage tiers", func() {
 	var (
 		ctx              context.Context
@@ -52,7 +56,7 @@ var _ = Describe("Public storage tiers", func() {
 					Endpoint: "https://storage.example.com:8443",
 					Credentials: privatev1.StorageBackendCredentials_builder{
 						Username: "admin",
-						Password: "secret",
+						Password: testBackendPassword,
 					}.Build(),
 				}.Build(),
 			}.Build(),

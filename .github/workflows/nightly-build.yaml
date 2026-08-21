@@ -258,7 +258,9 @@ jobs:
                 exit 1
               fi
               if [[ ! "${CHART_NAME}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
-                echo "::error::Invalid chart name in ${CHART_DIR}/Chart.yaml (name must match [a-zA-Z0-9._-]+)"
+                safe_name="${CHART_NAME//$'\n'/}"
+                safe_name="${safe_name//$'\r'/}"
+                echo "::error title=${safe_name}::Invalid chart name in ${CHART_DIR}/Chart.yaml (name must match [a-zA-Z0-9._-]+)"
                 exit 1
               fi
 

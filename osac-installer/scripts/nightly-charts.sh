@@ -3,7 +3,13 @@ set -euo pipefail
 
 # Shared helpers for nightly chart publishing and Slack notifications.
 
-NIGHTLY_CHART_SLACK_ORDER=(
+_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if ! declare -F http_retry >/dev/null 2>&1; then
+    # shellcheck source=lib.sh
+    source "${_LIB_DIR}/lib.sh"
+fi
+
+readonly NIGHTLY_CHART_SLACK_ORDER=(
     osac-operator-crds
     bare-metal-fulfillment-operator-crds
     osac-operator
@@ -42,7 +48,7 @@ append_chart_version() {
 # Prints the full commit SHA on stdout; fails if the image is not published yet.
 check_osac_ui_image() {
     local repo="${1:-osac-ui}"
-    local sha tag token code
+    local sha tag token
 
     sha=$(git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=10 \
         ls-remote "https://github.com/osac-project/${repo}.git" refs/heads/main | cut -f1)
@@ -53,19 +59,18 @@ check_osac_ui_image() {
     fi
 
     tag="sha-${sha:0:7}"
-    if ! token=$(curl -sf --max-time 15 \
-        "https://ghcr.io/token?scope=repository:osac-project/${repo}:pull" | jq -r .token); then
+    if ! token=$(http_json "Could not obtain GHCR token to verify ${repo}:${tag}" 3 5 '.token' \
+        "https://ghcr.io/token?scope=repository:osac-project/${repo}:pull"); then
         echo "::error::Could not obtain GHCR token to verify ${repo}:${tag}" >&2
         return 1
     fi
 
-    code=$(curl -s --max-time 15 -o /dev/null -w "%{http_code}" \
+    if ! http_retry "${repo} main HEAD ${sha:0:7} has no published image (tag ${tag})" 3 5 \
+        -s -o /dev/null \
         -H "Authorization: Bearer ${token}" \
         -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json" \
-        "https://ghcr.io/v2/osac-project/${repo}/manifests/${tag}")
-
-    if [[ "${code}" != "200" ]]; then
-        echo "::error::${repo} main HEAD ${sha:0:7} has no published image (tag ${tag}, HTTP ${code})" >&2
+        "https://ghcr.io/v2/osac-project/${repo}/manifests/${tag}"; then
+        echo "::error::${repo} main HEAD ${sha:0:7} has no published image (tag ${tag})" >&2
         return 1
     fi
 
@@ -89,6 +94,7 @@ osac_ui_nightly_image_ref() {
 stamp_umbrella_ui_image_ref() {
     local values_yaml="$1" image_ref="$2"
     if [[ ! -f "${values_yaml}" ]]; then
+        echo "::warning title=Missing values file::Values file not found: ${values_yaml} — skipping ui.images.ui stamp" >&2
         return 0
     fi
     IMAGE_REF="${image_ref}" yq -i '.ui.images.ui = strenv(IMAGE_REF)' "${values_yaml}"
@@ -102,6 +108,7 @@ stamp_umbrella_ui_values() {
     done
 }
 
+# Usage: _chart_slack_rank <chart_name>
 _chart_slack_rank() {
     local chart_name="$1"
     local i
@@ -114,6 +121,7 @@ _chart_slack_rank() {
     echo 999
 }
 
+# Usage: _sort_chart_manifest <manifest_file>
 _sort_chart_manifest() {
     local manifest_file="$1"
     local -a rows=()
@@ -133,6 +141,7 @@ _sort_chart_manifest() {
     done
 }
 
+# Usage: _slack_display_name <chart_name>
 _slack_display_name() {
     local chart_name="$1"
     if [[ "${chart_name}" == "osac" ]]; then
@@ -142,14 +151,19 @@ _slack_display_name() {
     fi
 }
 
+# Usage: _slack_table_hline <width>
 _slack_table_hline() {
-    printf '─%.0s' $(seq 1 "$1")
+    local width="$1"
+    printf '─%.0s' $(seq 1 "${width}")
 }
 
+# Usage: _slack_name_cell <width> <name>
 _slack_name_cell() {
-    printf '%-*s' "$1" "$2"
+    local width="$1" name="$2"
+    printf '%-*s' "${width}" "${name}"
 }
 
+# Usage: _slack_version_cell_plain <version_w> <ver>
 _slack_version_cell_plain() {
     local version_w="$1" ver="$2"
     local pad=$(( version_w - ${#ver} ))
@@ -157,6 +171,7 @@ _slack_version_cell_plain() {
     printf '%s%*s' "${ver}" "${pad}" ""
 }
 
+# Usage: _format_slack_linked_version <version> <url>
 _format_slack_linked_version() {
     local version="$1" url="$2"
     if [[ -n "${url}" ]]; then
@@ -166,6 +181,7 @@ _format_slack_linked_version() {
     fi
 }
 
+# Usage: _slack_version_cell_linked <version_w> <ver> <url>
 _slack_version_cell_linked() {
     local version_w="$1" ver="$2" url="$3"
     local linked pad
@@ -175,6 +191,7 @@ _slack_version_cell_linked() {
     printf '%s%*s' "${linked}" "${pad}" ""
 }
 
+# Usage: _build_slack_charts_table <manifest_file> [linked] [repo_owner] [gh_token]
 _build_slack_charts_table() {
     local manifest_file="$1"
     local linked="${2:-false}"
@@ -271,6 +288,11 @@ chart_version_url() {
         return 0
     fi
 
+    if [[ ! "${repo_owner}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+        echo "::warning::Skipping GHCR package lookup for invalid repo owner; Slack link omitted" >&2
+        return 0
+    fi
+
     encoded_version=$(jq -rn --arg v "${version}" '$v|@uri')
 
     if ! response=$(curl -sf --max-time 15 \
@@ -294,6 +316,7 @@ chart_version_url() {
     echo "${url}?tag=${encoded_version}"
 }
 
+# Usage: _osac_ui_source_from_manifest <manifest_file>
 _osac_ui_source_from_manifest() {
     local manifest_file="$1"
     local chart_name version short_sha full_sha

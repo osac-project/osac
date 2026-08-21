@@ -52,7 +52,7 @@ def _assert_nic_metadata(
     response: dict[str, Any] = grpc.get_baremetal_instance(bmi_id=bmi_id)
     nics: list[dict[str, Any]] = response.get("object", {}).get("status", {}).get("hardware", {}).get("nics", [])
     assert nics, f"gRPC API returned no status.hardware.nics for BMI {bmi_id}"
-    api_macs: set[str] = {nic.get("mac", "") for nic in nics}
+    api_macs: set[str] = {nic.get("mac", "").lower() for nic in nics}
     assert api_macs == bmh_macs, (
         f"gRPC API status.hardware.nics {sorted(api_macs)} does not match "
         f"BareMetalHost hardware.nics {sorted(bmh_macs)}"
@@ -63,9 +63,10 @@ def _assert_nic_metadata(
     assert "Network Interfaces:" in describe_output, (
         "osac describe baremetalinstance output missing 'Network Interfaces:' section"
     )
+    ni_section = describe_output[describe_output.index("Network Interfaces:"):]
     for mac in bmh_macs:
-        assert mac in describe_output, (
-            f"osac describe baremetalinstance output missing MAC '{mac}' from BMH hardware inventory"
+        assert mac in ni_section, (
+            f"osac describe baremetalinstance 'Network Interfaces:' section missing MAC '{mac}'"
         )
 
 

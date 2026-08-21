@@ -16,6 +16,7 @@ package it
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
@@ -139,7 +140,7 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 		diskImageId = diResp.GetObject().GetId()
 
 		// Create ComputeInstanceTemplate
-		computeInstanceTemplateId = fmt.Sprintf("test-ci-template-%s", uuid.New())
+		computeInstanceTemplateId = fmt.Sprintf("test_ci_template_%s", strings.ReplaceAll(uuid.New(), "-", "_"))
 		_, err = computeInstanceTemplatesClient.Create(ctx, privatev1.ComputeInstanceTemplatesCreateRequest_builder{
 			Object: privatev1.ComputeInstanceTemplate_builder{
 				Metadata: privatev1.Metadata_builder{

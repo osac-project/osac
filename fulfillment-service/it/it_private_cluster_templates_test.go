@@ -16,6 +16,7 @@ package it
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
@@ -39,7 +40,7 @@ var _ = Describe("Private cluster templates", func() {
 
 	It("Can get the list of templates", func() {
 		// Create a template:
-		id := fmt.Sprintf("my_template_%s", uuid.New())
+		id := fmt.Sprintf("my_template_%s", strings.ReplaceAll(uuid.New(), "-", "_"))
 		_, err := client.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
 				Id:          id,
@@ -63,7 +64,7 @@ var _ = Describe("Private cluster templates", func() {
 
 	It("Can get a specific template", func() {
 		// Create the template:
-		id := fmt.Sprintf("my_template_%s", uuid.New())
+		id := fmt.Sprintf("my_template_%s", strings.ReplaceAll(uuid.New(), "-", "_"))
 		_, err := client.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
 				Id:          id,
@@ -91,7 +92,7 @@ var _ = Describe("Private cluster templates", func() {
 	})
 
 	It("Can create a template", func() {
-		id := fmt.Sprintf("my_template_%s", uuid.New())
+		id := fmt.Sprintf("my_template_%s", strings.ReplaceAll(uuid.New(), "-", "_"))
 		response, err := client.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
 				Id:          id,
@@ -114,7 +115,7 @@ var _ = Describe("Private cluster templates", func() {
 
 	It("Can update a template", func() {
 		// Create a template::
-		id := fmt.Sprintf("my_template_%s", uuid.New())
+		id := fmt.Sprintf("my_template_%s", strings.ReplaceAll(uuid.New(), "-", "_"))
 		createResponse, err := client.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
 				Id:          id,
@@ -166,7 +167,7 @@ var _ = Describe("Private cluster templates", func() {
 
 	It("Can delete a template", func() {
 		// Create a template::
-		id := fmt.Sprintf("my_template_%s", uuid.New())
+		id := fmt.Sprintf("my_template_%s", strings.ReplaceAll(uuid.New(), "-", "_"))
 		_, err := client.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
 				Id:          id,

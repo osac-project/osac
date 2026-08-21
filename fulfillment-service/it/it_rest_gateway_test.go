@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
@@ -74,7 +75,7 @@ var _ = Describe("REST gateway", func() {
 		})
 
 		// Create a cluster template:
-		templateID := fmt.Sprintf("my_%s", uuid.New())
+		templateID := fmt.Sprintf("my_%s", strings.ReplaceAll(uuid.New(), "-", "_"))
 		nodeSets := map[string]*privatev1.ClusterTemplateNodeSet{
 			"compute": privatev1.ClusterTemplateNodeSet_builder{
 				HostType: privatev1.HostTypeReference_builder{Id: computeHostTypeID}.Build(),
@@ -157,7 +158,7 @@ var _ = Describe("REST gateway", func() {
 		})
 
 		// Create a cluster template:
-		templateID := fmt.Sprintf("my_%s", uuid.New())
+		templateID := fmt.Sprintf("my_%s", strings.ReplaceAll(uuid.New(), "-", "_"))
 		nodeSets := map[string]*privatev1.ClusterTemplateNodeSet{
 			"compute": privatev1.ClusterTemplateNodeSet_builder{
 				HostType: privatev1.HostTypeReference_builder{Id: computeHostTypeID}.Build(),

@@ -16,6 +16,7 @@ package it
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
@@ -39,7 +40,7 @@ var _ = Describe("Cluster templates", func() {
 	It("Can get the list of templates", func() {
 		// Create a template via the private API:
 		adminClient := privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
-		id := fmt.Sprintf("my_template_%s", uuid.New())
+		id := fmt.Sprintf("my_template_%s", strings.ReplaceAll(uuid.New(), "-", "_"))
 		_, err := adminClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
 				Id:          id,
@@ -64,7 +65,7 @@ var _ = Describe("Cluster templates", func() {
 	It("Can get a specific template", func() {
 		// Create a template via the private API:
 		adminClient := privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
-		id := fmt.Sprintf("my_template_%s", uuid.New())
+		id := fmt.Sprintf("my_template_%s", strings.ReplaceAll(uuid.New(), "-", "_"))
 		_, err := adminClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
 				Id:          id,

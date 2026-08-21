@@ -40,7 +40,7 @@ const (
 // buf:lint:ignore OSAC_OBJECT_SHAPE
 type ClusterTemplate struct {
 	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// Unique identifier of the template. Must be a valid Ansible role name: letters, digits,
+	// Unique identifier of the template. Must match the CRD kubebuilder pattern: letters, digits,
 	// underscores, and dots, starting with a letter or underscore (e.g., "osac.templates.ocp_small").
 	Id          string                                `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Metadata    *Metadata                             `protobuf:"bytes,2,opt,name=metadata,proto3" json:"metadata,omitempty"`
@@ -184,7 +184,7 @@ func (x *ClusterTemplate) ClearSpecDefaults() {
 type ClusterTemplate_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
-	// Unique identifier of the template. Must be a valid Ansible role name: letters, digits,
+	// Unique identifier of the template. Must match the CRD kubebuilder pattern: letters, digits,
 	// underscores, and dots, starting with a letter or underscore (e.g., "osac.templates.ocp_small").
 	Id          string
 	Metadata    *Metadata

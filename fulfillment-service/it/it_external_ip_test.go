@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand/v2"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
@@ -675,7 +676,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 
-		templateId = fmt.Sprintf("test-tmpl-%s", uuid.New())
+		templateId = fmt.Sprintf("test_tmpl_%s", strings.ReplaceAll(uuid.New(), "-", "_"))
 		_, err = clusterTemplatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
 				Id:    templateId,

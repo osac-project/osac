@@ -25,7 +25,7 @@ import "osac/private/v1/secret_type.proto";
 
 // buf:lint:ignore OSAC_OBJECT_SHAPE
 message ClusterTemplate {
-  // Unique identifier of the template. Must be a valid Ansible role name: letters, digits,
+  // Unique identifier of the template. Must match the CRD kubebuilder pattern: letters, digits,
   // underscores, and dots, starting with a letter or underscore (e.g., "osac.templates.ocp_small").
   string id = 1 [(buf.validate.field).string = {
     min_len: 1,

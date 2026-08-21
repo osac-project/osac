@@ -183,7 +183,7 @@ func (x *BareMetalInstanceTemplate) ClearSpecDefaults() {
 type BareMetalInstanceTemplate_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
-	// Unique identifier of the template. Must be a valid Ansible role name: letters, digits,
+	// Unique identifier of the template. Must match the CRD kubebuilder pattern: letters, digits,
 	// underscores, and dots, starting with a letter or underscore (e.g., "osac.templates.bm_host_provisioning").
 	Id       string
 	Metadata *Metadata

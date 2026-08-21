@@ -30,20 +30,20 @@ var _ = DescribeMigration("Add Subnet SG delete guard", func() {
 
 	insertVN := func(ctx context.Context, id string) {
 		_, err := conn.Exec(ctx,
-			`insert into virtual_networks (id, tenant, data) values ($1, 'system', '{}')`, id)
+			`insert into virtual_networks (id, name, tenant, data) values ($1, $1, 'system', '{}')`, id)
 		Expect(err).ToNot(HaveOccurred())
 	}
 
 	insertSubnet := func(ctx context.Context, id, vnID string) {
 		_, err := conn.Exec(ctx,
-			`insert into subnets (id, tenant, data) values ($1, 'system', $2::jsonb)`,
+			`insert into subnets (id, name, tenant, data) values ($1, $1, 'system', $2::jsonb)`,
 			id, `{"spec":{"virtual_network":{"id":"`+vnID+`"}}}`)
 		Expect(err).ToNot(HaveOccurred())
 	}
 
 	insertSG := func(ctx context.Context, id, vnID string) {
 		_, err := conn.Exec(ctx,
-			`insert into security_groups (id, tenant, data) values ($1, 'system', $2::jsonb)`,
+			`insert into security_groups (id, name, tenant, data) values ($1, $1, 'system', $2::jsonb)`,
 			id, `{"spec":{"virtual_network":{"id":"`+vnID+`"}}}`)
 		Expect(err).ToNot(HaveOccurred())
 	}

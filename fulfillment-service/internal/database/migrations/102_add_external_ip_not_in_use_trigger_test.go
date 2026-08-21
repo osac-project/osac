@@ -30,27 +30,27 @@ var _ = DescribeMigration("Add ExternalIP not-in-use triggers", func() {
 
 	insertPool := func(ctx context.Context, id string) {
 		_, err := conn.Exec(ctx,
-			`insert into external_ip_pools (id, tenant, data) values ($1, 'system', '{}')`, id)
+			`insert into external_ip_pools (id, name, tenant, data) values ($1, $1, 'system', '{}')`, id)
 		Expect(err).ToNot(HaveOccurred())
 	}
 
 	insertExternalIP := func(ctx context.Context, id, poolID string) {
 		_, err := conn.Exec(ctx,
-			`insert into external_ips (id, tenant, data) values ($1, 'system', $2::jsonb)`,
+			`insert into external_ips (id, name, tenant, data) values ($1, $1, 'system', $2::jsonb)`,
 			id, `{"spec":{"pool":{"id":"`+poolID+`"}}}`)
 		Expect(err).ToNot(HaveOccurred())
 	}
 
 	insertAttachment := func(ctx context.Context, id, eipID string) error {
 		_, err := conn.Exec(ctx,
-			`insert into external_ip_attachments (id, tenant, data) values ($1, 'system', $2::jsonb)`,
+			`insert into external_ip_attachments (id, name, tenant, data) values ($1, $1, 'system', $2::jsonb)`,
 			id, `{"spec":{"external_ip":{"id":"`+eipID+`"},"compute_instance":"ci-`+id+`"}}`)
 		return err
 	}
 
 	insertNATGateway := func(ctx context.Context, id, eipID string) error {
 		_, err := conn.Exec(ctx,
-			`insert into nat_gateways (id, tenant, data) values ($1, 'system', $2::jsonb)`,
+			`insert into nat_gateways (id, name, tenant, data) values ($1, $1, 'system', $2::jsonb)`,
 			id, `{"spec":{"virtual_network":"vn-1","external_ip":"`+eipID+`"}}`)
 		return err
 	}
@@ -88,7 +88,7 @@ var _ = DescribeMigration("Add ExternalIP not-in-use triggers", func() {
 		insertExternalIP(ctx, "eip-2", "pool-2")
 
 		_, err := conn.Exec(ctx,
-			`insert into virtual_networks (id, tenant, data) values ('vn-1', 'system', '{}')`)
+			`insert into virtual_networks (id, name, tenant, data) values ('vn-1', 'vn-1', 'system', '{}')`)
 		Expect(err).ToNot(HaveOccurred())
 
 		err = insertNATGateway(ctx, "ng-1", "eip-2")
@@ -154,7 +154,7 @@ var _ = DescribeMigration("Add ExternalIP not-in-use triggers", func() {
 
 	It("Rejects NATGateway when ExternalIP does not exist", func(ctx context.Context) {
 		_, err := conn.Exec(ctx,
-			`insert into virtual_networks (id, tenant, data) values ('vn-2', 'system', '{}')`)
+			`insert into virtual_networks (id, name, tenant, data) values ('vn-2', 'vn-2', 'system', '{}')`)
 		Expect(err).ToNot(HaveOccurred())
 
 		err = insertNATGateway(ctx, "ng-bad", "nonexistent-eip")
@@ -177,7 +177,7 @@ var _ = DescribeMigration("Add ExternalIP not-in-use triggers", func() {
 
 	It("Rejects ExternalIP when pool does not exist", func(ctx context.Context) {
 		_, err := conn.Exec(ctx,
-			`insert into external_ips (id, tenant, data) values ('eip-bad', 'system', $1::jsonb)`,
+			`insert into external_ips (id, name, tenant, data) values ('eip-bad', 'eip-bad', 'system', $1::jsonb)`,
 			`{"spec":{"pool":{"id":"nonexistent-pool"}}}`)
 		pgErr := expectPgErr(err, "Z0002")
 		Expect(pgErr.Message).To(ContainSubstring("nonexistent-pool"))
@@ -189,7 +189,7 @@ var _ = DescribeMigration("Add ExternalIP not-in-use triggers", func() {
 		Expect(err).ToNot(HaveOccurred())
 
 		_, err = conn.Exec(ctx,
-			`insert into external_ips (id, tenant, data) values ('eip-8', 'system', $1::jsonb)`,
+			`insert into external_ips (id, name, tenant, data) values ('eip-8', 'eip-8', 'system', $1::jsonb)`,
 			`{"spec":{"pool":{"id":"pool-8"}}}`)
 		pgErr := expectPgErr(err, "Z0002")
 		Expect(pgErr.Message).To(ContainSubstring("pool-8"))

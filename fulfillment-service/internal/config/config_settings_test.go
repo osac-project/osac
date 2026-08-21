@@ -184,19 +184,9 @@ var _ = Describe("Settings", func() {
 	})
 
 	When("Keyring available", func() {
-		var originalKeychainAvailableFunc func() bool
-
 		BeforeEach(func() {
 			keyring.MockInit()
-		})
-
-		BeforeEach(func() {
-			originalKeychainAvailableFunc = keychainAvailableFunc
-			keychainAvailableFunc = func() bool { return true }
-		})
-
-		AfterEach(func() {
-			keychainAvailableFunc = originalKeychainAvailableFunc
+			pinKeychainAvailable(true)
 		})
 
 		It("Saves secrets in the keyring, not in the config file", func(ctx context.Context) {
@@ -267,21 +257,10 @@ var _ = Describe("Settings", func() {
 	})
 
 	When("Keyring is not available", func() {
-		var originalKeychainAvailableFunc func() bool
-
 		BeforeEach(func() {
 			keyring.MockInitWithError(fmt.Errorf("keyring backend not available"))
-		})
-
-		// Pin the gate to "available" so these assertions exercise the mocked keyring-probe fallback path they're
-		// actually testing, not an accidental gate short-circuit on a darwin machine with no default keychain.
-		BeforeEach(func() {
-			originalKeychainAvailableFunc = keychainAvailableFunc
-			keychainAvailableFunc = func() bool { return true }
-		})
-
-		AfterEach(func() {
-			keychainAvailableFunc = originalKeychainAvailableFunc
+			// Pinned to "available" so this exercises the mocked keyring-probe fallback, not a darwin gate short-circuit.
+			pinKeychainAvailable(true)
 		})
 
 		It("Saves secrets in the secrets file, not in the keyring", func(ctx context.Context) {

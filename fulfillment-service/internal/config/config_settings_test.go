@@ -184,8 +184,19 @@ var _ = Describe("Settings", func() {
 	})
 
 	When("Keyring available", func() {
+		var originalKeychainAvailableFunc func() bool
+
 		BeforeEach(func() {
 			keyring.MockInit()
+		})
+
+		BeforeEach(func() {
+			originalKeychainAvailableFunc = keychainAvailableFunc
+			keychainAvailableFunc = func() bool { return true }
+		})
+
+		AfterEach(func() {
+			keychainAvailableFunc = originalKeychainAvailableFunc
 		})
 
 		It("Saves secrets in the keyring, not in the config file", func(ctx context.Context) {

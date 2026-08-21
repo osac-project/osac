@@ -35,6 +35,10 @@ type SecretStore interface {
 
 	// Save serializes the given object and writes it to the store. Passing nil clears all data from the store.
 	Save(ctx context.Context, object any) error
+
+	// Backend reports which backend this store is using ("keyring" or "file"), so callers can tell the user
+	// when their secrets are not going into the OS keyring.
+	Backend() string
 }
 
 // SecretStoreBuilder contains the data and logic needed to build a secret store that automatically selects the best
@@ -64,13 +68,30 @@ func (b *SecretStoreBuilder) SetDir(value string) *SecretStoreBuilder {
 	return b
 }
 
-// Build uses the data stored in the builder to create and configure a new secret store. It probes the operating system
-// keyring by attempting to read the secrets key: if the call succeeds or returns ErrNotFound the keyring is usable;
-// any other error indicates the backend is not available and a file-based store is returned instead.
+// keychainAvailableFunc indirects to keychainAvailable (platform-specific; see config_secret_store_darwin.go /
+// config_secret_store_other.go) so tests can pin its result instead of depending on the real host machine's
+// keychain state.
+var keychainAvailableFunc = keychainAvailable
+
+// Build uses the data stored in the builder to create and configure a new secret store. On platforms where the
+// keyring backend can be entirely absent without keyring.Get's probe being able to tell (currently just macOS --
+// see keychainAvailable), it checks that first and returns a file-based store immediately if no backend is
+// present. Otherwise it probes the operating system keyring by attempting to read the secrets key: if the call
+// succeeds or returns ErrNotFound the keyring is usable; any other error indicates the backend is not available
+// and a file-based store is returned instead.
 func (b *SecretStoreBuilder) Build() (result SecretStore, err error) {
 	// Check parameters:
 	if b.logger == nil {
 		err = errors.New("logger is mandatory")
+		return
+	}
+
+	// Skip the probe entirely if there's no keyring backend to probe:
+	if !keychainAvailableFunc() {
+		result, err = NewFileSecretStore().
+			SetLogger(b.logger).
+			SetDir(b.dir).
+			Build()
 		return
 	}
 
@@ -146,6 +167,8 @@ type keyringSecretStore struct {
 	logger *slog.Logger
 	key    string
 }
+
+func (s *keyringSecretStore) Backend() string { return "keyring" }
 
 func (s *keyringSecretStore) Load(ctx context.Context, object any) error {
 	data, err := keyring.Get(keyringService, s.key)
@@ -262,6 +285,8 @@ type fileSecretStore struct {
 	logger *slog.Logger
 	file   string
 }
+
+func (s *fileSecretStore) Backend() string { return "file" }
 
 func (s *fileSecretStore) Load(ctx context.Context, object any) error {
 	data, err := os.ReadFile(s.file)

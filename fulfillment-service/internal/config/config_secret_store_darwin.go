@@ -25,7 +25,10 @@ import (
 // securityBinPath is the path to the macOS security(1) CLI. Mutable so tests can stub it.
 var securityBinPath = "/usr/bin/security" // SIP-protected, stable across macOS versions
 
-// keychainProbePassword is the unlock-keychain probe's password; empty in production (mutable for tests -- see fix commit).
+// keychainProbePassword is the unlock-keychain probe's password; empty in production (mutable for tests -- see fix
+// commit). Known limitation: the empty-password no-op-when-unlocked behavior was verified on a standard,
+// non-MDM-managed Mac; MDM-enforced keychain policies are untested and could cause a false "unavailable" (safe --
+// just an unnecessary file-store fallback, not a dialog).
 var keychainProbePassword = ""
 
 // keychainProbeTimeout bounds the default-keychain and lock-state checks; real invocations finish in well under a second.

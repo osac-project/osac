@@ -14,3 +14,13 @@ storage_provider_csi_backends_chart_ref: >-
 storage_provider_csi_backends_chart_version: ""
 storage_provider_csi_backends_release_name: "osac-csi-backends"
 storage_provider_csi_backends_namespace: "osac-csi-backends"
+
+# Secret consumed by the (not-yet-implemented) vast-csi-controller
+# init-container to authenticate to fulfillment-service's private API and
+# fetch VMS admin credentials live — see OSAC-3290's "VMS Admin-Credential
+# Resolution" section. Static, registration-time data injected via AAP
+# Credential Type / vault-backed environment variables, not per-dispatch
+# extra_vars.
+storage_provider_csi_backends_oauth_secret_name: "csi-backends-oauth-credentials"
+storage_provider_csi_backends_oauth_client_id: "{{ lookup('env', 'STORAGE_PROVIDER_CSI_BACKENDS_OAUTH_CLIENT_ID') | default('', true) }}"
+storage_provider_csi_backends_oauth_client_secret: "{{ lookup('env', 'STORAGE_PROVIDER_CSI_BACKENDS_OAUTH_CLIENT_SECRET') | default('', true) }}"

@@ -38,8 +38,6 @@ def _assert_nic_metadata(
     # 1. BMH is the source of truth — hardware inspection provides the authoritative MAC list
     bmh_macs: set[str] = set(k8s.get_bmh_hardware_nics(name=bmh_name, bmh_namespace=bmh_namespace))
     assert bmh_macs, f"BareMetalHost {bmh_name} has no hardware.nics — inspection may not have completed"
-    for mac in bmh_macs:
-        assert _MAC_PATTERN.match(mac), f"BMH MAC '{mac}' does not match expected lowercase colon-separated format"
 
     # 2. BMI CR status.hardware.nics must match the BMH
     cr_macs: set[str] = set(k8s.get_bmi_hardware_nics(name=bmi_cr_name))

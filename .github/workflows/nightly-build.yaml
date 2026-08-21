@@ -45,6 +45,25 @@ jobs:
         fetch-depth: 0
         token: ${{ secrets.GITHUB_TOKEN }}
 
+    # cancel-in-progress can skip cleanup on superseded runs; prune orphaned nightly/* branches.
+    - name: Prune stale nightly temp branches
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        CUTOFF=$(date -u -d '7 days ago' +%Y%m%d)
+        while read -r ref; do
+          [[ -z "${ref}" ]] && continue
+          branch="${ref#refs/heads/}"
+          branch_date="${branch#nightly/}"
+          branch_date="${branch_date%%-*}"
+          [[ "${branch_date}" =~ ^[0-9]{8}$ ]] || continue
+          if (( branch_date < CUTOFF )); then
+            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${branch}" \
+              || echo "::warning::Could not delete stale nightly branch ${branch}"
+          fi
+        done < <(gh api --paginate "repos/${GITHUB_REPOSITORY}/git/matching-refs/heads/nightly/" --jq '.[].ref')
+
     # Resolve osac-ui@main HEAD once, but only accept it when ghcr.io/.../osac-ui:sha-<7>
     # already exists (check_osac_ui_image). The full SHA is written to pinned/osac-ui.commit
     # and propagated to E2E + publish via the temp branch outputs — same pin for the

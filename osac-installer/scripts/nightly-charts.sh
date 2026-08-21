@@ -47,35 +47,36 @@ append_chart_version() {
 # Prints the full commit SHA on stdout; fails if the image is not published yet.
 check_osac_ui_image() {
     local repo="${1:-osac-ui}"
-    local sha tag token
+    local sha tag token safe_repo safe_sha
 
     sha=$(git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=10 \
         ls-remote "https://github.com/osac-project/${repo}.git" refs/heads/main | cut -f1)
 
     if [[ -z "${sha}" || ! "${sha}" =~ ^[0-9a-f]{40}$ ]]; then
-        local safe_sha
         safe_sha=$(_gha_sanitize_for_message "${sha}")
-        echo "::error::Could not resolve ${repo} main HEAD SHA (got: '${safe_sha}')" >&2
+        safe_repo=$(_gha_sanitize_for_message "${repo}")
+        echo "::error::Could not resolve ${safe_repo} main HEAD SHA (got: '${safe_sha}')" >&2
         return 1
     fi
 
     tag="sha-${sha:0:7}"
-    if ! token=$(http_json "Could not obtain GHCR token to verify ${repo}:${tag}" 3 5 '.token' \
+    safe_repo=$(_gha_sanitize_for_message "${repo}")
+    if ! token=$(http_json "Could not obtain GHCR token to verify ${safe_repo}:${tag}" 3 5 '.token' \
         "https://ghcr.io/token?scope=repository:osac-project/${repo}:pull"); then
-        echo "::error::Could not obtain GHCR token to verify ${repo}:${tag}" >&2
+        echo "::error::Could not obtain GHCR token to verify ${safe_repo}:${tag}" >&2
         return 1
     fi
     if [[ -z "${token}" || "${token}" == "null" ]]; then
-        echo "::error::GHCR token is empty or null for ${repo}:${tag}" >&2
+        echo "::error::GHCR token is empty or null for ${safe_repo}:${tag}" >&2
         return 1
     fi
 
-    if ! http_retry "${repo} main HEAD ${sha:0:7} has no published image (tag ${tag})" 3 5 \
+    if ! http_retry "${safe_repo} main HEAD ${sha:0:7} has no published image (tag ${tag})" 3 5 \
         -s -o /dev/null \
         -H "Authorization: Bearer ${token}" \
         -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json" \
         "https://ghcr.io/v2/osac-project/${repo}/manifests/${tag}"; then
-        echo "::error::${repo} main HEAD ${sha:0:7} has no published image (tag ${tag})" >&2
+        echo "::error::${safe_repo} main HEAD ${sha:0:7} has no published image (tag ${tag})" >&2
         return 1
     fi
 
@@ -98,21 +99,24 @@ _gha_sanitize_for_message() {
 # Print chart name from Chart.yaml; return 1 with sanitized ::error if invalid.
 read_validated_chart_name() {
     local chart_dir="$1"
-    local chart_name safe_name
+    local chart_name safe_name safe_dir
 
     if [[ ! -f "${chart_dir}/Chart.yaml" ]]; then
-        echo "::error::Chart manifest '${chart_dir}/Chart.yaml' not found!" >&2
+        safe_dir=$(_gha_sanitize_for_message "${chart_dir}")
+        echo "::error::Chart manifest '${safe_dir}/Chart.yaml' not found!" >&2
         return 1
     fi
 
     chart_name=$(yq -r '.name' "${chart_dir}/Chart.yaml")
     if [[ -z "${chart_name}" || "${chart_name}" == "null" ]]; then
-        echo "::error::Chart name missing in ${chart_dir}/Chart.yaml" >&2
+        safe_dir=$(_gha_sanitize_for_message "${chart_dir}")
+        echo "::error::Chart name missing in ${safe_dir}/Chart.yaml" >&2
         return 1
     fi
     if [[ ! "${chart_name}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
         safe_name=$(_gha_sanitize_for_message "${chart_name}")
-        echo "::error title=${safe_name}::Invalid chart name in ${chart_dir}/Chart.yaml (name must match [a-zA-Z0-9._-]+)" >&2
+        safe_dir=$(_gha_sanitize_for_message "${chart_dir}")
+        echo "::error title=${safe_name}::Invalid chart name in ${safe_dir}/Chart.yaml (name must match [a-zA-Z0-9._-]+)" >&2
         return 1
     fi
     echo "${chart_name}"

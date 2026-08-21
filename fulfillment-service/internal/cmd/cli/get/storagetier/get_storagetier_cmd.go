@@ -22,7 +22,6 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
-	describestoragetier "github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/storagetier"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/lookup"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
@@ -100,7 +99,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	describestoragetier.RenderStorageTier(c.console, tier)
+	renderTierTable(c.console, []*publicv1.StorageTier{tier})
 	return nil
 }
 

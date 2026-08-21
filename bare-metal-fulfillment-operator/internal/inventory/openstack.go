@@ -28,6 +28,7 @@ import (
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack"
 	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/v1/nodes"
+	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/v1/ports"
 	"github.com/gophercloud/gophercloud/v2/pagination"
 	"github.com/gophercloud/utils/v2/openstack/clientconfig"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
@@ -184,6 +185,7 @@ func (c *OpenStackClient) findFreeHost(ctx context.Context, matchExpressions map
 
 	var foundHost *Host
 	err := nodes.List(c.client, listOpts).EachPage(ctx, func(ctx context.Context, page pagination.Page) (bool, error) {
+		log := ctrllog.FromContext(ctx)
 		nodeList, err := nodes.ExtractNodes(page)
 		if err != nil {
 			return false, err
@@ -216,6 +218,25 @@ func (c *OpenStackClient) findFreeHost(ctx context.Context, matchExpressions map
 				matchManagedBy = shared.OsacDefaultManagedByValue
 			}
 			if managedBy != matchManagedBy {
+				continue
+			}
+
+			// Skip nodes without registered Ironic ports
+			portPages, portErr := ports.ListDetail(c.client, ports.ListOpts{NodeUUID: node.UUID}).AllPages(ctx)
+			if portErr != nil {
+				if isAuthError(portErr) {
+					return false, portErr
+				}
+				log.V(1).Info("Skipping node: port lookup failed", "node", node.UUID, "error", portErr)
+				continue
+			}
+			portList, portErr := ports.ExtractPorts(portPages)
+			if portErr != nil || len(portList) == 0 {
+				if portErr != nil {
+					log.Error(portErr, "Skipping node: failed to extract ports", "node", node.UUID)
+				} else {
+					log.Error(nil, "Skipping node: no registered ports", "node", node.UUID)
+				}
 				continue
 			}
 
@@ -413,9 +434,37 @@ func getNestedLabel(node *nodes.Node, labelKey string) (string, bool) {
 	return "", false
 }
 
-// GetHostNICs returns nil for OpenStack hosts. NIC metadata discovery via
-// Ironic ports is implemented in OSAC-4202; returning nil allows the controller
-// to proceed to Ready without blocking on the unimplemented call.
-func (c *OpenStackClient) GetHostNICs(_ context.Context, _ string) ([]HostNIC, error) {
-	return nil, nil
+func (c *OpenStackClient) GetHostNICs(ctx context.Context, inventoryHostID string) ([]HostNIC, error) {
+	nics, err := c.getHostNICs(ctx, inventoryHostID)
+	if err != nil && isAuthError(err) {
+		log := ctrllog.FromContext(ctx)
+		log.Info("auth error on GetHostNICs, attempting reconnect", "inventoryHostID", inventoryHostID, "error", err)
+		if reconnErr := c.reconnect(ctx); reconnErr != nil {
+			return nil, fmt.Errorf("get host NICs %s: reconnect failed: %w", inventoryHostID, reconnErr)
+		}
+		nics, err = c.getHostNICs(ctx, inventoryHostID)
+		if err != nil {
+			return nil, fmt.Errorf("get host NICs %s after reconnect: %w", inventoryHostID, err)
+		}
+	}
+	return nics, err
+}
+
+func (c *OpenStackClient) getHostNICs(ctx context.Context, inventoryHostID string) ([]HostNIC, error) {
+	portPages, err := ports.ListDetail(c.client, ports.ListOpts{NodeUUID: inventoryHostID}).AllPages(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing ports for node %s: %w", inventoryHostID, err)
+	}
+	portList, err := ports.ExtractPorts(portPages)
+	if err != nil {
+		return nil, fmt.Errorf("extracting ports for node %s: %w", inventoryHostID, err)
+	}
+	if len(portList) == 0 {
+		return nil, fmt.Errorf("node %s has no NIC inventory despite being allocated", inventoryHostID)
+	}
+	nics := make([]HostNIC, 0, len(portList))
+	for _, p := range portList {
+		nics = append(nics, HostNIC{MAC: strings.ToLower(p.Address)})
+	}
+	return nics, nil
 }

@@ -2713,7 +2713,16 @@ var _ = Describe("Private bare metal instances server", func() {
 		})
 
 		It("Skips defaults when no default subnet exists", func() {
-			// Delete the default subnet — Create should succeed with no network_attachments.
+			// Delete the default SG first (migration 103 blocks subnet deletion while SGs
+			// reference the same VN), then delete the default subnet.
+			sgDao, sgErr := dao.NewGenericDAO[*privatev1.SecurityGroup]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(sgErr).ToNot(HaveOccurred())
+			_, sgErr = sgDao.Delete().SetId(defaultSG.GetId()).Do(ctx)
+			Expect(sgErr).ToNot(HaveOccurred())
+
 			subnetDao, sdErr := dao.NewGenericDAO[*privatev1.Subnet]().
 				SetLogger(logger).
 				SetTenancyLogic(tenancy).

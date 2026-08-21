@@ -44,7 +44,8 @@ const (
 type ClusterTemplate struct {
 	state protoimpl.MessageState `protogen:"hybrid.v1"`
 	// Unique identifier of the template. Must match the CRD kubebuilder pattern: letters, digits,
-	// underscores, and dots, starting with a letter or underscore (e.g., "osac.templates.ocp_small").
+	// underscores, and dots, starting with a letter or underscore. Hyphens are not allowed
+	// (e.g., "osac.templates.ocp_small").
 	Id       string    `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Metadata *Metadata `protobuf:"bytes,2,opt,name=metadata,proto3" json:"metadata,omitempty"`
 	// Human friendly short description of the template, only a few words, suitable for displaying in one single line on a
@@ -196,7 +197,8 @@ type ClusterTemplate_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
 	// Unique identifier of the template. Must match the CRD kubebuilder pattern: letters, digits,
-	// underscores, and dots, starting with a letter or underscore (e.g., "osac.templates.ocp_small").
+	// underscores, and dots, starting with a letter or underscore. Hyphens are not allowed
+	// (e.g., "osac.templates.ocp_small").
 	Id       string
 	Metadata *Metadata
 	// Human friendly short description of the template, only a few words, suitable for displaying in one single line on a

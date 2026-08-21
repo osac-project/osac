@@ -614,7 +614,7 @@ var _ = Describe("Compute instances server", func() {
 		})
 
 		It("User-provided values survive public-to-private mapping, missing fields filled from template", func() {
-			createTemplate("mapping-template")
+			createTemplate("mapping_template")
 
 			// Create with some user-provided fields and let template cover the rest for validation:
 			response, err := server.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
@@ -623,7 +623,7 @@ var _ = Describe("Compute instances server", func() {
 						Name: "test-compute-instance",
 					}.Build(),
 					Spec: publicv1.ComputeInstanceSpec_builder{
-						Template:    publicv1.ComputeInstanceTemplateReference_builder{Id: "mapping-template"}.Build(),
+						Template:    publicv1.ComputeInstanceTemplateReference_builder{Id: "mapping_template"}.Build(),
 						RunStrategy: new("Halted"),
 						NetworkAttachments: []*publicv1.NetworkAttachment{
 							publicv1.NetworkAttachment_builder{

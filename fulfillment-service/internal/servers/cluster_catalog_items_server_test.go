@@ -82,7 +82,7 @@ var _ = Describe("Cluster catalog items server", func() {
 					}.Build(),
 					Title:       "My cluster catalog item",
 					Description: "My description.",
-					Template:    publicv1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+					Template:    publicv1.ClusterTemplateReference_builder{Id: "my_template_id"}.Build(),
 					Published:   true,
 				}.Build(),
 			}.Build())
@@ -92,7 +92,7 @@ var _ = Describe("Cluster catalog items server", func() {
 			Expect(object).ToNot(BeNil())
 			Expect(object.GetId()).ToNot(BeEmpty())
 			Expect(object.GetTitle()).To(Equal("My cluster catalog item"))
-			Expect(object.GetTemplate().GetId()).To(Equal("my-template-id"))
+			Expect(object.GetTemplate().GetId()).To(Equal("my_template_id"))
 			Expect(object.GetPublished()).To(BeTrue())
 		})
 
@@ -105,7 +105,7 @@ var _ = Describe("Cluster catalog items server", func() {
 							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 						}.Build(),
 						Title:     fmt.Sprintf("Catalog item %d", i),
-						Template:  publicv1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+						Template:  publicv1.ClusterTemplateReference_builder{Id: "my_template_id"}.Build(),
 						Published: true,
 					}.Build(),
 				}.Build())
@@ -127,7 +127,7 @@ var _ = Describe("Cluster catalog items server", func() {
 							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 						}.Build(),
 						Title:     fmt.Sprintf("Catalog item %d", i),
-						Template:  publicv1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+						Template:  publicv1.ClusterTemplateReference_builder{Id: "my_template_id"}.Build(),
 						Published: true,
 					}.Build(),
 				}.Build())
@@ -151,7 +151,7 @@ var _ = Describe("Cluster catalog items server", func() {
 							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 						}.Build(),
 						Title:     fmt.Sprintf("Catalog item %d", i),
-						Template:  publicv1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+						Template:  publicv1.ClusterTemplateReference_builder{Id: "my_template_id"}.Build(),
 						Published: true,
 					}.Build(),
 				}.Build())
@@ -176,7 +176,7 @@ var _ = Describe("Cluster catalog items server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Title:     "Published item",
-					Template:  publicv1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+					Template:  publicv1.ClusterTemplateReference_builder{Id: "my_template_id"}.Build(),
 					Published: true,
 				}.Build(),
 			}.Build())
@@ -188,7 +188,7 @@ var _ = Describe("Cluster catalog items server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Title:     "Unpublished item",
-					Template:  publicv1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+					Template:  publicv1.ClusterTemplateReference_builder{Id: "my_template_id"}.Build(),
 					Published: false,
 				}.Build(),
 			}.Build())
@@ -207,7 +207,7 @@ var _ = Describe("Cluster catalog items server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Title:     "Target published",
-					Template:  publicv1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+					Template:  publicv1.ClusterTemplateReference_builder{Id: "my_template_id"}.Build(),
 					Published: true,
 				}.Build(),
 			}.Build())
@@ -219,7 +219,7 @@ var _ = Describe("Cluster catalog items server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Title:     "Other published",
-					Template:  publicv1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+					Template:  publicv1.ClusterTemplateReference_builder{Id: "my_template_id"}.Build(),
 					Published: true,
 				}.Build(),
 			}.Build())
@@ -231,7 +231,7 @@ var _ = Describe("Cluster catalog items server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Title:     "Target unpublished",
-					Template:  publicv1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+					Template:  publicv1.ClusterTemplateReference_builder{Id: "my_template_id"}.Build(),
 					Published: false,
 				}.Build(),
 			}.Build())
@@ -254,7 +254,7 @@ var _ = Describe("Cluster catalog items server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Title:     "Unpublished item",
-					Template:  publicv1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+					Template:  publicv1.ClusterTemplateReference_builder{Id: "my_template_id"}.Build(),
 					Published: false,
 				}.Build(),
 			}.Build())
@@ -275,7 +275,7 @@ var _ = Describe("Cluster catalog items server", func() {
 					}.Build(),
 					Spec: privatev1.ClusterSpec_builder{
 						CatalogItem: privatev1.ClusterCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						Template:    privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+						Template:    privatev1.ClusterTemplateReference_builder{Id: "my_template_id"}.Build(),
 					}.Build(),
 				}.Build(),
 			).Do(ctx)
@@ -295,7 +295,7 @@ var _ = Describe("Cluster catalog items server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Title:     "Unpublished item",
-					Template:  publicv1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+					Template:  publicv1.ClusterTemplateReference_builder{Id: "my_template_id"}.Build(),
 					Published: false,
 				}.Build(),
 			}.Build())
@@ -316,7 +316,7 @@ var _ = Describe("Cluster catalog items server", func() {
 					}.Build(),
 					Title:       "My catalog item",
 					Description: "My description.",
-					Template:    publicv1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+					Template:    publicv1.ClusterTemplateReference_builder{Id: "my_template_id"}.Build(),
 					Published:   true,
 				}.Build(),
 			}.Build())
@@ -337,7 +337,7 @@ var _ = Describe("Cluster catalog items server", func() {
 					}.Build(),
 					Title:       "Original title",
 					Description: "Original description.",
-					Template:    publicv1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+					Template:    publicv1.ClusterTemplateReference_builder{Id: "my_template_id"}.Build(),
 					Published:   true,
 				}.Build(),
 			}.Build())
@@ -350,7 +350,7 @@ var _ = Describe("Cluster catalog items server", func() {
 					Metadata:    publicv1.Metadata_builder{Name: name}.Build(),
 					Title:       "Updated title",
 					Description: "Updated description.",
-					Template:    publicv1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+					Template:    publicv1.ClusterTemplateReference_builder{Id: "my_template_id"}.Build(),
 					Published:   true,
 				}.Build(),
 			}.Build())
@@ -373,7 +373,7 @@ var _ = Describe("Cluster catalog items server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Title:     "My catalog item",
-					Template:  publicv1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+					Template:  publicv1.ClusterTemplateReference_builder{Id: "my_template_id"}.Build(),
 					Published: true,
 				}.Build(),
 			}.Build())

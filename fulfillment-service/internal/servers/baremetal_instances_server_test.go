@@ -80,7 +80,7 @@ var _ = Describe("Bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Title:     "Test catalog item",
-					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "test-template"}.Build(),
+					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "test_template"}.Build(),
 					Published: true,
 				}.Build(),
 			}.Build())

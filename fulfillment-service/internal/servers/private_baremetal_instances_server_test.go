@@ -109,7 +109,7 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Title:     "Test catalog item",
-					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "test-template"}.Build(),
+					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "test_template"}.Build(),
 					Published: true,
 				}.Build(),
 			}.Build())
@@ -211,7 +211,7 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: "my-named-catalog-item",
 					}.Build(),
 					Title:     "Named catalog item",
-					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "test-template"}.Build(),
+					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "test_template"}.Build(),
 					Published: true,
 				}.Build(),
 			}.Build())
@@ -249,7 +249,7 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Title:     "Unpublished item",
-					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "test-template"}.Build(),
+					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "test_template"}.Build(),
 					Published: false,
 				}.Build(),
 			}.Build())
@@ -351,7 +351,7 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Title:     "Second catalog item",
-					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "test-template"}.Build(),
+					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "test_template"}.Build(),
 					Published: true,
 				}.Build(),
 			}.Build())
@@ -566,11 +566,11 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 
 			template := privatev1.BareMetalInstanceTemplate_builder{
-				Id:          "image-default-template",
+				Id:          "image_default_template",
 				Title:       "Template with image default",
 				Description: "Has default image in spec_defaults",
 				Metadata: privatev1.Metadata_builder{
-					Name:   "image-default-template",
+					Name:   "image_default_template",
 					Tenant: auth.SharedTenant,
 				}.Build(),
 				SpecDefaults: privatev1.BareMetalInstanceTemplateSpecDefaults_builder{
@@ -590,7 +590,7 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Title:     "Catalog with image default",
-					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "image-default-template"}.Build(),
+					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "image_default_template"}.Build(),
 					Published: true,
 				}.Build(),
 			}.Build())
@@ -621,11 +621,11 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 
 			template := privatev1.BareMetalInstanceTemplate_builder{
-				Id:          "image-override-template",
+				Id:          "image_override_template",
 				Title:       "Template with image default",
 				Description: "Has default image in spec_defaults",
 				Metadata: privatev1.Metadata_builder{
-					Name:   "image-override-template",
+					Name:   "image_override_template",
 					Tenant: auth.SharedTenant,
 				}.Build(),
 				SpecDefaults: privatev1.BareMetalInstanceTemplateSpecDefaults_builder{
@@ -645,7 +645,7 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Title:     "Catalog with image default override",
-					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "image-override-template"}.Build(),
+					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "image_override_template"}.Build(),
 					Published: true,
 				}.Build(),
 			}.Build())
@@ -680,11 +680,11 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 
 			template := privatev1.BareMetalInstanceTemplate_builder{
-				Id:          "image-partial-merge-template",
+				Id:          "image_partial_merge_template",
 				Title:       "Template with image default",
 				Description: "Has default image in spec_defaults",
 				Metadata: privatev1.Metadata_builder{
-					Name:   "image-partial-merge-template",
+					Name:   "image_partial_merge_template",
 					Tenant: auth.SharedTenant,
 				}.Build(),
 				SpecDefaults: privatev1.BareMetalInstanceTemplateSpecDefaults_builder{
@@ -704,7 +704,7 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Title:     "Catalog with partial merge",
-					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "image-partial-merge-template"}.Build(),
+					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "image_partial_merge_template"}.Build(),
 					Published: true,
 				}.Build(),
 			}.Build())
@@ -872,11 +872,11 @@ var _ = Describe("Private bare metal instances server", func() {
 		It("Applies default values for optional template parameters", func() {
 			diskDefault, err := anypb.New(wrapperspb.String("single"))
 			Expect(err).ToNot(HaveOccurred())
-			createTemplate("defaults-template", []*privatev1.BareMetalInstanceTemplateParameterDefinition{
+			createTemplate("defaults_template", []*privatev1.BareMetalInstanceTemplateParameterDefinition{
 				{Name: "os_version", Required: true, Type: "type.googleapis.com/google.protobuf.StringValue"},
 				{Name: "disk_layout", Required: false, Type: "type.googleapis.com/google.protobuf.StringValue", Default: diskDefault},
 			})
-			catID := createCatalogItemWithTemplate("defaults-template")
+			catID := createCatalogItemWithTemplate("defaults_template")
 
 			osParam, err := anypb.New(wrapperspb.String("rhel9.4"))
 			Expect(err).ToNot(HaveOccurred())
@@ -1070,7 +1070,7 @@ var _ = Describe("Private bare metal instances server", func() {
 		})
 
 		It("Creates object with field_definitions and template_parameters", func() {
-			createTemplate("combo-template", []*privatev1.BareMetalInstanceTemplateParameterDefinition{
+			createTemplate("combo_template", []*privatev1.BareMetalInstanceTemplateParameterDefinition{
 				{Name: "os_version", Required: true, Type: "type.googleapis.com/google.protobuf.StringValue"},
 			})
 
@@ -1080,7 +1080,7 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Title:     "Catalog with both constraints",
-					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "combo-template"}.Build(),
+					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "combo_template"}.Build(),
 					Published: true,
 					FieldDefinitions: []*privatev1.FieldDefinition{
 						privatev1.FieldDefinition_builder{
@@ -1118,7 +1118,7 @@ var _ = Describe("Private bare metal instances server", func() {
 		})
 
 		It("Rejects user value for non-editable field_definition alongside template_parameters", func() {
-			createTemplate("override-combo-template", []*privatev1.BareMetalInstanceTemplateParameterDefinition{
+			createTemplate("override_combo_template", []*privatev1.BareMetalInstanceTemplateParameterDefinition{
 				{Name: "os_version", Required: true, Type: "type.googleapis.com/google.protobuf.StringValue"},
 			})
 
@@ -1128,7 +1128,7 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Title:     "Override + template params",
-					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "override-combo-template"}.Build(),
+					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "override_combo_template"}.Build(),
 					Published: true,
 					FieldDefinitions: []*privatev1.FieldDefinition{
 						privatev1.FieldDefinition_builder{
@@ -1170,7 +1170,7 @@ var _ = Describe("Private bare metal instances server", func() {
 		})
 
 		It("Accepts editable field_definition alongside template_parameters", func() {
-			createTemplate("editable-combo-template", []*privatev1.BareMetalInstanceTemplateParameterDefinition{
+			createTemplate("editable_combo_template", []*privatev1.BareMetalInstanceTemplateParameterDefinition{
 				{Name: "os_version", Required: true, Type: "type.googleapis.com/google.protobuf.StringValue"},
 			})
 
@@ -1180,7 +1180,7 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Title:     "Editable + template params",
-					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "editable-combo-template"}.Build(),
+					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "editable_combo_template"}.Build(),
 					Published: true,
 					FieldDefinitions: []*privatev1.FieldDefinition{
 						privatev1.FieldDefinition_builder{
@@ -1218,7 +1218,7 @@ var _ = Describe("Private bare metal instances server", func() {
 		})
 
 		It("Rejects missing required field_definition even with valid template_parameters", func() {
-			createTemplate("fd-fail-template", []*privatev1.BareMetalInstanceTemplateParameterDefinition{
+			createTemplate("fd_fail_template", []*privatev1.BareMetalInstanceTemplateParameterDefinition{
 				{Name: "os_version", Required: true, Type: "type.googleapis.com/google.protobuf.StringValue"},
 			})
 
@@ -1228,7 +1228,7 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Title:     "FD fail + valid TP",
-					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "fd-fail-template"}.Build(),
+					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "fd_fail_template"}.Build(),
 					Published: true,
 					FieldDefinitions: []*privatev1.FieldDefinition{
 						privatev1.FieldDefinition_builder{
@@ -1267,7 +1267,7 @@ var _ = Describe("Private bare metal instances server", func() {
 		})
 
 		It("Rejects missing required template_parameter even with valid field_definitions", func() {
-			createTemplate("tp-fail-template", []*privatev1.BareMetalInstanceTemplateParameterDefinition{
+			createTemplate("tp_fail_template", []*privatev1.BareMetalInstanceTemplateParameterDefinition{
 				{Name: "os_version", Required: true, Type: "type.googleapis.com/google.protobuf.StringValue"},
 			})
 
@@ -1277,7 +1277,7 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Title:     "Valid FD + TP fail",
-					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "tp-fail-template"}.Build(),
+					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "tp_fail_template"}.Build(),
 					Published: true,
 					FieldDefinitions: []*privatev1.FieldDefinition{
 						privatev1.FieldDefinition_builder{
@@ -1456,7 +1456,7 @@ var _ = Describe("Private bare metal instances server", func() {
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 			_, err = templatesDao.Create().SetObject(privatev1.BareMetalInstanceTemplate_builder{
-				Id:       "template-with-ht",
+				Id:       "template_with_ht",
 				Title:    "Template with HostType",
 				HostType: "test-host-type",
 				Metadata: privatev1.Metadata_builder{
@@ -1468,7 +1468,7 @@ var _ = Describe("Private bare metal instances server", func() {
 
 			// Create a template WITHOUT host_type.
 			_, err = templatesDao.Create().SetObject(privatev1.BareMetalInstanceTemplate_builder{
-				Id:    "template-no-ht",
+				Id:    "template_no_ht",
 				Title: "Template without HostType",
 				Metadata: privatev1.Metadata_builder{
 					Tenant: auth.SharedTenant,
@@ -1484,7 +1484,7 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Title:     "Catalog with HT",
-					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "template-with-ht"}.Build(),
+					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "template_with_ht"}.Build(),
 					Published: true,
 				}.Build(),
 			}.Build())
@@ -1497,7 +1497,7 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Title:     "Catalog no HT",
-					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "template-no-ht"}.Build(),
+					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "template_no_ht"}.Build(),
 					Published: true,
 				}.Build(),
 			}.Build())
@@ -2271,7 +2271,7 @@ var _ = Describe("Private bare metal instances server", func() {
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 			_, err = templatesDao.Create().SetObject(privatev1.BareMetalInstanceTemplate_builder{
-				Id:    "template-no-ht-fabric-manager-test",
+				Id:    "template_no_ht_fabric_manager_test",
 				Title: "Template without HostType",
 				Metadata: privatev1.Metadata_builder{
 					Tenant: auth.SharedTenant,
@@ -2286,7 +2286,7 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Title:     "Catalog for fabric manager validation",
-					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "template-no-ht-fabric-manager-test"}.Build(),
+					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "template_no_ht_fabric_manager_test"}.Build(),
 					Published: true,
 				}.Build(),
 			}.Build())
@@ -2454,7 +2454,7 @@ var _ = Describe("Private bare metal instances server", func() {
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 			_, err = templatesDao.Create().SetObject(privatev1.BareMetalInstanceTemplate_builder{
-				Id:       "default-template-with-ht",
+				Id:       "default_template_with_ht",
 				Title:    "Template with HostType",
 				HostType: "default-test-host-type",
 				Metadata: privatev1.Metadata_builder{
@@ -2465,7 +2465,7 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 
 			_, err = templatesDao.Create().SetObject(privatev1.BareMetalInstanceTemplate_builder{
-				Id:    "default-template-no-ht",
+				Id:    "default_template_no_ht",
 				Title: "Template without HostType",
 				Metadata: privatev1.Metadata_builder{
 					Tenant: auth.SharedTenant,
@@ -2481,7 +2481,7 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Title:     "Catalog with HT for defaults",
-					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "default-template-with-ht"}.Build(),
+					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "default_template_with_ht"}.Build(),
 					Published: true,
 				}.Build(),
 			}.Build())
@@ -2494,7 +2494,7 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Title:     "Catalog no HT for defaults",
-					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "default-template-no-ht"}.Build(),
+					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "default_template_no_ht"}.Build(),
 					Published: true,
 				}.Build(),
 			}.Build())
@@ -2711,7 +2711,7 @@ var _ = Describe("Private bare metal instances server", func() {
 				Build()
 			Expect(htErr).ToNot(HaveOccurred())
 			_, htErr = htDao.Create().SetObject(privatev1.HostType_builder{
-				Id:    "no-fabric-host-type",
+				Id:    "no_fabric_host_type",
 				Title: "No Fabric Host Type",
 				Metadata: privatev1.Metadata_builder{
 					Tenant: auth.SharedTenant,
@@ -2731,9 +2731,9 @@ var _ = Describe("Private bare metal instances server", func() {
 				Build()
 			Expect(tmplErr).ToNot(HaveOccurred())
 			_, tmplErr = tmplDao.Create().SetObject(privatev1.BareMetalInstanceTemplate_builder{
-				Id:       "no-fabric-template",
+				Id:       "no_fabric_template",
 				Title:    "No Fabric Template",
-				HostType: "no-fabric-host-type",
+				HostType: "no_fabric_host_type",
 				Metadata: privatev1.Metadata_builder{
 					Tenant: auth.SharedTenant,
 					Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
@@ -2747,7 +2747,7 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Title:     "Catalog no fabric",
-					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "no-fabric-template"}.Build(),
+					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "no_fabric_template"}.Build(),
 					Published: true,
 				}.Build(),
 			}.Build())

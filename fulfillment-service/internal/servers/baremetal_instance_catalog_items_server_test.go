@@ -75,7 +75,7 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 				Object: publicv1.BareMetalInstanceCatalogItem_builder{
 					Title:       "My BMI catalog item",
 					Description: "My description.",
-					Template:    publicv1.BareMetalInstanceTemplateReference_builder{Id: "my-bmi-template-id"}.Build(),
+					Template:    publicv1.BareMetalInstanceTemplateReference_builder{Id: "my_bmi_template_id"}.Build(),
 					Published:   true,
 					Metadata: publicv1.Metadata_builder{
 						Name: "test-bmi-catalog-item",
@@ -88,7 +88,7 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 			Expect(object).ToNot(BeNil())
 			Expect(object.GetId()).ToNot(BeEmpty())
 			Expect(object.GetTitle()).To(Equal("My BMI catalog item"))
-			Expect(object.GetTemplate().GetId()).To(Equal("my-bmi-template-id"))
+			Expect(object.GetTemplate().GetId()).To(Equal("my_bmi_template_id"))
 			Expect(object.GetPublished()).To(BeTrue())
 		})
 
@@ -106,7 +106,7 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 				_, err := server.Create(ctx, publicv1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 					Object: publicv1.BareMetalInstanceCatalogItem_builder{
 						Title:     fmt.Sprintf("Published item %d", i),
-						Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my-bmi-template-id"}.Build(),
+						Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my_bmi_template_id"}.Build(),
 						Published: true,
 						Metadata: publicv1.Metadata_builder{
 							Name: fmt.Sprintf("published-item-%d", i),
@@ -118,7 +118,7 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 			_, err := server.Create(ctx, publicv1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.BareMetalInstanceCatalogItem_builder{
 					Title:     "Unpublished item",
-					Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my-bmi-template-id"}.Build(),
+					Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my_bmi_template_id"}.Build(),
 					Published: false,
 					Metadata: publicv1.Metadata_builder{
 						Name: "unpublished-item",
@@ -149,7 +149,7 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 			createResponse, err := server.Create(ctx, publicv1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.BareMetalInstanceCatalogItem_builder{
 					Title:     "Published item",
-					Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my-bmi-template-id"}.Build(),
+					Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my_bmi_template_id"}.Build(),
 					Published: true,
 					Metadata: publicv1.Metadata_builder{
 						Name: "published-item",
@@ -170,7 +170,7 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 			createResponse, err := server.Create(ctx, publicv1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.BareMetalInstanceCatalogItem_builder{
 					Title:     "Unpublished item",
-					Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my-bmi-template-id"}.Build(),
+					Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my_bmi_template_id"}.Build(),
 					Published: false,
 					Metadata: publicv1.Metadata_builder{
 						Name: "unpublished-item-get",
@@ -193,7 +193,7 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 			createResponse, err := server.Create(ctx, publicv1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.BareMetalInstanceCatalogItem_builder{
 					Title:     "Original title",
-					Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my-bmi-template-id"}.Build(),
+					Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my_bmi_template_id"}.Build(),
 					Published: true,
 					Metadata: publicv1.Metadata_builder{
 						Name: "original-item",
@@ -207,7 +207,7 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 				Object: publicv1.BareMetalInstanceCatalogItem_builder{
 					Id:        id,
 					Title:     "Updated title",
-					Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my-bmi-template-id"}.Build(),
+					Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my_bmi_template_id"}.Build(),
 					Published: true,
 					Metadata: publicv1.Metadata_builder{
 						Name: "test-bmi-catalog-item-update",
@@ -222,7 +222,7 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 			createResponse, err := server.Create(ctx, publicv1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.BareMetalInstanceCatalogItem_builder{
 					Title:     "Original title",
-					Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my-bmi-template-id"}.Build(),
+					Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my_bmi_template_id"}.Build(),
 					Published: true,
 					Metadata: publicv1.Metadata_builder{
 						Name: "original-item",
@@ -236,7 +236,7 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 				Object: publicv1.BareMetalInstanceCatalogItem_builder{
 					Id:        id,
 					Title:     "Updated title",
-					Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my-bmi-template-id"}.Build(),
+					Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my_bmi_template_id"}.Build(),
 					Published: true,
 					Metadata: publicv1.Metadata_builder{
 						Name: name,
@@ -269,7 +269,7 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 			createResponse, err := server.Create(ctx, publicv1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.BareMetalInstanceCatalogItem_builder{
 					Title:     "Item to delete",
-					Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my-bmi-template-id"}.Build(),
+					Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my_bmi_template_id"}.Build(),
 					Published: true,
 					Metadata: publicv1.Metadata_builder{
 						Name: "item-to-delete",
@@ -297,7 +297,7 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 			createResponse, err := server.Create(ctx, publicv1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.BareMetalInstanceCatalogItem_builder{
 					Title:     "Referenced item",
-					Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my-bmi-template-id"}.Build(),
+					Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: "my_bmi_template_id"}.Build(),
 					Published: true,
 					Metadata: publicv1.Metadata_builder{
 						Name: "referenced-item",

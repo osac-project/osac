@@ -360,7 +360,7 @@ var _ = Describe("applyFieldDefinitions rejects unlisted fields", func() {
 
 	It("always allows template without a field_definition", func() {
 		spec := privatev1.ClusterSpec_builder{
-			Template: privatev1.ClusterTemplateReference_builder{Id: "my-template"}.Build(),
+			Template: privatev1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 		}.Build()
 		defaultVal, err := structpb.NewValue("ssh-ed25519 AAAA")
 		Expect(err).ToNot(HaveOccurred())

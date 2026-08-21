@@ -94,11 +94,11 @@ var _ = Describe("Tenancy logic", func() {
 		_, err = templatesDao.Create().
 			SetObject(
 				privatev1.ClusterTemplate_builder{
-					Id:          "my-template",
+					Id:          "my_template",
 					Title:       "My template",
 					Description: "My template",
 					Metadata: privatev1.Metadata_builder{
-						Name:   "test-template",
+						Name:   "test_template",
 						Tenant: "my-tenant",
 					}.Build(),
 				}.Build(),
@@ -124,7 +124,7 @@ var _ = Describe("Tenancy logic", func() {
 						Name: "test-cluster",
 					}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
-						Template: publicv1.ClusterTemplateReference_builder{Id: "my-template"}.Build(),
+						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build(),
@@ -150,11 +150,11 @@ var _ = Describe("Tenancy logic", func() {
 		Expect(err).ToNot(HaveOccurred())
 		_, err = templatesDao.Create().
 			SetObject(privatev1.ClusterTemplate_builder{
-				Id:          "my-template",
+				Id:          "my_template",
 				Title:       "My template",
 				Description: "My template",
 				Metadata: privatev1.Metadata_builder{
-					Name:   "test-template",
+					Name:   "test_template",
 					Tenant: "my-tenant",
 				}.Build(),
 			}.Build(),
@@ -190,7 +190,7 @@ var _ = Describe("Tenancy logic", func() {
 					Name: "test-cluster",
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: "my-template"}.Build(),
+					Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -225,11 +225,11 @@ var _ = Describe("Tenancy logic", func() {
 		_, err = templatesDao.Create().
 			SetObject(
 				privatev1.ClusterTemplate_builder{
-					Id:          "my-template",
+					Id:          "my_template",
 					Title:       "My template",
 					Description: "My template",
 					Metadata: privatev1.Metadata_builder{
-						Name:   "test-template",
+						Name:   "test_template",
 						Tenant: "my-tenant",
 					}.Build(),
 				}.Build(),
@@ -254,7 +254,7 @@ var _ = Describe("Tenancy logic", func() {
 					Tenant: "",
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: "my-template"}.Build(),
+					Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -289,11 +289,11 @@ var _ = Describe("Tenancy logic", func() {
 		Expect(err).ToNot(HaveOccurred())
 		_, err = templatesDao.Create().
 			SetObject(privatev1.ClusterTemplate_builder{
-				Id:          "my-template",
+				Id:          "my_template",
 				Title:       "My template",
 				Description: "My template",
 				Metadata: privatev1.Metadata_builder{
-					Name:   "test-template",
+					Name:   "test_template",
 					Tenant: "my-tenant",
 				}.Build(),
 			}.Build()).
@@ -317,7 +317,7 @@ var _ = Describe("Tenancy logic", func() {
 					Tenant: "my-tenant",
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: "my-template"}.Build(),
+					Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -350,11 +350,11 @@ var _ = Describe("Tenancy logic", func() {
 		Expect(err).ToNot(HaveOccurred())
 		_, err = templatesDao.Create().
 			SetObject(privatev1.ClusterTemplate_builder{
-				Id:          "my-template",
+				Id:          "my_template",
 				Title:       "My template",
 				Description: "My template",
 				Metadata: privatev1.Metadata_builder{
-					Name:   "test-template",
+					Name:   "test_template",
 					Tenant: "my-tenant",
 				}.Build(),
 			}.Build()).
@@ -375,7 +375,7 @@ var _ = Describe("Tenancy logic", func() {
 					Name: "test-cluster",
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: "my-template"}.Build(),
+					Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -418,11 +418,11 @@ var _ = Describe("Tenancy logic", func() {
 		Expect(err).ToNot(HaveOccurred())
 		_, err = templatesDao.Create().
 			SetObject(privatev1.ClusterTemplate_builder{
-				Id:          "my-template",
+				Id:          "my_template",
 				Title:       "My template",
 				Description: "My template",
 				Metadata: privatev1.Metadata_builder{
-					Name:   "test-template",
+					Name:   "test_template",
 					Tenant: "my-tenant",
 				}.Build(),
 			}.Build()).
@@ -443,7 +443,7 @@ var _ = Describe("Tenancy logic", func() {
 					Name: "test-cluster",
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: "my-template"}.Build(),
+					Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -490,9 +490,9 @@ var _ = Describe("Tenancy logic", func() {
 		Expect(err).ToNot(HaveOccurred())
 		_, err = templatesDao.Create().
 			SetObject(privatev1.ClusterTemplate_builder{
-				Id: "our-template",
+				Id: "our_template",
 				Metadata: privatev1.Metadata_builder{
-					Name:   "test-template",
+					Name:   "test_template",
 					Tenant: "my-tenant",
 				}.Build(),
 			}.Build(),
@@ -516,7 +516,7 @@ var _ = Describe("Tenancy logic", func() {
 					Tenant: "your-tenant",
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: "our-template"}.Build(),
+					Template: publicv1.ClusterTemplateReference_builder{Id: "our_template"}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -559,11 +559,11 @@ var _ = Describe("Tenancy logic", func() {
 		_, err = templatesDao.Create().
 			SetObject(
 				privatev1.ClusterTemplate_builder{
-					Id:          "my-template",
+					Id:          "my_template",
 					Title:       "My template",
 					Description: "My template",
 					Metadata: privatev1.Metadata_builder{
-						Name:   "test-template",
+						Name:   "test_template",
 						Tenant: "my-tenant",
 					}.Build(),
 				}.Build(),
@@ -579,7 +579,7 @@ var _ = Describe("Tenancy logic", func() {
 					Tenant: "does-not-exist",
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: "my-template"}.Build(),
+					Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())

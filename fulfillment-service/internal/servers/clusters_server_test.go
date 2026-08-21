@@ -185,7 +185,7 @@ var _ = Describe("Clusters server", func() {
 						Title:       "My template",
 						Description: "My template",
 						Metadata: privatev1.Metadata_builder{
-							Name:   "test-template",
+							Name:   "test_template",
 							Tenant: auth.SharedTenant,
 						}.Build(),
 						NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
@@ -1658,7 +1658,7 @@ var _ = Describe("Clusters server", func() {
 					Id:    "my_template",
 					Title: "My template",
 					Metadata: privatev1.Metadata_builder{
-						Name:   "test-template",
+						Name:   "test_template",
 						Tenant: auth.SharedTenant,
 					}.Build(),
 					NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
@@ -2023,7 +2023,7 @@ var _ = Describe("Clusters server", func() {
 							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 						}.Build(),
 						Spec: publicv1.ClusterSpec_builder{
-							Template: publicv1.ClusterTemplateReference_builder{Id: "non-existent"}.Build(),
+							Template: publicv1.ClusterTemplateReference_builder{Id: "non_existent"}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build())
@@ -2035,7 +2035,7 @@ var _ = Describe("Clusters server", func() {
 							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 						}.Build(),
 						Spec: publicv1.ClusterSpec_builder{
-							Template: publicv1.ClusterTemplateReference_builder{Id: "non-existent"}.Build(),
+							Template: publicv1.ClusterTemplateReference_builder{Id: "non_existent"}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build())

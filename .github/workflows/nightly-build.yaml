@@ -244,7 +244,7 @@ jobs:
             continue
           fi
           # Per-component base semver (independent of umbrella BASE_VERSION in the version step).
-          BASE_VERSION="${BASE_TAG#${COMPONENT}/v}"
+          BASE_VERSION="${BASE_TAG#"${COMPONENT}"/v}"
           SUB_VERSION="${BASE_VERSION}-${NIGHTLY_SUFFIX}"
 
           echo "Stamping ${COMPONENT} sub-charts to version ${SUB_VERSION} (from tag ${BASE_TAG})..."

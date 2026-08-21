@@ -24,8 +24,10 @@ import (
 	"go.uber.org/mock/gomock"
 	grpcmetadata "google.golang.org/grpc/metadata"
 
+	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 )
 
@@ -33,6 +35,8 @@ func TestServers(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "Servers package")
 }
+
+const testTenant = "test-tenant"
 
 var (
 	ctx         context.Context
@@ -70,7 +74,7 @@ var _ = BeforeSuite(func() {
 		Return(auth.AllTenants, nil).
 		AnyTimes()
 	tenancy.EXPECT().DetermineDefaultTenant(gomock.Any()).
-		Return(auth.SystemTenant, nil).
+		Return(testTenant, nil).
 		AnyTimes()
 	tenancy.EXPECT().DetermineVisibleTenants(gomock.Any()).
 		Return(auth.AllTenants, nil).
@@ -122,6 +126,24 @@ var _ = BeforeEach(func() {
 		Expect(err).ToNot(HaveOccurred())
 	})
 	ctx = database.TxIntoContext(ctx, tx)
+
+	// Create the testTenant in the database so foreign key constraints are satisfied
+	// when resources are created with the default tenant mock.
+	tenantsDao, err := dao.NewGenericDAO[*privatev1.Tenant]().
+		SetLogger(logger).
+		SetTenancyLogic(tenancy).
+		Build()
+	Expect(err).ToNot(HaveOccurred())
+	_, err = tenantsDao.Create().
+		SetObject(privatev1.Tenant_builder{
+			Id: testTenant,
+			Metadata: privatev1.Metadata_builder{
+				Name:   testTenant,
+				Tenant: testTenant,
+			}.Build(),
+		}.Build()).
+		Do(ctx)
+	Expect(err).ToNot(HaveOccurred())
 })
 
 func dryRunCtx() context.Context {

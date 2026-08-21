@@ -28,7 +28,6 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 )
@@ -104,7 +103,7 @@ var _ = Describe("Private clusters server", func() {
 				Id: "cv-default",
 				Metadata: privatev1.Metadata_builder{
 					Name:   "4-17-0",
-					Tenant: auth.SharedTenant,
+					Tenant: testTenant,
 				}.Build(),
 				Spec: privatev1.ClusterVersionSpec_builder{
 					Image:     "quay.io/openshift-release-dev/ocp-release:4.17.0-multi",
@@ -141,7 +140,7 @@ var _ = Describe("Private clusters server", func() {
 						Id: "acme-1ti-id",
 						Metadata: privatev1.Metadata_builder{
 							Name:   "acme-1ti-name",
-							Tenant: auth.SharedTenant,
+							Tenant: testTenant,
 						}.Build(),
 						Title:       "ACME 1TiB",
 						Description: "ACME 1TiB.",
@@ -156,7 +155,7 @@ var _ = Describe("Private clusters server", func() {
 						Id: "acme-gpu-id",
 						Metadata: privatev1.Metadata_builder{
 							Name:   "acme-gpu-name",
-							Tenant: auth.SharedTenant,
+							Tenant: testTenant,
 						}.Build(),
 						Title:       "ACME GPU",
 						Description: "ACME GPU.",
@@ -173,7 +172,7 @@ var _ = Describe("Private clusters server", func() {
 						Id: "my-template-id",
 						Metadata: privatev1.Metadata_builder{
 							Name:   "my-template-name",
-							Tenant: auth.SharedTenant,
+							Tenant: testTenant,
 						}.Build(),
 						Title:       "My template",
 						Description: "My template",
@@ -202,7 +201,7 @@ var _ = Describe("Private clusters server", func() {
 				Id: "test-vnet",
 				Metadata: privatev1.Metadata_builder{
 					Name:   "test-vnet",
-					Tenant: auth.SystemTenant,
+					Tenant: testTenant,
 				}.Build(),
 			}.Build()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
@@ -217,7 +216,7 @@ var _ = Describe("Private clusters server", func() {
 					Id: subnetID,
 					Metadata: privatev1.Metadata_builder{
 						Name:   subnetID,
-						Tenant: auth.SystemTenant,
+						Tenant: testTenant,
 					}.Build(),
 					Spec: privatev1.SubnetSpec_builder{
 						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "test-vnet"}.Build(),
@@ -239,7 +238,7 @@ var _ = Describe("Private clusters server", func() {
 				Id: "default-sg",
 				Metadata: privatev1.Metadata_builder{
 					Name:   "default-sg",
-					Tenant: auth.SystemTenant,
+					Tenant: testTenant,
 				}.Build(),
 				Spec: privatev1.SecurityGroupSpec_builder{
 					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "test-vnet"}.Build(),
@@ -253,7 +252,7 @@ var _ = Describe("Private clusters server", func() {
 				Id: "sg-2",
 				Metadata: privatev1.Metadata_builder{
 					Name:   "sg-2",
-					Tenant: auth.SystemTenant,
+					Tenant: testTenant,
 				}.Build(),
 				Spec: privatev1.SecurityGroupSpec_builder{
 					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "test-vnet"}.Build(),
@@ -267,7 +266,7 @@ var _ = Describe("Private clusters server", func() {
 				Id: "sg-3",
 				Metadata: privatev1.Metadata_builder{
 					Name:   "sg-3",
-					Tenant: auth.SystemTenant,
+					Tenant: testTenant,
 				}.Build(),
 				Spec: privatev1.SecurityGroupSpec_builder{
 					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "test-vnet"}.Build(),
@@ -288,7 +287,7 @@ var _ = Describe("Private clusters server", func() {
 							Description: fmt.Sprintf("My template %d", i),
 							Metadata: privatev1.Metadata_builder{
 								Name:   fmt.Sprintf("my-template-name-%d", i),
-								Tenant: auth.SharedTenant,
+								Tenant: testTenant,
 							}.Build(),
 							NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
 								"compute": privatev1.ClusterTemplateNodeSet_builder{
@@ -1869,7 +1868,7 @@ var _ = Describe("Private clusters server", func() {
 							Id: "template-with-defaults",
 							Metadata: privatev1.Metadata_builder{
 								Name:   "template-with-defaults-name",
-								Tenant: auth.SharedTenant,
+								Tenant: testTenant,
 							}.Build(),
 							Title:       "Template with defaults",
 							Description: "Template with spec defaults",
@@ -1936,7 +1935,7 @@ var _ = Describe("Private clusters server", func() {
 					Id: uuid.New(),
 					Metadata: privatev1.Metadata_builder{
 						Name:   "4-18-0",
-						Tenant: auth.SharedTenant,
+						Tenant: testTenant,
 					}.Build(),
 					Spec: privatev1.ClusterVersionSpec_builder{
 						Image:   "quay.io/openshift-release-dev/ocp-release:4.18.0-multi",
@@ -1957,7 +1956,7 @@ var _ = Describe("Private clusters server", func() {
 							Id: "template-version-pinned",
 							Metadata: privatev1.Metadata_builder{
 								Name:   "template-version-pinned-name",
-								Tenant: auth.SharedTenant,
+								Tenant: testTenant,
 							}.Build(),
 							Title:       "Version-pinned template",
 							Description: "Template that pins version via spec_defaults",
@@ -2017,7 +2016,7 @@ var _ = Describe("Private clusters server", func() {
 					Id: uuid.New(),
 					Metadata: privatev1.Metadata_builder{
 						Name:   "4-19-0",
-						Tenant: auth.SharedTenant,
+						Tenant: testTenant,
 					}.Build(),
 					Spec: privatev1.ClusterVersionSpec_builder{
 						Image:   "quay.io/openshift-release-dev/ocp-release:4.19.0-multi",
@@ -2039,7 +2038,7 @@ var _ = Describe("Private clusters server", func() {
 							Id: "template-fd-override",
 							Metadata: privatev1.Metadata_builder{
 								Name:   "template-fd-override-name",
-								Tenant: auth.SharedTenant,
+								Tenant: testTenant,
 							}.Build(),
 							Title:       "Template for FD override test",
 							Description: "Template whose spec_defaults are overridden by field_definitions",
@@ -2112,7 +2111,7 @@ var _ = Describe("Private clusters server", func() {
 							Id: "template-no-version",
 							Metadata: privatev1.Metadata_builder{
 								Name:   "template-no-version-name",
-								Tenant: auth.SharedTenant,
+								Tenant: testTenant,
 							}.Build(),
 							Title:       "Template without version default",
 							Description: "Template with no spec_defaults.version",
@@ -2260,7 +2259,7 @@ var _ = Describe("Private clusters server", func() {
 				Id: uuid.New(),
 				Metadata: privatev1.Metadata_builder{
 					Name:   "4-18-0",
-					Tenant: auth.SharedTenant,
+					Tenant: testTenant,
 				}.Build(),
 				Spec: privatev1.ClusterVersionSpec_builder{
 					Image:   "quay.io/openshift-release-dev/ocp-release:4.18.0-multi",
@@ -2389,7 +2388,7 @@ var _ = Describe("Private clusters server", func() {
 				Id: uuid.New(),
 				Metadata: privatev1.Metadata_builder{
 					Name:   "4-18-0-disabled",
-					Tenant: auth.SharedTenant,
+					Tenant: testTenant,
 				}.Build(),
 				Spec: privatev1.ClusterVersionSpec_builder{
 					Image:   "quay.io/openshift-release-dev/ocp-release:4.18.0-multi",
@@ -2443,7 +2442,7 @@ var _ = Describe("Private clusters server", func() {
 				Id: uuid.New(),
 				Metadata: privatev1.Metadata_builder{
 					Name:   "4-16-0-obsolete",
-					Tenant: auth.SharedTenant,
+					Tenant: testTenant,
 				}.Build(),
 				Spec: privatev1.ClusterVersionSpec_builder{
 					Image:   "quay.io/openshift-release-dev/ocp-release:4.16.0-multi",
@@ -2545,7 +2544,7 @@ var _ = Describe("Private clusters server", func() {
 					Id: uuid.New(),
 					Metadata: privatev1.Metadata_builder{
 						Name:   "4-18-0-disabled",
-						Tenant: auth.SharedTenant,
+						Tenant: testTenant,
 					}.Build(),
 					Spec: privatev1.ClusterVersionSpec_builder{
 						Image:   "quay.io/openshift-release-dev/ocp-release:4.18.0-multi",
@@ -2582,7 +2581,7 @@ var _ = Describe("Private clusters server", func() {
 					Id: uuid.New(),
 					Metadata: privatev1.Metadata_builder{
 						Name:   "4-16-0-obsolete",
-						Tenant: auth.SharedTenant,
+						Tenant: testTenant,
 					}.Build(),
 					Spec: privatev1.ClusterVersionSpec_builder{
 						Image:   "quay.io/openshift-release-dev/ocp-release:4.16.0-multi",
@@ -2683,7 +2682,7 @@ var _ = Describe("Private clusters server", func() {
 							Id: uuid.New(),
 							Metadata: privatev1.Metadata_builder{
 								Name:   "4-18-0-disabled-default",
-								Tenant: auth.SharedTenant,
+								Tenant: testTenant,
 							}.Build(),
 							Spec: privatev1.ClusterVersionSpec_builder{
 								Image:     "quay.io/openshift-release-dev/ocp-release:4.18.0-multi",
@@ -2734,7 +2733,7 @@ var _ = Describe("Private clusters server", func() {
 							Id: uuid.New(),
 							Metadata: privatev1.Metadata_builder{
 								Name:   "4-16-0-obsolete-default",
-								Tenant: auth.SharedTenant,
+								Tenant: testTenant,
 							}.Build(),
 							Spec: privatev1.ClusterVersionSpec_builder{
 								Image:     "quay.io/openshift-release-dev/ocp-release:4.16.0-multi",
@@ -3048,7 +3047,7 @@ var _ = Describe("Private clusters server", func() {
 					Id: "my-secret-id",
 					Metadata: privatev1.Metadata_builder{
 						Name:   "my-secret-name",
-						Tenant: auth.SharedTenant,
+						Tenant: testTenant,
 					}.Build(),
 				}.Build()).Do(ctx)
 				Expect(err).ToNot(HaveOccurred())
@@ -3305,7 +3304,7 @@ var _ = Describe("Private clusters server", func() {
 							Id: "template-with-secret-ref",
 							Metadata: privatev1.Metadata_builder{
 								Name:   "template-with-secret-ref-name",
-								Tenant: auth.SharedTenant,
+								Tenant: testTenant,
 							}.Build(),
 							Title:       "Template with secret ref default",
 							Description: "Template with pull_secret_secret in spec defaults",
@@ -3356,7 +3355,7 @@ var _ = Describe("Private clusters server", func() {
 							Id: "template-override-secret",
 							Metadata: privatev1.Metadata_builder{
 								Name:   "template-override-secret-name",
-								Tenant: auth.SharedTenant,
+								Tenant: testTenant,
 							}.Build(),
 							Title:       "Template override test",
 							Description: "Template with pull_secret_secret default",

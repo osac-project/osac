@@ -143,6 +143,7 @@ func (b *PrivateNetworkClassesServerBuilder) Build() (result *PrivateNetworkClas
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
 		SetFilterDesc(b.filterDesc).
+		AddAllowedTenants(auth.SharedTenant).
 		Build()
 	if err != nil {
 		return

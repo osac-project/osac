@@ -24,7 +24,6 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 )
@@ -487,7 +486,7 @@ var _ = Describe("Private cluster templates server", func() {
 						Id: uuid.New(),
 						Metadata: privatev1.Metadata_builder{
 							Name:   "4-18-0-disabled",
-							Tenant: auth.SharedTenant,
+							Tenant: testTenant,
 						}.Build(),
 						Spec: privatev1.ClusterVersionSpec_builder{
 							Image:   "quay.io/openshift-release-dev/ocp-release:4.18.0-multi",

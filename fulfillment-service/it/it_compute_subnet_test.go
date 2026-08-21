@@ -170,7 +170,8 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 		_, err = virtualNetworksClient.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 			Object: privatev1.VirtualNetwork_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name: fmt.Sprintf("test-vnet-%s", uuid.New()[24:32]),
+					Name:   fmt.Sprintf("test-vnet-%s", uuid.New()[24:32]),
+					Tenant: usersGroup,
 				}.Build(),
 				Id: virtualNetworkId,
 				Spec: privatev1.VirtualNetworkSpec_builder{
@@ -214,7 +215,8 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 		_, err = subnetsClient.Create(ctx, privatev1.SubnetsCreateRequest_builder{
 			Object: privatev1.Subnet_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name: fmt.Sprintf("test-subnet-%s", uuid.New()[24:32]),
+					Name:   fmt.Sprintf("test-subnet-%s", uuid.New()[24:32]),
+					Tenant: usersGroup,
 				}.Build(),
 				Id: subnetId,
 				Spec: privatev1.SubnetSpec_builder{

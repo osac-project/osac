@@ -19,11 +19,13 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"go.uber.org/mock/gomock"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 )
@@ -295,8 +297,8 @@ var _ = Describe("Private projects server", func() {
 			Expect(err).To(HaveOccurred())
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(ContainSubstring("cannot belong to 'shared' tenant"))
+			Expect(status.Code()).To(Equal(grpccodes.PermissionDenied))
+			Expect(status.Message()).To(ContainSubstring("cannot be placed in the 'shared' tenant"))
 		})
 
 		It("Rejects creation when tenant is explicitly set to 'system'", func() {
@@ -314,17 +316,36 @@ var _ = Describe("Private projects server", func() {
 			Expect(err).To(HaveOccurred())
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(ContainSubstring("cannot belong to 'system' tenant"))
+			Expect(status.Code()).To(Equal(grpccodes.PermissionDenied))
+			Expect(status.Message()).To(ContainSubstring("cannot be placed in the 'system' tenant"))
 		})
 
 		It("Rejects creation when no tenant is specified and default tenant is invalid", func() {
+			// Build a server with a tenancy mock that returns SystemTenant as default,
+			// simulating an admin whose default tenant is a reserved tenant.
+			localTenancy := auth.NewMockTenancyLogic(ctrl)
+			localTenancy.EXPECT().DetermineAssignableTenants(gomock.Any()).
+				Return(auth.AllTenants, nil).
+				AnyTimes()
+			localTenancy.EXPECT().DetermineDefaultTenant(gomock.Any()).
+				Return(auth.SystemTenant, nil).
+				AnyTimes()
+			localTenancy.EXPECT().DetermineVisibleTenants(gomock.Any()).
+				Return(auth.AllTenants, nil).
+				AnyTimes()
+			localServer, err := NewPrivateProjectsServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(localTenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
 			// Use a dedicated transaction to verify the write is rolled back
 			createTx, err := tm.Begin(context.Background())
 			Expect(err).ToNot(HaveOccurred())
 			createCtx := database.TxIntoContext(context.Background(), createTx)
 
-			_, err = privateServer.Create(createCtx, privatev1.ProjectsCreateRequest_builder{
+			_, err = localServer.Create(createCtx, privatev1.ProjectsCreateRequest_builder{
 				Object: privatev1.Project_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name: "my-project",
@@ -337,8 +358,8 @@ var _ = Describe("Private projects server", func() {
 			Expect(err).To(HaveOccurred())
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(ContainSubstring("must be assigned to a specific tenant"))
+			Expect(status.Code()).To(Equal(grpccodes.PermissionDenied))
+			Expect(status.Message()).To(ContainSubstring("cannot be placed in the 'system' tenant"))
 
 			// End the transaction — the reported error triggers rollback
 			err = createTx.End(createCtx)
@@ -352,7 +373,7 @@ var _ = Describe("Private projects server", func() {
 				_ = verifyTx.End(verifyCtx)
 			})
 
-			listResp, err := privateServer.List(verifyCtx, privatev1.ProjectsListRequest_builder{
+			listResp, err := localServer.List(verifyCtx, privatev1.ProjectsListRequest_builder{
 				Filter: new("this.metadata.name == 'my-project'"),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())

@@ -403,8 +403,8 @@ var _ = Describe("Identity provider lifecycle", func() {
 				"Creating IdP with tenant %q should fail", invalidTenant)
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument),
-				"Expected InvalidArgument for tenant %q, got %v", invalidTenant, status.Code())
+			Expect(status.Code()).To(Equal(grpccodes.PermissionDenied),
+				"Expected PermissionDenied for tenant %q, got %v", invalidTenant, status.Code())
 		}
 	})
 

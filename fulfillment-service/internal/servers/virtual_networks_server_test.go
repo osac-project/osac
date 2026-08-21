@@ -55,7 +55,7 @@ var _ = Describe("Virtual networks server", func() {
 			Id:                     "default",
 			ImplementationStrategy: "ovn-kubernetes",
 			Metadata: privatev1.Metadata_builder{
-				Tenant: auth.SharedTenant,
+				Tenant: testTenant,
 			}.Build(),
 			IsDefault: new(true),
 			Capabilities: privatev1.NetworkClassCapabilities_builder{

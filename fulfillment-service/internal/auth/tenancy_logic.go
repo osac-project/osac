@@ -51,3 +51,8 @@ var SharedTenants = collections.NewSet(SharedTenant)
 
 // AllTenants is the set of all tenants that are possible.
 var AllTenants = collections.NewUniversalSet[string]()
+
+// DefaultAllowedTenants is the set of tenants where objects can normally be created. It excludes
+// the system and shared tenants, which are reserved for platform-level concerns. Servers that
+// manage platform-scoped resources should opt in to the shared tenant explicitly.
+var DefaultAllowedTenants = AllTenants.Difference(collections.NewSet(SystemTenant, SharedTenant))

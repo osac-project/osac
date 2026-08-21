@@ -142,8 +142,8 @@ func (s *ProjectsServer) List(ctx context.Context,
 	if request.HasLimit() {
 		privateRequest.SetLimit(request.GetLimit())
 	}
-	privateRequest.SetOrder(request.GetOrder())
 	privateRequest.SetFilter(request.GetFilter())
+	privateRequest.SetOrder(request.GetOrder())
 	privateResponse, err := s.private.List(ctx, privateRequest)
 	if err != nil {
 		return nil, err

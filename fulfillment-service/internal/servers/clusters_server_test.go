@@ -143,7 +143,7 @@ var _ = Describe("Clusters server", func() {
 						Description: "ACME 1TiB.",
 						Metadata: privatev1.Metadata_builder{
 							Name:   "test-host-type-1tib",
-							Tenant: auth.SharedTenant,
+							Tenant: testTenant,
 						}.Build(),
 					}.Build()).
 				Do(ctx)
@@ -156,7 +156,7 @@ var _ = Describe("Clusters server", func() {
 						Description: "ACME GPU.",
 						Metadata: privatev1.Metadata_builder{
 							Name:   "test-host-type-gpu",
-							Tenant: auth.SharedTenant,
+							Tenant: testTenant,
 						}.Build(),
 					}.Build(),
 				).
@@ -170,7 +170,7 @@ var _ = Describe("Clusters server", func() {
 						Description: "Heuristically programmed ALgorithmic computer.",
 						Metadata: privatev1.Metadata_builder{
 							Name:   "test-host-type-hal",
-							Tenant: auth.SharedTenant,
+							Tenant: testTenant,
 						}.Build(),
 					}.Build(),
 				).
@@ -186,7 +186,7 @@ var _ = Describe("Clusters server", func() {
 						Description: "My template",
 						Metadata: privatev1.Metadata_builder{
 							Name:   "test-template",
-							Tenant: auth.SharedTenant,
+							Tenant: testTenant,
 						}.Build(),
 						NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
 							"compute": privatev1.ClusterTemplateNodeSet_builder{
@@ -215,7 +215,7 @@ var _ = Describe("Clusters server", func() {
 						Metadata: privatev1.Metadata_builder{
 							Name:       "test-deleted-template",
 							Finalizers: []string{"a"},
-							Tenant:     auth.SharedTenant,
+							Tenant:     testTenant,
 						}.Build(),
 					}.Build(),
 				).
@@ -235,7 +235,7 @@ var _ = Describe("Clusters server", func() {
 						Description: "My with parameters.",
 						Metadata: privatev1.Metadata_builder{
 							Name:   "test-template-params",
-							Tenant: auth.SharedTenant,
+							Tenant: testTenant,
 						}.Build(),
 						Parameters: []*privatev1.ClusterTemplateParameterDefinition{
 							privatev1.ClusterTemplateParameterDefinition_builder{
@@ -264,7 +264,7 @@ var _ = Describe("Clusters server", func() {
 				Id: "cv-default",
 				Metadata: privatev1.Metadata_builder{
 					Name:   "4-17-0",
-					Tenant: auth.SharedTenant,
+					Tenant: testTenant,
 				}.Build(),
 				Spec: privatev1.ClusterVersionSpec_builder{
 					Image:     "quay.io/openshift-release-dev/ocp-release:4.17.0-multi",
@@ -997,7 +997,7 @@ var _ = Describe("Clusters server", func() {
 					privatev1.Cluster_builder{
 						Metadata: privatev1.Metadata_builder{
 							Name:   "test-cluster",
-							Tenant: auth.SharedTenant,
+							Tenant: testTenant,
 						}.Build(),
 						Spec: privatev1.ClusterSpec_builder{
 							Template: privatev1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
@@ -1085,7 +1085,7 @@ var _ = Describe("Clusters server", func() {
 					privatev1.Cluster_builder{
 						Metadata: privatev1.Metadata_builder{
 							Name:   "test-cluster",
-							Tenant: auth.SharedTenant,
+							Tenant: testTenant,
 						}.Build(),
 						Spec: privatev1.ClusterSpec_builder{
 							Template: privatev1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
@@ -1641,7 +1641,7 @@ var _ = Describe("Clusters server", func() {
 					Title: "ACME 1TiB",
 					Metadata: privatev1.Metadata_builder{
 						Name:   "test-host-type-1tib",
-						Tenant: auth.SharedTenant,
+						Tenant: testTenant,
 					}.Build(),
 				}.Build()).
 				Do(ctx)
@@ -1659,7 +1659,7 @@ var _ = Describe("Clusters server", func() {
 					Title: "My template",
 					Metadata: privatev1.Metadata_builder{
 						Name:   "test-template",
-						Tenant: auth.SharedTenant,
+						Tenant: testTenant,
 					}.Build(),
 					NodeSets: map[string]*privatev1.ClusterTemplateNodeSet{
 						"compute": privatev1.ClusterTemplateNodeSet_builder{
@@ -1676,7 +1676,7 @@ var _ = Describe("Clusters server", func() {
 				Id: "cv-default",
 				Metadata: privatev1.Metadata_builder{
 					Name:   "4-17-0",
-					Tenant: auth.SharedTenant,
+					Tenant: testTenant,
 				}.Build(),
 				Spec: privatev1.ClusterVersionSpec_builder{
 					Image:     "quay.io/openshift-release-dev/ocp-release:4.17.0-multi",
@@ -1760,7 +1760,7 @@ var _ = Describe("Clusters server", func() {
 				Id: "cv-non-default",
 				Metadata: privatev1.Metadata_builder{
 					Name:   "4-18-0",
-					Tenant: auth.SharedTenant,
+					Tenant: testTenant,
 				}.Build(),
 				Spec: privatev1.ClusterVersionSpec_builder{
 					Image:   "quay.io/openshift-release-dev/ocp-release:4.18.0-multi",

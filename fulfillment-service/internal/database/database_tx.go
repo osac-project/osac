@@ -75,4 +75,10 @@ type Tx interface {
 	// End finishes a transaction. It will be committed if no errors have been reported, or rolled back otherwise.
 	// See the ReportError method for details on how errors are tracked.
 	End(ctx context.Context) error
+
+	// Savepoint executes the given function within a PostgreSQL savepoint. The function receives a
+	// context whose transaction is the savepoint, so any DAO operations inside it use the savepoint.
+	// If the function returns an error, the savepoint is rolled back and the outer transaction
+	// remains usable. If the function succeeds, the savepoint is released.
+	Savepoint(ctx context.Context, fn func(ctx context.Context) error) error
 }

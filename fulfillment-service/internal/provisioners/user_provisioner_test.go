@@ -27,6 +27,7 @@ import (
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 )
 
@@ -61,8 +62,14 @@ var _ = BeforeSuite(func() {
 var _ = BeforeEach(func() {
 	var err error
 
-	// Create a context:
-	ctx = context.Background()
+	// Create a context with a mock transaction:
+	mockTx := database.NewMockTx(ctrl)
+	mockTx.EXPECT().Savepoint(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, fn func(context.Context) error) error {
+			return fn(ctx)
+		},
+	).AnyTimes()
+	ctx = database.TxIntoContext(context.Background(), mockTx)
 
 	// Create mock users server:
 	usersServer = NewMockUsersServer(ctrl)

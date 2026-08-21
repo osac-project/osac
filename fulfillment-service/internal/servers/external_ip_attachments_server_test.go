@@ -114,7 +114,7 @@ var _ = Describe("External IP attachments server", func() {
 			poolResp, err := externalIPPoolDao.Create().SetObject(
 				privatev1.ExternalIPPool_builder{
 					Metadata: privatev1.Metadata_builder{
-						Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						Name:   "test-eip-pool",
 						Tenant: auth.SharedTenant,
 					}.Build(),
 					Spec: privatev1.ExternalIPPoolSpec_builder{

@@ -50,7 +50,7 @@ var _ = Describe("Private compute instances server", func() {
 			Id: "test-vnet",
 			Metadata: privatev1.Metadata_builder{
 				Name:   "test-vnet",
-				Tenant: auth.SharedTenant,
+				Tenant: testTenant,
 			}.Build(),
 		}.Build()
 
@@ -67,7 +67,7 @@ var _ = Describe("Private compute instances server", func() {
 			Id: "test-subnet",
 			Metadata: privatev1.Metadata_builder{
 				Name:   "test-subnet-default",
-				Tenant: auth.SharedTenant,
+				Tenant: testTenant,
 			}.Build(),
 			Spec: privatev1.SubnetSpec_builder{
 				VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "test-vnet"}.Build(),
@@ -93,7 +93,7 @@ var _ = Describe("Private compute instances server", func() {
 				Id: "test-disk-image",
 				Metadata: privatev1.Metadata_builder{
 					Name:   "test-disk-image",
-					Tenant: auth.SharedTenant,
+					Tenant: testTenant,
 				}.Build(),
 				Spec: privatev1.DiskImageSpec_builder{
 					Lifecycle: privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE,
@@ -115,7 +115,7 @@ var _ = Describe("Private compute instances server", func() {
 			ImplementationStrategy: "test-strategy",
 			Metadata: privatev1.Metadata_builder{
 				Name:   "test-network-class",
-				Tenant: auth.SharedTenant,
+				Tenant: testTenant,
 			}.Build(),
 			Capabilities: privatev1.NetworkClassCapabilities_builder{
 				SupportsIpv4:      true,
@@ -145,7 +145,7 @@ var _ = Describe("Private compute instances server", func() {
 		vn := privatev1.VirtualNetwork_builder{
 			Metadata: privatev1.Metadata_builder{
 				Name:   fmt.Sprintf("test-vn-%d", vnNameSeq),
-				Tenant: auth.SharedTenant,
+				Tenant: testTenant,
 			}.Build(),
 			Spec: privatev1.VirtualNetworkSpec_builder{
 				Ipv4Cidr:     new("10.0.0.0/16"),
@@ -174,7 +174,7 @@ var _ = Describe("Private compute instances server", func() {
 		subnet := privatev1.Subnet_builder{
 			Metadata: privatev1.Metadata_builder{
 				Name:   fmt.Sprintf("test-sn-%d", subnetNameSeq),
-				Tenant: auth.SharedTenant,
+				Tenant: testTenant,
 			}.Build(),
 			Spec: privatev1.SubnetSpec_builder{
 				VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
@@ -203,7 +203,7 @@ var _ = Describe("Private compute instances server", func() {
 		sg := privatev1.SecurityGroup_builder{
 			Metadata: privatev1.Metadata_builder{
 				Name:   fmt.Sprintf("test-sg-%d", sgNameSeq),
-				Tenant: auth.SharedTenant,
+				Tenant: testTenant,
 			}.Build(),
 			Spec: privatev1.SecurityGroupSpec_builder{
 				VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
@@ -283,7 +283,7 @@ var _ = Describe("Private compute instances server", func() {
 					Id: "standard-4-16",
 					Metadata: privatev1.Metadata_builder{
 						Name:   "standard-4-16",
-						Tenant: auth.SharedTenant,
+						Tenant: testTenant,
 					}.Build(),
 					Spec: privatev1.InstanceTypeSpec_builder{
 						Cores:     4,
@@ -305,7 +305,7 @@ var _ = Describe("Private compute instances server", func() {
 					Id: "standard",
 					Metadata: privatev1.Metadata_builder{
 						Name:   "standard",
-						Tenant: auth.SharedTenant,
+						Tenant: testTenant,
 					}.Build(),
 					Spec: privatev1.StorageTierSpec_builder{
 						Description: "Standard storage tier",
@@ -339,7 +339,7 @@ var _ = Describe("Private compute instances server", func() {
 				Description: "Test template for validation",
 				Metadata: privatev1.Metadata_builder{
 					Name:   strings.ReplaceAll(templateID, ".", "-"),
-					Tenant: auth.SharedTenant,
+					Tenant: testTenant,
 				}.Build(),
 				Parameters: []*privatev1.ComputeInstanceTemplateParameterDefinition{
 					{
@@ -1090,7 +1090,7 @@ var _ = Describe("Private compute instances server", func() {
 				Description: "Template without spec defaults",
 				Metadata: privatev1.Metadata_builder{
 					Name:   "no-defaults-template",
-					Tenant: auth.SharedTenant,
+					Tenant: testTenant,
 				}.Build(),
 			}.Build()
 			_, err = templatesDao.Create().SetObject(template).Do(ctx)
@@ -1138,7 +1138,7 @@ var _ = Describe("Private compute instances server", func() {
 				Description: "Template without defaults",
 				Metadata: privatev1.Metadata_builder{
 					Name:   "bare-template",
-					Tenant: auth.SharedTenant,
+					Tenant: testTenant,
 				}.Build(),
 			}.Build()
 			_, err = templatesDao.Create().SetObject(template).Do(ctx)
@@ -1186,7 +1186,7 @@ var _ = Describe("Private compute instances server", func() {
 				Description: "Template with partial spec defaults",
 				Metadata: privatev1.Metadata_builder{
 					Name:   "partial-defaults-template",
-					Tenant: auth.SharedTenant,
+					Tenant: testTenant,
 				}.Build(),
 				SpecDefaults: privatev1.ComputeInstanceTemplateSpecDefaults_builder{
 					InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
@@ -1598,7 +1598,7 @@ var _ = Describe("Private compute instances server", func() {
 						Title: "Template without spec defaults",
 						Metadata: privatev1.Metadata_builder{
 							Name:   "ci-template-no-defaults",
-							Tenant: auth.SharedTenant,
+							Tenant: testTenant,
 						}.Build(),
 					}.Build(),
 				).Do(ctx)
@@ -1657,7 +1657,7 @@ var _ = Describe("Private compute instances server", func() {
 						Title: "Template with instance type",
 						Metadata: privatev1.Metadata_builder{
 							Name:   "ci-template-with-it",
-							Tenant: auth.SharedTenant,
+							Tenant: testTenant,
 						}.Build(),
 						SpecDefaults: privatev1.ComputeInstanceTemplateSpecDefaults_builder{
 							InstanceType: privatev1.InstanceTypeReference_builder{Id: "nonexistent-instance-type"}.Build(),
@@ -1725,7 +1725,7 @@ var _ = Describe("Private compute instances server", func() {
 						Title: "Template with valid instance type",
 						Metadata: privatev1.Metadata_builder{
 							Name:   "ci-template-valid-it",
-							Tenant: auth.SharedTenant,
+							Tenant: testTenant,
 						}.Build(),
 						SpecDefaults: privatev1.ComputeInstanceTemplateSpecDefaults_builder{
 							InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
@@ -1820,7 +1820,7 @@ var _ = Describe("Private compute instances server", func() {
 					Id: "standard-4-16",
 					Metadata: privatev1.Metadata_builder{
 						Name:   "standard-4-16",
-						Tenant: auth.SharedTenant,
+						Tenant: testTenant,
 					}.Build(),
 					Spec: privatev1.InstanceTypeSpec_builder{
 						Cores:     4,
@@ -1842,7 +1842,7 @@ var _ = Describe("Private compute instances server", func() {
 					Id: "standard",
 					Metadata: privatev1.Metadata_builder{
 						Name:   "standard",
-						Tenant: auth.SharedTenant,
+						Tenant: testTenant,
 					}.Build(),
 					Spec: privatev1.StorageTierSpec_builder{
 						Description: "Standard storage tier",
@@ -1860,7 +1860,7 @@ var _ = Describe("Private compute instances server", func() {
 				Description: "Test template for network validation",
 				Metadata: privatev1.Metadata_builder{
 					Name:   "test-template",
-					Tenant: auth.SharedTenant,
+					Tenant: testTenant,
 				}.Build(),
 				Parameters: []*privatev1.ComputeInstanceTemplateParameterDefinition{
 					{
@@ -1967,7 +1967,7 @@ var _ = Describe("Private compute instances server", func() {
 				defaultSubnet := privatev1.Subnet_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name:   "test-default-subnet",
-						Tenant: auth.SystemTenant,
+						Tenant: testTenant,
 						Labels: map[string]string{
 							"osac.openshift.io/default": "true",
 						},
@@ -1993,7 +1993,7 @@ var _ = Describe("Private compute instances server", func() {
 				defaultSG := privatev1.SecurityGroup_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name:   "test-default-sg",
-						Tenant: auth.SystemTenant,
+						Tenant: testTenant,
 						Labels: map[string]string{
 							"osac.openshift.io/default": "true",
 						},
@@ -2041,7 +2041,7 @@ var _ = Describe("Private compute instances server", func() {
 				defaultSubnet := privatev1.Subnet_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name:   "test-default-subnet",
-						Tenant: auth.SystemTenant,
+						Tenant: testTenant,
 						Labels: map[string]string{
 							"osac.openshift.io/default": "true",
 						},
@@ -2089,7 +2089,7 @@ var _ = Describe("Private compute instances server", func() {
 				defaultSubnet := privatev1.Subnet_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name:   "test-default-subnet",
-						Tenant: auth.SharedTenant,
+						Tenant: testTenant,
 						Labels: map[string]string{
 							"osac.openshift.io/default": "true",
 						},
@@ -2140,7 +2140,7 @@ var _ = Describe("Private compute instances server", func() {
 					Id: "pod-network-vm",
 					Metadata: privatev1.Metadata_builder{
 						Name:   "pod-network-vm",
-						Tenant: auth.SharedTenant,
+						Tenant: testTenant,
 					}.Build(),
 					Spec: privatev1.ComputeInstanceSpec_builder{
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: template.GetId()}.Build(),
@@ -2649,7 +2649,7 @@ var _ = Describe("Private compute instances server", func() {
 						Id: "tier1",
 						Metadata: privatev1.Metadata_builder{
 							Name:   "tier1",
-							Tenant: auth.SharedTenant,
+							Tenant: testTenant,
 						}.Build(),
 						Spec: privatev1.StorageTierSpec_builder{
 							Description: "Test storage tier 1",
@@ -2667,7 +2667,7 @@ var _ = Describe("Private compute instances server", func() {
 						Id: "tier2",
 						Metadata: privatev1.Metadata_builder{
 							Name:   "tier2",
-							Tenant: auth.SharedTenant,
+							Tenant: testTenant,
 						}.Build(),
 						Spec: privatev1.StorageTierSpec_builder{
 							Description: "Test storage tier 2",
@@ -2861,7 +2861,7 @@ var _ = Describe("Private compute instances server", func() {
 						Id: name,
 						Metadata: privatev1.Metadata_builder{
 							Name:   name,
-							Tenant: auth.SharedTenant,
+							Tenant: testTenant,
 						}.Build(),
 						Spec: privatev1.InstanceTypeSpec_builder{
 							Cores:     4,
@@ -2891,7 +2891,7 @@ var _ = Describe("Private compute instances server", func() {
 						Description: "Template without defaults",
 						Metadata: privatev1.Metadata_builder{
 							Name:   templateID,
-							Tenant: auth.SharedTenant,
+							Tenant: testTenant,
 						}.Build(),
 					}.Build(),
 				).Do(ctx)
@@ -2986,7 +2986,7 @@ var _ = Describe("Private compute instances server", func() {
 						Description: "Template without defaults",
 						Metadata: privatev1.Metadata_builder{
 							Name:   templateID,
-							Tenant: auth.SharedTenant,
+							Tenant: testTenant,
 						}.Build(),
 					}.Build(),
 				).Do(ctx)
@@ -3085,7 +3085,7 @@ var _ = Describe("Private compute instances server", func() {
 						Description: "Template without defaults",
 						Metadata: privatev1.Metadata_builder{
 							Name:   "bare-template-di-by-name",
-							Tenant: auth.SharedTenant,
+							Tenant: testTenant,
 						}.Build(),
 					}.Build(),
 				).Do(ctx)
@@ -3156,7 +3156,7 @@ var _ = Describe("Private compute instances server", func() {
 					Id:    "auto-eip-template",
 					Title: "Auto EIP Template",
 					Metadata: privatev1.Metadata_builder{
-						Tenant: auth.SharedTenant,
+						Tenant: testTenant,
 					}.Build(),
 					Parameters: []*privatev1.ComputeInstanceTemplateParameterDefinition{
 						{
@@ -3197,7 +3197,7 @@ var _ = Describe("Private compute instances server", func() {
 					Id: "standard",
 					Metadata: privatev1.Metadata_builder{
 						Name:   "standard",
-						Tenant: auth.SharedTenant,
+						Tenant: testTenant,
 					}.Build(),
 					Spec: privatev1.StorageTierSpec_builder{
 						Description: "Standard storage tier",
@@ -3221,7 +3221,7 @@ var _ = Describe("Private compute instances server", func() {
 					Id: "auto-eip-it",
 					Metadata: privatev1.Metadata_builder{
 						Name:   "auto-eip-it",
-						Tenant: auth.SharedTenant,
+						Tenant: testTenant,
 					}.Build(),
 					Spec: privatev1.InstanceTypeSpec_builder{
 						Cores:     4,
@@ -3273,7 +3273,7 @@ var _ = Describe("Private compute instances server", func() {
 			return privatev1.ComputeInstancesCreateRequest_builder{
 				Object: privatev1.ComputeInstance_builder{
 					Metadata: privatev1.Metadata_builder{
-						Tenant: auth.SharedTenant,
+						Tenant: testTenant,
 					}.Build(),
 					Spec: privatev1.ComputeInstanceSpec_builder{
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "auto-eip-template"}.Build(),

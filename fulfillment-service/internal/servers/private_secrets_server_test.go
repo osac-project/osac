@@ -27,8 +27,8 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 )
@@ -515,7 +515,7 @@ var _ = Describe("Private secrets server", func() {
 		Describe("Create", func() {
 			It("Stores data in vault and clears data before DB write", func() {
 				mockStore.EXPECT().
-					Store(gomock.Any(), auth.SystemTenant, "", "my-secret",
+					Store(gomock.Any(), testTenant, "", "my-secret",
 						map[string][]byte{"key": []byte("value")}).
 					Return(nil)
 
@@ -598,7 +598,7 @@ var _ = Describe("Private secrets server", func() {
 				Expect(err).ToNot(HaveOccurred())
 
 				mockStore.EXPECT().
-					Fetch(gomock.Any(), auth.SystemTenant, "", "get-secret").
+					Fetch(gomock.Any(), testTenant, "", "get-secret").
 					Return(map[string][]byte{"password": []byte("secret-value")}, nil)
 
 				getResponse, err := server.Get(ctx, privatev1.SecretsGetRequest_builder{
@@ -682,7 +682,7 @@ var _ = Describe("Private secrets server", func() {
 				Expect(err).ToNot(HaveOccurred())
 
 				mockStore.EXPECT().
-					Store(gomock.Any(), auth.SystemTenant, "", "update-secret",
+					Store(gomock.Any(), testTenant, "", "update-secret",
 						map[string][]byte{"key": []byte("new-value")}).
 					Return(nil)
 
@@ -752,7 +752,7 @@ var _ = Describe("Private secrets server", func() {
 				Expect(err).ToNot(HaveOccurred())
 
 				mockStore.EXPECT().
-					Delete(gomock.Any(), auth.SystemTenant, "", "delete-secret").
+					Delete(gomock.Any(), testTenant, "", "delete-secret").
 					Return(nil)
 
 				_, err = server.Delete(ctx, privatev1.SecretsDeleteRequest_builder{
@@ -803,6 +803,26 @@ var _ = Describe("Private secrets server", func() {
 				createCtx := database.TxIntoContext(context.Background(), createTx)
 				DeferCleanup(func() { _ = createTx.End(createCtx) })
 
+				// Create a tenant for this separate transaction. We can't reuse
+				// testTenant because the suite-level seed holds an uncommitted row
+				// lock on it, which would block this transaction.
+				const secretsTestTenant = "secrets-test-tenant"
+				tenantsDao, seedErr := dao.NewGenericDAO[*privatev1.Tenant]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(seedErr).ToNot(HaveOccurred())
+				_, seedErr = tenantsDao.Create().
+					SetObject(privatev1.Tenant_builder{
+						Id: secretsTestTenant,
+						Metadata: privatev1.Metadata_builder{
+							Name:   secretsTestTenant,
+							Tenant: secretsTestTenant,
+						}.Build(),
+					}.Build()).
+					Do(createCtx)
+				Expect(seedErr).ToNot(HaveOccurred())
+
 				mockStore.EXPECT().
 					Store(gomock.Any(), gomock.Any(), gomock.Any(), "rollback-secret", gomock.Any()).
 					Return(nil)
@@ -810,7 +830,8 @@ var _ = Describe("Private secrets server", func() {
 				created, err := server.Create(createCtx, privatev1.SecretsCreateRequest_builder{
 					Object: privatev1.Secret_builder{
 						Metadata: privatev1.Metadata_builder{
-							Name: "rollback-secret",
+							Name:   "rollback-secret",
+							Tenant: secretsTestTenant,
 						}.Build(),
 						Data: map[string][]byte{
 							"key": []byte("value"),
@@ -831,7 +852,7 @@ var _ = Describe("Private secrets server", func() {
 				DeferCleanup(func() { _ = deleteTx.End(deleteCtx) })
 
 				mockStore.EXPECT().
-					Delete(gomock.Any(), auth.SystemTenant, "", "rollback-secret").
+					Delete(gomock.Any(), secretsTestTenant, "", "rollback-secret").
 					Return(fmt.Errorf("vault unavailable"))
 
 				_, err = server.Delete(deleteCtx, privatev1.SecretsDeleteRequest_builder{
@@ -849,7 +870,7 @@ var _ = Describe("Private secrets server", func() {
 				DeferCleanup(func() { _ = verifyTx.End(verifyCtx) })
 
 				mockStore.EXPECT().
-					Fetch(gomock.Any(), auth.SystemTenant, "", "rollback-secret").
+					Fetch(gomock.Any(), secretsTestTenant, "", "rollback-secret").
 					Return(map[string][]byte{"key": []byte("value")}, nil)
 
 				getResponse, err := server.Get(verifyCtx, privatev1.SecretsGetRequest_builder{

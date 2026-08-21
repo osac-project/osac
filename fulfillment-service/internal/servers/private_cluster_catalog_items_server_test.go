@@ -26,7 +26,6 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 )
@@ -405,7 +404,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 				privatev1.Cluster_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name:   "ref-cluster",
-						Tenant: "system",
+						Tenant: testTenant,
 					}.Build(),
 					Spec: privatev1.ClusterSpec_builder{
 						CatalogItem: privatev1.ClusterCatalogItemReference_builder{Id: catalogItem.GetId()}.Build(),
@@ -458,9 +457,9 @@ var _ = Describe("Private cluster catalog items server", func() {
 				Object: privatev1.ClusterCatalogItem_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name:   "dev-sandbox",
-						Tenant: "system",
+						Tenant: testTenant,
 					}.Build(),
-					Title:    "Catalog item for system tenant",
+					Title:    "Catalog item for test tenant",
 					Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 				}.Build(),
 			}.Build())
@@ -855,7 +854,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 						Id: uuid.New(),
 						Metadata: privatev1.Metadata_builder{
 							Name:   "4-16-0-obsolete",
-							Tenant: auth.SharedTenant,
+							Tenant: testTenant,
 						}.Build(),
 						Spec: privatev1.ClusterVersionSpec_builder{
 							Image:   "quay.io/openshift-release-dev/ocp-release:4.16.0-multi",

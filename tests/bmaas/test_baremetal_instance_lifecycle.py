@@ -260,7 +260,3 @@ def test_baremetal_instance_restart(
             except Exception:
                 logger.exception("Failed to delete BMI %s during cleanup", bmi_id)
         raise
-
-
-
-

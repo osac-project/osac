@@ -84,16 +84,10 @@ class GRPCClient:
 
     # VirtualNetwork operations
 
-    def create_virtual_network(self, *, name: str, ipv4_cidr: str, network_class: str | None = None) -> str:
-        spec: dict[str, Any] = {"ipv4_cidr": ipv4_cidr}
-        if network_class is not None:
-            # NetworkClass remains part of the currently deployed public API (pending removal in
-            # OSAC-1980); accept it as optional so callers that still need an explicit class (e.g.
-            # reference/typed-field tests) keep working, while defaulting callers omit it entirely.
-            spec["network_class"] = {"name": network_class}
+    def create_virtual_network(self, *, name: str, ipv4_cidr: str) -> str:
         response: dict[str, Any] = self.call(
             service=f"{PUBLIC_API}.VirtualNetworks/Create",
-            data={"object": {"metadata": {"name": name}, "spec": spec}},
+            data={"object": {"metadata": {"name": name}, "spec": {"ipv4_cidr": ipv4_cidr}}},
         )
         return response["object"]["id"]
 
@@ -413,7 +407,10 @@ class GRPCClient:
             raise ValueError("update_cluster_version requires at least one field to update")
         return self.call(
             service=f"{PRIVATE_API}.ClusterVersions/Update",
-            data={"object": {"id": version_id, "spec": dict(fields)}, "updateMask": {"paths": [f"spec.{k}" for k in fields]}},
+            data={
+                "object": {"id": version_id, "spec": dict(fields)},
+                "updateMask": {"paths": [f"spec.{k}" for k in fields]},
+            },
         )
 
     def delete_cluster_version(self, *, version_id: str) -> None:

@@ -97,7 +97,7 @@ func renderBareMetalInstance(w io.Writer, bmi *publicv1.BareMetalInstance) {
 
 	fmt.Fprintf(w, "\nNetwork Interfaces:\n")
 	if !bmi.GetStatus().HasHardware() || len(bmi.GetStatus().GetHardware().GetNics()) == 0 {
-		fmt.Fprintf(w, "  N/A\n")
+		fmt.Fprintf(w, "  (none)\n")
 	} else {
 		for _, nic := range bmi.GetStatus().GetHardware().GetNics() {
 			fmt.Fprintf(w, "  %s\n", nic.GetMac())

@@ -43,23 +43,21 @@ var _ = Describe("Describe Bare Metal Instance", func() {
 				}.Build(),
 			}
 			output := formatBareMetalInstance(bmi)
-			Expect(output).To(ContainSubstring("Network Interfaces:"))
-			Expect(output).To(ContainSubstring("aa:bb:cc:dd:ee:01"))
-			Expect(output).To(ContainSubstring("ff:00:11:22:33:44"))
-			Expect(output).NotTo(ContainSubstring("N/A"))
+			Expect(output).To(ContainSubstring("Network Interfaces:\n  aa:bb:cc:dd:ee:01\n"))
+			Expect(output).To(ContainSubstring("  ff:00:11:22:33:44\n"))
+			Expect(output).NotTo(ContainSubstring("(none)"))
 		})
 
-		It("should show N/A when Status.Hardware is nil", func() {
+		It("should show (none) when Status.Hardware is nil", func() {
 			bmi := &publicv1.BareMetalInstance{
 				Id:     "bmi-002",
 				Status: publicv1.BareMetalInstanceStatus_builder{}.Build(),
 			}
 			output := formatBareMetalInstance(bmi)
-			Expect(output).To(ContainSubstring("Network Interfaces:"))
-			Expect(output).To(ContainSubstring("N/A"))
+			Expect(output).To(ContainSubstring("Network Interfaces:\n  (none)\n"))
 		})
 
-		It("should show N/A when Status.Hardware.Nics is empty", func() {
+		It("should show (none) when Status.Hardware.Nics is empty", func() {
 			bmi := &publicv1.BareMetalInstance{
 				Id: "bmi-003",
 				Status: publicv1.BareMetalInstanceStatus_builder{
@@ -69,18 +67,16 @@ var _ = Describe("Describe Bare Metal Instance", func() {
 				}.Build(),
 			}
 			output := formatBareMetalInstance(bmi)
-			Expect(output).To(ContainSubstring("Network Interfaces:"))
-			Expect(output).To(ContainSubstring("N/A"))
+			Expect(output).To(ContainSubstring("Network Interfaces:\n  (none)\n"))
 		})
 
-		It("should show N/A when Status is nil", func() {
+		It("should show (none) when Status is nil", func() {
 			bmi := &publicv1.BareMetalInstance{
 				Id:     "bmi-004",
 				Status: nil,
 			}
 			output := formatBareMetalInstance(bmi)
-			Expect(output).To(ContainSubstring("Network Interfaces:"))
-			Expect(output).To(ContainSubstring("N/A"))
+			Expect(output).To(ContainSubstring("Network Interfaces:\n  (none)\n"))
 		})
 	})
 })

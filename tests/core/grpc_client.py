@@ -567,9 +567,21 @@ class GRPCClient:
     # ComputeInstanceTemplate operations (private API)
 
     def create_compute_instance_template(
-        self, *, name: str, title: str, description: str, spec_defaults: dict[str, Any] | None = None
+        self, *, template_id: str, name: str, title: str, description: str, spec_defaults: dict[str, Any] | None = None
     ) -> str:
-        obj: dict[str, Any] = {"metadata": {"name": name}, "title": title, "description": description}
+        # template_id is mandatory on purpose: it is written verbatim into the
+        # osac-operator ComputeInstance CR's spec.templateID, which the CRD
+        # validates against ^[a-zA-Z_][a-zA-Z0-9._]*$. Leaving it empty makes the
+        # server assign a UUIDv7 (hyphens + leading digit) that the CRD rejects at
+        # admission, so the CR is never created. Real templates are published by
+        # AAP with a dotted/underscored id (e.g. "osac.templates.ocp_virt_vm");
+        # callers must follow that pattern.
+        obj: dict[str, Any] = {
+            "id": template_id,
+            "metadata": {"name": name},
+            "title": title,
+            "description": description,
+        }
         if spec_defaults is not None:
             obj["spec_defaults"] = spec_defaults
         response: dict[str, Any] = self.call(
@@ -579,6 +591,9 @@ class GRPCClient:
 
     def delete_compute_instance_template(self, *, template_id: str) -> None:
         self.call(service=f"{PRIVATE_API}.ComputeInstanceTemplates/Delete", data={"id": template_id})
+
+    def get_compute_instance_template(self, *, template_id: str) -> dict[str, Any]:
+        return self.call(service=f"{PRIVATE_API}.ComputeInstanceTemplates/Get", data={"id": template_id})
 
     # Generic filtered list
 

@@ -1011,7 +1011,7 @@ func (s *PrivateBareMetalInstancesServer) autoProvisionExternalIP(
 		}
 
 		attEvent := privatev1.Event_builder{
-			Type:                   privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+			Type:                 privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
 			ExternalIpAttachment: attResp.GetObject(),
 		}.Build()
 		if notifyErr := s.notifier.Notify(ctx, attEvent); notifyErr != nil {

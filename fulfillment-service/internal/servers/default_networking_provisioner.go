@@ -22,10 +22,13 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/reflect/protoreflect"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	"github.com/osac-project/osac/fulfillment-service/internal/events"
+	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 )
 
 const defaultLabel = "osac.openshift.io/default"
@@ -43,6 +46,7 @@ type DefaultNetworkingProvisionerBuilder struct {
 	logger            *slog.Logger
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
+	notifier          events.Notifier
 }
 
 type DefaultNetworkingProvisioner struct {
@@ -76,6 +80,47 @@ func (b *DefaultNetworkingProvisionerBuilder) SetMetricsRegisterer(value prometh
 	return b
 }
 
+func (b *DefaultNetworkingProvisionerBuilder) SetNotifier(value events.Notifier) *DefaultNetworkingProvisionerBuilder {
+	b.notifier = value
+	return b
+}
+
+// makeNotifyCallback returns a dao.EventCallback that publishes events for resources created
+// by the DefaultNetworkingProvisioner. It finds the correct privatev1.Event payload field for
+// type O at construction time using proto reflection, mirroring the generic server's notifyEvent.
+func makeNotifyCallback[O dao.Object](notifier events.Notifier) dao.EventCallback {
+	var zero O
+	objDesc := zero.ProtoReflect().Descriptor()
+	eventDesc := (&privatev1.Event{}).ProtoReflect().Descriptor()
+	var payloadField protoreflect.FieldDescriptor
+	fields := eventDesc.Fields()
+	for i := range fields.Len() {
+		fd := fields.Get(i)
+		if fd.Kind() == protoreflect.MessageKind && fd.Message().FullName() == objDesc.FullName() {
+			payloadField = fd
+			break
+		}
+	}
+	return func(ctx context.Context, e dao.Event) error {
+		event := &privatev1.Event{}
+		event.SetId(uuid.New())
+		switch e.Type {
+		case dao.EventTypeCreated:
+			event.SetType(privatev1.EventType_EVENT_TYPE_OBJECT_CREATED)
+		case dao.EventTypeUpdated:
+			event.SetType(privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED)
+		case dao.EventTypeDeleted:
+			event.SetType(privatev1.EventType_EVENT_TYPE_OBJECT_DELETED)
+		default:
+			return fmt.Errorf("unknown event type '%s'", e.Type)
+		}
+		if payloadField != nil {
+			event.ProtoReflect().Set(payloadField, protoreflect.ValueOfMessage(e.Object.ProtoReflect()))
+		}
+		return notifier.Notify(ctx, event)
+	}
+}
+
 func (b *DefaultNetworkingProvisionerBuilder) Build() (result *DefaultNetworkingProvisioner, err error) {
 	if b.logger == nil {
 		err = errors.New("logger is mandatory")
@@ -95,38 +140,50 @@ func (b *DefaultNetworkingProvisionerBuilder) Build() (result *DefaultNetworking
 		return
 	}
 
-	virtualNetworkDao, err := dao.NewGenericDAO[*privatev1.VirtualNetwork]().
+	vnDaoBuilder := dao.NewGenericDAO[*privatev1.VirtualNetwork]().
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
-		SetMetricsRegisterer(b.metricsRegisterer).
-		Build()
+		SetMetricsRegisterer(b.metricsRegisterer)
+	if b.notifier != nil {
+		vnDaoBuilder.AddEventCallback(makeNotifyCallback[*privatev1.VirtualNetwork](b.notifier))
+	}
+	virtualNetworkDao, err := vnDaoBuilder.Build()
 	if err != nil {
 		return
 	}
 
-	subnetDao, err := dao.NewGenericDAO[*privatev1.Subnet]().
+	subnetDaoBuilder := dao.NewGenericDAO[*privatev1.Subnet]().
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
-		SetMetricsRegisterer(b.metricsRegisterer).
-		Build()
+		SetMetricsRegisterer(b.metricsRegisterer)
+	if b.notifier != nil {
+		subnetDaoBuilder.AddEventCallback(makeNotifyCallback[*privatev1.Subnet](b.notifier))
+	}
+	subnetDao, err := subnetDaoBuilder.Build()
 	if err != nil {
 		return
 	}
 
-	securityGroupDao, err := dao.NewGenericDAO[*privatev1.SecurityGroup]().
+	sgDaoBuilder := dao.NewGenericDAO[*privatev1.SecurityGroup]().
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
-		SetMetricsRegisterer(b.metricsRegisterer).
-		Build()
+		SetMetricsRegisterer(b.metricsRegisterer)
+	if b.notifier != nil {
+		sgDaoBuilder.AddEventCallback(makeNotifyCallback[*privatev1.SecurityGroup](b.notifier))
+	}
+	securityGroupDao, err := sgDaoBuilder.Build()
 	if err != nil {
 		return
 	}
 
-	externalIPDao, err := dao.NewGenericDAO[*privatev1.ExternalIP]().
+	eipDaoBuilder := dao.NewGenericDAO[*privatev1.ExternalIP]().
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
-		SetMetricsRegisterer(b.metricsRegisterer).
-		Build()
+		SetMetricsRegisterer(b.metricsRegisterer)
+	if b.notifier != nil {
+		eipDaoBuilder.AddEventCallback(makeNotifyCallback[*privatev1.ExternalIP](b.notifier))
+	}
+	externalIPDao, err := eipDaoBuilder.Build()
 	if err != nil {
 		return
 	}
@@ -140,11 +197,14 @@ func (b *DefaultNetworkingProvisionerBuilder) Build() (result *DefaultNetworking
 		return
 	}
 
-	natGatewayDao, err := dao.NewGenericDAO[*privatev1.NATGateway]().
+	ngDaoBuilder := dao.NewGenericDAO[*privatev1.NATGateway]().
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
-		SetMetricsRegisterer(b.metricsRegisterer).
-		Build()
+		SetMetricsRegisterer(b.metricsRegisterer)
+	if b.notifier != nil {
+		ngDaoBuilder.AddEventCallback(makeNotifyCallback[*privatev1.NATGateway](b.notifier))
+	}
+	natGatewayDao, err := ngDaoBuilder.Build()
 	if err != nil {
 		return
 	}

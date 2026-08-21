@@ -17,8 +17,6 @@ language governing permissions and limitations under the License.
 //go:generate mockgen -source=../../api/osac/private/v1/security_groups_service_grpc.pb.go -destination=security_groups_client_mock.go -package=tenant SecurityGroupsClient
 //go:generate mockgen -source=../../api/osac/private/v1/nat_gateways_service_grpc.pb.go -destination=nat_gateways_client_mock.go -package=tenant NATGatewaysClient
 //go:generate mockgen -source=../../api/osac/private/v1/network_classes_service_grpc.pb.go -destination=network_classes_client_mock.go -package=tenant NetworkClassesClient
-//go:generate mockgen -source=../../api/osac/private/v1/external_ip_pools_service_grpc.pb.go -destination=external_ip_pools_client_mock.go -package=tenant ExternalIPPoolsClient
-//go:generate mockgen -source=../../api/osac/private/v1/external_ips_service_grpc.pb.go -destination=external_ips_client_mock.go -package=tenant ExternalIPsClient
 
 package tenant
 
@@ -31,8 +29,6 @@ import (
 	"strings"
 
 	"google.golang.org/grpc"
-	grpccodes "google.golang.org/grpc/codes"
-	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -106,8 +102,6 @@ func (b *FunctionBuilder) Build() (result *function, err error) {
 		securityGroupsClient:  privatev1.NewSecurityGroupsClient(b.connection),
 		natGatewaysClient:     privatev1.NewNATGatewaysClient(b.connection),
 		networkClassesClient:  privatev1.NewNetworkClassesClient(b.connection),
-		externalIPPoolsClient: privatev1.NewExternalIPPoolsClient(b.connection),
-		externalIPsClient:     privatev1.NewExternalIPsClient(b.connection),
 		idpManager:            b.idpManager,
 		vaultLifecycle:        b.vaultLifecycle,
 		maskCalculator:        masks.NewCalculator().Build(),
@@ -125,8 +119,6 @@ type function struct {
 	securityGroupsClient  privatev1.SecurityGroupsClient
 	natGatewaysClient     privatev1.NATGatewaysClient
 	networkClassesClient  privatev1.NetworkClassesClient
-	externalIPPoolsClient privatev1.ExternalIPPoolsClient
-	externalIPsClient     privatev1.ExternalIPsClient
 	idpManager            *idp.TenantManager
 	vaultLifecycle        vault.LifecycleClient
 	maskCalculator        *masks.Calculator
@@ -528,6 +520,7 @@ func (t *task) checkDefaultNetworkingReadiness(ctx context.Context) error {
 		return nil
 	}
 	tenantName := t.tenant.GetMetadata().GetName()
+	condType := privatev1.TenantConditionType_TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY
 	filter := fmt.Sprintf("%s && this.metadata.tenant == %q", defaultLabelFilter, tenantName)
 
 	var pending, failed []string
@@ -596,37 +589,36 @@ func (t *task) checkDefaultNetworkingReadiness(ctx context.Context) error {
 		}
 	}
 
-	totalResources := len(vns.GetItems()) + len(subnets.GetItems()) + len(sgs.GetItems()) + len(ngs.GetItems())
-	condType := privatev1.TenantConditionType_TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY
-
-	created, err := t.ensureDefaultNetworking(ctx, tenantName, vns.GetItems(), subnets.GetItems(), sgs.GetItems(), ngs.GetItems())
-	if err != nil {
+	// When any core resources are absent, check whether a default NetworkClass with defaults
+	// is configured. Resources are provisioned server-side by the DefaultNetworkingProvisioner
+	// at tenant-creation time; this check only determines the condition outcome.
+	coreResourcesMissing := len(vns.GetItems()) == 0 || len(subnets.GetItems()) == 0 || len(sgs.GetItems()) == 0
+	if coreResourcesMissing {
+		nc, err := t.findDefaultNetworkClass(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to find default network class: %w", err)
+		}
+		if nc == nil {
+			t.updateCondition(condType, privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+				"NoDefaultNetworking", "No default networking resources configured")
+			return nil
+		}
 		t.updateCondition(condType, privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
-			"ProvisioningFailed", fmt.Sprintf("Failed to provision default networking: %v", err))
-		return nil
-	}
-	if created {
+			"ResourcesPending", "Provisioning default networking resources")
 		return nil
 	}
 
-	if totalResources == 0 {
-		t.updateCondition(condType, privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
-			"NoDefaultNetworking", "No default networking resources configured")
-		return nil
-	}
-
+	// All core resources exist (or NC=nil but some resources remain) — evaluate their states.
 	if len(failed) > 0 {
 		t.updateCondition(condType, privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
 			"ResourceFailed", fmt.Sprintf("Default networking resources failed: %s", strings.Join(failed, ", ")))
 		return nil
 	}
-
 	if len(pending) > 0 {
 		t.updateCondition(condType, privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
 			"ResourcesPending", fmt.Sprintf("Default networking resources pending: %s", strings.Join(pending, ", ")))
 		return nil
 	}
-
 	t.updateCondition(condType, privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
 		"AllResourcesReady", "All default networking resources are ready")
 	return nil
@@ -649,351 +641,4 @@ func (t *task) findDefaultNetworkClass(ctx context.Context) (*privatev1.NetworkC
 		}
 	}
 	return nil, nil
-}
-
-func (t *task) ensureDefaultNetworking(
-	ctx context.Context,
-	tenantName string,
-	vns []*privatev1.VirtualNetwork,
-	subnets []*privatev1.Subnet,
-	sgs []*privatev1.SecurityGroup,
-	ngs []*privatev1.NATGateway,
-) (bool, error) {
-	nc, err := t.findDefaultNetworkClass(ctx)
-	if err != nil {
-		return false, err
-	}
-	if nc == nil {
-		return false, nil
-	}
-
-	defaults := nc.GetSpec().GetDefaults()
-	created := false
-
-	vnID := findResourceID(vns, "default")
-	if vnID == "" {
-		vnID, err = t.createDefaultVirtualNetwork(ctx, tenantName, defaults, nc)
-		switch {
-		case err == nil:
-			created = true
-		case isAlreadyExists(err):
-			vnID, err = t.resolveDefaultVirtualNetworkID(ctx, tenantName)
-			if err != nil {
-				return false, fmt.Errorf("failed to resolve existing default VirtualNetwork: %w", err)
-			}
-		default:
-			return false, fmt.Errorf("failed to create default VirtualNetwork: %w", err)
-		}
-	}
-
-	if vnID == "" {
-		return created, nil
-	}
-
-	if defaults.GetSubnetIpv4Cidr() != "" && !hasResource(subnets, "default-ipv4") {
-		err = t.createDefaultSubnet(ctx, tenantName, vnID, defaults.GetSubnetIpv4Cidr(), "", "default-ipv4")
-		if err != nil && !isAlreadyExists(err) {
-			return created, fmt.Errorf("failed to create default IPv4 Subnet: %w", err)
-		}
-		created = true
-	}
-
-	if defaults.GetSubnetIpv6Cidr() != "" && !hasResource(subnets, "default-ipv6") {
-		err = t.createDefaultSubnet(ctx, tenantName, vnID, "", defaults.GetSubnetIpv6Cidr(), "default-ipv6")
-		if err != nil && !isAlreadyExists(err) {
-			return created, fmt.Errorf("failed to create default IPv6 Subnet: %w", err)
-		}
-		created = true
-	}
-
-	if !hasResource(sgs, "default") {
-		err = t.createDefaultSecurityGroup(ctx, tenantName, vnID, defaults)
-		if err != nil && !isAlreadyExists(err) {
-			return created, fmt.Errorf("failed to create default SecurityGroup: %w", err)
-		}
-		created = true
-	}
-
-	if defaults.GetEnableNatGateway() {
-		natCreated, natErr := t.ensureDefaultNATGateway(ctx, tenantName, vnID, ngs)
-		if natErr != nil {
-			return created, fmt.Errorf("failed to ensure default NAT gateway: %w", natErr)
-		}
-		created = created || natCreated
-	}
-
-	return created, nil
-}
-
-func (t *task) ensureDefaultNATGateway(
-	ctx context.Context,
-	tenantName, vnID string,
-	ngs []*privatev1.NATGateway,
-) (bool, error) {
-	if t.r.externalIPsClient == nil {
-		return false, nil
-	}
-
-	eipFilter := fmt.Sprintf("%s && this.metadata.tenant == %q", defaultLabelFilter, tenantName)
-	eips, err := t.r.externalIPsClient.List(ctx, privatev1.ExternalIPsListRequest_builder{
-		Filter: &eipFilter,
-	}.Build())
-	if err != nil {
-		return false, fmt.Errorf("failed to list default ExternalIPs: %w", err)
-	}
-
-	allFailed := len(eips.GetItems()) > 0
-	var allocatedEIPID string
-	for _, eip := range eips.GetItems() {
-		switch eip.GetStatus().GetState() {
-		case privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED:
-			allocatedEIPID = eip.GetId()
-			allFailed = false
-		case privatev1.ExternalIPState_EXTERNAL_IP_STATE_FAILED:
-		default:
-			allFailed = false
-		}
-	}
-
-	if len(eips.GetItems()) == 0 || allFailed {
-		err = t.createDefaultExternalIP(ctx, tenantName)
-		if err != nil && !isAlreadyExists(err) {
-			return false, fmt.Errorf("failed to create default ExternalIP: %w", err)
-		}
-		return true, nil
-	}
-
-	if hasResource(ngs, "default") {
-		return false, nil
-	}
-
-	if allocatedEIPID == "" {
-		return false, nil
-	}
-
-	err = t.createDefaultNATGateway(ctx, tenantName, vnID, allocatedEIPID)
-	if err != nil && !isAlreadyExists(err) {
-		return false, fmt.Errorf("failed to create default NATGateway: %w", err)
-	}
-	return true, nil
-}
-
-func (t *task) createDefaultVirtualNetwork(
-	ctx context.Context,
-	tenantName string,
-	defaults *privatev1.NetworkDefaults,
-	nc *privatev1.NetworkClass,
-) (string, error) {
-	vn := privatev1.VirtualNetwork_builder{
-		Metadata: privatev1.Metadata_builder{
-			Name:   "default",
-			Tenant: tenantName,
-			Labels: map[string]string{
-				defaultLabelKey: "true",
-			},
-			Creator: "system",
-		}.Build(),
-		Spec: privatev1.VirtualNetworkSpec_builder{
-			Region:                 "default",
-			NetworkClass:           privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-			ImplementationStrategy: nc.GetImplementationStrategy(),
-		}.Build(),
-	}.Build()
-
-	if ipv4 := defaults.GetVirtualNetworkIpv4Cidr(); ipv4 != "" {
-		vn.GetSpec().SetIpv4Cidr(ipv4)
-	}
-	if ipv6 := defaults.GetVirtualNetworkIpv6Cidr(); ipv6 != "" {
-		vn.GetSpec().SetIpv6Cidr(ipv6)
-	}
-
-	resp, err := t.r.virtualNetworksClient.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
-		Object: vn,
-	}.Build())
-	if err != nil {
-		return "", err
-	}
-	return resp.GetObject().GetId(), nil
-}
-
-func (t *task) resolveDefaultVirtualNetworkID(ctx context.Context, tenantName string) (string, error) {
-	filter := fmt.Sprintf("this.metadata.name == %q && this.metadata.tenant == %q", "default", tenantName)
-	resp, err := t.r.virtualNetworksClient.List(ctx, privatev1.VirtualNetworksListRequest_builder{
-		Filter: &filter,
-	}.Build())
-	if err != nil {
-		return "", fmt.Errorf("failed to list VirtualNetworks: %w", err)
-	}
-	if len(resp.GetItems()) == 0 {
-		return "", nil
-	}
-	return resp.GetItems()[0].GetId(), nil
-}
-
-func (t *task) createDefaultSubnet(
-	ctx context.Context,
-	tenantName, vnID, ipv4CIDR, ipv6CIDR, name string,
-) error {
-	subnet := privatev1.Subnet_builder{
-		Metadata: privatev1.Metadata_builder{
-			Name:   name,
-			Tenant: tenantName,
-			Labels: map[string]string{
-				defaultLabelKey: "true",
-			},
-			Annotations: map[string]string{
-				ownerReferenceAnnotationKey: vnID,
-			},
-			Creator: "system",
-		}.Build(),
-		Spec: privatev1.SubnetSpec_builder{
-			VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
-		}.Build(),
-	}.Build()
-
-	if ipv4CIDR != "" {
-		subnet.GetSpec().SetIpv4Cidr(ipv4CIDR)
-	}
-	if ipv6CIDR != "" {
-		subnet.GetSpec().SetIpv6Cidr(ipv6CIDR)
-	}
-
-	_, err := t.r.subnetsClient.Create(ctx, privatev1.SubnetsCreateRequest_builder{
-		Object: subnet,
-	}.Build())
-	return err
-}
-
-func (t *task) createDefaultSecurityGroup(
-	ctx context.Context,
-	tenantName, vnID string,
-	defaults *privatev1.NetworkDefaults,
-) error {
-	sg := privatev1.SecurityGroup_builder{
-		Metadata: privatev1.Metadata_builder{
-			Name:   "default",
-			Tenant: tenantName,
-			Labels: map[string]string{
-				defaultLabelKey: "true",
-			},
-			Annotations: map[string]string{
-				ownerReferenceAnnotationKey: vnID,
-			},
-			Creator: "system",
-		}.Build(),
-		Spec: privatev1.SecurityGroupSpec_builder{
-			VirtualNetwork:         privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
-			Ingress:                defaults.GetIngressRules(),
-			Egress:                 defaults.GetEgressRules(),
-			ImplementationStrategy: "network_policy",
-		}.Build(),
-	}.Build()
-
-	_, err := t.r.securityGroupsClient.Create(ctx, privatev1.SecurityGroupsCreateRequest_builder{
-		Object: sg,
-	}.Build())
-	return err
-}
-
-func (t *task) createDefaultExternalIP(ctx context.Context, tenantName string) error {
-	pool, err := t.selectExternalIPPool(ctx)
-	if err != nil {
-		return err
-	}
-
-	eip := privatev1.ExternalIP_builder{
-		Metadata: privatev1.Metadata_builder{
-			Name:   "default-nat",
-			Tenant: tenantName,
-			Labels: map[string]string{
-				defaultLabelKey: "true",
-			},
-			Creator: "system",
-		}.Build(),
-		Spec: privatev1.ExternalIPSpec_builder{
-			Pool: privatev1.ExternalIPPoolReference_builder{Id: pool.GetId()}.Build(),
-		}.Build(),
-	}.Build()
-
-	_, err = t.r.externalIPsClient.Create(ctx, privatev1.ExternalIPsCreateRequest_builder{
-		Object: eip,
-	}.Build())
-	return err
-}
-
-func (t *task) selectExternalIPPool(ctx context.Context) (*privatev1.ExternalIPPool, error) {
-	resp, err := t.r.externalIPPoolsClient.List(ctx, privatev1.ExternalIPPoolsListRequest_builder{}.Build())
-	if err != nil {
-		return nil, fmt.Errorf("failed to list ExternalIP pools: %w", err)
-	}
-
-	var best *privatev1.ExternalIPPool
-	for _, pool := range resp.GetItems() {
-		if pool.GetStatus().GetState() != privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY {
-			continue
-		}
-		if pool.GetStatus().GetAvailable() <= 0 {
-			continue
-		}
-		if best == nil || pool.GetStatus().GetAvailable() > best.GetStatus().GetAvailable() {
-			best = pool
-		}
-	}
-	if best == nil {
-		return nil, fmt.Errorf("no READY ExternalIP pool with available capacity found")
-	}
-	return best, nil
-}
-
-func (t *task) createDefaultNATGateway(ctx context.Context, tenantName, vnID, externalIPID string) error {
-	ng := privatev1.NATGateway_builder{
-		Metadata: privatev1.Metadata_builder{
-			Name:   "default",
-			Tenant: tenantName,
-			Labels: map[string]string{
-				defaultLabelKey: "true",
-			},
-			Annotations: map[string]string{
-				ownerReferenceAnnotationKey: vnID,
-			},
-			Creator: "system",
-		}.Build(),
-		Spec: privatev1.NATGatewaySpec_builder{
-			VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
-			ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: externalIPID}.Build(),
-		}.Build(),
-	}.Build()
-
-	_, err := t.r.natGatewaysClient.Create(ctx, privatev1.NATGatewaysCreateRequest_builder{
-		Object: ng,
-	}.Build())
-	return err
-}
-
-type named interface {
-	GetMetadata() *privatev1.Metadata
-	GetId() string
-}
-
-func findResourceID[T named](items []T, name string) string {
-	for _, item := range items {
-		if item.GetMetadata().GetName() == name {
-			return item.GetId()
-		}
-	}
-	return ""
-}
-
-func hasResource[T named](items []T, name string) bool {
-	for _, item := range items {
-		if item.GetMetadata().GetName() == name {
-			return true
-		}
-	}
-	return false
-}
-
-func isAlreadyExists(err error) bool {
-	st, ok := grpcstatus.FromError(err)
-	return ok && st.Code() == grpccodes.AlreadyExists
 }

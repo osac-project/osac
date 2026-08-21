@@ -116,11 +116,19 @@ func (b *FunctionBuilder) Build() (result controllers.ReconcilerFunction[*privat
 }
 
 func (r *function) run(ctx context.Context, virtualNetwork *privatev1.VirtualNetwork) error {
+	id := virtualNetwork.GetId()
+	isDefault := virtualNetwork.GetMetadata().GetLabels()["osac.openshift.io/default"] == "true"
+	r.logger.DebugContext(ctx, "VN run: started",
+		slog.String("id", id),
+		slog.String("tenant", virtualNetwork.GetMetadata().GetTenant()),
+		slog.Bool("is_default", isDefault),
+		slog.String("state", virtualNetwork.GetStatus().GetState().String()),
+		slog.String("hub", virtualNetwork.GetStatus().GetHub()),
+		slog.Any("finalizers", virtualNetwork.GetMetadata().GetFinalizers()),
+	)
+
 	oldVirtualNetwork := proto.Clone(virtualNetwork).(*privatev1.VirtualNetwork)
-	t := task{
-		r:              r,
-		virtualNetwork: virtualNetwork,
-	}
+	t := task{r: r, virtualNetwork: virtualNetwork}
 	var err error
 	if virtualNetwork.HasMetadata() && virtualNetwork.GetMetadata().HasDeletionTimestamp() {
 		err = t.delete(ctx)
@@ -128,94 +136,141 @@ func (r *function) run(ctx context.Context, virtualNetwork *privatev1.VirtualNet
 		err = t.update(ctx)
 	}
 	if err != nil {
+		r.logger.ErrorContext(ctx, "VN run: update/delete returned error",
+			slog.String("id", id),
+			slog.Bool("is_default", isDefault),
+			slog.Any("error", err),
+		)
 		return err
 	}
-	// Calculate which fields the reconciler actually modified and use a field mask
-	// to update only those fields. This prevents overwriting concurrent user changes.
-	updateMask := r.maskCalculator.Calculate(oldVirtualNetwork, virtualNetwork)
 
-	// Only send an update if there are actual changes
+	updateMask := r.maskCalculator.Calculate(oldVirtualNetwork, virtualNetwork)
+	if len(updateMask.GetPaths()) == 0 {
+		r.logger.DebugContext(ctx, "VN run: completed (no changes to persist)",
+			slog.String("id", id),
+			slog.Bool("is_default", isDefault),
+		)
+		return nil
+	}
+
+	r.logger.DebugContext(ctx, "VN run: calling virtualNetworksClient.Update",
+		slog.String("id", id),
+		slog.Bool("is_default", isDefault),
+		slog.Any("mask_paths", updateMask.GetPaths()),
+	)
 	_, err = r.virtualNetworksClient.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
 		Object:     virtualNetwork,
 		UpdateMask: updateMask,
 	}.Build())
-
+	if err != nil {
+		r.logger.ErrorContext(ctx, "VN run: virtualNetworksClient.Update failed",
+			slog.String("id", id),
+			slog.Bool("is_default", isDefault),
+			slog.Any("error", err),
+		)
+	} else {
+		r.logger.DebugContext(ctx, "VN run: completed",
+			slog.String("id", id),
+			slog.Bool("is_default", isDefault),
+		)
+	}
 	return err
 }
 
 func (t *task) update(ctx context.Context) error {
-	// Add the finalizer and return immediately if it was added. This ensures the finalizer is persisted before any
-	// other work is done, reducing the chance of the object being deleted before the finalizer is saved.
+	id := t.virtualNetwork.GetId()
+	isDefault := t.virtualNetwork.GetMetadata().GetLabels()["osac.openshift.io/default"] == "true"
+
+	// Pass 1: add finalizer.
+	t.r.logger.DebugContext(ctx, "VN update: pass 1 — addFinalizer",
+		slog.String("id", id), slog.Bool("is_default", isDefault))
 	if t.addFinalizer() {
+		t.r.logger.DebugContext(ctx, "VN update: pass 1 done — finalizer added, returning early",
+			slog.String("id", id), slog.Bool("is_default", isDefault))
 		return nil
 	}
+	t.r.logger.DebugContext(ctx, "VN update: pass 1 done — finalizer already present",
+		slog.String("id", id), slog.Bool("is_default", isDefault))
 
-	// Set the default values:
 	t.setDefaults()
 
-	// Validate that exactly one tenant is assigned:
 	if err := t.validateTenant(); err != nil {
 		return err
 	}
 
-	// Select the hub and return immediately if it was just selected. This ensures the hub is
-	// persisted before any Kubernetes objects are created.
+	// Pass 2: select hub.
 	hubJustSelected := t.virtualNetwork.GetStatus().GetHub() == ""
+	t.r.logger.DebugContext(ctx, "VN update: pass 2 — selectHub",
+		slog.String("id", id), slog.Bool("is_default", isDefault),
+		slog.Bool("hub_just_selected", hubJustSelected))
 	if err := t.selectHub(ctx); err != nil {
+		t.r.logger.ErrorContext(ctx, "VN update: pass 2 — selectHub failed",
+			slog.String("id", id), slog.Bool("is_default", isDefault), slog.Any("error", err))
 		return err
 	}
 	t.virtualNetwork.GetStatus().SetHub(t.hubId)
 	if hubJustSelected {
+		t.r.logger.DebugContext(ctx, "VN update: pass 2 done — hub selected, returning early",
+			slog.String("id", id), slog.Bool("is_default", isDefault), slog.String("hub", t.hubId))
 		return nil
 	}
+	t.r.logger.DebugContext(ctx, "VN update: pass 2 done — hub already set",
+		slog.String("id", id), slog.Bool("is_default", isDefault), slog.String("hub", t.hubId))
 
-	// Get the K8S object:
+	// Pass 3: create/update K8s CR.
+	t.r.logger.DebugContext(ctx, "VN update: pass 3 — getKubeObject",
+		slog.String("id", id), slog.Bool("is_default", isDefault),
+		slog.String("hub_namespace", t.hubNamespace))
 	object, err := t.getKubeObject(ctx)
 	if err != nil {
+		t.r.logger.ErrorContext(ctx, "VN update: pass 3 — getKubeObject failed",
+			slog.String("id", id), slog.Bool("is_default", isDefault), slog.Any("error", err))
 		return err
 	}
+	t.r.logger.DebugContext(ctx, "VN update: pass 3 — getKubeObject done",
+		slog.String("id", id), slog.Bool("is_default", isDefault),
+		slog.Bool("cr_exists", object != nil))
 
-	// Prepare the changes to the spec:
 	spec := t.buildSpec()
 
-	// Create or update the Kubernetes object:
 	if object == nil {
-		object := &osacv1alpha1.VirtualNetwork{
+		kubeObj := &osacv1alpha1.VirtualNetwork{
 			ObjectMeta: metav1.ObjectMeta{
 				Namespace:    t.hubNamespace,
 				GenerateName: objectPrefix,
-				Labels: map[string]string{
-					labels.VirtualNetworkUuid: t.virtualNetwork.GetId(),
-				},
-				Annotations: map[string]string{
-					annotations.Tenant: t.virtualNetwork.GetMetadata().GetTenant(),
-				},
+				Labels:       map[string]string{labels.VirtualNetworkUuid: id},
+				Annotations:  map[string]string{annotations.Tenant: t.virtualNetwork.GetMetadata().GetTenant()},
 			},
 			Spec: spec,
 		}
-		err = t.hubClient.Create(ctx, object)
+		t.r.logger.DebugContext(ctx, "VN update: pass 3 — calling hubClient.Create",
+			slog.String("id", id), slog.Bool("is_default", isDefault),
+			slog.String("hub_namespace", t.hubNamespace))
+		err = t.hubClient.Create(ctx, kubeObj)
 		if err != nil {
+			t.r.logger.ErrorContext(ctx, "VN update: pass 3 — hubClient.Create failed",
+				slog.String("id", id), slog.Bool("is_default", isDefault), slog.Any("error", err))
 			return controllers.HandleK8sWriteError(ctx, t.r.logger, err, t.setFailed)
 		}
-		t.r.logger.DebugContext(
-			ctx,
-			"Created virtual network",
-			slog.String("namespace", object.GetNamespace()),
-			slog.String("name", object.GetName()),
-		)
+		t.r.logger.DebugContext(ctx, "VN update: pass 3 done — K8s CR created",
+			slog.String("id", id), slog.Bool("is_default", isDefault),
+			slog.String("namespace", kubeObj.GetNamespace()),
+			slog.String("name", kubeObj.GetName()))
 	} else {
 		update := object.DeepCopy()
 		update.Spec = spec
+		t.r.logger.DebugContext(ctx, "VN update: pass 3 — calling hubClient.Patch",
+			slog.String("id", id), slog.Bool("is_default", isDefault))
 		err = t.hubClient.Patch(ctx, update, clnt.MergeFrom(object))
 		if err != nil {
+			t.r.logger.ErrorContext(ctx, "VN update: pass 3 — hubClient.Patch failed",
+				slog.String("id", id), slog.Bool("is_default", isDefault), slog.Any("error", err))
 			return controllers.HandleK8sWriteError(ctx, t.r.logger, err, t.setFailed)
 		}
-		t.r.logger.DebugContext(
-			ctx,
-			"Updated virtual network",
+		t.r.logger.DebugContext(ctx, "VN update: pass 3 done — K8s CR patched",
+			slog.String("id", id), slog.Bool("is_default", isDefault),
 			slog.String("namespace", object.GetNamespace()),
-			slog.String("name", object.GetName()),
-		)
+			slog.String("name", object.GetName()))
 	}
 
 	return err

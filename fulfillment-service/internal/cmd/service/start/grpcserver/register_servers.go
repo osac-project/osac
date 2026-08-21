@@ -858,6 +858,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetLogger(deps.Logger).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetNotifier(deps.Notifier).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create default networking provisioner: %w", err)

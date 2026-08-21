@@ -204,7 +204,10 @@ func (s *PrivateEventsServer) Watch(request *privatev1.EventsWatchRequest,
 		logger.DebugContext(ctx, "Canceled subcription")
 	}()
 
-	// Wait to receive events on the channel of the subscription and forward them to the client:
+	// Wait to receive events on the channel of the subscription and forward them to the client.
+	// eventsChan is buffered so that processEvent can deliver without blocking on a slow subscriber,
+	// and objectChannel on the controller side is buffered so that watchEvents never blocks on
+	// stream.Recv(), keeping the gRPC stream drained and stream.Send() always fast.
 	for {
 		select {
 		case event, ok := <-subInfo.eventsChan:

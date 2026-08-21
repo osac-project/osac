@@ -25,6 +25,11 @@ import (
 // securityBinPath is the path to the macOS security(1) CLI. Mutable so tests can stub it.
 var securityBinPath = "/usr/bin/security" // SIP-protected, stable across macOS versions
 
+// keychainProbePassword is the password used for the unlock-keychain probe. Empty in production, relying on
+// securityd's already-unlocked no-op shortcut; mutable because that shortcut doesn't survive a sandboxed HOME
+// override, so tests against a real unlocked keychain must supply its actual password (see the fix commit).
+var keychainProbePassword = ""
+
 // keychainProbeTimeout bounds the default-keychain and lock-state checks; real invocations complete in well
 // under a second.
 const keychainProbeTimeout = 5 * time.Second
@@ -36,18 +41,20 @@ func keychainAvailable() bool {
 	defer cancel()
 
 	//nolint:gosec // G204: securityBinPath is a hardcoded, test-stubbable literal, not externally controlled
-	out, err := exec.CommandContext(ctx, securityBinPath, "default-keychain").Output()
+	cmd := exec.CommandContext(ctx, securityBinPath, "default-keychain")
+	cmd.WaitDelay = time.Second
+	out, err := cmd.Output()
 	if err != nil {
 		return false
 	}
 	path := strings.Trim(strings.TrimSpace(string(out)), `"`)
 
-	// A configured default keychain isn't enough -- if it's locked, keyring.Get/Set risk hanging on an
-	// interactive unlock dialog instead of failing cleanly (see the fix commit for the full mechanism).
-	// show-keychain-info requires the target keychain to be unlocked to read its settings and fails fast
-	// (exit 152, no dialog) when it isn't -- empirically verified against a real locked/unlocked test
-	// keychain. A bare `security show-keychain-info` with no argument does NOT resolve to the default
-	// keychain (it returns a null placeholder), so the path from the first call is passed explicitly.
-	//nolint:gosec // G204: securityBinPath is a hardcoded, test-stubbable literal, not externally controlled
-	return exec.CommandContext(ctx, securityBinPath, "show-keychain-info", path).Run() == nil
+	// A locked default keychain must also count as unavailable: unlock-keychain -p is a no-op on an
+	// already-unlocked keychain (exit 0) but fails fast with zero dialog on a locked one (exit 51) -- unlike
+	// show-keychain-info, which has to consult SecurityAgent and pop a real dialog once run on an interactive
+	// session, and was rejected for that reason (see the fix commit for the full empirical trail).
+	//nolint:gosec // G204: securityBinPath, keychainProbePassword, and path are hardcoded/test-stubbable/system-derived, not externally controlled
+	cmd = exec.CommandContext(ctx, securityBinPath, "unlock-keychain", "-p", keychainProbePassword, path)
+	cmd.WaitDelay = time.Second
+	return cmd.Run() == nil
 }

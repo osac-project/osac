@@ -290,11 +290,24 @@ jobs:
         if ! UI_BASE_TAG=$(resolve_bare_release_tag_at osac-ui "${UI_SHA}"); then
           echo "::warning title=osac-ui::No vX.Y.Z release tag found for osac-ui — skipping sub-chart stamping"
         else
+          UI_CHART_DIR="osac-ui/charts/ui"
+          UI_CHART_NAME=$(yq -r '.name' "${UI_CHART_DIR}/Chart.yaml")
+          if [[ -z "${UI_CHART_NAME}" || "${UI_CHART_NAME}" == "null" ]]; then
+            echo "::error::Chart name missing in ${UI_CHART_DIR}/Chart.yaml"
+            exit 1
+          fi
+          if [[ ! "${UI_CHART_NAME}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+            safe_name="${UI_CHART_NAME//$'\n'/}"
+            safe_name="${safe_name//$'\r'/}"
+            safe_name="${safe_name//::/ }"
+            echo "::error title=${safe_name}::Invalid chart name in ${UI_CHART_DIR}/Chart.yaml (name must match [a-zA-Z0-9._-]+)"
+            exit 1
+          fi
           UI_SUB_VERSION=$(compute_nightly_chart_version "${UI_BASE_TAG}" "${NIGHTLY_SUFFIX}")
-          stamp_osac_ui_chart osac-ui/charts/ui "${UI_SUB_VERSION}" "${UI_IMAGE_REF}"
-          helm package osac-ui/charts/ui --destination ./packaged-charts
-          helm push "./packaged-charts/osac-ui-${UI_SUB_VERSION}.tgz" "oci://${REGISTRY}/${CHARTS_REPO}"
-          append_chart_version chart-versions.txt osac-ui "${UI_SUB_VERSION}" "${UI_SHORT_SHA}" "${UI_SHA}"
+          stamp_osac_ui_chart "${UI_CHART_DIR}" "${UI_SUB_VERSION}" "${UI_IMAGE_REF}"
+          helm package "${UI_CHART_DIR}" --destination ./packaged-charts
+          helm push "./packaged-charts/${UI_CHART_NAME}-${UI_SUB_VERSION}.tgz" "oci://${REGISTRY}/${CHARTS_REPO}"
+          append_chart_version chart-versions.txt "${UI_CHART_NAME}" "${UI_SUB_VERSION}" "${UI_SHORT_SHA}" "${UI_SHA}"
           echo "${UI_SUB_VERSION}" > osac-ui-nightly-version.txt
         fi
 
@@ -312,8 +325,8 @@ jobs:
         else
           helm dependency build osac-installer/charts/osac/
         fi
-        stamp_umbrella_ui_image_ref osac-installer/charts/osac/values.yaml "${UI_IMAGE_REF}"
-        stamp_umbrella_ui_image_ref "${VALUES_FILE}" "${UI_IMAGE_REF}"
+        # Re-stamp all NIGHTLY_UMBRELLA_UI_VALUES paths (same set as prepare; idempotent defense-in-depth).
+        stamp_umbrella_ui_values "${UI_IMAGE_REF}"
 
     - name: Lint chart
       working-directory: osac-installer

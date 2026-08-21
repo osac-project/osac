@@ -497,3 +497,19 @@ class K8sClient:
             "get", "baremetalhost", name, "-n", bmh_namespace, "-o", "jsonpath={.status.poweredOn}", checked=False
         )
         return output if rc == 0 else ""
+
+    def get_bmh_hardware_nics(self, *, name: str, bmh_namespace: str) -> list[str]:
+        """Return lowercased MAC addresses from BareMetalHost hardware inspection data."""
+        output, rc = self._get(
+            "get",
+            "baremetalhost",
+            name,
+            "-n",
+            bmh_namespace,
+            "-o",
+            "jsonpath={.status.hardware.nics[*].mac}",
+            checked=False,
+        )
+        if rc != 0 or not output.strip():
+            return []
+        return [mac.lower() for mac in output.split()]

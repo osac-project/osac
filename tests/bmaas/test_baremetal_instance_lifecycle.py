@@ -29,14 +29,33 @@ _RESTART_FAILED: str = "BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_FAILED"
 _MAC_PATTERN: re.Pattern[str] = re.compile(r"^([0-9a-f]{2}:){5}[0-9a-f]{2}$")
 
 
-def _assert_nic_metadata(*, grpc: GRPCClient, bmi_id: str, cli: OsacCLI, bmi_cr_name: str) -> None:
-    """Assert NIC metadata is populated and valid in both API and CLI output."""
+def _assert_nic_metadata(
+    *,
+    grpc: GRPCClient,
+    bmi_id: str,
+    cli: OsacCLI,
+    bmi_cr_name: str,
+    k8s: K8sClient,
+    bmh_name: str,
+    bmh_namespace: str,
+) -> None:
+    """Assert NIC metadata is populated, valid, and matches the BMH hardware inventory."""
     response: dict[str, Any] = grpc.get_baremetal_instance(bmi_id=bmi_id)
     nics: list[dict[str, Any]] = response.get("object", {}).get("status", {}).get("hardware", {}).get("nics", [])
     assert nics, f"Expected non-empty status.hardware.nics for BMI {bmi_id}"
+    bmi_macs: set[str] = set()
     for nic in nics:
         mac = nic.get("mac", "")
         assert _MAC_PATTERN.match(mac), f"MAC '{mac}' does not match expected lowercase colon-separated format"
+        bmi_macs.add(mac)
+
+    # Cross-check: BMI MACs must match the BareMetalHost hardware inspection data
+    bmh_macs: set[str] = set(k8s.get_bmh_hardware_nics(name=bmh_name, bmh_namespace=bmh_namespace))
+    assert bmh_macs, f"BareMetalHost {bmh_name} has no hardware.nics — inspection may not have completed"
+    assert bmi_macs == bmh_macs, (
+        f"BMI status.hardware.nics {sorted(bmi_macs)} does not match "
+        f"BareMetalHost hardware.nics {sorted(bmh_macs)}"
+    )
 
     describe_output: str = cli.describe_baremetal_instance(name=bmi_cr_name)
     assert "Network Interfaces:" in describe_output, (
@@ -80,13 +99,21 @@ def test_baremetal_instance_lifecycle(
         bmi_cr_name: str = wait_for_bmi_cr(k8s=k8s_hub_client, uuid=bmi_id)
         wait_for_bmi_running(grpc=grpc, bmi_id=bmi_id)
 
-        # Verify NIC metadata is populated (OSAC-3254)
-        _assert_nic_metadata(grpc=grpc, bmi_id=bmi_id, cli=cli, bmi_cr_name=bmi_cr_name)
-
         external_host_id: str = k8s_hub_client.get_baremetal_instance_external_host_id(name=bmi_cr_name)
         assert "/" in external_host_id, f"Expected namespace/name format, got: {external_host_id}"
         bmh_ns, bmh_name = external_host_id.split("/", 1)
         assert bmh_ns == bmh_namespace, f"BMH landed in {bmh_ns}, expected {bmh_namespace}"
+
+        # Verify NIC metadata matches the BMH hardware inventory (OSAC-3254)
+        _assert_nic_metadata(
+            grpc=grpc,
+            bmi_id=bmi_id,
+            cli=cli,
+            bmi_cr_name=bmi_cr_name,
+            k8s=k8s_hub_client,
+            bmh_name=bmh_name,
+            bmh_namespace=bmh_ns,
+        )
 
         # Verify provisioning
         wait_for_bmh_provisioned(k8s=k8s_hub_client, name=bmh_name, bmh_namespace=bmh_ns)

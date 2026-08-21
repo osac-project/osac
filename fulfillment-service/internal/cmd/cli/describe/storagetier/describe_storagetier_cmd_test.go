@@ -24,7 +24,7 @@ import (
 
 func formatStorageTier(st *publicv1.StorageTier) string {
 	var buf bytes.Buffer
-	RenderStorageTier(&buf, st)
+	renderStorageTier(&buf, st)
 	return buf.String()
 }
 

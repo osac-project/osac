@@ -43,7 +43,8 @@ const (
 // buf:lint:ignore OSAC_OBJECT_SHAPE
 type BareMetalInstanceTemplate struct {
 	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// Unique identifier of the template. Must match the CRD kubebuilder pattern.
+	// Unique identifier of the template. Must match the CRD kubebuilder pattern: letters, digits,
+	// underscores, and dots, starting with a letter or underscore (e.g., "osac.templates.bm_host_provisioning").
 	Id       string    `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Metadata *Metadata `protobuf:"bytes,2,opt,name=metadata,proto3" json:"metadata,omitempty"`
 	// Human friendly short description of the template, suitable for displaying in one single line on a UI or CLI.
@@ -190,7 +191,8 @@ func (x *BareMetalInstanceTemplate) ClearSpecDefaults() {
 type BareMetalInstanceTemplate_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
-	// Unique identifier of the template. Must match the CRD kubebuilder pattern.
+	// Unique identifier of the template. Must match the CRD kubebuilder pattern: letters, digits,
+	// underscores, and dots, starting with a letter or underscore (e.g., "osac.templates.bm_host_provisioning").
 	Id       string
 	Metadata *Metadata
 	// Human friendly short description of the template, suitable for displaying in one single line on a UI or CLI.

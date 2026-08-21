@@ -4,8 +4,9 @@
     name: netris.controller.auth
   when: netris_session_cookie is not defined
 
-- name: Query IPAM tree
+- name: Query IPAM tree filtered by VPC
   ansible.builtin.uri:
+    force: true
     url: >-
       {{ netris_controller_url }}/api/v2/ipam{{
         ('?filterByVpc=' + (ipam_vpc_id | string)) if ipam_vpc_id is defined else ''
@@ -13,6 +14,8 @@
     method: GET
     headers:
       Cookie: "connect.sid={{ netris_session_cookie }}"
+      Cache-Control: "no-cache"
+      Pragma: "no-cache"
     return_content: true
     status_code: [200]
     timeout: "{{ netris_timeout | default(30) }}"
@@ -26,7 +29,7 @@
       {{ (_ipam_tree_resp.json.data | default([]))
          | selectattr('name', 'equalto', ipam_name)
          | list | first | default(none) }}
-  when: _ipam_tree_resp.json is mapping
+  when: _ipam_tree_resp.json is defined and _ipam_tree_resp.json is mapping
 
 - name: Delete IPAM allocation
   when: _existing_ipam_alloc is defined and _existing_ipam_alloc is not none

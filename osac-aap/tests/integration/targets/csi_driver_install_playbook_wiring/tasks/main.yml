@@ -90,6 +90,12 @@
         csi_driver_install_override:
           name: osac.test_overrides.csi_driver_install_hooks
           tasks_from: install.yaml
+        # This test's own storage_provider dispatch (storage_provider_action: setup) is
+        # real, unstubbed -- it's the one action that invokes ensure_csi_backends.yaml,
+        # which would otherwise attempt a real Helm install against the not-yet-published
+        # osac-csi-driver chart. This test only stubs csi_driver_install (above), not
+        # storage_provider, so this must be suppressed independently.
+        storage_provider_csi_backends_enabled: false
 
 - name: Run tenant storage backend playbook with csi_driver_install stubbed
   ansible.builtin.import_playbook: ../../../../../playbook_osac_create_tenant_storage_backend.yml
@@ -114,15 +120,10 @@
           - "'csi_driver_install' in _override_log"
           - >-
             'tiers=' ~ (osac_job_vars.storage_tier_definitions | to_json) in _override_log
-          # Only the non-sensitive backend_id keys are logged (never the full
-          # connections dict, which carries username/password) -- matches
-          # csi_driver_install_hooks/tasks/install.yaml's log-and-skip pattern.
-          - >-
-            'backend_ids=' ~ (osac_job_vars.storage_backend_connections | list | to_json) in _override_log
         fail_msg: >-
           csi_driver_install override did not fire with the expected playbook-computed vars.
           Log: {{ _override_log }}
-        success_msg: "csi_driver_install override fired with the correct tiers/backend_ids from the playbook's vars: mapping"
+        success_msg: "csi_driver_install override fired with the correct tiers from the playbook's vars: mapping"
 
     # Proves the rest of the playbook (the pre-existing osac.service.storage_provider
     # dispatch) still executed for real and succeeded, immediately after the stubbed

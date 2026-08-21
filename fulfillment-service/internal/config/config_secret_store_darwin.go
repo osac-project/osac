@@ -39,7 +39,6 @@ func keychainAvailable() bool {
 	ctx, cancel := context.WithTimeout(context.Background(), keychainProbeTimeout)
 	defer cancel()
 
-	//nolint:gosec // G204: securityBinPath is a hardcoded, test-stubbable literal, not externally controlled
 	cmd := exec.CommandContext(ctx, securityBinPath, "default-keychain")
 	cmd.WaitDelay = time.Second
 	out, err := cmd.Output()

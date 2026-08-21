@@ -11,11 +11,8 @@
 -- specific language governing permissions and limitations under the License.
 --
 
--- Removes StorageTier's "protocol" and "quota_gib" fields from each backend association. "protocol" is
--- replaced by a new top-level StorageTierSpec.protocol field, but no backfill is performed: no real,
--- persistent OSAC deployment has StorageTier data today, so pre-existing rows simply read back with
--- protocol unset. Also restructures any pre-migration-77 archived_storage_tiers rows still in the flat
--- shape into spec/status, since migration 77 never touched that table.
+-- Strips "protocol"/"quota_gib" from backends (protocol moves to the new top-level spec.protocol, no
+-- backfill -- no real deployment has data) and fixes any pre-migration-77 archived rows still flat.
 --
 -- Before: {"spec":{"backends":[{"backend_id":"...","protocol":"STORAGE_PROTOCOL_NFS","quota_gib":500,...}]}}
 -- After:  {"spec":{"backends":[{"backend_id":"...",...}]}}

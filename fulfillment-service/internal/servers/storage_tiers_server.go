@@ -29,11 +29,8 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/events"
 )
 
-// storageTierUnforwardableFilterFields lists public StorageTierSpec field paths that don't exist at
-// the same path in the private schema — they live at `this.spec.backends[0].<field>` privately, not
-// `this.spec.<field>`. Filters referencing any of these are rejected rather than forwarded, since the
-// private FilterTranslator has no matching path for them. `this.spec.protocol` is not listed here: it
-// now lives at the same path (`this.spec.protocol`) on both schemas, so it forwards correctly.
+// storageTierUnforwardableFilterFields: public field paths that live under backends[0] privately, so
+// filters referencing them can't be forwarded (protocol is excluded -- its path matches on both schemas).
 var storageTierUnforwardableFilterFields = []string{
 	"this.spec.max_read_bandwidth_mbs",
 	"this.spec.max_write_bandwidth_mbs",
@@ -58,12 +55,8 @@ type StorageTiersServer struct {
 	delegate  privatev1.StorageTiersServer
 	outMapper *GenericMapper[*privatev1.StorageTier, *publicv1.StorageTier]
 
-	// filterValidator exists only to validate that a filter compiles against the PUBLIC StorageTier
-	// schema before it is forwarded to the private delegate — its Translate() return value (SQL) is
-	// never used. This closes the CEL-filter oracle where a filter referencing a field that doesn't
-	// exist publicly (e.g. `backend_id`) would otherwise compile and execute successfully against the
-	// private schema, letting a tenant infer private-only data through List's result count. Do not
-	// remove this as apparently-dead code.
+	// filterValidator only validates against the PUBLIC schema to close a CEL-filter oracle (its
+	// Translate() result is unused) -- do not remove this as apparently-dead code.
 	filterValidator *dao.FilterTranslator
 }
 
@@ -128,10 +121,7 @@ func (b *StorageTiersServerBuilder) Build() (result *StorageTiersServer, err err
 		return
 	}
 
-	// Create the mapper. The public spec is flattened by hand in toPublicTier rather than copied
-	// field-by-name, since the private spec's nested `backends` list has no structural match in the
-	// public spec — ignore "spec" here so the generic copy doesn't partially copy `description` and
-	// silently drop the rest:
+	// spec is ignored here since it's hand-flattened in toPublicTier, not copied field-by-name:
 	outMapper, err := NewGenericMapper[*privatev1.StorageTier, *publicv1.StorageTier]().
 		SetLogger(b.logger).
 		SetStrict(false).
@@ -212,10 +202,8 @@ func (s *StorageTiersServer) List(ctx context.Context,
 		return nil, err
 	}
 
-	// Map private response to public format. A tenant can't do anything about a malformed tier —
-	// that's a cloud-provider-admin data problem — so List logs and omits it rather than failing the
-	// whole listing for every caller (toPublicTier already logs the specific cause). Get, below,
-	// still fails the single request it was asked for.
+	// A malformed tier is a cloud-provider-admin data problem, not something a tenant can act on, so
+	// List logs and omits it instead of failing the whole page (Get still fails the one it was asked for).
 	privateItems := privateResponse.GetItems()
 	publicItems := make([]*publicv1.StorageTier, 0, len(privateItems))
 	for _, privateItem := range privateItems {
@@ -226,18 +214,8 @@ func (s *StorageTiersServer) List(ctx context.Context,
 		publicItems = append(publicItems, publicItem)
 	}
 
-	// Create the public response. Total is adjusted down by the number of tiers dropped from this
-	// page, so a page consisting only of malformed tiers doesn't report the misleading
-	// Total=1, Size=0, Items=[] — but ONLY when this page is provably the entire result set
-	// (offset 0 and every matching row fit within it): in that case `dropped` computed from this
-	// page equals the total number of malformed rows across the whole result set, so subtracting
-	// it is exactly correct. When the result set spans multiple pages, we cannot know how many
-	// malformed rows exist outside this page — the private CEL filter language has no
-	// size()/array-length function, so there is no way to ask the DAO for a malformed-only count
-	// without fetching every row — so Total is left as the plain DB row count in that case. This
-	// keeps Total deterministic across every page of the same query (matching the convention used
-	// by every other List endpoint in this codebase) instead of silently reporting a different,
-	// wrong value depending on which page happens to contain the malformed rows.
+	// Total is corrected for dropped tiers only when this page provably holds the entire result set
+	// (offset 0, every row fetched) -- otherwise the drop count outside this page is unknowable.
 	total := privateResponse.GetTotal()
 	if request.GetOffset() <= 0 && len(privateItems) == int(total) {
 		dropped := len(privateItems) - len(publicItems)
@@ -274,10 +252,8 @@ func (s *StorageTiersServer) Get(ctx context.Context,
 	return
 }
 
-// toPublicTier maps a private storage tier to its public representation, flattening the private spec's
-// single backend association into the public spec's flat fields. If mapping or flattening fails, errMsg
-// is returned to the caller (without leaking internal detail) so List and Get can each report their
-// own plural/singular wording.
+// toPublicTier flattens the private tier's single backend into the public spec; errMsg lets List/Get
+// report their own wording without leaking internal detail on failure.
 func (s *StorageTiersServer) toPublicTier(ctx context.Context, privateTier *privatev1.StorageTier,
 	errMsg string) (*publicv1.StorageTier, error) {
 	publicTier := &publicv1.StorageTier{}
@@ -304,10 +280,8 @@ func (s *StorageTiersServer) toPublicTier(ctx context.Context, privateTier *priv
 	return publicTier, nil
 }
 
-// toPublicStorageProtocol converts a private StorageProtocol value to its public counterpart. The two
-// enums are independently generated Go types with numerically matching values today, but a raw numeric
-// cast would silently produce the wrong (or an unnamed) public value if the private enum ever grows a
-// value the public enum doesn't know about yet — this makes that case explicit and logged instead.
+// toPublicStorageProtocol maps explicitly (not a numeric cast) so a future private-only value logs
+// instead of silently mismapping.
 func (s *StorageTiersServer) toPublicStorageProtocol(ctx context.Context,
 	p privatev1.StorageProtocol) publicv1.StorageProtocol {
 	switch p {

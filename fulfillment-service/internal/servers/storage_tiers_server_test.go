@@ -510,8 +510,7 @@ var _ = Describe("Storage tiers server", func() {
 
 			for i := range fields.Len() {
 				field := fields.Get(i)
-				// description and protocol share the same path publicly and privately, so they're
-				// forwardable and intentionally absent from storageTierUnforwardableFilterFields.
+				// description/protocol share the same path publicly and privately, so they're forwardable.
 				if field.Name() == "description" || field.Name() == "protocol" {
 					continue
 				}
@@ -523,6 +522,25 @@ var _ = Describe("Storage tiers server", func() {
 						field.Name(),
 					))
 			}
+		})
+
+		It("Public and private StorageProtocol enums have identical named values", func() {
+			private := make(map[string]int32)
+			privateValues := privatev1.StorageProtocol(0).Descriptor().Values()
+			for i := range privateValues.Len() {
+				v := privateValues.Get(i)
+				private[string(v.Name())] = int32(v.Number())
+			}
+
+			public := make(map[string]int32)
+			publicValues := publicv1.StorageProtocol(0).Descriptor().Values()
+			for i := range publicValues.Len() {
+				v := publicValues.Get(i)
+				public[string(v.Name())] = int32(v.Number())
+			}
+
+			Expect(private).To(Equal(public),
+				"private and public StorageProtocol enums have drifted — update toPublicStorageProtocol and this test")
 		})
 	})
 })

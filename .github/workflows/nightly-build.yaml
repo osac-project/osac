@@ -577,10 +577,13 @@ jobs:
 
     steps:
     - name: Delete temporary branch
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
         if [[ -z "${NIGHTLY_BRANCH}" ]]; then
           echo "No temp branch to delete (prepare may not have pushed one)"
           exit 0
         fi
-        git push origin --delete "${NIGHTLY_BRANCH}" || true
+        gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${NIGHTLY_BRANCH}" \
+          || echo "::warning::Could not delete temp branch ${NIGHTLY_BRANCH}"

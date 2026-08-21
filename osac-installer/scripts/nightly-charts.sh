@@ -293,6 +293,11 @@ chart_version_url() {
         return 0
     fi
 
+    if [[ ! "${version}" =~ ^[a-zA-Z0-9._+-]+$ ]]; then
+        echo "::warning::Skipping GHCR package lookup for invalid version; Slack link omitted" >&2
+        return 0
+    fi
+
     encoded_version=$(jq -rn --arg v "${version}" '$v|@uri')
 
     if ! response=$(curl -sf --max-time 15 \

@@ -25,9 +25,9 @@ spec:
   - name: output-image
     value: quay.io/redhat-user-workloads/osac-tenant/bare-metal-fulfillment-operator:{{revision}}
   - name: dockerfile
-    value: Containerfile
+    value: bare-metal-fulfillment-operator/Containerfile
   - name: path-context
-    value: bare-metal-fulfillment-operator
+    value: .
   pipelineSpec:
     description: |
       This pipeline is ideal for building container images from a Containerfile while maintaining trust after pipeline customization.

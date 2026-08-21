@@ -31,9 +31,15 @@ import (
 
 var _ = Describe("Private subnets server", func() {
 	var subnetDao *dao.GenericDAO[*privatev1.Subnet]
+	// networkClass memoizes the NetworkClass fixture created by createNetworkClass across
+	// multiple calls within a single It: the one-NetworkClass-per-deployment invariant
+	// (OSAC-4073) means only one non-deleted NetworkClass can exist in the (per-It) test
+	// database at a time. Reset in BeforeEach below.
+	var networkClass *privatev1.NetworkClass
 
 	BeforeEach(func() {
 		var err error
+		networkClass = nil
 
 		// Create the tenants used in the tests:
 		tenantsDao, err := dao.NewGenericDAO[*privatev1.Tenant]().
@@ -65,8 +71,14 @@ var _ = Describe("Private subnets server", func() {
 		Expect(err).ToNot(HaveOccurred())
 	})
 
-	// Helper function to create a NetworkClass for validation tests
+	// Helper function to create a NetworkClass for validation tests. Memoized: a second call
+	// within the same It reuses the first NetworkClass instead of attempting (and failing) to
+	// create another, since only one non-deleted NetworkClass can exist at a time (OSAC-4073).
 	createNetworkClass := func(ctx context.Context) *privatev1.NetworkClass {
+		if networkClass != nil {
+			return networkClass
+		}
+
 		name := fmt.Sprintf("test-network-class-%s", uuid.New().String()[:8])
 		// Create NetworkClass DAO
 		ncDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
@@ -96,7 +108,8 @@ var _ = Describe("Private subnets server", func() {
 			Do(ctx)
 		Expect(err).ToNot(HaveOccurred())
 
-		return response.GetObject()
+		networkClass = response.GetObject()
+		return networkClass
 	}
 
 	// Helper function to create a VirtualNetwork parent for Subnet tests

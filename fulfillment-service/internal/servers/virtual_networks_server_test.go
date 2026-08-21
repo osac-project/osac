@@ -432,6 +432,17 @@ var _ = Describe("Virtual networks server", func() {
 		})
 
 		It("Public Create honors explicit network_class instead of using default", func() {
+			// Drop the network_classes_singleton unique index (OSAC-4073, migration 102) to allow
+			// seeding a second NetworkClass below: this test predates the one-NetworkClass-per-
+			// deployment invariant and exercises explicit-selection-overrides-default logic that
+			// can only be reached with two NetworkClasses coexisting, which the invariant now
+			// prevents through the normal Create path. Mirrors the "Multiple defaults fallback"
+			// test's approach in network_classes_server_test.go.
+			tx, txErr := database.TxFromContext(ctx)
+			Expect(txErr).ToNot(HaveOccurred())
+			_, txErr = tx.Exec(ctx, "drop index if exists network_classes_singleton")
+			Expect(txErr).ToNot(HaveOccurred())
+
 			// Create a second non-default NetworkClass via DAO:
 			ncDao, ncErr := dao.NewGenericDAO[*privatev1.NetworkClass]().
 				SetLogger(logger).

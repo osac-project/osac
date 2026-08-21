@@ -28,3 +28,10 @@ argument_specs:
         type: str
         description: API endpoint for NetworkClass resources
         default: "{{ osac_fulfillment_service_uri }}/api/private/v1/network_classes"
+      publish_templates_network_class_implementation_strategy:
+        type: str
+        description: >-
+          Explicit implementation_strategy to select when osac_network_classes contains more
+          than one discovered role. Only one NetworkClass may be published per deployment
+          (OSAC-4073); leave empty to auto-select the role marked is_default: true.
+        default: ""

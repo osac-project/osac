@@ -15,8 +15,24 @@
   loop: "{{ publish_templates_network_class_check.json.get('items', []) }}"
   when: publish_templates_network_class_check is success and item.implementation_strategy is defined
 
+# OSAC-4073: only one NetworkClass may exist per deployment. `osac_network_classes` can contain
+# several discovered network roles (e.g. cudn_net, netris, openstack) -- select exactly one to
+# publish here instead of attempting all of them, which would fail every role beyond the first
+# against the API's singleton constraint. See osac.service.select_network_class for the
+# selection rules (explicit override, single role, or the role marked is_default).
+- name: Select the single NetworkClass to publish
+  ansible.builtin.set_fact:
+    publish_templates_selected_network_class: >-
+      {{
+      osac_network_classes | osac.service.select_network_class(publish_templates_network_class_implementation_strategy | default(''))
+      }}
+
+- name: Print selected NetworkClass
+  ansible.builtin.debug:
+    var: publish_templates_selected_network_class
+
 - name: Update existing NetworkClass
-  loop: "{{ osac_network_classes }}"
+  loop: "{{ [publish_templates_selected_network_class] if publish_templates_selected_network_class is not none else [] }}"
   loop_control:
     label: "{{ network_class.implementation_strategy }}"
     loop_var: network_class
@@ -33,7 +49,7 @@
     body: "{{ network_class }}"
 
 - name: Create new NetworkClass
-  loop: "{{ osac_network_classes }}"
+  loop: "{{ [publish_templates_selected_network_class] if publish_templates_selected_network_class is not none else [] }}"
   loop_control:
     label: "{{ network_class.implementation_strategy }}"
     loop_var: network_class

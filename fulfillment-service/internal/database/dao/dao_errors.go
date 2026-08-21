@@ -57,6 +57,11 @@ type ErrAlreadyExists struct {
 	// Reason is set when a custom error message is provided by a database trigger (e.g., for uniqueness
 	// violations with additional context). When set, this message is returned instead of the default message.
 	Reason string
+
+	// ConstraintName is the name of the PostgreSQL unique constraint or index that was violated, when known
+	// (e.g. "network_classes_singleton"). Callers can use this to distinguish between different uniqueness
+	// invariants on the same table without parsing the error message.
+	ConstraintName string
 }
 
 // Error returns the error message.

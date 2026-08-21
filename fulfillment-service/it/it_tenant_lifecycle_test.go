@@ -728,8 +728,11 @@ var _ = Describe("Multi-tenant resource isolation", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		networkClassId = ncResp.GetObject().GetId()
-		DeferCleanup(func() {
-			_, _ = networkClassesClient.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{
+		// Use a fresh context for cleanup: the ctx from this BeforeEach is cancelled by Ginkgo as soon as this
+		// node returns, so reusing it here would make the Delete call fail with "context canceled" and leak the
+		// NetworkClass — which is fatal now that only one NetworkClass may exist per deployment (OSAC-4073).
+		DeferCleanup(func(cleanupCtx context.Context) {
+			_, _ = networkClassesClient.Delete(cleanupCtx, privatev1.NetworkClassesDeleteRequest_builder{
 				Id: networkClassId,
 			}.Build())
 		})
@@ -772,8 +775,8 @@ var _ = Describe("Multi-tenant resource isolation", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		vnId := createResp.GetObject().GetId()
-		DeferCleanup(func() {
-			_, _ = vnAdminClient.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{
+		DeferCleanup(func(cleanupCtx context.Context) {
+			_, _ = vnAdminClient.Delete(cleanupCtx, privatev1.VirtualNetworksDeleteRequest_builder{
 				Id: vnId,
 			}.Build())
 		})
@@ -841,8 +844,8 @@ var _ = Describe("Multi-tenant resource isolation", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		vnId := createResp.GetObject().GetId()
-		DeferCleanup(func() {
-			_, _ = vnAdminClient.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{
+		DeferCleanup(func(cleanupCtx context.Context) {
+			_, _ = vnAdminClient.Delete(cleanupCtx, privatev1.VirtualNetworksDeleteRequest_builder{
 				Id: vnId,
 			}.Build())
 		})
@@ -899,8 +902,8 @@ var _ = Describe("Multi-tenant resource isolation", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		vnIdA := createRespA.GetObject().GetId()
-		DeferCleanup(func() {
-			_, _ = vnAdminClient.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{
+		DeferCleanup(func(cleanupCtx context.Context) {
+			_, _ = vnAdminClient.Delete(cleanupCtx, privatev1.VirtualNetworksDeleteRequest_builder{
 				Id: vnIdA,
 			}.Build())
 		})
@@ -921,8 +924,8 @@ var _ = Describe("Multi-tenant resource isolation", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		vnIdB := createRespB.GetObject().GetId()
-		DeferCleanup(func() {
-			_, _ = vnAdminClient.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{
+		DeferCleanup(func(cleanupCtx context.Context) {
+			_, _ = vnAdminClient.Delete(cleanupCtx, privatev1.VirtualNetworksDeleteRequest_builder{
 				Id: vnIdB,
 			}.Build())
 		})

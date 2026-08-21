@@ -51,6 +51,7 @@ jobs:
         GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
+        source osac-installer/scripts/nightly-charts.sh
         CUTOFF=$(date -u -d '7 days ago' +%Y%m%d)
         while read -r ref; do
           [[ -z "${ref}" ]] && continue
@@ -59,8 +60,9 @@ jobs:
           branch_date="${branch_date%%-*}"
           [[ "${branch_date}" =~ ^[0-9]{8}$ ]] || continue
           if (( branch_date < CUTOFF )); then
+            safe_branch=$(_gha_sanitize_for_message "${branch}")
             gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${branch}" \
-              || echo "::warning::Could not delete stale nightly branch ${branch}"
+              || echo "::warning::Could not delete stale nightly branch ${safe_branch}"
           fi
         done < <(gh api --paginate "repos/${GITHUB_REPOSITORY}/git/matching-refs/heads/nightly/" --jq '.[].ref')
 
@@ -92,6 +94,7 @@ jobs:
       id: push
       run: |
         set -euo pipefail
+        source osac-installer/scripts/nightly-charts.sh
         DATE=$(date -u +%Y%m%d)
         SHORT_SHA=$(git rev-parse --short=7 HEAD)
         BRANCH="nightly/${DATE}-${SHORT_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
@@ -100,11 +103,9 @@ jobs:
         git config user.email "github-actions[bot]@users.noreply.github.com"
         git checkout -b "${BRANCH}"
         git add osac-installer/pinned/osac-ui.commit
-        git add osac-installer/charts/osac/values.yaml
-        git add osac-installer/values/development/values.yaml
-        git add osac-installer/values/vmaas-ci/values.yaml
-        git add osac-installer/values/bmaas-ci/values.yaml
-        git add osac-installer/values/full-ci/values.yaml
+        for values_yaml in "${NIGHTLY_UMBRELLA_UI_VALUES[@]}"; do
+          git add "${values_yaml}"
+        done
         if git diff --cached --quiet; then
           echo "::error::No osac-ui pin changes staged — refusing to push empty temp branch"
           exit 1
@@ -587,9 +588,11 @@ jobs:
         GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
+        source osac-installer/scripts/nightly-charts.sh
         if [[ -z "${NIGHTLY_BRANCH}" ]]; then
           echo "No temp branch to delete (prepare may not have pushed one)"
           exit 0
         fi
+        safe_branch=$(_gha_sanitize_for_message "${NIGHTLY_BRANCH}")
         gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${NIGHTLY_BRANCH}" \
-          || echo "::warning::Could not delete temp branch ${NIGHTLY_BRANCH}"
+          || echo "::warning::Could not delete temp branch ${safe_branch}"

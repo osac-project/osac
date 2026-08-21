@@ -49,6 +49,12 @@ check_osac_ui_image() {
     local repo="${1:-osac-ui}"
     local sha tag token safe_repo safe_sha
 
+    if [[ ! "${repo}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+        safe_repo=$(_gha_sanitize_for_message "${repo}")
+        echo "::error::Invalid osac-ui repo name '${safe_repo}' — must match [a-zA-Z0-9._-]+" >&2
+        return 1
+    fi
+
     sha=$(git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=10 \
         ls-remote "https://github.com/osac-project/${repo}.git" refs/heads/main | cut -f1)
 
@@ -138,8 +144,10 @@ osac_ui_nightly_image_ref() {
 # Usage: stamp_umbrella_ui_image_ref <values_yaml> <image_ref>
 stamp_umbrella_ui_image_ref() {
     local values_yaml="$1" image_ref="$2"
+    local safe_values_yaml
     if [[ ! -f "${values_yaml}" ]]; then
-        echo "::warning title=Missing values file::Values file not found: ${values_yaml} — skipping ui.images.ui stamp" >&2
+        safe_values_yaml=$(_gha_sanitize_for_message "${values_yaml}")
+        echo "::warning title=Missing values file::Values file not found: ${safe_values_yaml} — skipping ui.images.ui stamp" >&2
         return 0
     fi
     IMAGE_REF="${image_ref}" yq -i '.ui.images.ui = strenv(IMAGE_REF)' "${values_yaml}"
@@ -302,8 +310,10 @@ _build_slack_charts_table() {
 # Usage: rewrite_umbrella_osac_ui_dependency <chart_yaml> <ui_version> <oci_repo>
 rewrite_umbrella_osac_ui_dependency() {
     local chart_yaml="$1" ui_version="$2" oci_repo="$3"
+    local safe_chart_yaml
     if [[ ! -f "${chart_yaml}" ]]; then
-        echo "::error::Chart manifest not found: ${chart_yaml}" >&2
+        safe_chart_yaml=$(_gha_sanitize_for_message "${chart_yaml}")
+        echo "::error::Chart manifest not found: ${safe_chart_yaml}" >&2
         return 1
     fi
     UI_VERSION="${ui_version}" yq -i \

@@ -15,8 +15,11 @@ syntax = "proto3";
 
 package osac.private.v1;
 
+import "cleanapi/cleanapi.proto";
 import "osac/private/v1/metadata_type.proto";
 import "osac/private/v1/storage_common_type.proto";
+
+option (cleanapi.file).private = true;
 
 // Lifecycle states for StorageTier resources.
 enum StorageTierState {

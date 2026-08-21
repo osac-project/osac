@@ -16,7 +16,10 @@ syntax = "proto3";
 package osac.private.v1;
 
 import "buf/validate/validate.proto";
+import "cleanapi/cleanapi.proto";
 import "osac/private/v1/metadata_type.proto";
+
+option (cleanapi.file).private = true;
 
 // Represents a registered storage backend in the OSAC platform.
 //

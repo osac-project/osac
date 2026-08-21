@@ -15,9 +15,12 @@ syntax = "proto3";
 
 package osac.private.v1;
 
+import "cleanapi/cleanapi.proto";
 import "google/api/annotations.proto";
 import "google/protobuf/field_mask.proto";
 import "osac/private/v1/storage_backend_type.proto";
+
+option (cleanapi.file).private = true;
 
 message StorageBackendsListRequest {
   // Index of the first result. If not specified the default value will be zero.

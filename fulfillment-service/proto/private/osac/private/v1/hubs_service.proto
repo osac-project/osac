@@ -15,9 +15,12 @@ syntax = "proto3";
 
 package osac.private.v1;
 
+import "cleanapi/cleanapi.proto";
 import "google/api/annotations.proto";
 import "google/protobuf/field_mask.proto";
 import "osac/private/v1/hub_type.proto";
+
+option (cleanapi.file).private = true;
 
 message HubsListRequest {
   optional int32 offset = 1;

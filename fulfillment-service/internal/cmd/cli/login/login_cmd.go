@@ -447,6 +447,9 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to save configuration: %w", err)
 	}
+	if cfg.UsingFileSecretStore() {
+		c.console.Render(ctx, "file_secret_store_fallback.txt", nil)
+	}
 
 	return nil
 }

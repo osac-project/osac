@@ -41,6 +41,17 @@ var _ = Describe("Secret store", func() {
 	})
 
 	Describe("Store selection", func() {
+		var originalKeychainAvailableFunc func() bool
+
+		BeforeEach(func() {
+			originalKeychainAvailableFunc = keychainAvailableFunc
+			keychainAvailableFunc = func() bool { return true }
+		})
+
+		AfterEach(func() {
+			keychainAvailableFunc = originalKeychainAvailableFunc
+		})
+
 		It("Selects the keyring store when the keyring is available", func() {
 			keyring.MockInit()
 			store, err := NewSecretStore().

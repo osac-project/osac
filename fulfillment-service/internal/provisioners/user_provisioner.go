@@ -25,6 +25,7 @@ import (
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 )
 
 // UserProvisionerBuilder builds a UserProvisioner.
@@ -108,7 +109,9 @@ func (p *UserProvisioner) Provision(ctx context.Context, username, tenant string
 		slog.String("tenant", tenant),
 	)
 
-	// Create user via server (this will trigger events for the controller)
+	// Create user via server (this will trigger events for the controller).
+	// Wrap in a savepoint so that a concurrent unique constraint violation
+	// (AlreadyExists) doesn't poison the outer PostgreSQL transaction.
 	user := privatev1.User_builder{
 		Metadata: privatev1.Metadata_builder{
 			Name:   sanitizedName,
@@ -121,11 +124,17 @@ func (p *UserProvisioner) Provision(ctx context.Context, username, tenant string
 		}.Build(),
 	}.Build()
 
-	_, err = p.usersServer.Create(ctx, &privatev1.UsersCreateRequest{
-		Object: user,
+	tx, err := database.TxFromContext(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get transaction: %w", err)
+	}
+	err = tx.Savepoint(ctx, func(spCtx context.Context) error {
+		_, err := p.usersServer.Create(spCtx, &privatev1.UsersCreateRequest{
+			Object: user,
+		})
+		return err
 	})
 	if err != nil {
-		// If the user was created concurrently (race condition), treat as success
 		if status.Code(err) == codes.AlreadyExists {
 			return nil
 		}

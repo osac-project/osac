@@ -91,6 +91,16 @@
     # execution environment's default kubeconfig context (the hub), never
     # _remote_kubeconfig. Skipping for ClusterOrder (CaaS) avoids installing the
     # OSAC CSI driver on a tenant's guest cluster, which is out of scope here.
+    #
+    # This playbook's own task order does NOT guarantee the vendor controller
+    # Service csi_driver_install's pre-block fail-fast requires already exists
+    # -- this is Stage 2 (ensure_storage_class), which never calls
+    # ensure_csi_backends.yaml. Safety here comes from an external invariant
+    # this file cannot enforce or verify: osac-operator's storage_controller.go
+    # handleBackendReadiness blocks Stage 2 from running until Stage 1
+    # (playbook_osac_create_tenant_storage_backend.yml's setup dispatch) has
+    # gone green for this tenant. A future change to that controller's
+    # Stage-gating logic could silently break this precondition.
     - name: Install OSAC CSI driver on the hub (once per dispatch, regardless of provider count)
       when: osac_job_vars.resource.kind == 'Tenant'
       ansible.builtin.include_role:
@@ -98,7 +108,6 @@
         tasks_from: "{{ (csi_driver_install_override | default(csi_driver_install_default)).tasks_from }}"
       vars:
         csi_driver_install_tiers: "{{ osac_job_vars.storage_tier_definitions }}"
-        csi_driver_install_backend_connections: "{{ osac_job_vars.storage_backend_connections | default({}) }}"
 
     - name: Provision StorageClasses for all configured tiers
       block:

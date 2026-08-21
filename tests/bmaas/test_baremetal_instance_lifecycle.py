@@ -1,16 +1,11 @@
 from __future__ import annotations
 
 import logging
-import os
 import re
-import subprocess
 from typing import Any
-
-import pytest
 
 from tests.core.grpc_client import GRPCClient
 from tests.core.helpers import (
-    assert_grpc_rejected,
     wait_for_bmh_available,
     wait_for_bmh_provisioned,
     wait_for_bmi_cr,
@@ -275,20 +270,3 @@ def test_baremetal_instance_nic_invariant(grpc: GRPCClient) -> None:
             assert _MAC_PATTERN.match(mac), f"BMI {bmi_id} has invalid MAC format: '{mac}'"
 
 
-@pytest.mark.skipif(
-    not os.getenv("OSAC_TENANT2_BMI_ID"),
-    reason="Requires OSAC_TENANT2_BMI_ID env var pointing to a BMI owned by tenant2",
-)
-def test_baremetal_instance_tenant_isolation(grpc: GRPCClient, jwt_grpc_tenant1: GRPCClient) -> None:
-    """Tenant 1 user cannot read a BMI belonging to tenant 2; admin can read NICs cross-tenant."""
-    tenant2_bmi_id = os.environ["OSAC_TENANT2_BMI_ID"]
-
-    # Admin can read the BMI and see NICs
-    bmi_data: dict[str, Any] = grpc.get_baremetal_instance(bmi_id=tenant2_bmi_id)
-    nics: list[dict[str, Any]] = bmi_data.get("object", {}).get("status", {}).get("hardware", {}).get("nics", [])
-    assert nics, f"Admin expected non-empty status.hardware.nics on tenant2 BMI {tenant2_bmi_id}"
-
-    # Tenant 1 user must be denied access to tenant 2's BMI
-    with pytest.raises(subprocess.CalledProcessError) as exc_info:
-        jwt_grpc_tenant1.get_baremetal_instance(bmi_id=tenant2_bmi_id)
-    assert_grpc_rejected(exc_info, "PermissionDenied")

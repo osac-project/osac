@@ -1,0 +1,849 @@
+---
+# Integration test for osac.service.storage_provider's ensure_csi_backends.yaml task
+# file -- the sole owner of the csi-backends Helm release as of OSAC-3290's
+# reconciliation with osac.service.csi_driver_install. Exercises this task file
+# directly via `tasks_from: ensure_csi_backends` (bypassing storage_provider/tasks/main.yaml's
+# own dispatcher and provider-role validation entirely) since ensure_csi_backends.yaml's
+# only real inputs are _unique_providers, storage_provider_tiers, and
+# storage_provider_backend_connections -- none of the tier/protocol/tenant validation
+# main.yaml performs, or the mock-VMS-backed provider dispatch that follows it in
+# setup.yaml, is relevant to what this file tests. Matches the precedent
+# osac.test_overrides.csi_driver_install_hooks already sets for calling a role with
+# tasks_from targeting a non-main task file.
+#
+# Tests: first-dispatch install (namespace PSA labels, vast-csi-controller
+# Deployment/Service, resolved vmsHost), an ambiguous multi-backend_id vast dispatch
+# failing fast before the install lock is ever touched (mirrors csi_driver_install's
+# own deleted Test 6 for the same validation, which lived there before OSAC-3290's
+# reconciliation moved it into this task file), cumulative enablement across two
+# dispatches (proves the union-with-live-Deployments logic, now under a lock, still
+# works), OAuth Secret creation and its don't-blank-real-creds guard, lock
+# contention (mirrors csi_driver_install's own Test 7 for its sibling lock), and the
+# rescue/always rollback path -- a fresh install's Helm release and OAuth Secret are
+# both torn down on a forced mid-block failure (Test 5a), while a genuinely
+# pre-existing release/Secret survive an equivalent failure on a later, separate
+# dispatch (Test 5b) -- the asymmetry existed-before tracking exists to protect for
+# this hub-wide, multi-tenant release.
+#
+# Requires: kind cluster (provided by setup_test_env.sh). Uses the same
+# OSAC_CSI_BACKENDS_CHART_REF local-filesystem chart path setup_test_env.sh already
+# exports and storage_provider_setup's own (pre-existing, real) csi-backends dispatch
+# already relies on -- no OCI registry needed for this test, unlike csi_driver_install's
+# own role-level test. Does NOT require the mock VMS server: this task file never calls
+# the VAST VMS API directly, only threads a connection endpoint through as an opaque
+# vmsHost string.
+
+# ── Setup: clean slate ──
+- name: "Storage Provider Ensure CSI Backends - Setup (clean slate)"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    storage_provider_test_backends_namespace: "osac-csi-backends"
+
+  tasks:
+    - name: Uninstall any pre-existing csi-backends release
+      kubernetes.core.helm:
+        name: osac-csi-backends
+        release_namespace: "{{ storage_provider_test_backends_namespace }}"
+        state: absent
+      failed_when: false
+
+    # wait: true -- avoids a later Helm install racing a still-terminating namespace.
+    - name: Delete csi-backends namespace if it exists
+      kubernetes.core.k8s:
+        state: absent
+        kind: Namespace
+        name: "{{ storage_provider_test_backends_namespace }}"
+        wait: true
+        wait_timeout: 300
+      register: _ns_delete_setup
+      failed_when: false
+
+    # failed_when: false above also hid a genuine wait timeout -- surface that loudly.
+    - name: Fail if the namespace delete above genuinely timed out
+      ansible.builtin.fail:
+        msg: "{{ _ns_delete_setup.msg }}"
+      when: "'Timed out waiting' in (_ns_delete_setup.msg | default(''))"
+
+# ── Test 1: First dispatch installs the csi-backends Helm release (vast) ──
+- name: "Storage Provider Ensure CSI Backends - First dispatch (vast)"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    _unique_providers:
+      - vast
+    storage_provider_tiers:
+      - name: default
+        protocol: nfs
+        provider: vast
+        backend_id: be-test
+    storage_provider_backend_connections:
+      be-test:
+        endpoint: "vast-mock.example.com:443"
+        username: "admin"
+        password: "mock-admin-password"
+
+  tasks:
+    - name: Call ensure_csi_backends.yaml directly (vast dispatch)
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+        tasks_from: ensure_csi_backends
+
+    - name: Read csi-backends namespace
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: osac-csi-backends
+      register: _backends_namespace_result
+
+    - name: Assert csi-backends namespace has the required privileged Pod Security labels
+      ansible.builtin.assert:
+        that:
+          - _backends_namespace_result.resources | length == 1
+          - _backends_namespace_result.resources[0].metadata.labels['pod-security.kubernetes.io/enforce'] == 'privileged'
+          - _backends_namespace_result.resources[0].metadata.labels['pod-security.kubernetes.io/warn'] == 'privileged'
+        fail_msg: >-
+          csi-backends namespace missing or missing required PSA labels:
+          {{ _backends_namespace_result.resources }}
+        success_msg: "csi-backends namespace correctly created with privileged Pod Security labels"
+
+    - name: Read vast controller Deployment
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: "vast-csi-controller"
+        namespace: "osac-csi-backends"
+      register: _vast_deployment_result
+
+    - name: Assert vast controller Deployment exists
+      ansible.builtin.assert:
+        that:
+          - _vast_deployment_result.resources | length == 1
+        fail_msg: "Deployment 'vast-csi-controller' was not created in namespace 'osac-csi-backends'"
+        success_msg: "vast controller Deployment exists"
+
+    - name: Read vast controller Service
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Service
+        name: "vast-csi-controller"
+        namespace: "osac-csi-backends"
+      register: _vast_service_result
+
+    - name: Assert vast controller Service exists
+      ansible.builtin.assert:
+        that:
+          - _vast_service_result.resources | length == 1
+        fail_msg: "Service 'vast-csi-controller' was not created in namespace 'osac-csi-backends'"
+        success_msg: "vast controller Service exists"
+
+    - name: Read installed csi-backends release
+      kubernetes.core.helm_info:
+        name: osac-csi-backends
+        release_namespace: osac-csi-backends
+      register: _backends_release_info
+
+    - name: Assert vast.enabled and vast.config.vmsHost on the csi-backends release
+      ansible.builtin.assert:
+        that:
+          - _backends_release_info.status['values'].vast.enabled | bool
+          - _backends_release_info.status['values'].vast.config.vmsHost == "vast-mock.example.com:443"
+        fail_msg: "csi-backends release values did not reflect the dispatched vast vendor: {{ _backends_release_info.status['values'] }}"
+        success_msg: "csi-backends release correctly enables vast with the resolved vmsHost"
+
+# ── Test 1.5: Multiple vast backend_ids registered platform-wide (in
+# storage_provider_tiers, the platform-wide catalog -- not filtered to this
+# dispatch's own _unique_providers) -- fails fast in the pre-block validation,
+# strictly before the "Discover, compute, and install..." block that acquires the
+# csi-backends-install-lock, so nothing is ever locked, read, or written and the
+# csi-backends release from Test 1 above must survive completely untouched. Mirrors
+# csi_driver_install's own deleted Test 6 for the identical validation, which lived
+# in csi_driver_install itself (fired mid-block, after existed_before tracking)
+# before OSAC-3290's reconciliation moved the check here as a pre-block guard. ──
+- name: "Storage Provider Ensure CSI Backends - Multiple vast backend_ids (should fail, pre-existing release survives)"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    _unique_providers:
+      - vast
+    storage_provider_tiers:
+      - name: gold
+        protocol: nfs
+        provider: vast
+        backend_id: be-test
+      - name: silver
+        protocol: nfs
+        provider: vast
+        backend_id: be-other
+    storage_provider_backend_connections:
+      be-test:
+        endpoint: "vast-mock.example.com:443"
+        username: "admin"
+        password: "mock-admin-password"
+      be-other:
+        endpoint: "vast-mock-2.example.com:443"
+        username: "admin"
+        password: "mock-admin-password"
+
+  tasks:
+    - name: Attempt dispatch with two vast tiers referencing different backend_ids (expected to fail)
+      block:
+        - name: Call ensure_csi_backends.yaml (ambiguous vast dispatch)
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+            tasks_from: ensure_csi_backends
+
+        - name: This task should not be reached -- ensure_csi_backends.yaml should have failed
+          ansible.builtin.fail:
+            msg: "ensure_csi_backends.yaml did not fail as expected when vast tiers reference multiple backend_ids"
+
+      rescue:
+        - name: Assert the dispatch failed with the expected ambiguous-backend_id message
+          ansible.builtin.assert:
+            that:
+              - "'Expected at most one VAST backend_id platform-wide' in (ansible_failed_result.msg | default(''))"
+              - "'Multiple VAST backends are not yet supported' in (ansible_failed_result.msg | default(''))"
+            fail_msg: >-
+              Dispatch failed but not with the expected ambiguous-backend_id message
+              (should be a clear error, not a raw Jinja error): error={{ ansible_failed_result.msg | default('unknown') }}
+            success_msg: "Dispatch correctly failed with a clear ambiguous-backend_id message, not a raw Jinja error"
+
+    - name: Read the csi-backends install lock after the failed validation
+      kubernetes.core.k8s_info:
+        api_version: coordination.k8s.io/v1
+        kind: Lease
+        name: csi-backends-install-lock
+        namespace: "{{ lookup('env', 'POD_NAMESPACE') }}"
+      register: _lease_after_ambiguous_backend_id
+
+    - name: Assert the install lock was never acquired -- this validation fires before lock acquisition
+      ansible.builtin.assert:
+        that:
+          - _lease_after_ambiguous_backend_id.resources | length == 0
+        fail_msg: >-
+          The csi-backends install lock should not exist after a pre-block validation
+          failure that never reaches lock acquisition: {{ _lease_after_ambiguous_backend_id.resources }}
+        success_msg: "csi-backends install lock correctly never acquired -- validation fired before lock acquisition"
+
+    - name: Read the csi-backends release after the failed validation (no side effects expected)
+      kubernetes.core.helm_info:
+        name: osac-csi-backends
+        release_namespace: osac-csi-backends
+      register: _backends_release_after_ambiguous_backend_id
+
+    - name: Assert the pre-existing csi-backends release from the first dispatch survived untouched
+      ansible.builtin.assert:
+        that:
+          - _backends_release_after_ambiguous_backend_id.status is not none
+          - _backends_release_after_ambiguous_backend_id.status['values'].vast.enabled | bool
+          - _backends_release_after_ambiguous_backend_id.status['values'].vast.config.vmsHost == "vast-mock.example.com:443"
+        fail_msg: >-
+          Pre-existing csi-backends release should be unaffected -- neither corrupted
+          nor partially modified -- by a failed ambiguous-backend_id validation:
+          {{ _backends_release_after_ambiguous_backend_id.status }}
+        success_msg: "Pre-existing csi-backends release correctly unaffected by the failed validation"
+
+# ── Test 2: A later dispatch that needs no csi-backends-managed vendor at all
+# must not clear an already-deployed vendor's enablement -- proves the
+# union-with-live-Deployments logic still works now that it runs under the new
+# csi-backends-install-lock. Deliberately does NOT dispatch pure or trident: their
+# controller images require manual, out-of-scope prerequisite config (a real
+# clusterUuid/credentialsSecret, a pullable vendor image) that nothing in this
+# reconciliation resolves, so they can never reach the wait-for-availability
+# task's "Available" state in ANY environment, not just this test's kind cluster
+# -- see charts/csi-backends/README.md's vendor prerequisite section in
+# osac-csi-driver. vast is the only vendor with complete config resolution today,
+# so it is the only one this test can genuinely dispatch and wait on. ──
+- name: "Storage Provider Ensure CSI Backends - Second dispatch needs no backend vendor, vast wiring survives"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    _unique_providers: []
+    # Platform-wide catalog -- unconditionally the same regardless of which
+    # provider THIS dispatch's own tenant needs (see ensure_csi_backends.yaml's
+    # own file-level comment). Still includes the vast tier/connection so vmsHost
+    # resolution keeps succeeding on this dispatch, matching the real-world
+    # invariant this data is never tenant-filtered.
+    storage_provider_tiers:
+      - name: default
+        protocol: nfs
+        provider: vast
+        backend_id: be-test
+    storage_provider_backend_connections:
+      be-test:
+        endpoint: "vast-mock.example.com:443"
+        username: "admin"
+        password: "mock-admin-password"
+
+  tasks:
+    - name: Call ensure_csi_backends.yaml directly (no-vendor dispatch)
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+        tasks_from: ensure_csi_backends
+
+    - name: Read vast controller Deployment after the no-vendor dispatch
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: "vast-csi-controller"
+        namespace: "osac-csi-backends"
+      register: _vast_deployment_after_no_vendor
+
+    - name: Assert vast controller Deployment still exists after the no-vendor dispatch
+      ansible.builtin.assert:
+        that:
+          - _vast_deployment_after_no_vendor.resources | length == 1
+        fail_msg: "Deployment 'vast-csi-controller' did not survive the no-vendor dispatch"
+        success_msg: "vast controller Deployment survived the no-vendor dispatch"
+
+    - name: Read installed csi-backends release after the no-vendor dispatch
+      kubernetes.core.helm_info:
+        name: osac-csi-backends
+        release_namespace: osac-csi-backends
+      register: _backends_release_after_no_vendor
+
+    - name: Assert vast (from the first dispatch) remains enabled and pure was never introduced
+      ansible.builtin.assert:
+        that:
+          - _backends_release_after_no_vendor.status['values'].vast.enabled | bool
+          - not (_backends_release_after_no_vendor.status['values'].pure.enabled | bool)
+        fail_msg: >-
+          A dispatch needing no csi-backends vendor must not clear an already-deployed
+          vendor's enablement, and must not enable a vendor with no live Deployment
+          and no need from this dispatch: {{ _backends_release_after_no_vendor.status['values'] }}
+        success_msg: "vast enablement survived the no-vendor dispatch; pure correctly remains disabled"
+
+# ── Test 3: OAuth Secret is created with real creds, then a dispatch with no
+# creds configured must not blank it out -- ensure_csi_backends.yaml's own
+# write-guard, ported from csi_driver_install's original mechanism ──
+- name: "Storage Provider Ensure CSI Backends - OAuth Secret created, not blanked by a creds-less dispatch"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    _unique_providers:
+      - vast
+    storage_provider_tiers:
+      - name: default
+        protocol: nfs
+        provider: vast
+        backend_id: be-test
+    storage_provider_backend_connections:
+      be-test:
+        endpoint: "vast-mock.example.com:443"
+        username: "admin"
+        password: "mock-admin-password"
+    storage_provider_csi_backends_oauth_client_id: "test-oauth-client-id"
+    storage_provider_csi_backends_oauth_client_secret: "test-oauth-client-secret"
+
+  tasks:
+    # Task-level vars (not just the play vars above) are required here: an earlier
+    # test's own ensure_csi_backends.yaml dispatch already ran in this same
+    # ansible-playbook invocation, and its always: block sets these same names as
+    # facts (see "Clear OAuth client-credential facts from play scope") -- facts
+    # outrank play vars, so a stale blanked fact from that earlier dispatch would
+    # otherwise silently shadow this play's own vars. Same pattern this file's own
+    # Test 5b uses for the same reason.
+    - name: Call ensure_csi_backends.yaml with real OAuth credentials configured
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+        tasks_from: ensure_csi_backends
+      vars:
+        storage_provider_csi_backends_oauth_client_id: "test-oauth-client-id"
+        storage_provider_csi_backends_oauth_client_secret: "test-oauth-client-secret"
+
+    - name: Read the OAuth client-credentials Secret after the real-creds dispatch
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: csi-backends-oauth-credentials
+        namespace: osac-csi-backends
+      register: _oauth_secret_after_real_creds
+      no_log: true
+
+    - name: Assert the OAuth Secret was created with the real credentials
+      ansible.builtin.assert:
+        that:
+          - _oauth_secret_after_real_creds.resources | length == 1
+          - (_oauth_secret_after_real_creds.resources[0].data['client-id'] | b64decode) == "test-oauth-client-id"
+          - (_oauth_secret_after_real_creds.resources[0].data['client-secret'] | b64decode) == "test-oauth-client-secret"
+        fail_msg: "OAuth Secret 'csi-backends-oauth-credentials' was not created with the expected real credentials"
+        success_msg: "OAuth Secret correctly created with the real credentials"
+        quiet: true
+
+    - name: Call ensure_csi_backends.yaml again with no OAuth credentials configured
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+        tasks_from: ensure_csi_backends
+      vars:
+        storage_provider_csi_backends_oauth_client_id: ""
+        storage_provider_csi_backends_oauth_client_secret: ""
+
+    - name: Read the OAuth client-credentials Secret after the creds-less dispatch
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: csi-backends-oauth-credentials
+        namespace: osac-csi-backends
+      register: _oauth_secret_after_blank_dispatch
+      no_log: true
+
+    - name: Assert the creds-less dispatch did not blank out the real credentials
+      ansible.builtin.assert:
+        that:
+          - _oauth_secret_after_blank_dispatch.resources | length == 1
+          - (_oauth_secret_after_blank_dispatch.resources[0].data['client-id'] | b64decode) == "test-oauth-client-id"
+          - (_oauth_secret_after_blank_dispatch.resources[0].data['client-secret'] | b64decode) == "test-oauth-client-secret"
+        fail_msg: "A dispatch with no OAuth credentials configured incorrectly blanked out the previously-real credentials"
+        success_msg: "Real OAuth credentials correctly survived a subsequent creds-less dispatch"
+        quiet: true
+
+# ── Test 4: The csi-backends install lock is already held by a DIFFERENT
+# dispatch -- acquisition must fail (after exhausting its retry budget) without
+# ever releasing or overwriting the other holder's lock. Mirrors
+# csi_driver_install's own Test 7 for its sibling, independent lock. Takes ~100s
+# (20 retries x 5s delay) -- this is the one scenario in this file that
+# genuinely needs that budget exhausted, not shortened, to prove the failure
+# path. ──
+- name: "Storage Provider Ensure CSI Backends - Lock already held by a different dispatch (should fail, other holder's lock survives)"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    _unique_providers:
+      - vast
+    storage_provider_tiers:
+      - name: default
+        protocol: nfs
+        provider: vast
+        backend_id: be-test
+    storage_provider_backend_connections:
+      be-test:
+        endpoint: "vast-mock.example.com:443"
+        username: "admin"
+        password: "mock-admin-password"
+
+  tasks:
+    - name: Acquire the csi-backends install lock as a different holder, simulating a concurrent dispatch
+      ansible.builtin.include_role:
+        name: osac.service.lease
+      vars:
+        lease_state: present
+        lease_name: "csi-backends-install-lock"
+        lease_holder: "a-different-concurrent-dispatch"
+
+    - name: Attempt dispatch while the lock is held elsewhere (expected to fail after retries exhaust)
+      block:
+        - name: Call ensure_csi_backends.yaml
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+            tasks_from: ensure_csi_backends
+
+        - name: This task should not be reached -- the dispatch should have failed to acquire the lock
+          ansible.builtin.fail:
+            msg: "ensure_csi_backends.yaml did not fail as expected when the install lock was already held by a different dispatch"
+
+      rescue:
+        # Matches csi_driver_install's own Test 7: ansible_failed_task/the "Failed
+        # task:" text resolves to the INNER task's own name when a task fails inside
+        # a dynamically included role (osac.service.lease here) -- lease/tasks/main.yaml's
+        # "Acquire lock {{ lease_name }}", which renders to "Acquire lock
+        # csi-backends-install-lock" -- not the outer wrapper's name.
+        - name: Assert the dispatch failed specifically at lock acquisition
+          ansible.builtin.assert:
+            that:
+              - "'Failed task: Acquire lock csi-backends-install-lock' in (ansible_failed_result.msg | default(''))"
+            fail_msg: >-
+              Dispatch failed but not at lock acquisition: error={{ ansible_failed_result.msg | default('unknown') }}
+            success_msg: "Dispatch correctly failed at lock acquisition when the lock was held elsewhere"
+
+    - name: Read the csi-backends install lock after the failed acquisition attempt
+      kubernetes.core.k8s_info:
+        api_version: coordination.k8s.io/v1
+        kind: Lease
+        name: csi-backends-install-lock
+        namespace: "{{ lookup('env', 'POD_NAMESPACE') }}"
+      register: _lease_after_contention
+
+    - name: Assert the other dispatch's lock was never released or overwritten
+      ansible.builtin.assert:
+        that:
+          - _lease_after_contention.resources | length == 1
+          - _lease_after_contention.resources[0].spec.holderIdentity == "a-different-concurrent-dispatch"
+        fail_msg: >-
+          The other dispatch's lock should survive a failed acquisition attempt untouched:
+          {{ _lease_after_contention.resources }}
+        success_msg: "Other dispatch's lock survived untouched -- no wrongful release occurred"
+
+    - name: Read the csi-backends release after the failed acquisition (no side effects expected)
+      kubernetes.core.helm_info:
+        name: osac-csi-backends
+        release_namespace: osac-csi-backends
+      register: _backends_release_after_contention
+
+    - name: Assert no Helm side effects occurred while the lock was contended
+      ansible.builtin.assert:
+        that:
+          - _backends_release_after_contention.status is not none
+          - _backends_release_after_contention.status['values'].vast.enabled | bool
+        fail_msg: >-
+          Pre-existing csi-backends release should be unaffected by a failed lock-acquisition attempt:
+          {{ _backends_release_after_contention.status }}
+        success_msg: "Pre-existing csi-backends release correctly unaffected by the failed lock-acquisition attempt"
+
+    - name: Release the simulated concurrent dispatch's lock (test cleanup)
+      ansible.builtin.include_role:
+        name: osac.service.lease
+      vars:
+        lease_state: absent
+        lease_name: "csi-backends-install-lock"
+        lease_holder: "a-different-concurrent-dispatch"
+
+# ── Reset: Tests 1-4 leave a real csi-backends release/Secret behind --
+# Test 5a needs a genuinely fresh (neither exists) starting point. ──
+- name: "Storage Provider Ensure CSI Backends - Reset to a clean slate before Test 5"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Uninstall the csi-backends release accumulated by Tests 1-4
+      kubernetes.core.helm:
+        name: osac-csi-backends
+        release_namespace: osac-csi-backends
+        state: absent
+      failed_when: false
+
+    # wait: true -- avoids Test 5a's own namespace pre-create racing termination.
+    - name: Delete csi-backends namespace before Test 5
+      kubernetes.core.k8s:
+        state: absent
+        kind: Namespace
+        name: osac-csi-backends
+        wait: true
+        wait_timeout: 300
+      register: _ns_delete_before_test5
+      failed_when: false
+
+    - name: Fail if the namespace delete above genuinely timed out
+      ansible.builtin.fail:
+        msg: "{{ _ns_delete_before_test5.msg }}"
+      when: "'Timed out waiting' in (_ns_delete_before_test5.msg | default(''))"
+
+# ── Test 5a: Fresh install (neither the release nor the Secret exist yet) --
+# a forced mid-block failure must roll back everything THIS run created. The
+# vendored csi-backends chart (charts/csi-backends/templates/*-controller.yaml)
+# templates no Secret of its own -- only ServiceAccount/Deployment/Service/RBAC --
+# so a fresh `helm upgrade --install` writes exactly one Secret: Helm's own
+# release-storage Secret (documented Helm 3 default storage-backend behavior, one
+# Secret per revision). A ResourceQuota capping `secrets` at 1 in the (test-
+# pre-created) namespace lets that one write through but rejects the very next
+# Secret create -- the role's own OAuth Secret -- forcing failure strictly after
+# the Helm release has already genuinely installed. Unlike planting an
+# already-existing Secret under the real name (csi_driver_install's own removed
+# Test 0 technique), this keeps the OAuth Secret's own existed-before tracking
+# honestly false, since nothing named csi-backends-oauth-credentials ever exists
+# until the role's own create task attempts (and fails) to write it. ──
+- name: "Storage Provider Ensure CSI Backends - Test 5a: fresh install rolls back on mid-block failure"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    _unique_providers:
+      - vast
+    storage_provider_tiers:
+      - name: default
+        protocol: nfs
+        provider: vast
+        backend_id: be-test
+    storage_provider_backend_connections:
+      be-test:
+        endpoint: "vast-mock.example.com:443"
+        username: "admin"
+        password: "mock-admin-password"
+    storage_provider_csi_backends_oauth_client_id: "test-oauth-client-id"
+    storage_provider_csi_backends_oauth_client_secret: "test-oauth-client-secret"
+
+  tasks:
+    - name: Pre-create csi-backends namespace so the Secret quota exists before Helm ever writes to it
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: osac-csi-backends
+
+    - name: Plant a ResourceQuota capping Secrets at 1 -- Helm's own release Secret fits, the role's OAuth Secret create does not
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ResourceQuota
+          metadata:
+            name: test-secret-quota
+            namespace: osac-csi-backends
+          spec:
+            hard:
+              secrets: "1"
+
+    - name: Attempt a fresh dispatch that fails after the Helm release installs (expected to fail)
+      block:
+        - name: Call ensure_csi_backends.yaml directly (fresh install, quota-forced failure)
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+            tasks_from: ensure_csi_backends
+
+        - name: This task should not be reached -- ensure_csi_backends.yaml should have failed on the quota-blocked Secret create
+          ansible.builtin.fail:
+            msg: "ensure_csi_backends.yaml did not fail as expected when the OAuth Secret create hit the Secret quota"
+
+      rescue:
+        - name: Assert the dispatch failed specifically at OAuth Secret creation, after the Helm release had already installed
+          ansible.builtin.assert:
+            that:
+              - "'Failed task: Create OAuth client-credentials Secret' in (ansible_failed_result.msg | default(''))"
+            fail_msg: >-
+              Dispatch failed but not at the expected task: error={{ ansible_failed_result.msg | default('unknown') }}
+            success_msg: "Dispatch correctly failed at OAuth Secret creation after the Helm release genuinely installed"
+
+    - name: Read the csi-backends release after the fresh-install failure
+      kubernetes.core.helm_info:
+        name: osac-csi-backends
+        release_namespace: osac-csi-backends
+      register: _backends_release_after_fresh_failure
+
+    - name: Assert the freshly-installed csi-backends release was rolled back
+      ansible.builtin.assert:
+        that:
+          - (_backends_release_after_fresh_failure.status | default(none, true)) is none
+        fail_msg: >-
+          Expected the rescue block to uninstall the csi-backends release this run installed
+          from nothing: status={{ _backends_release_after_fresh_failure.status | default(none, true) }}
+        success_msg: "csi-backends release correctly rolled back after the fresh-install failure"
+
+    - name: Read the OAuth Secret after the fresh-install failure
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: csi-backends-oauth-credentials
+        namespace: osac-csi-backends
+      register: _oauth_secret_after_fresh_failure
+      no_log: true
+
+    - name: Assert no orphaned OAuth Secret exists after the fresh-install failure
+      ansible.builtin.assert:
+        that:
+          - _oauth_secret_after_fresh_failure.resources | length == 0
+        fail_msg: "An OAuth Secret unexpectedly exists after the failed fresh install: {{ _oauth_secret_after_fresh_failure.resources }}"
+        success_msg: "No orphaned OAuth Secret exists after the fresh-install failure -- the quota correctly blocked its creation"
+
+    - name: Read the csi-backends install lock after the fresh-install failure
+      kubernetes.core.k8s_info:
+        api_version: coordination.k8s.io/v1
+        kind: Lease
+        name: csi-backends-install-lock
+        namespace: "{{ lookup('env', 'POD_NAMESPACE') }}"
+      register: _lease_after_fresh_failure
+
+    - name: Assert the install lock was released, not left held, after the fresh-install failure
+      ansible.builtin.assert:
+        that:
+          - _lease_after_fresh_failure.resources | length == 0
+        fail_msg: >-
+          The csi-backends install lock should be released after a failed dispatch that
+          genuinely acquired it: {{ _lease_after_fresh_failure.resources }}
+        success_msg: "csi-backends install lock correctly released after the fresh-install failure"
+
+    - name: Remove the test-only Secret quota before Test 5b
+      kubernetes.core.k8s:
+        state: absent
+        kind: ResourceQuota
+        name: test-secret-quota
+        namespace: osac-csi-backends
+
+# ── Test 5b: A genuinely pre-existing release/Secret must survive a LATER,
+# separate dispatch's failure -- the critical asymmetry existed-before tracking
+# protects, since csi-backends is a hub-wide release other tenants may already
+# depend on. A first dispatch installs both for real; the Secret is then deleted
+# and recreated as immutable with the same data (documented, versioned Kubernetes
+# behavior -- the same technique csi_driver_install's own removed Test 0 used) so
+# a SECOND, separate dispatch's own Secret-create task fails without ever
+# touching the Helm release, proving both survive because existed-before is true
+# for both by then. The second dispatch re-supplies real OAuth creds as
+# include_role vars (not play vars) -- the first dispatch's own always: block
+# already cleared them to "" as a fact, which play vars alone cannot outrank
+# (same reason Test 3's second call above does this). ──
+- name: "Storage Provider Ensure CSI Backends - Test 5b: pre-existing release/Secret survive a later failed dispatch"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    _unique_providers:
+      - vast
+    storage_provider_tiers:
+      - name: default
+        protocol: nfs
+        provider: vast
+        backend_id: be-test
+    storage_provider_backend_connections:
+      be-test:
+        endpoint: "vast-mock.example.com:443"
+        username: "admin"
+        password: "mock-admin-password"
+    storage_provider_csi_backends_oauth_client_id: "test-oauth-client-id"
+    storage_provider_csi_backends_oauth_client_secret: "test-oauth-client-secret"
+
+  tasks:
+    # Task-level vars required for the same reason as Test 3's first call: an earlier
+    # test's ensure_csi_backends.yaml dispatch already blanked these names as facts
+    # via its always: block, which would otherwise shadow this play's own vars.
+    - name: Dispatch once successfully so the release and Secret genuinely pre-exist
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+        tasks_from: ensure_csi_backends
+      vars:
+        storage_provider_csi_backends_oauth_client_id: "test-oauth-client-id"
+        storage_provider_csi_backends_oauth_client_secret: "test-oauth-client-secret"
+
+    - name: Read the OAuth Secret created by the successful dispatch (to preserve its data across the immutable recreate below)
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: csi-backends-oauth-credentials
+        namespace: osac-csi-backends
+      register: _oauth_secret_before_recreate
+      no_log: true
+
+    - name: Delete the OAuth Secret so it can be recreated as immutable with the same data
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: csi-backends-oauth-credentials
+        namespace: osac-csi-backends
+
+    - name: Recreate the OAuth Secret as immutable, preserving its real data, so the next dispatch's write fails
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: csi-backends-oauth-credentials
+            namespace: osac-csi-backends
+          type: Opaque
+          immutable: true
+          data: "{{ _oauth_secret_before_recreate.resources[0].data }}"
+      no_log: true
+
+    - name: Attempt a second, separate dispatch that fails writing the now-immutable Secret (expected to fail)
+      block:
+        # Deliberately different creds than the immutable Secret's own data (not a
+        # re-supply of the same values): kubernetes.core.k8s diffs the desired
+        # definition against live state and skips the API call entirely when nothing
+        # would change, so identical values would never even attempt the write this
+        # test needs Kubernetes to reject.
+        - name: Call ensure_csi_backends.yaml directly (second dispatch, immutable-Secret-forced failure)
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+            tasks_from: ensure_csi_backends
+          vars:
+            storage_provider_csi_backends_oauth_client_id: "test-oauth-client-id-changed"
+            storage_provider_csi_backends_oauth_client_secret: "test-oauth-client-secret-changed"
+
+        - name: This task should not be reached -- ensure_csi_backends.yaml should have failed writing the immutable Secret
+          ansible.builtin.fail:
+            msg: "ensure_csi_backends.yaml did not fail as expected when the OAuth Secret was immutable"
+
+      rescue:
+        - name: Assert the second dispatch failed specifically at OAuth Secret creation
+          ansible.builtin.assert:
+            that:
+              - "'Failed task: Create OAuth client-credentials Secret' in (ansible_failed_result.msg | default(''))"
+            fail_msg: >-
+              Second dispatch failed but not at the expected task: error={{ ansible_failed_result.msg | default('unknown') }}
+            success_msg: "Second dispatch correctly failed at OAuth Secret creation"
+
+    - name: Read the csi-backends release after the second dispatch's failure
+      kubernetes.core.helm_info:
+        name: osac-csi-backends
+        release_namespace: osac-csi-backends
+      register: _backends_release_after_preexisting_failure
+
+    - name: Assert the pre-existing csi-backends release survived the second dispatch's failure
+      ansible.builtin.assert:
+        that:
+          - _backends_release_after_preexisting_failure.status is not none
+          - _backends_release_after_preexisting_failure.status['values'].vast.enabled | bool
+        fail_msg: >-
+          A pre-existing csi-backends release must never be rolled back by a later dispatch's
+          failure: {{ _backends_release_after_preexisting_failure.status }}
+        success_msg: "Pre-existing csi-backends release correctly survived the second dispatch's failure"
+
+    - name: Read the OAuth Secret after the second dispatch's failure
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: csi-backends-oauth-credentials
+        namespace: osac-csi-backends
+      register: _oauth_secret_after_preexisting_failure
+      no_log: true
+
+    - name: Assert the pre-existing OAuth Secret survived the second dispatch's failure
+      ansible.builtin.assert:
+        that:
+          - _oauth_secret_after_preexisting_failure.resources | length == 1
+          - (_oauth_secret_after_preexisting_failure.resources[0].data['client-id'] | b64decode) == "test-oauth-client-id"
+        fail_msg: "A pre-existing OAuth Secret must never be rolled back by a later dispatch's failure"
+        success_msg: "Pre-existing OAuth Secret correctly survived the second dispatch's failure"
+        quiet: true
+
+    - name: Read the csi-backends install lock after the second dispatch's failure
+      kubernetes.core.k8s_info:
+        api_version: coordination.k8s.io/v1
+        kind: Lease
+        name: csi-backends-install-lock
+        namespace: "{{ lookup('env', 'POD_NAMESPACE') }}"
+      register: _lease_after_preexisting_failure
+
+    - name: Assert the install lock was released, not left held, after the second dispatch's failure
+      ansible.builtin.assert:
+        that:
+          - _lease_after_preexisting_failure.resources | length == 0
+        fail_msg: >-
+          The csi-backends install lock should be released after a failed dispatch that
+          genuinely acquired it: {{ _lease_after_preexisting_failure.resources }}
+        success_msg: "csi-backends install lock correctly released after the second dispatch's failure"
+
+# ── Cleanup ──
+- name: "Storage Provider Ensure CSI Backends - Cleanup"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Uninstall csi-backends release
+      kubernetes.core.helm:
+        name: osac-csi-backends
+        release_namespace: osac-csi-backends
+        state: absent
+      failed_when: false
+
+    - name: Delete csi-backends namespace
+      kubernetes.core.k8s:
+        state: absent
+        kind: Namespace
+        name: osac-csi-backends
+        wait: true
+        wait_timeout: 300
+      register: _ns_delete_final
+      failed_when: false
+
+    # failed_when: false above also hid a genuine wait timeout -- surface that loudly.
+    - name: Fail if the namespace delete above genuinely timed out
+      ansible.builtin.fail:
+        msg: "{{ _ns_delete_final.msg }}"
+      when: "'Timed out waiting' in (_ns_delete_final.msg | default(''))"

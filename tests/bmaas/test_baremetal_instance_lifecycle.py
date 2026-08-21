@@ -44,6 +44,14 @@ def _assert_nic_metadata(
         assert _MAC_PATTERN.match(mac), f"MAC '{mac}' does not match expected lowercase colon-separated format"
         bmi_macs.add(mac)
 
+    # Cross-check: BMI CR status.hardware.nics must match the API response
+    cr_macs: set[str] = set(k8s.get_bmi_hardware_nics(name=bmi_cr_name))
+    assert cr_macs, f"BareMetalInstance CR {bmi_cr_name} has no status.hardware.nics"
+    assert bmi_macs == cr_macs, (
+        f"API status.hardware.nics {sorted(bmi_macs)} does not match "
+        f"BMI CR status.hardware.nics {sorted(cr_macs)}"
+    )
+
     # Cross-check: BMI MACs must match the BareMetalHost hardware inspection data
     bmh_macs: set[str] = set(k8s.get_bmh_hardware_nics(name=bmh_name, bmh_namespace=bmh_namespace))
     assert bmh_macs, f"BareMetalHost {bmh_name} has no hardware.nics — inspection may not have completed"
@@ -255,18 +263,5 @@ def test_baremetal_instance_restart(
         raise
 
 
-def test_baremetal_instance_nic_invariant(grpc: GRPCClient) -> None:
-    """All RUNNING BareMetalInstances must have status.hardware.nics populated (OSAC-3254)."""
-    bmi_ids = grpc.list_baremetal_instance_ids()
-    for bmi_id in bmi_ids:
-        data: dict[str, Any] = grpc.get_baremetal_instance(bmi_id=bmi_id)
-        state: str = data.get("object", {}).get("status", {}).get("state", "")
-        if state != "BARE_METAL_INSTANCE_STATE_RUNNING":
-            continue
-        nics: list[dict[str, Any]] = data.get("object", {}).get("status", {}).get("hardware", {}).get("nics", [])
-        assert nics, f"Running BMI {bmi_id} has no status.hardware.nics"
-        for nic in nics:
-            mac = nic.get("mac", "")
-            assert _MAC_PATTERN.match(mac), f"BMI {bmi_id} has invalid MAC format: '{mac}'"
 
 

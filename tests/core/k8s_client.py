@@ -459,6 +459,22 @@ class K8sClient:
     def get_baremetal_instance_external_host_id(self, *, name: str) -> str:
         return self.get_jsonpath(resource="baremetalinstance", name=name, jsonpath="{.spec.externalHostID}")
 
+    def get_bmi_hardware_nics(self, *, name: str) -> list[str]:
+        """Return lowercased MAC addresses from BareMetalInstance CR status.hardware.nics."""
+        output, rc = self._get(
+            "get",
+            "baremetalinstance",
+            name,
+            "-n",
+            self.namespace,
+            "-o",
+            "jsonpath={.status.hardware.nics[*].mac}",
+            checked=False,
+        )
+        if rc != 0 or not output.strip():
+            return []
+        return [mac.lower() for mac in output.split()]
+
     # BareMetalHost queries (explicit namespace — BMHs live in a different namespace)
 
     def get_bmh_provisioning_state(self, *, name: str, bmh_namespace: str) -> str:

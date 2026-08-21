@@ -175,14 +175,15 @@ CSIEOF
   # by each test target) -- only VIP pool and TLS settings remain relevant here.
   # Resolve the csi-backends chart path from the repo root — integration tests
   # run playbooks from test subdirectories, not the top-level osac-aap/ dir,
-  # so the playbook_dir-based default doesn't resolve correctly.
-  REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+  # so the playbook_dir-based default doesn't resolve correctly. REPO_ROOT is
+  # already the mono-repo root (set once, near the top of this script) --
+  # osac-csi-driver is its direct sibling of osac-aap, not a child of it.
   cat > "${SCRIPT_DIR}/.storage_env" <<ENVEOF
 export VAST_VIP_POOL_NAME="osac-test-pool"
 export VAST_VIP_POOL_IP_RANGES='[["10.0.0.10","10.0.0.50"]]'
 export VAST_VIP_POOL_SUBNET_CIDR="24"
 export VAST_VALIDATE_CERTS="false"
-export OSAC_CSI_BACKENDS_CHART_REF="${REPO_ROOT}/../osac-csi-driver/charts/csi-backends"
+export OSAC_CSI_BACKENDS_CHART_REF="${REPO_ROOT}/osac-csi-driver/charts/csi-backends"
 ENVEOF
 
   # 5.2. Set up a local, TLS-trusted OCI registry hosting the osac-csi-driver charts at

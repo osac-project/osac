@@ -228,11 +228,10 @@ func (c *BCMClient) UnassignHost(_ context.Context, _ string, _ []string) error 
 // Reading from the BMH CR avoids a costly GetDevices round-trip to the BCM API.
 // Returns nil, nil when the BMH has no hardware inspection data (caller treats this as "NIC data unavailable").
 func (c *BCMClient) GetHostNICs(ctx context.Context, inventoryHostID string) ([]HostNIC, error) {
-	parts := strings.SplitN(inventoryHostID, "/", 2)
-	if len(parts) != 2 {
-		return nil, fmt.Errorf("invalid inventoryHostID %q: expected namespace/hostname format", inventoryHostID)
+	_, bmhName, err := ParseHostID(inventoryHostID)
+	if err != nil {
+		return nil, err
 	}
-	bmhName := parts[1]
 
 	macs, err := c.bmhManager.GetHardwareNICs(ctx, bmhName)
 	if err != nil {

@@ -159,6 +159,9 @@ func (m *Manager) GetHardwareNICs(ctx context.Context, name string) ([]string, e
 	}
 	macs := make([]string, 0, len(bmh.Status.HardwareDetails.NIC))
 	for _, nic := range bmh.Status.HardwareDetails.NIC {
+		if nic.MAC == "" {
+			continue
+		}
 		macs = append(macs, strings.ToLower(nic.MAC))
 	}
 	return macs, nil

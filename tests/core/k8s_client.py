@@ -514,6 +514,17 @@ class K8sClient:
         )
         return output if rc == 0 else ""
 
+    def count_bmhs_by_provisioning_state(self, *, bmh_namespace: str, states: set[str]) -> int:
+        """Return how many BareMetalHosts in ``bmh_namespace`` are in any of ``states``."""
+        raw: str = run(*self._base(), "get", "baremetalhost", "-n", bmh_namespace, "-o", "json")
+        items: list[dict[str, Any]] = json.loads(raw).get("items", [])
+        count = 0
+        for item in items:
+            state: str = item.get("status", {}).get("provisioning", {}).get("state", "")
+            if state in states:
+                count += 1
+        return count
+
     def get_bmh_hardware_nics(self, *, name: str, bmh_namespace: str) -> list[str]:
         """Return lowercased MAC addresses from BareMetalHost hardware inspection data."""
         output, rc = self._get(

@@ -477,6 +477,11 @@ class GRPCClient:
         template: str,
         field_definitions: list[dict[str, Any]] | None = None,
     ) -> str:
+        """Create a published BareMetalInstanceCatalogItem.
+
+        ``template`` is sent as a typed reference ``{"name": ...}`` (OSAC-1330),
+        matching Cluster/ComputeInstance catalog item creates.
+        """
         obj: dict[str, Any] = {
             "metadata": {"name": name},
             "title": title,

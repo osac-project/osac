@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import time
 from typing import Any
 
 import pytest
@@ -647,6 +648,98 @@ def wait_for_bmi_running(*, grpc: GRPCClient, bmi_id: str) -> None:
         retries=120,
         delay=10,
         description=f"{bmi_id} RUNNING",
+    )
+
+
+def assert_bmi_lifecycle_on_running(
+    *,
+    grpc: GRPCClient,
+    k8s: K8sClient,
+    bmi_id: str,
+    bmh_namespace: str,
+    power_cycle: bool = True,
+) -> tuple[str, str]:
+    """Assert BMH binding/provisioning on an already-RUNNING BMI.
+
+    Does not create or delete the instance. Inventory exhaust calls this after all
+    claim BMIs reach RUNNING so provisioning is not blocked by interleaved checks.
+
+    Returns (bmi_cr_name, bmh_name).
+    """
+    assert bmi_id in grpc.list_baremetal_instance_ids()
+    bmi_cr_name: str = wait_for_bmi_cr(k8s=k8s, uuid=bmi_id)
+
+    external_host_id: str = k8s.get_baremetal_instance_external_host_id(name=bmi_cr_name)
+    assert "/" in external_host_id, f"Expected namespace/name format, got: {external_host_id}"
+    bmh_ns, bmh_name = external_host_id.split("/", 1)
+    assert bmh_ns == bmh_namespace, f"BMH landed in {bmh_ns}, expected {bmh_namespace}"
+
+    wait_for_bmh_provisioned(k8s=k8s, name=bmh_name, bmh_namespace=bmh_ns)
+
+    image_url: str = k8s.get_bmh_image_url(name=bmh_name, bmh_namespace=bmh_ns)
+    assert image_url != "", f"BMH {bmh_name} has no image URL after provisioning"
+
+    consumer_ref: str = k8s.get_bmh_consumer_ref(name=bmh_name, bmh_namespace=bmh_ns)
+    assert consumer_ref != "", f"BMH {bmh_name} has no consumerRef after allocation"
+
+    online: str = k8s.get_bmh_online(name=bmh_name, bmh_namespace=bmh_ns)
+    assert online == "true", f"BMH {bmh_name} should be online after provisioning, got: {online}"
+
+    if power_cycle:
+        grpc.update_baremetal_instance_run_strategy(
+            bmi_id=bmi_id, run_strategy="BARE_METAL_INSTANCE_RUN_STRATEGY_HALTED"
+        )
+        poll_until(
+            fn=lambda: k8s.get_bmh_powered_on(name=bmh_name, bmh_namespace=bmh_ns),
+            until=lambda v: v == "false",
+            retries=60,
+            delay=5,
+            description=f"{bmh_name} powered off",
+        )
+        grpc.update_baremetal_instance_run_strategy(
+            bmi_id=bmi_id, run_strategy="BARE_METAL_INSTANCE_RUN_STRATEGY_ALWAYS"
+        )
+        poll_until(
+            fn=lambda: k8s.get_bmh_powered_on(name=bmh_name, bmh_namespace=bmh_ns),
+            until=lambda v: v == "true",
+            retries=60,
+            delay=5,
+            description=f"{bmh_name} powered on",
+        )
+
+    return bmi_cr_name, bmh_name
+
+
+def assert_bmi_does_not_become_running(*, grpc: GRPCClient, bmi_id: str, retries: int = 36, delay: int = 10) -> str:
+    """Observe that a BareMetalInstance never reaches RUNNING.
+
+    Returns the last observed state. If the instance enters a FAILED state,
+    returns immediately (inventory / scheduling failure).
+    """
+    last_state = ""
+    for _ in range(retries):
+        last_state = grpc.get_baremetal_instance_state(bmi_id=bmi_id)
+        assert last_state != "BARE_METAL_INSTANCE_STATE_RUNNING", (
+            f"BareMetalInstance {bmi_id} unexpectedly reached RUNNING with no free BMH"
+        )
+        if "FAILED" in last_state:
+            return last_state
+        time.sleep(delay)
+    return last_state
+
+
+def wait_for_bmi_running_after_recovery(*, grpc: GRPCClient, bmi_id: str) -> None:
+    """Wait until a BMI reaches RUNNING, allowing a prior FAILED/pending state.
+
+    Used after inventory is freed so an overflow instance can be scheduled.
+    Unlike wait_for_bmi_running, does not fail-fast on FAILED.
+    """
+    poll_until(
+        fn=lambda: grpc.get_baremetal_instance_state(bmi_id=bmi_id),
+        until=lambda v: v == "BARE_METAL_INSTANCE_STATE_RUNNING",
+        retries=120,
+        delay=10,
+        description=f"{bmi_id} RUNNING after inventory recovery",
     )
 
 

@@ -3,8 +3,8 @@ argument_specs:
   main:
     short_description: OSAC CSI driver Helm chart install
     description: >
-      Idempotently installs the OSAC CSI driver (csi-driver + csi-backends Helm
-      charts) once per hub-targeting storage dispatch that includes at least
+      Idempotently installs the OSAC CSI driver (csi-driver Helm chart) once
+      per hub-targeting storage dispatch that includes at least
       one CSI-driver-supported provider (regardless of how many such providers
       are configured in the dispatched tier list) -- a dispatch with zero
       supported providers is a no-op. Called directly
@@ -22,21 +22,10 @@ argument_specs:
         description: >
           The tier list for this dispatch (osac_job_vars.storage_tier_definitions
           or, for the JIT compute-instance path, the filtered _jit_storage_tiers).
-          Only the provider and backend_id fields are read — untouched by
+          Only the provider field is read — untouched by
           storage_provider's own qos_policy derivation, so the raw,
           pre-derivation list is equivalent for this role's purposes. Unique
           providers are derived from this list internally, the same way
           storage_provider/tasks/main.yaml's own "Extract unique providers
           from tier list" step does — callers do not compute or pass that
           separately.
-      csi_driver_install_backend_connections:
-        type: dict
-        required: false
-        default: {}
-        no_log: true
-        description: >
-          Backend connection details (endpoint, username, password), keyed by
-          backend_id, as resolved by osac-operator from the Tier API. Only
-          endpoint is read by this role (for vast.config.vmsHost); the whole
-          dict stays masked because it also carries username/password for
-          other consumers of the same fact.

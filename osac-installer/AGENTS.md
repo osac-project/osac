@@ -168,15 +168,27 @@ See `README.md` for complete script documentation. Most commonly used:
 
 GitHub Actions only discovers workflows under the repo root's `.github/workflows/`,
 so osac-installer-specific CI now lives there (not under `osac-installer/.github/`):
-`nightly-build.yaml` (nightly build: `prepare` resolves a gated osac-ui SHA and
-pushes a temp branch; E2E runs against that branch; publish stamps sub-charts,
-publishes osac-ui + umbrella charts to GHCR) and
-`publish-osac-installer-chart.yaml` (manual-dispatch umbrella chart release; takes
-one mono-repo release `version` plus an independent `ui_version` for osac-ui).
-Nightly sub-chart OCI publishing uses `resolve_release_tag()` per monorepo
-component; components without a `<component>/vX.Y.Z` tag yet (e.g.
-osac-metering, osac-csi-driver) are skipped from GHCR publish until their
-first release tag is cut.
+`nightly-build.yaml` (scheduled nightly + manual dispatch: `prepare` gates
+osac-ui@main on an existing `ghcr.io/.../osac-ui:sha-<7>` image, writes
+`pinned/osac-ui.commit`, stamps umbrella `ui.images.ui` on umbrella + CI
+values, and pushes a temp branch; E2E validates that branch; `publish`
+versions every mono-repo sub-chart from per-component `<component>/vX.Y.Z`
+tags, packages, and pushes each to GHCR, then checks out pinned osac-ui,
+stamps/publishes its sub-chart with the gated image ref, rebuilds umbrella
+dependencies, and publishes the umbrella chart — this workflow publishes charts
+only; mono-repo and osac-ui container images are referenced from values/chart
+stamps, not rebuilt here (`images.txt` lists the rendered refs);
+`tag-and-notify` tags `osac/v<version>` and Slack-lists `chart-versions.txt`)
+and `publish-osac-installer-chart.yaml` (manual-dispatch umbrella chart release;
+takes one mono-repo release `version` plus an independent `ui_version` for
+osac-ui).
+Nightly sub-chart OCI publishing covers osac-operator (operator +
+operator-crds), fulfillment-service, osac-aap, bare-metal-fulfillment-operator
+(+ crds), osac-metering, osac-csi-driver (csi-driver + csi-backends), external
+osac-ui, and the umbrella chart. Baseline semver uses `resolve_release_tag()`
+per mono-repo component; components without a `<component>/vX.Y.Z` tag yet
+(e.g. osac-metering, osac-csi-driver) are skipped until their first release
+tag is cut. osac-ui uses `resolve_bare_release_tag_at()` on the pinned commit.
 
 **osac-ui nightly source strategy** (external repo; see `nightly-build.yaml`
 `prepare` and `Resolve gated osac-ui SHA` steps):
@@ -184,7 +196,7 @@ first release tag is cut.
 | Step | Behavior |
 |------|----------|
 | `check_osac_ui_image()` | `ls-remote osac-ui@main` → verify `ghcr.io/.../osac-ui:sha-<7>` manifest exists (HTTP 200); fail if image not published yet |
-| Pin once per run | Full SHA written to `pinned/osac-ui.sha` on temp branch; publish checks out that exact commit |
+| Pin once per run | Full SHA written to `pinned/osac-ui.commit` on temp branch; publish checks out that exact commit |
 | Baseline semver | `resolve_bare_release_tag_at()` uses `git describe` on the pinned SHA (nearest ancestor `vX.Y.Z`) |
 | Umbrella image | `stamp_umbrella_ui_values()` sets `ui.images.ui` to `ghcr.io/.../osac-ui:sha-<7>` on umbrella + CI values (parent values win over subchart defaults) |
 | OCI chart dep | `rewrite_umbrella_osac_ui_dependency_and_rebuild()` rewrites Chart.yaml, deletes Chart.lock, runs `helm dependency build` |

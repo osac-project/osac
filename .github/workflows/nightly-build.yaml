@@ -19,7 +19,12 @@ env:
 
 jobs:
   # -------------------------------------------------------------------
-  # Job 1: Resolve gated osac-ui SHA and push temp branch for E2E/publish
+  # Job 1: Prepare — pin osac-ui and push temp branch
+  # osac-ui is the only external dependency needing a gated pin per run.
+  # Resolve osac-ui@main HEAD (ls-remote); accept only when GHCR already
+  # has ghcr.io/.../osac-ui:sha-<7>. Write pinned/osac-ui.commit; stamp
+  # umbrella ui.images.ui and CI values files. Push nightly/<date>-<sha>-<run>
+  # temp branch — consumed by e2e-test and publish (one pin for whole run).
   # -------------------------------------------------------------------
   prepare:
     name: Prepare nightly state
@@ -44,6 +49,10 @@ jobs:
     - name: Set up chart-testing
       uses: helm/chart-testing-action@6ec842c01de15ebb84c8627d2744a0c2f2755c9f  # v2.8.0
 
+    # Resolve osac-ui@main HEAD once, but only accept it when ghcr.io/.../osac-ui:sha-<7>
+    # already exists (check_osac_ui_image). The full SHA is written to pinned/osac-ui.commit
+    # and propagated to E2E + publish via the temp branch outputs — same pin for the
+    # whole workflow run, matching the archived submodule bump model.
     - name: Resolve and gate osac-ui SHA
       id: ui
       env:
@@ -57,7 +66,7 @@ jobs:
         UI_IMAGE_REF=$(osac_ui_nightly_image_ref "${REGISTRY}/${REPO_OWNER}/osac-ui" "${UI_SHORT_SHA}")
 
         mkdir -p osac-installer/pinned
-        printf '%s\n' "${UI_SHA}" > osac-installer/pinned/osac-ui.sha
+        printf '%s\n' "${UI_SHA}" > osac-installer/pinned/osac-ui.commit
         stamp_umbrella_ui_values "${UI_IMAGE_REF}"
 
         echo "sha=${UI_SHA}" >> "$GITHUB_OUTPUT"
@@ -76,7 +85,7 @@ jobs:
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
         git checkout -b "${BRANCH}"
-        git add osac-installer/pinned/osac-ui.sha
+        git add osac-installer/pinned/osac-ui.commit
         git add osac-installer/charts/osac/values.yaml
         git add osac-installer/values/development/values.yaml
         git add osac-installer/values/vmaas-ci/values.yaml
@@ -90,7 +99,11 @@ jobs:
         echo "Pushed temp branch: ${BRANCH}"
 
   # -------------------------------------------------------------------
-  # Job 2: Run E2E tests against the temporary branch
+  # Job 2: E2E validation — test temp branch, not github.sha
+  # Reusable vmaas full-install workflow; installer-ref = prepare temp branch.
+  # Mono-repo components (operator, fulfillment-service, etc.) share that
+  # branch commit. osac-ui pin travels on the branch via pinned/osac-ui.commit
+  # and stamped umbrella ui.images.ui — same SHA E2E will install as publish.
   # -------------------------------------------------------------------
   e2e-test:
     name: E2E validation
@@ -106,7 +119,11 @@ jobs:
       test-infra-ref: main
 
   # -------------------------------------------------------------------
-  # Job 3: Package and publish the umbrella chart (only if E2E passes)
+  # Job 3: Publish — version and push all charts (only if E2E passes)
+  # Checkout prepare temp branch; reuse gated osac-ui SHA (not osac-ui@main).
+  # Stamp, package, and push every mono-repo sub-chart plus osac-ui sub-chart
+  # and the umbrella osac chart to GHCR OCI. Charts only — does not build
+  # or push container images (mono-repo images stay :latest in values).
   # -------------------------------------------------------------------
   publish:
     name: Publish nightly chart
@@ -129,6 +146,14 @@ jobs:
         fetch-depth: 0
         persist-credentials: false
 
+    # osac-ui is an external repo (not in the osac mono-repo). The prepare job
+    # resolves one gated SHA per run (ls-remote main + GHCR sha-<7> manifest check)
+    # and records it in osac-installer/pinned/osac-ui.commit on the temp branch.
+    # Publish reuses that exact commit — do not checkout ref: main here.
+    # Reproducibility is enforced by:
+    #   - resolve_bare_release_tag_at() for chart semver baseline (git describe on pinned SHA)
+    #   - image pin ghcr.io/.../osac-ui:sha-<short-sha> (also stamped on umbrella ui.images.ui)
+    #   - rewrite_umbrella_osac_ui_dependency_and_rebuild() after publishing the nightly chart
     - name: Checkout osac-ui at pinned SHA
       uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v6
       with:
@@ -198,6 +223,12 @@ jobs:
 
         # Define sub-component map (component_dir -> chart_paths). Version baselines
         # come from per-component git tags (<component>/vX.Y.Z), not static files.
+        # Components without a release tag yet (currently osac-metering and
+        # osac-csi-driver) are skipped here with a ::warning:: — they are not
+        # published to GHCR until their first <component>/vX.Y.Z tag exists. The
+        # umbrella chart still embeds them via file:// at Chart.yaml placeholder
+        # versions (0.0.0); installs work, but those sub-charts are not
+        # independently pullable from the OCI registry until published.
         # TODO: derive SUB_CHARTS from umbrella file:// dependencies instead of hardcoding.
         declare -A SUB_CHARTS=(
           ["osac-operator"]="osac-operator/charts/operator osac-operator/charts/operator-crds"
@@ -248,6 +279,10 @@ jobs:
           done
         done
 
+        # osac-ui is required for nightly umbrella installs (ui.enabled). GHCR image
+        # existence was verified in prepare; baseline semver uses git describe on the
+        # pinned commit (not highest merged tag). Parent umbrella ui.images.ui was
+        # already stamped on the temp branch; subchart values stamp is defense-in-depth.
         echo "Stamping osac-ui chart from pinned SHA ${UI_SHORT_SHA}..."
         if ! UI_BASE_TAG=$(resolve_bare_release_tag_at osac-ui "${UI_SHA}"); then
           echo "::error::osac-ui has no reachable vX.Y.Z release tag at pinned SHA — cannot publish nightly UI chart"
@@ -361,7 +396,10 @@ jobs:
         retention-days: 14
 
   # -------------------------------------------------------------------
-  # Job 4: Tag and send success notification
+  # Job 4: Tag and notify — record success on temp branch + Slack
+  # Create osac/v<version> git tag at the temp branch commit (same pin E2E
+  # tested and publish packaged). Download chart-versions.txt artifact; post
+  # Slack summary with published chart OCI links.
   # -------------------------------------------------------------------
   tag-and-notify:
     name: Tag and notify

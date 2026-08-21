@@ -17,7 +17,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -63,7 +62,7 @@ var _ = Describe("Version", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		templateId = fmt.Sprintf("my_template_%s", strings.ReplaceAll(uuid.New(), "-", "_"))
+		templateId = newTemplateID("my_template")
 		_, err = templatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
 				Id: templateId,

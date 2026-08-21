@@ -16,7 +16,6 @@ package it
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
@@ -74,7 +73,7 @@ var _ = Describe("Public clusters", func() {
 		})
 
 		// Create a template for testing:
-		templateId = fmt.Sprintf("my_template_%s", strings.ReplaceAll(uuid.New(), "-", "_"))
+		templateId = newTemplateID("my_template")
 		_, err = templatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
 				Metadata: privatev1.Metadata_builder{

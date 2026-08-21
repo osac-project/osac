@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"slices"
-	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -139,7 +138,7 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 				}
 
 				// Create cluster template for testing
-				templateId := fmt.Sprintf("sa_isolation_template_%s", strings.ReplaceAll(uuid.New(), "-", "_"))
+				templateId := newTemplateID("sa_isolation_template")
 				templatesClient := privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
 				_, err = templatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 					Object: privatev1.ClusterTemplate_builder{
@@ -402,7 +401,7 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 				})
 
 				// Create cluster template for testing
-				templateId := fmt.Sprintf("oidc_isolation_template_%s", strings.ReplaceAll(uuid.New(), "-", "_"))
+				templateId := newTemplateID("oidc_isolation_template")
 				templatesClient := privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
 				_, err = templatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 					Object: privatev1.ClusterTemplate_builder{

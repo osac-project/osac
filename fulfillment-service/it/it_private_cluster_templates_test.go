@@ -15,8 +15,6 @@ package it
 
 import (
 	"context"
-	"fmt"
-	"strings"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
@@ -24,7 +22,6 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 )
 
 var _ = Describe("Private cluster templates", func() {
@@ -40,7 +37,7 @@ var _ = Describe("Private cluster templates", func() {
 
 	It("Can get the list of templates", func() {
 		// Create a template:
-		id := fmt.Sprintf("my_template_%s", strings.ReplaceAll(uuid.New(), "-", "_"))
+		id := newTemplateID("my_template")
 		_, err := client.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
 				Id:          id,
@@ -64,7 +61,7 @@ var _ = Describe("Private cluster templates", func() {
 
 	It("Can get a specific template", func() {
 		// Create the template:
-		id := fmt.Sprintf("my_template_%s", strings.ReplaceAll(uuid.New(), "-", "_"))
+		id := newTemplateID("my_template")
 		_, err := client.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
 				Id:          id,
@@ -92,7 +89,7 @@ var _ = Describe("Private cluster templates", func() {
 	})
 
 	It("Can create a template", func() {
-		id := fmt.Sprintf("my_template_%s", strings.ReplaceAll(uuid.New(), "-", "_"))
+		id := newTemplateID("my_template")
 		response, err := client.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
 				Id:          id,
@@ -115,7 +112,7 @@ var _ = Describe("Private cluster templates", func() {
 
 	It("Can update a template", func() {
 		// Create a template::
-		id := fmt.Sprintf("my_template_%s", strings.ReplaceAll(uuid.New(), "-", "_"))
+		id := newTemplateID("my_template")
 		createResponse, err := client.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
 				Id:          id,
@@ -167,7 +164,7 @@ var _ = Describe("Private cluster templates", func() {
 
 	It("Can delete a template", func() {
 		// Create a template::
-		id := fmt.Sprintf("my_template_%s", strings.ReplaceAll(uuid.New(), "-", "_"))
+		id := newTemplateID("my_template")
 		_, err := client.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
 				Id:          id,

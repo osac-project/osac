@@ -131,7 +131,7 @@ message ComputeInstanceTemplateSpecDefaults {
 
 // Reference to a ComputeInstanceTemplate resource.
 message ComputeInstanceTemplateReference {
-  string id = 1;
+  string id = 1 [(buf.validate.field).string.pattern = "^$|^[a-zA-Z_][a-zA-Z0-9._]*$"];
   string name = 2;
   string project = 3;
   bool shared = 4;

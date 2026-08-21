@@ -16,7 +16,6 @@ package it
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
@@ -70,7 +69,7 @@ var _ = Describe("Node set removal", func() {
 		Expect(err).ToNot(HaveOccurred())
 
 		// Create a template with 2 node sets:
-		templateId = fmt.Sprintf("template_2_nodesets_%s", strings.ReplaceAll(uuid.New(), "-", "_"))
+		templateId = newTemplateID("template_2_nodesets")
 		_, err = templatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
 				Id: templateId,

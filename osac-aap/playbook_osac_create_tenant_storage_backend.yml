@@ -45,14 +45,6 @@
         osac_job_vars.storage_tier_definitions | length == 0
 
   tasks:
-    - name: Install OSAC CSI driver (once per dispatch, regardless of provider count)
-      ansible.builtin.include_role:
-        name: "{{ (csi_driver_install_override | default(csi_driver_install_default)).name }}"
-        tasks_from: "{{ (csi_driver_install_override | default(csi_driver_install_default)).tasks_from }}"
-      vars:
-        csi_driver_install_tiers: "{{ osac_job_vars.storage_tier_definitions }}"
-        csi_driver_install_backend_connections: "{{ osac_job_vars.storage_backend_connections | default({}) }}"
-
     - name: Configure tenant storage backend
       ansible.builtin.include_role:
         name: osac.service.storage_provider
@@ -61,3 +53,14 @@
         storage_provider_tiers: "{{ osac_job_vars.storage_tier_definitions }}"
         storage_provider_backend_connections: "{{ osac_job_vars.storage_backend_connections | default({}) }}"
         storage_provider_block_encryption_passphrase: "{{ osac_job_vars.resource.spec.blockEncryptionPassphrase | default('') }}"
+
+    # Depends on storage_provider's dispatch above having already created each
+    # dispatched vendor's controller Service via ensure_csi_backends.yaml --
+    # csi_driver_install's own pre-block fail-fast rejects the dispatch
+    # otherwise.
+    - name: Install OSAC CSI driver (once per dispatch, regardless of provider count)
+      ansible.builtin.include_role:
+        name: "{{ (csi_driver_install_override | default(csi_driver_install_default)).name }}"
+        tasks_from: "{{ (csi_driver_install_override | default(csi_driver_install_default)).tasks_from }}"
+      vars:
+        csi_driver_install_tiers: "{{ osac_job_vars.storage_tier_definitions }}"

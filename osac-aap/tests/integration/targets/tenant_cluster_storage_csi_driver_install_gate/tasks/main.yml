@@ -159,12 +159,10 @@
           - "'csi_driver_install' in _override_log"
           - >-
             'tiers=' ~ (osac_job_vars.storage_tier_definitions | to_json) in _override_log
-          - >-
-            'backend_ids=' ~ (osac_job_vars.storage_backend_connections | list | to_json) in _override_log
         fail_msg: >-
           csi_driver_install override did not fire (or fired with the wrong vars) for the
           Tenant dispatch. Log: {{ _override_log }}
-        success_msg: "csi_driver_install override fired with the correct tiers/backend_ids for the Tenant dispatch"
+        success_msg: "csi_driver_install override fired with the correct tiers for the Tenant dispatch"
 
     - name: Read StorageClass created by the real storage_provider dispatch that followed
       kubernetes.core.k8s_info:

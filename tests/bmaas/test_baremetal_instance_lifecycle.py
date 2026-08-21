@@ -29,6 +29,7 @@ def _assert_nic_metadata(
     grpc: GRPCClient,
     bmi_id: str,
     cli: OsacCLI,
+    bmi_name: str,
     bmi_cr_name: str,
     k8s: K8sClient,
     bmh_name: str,
@@ -58,7 +59,7 @@ def _assert_nic_metadata(
     )
 
     # 4. CLI describe output must list all BMH MACs under the Network Interfaces section
-    describe_output: str = cli.describe_baremetal_instance(name=bmi_cr_name)
+    describe_output: str = cli.describe_baremetal_instance(name=bmi_name)
     assert "Network Interfaces:" in describe_output, (
         "osac describe baremetalinstance output missing 'Network Interfaces:' section"
     )
@@ -111,6 +112,7 @@ def test_baremetal_instance_lifecycle(
             grpc=grpc,
             bmi_id=bmi_id,
             cli=cli,
+            bmi_name=name,
             bmi_cr_name=bmi_cr_name,
             k8s=k8s_hub_client,
             bmh_name=bmh_name,

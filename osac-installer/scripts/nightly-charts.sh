@@ -65,6 +65,10 @@ check_osac_ui_image() {
         echo "::error::Could not obtain GHCR token to verify ${repo}:${tag}" >&2
         return 1
     fi
+    if [[ -z "${token}" || "${token}" == "null" ]]; then
+        echo "::error::GHCR token is empty or null for ${repo}:${tag}" >&2
+        return 1
+    fi
 
     if ! http_retry "${repo} main HEAD ${sha:0:7} has no published image (tag ${tag})" 3 5 \
         -s -o /dev/null \
@@ -162,10 +166,11 @@ _chart_slack_rank() {
 _sort_chart_manifest() {
     local manifest_file="$1"
     local -a rows=()
-    local chart_name version rank _short_sha _full_sha
+    local chart_name version rank _short_sha _full_sha safe_path
 
     if [[ ! -f "${manifest_file}" ]]; then
-        echo "::warning title=_sort_chart_manifest::Manifest file not found: ${manifest_file}" >&2
+        safe_path=$(_gha_sanitize_for_message "${manifest_file}")
+        echo "::warning title=_sort_chart_manifest::Manifest file not found: ${safe_path}" >&2
         return 0
     fi
 
@@ -293,6 +298,10 @@ _build_slack_charts_table() {
 # Usage: rewrite_umbrella_osac_ui_dependency <chart_yaml> <ui_version> <oci_repo>
 rewrite_umbrella_osac_ui_dependency() {
     local chart_yaml="$1" ui_version="$2" oci_repo="$3"
+    if [[ ! -f "${chart_yaml}" ]]; then
+        echo "::error::Chart manifest not found: ${chart_yaml}" >&2
+        return 1
+    fi
     UI_VERSION="${ui_version}" yq -i \
         '(.dependencies[] | select(.name == "osac-ui")).version = strenv(UI_VERSION)' \
         "${chart_yaml}"

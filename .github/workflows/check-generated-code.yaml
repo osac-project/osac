@@ -15,6 +15,12 @@ on:
       - '!osac-operator/**/*.md'
       - '!osac-operator/docs/**'
       - '!osac-operator/.claude/**'
+      - 'osac-metering/metering-service/**'
+      - '!osac-metering/metering-service/OWNERS'
+      - '!osac-metering/metering-service/LICENSE'
+      - '!osac-metering/metering-service/**/*.md'
+      - '!osac-metering/metering-service/docs/**'
+      - '!osac-metering/metering-service/.claude/**'
   merge_group:
 
 permissions:
@@ -59,6 +65,13 @@ jobs:
               - '!osac-operator/docs/**'
               - '!osac-operator/.claude/**'
               - 'fulfillment-service/proto/private/**'
+            osac-metering/metering-service:
+              - 'osac-metering/metering-service/**'
+              - '!osac-metering/metering-service/OWNERS'
+              - '!osac-metering/metering-service/LICENSE'
+              - '!osac-metering/metering-service/**/*.md'
+              - '!osac-metering/metering-service/docs/**'
+              - '!osac-metering/metering-service/.claude/**'
 
   check-generated-code:
     name: Check generated code (${{ matrix.component }})

@@ -26,6 +26,13 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 )
 
+// pinKeychainAvailable overrides keychainAvailableFunc for the current spec and restores it afterward.
+func pinKeychainAvailable(available bool) {
+	original := keychainAvailableFunc
+	keychainAvailableFunc = func() bool { return available }
+	DeferCleanup(func() { keychainAvailableFunc = original })
+}
+
 var _ = Describe("Secret store", func() {
 	var ctx context.Context
 
@@ -41,15 +48,8 @@ var _ = Describe("Secret store", func() {
 	})
 
 	Describe("Store selection", func() {
-		var originalKeychainAvailableFunc func() bool
-
 		BeforeEach(func() {
-			originalKeychainAvailableFunc = keychainAvailableFunc
-			keychainAvailableFunc = func() bool { return true }
-		})
-
-		AfterEach(func() {
-			keychainAvailableFunc = originalKeychainAvailableFunc
+			pinKeychainAvailable(true)
 		})
 
 		It("Selects the keyring store when the keyring is available", func() {

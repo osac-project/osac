@@ -28,14 +28,9 @@ import (
 	"time"
 )
 
-func TestKeychainAvailable_NoDefaultKeychain(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	if keychainAvailable() {
-		t.Error("keychainAvailable() = true, want false with no default keychain configured")
-	}
-}
-
-func TestKeychainAvailable_RealKeychainPresent(t *testing.T) {
+// setupDefaultKeychain creates a throwaway keychain under a sandboxed HOME and makes it the default, returning its path.
+func setupDefaultKeychain(t *testing.T, password string) string {
+	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 
@@ -44,12 +39,38 @@ func TestKeychainAvailable_RealKeychainPresent(t *testing.T) {
 		t.Fatalf("MkdirAll: %v", err)
 	}
 	keychainPath := filepath.Join(keychainDir, "login.keychain-db")
-	if out, err := exec.Command(securityBinPath, "create-keychain", "-p", "test-only-password", keychainPath).CombinedOutput(); err != nil {
+	if out, err := exec.Command(securityBinPath, "create-keychain", "-p", password, keychainPath).CombinedOutput(); err != nil {
 		t.Fatalf("create-keychain: %v: %s", err, out)
 	}
 	if out, err := exec.Command(securityBinPath, "default-keychain", "-s", keychainPath).CombinedOutput(); err != nil {
 		t.Fatalf("default-keychain -s: %v: %s", err, out)
 	}
+	return keychainPath
+}
+
+// stubSecurityBinary points securityBinPath at a throwaway shell script for the duration of the test.
+func stubSecurityBinary(t *testing.T, script string) {
+	t.Helper()
+	stubDir := t.TempDir()
+	stubPath := filepath.Join(stubDir, "security")
+	if err := os.WriteFile(stubPath, []byte(script), 0755); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	original := securityBinPath
+	securityBinPath = stubPath
+	t.Cleanup(func() { securityBinPath = original })
+}
+
+func TestKeychainAvailable_NoDefaultKeychain(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if keychainAvailable() {
+		t.Error("keychainAvailable() = true, want false with no default keychain configured")
+	}
+}
+
+func TestKeychainAvailable_RealKeychainPresent(t *testing.T) {
+	setupDefaultKeychain(t, "test-only-password")
 
 	// This verifies the full keychainAvailable() plumbing (stage-1 default-keychain detection under sandboxed
 	// HOME, stage-2 unlock-keychain subprocess execution and exit-code interpretation) using the keychain's real
@@ -66,15 +87,7 @@ func TestKeychainAvailable_RealKeychainPresent(t *testing.T) {
 }
 
 func TestKeychainAvailable_SecurityBinaryFails(t *testing.T) {
-	stubDir := t.TempDir()
-	stubPath := filepath.Join(stubDir, "security")
-	if err := os.WriteFile(stubPath, []byte("#!/bin/sh\nexit 1\n"), 0755); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	original := securityBinPath
-	securityBinPath = stubPath
-	t.Cleanup(func() { securityBinPath = original })
+	stubSecurityBinary(t, "#!/bin/sh\nexit 1\n")
 
 	if keychainAvailable() {
 		t.Error("keychainAvailable() = true, want false when the security binary fails")
@@ -82,15 +95,7 @@ func TestKeychainAvailable_SecurityBinaryFails(t *testing.T) {
 }
 
 func TestKeychainAvailable_SecurityBinaryHangs(t *testing.T) {
-	stubDir := t.TempDir()
-	stubPath := filepath.Join(stubDir, "security")
-	if err := os.WriteFile(stubPath, []byte("#!/bin/sh\nexec sleep 10\n"), 0755); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	original := securityBinPath
-	securityBinPath = stubPath
-	t.Cleanup(func() { securityBinPath = original })
+	stubSecurityBinary(t, "#!/bin/sh\nexec sleep 10\n")
 
 	start := time.Now()
 	available := keychainAvailable()
@@ -105,20 +110,7 @@ func TestKeychainAvailable_SecurityBinaryHangs(t *testing.T) {
 }
 
 func TestKeychainAvailable_DefaultKeychainLocked(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-
-	keychainDir := filepath.Join(dir, "Library", "Keychains")
-	if err := os.MkdirAll(keychainDir, 0700); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	keychainPath := filepath.Join(keychainDir, "login.keychain-db")
-	if out, err := exec.Command(securityBinPath, "create-keychain", "-p", "test-only-password", keychainPath).CombinedOutput(); err != nil {
-		t.Fatalf("create-keychain: %v: %s", err, out)
-	}
-	if out, err := exec.Command(securityBinPath, "default-keychain", "-s", keychainPath).CombinedOutput(); err != nil {
-		t.Fatalf("default-keychain -s: %v: %s", err, out)
-	}
+	keychainPath := setupDefaultKeychain(t, "test-only-password")
 	// Locking doesn't require the keychain's password -- only unlocking does.
 	if out, err := exec.Command(securityBinPath, "lock-keychain", keychainPath).CombinedOutput(); err != nil {
 		t.Fatalf("lock-keychain: %v: %s", err, out)

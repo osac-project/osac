@@ -45,24 +45,20 @@ jobs:
         fetch-depth: 0
         token: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Set up chart-testing
-      uses: helm/chart-testing-action@6ec842c01de15ebb84c8627d2744a0c2f2755c9f  # v2.8.0
-
     # Resolve osac-ui@main HEAD once, but only accept it when ghcr.io/.../osac-ui:sha-<7>
     # already exists (check_osac_ui_image). The full SHA is written to pinned/osac-ui.commit
     # and propagated to E2E + publish via the temp branch outputs — same pin for the
     # whole workflow run, matching the archived submodule bump model.
     - name: Resolve and gate osac-ui SHA
       id: ui
-      env:
-        REPO_OWNER: ${{ github.repository_owner }}
       run: |
         set -euo pipefail
         source osac-installer/scripts/nightly-charts.sh
 
         UI_SHA=$(check_osac_ui_image osac-ui)
         UI_SHORT_SHA="${UI_SHA:0:7}"
-        UI_IMAGE_REF=$(osac_ui_nightly_image_ref "${REGISTRY}/${REPO_OWNER}/osac-ui" "${UI_SHORT_SHA}")
+        # osac-ui is external; images always publish under ghcr.io/osac-project/osac-ui.
+        UI_IMAGE_REF=$(osac_ui_nightly_image_ref "${REGISTRY}/osac-project/osac-ui" "${UI_SHORT_SHA}")
 
         mkdir -p osac-installer/pinned
         printf '%s\n' "${UI_SHA}" > osac-installer/pinned/osac-ui.commit
@@ -90,7 +86,11 @@ jobs:
         git add osac-installer/values/vmaas-ci/values.yaml
         git add osac-installer/values/bmaas-ci/values.yaml
         git add osac-installer/values/full-ci/values.yaml
-        git diff --cached --quiet || git commit -m "nightly: pin osac-ui SHA and umbrella ui.images.ui"
+        if git diff --cached --quiet; then
+          echo "::error::No osac-ui pin changes staged — refusing to push empty temp branch"
+          exit 1
+        fi
+        git commit -m "nightly: pin osac-ui SHA and umbrella ui.images.ui"
 
         git push origin "${BRANCH}"
 

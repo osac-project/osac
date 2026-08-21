@@ -51,7 +51,7 @@ var _ = Describe("Clusters server", func() {
 				SetLogger(logger).
 				SetAttributionLogic(attribution).
 				SetTenancyLogic(tenancy).
-				SetScheme(testScheme).
+				SetHubClientProvider(&stubHubClientProvider{}).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 			Expect(server).ToNot(BeNil())
@@ -61,7 +61,7 @@ var _ = Describe("Clusters server", func() {
 			server, err := NewClustersServer().
 				SetAttributionLogic(attribution).
 				SetTenancyLogic(tenancy).
-				SetScheme(testScheme).
+				SetHubClientProvider(&stubHubClientProvider{}).
 				Build()
 			Expect(err).To(MatchError("logger is mandatory"))
 			Expect(server).To(BeNil())
@@ -71,7 +71,7 @@ var _ = Describe("Clusters server", func() {
 			server, err := NewClustersServer().
 				SetLogger(logger).
 				SetTenancyLogic(tenancy).
-				SetScheme(testScheme).
+				SetHubClientProvider(&stubHubClientProvider{}).
 				Build()
 			Expect(err).To(MatchError("attribution logic is mandatory"))
 			Expect(server).To(BeNil())
@@ -81,19 +81,19 @@ var _ = Describe("Clusters server", func() {
 			server, err := NewClustersServer().
 				SetLogger(logger).
 				SetAttributionLogic(attribution).
-				SetScheme(testScheme).
+				SetHubClientProvider(&stubHubClientProvider{}).
 				Build()
 			Expect(err).To(MatchError("tenancy logic is mandatory"))
 			Expect(server).To(BeNil())
 		})
 
-		It("Fails if scheme is not set", func() {
+		It("Fails if hub client provider is not set", func() {
 			server, err := NewClustersServer().
 				SetLogger(logger).
 				SetAttributionLogic(attribution).
 				SetTenancyLogic(tenancy).
 				Build()
-			Expect(err).To(MatchError("scheme is mandatory"))
+			Expect(err).To(MatchError("hub client provider is mandatory"))
 			Expect(server).To(BeNil())
 		})
 
@@ -116,7 +116,7 @@ var _ = Describe("Clusters server", func() {
 				SetLogger(logger).
 				SetAttributionLogic(attribution).
 				SetTenancyLogic(tenancy).
-				SetScheme(testScheme).
+				SetHubClientProvider(&stubHubClientProvider{}).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 
@@ -1625,7 +1625,7 @@ var _ = Describe("Clusters server", func() {
 				SetLogger(logger).
 				SetAttributionLogic(attribution).
 				SetTenancyLogic(tenancy).
-				SetScheme(testScheme).
+				SetHubClientProvider(&stubHubClientProvider{}).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 

@@ -37,7 +37,7 @@ import (
 	"google.golang.org/grpc/status"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -60,17 +60,6 @@ type mockCIServer struct {
 }
 
 func (m *mockCIServer) Get(ctx context.Context, req *privatev1.ComputeInstancesGetRequest) (*privatev1.ComputeInstancesGetResponse, error) {
-	return m.getResponse, m.getError
-}
-
-// mockHubServer implements just the Get method of privatev1.HubsServer.
-type mockHubServer struct {
-	privatev1.UnimplementedHubsServer
-	getResponse *privatev1.HubsGetResponse
-	getError    error
-}
-
-func (m *mockHubServer) Get(ctx context.Context, req *privatev1.HubsGetRequest) (*privatev1.HubsGetResponse, error) {
 	return m.getResponse, m.getError
 }
 
@@ -171,11 +160,14 @@ func (m *mockTx) Run(ctx context.Context, task any, args ...any) error {
 	return nil
 }
 
-// newFakeHubClientFactory returns a HubClientFactory that ignores the config
-// and always returns the provided fake client.
-func newFakeHubClientFactory(client clnt.Client) HubClientFactory {
-	return func(config *rest.Config) (clnt.Client, error) {
-		return client, nil
+// newFakeHubClientProvider returns a HubClientProvider that always returns the provided fake client
+// with a test namespace and config suitable for console resolution tests.
+func newFakeHubClientProvider(client clnt.Client, namespace string) HubClientProvider {
+	config, _ := clientcmd.RESTConfigFromKubeConfig(testKubeconfig)
+	return &stubHubClientProvider{
+		client:    client,
+		config:    config,
+		namespace: namespace,
 	}
 }
 
@@ -290,28 +282,16 @@ func generateSelfSignedCert(certFile, keyFile, cn string) {
 
 var _ = Describe("Console Server", func() {
 	var (
-		ciServer  *mockCIServer
-		hubServer *mockHubServer
+		ciServer *mockCIServer
 	)
 
 	BeforeEach(func() {
 		ciServer = &mockCIServer{}
-		hubServer = &mockHubServer{}
 	})
 
-	// setupHubMock configures the hub server mock and creates a fake K8s client
-	// with a ComputeInstance CR in the given phase.
-	setupHubMock := func(instanceID, hubNamespace string, phase osacv1alpha1.ComputeInstancePhaseType) clnt.Client {
-		hubServer.getResponse = privatev1.HubsGetResponse_builder{
-			Object: privatev1.Hub_builder{
-				Id: "hub-1",
-				Spec: privatev1.HubSpec_builder{
-					Kubeconfig: testKubeconfig,
-					Namespace:  hubNamespace,
-				}.Build(),
-			}.Build(),
-		}.Build()
-		cr := newComputeInstanceCR(instanceID, hubNamespace, phase)
+	// setupHubMock creates a fake K8s client with a ComputeInstance CR in the given phase.
+	setupHubMock := func(instanceID, ns string, phase osacv1alpha1.ComputeInstancePhaseType) clnt.Client {
+		cr := newComputeInstanceCR(instanceID, ns, phase)
 		return newFakeClient(cr)
 	}
 
@@ -364,10 +344,11 @@ var _ = Describe("Console Server", func() {
 
 	Describe("Create", func() {
 		var (
-			server  publicv1.ConsoleSessionsServer
-			sealer  *console.TicketSealer
-			tmpDir  string
-			fakeK8s clnt.Client
+			server       publicv1.ConsoleSessionsServer
+			sealer       *console.TicketSealer
+			tmpDir       string
+			fakeK8s      clnt.Client
+			hubNamespace string
 		)
 
 		BeforeEach(func() {
@@ -379,8 +360,7 @@ var _ = Describe("Console Server", func() {
 			resolver, err := NewConsoleTargetResolver().
 				SetLogger(logger).
 				SetComputeInstanceLookup(NewPrivateServerCILookup(ciServer)).
-				SetHubLookup(NewPrivateServerHubLookup(hubServer)).
-				SetHubClientFactory(newFakeHubClientFactory(fakeK8s)).
+				SetHubClientProvider(newFakeHubClientProvider(fakeK8s, hubNamespace)).
 				Build()
 			Expect(err).NotTo(HaveOccurred())
 
@@ -409,7 +389,8 @@ var _ = Describe("Console Server", func() {
 				}.Build(),
 			}.Build()
 
-			fakeK8s = setupHubMock("ci-123", "test-ns", osacv1alpha1.ComputeInstancePhaseRunning)
+			hubNamespace = "test-ns"
+			fakeK8s = setupHubMock("ci-123", hubNamespace, osacv1alpha1.ComputeInstancePhaseRunning)
 			buildServer()
 
 			ctx := authpkg.ContextWithSubject(context.Background(), &authpkg.Subject{

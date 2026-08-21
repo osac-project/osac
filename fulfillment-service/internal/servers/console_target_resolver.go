@@ -21,9 +21,6 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
@@ -36,20 +33,7 @@ import (
 
 // lookupResult contains the database-sourced state needed to resolve a console target.
 type lookupResult struct {
-	ciInfo       *ConsoleComputeInstanceInfo
-	kubeconfig   []byte
-	hubNamespace string
-}
-
-// HubClientFactory creates a Kubernetes client from a parsed REST config.
-type HubClientFactory func(config *rest.Config) (clnt.Client, error)
-
-// NewDefaultHubClientFactory creates a HubClientFactory that uses the given scheme
-// to create Kubernetes clients from a parsed REST config.
-func NewDefaultHubClientFactory(scheme *runtime.Scheme) HubClientFactory {
-	return func(config *rest.Config) (clnt.Client, error) {
-		return clnt.New(config, clnt.Options{Scheme: scheme})
-	}
+	ciInfo *ConsoleComputeInstanceInfo
 }
 
 // ComputeInstanceLookup provides compute instance data for console resolution.
@@ -65,29 +49,21 @@ type ConsoleComputeInstanceInfo struct {
 	HubID string
 }
 
-// HubLookup provides hub cluster access for console resolution.
-// Implementations are pure readers that consume a tx-bound context.
-type HubLookup interface {
-	GetKubeconfig(ctx context.Context, hubID string) (kubeconfig []byte, namespace string, err error)
-}
-
 // ConsoleTargetResolverBuilder contains the data and logic needed to create a console target resolver. Don't create
 // instances of this type directly, use the NewConsoleTargetResolver function instead.
 type ConsoleTargetResolverBuilder struct {
-	logger           *slog.Logger
-	ciLookup         ComputeInstanceLookup
-	hubLookup        HubLookup
-	hubClientFactory HubClientFactory
+	logger            *slog.Logger
+	ciLookup          ComputeInstanceLookup
+	hubClientProvider HubClientProvider
 }
 
 // ConsoleTargetResolver resolves a compute instance ID to hub cluster data needed for
 // backend target construction. It handles DB lookups and K8s CR validation; the caller
 // (SessionService) uses the result to build the KubeVirt target and seal the ticket.
 type ConsoleTargetResolver struct {
-	logger           *slog.Logger
-	ciLookup         ComputeInstanceLookup
-	hubLookup        HubLookup
-	hubClientFactory HubClientFactory
+	logger            *slog.Logger
+	ciLookup          ComputeInstanceLookup
+	hubClientProvider HubClientProvider
 }
 
 // NewConsoleTargetResolver creates a builder that can then be used to configure and create a new console target
@@ -108,15 +84,9 @@ func (b *ConsoleTargetResolverBuilder) SetComputeInstanceLookup(value ComputeIns
 	return b
 }
 
-// SetHubLookup sets the hub lookup. This is mandatory.
-func (b *ConsoleTargetResolverBuilder) SetHubLookup(value HubLookup) *ConsoleTargetResolverBuilder {
-	b.hubLookup = value
-	return b
-}
-
-// SetHubClientFactory sets the hub client factory. This is mandatory.
-func (b *ConsoleTargetResolverBuilder) SetHubClientFactory(value HubClientFactory) *ConsoleTargetResolverBuilder {
-	b.hubClientFactory = value
+// SetHubClientProvider sets the hub client provider. This is mandatory.
+func (b *ConsoleTargetResolverBuilder) SetHubClientProvider(value HubClientProvider) *ConsoleTargetResolverBuilder {
+	b.hubClientProvider = value
 	return b
 }
 
@@ -129,19 +99,15 @@ func (b *ConsoleTargetResolverBuilder) Build() (*ConsoleTargetResolver, error) {
 	if b.ciLookup == nil {
 		return nil, errors.New("compute instance lookup is mandatory")
 	}
-	if b.hubLookup == nil {
-		return nil, errors.New("hub lookup is mandatory")
-	}
-	if b.hubClientFactory == nil {
-		return nil, errors.New("hub client factory is mandatory")
+	if b.hubClientProvider == nil {
+		return nil, errors.New("hub client provider is mandatory")
 	}
 
 	// Create and populate the object:
 	return &ConsoleTargetResolver{
-		logger:           b.logger,
-		ciLookup:         b.ciLookup,
-		hubLookup:        b.hubLookup,
-		hubClientFactory: b.hubClientFactory,
+		logger:            b.logger,
+		ciLookup:          b.ciLookup,
+		hubClientProvider: b.hubClientProvider,
 	}, nil
 }
 
@@ -150,9 +116,10 @@ func (b *ConsoleTargetResolverBuilder) Build() (*ConsoleTargetResolver, error) {
 //
 // Resolution is split into two phases:
 //
-//  1. lookupDBState — reads compute instance state and hub kubeconfig inside a scoped
-//     transaction (via WithNewTx), then releases the DB connection.
-//  2. findCROnHub — queries the hub Kubernetes API for the ComputeInstance CR.
+//  1. lookupDBState — reads compute instance state inside a scoped transaction (via WithNewTx),
+//     then releases the DB connection.
+//  2. Hub access — retrieves a cached hub client (which fetches the kubeconfig on cache miss),
+//     then queries the hub Kubernetes API for the ComputeInstance CR.
 //     No DB connection is held during this phase.
 func (r *ConsoleTargetResolver) ResolveComputeInstance(ctx context.Context, resourceID string) (*console.ResolveResult, error) {
 	// Phase 1: DB reads inside a scoped transaction — released before Kubernetes API calls.
@@ -169,81 +136,56 @@ func (r *ConsoleTargetResolver) ResolveComputeInstance(ctx context.Context, reso
 		return nil, err
 	}
 
-	// Phase 2: Kubernetes API call — no DB connection held.
-	config, err := clientcmd.RESTConfigFromKubeConfig(state.kubeconfig)
+	// Phase 2: Hub access — no DB connection held.
+	hubInfo, err := r.hubClientProvider.GetClient(ctx, state.ciInfo.HubID)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to parse hub kubeconfig: %v", err)
+		return nil, err
+	}
+	if hubInfo.Namespace == "" {
+		return nil, status.Errorf(codes.Internal, "hub %q returned empty namespace", state.ciInfo.HubID)
 	}
 
-	namespace, crName, err := r.findCROnHub(ctx, config, state.hubNamespace, state.ciInfo.HubID, resourceID)
+	namespace, crName, err := r.findCROnHub(ctx, hubInfo.Client, state.ciInfo.HubID, hubInfo.Namespace, resourceID)
 	if err != nil {
 		return nil, err
 	}
 
 	return &console.ResolveResult{
-		HubConfig: config,
+		HubConfig: hubInfo.Config,
 		Namespace: namespace,
 		CRName:    crName,
 	}, nil
 }
 
-// lookupDBState validates the compute instance is running, has a hub assigned, and retrieves the
-// hub kubeconfig and namespace. The caller is responsible for transaction scoping.
+// lookupDBState validates the compute instance is running and has a hub assigned.
+// The caller is responsible for transaction scoping.
 func (r *ConsoleTargetResolver) lookupDBState(ctx context.Context, resourceID string) (*lookupResult, error) {
-	// Look up the compute instance to check its state and get the hub assignment.
 	ciInfo, err := r.ciLookup.GetForConsole(ctx, resourceID)
 	if err != nil {
-		// Preserve the original gRPC status code if available (e.g., Internal for DB
-		// errors, Unavailable for transient failures) so clients can retry appropriately.
 		if st, ok := status.FromError(err); ok {
 			return nil, status.Errorf(st.Code(), "failed to get compute instance %q: %v", resourceID, st.Message())
 		}
 		return nil, status.Errorf(codes.Internal, "failed to get compute instance %q: %v", resourceID, err)
 	}
 
-	// Verify running state.
 	if ciInfo.State != privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING {
 		return nil, status.Errorf(codes.FailedPrecondition,
 			"compute instance %q is not running (state: %s)", resourceID, ciInfo.State.String())
 	}
 
-	// Verify hub assignment.
 	if ciInfo.HubID == "" {
 		return nil, status.Errorf(codes.FailedPrecondition,
 			"compute instance %q has no hub assigned", resourceID)
 	}
 
-	// Read the hub kubeconfig and namespace.
-	kubeconfig, hubNamespace, err := r.hubLookup.GetKubeconfig(ctx, ciInfo.HubID)
-	if err != nil {
-		if st, ok := status.FromError(err); ok {
-			return nil, status.Errorf(st.Code(), "failed to get hub %q: %v", ciInfo.HubID, st.Message())
-		}
-		return nil, status.Errorf(codes.Internal, "failed to get hub %q: %v", ciInfo.HubID, err)
-	}
-	if hubNamespace == "" {
-		return nil, status.Errorf(codes.Internal, "hub %q returned empty namespace", ciInfo.HubID)
-	}
-
 	return &lookupResult{
-		ciInfo:       ciInfo,
-		kubeconfig:   kubeconfig,
-		hubNamespace: hubNamespace,
+		ciInfo: ciInfo,
 	}, nil
 }
 
 // findCROnHub queries the hub Kubernetes API for the ComputeInstance CR matching the given
-// instance ID, and returns its namespace and name. The rest.Config must already be parsed
-// from the hub kubeconfig.
-func (r *ConsoleTargetResolver) findCROnHub(ctx context.Context, config *rest.Config, hubNamespace, hubID, instanceID string) (namespace, crName string, err error) {
-	// Create a Kubernetes client for the hub cluster.
-	hubClient, err := r.hubClientFactory(config)
-	if err != nil {
-		err = status.Errorf(codes.Internal, "failed to create client for hub %q: %v", hubID, err)
-		return
-	}
-
-	// Query for the ComputeInstance CR by UUID label.
+// instance ID, and returns its namespace and name.
+func (r *ConsoleTargetResolver) findCROnHub(ctx context.Context, hubClient clnt.Client, hubID, hubNamespace, instanceID string) (namespace, crName string, err error) {
 	list := &osacv1alpha1.ComputeInstanceList{}
 	err = hubClient.List(
 		ctx, list,
@@ -319,26 +261,4 @@ func (l *privateServerCILookup) GetForConsole(ctx context.Context, id string) (*
 		State: ciStatus.GetState(),
 		HubID: ciStatus.GetHub(),
 	}, nil
-}
-
-// privateServerHubLookup wraps the private HubsServer to implement HubLookup.
-// It is a pure reader -- the caller provides a tx-bound context.
-type privateServerHubLookup struct {
-	hubServer privatev1.HubsServer
-}
-
-// NewPrivateServerHubLookup creates a HubLookup backed by the private Hubs server.
-func NewPrivateServerHubLookup(hubServer privatev1.HubsServer) HubLookup {
-	return &privateServerHubLookup{hubServer: hubServer}
-}
-
-func (l *privateServerHubLookup) GetKubeconfig(ctx context.Context, hubID string) (kubeconfig []byte, namespace string, err error) {
-	hubResp, err := l.hubServer.Get(ctx, privatev1.HubsGetRequest_builder{
-		Id: hubID,
-	}.Build())
-	if err != nil {
-		return nil, "", err
-	}
-	hub := hubResp.GetObject()
-	return hub.GetSpec().GetKubeconfig(), hub.GetSpec().GetNamespace(), nil
 }

@@ -18,7 +18,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/genproto/googleapis/api/httpbody"
@@ -27,8 +26,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/clientcmd"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
@@ -36,7 +33,6 @@ import (
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	"github.com/osac-project/osac/fulfillment-service/internal/jq"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/gvks"
@@ -49,7 +45,7 @@ type ClustersServerBuilder struct {
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
-	scheme            *runtime.Scheme
+	hubClientProvider HubClientProvider
 }
 
 var _ publicv1.ClustersServer = (*ClustersServer)(nil)
@@ -57,15 +53,12 @@ var _ publicv1.ClustersServer = (*ClustersServer)(nil)
 type ClustersServer struct {
 	publicv1.UnimplementedClustersServer
 
-	logger          *slog.Logger
-	private         privatev1.ClustersServer
-	inMapper        *GenericMapper[*publicv1.Cluster, *privatev1.Cluster]
-	outMapper       *GenericMapper[*privatev1.Cluster, *publicv1.Cluster]
-	jqTool          *jq.Tool
-	hubsDao         *dao.GenericDAO[*privatev1.Hub]
-	kubeClients     map[string]clnt.Client
-	kubeClientsLock *sync.Mutex
-	scheme          *runtime.Scheme
+	logger            *slog.Logger
+	private           privatev1.ClustersServer
+	inMapper          *GenericMapper[*publicv1.Cluster, *privatev1.Cluster]
+	outMapper         *GenericMapper[*privatev1.Cluster, *publicv1.Cluster]
+	jqTool            *jq.Tool
+	hubClientProvider HubClientProvider
 }
 
 func NewClustersServer() *ClustersServerBuilder {
@@ -103,10 +96,9 @@ func (b *ClustersServerBuilder) SetMetricsRegisterer(value prometheus.Registerer
 	return b
 }
 
-// SetScheme sets the Kubernetes runtime scheme used for typed API objects.
-// This is mandatory.
-func (b *ClustersServerBuilder) SetScheme(value *runtime.Scheme) *ClustersServerBuilder {
-	b.scheme = value
+// SetHubClientProvider sets the hub client provider. This is mandatory.
+func (b *ClustersServerBuilder) SetHubClientProvider(value HubClientProvider) *ClustersServerBuilder {
+	b.hubClientProvider = value
 	return b
 }
 
@@ -120,24 +112,14 @@ func (b *ClustersServerBuilder) Build() (result *ClustersServer, err error) {
 		err = errors.New("tenancy logic is mandatory")
 		return
 	}
-	if b.scheme == nil {
-		err = errors.New("scheme is mandatory")
+	if b.hubClientProvider == nil {
+		err = errors.New("hub client provider is mandatory")
 		return
 	}
 
 	// Create the JQ tool:
 	jqTool, err := jq.NewTool().
 		SetLogger(b.logger).
-		Build()
-	if err != nil {
-		return
-	}
-
-	// Create the DAOs:
-	hubsDao, err := dao.NewGenericDAO[*privatev1.Hub]().
-		SetLogger(b.logger).
-		SetTenancyLogic(b.tenancyLogic).
-		SetMetricsRegisterer(b.metricsRegisterer).
 		Build()
 	if err != nil {
 		return
@@ -186,15 +168,12 @@ func (b *ClustersServerBuilder) Build() (result *ClustersServer, err error) {
 
 	// Create and populate the object:
 	result = &ClustersServer{
-		logger:          b.logger,
-		jqTool:          jqTool,
-		hubsDao:         hubsDao,
-		kubeClients:     map[string]clnt.Client{},
-		kubeClientsLock: &sync.Mutex{},
-		private:         delegate,
-		inMapper:        inMapper,
-		outMapper:       outMapper,
-		scheme:          b.scheme,
+		logger:            b.logger,
+		jqTool:            jqTool,
+		hubClientProvider: b.hubClientProvider,
+		private:           delegate,
+		inMapper:          inMapper,
+		outMapper:         outMapper,
 	}
 	return
 }
@@ -619,26 +598,14 @@ func (s *ClustersServer) getHostedClusterSecret(ctx context.Context, clusterId s
 		return
 	}
 
-	// Get the data of the hub:
-	getHubResponse, err := s.hubsDao.Get().
-		SetId(cluster.GetStatus().GetHub()).
-		Do(ctx)
-	if err != nil {
-		return
-	}
-	hub := getHubResponse.GetObject()
-	if hub == nil {
-		return
-	}
-
 	// Create a client for the hub:
-	hubClient, err := s.getKubeClient(ctx, hub)
+	hubInfo, err := s.hubClientProvider.GetClient(ctx, cluster.GetStatus().GetHub())
 	if err != nil {
 		return
 	}
 
 	// Get the cluster order from the hub:
-	order, err := s.getKubeClusterOrder(ctx, hubClient, hub.GetSpec().GetNamespace(), cluster.GetId())
+	order, err := s.getKubeClusterOrder(ctx, hubInfo.Client, hubInfo.Namespace, cluster.GetId())
 	if err != nil {
 		return
 	}
@@ -655,7 +622,7 @@ func (s *ClustersServer) getHostedClusterSecret(ctx context.Context, clusterId s
 	}
 
 	// Get the hosted cluster from the hub:
-	hc, err := s.getKubeHostedCluster(ctx, hubClient, hcKey)
+	hc, err := s.getKubeHostedCluster(ctx, hubInfo.Client, hcKey)
 	if err != nil || hc == nil {
 		return
 	}
@@ -670,31 +637,7 @@ func (s *ClustersServer) getHostedClusterSecret(ctx context.Context, clusterId s
 	}
 
 	// Get the secret from the hub:
-	result, err = s.getKubeSecret(ctx, hubClient, secretKey)
-	return
-}
-
-func (s *ClustersServer) getKubeClient(ctx context.Context, hub *privatev1.Hub) (result clnt.Client, err error) {
-	s.kubeClientsLock.Lock()
-	defer s.kubeClientsLock.Unlock()
-	result, ok := s.kubeClients[hub.Id]
-	if ok {
-		return
-	}
-	result, err = s.createKubeClient(ctx, hub)
-	if err != nil {
-		return
-	}
-	s.kubeClients[hub.Id] = result
-	return
-}
-
-func (s *ClustersServer) createKubeClient(ctx context.Context, hub *privatev1.Hub) (result clnt.Client, err error) {
-	config, err := clientcmd.RESTConfigFromKubeConfig(hub.GetSpec().GetKubeconfig())
-	if err != nil {
-		return
-	}
-	result, err = clnt.New(config, clnt.Options{Scheme: s.scheme})
+	result, err = s.getKubeSecret(ctx, hubInfo.Client, secretKey)
 	return
 }
 

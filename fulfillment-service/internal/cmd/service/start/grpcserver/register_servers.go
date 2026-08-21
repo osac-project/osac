@@ -51,10 +51,12 @@ type ResourceServerDeps struct {
 	PrivateUsersServer privatev1.UsersServer
 }
 
-// ResourceServers exposes the constructed servers that code outside the registration block still needs directly.
+// ResourceServers exposes the constructed servers and shared infrastructure that code outside the
+// registration block still needs directly.
 type ResourceServers struct {
 	PrivateHubsServer             privatev1.HubsServer
 	PrivateComputeInstancesServer privatev1.ComputeInstancesServer
+	HubClientProvider             servers.HubClientProvider
 }
 
 // RegisterResourceServers constructs and registers every filterable resource's public and private server onto
@@ -152,21 +154,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		return nil, fmt.Errorf("failed to create private compute instance catalog items server: %w", err)
 	}
 	privatev1.RegisterComputeInstanceCatalogItemsServer(registrar, privateComputeInstanceCatalogItemsServer)
-
-	// Create the clusters server:
-	deps.Logger.InfoContext(ctx, "Creating clusters server")
-	clustersServer, err := servers.NewClustersServer().
-		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier).
-		SetAttributionLogic(deps.PublicAttributionLogic).
-		SetTenancyLogic(deps.TenancyLogic).
-		SetMetricsRegisterer(deps.MetricsRegisterer).
-		SetScheme(deps.HubScheme).
-		Build()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create clusters server: %w", err)
-	}
-	publicv1.RegisterClustersServer(registrar, clustersServer)
 
 	// Create the private clusters server:
 	deps.Logger.InfoContext(ctx, "Creating private clusters server")
@@ -392,6 +379,39 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	}
 	privatev1.RegisterHubsServer(registrar, privateHubsServer)
 
+	// Create the shared hub client infrastructure for on-demand retrieval of hub K8s clients:
+	hubLookup := servers.NewPrivateServerHubLookup(privateHubsServer)
+	hubClientFactory := servers.NewDefaultHubClientFactory(deps.HubScheme)
+	hubClientProvider, err := servers.NewHubClientProvider().
+		SetHubLookup(hubLookup).
+		SetHubClientFactory(hubClientFactory).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create hub client provider: %w", err)
+	}
+
+	hubSecretFetcher, err := servers.NewHubSecretFetcher().
+		SetHubClientProvider(hubClientProvider).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create hub secret fetcher: %w", err)
+	}
+
+	// Create the clusters server (after hub infrastructure, which it depends on):
+	deps.Logger.InfoContext(ctx, "Creating clusters server")
+	clustersServer, err := servers.NewClustersServer().
+		SetLogger(deps.Logger).
+		SetNotifier(deps.Notifier).
+		SetAttributionLogic(deps.PublicAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetHubClientProvider(hubClientProvider).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create clusters server: %w", err)
+	}
+	publicv1.RegisterClustersServer(registrar, clustersServer)
+
 	// Create the virtual networks server:
 	deps.Logger.InfoContext(ctx, "Creating virtual networks server")
 	virtualNetworksServer, err := servers.NewVirtualNetworksServer().
@@ -597,6 +617,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
 		SetSecretStore(deps.SecretStore).
+		SetHubSecretFetcher(hubSecretFetcher).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create private secrets server: %w", err)
@@ -612,6 +633,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
 		SetSecretStore(deps.SecretStore).
+		SetHubSecretFetcher(hubSecretFetcher).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create public secrets server: %w", err)
@@ -969,5 +991,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	return &ResourceServers{
 		PrivateHubsServer:             privateHubsServer,
 		PrivateComputeInstancesServer: privateComputeInstancesServer,
+		HubClientProvider:             hubClientProvider,
 	}, nil
 }

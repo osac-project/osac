@@ -111,7 +111,7 @@ var _ = Describe("Tenancy logic", func() {
 			SetLogger(logger).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
-			SetScheme(testScheme).
+			SetHubClientProvider(&stubHubClientProvider{}).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
@@ -179,7 +179,7 @@ var _ = Describe("Tenancy logic", func() {
 			SetLogger(logger).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
-			SetScheme(testScheme).
+			SetHubClientProvider(&stubHubClientProvider{}).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
@@ -242,7 +242,7 @@ var _ = Describe("Tenancy logic", func() {
 			SetLogger(logger).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
-			SetScheme(testScheme).
+			SetHubClientProvider(&stubHubClientProvider{}).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
@@ -305,7 +305,7 @@ var _ = Describe("Tenancy logic", func() {
 			SetLogger(logger).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
-			SetScheme(testScheme).
+			SetHubClientProvider(&stubHubClientProvider{}).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
@@ -365,7 +365,7 @@ var _ = Describe("Tenancy logic", func() {
 			SetLogger(logger).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
-			SetScheme(testScheme).
+			SetHubClientProvider(&stubHubClientProvider{}).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
@@ -433,7 +433,7 @@ var _ = Describe("Tenancy logic", func() {
 			SetLogger(logger).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
-			SetScheme(testScheme).
+			SetHubClientProvider(&stubHubClientProvider{}).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
@@ -504,7 +504,7 @@ var _ = Describe("Tenancy logic", func() {
 			SetLogger(logger).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
-			SetScheme(testScheme).
+			SetHubClientProvider(&stubHubClientProvider{}).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
@@ -546,7 +546,7 @@ var _ = Describe("Tenancy logic", func() {
 			SetLogger(logger).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
-			SetScheme(testScheme).
+			SetHubClientProvider(&stubHubClientProvider{}).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 

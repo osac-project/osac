@@ -653,12 +653,13 @@ var _ = Describe("Private secrets server", func() {
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 
-				getResponse, err := server.Get(ctx, privatev1.SecretsGetRequest_builder{
+				_, err = server.Get(ctx, privatev1.SecretsGetRequest_builder{
 					Id: created.GetObject().GetId(),
 				}.Build())
-				Expect(err).ToNot(HaveOccurred())
-				Expect(getResponse.GetObject().GetBackend()).To(Equal(
-					privatev1.SecretBackend_SECRET_BACKEND_HUB))
+				Expect(err).To(HaveOccurred())
+				st, ok := status.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(st.Code()).To(Equal(codes.FailedPrecondition))
 			})
 		})
 
@@ -878,6 +879,149 @@ var _ = Describe("Private secrets server", func() {
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 			})
+		})
+	})
+
+	Describe("Hub secret fetching", func() {
+		var (
+			mockHubFetcher *MockHubSecretFetcher
+			server         *PrivateSecretsServer
+		)
+
+		BeforeEach(func() {
+			mockHubFetcher = NewMockHubSecretFetcher(ctrl)
+			var err error
+			server, err = NewPrivateSecretsServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				SetHubSecretFetcher(mockHubFetcher).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("Get populates resolved_data from hub fetcher", func() {
+			created, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{
+				Object: privatev1.Secret_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "hub-fetch-secret",
+					}.Build(),
+					Backend: privatev1.SecretBackend_SECRET_BACKEND_HUB,
+					Coordinates: map[string]string{
+						"hub_id":      "hub-1",
+						"namespace":   "clusters",
+						"secret_name": "my-kubeconfig",
+						"key":         "kubeconfig",
+					},
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			mockHubFetcher.EXPECT().
+				Fetch(gomock.Any(), map[string]string{
+					"hub_id":      "hub-1",
+					"namespace":   "clusters",
+					"secret_name": "my-kubeconfig",
+					"key":         "kubeconfig",
+				}).
+				Return(map[string][]byte{"kubeconfig": []byte("apiVersion: v1")}, nil)
+
+			getResponse, err := server.Get(ctx, privatev1.SecretsGetRequest_builder{
+				Id: created.GetObject().GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(getResponse.GetObject().GetData()).To(
+				HaveKeyWithValue("kubeconfig", []byte("apiVersion: v1")))
+		})
+
+		It("Get returns error when hub fetch fails", func() {
+			created, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{
+				Object: privatev1.Secret_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "hub-fail-secret",
+					}.Build(),
+					Backend: privatev1.SecretBackend_SECRET_BACKEND_HUB,
+					Coordinates: map[string]string{
+						"hub_id":      "hub-1",
+						"namespace":   "clusters",
+						"secret_name": "missing-secret",
+					},
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			mockHubFetcher.EXPECT().
+				Fetch(gomock.Any(), gomock.Any()).
+				Return(nil, status.Errorf(codes.Unavailable, "hub unreachable"))
+
+			_, err = server.Get(ctx, privatev1.SecretsGetRequest_builder{
+				Id: created.GetObject().GetId(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			st, ok := status.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(st.Code()).To(Equal(codes.Unavailable))
+		})
+
+		It("Vault secret does not interact with hub fetcher", func() {
+			server, err := NewPrivateSecretsServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				SetHubSecretFetcher(mockHubFetcher).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			created, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{
+				Object: privatev1.Secret_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "vault-no-hub",
+					}.Build(),
+					Data: map[string][]byte{
+						"key": []byte("value"),
+					},
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			getResponse, err := server.Get(ctx, privatev1.SecretsGetRequest_builder{
+				Id: created.GetObject().GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(getResponse.GetObject().GetBackend()).To(Equal(
+				privatev1.SecretBackend_SECRET_BACKEND_VAULT))
+		})
+
+		It("Hub secret without fetcher returns FailedPrecondition", func() {
+			serverNoFetcher, err := NewPrivateSecretsServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			created, err := serverNoFetcher.Create(ctx, privatev1.SecretsCreateRequest_builder{
+				Object: privatev1.Secret_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "hub-no-fetcher",
+					}.Build(),
+					Backend: privatev1.SecretBackend_SECRET_BACKEND_HUB,
+					Coordinates: map[string]string{
+						"hub_id":      "hub-1",
+						"namespace":   "clusters",
+						"secret_name": "my-kubeconfig",
+					},
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = serverNoFetcher.Get(ctx, privatev1.SecretsGetRequest_builder{
+				Id: created.GetObject().GetId(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			st, ok := status.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(st.Code()).To(Equal(codes.FailedPrecondition))
 		})
 	})
 

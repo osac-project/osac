@@ -794,9 +794,8 @@ func (t *task) createDefaultVirtualNetwork(
 			Creator: "system",
 		}.Build(),
 		Spec: privatev1.VirtualNetworkSpec_builder{
-			Region:                 "default",
-			NetworkClass:           privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
-			ImplementationStrategy: nc.GetImplementationStrategy(),
+			Region:       "default",
+			NetworkClass: privatev1.NetworkClassReference_builder{Id: nc.GetId()}.Build(),
 		}.Build(),
 	}.Build()
 

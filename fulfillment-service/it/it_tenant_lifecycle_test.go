@@ -720,10 +720,9 @@ var _ = Describe("Multi-tenant resource isolation", func() {
 		ncName := fmt.Sprintf("cudn-tenant-%s", uuid.New())
 		ncResp, err := networkClassesClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 			Object: privatev1.NetworkClass_builder{
-				Metadata:               privatev1.Metadata_builder{Name: ncName}.Build(),
-				Title:                  "Phase 4 Isolation Test",
-				ImplementationStrategy: "cudn",
-				FabricManager:          new("netris"),
+				Metadata:      privatev1.Metadata_builder{Name: ncName}.Build(),
+				Title:         "Phase 4 Isolation Test",
+				FabricManager: new("netris"),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())

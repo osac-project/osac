@@ -7,7 +7,6 @@ description: >
 template_type: network
 
 # NetworkClass registration fields
-implementation_strategy: openstack
 fabric_manager: openstack
 capabilities:
   supports_ipv4: true

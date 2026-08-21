@@ -8,8 +8,7 @@ description: >
 
 template_type: network
 
-# ExternalIPPool registration fields
-implementation_strategy: metallb-l2
+# NetworkClass registration fields
 fabric_manager: metallb_l2
 capabilities:
   supports_ipv4: true

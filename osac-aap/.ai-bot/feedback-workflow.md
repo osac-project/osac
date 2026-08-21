@@ -110,7 +110,7 @@ These are frequently seen in osac-aap reviews and how to handle them:
 | "Missing task name" | Add descriptive `name:` field |
 | "Use underscores" | Rename to underscores in role dir, `meta/osac.yaml`, and strategy |
 | "Missing kubeconfig" | Add `osac.service.common` include before remote K8s ops |
-| "Update meta/osac.yaml" | Ensure `implementation_strategy` matches role directory name |
+| "Update meta/osac.yaml" | Ensure the identity field (`fabric_manager`/`k8s_manager` for network roles, `implementation_strategy` otherwise) matches role directory name |
 | "Cross-repo needed" | Document in PR description, do not attempt changes in other repos |
 | "Add to ansible-lint-ignore" | Only if genuinely unavoidable; explain in PR comment |
 | "Stale vendor" | Flag for human review; do not modify `vendor/` automatically |

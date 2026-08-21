@@ -46,14 +46,6 @@ type VirtualNetworkSpec struct {
 	// +kubebuilder:validation:Type=string
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="networkClass is immutable"
 	NetworkClass string `json:"networkClass,omitempty"`
-
-	// ImplementationStrategy determines the underlying network backend and Ansible role to use.
-	// This value is derived from the NetworkClass at creation time and stored here for direct
-	// access by controllers and provisioning systems.
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:Type=string
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="implementationStrategy is immutable"
-	ImplementationStrategy string `json:"implementationStrategy,omitempty"`
 }
 
 // VirtualNetworkPhaseType is a valid value for .status.phase

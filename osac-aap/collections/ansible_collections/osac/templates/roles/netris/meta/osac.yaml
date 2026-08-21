@@ -9,7 +9,6 @@ description: >
 template_type: network
 
 # NetworkClass registration fields
-implementation_strategy: netris
 fabric_manager: netris
 capabilities:
   supports_ipv4: true

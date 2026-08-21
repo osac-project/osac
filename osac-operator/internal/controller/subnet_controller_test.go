@@ -65,7 +65,10 @@ var _ = Describe("SubnetReconciler", func() {
 			MaxJobHistory:        10,
 		}
 
-		// Create VirtualNetwork fixture with ImplementationStrategy set
+		// Create VirtualNetwork fixture. SubnetReconciler reads the fabric implementation
+		// strategy from the parent VirtualNetwork's annotation (already resolved by the
+		// VirtualNetwork's own controller) when its own Resolver has no dispatch plan for
+		// the NetworkClass, so set it directly here rather than via a dispatcher Resolver.
 		vnet = &osacv1alpha1.VirtualNetwork{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "test-vnet",
@@ -73,12 +76,14 @@ var _ = Describe("SubnetReconciler", func() {
 				Labels: map[string]string{
 					osacVirtualNetworkIDLabel: "test-vnet-uuid",
 				},
+				Annotations: map[string]string{
+					osacImplementationStrategyAnnotation: "cudn-net",
+				},
 			},
 			Spec: osacv1alpha1.VirtualNetworkSpec{
-				Region:                 "us-west-1",
-				IPv4CIDR:               "10.0.0.0/16",
-				NetworkClass:           "cudn-net",
-				ImplementationStrategy: "cudn-net",
+				Region:       "us-west-1",
+				IPv4CIDR:     "10.0.0.0/16",
+				NetworkClass: "cudn-net",
 			},
 		}
 		Expect(k8sClient.Create(ctx, vnet)).To(Succeed())
@@ -241,10 +246,9 @@ var _ = Describe("SubnetReconciler", func() {
 					},
 				},
 				Spec: osacv1alpha1.VirtualNetworkSpec{
-					Region:                 "us-west-1",
-					IPv4CIDR:               "10.9.0.0/16",
-					NetworkClass:           "cudn-net",
-					ImplementationStrategy: "cudn-net",
+					Region:       "us-west-1",
+					IPv4CIDR:     "10.9.0.0/16",
+					NetworkClass: "cudn-net",
 				},
 			}
 			Expect(k8sClient.Create(ctx, duplicateVnet)).To(Succeed())
@@ -262,8 +266,8 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(err.Error()).To(ContainSubstring("expected exactly one parent VirtualNetwork"))
 		})
 
-		It("should requeue when parent VirtualNetwork has no ImplementationStrategy", func() {
-			// Create VirtualNetwork without ImplementationStrategy
+		It("should requeue when parent VirtualNetwork has no implementation-strategy annotation", func() {
+			// Create VirtualNetwork without an implementation-strategy annotation
 			vnetNoStrategy := &osacv1alpha1.VirtualNetwork{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "vnet-no-strategy",
@@ -276,7 +280,7 @@ var _ = Describe("SubnetReconciler", func() {
 					Region:       "us-west-1",
 					IPv4CIDR:     "10.0.0.0/16",
 					NetworkClass: "some-class",
-					// ImplementationStrategy intentionally not set
+					// implementation-strategy annotation intentionally not set
 				},
 			}
 			Expect(k8sClient.Create(ctx, vnetNoStrategy)).To(Succeed())
@@ -405,10 +409,9 @@ var _ = Describe("SubnetReconciler", func() {
 					Labels:    map[string]string{osacVirtualNetworkIDLabel: "dispatch-vnet-uuid"},
 				},
 				Spec: osacv1alpha1.VirtualNetworkSpec{
-					Region:                 "us-west-1",
-					IPv4CIDR:               "10.1.0.0/16",
-					NetworkClass:           "nc-dispatch",
-					ImplementationStrategy: "legacy-value",
+					Region:       "us-west-1",
+					IPv4CIDR:     "10.1.0.0/16",
+					NetworkClass: "nc-dispatch",
 				},
 			}
 			Expect(k8sClient.Create(ctx, dispatchVnet)).To(Succeed())
@@ -431,7 +434,7 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("netris"))
 		})
 
-		It("falls back to the parent VirtualNetwork's legacy implementation strategy when fabricManager is not set", func() {
+		It("falls back to the parent VirtualNetwork's resolved implementation-strategy annotation when fabricManager is not set", func() {
 			disc, err := networkmanager.NewDiscovery(fakeDiscoveryClient, "osac")
 			Expect(err).NotTo(HaveOccurred())
 			reconciler.Resolver = dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
@@ -443,12 +446,14 @@ var _ = Describe("SubnetReconciler", func() {
 					Name:      "legacy-vnet",
 					Namespace: "default",
 					Labels:    map[string]string{osacVirtualNetworkIDLabel: "legacy-vnet-uuid"},
+					// The parent VirtualNetwork's own controller has already resolved and
+					// written this annotation (its NetworkClass has no fabricManager either).
+					Annotations: map[string]string{osacImplementationStrategyAnnotation: "cudn-net"},
 				},
 				Spec: osacv1alpha1.VirtualNetworkSpec{
-					Region:                 "us-west-1",
-					IPv4CIDR:               "10.2.0.0/16",
-					NetworkClass:           "nc-legacy",
-					ImplementationStrategy: "cudn-net",
+					Region:       "us-west-1",
+					IPv4CIDR:     "10.2.0.0/16",
+					NetworkClass: "nc-legacy",
 				},
 			}
 			Expect(k8sClient.Create(ctx, dispatchVnet)).To(Succeed())

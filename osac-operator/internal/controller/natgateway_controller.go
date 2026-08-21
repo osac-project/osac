@@ -180,8 +180,9 @@ func (r *NATGatewayReconciler) handleUpdate(ctx context.Context, natgw *v1alpha1
 	}
 	vnet := &vnetList.Items[0]
 
-	// Read implementation strategy from parent VirtualNetwork spec
-	implementationStrategy := vnet.Spec.ImplementationStrategy
+	// Read implementation strategy from the annotation the parent VirtualNetwork's own
+	// controller has already resolved and written onto it.
+	implementationStrategy := vnet.Annotations[osacImplementationStrategyAnnotation]
 	if implementationStrategy == "" {
 		log.Info("implementation strategy not set on parent VirtualNetwork, requeueing", "virtualNetwork", vnet.Name)
 		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil

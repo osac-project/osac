@@ -38,3 +38,15 @@ func setReadyConditionTrue(conditions *[]metav1.Condition) {
 		Reason: v1alpha1.ReasonAsExpected,
 	})
 }
+
+// setReadyConditionBlocked marks Ready=False for a precondition that is expected to
+// self-heal once satisfied (e.g. no dispatcher-resolvable manager yet), as opposed to
+// setReadyConditionFailed's terminal provisioning failure.
+func setReadyConditionBlocked(conditions *[]metav1.Condition, reason, message string) {
+	apimeta.SetStatusCondition(conditions, metav1.Condition{
+		Type:    v1alpha1.ConditionReady,
+		Status:  metav1.ConditionFalse,
+		Reason:  reason,
+		Message: message,
+	})
+}

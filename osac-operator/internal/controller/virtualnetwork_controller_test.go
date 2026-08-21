@@ -53,6 +53,20 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 	BeforeEach(func() {
 		ctx = context.TODO()
 		mockProvider = &mockVirtualNetworkProvider{}
+
+		// Default dispatcher setup: NetworkClass "cudn-net" resolves to a registered
+		// fabric manager of the same name, so tests that don't care about dispatcher
+		// mechanics get an implementation strategy without extra setup.
+		// NetworkClass "some-class" is registered but has no managers, exercising the
+		// "no manager configured" precondition path.
+		scheme := runtime.NewScheme()
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
+		defaultDiscoveryClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+			newFabricManagerConfigMap("fm-cudn-net", "default", "cudn-net"),
+		).Build()
+		disc, err := networkmanager.NewDiscovery(defaultDiscoveryClient, "default")
+		Expect(err).NotTo(HaveOccurred())
+
 		reconciler = &VirtualNetworkReconciler{
 			Client:               k8sClient,
 			APIReader:            k8sClient,
@@ -61,19 +75,26 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			ProvisioningProvider: mockProvider,
 			StatusPollInterval:   1 * time.Second,
 			MaxJobHistory:        10,
+			Resolver: dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+				[]*privatev1.NetworkClass{
+					{Id: "cudn-net", FabricManager: ptr.To("cudn-net")},
+					{Id: "some-class"},
+				}, &[]*privatev1.NetworkClass{},
+			)), disc),
 		}
 
-		// Create VirtualNetwork fixture with ImplementationStrategy
+		// Create VirtualNetwork fixture. Implementation strategy is now resolved
+		// dynamically from the NetworkClass via the dispatcher (see Resolver above)
+		// rather than stored on the spec.
 		vnet = &osacv1alpha1.VirtualNetwork{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "test-vnet",
 				Namespace: "default",
 			},
 			Spec: osacv1alpha1.VirtualNetworkSpec{
-				Region:                 "us-west-1",
-				IPv4CIDR:               "10.0.0.0/16",
-				NetworkClass:           "cudn-net",
-				ImplementationStrategy: "cudn-net",
+				Region:       "us-west-1",
+				IPv4CIDR:     "10.0.0.0/16",
+				NetworkClass: "cudn-net",
 			},
 		}
 	})
@@ -217,8 +238,9 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			Expect(latestJob.JobID).To(Equal("concurrent-job-123"))
 		})
 
-		It("should requeue if ImplementationStrategy not set", func() {
-			// Create VirtualNetwork without ImplementationStrategy
+		It("should requeue and set a blocked Ready condition when the NetworkClass has no manager configured", func() {
+			// "some-class" is registered with the dispatcher (see BeforeEach) but has
+			// neither a fabricManager nor a k8sManager set.
 			vnetNoStrategy := &osacv1alpha1.VirtualNetwork{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-vnet-no-strategy",
@@ -228,7 +250,6 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 					Region:       "us-west-1",
 					IPv4CIDR:     "10.0.0.0/16",
 					NetworkClass: "some-class",
-					// ImplementationStrategy intentionally not set
 				},
 			}
 			Expect(k8sClient.Create(ctx, vnetNoStrategy)).To(Succeed())
@@ -246,6 +267,14 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			}})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+
+			updated := &osacv1alpha1.VirtualNetwork{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: vnetNoStrategy.Name, Namespace: vnetNoStrategy.Namespace}, updated)).To(Succeed())
+			cond := apimeta.FindStatusCondition(updated.Status.Conditions, osacv1alpha1.ConditionReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal(osacv1alpha1.ReasonNoManagerConfigured))
+			Expect(cond.Message).To(ContainSubstring("some-class"))
 		})
 	})
 
@@ -531,9 +560,10 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 	})
 
 	Context("handleDelete", func() {
-		It("should trigger deprovision job on deletion", func() {
+		It("should trigger deprovision job on deletion when the implementation-strategy annotation is set", func() {
 			vnet.Finalizers = []string{osacVirtualNetworkFinalizer}
 			vnet.DeletionTimestamp = &metav1.Time{Time: time.Now()}
+			vnet.Annotations = map[string]string{osacImplementationStrategyAnnotation: "cudn_net"}
 
 			mockProvider.triggerDeprovisionFunc = func(ctx context.Context, resource client.Object, _ []osacv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
 				return &provisioning.DeprovisionResult{
@@ -551,6 +581,32 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			Expect(latestJob).NotTo(BeNil())
 			Expect(latestJob.JobID).To(Equal("deprovision-job-303"))
 			Expect(latestJob.BlockDeletionOnFailure).To(BeTrue())
+		})
+
+		It("should skip deprovisioning when deleted before the implementation-strategy annotation was ever stamped", func() {
+			// A VirtualNetwork deleted in the narrow window before its first successful
+			// handleUpdate reconcile has neither the annotation nor any job history —
+			// nothing was ever provisioned, and (unlike Subnet) the VirtualNetwork
+			// delete playbook has no spec-field fallback for a missing annotation, so
+			// triggering a deprovision job here would just fail. handleDeprovisioning
+			// must skip it and let the finalizer come off immediately.
+			vnet.Finalizers = []string{osacVirtualNetworkFinalizer}
+			Expect(k8sClient.Create(ctx, vnet)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, vnet)).To(Succeed())
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: vnet.Name, Namespace: vnet.Namespace}, vnet)).To(Succeed())
+			Expect(vnet.Annotations).To(BeEmpty())
+			Expect(vnet.Status.ProvisioningJobs).To(BeEmpty())
+
+			mockProvider.triggerDeprovisionFunc = func(ctx context.Context, resource client.Object, _ []osacv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
+				Fail("deprovision should not be triggered when no annotation or job history exists")
+				return nil, nil
+			}
+
+			result, err := reconciler.handleDelete(ctx, vnet)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(0 * time.Second))
+			Expect(vnet.Status.ProvisioningJobs).To(BeEmpty())
+			Expect(vnet.Finalizers).NotTo(ContainElement(osacVirtualNetworkFinalizer))
 		})
 
 		It("should remove finalizer after successful deprovision", func() {
@@ -606,10 +662,9 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 					},
 				},
 				Spec: osacv1alpha1.VirtualNetworkSpec{
-					Region:                 "us-west-1",
-					IPv4CIDR:               "10.0.0.0/16",
-					NetworkClass:           "cudn-net",
-					ImplementationStrategy: "cudn-net",
+					Region:       "us-west-1",
+					IPv4CIDR:     "10.0.0.0/16",
+					NetworkClass: "cudn-net",
 				},
 			}
 			Expect(k8sClient.Create(ctx, unmanagedVnet)).To(Succeed())
@@ -639,10 +694,9 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 					Finalizers: []string{osacVirtualNetworkFinalizer},
 				},
 				Spec: osacv1alpha1.VirtualNetworkSpec{
-					Region:                 "us-west-1",
-					IPv4CIDR:               "10.0.0.0/16",
-					NetworkClass:           "cudn-net",
-					ImplementationStrategy: "cudn-net",
+					Region:       "us-west-1",
+					IPv4CIDR:     "10.0.0.0/16",
+					NetworkClass: "cudn-net",
 				},
 			}
 			Expect(k8sClient.Create(ctx, managedThenUnmanaged)).To(Succeed())
@@ -678,6 +732,7 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			Expect(corev1.AddToScheme(scheme)).To(Succeed())
 			fakeDiscoveryClient = fake.NewClientBuilder().WithScheme(scheme).WithObjects(
 				newFabricManagerConfigMap("fm-netris", "osac", "netris"),
+				newFabricManagerConfigMap("fm-netris-initial", "osac", "netris-initial"),
 			).Build()
 		})
 
@@ -689,7 +744,6 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			)), disc)
 
 			vnet.Spec.NetworkClass = "nc-dispatch"
-			vnet.Spec.ImplementationStrategy = "legacy-value"
 			Expect(k8sClient.Create(ctx, vnet)).To(Succeed())
 
 			_, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
@@ -702,25 +756,28 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("netris"))
 		})
 
-		It("falls back to the legacy implementation-strategy path when fabricManager is not set", func() {
+		It("requeues and sets a blocked condition when the NetworkClass has no manager configured (no legacy fallback)", func() {
 			disc, err := networkmanager.NewDiscovery(fakeDiscoveryClient, "osac")
 			Expect(err).NotTo(HaveOccurred())
 			reconciler.Resolver = dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
-				[]*privatev1.NetworkClass{{Id: "nc-legacy"}}, &[]*privatev1.NetworkClass{},
+				[]*privatev1.NetworkClass{{Id: "nc-no-manager"}}, &[]*privatev1.NetworkClass{},
 			)), disc)
 
-			vnet.Spec.NetworkClass = "nc-legacy"
-			vnet.Spec.ImplementationStrategy = "cudn-net"
+			vnet.Spec.NetworkClass = "nc-no-manager"
 			Expect(k8sClient.Create(ctx, vnet)).To(Succeed())
 
-			_, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
+			result, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
 				NamespacedName: types.NamespacedName{Name: vnet.Name, Namespace: vnet.Namespace},
 			}})
 			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
 
 			updated := &osacv1alpha1.VirtualNetwork{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: vnet.Name, Namespace: vnet.Namespace}, updated)).To(Succeed())
-			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("cudn-net"))
+			Expect(updated.Annotations).NotTo(HaveKey(osacImplementationStrategyAnnotation))
+			cond := apimeta.FindStatusCondition(updated.Status.Conditions, osacv1alpha1.ConditionReady)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Reason).To(Equal(osacv1alpha1.ReasonNoManagerConfigured))
 		})
 
 		It("returns a reconcile error when the NetworkClass references an unregistered manager", func() {
@@ -743,23 +800,21 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			disc, err := networkmanager.NewDiscovery(fakeDiscoveryClient, "osac")
 			Expect(err).NotTo(HaveOccurred())
 			reconciler.Resolver = dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
-				[]*privatev1.NetworkClass{{Id: "nc-dispatch"}}, &[]*privatev1.NetworkClass{},
+				[]*privatev1.NetworkClass{{Id: "nc-dispatch", FabricManager: ptr.To("netris-initial")}}, &[]*privatev1.NetworkClass{},
 			)), disc)
 
 			vnet.Spec.NetworkClass = "nc-dispatch"
-			vnet.Spec.ImplementationStrategy = "cudn-net"
 			Expect(k8sClient.Create(ctx, vnet)).To(Succeed())
 
 			req := mcreconcile.Request{Request: reconcile.Request{
 				NamespacedName: types.NamespacedName{Name: vnet.Name, Namespace: vnet.Namespace},
 			}}
 
-			// First reconcile: adds finalizer and sets the legacy strategy annotation
-			// (the NetworkClass has no fabricManager registered yet).
+			// First reconcile: adds finalizer and sets the initially-resolved strategy annotation.
 			_, err = reconciler.Reconcile(ctx, req)
 			Expect(err).NotTo(HaveOccurred())
 
-			// Second reconcile: triggers the initial provisioning job under the legacy strategy.
+			// Second reconcile: triggers the initial provisioning job under the initial strategy.
 			mockProvider.triggerProvisionFunc = func(_ context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
 				return &provisioning.ProvisionResult{
 					JobID:        "job-before-strategy-change",
@@ -772,21 +827,21 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 
 			beforeVnet := &osacv1alpha1.VirtualNetwork{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: vnet.Name, Namespace: vnet.Namespace}, beforeVnet)).To(Succeed())
-			Expect(beforeVnet.Annotations[osacImplementationStrategyAnnotation]).To(Equal("cudn-net"))
+			Expect(beforeVnet.Annotations[osacImplementationStrategyAnnotation]).To(Equal("netris-initial"))
 			versionBefore := beforeVnet.Status.DesiredConfigVersion
 			Expect(versionBefore).NotTo(BeEmpty())
 			jobBefore := provisioning.FindJobByID(beforeVnet.Status.ProvisioningJobs, "job-before-strategy-change")
 			Expect(jobBefore).NotTo(BeNil())
 
 			// Mark the existing job as succeeded at the current desired version, mirroring a
-			// VirtualNetwork that has already been successfully provisioned under the legacy path.
+			// VirtualNetwork that has already been successfully provisioned under the initial strategy.
 			beforeVnet.Status.Phase = osacv1alpha1.VirtualNetworkPhaseReady
 			jobBefore.State = osacv1alpha1.JobStateSucceeded
 			jobBefore.ConfigVersion = versionBefore
 			Expect(k8sClient.Status().Update(ctx, beforeVnet)).To(Succeed())
 
-			// Simulate the NetworkClass being updated to register a fabricManager. The
-			// VirtualNetwork's spec is untouched — only the dynamically-resolved strategy changes.
+			// Simulate the NetworkClass being updated to register a different fabricManager.
+			// The VirtualNetwork's spec is untouched — only the dynamically-resolved strategy changes.
 			reconciler.Resolver = dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
 				[]*privatev1.NetworkClass{{Id: "nc-dispatch", FabricManager: ptr.To("netris")}}, &[]*privatev1.NetworkClass{},
 			)), disc)

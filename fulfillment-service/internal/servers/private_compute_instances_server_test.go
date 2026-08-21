@@ -111,8 +111,9 @@ var _ = Describe("Private compute instances server", func() {
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
+		fabricManager := "test-strategy"
 		nc := privatev1.NetworkClass_builder{
-			ImplementationStrategy: "test-strategy",
+			FabricManager: &fabricManager,
 			Metadata: privatev1.Metadata_builder{
 				Name:   "test-network-class",
 				Tenant: auth.SharedTenant,

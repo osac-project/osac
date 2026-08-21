@@ -183,9 +183,8 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		// Create a k8s-only NetworkClass (no fabric_manager):
 		ncResp, err := networkClassesClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 			Object: privatev1.NetworkClass_builder{
-				Title:                  "Test k8s-only Network Class for BMI",
-				ImplementationStrategy: "cudn",
-				K8SManager:             new("cudn_localnet"),
+				Title:      "Test k8s-only Network Class for BMI",
+				K8SManager: new("cudn_localnet"),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())

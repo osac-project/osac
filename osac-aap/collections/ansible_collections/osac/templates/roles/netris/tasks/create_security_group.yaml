@@ -78,6 +78,7 @@
     name: netris.controller.acl
     tasks_from: create
   vars:
+    subnet_idx: "{{ _sg_subnet_cidrs.index(item.1) }}"
     acl_name: "{{ sg_name }}-ingress-{{ idx }}-{{ subnet_idx }}"
     acl_action: permit
     acl_proto: "{{ item.0.protocol }}"
@@ -91,8 +92,6 @@
   loop_control:
     index_var: idx
     label: "{{ item.0.protocol | default('all') }}:{{ item.1 }}"
-  vars:
-    subnet_idx: "{{ _sg_subnet_cidrs.index(item.1) }}"
   when: ingress_rules | length > 0
 
 - name: Create ACL rules for egress (per subnet)
@@ -100,6 +99,7 @@
     name: netris.controller.acl
     tasks_from: create
   vars:
+    subnet_idx: "{{ _sg_subnet_cidrs.index(item.1) }}"
     acl_name: "{{ sg_name }}-egress-{{ idx }}-{{ subnet_idx }}"
     acl_action: permit
     acl_proto: "{{ item.0.protocol }}"
@@ -113,8 +113,6 @@
   loop_control:
     index_var: idx
     label: "{{ item.0.protocol | default('all') }}:{{ item.1 }}"
-  vars:
-    subnet_idx: "{{ _sg_subnet_cidrs.index(item.1) }}"
   when: egress_rules | length > 0
 
 - name: Display SecurityGroup creation result

@@ -3,10 +3,9 @@ set -euo pipefail
 
 # Shared helpers for nightly chart publishing and Slack notifications.
 
-_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if ! declare -F http_retry >/dev/null 2>&1; then
     # shellcheck source=lib.sh
-    source "${_LIB_DIR}/lib.sh"
+    source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 fi
 
 readonly NIGHTLY_CHART_SLACK_ORDER=(
@@ -54,7 +53,8 @@ check_osac_ui_image() {
         ls-remote "https://github.com/osac-project/${repo}.git" refs/heads/main | cut -f1)
 
     if [[ -z "${sha}" || ! "${sha}" =~ ^[0-9a-f]{40}$ ]]; then
-        echo "::error::Could not resolve ${repo} main HEAD SHA (got: '${sha}')" >&2
+        local safe_sha="${sha//::/ }"
+        echo "::error::Could not resolve ${repo} main HEAD SHA (got: '${safe_sha}')" >&2
         return 1
     fi
 

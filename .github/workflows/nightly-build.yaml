@@ -31,7 +31,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      packages: read
     outputs:
       temp-branch: ${{ steps.push.outputs.branch }}
       ui-sha: ${{ steps.ui.outputs.sha }}
@@ -250,6 +249,7 @@ jobs:
 
           echo "Stamping ${COMPONENT} sub-charts to version ${SUB_VERSION} (from tag ${BASE_TAG})..."
 
+          # Intentional word splitting: each SUB_CHARTS value lists multiple chart paths.
           for CHART_DIR in ${SUB_CHARTS[$COMPONENT]}; do
             if [[ -f "${CHART_DIR}/Chart.yaml" ]]; then
               CHART_NAME=$(yq -r '.name' "${CHART_DIR}/Chart.yaml")
@@ -260,6 +260,7 @@ jobs:
               if [[ ! "${CHART_NAME}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
                 safe_name="${CHART_NAME//$'\n'/}"
                 safe_name="${safe_name//$'\r'/}"
+                safe_name="${safe_name//::/ }"
                 echo "::error title=${safe_name}::Invalid chart name in ${CHART_DIR}/Chart.yaml (name must match [a-zA-Z0-9._-]+)"
                 exit 1
               fi

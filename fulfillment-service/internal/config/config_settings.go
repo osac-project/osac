@@ -143,6 +143,7 @@ func (s *Settings) Reset() {
 	s.general = generalSettings{}
 	s.secret = secretSettings{}
 	s.caPool = nil
+	s.secretStoreBackend = ""
 }
 
 // Address returns the server address.

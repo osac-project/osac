@@ -625,8 +625,8 @@ type ClusterTemplateSpecDefaults_builder struct {
 	Version *ClusterVersionReference
 	// Default Secret reference for pull secret credentials.
 	//
-	// When set, clusters created from this template will use this secret reference unless the user provides an
-	// explicit pull_secret or pull_secret_secret.
+	// Mutually exclusive with `pull_secret`. When set, clusters created from this template will use this secret
+	// reference unless the user provides an explicit pull_secret or pull_secret_secret.
 	PullSecretSecret *SecretLocalReference
 }
 

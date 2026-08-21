@@ -66,7 +66,7 @@ var _ = Describe("Describe command", func() {
 		It("should annotate private-API subcommands", func() {
 			cmd := Cmd()
 			privateNames := map[string]bool{
-				"storagebackend": true, "storagetier": true,
+				"storagebackend": true,
 			}
 			for _, sub := range cmd.Commands() {
 				if privateNames[sub.Name()] {

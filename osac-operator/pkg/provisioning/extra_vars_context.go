@@ -33,7 +33,7 @@ const (
 
 // TierDefinition is the flat, AAP-schema-shaped representation of a storage tier
 // (mirrors osac-aap's storage_provider role argument_specs.yaml: name/protocol/
-// provider/qos_limits/quota), resolved from the Tier and Backend APIs.
+// provider/qos_limits), resolved from the Tier and Backend APIs.
 type TierDefinition struct {
 	Name     string
 	Protocol string
@@ -42,7 +42,6 @@ type TierDefinition struct {
 	// backend_id — not the connection itself.
 	BackendID string
 	QosLimits TierQosLimits
-	QuotaGiB  int64
 }
 
 // TierQosLimits carries the bandwidth limits for a TierDefinition's backend association.

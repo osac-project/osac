@@ -1,0 +1,94 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.public.v1;
+
+import "buf/validate/validate.proto";
+import "osac/public/v1/metadata_type.proto";
+
+// Identifies the storage protocol used by a storage tier.
+enum StorageProtocol {
+  // Protocol is unknown or has not been specified.
+  STORAGE_PROTOCOL_UNSPECIFIED = 0;
+
+  // NFS (Network File System) protocol for file-based storage access.
+  STORAGE_PROTOCOL_NFS = 1;
+
+  // Block storage protocol for volume-based storage access.
+  STORAGE_PROTOCOL_BLOCK = 2;
+}
+
+// Lifecycle states for StorageTier resources.
+enum StorageTierState {
+  // State is unknown or has not been determined yet.
+  STORAGE_TIER_STATE_UNSPECIFIED = 0;
+
+  // The storage tier is active and available for use by tenants.
+  STORAGE_TIER_STATE_ACTIVE = 1;
+}
+
+// Describes a class of storage service that can be referenced by name when provisioning
+// storage-enabled resources.
+//
+// StorageTiers are admin-managed catalog resources. Tenant users select a tier by name instead of
+// specifying raw storage backend details. Cloud Provider Admins control the available tiers through
+// the private API.
+//
+// The `spec` contains the tier's advertised service level. The `status` contains the current state
+// of the storage tier, is provided by the system and can't be modified by the user.
+message StorageTier {
+  // Unique identifier of the storage tier.
+  string id = 1;
+
+  // Metadata of the storage tier.
+  Metadata metadata = 2;
+
+  // Advertised service level of the storage tier.
+  StorageTierSpec spec = 3 [(buf.validate.field).required = true];
+
+  // Current operational status of the storage tier.
+  StorageTierStatus status = 4;
+}
+
+// Defines the advertised service level of a StorageTier.
+message StorageTierSpec {
+  // Human-readable description of the storage tier.
+  string description = 1;
+
+  // Storage protocol used by this tier.
+  StorageProtocol protocol = 2 [(buf.validate.field).enum.defined_only = true];
+
+  // Maximum read bandwidth in megabytes per second.
+  int32 max_read_bandwidth_mbs = 3;
+
+  // Maximum write bandwidth in megabytes per second.
+  int32 max_write_bandwidth_mbs = 4;
+
+  // Reserved field numbers for removed fields (do not reuse).
+  reserved 5;
+  reserved "quota_gib";
+
+  // Whether data at rest is encrypted on this tier.
+  bool encryption_enabled = 6;
+}
+
+// Contains the system-provided status of a StorageTier.
+message StorageTierStatus {
+  // Current lifecycle state of the storage tier.
+  StorageTierState state = 1;
+
+  // Human-readable message providing additional details about the current state.
+  optional string message = 2;
+}

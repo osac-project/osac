@@ -851,7 +851,6 @@ var _ = Describe("AAPProvider", func() {
 					Provider:  "vast",
 					BackendID: "backend-1",
 					QosLimits: provisioning.TierQosLimits{MaxReadBandwidthMBs: 100, MaxWriteBandwidthMBs: 200},
-					QuotaGiB:  500,
 				},
 			})
 
@@ -871,7 +870,6 @@ var _ = Describe("AAPProvider", func() {
 							"max_writes_bw_mbps": int32(200),
 						},
 					},
-					"quota_bytes": int64(500 * 1073741824),
 				}))
 				Expect(tiers[0]).NotTo(HaveKey("qos_policy"))
 				return &aap.LaunchJobTemplateResponse{JobID: 111}, nil

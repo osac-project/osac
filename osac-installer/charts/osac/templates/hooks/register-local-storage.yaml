@@ -69,8 +69,9 @@ spec:
             rm -f "${BACKEND_RESP}"
 
             # Step 2: Create the local StorageTier referencing the backend by ID.
-            # Protocol 2 = STORAGE_PROTOCOL_BLOCK (LVMS provides block volumes).
-            TIER_BODY=$(printf '{"metadata":{"name":"local"},"spec":{"backends":[{"backend_id":"%s","protocol":2}]}}' "${BACKEND_ID}")
+            # Protocol 2 = STORAGE_PROTOCOL_BLOCK (LVMS provides block volumes). Protocol is a
+            # top-level spec field, not nested under backends.
+            TIER_BODY=$(env BACKEND_ID="${BACKEND_ID}" python3 -c "import os, json; print(json.dumps({'metadata':{'name':'local'},'spec':{'protocol':2,'backends':[{'backend_id':os.environ['BACKEND_ID']}]}}))")
             TIER_RESP=$(mktemp)
             TIER_CODE=$(curl -skS \
               --connect-timeout 5 --max-time 30 \
@@ -86,7 +87,7 @@ spec:
                 echo "StorageTier 'local' already exists, verifying backend reference..."
                 EXISTING_TIER=$(curl -skS --connect-timeout 5 --max-time 30 \
                   "${API}/storage_tiers" -H "Authorization: Bearer ${AUTH_TOKEN}")
-                echo "${EXISTING_TIER}" | python3 -c "import sys,json; items=json.load(sys.stdin).get('items',[]); m=next((t for t in items if t.get('metadata',{}).get('name')=='local'),None); sys.exit(1) if not m else None; ok=next((b for b in m.get('spec',{}).get('backends',[]) if b.get('backend_id')=='${BACKEND_ID}' and b.get('protocol')==2),None); sys.stderr.write('ERROR: tier does not reference backend ${BACKEND_ID}\n') or sys.exit(1) if not ok else print('ok')"
+                echo "${EXISTING_TIER}" | env BACKEND_ID="${BACKEND_ID}" python3 -c "import sys, json, os; backend_id=os.environ['BACKEND_ID']; items=json.load(sys.stdin).get('items',[]); m=next((t for t in items if t.get('metadata',{}).get('name')=='local'),None); sys.exit(1) if not m else None; ok=next((b for b in m.get('spec',{}).get('backends',[]) if b.get('backend_id')==backend_id),None); protocol_ok=m.get('spec',{}).get('protocol')==2; (sys.stderr.write('ERROR: tier does not reference backend '+backend_id+' with protocol 2\n'), sys.exit(1)) if not (ok and protocol_ok) else print('ok')"
                 ;;
               *)
                 echo "ERROR: Failed to create StorageTier 'local' (HTTP ${TIER_CODE}):" >&2

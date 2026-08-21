@@ -22,7 +22,7 @@ import (
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/lookup"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
@@ -64,10 +64,10 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	}
 	defer conn.Close()
 
-	client := privatev1.NewStorageTiersClient(conn)
+	client := publicv1.NewStorageTiersClient(conn)
 
-	matched, err := lookup.Find(ref, "storage tier", func(filter string, limit int32) ([]*privatev1.StorageTier, error) {
-		resp, err := client.List(ctx, privatev1.StorageTiersListRequest_builder{
+	matched, err := lookup.Find(ref, "storage tier", func(filter string, limit int32) ([]*publicv1.StorageTier, error) {
+		resp, err := client.List(ctx, publicv1.StorageTiersListRequest_builder{
 			Filter: proto.String(filter),
 			Limit:  proto.Int32(limit),
 		}.Build())
@@ -85,34 +85,37 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func renderStorageTier(w io.Writer, st *privatev1.StorageTier) {
+// renderStorageTier writes a detailed key-value description of a storage tier to w.
+func renderStorageTier(w io.Writer, st *publicv1.StorageTier) {
 	writer := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 
-	fmt.Fprintf(writer, "ID:\t%s\n", st.GetId())
-	fmt.Fprintf(writer, "Name:\t%s\n", st.GetMetadata().GetName())
+	name := "-"
+	if v := st.GetMetadata().GetName(); v != "" {
+		name = v
+	}
 
+	description := "-"
+	if v := st.GetSpec().GetDescription(); v != "" {
+		description = v
+	}
+
+	protocol := strings.TrimPrefix(st.GetSpec().GetProtocol().String(), "STORAGE_PROTOCOL_")
 	state := strings.TrimPrefix(st.GetStatus().GetState().String(), "STORAGE_TIER_STATE_")
+
+	message := "-"
+	if v := st.GetStatus().GetMessage(); v != "" {
+		message = v
+	}
+
+	fmt.Fprintf(writer, "ID:\t%s\n", st.GetId())
+	fmt.Fprintf(writer, "Name:\t%s\n", name)
+	fmt.Fprintf(writer, "Description:\t%s\n", description)
+	fmt.Fprintf(writer, "Protocol:\t%s\n", protocol)
+	fmt.Fprintf(writer, "Max Read BW (MB/s):\t%d\n", st.GetSpec().GetMaxReadBandwidthMbs())
+	fmt.Fprintf(writer, "Max Write BW (MB/s):\t%d\n", st.GetSpec().GetMaxWriteBandwidthMbs())
+	fmt.Fprintf(writer, "Encryption Enabled:\t%t\n", st.GetSpec().GetEncryptionEnabled())
 	fmt.Fprintf(writer, "State:\t%s\n", state)
-
-	if desc := st.GetSpec().GetDescription(); desc != "" {
-		fmt.Fprintf(writer, "Description:\t%s\n", desc)
-	}
-
-	backends := st.GetSpec().GetBackends()
-	if len(backends) > 0 {
-		for i, ba := range backends {
-			if i > 0 {
-				fmt.Fprintln(writer)
-			}
-			protocol := strings.TrimPrefix(ba.GetProtocol().String(), "STORAGE_PROTOCOL_")
-			fmt.Fprintf(writer, "Backend ID:\t%s\n", ba.GetBackendId())
-			fmt.Fprintf(writer, "Protocol:\t%s\n", protocol)
-			fmt.Fprintf(writer, "Max Read BW (MB/s):\t%d\n", ba.GetMaxReadBandwidthMbs())
-			fmt.Fprintf(writer, "Max Write BW (MB/s):\t%d\n", ba.GetMaxWriteBandwidthMbs())
-			fmt.Fprintf(writer, "Quota (GiB):\t%d\n", ba.GetQuotaGib())
-			fmt.Fprintf(writer, "Encryption:\t%t\n", ba.GetEncryptionEnabled())
-		}
-	}
+	fmt.Fprintf(writer, "Message:\t%s\n", message)
 
 	writer.Flush()
 }
@@ -122,8 +125,8 @@ const shortHelp = `Describe a storage tier`
 const longHelp = `
 Describe a storage tier.
 
-Displays detailed information about a storage tier, including its backend association, protocol,
-QoS settings (bandwidth limits, quota), and encryption configuration.
+Displays detailed information about a storage tier, including protocol, QoS settings (bandwidth
+limits), and encryption configuration.
 
 To describe a storage tier by name:
 

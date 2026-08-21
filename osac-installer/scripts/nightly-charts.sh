@@ -83,6 +83,7 @@ _gha_sanitize_for_message() {
     local value="$1"
     value="${value//$'\n'/}"
     value="${value//$'\r'/}"
+    value="${value//$'\x1b'/}"
     value="${value//::/ }"
     value="${value//%0A/}"
     value="${value//%0D/}"

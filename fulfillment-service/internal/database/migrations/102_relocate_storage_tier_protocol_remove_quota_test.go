@@ -123,8 +123,7 @@ var _ = DescribeMigration("Remove storage tier protocol and quota", func() {
 		Expect(backendHasQuota).To(BeFalse())
 		Expect(specHasProtocol).To(BeFalse())
 
-		// "state" is a proto enum, serialized as its string name for a non-zero value, never a bare integer --
-		// relocating it must pass it through as-is, not cast it to a SQL scalar type.
+		// "state" must round-trip as its string enum name here, never a bare int.
 		var state string
 		err = conn.QueryRow(ctx,
 			`select data->'status'->>'state' from archived_storage_tiers where id = 'archived-tier-flat'`).Scan(&state)

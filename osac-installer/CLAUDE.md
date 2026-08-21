@@ -6,7 +6,7 @@ This is an infrastructure/deployment repository (Helm-based) with no Go code, co
 
 ### Read Tool
 
-Use for reading YAML manifests, Helm chart files, scripts, submodule metadata. Primary targets:
+Use for reading YAML manifests, Helm chart files, and scripts. Primary targets:
 
 - `charts/osac/values.yaml`, `charts/osac/values.schema.json` -- Helm default values and schema
 - `values/<env>/values.yaml` -- Helm environment-specific values
@@ -20,7 +20,8 @@ Use for updating Helm chart files, YAML manifests, shell scripts. Common edits:
 - New/changed keys in `charts/osac/values.yaml` -- always add a matching property in `charts/osac/values.schema.json`
 - Script logic in `scripts/*.sh` (follow `set -euo pipefail`)
 
-Never use Edit for files in submodule directories (`base/*/` -- discover with: `git submodule status`).
+Never use Edit for component code under sibling mono-repo directories (e.g.
+`../fulfillment-service/`). Edit those paths from the `osac` repo root in one PR.
 
 ### Write Tool
 
@@ -30,7 +31,8 @@ Use sparingly. Most work is editing existing files. Valid use cases:
 - New Helm values files in `values/<env>/`
 - Session artifacts (`.ai-bot/diagnosis.md`, `.ai-bot/pr.md`)
 
-Never use Write for files in submodule directories (`base/*/` -- discover with: `git submodule status`).
+Never use Write for component code under sibling mono-repo directories (e.g.
+`../fulfillment-service/`). Edit those paths from the `osac` repo root in one PR.
 
 ### Bash Tool
 
@@ -45,7 +47,7 @@ pre-commit run --all-files
 make helm-lint
 make helm-validate
 
-# Git operations (always from installer root, never inside submodules)
+# Git operations (always from installer root)
 git status
 git add file1 file2
 git commit -s -m "OSAC-XXXX: description

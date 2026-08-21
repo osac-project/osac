@@ -14,8 +14,8 @@ is structural (YAML lint, pre-commit, Helm lint, Helm template render).
 
 3. **Read and execute .ai-workflows/bugfix/skills/fix.md**
    Implement the minimal fix. Key constraints:
-   - Never modify files inside any `base/*/` submodule directories
-     (discover with: `git submodule status`).
+   - Do not edit component code under sibling mono-repo directories (e.g.
+     `../fulfillment-service/`) from an installer-only change — use one `osac` PR.
 
 4. **Validate changes**
    Run all validation commands from the installer root in sequence. If any

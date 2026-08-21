@@ -106,9 +106,7 @@ uninstall: ## Full uninstall (OSAC + prereqs + operators)
 ##@ Helm Chart Management
 
 .PHONY: sync-charts
-sync-charts: ## Update submodules and rebuild chart dependencies
-	git submodule update --init --recursive
-	helm dependency build charts/osac/
+sync-charts: helm-deps ## Rebuild chart dependencies (alias for helm-deps)
 
 .PHONY: helm-deps
 helm-deps: ## Build Helm chart dependencies

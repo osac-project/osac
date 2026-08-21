@@ -1,10 +1,11 @@
 # OSAC Installer Instructions
 
-This is a **Helm-based infrastructure/deployment repository**. It
-assembles component submodules (osac-operator, fulfillment-service,
-osac-aap, bare-metal-fulfillment-operator, osac-ui) and deploys them
-via a Helm umbrella chart. There is no Go code, no container builds,
-and no unit tests in this repo. All validation is structural.
+This is a **Helm-based infrastructure/deployment repository** in the `osac`
+mono-repo. It assembles component charts (osac-operator, fulfillment-service,
+osac-aap, bare-metal-fulfillment-operator, osac-csi-driver, osac-metering) via
+`file://` references and deploys **osac-ui** from an external OCI chart. There is
+no Go code, no container builds, and no unit tests in this directory. All
+validation is structural.
 
 ## Validation Commands
 
@@ -50,10 +51,12 @@ values/
   vmaas-ci/values.yaml           # VMaaS CI: pinned images
   caas-ci/values.yaml            # CaaS CI: pinned images
 
-base/                            # Git submodules (version tracking) -- discover with: git submodule status
 prerequisites/                   # Cluster-wide operator manifests
 scripts/                         # Automation scripts (setup, teardown, sync)
 ```
+
+Component source lives in sibling directories at the `osac` repo root (not under
+`osac-installer/`). **osac-ui** is external (OCI chart dependency).
 
 ## Coding Conventions
 
@@ -69,6 +72,8 @@ scripts/                         # Automation scripts (setup, teardown, sync)
 
 ## What Not to Modify
 
-- Do not modify files inside any `base/*/` directories (discover with:
-  `git submodule status`) -- these are submodules. Changes to component
-  manifests belong in the component repos.
+- Do not edit component implementation under sibling mono-repo directories
+  (e.g. `../fulfillment-service/`) from an `osac-installer/`-only mindset —
+  land one PR at the `osac` repo root. **osac-ui** is external; chart version
+  bumps belong in `charts/osac/Chart.yaml` or release workflows, not ad-hoc
+  edits in a checkout of `osac-ui` from here.

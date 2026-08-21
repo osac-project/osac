@@ -47,7 +47,7 @@ append_chart_version() {
 # Prints the full commit SHA on stdout; fails if the image is not published yet.
 check_osac_ui_image() {
     local repo="${1:-osac-ui}"
-    local sha tag token safe_repo safe_sha
+    local sha tag token safe_repo safe_sha attempt
 
     if [[ ! "${repo}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
         safe_repo=$(_gha_sanitize_for_message "${repo}")
@@ -55,8 +55,16 @@ check_osac_ui_image() {
         return 1
     fi
 
-    sha=$(git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=10 \
-        ls-remote "https://github.com/osac-project/${repo}.git" refs/heads/main | cut -f1)
+    for attempt in 1 2 3; do
+        if sha=$(git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=10 \
+            ls-remote "https://github.com/osac-project/${repo}.git" refs/heads/main | cut -f1); then
+            [[ -n "${sha}" ]] && break
+        fi
+        if (( attempt < 3 )); then
+            echo "  check_osac_ui_image: git ls-remote attempt ${attempt}/3 failed, retrying in 5s..." >&2
+            sleep 5
+        fi
+    done
 
     if [[ -z "${sha}" || ! "${sha}" =~ ^[0-9a-f]{40}$ ]]; then
         safe_sha=$(_gha_sanitize_for_message "${sha}")

@@ -53,7 +53,8 @@ check_osac_ui_image() {
         ls-remote "https://github.com/osac-project/${repo}.git" refs/heads/main | cut -f1)
 
     if [[ -z "${sha}" || ! "${sha}" =~ ^[0-9a-f]{40}$ ]]; then
-        local safe_sha="${sha//::/ }"
+        local safe_sha
+        safe_sha=$(_gha_sanitize_for_message "${sha}")
         echo "::error::Could not resolve ${repo} main HEAD SHA (got: '${safe_sha}')" >&2
         return 1
     fi
@@ -75,6 +76,41 @@ check_osac_ui_image() {
     fi
 
     echo "${sha}"
+}
+
+# Strip characters that break or inject GitHub Actions workflow commands.
+_gha_sanitize_for_message() {
+    local value="$1"
+    value="${value//$'\n'/}"
+    value="${value//$'\r'/}"
+    value="${value//::/ }"
+    value="${value//%0A/}"
+    value="${value//%0D/}"
+    echo "${value}"
+}
+
+# Usage: read_validated_chart_name <chart_dir>
+# Print chart name from Chart.yaml; exit 1 with sanitized ::error if invalid.
+read_validated_chart_name() {
+    local chart_dir="$1"
+    local chart_name safe_name
+
+    if [[ ! -f "${chart_dir}/Chart.yaml" ]]; then
+        echo "::error::Chart manifest '${chart_dir}/Chart.yaml' not found!" >&2
+        exit 1
+    fi
+
+    chart_name=$(yq -r '.name' "${chart_dir}/Chart.yaml")
+    if [[ -z "${chart_name}" || "${chart_name}" == "null" ]]; then
+        echo "::error::Chart name missing in ${chart_dir}/Chart.yaml" >&2
+        exit 1
+    fi
+    if [[ ! "${chart_name}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+        safe_name=$(_gha_sanitize_for_message "${chart_name}")
+        echo "::error title=${safe_name}::Invalid chart name in ${chart_dir}/Chart.yaml (name must match [a-zA-Z0-9._-]+)" >&2
+        exit 1
+    fi
+    echo "${chart_name}"
 }
 
 # Usage: compute_nightly_chart_version <base_tag> <nightly_suffix>
@@ -126,6 +162,12 @@ _sort_chart_manifest() {
     local manifest_file="$1"
     local -a rows=()
     local chart_name version rank _short_sha _full_sha
+
+    if [[ ! -f "${manifest_file}" ]]; then
+        echo "::warning title=_sort_chart_manifest::Manifest file not found: ${manifest_file}" >&2
+        return 0
+    fi
+
     while read -r chart_name version _short_sha _full_sha; do
         [[ -z "${chart_name}" ]] && continue
         rank=$(_chart_slack_rank "${chart_name}")

@@ -251,34 +251,18 @@ jobs:
 
           # Intentional word splitting: each SUB_CHARTS value lists multiple chart paths.
           for CHART_DIR in ${SUB_CHARTS[$COMPONENT]}; do
-            if [[ -f "${CHART_DIR}/Chart.yaml" ]]; then
-              CHART_NAME=$(yq -r '.name' "${CHART_DIR}/Chart.yaml")
-              if [[ -z "${CHART_NAME}" || "${CHART_NAME}" == "null" ]]; then
-                echo "::error::Chart name missing in ${CHART_DIR}/Chart.yaml"
-                exit 1
-              fi
-              if [[ ! "${CHART_NAME}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
-                safe_name="${CHART_NAME//$'\n'/}"
-                safe_name="${safe_name//$'\r'/}"
-                safe_name="${safe_name//::/ }"
-                echo "::error title=${safe_name}::Invalid chart name in ${CHART_DIR}/Chart.yaml (name must match [a-zA-Z0-9._-]+)"
-                exit 1
-              fi
+            CHART_NAME=$(read_validated_chart_name "${CHART_DIR}")
 
-              # Update Chart.yaml version fields (strenv avoids shell interpolation in yq)
-              SUB_VERSION="${SUB_VERSION}" yq -i '.version = strenv(SUB_VERSION)' "${CHART_DIR}/Chart.yaml"
-              SUB_VERSION="${SUB_VERSION}" yq -i '.appVersion = strenv(SUB_VERSION)' "${CHART_DIR}/Chart.yaml"
+            # Update Chart.yaml version fields (strenv avoids shell interpolation in yq)
+            SUB_VERSION="${SUB_VERSION}" yq -i '.version = strenv(SUB_VERSION)' "${CHART_DIR}/Chart.yaml"
+            SUB_VERSION="${SUB_VERSION}" yq -i '.appVersion = strenv(SUB_VERSION)' "${CHART_DIR}/Chart.yaml"
 
-              # Package sub-chart
-              helm package "${CHART_DIR}" --destination ./packaged-charts
+            # Package sub-chart
+            helm package "${CHART_DIR}" --destination ./packaged-charts
 
-              # Push individual sub-chart to OCI registry (GHCR)
-              helm push "./packaged-charts/${CHART_NAME}-${SUB_VERSION}.tgz" "oci://${REGISTRY}/${CHARTS_REPO}"
-              append_chart_version chart-versions.txt "${CHART_NAME}" "${SUB_VERSION}"
-            else
-              echo "::error::Chart manifest '${CHART_DIR}/Chart.yaml' not found!"
-              exit 1
-            fi
+            # Push individual sub-chart to OCI registry (GHCR)
+            helm push "./packaged-charts/${CHART_NAME}-${SUB_VERSION}.tgz" "oci://${REGISTRY}/${CHARTS_REPO}"
+            append_chart_version chart-versions.txt "${CHART_NAME}" "${SUB_VERSION}"
           done
         done
 
@@ -291,18 +275,7 @@ jobs:
           echo "::warning title=osac-ui::No vX.Y.Z release tag found for osac-ui — skipping sub-chart stamping"
         else
           UI_CHART_DIR="osac-ui/charts/ui"
-          UI_CHART_NAME=$(yq -r '.name' "${UI_CHART_DIR}/Chart.yaml")
-          if [[ -z "${UI_CHART_NAME}" || "${UI_CHART_NAME}" == "null" ]]; then
-            echo "::error::Chart name missing in ${UI_CHART_DIR}/Chart.yaml"
-            exit 1
-          fi
-          if [[ ! "${UI_CHART_NAME}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
-            safe_name="${UI_CHART_NAME//$'\n'/}"
-            safe_name="${safe_name//$'\r'/}"
-            safe_name="${safe_name//::/ }"
-            echo "::error title=${safe_name}::Invalid chart name in ${UI_CHART_DIR}/Chart.yaml (name must match [a-zA-Z0-9._-]+)"
-            exit 1
-          fi
+          UI_CHART_NAME=$(read_validated_chart_name "${UI_CHART_DIR}")
           UI_SUB_VERSION=$(compute_nightly_chart_version "${UI_BASE_TAG}" "${NIGHTLY_SUFFIX}")
           stamp_osac_ui_chart "${UI_CHART_DIR}" "${UI_SUB_VERSION}" "${UI_IMAGE_REF}"
           helm package "${UI_CHART_DIR}" --destination ./packaged-charts

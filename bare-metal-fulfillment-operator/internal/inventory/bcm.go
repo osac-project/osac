@@ -223,9 +223,27 @@ func (c *BCMClient) UnassignHost(_ context.Context, _ string, _ []string) error 
 	return fmt.Errorf("bcm UnassignHost not implemented")
 }
 
-// GetHostNICs returns nil for BCM hosts. NIC metadata discovery is not yet
-// supported for this backend; returning nil allows the controller to proceed
-// to Ready without blocking on an unimplemented inventory call.
-func (c *BCMClient) GetHostNICs(_ context.Context, _ string) ([]HostNIC, error) {
-	return nil, nil
+// GetHostNICs reads all NIC MAC addresses from the BareMetalHost CR hardware inspection data.
+// inventoryHostID must be in namespace/hostname format where hostname is the BMH name.
+// Reading from the BMH CR avoids a costly GetDevices round-trip to the BCM API.
+// Returns nil, nil when the BMH has no hardware inspection data (caller treats this as "NIC data unavailable").
+func (c *BCMClient) GetHostNICs(ctx context.Context, inventoryHostID string) ([]HostNIC, error) {
+	parts := strings.SplitN(inventoryHostID, "/", 2)
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("invalid inventoryHostID %q: expected namespace/hostname format", inventoryHostID)
+	}
+	bmhName := parts[1]
+
+	macs, err := c.bmhManager.GetHardwareNICs(ctx, bmhName)
+	if err != nil {
+		return nil, fmt.Errorf("GetHostNICs: failed to get BMH %s: %w", bmhName, err)
+	}
+	if len(macs) == 0 {
+		return nil, nil
+	}
+	nics := make([]HostNIC, 0, len(macs))
+	for _, mac := range macs {
+		nics = append(nics, HostNIC{MAC: mac})
+	}
+	return nics, nil
 }

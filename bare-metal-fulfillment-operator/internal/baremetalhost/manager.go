@@ -23,6 +23,7 @@ package baremetalhost
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	metal3api "github.com/metal3-io/baremetal-operator/apis/metal3.io/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
@@ -143,6 +144,24 @@ func (m *Manager) DeleteBMH(ctx context.Context, name string) error {
 
 	log.Info("Deleted BareMetalHost", "name", name, "namespace", m.namespace)
 	return nil
+}
+
+// GetHardwareNICs returns the lowercased MAC addresses from the BareMetalHost
+// status.hardware.nics (Metal3 hardware inspection data). Returns nil when
+// the BMH has no hardware details or no NICs recorded.
+func (m *Manager) GetHardwareNICs(ctx context.Context, name string) ([]string, error) {
+	bmh := &metal3api.BareMetalHost{}
+	if err := m.client.Get(ctx, client.ObjectKey{Namespace: m.namespace, Name: name}, bmh); err != nil {
+		return nil, fmt.Errorf("failed to get BareMetalHost %s/%s: %w", m.namespace, name, err)
+	}
+	if bmh.Status.HardwareDetails == nil || len(bmh.Status.HardwareDetails.NIC) == 0 {
+		return nil, nil
+	}
+	macs := make([]string, 0, len(bmh.Status.HardwareDetails.NIC))
+	for _, nic := range bmh.Status.HardwareDetails.NIC {
+		macs = append(macs, strings.ToLower(nic.MAC))
+	}
+	return macs, nil
 }
 
 // IsBMHReady checks whether the BMH has completed Metal3 registration and is

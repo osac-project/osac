@@ -7,6 +7,12 @@
     tenant_name: "{{ osac_job_vars.resource.metadata.name }}"
     tenant_namespace: "{{ osac_job_vars.resource.metadata.namespace }}"
     tenant_uid: "{{ osac_job_vars.resource.metadata.uid }}"
+    # Overridable so tests can stub out the real Helm install while still
+    # exercising this playbook's own vars: mapping, matching the pattern
+    # osac.templates.ocp_virt_vm already uses for its create_step_* hooks.
+    csi_driver_install_default:
+      name: osac.service.csi_driver_install
+      tasks_from: main.yaml
 
   pre_tasks:
     - name: Show resource metadata
@@ -47,3 +53,14 @@
         storage_provider_tiers: "{{ osac_job_vars.storage_tier_definitions }}"
         storage_provider_backend_connections: "{{ osac_job_vars.storage_backend_connections | default({}) }}"
         storage_provider_block_encryption_passphrase: "{{ osac_job_vars.resource.spec.blockEncryptionPassphrase | default('') }}"
+
+    # Depends on storage_provider's dispatch above having already created each
+    # dispatched vendor's controller Service via ensure_csi_backends.yaml --
+    # csi_driver_install's own pre-block fail-fast rejects the dispatch
+    # otherwise.
+    - name: Install OSAC CSI driver (once per dispatch, regardless of provider count)
+      ansible.builtin.include_role:
+        name: "{{ (csi_driver_install_override | default(csi_driver_install_default)).name }}"
+        tasks_from: "{{ (csi_driver_install_override | default(csi_driver_install_default)).tasks_from }}"
+      vars:
+        csi_driver_install_tiers: "{{ osac_job_vars.storage_tier_definitions }}"

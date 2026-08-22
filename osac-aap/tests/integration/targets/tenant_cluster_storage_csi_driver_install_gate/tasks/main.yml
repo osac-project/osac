@@ -1,0 +1,412 @@
+---
+# Integration test for the playbook-level wiring of osac.service.csi_driver_install
+# into playbook_osac_create_tenant_cluster_storage.yml's Tenant/ClusterOrder gate -- the
+# real AAP entry point shared by both hub storage (handleClusterStorageProvisioning,
+# sends a Tenant) and CaaS/guest-cluster storage (handleCaaSUpdate, sends a ClusterOrder).
+# csi_driver_install must fire for the Tenant (hub) case and NEVER for the ClusterOrder
+# (guest-cluster) case, since it always targets the hub's default kubeconfig context.
+#
+# Verifies the playbook's when: osac_job_vars.resource.kind == 'Tenant' gate by stubbing
+# the real Helm install via csi_driver_install_override (same override mechanism
+# csi_driver_install_playbook_wiring already tests for the tenant storage backend call
+# site), then runs the rest of the playbook (the real osac.service.storage_provider
+# ensure_storage_class dispatch) for real against the mock VMS server for BOTH cases --
+# proving the gate is the only thing that differs, not that storage provisioning itself
+# is broken for one of the two kinds.
+#
+# _cluster_name is pre-set for both cases to bypass vast_storage's OpenShift
+# Infrastructure-object discovery (this kind-based test cluster is vanilla Kubernetes,
+# not OpenShift) -- the same workaround storage_provider_ensure_sc already uses. That
+# discovery task is NOT the only consumer of _remote_kubeconfig, though:
+# osac.service.storage_provider's _dispatch_provider.yaml applies it via a
+# module_defaults block covering every kubernetes.core.k8s*/k8s_info call in the whole
+# provider dispatch. So the ClusterOrder case's admin_kubeconfig must be genuinely
+# reachable -- it points back at this same test cluster (see that case's Setup play)
+# rather than using a syntactically-valid-but-unreachable placeholder.
+#
+# Requires: mock VMS server on 127.0.0.1:18443, kind cluster with osac-system namespace
+# (same requirements as storage_provider_ensure_sc, which this test's hub Secret fixtures
+# mirror). Does NOT require a published osac-csi-driver chart tag or the local chart
+# registry setup_test_env.sh stands up for csi_driver_install's own role-level test -- the
+# real Helm install is stubbed out entirely here.
+
+# ── Positive case: Tenant kind -- csi_driver_install must fire ──
+- name: "Tenant Cluster Storage CSI Driver Install Gate - Setup (Tenant case)"
+  hosts: localhost
+  gather_facts: true
+
+  tasks:
+    # Must be facts (set_fact), not an `environment:` block: the imported playbook below
+    # runs in a separate play, and only host facts -- not play-level vars -- cross that
+    # boundary. `environment:` is a stricter trap than vars: -- it only wraps module
+    # subprocess execution and never affects lookup('env', ...) calls at all (those read
+    # the controller process's real OS environment directly), even within the SAME play.
+    # vast_storage_config_namespace/vast_storage_validate_certs' defaults are exactly such
+    # lookup('env', ...) expressions.
+    - name: Set vast_storage_* config as cross-play facts
+      ansible.builtin.set_fact:
+        vast_storage_config_namespace: "osac-system"
+        vast_storage_validate_certs: false
+
+    - name: Delete any pre-existing test resources (clean slate)
+      block:
+        - name: Delete hub Secret if exists
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Secret
+            name: "vast-tenant-config-test-tcs-tenant"
+            namespace: "osac-system"
+          failed_when: false
+
+        - name: Delete CSI Secret if exists
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Secret
+            name: "vast-csi-test-tcs-tenant"
+            namespace: "osac-tenants"
+          failed_when: false
+
+        - name: Delete NFS StorageClass if exists
+          kubernetes.core.k8s:
+            state: absent
+            api_version: storage.k8s.io/v1
+            kind: StorageClass
+            name: "vast-nfs-test-tcs-tenant-default"
+          failed_when: false
+
+    - name: Create hub Secret fixture (simulates output from setup action)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "vast-tenant-config-test-tcs-tenant"
+            namespace: "osac-system"
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/tenant: "test-tcs-tenant"
+          type: Opaque
+          stringData:
+            tenant_uid_hash: "b2c3d4e5"
+            vast_tenant_id: "222"
+            vip_pool_name: "osac-test-pool"
+            vast_endpoint: "127.0.0.1:18443"
+            tenant_manager_username: "osac-test-tcs-tenant"
+            tenant_manager_password: "test-csi-password"
+            view_policy_name: "osac-test-tcs-tenant-nfs"
+
+    - name: Clear override log
+      ansible.builtin.file:
+        path: /tmp/osac_test_overrides.log
+        state: absent
+
+    - name: Create empty override log
+      ansible.builtin.file:
+        path: /tmp/osac_test_overrides.log
+        state: touch
+
+    - name: Set test variables (Tenant dispatch, csi_driver_install stubbed)
+      ansible.builtin.set_fact:
+        osac_job_vars:
+          resource:
+            apiVersion: osac.openshift.io/v1alpha1
+            kind: Tenant
+            metadata:
+              name: test-tcs-tenant
+              namespace: osac-tenants
+              uid: test-uid-tcs-tenant
+            spec: {}
+          storage_tier_definitions:
+            - name: default
+              protocol: nfs
+              provider: vast
+              backend_id: be-tcs-tenant
+          storage_backend_connections:
+            be-tcs-tenant:
+              endpoint: "127.0.0.1:18443"
+              username: "admin"
+              password: "mock-admin-password"
+        # Bypasses vast_storage's OpenShift Infrastructure-object discovery -- see the
+        # file-level comment above.
+        _cluster_name: "test-cluster"
+        csi_driver_install_override:
+          name: osac.test_overrides.csi_driver_install_hooks
+          tasks_from: install.yaml
+
+- name: Run tenant cluster storage playbook with csi_driver_install stubbed (Tenant case)
+  ansible.builtin.import_playbook: ../../../../../playbook_osac_create_tenant_cluster_storage.yml
+
+- name: "Tenant Cluster Storage CSI Driver Install Gate - Verify results (Tenant case)"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Read override log
+      ansible.builtin.slurp:
+        path: /tmp/osac_test_overrides.log
+      register: _override_log_content
+
+    - name: Parse override log
+      ansible.builtin.set_fact:
+        _override_log: "{{ _override_log_content.content | b64decode }}"
+
+    - name: "Assert csi_driver_install's override fired for the Tenant (hub) dispatch"
+      ansible.builtin.assert:
+        that:
+          - "'csi_driver_install' in _override_log"
+          - >-
+            'tiers=' ~ (osac_job_vars.storage_tier_definitions | to_json) in _override_log
+        fail_msg: >-
+          csi_driver_install override did not fire (or fired with the wrong vars) for the
+          Tenant dispatch. Log: {{ _override_log }}
+        success_msg: "csi_driver_install override fired with the correct tiers for the Tenant dispatch"
+
+    - name: Read StorageClass created by the real storage_provider dispatch that followed
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "vast-nfs-test-tcs-tenant-default"
+      register: _tenant_storage_class
+
+    - name: Assert the real storage_provider dispatch after the stubbed csi_driver_install step succeeded
+      ansible.builtin.assert:
+        that:
+          - _tenant_storage_class.resources | length == 1
+        fail_msg: >-
+          StorageClass 'vast-nfs-test-tcs-tenant-default' was not created -- the real
+          storage_provider ensure_storage_class dispatch that runs after the stubbed
+          csi_driver_install step did not complete successfully.
+        success_msg: "storage_provider's real ensure_storage_class dispatch succeeded immediately after the stubbed csi_driver_install step"
+
+# ── Cleanup (Tenant case) ──
+- name: "Tenant Cluster Storage CSI Driver Install Gate - Cleanup (Tenant case)"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Delete NFS StorageClass
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "vast-nfs-test-tcs-tenant-default"
+      failed_when: false
+
+    - name: Delete CSI Secret
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "vast-csi-test-tcs-tenant"
+        namespace: "osac-tenants"
+      failed_when: false
+
+    - name: Delete hub Secret
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "vast-tenant-config-test-tcs-tenant"
+        namespace: "osac-system"
+      failed_when: false
+
+    - name: Delete override log
+      ansible.builtin.file:
+        path: /tmp/osac_test_overrides.log
+        state: absent
+
+# ── Negative case: ClusterOrder kind -- csi_driver_install must NEVER fire ──
+- name: "Tenant Cluster Storage CSI Driver Install Gate - Setup (ClusterOrder case)"
+  hosts: localhost
+  gather_facts: true
+
+  tasks:
+    # Must be facts (set_fact), not an `environment:` block -- see the Tenant case
+    # Setup play above for why.
+    - name: Set vast_storage_* config as cross-play facts
+      ansible.builtin.set_fact:
+        vast_storage_config_namespace: "osac-system"
+        vast_storage_validate_certs: false
+
+    - name: Delete any pre-existing test resources (clean slate)
+      block:
+        - name: Delete hub Secret if exists
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Secret
+            name: "vast-tenant-config-test-tcs-clusterorder"
+            namespace: "osac-system"
+          failed_when: false
+
+        - name: Delete CSI Secret if exists
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Secret
+            name: "vast-csi-test-tcs-clusterorder"
+            namespace: "openshift-osac-storage"
+          failed_when: false
+
+        - name: Delete NFS StorageClass if exists
+          kubernetes.core.k8s:
+            state: absent
+            api_version: storage.k8s.io/v1
+            kind: StorageClass
+            name: "vast-nfs-test-tcs-clusterorder-default"
+          failed_when: false
+
+    - name: Create hub Secret fixture (simulates output from setup action)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "vast-tenant-config-test-tcs-clusterorder"
+            namespace: "osac-system"
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/tenant: "test-tcs-clusterorder"
+          type: Opaque
+          stringData:
+            tenant_uid_hash: "c3d4e5f6"
+            vast_tenant_id: "333"
+            vip_pool_name: "osac-test-pool"
+            vast_endpoint: "127.0.0.1:18443"
+            tenant_manager_username: "osac-test-tcs-clusterorder"
+            tenant_manager_password: "test-csi-password"
+            view_policy_name: "osac-test-tcs-clusterorder-nfs"
+
+    - name: Clear override log
+      ansible.builtin.file:
+        path: /tmp/osac_test_overrides.log
+        state: absent
+
+    - name: Create empty override log
+      ansible.builtin.file:
+        path: /tmp/osac_test_overrides.log
+        state: touch
+
+    - name: Set test variables (ClusterOrder/CaaS dispatch, csi_driver_install must not fire)
+      ansible.builtin.set_fact:
+        osac_job_vars:
+          resource:
+            apiVersion: osac.openshift.io/v1alpha1
+            kind: ClusterOrder
+            metadata:
+              name: test-tcs-clusterorder
+              namespace: osac-devel
+              uid: test-uid-tcs-clusterorder
+              annotations:
+                osac.openshift.io/tenant: test-tcs-clusterorder
+            spec: {}
+          storage_tier_definitions:
+            - name: default
+              protocol: nfs
+              provider: vast
+              backend_id: be-tcs-clusterorder
+          storage_backend_connections:
+            be-tcs-clusterorder:
+              endpoint: "127.0.0.1:18443"
+              username: "admin"
+              password: "mock-admin-password"
+          # Points the "guest" cluster back at this same test cluster: osac.service.storage_provider's
+          # _dispatch_provider.yaml applies _remote_kubeconfig via a module_defaults block covering
+          # EVERY kubernetes.core.k8s*/k8s_info call in the whole provider dispatch (not just the one
+          # OpenShift Infrastructure-object lookup _cluster_name below bypasses) -- so this must be a
+          # genuinely reachable kubeconfig, not a placeholder. Reads whatever kubeconfig this
+          # ansible-playbook invocation itself is using (KUBECONFIG env var, falling back to
+          # ~/.kube/config), mirroring K8S_AUTH_KUBECONFIG's own resolution order in
+          # osac.workflows.compute_instance.create.
+          admin_kubeconfig: "{{ lookup('file', lookup('env', 'KUBECONFIG') | default(lookup('env', 'HOME') + '/.kube/config', true)) }}"
+        # Bypasses vast_storage's OpenShift Infrastructure-object discovery -- see the
+        # file-level comment above.
+        _cluster_name: "test-cluster"
+        csi_driver_install_override:
+          name: osac.test_overrides.csi_driver_install_hooks
+          tasks_from: install.yaml
+
+- name: Run tenant cluster storage playbook with a ClusterOrder dispatch (negative case)
+  ansible.builtin.import_playbook: ../../../../../playbook_osac_create_tenant_cluster_storage.yml
+
+- name: "Tenant Cluster Storage CSI Driver Install Gate - Verify results (ClusterOrder case)"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Read override log
+      ansible.builtin.slurp:
+        path: /tmp/osac_test_overrides.log
+      register: _override_log_content_co
+
+    - name: Parse override log
+      ansible.builtin.set_fact:
+        _override_log_co: "{{ _override_log_content_co.content | b64decode }}"
+
+    - name: "Assert csi_driver_install's override did NOT fire for the ClusterOrder (guest-cluster) dispatch"
+      ansible.builtin.assert:
+        that:
+          - "'csi_driver_install' not in _override_log_co"
+        fail_msg: >-
+          csi_driver_install override fired for a ClusterOrder dispatch -- it must only ever
+          target the hub's default kubeconfig context and must never run for CaaS/guest-cluster
+          storage. Log: {{ _override_log_co }}
+        success_msg: "csi_driver_install correctly skipped for the ClusterOrder (guest-cluster) dispatch"
+
+    - name: Read StorageClass created by the real storage_provider dispatch that still ran
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "vast-nfs-test-tcs-clusterorder-default"
+      register: _co_storage_class
+
+    - name: Assert storage_provider still ran for real even though csi_driver_install correctly skipped
+      ansible.builtin.assert:
+        that:
+          - _co_storage_class.resources | length == 1
+        fail_msg: >-
+          StorageClass 'vast-nfs-test-tcs-clusterorder-default' was not created -- the gate
+          skipping csi_driver_install should not have any effect on the storage_provider
+          dispatch that follows it.
+        success_msg: "storage_provider's real ensure_storage_class dispatch succeeded for the ClusterOrder dispatch too"
+
+# ── Cleanup (ClusterOrder case) ──
+- name: "Tenant Cluster Storage CSI Driver Install Gate - Cleanup (ClusterOrder case)"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Delete NFS StorageClass
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "vast-nfs-test-tcs-clusterorder-default"
+      failed_when: false
+
+    - name: Delete CSI Secret
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "vast-csi-test-tcs-clusterorder"
+        namespace: "openshift-osac-storage"
+      failed_when: false
+
+    - name: Delete hub Secret
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "vast-tenant-config-test-tcs-clusterorder"
+        namespace: "osac-system"
+      failed_when: false
+
+    - name: Delete override log
+      ansible.builtin.file:
+        path: /tmp/osac_test_overrides.log
+        state: absent

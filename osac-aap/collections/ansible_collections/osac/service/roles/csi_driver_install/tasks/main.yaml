@@ -1,0 +1,330 @@
+---
+# Idempotent, provider-agnostic install of the OSAC CSI driver (csi-driver
+# Helm chart). Invoked directly from every hub-targeting storage dispatch
+# point (playbook_osac_create_tenant_storage_backend.yml; the Tenant call
+# site of playbook_osac_create_tenant_cluster_storage.yml;
+# playbook_osac_create_compute_instance.yml's JIT storage path), before their
+# own osac.service.storage_provider include — not from storage_provider's own
+# dispatcher, so that storage_provider/tests/test.yml's zero-live-I/O
+# validation guarantee stays intact. Never invoked for the CaaS/guest-cluster
+# call site, since this role always targets the hub's default kubeconfig
+# context. Installed alongside, not instead of, each provider's existing
+# CSI-operator install (e.g. vast_storage's ensure_csi_operator.yaml) until a
+# follow-up story cuts StorageClasses over to this driver.
+#
+# csi-driver is a cluster-wide, shared Helm release (not tenant-scoped) — a
+# later dispatch for a different tenant/provider must never drop an earlier
+# dispatch's already-working vendor wiring. reuse_values on the
+# kubernetes.core.helm call below handles this automatically for nested-map
+# values (vendors.<name>.enabled/config), since Helm's own --reuse-values
+# deep-merges maps. It does NOT handle the two flat, comma-joined
+# vendorSockets strings — Helm replaces scalars outright — so this role reads
+# back the release's previously-deployed vendorSockets via helm_info and
+# merges this dispatch's vendors into it before reinstalling. Because
+# multiple AAP jobs can dispatch this role concurrently against this same
+# shared release (e.g. two ComputeInstance creations at once), the
+# read-modify-write of vendorSockets is additionally serialized by an
+# osac.service.lease lock around the whole install block below.
+#
+# Each dispatched vendor's controller socket address is resolved by a live
+# Kubernetes Service read (see the pre-block fail-fast below) rather than a
+# chart-defaults lookup or static default -- this role's and
+# ensure_csi_backends.yaml's chart versions are independently variable, so
+# only a live read reflects what's actually deployed.
+
+- name: Extract unique providers from the dispatched tier list
+  ansible.builtin.set_fact:
+    _csi_driver_install_unique_providers: "{{ csi_driver_install_tiers | map(attribute='provider') | unique | sort | list }}"
+
+- name: Determine dispatched providers supported by the csi-driver chart
+  ansible.builtin.set_fact:
+    _csi_driver_install_dispatched_vendors: "{{ _csi_driver_install_unique_providers | intersect(csi_driver_install_supported_vendors) }}"
+
+- name: Warn about dispatched providers the csi-driver chart does not support
+  ansible.builtin.debug:
+    msg: >-
+      Provider(s) {{ _csi_driver_install_unique_providers | difference(_csi_driver_install_dispatched_vendors) | join(', ') }}
+      dispatched but not present in csi_driver_install_supported_vendors
+      ({{ csi_driver_install_supported_vendors | join(', ') }}) — the OSAC CSI
+      driver will not be enabled for them.
+  when: (_csi_driver_install_unique_providers | difference(_csi_driver_install_dispatched_vendors)) | length > 0
+
+- name: Read live vendor controller Services for dispatched, CSI-driver-supported providers
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Service
+    name: "{{ item }}-csi-controller"
+    namespace: "{{ csi_driver_install_backends_namespace }}"
+  register: _csi_driver_install_vendor_service_info
+  loop: "{{ _csi_driver_install_dispatched_vendors }}"
+  loop_control:
+    label: "{{ item }}-csi-controller"
+
+- name: Fail if any dispatched vendor's controller Service is missing
+  ansible.builtin.fail:
+    msg: >-
+      Vendor controller Service '{{ item.item }}-csi-controller' not found in
+      {{ csi_driver_install_backends_namespace }} — ensure_csi_backends.yaml
+      must run before csi_driver_install for this vendor.
+  loop: "{{ _csi_driver_install_vendor_service_info.results }}"
+  loop_control:
+    label: "{{ item.item }}-csi-controller"
+  when: (item.resources | default([])) | length == 0
+
+- name: Build vendor controller Service port map from the live read
+  ansible.builtin.set_fact:
+    _csi_driver_install_vendor_service_ports: >-
+      {% set _map = {} -%}
+      {% for _result in _csi_driver_install_vendor_service_info.results -%}
+      {% set _ = _map.update({_result.item: _result.resources[0].spec.ports[0].port}) -%}
+      {% endfor -%}
+      {{ _map }}
+
+- name: Default csi-driver chart values to empty maps (overwritten below when vendors are dispatched)
+  ansible.builtin.set_fact:
+    _csi_driver_install_chart_defaults: {}
+
+# Pure function of static role config (chart_registry/chart_version) and the
+# dispatched-vendor count -- reads/writes nothing the install lock below
+# protects (that lock exists for the vendorSockets read-modify-write against
+# the live Helm release, not for OCI registry reads), so it runs before lock
+# acquisition rather than needlessly extending the critical section with one
+# external network round trip.
+- name: Fetch and parse csi-driver chart's default values (skipped when no supported vendor is dispatched)
+  when: _csi_driver_install_dispatched_vendors | length > 0
+  block:
+    - name: Fetch csi-driver chart's default values (single source for vendor node socketPath)
+      ansible.builtin.command:
+        argv:
+          - helm
+          - show
+          - values
+          - "{{ csi_driver_install_chart_registry }}/csi-driver"
+          - --version
+          - "{{ csi_driver_install_chart_version }}"
+      register: _csi_driver_install_chart_defaults_raw
+      changed_when: false
+
+    - name: Parse csi-driver chart's default values
+      ansible.builtin.set_fact:
+        _csi_driver_install_chart_defaults: "{{ _csi_driver_install_chart_defaults_raw.stdout | from_yaml }}"
+
+# Skipped entirely when zero CSI-driver-supported vendors are dispatched --
+# e.g. every JIT compute-instance dispatch today, which sends the
+# not-yet-supported 'lvms' provider (see register-local-storage.yaml in
+# osac-installer). There is nothing to reconcile in that case, so this avoids
+# paying for the install lock plus one Helm install/upgrade call on every
+# such dispatch just to leave csi-driver unchanged.
+- name: Install OSAC CSI driver
+  when: _csi_driver_install_dispatched_vendors | length > 0
+  block:
+    - name: Set CSI driver install lock holder identity
+      ansible.builtin.set_fact:
+        _csi_driver_install_lock_holder: >-
+          csi-driver-install-{{ awx_job_id | default('unknown') }}-{{
+            lookup('community.general.random_string', special=false, numbers=false, upper=false)
+          }}
+        # Reset explicitly on every invocation: a stale `true` left over from an
+        # earlier successful dispatch targeting this same host (e.g. an earlier
+        # scenario in a role-level test, where facts persist across plays) must
+        # never be read by a LATER invocation whose own acquire attempt fails
+        # before reaching the "Mark the lock as acquired" task below -- that
+        # would make `always:` believe this run holds the lock when it never
+        # acquired one, triggering the exact wrongful-release this guard exists
+        # to prevent.
+        _csi_driver_install_lock_acquired: false
+
+    # csi-driver is a cluster-wide, shared Helm release (see the module
+    # docstring above): every hub-targeting dispatch point reads then
+    # rewrites this release's vendorSockets state, and that read-modify-write
+    # has no natural atomicity across concurrently-running AAP jobs. A single
+    # global lock name (not per-tenant/per-provider, since the underlying
+    # release is a singleton) serializes these dispatches, using the same
+    # osac.service.lease primitive already used elsewhere in this repo to
+    # serialize cluster-order provisioning
+    # (playbook_osac_create_hosted_cluster.yml) and global agent-pool
+    # selection (manage_agents/select_and_label_new_agents.yml).
+    - name: Acquire CSI driver install lock
+      ansible.builtin.include_role:
+        name: osac.service.lease
+      vars:
+        lease_state: present
+        lease_name: "csi-driver-install-lock"
+        lease_holder: "{{ _csi_driver_install_lock_holder }}"
+        lease_retries: 20
+        lease_delay: 5
+
+    # Only mark the lock as ours to release once acquisition genuinely
+    # succeeded. `always:` runs even when the block fails on its very first
+    # task -- if acquisition itself failed (e.g. contention timeout, another
+    # dispatch still holds it), unconditionally deleting the lease by name in
+    # `always:` would tear down a lock a DIFFERENT, still-running dispatch
+    # legitimately holds, since the lease role's own delete task does not
+    # check current holder identity before deleting.
+    - name: Mark the lock as acquired by this dispatch
+      ansible.builtin.set_fact:
+        _csi_driver_install_lock_acquired: true
+
+    - name: Pre-create csi-driver namespace with Helm release ownership metadata
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ csi_driver_install_namespace }}"
+            labels:
+              app.kubernetes.io/managed-by: Helm
+            annotations:
+              meta.helm.sh/release-name: csi-driver
+              meta.helm.sh/release-namespace: "{{ csi_driver_install_namespace }}"
+
+    - name: Check currently installed csi-driver release
+      kubernetes.core.helm_info:
+        name: csi-driver
+        release_namespace: "{{ csi_driver_install_namespace }}"
+      register: _csi_driver_install_release_info
+
+    - name: Log installed csi-driver release chart version
+      ansible.builtin.debug:
+        msg: >-
+          csi-driver release:
+          {{ 'not installed' if (_csi_driver_install_release_info.status | default(none, true)) is none
+             else ((_csi_driver_install_release_info.status | default(none, true)).chart ~ ' (pinned: ' ~ csi_driver_install_chart_version ~ ')') }}
+
+    # helm_info omits the `status` key entirely (not null) when a release
+    # doesn't exist yet, so `| default(none, true)` guards the `is none`
+    # check below -- a bare `.status` access on a nonexistent release raises
+    # an Undefined error.
+    - name: Extract csi-driver's previously-deployed status (None if not yet installed)
+      ansible.builtin.set_fact:
+        _csi_driver_install_prior_driver_status: "{{ _csi_driver_install_release_info.status | default(none, true) }}"
+
+    # Bracket notation (['values']) is required here, not dot notation: the
+    # release dict has a real key literally named "values", which collides
+    # with Python dict's own .values() method — attribute access would
+    # silently return the bound method instead of the chart values.
+    - name: Extract previously-deployed controller/node vendorSockets strings (empty string if unset)
+      ansible.builtin.set_fact:
+        _csi_driver_install_prior_controller_sockets_raw: >-
+          {{ (_csi_driver_install_prior_driver_status['values'].controller.vendorSockets | default('', true) | trim)
+             if (_csi_driver_install_prior_driver_status is not none) else '' }}
+        _csi_driver_install_prior_node_sockets_raw: >-
+          {{ (_csi_driver_install_prior_driver_status['values'].node.vendorSockets | default('', true) | trim)
+             if (_csi_driver_install_prior_driver_status is not none) else '' }}
+
+    - name: Parse previously-deployed vendorSockets strings into per-vendor maps (empty map if unset)
+      ansible.builtin.set_fact:
+        _csi_driver_install_prior_controller_sockets: >-
+          {% set _map = {} -%}
+          {% for _pair in _csi_driver_install_prior_controller_sockets_raw.split(',') if _pair | trim | length > 0 -%}
+          {% set _kv = _pair.split('=', 1) -%}
+          {% set _ = _map.update({_kv[0]: _kv[1]}) -%}
+          {% endfor -%}
+          {{ _map }}
+        _csi_driver_install_prior_node_sockets: >-
+          {% set _map = {} -%}
+          {% for _pair in _csi_driver_install_prior_node_sockets_raw.split(',') if _pair | trim | length > 0 -%}
+          {% set _kv = _pair.split('=', 1) -%}
+          {% set _ = _map.update({_kv[0]: _kv[1]}) -%}
+          {% endfor -%}
+          {{ _map }}
+
+    - name: Reset per-dispatch vendor socket/enablement accumulators
+      ansible.builtin.set_fact:
+        _csi_driver_install_controller_socket_map: {}
+        _csi_driver_install_node_socket_map: {}
+        _csi_driver_install_vendors_enabled: {}
+
+    # controller.vendorSockets/node.vendorSockets use different address formats: the
+    # controller Deployment dials each backend's csi-backends controller Service over
+    # gRPC/TCP, while the node DaemonSet reaches vendor sockets only via its shared
+    # /var/lib/kubelet hostPath mount and needs a literal Unix socket path.
+    - name: Accumulate this dispatch's controller/node vendor sockets and enablement map
+      ansible.builtin.set_fact:
+        _csi_driver_install_controller_socket_map: >-
+          {{
+            _csi_driver_install_controller_socket_map | combine({
+              item: item ~ '-csi-controller.' ~ csi_driver_install_backends_namespace ~
+                '.svc.cluster.local:' ~ (_csi_driver_install_vendor_service_ports[item] | string)
+            })
+          }}
+        _csi_driver_install_node_socket_map: >-
+          {{
+            _csi_driver_install_node_socket_map | combine({
+              item: _csi_driver_install_chart_defaults.vendors[item].node.socketPath ~ '/csi.sock'
+            })
+          }}
+        _csi_driver_install_vendors_enabled: "{{ _csi_driver_install_vendors_enabled | combine({item: {'enabled': true}}) }}"
+      loop: "{{ _csi_driver_install_dispatched_vendors }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Merge previously-deployed vendor sockets with this dispatch's vendors (cross-dispatch accumulation)
+      ansible.builtin.set_fact:
+        _csi_driver_install_controller_sockets: "{{ _csi_driver_install_prior_controller_sockets | combine(_csi_driver_install_controller_socket_map) }}"
+        _csi_driver_install_node_sockets: "{{ _csi_driver_install_prior_node_sockets | combine(_csi_driver_install_node_socket_map) }}"
+
+    - name: Build controller/node vendorSockets strings from the merged per-vendor maps
+      ansible.builtin.set_fact:
+        _csi_driver_install_controller_vendor_sockets: >-
+          {% set _pairs = [] -%}
+          {% for _vendor, _addr in _csi_driver_install_controller_sockets.items() -%}
+          {% set _ = _pairs.append(_vendor ~ '=' ~ _addr) -%}
+          {% endfor -%}
+          {{ _pairs | sort | join(',') }}
+        _csi_driver_install_node_vendor_sockets: >-
+          {% set _pairs = [] -%}
+          {% for _vendor, _addr in _csi_driver_install_node_sockets.items() -%}
+          {% set _ = _pairs.append(_vendor ~ '=' ~ _addr) -%}
+          {% endfor -%}
+          {{ _pairs | sort | join(',') }}
+
+    - name: Build csi-driver chart values for this dispatch
+      ansible.builtin.set_fact:
+        _csi_driver_install_driver_values:
+          namespace: "{{ csi_driver_install_namespace }}"
+          controller:
+            vendorSockets: "{{ _csi_driver_install_controller_vendor_sockets }}"
+          node:
+            vendorSockets: "{{ _csi_driver_install_node_vendor_sockets }}"
+          vendors: "{{ _csi_driver_install_vendors_enabled }}"
+
+    # state: present is Helm's own required-state idempotency (an upgrade -i that
+    # no-ops when nothing changed) — not a manual existence-only skip. reuse_values
+    # means a later dispatch enabling a second vendor doesn't clear the first (see
+    # the vendorSockets accumulation above for the one case reuse_values alone
+    # doesn't cover). reset_values must be explicitly false: the module's own
+    # default (true) takes precedence over reuse_values and would silently
+    # discard it, per the module's own documentation ("If reset_values is set
+    # to True, [reuse_values] is ignored").
+    - name: Install/upgrade csi-driver Helm release
+      kubernetes.core.helm:
+        name: csi-driver
+        chart_ref: "{{ csi_driver_install_chart_registry }}/csi-driver"
+        chart_version: "{{ csi_driver_install_chart_version }}"
+        release_namespace: "{{ csi_driver_install_namespace }}"
+        state: present
+        reuse_values: true
+        reset_values: false
+        values: "{{ _csi_driver_install_driver_values }}"
+      register: _csi_driver_install_driver_result
+
+  rescue:
+    - name: Report OSAC CSI driver install failure
+      ansible.builtin.fail:
+        msg: >-
+          OSAC CSI driver install failed. Failed task: {{ ansible_failed_task.name | default('unknown') }}.
+          Error: {{ ansible_failed_result.msg | default('see logs for details') }}.
+
+  always:
+    # Guarded by _csi_driver_install_lock_acquired -- see the "Mark the lock
+    # as acquired" task above for why this must not release unconditionally.
+    - name: Release CSI driver install lock
+      when: _csi_driver_install_lock_acquired | default(false)
+      ansible.builtin.include_role:
+        name: osac.service.lease
+      vars:
+        lease_state: absent
+        lease_name: "csi-driver-install-lock"
+        lease_holder: "{{ _csi_driver_install_lock_holder }}"

@@ -62,6 +62,11 @@ echo "Waiting for pods to terminate..."
 kubectl wait --for=delete pod --all -n kubevirt --timeout=60s 2>/dev/null || echo "Some kubevirt pods still terminating"
 kubectl wait --for=delete pod --all -n cdi --timeout=60s 2>/dev/null || echo "Some cdi pods still terminating"
 
+# Scaled-to-0 deployments leave these APIServices registered but unreachable, which
+# breaks cluster-wide discovery and can wedge any later namespace delete forever.
+echo "Removing stale KubeVirt/CDI APIServices to keep namespace discovery healthy..."
+kubectl delete apiservice v1.subresources.kubevirt.io v1alpha3.subresources.kubevirt.io v1beta1.upload.cdi.kubevirt.io --ignore-not-found 2>/dev/null || echo "Could not remove one or more stale APIServices"
+
 echo "KubeVirt and CDI deployments scaled down. CRs and CRDs remain available for testing."
 
 echo "Installing OLM CRDs..."
@@ -170,15 +175,116 @@ CSIEOF
   # by each test target) -- only VIP pool and TLS settings remain relevant here.
   # Resolve the csi-backends chart path from the repo root — integration tests
   # run playbooks from test subdirectories, not the top-level osac-aap/ dir,
-  # so the playbook_dir-based default doesn't resolve correctly.
-  REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+  # so the playbook_dir-based default doesn't resolve correctly. REPO_ROOT is
+  # already the mono-repo root (set once, near the top of this script) --
+  # osac-csi-driver is its direct sibling of osac-aap, not a child of it.
   cat > "${SCRIPT_DIR}/.storage_env" <<ENVEOF
 export VAST_VIP_POOL_NAME="osac-test-pool"
 export VAST_VIP_POOL_IP_RANGES='[["10.0.0.10","10.0.0.50"]]'
 export VAST_VIP_POOL_SUBNET_CIDR="24"
 export VAST_VALIDATE_CERTS="false"
-export OSAC_CSI_BACKENDS_CHART_REF="${REPO_ROOT}/../osac-csi-driver/charts/csi-backends"
+export OSAC_CSI_BACKENDS_CHART_REF="${REPO_ROOT}/osac-csi-driver/charts/csi-backends"
 ENVEOF
+
+  # 5.2. Set up a local, TLS-trusted OCI registry hosting the osac-csi-driver charts at
+  # two versions, so the csi_driver_install role-level test (which now runs unconditionally
+  # under STORAGE_TESTS_ENABLED, not a dedicated gate) can run in CI without a real
+  # oci://ghcr.io/osac-project/charts release tag -- no such tag
+  # has been cut yet (OSAC-3290 Risk Assessment item 1). Plain HTTP is not viable: the
+  # vendored kubernetes.core.helm module (pinned 5.2.0) has no plain_http or
+  # insecure-skip-tls-verify parameter at all, and Helm's own OCI client special-cases
+  # localhost/127.0.0.1 to force plain HTTP regardless of TLS config -- so a genuinely
+  # system-trusted TLS cert on a non-loopback hostname is required. localtest.me is a
+  # public DNS name that resolves to 127.0.0.1, sidestepping both problems with no
+  # /etc/hosts changes.
+  echo "Setting up local TLS OCI registry for csi_driver_install tests..."
+
+  CSI_DRIVER_TEST_REGISTRY_HOST="localtest.me"
+  CSI_DRIVER_TEST_REGISTRY_PORT="5500"
+  CSI_DRIVER_TEST_REGISTRY_REPO="oci://${CSI_DRIVER_TEST_REGISTRY_HOST}:${CSI_DRIVER_TEST_REGISTRY_PORT}/csi-driver-test"
+  # Prefer the same container tool kind itself would use (KIND_EXPERIMENTAL_PROVIDER),
+  # falling back to whichever of docker/podman is actually installed.
+  if [ -n "${KIND_EXPERIMENTAL_PROVIDER:-}" ]; then
+    CSI_DRIVER_TEST_CONTAINER_TOOL="${KIND_EXPERIMENTAL_PROVIDER}"
+  elif command -v docker > /dev/null 2>&1; then
+    CSI_DRIVER_TEST_CONTAINER_TOOL="docker"
+  else
+    CSI_DRIVER_TEST_CONTAINER_TOOL="podman"
+  fi
+
+  # This whole section is best-effort: it must never abort the rest of setup (the storage
+  # tests it shares STORAGE_TESTS_ENABLED with, e.g. the playbook wiring tests, don't need
+  # it at all). Only Debian/Ubuntu's system trust store is supported today -- that's what
+  # CI (ubuntu-latest) actually runs on. On any other OS, skip straight to leaving
+  # CSI_DRIVER_INSTALL_TEST_REGISTRY unset: csi_driver_install's own role-level test then
+  # falls back to the real (not-yet-published) oci://ghcr.io/osac-project/charts and fails
+  # with a clear registry-not-found error, rather than every other storage test failing to
+  # even start because this section couldn't get a trusted TLS chain.
+  if [ -d /usr/local/share/ca-certificates ]; then
+    echo "Generating a local CA and server certificate for ${CSI_DRIVER_TEST_REGISTRY_HOST}..."
+    openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+      -keyout "${SCRIPT_DIR}/certs/registry-ca.key" \
+      -out "${SCRIPT_DIR}/certs/registry-ca.pem" \
+      -subj "/CN=osac-test-registry-ca" 2>/dev/null
+
+    openssl req -newkey rsa:2048 -nodes \
+      -keyout "${SCRIPT_DIR}/certs/registry.key" \
+      -out "${SCRIPT_DIR}/certs/registry.csr" \
+      -subj "/CN=${CSI_DRIVER_TEST_REGISTRY_HOST}" 2>/dev/null
+
+    echo "subjectAltName=DNS:${CSI_DRIVER_TEST_REGISTRY_HOST}" > "${SCRIPT_DIR}/certs/registry.ext"
+
+    openssl x509 -req -in "${SCRIPT_DIR}/certs/registry.csr" \
+      -CA "${SCRIPT_DIR}/certs/registry-ca.pem" -CAkey "${SCRIPT_DIR}/certs/registry-ca.key" \
+      -CAcreateserial -out "${SCRIPT_DIR}/certs/registry.pem" \
+      -days 1 -extfile "${SCRIPT_DIR}/certs/registry.ext" 2>/dev/null
+
+    echo "Installing the local CA into the system trust store..."
+    sudo cp "${SCRIPT_DIR}/certs/registry-ca.pem" /usr/local/share/ca-certificates/osac-test-registry-ca.crt
+    sudo update-ca-certificates > /dev/null
+
+    echo "Starting local OCI registry (TLS) on port ${CSI_DRIVER_TEST_REGISTRY_PORT}..."
+    "${CSI_DRIVER_TEST_CONTAINER_TOOL}" rm -f osac-test-csi-registry > /dev/null 2>&1 || true
+    "${CSI_DRIVER_TEST_CONTAINER_TOOL}" run -d --name osac-test-csi-registry \
+      -p "${CSI_DRIVER_TEST_REGISTRY_PORT}:5000" \
+      -v "${SCRIPT_DIR}/certs:/certs:ro" \
+      -e REGISTRY_HTTP_TLS_CERTIFICATE=/certs/registry.pem \
+      -e REGISTRY_HTTP_TLS_KEY=/certs/registry.key \
+      registry:2 > /dev/null
+
+    echo "Waiting for local OCI registry to be ready..."
+    for i in $(seq 1 10); do
+      if curl -sf "https://${CSI_DRIVER_TEST_REGISTRY_HOST}:${CSI_DRIVER_TEST_REGISTRY_PORT}/v2/" > /dev/null 2>&1; then
+        echo "Local OCI registry ready on ${CSI_DRIVER_TEST_REGISTRY_HOST}:${CSI_DRIVER_TEST_REGISTRY_PORT}"
+        break
+      fi
+      sleep 1
+    done
+
+    echo "Packaging and pushing osac-csi-driver charts (csi-driver, csi-backends) at versions 0.1.0 and 0.1.1..."
+    CSI_DRIVER_CHARTS_DIR="${REPO_ROOT}/osac-csi-driver/charts"
+    CSI_DRIVER_CHART_PKG_DIR="${SCRIPT_DIR}/.csi_driver_chart_pkgs"
+    rm -rf "${CSI_DRIVER_CHART_PKG_DIR}"
+    mkdir -p "${CSI_DRIVER_CHART_PKG_DIR}"
+
+    for chart in csi-driver csi-backends; do
+      for version in 0.1.0 0.1.1; do
+        helm package "${CSI_DRIVER_CHARTS_DIR}/${chart}" --version "${version}" --app-version "${version}" \
+          -d "${CSI_DRIVER_CHART_PKG_DIR}"
+        helm push "${CSI_DRIVER_CHART_PKG_DIR}/${chart}-${version}.tgz" "${CSI_DRIVER_TEST_REGISTRY_REPO}"
+      done
+    done
+
+    # Append to the same env file consumed by run_tests.sh (Make runs each recipe line in
+    # a separate shell) -- csi_driver_install's role-level test overrides
+    # csi_driver_install_chart_registry to this value instead of the real, not-yet-published
+    # oci://ghcr.io/osac-project/charts.
+    cat >> "${SCRIPT_DIR}/.storage_env" <<ENVEOF
+export CSI_DRIVER_INSTALL_TEST_REGISTRY="${CSI_DRIVER_TEST_REGISTRY_REPO}"
+ENVEOF
+  else
+    echo "No supported CA trust store found (expected /usr/local/share/ca-certificates on Debian/Ubuntu, which is what CI runs on) -- skipping local OCI registry setup. csi_driver_install's own role-level test will fail against the real, not-yet-published oci://ghcr.io/osac-project/charts; every other STORAGE_TESTS_ENABLED test is unaffected."
+  fi
 fi
 
 echo "=== Test environment ready ==="

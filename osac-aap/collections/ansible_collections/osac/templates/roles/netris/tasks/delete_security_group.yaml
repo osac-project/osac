@@ -1,9 +1,12 @@
 ---
-# SecurityGroup deletion - removes the corresponding Netris ACL rules
+# SecurityGroup deletion - removes the corresponding Netris ACL rules.
+# Handles both old-style names (sg-ingress-N) and new per-subnet names
+# (sg-ingress-N-M) for backward compatibility during transition.
 
 - name: Extract SecurityGroup configuration
   ansible.builtin.set_fact:
     sg_name: "{{ security_group.metadata.name }}"
+    sg_virtual_network: "{{ security_group.spec.virtualNetwork | default('') }}"
     ingress_rules: "{{ security_group.spec.ingressRules | default([]) }}"
     egress_rules: "{{ security_group.spec.egressRules | default([]) }}"
 
@@ -14,7 +17,43 @@
       - "Ingress rules to delete: {{ ingress_rules | length }}"
       - "Egress rules to delete: {{ egress_rules | length }}"
 
-- name: Delete ACL rules for ingress
+- name: Look up subnets in VirtualNetwork for per-subnet ACL cleanup
+  when: sg_virtual_network | length > 0
+  block:
+    - name: Look up all Subnets
+      kubernetes.core.k8s_info:
+        api_version: osac.openshift.io/v1alpha1
+        kind: Subnet
+        namespace: "{{ security_group.metadata.namespace }}"
+      register: _sg_del_subnets
+
+    - name: Count subnets in this VN
+      ansible.builtin.set_fact:
+        _sg_del_subnet_count: >-
+          {{ _sg_del_subnets.resources | default([])
+             | selectattr('spec.virtualNetwork', 'defined')
+             | selectattr('spec.virtualNetwork', 'equalto', sg_virtual_network)
+             | list | length }}
+
+- name: Default subnet count
+  ansible.builtin.set_fact:
+    _sg_del_subnet_count: "{{ _sg_del_subnet_count | default(1) | int }}"
+
+- name: Delete per-subnet ACL rules for ingress
+  ansible.builtin.include_role:
+    name: netris.controller.acl
+    tasks_from: delete
+  vars:
+    _rule_idx: "{{ item.0 }}"
+    _subnet_idx: "{{ item.1 }}"
+    _flat_idx: "{{ item.0 * (_sg_del_subnet_count | int) + item.1 }}"
+    acl_name: "{{ sg_name }}-ingress-{{ _flat_idx }}-{{ _subnet_idx }}"
+  loop: "{{ range(ingress_rules | length) | product(range(_sg_del_subnet_count | int)) | list }}"
+  loop_control:
+    label: "ingress-rule{{ item.0 }}-subnet{{ item.1 }}"
+  when: ingress_rules | length > 0
+
+- name: Delete legacy ACL rules for ingress
   ansible.builtin.include_role:
     name: netris.controller.acl
     tasks_from: delete
@@ -25,7 +64,21 @@
     index_var: idx
   when: ingress_rules | length > 0
 
-- name: Delete ACL rules for egress
+- name: Delete per-subnet ACL rules for egress
+  ansible.builtin.include_role:
+    name: netris.controller.acl
+    tasks_from: delete
+  vars:
+    _rule_idx: "{{ item.0 }}"
+    _subnet_idx: "{{ item.1 }}"
+    _flat_idx: "{{ item.0 * (_sg_del_subnet_count | int) + item.1 }}"
+    acl_name: "{{ sg_name }}-egress-{{ _flat_idx }}-{{ _subnet_idx }}"
+  loop: "{{ range(egress_rules | length) | product(range(_sg_del_subnet_count | int)) | list }}"
+  loop_control:
+    label: "egress-rule{{ item.0 }}-subnet{{ item.1 }}"
+  when: egress_rules | length > 0
+
+- name: Delete legacy ACL rules for egress
   ansible.builtin.include_role:
     name: netris.controller.acl
     tasks_from: delete

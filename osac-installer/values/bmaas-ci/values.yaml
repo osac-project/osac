@@ -167,6 +167,12 @@ bmf:
 hubAccess:
   enabled: true
 
+networkManagers:
+  - name: netris
+    role: fabric
+    description: "Netris SDN fabric manager"
+    capabilities: "ipv4"
+
 # Bundled PostgreSQL: single-pod ephemeral database for testing.
 # Uses fsync=off — data is lost on restart. Not for production.
 bundledPostgres:

@@ -60,6 +60,37 @@
     name: netris.controller.auth
   when: netris_session_cookie is not defined
 
+# The DNAT rule must live in the VPC that owns the target IP. The operator passes
+# the tenant VirtualNetwork name; the Netris VPC is named after it. Default to the
+# mgmt VPC (cluster-level rules) and override when a tenant VPC is resolved.
+- name: Determine tenant VirtualNetwork name
+  ansible.builtin.set_fact:
+    attachment_vn_name: >-
+      {{ external_ip_attachment.metadata.annotations['osac.openshift.io/virtual-network-name']
+         | default('', true) }}
+
+- name: Default NAT VPC to the management VPC
+  ansible.builtin.set_fact:
+    attachment_nat_vpc_id: "{{ netris_mgmt_vpc_id }}"
+    attachment_nat_vpc_name: "{{ netris_mgmt_vpc_name | default('') }}"
+
+- name: Look up tenant VPC by VirtualNetwork name
+  ansible.builtin.include_role:
+    name: netris.controller.vpc
+    tasks_from: read
+  vars:
+    vpc_name: "{{ attachment_vn_name }}"
+  when: attachment_vn_name | length > 0
+
+- name: Use tenant VPC when resolved
+  ansible.builtin.set_fact:
+    attachment_nat_vpc_id: "{{ netris_vpc.id }}"
+    attachment_nat_vpc_name: "{{ netris_vpc.name }}"
+  when:
+    - attachment_vn_name | length > 0
+    - netris_vpc is defined
+    - netris_vpc is not none
+
 - name: Create DNAT rule for ExternalIPAttachment
   ansible.builtin.include_role:
     name: netris.controller.nat
@@ -67,8 +98,8 @@
   vars:
     nat_name: "{{ attachment_name }}-dnat"
     nat_site_id: "{{ netris_site_id }}"
-    nat_vpc_id: "{{ netris_mgmt_vpc_id }}"
-    nat_vpc_name: "{{ netris_mgmt_vpc_name | default('') }}"
+    nat_vpc_id: "{{ attachment_nat_vpc_id }}"
+    nat_vpc_name: "{{ attachment_nat_vpc_name }}"
     nat_action: dnat
     nat_protocol: all
     nat_destination_address: "{{ attachment_external_ip }}/32"

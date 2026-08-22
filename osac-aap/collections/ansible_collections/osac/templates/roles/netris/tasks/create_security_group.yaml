@@ -1,6 +1,8 @@
 ---
 # SecurityGroup maps to Netris ACL rules (v1 API)
-# Creates permit ACL rules for each ingress and egress rule in the SecurityGroup CR
+# Creates permit ACL rules for each ingress and egress rule in the SecurityGroup CR.
+# ACL rules are created per-subnet in the VN — each subnet maps to a Netris network
+# segment, and Netris ACL rules must use subnet CIDRs (not the wider VN CIDR).
 
 - name: Extract SecurityGroup configuration
   ansible.builtin.set_fact:
@@ -17,25 +19,7 @@
       - "Ingress rules count: {{ ingress_rules | length }}"
       - "Egress rules count: {{ egress_rules | length }}"
 
-- name: Ensure Netris auth
-  ansible.builtin.include_role:
-    name: netris.controller.auth
-  when: netris_session_cookie is not defined
-
-- name: Look up VPC for VirtualNetwork
-  ansible.builtin.uri:
-    url: "{{ netris_controller_url }}/api/v2/vpc"
-    method: GET
-    headers:
-      Cookie: "connect.sid={{ netris_session_cookie }}"
-    return_content: true
-    status_code: 200
-    validate_certs: "{{ netris_validate_certs | default(true) }}"
-  register: _sg_vpc_list_resp
-  no_log: true
-  when: sg_virtual_network | length > 0
-
-- name: Resolve VirtualNetwork UUID to VPC ID
+- name: Resolve VirtualNetwork UUID to VPC ID and discover subnets
   when: sg_virtual_network | length > 0
   block:
     - name: Look up VirtualNetwork CR by UUID label
@@ -47,60 +31,93 @@
           - "osac.openshift.io/virtualnetwork-uuid={{ sg_virtual_network }}"
       register: _sg_vn_lookup
 
-    - name: Set VPC ID and VN CIDR from VirtualNetwork
-      ansible.builtin.set_fact:
-        _sg_vpc_id: >-
-          {{ ((_sg_vpc_list_resp.json.data | default([]))
-              | selectattr('name', 'equalto', _sg_vn_lookup.resources[0].metadata.name)
-              | map(attribute='id') | list | first | default(1)) }}
-        _sg_vn_cidr: "{{ _sg_vn_lookup.resources[0].spec.ipv4Cidr | default('') }}"
+    - name: Look up VPC for VirtualNetwork
+      ansible.builtin.include_role:
+        name: netris.controller.vpc
+        tasks_from: read
+      vars:
+        vpc_name: "{{ _sg_vn_lookup.resources[0].metadata.name }}"
       when: _sg_vn_lookup.resources | length > 0
 
-- name: Default VPC ID and VN CIDR if not resolved
+    - name: Set VPC ID
+      ansible.builtin.set_fact:
+        _sg_vpc_id: "{{ (netris_vpc.id | default(1)) }}"
+      when: _sg_vn_lookup.resources | length > 0
+
+    - name: Look up all Subnets in this VirtualNetwork
+      kubernetes.core.k8s_info:
+        api_version: osac.openshift.io/v1alpha1
+        kind: Subnet
+        namespace: "{{ security_group.metadata.namespace }}"
+      register: _sg_all_subnets
+      when: _sg_vn_lookup.resources | length > 0
+
+    - name: Filter subnets belonging to this VirtualNetwork
+      ansible.builtin.set_fact:
+        _sg_subnet_cidrs: >-
+          {{ _sg_all_subnets.resources | default([])
+             | selectattr('spec.virtualNetwork', 'defined')
+             | selectattr('spec.virtualNetwork', 'equalto', sg_virtual_network)
+             | map(attribute='spec.ipv4Cidr')
+             | select('defined')
+             | reject('equalto', '')
+             | list }}
+      when: _sg_vn_lookup.resources | length > 0
+
+- name: Default VPC ID and subnet CIDRs if not resolved
   ansible.builtin.set_fact:
     _sg_vpc_id: "{{ _sg_vpc_id | default(1) }}"
-    _sg_vn_cidr: "{{ _sg_vn_cidr | default('') }}"
+    _sg_subnet_cidrs: "{{ _sg_subnet_cidrs | default(['0.0.0.0/0']) }}"
 
-- name: Create ACL rules for ingress
+- name: Display resolved subnet CIDRs
+  ansible.builtin.debug:
+    msg: "ACL rules will be created for subnet CIDRs: {{ _sg_subnet_cidrs }}"
+
+- name: Create ACL rules for ingress (per subnet)
   ansible.builtin.include_role:
     name: netris.controller.acl
     tasks_from: create
   vars:
-    acl_name: "{{ sg_name }}-ingress-{{ idx }}"
+    subnet_idx: "{{ _sg_subnet_cidrs.index(item.1) }}"
+    acl_name: "{{ sg_name }}-ingress-{{ idx }}-{{ subnet_idx }}"
     acl_action: permit
-    acl_proto: "{{ item.protocol }}"
+    acl_proto: "{{ item.0.protocol }}"
     acl_vpc_id: "{{ _sg_vpc_id }}"
-    acl_src_prefix: "{{ item.sourceCidr | default(item.ipv4Cidr | default('0.0.0.0/0')) }}"
-    acl_dst_prefix: "{{ item.destinationCidr | default(_sg_vn_cidr if _sg_vn_cidr | length > 0 else '0.0.0.0/0') }}"
-    acl_dst_port_from: "{{ item.portFrom | default(none) }}"
-    acl_dst_port_to: "{{ item.portTo | default(item.portFrom) | default(none) }}"
-    acl_comment: "OSAC SG {{ sg_name }} ingress rule {{ idx }}"
-  loop: "{{ ingress_rules }}"
+    acl_src_prefix: "{{ item.0.sourceCidr | default(item.0.ipv4Cidr | default('0.0.0.0/0')) }}"
+    acl_dst_prefix: "{{ item.1 }}"
+    acl_dst_port_from: "{{ item.0.portFrom | default(none) }}"
+    acl_dst_port_to: "{{ item.0.portTo | default(item.0.portFrom) | default(none) }}"
+    acl_comment: "OSAC SG {{ sg_name }} ingress rule {{ idx }} subnet {{ subnet_idx }}"
+  loop: "{{ ingress_rules | product(_sg_subnet_cidrs) | list }}"
   loop_control:
     index_var: idx
+    label: "{{ item.0.protocol | default('all') }}:{{ item.1 }}"
   when: ingress_rules | length > 0
 
-- name: Create ACL rules for egress
+- name: Create ACL rules for egress (per subnet)
   ansible.builtin.include_role:
     name: netris.controller.acl
     tasks_from: create
   vars:
-    acl_name: "{{ sg_name }}-egress-{{ idx }}"
+    subnet_idx: "{{ _sg_subnet_cidrs.index(item.1) }}"
+    acl_name: "{{ sg_name }}-egress-{{ idx }}-{{ subnet_idx }}"
     acl_action: permit
-    acl_proto: "{{ item.protocol }}"
+    acl_proto: "{{ item.0.protocol }}"
     acl_vpc_id: "{{ _sg_vpc_id }}"
-    acl_src_prefix: "{{ _sg_vn_cidr if _sg_vn_cidr | length > 0 else '0.0.0.0/0' }}"
-    acl_dst_prefix: "{{ item.sourceCidr | default(item.ipv4Cidr | default('0.0.0.0/0')) }}"
-    acl_dst_port_from: "{{ item.portFrom | default(none) }}"
-    acl_dst_port_to: "{{ item.portTo | default(item.portFrom) | default(none) }}"
-    acl_comment: "OSAC SG {{ sg_name }} egress rule {{ idx }}"
-  loop: "{{ egress_rules }}"
+    acl_src_prefix: "{{ item.1 }}"
+    acl_dst_prefix: "{{ item.0.sourceCidr | default(item.0.ipv4Cidr | default('0.0.0.0/0')) }}"
+    acl_dst_port_from: "{{ item.0.portFrom | default(none) }}"
+    acl_dst_port_to: "{{ item.0.portTo | default(item.0.portFrom) | default(none) }}"
+    acl_comment: "OSAC SG {{ sg_name }} egress rule {{ idx }} subnet {{ subnet_idx }}"
+  loop: "{{ egress_rules | product(_sg_subnet_cidrs) | list }}"
   loop_control:
     index_var: idx
+    label: "{{ item.0.protocol | default('all') }}:{{ item.1 }}"
   when: egress_rules | length > 0
 
 - name: Display SecurityGroup creation result
   ansible.builtin.debug:
     msg: >-
       ACL rules created for SecurityGroup '{{ sg_name }}':
-      {{ ingress_rules | length }} ingress, {{ egress_rules | length }} egress
+      {{ ingress_rules | length }} ingress × {{ _sg_subnet_cidrs | length }} subnets,
+      {{ egress_rules | length }} egress × {{ _sg_subnet_cidrs | length }} subnets

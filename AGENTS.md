@@ -30,6 +30,17 @@ Clone as siblings for cross-repo workflows:
 | [enhancement-proposals](https://github.com/osac-project/enhancement-proposals) | PRDs and design documents (two-stage EP flow) |
 | [docs](https://github.com/osac-project/docs) | Architecture docs and guides |
 
+## AI-Assisted Development
+
+Run `tools/bootstrap.sh` once after clone (and anytime to refresh). It vendors
+[`osac-ai-skills`](https://github.com/osac-project/osac-ai-skills) and
+[`flightctl/ai-workflows`](https://github.com/flightctl/ai-workflows), then links
+Claude Code / Cursor / Gemini CLI skill discovery under this repo. No separate
+checkout of `osac-workspace` or a manual `osac-ai-skills` clone is required.
+
+Edit OSAC-native skills only in `osac-project/osac-ai-skills`. Local `skills/`
+and `.osac-ai-skills/` are bootstrap-managed and gitignored.
+
 ## Cross-Component Changes
 
 A feature spanning multiple components lands in a single branch and PR. Apply changes in dependency order:

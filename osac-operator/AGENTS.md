@@ -128,7 +128,7 @@ hack/sync-helm-crds.py     # Script invoked by `make helm-crds` to sync CRDs to 
 - **Unit tests**: Ginkgo + Gomega with `envtest` (real etcd + kube-apiserver)
 - **Integration**: `make test-kustomize` (manifest validation) + `make test-smoke` (kind cluster)
 - **Go integration tests**: `test/integration/` (console_proxy_test.go, integration_suite_test.go, networking_test.go) — run against an already-running kind cluster via `make test-integration-kind` (`go test ./test/integration/ -v -ginkgo.v`)
-- **E2E tests**: pytest-based, live in the separate `osac-test-infra` repo; triggered by the root-level `.github/workflows/e2e-vmaas-full-install.yml`, which builds and deploys both `osac-operator` and `fulfillment-service` together
+- **E2E tests**: pytest-based, live in `tests/e2e/` in this mono-repo; triggered by the root-level `.github/workflows/e2e-vmaas-full-install.yml`, which builds and deploys both `osac-operator` and `fulfillment-service` together
 - Kind cluster defaults to `osac` (`KIND_CLUSTER_NAME` in Makefile line 81), but smoke tests create `osac-test`
 - Clean up: `kind delete cluster --name osac-test`
 - `test-kustomize` catches missing files in kustomization.yaml — always run before committing manifest changes

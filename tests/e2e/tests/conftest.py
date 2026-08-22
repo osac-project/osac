@@ -1,0 +1,286 @@
+from __future__ import annotations
+
+import os
+from collections.abc import Iterator
+from pathlib import Path
+
+import pytest
+
+from tests.core.grpc_client import GRPCClient
+from tests.core.k8s_client import K8sClient
+from tests.core.keycloak import get_jwt
+from tests.core.keycloak_admin import (
+    add_user_to_organization,
+    add_user_to_organization_group,
+    ensure_organization_group,
+    get_admin_token,
+    get_user_id,
+    wait_for_organization,
+)
+from tests.core.metering import MeteringCollector
+from tests.core.osac_cli import OsacCLI
+from tests.core.runner import env, run
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Give each xdist worker its own log_file so records stay chronologically ordered.
+
+    A shared log_file is interleaved across workers as they report at their own
+    pace; gather-osac-logs.sh merges the per-worker files back into one sorted
+    e2e.log artifact.
+    """
+    config.addinivalue_line("markers", "metering: test verifies metering events via the test adapter HTTP API")
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER")
+    if worker_id is not None:
+        log_dir = Path(config.getini("log_file")).parent
+        log_dir.mkdir(parents=True, exist_ok=True)
+        config.option.log_file = str(log_dir / f"e2e_{worker_id}.log")
+
+
+@pytest.fixture(scope="session")
+def namespace() -> str:
+    return env("OSAC_NAMESPACE", "osac-devel")
+
+
+@pytest.fixture(scope="session")
+def cluster_domain() -> str:
+    return run("kubectl", "get", "ingress.config.openshift.io", "cluster", "-o", "jsonpath={.spec.domain}")
+
+
+@pytest.fixture(scope="session")
+def fulfillment_address(namespace: str, cluster_domain: str) -> str:
+    return env("OSAC_FULFILLMENT_ADDRESS", f"fulfillment-api-{namespace}.{cluster_domain}:443")
+
+
+@pytest.fixture(scope="session")
+def fulfillment_private_address(namespace: str, cluster_domain: str) -> str:
+    return env("OSAC_FULFILLMENT_PRIVATE_ADDRESS", f"fulfillment-internal-api-{namespace}.{cluster_domain}:443")
+
+
+@pytest.fixture(scope="session")
+def service_account() -> str:
+    return env("OSAC_SERVICE_ACCOUNT", "admin")
+
+
+@pytest.fixture(scope="session")
+def grpc(fulfillment_address: str, namespace: str, service_account: str) -> GRPCClient:
+    # wait_for_cluster_ready's own budget alone can run up to 120min on cold
+    # EC2 hardware, plus deletion/verification steps after it -- a token this
+    # short can expire mid-session, failing every subsequent grpcurl call
+    # with UNAUTHENTICATED. Stay safely above the worst-case session length.
+    token: str = run(
+        "oc", "create", "token", service_account, "-n", namespace, "--duration", "4h", "--as", "system:admin"
+    )
+    return GRPCClient(address=fulfillment_address, token=token)
+
+
+@pytest.fixture(scope="session")
+def private_grpc(fulfillment_private_address: str, namespace: str, service_account: str) -> GRPCClient:
+    token: str = run(
+        "oc", "create", "token", service_account, "-n", namespace, "--duration", "4h", "--as", "system:admin"
+    )
+    return GRPCClient(address=fulfillment_private_address, token=token)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def ensure_tenants(private_grpc: GRPCClient) -> None:
+    for name in ("tenant1", "tenant2"):
+        private_grpc.ensure_tenant(name=name)
+
+
+@pytest.fixture(scope="session")
+def keycloak_admin_password() -> str:
+    return env("OSAC_KEYCLOAK_ADMIN_PASSWORD", "admin")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def setup_organization_memberships(ensure_tenants: None, keycloak_url: str, keycloak_admin_password: str) -> None:
+    """
+    Add test users to their corresponding Keycloak organizations.
+    This runs after ensure_tenants creates the Tenant resources, which the
+    tenant controller syncs to Keycloak as organizations.
+    """
+    # Get admin token for Keycloak admin API
+    admin_token = get_admin_token(keycloak_url=keycloak_url, username="admin", password=keycloak_admin_password)
+
+    # Map of organization name -> list of usernames
+    org_users = {"tenant1": ["tenant1_user", "tenant1_admin"], "tenant2": ["tenant2_user", "tenant2_admin"]}
+
+    for org_name, usernames in org_users.items():
+        # Wait for the organization to be synced to Keycloak by the tenant controller
+        org_id = wait_for_organization(keycloak_url=keycloak_url, admin_token=admin_token, org_name=org_name)
+
+        # Add each user to the organization
+        for username in usernames:
+            user_id = get_user_id(keycloak_url=keycloak_url, admin_token=admin_token, username=username)
+            add_user_to_organization(
+                keycloak_url=keycloak_url,
+                admin_token=admin_token,
+                org_id=org_id,
+                user_id=user_id,
+                username=username,
+                org_name=org_name,
+            )
+
+        # Create /members group in the organization and add all users to it
+        # This is required for the organization scope to include the organization in the JWT token
+        group_id = ensure_organization_group(
+            keycloak_url=keycloak_url, admin_token=admin_token, org_id=org_id, org_name=org_name
+        )
+
+        for username in usernames:
+            user_id = get_user_id(keycloak_url=keycloak_url, admin_token=admin_token, username=username)
+            add_user_to_organization_group(
+                keycloak_url=keycloak_url,
+                admin_token=admin_token,
+                org_id=org_id,
+                group_id=group_id,
+                user_id=user_id,
+                username=username,
+                org_name=org_name,
+            )
+
+
+@pytest.fixture(scope="session")
+def k8s_hub_client(namespace: str) -> K8sClient:
+    return K8sClient(namespace=namespace)
+
+
+@pytest.fixture(scope="session")
+def cli(namespace: str, fulfillment_address: str, service_account: str) -> Iterator[OsacCLI]:
+    instance = OsacCLI(
+        binary=env("OSAC_CLI_PATH", "osac"),
+        address=f"https://{fulfillment_address.rsplit(':', 1)[0]}",
+        token_script=f"oc create token -n {namespace} {service_account} --as system:admin",
+        namespace=namespace,
+    )
+    yield instance
+    instance.close()
+
+
+@pytest.fixture(scope="session")
+def private_cli(namespace: str, fulfillment_private_address: str, service_account: str) -> Iterator[OsacCLI]:
+    instance = OsacCLI(
+        binary=env("OSAC_CLI_PATH", "osac"),
+        address=f"https://{fulfillment_private_address.rsplit(':', 1)[0]}",
+        token_script=f"oc create token -n {namespace} {service_account} --as system:admin",
+        namespace=namespace,
+        private=True,
+    )
+    yield instance
+    instance.close()
+
+
+@pytest.fixture(scope="session")
+def keycloak_url(cluster_domain: str) -> str:
+    return env("OSAC_KEYCLOAK_URL", f"https://keycloak-keycloak.{cluster_domain}")
+
+
+@pytest.fixture(scope="session")
+def jwt_password() -> str:
+    return env("OSAC_JWT_PASSWORD", "foobar")
+
+
+def _make_jwt_token_script(keycloak_url: str, username: str, password: str) -> str:
+    return (
+        f"curl -sk -X POST {keycloak_url}/realms/osac/protocol/openid-connect/token"
+        f" -d grant_type=password -d client_id=osac-cli"
+        f" -d username={username} -d password={password} -d 'scope=openid organization'"
+        " | python3 -c \"import sys,json;print(json.load(sys.stdin)['access_token'])\""
+    )
+
+
+@pytest.fixture(scope="session")
+def jwt_cli_user(namespace: str, fulfillment_address: str, keycloak_url: str, jwt_password: str) -> Iterator[OsacCLI]:
+    instance = OsacCLI(
+        binary=env("OSAC_CLI_PATH", "osac"),
+        address=f"https://{fulfillment_address.rsplit(':', 1)[0]}",
+        token_script=_make_jwt_token_script(keycloak_url, "tenant1_user", jwt_password),
+        namespace=namespace,
+    )
+    yield instance
+    instance.close()
+
+
+@pytest.fixture(scope="session")
+def jwt_cli_admin(namespace: str, fulfillment_address: str, keycloak_url: str, jwt_password: str) -> Iterator[OsacCLI]:
+    instance = OsacCLI(
+        binary=env("OSAC_CLI_PATH", "osac"),
+        address=f"https://{fulfillment_address.rsplit(':', 1)[0]}",
+        token_script=_make_jwt_token_script(keycloak_url, "tenant1_admin", jwt_password),
+        namespace=namespace,
+    )
+    yield instance
+    instance.close()
+
+
+@pytest.fixture(scope="session")
+def jwt_grpc_tenant1_admin(fulfillment_address: str, keycloak_url: str, jwt_password: str) -> GRPCClient:
+    return GRPCClient(
+        address=fulfillment_address,
+        token_factory=lambda: get_jwt(
+            keycloak_url=keycloak_url,
+            realm="osac",
+            client_id="osac-cli",
+            username="tenant1_admin",
+            password=jwt_password,
+        ),
+    )
+
+
+@pytest.fixture(scope="session")
+def jwt_grpc_tenant1(fulfillment_address: str, keycloak_url: str, jwt_password: str) -> GRPCClient:
+    return GRPCClient(
+        address=fulfillment_address,
+        token_factory=lambda: get_jwt(
+            keycloak_url=keycloak_url,
+            realm="osac",
+            client_id="osac-cli",
+            username="tenant1_user",
+            password=jwt_password,
+        ),
+    )
+
+
+@pytest.fixture(scope="session")
+def jwt_grpc_tenant2(fulfillment_address: str, keycloak_url: str, jwt_password: str) -> GRPCClient:
+    return GRPCClient(
+        address=fulfillment_address,
+        token_factory=lambda: get_jwt(
+            keycloak_url=keycloak_url,
+            realm="osac",
+            client_id="osac-cli",
+            username="tenant2_user",
+            password=jwt_password,
+        ),
+    )
+
+
+# --- Cross-cutting concern: Metering ---
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    metering_tests = [item for item in items if item.get_closest_marker("metering")]
+    if metering_tests and not os.environ.get("METERING_ADAPTER_URL"):
+        pytest.fail(
+            f"METERING_ADAPTER_URL is not set but {len(metering_tests)} test(s) require metering. "
+            "Set the env var or run with -m 'not metering' to exclude metering tests.",
+            pytrace=False,
+        )
+
+
+@pytest.fixture
+def metering() -> Iterator[MeteringCollector]:
+    """Composable metering verifier. Inject into any test to verify
+    that lifecycle events appear via the test adapter HTTP API.
+
+    Records a start timestamp on setup, verifies all expectations
+    (including CloudEvent structure validation) on teardown.
+    """
+    collector = MeteringCollector(base_url=env("METERING_ADAPTER_URL"))
+    collector.start()
+    yield collector
+    try:
+        collector.verify()
+    finally:
+        collector.stop()

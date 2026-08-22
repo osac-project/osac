@@ -13,6 +13,7 @@ OSAC (Open Sovereign AI Cloud) is a fulfillment system for provisioning Kubernet
 | `bare-metal-fulfillment-operator/` | Kubernetes operator for bare-metal host pools |
 | `osac-csi-driver/` | CSI meta-driver aggregating vendor storage drivers |
 | `osac-metering/` | Metering pipeline — collects usage events via gRPC Watch, publishes CloudEvents to Kafka, and provides Provider Adapters framework for billing integrations |
+| `tests/e2e/` | Cross-component e2e pytest suite (bmaas, vmaas, caas, catalog, storage) — runs against a deployed cluster's gRPC API |
 
 See also [`docs/`](docs/README.md) for hand-trimmed cross-component architecture and
 conventions content with no home in any single component's own `AGENTS.md`
@@ -25,7 +26,7 @@ Clone as siblings for cross-repo workflows:
 
 | Repo | Description |
 |------|-------------|
-| [osac-test-infra](https://github.com/osac-project/osac-test-infra) | E2E pytest tests against the fulfillment-service gRPC API |
+| [osac-test-infra](https://github.com/osac-project/osac-test-infra) | E2E workflow orchestration (cluster lifecycle, image builds, secrets); test content has moved to `tests/e2e/` in this repo |
 | [osac-ui](https://github.com/osac-project/osac-ui) | Web console (React, PatternFly 6) |
 | [enhancement-proposals](https://github.com/osac-project/enhancement-proposals) | PRDs and design documents (two-stage EP flow) |
 | [docs](https://github.com/osac-project/docs) | Architecture docs and guides |

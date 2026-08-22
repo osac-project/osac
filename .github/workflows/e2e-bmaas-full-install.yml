@@ -29,7 +29,7 @@ on:
         required: false
         default: ""
       test-infra-ref:
-        description: "Branch/ref of osac-test-infra"
+        description: "Branch/ref of osac-test-infra (orchestration only; test content is in this repo under tests/e2e/)"
         required: false
         default: "main"
 
@@ -109,7 +109,10 @@ jobs:
       fork-pr-author-association: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.author_association || '' }}
       fork-pr-author: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.user.login || '' }}
       pr-number: ${{ github.event.pull_request.number }}
-      # Checkout osac-test-infra for tests/Containerfile (not the caller repo)
+      # osac-test-infra is still checked out for orchestration infrastructure
+      # (actions, scripts, secrets). Test content (tests/, pyproject.toml) has
+      # moved to this repo under tests/e2e/ -- the reusable workflow needs a
+      # companion update to source tests from the installer checkout instead.
       test-infra-repository: osac-project/osac-test-infra
       test-infra-ref: ${{ inputs.test-infra-ref || 'main' }}
 

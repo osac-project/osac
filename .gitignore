@@ -4,6 +4,7 @@ skills/
 .claude/skills
 .claude/commands
 .claude/agents
+.claude/worktrees
 .cursor/
 .gemini/
 

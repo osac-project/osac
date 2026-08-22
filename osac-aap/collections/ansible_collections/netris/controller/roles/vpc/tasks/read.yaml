@@ -1,0 +1,43 @@
+---
+# List VPCs and optionally find one by name.
+# Optional variables:
+#   vpc_name — find a specific VPC by name
+# Output facts:
+#   netris_vpcs   — full list of VPCs
+#   netris_vpc    — the matched VPC dict (or none if not found / not requested)
+
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Get VPCs
+  ansible.builtin.uri:
+    force: true
+    url: "{{ netris_controller_url }}/api/v2/vpc"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+      Cache-Control: "no-cache"
+      Pragma: "no-cache"
+    return_content: true
+    status_code: 200
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _vpc_read_resp
+  no_log: true
+
+- name: Set VPC facts
+  ansible.builtin.set_fact:
+    netris_vpcs: "{{ _vpc_read_resp.json.data | default([]) }}"
+    netris_vpc: >-
+      {{ (_vpc_read_resp.json.data | default([]))
+         | selectattr('name', 'equalto', vpc_name)
+         | list | first | default(none) }}
+  when: vpc_name is defined
+
+- name: Set VPC facts (no filter)
+  ansible.builtin.set_fact:
+    netris_vpcs: "{{ _vpc_read_resp.json.data | default([]) }}"
+    netris_vpc: "{{ none }}"
+  when: vpc_name is not defined

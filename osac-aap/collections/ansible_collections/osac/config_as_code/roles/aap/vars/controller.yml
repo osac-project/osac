@@ -250,6 +250,30 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     allow_simultaneous: true
     ask_variables_on_launch: true
     verbosity: 0
+  - name: "{{ aap_prefix }}-create-nat-gateway"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_create_nat_gateway.yml"
+    inventory: "{{ aap_prefix }}-networking-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-networking-operations-ig"
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    verbosity: 0
+  - name: "{{ aap_prefix }}-delete-nat-gateway"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_delete_nat_gateway.yml"
+    inventory: "{{ aap_prefix }}-networking-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-networking-operations-ig"
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    verbosity: 0
   - name: "{{ aap_prefix }}-create-security-group"
     project: "{{ aap_prefix }}"
     organization: "{{ aap_organization_name }}"
@@ -396,6 +420,30 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     instance_groups:
       - "{{ aap_prefix }}-cluster-fulfillment-ig"
     allow_simultaneous: false
+    ask_variables_on_launch: true
+    verbosity: 0
+  - name: "{{ aap_prefix }}-move-network-attachment"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_move_network_attachment.yml"
+    inventory: "{{ aap_prefix }}-networking-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-networking-operations-ig"
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    verbosity: 0
+  - name: "{{ aap_prefix }}-query-dhcp-lease"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_query_dhcp_lease.yml"
+    inventory: "{{ aap_prefix }}-networking-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-networking-operations-ig"
+    allow_simultaneous: true
     ask_variables_on_launch: true
     verbosity: 0
 

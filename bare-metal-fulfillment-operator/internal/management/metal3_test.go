@@ -296,6 +296,59 @@ var _ = Describe("Metal3 Management Backend", func() {
 		})
 	})
 
+	Describe("GetHostInterfaceMACs", func() {
+		It("returns the interface→MAC map from the annotation", func() {
+			bmh := newBMHWithAnnotations("host-macs", true, true, map[string]string{
+				management.HostInterfaceMACsAnnotation: `{"eth9":"52:54:00:16:04:83","eth0":"52:54:00:AA:BB:CC"}`,
+			})
+			m := newMetal3ManagementClient(bmh)
+
+			macs, err := m.GetHostInterfaceMACs(ctx, metal3TestNamespace+"/host-macs")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(macs).To(Equal(map[string]string{
+				"eth9": "52:54:00:16:04:83",
+				"eth0": "52:54:00:AA:BB:CC",
+			}))
+		})
+
+		It("returns an empty map when the annotation is absent", func() {
+			bmh := newBMHForManagement("host-noann", true, true)
+			m := newMetal3ManagementClient(bmh)
+
+			macs, err := m.GetHostInterfaceMACs(ctx, metal3TestNamespace+"/host-noann")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(macs).To(BeEmpty())
+		})
+
+		It("returns an empty map when the annotation value is empty", func() {
+			bmh := newBMHWithAnnotations("host-empty", true, true, map[string]string{
+				management.HostInterfaceMACsAnnotation: "",
+			})
+			m := newMetal3ManagementClient(bmh)
+
+			macs, err := m.GetHostInterfaceMACs(ctx, metal3TestNamespace+"/host-empty")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(macs).To(BeEmpty())
+		})
+
+		It("returns an error when the annotation is not valid JSON", func() {
+			bmh := newBMHWithAnnotations("host-bad", true, true, map[string]string{
+				management.HostInterfaceMACsAnnotation: "not-json",
+			})
+			m := newMetal3ManagementClient(bmh)
+
+			_, err := m.GetHostInterfaceMACs(ctx, metal3TestNamespace+"/host-bad")
+			Expect(err).To(HaveOccurred())
+		})
+
+		It("returns an error when the host does not exist", func() {
+			m := newMetal3ManagementClient()
+
+			_, err := m.GetHostInterfaceMACs(ctx, metal3TestNamespace+"/missing")
+			Expect(err).To(HaveOccurred())
+		})
+	})
+
 	Describe("Registration", func() {
 		It("metal3 backend is registered", func() {
 			_, err := management.NewClient(context.Background(), &management.Config{

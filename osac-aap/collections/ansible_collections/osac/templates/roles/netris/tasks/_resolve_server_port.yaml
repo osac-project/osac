@@ -1,0 +1,29 @@
+---
+# Resolve the Netris server port for a host + logical interface.
+# Inputs:  na_host_name, na_logical_interface
+# Output:  _target_port (dict with .id) or none.
+
+- name: Initialize resolved port
+  ansible.builtin.set_fact:
+    _target_port: "{{ none }}"
+
+- name: Find server by name
+  ansible.builtin.include_role:
+    name: netris.controller.inventory
+    tasks_from: read_servers
+  vars:
+    server_name: "{{ na_host_name }}"
+
+- name: Get server ports and find matching interface
+  ansible.builtin.include_role:
+    name: netris.controller.inventory
+    tasks_from: read_server_ports
+  vars:
+    server_id: "{{ netris_server.id }}"
+    port_name: "{{ na_logical_interface }}"
+  when: netris_server is not none
+
+- name: Set resolved port
+  ansible.builtin.set_fact:
+    _target_port: "{{ netris_server_port | default(none) }}"
+  when: netris_server is not none

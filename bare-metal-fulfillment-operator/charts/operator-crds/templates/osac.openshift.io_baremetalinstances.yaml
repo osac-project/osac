@@ -295,6 +295,68 @@ spec:
                       type: object
                     type: array
                 type: object
+              ipDiscoveryJobs:
+                description: IPDiscoveryJobs tracks the history of DHCP lease discovery
+                  operations.
+                items:
+                  description: JobStatus represents the status of a provisioning or
+                    deprovisioning job
+                  properties:
+                    blockDeletionOnFailure:
+                      description: |-
+                        BlockDeletionOnFailure indicates whether CR deletion should be blocked if this job fails.
+                        AAP sets this to true to prevent orphaned cloud resources when deprovisioning fails.
+                      type: boolean
+                    configVersion:
+                      description: |-
+                        ConfigVersion is the DesiredConfigVersion at the time this job was triggered.
+                        Used to determine retry behavior on failure: if ConfigVersion differs from
+                        the current DesiredConfigVersion, a new job is triggered immediately.
+                        If they match, the controller retries with exponential backoff.
+                      type: string
+                    jobID:
+                      description: JobID is the AAP job identifier from the provisioning
+                        provider API response.
+                      type: string
+                    message:
+                      description: Message provides human-readable status or error
+                        information
+                      type: string
+                    state:
+                      description: State is the current state of the job
+                      enum:
+                      - Pending
+                      - Waiting
+                      - Running
+                      - Succeeded
+                      - Failed
+                      - Canceled
+                      - Unknown
+                      type: string
+                    target:
+                      description: |-
+                        Target identifies which manager this job was dispatched to, for resources
+                        that provision through multiple managers concurrently (e.g. a Subnet
+                        dispatching to both a fabric manager and a k8s manager). Empty for
+                        resources with a single provisioning target.
+                      type: string
+                    timestamp:
+                      description: Timestamp when this job was created/triggered
+                      format: date-time
+                      type: string
+                    type:
+                      description: Type indicates the operation type
+                      enum:
+                      - provision
+                      - deprovision
+                      type: string
+                  required:
+                  - jobID
+                  - state
+                  - timestamp
+                  - type
+                  type: object
+                type: array
               networkAttachmentStatuses:
                 description: |-
                   NetworkAttachmentStatuses captures runtime networking state for each NIC.
@@ -318,6 +380,68 @@ spec:
                       description: SubnetRef is the fulfillment Subnet ID associated
                         with this attachment.
                       type: string
+                  type: object
+                type: array
+              networkingJobs:
+                description: NetworkingJobs tracks the history of network attachment
+                  provisioning/deprovisioning.
+                items:
+                  description: JobStatus represents the status of a provisioning or
+                    deprovisioning job
+                  properties:
+                    blockDeletionOnFailure:
+                      description: |-
+                        BlockDeletionOnFailure indicates whether CR deletion should be blocked if this job fails.
+                        AAP sets this to true to prevent orphaned cloud resources when deprovisioning fails.
+                      type: boolean
+                    configVersion:
+                      description: |-
+                        ConfigVersion is the DesiredConfigVersion at the time this job was triggered.
+                        Used to determine retry behavior on failure: if ConfigVersion differs from
+                        the current DesiredConfigVersion, a new job is triggered immediately.
+                        If they match, the controller retries with exponential backoff.
+                      type: string
+                    jobID:
+                      description: JobID is the AAP job identifier from the provisioning
+                        provider API response.
+                      type: string
+                    message:
+                      description: Message provides human-readable status or error
+                        information
+                      type: string
+                    state:
+                      description: State is the current state of the job
+                      enum:
+                      - Pending
+                      - Waiting
+                      - Running
+                      - Succeeded
+                      - Failed
+                      - Canceled
+                      - Unknown
+                      type: string
+                    target:
+                      description: |-
+                        Target identifies which manager this job was dispatched to, for resources
+                        that provision through multiple managers concurrently (e.g. a Subnet
+                        dispatching to both a fabric manager and a k8s manager). Empty for
+                        resources with a single provisioning target.
+                      type: string
+                    timestamp:
+                      description: Timestamp when this job was created/triggered
+                      format: date-time
+                      type: string
+                    type:
+                      description: Type indicates the operation type
+                      enum:
+                      - provision
+                      - deprovision
+                      type: string
+                  required:
+                  - jobID
+                  - state
+                  - timestamp
+                  - type
                   type: object
                 type: array
               phase:

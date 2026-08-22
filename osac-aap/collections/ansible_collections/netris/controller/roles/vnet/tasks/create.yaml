@@ -45,11 +45,34 @@
         id: "{{ vnet_tenant_id }}"
   when: _existing_vnet is not defined or _existing_vnet is none
 
+- name: Build gateway entry
+  ansible.builtin.set_fact:
+    _gw_entry:
+      prefix: "{{ vnet_gateway }}"
+  when:
+    - _existing_vnet is not defined or _existing_vnet is none
+    - vnet_gateway is defined
+
+- name: Add DHCP to gateway entry
+  ansible.builtin.set_fact:
+    _gw_entry: >-
+      {{ _gw_entry | combine({
+        'dhcpEnabled': true,
+        'dhcpStartIp': vnet_dhcp_start_ip,
+        'dhcpEndIp': vnet_dhcp_end_ip
+      }) }}
+  when:
+    - _existing_vnet is not defined or _existing_vnet is none
+    - vnet_gateway is defined
+    - vnet_dhcp_enabled | default(false) | bool
+    - vnet_dhcp_start_ip is defined
+    - vnet_dhcp_end_ip is defined
+
 - name: Add gateway to V-Net body
   ansible.builtin.set_fact:
     _vnet_body: >-
       {{ _vnet_body | combine({
-        'gateways': [{'prefix': vnet_gateway}]
+        'gateways': [_gw_entry]
       }) }}
   when:
     - _existing_vnet is not defined or _existing_vnet is none

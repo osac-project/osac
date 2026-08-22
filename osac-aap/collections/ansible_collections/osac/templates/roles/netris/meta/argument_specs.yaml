@@ -95,30 +95,35 @@ argument_specs:
         required: true
         description: NATGateway CR from fulfillment-api via osac_job_vars
 
-  create_network_attachment:
+  move_network_attachment:
     options:
       network_attachment:
         type: dict
         required: true
         description: >-
-          Network attachment parameters from dispatcher. Contains host_name
-          (Netris server name), logical_interface_name (Netris port name),
-          and subnet_ref (OSAC Subnet UUID). If the port is already on
-          another V-Net (e.g. parking network), it is removed first.
+          Move a server's fabric port between Netris V-Nets: detach from
+          from_vnet_name (if set) then attach to to_vnet_name (if set).
+        options:
+          host_name:
+            type: str
+            required: true
+            description: Netris server (host) name.
+          logical_interface_name:
+            type: str
+            required: true
+            description: Server port / logical interface name (e.g. eth9).
+          from_vnet_name:
+            type: str
+            required: false
+            default: ""
+            description: Netris V-Net name to detach the port from (empty = skip).
+          to_vnet_name:
+            type: str
+            required: false
+            default: ""
+            description: Netris V-Net name to attach the port to (empty = skip).
       template_parameters:
         type: dict
         description: Template-specific parameters (reserved for future use)
         options: {}
         default: {}
-
-  delete_network_attachment:
-    options:
-      network_attachment:
-        type: dict
-        required: true
-        description: >-
-          Network attachment parameters from dispatcher. Contains host_name
-          (Netris server name), logical_interface_name (Netris port name),
-          subnet_ref (OSAC Subnet UUID), and optional parking_vnet_name
-          (V-Net to return port to after removal — used by CaaS; omit for
-          BMaaS to leave port detached).

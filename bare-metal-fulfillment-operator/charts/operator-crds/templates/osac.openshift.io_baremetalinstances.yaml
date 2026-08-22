@@ -21,9 +21,6 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
-    - jsonPath: .spec.hostType
-      name: HostType
-      type: string
     - jsonPath: .spec.templateID
       name: Template
       type: string
@@ -68,12 +65,6 @@ spec:
               hostClass:
                 description: HostClass is host management backend class (e.g. openstack).
                 type: string
-              hostType:
-                description: HostType is the resource class/type of the host.
-                type: string
-                x-kubernetes-validations:
-                - message: field is immutable
-                  rule: self == oldSelf
               inventorylabels:
                 additionalProperties:
                   type: string
@@ -178,17 +169,19 @@ spec:
                   When empty, the operator will not manage the host's power state.
                 type: string
               selector:
-                description: |-
-                  Selector defines additional host selection filters.
-                  hostSelector accepts arbitrary key/value selectors such as managedBy or topology.
+                description: Selector defines host selection filters. HostSelector
+                  is required for label-based host selection.
                 properties:
                   hostSelector:
                     additionalProperties:
                       type: string
                     description: |-
                       HostSelector is a map of arbitrary selector key/value pairs
-                      (for example managedBy, topology, rack, zone).
+                      (for example managedBy, topology, rack, zone). Required for label-based host selection.
+                    minProperties: 1
                     type: object
+                required:
+                - hostSelector
                 type: object
                 x-kubernetes-validations:
                 - message: field is immutable
@@ -205,7 +198,7 @@ spec:
                 type: string
             required:
             - externalHostID
-            - hostType
+            - selector
             - templateID
             type: object
           status:

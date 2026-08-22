@@ -135,9 +135,11 @@ var _ = Describe("bareMetalInstanceStatusChangedPredicate", func() {
 	It("should filter Update events when only spec changes", func() {
 		old := &bmfov1alpha1.BareMetalInstance{
 			Spec: bmfov1alpha1.BareMetalInstanceSpec{
-				HostType:       "default",
 				ExternalHostID: "ext-1",
 				TemplateID:     "tpl-1",
+				Selector: bmfov1alpha1.HostSelectorSpec{
+					HostSelector: map[string]string{"osac.openshift.io/host-type": "default"},
+				},
 			},
 		}
 		old.Status.Phase = bmfov1alpha1.BareMetalInstancePhaseProgressing
@@ -211,7 +213,9 @@ var _ = Describe("BareMetalInstanceFeedbackReconciler", func() {
 					Namespace: bmiNS,
 				},
 				Spec: bmfov1alpha1.BareMetalInstanceSpec{
-					HostType:       "default",
+					Selector: bmfov1alpha1.HostSelectorSpec{
+						HostSelector: map[string]string{"osac.openshift.io/host-type": "default"},
+					},
 					ExternalHostID: "ext-123",
 					TemplateID:     "test_template",
 				},
@@ -276,7 +280,9 @@ var _ = Describe("BareMetalInstanceFeedbackReconciler", func() {
 					},
 				},
 				Spec: bmfov1alpha1.BareMetalInstanceSpec{
-					HostType:       "default",
+					Selector: bmfov1alpha1.HostSelectorSpec{
+						HostSelector: map[string]string{"osac.openshift.io/host-type": "default"},
+					},
 					ExternalHostID: "ext-123",
 					TemplateID:     "test_template",
 				},
@@ -324,7 +330,9 @@ var _ = Describe("BareMetalInstanceFeedbackReconciler", func() {
 					Finalizers: []string{osacBareMetalInstanceFeedbackFinalizer},
 				},
 				Spec: bmfov1alpha1.BareMetalInstanceSpec{
-					HostType:       "default",
+					Selector: bmfov1alpha1.HostSelectorSpec{
+						HostSelector: map[string]string{"osac.openshift.io/host-type": "default"},
+					},
 					ExternalHostID: "ext-123",
 					TemplateID:     "test_template",
 				},
@@ -397,7 +405,9 @@ var _ = Describe("BareMetalInstanceFeedbackReconciler", func() {
 					Finalizers: []string{"other-finalizer", osacBareMetalInstanceFeedbackFinalizer},
 				},
 				Spec: bmfov1alpha1.BareMetalInstanceSpec{
-					HostType:       "default",
+					Selector: bmfov1alpha1.HostSelectorSpec{
+						HostSelector: map[string]string{"osac.openshift.io/host-type": "default"},
+					},
 					ExternalHostID: "ext-456",
 					TemplateID:     "test_template",
 				},

@@ -68,10 +68,6 @@ type BareMetalNetworkAttachment struct {
 
 // BareMetalInstanceSpec defines the desired state of BareMetalInstance.
 type BareMetalInstanceSpec struct {
-	// HostType is the resource class/type of the host.
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="field is immutable"
-	HostType string `json:"hostType"`
 	// ExternalHostID is the host ID from external inventory (used by Host Management Operator as node identifier).
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Type=string
@@ -82,11 +78,10 @@ type BareMetalInstanceSpec struct {
 	ExternalHostName string `json:"externalHostName,omitempty"`
 	// HostClass is host management backend class (e.g. openstack).
 	HostClass string `json:"hostClass,omitempty"`
-	// Selector defines additional host selection filters.
-	// hostSelector accepts arbitrary key/value selectors such as managedBy or topology.
-	// +kubebuilder:validation:Optional
+	// Selector defines host selection filters. HostSelector is required for label-based host selection.
+	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="field is immutable"
-	Selector HostSelectorSpec `json:"selector,omitempty"`
+	Selector HostSelectorSpec `json:"selector"`
 	// InventoryLabels are labels to be applied to the host in the inventory system.
 	// These labels are non-persistent and will be removed when the BareMetalInstance is deleted.
 	// +kubebuilder:validation:Optional
@@ -202,14 +197,18 @@ const (
 	// HostConditionReasonPowerSyncRequired indicates a restart is required
 	// Reserved for future use — not set by any current code path
 	HostConditionReasonPowerSyncRequired = "PowerSyncRequired"
+
+	// HostConditionReasonNoMatchingHosts indicates no hosts match the selector labels
+	HostConditionReasonNoMatchingHosts = "NoMatchingHosts"
 )
 
-// HostSelectorSpec defines additional host selection constraints.
+// HostSelectorSpec defines host selection constraints.
 type HostSelectorSpec struct {
 	// HostSelector is a map of arbitrary selector key/value pairs
-	// (for example managedBy, topology, rack, zone).
-	// +kubebuilder:validation:Optional
-	HostSelector map[string]string `json:"hostSelector,omitempty"`
+	// (for example managedBy, topology, rack, zone). Required for label-based host selection.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinProperties=1
+	HostSelector map[string]string `json:"hostSelector"`
 }
 
 // BareMetalNICStatus holds the MAC address of a single physical network interface.
@@ -297,7 +296,6 @@ func (h *BareMetalInstance) GetPoolID() (string, bool) {
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:shortName=bmi
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
-// +kubebuilder:printcolumn:name="HostType",type=string,JSONPath=`.spec.hostType`
 // +kubebuilder:printcolumn:name="Template",type=string,JSONPath=`.spec.templateID`
 // +kubebuilder:printcolumn:name="HostClass",type=string,JSONPath=`.spec.hostClass`
 // +kubebuilder:printcolumn:name="ExternalHostID",type=string,JSONPath=`.spec.externalHostID`

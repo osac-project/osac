@@ -1255,7 +1255,9 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 					},
 				},
 				Spec: bmfov1alpha1.BareMetalInstanceSpec{
-					HostType:       "compute",
+					Selector: bmfov1alpha1.HostSelectorSpec{
+						HostSelector: map[string]string{"osac.openshift.io/host-type": "compute"},
+					},
 					ExternalHostID: "ext-host-1",
 				},
 			}
@@ -1363,7 +1365,9 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 					},
 				},
 				Spec: bmfov1alpha1.BareMetalInstanceSpec{
-					HostType:       "compute",
+					Selector: bmfov1alpha1.HostSelectorSpec{
+						HostSelector: map[string]string{"osac.openshift.io/host-type": "compute"},
+					},
 					ExternalHostID: "ext-host-1",
 				},
 			}

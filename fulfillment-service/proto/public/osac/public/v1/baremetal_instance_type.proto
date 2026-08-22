@@ -21,6 +21,7 @@ import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
 import "osac/public/v1/baremetal_instance_catalog_item_type.proto";
 import "osac/public/v1/baremetal_instance_common_type.proto";
+import "osac/public/v1/baremetal_instance_type_type.proto";
 import "osac/public/v1/condition_status_type.proto";
 import "osac/public/v1/metadata_type.proto";
 import "osac/public/v1/security_group_type.proto";
@@ -137,6 +138,14 @@ message BareMetalInstanceSpec {
   // with an ExternalIPAttachment for this instance atomically during creation.
   // Immutable after creation.
   bool auto_external_ip_attachment = 9 [(google.api.field_behavior) = IMMUTABLE];
+
+  // Reference to a BareMetalInstanceType that determines the hardware profile for this instance.
+  // The system resolves this to host selection labels used during provisioning.
+  // Required on create; immutable after creation.
+  BareMetalInstanceTypeLocalReference instance_type = 20 [
+    (google.api.field_behavior) = IMMUTABLE,
+    (buf.validate.field).required = true
+  ];
 }
 
 // The status contains the details of the bare metal instance provided by the system.

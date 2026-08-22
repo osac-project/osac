@@ -325,7 +325,7 @@ var _ = Describe("BareMetalPool Controller", func() {
 			for _, bareMetalInstance := range bareMetalInstanceList.Items {
 				Expect(bareMetalInstance.Labels[BareMetalPoolLabelKey]).To(Equal(string(updatedPool.UID)))
 				Expect(bareMetalInstance.Labels[HostTypeLabelKey]).To(Equal("fc430"))
-				Expect(bareMetalInstance.Spec.HostType).To(Equal("fc430"))
+				Expect(bareMetalInstance.Annotations["osac.openshift.io/host-type"]).To(Equal("fc430"))
 				Expect(bareMetalInstance.OwnerReferences).To(HaveLen(1))
 				Expect(bareMetalInstance.OwnerReferences[0].Name).To(Equal(updatedPool.Name))
 				Expect(bareMetalInstance.OwnerReferences[0].Kind).To(Equal("BareMetalPool"))

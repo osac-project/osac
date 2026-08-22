@@ -46,9 +46,6 @@ import (
 
 const objectPrefix = "bmi-"
 
-// defaultHostType is a placeholder until host type is modeled in the template proto.
-const defaultHostType = "default"
-
 const userDataSecretSuffix = "-user-data"
 
 const userDataSecretKey = "userdata"
@@ -65,6 +62,7 @@ type function struct {
 	hubCache                            controllers.HubCache
 	bareMetalInstancesClient            privatev1.BareMetalInstancesClient
 	bareMetalInstanceCatalogItemsClient privatev1.BareMetalInstanceCatalogItemsClient
+	bareMetalInstanceTypesClient        privatev1.BareMetalInstanceTypesClient
 	hubsClient                          privatev1.HubsClient
 	maskCalculator                      *masks.Calculator
 }
@@ -120,6 +118,7 @@ func (b *FunctionBuilder) Build() (result controllers.ReconcilerFunction[*privat
 		logger:                              b.logger,
 		bareMetalInstancesClient:            privatev1.NewBareMetalInstancesClient(b.connection),
 		bareMetalInstanceCatalogItemsClient: privatev1.NewBareMetalInstanceCatalogItemsClient(b.connection),
+		bareMetalInstanceTypesClient:        privatev1.NewBareMetalInstanceTypesClient(b.connection),
 		hubsClient:                          privatev1.NewHubsClient(b.connection),
 		hubCache:                            b.hubCache,
 		maskCalculator:                      masks.NewCalculator().Build(),
@@ -618,7 +617,31 @@ func (t *task) mutateBMI(ctx context.Context, object *bmfov1alpha1.BareMetalInst
 		return fmt.Errorf("failed to get catalog item '%s': %w", catalogItemID, err)
 	}
 
-	object.Spec.HostType = defaultHostType
+	// Resolve instance type and map host_label_selector to CRD's Selector.HostSelector
+	if !t.bareMetalInstance.GetSpec().HasInstanceType() {
+		return fmt.Errorf("instance_type is required but not specified")
+	}
+
+	instanceTypeRef := t.bareMetalInstance.GetSpec().GetInstanceType()
+	instanceTypeResp, err := t.r.bareMetalInstanceTypesClient.Get(ctx, privatev1.BareMetalInstanceTypesGetRequest_builder{
+		Id: instanceTypeRef.GetId(),
+	}.Build())
+	if err != nil {
+		return fmt.Errorf("failed to get instance type '%s': %w", instanceTypeRef.GetId(), err)
+	}
+
+	instanceType := instanceTypeResp.GetObject()
+	if instanceType.GetSpec().HasHostLabelSelector() {
+		matchLabels := instanceType.GetSpec().GetHostLabelSelector().GetMatchLabels()
+		if len(matchLabels) > 0 {
+			if object.Spec.Selector.HostSelector == nil {
+				object.Spec.Selector.HostSelector = make(map[string]string)
+			}
+			for key, value := range matchLabels {
+				object.Spec.Selector.HostSelector[key] = value
+			}
+		}
+	}
 	object.Spec.TemplateID = catalogItemResp.GetObject().GetTemplate().GetId()
 	object.Spec.TemplateParameters = ""
 	object.Spec.RunStrategy = bmfov1alpha1.RunStrategyUnspecified

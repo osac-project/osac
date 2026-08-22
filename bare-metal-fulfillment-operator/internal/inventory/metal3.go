@@ -136,21 +136,58 @@ func validateBareMetalHostCRD(restConfig *rest.Config) error {
 	return nil
 }
 
+// validateMetal3MatchExpressions validates matchExpressions keys for the Metal3 backend.
+// Rejects empty keys and keys containing spaces. All other keys are valid and will be
+// passed as BareMetalHost label filters or handled specially (like managedBy).
+func validateMetal3MatchExpressions(matchExpressions map[string]string) error {
+	for key := range matchExpressions {
+		if key == "" {
+			return fmt.Errorf("invalid matchExpression: empty key not allowed")
+		}
+
+		if strings.Contains(key, " ") {
+			return fmt.Errorf("invalid matchExpression: key %q contains spaces", key)
+		}
+	}
+	return nil
+}
+
 func (m *Metal3Client) FindFreeHost(ctx context.Context, matchExpressions map[string]string) (*Host, error) {
+	if err := validateMetal3MatchExpressions(matchExpressions); err != nil {
+		return nil, err
+	}
+
 	log := ctrllog.FromContext(ctx)
 	log.Info("Finding free Metal3 host", "namespace", m.namespace)
 
-	listOpts := make([]client.ListOption, 0, 2)
-	listOpts = append(listOpts, client.InNamespace(m.namespace))
+	listOpts := []client.ListOption{client.InNamespace(m.namespace)}
 
+	// Build label selector from all matchExpressions except specially handled keys
 	matchLabels := map[string]string{}
-	if hostType, ok := matchExpressions["hostType"]; ok && hostType != "" {
-		matchLabels[Metal3HostTypeLabel] = hostType
+	for key, value := range matchExpressions {
+		// Skip keys that have special client-side handling
+		if key == "managedBy" || key == "provisionState" {
+			continue
+		}
+
+		// Skip empty values
+		if value == "" {
+			continue
+		}
+
+		// Handle legacy type/hostType mapping for backward compatibility
+		if key == "hostType" || key == "type" {
+			matchLabels[Metal3HostTypeLabel] = value
+		} else {
+			// Pass all other labels directly as BareMetalHost labels
+			matchLabels[key] = value
+		}
 	}
 	if len(matchLabels) > 0 {
 		listOpts = append(listOpts, client.MatchingLabels(matchLabels))
 	}
 
+	// Handle managedBy specially (client-side filtering, not BareMetalHost label)
 	matchManagedBy := matchExpressions["managedBy"]
 	if matchManagedBy == "" {
 		matchManagedBy = shared.OsacDefaultManagedByValue

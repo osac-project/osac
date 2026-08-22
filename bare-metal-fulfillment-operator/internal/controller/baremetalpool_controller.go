@@ -329,7 +329,12 @@ func (r *BareMetalPoolReconciler) listAndGroupBareMetalInstances(ctx context.Con
 		if !bareMetalInstanceList.Items[i].DeletionTimestamp.IsZero() {
 			continue
 		}
-		hostType := bareMetalInstanceList.Items[i].Spec.HostType
+		// Read hostType from annotation (required for label-based selection)
+		hostType := bareMetalInstanceList.Items[i].Annotations["osac.openshift.io/host-type"]
+		if hostType == "" {
+			log.Error(nil, "BareMetalInstance missing required host-type annotation - instance was created before label-based selection migration", "name", bareMetalInstanceList.Items[i].Name)
+			continue
+		}
 		currentBareMetalInstances[hostType] = append(currentBareMetalInstances[hostType], &bareMetalInstanceList.Items[i])
 	}
 
@@ -595,7 +600,9 @@ func (r *BareMetalPoolReconciler) createBareMetalInstanceCR(
 			templateID = currentProfile.HostTemplate
 		}
 		templateParameters = bareMetalPool.Spec.Profile.TemplateParameters
-		selector.HostSelector = currentProfile.HostSelector
+		if len(currentProfile.HostSelector) > 0 {
+			selector.HostSelector = currentProfile.HostSelector
+		}
 	}
 
 	// Prepare inventory labels from profile
@@ -616,9 +623,11 @@ func (r *BareMetalPoolReconciler) createBareMetalInstanceCR(
 			Name:      bareMetalInstanceName,
 			Namespace: namespace,
 			Labels:    labels,
+			Annotations: map[string]string{
+				"osac.openshift.io/host-type": hostType,
+			},
 		},
 		Spec: v1alpha1.BareMetalInstanceSpec{
-			HostType:                  hostType,
 			ExternalHostID:            "",
 			ExternalHostName:          "",
 			Selector:                  selector,

@@ -18,6 +18,7 @@ package inventory
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	metal3api "github.com/metal3-io/baremetal-operator/apis/metal3.io/v1alpha1"
@@ -204,6 +205,95 @@ func TestParseHostID(t *testing.T) {
 			}
 			if name != tt.wantName {
 				t.Errorf("name = %q, want %q", name, tt.wantName)
+			}
+		})
+	}
+}
+
+// --- validateMetal3MatchExpressions ---
+
+func TestValidateMetal3MatchExpressions(t *testing.T) {
+	tests := []struct {
+		name             string
+		matchExpressions map[string]string
+		wantError        bool
+		wantErrorMsg     string
+	}{
+		{
+			name:             "valid single label",
+			matchExpressions: map[string]string{"hardware-profile": "gpu-large"},
+			wantError:        false,
+		},
+		{
+			name: "valid multiple labels",
+			matchExpressions: map[string]string{
+				"hardware-profile": "gpu-large",
+				"rack":             "rack-01",
+				"datacenter":       "dc-west",
+			},
+			wantError: false,
+		},
+		{
+			name:             "empty map is valid",
+			matchExpressions: map[string]string{},
+			wantError:        false,
+		},
+		{
+			name:             "nil map is valid",
+			matchExpressions: nil,
+			wantError:        false,
+		},
+		{
+			name:             "empty string key is invalid",
+			matchExpressions: map[string]string{"": "value"},
+			wantError:        true,
+			wantErrorMsg:     "empty key",
+		},
+		{
+			name:             "key with spaces is invalid",
+			matchExpressions: map[string]string{"key with spaces": "value"},
+			wantError:        true,
+			wantErrorMsg:     "spaces",
+		},
+		{
+			name:             "managedBy key is allowed (specially handled)",
+			matchExpressions: map[string]string{"managedBy": "baremetal"},
+			wantError:        false,
+		},
+		{
+			name:             "provisionState key is allowed",
+			matchExpressions: map[string]string{"provisionState": "available"},
+			wantError:        false,
+		},
+		{
+			name: "mix of regular and special keys is valid",
+			matchExpressions: map[string]string{
+				"hardware-profile": "gpu-large",
+				"managedBy":        "baremetal",
+			},
+			wantError: false,
+		},
+		{
+			name:             "hostType key is allowed (legacy compatibility)",
+			matchExpressions: map[string]string{"hostType": "gpu-node"},
+			wantError:        false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateMetal3MatchExpressions(tt.matchExpressions)
+			if tt.wantError {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tt.wantErrorMsg)
+				}
+				if !strings.Contains(err.Error(), tt.wantErrorMsg) {
+					t.Errorf("expected error containing %q, got %q", tt.wantErrorMsg, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("expected no error, got %v", err)
+				}
 			}
 		})
 	}
@@ -426,6 +516,35 @@ func TestFindFreeHost(t *testing.T) {
 		}
 	})
 
+	t.Run("filters by arbitrary label key-value pairs", func(t *testing.T) {
+		// Create hosts with different label combinations
+		gpuLabels := map[string]string{
+			"osac.openshift.io/hardware-profile": "gpu-large",
+			"datacenter":                         "dc-west",
+			Metal3ManagedByLabel:                 "baremetal",
+		}
+		cpuLabels := map[string]string{
+			"osac.openshift.io/hardware-profile": "cpu-standard",
+			"datacenter":                         "dc-east",
+			Metal3ManagedByLabel:                 "baremetal",
+		}
+		gpuHost := newBMH("host-gpu", gpuLabels, metal3api.OperationalStatusOK, metal3api.StateAvailable)
+		cpuHost := newBMH("host-cpu", cpuLabels, metal3api.OperationalStatusOK, metal3api.StateAvailable)
+
+		m := newMetal3ClientForTest(gpuHost, cpuHost)
+
+		// Filter by hardware-profile label
+		host, err := m.FindFreeHost(ctx, map[string]string{
+			"osac.openshift.io/hardware-profile": "gpu-large",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if host == nil {
+			t.Fatal("expected host (inspect annotation is not disabled), got nil")
+		}
+	})
+
 	t.Run("skips host with nil HardwareDetails", func(t *testing.T) {
 		bmh := newBMHBuilder("host-no-hardware").Build()
 
@@ -458,6 +577,37 @@ func TestFindFreeHost(t *testing.T) {
 
 		m := newMetal3ClientForTest(noHardware, withHW)
 		host, err := m.FindFreeHost(ctx, map[string]string{"hostType": "gpu-node"})
+			t.Fatal("expected gpu host, got nil")
+		}
+		if host.Name != "host-gpu" {
+			t.Errorf("got host %q, want %q", host.Name, "host-gpu")
+		}
+	})
+
+	t.Run("filters by multiple label requirements (AND semantics)", func(t *testing.T) {
+		// Create hosts with different label combinations
+		matchingLabels := map[string]string{
+			"osac.openshift.io/hardware-profile": "gpu-large",
+			"datacenter":                         "dc-west",
+			"rack":                               "rack-01",
+			Metal3ManagedByLabel:                 "baremetal",
+		}
+		partialLabels := map[string]string{
+			"osac.openshift.io/hardware-profile": "gpu-large",
+			"datacenter":                         "dc-east", // Different datacenter
+			"rack":                               "rack-01",
+			Metal3ManagedByLabel:                 "baremetal",
+		}
+		matchingHost := newBMH("host-matching", matchingLabels, metal3api.OperationalStatusOK, metal3api.StateAvailable)
+		partialHost := newBMH("host-partial", partialLabels, metal3api.OperationalStatusOK, metal3api.StateAvailable)
+
+		m := newMetal3ClientForTest(matchingHost, partialHost)
+
+		// Require both hardware-profile AND datacenter to match
+		host, err := m.FindFreeHost(ctx, map[string]string{
+			"osac.openshift.io/hardware-profile": "gpu-large",
+			"datacenter":                         "dc-west",
+		})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -466,6 +616,109 @@ func TestFindFreeHost(t *testing.T) {
 		}
 		if host.Name != "host-with-hw" {
 			t.Errorf("expected host-with-hw, got %q", host.Name)
+			t.Fatal("expected matching host, got nil")
+		}
+		if host.Name != "host-matching" {
+			t.Errorf("got host %q, want %q", host.Name, "host-matching")
+		}
+	})
+
+	t.Run("empty matchExpressions returns any available host", func(t *testing.T) {
+		labels := map[string]string{Metal3ManagedByLabel: "baremetal"}
+		host := newBMH("host-any", labels, metal3api.OperationalStatusOK, metal3api.StateAvailable)
+
+		m := newMetal3ClientForTest(host)
+
+		// No label filters - should return any available host
+		result, err := m.FindFreeHost(ctx, map[string]string{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result == nil {
+			t.Fatal("expected host (no filters), got nil")
+		}
+		if result.Name != "host-any" {
+			t.Errorf("got host %q, want %q", result.Name, "host-any")
+		}
+	})
+
+	t.Run("returns error for invalid match expressions", func(t *testing.T) {
+		m := newMetal3ClientForTest()
+
+		// Empty key should be rejected
+		_, err := m.FindFreeHost(ctx, map[string]string{"": "value"})
+		if err == nil {
+			t.Fatal("expected error for empty key, got nil")
+		}
+		if !strings.Contains(err.Error(), "empty key") {
+			t.Errorf("expected error about empty key, got %q", err.Error())
+		}
+	})
+
+	t.Run("filters by arbitrary label key-value pairs", func(t *testing.T) {
+		// Create hosts with different label combinations
+		gpuLabels := map[string]string{
+			"osac.openshift.io/hardware-profile": "gpu-large",
+			"datacenter":                         "dc-west",
+			Metal3ManagedByLabel:                 "baremetal",
+		}
+		cpuLabels := map[string]string{
+			"osac.openshift.io/hardware-profile": "cpu-standard",
+			"datacenter":                         "dc-east",
+			Metal3ManagedByLabel:                 "baremetal",
+		}
+		gpuHost := newBMHBuilder("host-gpu").WithLabels(gpuLabels).WithOpStatus(metal3api.OperationalStatusOK).WithProvState(metal3api.StateAvailable).WithNICs(testNIC("AA:BB:CC:DD:EE:01")).Build()
+		cpuHost := newBMHBuilder("host-cpu").WithLabels(cpuLabels).WithOpStatus(metal3api.OperationalStatusOK).WithProvState(metal3api.StateAvailable).WithNICs(testNIC("AA:BB:CC:DD:EE:02")).Build()
+
+		m := newMetal3ClientForTest(gpuHost, cpuHost)
+
+		// Filter by hardware-profile label
+		host, err := m.FindFreeHost(ctx, map[string]string{
+			"osac.openshift.io/hardware-profile": "gpu-large",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if host == nil {
+			t.Fatal("expected host (gpu-large profile), got nil")
+		}
+		if host.Name != "host-gpu" {
+			t.Errorf("expected host-gpu, got %q", host.Name)
+		}
+	})
+
+	t.Run("filters by multiple label requirements (AND semantics)", func(t *testing.T) {
+		// Create hosts with different label combinations
+		matchingLabels := map[string]string{
+			"osac.openshift.io/hardware-profile": "gpu-large",
+			"datacenter":                         "dc-west",
+			"rack":                               "rack-01",
+			Metal3ManagedByLabel:                 "baremetal",
+		}
+		partialLabels := map[string]string{
+			"osac.openshift.io/hardware-profile": "gpu-large",
+			"datacenter":                         "dc-east", // Different datacenter
+			"rack":                               "rack-01",
+			Metal3ManagedByLabel:                 "baremetal",
+		}
+		matchingHost := newBMHBuilder("host-matching").WithLabels(matchingLabels).WithOpStatus(metal3api.OperationalStatusOK).WithProvState(metal3api.StateAvailable).WithNICs(testNIC("AA:BB:CC:DD:EE:03")).Build()
+		partialHost := newBMHBuilder("host-partial").WithLabels(partialLabels).WithOpStatus(metal3api.OperationalStatusOK).WithProvState(metal3api.StateAvailable).WithNICs(testNIC("AA:BB:CC:DD:EE:04")).Build()
+
+		m := newMetal3ClientForTest(matchingHost, partialHost)
+
+		// Require both hardware-profile AND datacenter to match
+		host, err := m.FindFreeHost(ctx, map[string]string{
+			"osac.openshift.io/hardware-profile": "gpu-large",
+			"datacenter":                         "dc-west",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if host == nil {
+			t.Fatal("expected host (matching both labels), got nil")
+		}
+		if host.Name != "host-matching" {
+			t.Errorf("expected host-matching, got %q", host.Name)
 		}
 	})
 }
@@ -554,6 +807,74 @@ func TestAssignHost(t *testing.T) {
 		_, err := m.AssignHost(ctx, "no-slash", "instance-123", nil)
 		if err == nil {
 			t.Fatal("expected error for invalid hostID, got nil")
+		}
+	})
+	t.Run("assigns label-filtered host and sets consumerRef correctly", func(t *testing.T) {
+		// Create hosts with different labels - only one should match the filter
+		matchingLabels := map[string]string{
+			"osac.openshift.io/hardware-profile": "gpu-large",
+			"datacenter":                         "dc-west",
+			Metal3ManagedByLabel:                 "baremetal",
+		}
+		nonMatchingLabels := map[string]string{
+			"osac.openshift.io/hardware-profile": "cpu-standard",
+			"datacenter":                         "dc-east",
+			Metal3ManagedByLabel:                 "baremetal",
+		}
+		matchingHost := newBMH("host-gpu", matchingLabels, metal3api.OperationalStatusOK, metal3api.StateAvailable)
+		nonMatchingHost := newBMH("host-cpu", nonMatchingLabels, metal3api.OperationalStatusOK, metal3api.StateAvailable)
+
+		m := newMetal3ClientForTest(matchingHost, nonMatchingHost)
+
+		// First, find the host using label filtering
+		foundHost, err := m.FindFreeHost(ctx, map[string]string{
+			"osac.openshift.io/hardware-profile": "gpu-large",
+			"datacenter":                         "dc-west",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error during FindFreeHost: %v", err)
+		}
+		if foundHost == nil {
+			t.Fatal("expected to find matching host, got nil")
+		}
+		if foundHost.Name != "host-gpu" {
+			t.Errorf("found host %q, want %q", foundHost.Name, "host-gpu")
+		}
+
+		// Now assign that specific host
+		assignedHost, err := m.AssignHost(ctx, foundHost.InventoryHostID, "instance-456", map[string]string{
+			"profileName": "gpu-profile",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error during AssignHost: %v", err)
+		}
+		if assignedHost == nil {
+			t.Fatal("expected assigned host, got nil")
+		}
+		if assignedHost.BareMetalInstanceID != "instance-456" {
+			t.Errorf("BareMetalInstanceID = %q, want %q", assignedHost.BareMetalInstanceID, "instance-456")
+		}
+
+		// Verify the BareMetalHost object has the correct ConsumerRef
+		updatedBMH := &metal3api.BareMetalHost{}
+		if err := m.client.Get(ctx, client.ObjectKey{Namespace: testNamespace, Name: "host-gpu"}, updatedBMH); err != nil {
+			t.Fatalf("failed to get updated BMH: %v", err)
+		}
+
+		if updatedBMH.Spec.ConsumerRef == nil {
+			t.Fatal("expected ConsumerRef to be set, got nil")
+		}
+		if updatedBMH.Spec.ConsumerRef.Name != "instance-456" {
+			t.Errorf("ConsumerRef.Name = %q, want %q", updatedBMH.Spec.ConsumerRef.Name, "instance-456")
+		}
+		if updatedBMH.Spec.ConsumerRef.Kind != "BareMetalInstance" {
+			t.Errorf("ConsumerRef.Kind = %q, want %q", updatedBMH.Spec.ConsumerRef.Kind, "BareMetalInstance")
+		}
+
+		// Verify the profile label was added with the correct prefix
+		expectedProfileLabel := metal3LabelPrefix + "profileName"
+		if updatedBMH.Labels[expectedProfileLabel] != "gpu-profile" {
+			t.Errorf("profile label %q = %q, want %q", expectedProfileLabel, updatedBMH.Labels[expectedProfileLabel], "gpu-profile")
 		}
 	})
 }

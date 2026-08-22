@@ -128,6 +128,12 @@ message BareMetalAcceleratorSpec {
   optional int32 memory_gb = 4 [(buf.validate.field).int32.gt = 0];
 }
 
+// Local reference to a BareMetalInstanceType resource.
+message BareMetalInstanceTypeLocalReference {
+  string id = 1;
+  string name = 2;
+}
+
 // Describes a network port in a bare metal instance type.
 //
 // Port roles: fabric (tenant data traffic), management (control plane),

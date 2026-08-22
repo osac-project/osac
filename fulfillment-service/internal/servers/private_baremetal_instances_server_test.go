@@ -454,7 +454,8 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: "test-baremetal-instance",
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						InstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Id: "default-type"}.Build(),
 						Image: privatev1.BareMetalInstanceImage_builder{
 							SourceType: "registry",
 							SourceRef:  "quay.io/test:latest",
@@ -494,7 +495,8 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						InstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Id: "default-type"}.Build(),
 						Image: privatev1.BareMetalInstanceImage_builder{
 							SourceType: "registry",
 							SourceRef:  "quay.io/test:latest",
@@ -737,7 +739,8 @@ var _ = Describe("Private bare metal instances server", func() {
 						Name: "test-baremetal-instance",
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						InstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Id: "default-type"}.Build(),
 						Image: privatev1.BareMetalInstanceImage_builder{
 							SourceType: "registry",
 							SourceRef:  "quay.io/test:latest",
@@ -752,7 +755,8 @@ var _ = Describe("Private bare metal instances server", func() {
 				Object: privatev1.BareMetalInstance_builder{
 					Id: object.GetId(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						InstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Id: "default-type"}.Build(),
 						Image: privatev1.BareMetalInstanceImage_builder{
 							SourceType: "registry",
 							SourceRef:  "quay.io/test:latest",

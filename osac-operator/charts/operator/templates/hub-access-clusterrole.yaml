@@ -48,6 +48,8 @@ rules:
   - volumes/status
   verbs:
   - get
+  - patch
+  - update
 - apiGroups:
   - console.osac.openshift.io
   resources:

@@ -15,14 +15,12 @@ package it
 
 import (
 	"context"
-	"fmt"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
-	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 )
 
 var _ = Describe("Cluster templates", func() {
@@ -39,7 +37,7 @@ var _ = Describe("Cluster templates", func() {
 	It("Can get the list of templates", func() {
 		// Create a template via the private API:
 		adminClient := privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
-		id := fmt.Sprintf("my_template_%s", uuid.New())
+		id := newTemplateID("my_template")
 		_, err := adminClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
 				Id:          id,
@@ -64,7 +62,7 @@ var _ = Describe("Cluster templates", func() {
 	It("Can get a specific template", func() {
 		// Create a template via the private API:
 		adminClient := privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
-		id := fmt.Sprintf("my_template_%s", uuid.New())
+		id := newTemplateID("my_template")
 		_, err := adminClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
 				Id:          id,

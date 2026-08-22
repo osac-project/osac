@@ -324,7 +324,7 @@ type ClusterSpec struct {
 	//
 	//	{
 	//	  "spec": {
-	//	    "template_id": "123",
+	//	    "template_id": "my_cluster_template",
 	//	    "template_parameters": {
 	//	      "number_of_gpus": {
 	//	        "@type": "type.googleapis.com/google.protobuf.Int32Value",
@@ -711,7 +711,7 @@ type ClusterSpec_builder struct {
 	//
 	//	{
 	//	  "spec": {
-	//	    "template_id": "123",
+	//	    "template_id": "my_cluster_template",
 	//	    "template_parameters": {
 	//	      "number_of_gpus": {
 	//	        "@type": "type.googleapis.com/google.protobuf.Int32Value",

@@ -17,7 +17,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
@@ -56,7 +55,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		// a digit and are rejected by the CRD when the controller creates the CR.
 		templateResp, err := bareMetalInstanceTemplatesClient.Create(ctx, privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
 			Object: privatev1.BareMetalInstanceTemplate_builder{
-				Id:          fmt.Sprintf("test_template_%s", strings.ReplaceAll(uuid.New(), "-", "_")),
+				Id:          newTemplateID("test_template"),
 				Title:       "Test BMI Template",
 				Description: "Template for bare metal instance lifecycle test.",
 				Metadata: privatev1.Metadata_builder{
@@ -406,7 +405,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		imageTemplateResp, err := bareMetalInstanceTemplatesClient.Create(ctx,
 			privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceTemplate_builder{
-					Id:          fmt.Sprintf("test_image_default_%s", strings.ReplaceAll(uuid.New(), "-", "_")),
+					Id:          newTemplateID("test_image_default"),
 					Title:       "Template with image default",
 					Description: "Template that provides a default image via spec_defaults.",
 					Metadata: privatev1.Metadata_builder{
@@ -494,7 +493,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		imageTemplateResp, err := bareMetalInstanceTemplatesClient.Create(ctx,
 			privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceTemplate_builder{
-					Id:          fmt.Sprintf("test_image_override_%s", strings.ReplaceAll(uuid.New(), "-", "_")),
+					Id:          newTemplateID("test_image_override"),
 					Title:       "Template with overridable image default",
 					Description: "Template whose image default should be overridden by user.",
 					Metadata: privatev1.Metadata_builder{

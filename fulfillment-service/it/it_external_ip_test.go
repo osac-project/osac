@@ -675,7 +675,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 
-		templateId = fmt.Sprintf("test-tmpl-%s", uuid.New())
+		templateId = newTemplateID("test_tmpl")
 		_, err = clusterTemplatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
 				Id:    templateId,

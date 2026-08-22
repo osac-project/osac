@@ -278,8 +278,8 @@ configured automatically via AWX job template extra_vars by the setup script.
 - Hub registration uses the internal K8s API (`https://kubernetes.default.svc.cluster.local:443`),
   not the host-reachable address.
 - AWX `aap.url` must include `/api` path prefix.
-- The ComputeInstance template ID must match the Ansible role name
-  (`osac.templates.ocp_virt_vm`), not an arbitrary name.
+- The ComputeInstance template ID must match the CRD kubebuilder pattern
+  (e.g., `osac.templates.ocp_virt_vm`), not an arbitrary name.
 - AWX project sync disables collection install (Red Hat proprietary
   collections like `ansible.platform` are not available in open-source AWX).
 - **Rootless podman does NOT work** for KubeVirt — virt-handler needs to

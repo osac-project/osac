@@ -210,6 +210,35 @@ func (m *Metal3Client) IsRestartComplete(ctx context.Context, hostID string) (bo
 	return !hasRebootAnnotation && bmh.Status.PoweredOn, nil
 }
 
+// HostInterfaceMACsAnnotation records, on a BareMetalHost, the mapping from OSAC
+// interface names to their MAC addresses as a JSON object, e.g.
+// {"eth9":"52:54:00:16:04:83"}. IP discovery uses it to match a DHCP lease by MAC
+// when the fabric records leases without a server name (the BMaaS case, where the
+// host is not registered as a named fabric server).
+const HostInterfaceMACsAnnotation = "osac.openshift.io/interface-macs"
+
+// GetHostInterfaceMACs returns the interface-name → MAC-address map recorded on the
+// host's BareMetalHost annotation. Returns an empty map when the annotation is absent
+// or empty.
+func (m *Metal3Client) GetHostInterfaceMACs(ctx context.Context, hostID string) (map[string]string, error) {
+	bmh, err := m.getBMH(ctx, hostID)
+	if err != nil {
+		return nil, err
+	}
+
+	raw, ok := bmh.Annotations[HostInterfaceMACsAnnotation]
+	if !ok || raw == "" {
+		return map[string]string{}, nil
+	}
+
+	macs := map[string]string{}
+	if err := json.Unmarshal([]byte(raw), &macs); err != nil {
+		return nil, fmt.Errorf("host %s: failed to parse %s annotation: %w", hostID, HostInterfaceMACsAnnotation, err)
+	}
+
+	return macs, nil
+}
+
 func (m *Metal3Client) getBMH(ctx context.Context, hostID string) (*metal3api.BareMetalHost, error) {
 	namespace, name, err := inventory.ParseHostID(hostID)
 	if err != nil {

@@ -32,6 +32,10 @@ type Client interface {
 	SetPowerState(ctx context.Context, hostID string, target PowerState) error
 	TriggerRestart(ctx context.Context, hostID string) error
 	IsRestartComplete(ctx context.Context, hostID string) (bool, error)
+	// GetHostInterfaceMACs returns the OSAC-interface-name → MAC-address map recorded
+	// on the host, used by IP discovery to match a DHCP lease by MAC. Backends that
+	// cannot provide it return an empty map (callers then fall back to name matching).
+	GetHostInterfaceMACs(ctx context.Context, hostID string) (map[string]string, error)
 }
 
 type NewClientFunc func(ctx context.Context, cfg *Config) (Client, error)

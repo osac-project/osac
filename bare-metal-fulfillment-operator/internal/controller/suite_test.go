@@ -34,6 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	osacv1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
+	opv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -64,6 +65,8 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 	err = metal3api.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
+	err = opv1alpha1.AddToScheme(scheme.Scheme)
+	Expect(err).NotTo(HaveOccurred())
 	// +kubebuilder:scaffold:scheme
 
 	By("bootstrapping test environment")
@@ -71,6 +74,7 @@ var _ = BeforeSuite(func() {
 		CRDDirectoryPaths: []string{
 			filepath.Join("..", "..", "config", "crd", "bases"),
 			filepath.Join("..", "..", "test", "crds"),
+			filepath.Join("..", "..", "..", "osac-operator", "config", "crd", "bases"),
 		},
 		ErrorIfCRDPathMissing: false,
 	}

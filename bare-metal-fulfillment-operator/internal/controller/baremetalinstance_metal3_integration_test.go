@@ -76,6 +76,9 @@ func newMetal3Reconciler() *BareMetalInstanceReconciler {
 		invClient,
 		mgmtClient,
 		nil, // provisioning provider
+		nil, // networking provider
+		nil, // IP discovery provider
+		nil, // AAP client
 		0, 0, 0, 0,
 	)
 }

@@ -1,0 +1,43 @@
+---
+# List V-Nets and optionally find one by name.
+# Optional variables:
+#   vnet_name — find a specific V-Net by name
+# Output facts:
+#   netris_vnets  — full list of V-Net summaries
+#   netris_vnet   — the matched V-Net summary dict (or none)
+
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Get V-Nets
+  ansible.builtin.uri:
+    force: true
+    url: "{{ netris_controller_url }}/api/v2/vnet"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+      Cache-Control: "no-cache"
+      Pragma: "no-cache"
+    return_content: true
+    status_code: 200
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _vnet_read_resp
+  no_log: true
+
+- name: Set V-Net facts
+  ansible.builtin.set_fact:
+    netris_vnets: "{{ _vnet_read_resp.json.data | default([]) }}"
+    netris_vnet: >-
+      {{ (_vnet_read_resp.json.data | default([]))
+         | selectattr('name', 'equalto', vnet_name)
+         | list | first | default(none) }}
+  when: vnet_name is defined
+
+- name: Set V-Net facts (no filter)
+  ansible.builtin.set_fact:
+    netris_vnets: "{{ _vnet_read_resp.json.data | default([]) }}"
+    netris_vnet: "{{ none }}"
+  when: vnet_name is not defined

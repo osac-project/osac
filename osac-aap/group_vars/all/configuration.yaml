@@ -43,6 +43,16 @@ netris_tenant_name: "{{ lookup('env', 'NETRIS_TENANT_NAME') }}"
 netris_mgmt_vpc_id: "{{ lookup('env', 'NETRIS_MGMT_VPC_ID') | default(0, true) | int }}"
 netris_mgmt_vpc_name: "{{ lookup('env', 'NETRIS_MGMT_VPC_NAME') }}"
 
+# Bare-metal provisioning network: unassigned fabric ports return here (DHCP +
+# gateway + SNAT) on BMI deletion and are moved off it on provision. Empty leaves
+# the port detached. Deployment-wide; set NETRIS_BM_PROVISIONING_VNET (or the
+# deprecated NETRIS_BM_PARKING_VNET) in the networking env.
+netris_bm_provisioning_vnet: >-
+  {{ lookup('env', 'NETRIS_BM_PROVISIONING_VNET')
+     | default(lookup('env', 'NETRIS_BM_PARKING_VNET'), true)
+     | default('', true) }}
+netris_bm_parking_vnet: "{{ netris_bm_provisioning_vnet }}"
+
 # Per-resource-class configuration (JSON dict).
 # Each key is a resource class name; the value is an object with:
 #   server_cluster_template_id  – Netris server cluster template ID

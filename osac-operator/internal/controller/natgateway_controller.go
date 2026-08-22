@@ -34,6 +34,7 @@ import (
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/pkg/dispatcher"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 )
 
@@ -52,6 +53,7 @@ type NATGatewayReconciler struct {
 	StatusPollInterval   time.Duration
 	MaxJobHistory        int
 	targetCluster        mc.ClusterName
+	Resolver             *dispatcher.Resolver
 }
 
 // NewNATGatewayReconciler creates a new reconciler for NATGateway resources.
@@ -62,6 +64,7 @@ func NewNATGatewayReconciler(
 	statusPollInterval time.Duration,
 	maxJobHistory int,
 	targetCluster mc.ClusterName,
+	resolver *dispatcher.Resolver,
 ) *NATGatewayReconciler {
 	if mgr == nil {
 		panic("mgr must not be nil")
@@ -82,6 +85,7 @@ func NewNATGatewayReconciler(
 		StatusPollInterval:   statusPollInterval,
 		MaxJobHistory:        maxJobHistory,
 		targetCluster:        targetCluster,
+		Resolver:             resolver,
 	}
 }
 
@@ -188,11 +192,17 @@ func (r *NATGatewayReconciler) handleUpdate(ctx context.Context, natgw *v1alpha1
 		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
 
-	// Read implementation strategy from parent VirtualNetwork spec
-	implementationStrategy := vnet.Spec.ImplementationStrategy
-	if implementationStrategy == "" {
+	// Resolve implementation strategy via the NetworkClass dispatcher path,
+	// falling back to the VNet's legacy ImplementationStrategy field.
+	networkClassID := vnet.Spec.NetworkClass
+	legacyStrategy := vnet.Spec.ImplementationStrategy
+	if legacyStrategy == "" {
 		log.Info("implementation strategy not set on parent VirtualNetwork, requeueing", "virtualNetwork", vnet.Name)
 		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+	}
+	implementationStrategy, err := resolveImplementationStrategy(ctx, r.Resolver, "NATGateway", networkClassID, legacyStrategy)
+	if err != nil {
+		return ctrl.Result{}, err
 	}
 
 	// Resolve the ExternalIP CR (by UUID label) for the SNAT source address; the AAP

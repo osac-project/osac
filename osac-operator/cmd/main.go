@@ -732,7 +732,7 @@ func setupNetworkingControllers(
 	}
 	if err := setupNATGatewayControllers(
 		mgr, localMgr, grpcConn, networkingNamespace,
-		networkingProvider, statusPollInterval, maxJobHistory, targetCluster,
+		networkingProvider, statusPollInterval, maxJobHistory, targetCluster, resolver,
 	); err != nil {
 		return err
 	}
@@ -900,6 +900,7 @@ func setupNATGatewayControllers(
 	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn *grpc.ClientConn,
 	networkingNamespace string, provider provisioning.ProvisioningProvider,
 	statusPollInterval time.Duration, maxJobHistory int, targetCluster multicluster.ClusterName,
+	resolver *dispatcher.Resolver,
 ) error {
 	if grpcConn != nil {
 		if err := controller.NewNATGatewayFeedbackReconciler(
@@ -909,7 +910,7 @@ func setupNATGatewayControllers(
 		}
 	}
 	if err := controller.NewNATGatewayReconciler(
-		mgr, networkingNamespace, provider, statusPollInterval, maxJobHistory, targetCluster,
+		mgr, networkingNamespace, provider, statusPollInterval, maxJobHistory, targetCluster, resolver,
 	).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("natgateway controller: %w", err)
 	}

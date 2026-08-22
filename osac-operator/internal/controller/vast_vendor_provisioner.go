@@ -166,6 +166,11 @@ func (p *VastVendorProvisioner) CreateVolume(ctx context.Context, req VendorCrea
 			"username": creds.username,
 			"password": creds.password,
 			"endpoint": creds.vastEndpoint,
+			// tenant scopes auth to the tenant's VMS view: the VAST CSI driver
+			// sends it as the X-Tenant-Name header, which VMS requires to
+			// authenticate a TENANT_ADMIN manager on /api/token/ (a per-tenant
+			// manager cannot authenticate without it — VMS returns 401).
+			"tenant": req.Tenant,
 		},
 	}
 	creds.applyVipPool(csiReq.Parameters)
@@ -211,6 +216,11 @@ func (p *VastVendorProvisioner) DeleteVolume(ctx context.Context, req VendorDele
 			"username": creds.username,
 			"password": creds.password,
 			"endpoint": creds.vastEndpoint,
+			// tenant scopes auth to the tenant's VMS view: the VAST CSI driver
+			// sends it as the X-Tenant-Name header, which VMS requires to
+			// authenticate a TENANT_ADMIN manager on /api/token/ (a per-tenant
+			// manager cannot authenticate without it — VMS returns 401).
+			"tenant": req.Tenant,
 		},
 	})
 	if err != nil {

@@ -28,7 +28,7 @@ var _ = Describe("ExternalIPAttachmentSpec", func() {
 	It("should accept a valid spec with all fields", func() {
 		ci := "my-instance"
 		spec := v1alpha1.ExternalIPAttachmentSpec{
-			ExternalIP:        "my-public-ip",
+			ExternalIP:      "my-public-ip",
 			ComputeInstance: &ci,
 		}
 
@@ -40,7 +40,7 @@ var _ = Describe("ExternalIPAttachmentSpec", func() {
 	It("should accept a spec with baremetalInstance target", func() {
 		bmi := "my-bmi"
 		spec := v1alpha1.ExternalIPAttachmentSpec{
-			ExternalIP:       "my-public-ip",
+			ExternalIP:        "my-public-ip",
 			BaremetalInstance: &bmi,
 		}
 

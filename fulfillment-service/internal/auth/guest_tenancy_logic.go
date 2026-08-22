@@ -71,5 +71,13 @@ func (p *GuestTenancyLogic) DetermineVisibleTenants(_ context.Context) (result c
 	return
 }
 
+// DetermineVisibility returns a visibility that grants access only to the shared tenant.
+func (p *GuestTenancyLogic) DetermineVisibility(_ context.Context) (result *Visibility, err error) {
+	result, err = NewVisibility().
+		AddVisibleTenant(SharedTenant).
+		Build()
+	return
+}
+
 // GuestTenants is the set of tenants that are assigned to guest users.
 var GuestTenants = collections.NewSet("guest")

@@ -2,6 +2,7 @@ name: pre-commit
 
 on:
   pull_request:
+  merge_group:
 
 jobs:
   pre-commit:
@@ -38,7 +39,7 @@ jobs:
       id: gitleaks-config
       if: always()
       env:
-        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
       run: |
         set -euo pipefail
         git show "${BASE_SHA}:.gitleaks.toml" > /tmp/gitleaks-base.toml
@@ -52,8 +53,8 @@ jobs:
       id: gitleaks
       if: always() && steps.gitleaks-config.outcome == 'success'
       env:
-        BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
       run: |
         set -euo pipefail
         docker run --rm \
@@ -76,7 +77,7 @@ jobs:
   # comment may fail there — accepted gap; the scan job still blocks the PR.
   gitleaks-rotation-comment:
     needs: pre-commit
-    if: always() && needs.pre-commit.outputs.gitleaks-failed == 'true'
+    if: always() && needs.pre-commit.outputs.gitleaks-failed == 'true' && github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       issues: write

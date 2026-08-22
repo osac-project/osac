@@ -99,9 +99,9 @@ spec:
               fieldRef:
                 fieldPath: metadata.namespace
           - name: OSAC_ENABLE_CLUSTER_CONTROLLER
-            value: {{ .Values.controllers.clusterOrder | quote }}
+            value: {{ include "osac-operator.controller.clusterOrder" . | quote }}
           - name: OSAC_ENABLE_COMPUTE_INSTANCE_CONTROLLER
-            value: {{ .Values.controllers.computeInstance | quote }}
+            value: {{ include "osac-operator.controller.computeInstance" . | quote }}
           - name: OSAC_ENABLE_TENANT_CONTROLLER
             value: {{ .Values.controllers.tenant | quote }}
           - name: OSAC_ENABLE_NETWORKING_CONTROLLER

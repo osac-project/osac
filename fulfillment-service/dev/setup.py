@@ -217,4 +217,3 @@ def install_artifact(path: pathlib.Path, extracted_name: str, tool_name: str) ->
     bin_stat = bin_file.stat()
     bin_file.chmod(bin_stat.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     logging.info(f"Successfully installed '{tool_name}' to '{bin_file}'")
-

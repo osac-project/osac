@@ -244,6 +244,70 @@ var _ = Describe("translateEvent", func() {
 			Expect(payload["prompt_tokens"]).To(BeEquivalentTo(1500))
 			Expect(payload["total_tokens"]).To(BeEquivalentTo(2300))
 		})
+
+		It("translates an enriched inference event with empty lifecycle fields", func() {
+			ce := cloudevents.NewEvent()
+			ce.SetSpecVersion("1.0")
+			ce.SetID("ce-maas-enriched")
+			ce.SetType("osac.inference.usage.v1")
+			ce.SetSource("osac-metering")
+			ce.SetSubject("maas_inference/ce-maas-enriched")
+			ce.SetTime(time.Date(2026, 8, 19, 14, 30, 0, 0, time.UTC))
+			ce.SetDataContentType("application/json")
+
+			data := map[string]any{
+				"resource_id":    "ce-maas-enriched",
+				"resource_type":  "maas_inference",
+				"tenant_id":      "tenant-acme",
+				"schema_version": "v1",
+				"billing_dimensions": map[string]any{
+					"organization_id":       "acme-corp",
+					"cost_center":           "engineering",
+					"subscription":          "acme-premium-sub",
+					"provider":              "anthropic",
+					"model":                 "claude-sonnet-4-20250514",
+					"prompt_tokens":         1500,
+					"completion_tokens":     800,
+					"total_tokens":          2300,
+					"cached_input_tokens":   200,
+					"cache_creation_tokens": 0,
+					"reasoning_tokens":      150,
+					"duration_ms":           3200.5,
+				},
+			}
+			ExpectWithOffset(1, ce.SetData(cloudevents.ApplicationJSON, data)).To(Succeed())
+
+			endpoint, payload, err := translateEvent(ce)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(endpoint).To(Equal("/maas/event"))
+
+			Expect(payload["resource_type"]).To(Equal("maas_inference"))
+			Expect(payload["tenant_id"]).To(Equal("tenant-acme"))
+			Expect(payload["schema_version"]).To(Equal("v1"))
+
+			Expect(payload["previous_state"]).To(Equal(" "))
+			Expect(payload["current_state"]).To(Equal(" "))
+			Expect(payload["transition_time"]).To(Equal(" "))
+			Expect(payload["duration_seconds"]).To(Equal(" "))
+			Expect(payload["project_id"]).To(Equal(" "))
+			Expect(payload["catalog_item_id"]).To(Equal(" "))
+			Expect(payload["template_id"]).To(Equal(" "))
+
+			Expect(payload["provider"]).To(Equal("anthropic"))
+			Expect(payload["model"]).To(Equal("claude-sonnet-4-20250514"))
+			Expect(payload["prompt_tokens"]).To(BeEquivalentTo(1500))
+			Expect(payload["completion_tokens"]).To(BeEquivalentTo(800))
+			Expect(payload["total_tokens"]).To(BeEquivalentTo(2300))
+			Expect(payload["cached_input_tokens"]).To(BeEquivalentTo(200))
+			Expect(payload["reasoning_tokens"]).To(BeEquivalentTo(150))
+			Expect(payload["duration_ms"]).To(BeEquivalentTo(3200.5))
+			Expect(payload["organization_id"]).To(Equal("acme-corp"))
+			Expect(payload["cost_center"]).To(Equal("engineering"))
+			Expect(payload["subscription"]).To(Equal("acme-premium-sub"))
+
+			Expect(payload).NotTo(HaveKey("cache_creation_tokens"))
+		})
 	})
 
 	Describe("error cases", func() {

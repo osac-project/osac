@@ -1212,9 +1212,14 @@ func (s *PrivateComputeInstancesServer) autoProvisionExternalIP(
 
 	tenant := ci.GetMetadata().GetTenant()
 	ciID := ci.GetId()
+	shortID := ciID
+	if len(shortID) > 8 {
+		shortID = shortID[:8]
+	}
 
 	eip := privatev1.ExternalIP_builder{
 		Metadata: privatev1.Metadata_builder{
+			Name:   fmt.Sprintf("auto-eip-%s", shortID),
 			Tenant: tenant,
 			Labels: map[string]string{
 				autoCreatedLabel:    "true",
@@ -1246,6 +1251,7 @@ func (s *PrivateComputeInstancesServer) autoProvisionExternalIP(
 
 	attachment := privatev1.ExternalIPAttachment_builder{
 		Metadata: privatev1.Metadata_builder{
+			Name:   fmt.Sprintf("auto-eipa-%s", shortID),
 			Tenant: tenant,
 			Labels: map[string]string{
 				autoCreatedLabel:    "true",

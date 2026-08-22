@@ -29,3 +29,9 @@ columns:
 - header: STATE
   value: this.status.state
   type: osac.public.v1.BareMetalInstanceState
+
+- header: INTERNAL IP
+  value: >-
+    has(this.status.network_attachment_statuses) && this.status.network_attachment_statuses.size() > 0 ?
+      this.status.network_attachment_statuses.filter(a, has(a.ip_address) && a.ip_address != '').map(a, a.ip_address).join(',')
+      : '-'

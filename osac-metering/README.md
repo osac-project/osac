@@ -13,7 +13,7 @@ Metering pipeline for OSAC — collects resource usage events and publishes them
 |-----------|-------------|
 | `schema/` | Shared metering event schema — lifecycle data types, resource type constants, CloudEvent extension names |
 | `metering-service/` | Watch Consumer: connects to fulfillment-service gRPC Watch stream, maps lifecycle events to CloudEvents, publishes to Kafka |
-| `adapters/` | Provider Adapter framework (`Runner`, Kafka consumer, dedup, retry) and concrete adapters (`echo-adapter`, `m360-adapter`) |
+| `adapters/` | Provider Adapter framework (`Runner`, Kafka consumer, dedup, retry, DLQ routing) and concrete adapters (`echo-adapter`, `m360-adapter`) |
 | `charts/osac-metering/` | Helm umbrella chart for the metering subsystem |
 
 ## Build and Test

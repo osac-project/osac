@@ -11,7 +11,6 @@ package adapters
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -19,10 +18,7 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
-	cloudevents "github.com/cloudevents/sdk-go/v2"
 	"github.com/go-logr/logr"
-
-	"github.com/osac-project/osac-metering/schema"
 )
 
 const (
@@ -50,6 +46,14 @@ type topicPartition struct {
 	Partition int32
 }
 
+// RunnerOption configures optional Runner behavior.
+type RunnerOption func(*Runner)
+
+// WithDLQ sets a DLQ sender for routing failed events.
+func WithDLQ(dlq DLQSender) RunnerOption {
+	return func(r *Runner) { r.dlq = dlq }
+}
+
 // Runner manages the Kafka consumer lifecycle for a ProviderAdapter.
 type Runner struct {
 	adapter ProviderAdapter
@@ -58,6 +62,7 @@ type Runner struct {
 	metrics *adapterMetrics
 	dedup   *dedupCache
 	order   *orderTracker
+	dlq     DLQSender
 
 	mu      sync.Mutex
 	offsets map[topicPartition]int64
@@ -65,7 +70,7 @@ type Runner struct {
 }
 
 // NewRunner creates a Runner for the given adapter.
-func NewRunner(adapter ProviderAdapter, cfg RunnerConfig, logger logr.Logger) *Runner {
+func NewRunner(adapter ProviderAdapter, cfg RunnerConfig, logger logr.Logger, opts ...RunnerOption) *Runner {
 	if cfg.FlushInterval == 0 {
 		cfg.FlushInterval = defaultFlushInterval
 	}
@@ -76,7 +81,7 @@ func NewRunner(adapter ProviderAdapter, cfg RunnerConfig, logger logr.Logger) *R
 		cfg.MaxRetries = defaultMaxRetries
 	}
 
-	return &Runner{
+	r := &Runner{
 		adapter: adapter,
 		cfg:     cfg,
 		logger:  logger.WithName("adapter-runner").WithValues("provider", adapter.Name()),
@@ -85,6 +90,10 @@ func NewRunner(adapter ProviderAdapter, cfg RunnerConfig, logger logr.Logger) *R
 		order:   newOrderTracker(cfg.DedupTTL),
 		offsets: make(map[topicPartition]int64),
 	}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r
 }
 
 // MetricsHandler returns an HTTP handler for Prometheus metrics.
@@ -234,114 +243,12 @@ func (r *Runner) ConsumeClaim(
 	provider := r.adapter.Name()
 
 	for msg := range claim.Messages() {
-		r.processMessage(session.Context(), msg, provider)
+		if !r.processMessage(session.Context(), msg, provider) {
+			r.logger.Info("stopping partition claim after DLQ failure, will retry after rebalance",
+				"topic", claim.Topic(), "partition", claim.Partition(),
+			)
+			return nil
+		}
 	}
 	return nil
-}
-
-func (r *Runner) processMessage(
-	ctx context.Context,
-	msg *sarama.ConsumerMessage,
-	provider string,
-) {
-	var ce cloudevents.Event
-	if err := json.Unmarshal(msg.Value, &ce); err != nil {
-		r.logger.Error(err, "failed to deserialize CloudEvent",
-			"topic", msg.Topic, "partition", msg.Partition, "offset", msg.Offset,
-		)
-		r.metrics.eventsFailed.WithLabelValues(provider, "deserialization").Inc()
-		return
-	}
-
-	eventID := ce.ID()
-
-	if r.dedup.contains(eventID) {
-		r.metrics.duplicatesSuppressed.WithLabelValues(provider).Inc()
-		r.trackOffset(msg)
-		return
-	}
-
-	r.checkOutOfOrder(ce, provider)
-
-	event := MeteringEvent{
-		CloudEvent: ce,
-		Topic:      msg.Topic,
-		Partition:  msg.Partition,
-		Offset:     msg.Offset,
-	}
-
-	result := submitWithRetry(ctx, r.adapter, event, r.cfg.MaxRetries, r.logger)
-
-	if result.TotalDuration > 0 && result.Attempts > 1 {
-		r.metrics.retryDuration.WithLabelValues(provider).Observe(result.TotalDuration.Seconds())
-	}
-
-	if result.Err != nil {
-		if result.NonRetryable {
-			r.metrics.eventsFailed.WithLabelValues(provider, "non_retryable").Inc()
-			r.logger.Error(result.Err, "dropping non-retryable event",
-				"event_id", eventID, "topic", msg.Topic,
-				"partition", msg.Partition, "offset", msg.Offset,
-			)
-		} else if result.Exhausted {
-			r.metrics.eventsFailed.WithLabelValues(provider, "retries_exhausted").Inc()
-			r.logger.Error(result.Err, "dropping event after retries exhausted",
-				"event_id", eventID, "topic", msg.Topic,
-				"partition", msg.Partition, "offset", msg.Offset,
-			)
-		} else {
-			// Context cancelled (e.g., rebalance interrupted retry backoff).
-			// Do NOT track offset — the event will be redelivered to the new
-			// partition owner after rebalance completes.
-			r.logger.V(1).Info("submit interrupted, event will be redelivered",
-				"event_id", eventID, "topic", msg.Topic,
-				"partition", msg.Partition, "offset", msg.Offset,
-				"error", result.Err,
-			)
-			return
-		}
-		// Track the offset for non-retryable and exhausted errors so the
-		// consumer does not redeliver the same poison message on every restart.
-		r.trackOffset(msg)
-		return
-	}
-
-	r.dedup.add(eventID)
-	r.metrics.eventsSubmitted.WithLabelValues(provider, msg.Topic).Inc()
-	r.trackOffset(msg)
-}
-
-func (r *Runner) trackOffset(msg *sarama.ConsumerMessage) {
-	tp := topicPartition{Topic: msg.Topic, Partition: msg.Partition}
-	r.mu.Lock()
-	if current, ok := r.offsets[tp]; !ok || msg.Offset > current {
-		r.offsets[tp] = msg.Offset
-	}
-	r.mu.Unlock()
-}
-
-func (r *Runner) checkOutOfOrder(ce cloudevents.Event, provider string) {
-	resourceID, ok := ce.Extensions()[schema.ExtResourceID]
-	if !ok {
-		return
-	}
-
-	var data map[string]interface{}
-	if err := json.Unmarshal(ce.Data(), &data); err != nil {
-		return
-	}
-
-	ttStr, ok := data["transition_time"].(string)
-	if !ok {
-		return
-	}
-
-	tt, err := time.Parse(time.RFC3339, ttStr)
-	if err != nil {
-		return
-	}
-
-	if r.order.check(fmt.Sprintf("%v", resourceID), tt) {
-		r.metrics.outOfOrderEvents.WithLabelValues(provider).Inc()
-	}
 }

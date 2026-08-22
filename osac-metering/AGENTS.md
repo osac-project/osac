@@ -9,7 +9,7 @@ Metering pipeline for OSAC — collects resource usage events from the fulfillme
 - **Always `make helm-lint`** from `osac-metering/` before committing chart changes
 - **Kafka cluster required** — metering subsystem needs AMQ Streams and Kafka (deployed via osac-installer phases 1-2)
 - **CloudEvents format** — all metering events use CloudEvents specification for consistency
-- **Implement `ProviderAdapter`** — new billing integrations implement the `ProviderAdapter` interface in `adapters/adapter.go`; the `Runner` handles Kafka consumption, dedup, retry, and offset management
+- **Implement `ProviderAdapter`** — new billing integrations implement the `ProviderAdapter` interface in `adapters/adapter.go`; the `Runner` handles Kafka consumption, dedup, retry, DLQ routing, and offset management
 
 ## Dev Environment
 
@@ -56,7 +56,7 @@ metering-service (event mapping, heartbeats, reconciliation)
   ↓ CloudEvents
 Kafka Topics
   ↓ Sarama consumer group
-adapters.Runner (dedup → out-of-order check → retry → Submit → Flush → offset commit)
+adapters.Runner (dedup → out-of-order check → retry → Submit [→ DLQ on failure] → Flush → offset commit)
   ↓ ProviderAdapter interface
 Concrete Adapters (echo-adapter, m360-adapter, billing providers)
 ```
@@ -83,15 +83,20 @@ The `adapters/` package is a standalone Go module that provides everything a bil
 - `HealthCheck(ctx)` — verify provider connectivity
 - `Close()` — release resources after final flush
 
-**`Runner`** (`runner.go`) — manages the full Kafka consumer lifecycle:
+**`Runner`** (`runner.go`, `runner_process.go`) — manages the full Kafka consumer lifecycle:
 - Sarama consumer group with manual offset commits (offsets committed only after successful `Flush`)
 - TTL-based dedup cache suppresses duplicate CloudEvent IDs
 - Out-of-order detection tracks per-resource `transition_time` ordering
 - Exponential backoff retry (1s→5m, ±25% jitter, configurable max attempts)
 - `NonRetryableError` / `RetryableError` error classification
+- DLQ routing for failed events (non-retryable, retries exhausted, deserialization); DLQ send failure halts partition consumption to prevent data loss
 - Graceful shutdown: final flush with 30s timeout, adapter close with 10s timeout
 
 **Kafka configuration** (`kafka.go`, `kafka_env.go`) — TLS with custom CA, SASL/SCRAM-SHA-512 authentication; `KafkaConfigFromEnv()` reads `KAFKA_*` env vars with TLS enabled by default
+
+**DLQ configuration** — `DLQOptionFromEnv()` reads DLQ environment variables:
+- `DLQ_ENABLED` — set to `false` to disable DLQ (default: enabled)
+- `DLQ_TOPIC` — override the DLQ topic name (default: `osac.metering.dlq`)
 
 **Prometheus metrics** (`metrics.go`):
 - `osac_adapter_events_submitted_total` (provider, topic)
@@ -101,6 +106,9 @@ The `adapters/` package is a standalone Go module that provides everything a bil
 - `osac_adapter_flush_duration_seconds` (provider)
 - `osac_adapter_flush_errors_total` (provider)
 - `osac_adapter_retry_duration_seconds` (provider)
+- `osac_adapter_events_dropped_total` (provider)
+- `osac_adapter_dlq_events_total` (provider)
+- `osac_adapter_dlq_send_errors_total` (provider)
 
 ### Echo Adapter
 

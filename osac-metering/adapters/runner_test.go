@@ -103,6 +103,37 @@ func (c *mockClaim) InitialOffset() int64                     { return 0 }
 func (c *mockClaim) HighWaterMarkOffset() int64               { return 0 }
 func (c *mockClaim) Messages() <-chan *sarama.ConsumerMessage { return c.messages }
 
+type mockDLQSender struct {
+	mu      sync.Mutex
+	sends   []dlqSendEntry
+	sendErr error
+	sendFn  func(msg *sarama.ConsumerMessage) error
+	closed  bool
+}
+
+type dlqSendEntry struct {
+	msg      *sarama.ConsumerMessage
+	reason   string
+	attempts int
+}
+
+func (m *mockDLQSender) Send(msg *sarama.ConsumerMessage, reason string, attempts int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sends = append(m.sends, dlqSendEntry{msg: msg, reason: reason, attempts: attempts})
+	if m.sendFn != nil {
+		return m.sendFn(msg)
+	}
+	return m.sendErr
+}
+
+func (m *mockDLQSender) Close() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.closed = true
+	return nil
+}
+
 // --- Helpers ---
 
 func newTestMessage(id, resourceID string, offset int64) *sarama.ConsumerMessage {
@@ -155,6 +186,17 @@ func newRunner(adapter ProviderAdapter) *Runner {
 		DedupTTL:      10 * time.Minute,
 		MaxRetries:    3,
 	}, logr.Discard())
+}
+
+func newRunnerWithDLQ(adapter ProviderAdapter, dlq DLQSender) *Runner {
+	return NewRunner(adapter, RunnerConfig{
+		Brokers:       "localhost:9092",
+		ConsumerGroup: "test-group",
+		Topics:        []string{TopicLifecycle},
+		FlushInterval: 10 * time.Second,
+		DedupTTL:      10 * time.Minute,
+		MaxRetries:    3,
+	}, logr.Discard(), WithDLQ(dlq))
 }
 
 func feedMessages(claim *mockClaim, msgs ...*sarama.ConsumerMessage) {
@@ -323,6 +365,15 @@ var _ = Describe("Runner", func() {
 
 			val := testutil.ToFloat64(runner.metrics.eventsFailed.WithLabelValues("test-provider", "deserialization"))
 			Expect(val).To(Equal(float64(1)))
+
+			dropped := testutil.ToFloat64(runner.metrics.eventsDropped.WithLabelValues("test-provider"))
+			Expect(dropped).To(Equal(float64(1)))
+
+			runner.mu.Lock()
+			offset, ok := runner.offsets[topicPartition{Topic: TopicLifecycle, Partition: 0}]
+			runner.mu.Unlock()
+			Expect(ok).To(BeTrue())
+			Expect(offset).To(Equal(int64(0)))
 		})
 
 		It("increments non_retryable metric on NonRetryableError", func() {
@@ -525,6 +576,220 @@ var _ = Describe("Runner", func() {
 			Expect(session.marks).To(HaveLen(1))
 			Expect(session.marks[0].offset).To(Equal(int64(3))) // highest offset (2) + 1
 			Expect(session.committed).To(Equal(1))
+		})
+	})
+})
+
+var _ = Describe("Runner DLQ integration", func() {
+	var (
+		adapter   *mockAdapter
+		dlqSender *mockDLQSender
+		runner    *Runner
+		session   *mockSession
+		claim     *mockClaim
+	)
+
+	BeforeEach(func() {
+		adapter = &mockAdapter{name: "test-provider"}
+		dlqSender = &mockDLQSender{}
+		runner = newRunnerWithDLQ(adapter, dlqSender)
+		session = &mockSession{ctx: context.Background()}
+		claim = &mockClaim{
+			topic:     TopicLifecycle,
+			partition: 0,
+			messages:  make(chan *sarama.ConsumerMessage, 10),
+		}
+		_ = runner.Setup(session)
+	})
+
+	Describe("non-retryable errors", func() {
+		It("routes to DLQ with correct metadata", func() {
+			adapter.submitErr = &NonRetryableError{Err: errors.New("bad schema")}
+			feedMessages(claim, newTestMessage("evt-1", "res-1", 5))
+
+			err := runner.ConsumeClaim(session, claim)
+			Expect(err).NotTo(HaveOccurred())
+
+			dlqSender.mu.Lock()
+			defer dlqSender.mu.Unlock()
+			Expect(dlqSender.sends).To(HaveLen(1))
+			Expect(dlqSender.sends[0].reason).To(ContainSubstring("bad schema"))
+			Expect(dlqSender.sends[0].attempts).To(Equal(1))
+		})
+
+		It("tracks offset after DLQ send", func() {
+			adapter.submitErr = &NonRetryableError{Err: errors.New("bad")}
+			feedMessages(claim, newTestMessage("evt-1", "res-1", 7))
+
+			err := runner.ConsumeClaim(session, claim)
+			Expect(err).NotTo(HaveOccurred())
+
+			runner.mu.Lock()
+			defer runner.mu.Unlock()
+			tp := topicPartition{Topic: TopicLifecycle, Partition: 0}
+			Expect(runner.offsets[tp]).To(Equal(int64(7)))
+		})
+
+		It("increments dlq_events_total metric", func() {
+			adapter.submitErr = &NonRetryableError{Err: errors.New("bad")}
+			feedMessages(claim, newTestMessage("evt-1", "res-1", 0))
+
+			err := runner.ConsumeClaim(session, claim)
+			Expect(err).NotTo(HaveOccurred())
+
+			val := testutil.ToFloat64(runner.metrics.dlqEventsTotal.WithLabelValues("test-provider"))
+			Expect(val).To(Equal(float64(1)))
+		})
+	})
+
+	Describe("exhausted retries", func() {
+		It("routes to DLQ after all retries exhausted", func() {
+			adapter.submitErr = errors.New("always fails")
+			feedMessages(claim, newTestMessage("evt-1", "res-1", 10))
+
+			err := runner.ConsumeClaim(session, claim)
+			Expect(err).NotTo(HaveOccurred())
+
+			dlqSender.mu.Lock()
+			defer dlqSender.mu.Unlock()
+			Expect(dlqSender.sends).To(HaveLen(1))
+			Expect(dlqSender.sends[0].reason).To(ContainSubstring("always fails"))
+			Expect(dlqSender.sends[0].attempts).To(Equal(3)) // maxRetries=3
+		})
+	})
+
+	Describe("deserialization errors", func() {
+		It("routes raw bytes to DLQ", func() {
+			msg := &sarama.ConsumerMessage{
+				Topic:     TopicLifecycle,
+				Partition: 0,
+				Offset:    42,
+				Value:     []byte("not valid json{{{"),
+			}
+			feedMessages(claim, msg)
+
+			err := runner.ConsumeClaim(session, claim)
+			Expect(err).NotTo(HaveOccurred())
+
+			dlqSender.mu.Lock()
+			defer dlqSender.mu.Unlock()
+			Expect(dlqSender.sends).To(HaveLen(1))
+			Expect(dlqSender.sends[0].reason).To(Equal("deserialization"))
+			Expect(dlqSender.sends[0].attempts).To(Equal(1))
+			Expect(string(dlqSender.sends[0].msg.Value)).To(Equal("not valid json{{{"))
+		})
+
+		It("stops partition claim when DLQ send fails for deserialization errors", func() {
+			dlqSender.sendErr = errors.New("DLQ broker down")
+			msg := &sarama.ConsumerMessage{
+				Topic:     TopicLifecycle,
+				Partition: 0,
+				Offset:    42,
+				Value:     []byte("not valid json{{{"),
+			}
+			feedMessages(claim, msg, newTestMessage("evt-2", "res-2", 43))
+
+			err := runner.ConsumeClaim(session, claim)
+			Expect(err).NotTo(HaveOccurred())
+
+			runner.mu.Lock()
+			defer runner.mu.Unlock()
+			tp := topicPartition{Topic: TopicLifecycle, Partition: 0}
+			_, tracked := runner.offsets[tp]
+			Expect(tracked).To(BeFalse(), "offset must not be tracked when DLQ send fails")
+		})
+
+		It("tracks offset after DLQ send for deserialization errors", func() {
+			msg := &sarama.ConsumerMessage{
+				Topic:     TopicLifecycle,
+				Partition: 0,
+				Offset:    99,
+				Value:     []byte("bad"),
+			}
+			feedMessages(claim, msg)
+
+			err := runner.ConsumeClaim(session, claim)
+			Expect(err).NotTo(HaveOccurred())
+
+			runner.mu.Lock()
+			defer runner.mu.Unlock()
+			tp := topicPartition{Topic: TopicLifecycle, Partition: 0}
+			Expect(runner.offsets[tp]).To(Equal(int64(99)))
+		})
+	})
+
+	Describe("DLQ send failures", func() {
+		It("stops partition claim and does not track offset when DLQ send fails", func() {
+			adapter.submitErr = &NonRetryableError{Err: errors.New("bad")}
+			dlqSender.sendErr = errors.New("DLQ broker down")
+
+			feedMessages(claim,
+				newTestMessage("evt-1", "res-1", 5),
+				newTestMessage("evt-2", "res-2", 6),
+			)
+
+			err := runner.ConsumeClaim(session, claim)
+			Expect(err).NotTo(HaveOccurred())
+
+			runner.mu.Lock()
+			defer runner.mu.Unlock()
+			tp := topicPartition{Topic: TopicLifecycle, Partition: 0}
+			_, tracked := runner.offsets[tp]
+			Expect(tracked).To(BeFalse(), "offset must not be tracked when DLQ send fails")
+		})
+
+		It("does not process subsequent messages after DLQ send failure", func() {
+			adapter.submitErr = &NonRetryableError{Err: errors.New("bad")}
+			dlqSender.sendErr = errors.New("DLQ broker down")
+
+			feedMessages(claim,
+				newTestMessage("evt-1", "res-1", 5),
+				newTestMessage("evt-2", "res-2", 6),
+			)
+
+			err := runner.ConsumeClaim(session, claim)
+			Expect(err).NotTo(HaveOccurred())
+
+			adapter.mu.Lock()
+			defer adapter.mu.Unlock()
+			Expect(adapter.submitCalls).To(HaveLen(1), "second message must not be processed")
+		})
+
+		It("increments dlq_send_errors metric", func() {
+			adapter.submitErr = &NonRetryableError{Err: errors.New("bad")}
+			dlqSender.sendErr = errors.New("DLQ broker down")
+
+			feedMessages(claim, newTestMessage("evt-1", "res-1", 0))
+
+			err := runner.ConsumeClaim(session, claim)
+			Expect(err).NotTo(HaveOccurred())
+
+			val := testutil.ToFloat64(runner.metrics.dlqSendErrors.WithLabelValues("test-provider"))
+			Expect(val).To(Equal(float64(1)))
+		})
+	})
+
+	Describe("backward compatibility", func() {
+		It("still works without DLQ (nil sender)", func() {
+			noDLQRunner := newRunner(adapter)
+			_ = noDLQRunner.Setup(session)
+			noDLQClaim := &mockClaim{
+				topic:     TopicLifecycle,
+				partition: 0,
+				messages:  make(chan *sarama.ConsumerMessage, 10),
+			}
+
+			adapter.submitErr = &NonRetryableError{Err: errors.New("bad")}
+			feedMessages(noDLQClaim, newTestMessage("evt-1", "res-1", 0))
+
+			err := noDLQRunner.ConsumeClaim(session, noDLQClaim)
+			Expect(err).NotTo(HaveOccurred())
+
+			val := testutil.ToFloat64(noDLQRunner.metrics.eventsFailed.WithLabelValues("test-provider", "non_retryable"))
+			Expect(val).To(Equal(float64(1)))
+
+			dropped := testutil.ToFloat64(noDLQRunner.metrics.eventsDropped.WithLabelValues("test-provider"))
+			Expect(dropped).To(Equal(float64(1)))
 		})
 	})
 })

@@ -49,7 +49,7 @@ const (
 
 	// defaultExternalIPPoolImplementationStrategy is the fallback strategy when none is specified.
 	// Used by ExternalIPPool (from its own spec) and ExternalIP (inherited from parent pool).
-	defaultExternalIPPoolImplementationStrategy = "netris"
+	defaultExternalIPPoolImplementationStrategy = "metallb-l2"
 
 	// defaultSecurityGroupImplementationStrategy is the fallback implementation strategy
 	// for SecurityGroup (standard Kubernetes NetworkPolicy) when neither the SecurityGroup

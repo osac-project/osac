@@ -1,0 +1,20 @@
+{{- if .Values.bcm.enabled }}
+{{- if not .Values.bcm.bmhNamespace }}
+{{- fail "bcm.enabled is true but bcm.bmhNamespace is not set" }}
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Values.secrets.managementConfig }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "bare-metal-fulfillment-operator.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  management.yaml: |
+    name: metal3-management
+    type: metal3
+    options:
+      metal3:
+        namespace: {{ .Values.bcm.bmhNamespace | quote }}
+{{- end }}

@@ -71,6 +71,16 @@ aap:
 csiDriver:
   enabled: true
 
+bmf:
+  bcm:
+    enabled: true
+    url: "https://bcm-head.example.com:8081"
+    cert: "test-cert-placeholder"
+    key: "test-key-placeholder"
+    insecureSkipVerify: false
+    hostClass: "bcm"
+    bmhNamespace: "hardware-inventory"
+
 validation:
   enabled: true
 

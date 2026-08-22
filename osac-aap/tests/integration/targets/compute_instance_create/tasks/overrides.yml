@@ -25,7 +25,9 @@
         osac_job_vars:
           resource: "{{ test_compute_instance }}"
         tenant_target_namespace: "computeinstance-test-vm-work"
-        tenant_storage_class_name: "test-storage-class"
+        tenant_storage_class_storage_classes:
+          - name: "test-storage-class"
+            tier: "local"
 
         # Override 3 workflow extension points
         hook_workflow_start:

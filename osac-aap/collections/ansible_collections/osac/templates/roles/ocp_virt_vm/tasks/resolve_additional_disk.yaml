@@ -1,0 +1,11 @@
+---
+- name: Resolve StorageClass for additional disk {{ resolve_disk_index + 1 }}
+  ansible.builtin.include_role:
+    name: osac.service.tenant_storage_class
+  vars:
+    tenant_storage_class_storage_tier: "{{ item.storageTier }}"
+    tenant_storage_class_disk_label: "additional disk {{ resolve_disk_index + 1 }}"
+
+- name: Append resolved StorageClass for additional disk {{ resolve_disk_index + 1 }}
+  ansible.builtin.set_fact:
+    additional_disk_storage_classes: "{{ additional_disk_storage_classes + [tenant_storage_class_name] }}"

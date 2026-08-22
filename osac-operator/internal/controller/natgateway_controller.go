@@ -88,6 +88,8 @@ func NewNATGatewayReconciler(
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=natgateways,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=natgateways/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=natgateways/finalizers,verbs=update
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=virtualnetworks,verbs=get;list;watch
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=externalips,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -180,6 +182,12 @@ func (r *NATGatewayReconciler) handleUpdate(ctx context.Context, natgw *v1alpha1
 	}
 	vnet := &vnetList.Items[0]
 
+	if vnet.Status.Phase != v1alpha1.VirtualNetworkPhaseReady {
+		log.Info("parent VirtualNetwork not Ready yet, requeueing",
+			"virtualNetwork", vnet.Name, "phase", vnet.Status.Phase)
+		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+	}
+
 	// Read implementation strategy from the annotation the parent VirtualNetwork's own
 	// controller has already resolved and written onto it.
 	implementationStrategy := vnet.Annotations[osacImplementationStrategyAnnotation]
@@ -188,13 +196,53 @@ func (r *NATGatewayReconciler) handleUpdate(ctx context.Context, natgw *v1alpha1
 		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
 
+	// Resolve the ExternalIP CR (by UUID label) for the SNAT source address; the AAP
+	// role reads its allocated address from the ExternalIP CR by name.
+	eipList := &v1alpha1.ExternalIPList{}
+	if err := r.List(ctx, eipList,
+		client.InNamespace(natgw.Namespace),
+		client.MatchingLabels{osacExternalIPIDLabel: natgw.Spec.ExternalIP},
+	); err != nil {
+		return ctrl.Result{}, err
+	}
+	if len(eipList.Items) == 0 {
+		log.Info("ExternalIP not found, requeueing", "uuid", natgw.Spec.ExternalIP)
+		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+	}
+	externalIP := &eipList.Items[0]
+
+	if externalIP.Status.Address == "" {
+		log.Info("ExternalIP address not allocated yet, requeueing", "externalIP", externalIP.Name)
+		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+	}
+
 	// Add implementation-strategy annotation if not present or different
 	if natgw.Annotations == nil {
 		natgw.Annotations = make(map[string]string)
 	}
+	annotationsChanged := false
 	if natgw.Annotations[osacImplementationStrategyAnnotation] != implementationStrategy {
 		natgw.Annotations[osacImplementationStrategyAnnotation] = implementationStrategy
 		log.Info("setting implementation-strategy annotation", "strategy", implementationStrategy)
+		annotationsChanged = true
+	}
+	// Pass the tenant VirtualNetwork name so the netris role creates the SNAT rule in
+	// the tenant VPC (VPC name == VirtualNetwork name), not the mgmt VPC.
+	if natgw.Annotations[osacVirtualNetworkNameAnnotation] != vnet.Name {
+		natgw.Annotations[osacVirtualNetworkNameAnnotation] = vnet.Name
+		annotationsChanged = true
+	}
+	// Pass the ExternalIP CR name (SNAT source address is read from it) and the VN
+	// IPv4 CIDR (the SNAT rule's source network) for the AAP role.
+	if natgw.Annotations[osacExternalIPNameAnnotation] != externalIP.Name {
+		natgw.Annotations[osacExternalIPNameAnnotation] = externalIP.Name
+		annotationsChanged = true
+	}
+	if natgw.Annotations[osacVNIPv4CIDRAnnotation] != vnet.Spec.IPv4CIDR {
+		natgw.Annotations[osacVNIPv4CIDRAnnotation] = vnet.Spec.IPv4CIDR
+		annotationsChanged = true
+	}
+	if annotationsChanged {
 		if err := r.Update(ctx, natgw); err != nil {
 			return ctrl.Result{}, err
 		}

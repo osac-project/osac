@@ -78,6 +78,25 @@ var _ = Describe("NATGatewayReconciler", func() {
 			},
 		}
 		Expect(k8sClient.Create(ctx, vnet)).To(Succeed())
+		vnet.Status.Phase = osacv1alpha1.VirtualNetworkPhaseReady
+		Expect(k8sClient.Status().Update(ctx, vnet)).To(Succeed())
+
+		// Create ExternalIP fixture referenced by the NATGateway (SNAT source)
+		eip := &osacv1alpha1.ExternalIP{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-eip-natgw",
+				Namespace: "default",
+				Labels: map[string]string{
+					osacExternalIPIDLabel: "test-eip-uuid",
+				},
+			},
+			Spec: osacv1alpha1.ExternalIPSpec{
+				Pool: "test-pool-natgw-uuid",
+			},
+		}
+		Expect(k8sClient.Create(ctx, eip)).To(Succeed())
+		eip.Status.Address = "198.51.100.20"
+		Expect(k8sClient.Status().Update(ctx, eip)).To(Succeed())
 
 		// Create NATGateway fixture
 		natgw = &osacv1alpha1.NATGateway{
@@ -110,6 +129,15 @@ var _ = Describe("NATGatewayReconciler", func() {
 			_ = k8sClient.Update(ctx, existingNATGW)
 			_ = k8sClient.Delete(ctx, existingNATGW)
 		}
+
+		// Cleanup ExternalIP fixture
+		eipKey := types.NamespacedName{Name: "test-eip-natgw", Namespace: "default"}
+		existingEIP := &osacv1alpha1.ExternalIP{}
+		if err := k8sClient.Get(ctx, eipKey, existingEIP); err == nil {
+			existingEIP.Finalizers = nil
+			_ = k8sClient.Update(ctx, existingEIP)
+			_ = k8sClient.Delete(ctx, existingEIP)
+		}
 	})
 
 	Context("Reconcile", func() {
@@ -127,6 +155,24 @@ var _ = Describe("NATGatewayReconciler", func() {
 			updated := &osacv1alpha1.NATGateway{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: natgw.Name, Namespace: natgw.Namespace}, updated)).To(Succeed())
 			Expect(updated.Finalizers).To(ContainElement(osacNATGatewayFinalizer))
+		})
+
+		It("should set virtual-network-name, externalip-name and vn-ipv4-cidr annotations for the SNAT job", func() {
+			Expect(k8sClient.Create(ctx, natgw)).To(Succeed())
+			req := mcreconcile.Request{Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: natgw.Name, Namespace: natgw.Namespace},
+			}}
+			// Reconcile a few times to settle the finalizer and annotation writes.
+			for range 3 {
+				_, err := reconciler.Reconcile(ctx, req)
+				Expect(err).NotTo(HaveOccurred())
+			}
+
+			updated := &osacv1alpha1.NATGateway{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: natgw.Name, Namespace: natgw.Namespace}, updated)).To(Succeed())
+			Expect(updated.Annotations).To(HaveKeyWithValue(osacVirtualNetworkNameAnnotation, "test-vnet-natgw"))
+			Expect(updated.Annotations).To(HaveKeyWithValue(osacExternalIPNameAnnotation, "test-eip-natgw"))
+			Expect(updated.Annotations).To(HaveKeyWithValue(osacVNIPv4CIDRAnnotation, "10.0.0.0/16"))
 		})
 
 		It("should set phase to Progressing on first reconcile", func() {

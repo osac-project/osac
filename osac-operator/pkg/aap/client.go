@@ -98,12 +98,13 @@ type LaunchWorkflowTemplateResponse struct {
 
 // Job represents an AAP job with status information.
 type Job struct {
-	ID              int       `json:"id"`
-	Status          string    `json:"status"`
-	Started         time.Time `json:"started"`
-	Finished        time.Time `json:"finished"`
-	ExtraVars       string    `json:"extra_vars"` // AAP returns this as a JSON-encoded string
-	ResultTraceback string    `json:"result_traceback"`
+	ID              int             `json:"id"`
+	Status          string          `json:"status"`
+	Started         time.Time       `json:"started"`
+	Finished        time.Time       `json:"finished"`
+	ExtraVars       string          `json:"extra_vars"` // AAP returns this as a JSON-encoded string
+	ResultTraceback string          `json:"result_traceback"`
+	Artifacts       json.RawMessage `json:"artifacts,omitempty"`
 }
 
 // TemplateType represents the type of AAP template.

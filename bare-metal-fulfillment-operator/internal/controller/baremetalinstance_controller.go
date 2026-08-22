@@ -328,7 +328,11 @@ func (r *BareMetalInstanceReconciler) reconcileManagement(ctx context.Context, b
 
 		provisionCond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionProvisionTemplateComplete)
 		if provisionCond != nil && provisionCond.Status != metav1.ConditionTrue {
-			bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+			if provisionCond.Reason == v1alpha1.HostConditionReasonRetrying {
+				bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
+			} else {
+				bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+			}
 			log.Info("BareMetalInstance not ready: provision template not complete", "bareMetalInstance", bareMetalInstance.Name)
 			return ctrl.Result{}, nil
 		}
@@ -500,17 +504,19 @@ func (r *BareMetalInstanceReconciler) reconcileProvisioning(ctx context.Context,
 	}
 	bareMetalInstance.Status.DesiredConfigVersion = desiredVersion
 
+	provState := &provisioning.State{Jobs: &bareMetalInstance.Status.ProvisioningJobs, DesiredConfigVersion: desiredVersion}
+
 	result, err := provisioning.RunProvisioningLifecycle(ctx, r.ProvisioningProvider, bareMetalInstance,
-		&provisioning.State{Jobs: &bareMetalInstance.Status.ProvisioningJobs, DesiredConfigVersion: desiredVersion},
+		provState,
 		provisioning.DefaultMaxJobHistory, r.ProvisionPollIntervalDuration,
 		&provisioning.PollCallbacks{
 			OnFailed: func(message string) {
-				bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+				retryCount := countFailedProvisionJobs(*provState.Jobs, desiredVersion)
 				bareMetalInstance.SetStatusCondition(
 					v1alpha1.HostConditionProvisionTemplateComplete,
 					metav1.ConditionFalse,
-					v1alpha1.HostConditionReasonTemplateFailed,
-					message,
+					v1alpha1.HostConditionReasonRetrying,
+					fmt.Sprintf("Retry #%d: Last provision failed due to %s", retryCount, message),
 				)
 			},
 			OnSuccess: func(_ provisioning.ProvisionStatus) {
@@ -538,9 +544,11 @@ func (r *BareMetalInstanceReconciler) reconcileProvisioning(ctx context.Context,
 		return result, err
 	}
 
-	// Set progressing condition while provisioning is in-flight, but don't overwrite a failure.
+	// Set progressing condition while provisioning is in-flight, but don't overwrite a failure or retry.
 	provisionCond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionProvisionTemplateComplete)
-	if result.RequeueAfter > 0 && (provisionCond == nil || provisionCond.Reason != v1alpha1.HostConditionReasonTemplateFailed) {
+	if result.RequeueAfter > 0 && (provisionCond == nil ||
+		(provisionCond.Reason != v1alpha1.HostConditionReasonTemplateFailed &&
+			provisionCond.Reason != v1alpha1.HostConditionReasonRetrying)) {
 		bareMetalInstance.SetStatusCondition(
 			v1alpha1.HostConditionProvisionTemplateComplete,
 			metav1.ConditionFalse,
@@ -550,6 +558,17 @@ func (r *BareMetalInstanceReconciler) reconcileProvisioning(ctx context.Context,
 	}
 
 	return result, nil
+}
+
+func countFailedProvisionJobs(jobs []opv1alpha1.JobStatus, configVersion string) int {
+	count := 0
+	for i := range jobs {
+		j := &jobs[i]
+		if j.Type == opv1alpha1.JobTypeProvision && j.State == opv1alpha1.JobStateFailed && j.ConfigVersion == configVersion {
+			count++
+		}
+	}
+	return count
 }
 
 func (r *BareMetalInstanceReconciler) syncBareMetalInstanceStatus(bareMetalInstance *v1alpha1.BareMetalInstance, powerStatus *management.PowerStatus, reconcileErr error, log logr.Logger) {

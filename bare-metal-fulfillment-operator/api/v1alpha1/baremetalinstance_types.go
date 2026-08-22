@@ -196,6 +196,9 @@ const (
 	// HostConditionReasonIronicAPIFailure indicates a power operation failed due to Ironic API error.
 	HostConditionReasonIronicAPIFailure = "IronicAPIFailure"
 
+	// HostConditionReasonRetrying indicates provisioning failed and is being retried with backoff.
+	HostConditionReasonRetrying = "Retrying"
+
 	// HostConditionReasonPowerSyncFailed indicates a restart has failed
 	HostConditionReasonPowerSyncFailed = "PowerSyncFailed"
 

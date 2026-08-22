@@ -1,0 +1,14 @@
+---
+# Remove e2e-ready on new push. lgtm staleness is Prow; this caller only
+# strips the quiet override. Reusable lives in osac-test-infra (OSAC-3370).
+name: Remove e2e-ready label on new push
+on:
+  pull_request_target:
+    types: [synchronize]
+
+jobs:
+  remove-label:
+    permissions:
+      pull-requests: write
+    if: contains(github.event.pull_request.labels.*.name, 'e2e-ready')
+    uses: osac-project/osac-test-infra/.github/workflows/e2e-ready-label-cleanup.yml@main

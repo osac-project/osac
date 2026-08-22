@@ -1,0 +1,370 @@
+---
+# OSAC-3370: fork CodeRabbit APPROVED cannot gh run rerun from
+# pull_request_review (read-only token, no secrets). This workflow_run
+# listener runs default-branch YAML with a write token. No checkout of
+# the PR. Independently verify coderabbitai[bot] APPROVED on current HEAD
+# — do not trust the triggering workflow (fork merge can rename/copy it).
+name: E2E on CodeRabbit approval (fork replay)
+
+on:
+  workflow_run:
+    workflows: ["E2E on CodeRabbit approval"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+# Fork payload often has empty pull_requests; key on head SHA.
+concurrency:
+  group: e2e-start-fork-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  start-e2e:
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: write
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request_review' &&
+      github.event.workflow_run.head_repository.full_name != github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Start e2e workflows for fork CodeRabbit approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }}
+          REVIEWER: coderabbitai[bot]
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${EVENT_HEAD_SHA}" || -z "${HEAD_REPO}" ]]; then
+            echo "workflow_run missing head_sha or head_repository; skipping."
+            exit 0
+          fi
+
+          # Triggering workflow may be attacker-controlled (same name). Require
+          # the trusted fork-handoff job; still verify CR APPROVED below.
+          # Display name equals job id (no name: on producer). e2e-on-approval.yml
+          # fork-handoff must stay in sync; a rename breaks this gate.
+          if ! gh run view "${WORKFLOW_RUN_ID}" -R "${REPO}" --json jobs \
+            | jq -e '.jobs[] | select(.name == "fork-handoff" and .conclusion == "success")' >/dev/null; then
+            echo "No successful fork-handoff job on run #${WORKFLOW_RUN_ID}; skipping."
+            exit 0
+          fi
+
+          prs_json=$(gh api "repos/${REPO}/commits/${EVENT_HEAD_SHA}/pulls")
+          pr_json=$(jq -c --arg sha "${EVENT_HEAD_SHA}" --arg repo "${HEAD_REPO}" '
+            [.[]
+              | select(.state == "open")
+              | select(.base.ref == "main")
+              | select(.head.sha == $sha)
+              | select((.head.repo.full_name // "") == $repo)
+            ]
+            | if length == 1 then .[0] else empty end
+          ' <<<"${prs_json}")
+          if [[ -z "${pr_json}" || "${pr_json}" == "null" ]]; then
+            echo "No unique open main PR for ${HEAD_REPO}@${EVENT_HEAD_SHA:0:7}; skipping."
+            exit 0
+          fi
+
+          PR_NUMBER=$(jq -r '.number' <<<"${pr_json}")
+          HEAD_SHA=$(jq -r '.head.sha' <<<"${pr_json}")
+          HEAD_REF=$(jq -r '.head.ref // empty' <<<"${pr_json}")
+
+          pr_is_open() {
+            [[ "$(jq -r '.state' <<<"${pr_json}")" == "open" ]]
+          }
+
+          human_cr_blocks_bot() {
+            local reviews_json="$1"
+            local rc e_was=0
+            [[ $- == *e* ]] && e_was=1
+            set +e
+            jq -e '
+              [.[]
+                | select(.user != null)
+                | select(((.user.login // "") | endswith("[bot]")) | not)
+                | select((.user.type // "User") != "Bot")
+                | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED")
+              ]
+              | group_by(.user.login)
+              | map(max_by([(.submitted_at // ""), (.id // 0)]))
+              | map(select(.state == "CHANGES_REQUESTED"))
+              | length > 0
+            ' <<<"${reviews_json}" >/dev/null
+            rc=$?
+            [[ ${e_was} -eq 1 ]] && set -e
+            if [[ ${rc} -ne 0 && ${rc} -ne 1 ]]; then
+              echo "Cannot evaluate human review state (jq rc=${rc}); treating as blocked." >&2
+              return 0
+            fi
+            return ${rc}
+          }
+
+          approval_still_valid() {
+            local sha="$1"
+            local reviews_json
+            if ! reviews_json=$(gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUMBER}/reviews" | jq 'add'); then
+              return 2
+            fi
+            if human_cr_blocks_bot "${reviews_json}"; then
+              return 1
+            fi
+            jq -e --arg sha "${sha}" --arg who "${REVIEWER}" '
+              ([.[]
+                | select(.user.login == $who)
+                | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED")
+              ] | max_by([(.submitted_at // ""), (.id // 0)]) // empty) as $latest
+              | ($latest != null)
+                and ($latest.state == "APPROVED")
+                and ($latest.commit_id != null)
+                and ($latest.commit_id == $sha)
+            ' <<<"${reviews_json}" >/dev/null 2>&1
+          }
+
+          av_rc=0
+          approval_still_valid "${HEAD_SHA}" || av_rc=$?
+          if [[ ${av_rc} -eq 2 ]]; then
+            echo "Failed to fetch reviews for PR #${PR_NUMBER}; skipping."
+            {
+              echo "### E2E on approval (fork) skipped"
+              echo ""
+              echo "Could not read review state for \`${HEAD_SHA:0:7}\` on PR #${PR_NUMBER}."
+              echo "Re-approve or use \`lgtm\` / \`/e2e-ready\`."
+            } > /tmp/e2e-on-approval-fork-skip.md
+            gh pr comment "${PR_NUMBER}" -R "${REPO}" --body "$(cat /tmp/e2e-on-approval-fork-skip.md)"
+            exit 1
+          fi
+          if [[ ${av_rc} -ne 0 ]]; then
+            echo "No current ${REVIEWER} APPROVED on ${HEAD_SHA:0:7} (or human CHANGES_REQUESTED); skipping."
+            {
+              echo "### E2E on approval skipped"
+              echo ""
+              echo "\`${REVIEWER}\` is not APPROVED on exact head \`${HEAD_SHA:0:7}\` (different SHA, withdrawn, or a human still has CHANGES_REQUESTED)."
+              echo "Expensive e2e will not start until that is cleared, or a \`lgtm\` / \`/e2e-ready\` unlock is applied."
+            } > /tmp/e2e-on-approval-fork-blocked.md
+            gh pr comment "${PR_NUMBER}" -R "${REPO}" --body "$(cat /tmp/e2e-on-approval-fork-blocked.md)"
+            exit 0
+          fi
+
+          E2E_WORKFLOWS=(
+            e2e-vmaas-full-install.yml
+            e2e-bmaas-full-install.yml
+            e2e-caas-full-install.yml
+          )
+
+          STARTED=0
+          ERRORS=0
+          SKIPPED=0
+          STALE=0
+          TIMEOUTS=0
+
+          find_pr_run() {
+            local wf="$1"
+            local runs
+            runs=$(gh api \
+              "repos/${REPO}/actions/workflows/${wf}/runs?event=pull_request&per_page=100" \
+              --jq '[.workflow_runs[]]')
+            jq -c --arg sha "${HEAD_SHA}" --argjson pr "${PR_NUMBER}" \
+              --arg repo "${HEAD_REPO}" --arg ref "${HEAD_REF}" '
+              ([.[]
+                | select(.head_sha == $sha)
+                | select(any(.pull_requests[]?; .number == $pr))
+              ][0])
+              // (if ($repo | length) > 0 and ($ref | length) > 0 then
+                  ([.[]
+                    | select(.head_sha == $sha)
+                    | select((.pull_requests // []) | length == 0)
+                    | select((.head_repository.full_name // "") == $repo)
+                    | select(.head_branch == $ref)
+                  ] | if length == 1 then .[0] else empty end)
+                else empty end)
+              // empty
+            ' <<<"${runs}"
+          }
+
+          wait_until_rerun_or_skip() {
+            local run_id="$1"
+            local view status conclusion busy
+            for _ in $(seq 1 90); do
+              view=$(gh run view "${run_id}" -R "${REPO}" --json status,conclusion,jobs)
+              status=$(jq -r '.status' <<<"${view}")
+              conclusion=$(jq -r '.conclusion // empty' <<<"${view}")
+              busy=$(jq -r '
+                [.jobs[]
+                  | select(.name | test("full-install"; "i"))
+                  | select(.name | test("readiness"; "i") | not)
+                  | .status
+                ]
+                | if length == 0 then "unknown"
+                  else (map(select(. == "in_progress" or . == "queued")) | length > 0 | tostring)
+                  end
+              ' <<<"${view}")
+
+              if [[ "${busy}" == "unknown" && "${status}" != "completed" ]]; then
+                sleep 2
+                continue
+              fi
+
+              if [[ "${busy}" == "true" ]]; then
+                echo "Expensive job already active on run #${run_id}; skip rerun."
+                return 2
+              fi
+
+              if [[ "${status}" == "completed" ]]; then
+                if [[ "${conclusion}" == "success" ]]; then
+                  return 2
+                fi
+                echo "Run #${run_id} completed (conclusion=${conclusion:-none}); will rerun."
+                return 0
+              fi
+              sleep 2
+            done
+            echo "Timed out waiting on run #${run_id}; expensive job never started."
+            return 1
+          }
+
+          start_via_pr_run() {
+            local wf="$1"
+            local candidates run_id rc cur_sha av_rc
+
+            if ! pr_json=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}"); then
+              echo "Failed to fetch PR #${PR_NUMBER} while processing ${wf}."
+              ERRORS=$((ERRORS + 1))
+              return
+            fi
+            if ! pr_is_open; then
+              echo "PR #${PR_NUMBER} is no longer open; aborting ${wf}."
+              STALE=$((STALE + 1))
+              return
+            fi
+            cur_sha=$(jq -r '.head.sha' <<<"${pr_json}")
+            if [[ "${cur_sha}" != "${HEAD_SHA}" ]]; then
+              echo "PR head moved before starting ${wf} (${HEAD_SHA:0:7} → ${cur_sha:0:7}); aborting."
+              STALE=$((STALE + 1))
+              return
+            fi
+            approval_still_valid "${HEAD_SHA}"
+            av_rc=$?
+            if [[ ${av_rc} -eq 2 ]]; then
+              echo "Failed to fetch reviews for PR #${PR_NUMBER} while processing ${wf}."
+              ERRORS=$((ERRORS + 1))
+              return
+            fi
+            if [[ ${av_rc} -ne 0 ]]; then
+              echo "Approval from ${REVIEWER} no longer valid on ${HEAD_SHA:0:7}; aborting ${wf}."
+              STALE=$((STALE + 1))
+              return
+            fi
+
+            candidates=""
+            for _ in $(seq 1 30); do
+              candidates=$(find_pr_run "${wf}")
+              if [[ -n "${candidates}" && "${candidates}" != "null" ]]; then
+                break
+              fi
+              echo "Waiting for pull_request run for ${wf} at ${HEAD_SHA:0:7}..."
+              sleep 2
+            done
+            if [[ -z "${candidates}" || "${candidates}" == "null" ]]; then
+              echo "No pull_request run for ${wf} at ${HEAD_SHA:0:7} on PR #${PR_NUMBER}."
+              ERRORS=$((ERRORS + 1))
+              return
+            fi
+
+            run_id=$(jq -r '.id' <<<"${candidates}")
+            echo "Considering ${wf} PR run #${run_id}..."
+
+            wait_until_rerun_or_skip "${run_id}"
+            rc=$?
+            if [[ ${rc} -eq 2 ]]; then
+              SKIPPED=$((SKIPPED + 1))
+              return
+            fi
+            if [[ ${rc} -ne 0 ]]; then
+              TIMEOUTS=$((TIMEOUTS + 1))
+              return
+            fi
+
+            if ! pr_json=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}"); then
+              echo "Failed to fetch PR #${PR_NUMBER} before rerun of ${wf}."
+              ERRORS=$((ERRORS + 1))
+              return
+            fi
+            if ! pr_is_open; then
+              echo "PR #${PR_NUMBER} is no longer open; skipping rerun of ${wf}."
+              STALE=$((STALE + 1))
+              return
+            fi
+            cur_sha=$(jq -r '.head.sha' <<<"${pr_json}")
+            if [[ "${cur_sha}" != "${HEAD_SHA}" ]]; then
+              echo "Head/approval changed immediately before rerun of ${wf}; skipping."
+              STALE=$((STALE + 1))
+              return
+            fi
+            approval_still_valid "${HEAD_SHA}"
+            av_rc=$?
+            if [[ ${av_rc} -eq 2 ]]; then
+              echo "Failed to fetch reviews for PR #${PR_NUMBER} before rerun of ${wf}."
+              ERRORS=$((ERRORS + 1))
+              return
+            fi
+            if [[ ${av_rc} -ne 0 ]]; then
+              echo "Head/approval changed immediately before rerun of ${wf}; skipping."
+              STALE=$((STALE + 1))
+              return
+            fi
+
+            if gh run rerun "${run_id}" -R "${REPO}"; then
+              STARTED=$((STARTED + 1))
+            else
+              echo "Failed to start ${wf} from run #${run_id}"
+              ERRORS=$((ERRORS + 1))
+            fi
+          }
+
+          echo "Fork PR #${PR_NUMBER}: ${REVIEWER} APPROVED ${HEAD_SHA:0:7} — starting e2e via pull_request rerun."
+
+          for wf in "${E2E_WORKFLOWS[@]}"; do
+            set +e
+            start_via_pr_run "${wf}"
+            wf_rc=$?
+            set -e
+            if [[ ${wf_rc} -ne 0 ]]; then
+              echo "Unexpected failure while processing ${wf} (rc=${wf_rc})."
+              ERRORS=$((ERRORS + 1))
+            fi
+          done
+
+          {
+            echo "### E2E on approval (fork)"
+            echo ""
+            echo "\`${REVIEWER}\` approved \`${HEAD_SHA:0:7}\` on fork PR #${PR_NUMBER} — starting expensive e2e (PR run replay)."
+            echo "- Started: ${STARTED}/${#E2E_WORKFLOWS[@]}"
+            if [[ ${SKIPPED} -gt 0 ]]; then
+              echo "- Already active/green (skipped rerun): ${SKIPPED}"
+            fi
+            if [[ ${STALE} -gt 0 ]]; then
+              echo "- Head moved or approval withdrawn (no rerun): ${STALE}"
+            fi
+            if [[ ${TIMEOUTS} -gt 0 ]]; then
+              echo "- Timed out waiting for the expensive job to reach a terminal state: ${TIMEOUTS}"
+            fi
+            if [[ ${ERRORS} -gt 0 ]]; then
+              echo "- Errors: ${ERRORS}"
+              echo ""
+              echo "Needs a prior \`pull_request\` e2e run at this head for PR #${PR_NUMBER}."
+            fi
+          } > /tmp/e2e-on-approval-fork.md
+
+          gh pr comment "${PR_NUMBER}" -R "${REPO}" --body "$(cat /tmp/e2e-on-approval-fork.md)"
+
+          if [[ ${ERRORS} -gt 0 || ${TIMEOUTS} -gt 0 ]]; then
+            exit 1
+          fi

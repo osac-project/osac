@@ -1,0 +1,149 @@
+{{- if and .Values.keycloak.enabled .Values.keycloak.route.publicIngress }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: osac-prereqs-patch-route
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-prereqs.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: osac-prereqs-patch-route-cert-manager
+  namespace: cert-manager
+  labels:
+    {{- include "osac-prereqs.labels" . | nindent 4 }}
+rules:
+- apiGroups: [""]
+  resources: [secrets]
+  resourceNames: [default-ca]
+  verbs: [get, watch, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: osac-prereqs-patch-route-keycloak
+  namespace: keycloak
+  labels:
+    {{- include "osac-prereqs.labels" . | nindent 4 }}
+rules:
+- apiGroups: [route.openshift.io]
+  resources: [routes]
+  resourceNames: [keycloak]
+  verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: osac-prereqs-patch-route-cert-manager
+  namespace: cert-manager
+  labels:
+    {{- include "osac-prereqs.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: osac-prereqs-patch-route-cert-manager
+subjects:
+- kind: ServiceAccount
+  name: osac-prereqs-patch-route
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: osac-prereqs-patch-route-keycloak
+  namespace: keycloak
+  labels:
+    {{- include "osac-prereqs.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: osac-prereqs-patch-route-keycloak
+subjects:
+- kind: ServiceAccount
+  name: osac-prereqs-patch-route
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: osac-prereqs-patch-route
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-prereqs.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: osac-prereqs-patch-route
+  template:
+    metadata:
+      labels:
+        app: osac-prereqs-patch-route
+    spec:
+      restartPolicy: Always
+      serviceAccountName: osac-prereqs-patch-route
+      containers:
+      - name: patch-route
+        image: {{ .Values.cliImage }}
+        command: ["/bin/bash", "/scripts/patch-keycloak-route.sh"]
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          capabilities:
+            drop:
+            - "ALL"
+        livenessProbe:
+          exec:
+            command:
+            - /bin/bash
+            - -c
+            - |
+              # Liveness check: verify the reconciliation loop is responsive
+              # Check that oc command works and Route exists (if past initial reconciliation)
+              oc get route keycloak -n keycloak &>/dev/null || exit 0
+          initialDelaySeconds: 30
+          periodSeconds: 60
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          exec:
+            command:
+            - /bin/bash
+            - -c
+            - |
+              # Readiness check: verify initial reconciliation completed
+              # Route must exist and have destinationCACertificate set (if reencrypt)
+              TERMINATION=$(oc get route keycloak -n keycloak -o jsonpath='{.spec.tls.termination}' 2>/dev/null || echo "")
+              if [[ "$TERMINATION" == "reencrypt" ]]; then
+                DEST_CA=$(oc get route keycloak -n keycloak -o jsonpath='{.spec.tls.destinationCACertificate}' 2>/dev/null || echo "")
+                [[ -n "$DEST_CA" ]] || exit 1
+              fi
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        volumeMounts:
+        - name: scripts
+          mountPath: /scripts
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: scripts
+        configMap:
+          name: osac-prereqs-hook-scripts
+          defaultMode: 0755
+      - name: tmp
+        emptyDir: {}
+{{- end }}

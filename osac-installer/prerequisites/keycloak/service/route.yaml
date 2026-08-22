@@ -22,4 +22,9 @@ spec:
   port:
     targetPort: https
   tls:
+    # NOTE: For clusters with publicly-trusted *.apps ingress certs, switch to:
+    #   termination: reencrypt
+    #   destinationCACertificate: |
+    #     <PEM-encoded CA cert from keycloak-tls-cert secret>
+    # See osac-installer charts/osac-prereqs/values.yaml: keycloak.route.publicIngress
     termination: passthrough

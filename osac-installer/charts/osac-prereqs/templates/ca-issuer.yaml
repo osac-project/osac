@@ -49,6 +49,9 @@ spec:
   - secret:
       name: "default-ca"
       key: "ca.crt"
+  {{- if .Values.keycloak.route.publicIngress }}
+  - useDefaultCAs: true
+  {{- end }}
   target:
     configMap:
       key: bundle.pem

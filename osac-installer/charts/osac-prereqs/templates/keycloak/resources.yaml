@@ -496,7 +496,13 @@ spec:
   port:
     targetPort: https
   tls:
-    termination: passthrough
+    {{- if .Values.keycloak.route.publicIngress }}
+    # reencrypt mode presents the cluster's public ingress cert to browsers while re-encrypting
+    # traffic to Keycloak's internal TLS endpoint. The destinationCACertificate (required for
+    # reencrypt) is automatically managed by the osac-prereqs-patch-route Deployment, which
+    # continuously reconciles the Route with the current CA cert from cert-manager.
+    {{- end }}
+    termination: {{ if .Values.keycloak.route.publicIngress }}reencrypt{{ else }}passthrough{{ end }}
 ---
 apiVersion: v1
 kind: ConfigMap

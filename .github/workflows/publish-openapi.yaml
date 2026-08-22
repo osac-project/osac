@@ -51,7 +51,7 @@ jobs:
     - uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3  # v1
       with:
         setup_only: true
-    - uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95  # v5
+    - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961  # v5
       with:
         distribution: 'temurin'
         java-version: '21'

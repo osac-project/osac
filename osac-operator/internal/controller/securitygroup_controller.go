@@ -173,17 +173,18 @@ func (r *SecurityGroupReconciler) handleUpdate(ctx context.Context, sg *v1alpha1
 		networkClassID = vnetList.Items[0].Spec.NetworkClass
 
 		// Gate: at least one subnet must be Ready before creating SG ACL rules,
-		// because the ACL fan-out uses per-subnet CIDRs.
+		// because the ACL fan-out uses per-subnet CIDRs. Subnets don't carry
+		// the VN UUID label — filter by spec.VirtualNetwork instead.
 		subnetList := &v1alpha1.SubnetList{}
 		if err := r.List(ctx, subnetList,
 			client.InNamespace(sg.Namespace),
-			client.MatchingLabels{osacVirtualNetworkIDLabel: sg.Spec.VirtualNetwork},
 		); err != nil {
 			return ctrl.Result{}, err
 		}
 		hasReadySubnet := false
 		for i := range subnetList.Items {
-			if subnetList.Items[i].Status.Phase == v1alpha1.SubnetPhaseReady {
+			if subnetList.Items[i].Spec.VirtualNetwork == sg.Spec.VirtualNetwork &&
+				subnetList.Items[i].Status.Phase == v1alpha1.SubnetPhaseReady {
 				hasReadySubnet = true
 				break
 			}

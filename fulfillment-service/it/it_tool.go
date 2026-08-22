@@ -440,7 +440,14 @@ func (t *Tool) Setup(ctx context.Context) error {
 	}
 
 	// Register the hub:
-	if err = t.registerHub(ctx); err != nil {
+	err = t.ensureHub(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Ensure that a default cluster version is present:
+	err = t.ensureDefaultClusterVersion(ctx)
+	if err != nil {
 		return err
 	}
 
@@ -2392,7 +2399,7 @@ func (t *Tool) createHubNamespace(ctx context.Context) error {
 	return nil
 }
 
-func (t *Tool) registerHub(ctx context.Context) error {
+func (t *Tool) ensureHub(ctx context.Context) error {
 	t.logger.DebugContext(ctx, "Registering hub")
 
 	// Prepare the kubeconfig for the hub:
@@ -2445,6 +2452,28 @@ func (t *Tool) registerHub(ctx context.Context) error {
 		return fmt.Errorf("failed to create hub: %w", err)
 	}
 	return nil
+}
+
+// ensureDefaultClusterVersion ensures that a default cluster version is present for version resolution during cluster creation.
+func (t *Tool) ensureDefaultClusterVersion(ctx context.Context) error {
+	client := privatev1.NewClusterVersionsClient(t.internalView.adminConn)
+	_, err := client.Create(ctx, privatev1.ClusterVersionsCreateRequest_builder{
+		Object: privatev1.ClusterVersion_builder{
+			Metadata: privatev1.Metadata_builder{
+				Name: "default",
+			}.Build(),
+			Spec: privatev1.ClusterVersionSpec_builder{
+				Version:   "4.17.0",
+				Image:     "quay.io/openshift-release-dev/ocp-release:4.17.0-multi",
+				IsDefault: new(true),
+			}.Build(),
+		}.Build(),
+	}.Build())
+	status, ok := grpcstatus.FromError(err)
+	if ok && status.Code() == grpccodes.AlreadyExists {
+		return nil
+	}
+	return fmt.Errorf("failed to create default cluster version: %w", err)
 }
 
 // buildCLI builds the osac CLI binary and stores its path for use in CLI integration tests.

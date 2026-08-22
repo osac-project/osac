@@ -27,7 +27,6 @@ import (
 	"k8s.io/klog/v2"
 	crlog "sigs.k8s.io/controller-runtime/pkg/log"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 )
 
@@ -127,22 +126,6 @@ var _ = BeforeSuite(func() {
 		err := tool.Cleanup(ctx)
 		Expect(err).ToNot(HaveOccurred())
 	})
-
-	// Create a default cluster version for version resolution during cluster creation:
-	cvClient := privatev1.NewClusterVersionsClient(tool.InternalView().AdminConn())
-	_, err = cvClient.Create(ctx, privatev1.ClusterVersionsCreateRequest_builder{
-		Object: privatev1.ClusterVersion_builder{
-			Metadata: privatev1.Metadata_builder{
-				Name: "default",
-			}.Build(),
-			Spec: privatev1.ClusterVersionSpec_builder{
-				Version:   "4.17.0",
-				Image:     "quay.io/openshift-release-dev/ocp-release:4.17.0-multi",
-				IsDefault: new(true),
-			}.Build(),
-		}.Build(),
-	}.Build())
-	Expect(err).ToNot(HaveOccurred())
 })
 
 var _ = Describe("Integration", func() {

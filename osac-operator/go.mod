@@ -3,11 +3,11 @@ module github.com/osac-project/osac/osac-operator
 go 1.26.3
 
 require (
-	buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.36.11-20260709200747-435963d16310.1
+	buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.36.12-20260709200747-435963d16310.1
 	github.com/coder/websocket v1.8.15
-	github.com/container-storage-interface/spec v1.12.0
+	github.com/container-storage-interface/spec v1.13.0
 	github.com/go-logr/logr v1.4.4
-	github.com/onsi/ginkgo/v2 v2.32.0
+	github.com/onsi/ginkgo/v2 v2.32.1
 	github.com/onsi/gomega v1.42.1
 	github.com/openshift/hypershift/api v0.0.0-20250331235933-616a2fae81ae
 	github.com/osac-project/osac/bare-metal-fulfillment-operator v0.0.0-00010101000000-000000000000
@@ -18,13 +18,13 @@ require (
 	golang.org/x/sync v0.22.0
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa
 	google.golang.org/grpc v1.83.0
-	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af
+	google.golang.org/protobuf v1.36.12
 	k8s.io/api v0.36.3
 	k8s.io/apimachinery v0.36.3
-	k8s.io/apiserver v0.36.2
+	k8s.io/apiserver v0.36.3
 	k8s.io/client-go v0.36.3
 	k8s.io/utils v0.0.0-20260319190234-28399d86e0b5
-	kubevirt.io/api v1.8.4
+	kubevirt.io/api v1.9.0
 	sigs.k8s.io/controller-runtime v0.24.1
 	sigs.k8s.io/multicluster-runtime v0.24.1
 )
@@ -100,7 +100,7 @@ require (
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	k8s.io/apiextensions-apiserver v0.36.0 // indirect
-	k8s.io/component-base v0.36.2 // indirect
+	k8s.io/component-base v0.36.3 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect
 	k8s.io/kube-openapi v0.0.0-20260317180543-43fb72c5454a // indirect
 	k8s.io/streaming v0.36.3 // indirect

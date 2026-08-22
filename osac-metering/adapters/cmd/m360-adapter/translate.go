@@ -20,18 +20,25 @@ import (
 	"github.com/osac-project/osac-metering/schema"
 )
 
-// resourceTypeEndpoints maps OSAC resource types to M360 API endpoints.
-var resourceTypeEndpoints = map[string]string{
-	schema.ResourceTypeComputeInstance: "/vmaas/event",
-	schema.ResourceTypeClusterOrder:    "/caas/event",
-	"maas_inference":                   "/maas/event",
+// Route key constants — each submitter maps these to its own destination format.
+const (
+	routeVMaaS = "vmaas"
+	routeCaaS  = "caas"
+	routeMaaS  = "maas"
+)
+
+// resourceTypeRoutes maps OSAC resource types to protocol-neutral route keys.
+var resourceTypeRoutes = map[string]string{
+	schema.ResourceTypeComputeInstance: routeVMaaS,
+	schema.ResourceTypeClusterOrder:    routeCaaS,
+	"maas_inference":                   routeMaaS,
 }
 
 // spaceString is the M360 convention for non-applicable fields.
 const spaceString = " "
 
 // translateEvent converts a canonical OSAC CloudEvent to a flat M360
-// Usage API payload and returns the target endpoint path.
+// Usage API payload and returns the route key for destination selection.
 func translateEvent(ce cloudevents.Event) (string, map[string]any, error) {
 	if ce.ID() == "" {
 		return "", nil, &adapters.NonRetryableError{
@@ -52,7 +59,7 @@ func translateEvent(ce cloudevents.Event) (string, map[string]any, error) {
 	}
 
 	resourceType, _ := data["resource_type"].(string)
-	endpoint, ok := resourceTypeEndpoints[resourceType]
+	route, ok := resourceTypeRoutes[resourceType]
 	if !ok {
 		return "", nil, &adapters.NonRetryableError{
 			Err: fmt.Errorf("unknown resource_type %q", resourceType),
@@ -95,7 +102,7 @@ func translateEvent(ce cloudevents.Event) (string, map[string]any, error) {
 		}
 	}
 
-	return endpoint, payload, nil
+	return route, payload, nil
 }
 
 // nullToSpace replaces nil and empty string with the M360 space string.

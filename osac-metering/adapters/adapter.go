@@ -60,7 +60,7 @@ type NonRetryableError struct{ Err error }
 func (e *NonRetryableError) Error() string { return e.Err.Error() }
 func (e *NonRetryableError) Unwrap() error { return e.Err }
 
-// KafkaConfig configures the Kafka consumer connection.
+// KafkaConfig configures Kafka connections (consumer and producer).
 type KafkaConfig struct {
 	TLSEnabled   bool   // Enable TLS for broker connections
 	TLSCACert    string // Path to CA certificate file (empty = system CAs)

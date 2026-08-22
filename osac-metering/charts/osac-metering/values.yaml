@@ -47,3 +47,17 @@ m360Adapter:
     apiUrl: ""
     apiKeySecret: ""     # name of K8s Secret with key "api-key"
     apiVersion: "v1"
+  output:
+    protocol: "rest"       # "rest" or "kafka"
+    kafka:
+      brokers: ""          # M360 Kafka bootstrap servers (required when protocol=kafka)
+      tls:
+        enabled: true
+        caCertSecret: ""   # K8s Secret name with key "ca.crt"
+      sasl:
+        username: ""
+        passwordSecret: "" # K8s Secret name with key "password"
+      topics:
+        vmaas: "m360.metering.vmaas"
+        caas: "m360.metering.caas"
+        maas: "m360.metering.maas"

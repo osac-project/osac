@@ -8,13 +8,20 @@ in compliance with the License. You may obtain a copy of the License at
 */
 
 // m360-adapter consumes OSAC metering CloudEvents from Kafka and
-// forwards them to the Monetize360 (M360) Usage API via REST.
+// forwards them to the Monetize360 (M360) Usage API via REST or Kafka.
 //
-// Usage:
+// Usage (REST — default):
 //
 //	export KAFKA_BROKERS="localhost:9092"
 //	export M360_API_URL="https://m360.example.com"
 //	export M360_API_KEY_FILE="/path/to/api-key"
+//	go run ./cmd/m360-adapter/
+//
+// Usage (Kafka):
+//
+//	export KAFKA_BROKERS="localhost:9092"
+//	export M360_OUTPUT_PROTOCOL="kafka"
+//	export M360_KAFKA_BROKERS="m360-kafka:9093"
 //	go run ./cmd/m360-adapter/
 package main
 
@@ -27,23 +34,24 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/IBM/sarama"
 	"github.com/go-logr/stdr"
 	"github.com/osac-project/osac-metering/adapters"
 	"github.com/osac-project/osac-metering/adapters/envutil"
 )
 
 type m360Adapter struct {
-	client *m360Client
+	sub submitter
 }
 
 func (a *m360Adapter) Name() string { return "m360" }
 
 func (a *m360Adapter) Submit(ctx context.Context, event adapters.MeteringEvent) error {
-	endpoint, payload, err := translateEvent(event.CloudEvent)
+	route, payload, err := translateEvent(event.CloudEvent)
 	if err != nil {
 		return err
 	}
-	return a.client.post(ctx, endpoint, payload)
+	return a.sub.submit(ctx, route, payload)
 }
 
 func (a *m360Adapter) Flush(_ context.Context) (adapters.SubmitResult, error) {
@@ -51,18 +59,67 @@ func (a *m360Adapter) Flush(_ context.Context) (adapters.SubmitResult, error) {
 }
 
 func (a *m360Adapter) HealthCheck(ctx context.Context) error {
-	return a.client.healthCheck(ctx)
+	return a.sub.healthCheck(ctx)
 }
 
-func (a *m360Adapter) Close() error { return nil }
+func (a *m360Adapter) Close() error { return a.sub.close() }
 
 func main() {
 	brokers := envutil.RequireEnv("KAFKA_BROKERS")
-	m360URL := envutil.RequireEnv("M360_API_URL")
-	apiKeyFile := envutil.RequireEnv("M360_API_KEY_FILE")
+	logger := stdr.New(log.New(os.Stderr, "", log.LstdFlags))
 
-	apiKey := envutil.ReadFileOrFatal(apiKeyFile)
-	apiVersion := envutil.EnvOrDefault("M360_API_VERSION", "v1")
+	protocol := envutil.EnvOrDefault("M360_OUTPUT_PROTOCOL", "rest")
+
+	var sub submitter
+
+	switch protocol {
+	case "rest":
+		m360URL := envutil.RequireEnv("M360_API_URL")
+		apiKeyFile := envutil.RequireEnv("M360_API_KEY_FILE")
+		apiKey := envutil.ReadFileOrFatal(apiKeyFile)
+		apiVersion := envutil.EnvOrDefault("M360_API_VERSION", "v1")
+
+		sub = newRESTSubmitter(m360URL, apiVersion, apiKey, logger)
+		log.Printf("M360 output: REST api_version=%s", apiVersion)
+
+	case "kafka":
+		m360Brokers := envutil.RequireEnv("M360_KAFKA_BROKERS")
+		m360Cfg := adapters.KafkaConfig{
+			TLSEnabled:   os.Getenv("M360_KAFKA_TLS_ENABLED") != "false",
+			TLSCACert:    os.Getenv("M360_KAFKA_TLS_CA_CERT"),
+			SASLUser:     os.Getenv("M360_KAFKA_SASL_USERNAME"),
+			SASLPassFile: os.Getenv("M360_KAFKA_SASL_PASSWORD_FILE"),
+		}
+
+		producerCfg, err := adapters.NewProducerConfig(m360Cfg)
+		if err != nil {
+			log.Fatalf("M360 Kafka producer config: %v", err)
+		}
+
+		m360BrokerList := envutil.SplitAndTrim(m360Brokers, ",")
+		client, err := sarama.NewClient(m360BrokerList, producerCfg)
+		if err != nil {
+			log.Fatalf("M360 Kafka client: %v", err)
+		}
+
+		producer, err := sarama.NewSyncProducerFromClient(client)
+		if err != nil {
+			_ = client.Close()
+			log.Fatalf("M360 Kafka producer: %v", err)
+		}
+
+		m360Topics := map[string]string{
+			routeVMaaS: envutil.EnvOrDefault("M360_KAFKA_TOPIC_VMAAS", "m360.metering.vmaas"),
+			routeCaaS:  envutil.EnvOrDefault("M360_KAFKA_TOPIC_CAAS", "m360.metering.caas"),
+			routeMaaS:  envutil.EnvOrDefault("M360_KAFKA_TOPIC_MAAS", "m360.metering.maas"),
+		}
+
+		sub = newKafkaSubmitter(producer, client, m360Topics, logger)
+		log.Printf("M360 output: Kafka brokers=%v topics=%v", m360BrokerList, m360Topics)
+
+	default:
+		log.Fatalf("unknown M360_OUTPUT_PROTOCOL %q (expected rest or kafka)", protocol)
+	}
 
 	topics := adapters.AllTopics
 	if v := os.Getenv("KAFKA_TOPICS"); v != "" {
@@ -88,12 +145,7 @@ func main() {
 
 	metricsAddr := envutil.EnvOrDefault("METRICS_ADDR", ":2112")
 
-	logger := stdr.New(log.New(os.Stderr, "", log.LstdFlags))
-
-	client := newM360Client(m360URL, apiVersion, apiKey)
-	client.logger = logger
-
-	adapter := &m360Adapter{client: client}
+	adapter := &m360Adapter{sub: sub}
 	runner := adapters.NewRunner(adapter, adapters.RunnerConfig{
 		Brokers:       brokers,
 		ConsumerGroup: group,
@@ -130,8 +182,8 @@ func main() {
 		syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	log.Printf("starting m360 adapter: topics=%v group=%s api_version=%s flush=%s",
-		topics, group, apiVersion, flushInterval)
+	log.Printf("starting m360 adapter: protocol=%s topics=%v group=%s flush=%s",
+		protocol, topics, group, flushInterval)
 
 	runErr := runner.Run(ctx)
 

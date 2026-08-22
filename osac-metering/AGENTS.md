@@ -119,17 +119,21 @@ Deployed via Helm with `echoAdapter.enabled: true` (disabled by default; enabled
 
 ### M360 Adapter
 
-`adapters/cmd/m360-adapter/` forwards OSAC metering CloudEvents to the Monetize360 (M360) Usage API via REST. It translates nested CloudEvents to M360's flat payload format and routes to the correct M360 endpoint by resource type (`/vmaas/event`, `/caas/event`, `/maas/event`).
+`adapters/cmd/m360-adapter/` forwards OSAC metering CloudEvents to the Monetize360 (M360) Usage API via REST or Kafka. It translates nested CloudEvents to M360's flat payload format and routes by resource type via protocol-neutral route keys (`vmaas`, `caas`, `maas`).
 
-- Per-event submit (M360 API is per-event; no batch endpoint)
-- Bearer token auth from K8s Secret file mount
-- Error classification: 4xx → non-retryable (except 408/429), 5xx → retryable
-- TLS enabled by default, configurable API version (default `v1`)
+**Output protocol** is configured per-deployment via `M360_OUTPUT_PROTOCOL` (default `rest`):
+
+- **REST** — POST to M360 Usage API endpoints (`/vmaas/event`, `/caas/event`, `/maas/event`), Bearer token auth from K8s Secret
+- **Kafka** — Produce flat M360 JSON to M360 Kafka topics (`m360.metering.vmaas`, etc.), resource_id as message key, idempotent SyncProducer
+
+Common features:
+- Per-event submit, error classification: 4xx → non-retryable (except 408/429), 5xx → retryable
 - `GET /healthz` — liveness probe (always 200)
-- `GET /readyz` — readiness probe (TCP/TLS reachability check to M360 base URL)
+- `GET /readyz` — readiness probe (REST: TCP/TLS to M360 base URL; Kafka: metadata refresh)
 - `GET /metrics` — Prometheus metrics
+- `submitter` interface abstracts output protocol (`restSubmitter`, `kafkaSubmitter`)
 
-Deployed via Helm with `m360Adapter.enabled: true` (disabled by default).
+Deployed via Helm with `m360Adapter.enabled: true` (disabled by default). Set `m360Adapter.output.protocol: kafka` and configure `m360Adapter.output.kafka.*` for Kafka output.
 
 ## Deployment
 
@@ -155,9 +159,14 @@ Key configuration parameters in `charts/osac-metering/values.yaml`:
 - `certs.caBundle.configMap` — CA bundle ConfigMap name
 - `echoAdapter.enabled` — Deploy the echo-adapter (default `false`)
 - `m360Adapter.enabled` — Deploy the m360-adapter (default `false`)
-- `m360Adapter.m360.apiUrl` — M360 Usage API base URL
-- `m360Adapter.m360.apiKeySecret` — K8s Secret name containing the M360 API key
+- `m360Adapter.m360.apiUrl` — M360 Usage API base URL (required when protocol=rest)
+- `m360Adapter.m360.apiKeySecret` — K8s Secret name containing the M360 API key (required when protocol=rest)
 - `m360Adapter.m360.apiVersion` — M360 API version (default `v1`)
+- `m360Adapter.output.protocol` — Output protocol: `rest` or `kafka` (default `rest`)
+- `m360Adapter.output.kafka.brokers` — M360 Kafka bootstrap servers (required when protocol=kafka)
+- `m360Adapter.output.kafka.tls.*` — TLS config for M360 Kafka (enabled by default)
+- `m360Adapter.output.kafka.sasl.*` — SASL/SCRAM config for M360 Kafka
+- `m360Adapter.output.kafka.topics.*` — Topic name overrides (defaults: `m360.metering.vmaas/caas/maas`)
 
 ## CI Integration
 

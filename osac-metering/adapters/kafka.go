@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/IBM/sarama"
 	"github.com/xdg-go/scram"
@@ -32,19 +33,45 @@ func newConsumerConfig(cfg KafkaConfig) (*sarama.Config, error) {
 	}
 
 	if cfg.TLSEnabled {
-		if err := configureConsumerTLS(sc, cfg.TLSCACert); err != nil {
+		if err := configureTLS(sc, cfg.TLSCACert); err != nil {
 			return nil, err
 		}
 	}
 	if cfg.SASLUser != "" {
-		if err := configureConsumerSASL(sc, cfg.SASLUser, cfg.SASLPassFile); err != nil {
+		if err := configureSASL(sc, cfg.SASLUser, cfg.SASLPassFile); err != nil {
 			return nil, err
 		}
 	}
 	return sc, nil
 }
 
-func configureConsumerTLS(sc *sarama.Config, caCertPath string) error {
+// NewProducerConfig creates a Sarama config for a Kafka producer.
+// Idempotent, acks=all, synchronous — suitable for at-least-once delivery.
+func NewProducerConfig(cfg KafkaConfig) (*sarama.Config, error) {
+	sc := sarama.NewConfig()
+	sc.Version = sarama.V3_9_0_0
+	sc.Producer.RequiredAcks = sarama.WaitForAll
+	sc.Producer.Idempotent = true
+	sc.Producer.Return.Successes = true
+	sc.Net.MaxOpenRequests = 1
+	sc.Net.DialTimeout = 5 * time.Second
+	sc.Net.ReadTimeout = 5 * time.Second
+	sc.Net.WriteTimeout = 5 * time.Second
+
+	if cfg.TLSEnabled {
+		if err := configureTLS(sc, cfg.TLSCACert); err != nil {
+			return nil, err
+		}
+	}
+	if cfg.SASLUser != "" {
+		if err := configureSASL(sc, cfg.SASLUser, cfg.SASLPassFile); err != nil {
+			return nil, err
+		}
+	}
+	return sc, nil
+}
+
+func configureTLS(sc *sarama.Config, caCertPath string) error {
 	sc.Net.TLS.Enable = true
 	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
 	if caCertPath != "" {
@@ -62,7 +89,7 @@ func configureConsumerTLS(sc *sarama.Config, caCertPath string) error {
 	return nil
 }
 
-func configureConsumerSASL(sc *sarama.Config, user, passFile string) error {
+func configureSASL(sc *sarama.Config, user, passFile string) error {
 	password, err := os.ReadFile(passFile)
 	if err != nil {
 		return fmt.Errorf("reading SASL password file %s: %w", passFile, err)

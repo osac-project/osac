@@ -70,10 +70,10 @@ var _ = Describe("translateEvent", func() {
 				},
 			)
 
-			endpoint, payload, err := translateEvent(ce)
+			route, payload, err := translateEvent(ce)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(endpoint).To(Equal("/vmaas/event"))
+			Expect(route).To(Equal("vmaas"))
 			Expect(payload["event_id"]).To(Equal("ce-abc123"))
 			Expect(payload["event_time"]).To(Equal("2026-07-20T10:00:00Z"))
 			Expect(payload["resource_type"]).To(Equal("compute_instance"))
@@ -127,10 +127,10 @@ var _ = Describe("translateEvent", func() {
 				nil,
 			)
 
-			endpoint, payload, err := translateEvent(ce)
+			route, payload, err := translateEvent(ce)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(endpoint).To(Equal("/vmaas/event"))
+			Expect(route).To(Equal("vmaas"))
 			Expect(payload).NotTo(HaveKey("instance_type"))
 		})
 
@@ -184,7 +184,7 @@ var _ = Describe("translateEvent", func() {
 	})
 
 	Describe("CaaS events", func() {
-		It("translates a cluster_order event to /caas/event", func() {
+		It("translates a cluster_order event to caas route", func() {
 			ce := buildCloudEvent(
 				"ce-caas-001",
 				"osac.resource.created.v1",
@@ -201,10 +201,10 @@ var _ = Describe("translateEvent", func() {
 				},
 			)
 
-			endpoint, payload, err := translateEvent(ce)
+			route, payload, err := translateEvent(ce)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(endpoint).To(Equal("/caas/event"))
+			Expect(route).To(Equal("caas"))
 			Expect(payload["cluster_template"]).To(Equal("ocp-ci-small"))
 			Expect(payload["component"]).To(Equal("control_plane"))
 			Expect(payload["node_count"]).To(BeEquivalentTo(1))
@@ -212,7 +212,7 @@ var _ = Describe("translateEvent", func() {
 	})
 
 	Describe("MaaS events", func() {
-		It("translates a maas_inference event to /maas/event", func() {
+		It("translates a maas_inference event to maas route", func() {
 			ce := buildCloudEvent(
 				"ce-maas-001",
 				"osac.inference.usage.v1",
@@ -236,10 +236,10 @@ var _ = Describe("translateEvent", func() {
 				},
 			)
 
-			endpoint, payload, err := translateEvent(ce)
+			route, payload, err := translateEvent(ce)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(endpoint).To(Equal("/maas/event"))
+			Expect(route).To(Equal("maas"))
 			Expect(payload["provider"]).To(Equal("anthropic"))
 			Expect(payload["prompt_tokens"]).To(BeEquivalentTo(1500))
 			Expect(payload["total_tokens"]).To(BeEquivalentTo(2300))

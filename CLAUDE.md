@@ -9,3 +9,4 @@ Rules:
 - If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
 - Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
 - Do **not** run `graphify update .` locally to refresh the graph after code changes -- generation is centralized in CI (see AGENTS.md's "Knowledge Graph" section); a local run would overwrite the CI-fetched, org-wide graph with an incomplete single-machine view.
+- The graph reflects committed file content only. It helps code-structure questions (tracing symbols, cross-component changes) -- it does not help questions about live GitHub state (branch protection rules, actual required checks, run/failure history, current merge-queue state); verify those directly with `gh api`/`gh run`, not by reading workflow file content.

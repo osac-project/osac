@@ -1,0 +1,43 @@
+---
+# List Netris servers (hw type=server) and optionally find one by name.
+# Optional variables:
+#   server_name — find a specific server by name
+# Output facts:
+#   netris_servers — list of server objects
+#   netris_server  — matched server dict (or none)
+
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Get servers
+  ansible.builtin.uri:
+    force: true
+    url: "{{ netris_controller_url }}/api/v2/hw?type=server"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+      Cache-Control: "no-cache"
+      Pragma: "no-cache"
+    return_content: true
+    status_code: 200
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _hw_servers_resp
+  no_log: true
+
+- name: Set server facts
+  ansible.builtin.set_fact:
+    netris_servers: "{{ _hw_servers_resp.json.data | default([]) }}"
+    netris_server: >-
+      {{ (_hw_servers_resp.json.data | default([]))
+         | selectattr('name', 'equalto', server_name)
+         | list | first | default(none) }}
+  when: server_name is defined
+
+- name: Set server facts (no filter)
+  ansible.builtin.set_fact:
+    netris_servers: "{{ _hw_servers_resp.json.data | default([]) }}"
+    netris_server: "{{ none }}"
+  when: server_name is not defined

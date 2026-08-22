@@ -22,4 +22,8 @@ var (
 	osacExternalIPAttachmentIDLabel           string = fmt.Sprintf("%s/externalipattachment-uuid", osacPrefix)
 	osacExternalIPAttachmentFeedbackFinalizer string = fmt.Sprintf("%s/externalipattachment-feedback", osacPrefix)
 	osacExternalIPTargetIPAnnotation          string = fmt.Sprintf("%s/target-ip", osacPrefix)
+	// osacVirtualNetworkNameAnnotation carries the tenant VirtualNetwork CR name to the
+	// AAP job so the netris role can resolve the Netris VPC by name (VPC name == VN name)
+	// and create the NAT rule in the tenant VPC that owns the rule's tenant-side IP.
+	osacVirtualNetworkNameAnnotation string = fmt.Sprintf("%s/virtual-network-name", osacPrefix)
 )

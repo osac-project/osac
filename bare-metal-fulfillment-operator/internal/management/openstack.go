@@ -141,6 +141,13 @@ func (c *OpenStackClient) reconnect(ctx context.Context) error {
 	return nil
 }
 
+// GetHostInterfaceMACs is not supported by the OpenStack backend; interface-MAC
+// discovery relies on the metal3 BareMetalHost annotation. Returning an empty map
+// makes IP discovery fall back to server-name-based lease matching.
+func (c *OpenStackClient) GetHostInterfaceMACs(_ context.Context, _ string) (map[string]string, error) {
+	return map[string]string{}, nil
+}
+
 func (c *OpenStackClient) GetPowerState(ctx context.Context, hostID string) (*PowerStatus, error) {
 	var node *nodes.Node
 	err := c.withAuthRetry(ctx, func(client *gophercloud.ServiceClient) error {

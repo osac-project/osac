@@ -23,44 +23,21 @@
       - "Allocating Netris IPAM IP for ExternalIP '{{ eip_name }}'"
       - "Pool name (ExternalIPPool): {{ eip_pool_name }}"
 
-- name: Ensure Netris auth
-  ansible.builtin.include_role:
-    name: netris.controller.auth
-  when: netris_session_cookie is not defined
-
 - name: Query IPAM allocations
-  ansible.builtin.uri:
-    url: "{{ netris_controller_url }}/api/v2/ipam"
-    method: GET
-    headers:
-      Cookie: "connect.sid={{ netris_session_cookie }}"
-    return_content: true
-    status_code: [200]
-    timeout: "{{ netris_timeout | default(30) }}"
-    validate_certs: "{{ netris_validate_certs | default(true) }}"
-  register: _eip_ipam_tree_resp
-  no_log: true
+  ansible.builtin.include_role:
+    name: netris.controller.ipam
+    tasks_from: read_tree
 
 - name: Query IPAM subnets
-  ansible.builtin.uri:
-    url: "{{ netris_controller_url }}/api/v2/ipam/subnets"
-    method: GET
-    headers:
-      Cookie: "connect.sid={{ netris_session_cookie }}"
-    return_content: true
-    status_code: [200]
-    timeout: "{{ netris_timeout | default(30) }}"
-    validate_certs: "{{ netris_validate_certs | default(true) }}"
-  register: _eip_ipam_subnets_resp
-  no_log: true
+  ansible.builtin.include_role:
+    name: netris.controller.ipam
+    tasks_from: read_subnets
+  vars:
+    ipam_subnet_name: "{{ eip_name }}"
 
-- name: Check for existing subnet by ExternalIP name
+- name: Set existing subnet reference
   ansible.builtin.set_fact:
-    _eip_existing_subnet: >-
-      {{ (_eip_ipam_subnets_resp.json.data | default([]))
-         | selectattr('name', 'equalto', eip_name)
-         | list | first | default(none) }}
-  when: _eip_ipam_subnets_resp.json is mapping
+    _eip_existing_subnet: "{{ netris_ipam_subnet }}"
 
 - name: Use existing subnet address (idempotent)
   when: _eip_existing_subnet is defined and _eip_existing_subnet is not none
@@ -79,10 +56,9 @@
     - name: Find pool allocations in IPAM tree
       ansible.builtin.set_fact:
         _eip_pool_allocs: >-
-          {{ (_eip_ipam_tree_resp.json.data | default([]))
+          {{ netris_ipam_tree
              | selectattr('name', 'match', '^' + (eip_pool_name | regex_escape) + '(-[0-9]+)?$')
              | list }}
-      when: _eip_ipam_tree_resp.json is mapping
 
     - name: Fail if no pool allocations found
       ansible.builtin.fail:
@@ -94,7 +70,7 @@
     - name: Collect all allocated /32 addresses from IPAM
       ansible.builtin.set_fact:
         _eip_allocated_addrs: >-
-          {{ (_eip_ipam_subnets_resp.json.data | default([]))
+          {{ netris_ipam_subnets
              | selectattr('prefix', 'defined')
              | selectattr('prefix', 'match', '.*\/32$')
              | map(attribute='prefix')

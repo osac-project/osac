@@ -1,0 +1,49 @@
+---
+- name: Query DHCP leases for network attachments
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    resource: "{{ osac_job_vars.resource }}"
+    resource_name: "{{ resource.metadata.name }}"
+    implementation_strategy: >-
+      {{ resource.metadata.annotations
+         ['osac.openshift.io/implementation-strategy']
+         | default('netris', true) }}
+    network_attachments: "{{ resource.spec.networkAttachments | default([]) }}"
+    host_name: >-
+      {{ (resource.spec.externalHostName
+         | default(resource.spec.externalHostID, true)).split('/')[-1] }}
+
+  pre_tasks:
+    - name: Show resource metadata
+      ansible.builtin.debug:
+        var: resource.metadata
+
+    - name: Fail if no network attachments
+      ansible.builtin.fail:
+        msg: "No networkAttachments defined on {{ resource_name }}"
+      when: network_attachments | length == 0
+
+  tasks:
+    - name: Query DHCP lease for each network attachment
+      ansible.builtin.include_role:
+        name: "osac.templates.{{ implementation_strategy }}"
+        tasks_from: query_dhcp_lease
+      vars:
+        network_attachment:
+          host_name: "{{ host_name }}"
+          logical_interface_name: "{{ item.interface }}"
+          subnet_ref: "{{ item.subnetRef }}"
+      loop: "{{ network_attachments }}"
+      loop_control:
+        label: "{{ item.interface | default('default') }} → {{ item.subnetRef }}"
+
+  post_tasks:
+    # Emit once, after all attachments resolved, so multi-NIC leases aren't
+    # clobbered by per-iteration set_stats. Skipped if any attachment failed
+    # above (the job then fails and the operator retries with backoff).
+    - name: Publish discovered leases as job artifacts
+      ansible.builtin.set_stats:
+        data:
+          leases: "{{ _dhcp_leases | default([]) }}"

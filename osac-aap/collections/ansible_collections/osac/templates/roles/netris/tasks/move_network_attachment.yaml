@@ -1,0 +1,34 @@
+---
+# Move a server's fabric port between Netris V-Nets: detach from from_vnet_name
+# (if set) then attach to to_vnet_name (if set). Either may be empty for a pure
+# detach or attach. Backend/lifecycle-agnostic — callers decide what the V-Nets
+# mean (tenant, provisioning, ...), so this is reusable across BMaaS and CaaS.
+
+- name: Extract move configuration
+  ansible.builtin.set_fact:
+    na_host_name: "{{ network_attachment.host_name }}"
+    na_logical_interface: "{{ network_attachment.logical_interface_name }}"
+    _na_from: "{{ network_attachment.from_vnet_name | default('', true) }}"
+    _na_to: "{{ network_attachment.to_vnet_name | default('', true) }}"
+
+- name: Resolve server port
+  ansible.builtin.include_tasks: _resolve_server_port.yaml
+
+- name: Fail if server port not found
+  ansible.builtin.fail:
+    msg: >-
+      Port '{{ na_logical_interface }}' not found on server '{{ na_host_name }}'
+      (ensure the host is registered in Netris and the interface name is correct).
+  when: _target_port is none
+
+- name: Detach from source V-Net
+  ansible.builtin.include_tasks: _detach_port_from_vnet.yaml
+  vars:
+    _op_vnet_name: "{{ _na_from }}"
+  when: _na_from | length > 0
+
+- name: Attach to target V-Net
+  ansible.builtin.include_tasks: _attach_port_to_vnet.yaml
+  vars:
+    _op_vnet_name: "{{ _na_to }}"
+  when: _na_to | length > 0

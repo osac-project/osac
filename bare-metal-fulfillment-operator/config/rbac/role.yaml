@@ -48,6 +48,16 @@ rules:
 - apiGroups:
   - osac.openshift.io
   resources:
+  - externalipattachments
+  - externalips
+  verbs:
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups:
+  - osac.openshift.io
+  resources:
   - networkclasses
   - subnets
   verbs:

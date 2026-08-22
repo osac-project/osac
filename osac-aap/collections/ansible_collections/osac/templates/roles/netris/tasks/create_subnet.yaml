@@ -27,30 +27,16 @@
   ansible.builtin.set_fact:
     subnet_virtual_network_name: "{{ _vn_lookup.resources[0].metadata.name }}"
 
-- name: Ensure Netris auth
-  ansible.builtin.include_role:
-    name: netris.controller.auth
-  when: netris_session_cookie is not defined
-
 - name: Look up parent VPC by name
-  ansible.builtin.uri:
-    url: "{{ netris_controller_url }}/api/v2/vpc"
-    method: GET
-    headers:
-      Cookie: "connect.sid={{ netris_session_cookie }}"
-    return_content: true
-    status_code: 200
-    timeout: "{{ netris_timeout | default(30) }}"
-    validate_certs: "{{ netris_validate_certs | default(true) }}"
-  register: _vpc_lookup_resp
-  no_log: true
+  ansible.builtin.include_role:
+    name: netris.controller.vpc
+    tasks_from: read
+  vars:
+    vpc_name: "{{ subnet_virtual_network_name }}"
 
-- name: Find parent VPC matching VirtualNetwork name
+- name: Set parent VPC
   ansible.builtin.set_fact:
-    _parent_vpc: >-
-      {{ (_vpc_lookup_resp.json.data | default([]))
-         | selectattr('name', 'equalto', subnet_virtual_network_name)
-         | list | first | default(none) }}
+    _parent_vpc: "{{ netris_vpc }}"
 
 - name: Fail if parent VPC not found
   ansible.builtin.fail:
@@ -59,11 +45,20 @@
       Ensure the VirtualNetwork has been created before creating a Subnet.
   when: _parent_vpc is none
 
-- name: Compute gateway IP from subnet CIDR
-  ansible.builtin.set_fact:
-    _gateway_cidr: >-
-      {{ subnet_ipv4_cidr | ansible.utils.ipaddr('next_usable') }}/{{ subnet_ipv4_cidr | ansible.utils.ipaddr('prefix') }}
+- name: Compute gateway and DHCP range from subnet CIDR
   when: subnet_ipv4_cidr | length > 0
+  block:
+    - name: Set gateway IP (first usable address)
+      ansible.builtin.set_fact:
+        _gateway_ip: "{{ subnet_ipv4_cidr | ansible.utils.ipaddr('next_usable') }}"
+        _gateway_cidr: >-
+          {{ subnet_ipv4_cidr | ansible.utils.ipaddr('next_usable') }}/{{ subnet_ipv4_cidr | ansible.utils.ipaddr('prefix') }}
+        _last_usable: "{{ subnet_ipv4_cidr | ansible.utils.ipaddr('last_usable') }}"
+
+    - name: Compute DHCP range (second usable to last usable)
+      ansible.builtin.set_fact:
+        _dhcp_start: "{{ subnet_ipv4_cidr | ansible.utils.ipaddr('2') | ansible.utils.ipaddr('address') }}"
+        _dhcp_end: "{{ _last_usable }}"
 
 - name: Display Subnet information
   ansible.builtin.debug:
@@ -72,6 +67,7 @@
       - "VirtualNetwork: {{ subnet_virtual_network_name }} (VPC ID: {{ _parent_vpc.id }})"
       - "IPv4 CIDR: {{ subnet_ipv4_cidr }}"
       - "Gateway: {{ _gateway_cidr | default('none') }}"
+      - "DHCP range: {{ _dhcp_start | default('none') }} - {{ _dhcp_end | default('none') }}"
 
 - name: Create IPAM subnet in Netris controller
   ansible.builtin.include_role:
@@ -101,6 +97,9 @@
     vnet_site_id: "{{ netris_site_id }}"
     vnet_tenant_id: "{{ netris_tenant_id }}"
     vnet_gateway: "{{ _gateway_cidr | default(omit) }}"
+    vnet_dhcp_enabled: true
+    vnet_dhcp_start_ip: "{{ _dhcp_start | default(omit) }}"
+    vnet_dhcp_end_ip: "{{ _dhcp_end | default(omit) }}"
 
 - name: Display V-Net creation result
   ansible.builtin.debug:

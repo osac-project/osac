@@ -1,0 +1,193 @@
+---
+# Configure OSAC inference metering on the MaaS cluster.
+# Patches the IPP deployment to use a custom image with Kafka transport
+# and adds the external-metering plugin to the plugin chain.
+#
+# Prerequisites:
+#   - MaaS enabled (Phase 3 complete)
+#   - Kafka brokers reachable from the MaaS cluster
+#   - SASL credentials provisioned on the management cluster
+
+- name: Validate metering configuration
+  ansible.builtin.assert:
+    that:
+      - ocp_4_20_ai_maas_metering_kafka_brokers | length > 0
+      - ocp_4_20_ai_maas_metering_kafka_sasl_user | length > 0
+      - ocp_4_20_ai_maas_metering_kafka_sasl_password | length > 0
+    fail_msg: >-
+      metering_kafka_brokers, metering_kafka_sasl_user, and
+      metering_kafka_sasl_password are required when enable_metering=true.
+
+- name: Create metering Kafka credentials Secret
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: osac-metering-kafka-credentials
+        namespace: openshift-ingress
+      type: Opaque
+      stringData:
+        password: "{{ ocp_4_20_ai_maas_metering_kafka_sasl_password }}"
+  no_log: true
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Create metering Kafka CA ConfigMap
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: osac-metering-kafka-ca
+        namespace: openshift-ingress
+      data:
+        ca.crt: "{{ ocp_4_20_ai_maas_metering_kafka_tls_ca }}"
+  when: ocp_4_20_ai_maas_metering_kafka_tls_ca | length > 0
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Set TLS enabled flag
+  ansible.builtin.set_fact:
+    _metering_tls_enabled: "{{ ocp_4_20_ai_maas_metering_kafka_tls_ca | length > 0 }}"
+
+- name: Read current IPP plugin config
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: v1
+    kind: ConfigMap
+    name: payload-processing-plugins
+    namespace: openshift-ingress
+  register: _ipp_config
+
+- name: Parse current plugin config
+  ansible.builtin.set_fact:
+    _ipp_config_yaml: "{{ _ipp_config.resources[0].data['custom-ipp-config.yaml'] | from_yaml }}"
+
+- name: Build metering plugin entries
+  ansible.builtin.set_fact:
+    _metering_plugin:
+      type: external-metering
+      name: external-metering
+      json:
+        kafkaBrokers: "{{ ocp_4_20_ai_maas_metering_kafka_brokers }}"
+        kafkaTopic: "{{ ocp_4_20_ai_maas_metering_kafka_topic }}"
+        kafkaTLSCA: "{{ '/etc/metering/kafka-ca/ca.crt' if _metering_tls_enabled else '' }}"
+        kafkaTLSEnabled: "{{ _metering_tls_enabled }}"
+        kafkaSASLUser: "{{ ocp_4_20_ai_maas_metering_kafka_sasl_user }}"
+        kafkaSASLPassFile: /etc/metering/kafka-credentials/password
+        source: maas-gateway
+        failOpen: true
+    _metering_streaming_plugin:
+      type: external-metering-streaming
+      name: external-metering-streaming
+      json:
+        kafkaBrokers: "{{ ocp_4_20_ai_maas_metering_kafka_brokers }}"
+        kafkaTopic: "{{ ocp_4_20_ai_maas_metering_kafka_topic }}"
+        kafkaTLSCA: "{{ '/etc/metering/kafka-ca/ca.crt' if _metering_tls_enabled else '' }}"
+        kafkaTLSEnabled: "{{ _metering_tls_enabled }}"
+        kafkaSASLUser: "{{ ocp_4_20_ai_maas_metering_kafka_sasl_user }}"
+        kafkaSASLPassFile: /etc/metering/kafka-credentials/password
+        source: maas-gateway
+        failOpen: true
+
+- name: Filter out existing metering plugins (idempotency)
+  ansible.builtin.set_fact:
+    _existing_plugins: >-
+      {{ _ipp_config_yaml.plugins | rejectattr('name', 'in', ['external-metering', 'external-metering-streaming']) | list }}
+
+- name: Build updated profiles with metering pluginRefs
+  ansible.builtin.set_fact:
+    _updated_profiles: |
+      {% set profiles = [] %}
+      {% for profile in _ipp_config_yaml.profiles %}
+      {% set req_filtered = profile.plugins.request | rejectattr('pluginRef', 'in', ['external-metering', 'external-metering-streaming']) | list %}
+      {% set resp_filtered = profile.plugins.response | rejectattr('pluginRef', 'in', ['external-metering', 'external-metering-streaming']) | list %}
+      {% set request_plugins = req_filtered + [{'pluginRef': 'external-metering'}, {'pluginRef': 'external-metering-streaming'}] %}
+      {% set response_plugins = [{'pluginRef': 'external-metering'}, {'pluginRef': 'external-metering-streaming'}] + resp_filtered %}
+      {% set _ = profiles.append(profile | combine({'plugins': {'request': request_plugins, 'response': response_plugins}}, recursive=true)) %}
+      {% endfor %}
+      {{ profiles }}
+
+- name: Apply updated IPP plugin config
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: payload-processing-plugins
+        namespace: openshift-ingress
+      data:
+        custom-ipp-config.yaml: |
+          {{ _ipp_config_yaml | combine({
+               'plugins': _existing_plugins + [_metering_plugin, _metering_streaming_plugin],
+               'profiles': _updated_profiles
+             }) | to_nice_yaml(indent=2) }}
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Build volume mounts list
+  ansible.builtin.set_fact:
+    _metering_volume_mounts:
+      - name: metering-kafka-credentials
+        mountPath: /etc/metering/kafka-credentials
+        readOnly: true
+    _metering_volumes:
+      - name: metering-kafka-credentials
+        secret:
+          secretName: osac-metering-kafka-credentials
+
+- name: Add CA volume mount when TLS CA is provided
+  ansible.builtin.set_fact:
+    _metering_volume_mounts: >-
+      {{ _metering_volume_mounts + [{'name': 'metering-kafka-ca',
+          'mountPath': '/etc/metering/kafka-ca', 'readOnly': true}] }}
+    _metering_volumes: >-
+      {{ _metering_volumes + [{'name': 'metering-kafka-ca',
+          'configMap': {'name': 'osac-metering-kafka-ca'}}] }}
+  when: ocp_4_20_ai_maas_metering_kafka_tls_ca | length > 0
+
+- name: Patch IPP deployment with custom metering image and Kafka volumes
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    merge_type: strategic-merge
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: payload-processing
+        namespace: openshift-ingress
+      spec:
+        template:
+          spec:
+            containers:
+              - name: payload-processing
+                image: "{{ ocp_4_20_ai_maas_metering_ipp_image }}"
+                volumeMounts: "{{ _metering_volume_mounts }}"
+            volumes: "{{ _metering_volumes }}"
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Wait for IPP rollout
+  environment:
+    KUBECONFIG: "{{ admin_kubeconfig | expanduser }}"
+  ansible.builtin.shell: |
+    oc rollout status deployment/payload-processing -n openshift-ingress --timeout=180s
+  args:
+    executable: /bin/bash
+  changed_when: true

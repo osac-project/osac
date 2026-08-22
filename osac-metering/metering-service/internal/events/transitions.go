@@ -27,18 +27,6 @@ var (
 	ErrUnsupportedEvent = errors.New("unsupported event type")
 )
 
-// CloudEvent type constants.
-const (
-	EventCreated    = "osac.resource.created.v1"
-	EventStarted    = "osac.resource.started.v1"
-	EventResumed    = "osac.resource.resumed.v1"
-	EventSuspended  = "osac.resource.suspended.v1"
-	EventDeleted    = "osac.resource.deleted.v1"
-	EventUpdated    = "osac.resource.updated.v1"
-	EventHeartbeat  = "osac.resource.heartbeat.v1"
-	EventCorrection = "osac.resource.correction.v1"
-)
-
 // eventBillableStart is an internal marker, never emitted as a real CloudEvent
 // type. Transition tables use it for every "crossed into billable" row instead
 // of picking EventStarted or EventResumed themselves -- that choice depends on

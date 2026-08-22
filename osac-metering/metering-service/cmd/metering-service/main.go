@@ -42,6 +42,7 @@ import (
 	"github.com/osac-project/osac-metering/internal/database"
 	"github.com/osac-project/osac-metering/internal/heartbeat"
 	kafkapub "github.com/osac-project/osac-metering/internal/kafka"
+	"github.com/osac-project/osac-metering/internal/maas"
 	"github.com/osac-project/osac-metering/internal/projection"
 	"github.com/osac-project/osac-metering/internal/reconciliation"
 	"github.com/osac-project/osac-metering/internal/watch"
@@ -70,7 +71,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 
-	if err := run(ctx, logger, cfg); err != nil {
+	if err := run(ctx, logger, cfg); err != nil && ctx.Err() == nil {
 		logger.Error(err, "metering service exited with error")
 		os.Exit(1)
 	}
@@ -215,6 +216,19 @@ func run(ctx context.Context, logger logr.Logger, cfg *config) error {
 	}
 	logger.Info("startup reconciliation completed")
 
+	tenantsClient := privatev1.NewTenantsClient(grpcConn)
+	tenantCache := maas.NewTenantCache(tenantsClient, logger, 5*time.Minute)
+	if err := tenantCache.Load(ctx); err != nil {
+		return fmt.Errorf("loading tenant cache: %w", err)
+	}
+
+	maasConsumerGroup, err := kafkapub.NewConsumerGroup(cfg.kafka, "osac-metering-maas-consumer")
+	if err != nil {
+		return fmt.Errorf("creating MaaS Kafka consumer group: %w", err)
+	}
+	defer func() { _ = maasConsumerGroup.Close() }()
+	maasConsumer := maas.NewConsumer(maasConsumerGroup, publisher, tenantCache, logger)
+
 	health.conn = grpcConn
 	health.ready.Store(true)
 	logger.Info("service ready")
@@ -233,6 +247,21 @@ func run(ctx context.Context, logger logr.Logger, cfg *config) error {
 	go func() {
 		defer wg.Done()
 		reconciler.RunPeriodic(ctx, cfg.reconciliationInterval)
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		tenantCache.RunPeriodicRefresh(ctx)
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := maasConsumer.Run(ctx); err != nil && ctx.Err() == nil {
+			logger.Error(err, "MaaS consumer exited with error")
+			runCancel()
+		}
 	}()
 
 	eventsClient := privatev1.NewEventsClient(grpcConn)

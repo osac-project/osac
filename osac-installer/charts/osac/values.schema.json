@@ -1270,6 +1270,31 @@
               "default": ""
             }
           }
+        },
+        "metal3": {
+          "type": "object",
+          "description": "Metal3 inventory and management backend configuration. When enabled, creates osac-inventory-config and osac-management-config Secrets.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Create Metal3 inventory and management config Secrets",
+              "default": false
+            },
+            "namespace": {
+              "type": "string",
+              "description": "Kubernetes namespace where BareMetalHost CRs are located"
+            },
+            "hostClass": {
+              "type": "string",
+              "description": "Host class identifier for Metal3 inventory",
+              "default": "metal3"
+            },
+            "networkClass": {
+              "type": "string",
+              "description": "Network class identifier for Metal3 inventory",
+              "default": "metal3"
+            }
+          }
         }
       }
     },

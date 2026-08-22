@@ -71,6 +71,13 @@ aap:
 csiDriver:
   enabled: true
 
+bmf:
+  metal3:
+    enabled: true
+    namespace: "hardware-inventory"
+    hostClass: "metal3"
+    networkClass: "metal3"
+
 validation:
   enabled: true
 

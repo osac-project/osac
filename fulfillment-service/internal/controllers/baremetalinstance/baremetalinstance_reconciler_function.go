@@ -591,8 +591,6 @@ func sanitizeConditionMessage(condType bmfov1alpha1.BareMetalInstanceConditionTy
 			return "BareMetalInstance successfully provisioned"
 		case bmfov1alpha1.HostConditionProvisionTemplateComplete:
 			return "Configuration successfully applied"
-		case bmfov1alpha1.HostConditionAvailable:
-			return "BareMetalInstance is ready"
 		}
 	}
 	return ""

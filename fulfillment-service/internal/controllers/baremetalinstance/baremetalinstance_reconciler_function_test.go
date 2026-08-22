@@ -1805,11 +1805,6 @@ var _ = Describe("syncStatus", func() {
 						Reason: "Complete",
 					},
 					{
-						Type:   string(bmfov1alpha1.HostConditionAvailable),
-						Status: metav1.ConditionTrue,
-						Reason: "HostAvailable",
-					},
-					{
 						Type:   string(bmfov1alpha1.HostConditionPowerSynced),
 						Status: metav1.ConditionTrue,
 						Reason: bmfov1alpha1.HostConditionReasonPowerOn,
@@ -2026,11 +2021,6 @@ var _ = Describe("sanitizeConditionMessage", func() {
 	It("should return tenant-facing message for ProvisionTemplateComplete condition when True", func() {
 		msg := sanitizeConditionMessage(bmfov1alpha1.HostConditionProvisionTemplateComplete, metav1.ConditionTrue)
 		Expect(msg).To(Equal("Configuration successfully applied"))
-	})
-
-	It("should return tenant-facing message for Available condition when True", func() {
-		msg := sanitizeConditionMessage(bmfov1alpha1.HostConditionAvailable, metav1.ConditionTrue)
-		Expect(msg).To(Equal("BareMetalInstance is ready"))
 	})
 
 	It("should return empty message for conditions with False status", func() {

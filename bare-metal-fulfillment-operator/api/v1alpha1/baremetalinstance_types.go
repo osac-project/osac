@@ -159,9 +159,6 @@ const (
 	// HostConditionAllocated means the host has been allocated.
 	HostConditionAllocated BareMetalInstanceConditionType = "Allocated"
 
-	// HostConditionAvailable means the host is available for provisioning.
-	HostConditionAvailable BareMetalInstanceConditionType = "Available"
-
 	// HostConditionPowerSynced tracks the host power synchronization state.
 	// Set condition status to True and reason to PowerOn when power on is successful.
 	// Set condition status to True and reason to PowerOff when power off is successful.

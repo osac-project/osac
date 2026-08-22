@@ -1,0 +1,116 @@
+{{- if .Values.certManager.enabled }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: osac-deps-wait-cert-manager
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-deps.hookLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation
+    "helm.sh/hook-weight": "5"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: osac-deps-wait-cert-manager
+  labels:
+    {{- include "osac-deps.hookLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation
+    "helm.sh/hook-weight": "5"
+rules:
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["operators.coreos.com"]
+    resources: ["clusterserviceversions"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get"]
+  - apiGroups: ["operator.openshift.io"]
+    resources: ["certmanagers"]
+    verbs: ["get", "create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: osac-deps-wait-cert-manager
+  labels:
+    {{- include "osac-deps.hookLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation
+    "helm.sh/hook-weight": "5"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: osac-deps-wait-cert-manager
+subjects:
+  - kind: ServiceAccount
+    name: osac-deps-wait-cert-manager
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: osac-deps-wait-cert-manager
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-deps.hookLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation
+    "helm.sh/hook-weight": "5"
+spec:
+  backoffLimit: 5
+  activeDeadlineSeconds: 1800
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        {{- include "osac-deps.hookLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: osac-deps-wait-cert-manager
+      restartPolicy: OnFailure
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: scripts
+          configMap:
+            name: osac-deps-hook-scripts
+      containers:
+        - name: wait-cert-manager
+          image: {{ .Values.cliImage }}
+          env:
+            - name: HOME
+              value: /tmp
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: scripts
+              mountPath: /scripts
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              cpu: 200m
+              memory: 512Mi
+          command:
+            - /bin/bash
+            - /scripts/wait-cert-manager.sh
+{{- end }}

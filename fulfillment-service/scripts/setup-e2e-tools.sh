@@ -213,9 +213,6 @@ main() {
     echo ""
     info "If you see 'command not found', add to your PATH:"
     info "  export PATH=\"\${HOME}/.local/bin:\${PATH}\""
-    echo ""
-    info "To keep the test cluster for debugging:"
-    info "  IT_KEEP_KIND=true ginkgo run -v it"
 }
 
 main "$@"

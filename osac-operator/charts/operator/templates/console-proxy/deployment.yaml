@@ -1,3 +1,4 @@
+{{- if not .Values.consoleProxy.disabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -73,3 +74,4 @@ spec:
         secret:
           secretName: {{ include "osac-operator.fullname" . }}-console-proxy-tls
       terminationGracePeriodSeconds: 10
+{{- end }}

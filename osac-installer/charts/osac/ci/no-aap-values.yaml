@@ -35,7 +35,7 @@ service:
   database:
     connection:
     - secret:
-        name: fulfillment-db
+        name: osac-db-config
         items:
         - key: url
           param: url

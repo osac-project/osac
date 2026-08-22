@@ -13,10 +13,12 @@ dependencies:
     version: ">=0.0.0"
     repository: "file://../../../osac-operator/charts/operator"
     alias: operator
+    condition: operator.enabled
   - name: fulfillment-service
     version: ">=0.0.0"
     repository: "file://../../../fulfillment-service/charts/service"
     alias: service
+    condition: service.enabled
   - name: osac-aap
     version: ">=0.0.0"
     repository: "file://../../../osac-aap/charts/aap"

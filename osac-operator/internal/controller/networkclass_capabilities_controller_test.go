@@ -28,7 +28,6 @@ import (
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 
 	privatev1 "github.com/osac-project/osac/osac-operator/internal/api/osac/private/v1"
-	"github.com/osac-project/osac/osac-operator/internal/dispatcheradapter"
 	"github.com/osac-project/osac/osac-operator/pkg/dispatcher"
 	"github.com/osac-project/osac/osac-operator/pkg/networkmanager"
 )
@@ -123,7 +122,7 @@ var _ = Describe("NetworkClassCapabilitiesReconciler", func() {
 		}
 		var updates []*privatev1.NetworkClass
 		stubClient := newListingNetworkClassClient([]*privatev1.NetworkClass{nc}, &updates)
-		resolver := dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(stubClient), disc)
+		resolver := dispatcher.NewResolver(stubClient, disc)
 
 		reconciler := NewNetworkClassCapabilitiesReconciler(stubClient, resolver, namespace)
 		_, err = reconciler.Reconcile(ctx, ctrl.Request{})
@@ -150,7 +149,7 @@ var _ = Describe("NetworkClassCapabilitiesReconciler", func() {
 		}
 		var updates []*privatev1.NetworkClass
 		stubClient := newListingNetworkClassClient([]*privatev1.NetworkClass{nc}, &updates)
-		resolver := dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(stubClient), disc)
+		resolver := dispatcher.NewResolver(stubClient, disc)
 
 		reconciler := NewNetworkClassCapabilitiesReconciler(stubClient, resolver, namespace)
 		_, err = reconciler.Reconcile(ctx, ctrl.Request{})
@@ -166,7 +165,7 @@ var _ = Describe("NetworkClassCapabilitiesReconciler", func() {
 		nc := &privatev1.NetworkClass{Id: "nc-caps-no-fabric"}
 		var updates []*privatev1.NetworkClass
 		stubClient := newListingNetworkClassClient([]*privatev1.NetworkClass{nc}, &updates)
-		resolver := dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(stubClient), disc)
+		resolver := dispatcher.NewResolver(stubClient, disc)
 
 		reconciler := NewNetworkClassCapabilitiesReconciler(stubClient, resolver, namespace)
 		_, err = reconciler.Reconcile(ctx, ctrl.Request{})
@@ -181,7 +180,7 @@ var _ = Describe("NetworkClassCapabilitiesReconciler", func() {
 		nc := &privatev1.NetworkClass{Id: "nc-caps-bad-fabric", FabricManager: ptr.To("unregistered-fabric")}
 		var updates []*privatev1.NetworkClass
 		stubClient := newListingNetworkClassClient([]*privatev1.NetworkClass{nc}, &updates)
-		resolver := dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(stubClient), disc)
+		resolver := dispatcher.NewResolver(stubClient, disc)
 
 		reconciler := NewNetworkClassCapabilitiesReconciler(stubClient, resolver, namespace)
 		_, err = reconciler.Reconcile(ctx, ctrl.Request{})
@@ -201,7 +200,7 @@ var _ = Describe("NetworkClassCapabilitiesReconciler", func() {
 		badNC := &privatev1.NetworkClass{Id: "nc-caps-bad", FabricManager: ptr.To("unregistered-fabric-multi")}
 		var updates []*privatev1.NetworkClass
 		stubClient := newListingNetworkClassClient([]*privatev1.NetworkClass{badNC, goodNC}, &updates)
-		resolver := dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(stubClient), disc)
+		resolver := dispatcher.NewResolver(stubClient, disc)
 
 		reconciler := NewNetworkClassCapabilitiesReconciler(stubClient, resolver, namespace)
 		_, err = reconciler.Reconcile(ctx, ctrl.Request{})

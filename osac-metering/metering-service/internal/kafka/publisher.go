@@ -45,7 +45,7 @@ type EventPublisher interface {
 	Publish(ctx context.Context, event cloudevents.Event) error
 }
 
-const (
+var (
 	TopicLifecycle   = "osac.metering.lifecycle"
 	TopicHeartbeat   = "osac.metering.heartbeat"
 	TopicCorrections = "osac.metering.corrections"

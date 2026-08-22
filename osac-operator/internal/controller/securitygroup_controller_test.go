@@ -36,7 +36,6 @@ import (
 
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	privatev1 "github.com/osac-project/osac/osac-operator/internal/api/osac/private/v1"
-	"github.com/osac-project/osac/osac-operator/internal/dispatcheradapter"
 	"github.com/osac-project/osac/osac-operator/pkg/dispatcher"
 	"github.com/osac-project/osac/osac-operator/pkg/networkmanager"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
@@ -697,9 +696,9 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			Expect(fakeClient.Create(ctx, newFabricManagerConfigMap("fm-netris", "test-namespace", "netris"))).To(Succeed())
 			disc, err := networkmanager.NewDiscovery(fakeClient, "test-namespace")
 			Expect(err).NotTo(HaveOccurred())
-			reconciler.Resolver = dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+			reconciler.Resolver = dispatcher.NewResolver(newListingNetworkClassClient(
 				[]*privatev1.NetworkClass{{Id: "nc-dispatch", FabricManager: ptr.To("netris")}}, &[]*privatev1.NetworkClass{},
-			)), disc)
+			), disc)
 
 			vnet.Spec.NetworkClass = "nc-dispatch"
 			Expect(fakeClient.Update(ctx, vnet)).To(Succeed())
@@ -723,9 +722,9 @@ var _ = Describe("SecurityGroupReconciler", func() {
 		It("falls back to SecurityGroup's own legacy implementation strategy when fabricManager is not set", func() {
 			disc, err := networkmanager.NewDiscovery(fakeClient, "test-namespace")
 			Expect(err).NotTo(HaveOccurred())
-			reconciler.Resolver = dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+			reconciler.Resolver = dispatcher.NewResolver(newListingNetworkClassClient(
 				[]*privatev1.NetworkClass{{Id: "nc-legacy"}}, &[]*privatev1.NetworkClass{},
-			)), disc)
+			), disc)
 
 			vnet.Spec.NetworkClass = "nc-legacy"
 			Expect(fakeClient.Update(ctx, vnet)).To(Succeed())
@@ -752,9 +751,9 @@ var _ = Describe("SecurityGroupReconciler", func() {
 		It("returns a reconcile error when the NetworkClass references an unregistered manager", func() {
 			disc, err := networkmanager.NewDiscovery(fakeClient, "test-namespace")
 			Expect(err).NotTo(HaveOccurred())
-			reconciler.Resolver = dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+			reconciler.Resolver = dispatcher.NewResolver(newListingNetworkClassClient(
 				[]*privatev1.NetworkClass{{Id: "nc-broken", FabricManager: ptr.To("does-not-exist")}}, &[]*privatev1.NetworkClass{},
-			)), disc)
+			), disc)
 
 			vnet.Spec.NetworkClass = "nc-broken"
 			Expect(fakeClient.Update(ctx, vnet)).To(Succeed())
@@ -795,9 +794,9 @@ var _ = Describe("SecurityGroupReconciler", func() {
 		It("falls back to legacy strategy when the parent VirtualNetwork cannot be found", func() {
 			disc, err := networkmanager.NewDiscovery(fakeClient, "test-namespace")
 			Expect(err).NotTo(HaveOccurred())
-			reconciler.Resolver = dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+			reconciler.Resolver = dispatcher.NewResolver(newListingNetworkClassClient(
 				nil, &[]*privatev1.NetworkClass{},
-			)), disc)
+			), disc)
 
 			orphanSG := &osacv1alpha1.SecurityGroup{
 				ObjectMeta: metav1.ObjectMeta{Name: "orphan-sg", Namespace: "test-namespace"},

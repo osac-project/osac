@@ -1,0 +1,180 @@
+# VMaaS CI environment -- instance values for osac chart.
+
+# --- CSI Driver ---
+csiDriver:
+  enabled: true
+
+# --- Operator ---
+operator:
+  image:
+    repository: ghcr.io/osac-project/osac-operator
+    tag: latest
+    pullPolicy: Always
+  provisioning:
+    provider: "aap"
+  aap:
+    insecureSkipVerify: "true"
+    tokenSecret:
+      name: osac-aap-api-token
+      key: token
+  fulfillment:
+    serverAddress: "fulfillment-internal-api:8001"
+    tokenFile: "/var/run/secrets/kubernetes.io/serviceaccount/token"
+  controllers:
+    clusterOrder: false
+    computeInstance: true
+    tenant: true
+    networking: true
+    storage: true
+  hubAccess:
+    enabled: true
+  tenants:
+  - name: shared
+  - name: osac-e2e-ci
+
+# --- Fulfillment Service ---
+service:
+  externalHostname: ""  # Set dynamically by make install-osac
+  internalHostname: ""  # Set dynamically by make install-osac
+  variant: openshift
+  images:
+    service: ghcr.io/osac-project/fulfillment-service:main
+    envoy: ghcr.io/osac-project/envoy:v1.33.0
+  certs:
+    issuerRef:
+      kind: ClusterIssuer
+      name: default-ca
+    caBundle:
+      configMap: ca-bundle
+  auth:
+    issuerUrl: https://keycloak.keycloak.svc.cluster.local/realms/osac
+    emergencyServiceAccounts:
+    - admin
+    - osac-operator
+    - osac-operator-controller-manager
+    - template-publisher
+    - osac-metering
+    controllerCredentials:
+    - secret:
+        name: fulfillment-controller-credentials
+        items:
+        - key: client-id
+          param: client-id
+        - key: client-secret
+          param: client-secret
+  idp:
+    provider: keycloak
+    url: https://keycloak.keycloak.svc.cluster.local
+    credentials:
+    - secret:
+        name: fulfillment-controller-credentials
+        items:
+        - key: client-id
+          param: client-id
+        - key: client-secret
+          param: client-secret
+  database:
+    connection:
+    - secret:
+        name: osac-db-config
+        items:
+        - key: url
+          param: url
+    - secret:
+        name: osac-db-client-cert
+        items:
+        - key: tls.crt
+          param: sslcert
+        - key: tls.key
+          param: sslkey
+        - key: ca.crt
+          param: sslrootcert
+  log:
+    level: debug
+
+# --- UI ---
+ui:
+  enabled: true
+  images:
+    ui: ghcr.io/osac-project/osac-ui:v0.0.5
+  api:
+    fulfillment:
+      certs:
+        caBundle:
+          configMap: ca-bundle
+  auth:
+    certs:
+      caBundle:
+        configMap: ca-bundle
+
+# --- AAP ---
+aap:
+  aap:
+    instance:
+      enabled: true
+      name: "osac-aap"
+  bootstrap:
+    enabled: true
+    image: ghcr.io/osac-project/osac-aap:latest
+    backoffLimit: 15
+  configAsCode:
+    manifestSecret: "config-as-code-manifest-ig"
+    secret: "config-as-code-ig"
+    # NOTE: e2e's COMPONENT_BUILD_RESULTS image-override step overrides
+    # bootstrap.image with this PR's own built image but does not touch
+    # eeImage, so the two can diverge at e2e runtime even though they're
+    # the same base value here. Extending that override to cover eeImage
+    # too is tracked separately (OSAC-3545), since it lives in
+    # osac-test-infra, not this repo.
+    eeImage: "ghcr.io/osac-project/osac-aap:latest"
+    projectGitUri: "https://github.com/osac-project/osac"
+    projectGitBranch: "main"
+  instanceGroups:
+    storageFulfillment:
+      enabled: true
+
+# --- Validation ---
+validation:
+  enabled: true
+
+# --- Bare Metal Fulfillment Operator ---
+bmf:
+  enabled: false
+
+# --- Hub Access ---
+hubAccess:
+  enabled: true
+
+# --- Metering ---
+metering:
+  enabled: true
+  reconciliation:
+    interval: "5m"
+  # Echo adapter -- test/development tool only. Consumes metering events from
+  # Kafka and exposes them via HTTP for E2E test assertions.
+  echoAdapter:
+    enabled: true
+    image:
+      repository: ghcr.io/osac-project/metering-echo-adapter
+      tag: latest
+      pullPolicy: Always
+  database:
+    connection:
+    - secret:
+        name: osac-db-metering-config
+        items:
+        - key: url
+          param: url
+    - secret:
+        name: osac-db-metering-client-cert
+        items:
+        - key: tls.crt
+          param: sslcert
+        - key: tls.key
+          param: sslkey
+        - key: ca.crt
+          param: sslrootcert
+
+# --- LVMS StorageBackend registration ---
+lvms:
+  enabled: true

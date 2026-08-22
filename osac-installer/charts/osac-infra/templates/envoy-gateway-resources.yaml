@@ -1,0 +1,84 @@
+{{- if or .Values.envoygateway.enabled .Values.envoygateway.resources }}
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: default
+  namespace: envoy-gateway
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyService:
+        type: NodePort
+        patch:
+          type: StrategicMerge
+          value:
+            spec:
+              ports:
+                - name: http
+                  port: 80
+                  nodePort: {{ .Values.envoygateway.httpNodePort | default 30080 }}
+                - name: https
+                  port: 443
+                  nodePort: {{ .Values.envoygateway.httpsNodePort | default 30443 }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: default
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  parametersRef:
+    group: gateway.envoyproxy.io
+    kind: EnvoyProxy
+    namespace: envoy-gateway
+    name: default
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: default
+  namespace: envoy-gateway
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+spec:
+  gatewayClassName: default
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: All
+    - name: tls
+      protocol: TLS
+      port: 443
+      tls:
+        mode: Passthrough
+      allowedRoutes:
+        namespaces:
+          from: All
+---
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TLSRoute
+metadata:
+  name: keycloak
+  namespace: keycloak
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: default
+      namespace: envoy-gateway
+      sectionName: tls
+  hostnames:
+    - keycloak.keycloak.svc.cluster.local
+  rules:
+    - backendRefs:
+        - name: keycloak
+          port: 443
+{{- end }}

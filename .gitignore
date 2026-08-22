@@ -183,7 +183,6 @@ cython_debug/
 *.iml
 
 # osac-installer
-/osac-installer/kustomization-build/
 /osac-installer/dist/
 /osac-installer/local/
 /osac-installer/*.local.yaml
@@ -201,3 +200,4 @@ cython_debug/
 **/osac-aap-secrets.env
 **/server-ssh-key
 **/server-ssh-bastion-key
+osac-installer/charts/osac/tmpcharts*/

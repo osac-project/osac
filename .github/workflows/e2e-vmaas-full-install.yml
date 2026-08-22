@@ -94,7 +94,7 @@ jobs:
   e2e-vmaas-full-install:
     needs: changes
     if: needs.changes.outputs.should-run == 'true'
-    uses: osac-project/osac-test-infra/.github/workflows/e2e-vmaas-full-install.yml@main
+    uses: osac-project/osac-test-infra/.github/workflows/e2e-vmaas-full-install.yml@feat/OSAC-3752-chart-restructure
     with:
       test-suite: ${{ inputs.test-suite || 'vmaas' }}
       test-filter: ${{ inputs.test-filter || '' }}

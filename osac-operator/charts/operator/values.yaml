@@ -55,6 +55,7 @@ serviceAccount:
   name: ""
 
 consoleProxy:
+  disabled: false
   vmClusterMode: auto
   resources:
     limits:
@@ -68,6 +69,8 @@ certs:
   issuerRef:
     kind: ClusterIssuer
     name: default-ca
+
+remoteClusterKubeconfig: ""
 
 hubAccess:
   enabled: false

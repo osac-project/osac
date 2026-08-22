@@ -27,6 +27,17 @@ resources:
     cpu: 500m
     memory: 256Mi
 
+# Kafka connection and topic naming. Override to point at a different
+# Kafka cluster or to prefix topics for per-instance isolation.
+kafka:
+  brokers: ""          # default: osac-kafka-kafka-bootstrap.osac-kafka.svc.cluster.local:9093
+  clusterName: ""      # default: osac-kafka
+  clusterNamespace: "" # default: osac-kafka
+  caSecret: ""         # default: osac-kafka-cluster-ca-cert
+
+# Prefix prepended to all topic names (e.g. "pr101" -> "pr101.osac.metering.lifecycle").
+# When set, this chart skips KafkaTopic/KafkaUser creation (the parent chart owns them).
+
 ## Echo adapter — test/development tool only, not for production use.
 ## Enable and configure via environment-specific values (e.g., values/vmaas-ci/values.yaml).
 echoAdapter:

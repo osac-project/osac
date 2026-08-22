@@ -225,10 +225,10 @@ If you need to export the realm configuration for backup or modification:
    kubectl exec -n keycloak "${pod}" -- cat /tmp/realm.json > realm.json
    ```
 
-4. (Optional) Update the chart's realm file:
+4. (Optional) Update the chart's realm file (in the `osac-installer` repo, not here):
 
    ```bash
-   cp realm.json it/charts/keycloak/files/realm.json
+   cp realm.json osac-installer/charts/osac-infra/files/realm.json
    ```
 
 ## Fulfillment Service Configuration
@@ -1044,5 +1044,4 @@ Test that authorization rules are working:
 
 - [Keycloak Documentation](https://www.keycloak.org/documentation)
 - [Open Policy Agent (OPA) Documentation](https://www.openpolicyagent.org/docs/latest/)
-- [Helm Chart README](it/charts/keycloak/README.md)
 - [Service Chart README](charts/service/README.md)

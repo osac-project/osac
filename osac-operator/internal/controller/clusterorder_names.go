@@ -36,9 +36,9 @@ func generateNamespaceName(instance *v1alpha1.ClusterOrder) string {
 	return fmt.Sprintf("%s-%s", instance.GetNamespace(), instance.GetName())
 }
 
-// hubAccessClusterRoleName returns the ClusterRole name, accounting for the
-// kustomize prefix transformer that prepends "{namespace}-" to cluster-scoped
-// resources in CI/production overlays.
+// hubAccessClusterRoleName returns the ClusterRole name, matching the
+// "{namespace}-" prefix charts/operator/templates/hub-access-clusterrole.yaml
+// applies to this cluster-scoped resource.
 func (r *ClusterOrderReconciler) hubAccessClusterRoleName() string {
 	return fmt.Sprintf("%s-%s", r.ClusterOrderNamespace, hubAccessClusterRoleBaseName)
 }

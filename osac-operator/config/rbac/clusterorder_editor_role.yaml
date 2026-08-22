@@ -4,7 +4,6 @@ kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/name: osac-operator
-    app.kubernetes.io/managed-by: kustomize
   name: clusterorder-editor-role
 rules:
 - apiGroups:

@@ -19,6 +19,65 @@ metadata:
     kubernetes.io/service-account.name: hub-access
 ---
 apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Namespace }}-hub-access
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+      - osac.openshift.io
+    resources:
+      - baremetalinstances
+      - clusterorders
+      - computeinstances
+      - externalipattachments
+      - externalippools
+      - externalips
+      - natgateways
+      - securitygroups
+      - subnets
+      - tenants
+      - virtualnetworks
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - osac.openshift.io
+    resources:
+      - baremetalinstances/status
+      - clusterorders/status
+      - computeinstances/status
+      - externalipattachments/status
+      - externalippools/status
+      - externalips/status
+      - natgateways/status
+      - securitygroups/status
+      - subnets/status
+      - tenants/status
+      - virtualnetworks/status
+    verbs:
+      - get
+  - apiGroups:
+      - console.osac.openshift.io
+    resources:
+      - computeinstances/console
+      - computeinstances/vnc
+    verbs:
+      - get
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: hub-access

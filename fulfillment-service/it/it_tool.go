@@ -39,9 +39,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/jq"
 	"github.com/osac-project/osac/fulfillment-service/internal/network"
 	"github.com/osac-project/osac/fulfillment-service/internal/oauth"
-	"github.com/osac-project/osac/fulfillment-service/internal/testing"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
-	"go.yaml.in/yaml/v2"
 	"google.golang.org/grpc"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
@@ -49,15 +47,18 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/clientcmd"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 
+	bmfov1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/version"
+	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
 
 var ServiceAccountTenants = map[string]string{
@@ -76,15 +77,9 @@ var OIDCTenants = map[string][]string{
 // ToolBuilder contains the data and logic needed to create an instance of the integration test tool. Don't create
 // instances of this directly, use the NewTool function instead.
 type ToolBuilder struct {
-	logger      *slog.Logger
-	projectDir  string
-	crdFiles    []string
-	keepCluster bool
-	keepService bool
-	debug       bool
-	secret      string
-	caKeyFile   string
-	caCrtFile   string
+	logger     *slog.Logger
+	projectDir string
+	secret     string
 }
 
 // Tool is an instance of the integration test tool that sets up the test environment. Don't create instances of this
@@ -92,14 +87,8 @@ type ToolBuilder struct {
 type Tool struct {
 	logger        *slog.Logger
 	projectDir    string
-	crdFiles      []string
-	keepKind      bool
-	keepService   bool
-	debug         bool
-	caKeyFile     string
-	caCrtFile     string
 	tmpDir        string
-	cluster       *testing.Kind
+	clusterName   string
 	kubeClient    crclient.Client
 	kubeClientSet *kubernetes.Clientset
 	caPool        *x509.CertPool
@@ -142,54 +131,10 @@ func (b *ToolBuilder) SetProjectDir(value string) *ToolBuilder {
 	return b
 }
 
-// AddCrdFile adds a CRD file to be installed in the cluster.
-func (b *ToolBuilder) AddCrdFile(value string) *ToolBuilder {
-	b.crdFiles = append(b.crdFiles, value)
-	return b
-}
-
-// AddCrdFiles adds multiple CRD files to be installed in the cluster.
-func (b *ToolBuilder) AddCrdFiles(values ...string) *ToolBuilder {
-	b.crdFiles = append(b.crdFiles, values...)
-	return b
-}
-
-// SetKeepCluster sets whether to keep the cluster after the tests complete. The default is to destroy the cluster.
-func (b *ToolBuilder) SetKeepCluster(value bool) *ToolBuilder {
-	b.keepCluster = value
-	return b
-}
-
-// SetKeepService sets whether to keep the service after the tests complete. The default is to undeploy the service.
-func (b *ToolBuilder) SetKeepService(value bool) *ToolBuilder {
-	b.keepService = value
-	return b
-}
-
-// SetDebug sets whether to enable the debug mode. This means that the debugger binary will be added to the container
-// image, and that the services will be started under the control of the debugger. Access to the debugger will be done
-// via the following ports:
-//
-// - gRPC server: 30001
-// - REST gateway: 30002
-// - Controller: 30003
-func (b *ToolBuilder) SetDebug(value bool) *ToolBuilder {
-	b.debug = value
-	return b
-}
-
 // SetSecret sets the secret used in all places where passwords or secrets are needed, such as service account client
 // secrets and user passwords. If not set then a random one will be generated.
 func (b *ToolBuilder) SetSecret(value string) *ToolBuilder {
 	b.secret = value
-	return b
-}
-
-// SetCaFiles sets the paths to PEM files containing a pre-generated CA private key and certificate. When set, the
-// Kind cluster will use these files instead of generating a new CA each time. This is optional.
-func (b *ToolBuilder) SetCaFiles(keyFile, crtFile string) *ToolBuilder {
-	b.caKeyFile = keyFile
-	b.caCrtFile = crtFile
 	return b
 }
 
@@ -198,10 +143,6 @@ func (b *ToolBuilder) Build() (result *Tool, err error) {
 	// Check parameters:
 	if b.logger == nil {
 		err = errors.New("logger is mandatory")
-		return
-	}
-	if (b.caKeyFile == "") != (b.caCrtFile == "") {
-		err = errors.New("key file and certificate file must both be provided or both be omitted")
 		return
 	}
 
@@ -225,16 +166,10 @@ func (b *ToolBuilder) Build() (result *Tool, err error) {
 
 	// Create and populate the object:
 	result = &Tool{
-		logger:      b.logger,
-		projectDir:  projectDir,
-		crdFiles:    slices.Clone(b.crdFiles),
-		keepKind:    b.keepCluster,
-		keepService: b.keepService,
-		debug:       b.debug,
-		caKeyFile:   b.caKeyFile,
-		caCrtFile:   b.caCrtFile,
-		secret:      b.secret,
-		jqTool:      jqTool,
+		logger:     b.logger,
+		projectDir: projectDir,
+		secret:     b.secret,
+		jqTool:     jqTool,
 	}
 	return
 }
@@ -266,8 +201,9 @@ func (b *ToolBuilder) findProjectDir() (result string, err error) {
 	}
 }
 
-// Setup prepares the integration test environment. This includes building the binary and container image, starting
-// the Kind cluster, installing Keycloak and the service, and creating the necessary clients.
+// Setup prepares the integration test environment. Assumes a pre-existing Kind cluster with
+// infrastructure (cert-manager, Keycloak, Envoy Gateway) and OSAC services already deployed
+// via `make dev-env`. Creates test users, tenants, service accounts, and gRPC/HTTP clients.
 func (t *Tool) Setup(ctx context.Context) error {
 	var err error
 
@@ -297,45 +233,39 @@ func (t *Tool) Setup(ctx context.Context) error {
 		return err
 	}
 
-	// Build the container image:
-	imageRef, err := t.buildImage(ctx)
-	if err != nil {
-		return err
-	}
-
 	// Build the CLI binary:
 	err = t.buildCLI(ctx)
 	if err != nil {
 		return err
 	}
 
-	// Save the container image to a tar file:
-	imageTar, err := t.saveImage(ctx, imageRef)
+	// Connect to the pre-existing Kind cluster:
+	t.clusterName = os.Getenv("KIND_CLUSTER")
+	if t.clusterName == "" {
+		t.clusterName = "osac-dev"
+	}
+	t.kcFile = os.Getenv("KUBECONFIG")
+	if t.kcFile == "" {
+		t.kcFile = filepath.Join(os.Getenv("HOME"), ".kube", t.clusterName+"-kind.kubeconfig")
+	}
+
+	// Create the Kubernetes clients from the kubeconfig:
+	restConfig, err := clientcmd.BuildConfigFromFlags("", t.kcFile)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to build rest config from kubeconfig: %w", err)
 	}
-
-	// Start the cluster:
-	if err = t.startCluster(ctx); err != nil {
-		return err
-	}
-
-	// Load the container image into the cluster:
-	err = t.cluster.LoadArchive(ctx, imageTar)
+	scheme := runtime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(osacv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(bmfov1alpha1.AddToScheme(scheme))
+	t.kubeClient, err = crclient.New(restConfig, crclient.Options{Scheme: scheme})
 	if err != nil {
-		return fmt.Errorf("failed to load container image into cluster: %w", err)
+		return fmt.Errorf("failed to create kubernetes client: %w", err)
 	}
-
-	// Write the kubeconfig file:
-	t.kcFile = filepath.Join(t.tmpDir, "kubeconfig")
-	err = os.WriteFile(t.kcFile, t.cluster.Kubeconfig(), 0400)
+	t.kubeClientSet, err = kubernetes.NewForConfig(restConfig)
 	if err != nil {
-		return fmt.Errorf("failed to write kubeconfig file: %w", err)
+		return fmt.Errorf("failed to create kubernetes clientset: %w", err)
 	}
-
-	// Get the clients:
-	t.kubeClient = t.cluster.Client()
-	t.kubeClientSet = t.cluster.ClientSet()
 
 	// Resolve the secret to use for passwords and credentials:
 	err = t.resolveRandomSecret(ctx)
@@ -349,50 +279,14 @@ func (t *Tool) Setup(ctx context.Context) error {
 		return err
 	}
 
-	// Install PostgreSQL:
-	err = t.deployPostgres(ctx)
+	// Create test users in Keycloak and set up admin org membership before
+	// creating clients — the admin token source needs admin to be in an org
+	// for the password flow to succeed:
+	err = t.createKeycloakTestUsers(ctx)
 	if err != nil {
 		return err
 	}
-
-	// Create the Keycloak database resources:
-	err = t.createKeycloakDatabaseResources(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Install Keycloak:
-	err = t.deployKeycloak(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Install OpenBao:
-	err = t.deployOpenBao(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Configure OpenBao (create parent namespace):
-	err = t.configureOpenBao(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Create the service database resources:
-	err = t.createServiceDatabaseResources(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Create the controller credentials:
-	err = t.createControllerCredentials(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Install the service:
-	err = t.deployService(ctx, imageRef)
+	err = t.ensureUsersInKeycloakOrganizations(ctx)
 	if err != nil {
 		return err
 	}
@@ -421,13 +315,15 @@ func (t *Tool) Setup(ctx context.Context) error {
 		return err
 	}
 
-	// Wait for vault ready conditions to be satisfied by the controller:
-	err = t.waitForVaultReady(ctx)
+	// The controller's initial sync loop processes tenants asynchronously —
+	// IDP org creation and break-glass credential setup must complete before
+	// tests can create their own tenants with a 60s timeout.
+	err = t.waitForTenantsSynced(ctx)
 	if err != nil {
 		return err
 	}
 
-	// Add users to Keycloak Organizations:
+	// Add users to Keycloak Organizations (tenant orgs created by the controller):
 	err = t.addUsersToKeycloakOrganizations(ctx)
 	if err != nil {
 		return err
@@ -470,8 +366,6 @@ func (t *Tool) checkCommands(ctx context.Context) error {
 	t.logger.DebugContext(ctx, "Checking command line tools")
 	commands := []string{
 		kubectlCmd,
-		podmanCmd,
-		helmCmd,
 	}
 	for _, command := range commands {
 		_, err := exec.LookPath(command)
@@ -482,119 +376,15 @@ func (t *Tool) checkCommands(ctx context.Context) error {
 	return nil
 }
 
-// buildImage builds the container image and returns the full image reference.
-func (t *Tool) buildImage(ctx context.Context) (result string, err error) {
-	t.logger.DebugContext(ctx, "Building image")
-	imageTag := time.Now().Format("20060102150405")
-	imageRef := fmt.Sprintf("%s:%s", imageName, imageTag)
-
-	// Resolve the version on the host so that the container build does not
-	// need access to the .git directory. This is required when building from
-	// a git worktree, where the .git file is a pointer that cannot be
-	// resolved inside the container context.
-	versionBytes, versionErr := exec.CommandContext(ctx, "git", "-C", t.projectDir, "describe", "--tags", "--always").Output()
-	gitVersion := "dev"
-	if versionErr == nil {
-		gitVersion = strings.TrimSpace(string(versionBytes))
-	}
-
-	buildTarget := "runtime"
-	if t.debug {
-		buildTarget = "runtime-debug"
-	}
-	// The Containerfile expects the mono-repo root as build context so
-	// that cross-module dependencies resolve from sibling directories.
-	buildContext := t.projectDir
-	containerfile := "Containerfile"
-	monoRepoRoot := filepath.Dir(t.projectDir)
-	if _, statErr := os.Stat(filepath.Join(monoRepoRoot, "go.work")); statErr == nil {
-		buildContext = monoRepoRoot
-		containerfile = filepath.Join(filepath.Base(t.projectDir), "Containerfile")
-	}
-
-	buildCmd, err := testing.NewCommand().
-		SetLogger(t.logger).
-		SetHome(t.projectDir).
-		SetDir(buildContext).
-		SetName(podmanCmd).
-		SetArgs(
-			"build",
-			"--build-arg", fmt.Sprintf("DEBUG=%t", t.debug),
-			"--build-arg", fmt.Sprintf("VERSION=%s", gitVersion),
-			"--target", buildTarget,
-			"--tag", imageRef,
-			"--file", containerfile,
-			".",
-		).
-		Build()
+func (t *Tool) runCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = t.projectDir
+	t.logger.DebugContext(ctx, "Running command", "command", name, "args", args)
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		err = fmt.Errorf("failed to create command to build image: %w", err)
-		return
+		return output, fmt.Errorf("%s %s failed: %w\n%s", name, strings.Join(args, " "), err, output)
 	}
-	err = buildCmd.Execute(ctx)
-	if err != nil {
-		err = fmt.Errorf("failed to build image: %w", err)
-		return
-	}
-	result = imageRef
-	return
-}
-
-// saveImage saves the given container image to a tar file and returns the path to that tar file.
-func (t *Tool) saveImage(ctx context.Context, imageRef string) (result string, err error) {
-	t.logger.DebugContext(ctx, "Saving container image to tar file")
-	imageTar := filepath.Join(t.tmpDir, "image.tar")
-	saveCmd, err := testing.NewCommand().
-		SetLogger(t.logger).
-		SetHome(t.projectDir).
-		SetDir(t.projectDir).
-		SetName(podmanCmd).
-		SetArgs(
-			"save",
-			"--output", imageTar,
-			imageRef,
-		).
-		Build()
-	if err != nil {
-		err = fmt.Errorf("failed to create command to save image: %w", err)
-		return
-	}
-	err = saveCmd.Execute(ctx)
-	if err != nil {
-		err = fmt.Errorf("failed to save container image: %w", err)
-		return
-	}
-	result = imageTar
-	return
-}
-
-func (t *Tool) startCluster(ctx context.Context) error {
-	t.logger.DebugContext(ctx, "Starting cluster")
-	builder := testing.NewKind()
-	builder.SetLogger(t.logger)
-	builder.SetHome(t.projectDir)
-	builder.SetName("fulfillment-service-it")
-	for _, crdFile := range t.crdFiles {
-		builder.AddCrdFile(crdFile)
-	}
-	if t.debug {
-		builder.AddPortMapping("127.0.0.1", 30001, 30001) // gRPC server.
-		builder.AddPortMapping("127.0.0.1", 30002, 30002) // REST gateway.
-		builder.AddPortMapping("127.0.0.1", 30003, 30003) // Controller.
-	}
-	if t.caKeyFile != "" && t.caCrtFile != "" {
-		builder.SetCaFiles(t.caKeyFile, t.caCrtFile)
-	}
-	var err error
-	t.cluster, err = builder.Build()
-	if err != nil {
-		return fmt.Errorf("failed to create cluster: %w", err)
-	}
-	err = t.cluster.Start(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to start cluster: %w", err)
-	}
-	return nil
+	return output, nil
 }
 
 // resolveRandomSecret determines the secret to use for all passwords and credentials. If the secret was explicitly
@@ -670,7 +460,7 @@ func (t *Tool) loadCaBundle(ctx context.Context) error {
 
 	// Wait for the CA bundle to be available:
 	caBundleKey := crclient.ObjectKey{
-		Namespace: "default",
+		Namespace: "osac",
 		Name:      "ca-bundle",
 	}
 	caBundleMap := &corev1.ConfigMap{}
@@ -707,1047 +497,6 @@ func (t *Tool) loadCaBundle(ctx context.Context) error {
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create CA pool: %w", err)
-	}
-	return nil
-}
-
-// createKeycloakDatabaseResources creates the cert-manager Certificate and connection ConfigMap in
-// the keycloak namespace for connecting to the PostgreSQL database. The certificate uses PKCS8
-// encoding with DER additional output format, as required by the Keycloak JDBC driver.
-func (t *Tool) createKeycloakDatabaseResources(ctx context.Context) error {
-	t.logger.DebugContext(ctx, "Creating Keycloak database resources")
-
-	// Create the keycloak namespace if it doesn't exist:
-	ns := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "keycloak",
-		},
-	}
-	err := t.kubeClient.Create(ctx, ns)
-	if err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("failed to create keycloak namespace: %w", err)
-	}
-
-	// Create the cert-manager Certificate:
-	cert := &unstructured.Unstructured{}
-	cert.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "cert-manager.io",
-		Version: "v1",
-		Kind:    "Certificate",
-	})
-	cert.SetNamespace("keycloak")
-	cert.SetName("keycloak-database-client")
-	cert.Object["spec"] = map[string]any{
-		"issuerRef": map[string]any{
-			"kind": "ClusterIssuer",
-			"name": "default-ca",
-		},
-		"usages":     []any{"client auth"},
-		"commonName": "keycloak",
-		"secretName": keycloakDatabaseClientCertSecret,
-		"privateKey": map[string]any{
-			"encoding":       "PKCS8",
-			"rotationPolicy": "Always",
-		},
-		"additionalOutputFormats": []any{
-			map[string]any{"type": "DER"},
-		},
-	}
-	err = t.kubeClient.Create(ctx, cert)
-	if err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("failed to create keycloak database client certificate: %w", err)
-	}
-
-	// Create the ConfigMap with the database connection details:
-	configMap := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "keycloak",
-			Name:      keycloakDatabaseConfigMap,
-		},
-		Data: map[string]string{
-			"url":      "postgres://postgres.postgres.svc.cluster.local:5432/keycloak",
-			"user":     "keycloak",
-			"password": "",
-			"sslmode":  "require",
-		},
-	}
-	err = t.kubeClient.Create(ctx, configMap)
-	if err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("failed to create keycloak database config map: %w", err)
-	}
-
-	// Wait for the certificate secret to be available:
-	secretKey := crclient.ObjectKey{
-		Namespace: "keycloak",
-		Name:      keycloakDatabaseClientCertSecret,
-	}
-	secret := &corev1.Secret{}
-	for i := 0; i < 60; i++ {
-		err = t.kubeClient.Get(ctx, secretKey, secret)
-		if err == nil {
-			return nil
-		}
-		if !apierrors.IsNotFound(err) {
-			return fmt.Errorf("failed to get keycloak database client certificate secret: %w", err)
-		}
-		time.Sleep(time.Second)
-	}
-	return fmt.Errorf("keycloak database client certificate secret not available after waiting: %w", err)
-}
-
-// createServiceDatabaseResources creates the cert-manager Certificate and connection ConfigMap in
-// the osac namespace for connecting the fulfillment service to the PostgreSQL database.
-func (t *Tool) createServiceDatabaseResources(ctx context.Context) error {
-	t.logger.DebugContext(ctx, "Creating service database resources")
-
-	// Create the osac namespace if it doesn't exist:
-	ns := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "osac",
-		},
-	}
-	err := t.kubeClient.Create(ctx, ns)
-	if err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("failed to create osac namespace: %w", err)
-	}
-
-	// Create the cert-manager Certificate:
-	cert := &unstructured.Unstructured{}
-	cert.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "cert-manager.io",
-		Version: "v1",
-		Kind:    "Certificate",
-	})
-	cert.SetNamespace("osac")
-	cert.SetName("fulfillment-database-client")
-	cert.Object["spec"] = map[string]any{
-		"issuerRef": map[string]any{
-			"kind": "ClusterIssuer",
-			"name": "default-ca",
-		},
-		"usages":     []any{"client auth"},
-		"commonName": "service",
-		"secretName": serviceDatabaseClientCertSecret,
-		"privateKey": map[string]any{
-			"rotationPolicy": "Always",
-		},
-	}
-	err = t.kubeClient.Create(ctx, cert)
-	if err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("failed to create service database client certificate: %w", err)
-	}
-
-	// Create the ConfigMap with the database connection details:
-	configMap := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "osac",
-			Name:      serviceDatabaseConfigMap,
-		},
-		Data: map[string]string{
-			"url":     "postgres://service@postgres.postgres.svc.cluster.local:5432/service",
-			"sslmode": "verify-full",
-		},
-	}
-	err = t.kubeClient.Create(ctx, configMap)
-	if err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("failed to create service database config map: %w", err)
-	}
-
-	// Wait for the certificate secret to be available:
-	secretKey := crclient.ObjectKey{
-		Namespace: "osac",
-		Name:      serviceDatabaseClientCertSecret,
-	}
-	secret := &corev1.Secret{}
-	for i := 0; i < 60; i++ {
-		err = t.kubeClient.Get(ctx, secretKey, secret)
-		if err == nil {
-			return nil
-		}
-		if !apierrors.IsNotFound(err) {
-			return fmt.Errorf("failed to get service database client certificate secret: %w", err)
-		}
-		time.Sleep(time.Second)
-	}
-	return fmt.Errorf("service database client certificate secret not available after waiting: %w", err)
-}
-
-// createControllerCredentials creates a Kubernetes secret containing the OAuth client credentials that the controller
-// uses to authenticate to the API.
-func (t *Tool) createControllerCredentials(ctx context.Context) error {
-	t.logger.DebugContext(ctx, "Creating controller API credentials secret")
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "osac",
-			Name:      controllerCredentialsSecret,
-		},
-		StringData: map[string]string{
-			"client-id":     controllerClientId,
-			"client-secret": t.secret,
-		},
-	}
-	err := t.kubeClient.Create(ctx, secret)
-	if err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("failed to create controller credentials secret: %w", err)
-	}
-	return nil
-}
-
-// deployKeycloak installs the Keycloak chart.
-func (t *Tool) deployKeycloak(ctx context.Context) error {
-	// Get the host name:
-	t.logger.DebugContext(ctx, "Installing Keycloak chart")
-	host, _, err := net.SplitHostPort(keycloakAddr)
-	if err != nil {
-		return fmt.Errorf("failed to split host and port from '%s': %w", keycloakAddr, err)
-	}
-
-	// Prepare the lists of clients, users and groups:
-	var (
-		clients []map[string]any
-		users   []map[string]any
-		groups  []map[string]any
-	)
-
-	// Prepare a map containing the values for the chart:
-	valuesData := map[string]any{
-		"hostname": host,
-		"admin": map[string]any{
-			"username": "admin",
-			"password": t.secret,
-		},
-		"certs": map[string]any{
-			"issuerRef": map[string]any{
-				"kind": "ClusterIssuer",
-				"name": "default-ca",
-			},
-			"caBundle": map[string]any{
-				"configMap": "ca-bundle",
-			},
-		},
-		"database": map[string]any{
-			"connection": []any{
-				map[string]any{
-					"configMap": map[string]any{
-						"name": keycloakDatabaseConfigMap,
-						"items": []any{
-							map[string]any{
-								"key":   "url",
-								"param": "url",
-							},
-							map[string]any{
-								"key":   "user",
-								"param": "user",
-							},
-							map[string]any{
-								"key":   "password",
-								"param": "password",
-							},
-							map[string]any{
-								"key":   "sslmode",
-								"param": "sslmode",
-							},
-						},
-					},
-				},
-				map[string]any{
-					"secret": map[string]any{
-						"name": keycloakDatabaseClientCertSecret,
-						"items": []any{
-							map[string]any{
-								"key":   "tls.crt",
-								"param": "sslcert",
-							},
-							map[string]any{
-								"key":   "key.der",
-								"param": "sslkey",
-							},
-							map[string]any{
-								"key":   "ca.crt",
-								"param": "sslrootcert",
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	// Add the groups:
-	addGroup := func(name string) {
-		for _, group := range groups {
-			if group["name"] == name {
-				return
-			}
-		}
-		groups = append(
-			groups,
-			map[string]any{
-				"name": name,
-				"path": fmt.Sprintf("/%s", name),
-			},
-		)
-	}
-	addGroup(adminsGroup)
-	addGroup(usersGroup)
-
-	// Add the users:
-	type userData struct {
-		Name     string
-		First    string
-		Last     string
-		Groups   []string
-		Password string
-	}
-	addUser := func(data userData) {
-		groups := make([]string, len(data.Groups))
-		for i, name := range data.Groups {
-			addGroup(name)
-			groups[i] = fmt.Sprintf("/%s", name)
-		}
-		users = append(
-			users,
-			map[string]any{
-				"username":      data.Name,
-				"enabled":       true,
-				"firstName":     data.First,
-				"lastName":      data.Last,
-				"email":         fmt.Sprintf("%s@example.com", data.Name),
-				"emailVerified": true,
-				"groups":        groups,
-				"credentials": []any{
-					map[string]any{
-						"type":      "password",
-						"value":     data.Password,
-						"temporary": false,
-					},
-				},
-			},
-		)
-	}
-	addUser(userData{
-		Name:     adminUsername,
-		First:    "Ms.",
-		Last:     "Admin",
-		Groups:   []string{adminsGroup},
-		Password: adminsPassword,
-	})
-	addUser(userData{
-		Name:     userUsername,
-		First:    "Mr.",
-		Last:     "User",
-		Groups:   []string{usersGroup},
-		Password: usersPassword,
-	})
-
-	// Add the OIDC tenants
-	for oidcUser, oidcGroups := range OIDCTenants {
-		addUser(userData{
-			Name:     oidcUser,
-			First:    oidcUser,
-			Last:     oidcUser,
-			Groups:   oidcGroups,
-			Password: usersPassword,
-		})
-	}
-
-	// Add the service account clients and their corresponding users:
-	type serviceAccountData struct {
-		Name        string
-		Description string
-		ClientId    string
-		ClientRoles map[string][]string
-	}
-	addServiceAccount := func(data serviceAccountData) {
-		clients = append(
-			clients,
-			map[string]any{
-				"name":                      data.Name,
-				"description":               data.Description,
-				"clientId":                  data.ClientId,
-				"enabled":                   true,
-				"clientAuthenticatorType":   "client-secret",
-				"secret":                    t.secret,
-				"serviceAccountsEnabled":    true,
-				"publicClient":              false,
-				"standardFlowEnabled":       false,
-				"implicitFlowEnabled":       false,
-				"directAccessGrantsEnabled": false,
-				"protocol":                  "openid-connect",
-				"fullScopeAllowed":          true,
-				"defaultClientScopes": []string{
-					"basic",
-					"username",
-					"groups",
-					auth.Audience,
-				},
-			},
-		)
-		users = append(
-			users, map[string]any{
-				"username":               fmt.Sprintf("service-account-%s", data.ClientId),
-				"enabled":                true,
-				"serviceAccountClientId": data.ClientId,
-				"clientRoles":            data.ClientRoles,
-			},
-		)
-	}
-	addServiceAccount(serviceAccountData{
-		Name:        "OSAC administrator",
-		Description: "Service account for the OSAC administrator",
-		ClientId:    adminClientId,
-	})
-	addServiceAccount(serviceAccountData{
-		Name:        "OSAC controller",
-		Description: "Service account for the OSAC controller",
-		ClientId:    controllerClientId,
-		ClientRoles: map[string][]string{
-			"realm-management": {
-				"manage-realm",
-				"manage-users",
-				"view-realm",
-				"view-users",
-				"view-clients",
-				"manage-identity-providers",
-				"view-identity-providers",
-			},
-		},
-	})
-
-	// Add the prepared clients, groups and users to the values:
-	valuesData["clients"] = clients
-	valuesData["groups"] = groups
-	valuesData["users"] = users
-
-	// Write the values to a temporary file:
-	valuesBytes, err := yaml.Marshal(valuesData)
-	if err != nil {
-		return fmt.Errorf("failed to marshal values to YAML: %w", err)
-	}
-	valuesFile := filepath.Join(t.tmpDir, "keycloak-values.yaml")
-	err = os.WriteFile(valuesFile, valuesBytes, 0400)
-	if err != nil {
-		return fmt.Errorf("failed to write values to file: %w", err)
-	}
-
-	// Install the chart:
-	installCmd, err := testing.NewCommand().
-		SetLogger(t.logger).
-		SetHome(t.projectDir).
-		SetDir(t.projectDir).
-		SetName(helmCmd).
-		SetArgs(
-			"upgrade",
-			"--install",
-			"keycloak",
-			"it/charts/keycloak",
-			"--kubeconfig", t.kcFile,
-			"--namespace", "keycloak",
-			"--create-namespace",
-			"--values", valuesFile,
-			"--wait",
-		).
-		Build()
-	if err != nil {
-		return fmt.Errorf("failed to create Keycloak install command: %w", err)
-	}
-	if err = installCmd.Execute(ctx); err != nil {
-		return fmt.Errorf("failed to install Keycloak: %w", err)
-	}
-
-	// Create a token source to connect to the Keycloak admin API:
-	tokenStore, err := auth.NewMemoryTokenStore().
-		SetLogger(t.logger).
-		Build()
-	if err != nil {
-		return fmt.Errorf("failed to create Keycloak admin token store: %w", err)
-	}
-	tokenSource, err := oauth.NewTokenSource().
-		SetLogger(t.logger).
-		SetStore(tokenStore).
-		SetCaPool(t.caPool).
-		SetIssuer(fmt.Sprintf("https://%s/realms/master", keycloakAddr)).
-		SetFlow(oauth.PasswordFlow).
-		SetClientId("admin-cli").
-		SetUsername("admin").
-		SetPassword(t.secret).
-		SetScopes("openid").
-		Build()
-	if err != nil {
-		return fmt.Errorf("failed to create Keycloak admin token source: %w", err)
-	}
-
-	// Create an HTTP client to connect to the Keycloak admin API:
-	httpClient := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				RootCAs: t.caPool,
-			},
-		},
-	}
-
-	// Helper to make authenticated requests to the Keycloak admin API:
-	sendRequest := func(method, path string, input any) (code int, output []byte, err error) {
-		var body io.Reader
-		if input != nil {
-			var data []byte
-			data, err = json.Marshal(input)
-			if err != nil {
-				err = fmt.Errorf("failed to marshal request body: %w", err)
-				return
-			}
-			body = bytes.NewReader(data)
-		}
-		url := fmt.Sprintf("https://%s/admin/realms/master%s", keycloakAddr, path)
-		request, err := http.NewRequestWithContext(ctx, method, url, body)
-		if err != nil {
-			err = fmt.Errorf("failed to create request: %w", err)
-			return
-		}
-		if input != nil {
-			request.Header.Set("Content-Type", "application/json")
-		}
-		var token *auth.Token
-		token, err = tokenSource.Token(ctx)
-		if err != nil {
-			err = fmt.Errorf("failed to get token: %w", err)
-			return
-		}
-		request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token.Access))
-		response, err := httpClient.Do(request)
-		if err != nil {
-			err = fmt.Errorf("failed to send request: %w", err)
-			return
-		}
-		defer response.Body.Close()
-		output, err = io.ReadAll(response.Body)
-		if err != nil {
-			err = fmt.Errorf("failed to read response body: %w", err)
-			return
-		}
-		code = response.StatusCode
-		return
-	}
-
-	// Create the 'admin' client in the master realm:
-	var body []byte
-	code, _, err := sendRequest(
-		http.MethodPost,
-		"/clients",
-		map[string]any{
-			"clientId":                  "admin",
-			"name":                      "Administrator",
-			"description":               "Administrator",
-			"enabled":                   true,
-			"clientAuthenticatorType":   "client-secret",
-			"secret":                    t.secret,
-			"serviceAccountsEnabled":    true,
-			"publicClient":              false,
-			"standardFlowEnabled":       false,
-			"implicitFlowEnabled":       false,
-			"directAccessGrantsEnabled": false,
-			"protocol":                  "openid-connect",
-			"fullScopeAllowed":          true,
-		},
-	)
-	if err != nil {
-		return err
-	}
-	if code != http.StatusCreated && code != http.StatusConflict {
-		return fmt.Errorf("failed to create admin client in master realm: %d", code)
-	}
-
-	// Find the internal identifier of the client we just created:
-	code, body, err = sendRequest(
-		http.MethodGet,
-		"/clients",
-		nil,
-	)
-	if err != nil {
-		return err
-	}
-	if code != http.StatusOK {
-		return fmt.Errorf("failed to find admin client in master realm: %d", code)
-	}
-	var adminClientId string
-	err = t.jqTool.EvaluateBytes(
-		`.[] | select(.clientId == "admin") | .id`,
-		body,
-		&adminClientId,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to get admin client identifier: %w", err)
-	}
-
-	// Get the service account user for the client:
-	code, body, err = sendRequest(
-		http.MethodGet,
-		fmt.Sprintf("/clients/%s/service-account-user", adminClientId),
-		nil,
-	)
-	if err != nil {
-		return err
-	}
-	if code != http.StatusOK {
-		return fmt.Errorf("failed to get service account user: %d", code)
-	}
-	var adminUserId string
-	err = t.jqTool.EvaluateBytes(`.id`, body, &adminUserId)
-	if err != nil {
-		return fmt.Errorf("failed to get service account user identifier: %w", err)
-	}
-
-	// Find the 'admin' realm role in the master realm:
-	code, body, err = sendRequest(
-		http.MethodGet,
-		"/roles/admin",
-		nil,
-	)
-	if err != nil {
-		return err
-	}
-	if code != http.StatusOK {
-		return fmt.Errorf("failed to find admin role: %d", code)
-	}
-	var adminRoleId string
-	err = t.jqTool.EvaluateBytes(`.id`, body, &adminRoleId)
-	if err != nil {
-		return fmt.Errorf("failed to get admin role identifier: %w", err)
-	}
-
-	// Assign the 'admin' role to the service account user:
-	code, _, err = sendRequest(
-		http.MethodPost,
-		fmt.Sprintf("/users/%s/role-mappings/realm", adminUserId),
-		[]any{
-			map[string]any{
-				"id":   adminRoleId,
-				"name": "admin",
-			},
-		},
-	)
-	if err != nil {
-		return err
-	}
-	if code != http.StatusNoContent && code != http.StatusConflict {
-		return fmt.Errorf("failed to assign admin role: %d", code)
-	}
-
-	t.logger.InfoContext(ctx, "Created admin service account")
-
-	return nil
-}
-
-// deployPostgres installs the PostgreSQL chart with databases for Keycloak and the service.
-func (t *Tool) deployPostgres(ctx context.Context) error {
-	t.logger.DebugContext(ctx, "Installing PostgreSQL chart")
-
-	// Prepare a map containing the values for the chart:
-	valuesData := map[string]any{
-		"certs": map[string]any{
-			"issuerRef": map[string]any{
-				"kind": "ClusterIssuer",
-				"name": "default-ca",
-			},
-			"caBundle": map[string]any{
-				"configMap": "ca-bundle",
-			},
-		},
-		"databases": []any{
-			map[string]any{
-				"name": "keycloak",
-				"user": "keycloak",
-			},
-			map[string]any{
-				"name": "service",
-				"user": "service",
-			},
-		},
-	}
-	valuesBytes, err := yaml.Marshal(valuesData)
-	if err != nil {
-		return fmt.Errorf("failed to marshal PostgreSQL values to YAML: %w", err)
-	}
-
-	// Write the values to a temporary file:
-	valuesFile := filepath.Join(t.tmpDir, "postgres-values.yaml")
-	err = os.WriteFile(valuesFile, valuesBytes, 0400)
-	if err != nil {
-		return fmt.Errorf("failed to write PostgreSQL values to file: %w", err)
-	}
-
-	// Install the chart:
-	installCmd, err := testing.NewCommand().
-		SetLogger(t.logger).
-		SetHome(t.projectDir).
-		SetDir(t.projectDir).
-		SetName(helmCmd).
-		SetArgs(
-			"upgrade",
-			"--install",
-			"postgres",
-			"it/charts/postgres",
-			"--kubeconfig", t.kcFile,
-			"--namespace", "postgres",
-			"--create-namespace",
-			"--values", valuesFile,
-			"--wait",
-		).
-		Build()
-	if err != nil {
-		return fmt.Errorf("failed to create PostgreSQL install command: %w", err)
-	}
-	if err = installCmd.Execute(ctx); err != nil {
-		return fmt.Errorf("failed to install PostgreSQL: %w", err)
-	}
-	return nil
-}
-
-// deployOpenBao installs the OpenBao chart in dev mode as a Vault-compatible secret store.
-func (t *Tool) deployOpenBao(ctx context.Context) error {
-	t.logger.DebugContext(ctx, "Installing OpenBao chart")
-
-	valuesData := map[string]any{
-		"dev": map[string]any{
-			"rootToken":     t.secret,
-			"listenAddress": "0.0.0.0:8200",
-		},
-		"caBundle": map[string]any{
-			"configMap": "ca-bundle",
-		},
-	}
-	valuesBytes, err := yaml.Marshal(valuesData)
-	if err != nil {
-		return fmt.Errorf("failed to marshal OpenBao values to YAML: %w", err)
-	}
-
-	valuesFile := filepath.Join(t.tmpDir, "openbao-values.yaml")
-	err = os.WriteFile(valuesFile, valuesBytes, 0400)
-	if err != nil {
-		return fmt.Errorf("failed to write OpenBao values to file: %w", err)
-	}
-
-	installCmd, err := testing.NewCommand().
-		SetLogger(t.logger).
-		SetHome(t.projectDir).
-		SetDir(t.projectDir).
-		SetName(helmCmd).
-		SetArgs(
-			"upgrade",
-			"--install",
-			"openbao",
-			"it/charts/openbao",
-			"--kubeconfig", t.kcFile,
-			"--namespace", "openbao",
-			"--create-namespace",
-			"--values", valuesFile,
-			"--wait",
-		).
-		Build()
-	if err != nil {
-		return fmt.Errorf("failed to create OpenBao install command: %w", err)
-	}
-	if err = installCmd.Execute(ctx); err != nil {
-		return fmt.Errorf("failed to install OpenBao: %w", err)
-	}
-	return nil
-}
-
-// configureOpenBao sets up the parent namespace and JWT auth in the OpenBao secret store
-// so that the controller can authenticate via Keycloak and manage per-tenant namespaces.
-func (t *Tool) configureOpenBao(ctx context.Context) error {
-	t.logger.DebugContext(ctx, "Configuring OpenBao")
-
-	// Create the parent namespace:
-	if err := t.execBao(ctx, "bao", "namespace", "create", "osac"); err != nil {
-		return fmt.Errorf("failed to create osac namespace in OpenBao: %w", err)
-	}
-
-	// Enable JWT auth in the parent namespace:
-	if err := t.execBao(ctx, "bao", "auth", "enable", "-ns=osac", "jwt"); err != nil {
-		return fmt.Errorf("failed to enable JWT auth in osac namespace: %w", err)
-	}
-
-	// Configure JWT auth with Keycloak OIDC discovery. The CA cert file is
-	// mounted into the OpenBao pod by the chart from the ca-bundle ConfigMap.
-	if err := t.execBao(ctx,
-		"bao", "write", "-ns=osac", "auth/jwt/config",
-		fmt.Sprintf("oidc_discovery_url=https://%s/realms/osac", keycloakAddr),
-		"oidc_discovery_ca_pem=@/etc/openbao/ca/bundle.pem",
-		"default_role=lifecycle",
-	); err != nil {
-		return fmt.Errorf("failed to configure JWT auth in osac namespace: %w", err)
-	}
-
-	// Create a policy granting the lifecycle role control over child
-	// namespaces. The "+" glob matches any single child namespace segment,
-	// allowing the parent-scoped token to manage mounts, auth methods,
-	// policies, and roles inside each tenant namespace.
-	lifecyclePolicy := strings.Join([]string{
-		`path "sys/namespaces/*"      { capabilities = ["create","read","update","delete","list"] }`,
-		`path "+/sys/mounts/*"        { capabilities = ["create","read","update","delete","list","sudo"] }`,
-		`path "+/sys/mounts"          { capabilities = ["read"] }`,
-		`path "+/sys/policies/acl/*"  { capabilities = ["create","read","update","delete","list"] }`,
-		`path "+/sys/auth/*"          { capabilities = ["create","read","update","delete","list","sudo"] }`,
-		`path "+/auth/*"              { capabilities = ["create","read","update","delete","list"] }`,
-	}, " ")
-	if err := t.execBao(ctx,
-		"bao", "write", "-ns=osac", "sys/policy/lifecycle",
-		fmt.Sprintf("policy=%s", lifecyclePolicy),
-	); err != nil {
-		return fmt.Errorf("failed to create lifecycle policy in osac namespace: %w", err)
-	}
-
-	// Create the lifecycle role bound to the osac-api audience:
-	if err := t.execBao(ctx,
-		"bao", "write", "-ns=osac", "auth/jwt/role/lifecycle",
-		"role_type=jwt",
-		"bound_audiences=osac-api",
-		"user_claim=sub",
-		"policies=lifecycle",
-	); err != nil {
-		return fmt.Errorf("failed to create lifecycle role in osac namespace: %w", err)
-	}
-
-	t.logger.InfoContext(ctx, "Configured OpenBao with parent namespace and JWT auth")
-	return nil
-}
-
-// execBao runs a bao CLI command inside the OpenBao pod via kubectl exec.
-func (t *Tool) execBao(ctx context.Context, baoArgs ...string) error {
-	args := []string{
-		"exec", "openbao",
-		"--namespace", "openbao",
-		"--kubeconfig", t.kcFile,
-		"--",
-		"env",
-		"BAO_ADDR=http://127.0.0.1:8200",
-		fmt.Sprintf("BAO_TOKEN=%s", t.secret),
-	}
-	args = append(args, baoArgs...)
-
-	cmd, err := testing.NewCommand().
-		SetLogger(t.logger).
-		SetHome(t.projectDir).
-		SetDir(t.projectDir).
-		SetName(kubectlCmd).
-		SetArgs(args...).
-		Build()
-	if err != nil {
-		return err
-	}
-	stdout, stderr, err := cmd.Evaluate(ctx)
-	if err != nil {
-		combined := string(stdout) + string(stderr)
-		if strings.Contains(combined, "already exists") ||
-			strings.Contains(combined, "existing mount") ||
-			strings.Contains(combined, "path is already in use") {
-			t.logger.DebugContext(ctx, "OpenBao resource already exists",
-				slog.String("command", strings.Join(baoArgs, " ")))
-			return nil
-		}
-		return fmt.Errorf("%s: %w", combined, err)
-	}
-	return nil
-}
-
-func (t *Tool) deployService(ctx context.Context, imageRef string) error {
-	// Prepare the values:
-	externalHostname, _, err := net.SplitHostPort(externalServiceAddr)
-	if err != nil {
-		return fmt.Errorf("failed to extract host from external service address: %w", err)
-	}
-	internalHostname, _, err := net.SplitHostPort(internalServiceAddr)
-	if err != nil {
-		return fmt.Errorf("failed to extract host from internal service address: %w", err)
-	}
-	valuesData := map[string]any{
-		"variant":          "kind",
-		"debug":            t.debug,
-		"externalHostname": externalHostname,
-		"internalHostname": internalHostname,
-		"log": map[string]any{
-			"level":   "debug",
-			"headers": true,
-			"bodies":  true,
-		},
-		"images": map[string]any{
-			"service": imageRef,
-		},
-		"certs": map[string]any{
-			"issuerRef": map[string]any{
-				"kind": "ClusterIssuer",
-				"name": "default-ca",
-			},
-			"caBundle": map[string]any{
-				"configMap": "ca-bundle",
-			},
-		},
-		"auth": map[string]any{
-			"issuerUrl": fmt.Sprintf("https://%s/realms/osac", keycloakAddr),
-			"controllerCredentials": []any{
-				map[string]any{
-					"secret": map[string]any{
-						"name": controllerCredentialsSecret,
-						"items": []any{
-							map[string]any{
-								"key":   "client-id",
-								"param": "client-id",
-							},
-							map[string]any{
-								"key":   "client-secret",
-								"param": "client-secret",
-							},
-						},
-					},
-				},
-			},
-		},
-		"database": map[string]any{
-			"connection": []any{
-				map[string]any{
-					"configMap": map[string]any{
-						"name": serviceDatabaseConfigMap,
-						"items": []any{
-							map[string]any{
-								"key":   "url",
-								"param": "url",
-							},
-							map[string]any{
-								"key":   "sslmode",
-								"param": "sslmode",
-							},
-						},
-					},
-				},
-				map[string]any{
-					"secret": map[string]any{
-						"name": serviceDatabaseClientCertSecret,
-						"items": []any{
-							map[string]any{
-								"key":   "tls.crt",
-								"param": "sslcert",
-							},
-							map[string]any{
-								"key":   "tls.key",
-								"param": "sslkey",
-							},
-							map[string]any{
-								"key":   "ca.crt",
-								"param": "sslrootcert",
-							},
-						},
-					},
-				},
-			},
-		},
-		"idp": map[string]any{
-			"provider": "keycloak",
-			"url":      fmt.Sprintf("https://%s", keycloakAddr),
-			"credentials": []any{
-				map[string]any{
-					"secret": map[string]any{
-						"name": controllerCredentialsSecret,
-						"items": []any{
-							map[string]any{
-								"key":   "client-id",
-								"param": "client-id",
-							},
-							map[string]any{
-								"key":   "client-secret",
-								"param": "client-secret",
-							},
-						},
-					},
-				},
-			},
-		},
-		"vault": map[string]any{
-			"endpoint":           fmt.Sprintf("http://%s", openbaoAddr),
-			"namespace":          "osac",
-			"kvMountPath":        "secret",
-			"lifecycleRole":      "lifecycle",
-			"lifecycleMountPath": "jwt",
-			"keycloakClientId":   "osac-controller",
-			"keycloakIssuerUrl":  fmt.Sprintf("https://%s/realms/osac", keycloakAddr),
-			"keycloakAudience":   "osac-api",
-			"caBundle": map[string]any{
-				"configMap": "ca-bundle",
-			},
-			"credentials": []map[string]any{
-				{
-					"secret": map[string]any{
-						"name": "fulfillment-controller-credentials",
-						"items": []map[string]string{
-							{"key": "client-secret", "param": "client-secret"},
-						},
-					},
-				},
-			},
-		},
-	}
-	valuesBytes, err := yaml.Marshal(valuesData)
-	if err != nil {
-		return fmt.Errorf("failed to marshal values to YAML: %w", err)
-	}
-	valuesFile := filepath.Join(t.tmpDir, "service-values.yaml")
-	err = os.WriteFile(valuesFile, valuesBytes, 0400)
-	if err != nil {
-		return fmt.Errorf("failed to write values to file: %w", err)
-	}
-	t.logger.DebugContext(
-		ctx,
-		"Service chart values",
-		slog.Any("values", valuesData),
-	)
-
-	// Deploy the service:
-	t.logger.DebugContext(ctx, "Deploying service with Helm")
-	installCmd, err := testing.NewCommand().
-		SetLogger(t.logger).
-		SetHome(t.projectDir).
-		SetDir(t.projectDir).
-		SetName(helmCmd).
-		SetArgs(
-			"upgrade",
-			"--install",
-			"fulfillment-service",
-			"charts/service",
-			"--kubeconfig", t.kcFile,
-			"--namespace", "osac",
-			"--create-namespace",
-			"--values", valuesFile,
-			"--wait",
-		).
-		Build()
-	if err != nil {
-		return fmt.Errorf("failed to create service install command: %w", err)
-	}
-	if err = installCmd.Execute(ctx); err != nil {
-		return fmt.Errorf("failed to install service: %w", err)
-	}
-	return nil
-}
-
-func (t *Tool) undeployService(ctx context.Context) error {
-	t.logger.DebugContext(ctx, "Undeploying service with Helm")
-	uninstallCmd, err := testing.NewCommand().
-		SetLogger(t.logger).
-		SetHome(t.projectDir).
-		SetDir(t.projectDir).
-		SetName(helmCmd).
-		SetArgs(
-			"uninstall",
-			"fulfillment-service",
-			"--kubeconfig", t.kcFile,
-			"--namespace", "osac",
-		).
-		Build()
-	if err != nil {
-		return fmt.Errorf("failed to create service uninstall command: %w", err)
-	}
-	if err = uninstallCmd.Execute(ctx); err != nil {
-		return fmt.Errorf("failed to uninstall service: %w", err)
 	}
 	return nil
 }
@@ -1850,8 +599,8 @@ func (t *Tool) createTenants(ctx context.Context) error {
 	return nil
 }
 
-func (t *Tool) waitForVaultReady(ctx context.Context) error {
-	t.logger.InfoContext(ctx, "Waiting for vault ready conditions")
+func (t *Tool) waitForTenantsSynced(ctx context.Context) error {
+	t.logger.InfoContext(ctx, "Waiting for setup tenants to reach SYNCED")
 
 	uniqueTenants := make(map[string]bool)
 	uniqueTenants[usersGroup] = true
@@ -1863,39 +612,233 @@ func (t *Tool) waitForVaultReady(ctx context.Context) error {
 
 	tenantsClient := privatev1.NewTenantsClient(t.internalView.adminConn)
 	for tenant := range uniqueTenants {
-		backOff := backoff.NewExponentialBackOff()
-		backOff.InitialInterval = 1 * time.Second
-		backOff.MaxInterval = 5 * time.Second
-		backOff.MaxElapsedTime = 120 * time.Second
+		bo := backoff.NewExponentialBackOff()
+		bo.InitialInterval = 1 * time.Second
+		bo.MaxInterval = 5 * time.Second
+		bo.MaxElapsedTime = 120 * time.Second
 		tenantName := tenant
 		err := backoff.Retry(func() error {
-			filter := fmt.Sprintf("this.metadata.name == %q", tenantName)
-			resp, listErr := tenantsClient.List(ctx, privatev1.TenantsListRequest_builder{
-				Filter: &filter,
+			resp, getErr := tenantsClient.Get(ctx, privatev1.TenantsGetRequest_builder{
+				Id: tenantName,
 			}.Build())
-			if listErr != nil {
-				return fmt.Errorf("failed to list tenant %q: %w", tenantName, listErr)
+			if getErr != nil {
+				return fmt.Errorf("failed to get tenant %q: %w", tenantName, getErr)
 			}
-			if len(resp.GetItems()) == 0 {
-				return fmt.Errorf("tenant %q not found", tenantName)
+			if resp.GetObject().GetStatus().GetState() != privatev1.TenantState_TENANT_STATE_SYNCED {
+				return fmt.Errorf("tenant %q not yet synced", tenantName)
 			}
-			for _, c := range resp.GetItems()[0].GetStatus().GetConditions() {
-				if c.GetType() == privatev1.TenantConditionType_TENANT_CONDITION_TYPE_VAULT_READY {
-					if c.GetStatus() == privatev1.ConditionStatus_CONDITION_STATUS_TRUE {
-						return nil
-					}
-					return fmt.Errorf("tenant %q vault not yet ready (reason: %s)", tenantName, c.GetReason())
-				}
-			}
-			return fmt.Errorf("tenant %q vault ready condition not yet present", tenantName)
-		}, backoff.WithContext(backOff, ctx))
+			return nil
+		}, backoff.WithContext(bo, ctx))
 		if err != nil {
-			return fmt.Errorf("timed out waiting for vault ready for tenant %q: %w", tenant, err)
+			return fmt.Errorf("timed out waiting for tenant %q to reach SYNCED: %w", tenant, err)
 		}
-		t.logger.DebugContext(ctx, "Vault ready for tenant", slog.String("tenant", tenant))
+		t.logger.DebugContext(ctx, "Tenant synced", slog.String("tenant", tenant))
 	}
 
-	t.logger.InfoContext(ctx, "All vault ready conditions satisfied")
+	t.logger.InfoContext(ctx, "All setup tenants synced")
+	return nil
+}
+
+// createKeycloakTestUsers creates the test users in Keycloak via the admin API. The prereqs chart
+// deploys Keycloak with its own realm but does not include the test-specific users. This method
+// creates them idempotently (409 Conflict is acceptable).
+func (t *Tool) createKeycloakTestUsers(ctx context.Context) error {
+	t.logger.DebugContext(ctx, "Creating test users in Keycloak")
+
+	users := []string{adminUsername, userUsername}
+	for user := range OIDCTenants {
+		users = append(users, user)
+	}
+
+	for _, username := range users {
+		payload := map[string]any{
+			"username":      username,
+			"enabled":       true,
+			"email":         fmt.Sprintf("%s@test.local", username),
+			"emailVerified": true,
+			"firstName":     username,
+			"lastName":      "Test",
+			"credentials": []map[string]any{{
+				"type":      "password",
+				"value":     usersPassword,
+				"temporary": false,
+			}},
+		}
+		code, body, err := t.KeycloakAdminRequest(ctx, http.MethodPost, "/users", payload)
+		if err != nil {
+			return fmt.Errorf("failed to create user '%s': %w", username, err)
+		}
+		if code != http.StatusCreated && code != http.StatusConflict {
+			return fmt.Errorf("failed to create user '%s': status=%d body=%s", username, code, string(body))
+		}
+
+		// Ensure emailVerified and password are set even if the user already existed
+		userId, err := t.keycloakEnsureUserReady(ctx, username)
+		if err != nil {
+			return err
+		}
+		_ = userId
+
+		t.logger.InfoContext(ctx, "Created Keycloak test user", "!user", username)
+	}
+	return nil
+}
+
+// keycloakEnsureUserReady updates a Keycloak user to have email, emailVerified, and resets
+// their password. Needed because POST /users with 409 Conflict doesn't update attributes.
+func (t *Tool) keycloakEnsureUserReady(ctx context.Context, username string) (string, error) {
+	query := url.Values{}
+	query.Set("username", username)
+	query.Set("exact", "true")
+	_, body, err := t.KeycloakAdminRequest(ctx, http.MethodGet, "/users?"+query.Encode(), nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to get user '%s': %w", username, err)
+	}
+	var usersResult []map[string]any
+	if err := json.Unmarshal(body, &usersResult); err != nil || len(usersResult) == 0 {
+		return "", fmt.Errorf("user '%s' not found after creation", username)
+	}
+	userId := usersResult[0]["id"].(string)
+
+	updatePayload := map[string]any{
+		"email":         fmt.Sprintf("%s@test.local", username),
+		"emailVerified": true,
+		"enabled":       true,
+	}
+	code, body, err := t.KeycloakAdminRequest(ctx, http.MethodPut,
+		fmt.Sprintf("/users/%s", userId), updatePayload)
+	if err != nil {
+		return "", fmt.Errorf("failed to update user '%s': %w", username, err)
+	}
+	if code != http.StatusOK && code != http.StatusNoContent {
+		return "", fmt.Errorf("failed to update user '%s': status=%d body=%s", username, code, string(body))
+	}
+
+	credPayload := map[string]any{
+		"type":      "password",
+		"value":     usersPassword,
+		"temporary": false,
+	}
+	code, body, err = t.KeycloakAdminRequest(ctx, http.MethodPut,
+		fmt.Sprintf("/users/%s/reset-password", userId), credPayload)
+	if err != nil {
+		return "", fmt.Errorf("failed to reset password for '%s': %w", username, err)
+	}
+	if code != http.StatusOK && code != http.StatusNoContent {
+		return "", fmt.Errorf("failed to reset password for '%s': status=%d body=%s", username, code, string(body))
+	}
+
+	return userId, nil
+}
+
+// ensureUsersInKeycloakOrganizations creates placeholder Keycloak organizations and adds
+// the admin and user accounts to them with group membership. This must happen before
+// creating gRPC/HTTP clients because the token sources use the password flow, which
+// requires org membership in Keycloak 26.
+func (t *Tool) ensureUsersInKeycloakOrganizations(ctx context.Context) error {
+	t.logger.DebugContext(ctx, "Ensuring test users are in Keycloak organizations")
+
+	userOrgs := map[string]string{
+		adminUsername: "system",
+		userUsername:  usersGroup,
+	}
+	for username, orgName := range userOrgs {
+		if err := t.ensureUserInOrg(ctx, username, orgName); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (t *Tool) ensureUserInOrg(ctx context.Context, username, orgName string) error {
+	orgPayload := map[string]any{"name": orgName, "enabled": true}
+	code, body, err := t.KeycloakAdminRequest(ctx, http.MethodPost, "/organizations", orgPayload)
+	if err != nil {
+		return fmt.Errorf("failed to create org '%s': %w", orgName, err)
+	}
+	if code != http.StatusCreated && code != http.StatusConflict {
+		return fmt.Errorf("failed to create org '%s': status=%d body=%s", orgName, code, string(body))
+	}
+
+	query := url.Values{}
+	query.Set("exact", "true")
+	query.Set("search", orgName)
+	_, body, err = t.KeycloakAdminRequest(ctx, http.MethodGet, "/organizations?"+query.Encode(), nil)
+	if err != nil {
+		return fmt.Errorf("failed to get org '%s': %w", orgName, err)
+	}
+	var orgs []map[string]any
+	if err := json.Unmarshal(body, &orgs); err != nil || len(orgs) == 0 {
+		return fmt.Errorf("org '%s' not found after creation", orgName)
+	}
+	orgId := orgs[0]["id"].(string)
+
+	query = url.Values{}
+	query.Set("username", username)
+	query.Set("exact", "true")
+	_, body, err = t.KeycloakAdminRequest(ctx, http.MethodGet, "/users?"+query.Encode(), nil)
+	if err != nil {
+		return fmt.Errorf("failed to get user '%s': %w", username, err)
+	}
+	var users []map[string]any
+	if err := json.Unmarshal(body, &users); err != nil || len(users) == 0 {
+		return fmt.Errorf("user '%s' not found", username)
+	}
+	userId := users[0]["id"].(string)
+
+	code, _, err = t.KeycloakAdminRequest(ctx, http.MethodPost,
+		fmt.Sprintf("/organizations/%s/members", orgId), userId)
+	if err != nil {
+		return fmt.Errorf("failed to add '%s' to org '%s': %w", username, orgName, err)
+	}
+	if code != http.StatusCreated && code != http.StatusNoContent && code != http.StatusConflict {
+		return fmt.Errorf("failed to add '%s' to org '%s': status=%d", username, orgName, code)
+	}
+
+	groupPayload := map[string]any{"name": "/members"}
+	code, body, err = t.KeycloakAdminRequest(ctx, http.MethodPost,
+		fmt.Sprintf("/organizations/%s/groups", orgId), groupPayload)
+	if err != nil {
+		return fmt.Errorf("failed to create members group in org '%s': %w", orgName, err)
+	}
+
+	var groupId string
+	if code == http.StatusCreated {
+		var g map[string]any
+		if err := json.Unmarshal(body, &g); err == nil {
+			groupId, _ = g["id"].(string)
+		}
+	}
+	if groupId == "" {
+		_, body, err = t.KeycloakAdminRequest(ctx, http.MethodGet,
+			fmt.Sprintf("/organizations/%s/groups", orgId), nil)
+		if err != nil {
+			return fmt.Errorf("failed to get groups for org '%s': %w", orgName, err)
+		}
+		var groups []map[string]any
+		if err := json.Unmarshal(body, &groups); err == nil {
+			for _, g := range groups {
+				if name, ok := g["name"].(string); ok && name == "/members" {
+					groupId, _ = g["id"].(string)
+					break
+				}
+			}
+		}
+	}
+	if groupId == "" {
+		return fmt.Errorf("failed to find /members group in org '%s'", orgName)
+	}
+
+	code, _, err = t.KeycloakAdminRequest(ctx, http.MethodPut,
+		fmt.Sprintf("/organizations/%s/groups/%s/members/%s", orgId, groupId, userId), nil)
+	if err != nil {
+		return fmt.Errorf("failed to add '%s' to members group: %w", username, err)
+	}
+	if code != http.StatusOK && code != http.StatusCreated && code != http.StatusNoContent && code != http.StatusConflict {
+		return fmt.Errorf("failed to add '%s' to members group: status=%d", username, code)
+	}
+
+	t.logger.InfoContext(ctx, "User added to organization", "!user", username, "!org", orgName)
 	return nil
 }
 
@@ -2205,7 +1148,7 @@ func (t *Tool) KeycloakAdminRequest(ctx context.Context, method, path string, in
 		SetFlow(oauth.PasswordFlow).
 		SetClientId("admin-cli").
 		SetUsername("admin").
-		SetPassword(t.secret).
+		SetPassword("admin").
 		SetScopes("openid").
 		Build()
 	if err != nil {
@@ -2363,7 +1306,6 @@ func (t *Tool) waitForRestGatewayReady(ctx context.Context) error {
 			)
 			return err
 		}
-		_, _ = io.Copy(io.Discard, response.Body)
 		response.Body.Close()
 		if response.StatusCode != http.StatusOK {
 			err = fmt.Errorf("REST gateway returned status %d", response.StatusCode)
@@ -2396,7 +1338,10 @@ func (t *Tool) registerHub(ctx context.Context) error {
 	t.logger.DebugContext(ctx, "Registering hub")
 
 	// Prepare the kubeconfig for the hub:
-	hubKcBytes := t.cluster.Kubeconfig()
+	hubKcBytes, err := os.ReadFile(t.kcFile)
+	if err != nil {
+		return fmt.Errorf("failed to read kubeconfig file: %w", err)
+	}
 	hubKcObject, err := clientcmd.Load(hubKcBytes)
 	if err != nil {
 		return fmt.Errorf("failed to load hub kubeconfig: %w", err)
@@ -2451,17 +1396,7 @@ func (t *Tool) registerHub(ctx context.Context) error {
 func (t *Tool) buildCLI(ctx context.Context) error {
 	t.logger.DebugContext(ctx, "Building CLI binary")
 	t.cliBinaryPath = filepath.Join(t.tmpDir, "osac")
-	buildCmd, err := testing.NewCommand().
-		SetLogger(t.logger).
-		SetHome(t.projectDir).
-		SetDir(t.projectDir).
-		SetName("go").
-		SetArgs("build", "-o", t.cliBinaryPath, "./cmd/osac").
-		Build()
-	if err != nil {
-		return fmt.Errorf("failed to create command to build CLI: %w", err)
-	}
-	err = buildCmd.Execute(ctx)
+	_, err := t.runCommand(ctx, "go", "build", "-o", t.cliBinaryPath, "./cmd/osac")
 	if err != nil {
 		return fmt.Errorf("failed to build CLI binary: %w", err)
 	}
@@ -2473,8 +1408,17 @@ func (t *Tool) CLIBinaryPath() string {
 	return t.cliBinaryPath
 }
 
-// Secret returns the shared secret used for passwords and credentials in the test environment.
+// Secret returns the controller client secret from the cluster. The prereqs chart creates
+// the fulfillment-controller-credentials Secret with a randomly generated client secret.
 func (t *Tool) Secret() string {
+	secret := &corev1.Secret{}
+	key := crclient.ObjectKey{Namespace: "osac", Name: "fulfillment-controller-credentials"}
+	if err := t.kubeClient.Get(context.Background(), key, secret); err != nil {
+		return t.secret
+	}
+	if v, ok := secret.Data["client-secret"]; ok {
+		return string(v)
+	}
 	return t.secret
 }
 
@@ -2498,7 +1442,7 @@ func (t *Tool) RunCLIWithEnv(ctx context.Context, homeDir string, extraEnv []str
 }
 
 // runCLI is the shared implementation for RunCLI and RunCLIWithEnv. We intentionally use
-// exec.CommandContext directly rather than testing.Command because the CLI tests need custom
+// exec.CommandContext directly rather than runCommand because the CLI tests need custom
 // environment sandboxing and explicit exit-code extraction for non-zero exits (expected
 // behavior, not errors).
 func (t *Tool) runCLI(ctx context.Context, homeDir string, extraEnv []string, args ...string) (stdout, stderr string, exitCode int) {
@@ -2588,27 +1532,10 @@ func (t *Tool) Cleanup(ctx context.Context) error {
 	}
 
 	// Dump the logs:
-	if t.cluster != nil && !t.keepKind {
-		err := t.cluster.Dump(ctx, filepath.Join(t.projectDir, "logs"))
-		if err != nil {
-			errs = append(errs, fmt.Errorf("failed to dump cluster logs: %w", err))
-		}
-	}
-
-	// Undeploy the service:
-	if t.cluster != nil && t.keepKind && !t.keepService {
-		err := t.undeployService(ctx)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("failed to undeploy service: %w", err))
-		}
-	}
-
-	// Stop the cluster:
-	if t.cluster != nil && !t.keepKind {
-		err := t.cluster.Stop(ctx)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("failed to stop cluster: %w", err))
-		}
+	logsDir := filepath.Join(t.projectDir, "logs")
+	_, dumpErr := t.runCommand(ctx, "kind", "export", "logs", logsDir, "--name", t.clusterName)
+	if dumpErr != nil {
+		errs = append(errs, fmt.Errorf("failed to dump cluster logs: %w", dumpErr))
 	}
 
 	// Remove temporary directory:
@@ -2623,19 +1550,6 @@ func (t *Tool) Cleanup(ctx context.Context) error {
 		return errors.Join(errs...)
 	}
 	return nil
-}
-
-func (t *Tool) Dump(ctx context.Context) error {
-	if t.cluster == nil {
-		return nil
-	}
-	logsDir := filepath.Join(t.projectDir, "logs")
-	return t.cluster.Dump(ctx, logsDir)
-}
-
-// Cluster returns the Kind cluster.
-func (t *Tool) Cluster() *testing.Kind {
-	return t.cluster
 }
 
 // KubeClient returns the Kubernetes client.
@@ -2727,36 +1641,20 @@ func (t *Tool) ProjectDir() string {
 }
 
 // Names of the command line tools:
-const (
-	helmCmd    = "helm"
-	kubectlCmd = "kubectl"
-	podmanCmd  = "podman"
-)
+const kubectlCmd = "kubectl"
 
 // Name and namespace of the hub:
 const hubId = "local"
-const hubNamespace = "osac-operator-system"
-
-// Image details:
-const imageName = "ghcr.io/osac/fulfillment-service"
+const hubNamespace = "osac"
 
 // userAgent is the user agent string for the integration test tool.
 const userAgent = "fulfillment-it-tool"
 
-// Service host name and address:
+// Service host name and address (host-side, via Kind port mapping):
 const (
-	keycloakAddr        = "keycloak.keycloak.svc.cluster.local:8000"
-	externalServiceAddr = "fulfillment-api.osac.svc.cluster.local:8000"
-	internalServiceAddr = "fulfillment-internal-api.osac.svc.cluster.local:8000"
-	openbaoAddr         = "openbao.openbao.svc.cluster.local:8200"
-)
-
-// Names of the database-related Kubernetes resources.
-const (
-	keycloakDatabaseClientCertSecret = "keycloak-database-client-cert"
-	keycloakDatabaseConfigMap        = "keycloak-database-config"
-	serviceDatabaseClientCertSecret  = "fulfillment-database-client-cert"
-	serviceDatabaseConfigMap         = "fulfillment-database-config"
+	keycloakAddr        = "keycloak.keycloak.svc.cluster.local:8443"
+	externalServiceAddr = "fulfillment-api.osac.svc.cluster.local:8443"
+	internalServiceAddr = "fulfillment-internal-api.osac.svc.cluster.local:8443"
 )
 
 // Namespace, name and key of the Kubernetes secret that contains the random secret used for passwords and credentials.
@@ -2766,12 +1664,11 @@ const (
 	randomSecretKey       = "secret"
 )
 
-// Name of the Kubernetes secret that contains the OAuth client credentials that the controller uses to authenticate to
-// the API.
-const controllerCredentialsSecret = "fulfillment-controller-credentials"
-
 // Name of the Kubernetes service account that is used for emergency administration access.
 const emergencyServiceAccount = "admin"
+
+// Keycloak client ID for the controller service account.
+const controllerClientId = "osac-controller"
 
 // Details of the Keycloak administrator user:
 const (
@@ -2784,13 +1681,6 @@ const (
 	userUsername  = "user"
 	usersPassword = "password"
 	usersGroup    = "users"
-	adminsGroup   = "admins"
-)
-
-// Details of the Keycloak service accounts:
-const (
-	adminClientId      = "osac-admin"
-	controllerClientId = "osac-controller"
 )
 
 // ExtractOrganizationNames extracts organization names from a JWT organization claim.

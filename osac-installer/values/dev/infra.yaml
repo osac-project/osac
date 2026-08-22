@@ -1,0 +1,23 @@
+# OpenShift dev environment -- infrastructure values for osac-deps + osac-infra charts.
+
+# --- OLM Subscriptions (osac-deps) ---
+certManager:
+  enabled: true
+trustManager:
+  enabled: true
+aapOperator:
+  enabled: true
+lvms:
+  enabled: false
+metallb:
+  enabled: false
+cnv:
+  enabled: false
+mce:
+  enabled: false
+
+# --- Infrastructure (osac-infra) ---
+caIssuer:
+  enabled: true
+keycloak:
+  enabled: true

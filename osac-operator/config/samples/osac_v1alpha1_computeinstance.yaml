@@ -3,7 +3,6 @@ kind: ComputeInstance
 metadata:
   labels:
     app.kubernetes.io/name: osac-operator
-    app.kubernetes.io/managed-by: kustomize
   annotations:
     osac.openshift.io/tenant: my-tenant
   name: computeinstance-sample

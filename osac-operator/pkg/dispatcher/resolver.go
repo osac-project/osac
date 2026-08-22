@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 
+	privatev1 "github.com/osac-project/osac/osac-operator/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/osac-operator/pkg/networkmanager"
 )
 
@@ -41,77 +42,55 @@ type ResolvedManagers struct {
 	K8sManager *networkmanager.Manager
 }
 
-// NetworkClassManagers holds the raw fabric/k8s manager name fields read from a
-// NetworkClass, decoupled from any generated proto/gRPC type so this package
-// carries no dependency on osac-operator's internal/ packages.
-type NetworkClassManagers struct {
-	// FabricManager is the configured fabric manager name, or "" if the
-	// NetworkClass does not specify one (k8s-only deployments).
-	FabricManager string
-
-	// K8sManager is the configured k8s manager name, or "" if the NetworkClass
-	// does not specify one (regions without VM workloads).
-	K8sManager string
-}
-
-// NetworkClassClient fetches the manager names configured on a NetworkClass by
-// ID. Resolver depends only on this interface — never on a concrete generated
-// gRPC client type — so pkg/dispatcher can be imported by other operators in
-// this monorepo that implement this interface against their own
-// fulfillment-service client.
-type NetworkClassClient interface {
-	// GetNetworkClass fetches the manager configuration for networkClassID.
-	// Returns a nil *NetworkClassManagers (with a nil error) if the backend
-	// has no such NetworkClass; Resolve turns that into a domain error.
-	GetNetworkClass(ctx context.Context, networkClassID string) (*NetworkClassManagers, error)
-}
-
 // Resolver fetches a NetworkClass from the fulfillment-service and validates
 // its manager references against registered ConfigMaps.
 type Resolver struct {
-	networkClassClient NetworkClassClient
-	discovery          *networkmanager.Discovery
+	networkClassesClient privatev1.NetworkClassesClient
+	discovery            *networkmanager.Discovery
 }
 
-// NewResolver creates a Resolver that uses the given NetworkClassClient and ConfigMap discovery.
+// NewResolver creates a Resolver that uses the given gRPC client and ConfigMap discovery.
 func NewResolver(
-	networkClassClient NetworkClassClient,
+	ncClient privatev1.NetworkClassesClient,
 	discovery *networkmanager.Discovery,
 ) *Resolver {
 	return &Resolver{
-		networkClassClient: networkClassClient,
-		discovery:          discovery,
+		networkClassesClient: ncClient,
+		discovery:            discovery,
 	}
 }
 
 // Resolve fetches the NetworkClass by ID from the fulfillment-service, extracts the
 // fabric and k8s manager names, and validates each against the registered ConfigMaps.
 func (r *Resolver) Resolve(ctx context.Context, networkClassID string) (*ResolvedManagers, error) {
-	managers, err := r.networkClassClient.GetNetworkClass(ctx, networkClassID)
+	resp, err := r.networkClassesClient.Get(ctx, &privatev1.NetworkClassesGetRequest{Id: networkClassID})
 	if err != nil {
 		return nil, fmt.Errorf("fetching NetworkClass %q: %w", networkClassID, err)
 	}
 
-	if managers == nil {
+	nc := resp.GetObject()
+	if nc == nil {
 		return nil, fmt.Errorf("NetworkClass %q: response contains no object", networkClassID)
 	}
 
 	result := &ResolvedManagers{}
 
-	if managers.FabricManager != "" {
-		fabricMgr, err := r.discovery.GetFabricManager(ctx, managers.FabricManager)
+	fabricManagerName := nc.GetFabricManager()
+	if fabricManagerName != "" {
+		fabricMgr, err := r.discovery.GetFabricManager(ctx, fabricManagerName)
 		if err != nil {
 			return nil, fmt.Errorf("NetworkClass %q: resolving fabricManager %q: %w",
-				networkClassID, managers.FabricManager, err)
+				networkClassID, fabricManagerName, err)
 		}
 		result.FabricManager = fabricMgr
 	}
 
-	if managers.K8sManager != "" {
-		k8sMgr, err := r.discovery.GetK8sManager(ctx, managers.K8sManager)
+	k8sManagerName := nc.GetK8SManager()
+	if k8sManagerName != "" {
+		k8sMgr, err := r.discovery.GetK8sManager(ctx, k8sManagerName)
 		if err != nil {
 			return nil, fmt.Errorf("NetworkClass %q: resolving k8sManager %q: %w",
-				networkClassID, managers.K8sManager, err)
+				networkClassID, k8sManagerName, err)
 		}
 		result.K8sManager = k8sMgr
 	}

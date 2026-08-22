@@ -48,12 +48,12 @@ Parent-child relationships use owner reference annotations (`osac.openshift.io/o
 
 ## Integration Testing (fulfillment-service)
 
-- Kind clusters (named "fulfillment-service-it")
+- Runs against a Kind cluster (named "osac-dev"), created via
+  `make -C osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac`
 - TLS with SNI routing via Envoy Gateway
 - Keycloak for authentication
 - Requires `/etc/hosts` entries:
   - `127.0.0.1 keycloak.keycloak.svc.cluster.local`
   - `127.0.0.1 fulfillment-api.osac.svc.cluster.local`
   - `127.0.0.1 fulfillment-internal-api.osac.svc.cluster.local`
-- Use `IT_KEEP_KIND=true` to preserve cluster for debugging
-- Clean up with: `kind delete cluster --name fulfillment-service-it`
+- Clean up with: `make -C osac-installer uninstall PLATFORM=kind PROFILE=dev NS=osac`

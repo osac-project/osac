@@ -296,7 +296,7 @@ oc get pods -n cert-manager
 cd osac-installer
 
 # Deploy via Helm
-helm upgrade --install osac charts/osac/ --namespace osac --values values/development/values.yaml --timeout 40m --wait
+make install PLATFORM=openshift PROFILE=dev NS=osac
 
 # Apply the complete development overlay
 
@@ -549,18 +549,18 @@ Create a service account with cluster-admin privileges for hub operations:
 export KUBECONFIG=/path/to/hub/kubeconfig
 
 # Create namespace for osac-operator if it doesn't exist
-oc create namespace osac-operator-system --dry-run=client -o yaml | oc apply -f -
+oc create namespace osac --dry-run=client -o yaml | oc apply -f -
 
 # Create service account for hub access
-oc create serviceaccount hub-access -n osac-operator-system
+oc create serviceaccount hub-access -n osac
 
 # Grant cluster-admin permissions
 oc create clusterrolebinding hub-access-admin \
   --clusterrole=cluster-admin \
-  --serviceaccount=osac-operator-system:hub-access
+  --serviceaccount=osac:hub-access
 
 # Generate a long-lived token (24 hours recommended)
-HUB_TOKEN=$(oc create token hub-access -n osac-operator-system --duration=24h)
+HUB_TOKEN=$(oc create token hub-access -n osac --duration=24h)
 echo "Hub token: $HUB_TOKEN"
 ```
 
@@ -619,7 +619,7 @@ EOF
 ./osac create hub \
   --id production-hub-01 \
   --kubeconfig /tmp/hub-kubeconfig.yaml \
-  --namespace osac-operator-system
+  --namespace osac
 
 # Verify hub registration
 ./osac get hubs
@@ -683,19 +683,19 @@ EOF
 ./osac create hub \
   --id dev-hub \
   --kubeconfig /tmp/dev-hub-kubeconfig.yaml \
-  --namespace osac-operator-system
+  --namespace osac
 
 # Staging hub
 ./osac create hub \
   --id staging-hub \
   --kubeconfig /tmp/staging-hub-kubeconfig.yaml \
-  --namespace osac-operator-system
+  --namespace osac
 
 # Production hub
 ./osac create hub \
   --id prod-hub \
   --kubeconfig /tmp/prod-hub-kubeconfig.yaml \
-  --namespace osac-operator-system
+  --namespace osac
 
 # List all registered hubs
 ./osac get hubs --output table
@@ -722,7 +722,7 @@ wc -c /path/to/kubeconfig
 # If > 8KB, create minimal version
 
 # Create service account token
-TOKEN=$(oc create token hub-access -n osac-operator-system --duration=24h)
+TOKEN=$(oc create token hub-access -n osac --duration=24h)
 
 # Create minimal kubeconfig
 cat > /tmp/minimal-kubeconfig.yaml << EOF
@@ -752,7 +752,7 @@ EOF
 KUBECONFIG=/tmp/hub-kubeconfig.yaml oc get nodes
 
 # Verify osac-operator is running
-KUBECONFIG=/tmp/hub-kubeconfig.yaml oc get pods -n osac-operator-system
+KUBECONFIG=/tmp/hub-kubeconfig.yaml oc get pods -n osac
 
 # Check ClusterOrder CRDs
 KUBECONFIG=/tmp/hub-kubeconfig.yaml oc get crd | grep clusterorder
@@ -768,7 +768,7 @@ TOKEN_EXPIRY=$(echo $TOKEN | cut -d. -f2 | base64 -d 2>/dev/null | jq -r .exp)
 echo "Token expires: $(date -d @$TOKEN_EXPIRY)"
 
 # Refresh token and update hub
-NEW_TOKEN=$(oc create token hub-access -n osac-operator-system --duration=24h)
+NEW_TOKEN=$(oc create token hub-access -n osac --duration=24h)
 # Update kubeconfig with new token and re-register hub
 ```
 
@@ -855,13 +855,13 @@ watch -n 30 "./osac get cluster $CLUSTER_ID"
 export KUBECONFIG=/path/to/hub/kubeconfig
 
 # List all ClusterOrders
-oc get clusterorders -n osac-operator-system
+oc get clusterorders -n osac
 
 # Get specific ClusterOrder details
-oc describe clusterorder order-h9ppt -n osac-operator-system
+oc describe clusterorder order-h9ppt -n osac
 
 # View ClusterOrder YAML
-oc get clusterorder order-h9ppt -n osac-operator-system -o yaml
+oc get clusterorder order-h9ppt -n osac -o yaml
 ```
 
 **Example ClusterOrder Structure:**
@@ -870,7 +870,7 @@ apiVersion: osac.openshift.io/v1alpha1
 kind: ClusterOrder
 metadata:
   name: order-h9ppt
-  namespace: osac-operator-system
+  namespace: osac
   labels:
     osac.openshift.io/clusterorder-uuid: 0063916a-f82e-4eaa-a5de-f783d05294d4
 spec:
@@ -966,7 +966,7 @@ while true; do
 
     # Check ClusterOrder status in hub
     export KUBECONFIG="$HUB_KUBECONFIG"
-    CO_STATUS=$(oc get clusterorders -n osac-operator-system \
+    CO_STATUS=$(oc get clusterorders -n osac \
         -l "osac.openshift.io/clusterorder-uuid=$CLUSTER_ID" \
         -o jsonpath='{.items[0].status.phase}' 2>/dev/null || echo "NOT_FOUND")
 
@@ -985,7 +985,7 @@ while true; do
         ./osac describe cluster "$CLUSTER_ID"
 
         echo "=== ClusterOrder Details ==="
-        oc describe clusterorder -n osac-operator-system \
+        oc describe clusterorder -n osac \
             -l "osac.openshift.io/clusterorder-uuid=$CLUSTER_ID"
 
         exit 1

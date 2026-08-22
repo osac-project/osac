@@ -114,7 +114,7 @@ oc get csv -n ansible-aap | grep ansible-automation-platform
 ### Step 6: Optional Components
 
 LVMS, MetalLB, MCE, and OpenShift Virtualization are installed automatically
-by `make install-operators` (Phase 1) when enabled in values. Each is gated
+by `make install-infra` when enabled in values. Each is gated
 by a toggle (e.g., `lvms.enabled: true`). The manifests below are reference
 files for manual installation if needed.
 

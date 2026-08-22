@@ -30,7 +30,6 @@ import (
 
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	privatev1 "github.com/osac-project/osac/osac-operator/internal/api/osac/private/v1"
-	"github.com/osac-project/osac/osac-operator/internal/dispatcheradapter"
 	"github.com/osac-project/osac/osac-operator/pkg/dispatcher"
 	"github.com/osac-project/osac/osac-operator/pkg/networkmanager"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
@@ -61,9 +60,7 @@ var _ = Describe("resolveDispatchPlan", func() {
 	It("returns a nil plan and no error when networkClassID is empty", func() {
 		disc, err := networkmanager.NewDiscovery(fakeDiscoveryClient, "osac")
 		Expect(err).NotTo(HaveOccurred())
-		resolver := dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(
-			newListingNetworkClassClient(nil, &[]*privatev1.NetworkClass{}),
-		), disc)
+		resolver := dispatcher.NewResolver(newListingNetworkClassClient(nil, &[]*privatev1.NetworkClass{}), disc)
 
 		plan, err := resolveDispatchPlan(ctx, resolver, "Subnet", "")
 		Expect(err).NotTo(HaveOccurred())
@@ -73,9 +70,9 @@ var _ = Describe("resolveDispatchPlan", func() {
 	It("returns a nil plan and no error when the NetworkClass has no fabricManager set", func() {
 		disc, err := networkmanager.NewDiscovery(fakeDiscoveryClient, "osac")
 		Expect(err).NotTo(HaveOccurred())
-		resolver := dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+		resolver := dispatcher.NewResolver(newListingNetworkClassClient(
 			[]*privatev1.NetworkClass{{Id: "nc-unset"}}, &[]*privatev1.NetworkClass{},
-		)), disc)
+		), disc)
 
 		plan, err := resolveDispatchPlan(ctx, resolver, "Subnet", "nc-unset")
 		Expect(err).NotTo(HaveOccurred())
@@ -85,9 +82,9 @@ var _ = Describe("resolveDispatchPlan", func() {
 	It("resolves a fabric-only plan for a fabric-only kind", func() {
 		disc, err := networkmanager.NewDiscovery(fakeDiscoveryClient, "osac")
 		Expect(err).NotTo(HaveOccurred())
-		resolver := dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+		resolver := dispatcher.NewResolver(newListingNetworkClassClient(
 			[]*privatev1.NetworkClass{{Id: "nc-vnet", FabricManager: ptr.To("netris")}}, &[]*privatev1.NetworkClass{},
-		)), disc)
+		), disc)
 
 		plan, err := resolveDispatchPlan(ctx, resolver, "VirtualNetwork", "nc-vnet")
 		Expect(err).NotTo(HaveOccurred())
@@ -101,10 +98,10 @@ var _ = Describe("resolveDispatchPlan", func() {
 		disc, err := networkmanager.NewDiscovery(fakeDiscoveryClient, "osac")
 		Expect(err).NotTo(HaveOccurred())
 		k8sManagerName := "cudn_net"
-		resolver := dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+		resolver := dispatcher.NewResolver(newListingNetworkClassClient(
 			[]*privatev1.NetworkClass{{Id: "nc-dual", FabricManager: ptr.To("netris"), K8SManager: &k8sManagerName}},
 			&[]*privatev1.NetworkClass{},
-		)), disc)
+		), disc)
 
 		plan, err := resolveDispatchPlan(ctx, resolver, "Subnet", "nc-dual")
 		Expect(err).NotTo(HaveOccurred())
@@ -118,9 +115,9 @@ var _ = Describe("resolveDispatchPlan", func() {
 	It("resolves a fabric-only plan for Subnet when the NetworkClass has no k8sManager set", func() {
 		disc, err := networkmanager.NewDiscovery(fakeDiscoveryClient, "osac")
 		Expect(err).NotTo(HaveOccurred())
-		resolver := dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+		resolver := dispatcher.NewResolver(newListingNetworkClassClient(
 			[]*privatev1.NetworkClass{{Id: "nc-fabric-only", FabricManager: ptr.To("netris")}}, &[]*privatev1.NetworkClass{},
-		)), disc)
+		), disc)
 
 		plan, err := resolveDispatchPlan(ctx, resolver, "Subnet", "nc-fabric-only")
 		Expect(err).NotTo(HaveOccurred())
@@ -132,9 +129,9 @@ var _ = Describe("resolveDispatchPlan", func() {
 	It("returns a reconcile error when the NetworkClass references an unregistered fabric manager", func() {
 		disc, err := networkmanager.NewDiscovery(fakeDiscoveryClient, "osac")
 		Expect(err).NotTo(HaveOccurred())
-		resolver := dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+		resolver := dispatcher.NewResolver(newListingNetworkClassClient(
 			[]*privatev1.NetworkClass{{Id: "nc-broken", FabricManager: ptr.To("does-not-exist")}}, &[]*privatev1.NetworkClass{},
-		)), disc)
+		), disc)
 
 		plan, err := resolveDispatchPlan(ctx, resolver, "Subnet", "nc-broken")
 		Expect(err).To(HaveOccurred())
@@ -145,10 +142,10 @@ var _ = Describe("resolveDispatchPlan", func() {
 		disc, err := networkmanager.NewDiscovery(fakeDiscoveryClient, "osac")
 		Expect(err).NotTo(HaveOccurred())
 		unregisteredK8sManager := "does-not-exist"
-		resolver := dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+		resolver := dispatcher.NewResolver(newListingNetworkClassClient(
 			[]*privatev1.NetworkClass{{Id: "nc-broken-k8s", FabricManager: ptr.To("netris"), K8SManager: &unregisteredK8sManager}},
 			&[]*privatev1.NetworkClass{},
-		)), disc)
+		), disc)
 
 		plan, err := resolveDispatchPlan(ctx, resolver, "Subnet", "nc-broken-k8s")
 		Expect(err).To(HaveOccurred())
@@ -176,10 +173,10 @@ var _ = Describe("resolveImplementationStrategy", func() {
 		disc, err := networkmanager.NewDiscovery(fakeDiscoveryClient, "osac")
 		Expect(err).NotTo(HaveOccurred())
 		k8sManagerName := "cudn_net"
-		resolver := dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+		resolver := dispatcher.NewResolver(newListingNetworkClassClient(
 			[]*privatev1.NetworkClass{{Id: "nc-k8s-fallback", K8SManager: &k8sManagerName}},
 			&[]*privatev1.NetworkClass{},
-		)), disc)
+		), disc)
 
 		// VirtualNetwork's dispatch config is Fabric-role-only with K8sFallback: true, so a
 		// NetworkClass with only a k8sManager set resolves the fabric role's target to the k8s
@@ -192,9 +189,9 @@ var _ = Describe("resolveImplementationStrategy", func() {
 	It("returns the resolved fabric manager's name when the NetworkClass has a fabricManager set", func() {
 		disc, err := networkmanager.NewDiscovery(fakeDiscoveryClient, "osac")
 		Expect(err).NotTo(HaveOccurred())
-		resolver := dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+		resolver := dispatcher.NewResolver(newListingNetworkClassClient(
 			[]*privatev1.NetworkClass{{Id: "nc-fabric", FabricManager: ptr.To("netris")}}, &[]*privatev1.NetworkClass{},
-		)), disc)
+		), disc)
 
 		strategy, err := resolveImplementationStrategy(ctx, resolver, "VirtualNetwork", "nc-fabric", "legacy-strategy")
 		Expect(err).NotTo(HaveOccurred())

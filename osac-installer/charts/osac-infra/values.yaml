@@ -1,0 +1,92 @@
+cliImage: quay.io/openshift/origin-cli:4.20.0
+osacNamespace: osac
+
+certManager:
+  enabled: true
+  channel: "stable-v1"
+
+trustManager:
+  enabled: true
+  upstream:
+    enabled: false
+
+caIssuer:
+  enabled: true
+
+envoygateway:
+  enabled: false
+
+keycloak:
+  enabled: true
+  realmOverwrite: true
+  hostname: "keycloak.keycloak.svc.cluster.local"
+  adminUsername: admin
+  adminPassword: admin
+  defaultUserPassword: foobar
+  route:
+    hostname: ""
+  # devFixtures seeds known, non-random passwords for the realm's built-in
+  # tenant/test users (admin, user, tenant1_admin, ...). Must stay disabled
+  # outside Kind/CI -- this chart is also used for real installs.
+  devFixtures:
+    enabled: false
+  images:
+    keycloak: quay.io/keycloak/keycloak:26.6.4
+    postgres: quay.io/sclorg/postgresql-18-c10s@sha256:6be2c9d855f06fb665257a6b0911676a38d740be7022cc61acee1c99a832b1b2
+
+fakeCrds:
+  enabled: false
+
+coredns:
+  localhostRewrite: false
+
+aapOperator:
+  enabled: true
+  channel: stable-2.6-cluster-scoped
+
+lvms:
+  enabled: false
+  channel: "stable-4.22"
+
+metallb:
+  enabled: false
+  channel: "stable"
+
+cnv:
+  enabled: false
+  channel: "stable"
+
+mce:
+  enabled: false
+  channel: "stable-2.17"
+  osImages: []
+
+kafka:
+  enabled: false
+  replicas: 3
+  storage:
+    size: 100Gi
+  version: "4.2.0"
+  metadataVersion: "4.2-IV0"
+
+# --- Shared PostgreSQL (dev/CI only) ---
+bundledPostgres:
+  enabled: false
+  database:
+    name: service
+    user: service
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 50m
+      memory: 128Mi
+
+# --- TLS certificate configuration for shared infrastructure ---
+certs:
+  issuerRef:
+    kind: ClusterIssuer
+    name: default-ca
+  caBundle:
+    configMap: ca-bundle

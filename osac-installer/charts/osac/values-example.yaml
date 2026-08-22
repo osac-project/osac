@@ -176,13 +176,13 @@ service:
     # Production: external Postgres with mTLS.
     # Provide a secret with the connection URL and client certificates.
     - secret:
-        name: fulfillment-db
+        name: osac-db-config
         items:
         - key: url
           # Format: postgresql://<user>:<password>@<host>:5432/<dbname>?sslmode=verify-full
           param: url
     - secret:
-        name: postgres-client-cert-service
+        name: osac-db-client-cert
         items:
         - key: tls.crt
           param: sslcert
@@ -193,7 +193,7 @@ service:
   # Development: for non-TLS Postgres, replace the connection block above with:
   #   connection:
   #   - secret:
-  #       name: fulfillment-db
+  #       name: osac-db-config
   #       items:
   #       - key: url
   #         param: url
@@ -300,16 +300,8 @@ aap:
 # ---------------------
 # Bundled PostgreSQL (dev/test)
 # ---------------------
-bundledPostgres:
-  # When true, auto-creates fulfillment-db secret and postgres-client-cert-service
-  # Certificate. Deploy in-cluster PostgreSQL via an operator per
-  # ../fulfillment-service/docs/INSTALL.md first. With bundledPostgres
-  # enabled, the chart assumes a postgres Service at postgres:5432 in the
-  # install namespace.
-  enabled: false
-  database:
-    name: service
-    user: service
+# NOTE: bundledPostgres has moved to the osac-infra chart. Configure it
+# in the osac-infra values instead.
 
 # ---------------------
 # Hub Access

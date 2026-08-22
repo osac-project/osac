@@ -32,6 +32,22 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
 {{/*
+PostgreSQL identifier prefix. All database identifiers derive from this
+single template.
+*/}}
+{{- define "osac.pgPrefix" -}}
+osac
+{{- end }}
+
+{{- define "osac.dbNameService" -}}
+{{ include "osac.pgPrefix" . }}_service
+{{- end }}
+
+{{- define "osac.dbNameMetering" -}}
+{{ include "osac.pgPrefix" . }}_metering
+{{- end }}
+
+{{/*
 Wait-for-fulfillment init container.
 Uses .Values.cliImage for the container image.
 */}}

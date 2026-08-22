@@ -927,8 +927,8 @@ func (r *StorageReconciler) backendRegistered(ctx context.Context) (bool, error)
 }
 
 // storageConfigNamespace returns the namespace where storage config Secrets are stored.
-// In production, OSAC_STORAGE_CONFIG_NAMESPACE is set by the Helm chart or kustomize
-// overlay to match the deployment namespace. The fallback is for local development only.
+// In production, OSAC_STORAGE_CONFIG_NAMESPACE is set by the Helm chart to match the
+// deployment namespace. The fallback is for local development only.
 func storageConfigNamespace() string {
 	if ns := os.Getenv("OSAC_STORAGE_CONFIG_NAMESPACE"); ns != "" {
 		return ns

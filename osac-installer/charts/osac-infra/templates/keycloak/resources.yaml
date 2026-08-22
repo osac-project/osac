@@ -1,0 +1,642 @@
+{{- if .Values.keycloak.enabled }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: keycloak
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-db-server-config
+  namespace: keycloak
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+data:
+  server.conf: |
+{{ .Files.Get "files/server.conf" | indent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-db-access-config
+  namespace: keycloak
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+data:
+  access.conf: |
+{{ .Files.Get "files/access.conf" | indent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-realm
+  namespace: keycloak
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+data:
+  realm.json: |
+{{ .Files.Get "files/realm.json" | indent 4 }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: keycloak-database
+  namespace: keycloak
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: keycloak-database
+  namespace: keycloak
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+  - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: keycloak-database
+  namespace: keycloak
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: keycloak-database
+subjects:
+- kind: ServiceAccount
+  name: keycloak-database
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: keycloak-service
+  namespace: keycloak
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: keycloak-service
+  namespace: keycloak
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - create
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  resourceNames:
+  - keycloak-client-secrets
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: keycloak-service
+  namespace: keycloak
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: keycloak-service
+subjects:
+- kind: ServiceAccount
+  name: keycloak-service
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-init-scripts
+  namespace: keycloak
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+data:
+  resolve-realm-secrets.sh: |
+{{ $.Files.Get "files/hooks/resolve-realm-secrets.sh" | indent 4 }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: keycloak-admin-credentials
+  namespace: keycloak
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  admin-username: {{ .Values.keycloak.adminUsername | quote }}
+  admin-password: {{ .Values.keycloak.adminPassword | quote }}
+  default-user-password: {{ .Values.keycloak.defaultUserPassword | quote }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: keycloak-database
+  namespace: keycloak
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: keycloak-database-server
+  namespace: keycloak
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+spec:
+  issuerRef:
+    kind: ClusterIssuer
+    name: default-ca
+  dnsNames:
+  - localhost
+  - keycloak-database
+  secretName: keycloak-database-server-cert
+  privateKey:
+    rotationPolicy: Always
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: keycloak-database-client
+  namespace: keycloak
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+spec:
+  issuerRef:
+    kind: ClusterIssuer
+    name: default-ca
+  usages:
+  - client auth
+  commonName: keycloak
+  secretName: keycloak-database-client-cert
+  privateKey:
+    encoding: PKCS8
+    rotationPolicy: Always
+  additionalOutputFormats:
+  - type: DER
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: keycloak-tls
+  namespace: keycloak
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+spec:
+  issuerRef:
+    kind: ClusterIssuer
+    name: default-ca
+  dnsNames:
+  - keycloak
+  - keycloak.keycloak.svc.cluster.local
+  {{- if .Values.keycloak.route.hostname }}
+  - {{ .Values.keycloak.route.hostname }}
+  {{- end }}
+  secretName: keycloak-tls-cert
+  privateKey:
+    rotationPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak-database
+  namespace: keycloak
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: keycloak-database
+  ports:
+  - name: postgres
+    port: 5432
+    targetPort: postgres
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+  namespace: keycloak
+  labels:
+    app: keycloak-service
+    {{- include "osac-infra.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: keycloak-service
+  ports:
+  - name: https
+    port: 443
+    targetPort: 8001
+  {{- if .Values.keycloak.extraPort }}
+  - name: https-alt
+    port: {{ .Values.keycloak.extraPort }}
+    targetPort: 8001
+  {{- end }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: keycloak-database
+  namespace: keycloak
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  serviceName: keycloak-database
+  selector:
+    matchLabels:
+      app: keycloak-database
+  template:
+    metadata:
+      labels:
+        app: keycloak-database
+    spec:
+      serviceAccountName: keycloak-database
+      volumes:
+      - name: server-cert
+        secret:
+          secretName: keycloak-database-server-cert
+          defaultMode: 0440
+      - name: server-config
+        configMap:
+          name: keycloak-db-server-config
+      - name: access-config
+        configMap:
+          name: keycloak-db-access-config
+      - name: data
+        persistentVolumeClaim:
+          claimName: keycloak-database
+      initContainers:
+      - name: password-generator
+        image: {{ .Values.cliImage }}
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -euo pipefail
+          if ! oc get secret keycloak-database-password -n keycloak; then
+              echo "generating postgresql password"
+              password=$(openssl rand -hex 20)
+              oc create secret generic keycloak-database-password \
+                -n keycloak --from-literal POSTGRES_PASSWORD="$password"
+          fi
+      containers:
+      - name: server
+        image: {{ .Values.keycloak.images.postgres }}
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: POSTGRESQL_USER
+          value: keycloak
+        - name: POSTGRESQL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: keycloak-database-password
+              key: POSTGRES_PASSWORD
+        - name: POSTGRESQL_DATABASE
+          value: keycloak
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/pgsql/data
+        - name: server-cert
+          mountPath: /secrets/cert
+        - name: server-config
+          mountPath: /opt/app-root/src/postgresql-cfg
+        - name: access-config
+          mountPath: /config/access
+        ports:
+        - name: postgres
+          protocol: TCP
+          containerPort: 5432
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak-service
+  namespace: keycloak
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: keycloak-service
+  template:
+    metadata:
+      labels:
+        app: keycloak-service
+    spec:
+      serviceAccountName: keycloak-service
+      volumes:
+      - name: realm-raw
+        configMap:
+          name: keycloak-realm
+      - name: realm
+        emptyDir: {}
+      - name: scripts
+        configMap:
+          name: keycloak-init-scripts
+          defaultMode: 0755
+      - name: database-client-cert
+        secret:
+          secretName: keycloak-database-client-cert
+      - name: tls-cert
+        secret:
+          secretName: keycloak-tls-cert
+      initContainers:
+      - name: wait-for-database
+        image: {{ .Values.keycloak.images.postgres }}
+        imagePullPolicy: IfNotPresent
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          until pg_isready --host keycloak-database --timeout 1; do
+            sleep 1
+          done
+      - name: resolve-realm-secrets
+        image: {{ .Values.cliImage }}
+        imagePullPolicy: IfNotPresent
+        command: ["/bin/bash", "/scripts/resolve-realm-secrets.sh"]
+        env:
+        - name: KEYCLOAK_NAMESPACE
+          value: keycloak
+        - name: REALM_RAW_PATH
+          value: /realm-raw/realm.json
+        - name: REALM_OUTPUT_PATH
+          value: /realm/realm.json
+        - name: REALM_ADMIN_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: keycloak-admin-credentials
+              key: admin-username
+        - name: REALM_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: keycloak-admin-credentials
+              key: admin-password
+        volumeMounts:
+        - name: scripts
+          mountPath: /scripts
+          readOnly: true
+        - name: realm-raw
+          mountPath: /realm-raw
+          readOnly: true
+        - name: realm
+          mountPath: /realm
+      containers:
+      - name: keycloak
+        image: {{ .Values.keycloak.images.keycloak }}
+        imagePullPolicy: IfNotPresent
+        volumeMounts:
+        - name: realm
+          mountPath: /opt/keycloak/data/import
+          readOnly: true
+        - name: database-client-cert
+          mountPath: /secrets/database-client
+          readOnly: true
+        - name: tls-cert
+          mountPath: /secrets/tls
+          readOnly: true
+        env:
+        - name: KEYCLOAK_ADMIN
+          valueFrom:
+            secretKeyRef:
+              name: keycloak-admin-credentials
+              key: admin-username
+        - name: KEYCLOAK_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: keycloak-admin-credentials
+              key: admin-password
+        - name: KC_HTTP_ENABLED
+          value: "false"
+        - name: KC_HTTPS_ENABLED
+          value: "true"
+        - name: KC_HTTPS_PORT
+          value: "8001"
+        - name: KC_HTTPS_CERTIFICATE_FILE
+          value: "/secrets/tls/tls.crt"
+        - name: KC_HTTPS_CERTIFICATE_KEY_FILE
+          value: "/secrets/tls/tls.key"
+        - name: KC_HOSTNAME
+          value: {{ .Values.keycloak.hostname | quote }}
+        - name: KC_DB
+          value: "postgres"
+        - name: KC_DB_URL
+          value: "jdbc:postgresql://keycloak-database:5432/keycloak?sslmode=require&sslcert=/secrets/database-client/tls.crt&sslkey=/secrets/database-client/key.der&sslrootcert=/secrets/database-client/ca.crt"
+        - name: KC_DB_USERNAME
+          value: keycloak
+        - name: KC_DB_PASSWORD
+          value: ""
+        {{- if .Values.keycloak.realmOverwrite }}
+        - name: KC_SPI_IMPORT_REALM_FILE_STRATEGY
+          value: OVERWRITE
+        {{- end }}
+        args:
+        - start
+        - --import-realm
+        ports:
+        - name: https
+          containerPort: 8001
+        startupProbe:
+          httpGet:
+            path: /realms/master
+            port: 8001
+            scheme: HTTPS
+          failureThreshold: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /realms/master
+            port: 8001
+            scheme: HTTPS
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /realms/master
+            port: 8001
+            scheme: HTTPS
+          periodSeconds: 30
+---
+{{- if .Capabilities.APIVersions.Has "route.openshift.io/v1" }}
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: keycloak
+  namespace: keycloak
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+spec:
+  {{- if .Values.keycloak.route.hostname }}
+  host: {{ .Values.keycloak.route.hostname }}
+  {{- end }}
+  to:
+    kind: Service
+    name: keycloak
+  port:
+    targetPort: https
+  tls:
+    termination: passthrough
+{{- end }}
+{{- if .Values.keycloak.devFixtures.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-password-setup
+  namespace: keycloak
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+data:
+  set-passwords.sh: |
+    #!/bin/bash
+    set -euo pipefail
+
+    echo "Waiting for Keycloak to be ready..."
+    for i in $(seq 1 120); do
+      if curl -k -sf https://keycloak:443/realms/osac; then
+        echo "Keycloak is ready!"
+        break
+      fi
+      [[ $i -eq 120 ]] && { echo "ERROR: Keycloak not ready after 600s"; exit 1; }
+      sleep 5
+    done
+
+    set_password() {
+      local username=$1
+      local password=$2
+
+      TOKEN=$(curl -k -sf -X POST https://keycloak:443/realms/master/protocol/openid-connect/token \
+        -H 'Content-Type: application/x-www-form-urlencoded' \
+        -d 'grant_type=password' \
+        -d 'client_id=admin-cli' \
+        --data-urlencode "username=${ADMIN_USERNAME}" \
+        --data-urlencode "password=${ADMIN_PASSWORD}" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+      [[ -n "${TOKEN}" ]] || { echo "ERROR: Could not get admin token"; return 1; }
+
+      USER_ID=$(curl -k -sf -X GET "https://keycloak:443/admin/realms/osac/users?username=$username" \
+        -H "Authorization: Bearer $TOKEN" | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['id'])")
+      [[ -n "${USER_ID}" ]] || { echo "ERROR: Could not find user: $username"; return 1; }
+
+      # Build the JSON body with python3 (already used above for parsing)
+      # rather than hand-rolled bash string interpolation, so $password can
+      # safely contain quotes, backslashes, or other JSON-significant chars.
+      PAYLOAD=$(python3 -c "import json,sys; print(json.dumps({'type': 'password', 'value': sys.argv[1], 'temporary': False}))" "$password")
+
+      curl -k -sf -X PUT "https://keycloak:443/admin/realms/osac/users/$USER_ID/reset-password" \
+        -H "Authorization: Bearer $TOKEN" \
+        -H "Content-Type: application/json" \
+        -d "$PAYLOAD"
+
+      echo "Set password for $username"
+    }
+
+    # Set all passwords
+    echo "Setting passwords for all tenant users..."
+    set_password "admin" "${DEFAULT_USER_PASSWORD}"
+    set_password "user" "${DEFAULT_USER_PASSWORD}"
+    set_password "tenant1_admin" "${DEFAULT_USER_PASSWORD}"
+    set_password "tenant1_user" "${DEFAULT_USER_PASSWORD}"
+    set_password "tenant2_admin" "${DEFAULT_USER_PASSWORD}"
+    set_password "tenant2_user" "${DEFAULT_USER_PASSWORD}"
+    set_password "twotenant" "${DEFAULT_USER_PASSWORD}"
+    set_password "my_user" "${DEFAULT_USER_PASSWORD}"
+    set_password "your_user" "${DEFAULT_USER_PASSWORD}"
+
+    echo "All demo-user passwords set"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: keycloak-set-passwords
+  namespace: keycloak
+  labels:
+    {{- include "osac-infra.hookLabels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "16"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 5
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: set-passwords
+        image: {{ .Values.cliImage }}
+        command:
+        - /bin/bash
+        - /scripts/set-passwords.sh
+        env:
+        - name: HOME
+          value: /tmp
+        - name: ADMIN_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: keycloak-admin-credentials
+              key: admin-username
+        - name: ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: keycloak-admin-credentials
+              key: admin-password
+        - name: DEFAULT_USER_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: keycloak-admin-credentials
+              key: default-user-password
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - "ALL"
+        volumeMounts:
+        - name: scripts
+          mountPath: /scripts
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: scripts
+        configMap:
+          name: keycloak-password-setup
+          defaultMode: 0755
+      - name: tmp
+        emptyDir: {}
+{{- end }}
+{{- end }}

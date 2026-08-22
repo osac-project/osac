@@ -1,0 +1,53 @@
+# Kind dev environment -- infrastructure values for osac-infra chart.
+# cert-manager, trust-manager, and envoy gateway are installed as
+# separate Helm releases by the root Makefile (install-infra).
+# This values file configures the infra chart templates only.
+
+# --- Disable OLM subscription templates (not available in Kind) ---
+certManager:
+  enabled: false
+trustManager:
+  enabled: false
+aapOperator:
+  enabled: false
+cnv:
+  enabled: false
+lvms:
+  enabled: false
+metallb:
+  enabled: false
+mce:
+  enabled: false
+kafka:
+  enabled: false
+
+# --- Envoy Gateway resources (Gateway, GatewayClass, EnvoyProxy) ---
+envoygateway:
+  resources: true
+  httpNodePort: 30080
+  httpsNodePort: 30443
+
+# --- Bundled PostgreSQL ---
+bundledPostgres:
+  enabled: true
+
+# --- CA issuer ---
+caIssuer:
+  enabled: true
+
+# --- Keycloak ---
+keycloak:
+  enabled: true
+  hostname: "https://keycloak.keycloak.svc.cluster.local:8443"
+  extraPort: 8443
+  # Kind/IT only: seed known passwords for the realm's built-in test users.
+  devFixtures:
+    enabled: true
+
+# --- Fake CRDs (HyperShift, OVN-K stubs for controllers) ---
+fakeCrds:
+  enabled: true
+
+# --- CoreDNS *.localhost rewrite ---
+coredns:
+  localhostRewrite: true

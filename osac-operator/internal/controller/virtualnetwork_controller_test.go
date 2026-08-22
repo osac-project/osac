@@ -36,7 +36,6 @@ import (
 
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	privatev1 "github.com/osac-project/osac/osac-operator/internal/api/osac/private/v1"
-	"github.com/osac-project/osac/osac-operator/internal/dispatcheradapter"
 	"github.com/osac-project/osac/osac-operator/pkg/dispatcher"
 	"github.com/osac-project/osac/osac-operator/pkg/networkmanager"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
@@ -684,9 +683,9 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 		It("uses the resolved fabric manager name when the NetworkClass has fabricManager set", func() {
 			disc, err := networkmanager.NewDiscovery(fakeDiscoveryClient, "osac")
 			Expect(err).NotTo(HaveOccurred())
-			reconciler.Resolver = dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+			reconciler.Resolver = dispatcher.NewResolver(newListingNetworkClassClient(
 				[]*privatev1.NetworkClass{{Id: "nc-dispatch", FabricManager: ptr.To("netris")}}, &[]*privatev1.NetworkClass{},
-			)), disc)
+			), disc)
 
 			vnet.Spec.NetworkClass = "nc-dispatch"
 			vnet.Spec.ImplementationStrategy = "legacy-value"
@@ -705,9 +704,9 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 		It("falls back to the legacy implementation-strategy path when fabricManager is not set", func() {
 			disc, err := networkmanager.NewDiscovery(fakeDiscoveryClient, "osac")
 			Expect(err).NotTo(HaveOccurred())
-			reconciler.Resolver = dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+			reconciler.Resolver = dispatcher.NewResolver(newListingNetworkClassClient(
 				[]*privatev1.NetworkClass{{Id: "nc-legacy"}}, &[]*privatev1.NetworkClass{},
-			)), disc)
+			), disc)
 
 			vnet.Spec.NetworkClass = "nc-legacy"
 			vnet.Spec.ImplementationStrategy = "cudn-net"
@@ -726,9 +725,9 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 		It("returns a reconcile error when the NetworkClass references an unregistered manager", func() {
 			disc, err := networkmanager.NewDiscovery(fakeDiscoveryClient, "osac")
 			Expect(err).NotTo(HaveOccurred())
-			reconciler.Resolver = dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+			reconciler.Resolver = dispatcher.NewResolver(newListingNetworkClassClient(
 				[]*privatev1.NetworkClass{{Id: "nc-broken", FabricManager: ptr.To("does-not-exist")}}, &[]*privatev1.NetworkClass{},
-			)), disc)
+			), disc)
 
 			vnet.Spec.NetworkClass = "nc-broken"
 			Expect(k8sClient.Create(ctx, vnet)).To(Succeed())
@@ -742,9 +741,9 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 		It("triggers a new provisioning job when the resolved strategy changes with the spec unchanged", func() {
 			disc, err := networkmanager.NewDiscovery(fakeDiscoveryClient, "osac")
 			Expect(err).NotTo(HaveOccurred())
-			reconciler.Resolver = dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+			reconciler.Resolver = dispatcher.NewResolver(newListingNetworkClassClient(
 				[]*privatev1.NetworkClass{{Id: "nc-dispatch"}}, &[]*privatev1.NetworkClass{},
-			)), disc)
+			), disc)
 
 			vnet.Spec.NetworkClass = "nc-dispatch"
 			vnet.Spec.ImplementationStrategy = "cudn-net"
@@ -787,9 +786,9 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 
 			// Simulate the NetworkClass being updated to register a fabricManager. The
 			// VirtualNetwork's spec is untouched — only the dynamically-resolved strategy changes.
-			reconciler.Resolver = dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+			reconciler.Resolver = dispatcher.NewResolver(newListingNetworkClassClient(
 				[]*privatev1.NetworkClass{{Id: "nc-dispatch", FabricManager: ptr.To("netris")}}, &[]*privatev1.NetworkClass{},
-			)), disc)
+			), disc)
 
 			// Third reconcile: updates the annotation to the newly-resolved manager and requeues.
 			_, err = reconciler.Reconcile(ctx, req)

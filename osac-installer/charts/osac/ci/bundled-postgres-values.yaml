@@ -1,9 +1,6 @@
-# Bundled-postgres scenario: validates auto-generated secrets render correctly.
-bundledPostgres:
-  enabled: true
-  database:
-    name: service
-    user: service
+# Bundled-postgres scenario: validates that the osac chart renders correctly
+# when bundled PostgreSQL is deployed by osac-infra (this values file tests the
+# osac chart in isolation -- bundledPostgres has moved to osac-infra).
 
 ui:
   enabled: true
@@ -39,12 +36,12 @@ service:
   database:
     connection:
     - secret:
-        name: fulfillment-db
+        name: osac-db-config
         items:
         - key: url
           param: url
     - secret:
-        name: postgres-client-cert-service
+        name: osac-db-client-cert
         items:
         - key: tls.crt
           param: sslcert

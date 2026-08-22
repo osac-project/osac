@@ -3,7 +3,6 @@ kind: ClusterOrder
 metadata:
   labels:
     app.kubernetes.io/name: osac-operator
-    app.kubernetes.io/managed-by: kustomize
   name: clusterorder-sample
 spec:
   templateID: osac.templates.ocp_4_17_small

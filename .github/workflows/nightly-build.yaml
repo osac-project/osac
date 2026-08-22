@@ -15,7 +15,7 @@ permissions: {}
 env:
   REGISTRY: ghcr.io
   CHARTS_REPO: ${{ github.repository_owner }}/charts
-  VALUES_FILE: osac-installer/values/development/values.yaml
+  VALUES_FILE: osac-installer/values/dev/instance.yaml
 
 jobs:
   # -------------------------------------------------------------------

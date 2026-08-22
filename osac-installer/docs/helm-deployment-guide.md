@@ -22,8 +22,8 @@ git submodule update --init --recursive
 # Place your AAP license file
 cp /path/to/license.zip values/vmaas-ci/
 
-# Install (all 3 phases)
-make install VALUES_FILE=values/vmaas-ci/values.yaml
+# Install (infra + osac)
+make install PLATFORM=openshift PROFILE=vmaas-ci NS=osac
 ```
 
 ## How It Works
@@ -33,25 +33,19 @@ inputs. This is required because Helm validates all templates before applying
 any — a template that references a CRD must have that CRD already registered
 on the cluster.
 
-### Phase 1: `make install-operators`
+### `make install-infra`
 
-Installs OLM operator Subscriptions: cert-manager, AAP, LVMS, MetalLB, CNV,
-MCE. Post-install hooks wait for each operator's CSV to succeed and CRDs to
-register. After this phase, all CRDs exist.
+Installs infrastructure in two Helm releases:
 
-Each operator is gated by a values toggle (e.g., `certManager.enabled`).
+1. **osac-deps** — OLM operator Subscriptions (cert-manager, AAP, LVMS, MetalLB,
+   CNV, MCE). Post-install hooks wait for each operator's CSV to succeed and CRDs
+   to register. Each operator is gated by a values toggle.
 
-### Phase 2: `make install-prereqs`
+2. **osac-infra** — CRD instances: CertManager CR, ClusterIssuer, CA certificates,
+   trust-manager Bundle, Keycloak, LVMCluster, HyperConverged, MetalLB IPAddressPool,
+   controller credentials, and bundled PostgreSQL (dev/CI only).
 
-Creates CRD instances that OSAC depends on: CertManager CR, ClusterIssuer,
-CA certificates, trust-manager Bundle, Keycloak (realm with OVERWRITE
-strategy), LVMCluster, HyperConverged, MetalLB IPAddressPool, and
-controller credentials (read from Keycloak, written to OSAC namespace).
-
-Uses `--wait-for-jobs` to avoid circular dependencies between hook Jobs
-and template resources.
-
-### Phase 3: `make install-osac`
+### `make install-osac`
 
 Installs OSAC: operator, fulfillment-service, AAP bootstrap, UI. All
 prerequisites are ready - certificates issued, secrets created, CRDs
@@ -86,17 +80,21 @@ aap:
 
 ## Values Files
 
-| File | Use case |
-|------|----------|
-| `values/vmaas-ci/values.yaml` | VMaaS (compute instances) |
-| `values/caas-ci/values.yaml` | CaaS (cluster provisioning) |
-| `values/development/values.yaml` | Local dev (all controllers) |
+Each profile has two files: `infra.yaml` (infrastructure config) and `instance.yaml` (OSAC instance config).
+
+| Profile | Use case |
+|---------|----------|
+| `values/vmaas-ci/` | VMaaS CI (compute instances) |
+| `values/caas-ci/` | CaaS CI (cluster provisioning) |
+| `values/bmaas-ci/` | BMaaS CI (bare metal) |
+| `values/dev/` | Local dev (Kind) |
 
 Copy and customize for your environment:
 
 ```bash
 mkdir -p values/my-env
-cp values/development/values.yaml values/my-env/values.yaml
+cp values/dev/infra.yaml values/my-env/
+cp values/dev/instance.yaml values/my-env/
 # Edit to match your cluster
 ```
 
@@ -120,22 +118,21 @@ These are top-level values, disabled by default. Enable only in CI/dev:
 
 ## Makefile Targets
 
+All targets require `PLATFORM=kind|openshift PROFILE=dev|vmaas-ci|... NS=<namespace>`.
+
 | Target | Description |
 |--------|-------------|
-| `make install` | Full install (all 3 phases) |
-| `make install-operators` | Phase 1 only |
-| `make install-prereqs` | Phase 2 only |
-| `make install-osac` | Phase 3 only |
+| `make install` | Full install (infra + osac) |
+| `make install-infra` | Infrastructure only (osac-deps + osac-infra) |
+| `make install-osac` | OSAC instance only |
 | `make uninstall` | Full uninstall (reverse order) |
+| `make test` | Run integration tests (SUITE= required) |
 | `make helm-lint` | Lint all charts |
-| `make helm-deps` | Build chart dependencies |
-| `make sync-charts` | Update submodules + rebuild deps |
 
 ## Uninstall
 
 ```bash
-make uninstall
-oc delete namespace ${NAMESPACE} --wait
+make uninstall PLATFORM=openshift PROFILE=vmaas-ci NS=osac
 ```
 
 ## Troubleshooting

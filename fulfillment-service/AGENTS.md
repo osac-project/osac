@@ -78,17 +78,14 @@ ginkgo run -r
 ### Integration Tests
 
 ```bash
-# Run integration tests (creates a kind cluster)
-ginkgo run it
+# Create Kind cluster + deploy infrastructure
+make -C ../osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac
 
-# Preserve cluster for debugging
-IT_KEEP_KIND=true ginkgo run it
+# Build image, deploy fulfillment-service via osac chart, run tests
+make -C ../osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment
 
-# Run only setup (create cluster without tests)
-IT_KEEP_KIND=true ginkgo run --label-filter=setup it
-
-# Clean up preserved cluster
-kind delete cluster --name fulfillment-service-it
+# Clean up
+make -C ../osac-installer uninstall PLATFORM=kind PROFILE=dev NS=osac
 ```
 
 Requires `/etc/hosts` entries:
@@ -161,7 +158,7 @@ running tests with specific options, or installing a tool), refer to [dev/README
 - `internal/database/migrations/` - SQL migration files
 - `internal/auth/` - Authentication, tenancy, and attribution logic
 - `internal/controllers/` - Kubernetes controllers
-- `internal/testing/` - Test utilities (test server, database helpers, kind helpers)
+- `internal/testing/` - Test utilities (test server, database helpers)
 - `it/` - Integration tests
 - `charts/` - Helm charts
 
@@ -305,7 +302,6 @@ As with any proto change, run `uv run dev.py lint proto && buf generate` afterwa
 - `SERVICE_SUFFIX` lint rule is intentionally excluded in `buf.yaml`
 - Unit tests: run `ginkgo run -r internal` (not `ginkgo run -r`) to avoid triggering integration tests
 - CI timeout: 1 hour for unit and integration test runs
-- Integration test logs uploaded as `logs-helm` and `logs-kustomize` artifacts (always, even on failure)
 
 See [Linting and Code Generation](#linting-and-code-generation) for the required `uv run dev.py lint proto && buf generate` step, and [Files Requiring Extra Caution](#files-requiring-extra-caution) for generated paths that must never be hand-edited.
 
@@ -320,7 +316,7 @@ See [Linting and Code Generation](#linting-and-code-generation) for the required
 
 ### Verify Before Changing
 
-- `charts/` and `it/charts/` - maintained Helm chart sources, not generated; call out the change explicitly in the PR description so a reviewer from [OWNERS](OWNERS) can confirm it's intentional
+- `charts/` - maintained Helm chart sources, not generated; call out the change explicitly in the PR description so a reviewer from [OWNERS](OWNERS) can confirm it's intentional
 - `proto/**/*.proto` - changes cascade to generated code (see [Linting and Code Generation](#linting-and-code-generation))
 - `internal/database/migrations/*.up.sql` - existing migrations must never be modified; only add new numbered files
 - `.goreleaser.yaml`, `buf.yaml`, `buf.gen.yaml` - infrastructure config; call out the change explicitly in the PR description so a reviewer from [OWNERS](OWNERS) can confirm it's intentional (pre-commit/yamllint config now lives in the root-level `.pre-commit-config.yaml`/`.yamllint.yaml`, not here)

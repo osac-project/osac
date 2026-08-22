@@ -9,7 +9,7 @@ in compliance with the License. You may obtain a copy of the License at
 
 package adapters
 
-const (
+var (
 	TopicLifecycle   = "osac.metering.lifecycle"
 	TopicHeartbeat   = "osac.metering.heartbeat"
 	TopicCorrections = "osac.metering.corrections"

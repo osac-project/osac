@@ -27,7 +27,10 @@ import (
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 
+	metal3api "github.com/metal3-io/baremetal-operator/apis/metal3.io/v1alpha1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/baremetalhost"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/bcmclient"
@@ -372,6 +375,85 @@ var _ = Describe("BCM Inventory Adapter", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(host).NotTo(BeNil())
 			Expect(host.ManagedBy).To(Equal("baremetal"))
+		})
+	})
+
+	Describe("GetHostNICs", func() {
+		const bmhNamespace = "osac-baremetal"
+
+		var ctx context.Context
+
+		newClientWithNICs := func(bmhName string, macs ...string) *BCMClient {
+			scheme := newTestScheme()
+			nics := make([]metal3api.NIC, 0, len(macs))
+			for _, mac := range macs {
+				nics = append(nics, metal3api.NIC{MAC: mac})
+			}
+			bmh := &metal3api.BareMetalHost{
+				ObjectMeta: metav1.ObjectMeta{Name: bmhName, Namespace: bmhNamespace},
+			}
+			k8sClient := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(bmh).
+				WithStatusSubresource(&metal3api.BareMetalHost{}).
+				Build()
+			// Set status via status subresource
+			bmh.Status.HardwareDetails = &metal3api.HardwareDetails{NIC: nics}
+			Expect(k8sClient.Status().Update(context.Background(), bmh)).To(Succeed())
+			mgr := baremetalhost.NewManager(k8sClient, bmhNamespace)
+			return NewBCMClient(&mockBCMAPI{}, mgr, "bcm")
+		}
+
+		newClientNoBMH := func() *BCMClient {
+			scheme := newTestScheme()
+			k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+			mgr := baremetalhost.NewManager(k8sClient, bmhNamespace)
+			return NewBCMClient(&mockBCMAPI{}, mgr, "bcm")
+		}
+
+		BeforeEach(func() {
+			ctx = context.Background()
+		})
+
+		It("returns lowercased MACs from BMH status.hardware.nics", func() {
+			client := newClientWithNICs("node001", "AA:BB:CC:DD:EE:01", "FF:00:11:22:33:44")
+			nics, err := client.GetHostNICs(ctx, "osac-baremetal/node001")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(nics).To(HaveLen(2))
+			Expect(nics[0].MAC).To(Equal("aa:bb:cc:dd:ee:01"))
+			Expect(nics[1].MAC).To(Equal("ff:00:11:22:33:44"))
+		})
+
+		It("returns error when BMH does not exist", func() {
+			client := newClientNoBMH()
+			_, err := client.GetHostNICs(ctx, "osac-baremetal/nonexistent")
+			Expect(err).To(HaveOccurred())
+		})
+
+		It("returns nil,nil when BMH has no hardware details", func() {
+			scheme := newTestScheme()
+			bmh := &metal3api.BareMetalHost{
+				ObjectMeta: metav1.ObjectMeta{Name: "node001", Namespace: bmhNamespace},
+			}
+			k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(bmh).Build()
+			mgr := baremetalhost.NewManager(k8sClient, bmhNamespace)
+			client := NewBCMClient(&mockBCMAPI{}, mgr, "bcm")
+			nics, err := client.GetHostNICs(ctx, "osac-baremetal/node001")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(nics).To(BeNil())
+		})
+
+		It("returns nil,nil when BMH hardware.nics is empty", func() {
+			client := newClientWithNICs("node001") // no MACs
+			nics, err := client.GetHostNICs(ctx, "osac-baremetal/node001")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(nics).To(BeNil())
+		})
+
+		It("returns error for invalid inventoryHostID format", func() {
+			client := newClientNoBMH()
+			_, err := client.GetHostNICs(ctx, "no-slash")
+			Expect(err).To(HaveOccurred())
 		})
 	})
 })

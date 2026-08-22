@@ -41,7 +41,13 @@ func Root() *cobra.Command {
 	}
 
 	// Add flags:
-	logging.AddFlags(result.PersistentFlags())
+	flags := result.PersistentFlags()
+	logging.AddFlags(flags)
+	flags.Bool(
+		help.NoColorFlag,
+		false,
+		help.NoColorFlagHelp,
+	)
 
 	// Add commands:
 	result.AddCommand(dev.Cmd())

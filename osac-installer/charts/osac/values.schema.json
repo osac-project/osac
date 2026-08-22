@@ -1413,6 +1413,46 @@
           "default": false
         }
       }
+    },
+    "bundledVault": {
+      "type": "object",
+      "description": "Bundled OpenBao (Vault-compatible) secret store for dev/CI environments. When enabled, deploys a single-replica OpenBao instance in dev mode with emptyDir storage.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Deploy a bundled OpenBao instance for development/CI use",
+          "default": false
+        },
+        "devRootToken": {
+          "type": "string",
+          "description": "Root token for OpenBao dev mode (required when enabled)"
+        },
+        "image": {
+          "type": "string",
+          "description": "OpenBao container image (must be 2.5+ for namespace support)",
+          "default": "ghcr.io/openbao/openbao:2.6.1"
+        },
+        "resources": {
+          "type": "object",
+          "description": "Container resource requests and limits",
+          "properties": {
+            "limits": {
+              "type": "object",
+              "properties": {
+                "cpu": { "type": "string", "description": "CPU limit" },
+                "memory": { "type": "string", "description": "Memory limit" }
+              }
+            },
+            "requests": {
+              "type": "object",
+              "properties": {
+                "cpu": { "type": "string", "description": "CPU request" },
+                "memory": { "type": "string", "description": "Memory request" }
+              }
+            }
+          }
+        }
+      }
     }
   }
 }

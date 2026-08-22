@@ -41,6 +41,14 @@ var _ = Describe("Secret store", func() {
 	})
 
 	Describe("Store selection", func() {
+		BeforeEach(func() {
+			// Ensure a clean baseline: an OSAC_SECRET_STORE inherited from the host shell (e.g. a
+			// developer working around the exact keychain issue this override exists for) would
+			// otherwise make these tests silently select the wrong store.
+			err := os.Unsetenv("OSAC_SECRET_STORE")
+			Expect(err).ToNot(HaveOccurred())
+		})
+
 		It("Selects the keyring store when the keyring is available", func() {
 			keyring.MockInit()
 			store, err := NewSecretStore().
@@ -59,6 +67,38 @@ var _ = Describe("Secret store", func() {
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 			Expect(store).To(BeAssignableToTypeOf(&fileSecretStore{}))
+		})
+
+		It("Forces the file store when OSAC_SECRET_STORE=file, even if the keyring is available", func() {
+			// Make the keyring appear available: without the override this would select the keyring store, as
+			// proven by the "Selects the keyring store..." test above.
+			keyring.MockInit()
+
+			err := os.Setenv("OSAC_SECRET_STORE", "file")
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(os.Unsetenv, "OSAC_SECRET_STORE")
+
+			store, err := NewSecretStore().
+				SetLogger(logger).
+				SetDir("/some/dir").
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(store).To(BeAssignableToTypeOf(&fileSecretStore{}))
+		})
+
+		It("Does not force the file store for other OSAC_SECRET_STORE values", func() {
+			keyring.MockInit()
+
+			err := os.Setenv("OSAC_SECRET_STORE", "keyring")
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(os.Unsetenv, "OSAC_SECRET_STORE")
+
+			store, err := NewSecretStore().
+				SetLogger(logger).
+				SetDir("/some/dir").
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(store).To(BeAssignableToTypeOf(&keyringSecretStore{}))
 		})
 
 		It("Passes the directory to the file store when the keyring is not available", func() {

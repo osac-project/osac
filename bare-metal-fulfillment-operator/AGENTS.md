@@ -12,7 +12,7 @@ Kubernetes operator for managing bare-metal host pools in the OSAC project. Defi
 
 ## Dev Environment
 
-**Language**: Go (see `go.mod`) | **Framework**: controller-runtime (Kubebuilder v4) | **Build tool**: Make | **Container tool**: Podman (default) | **Test framework**: Ginkgo v2 + Gomega | **Linter**: golangci-lint (see `Makefile`)
+**Language**: Go (see `go.mod`) | **Framework**: controller-runtime (Kubebuilder v4) | **Build tool**: Make | **Container tool**: Podman (default) | **Test framework**: Ginkgo v2 + Gomega | **Linter**: golangci-lint (see `../tools/golangci-lint.mk`)
 
 ```bash
 make build                     # Build manager binary
@@ -135,7 +135,7 @@ CRDs must stay in sync: after `make manifests`, run `make helm-crds` (uses `hack
 
 ## Code Quality
 
-- **golangci-lint** (see `Makefile`) with dupl, errcheck, ginkgolinter, goconst, gocyclo, govet, ineffassign, lll, misspell, prealloc, revive, staticcheck, unconvert, unused (see `.golangci.yml`)
+- **golangci-lint** (see `../tools/golangci-lint.mk`) with dupl, errcheck, ginkgolinter, goconst, gocyclo, govet, ineffassign, lll, misspell, prealloc, revive, staticcheck, unconvert, unused (see `.golangci.yml`)
 - **Pre-commit hooks**: trailing-whitespace, check-merge-conflict, end-of-file-fixer, check-added-large-files, check-case-conflict, check-json, check-symlinks, detect-private-key, yamllint --strict (excludes `config/`), golangci-lint run --fix
 - **Tests**: Ginkgo v2 + Gomega with envtest for unit tests; Kind cluster integration tests for e2e (`test/e2e/`)
 - **Test coverage**: Unit tests generate `cover.out`

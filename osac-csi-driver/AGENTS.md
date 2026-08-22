@@ -20,7 +20,7 @@ CSI meta-driver that presents a single CSI identity (`csi.osac.openshift.io`) to
 ```bash
 make build                     # Build binary to bin/osac-csi-driver (CGO_ENABLED=0)
 make test                      # Unit tests + CSI sanity tests (go test ./... with coverage)
-make lint                      # golangci-lint (auto-downloads to bin/)
+make lint                      # golangci-lint (auto-downloads to shared tools/bin/, see ../tools/golangci-lint.mk)
 make lint-fix                  # golangci-lint --fix
 make fmt                       # go fmt
 make vet                       # go vet

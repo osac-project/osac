@@ -8,10 +8,8 @@
 GO_VERSION ?= $(shell grep '^go ' go.mod | cut -d' ' -f2)
 GOTOOLCHAIN ?= go$(GO_VERSION)
 GINKGO ?= go run github.com/onsi/ginkgo/v2/ginkgo
-GOLANGCI_LINT_VERSION ?= v2.12.1
 
-LOCALBIN ?= $(shell pwd)/bin
-GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
+include $(shell git rev-parse --show-toplevel)/tools/golangci-lint.mk
 
 .PHONY: all build-echo-adapter build-m360-adapter test lint clean
 
@@ -28,12 +26,8 @@ build-m360-adapter:
 test:
 	$(GINKGO) run -r .
 
-lint: $(GOLANGCI_LINT)
+lint: golangci-lint
 	$(GOLANGCI_LINT) run ./...
-
-$(GOLANGCI_LINT):
-	@mkdir -p $(LOCALBIN)
-	GOTOOLCHAIN=$(GOTOOLCHAIN) GOBIN=$(LOCALBIN) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
 clean:
 	rm -rf bin/

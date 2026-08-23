@@ -442,20 +442,24 @@ func (r *SubnetReconciler) handleDelete(ctx context.Context, subnet *v1alpha1.Su
 		}
 	}
 
-	// Remove MetalLB IPAddressPool before AAP deprovisioning (which removes the CUDN)
-	if err := r.deleteMetalLBIPAddressPool(ctx, subnet); err != nil {
-		return ctrl.Result{}, fmt.Errorf("deleting MetalLB IPAddressPool: %w", err)
-	}
+	if subnet.Annotations[osacImplementationStrategyAnnotation] == "" {
+		log.Info("skipping deprovisioning — resource was never provisioned")
+	} else {
+		// Remove MetalLB IPAddressPool before AAP deprovisioning (which removes the CUDN)
+		if err := r.deleteMetalLBIPAddressPool(ctx, subnet); err != nil {
+			return ctrl.Result{}, fmt.Errorf("deleting MetalLB IPAddressPool: %w", err)
+		}
 
-	// Handle deprovisioning
-	result, err := r.handleDeprovisioning(ctx, subnet)
-	if err != nil {
-		return result, err
-	}
+		// Handle deprovisioning
+		result, err := r.handleDeprovisioning(ctx, subnet)
+		if err != nil {
+			return result, err
+		}
 
-	// If we need to requeue (jobs still running), do so
-	if result.RequeueAfter > 0 {
-		return result, nil
+		// If we need to requeue (jobs still running), do so
+		if result.RequeueAfter > 0 {
+			return result, nil
+		}
 	}
 
 	// Deprovisioning complete or skipped, remove base finalizer

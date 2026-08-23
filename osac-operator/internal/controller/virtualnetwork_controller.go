@@ -298,14 +298,18 @@ func (r *VirtualNetworkReconciler) handleDelete(ctx context.Context, vnet *v1alp
 	}
 
 	// Handle deprovisioning
-	result, err := r.handleDeprovisioning(ctx, vnet)
-	if err != nil {
-		return result, err
-	}
+	if vnet.Annotations[osacImplementationStrategyAnnotation] == "" {
+		log.Info("skipping deprovisioning — resource was never provisioned")
+	} else {
+		result, err := r.handleDeprovisioning(ctx, vnet)
+		if err != nil {
+			return result, err
+		}
 
-	// If we need to requeue (jobs still running), do so
-	if result.RequeueAfter > 0 {
-		return result, nil
+		// If we need to requeue (jobs still running), do so
+		if result.RequeueAfter > 0 {
+			return result, nil
+		}
 	}
 
 	// Deprovisioning complete or skipped, remove base finalizer

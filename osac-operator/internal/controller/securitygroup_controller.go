@@ -254,9 +254,13 @@ func (r *SecurityGroupReconciler) handleDelete(ctx context.Context, sg *v1alpha1
 	}
 
 	// Handle deprovisioning
-	result, err := r.handleDeprovisioning(ctx, sg)
-	if err != nil || result.RequeueAfter > 0 {
-		return result, err
+	if sg.Annotations[osacImplementationStrategyAnnotation] == "" {
+		log.Info("skipping deprovisioning — resource was never provisioned")
+	} else {
+		result, err := r.handleDeprovisioning(ctx, sg)
+		if err != nil || result.RequeueAfter > 0 {
+			return result, err
+		}
 	}
 
 	// Remove finalizer

@@ -354,9 +354,13 @@ func (r *ExternalIPReconciler) handleDelete(ctx context.Context, externalIP *v1a
 		}
 	}
 
-	result, err := r.handleDeprovisioning(ctx, externalIP)
-	if err != nil || result.RequeueAfter > 0 {
-		return result, err
+	if externalIP.Annotations[osacImplementationStrategyAnnotation] == "" {
+		log.Info("skipping deprovisioning — resource was never provisioned")
+	} else {
+		result, err := r.handleDeprovisioning(ctx, externalIP)
+		if err != nil || result.RequeueAfter > 0 {
+			return result, err
+		}
 	}
 
 	// Deprovisioning complete, remove finalizer to allow K8s garbage collection

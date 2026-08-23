@@ -283,13 +283,17 @@ func (r *NATGatewayReconciler) handleDelete(ctx context.Context, natgw *v1alpha1
 		return ctrl.Result{}, nil
 	}
 
-	result, err := r.handleDeprovisioning(ctx, natgw)
-	if err != nil {
-		return result, err
-	}
+	if natgw.Annotations[osacImplementationStrategyAnnotation] == "" {
+		log.Info("skipping deprovisioning — resource was never provisioned")
+	} else {
+		result, err := r.handleDeprovisioning(ctx, natgw)
+		if err != nil {
+			return result, err
+		}
 
-	if result.RequeueAfter > 0 {
-		return result, nil
+		if result.RequeueAfter > 0 {
+			return result, nil
+		}
 	}
 
 	if controllerutil.RemoveFinalizer(natgw, osacNATGatewayFinalizer) {

@@ -74,6 +74,13 @@ jobs:
               - '!.design/**'
               - '!.skillsaw.yaml'
               - '!.pre-commit-config.yaml'
+              - '!**/*_test.go'
+              - '!**/testdata/**'
+              - '!**/test/**'
+              - '!**/tests/**'
+              - '!**/it/**'
+              - '!**/conftest.py'
+              - '!**/fixtures/**'
 
   # Builds fulfillment-service, osac-operator, osac-aap's execution
   # environment (twice -- once each for aap.bootstrap.image and

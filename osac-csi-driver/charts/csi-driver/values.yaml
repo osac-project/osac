@@ -107,7 +107,7 @@ vendors:
     enabled: false
     image:
       repository: docker.io/vastdataorg/csi
-      tag: v2.6.5
+      tag: v2.6.6
     config:
       vmsHost: ""
       vipPoolName: ""

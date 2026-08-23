@@ -16,7 +16,7 @@ vast:
   enabled: false
   image:
     repository: docker.io/vastdataorg/csi
-    tag: v2.6.5
+    tag: v2.6.6
   service:
     port: 50051
   config:

@@ -344,6 +344,42 @@ var _ = Describe("SubnetReconciler", func() {
 			_ = k8sClient.Delete(ctx, unmanagedSubnet)
 		})
 
+		It("should wait for child ComputeInstance before deprovisioning", func() {
+			testSubnet := &osacv1alpha1.Subnet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "subnet-with-ci",
+					Namespace:  "default",
+					Finalizers: []string{osacSubnetFinalizer},
+				},
+				Spec: osacv1alpha1.SubnetSpec{
+					VirtualNetwork: "test-vnet",
+					IPv4CIDR:       "10.0.10.0/24",
+				},
+			}
+			Expect(k8sClient.Create(ctx, testSubnet)).To(Succeed())
+
+			ciSpec := newTestComputeInstanceSpec("test_template")
+			ciSpec.NetworkAttachments = []osacv1alpha1.NetworkAttachment{
+				{SubnetRef: testSubnet.Name},
+			}
+			childCI := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "child-ci",
+					Namespace: "default",
+				},
+				Spec: ciSpec,
+			}
+			Expect(k8sClient.Create(ctx, childCI)).To(Succeed())
+
+			result, err := reconciler.handleDelete(ctx, testSubnet)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+
+			// Clean up
+			Expect(k8sClient.Delete(ctx, childCI)).To(Succeed())
+			_ = k8sClient.Delete(ctx, testSubnet)
+		})
+
 		It("should still handle delete for unmanaged subnet with finalizer", func() {
 			managedThenUnmanaged := &osacv1alpha1.Subnet{
 				ObjectMeta: metav1.ObjectMeta{

@@ -194,7 +194,7 @@ func (r *BareMetalInstanceReconciler) applyIPDiscoveryResults(
 		return fmt.Errorf("failed to get job %s for IP discovery results: %w", jobID, err)
 	}
 
-	if len(job.Artifacts) == 0 {
+	if len(job.Artifacts) == 0 || string(job.Artifacts) == "null" || string(job.Artifacts) == "{}" {
 		return fmt.Errorf("IP discovery job %s returned no artifacts; DHCP lease not yet available", jobID)
 	}
 

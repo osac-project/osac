@@ -398,6 +398,66 @@ var _ = Describe("ExternalIPReconciler", func() {
 		// support setting DeletionTimestamp via Update. We add the finalizer via a
 		// normal Reconcile, then set DeletionTimestamp in memory and call handleDelete.
 
+		It("should wait for child ExternalIPAttachment before deprovisioning", func() {
+			childAttachment := &osacv1alpha1.ExternalIPAttachment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "child-attachment",
+					Namespace: testNamespace,
+				},
+				Spec: osacv1alpha1.ExternalIPAttachmentSpec{
+					ExternalIP: publicIP.Name,
+				},
+			}
+			Expect(fakeClient.Create(testCtx, childAttachment)).To(Succeed())
+
+			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
+			// Add finalizer via normal reconcile
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			toDelete := &osacv1alpha1.ExternalIP{}
+			Expect(fakeClient.Get(testCtx, key, toDelete)).To(Succeed())
+			now := metav1.Now()
+			toDelete.DeletionTimestamp = &now
+			toDelete.Finalizers = []string{osacExternalIPFinalizer}
+
+			result, err := reconciler.handleDelete(testCtx, toDelete)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+
+			Expect(fakeClient.Delete(testCtx, childAttachment)).To(Succeed())
+		})
+
+		It("should wait for child NATGateway before deprovisioning", func() {
+			childNATGW := &osacv1alpha1.NATGateway{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "child-natgw",
+					Namespace: testNamespace,
+				},
+				Spec: osacv1alpha1.NATGatewaySpec{
+					ExternalIP:     publicIP.Name,
+					VirtualNetwork: "some-vnet",
+				},
+			}
+			Expect(fakeClient.Create(testCtx, childNATGW)).To(Succeed())
+
+			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			toDelete := &osacv1alpha1.ExternalIP{}
+			Expect(fakeClient.Get(testCtx, key, toDelete)).To(Succeed())
+			now := metav1.Now()
+			toDelete.DeletionTimestamp = &now
+			toDelete.Finalizers = []string{osacExternalIPFinalizer}
+
+			result, err := reconciler.handleDelete(testCtx, toDelete)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+
+			Expect(fakeClient.Delete(testCtx, childNATGW)).To(Succeed())
+		})
+
 		It("should trigger deprovision on delete", func() {
 			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
 

@@ -48,6 +48,10 @@ CA certificates, trust-manager Bundle, Keycloak (realm with OVERWRITE
 strategy), LVMCluster, HyperConverged, MetalLB IPAddressPool, and
 controller credentials (read from Keycloak, written to OSAC namespace).
 
+Keycloak realm admin credentials are configurable via `keycloak.adminUsername`,
+`keycloak.adminPassword`, and `keycloak.defaultUserPassword` in the prereqs
+values file (defaults: `admin`/`admin`/`foobar`).
+
 Uses `--wait-for-jobs` to avoid circular dependencies between hook Jobs
 and template resources.
 
@@ -108,6 +112,9 @@ Key settings:
 | `service.internalHostname` | Required. Set automatically by `make install-osac`. |
 | `service.auth.issuerUrl` | Keycloak realm URL (default works for in-cluster Keycloak) |
 | `operator.controllers.*` | Enable/disable individual controllers |
+| `keycloak.adminUsername` | Keycloak realm admin username (default: `admin`) |
+| `keycloak.adminPassword` | Keycloak realm admin password (default: `admin`) |
+| `keycloak.defaultUserPassword` | Default password for example users (default: `foobar`) |
 
 ## CI/Dev-Only Features
 
@@ -117,6 +124,27 @@ These are top-level values, disabled by default. Enable only in CI/dev:
 |-------|-------------|
 | `hubAccess.enabled` | Creates hub-access SA/RBAC and registers local cluster as a hub. Only for environments where fulfillment-service and hub are the same cluster. |
 | `bundledPostgres.enabled` | Deploys a single-pod ephemeral PostgreSQL. Uses `fsync=off` and `emptyDir` — data lost on restart. Not for production. |
+
+## Keycloak Credential Configuration
+
+The `osac-prereqs` chart ships with default Keycloak credentials for
+development convenience. **Override these in any non-dev environment:**
+
+```yaml
+# In your values file:
+keycloak:
+  adminUsername: my-admin
+  adminPassword: <strong-password>
+  defaultUserPassword: <user-password>
+```
+
+Or via `--set` flags on `make install-prereqs`:
+
+```bash
+helm install osac-prereqs charts/osac-prereqs/ \
+  --set keycloak.adminUsername=my-admin \
+  --set keycloak.adminPassword='<strong-password>'
+```
 
 ## Makefile Targets
 

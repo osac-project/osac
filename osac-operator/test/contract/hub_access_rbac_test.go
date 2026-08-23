@@ -19,21 +19,16 @@ limitations under the License.
 package contract
 
 import (
-	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
 	"testing"
-	"time"
 
 	"gopkg.in/yaml.v3"
 )
-
-// helmTimeout is the maximum time a helm subprocess is allowed to run.
-const helmTimeout = 30 * time.Second
 
 // policyRule mirrors rbac.authorization.k8s.io/v1.PolicyRule for YAML parsing.
 type policyRule struct {
@@ -46,87 +41,105 @@ type policyRule struct {
 type clusterRole struct {
 	APIVersion string       `yaml:"apiVersion"`
 	Kind       string       `yaml:"kind"`
+	Metadata   crMetadata   `yaml:"metadata"`
 	Rules      []policyRule `yaml:"rules"`
 }
 
-// chartDir returns the absolute path to osac-operator/charts/operator relative
-// to this test file's location, making the test independent of the working
-// directory.
-func chartDir() string {
+// crMetadata captures the name field for identifying the right ClusterRole.
+type crMetadata struct {
+	Name string `yaml:"name"`
+}
+
+// hubAccessTemplatePath is the path to the hub-access template relative to
+// the mono-repo root. After the OSAC-3752 restructuring this lives in the
+// osac-installer umbrella chart, not in osac-operator's own chart.
+const hubAccessTemplatePath = "osac-installer/charts/osac/templates/hub-access.yaml"
+
+// templateDirectiveRe matches Helm/Go-template directives ({{ ... }}).
+var templateDirectiveRe = regexp.MustCompile(`\{\{.*?\}\}`)
+
+// repoRoot returns the mono-repo root by walking up from this test file's
+// location until it finds the go.work file that anchors the workspace.
+func repoRoot() string {
 	_, thisFile, _, _ := runtime.Caller(0) //nolint:dogsled
-	return filepath.Join(filepath.Dir(thisFile), "..", "..", "charts", "operator")
+	dir := filepath.Dir(thisFile)
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.work")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			// Reached filesystem root without finding go.work.
+			// Fall back to relative path from the test file location:
+			// test/contract/ -> osac-operator/ -> mono-repo root
+			_, f, _, _ := runtime.Caller(0) //nolint:dogsled
+			return filepath.Join(filepath.Dir(f), "..", "..", "..")
+		}
+		dir = parent
+	}
 }
 
-// renderHubAccessClusterRole shells out to `helm template` with
-// hubAccess.enabled=true and returns the rendered YAML for the
-// hub-access-clusterrole.yaml template.
+// loadHubAccessClusterRoles reads the hub-access Helm template, strips
+// Go-template directives so the remaining YAML is parseable, splits the
+// multi-document file, and returns only the ClusterRole documents.
 //
-// If helm is not on PATH the test is skipped so that `make test`
-// (unit-test gate) never breaks on environments without helm.
-func renderHubAccessClusterRole(t *testing.T) []byte {
+// This approach avoids shelling out to helm, which requires chart
+// dependency resolution for the umbrella chart and may not be installed
+// in every CI environment.
+func loadHubAccessClusterRoles(t *testing.T) []clusterRole {
 	t.Helper()
 
-	helmBin := findHelm(t)
-
-	chart := chartDir()
-	if _, err := os.Stat(filepath.Join(chart, "Chart.yaml")); err != nil {
-		t.Fatalf("chart directory not found at %s: %v", chart, err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), helmTimeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(
-		ctx,
-		helmBin, "template", "contract-test", chart,
-		"--set", "hubAccess.enabled=true",
-		"-s", "templates/hub-access-clusterrole.yaml",
-	)
-	out, err := cmd.CombinedOutput()
+	templateFile := filepath.Join(repoRoot(), hubAccessTemplatePath)
+	raw, err := os.ReadFile(templateFile)
 	if err != nil {
-		t.Fatalf("helm template failed: %v\n%s", err, out)
+		t.Fatalf("failed to read hub-access template at %s: %v\n"+
+			"(repo root resolved to %s)", templateFile, err, repoRoot())
 	}
-	return out
+
+	// Strip template directives so pure-YAML fields remain.
+	// Lines that are ONLY a template directive (e.g. {{- if ... }}) become
+	// empty and are harmless. Lines with mixed content (e.g. "name: {{ .Release.Namespace }}-hub-access")
+	// become "name: -hub-access" which still parses as valid YAML.
+	cleaned := templateDirectiveRe.ReplaceAllString(string(raw), "")
+
+	// Split multi-document YAML on "---" separators.
+	docs := strings.Split(cleaned, "\n---\n")
+
+	var roles []clusterRole
+	for _, doc := range docs {
+		trimmed := strings.TrimSpace(doc)
+		if trimmed == "" {
+			continue
+		}
+		var cr clusterRole
+		if err := yaml.Unmarshal([]byte(trimmed), &cr); err != nil {
+			// Some documents may not parse cleanly after directive stripping
+			// (e.g. ServiceAccount with only template-derived fields). Skip those.
+			continue
+		}
+		if cr.Kind == "ClusterRole" {
+			roles = append(roles, cr)
+		}
+	}
+
+	if len(roles) == 0 {
+		t.Fatal("no ClusterRole documents found in hub-access template")
+	}
+	return roles
 }
 
-// findHelm locates the helm binary on PATH or in ~/bin.
-// It skips the test if helm cannot be found and handles
-// os.UserHomeDir errors before constructing a fallback path.
-func findHelm(t *testing.T) string {
+// findMainHubAccessRole returns the primary hub-access ClusterRole (the one
+// whose name ends with "-hub-access", not "-hub-access-hosted-clusters").
+func findMainHubAccessRole(t *testing.T, roles []clusterRole) clusterRole {
 	t.Helper()
-
-	helmBin, err := exec.LookPath("helm")
-	if err == nil {
-		return helmBin
+	for _, cr := range roles {
+		name := cr.Metadata.Name
+		if strings.HasSuffix(name, "-hub-access") && !strings.Contains(name, "hosted-clusters") {
+			return cr
+		}
 	}
-
-	// Fall back to ~/bin/helm (CI containers may install there).
-	// Use LookPath on the absolute path so directories and non-executable
-	// files are rejected — os.Stat alone would accept them.
-	home, homeErr := os.UserHomeDir()
-	if homeErr != nil {
-		t.Skipf("helm not on PATH and home directory unavailable (%v) — skipping contract test", homeErr)
-	}
-
-	helmBin = filepath.Join(home, "bin", "helm")
-	if _, lookErr := exec.LookPath(helmBin); lookErr != nil {
-		t.Skip("helm not found on PATH or in ~/bin — skipping contract test")
-	}
-	return helmBin
-}
-
-// parseClusterRole parses rendered YAML into a clusterRole struct.
-func parseClusterRole(t *testing.T, rendered []byte) clusterRole {
-	t.Helper()
-
-	var cr clusterRole
-	if err := yaml.Unmarshal(rendered, &cr); err != nil {
-		t.Fatalf("failed to parse ClusterRole YAML: %v", err)
-	}
-	if cr.Kind != "ClusterRole" {
-		t.Fatalf("expected Kind=ClusterRole, got %q", cr.Kind)
-	}
-	return cr
+	t.Fatal("main hub-access ClusterRole (name ending in '-hub-access') not found")
+	return clusterRole{} // unreachable
 }
 
 // ruleKey uniquely identifies a rule by its apiGroup + sorted resource list.
@@ -228,16 +241,16 @@ func expectedHubAccessVerbs() []verbExpectation {
 	}
 }
 
-// TestHubAccessClusterRoleVerbs is the main contract test.  It renders the
-// hub-access-clusterrole.yaml Helm template and verifies that every
-// required verb is present for each resource group.
+// TestHubAccessClusterRoleVerbs is the main contract test.  It parses the
+// hub-access Helm template and verifies that every required verb is present
+// for each resource group.
 //
 // This test prevents regressions like OSAC-4258, where the ClusterRole
 // only granted "get" on /status subresources but the fulfillment-service
 // code also required "update" and "patch".
 func TestHubAccessClusterRoleVerbs(t *testing.T) {
-	rendered := renderHubAccessClusterRole(t)
-	cr := parseClusterRole(t, rendered)
+	roles := loadHubAccessClusterRoles(t)
+	cr := findMainHubAccessRole(t, roles)
 	ruleIndex := indexRules(cr.Rules)
 
 	for _, exp := range expectedHubAccessVerbs() {
@@ -275,47 +288,30 @@ func TestHubAccessClusterRoleVerbs(t *testing.T) {
 	}
 }
 
-// TestHubAccessClusterRoleDisabledByDefault verifies that the ClusterRole
-// is NOT rendered when hubAccess.enabled is false (the default).
-func TestHubAccessClusterRoleDisabledByDefault(t *testing.T) {
-	helmBin := findHelm(t)
-	chart := chartDir()
-
-	ctx, cancel := context.WithTimeout(context.Background(), helmTimeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(
-		ctx,
-		helmBin, "template", "contract-test", chart,
-		"-s", "templates/hub-access-clusterrole.yaml",
-	)
-	out, err := cmd.CombinedOutput()
+// TestHubAccessClusterRoleGuarded verifies that the hub-access template is
+// wrapped in a {{- if .Values.hubAccess.enabled }} guard, ensuring the
+// resources are not deployed unless explicitly enabled.
+func TestHubAccessClusterRoleGuarded(t *testing.T) {
+	templateFile := filepath.Join(repoRoot(), hubAccessTemplatePath)
+	raw, err := os.ReadFile(templateFile)
 	if err != nil {
-		// helm template exits non-zero when the selected template renders
-		// to an empty document (because the if-guard evaluates false).
-		// That is exactly the behaviour we want — but only that specific
-		// error. Distinguish it from unexpected rendering failures.
-		outStr := string(out)
-		if strings.Contains(outStr, "could not find template") {
-			return // expected: guarded template produced no output
-		}
-		t.Fatalf("unexpected helm template error (expected empty-template error): %v\n%s",
-			err, outStr)
+		t.Fatalf("failed to read hub-access template: %v", err)
 	}
 
-	// If it somehow renders, the output should be empty or whitespace-only.
-	trimmed := strings.TrimSpace(string(out))
-	if trimmed != "" {
-		t.Errorf("hub-access ClusterRole should not render when hubAccess.enabled=false,"+
-			" but got:\n%s", trimmed)
+	content := string(raw)
+	if !strings.Contains(content, "{{- if .Values.hubAccess.enabled }}") {
+		t.Error("hub-access template is not guarded by {{- if .Values.hubAccess.enabled }}")
+	}
+	if !strings.Contains(content, "{{- end }}") {
+		t.Error("hub-access template is missing closing {{- end }}")
 	}
 }
 
 // TestHubAccessStatusSubresourceVerbs is a focused regression test for
 // OSAC-4258: /status subresources must allow "get", "patch", AND "update".
 func TestHubAccessStatusSubresourceVerbs(t *testing.T) {
-	rendered := renderHubAccessClusterRole(t)
-	cr := parseClusterRole(t, rendered)
+	roles := loadHubAccessClusterRoles(t)
+	cr := findMainHubAccessRole(t, roles)
 
 	requiredStatusVerbs := []string{"get", "patch", "update"}
 
@@ -341,8 +337,8 @@ func TestHubAccessStatusSubresourceVerbs(t *testing.T) {
 // appears in the ClusterRole's main resources rule. If a new CRD is added
 // but not granted to the fulfillment-service, this test surfaces the gap.
 func TestHubAccessExpectedResources(t *testing.T) {
-	rendered := renderHubAccessClusterRole(t)
-	cr := parseClusterRole(t, rendered)
+	roles := loadHubAccessClusterRoles(t)
+	cr := findMainHubAccessRole(t, roles)
 
 	// Collect all main resources (not /status, /console, /vnc subresources).
 	mainResources := make(map[string]bool)
@@ -385,8 +381,8 @@ func TestHubAccessExpectedResources(t *testing.T) {
 // also has a corresponding /status subresource entry, ensuring status
 // updates work for all resource types.
 func TestHubAccessStatusResourcesParity(t *testing.T) {
-	rendered := renderHubAccessClusterRole(t)
-	cr := parseClusterRole(t, rendered)
+	roles := loadHubAccessClusterRoles(t)
+	cr := findMainHubAccessRole(t, roles)
 
 	mainResources := make(map[string]bool)
 	statusResources := make(map[string]bool)
@@ -423,12 +419,13 @@ func toSet(items []string) map[string]bool {
 
 // --- Diagnostic output helpers ---
 
-// TestChartDirResolution is a trivial test that logs the resolved chart
-// directory for debugging in CI.
-func TestChartDirResolution(t *testing.T) {
-	dir := chartDir()
-	t.Logf("resolved chart directory: %s", dir)
-	if _, err := os.Stat(filepath.Join(dir, "Chart.yaml")); err != nil {
-		t.Fatalf("Chart.yaml not found in %s: %v", dir, err)
+// TestTemplateFileResolution logs the resolved template path for CI debugging.
+func TestTemplateFileResolution(t *testing.T) {
+	root := repoRoot()
+	path := filepath.Join(root, hubAccessTemplatePath)
+	t.Logf("resolved repo root: %s", root)
+	t.Logf("resolved template path: %s", path)
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("hub-access template not found at %s: %v", path, err)
 	}
 }

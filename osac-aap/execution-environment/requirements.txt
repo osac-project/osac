@@ -162,7 +162,7 @@ osc-lib==4.4.0
     #   python-openstackclient
 oslo-config==10.3.0
     # via python-keystoneclient
-oslo-i18n==6.7.2
+oslo-i18n==6.9.0
     # via
     #   osc-lib
     #   oslo-config

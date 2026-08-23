@@ -171,7 +171,7 @@ oslo-i18n==6.7.2
     #   python-keystoneclient
     #   python-novaclient
     #   python-openstackclient
-oslo-serialization==5.9.1
+oslo-serialization==5.11.0
     # via
     #   python-keystoneclient
     #   python-novaclient

@@ -19,6 +19,7 @@ limitations under the License.
 package contract
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,9 +27,13 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
+
+// helmTimeout is the maximum time a helm subprocess is allowed to run.
+const helmTimeout = 30 * time.Second
 
 // policyRule mirrors rbac.authorization.k8s.io/v1.PolicyRule for YAML parsing.
 type policyRule struct {
@@ -61,22 +66,18 @@ func chartDir() string {
 func renderHubAccessClusterRole(t *testing.T) []byte {
 	t.Helper()
 
-	helmBin, err := exec.LookPath("helm")
-	if err != nil {
-		// Fall back to ~/bin/helm (CI containers may install there).
-		home, _ := os.UserHomeDir()
-		helmBin = filepath.Join(home, "bin", "helm")
-		if _, statErr := os.Stat(helmBin); statErr != nil {
-			t.Skip("helm not found on PATH or in ~/bin — skipping contract test")
-		}
-	}
+	helmBin := findHelm(t)
 
 	chart := chartDir()
 	if _, err := os.Stat(filepath.Join(chart, "Chart.yaml")); err != nil {
 		t.Fatalf("chart directory not found at %s: %v", chart, err)
 	}
 
-	cmd := exec.Command(
+	ctx, cancel := context.WithTimeout(context.Background(), helmTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(
+		ctx,
 		helmBin, "template", "contract-test", chart,
 		"--set", "hubAccess.enabled=true",
 		"-s", "templates/hub-access-clusterrole.yaml",
@@ -86,6 +87,30 @@ func renderHubAccessClusterRole(t *testing.T) []byte {
 		t.Fatalf("helm template failed: %v\n%s", err, out)
 	}
 	return out
+}
+
+// findHelm locates the helm binary on PATH or in ~/bin.
+// It skips the test if helm cannot be found and handles
+// os.UserHomeDir errors before constructing a fallback path.
+func findHelm(t *testing.T) string {
+	t.Helper()
+
+	helmBin, err := exec.LookPath("helm")
+	if err == nil {
+		return helmBin
+	}
+
+	// Fall back to ~/bin/helm (CI containers may install there).
+	home, homeErr := os.UserHomeDir()
+	if homeErr != nil {
+		t.Skipf("helm not on PATH and home directory unavailable (%v) — skipping contract test", homeErr)
+	}
+
+	helmBin = filepath.Join(home, "bin", "helm")
+	if _, statErr := os.Stat(helmBin); statErr != nil {
+		t.Skip("helm not found on PATH or in ~/bin — skipping contract test")
+	}
+	return helmBin
 }
 
 // parseClusterRole parses rendered YAML into a clusterRole struct.
@@ -251,26 +276,29 @@ func TestHubAccessClusterRoleVerbs(t *testing.T) {
 // TestHubAccessClusterRoleDisabledByDefault verifies that the ClusterRole
 // is NOT rendered when hubAccess.enabled is false (the default).
 func TestHubAccessClusterRoleDisabledByDefault(t *testing.T) {
-	helmBin, err := exec.LookPath("helm")
-	if err != nil {
-		home, _ := os.UserHomeDir()
-		helmBin = filepath.Join(home, "bin", "helm")
-		if _, statErr := os.Stat(helmBin); statErr != nil {
-			t.Skip("helm not found on PATH or in ~/bin — skipping contract test")
-		}
-	}
-
+	helmBin := findHelm(t)
 	chart := chartDir()
-	cmd := exec.Command(
+
+	ctx, cancel := context.WithTimeout(context.Background(), helmTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(
+		ctx,
 		helmBin, "template", "contract-test", chart,
 		"-s", "templates/hub-access-clusterrole.yaml",
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		// helm template exits non-zero when the selected template renders
-		// to an empty document (because the if-guard evaluates false) —
-		// that is exactly the behaviour we want.
-		return
+		// to an empty document (because the if-guard evaluates false).
+		// That is exactly the behaviour we want — but only that specific
+		// error. Distinguish it from unexpected rendering failures.
+		outStr := string(out)
+		if strings.Contains(outStr, "could not find template") {
+			return // expected: guarded template produced no output
+		}
+		t.Fatalf("unexpected helm template error (expected empty-template error): %v\n%s",
+			err, outStr)
 	}
 
 	// If it somehow renders, the output should be empty or whitespace-only.

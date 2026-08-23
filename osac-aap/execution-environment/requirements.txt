@@ -50,7 +50,7 @@ cliff==4.13.2
     #   python-openstackclient
 cmd2==3.4.0
     # via cliff
-cryptography==46.0.5
+cryptography==46.0.7
     # via
     #   ansible-core
     #   openstacksdk

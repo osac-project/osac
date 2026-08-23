@@ -226,7 +226,9 @@ func (r *ExternalIPPoolReconciler) handleDelete(ctx context.Context, pool *v1alp
 	}
 
 	// Gate: wait for all ExternalIP CRs allocated from this pool to be fully removed.
-	poolName := pool.Name
+	// Child ExternalIPs reference the parent pool by its fulfillment-service UUID
+	// (stored in the osac.openshift.io/externalippool-uuid label), not by K8s name.
+	poolUUID := pool.Labels[osacExternalIPPoolIDLabel]
 	ns := pool.Namespace
 
 	eipList := &v1alpha1.ExternalIPList{}
@@ -234,7 +236,7 @@ func (r *ExternalIPPoolReconciler) handleDelete(ctx context.Context, pool *v1alp
 		return ctrl.Result{}, fmt.Errorf("listing ExternalIPs: %w", err)
 	}
 	for i := range eipList.Items {
-		if eipList.Items[i].Spec.Pool == poolName {
+		if eipList.Items[i].Spec.Pool == poolUUID {
 			log.Info("waiting for child ExternalIP to be deleted before deprovisioning ExternalIPPool",
 				"externalIP", eipList.Items[i].Name)
 			return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil

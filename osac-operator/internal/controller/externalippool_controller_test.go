@@ -339,13 +339,18 @@ var _ = Describe("ExternalIPPoolReconciler", func() {
 		// normal Reconcile, then set DeletionTimestamp in memory and call handleDelete.
 
 		It("should wait for child ExternalIP before deprovisioning", func() {
+			// Add UUID label to pool so the guard can match children
+			const poolUUID = "test-pool-uuid"
+			pool.Labels = map[string]string{osacExternalIPPoolIDLabel: poolUUID}
+			Expect(fakeClient.Update(testCtx, pool)).To(Succeed())
+
 			childEIP := &osacv1alpha1.ExternalIP{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "child-eip",
 					Namespace: pool.Namespace,
 				},
 				Spec: osacv1alpha1.ExternalIPSpec{
-					Pool: pool.Name,
+					Pool: poolUUID,
 				},
 			}
 			Expect(fakeClient.Create(testCtx, childEIP)).To(Succeed())

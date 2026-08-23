@@ -610,11 +610,13 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 		})
 
 		It("should wait for child Subnet before deprovisioning", func() {
+			const gateVnetSubnetUUID = "gate-vnet-subnet-uuid"
 			gateVnet := &osacv1alpha1.VirtualNetwork{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:       "gate-vnet-subnet",
 					Namespace:  "default",
 					Finalizers: []string{osacVirtualNetworkFinalizer},
+					Labels:     map[string]string{osacVirtualNetworkIDLabel: gateVnetSubnetUUID},
 				},
 				Spec: osacv1alpha1.VirtualNetworkSpec{
 					Region: "us-west-1", IPv4CIDR: "10.1.0.0/16",
@@ -625,7 +627,7 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 
 			childSubnet := &osacv1alpha1.Subnet{
 				ObjectMeta: metav1.ObjectMeta{Name: "gate-child-subnet", Namespace: "default"},
-				Spec:       osacv1alpha1.SubnetSpec{VirtualNetwork: gateVnet.Name, IPv4CIDR: "10.1.1.0/24"},
+				Spec:       osacv1alpha1.SubnetSpec{VirtualNetwork: gateVnetSubnetUUID, IPv4CIDR: "10.1.1.0/24"},
 			}
 			Expect(k8sClient.Create(ctx, childSubnet)).To(Succeed())
 
@@ -640,11 +642,13 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 		})
 
 		It("should wait for child SecurityGroup before deprovisioning", func() {
+			const gateVnetSGUUID = "gate-vnet-sg-uuid"
 			gateVnet := &osacv1alpha1.VirtualNetwork{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:       "gate-vnet-sg",
 					Namespace:  "default",
 					Finalizers: []string{osacVirtualNetworkFinalizer},
+					Labels:     map[string]string{osacVirtualNetworkIDLabel: gateVnetSGUUID},
 				},
 				Spec: osacv1alpha1.VirtualNetworkSpec{
 					Region: "us-west-1", IPv4CIDR: "10.2.0.0/16",
@@ -655,7 +659,7 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 
 			childSG := &osacv1alpha1.SecurityGroup{
 				ObjectMeta: metav1.ObjectMeta{Name: "gate-child-sg", Namespace: "default"},
-				Spec:       osacv1alpha1.SecurityGroupSpec{VirtualNetwork: gateVnet.Name},
+				Spec:       osacv1alpha1.SecurityGroupSpec{VirtualNetwork: gateVnetSGUUID},
 			}
 			Expect(k8sClient.Create(ctx, childSG)).To(Succeed())
 
@@ -670,11 +674,13 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 		})
 
 		It("should wait for child NATGateway before deprovisioning", func() {
+			const gateVnetNATGWUUID = "gate-vnet-natgw-uuid"
 			gateVnet := &osacv1alpha1.VirtualNetwork{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:       "gate-vnet-natgw",
 					Namespace:  "default",
 					Finalizers: []string{osacVirtualNetworkFinalizer},
+					Labels:     map[string]string{osacVirtualNetworkIDLabel: gateVnetNATGWUUID},
 				},
 				Spec: osacv1alpha1.VirtualNetworkSpec{
 					Region: "us-west-1", IPv4CIDR: "10.3.0.0/16",
@@ -685,7 +691,7 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 
 			childNATGW := &osacv1alpha1.NATGateway{
 				ObjectMeta: metav1.ObjectMeta{Name: "gate-child-natgw", Namespace: "default"},
-				Spec:       osacv1alpha1.NATGatewaySpec{VirtualNetwork: gateVnet.Name, ExternalIP: "some-eip"},
+				Spec:       osacv1alpha1.NATGatewaySpec{VirtualNetwork: gateVnetNATGWUUID, ExternalIP: "some-eip"},
 			}
 			Expect(k8sClient.Create(ctx, childNATGW)).To(Succeed())
 

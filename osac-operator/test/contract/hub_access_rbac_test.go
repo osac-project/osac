@@ -55,6 +55,10 @@ type crMetadata struct {
 // osac-installer umbrella chart, not in osac-operator's own chart.
 const hubAccessTemplatePath = "osac-installer/charts/osac/templates/hub-access.yaml"
 
+// hubAccessValuesPath is the umbrella chart's values.yaml which sets
+// the default for hubAccess.enabled.
+const hubAccessValuesPath = "osac-installer/charts/osac/values.yaml"
+
 // templateDirectiveRe matches Helm/Go-template directives ({{ ... }}).
 var templateDirectiveRe = regexp.MustCompile(`\{\{.*?\}\}`)
 
@@ -288,23 +292,53 @@ func TestHubAccessClusterRoleVerbs(t *testing.T) {
 	}
 }
 
-// TestHubAccessClusterRoleGuarded verifies that the hub-access template is
-// wrapped in a {{- if .Values.hubAccess.enabled }} guard, ensuring the
-// resources are not deployed unless explicitly enabled.
-func TestHubAccessClusterRoleGuarded(t *testing.T) {
-	templateFile := filepath.Join(repoRoot(), hubAccessTemplatePath)
-	raw, err := os.ReadFile(templateFile)
-	if err != nil {
-		t.Fatalf("failed to read hub-access template: %v", err)
-	}
+// hubAccessValues is a minimal struct for parsing the hubAccess section
+// from the umbrella chart's values.yaml.
+type hubAccessValues struct {
+	HubAccess struct {
+		Enabled bool `yaml:"enabled"`
+	} `yaml:"hubAccess"`
+}
 
-	content := string(raw)
-	if !strings.Contains(content, "{{- if .Values.hubAccess.enabled }}") {
-		t.Error("hub-access template is not guarded by {{- if .Values.hubAccess.enabled }}")
-	}
-	if !strings.Contains(content, "{{- end }}") {
-		t.Error("hub-access template is missing closing {{- end }}")
-	}
+// TestHubAccessClusterRoleGuarded verifies two things:
+//  1. The hub-access template is wrapped in a {{- if .Values.hubAccess.enabled }}
+//     guard, ensuring the resources are not deployed unless explicitly enabled.
+//  2. The chart's values.yaml defaults hubAccess.enabled to false, so the
+//     ClusterRole is opt-in by default. This catches accidental default flips.
+func TestHubAccessClusterRoleGuarded(t *testing.T) {
+	t.Run("template has if-guard", func(t *testing.T) {
+		templateFile := filepath.Join(repoRoot(), hubAccessTemplatePath)
+		raw, err := os.ReadFile(templateFile)
+		if err != nil {
+			t.Fatalf("failed to read hub-access template: %v", err)
+		}
+
+		content := string(raw)
+		if !strings.Contains(content, "{{- if .Values.hubAccess.enabled }}") {
+			t.Error("hub-access template is not guarded by {{- if .Values.hubAccess.enabled }}")
+		}
+		if !strings.Contains(content, "{{- end }}") {
+			t.Error("hub-access template is missing closing {{- end }}")
+		}
+	})
+
+	t.Run("values.yaml defaults hubAccess.enabled to false", func(t *testing.T) {
+		valuesFile := filepath.Join(repoRoot(), hubAccessValuesPath)
+		raw, err := os.ReadFile(valuesFile)
+		if err != nil {
+			t.Fatalf("failed to read values.yaml: %v", err)
+		}
+
+		var vals hubAccessValues
+		if err := yaml.Unmarshal(raw, &vals); err != nil {
+			t.Fatalf("failed to parse values.yaml: %v", err)
+		}
+
+		if vals.HubAccess.Enabled {
+			t.Error("hubAccess.enabled defaults to true in values.yaml — " +
+				"it must default to false so hub-access resources are opt-in")
+		}
+	})
 }
 
 // TestHubAccessStatusSubresourceVerbs is a focused regression test for

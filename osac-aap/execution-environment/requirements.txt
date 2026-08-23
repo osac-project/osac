@@ -214,7 +214,7 @@ platformdirs==4.9.4
     # via
     #   openstacksdk
     #   python-ironicclient
-prettytable==3.17.0
+prettytable==3.18.0
     # via
     #   cliff
     #   metalsmith

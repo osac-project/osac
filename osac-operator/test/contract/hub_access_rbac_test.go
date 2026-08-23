@@ -101,13 +101,15 @@ func findHelm(t *testing.T) string {
 	}
 
 	// Fall back to ~/bin/helm (CI containers may install there).
+	// Use LookPath on the absolute path so directories and non-executable
+	// files are rejected — os.Stat alone would accept them.
 	home, homeErr := os.UserHomeDir()
 	if homeErr != nil {
 		t.Skipf("helm not on PATH and home directory unavailable (%v) — skipping contract test", homeErr)
 	}
 
 	helmBin = filepath.Join(home, "bin", "helm")
-	if _, statErr := os.Stat(helmBin); statErr != nil {
+	if _, lookErr := exec.LookPath(helmBin); lookErr != nil {
 		t.Skip("helm not found on PATH or in ~/bin — skipping contract test")
 	}
 	return helmBin

@@ -33,7 +33,7 @@ repos:
       entry: gitleaks git --pre-commit --redact --staged
 
 - repo: https://github.com/adrienverge/yamllint.git
-  rev: v1.35.1
+  rev: v1.38.0
   hooks:
     - id: yamllint
       files: \.(yaml|yml)$

@@ -37,6 +37,7 @@ import (
 	mc "sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
+	bmfov1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/helpers"
 	privatev1 "github.com/osac-project/osac/osac-operator/internal/api/osac/private/v1"
@@ -114,6 +115,7 @@ func NewSubnetReconciler(
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=subnets/finalizers,verbs=update
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=virtualnetworks,verbs=get;list;watch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=computeinstances,verbs=list
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=baremetalinstances,verbs=list
 // +kubebuilder:rbac:groups=metallb.io,resources=ipaddresspools,verbs=get;create;update;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
@@ -420,6 +422,21 @@ func (r *SubnetReconciler) handleDelete(ctx context.Context, subnet *v1alpha1.Su
 			if na.SubnetRef == subnetName {
 				log.Info("waiting for ComputeInstance to be deleted before deprovisioning Subnet",
 					"computeInstance", ciList.Items[i].Name)
+				return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+			}
+		}
+	}
+
+	// Gate: wait for BareMetalInstances with network attachments to this subnet.
+	bmiList := &bmfov1alpha1.BareMetalInstanceList{}
+	if err := r.List(ctx, bmiList, client.InNamespace(ns)); err != nil {
+		return ctrl.Result{}, fmt.Errorf("listing BareMetalInstances: %w", err)
+	}
+	for i := range bmiList.Items {
+		for _, na := range bmiList.Items[i].Spec.NetworkAttachments {
+			if na.SubnetRef == subnetName {
+				log.Info("waiting for BareMetalInstance to be deleted before deprovisioning Subnet",
+					"bareMetalInstance", bmiList.Items[i].Name)
 				return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 			}
 		}

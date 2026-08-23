@@ -102,7 +102,7 @@ jmespath==1.1.0
     #   openstacksdk
 jsonpatch==1.33
     # via openstacksdk
-jsonpointer==3.0.0
+jsonpointer==3.1.1
     # via jsonpatch
 jsonschema==4.26.0
     # via python-ironicclient

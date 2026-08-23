@@ -337,7 +337,7 @@ stevedore==5.7.0
     #   python-keystoneclient
     #   python-novaclient
     #   python-openstackclient
-typing-extensions==4.15.0
+typing-extensions==4.16.0
     # via
     #   aiohttp
     #   aiosignal

@@ -16,7 +16,7 @@ collections:
   - name: ansible.controller
     version: "4.6.11"
   - name: infra.aap_configuration
-    version: "4.4.0"
+    version: "4.8.0"
   - name: nvidia.bare_metal
     type: git
     source: https://github.com/fabiendupont/nvidia-ncx-infra-controller-ansible

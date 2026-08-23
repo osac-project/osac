@@ -16,4 +16,4 @@ dependencies:
   ansible.platform: "2.5.20250326"
   ansible.hub: "1.0.0"
   ansible.controller: "4.6.11"
-  infra.aap_configuration: "3.4.1"
+  infra.aap_configuration: "4.8.0"

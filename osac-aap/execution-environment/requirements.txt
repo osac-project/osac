@@ -307,7 +307,7 @@ rich==14.3.3
     # via
     #   cmd2
     #   rich-argparse
-rich-argparse==1.7.2
+rich-argparse==1.8.0
     # via cmd2
 rpds-py==0.30.0
     # via

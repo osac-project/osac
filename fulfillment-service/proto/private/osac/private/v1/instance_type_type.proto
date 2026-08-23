@@ -94,10 +94,10 @@ message GpuSpec {
 // to manage the instance type lifecycle.
 message InstanceTypeSpec {
   // Number of CPU cores. Immutable after creation.
-  int32 cores = 1;
+  int32 cores = 1 [(buf.validate.field).int32.gt = 0];
 
   // Amount of memory in GiB. Immutable after creation.
-  int32 memory_gib = 2;
+  int32 memory_gib = 2 [(buf.validate.field).int32.gt = 0];
 
   // Human friendly description of the instance type, using Markdown format.
   string description = 3;

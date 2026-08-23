@@ -935,7 +935,7 @@ var _ = Describe("Private instance types server", func() {
 			})
 		})
 
-		Describe("Spec field validation via protovalidate", func() {
+		Describe("Cores and memory validation", func() {
 			var validator protovalidate.Validator
 
 			BeforeEach(func() {
@@ -945,85 +945,50 @@ var _ = Describe("Private instance types server", func() {
 			})
 
 			It("Accepts valid cores and memory_gib", func() {
-				request := privatev1.InstanceTypesCreateRequest_builder{
-					Object: privatev1.InstanceType_builder{
-						Metadata: privatev1.Metadata_builder{
-							Name: "valid-spec",
-						}.Build(),
-						Spec: privatev1.InstanceTypeSpec_builder{
-							Cores:     4,
-							MemoryGib: 16,
-						}.Build(),
-					}.Build(),
+				spec := privatev1.InstanceTypeSpec_builder{
+					Cores:     4,
+					MemoryGib: 16,
 				}.Build()
-				err := validator.Validate(request)
+				err := validator.Validate(spec)
 				Expect(err).ToNot(HaveOccurred())
 			})
 
 			It("Rejects cores equal to zero", func() {
-				request := privatev1.InstanceTypesCreateRequest_builder{
-					Object: privatev1.InstanceType_builder{
-						Metadata: privatev1.Metadata_builder{
-							Name: "zero-cores",
-						}.Build(),
-						Spec: privatev1.InstanceTypeSpec_builder{
-							Cores:     0,
-							MemoryGib: 16,
-						}.Build(),
-					}.Build(),
+				spec := privatev1.InstanceTypeSpec_builder{
+					Cores:     0,
+					MemoryGib: 16,
 				}.Build()
-				err := validator.Validate(request)
+				err := validator.Validate(spec)
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("cores"))
 			})
 
 			It("Rejects memory_gib equal to zero", func() {
-				request := privatev1.InstanceTypesCreateRequest_builder{
-					Object: privatev1.InstanceType_builder{
-						Metadata: privatev1.Metadata_builder{
-							Name: "zero-memory",
-						}.Build(),
-						Spec: privatev1.InstanceTypeSpec_builder{
-							Cores:     4,
-							MemoryGib: 0,
-						}.Build(),
-					}.Build(),
+				spec := privatev1.InstanceTypeSpec_builder{
+					Cores:     4,
+					MemoryGib: 0,
 				}.Build()
-				err := validator.Validate(request)
+				err := validator.Validate(spec)
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("memory_gib"))
 			})
 
 			It("Rejects negative cores", func() {
-				request := privatev1.InstanceTypesCreateRequest_builder{
-					Object: privatev1.InstanceType_builder{
-						Metadata: privatev1.Metadata_builder{
-							Name: "negative-cores",
-						}.Build(),
-						Spec: privatev1.InstanceTypeSpec_builder{
-							Cores:     -1,
-							MemoryGib: 16,
-						}.Build(),
-					}.Build(),
+				spec := privatev1.InstanceTypeSpec_builder{
+					Cores:     -1,
+					MemoryGib: 16,
 				}.Build()
-				err := validator.Validate(request)
+				err := validator.Validate(spec)
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("cores"))
 			})
 
 			It("Rejects negative memory_gib", func() {
-				request := privatev1.InstanceTypesCreateRequest_builder{
-					Object: privatev1.InstanceType_builder{
-						Metadata: privatev1.Metadata_builder{
-							Name: "negative-memory",
-						}.Build(),
-						Spec: privatev1.InstanceTypeSpec_builder{
-							Cores:     4,
-							MemoryGib: -1,
-						}.Build(),
-					}.Build(),
+				spec := privatev1.InstanceTypeSpec_builder{
+					Cores:     4,
+					MemoryGib: -1,
 				}.Build()
-				err := validator.Validate(request)
+				err := validator.Validate(spec)
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("memory_gib"))
 			})

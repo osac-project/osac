@@ -935,6 +935,11 @@ var _ = Describe("Private instance types server", func() {
 			})
 		})
 
+		// Field-level validation (cores, memory_gib) is enforced by the
+		// protovalidate interceptor, not the server handler. Unit tests bypass the
+		// interceptor chain, so those constraints cannot be covered here. See
+		// internal/validation/protovalidate_interceptor_test.go for coverage.
+
 		Describe("Cores and memory validation", func() {
 			var validator protovalidate.Validator
 

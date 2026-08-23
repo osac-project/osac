@@ -89,9 +89,11 @@
       ansible.builtin.set_fact:
         vast_storage_vip_pool_name: "osac-{{ tenant_name }}-vippool"
 
-    - name: Look up existing VIP pools
+    # Server-side name filter keeps this O(1) as per-tenant pools grow with
+    # tenant count (mirrors the ?name= lookups for tenants/localproviders below).
+    - name: Look up the conventional VIP pool by name
       ansible.builtin.uri:
-        url: "https://{{ vast_endpoint }}/api/vippools/"
+        url: "https://{{ vast_endpoint }}/api/vippools/?name={{ vast_storage_vip_pool_name }}"
         method: GET
         url_username: "{{ vast_username }}"
         url_password: "{{ vast_password }}"
@@ -102,12 +104,20 @@
       register: _vast_vip_pool_check
       no_log: true
 
-    - name: Determine whether the conventional VIP pool already exists
+    # Re-check the exact name client-side too: ?name= may match as a substring
+    # on some VAST versions, and the filtered list is now small either way.
+    # Capture the matched pool so its ownership can be verified after the tenant
+    # id is known (a wrong-owned pool with the conventional name is OSAC-4260).
+    - name: Capture the matched pre-existing VIP pool (if any)
       ansible.builtin.set_fact:
-        _vast_vip_pool_present: >-
-          {{ (_vast_vip_pool_check.json
-              | selectattr('name', 'equalto', vast_storage_vip_pool_name)
-              | list | length) > 0 }}
+        _vast_vip_pool_existing: >-
+          {{ _vast_vip_pool_check.json
+             | selectattr('name', 'equalto', vast_storage_vip_pool_name)
+             | list | first | default({}) }}
+
+    - name: Record whether the conventional VIP pool already exists
+      ansible.builtin.set_fact:
+        _vast_vip_pool_present: "{{ _vast_vip_pool_existing | length > 0 }}"
 
     - name: Require a pre-created pool or a supernet for self-creation
       ansible.builtin.fail:
@@ -237,6 +247,25 @@
         - name: Set tenant ID for downstream tasks
           ansible.builtin.set_fact:
             _vast_tenant_id: "{{ _vast_tenant_result.tenants.id | string }}"
+
+        # A pre-existing pool with the conventional name must be owned by this
+        # tenant (or All-Tenants), or a block TENANT_ADMIN still can't resolve
+        # it — the exact OSAC-4260 failure. Reject a wrong-owned pool instead of
+        # silently adopting it.
+        - name: Verify a pre-existing VIP pool is owned by this tenant (or All-Tenants)
+          ansible.builtin.fail:
+            msg: >-
+              VIP pool '{{ vast_storage_vip_pool_name }}' already exists but is owned by
+              VAST tenant_id {{ _vast_vip_pool_existing.tenant_id | default('unknown') }},
+              which is neither this tenant ({{ _vast_tenant_id }}) nor All-Tenants. A
+              block/NVMe TENANT_ADMIN cannot resolve a pool owned by another tenant
+              (the OSAC-4260 failure mode). Re-create it owned by tenant
+              '{{ tenant_name }}' or as All-Tenants.
+          when:
+            - _vast_vip_pool_present | bool
+            - _vast_vip_pool_existing.tenant_id is defined
+            - _vast_vip_pool_existing.tenant_id is not none
+            - (_vast_vip_pool_existing.tenant_id | int) != (_vast_tenant_id | int)
 
         # ── Self-create the tenant's dedicated VIP pool when it is missing ──
         # Only runs when the pool did not already exist (checked pre-tenant). The
@@ -507,6 +536,7 @@
         _vast_client_ip_ranges: []
         _vast_node_list: {}
         _vast_vip_pool_check: {}
+        _vast_vip_pool_existing: {}
         _vast_vip_pool_present: false
         _vast_vip_slice_start: ""
         _vast_vip_slice_end: ""

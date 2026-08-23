@@ -101,6 +101,8 @@ func NewExternalIPReconciler(
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=externalips/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=externalips/finalizers,verbs=update
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=externalippools,verbs=get;list;watch
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=externalipattachments,verbs=list
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=natgateways,verbs=list
 // +kubebuilder:rbac:groups="",resources=services,verbs=get
 
 // Reconcile handles create/update/delete for a ExternalIP CR.
@@ -322,6 +324,34 @@ func (r *ExternalIPReconciler) handleDelete(ctx context.Context, externalIP *v1a
 
 	if !controllerutil.ContainsFinalizer(externalIP, osacExternalIPFinalizer) {
 		return ctrl.Result{}, nil
+	}
+
+	// Gate: wait for all child resources referencing this ExternalIP to be fully removed.
+	eipName := externalIP.Name
+	ns := externalIP.Namespace
+
+	attachmentList := &v1alpha1.ExternalIPAttachmentList{}
+	if err := r.List(ctx, attachmentList, client.InNamespace(ns)); err != nil {
+		return ctrl.Result{}, fmt.Errorf("listing ExternalIPAttachments: %w", err)
+	}
+	for i := range attachmentList.Items {
+		if attachmentList.Items[i].Spec.ExternalIP == eipName {
+			log.Info("waiting for child ExternalIPAttachment to be deleted before deprovisioning ExternalIP",
+				"attachment", attachmentList.Items[i].Name)
+			return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+		}
+	}
+
+	natgwList := &v1alpha1.NATGatewayList{}
+	if err := r.List(ctx, natgwList, client.InNamespace(ns)); err != nil {
+		return ctrl.Result{}, fmt.Errorf("listing NATGateways: %w", err)
+	}
+	for i := range natgwList.Items {
+		if natgwList.Items[i].Spec.ExternalIP == eipName {
+			log.Info("waiting for child NATGateway to be deleted before deprovisioning ExternalIP",
+				"natGateway", natgwList.Items[i].Name)
+			return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+		}
 	}
 
 	result, err := r.handleDeprovisioning(ctx, externalIP)

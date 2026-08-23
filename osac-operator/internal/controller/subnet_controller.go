@@ -113,6 +113,7 @@ func NewSubnetReconciler(
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=subnets/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=subnets/finalizers,verbs=update
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=virtualnetworks,verbs=get;list;watch
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=computeinstances,verbs=list
 // +kubebuilder:rbac:groups=metallb.io,resources=ipaddresspools,verbs=get;create;update;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
@@ -402,6 +403,26 @@ func (r *SubnetReconciler) handleDelete(ctx context.Context, subnet *v1alpha1.Su
 	// Base finalizer has already been removed, cleanup complete
 	if !controllerutil.ContainsFinalizer(subnet, osacSubnetFinalizer) {
 		return ctrl.Result{}, nil
+	}
+
+	// Gate: wait for ComputeInstances with network attachments to this subnet to be
+	// fully removed. Without this gate, the infrastructure backend rejects the subnet
+	// deletion because instances still exist on it.
+	subnetName := subnet.Name
+	ns := subnet.Namespace
+
+	ciList := &v1alpha1.ComputeInstanceList{}
+	if err := r.List(ctx, ciList, client.InNamespace(ns)); err != nil {
+		return ctrl.Result{}, fmt.Errorf("listing ComputeInstances: %w", err)
+	}
+	for i := range ciList.Items {
+		for _, na := range ciList.Items[i].Spec.NetworkAttachments {
+			if na.SubnetRef == subnetName {
+				log.Info("waiting for ComputeInstance to be deleted before deprovisioning Subnet",
+					"computeInstance", ciList.Items[i].Name)
+				return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+			}
+		}
 	}
 
 	// Remove MetalLB IPAddressPool before AAP deprovisioning (which removes the CUDN)

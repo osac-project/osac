@@ -98,6 +98,7 @@ func NewExternalIPPoolReconciler(
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=externalippools,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=externalippools/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=externalippools/finalizers,verbs=update
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=externalips,verbs=list
 
 // Reconcile handles create/update/delete for a ExternalIPPool CR.
 // On create/update it ensures a finalizer, reads the implementation strategy from spec,
@@ -222,6 +223,22 @@ func (r *ExternalIPPoolReconciler) handleDelete(ctx context.Context, pool *v1alp
 	// Finalizer already removed, cleanup complete
 	if !controllerutil.ContainsFinalizer(pool, osacExternalIPPoolFinalizer) {
 		return ctrl.Result{}, nil
+	}
+
+	// Gate: wait for all ExternalIP CRs allocated from this pool to be fully removed.
+	poolName := pool.Name
+	ns := pool.Namespace
+
+	eipList := &v1alpha1.ExternalIPList{}
+	if err := r.List(ctx, eipList, client.InNamespace(ns)); err != nil {
+		return ctrl.Result{}, fmt.Errorf("listing ExternalIPs: %w", err)
+	}
+	for i := range eipList.Items {
+		if eipList.Items[i].Spec.Pool == poolName {
+			log.Info("waiting for child ExternalIP to be deleted before deprovisioning ExternalIPPool",
+				"externalIP", eipList.Items[i].Name)
+			return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+		}
 	}
 
 	// Handle deprovisioning

@@ -33,7 +33,7 @@ require (
 	github.com/osac-project/osac/osac-operator/api v0.0.7
 	github.com/prometheus/client_golang v1.24.1
 	github.com/prometheus/client_model v0.6.2
-	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/skratchdot/open-golang v0.0.0-20200116055534-eef842397966
 	github.com/zalando/go-keyring v0.2.8
 	go.uber.org/mock v0.6.0

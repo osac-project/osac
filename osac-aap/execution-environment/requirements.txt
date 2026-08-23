@@ -366,5 +366,5 @@ wrapt==2.1.2
     # via
     #   aiobotocore
     #   debtcollector
-yarl==1.23.0
+yarl==1.24.5
     # via aiohttp

@@ -684,9 +684,13 @@ func (r *ExternalIPAttachmentReconciler) handleDelete(ctx context.Context, attac
 		return ctrl.Result{}, nil
 	}
 
-	result, err := r.handleDeprovisioning(ctx, attachment)
-	if err != nil || result.RequeueAfter > 0 {
-		return result, err
+	if attachment.Annotations[osacImplementationStrategyAnnotation] == "" {
+		log.Info("skipping deprovisioning — attachment was never provisioned")
+	} else {
+		result, err := r.handleDeprovisioning(ctx, attachment)
+		if err != nil || result.RequeueAfter > 0 {
+			return result, err
+		}
 	}
 
 	// Deprovisioning complete: update parent resources and remove finalizers

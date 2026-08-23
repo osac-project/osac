@@ -155,7 +155,7 @@ os-service-types==1.8.2
     # via
     #   keystoneauth1
     #   openstacksdk
-osc-lib==4.4.0
+osc-lib==4.7.0
     # via
     #   python-esiclient
     #   python-ironicclient

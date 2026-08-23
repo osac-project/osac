@@ -62,10 +62,20 @@ Values:
 vast:
   enabled: true
   config:
+    plugin: block          # block (raw-block) | csi (NFS/filesystem)
+    mode: controller       # controller (controller-only) | controller_and_node
     vmsHost: "<vms-management-ip>"
     vipPoolName: "<vip-pool>"
     credentialsSecret: vast-credentials
 ```
+
+The VAST driver serves a **single plugin per process**, so this controller
+handles one protocol at a time. It defaults to `block` (the current priority).
+NFS/filesystem needs its own separate deployment — and object storage likewise
+when it lands — rather than reconfiguring this one; those follow OSAC-4262. Use
+`mode: controller` for the vendor path: the operator issues only controller
+RPCs, so node-side NVMe probes (which require the host FS at `/host`) are
+skipped, avoiding the block plugin's CrashLoopBackOff under `controller_and_node`.
 
 ### Pure Storage
 

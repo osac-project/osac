@@ -14,7 +14,7 @@ annotated-types==0.7.0
     # via pydantic
 ansible==13.4.0
     # via osac-aap (pyproject.toml)
-ansible-core==2.20.3
+ansible-core==2.21.3
     # via ansible
 ansible-runner==2.4.3
     # via python-esiclient

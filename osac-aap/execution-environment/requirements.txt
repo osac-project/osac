@@ -303,7 +303,7 @@ resolvelib==1.2.1
     # via ansible-core
 rfc3986==2.0.0
     # via oslo-config
-rich==14.3.3
+rich==14.3.4
     # via
     #   cmd2
     #   rich-argparse

@@ -160,7 +160,7 @@ osc-lib==4.4.0
     #   python-esiclient
     #   python-ironicclient
     #   python-openstackclient
-oslo-config==10.3.0
+oslo-config==10.7.0
     # via python-keystoneclient
 oslo-i18n==6.7.2
     # via

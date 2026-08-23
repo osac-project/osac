@@ -12,7 +12,7 @@ aiosignal==1.4.0
     # via aiohttp
 annotated-types==0.7.0
     # via pydantic
-ansible==13.4.0
+ansible==14.3.1
     # via osac-aap (pyproject.toml)
 ansible-core==2.20.3
     # via ansible

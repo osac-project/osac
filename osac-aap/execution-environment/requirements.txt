@@ -121,7 +121,7 @@ kubernetes==35.0.0
     # via osac-aap (pyproject.toml)
 lockfile==0.12.2
     # via python-daemon
-markdown-it-py==4.0.0
+markdown-it-py==4.2.0
     # via rich
 markupsafe==3.0.3
     # via jinja2

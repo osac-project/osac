@@ -4,7 +4,7 @@ collections:
   - name: openstack.cloud
     version: 2.4.1
   - name: amazon.aws
-    version: 9.4.0
+    version: 9.5.2
   - name: community.general
     version: 10.5.0
   - name: ansible.utils

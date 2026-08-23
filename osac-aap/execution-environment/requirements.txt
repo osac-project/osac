@@ -235,7 +235,7 @@ pycparser==3.0
     # via cffi
 pydantic==2.12.5
     # via osac-aap (pyproject.toml)
-pydantic-core==2.41.5
+pydantic-core==2.48.0
     # via pydantic
 pygments==2.19.2
     # via rich

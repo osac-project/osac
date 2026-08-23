@@ -315,7 +315,7 @@ rpds-py==0.30.0
     #   referencing
 s3transfer==0.19.2
     # via boto3
-setuptools==82.0.1
+setuptools==84.0.0
     # via pbr
 simplejson==3.20.2
     # via python-esiclient

@@ -184,7 +184,7 @@ oslo-utils==10.0.0
     #   python-ironicclient
     #   python-keystoneclient
     #   python-novaclient
-packaging==26.0
+packaging==26.3
     # via
     #   ansible-core
     #   ansible-runner

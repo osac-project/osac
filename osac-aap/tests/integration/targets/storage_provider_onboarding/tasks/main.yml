@@ -52,9 +52,7 @@
   gather_facts: false
 
   environment:
-    VAST_VIP_POOL_NAME: "osac-test-pool"
-    VAST_VIP_POOL_IP_RANGES: '[["10.0.0.10","10.0.0.50"]]'
-    VAST_VIP_POOL_SUBNET_CIDR: "24"
+    VAST_VIP_POOL_SUPERNET: "10.0.0.0/24"
     OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
 
   vars:
@@ -135,7 +133,7 @@
     - name: Assert StorageClass parameters
       ansible.builtin.assert:
         that:
-          - _sc_result.resources[0].parameters.vip_pool_name == "osac-test-pool"
+          - _sc_result.resources[0].parameters.vip_pool_name == "osac-test-onboard-vippool"
           - _sc_result.resources[0].parameters.root_export == "/osac-test-onboard-d0f7f176/default"
           - "_sc_result.resources[0].parameters['csi.storage.k8s.io/provisioner-secret-name'] == 'vast-csi-test-onboard'"
           - "_sc_result.resources[0].parameters['csi.storage.k8s.io/provisioner-secret-namespace'] == 'osac-system'"

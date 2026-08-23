@@ -173,9 +173,7 @@ CSIEOF
   # so the playbook_dir-based default doesn't resolve correctly.
   REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
   cat > "${SCRIPT_DIR}/.storage_env" <<ENVEOF
-export VAST_VIP_POOL_NAME="osac-test-pool"
-export VAST_VIP_POOL_IP_RANGES='[["10.0.0.10","10.0.0.50"]]'
-export VAST_VIP_POOL_SUBNET_CIDR="24"
+export VAST_VIP_POOL_SUPERNET="10.0.0.0/24"
 export VAST_VALIDATE_CERTS="false"
 export OSAC_CSI_BACKENDS_CHART_REF="${REPO_ROOT}/../osac-csi-driver/charts/csi-backends"
 ENVEOF

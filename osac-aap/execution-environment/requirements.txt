@@ -262,7 +262,7 @@ python-ironicclient==6.0.0
     #   python-esiclient
 python-keystoneclient==5.8.0
     # via python-openstackclient
-python-novaclient==17.4.0
+python-novaclient==17.7.0
     # via python-esiclient
 python-openstackclient==9.0.0
     # via

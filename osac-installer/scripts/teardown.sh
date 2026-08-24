@@ -273,7 +273,7 @@ if [[ "${MCE_SERVICE}" == "true" ]]; then
     done
 fi
 
-NS_WAIT_LIST=("${INSTALLER_NAMESPACE}" keycloak ansible-aap cert-manager cert-manager-operator)
+NS_WAIT_LIST=("${INSTALLER_NAMESPACE}" keycloak ansible-aap cert-manager cert-manager-operator osac-kafka)
 if [[ "${MCE_SERVICE}" == "true" ]]; then
     NS_WAIT_LIST+=(multicluster-engine hive hypershift local-cluster open-cluster-management-agent open-cluster-management-agent-addon open-cluster-management-global-set open-cluster-management-hub hardware-inventory)
 fi

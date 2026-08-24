@@ -25,7 +25,6 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/events"
 )
 
@@ -197,7 +196,7 @@ var _ = Describe("Generic server dry run", func() {
 		Expect(response.GetObject()).ToNot(BeNil())
 		Expect(response.GetObject().GetMetadata().GetName()).To(Equal("my-dry-run-object"))
 		Expect(response.GetObject().GetMetadata().GetCreator()).To(Equal("system"))
-		Expect(response.GetObject().GetMetadata().GetTenant()).To(Equal(auth.SystemTenant))
+		Expect(response.GetObject().GetMetadata().GetTenant()).To(Equal(testTenant))
 	})
 
 	It("Validates metadata and rejects invalid labels", func() {

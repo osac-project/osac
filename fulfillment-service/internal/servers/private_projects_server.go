@@ -154,16 +154,6 @@ func (s *PrivateProjectsServer) Create(ctx context.Context,
 		return
 	}
 
-	// Projects are scoped to a specific tenant.
-	// Validate that the tenant will not be set to 'shared' or 'system'.
-	if tenant := metadata.GetTenant(); tenant == auth.SharedTenant || tenant == auth.SystemTenant {
-		err = grpcstatus.Errorf(
-			grpccodes.InvalidArgument,
-			"project cannot belong to '%s' tenant - must be scoped to a specific tenant",
-			tenant,
-		)
-		return
-	}
 	name := metadata.GetName()
 	path := strings.Split(name, ".")
 	count := len(path)
@@ -197,41 +187,6 @@ func (s *PrivateProjectsServer) Create(ctx context.Context,
 
 	// Call the generic server to create the project:
 	err = s.generic.Create(ctx, request, &response)
-	if err != nil {
-		return
-	}
-
-	// Report any post-create errors to the transaction so the write is rolled back.
-	if tx, txErr := database.TxFromContext(ctx); txErr == nil {
-		defer tx.ReportError(&err)
-	}
-
-	// Check if the assigned tenant is 'shared' or 'system' and reject if so.
-	// This can happen if the user is an admin and didn't specify a tenant explicitly.
-	if response == nil || response.Object == nil || !response.Object.HasMetadata() {
-		s.logger.WarnContext(
-			ctx,
-			"Post-create tenant validation skipped: response missing expected object or metadata",
-		)
-		err = grpcstatus.Errorf(
-			grpccodes.Internal,
-			"post-create tenant validation failed: response missing expected object or metadata",
-		)
-		return
-	}
-	if tenant := response.Object.GetMetadata().GetTenant(); tenant == auth.SharedTenant || tenant == auth.SystemTenant {
-		s.logger.WarnContext(
-			ctx,
-			"Attempted to create project with invalid tenant",
-			slog.String("tenant", tenant),
-		)
-		err = grpcstatus.Errorf(
-			grpccodes.InvalidArgument,
-			"project must be assigned to a specific tenant - please specify metadata.tenant in the request",
-		)
-		return
-	}
-
 	return
 }
 

@@ -39,7 +39,7 @@ func createExternalIPInState(
 	resp, err := externalIPDao.Create().SetObject(
 		privatev1.ExternalIP_builder{
 			Metadata: privatev1.Metadata_builder{
-				Tenant: auth.SharedTenant,
+				Tenant: testTenant,
 				Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 			}.Build(),
 			Spec: privatev1.ExternalIPSpec_builder{
@@ -63,7 +63,7 @@ func createClusterInState(
 	resp, err := clusterDao.Create().SetObject(
 		privatev1.Cluster_builder{
 			Metadata: privatev1.Metadata_builder{
-				Tenant: auth.SharedTenant,
+				Tenant: testTenant,
 				Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 			}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
@@ -82,7 +82,7 @@ func createBareMetalInstanceInState(
 	resp, err := bareMetalInstanceDao.Create().SetObject(
 		privatev1.BareMetalInstance_builder{
 			Metadata: privatev1.Metadata_builder{
-				Tenant: auth.SharedTenant,
+				Tenant: testTenant,
 				Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 			}.Build(),
 			Spec: privatev1.BareMetalInstanceSpec_builder{
@@ -356,7 +356,7 @@ var _ = Describe("Private external IP attachments server", func() {
 			Expect(getResponse.GetObject().GetSpec().GetComputeInstance().GetId()).To(Equal(ci.GetId()))
 		})
 
-		It("Rejects update of the name of ExternalIPAttachment", func() {
+		It("Updates metadata of an external IP attachment", func() {
 			eip := createExternalIPInState(ctx, externalIPDao, sharedPool.GetId(),
 				privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, false)
 			ci := createComputeInstanceInState(ctx, computeInstanceDao,
@@ -375,19 +375,19 @@ var _ = Describe("Private external IP attachments server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 
-			_, err = server.Update(ctx, privatev1.ExternalIPAttachmentsUpdateRequest_builder{
+			updateResponse, err := server.Update(ctx, privatev1.ExternalIPAttachmentsUpdateRequest_builder{
 				Object: privatev1.ExternalIPAttachment_builder{
 					Id: createResponse.GetObject().GetId(),
 					Metadata: privatev1.Metadata_builder{
-						Name: "renamed-attachment",
+						Labels: map[string]string{"env": "test"},
 					}.Build(),
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{
-					Paths: []string{"metadata.name"},
+					Paths: []string{"metadata.labels"},
 				},
 			}.Build())
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("immutable"))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updateResponse.GetObject().GetMetadata().GetLabels()).To(HaveKeyWithValue("env", "test"))
 		})
 
 		It("Deletes an external IP attachment", func() {

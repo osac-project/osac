@@ -438,13 +438,15 @@ fulfillment service. Valid values are `default` and `guest`.
 1. **Shared Tenant**: The `shared` tenant is a special tenant that is always included in the visible
    tenants for all users. Resources assigned to the `shared` tenant are visible to **everyone**.
    This is useful for templates, shared configurations, or other resources that should be accessible
-   across all tenants. Note that certain resource types — specifically **projects** and **identity
-   providers** — cannot be created in the `shared` tenant and must be scoped to a specific tenant.
+   across all tenants. Note that tenant-scoped resource types (such as projects, identity providers,
+   clusters, compute instances, and networking resources) cannot be created in the `shared` tenant
+   and must be scoped to a specific tenant. Platform-scoped resources (such as roles, users, host
+   types, instance types, templates, and catalog items) can be placed in the `shared` tenant.
 
 2. **System Tenant**: The `system` tenant is a special tenant used for objects that are only visible
    to the system itself. Resources assigned to the `system` tenant are not visible to regular users.
-   This is used internally for system-level resources. As with the `shared` tenant, **projects** and
-   **identity providers** cannot be created in the `system` tenant.
+   This is used internally for system-level resources. As with the `shared` tenant, tenant-scoped
+   resources cannot be created in the `system` tenant.
 
 3. **Single-Organization Limitation**: In Keycloak, a user can only be a member of one organization
    at a time. This means JWT users have access to exactly one tenant (plus the `shared` tenant for
@@ -477,10 +479,9 @@ JWT token claims (see [Subject Resolution](#subject-resolution)).
 - **Assignable Tenants**: All tenants from the subject
 - **Default Tenant**: First tenant from the subject. When the subject has access to all tenants
   (e.g., an admin with the universal set `["*"]`), the default tenant is `shared` because a
-  universal set cannot be stored as the tenant of an object. For resource types that cannot belong
-  to the `shared` tenant (projects and identity providers), admin users must explicitly specify
-  `metadata.tenant` in the create request; otherwise the request will be rejected with
-  `InvalidArgument`.
+  universal set cannot be stored as the tenant of an object. For tenant-scoped resource types that
+  cannot be placed in the `shared` tenant, admin users must explicitly specify `metadata.tenant`
+  in the create request; otherwise the request will be rejected with `PermissionDenied`.
 - **Visible Tenants**: All subject's tenants plus the `shared` tenant. For admins with the
   universal set, all tenants are visible.
 

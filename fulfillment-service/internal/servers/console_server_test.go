@@ -167,6 +167,10 @@ func (m *mockTx) ReportError(err *error) {}
 
 func (m *mockTx) End(ctx context.Context) error { return nil }
 
+func (m *mockTx) Savepoint(ctx context.Context, fn func(context.Context) error) error {
+	return fn(ctx)
+}
+
 func (m *mockTx) Run(ctx context.Context, task any, args ...any) error {
 	return nil
 }

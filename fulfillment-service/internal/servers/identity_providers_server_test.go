@@ -18,10 +18,8 @@ import (
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
 
-	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 )
 
 var _ = Describe("Identity Providers Server", func() {
@@ -83,24 +81,6 @@ var _ = Describe("Identity Providers Server", func() {
 
 		BeforeEach(func() {
 			var err error
-
-			// Identity providers require a real tenant (cannot use 'shared'). Create a tenant for tests:
-			tenantsDao, err := dao.NewGenericDAO[*privatev1.Tenant]().
-				SetLogger(logger).
-				SetTenancyLogic(tenancy).
-				Build()
-			Expect(err).ToNot(HaveOccurred())
-			_, err = tenantsDao.Create().
-				SetObject(
-					privatev1.Tenant_builder{
-						Id: "test-tenant",
-						Metadata: privatev1.Metadata_builder{
-							Name:   "test-tenant",
-							Tenant: "test-tenant",
-						}.Build(),
-					}.Build(),
-				).Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
 
 			publicServer, err = NewIdentityProvidersServer().
 				SetLogger(logger).

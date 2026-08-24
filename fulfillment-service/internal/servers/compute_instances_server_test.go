@@ -26,7 +26,6 @@ import (
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
-	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 )
 
@@ -99,7 +98,7 @@ var _ = Describe("Compute instances server", func() {
 				Id: "test-vnet",
 				Metadata: privatev1.Metadata_builder{
 					Name:   "test-vnet",
-					Tenant: auth.SharedTenant,
+					Tenant: testTenant,
 				}.Build(),
 			}.Build()
 
@@ -116,7 +115,7 @@ var _ = Describe("Compute instances server", func() {
 				Id: "test-subnet",
 				Metadata: privatev1.Metadata_builder{
 					Name:   "test-subnet",
-					Tenant: auth.SharedTenant,
+					Tenant: testTenant,
 				}.Build(),
 				Spec: privatev1.SubnetSpec_builder{
 					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "test-vnet"}.Build(),
@@ -142,7 +141,7 @@ var _ = Describe("Compute instances server", func() {
 					Id: "standard-4-16",
 					Metadata: privatev1.Metadata_builder{
 						Name:   "standard-4-16",
-						Tenant: auth.SharedTenant,
+						Tenant: testTenant,
 					}.Build(),
 					Spec: privatev1.InstanceTypeSpec_builder{
 						Cores:     4,
@@ -164,7 +163,7 @@ var _ = Describe("Compute instances server", func() {
 					Id: "standard",
 					Metadata: privatev1.Metadata_builder{
 						Name:   "standard",
-						Tenant: auth.SharedTenant,
+						Tenant: testTenant,
 					}.Build(),
 					Spec: privatev1.StorageTierSpec_builder{
 						Description: "Standard storage tier",
@@ -187,7 +186,7 @@ var _ = Describe("Compute instances server", func() {
 					Id: "test-disk-image",
 					Metadata: privatev1.Metadata_builder{
 						Name:   "test-disk-image",
-						Tenant: auth.SharedTenant,
+						Tenant: testTenant,
 					}.Build(),
 					Spec: privatev1.DiskImageSpec_builder{
 						SourceType:    privatev1.SourceType_SOURCE_TYPE_REGISTRY,
@@ -224,7 +223,7 @@ var _ = Describe("Compute instances server", func() {
 				Description: "Test template for validation",
 				Metadata: privatev1.Metadata_builder{
 					Name:   strings.ReplaceAll(templateID, ".", "-"),
-					Tenant: auth.SharedTenant,
+					Tenant: testTenant,
 				}.Build(),
 				Parameters: []*privatev1.ComputeInstanceTemplateParameterDefinition{
 					{

@@ -21,13 +21,16 @@ import (
 	"fmt"
 	"time"
 
+	coordinationv1 "k8s.io/api/coordination/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -117,6 +120,7 @@ func NewSubnetReconciler(
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=computeinstances,verbs=list
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=baremetalinstances,verbs=list
 // +kubebuilder:rbac:groups=metallb.io,resources=ipaddresspools,verbs=get;create;update;delete
+// +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;create;update
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -211,6 +215,11 @@ func (r *SubnetReconciler) handleUpdate(ctx context.Context, subnet *v1alpha1.Su
 		if err := r.Update(ctx, subnet); err != nil {
 			return ctrl.Result{}, err
 		}
+	}
+
+	// Ensure V-Net lock lease exists for move_network_attachment serialization
+	if err := r.ensureVNetLockLease(ctx, subnet); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	// Set phase to Progressing only on first reconcile (empty phase).
@@ -315,6 +324,40 @@ func (r *SubnetReconciler) handleUpdate(ctx context.Context, subnet *v1alpha1.Su
 
 	// Handle provisioning
 	return r.handleProvisioning(ctx, subnet, plan)
+}
+
+// ensureVNetLockLease creates a K8s Lease for V-Net mutex locking if it
+// doesn't already exist. The Lease is owned by the Subnet CR and will be
+// garbage collected when the Subnet is deleted.
+func (r *SubnetReconciler) ensureVNetLockLease(ctx context.Context, subnet *v1alpha1.Subnet) error {
+	lease := &coordinationv1.Lease{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      vnetLockLeaseName(subnet.Name),
+			Namespace: subnet.Namespace,
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion:         v1alpha1.GroupVersion.String(),
+					Kind:               "Subnet",
+					Name:               subnet.Name,
+					UID:                subnet.UID,
+					Controller:         ptr.To(true),
+					BlockOwnerDeletion: ptr.To(false),
+				},
+			},
+		},
+		Spec: coordinationv1.LeaseSpec{
+			LeaseDurationSeconds: ptr.To(int32(120)),
+		},
+	}
+	err := r.Create(ctx, lease)
+	if apierrors.IsAlreadyExists(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("creating V-Net lock lease: %w", err)
+	}
+	ctrllog.FromContext(ctx).Info("created V-Net lock lease", "lease", lease.Name)
+	return nil
 }
 
 // updateSubnetStrategyAnnotations stamps the implementation-strategy, k8s

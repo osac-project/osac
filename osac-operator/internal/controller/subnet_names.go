@@ -28,3 +28,7 @@ var (
 	osacSubnetIDLabel           string = fmt.Sprintf("%s/subnet-uuid", osacPrefix)
 	osacSubnetFeedbackFinalizer string = fmt.Sprintf("%s/subnet-feedback", osacPrefix)
 )
+
+func vnetLockLeaseName(subnetName string) string {
+	return "netris-vnet-lock-" + subnetName
+}

@@ -266,6 +266,29 @@ def wait_for_external_ip_attachment_deletion(*, k8s: K8sClient, name: str) -> No
     )
 
 
+# NATGateway helpers
+
+
+def wait_for_nat_gateway_ready(*, k8s: K8sClient, name: str) -> None:
+    poll_until(
+        fn=lambda: k8s.get_jsonpath(resource="natgateway", name=name, jsonpath="{.status.state}"),
+        until=lambda state: state == "Ready",
+        retries=30,
+        delay=5,
+        description=f"NATGateway {name} to become Ready",
+    )
+
+
+def wait_for_nat_gateway_deletion(*, k8s: K8sClient, name: str) -> None:
+    poll_until(
+        fn=lambda: not k8s.is_present(resource="natgateway", name=name),
+        until=lambda v: v is True,
+        retries=120,
+        delay=5,
+        description=f"{name} NATGateway deletion",
+    )
+
+
 def wait_for_cluster_order_cr(*, k8s: K8sClient, uuid: str) -> str:
     return poll_until(
         fn=lambda: k8s.get_cluster_order_name(uuid=uuid, checked=False),

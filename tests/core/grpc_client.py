@@ -156,6 +156,40 @@ class GRPCClient:
     def delete_security_group(self, *, sg_id: str) -> None:
         self.call(service=f"{PUBLIC_API}.SecurityGroups/Delete", data={"id": sg_id})
 
+    def create_security_group_with_rules(
+        self,
+        *,
+        name: str,
+        virtual_network: str,
+        ingress: list[dict[str, Any]] | None = None,
+        egress: list[dict[str, Any]] | None = None,
+    ) -> str:
+        spec: dict[str, Any] = {"virtual_network": {"id": virtual_network}}
+        if ingress is not None:
+            spec["ingress"] = ingress
+        if egress is not None:
+            spec["egress"] = egress
+        response: dict[str, Any] = self.call(
+            service=f"{PUBLIC_API}.SecurityGroups/Create", data={"object": {"metadata": {"name": name}, "spec": spec}}
+        )
+        return response["object"]["id"]
+
+    def update_security_group_rules(
+        self, *, sg_id: str, ingress: list[dict[str, Any]] | None = None, egress: list[dict[str, Any]] | None = None
+    ) -> None:
+        spec: dict[str, Any] = {}
+        paths: list[str] = []
+        if ingress is not None:
+            spec["ingress"] = ingress
+            paths.append("spec.ingress")
+        if egress is not None:
+            spec["egress"] = egress
+            paths.append("spec.egress")
+        self.call(
+            service=f"{PUBLIC_API}.SecurityGroups/Update",
+            data={"object": {"id": sg_id, "spec": spec}, "updateMask": {"paths": paths}},
+        )
+
     # Console operations
 
     def create_console_session(
@@ -200,7 +234,7 @@ class GRPCClient:
         name: str,
         cidrs: list[str],
         ip_family: str = "IP_FAMILY_IPV4",
-        implementation_strategy: str = "metallb-l2",
+        implementation_strategy: str = "",
     ) -> str:
         response: dict[str, Any] = self.call(
             service=f"{PRIVATE_API}.ExternalIPPools/Create",
@@ -269,6 +303,18 @@ class GRPCClient:
 
     def delete_external_ip_attachment(self, *, attachment_id: str) -> None:
         self.call(service=f"{PUBLIC_API}.ExternalIPAttachments/Delete", data={"id": attachment_id})
+
+    def create_external_ip_attachment_bmi(self, *, name: str, external_ip: str, baremetal_instance: str) -> str:
+        response: dict[str, Any] = self.call(
+            service=f"{PUBLIC_API}.ExternalIPAttachments/Create",
+            data={
+                "object": {
+                    "metadata": {"name": name},
+                    "spec": {"external_ip": {"id": external_ip}, "baremetal_instance": {"id": baremetal_instance}},
+                }
+            },
+        )
+        return response["object"]["id"]
 
     # ClusterCatalogItem operations
 

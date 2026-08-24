@@ -475,6 +475,11 @@ class K8sClient:
             return []
         return [mac.lower() for mac in output.split()]
 
+    def get_baremetal_instance_tenant_ip(self, *, name: str) -> str:
+        return self.get_jsonpath(
+            resource="baremetalinstance", name=name, jsonpath="{.status.networkAttachmentStatuses[0].ipAddress}"
+        )
+
     # BareMetalHost queries (explicit namespace — BMHs live in a different namespace)
 
     def get_bmh_provisioning_state(self, *, name: str, bmh_namespace: str) -> str:

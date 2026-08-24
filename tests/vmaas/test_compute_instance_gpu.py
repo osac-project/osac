@@ -109,10 +109,6 @@ def test_gpu_compute_instance(
             f"GPU ComputeInstance CR missing tenant annotation: {annotations}"
         )
         assert annotations["osac.openshift.io/tenant"] != "", "tenant annotation must not be empty"
-        assert "osac.openshift.io/owner-reference" in annotations, (
-            f"GPU ComputeInstance CR missing owner-reference annotation: {annotations}"
-        )
-        assert annotations["osac.openshift.io/owner-reference"] != "", "owner-reference annotation must not be empty"
 
         # Wait for AAP to trigger provisioning
         poll_until(

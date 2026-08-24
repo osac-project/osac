@@ -1022,7 +1022,6 @@ func (s *PrivateBareMetalInstancesServer) autoProvisionExternalIP(
 	return nil
 }
 
-
 func (s *PrivateBareMetalInstancesServer) updateExternalIPAttachedFlag(ctx context.Context, externalIPID string, attached bool) error {
 	getResponse, err := s.externalIPDao.Get().
 		SetId(externalIPID).

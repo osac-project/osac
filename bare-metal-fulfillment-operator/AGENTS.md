@@ -12,14 +12,12 @@ Kubernetes operator for managing bare-metal host pools in the OSAC project. Defi
 
 ## Dev Environment
 
-**Language**: Go (see `go.mod`) | **Framework**: controller-runtime (Kubebuilder v4) | **Build tool**: Make | **Container tool**: Podman (default) | **Test framework**: Ginkgo v2 + Gomega | **Linter**: golangci-lint (see `Makefile`)
+**Language**: Go (see `go.mod`) | **Framework**: controller-runtime (Kubebuilder v4) | **Build tool**: Make | **Container tool**: Podman (default) | **Test framework**: Ginkgo v2 + Gomega | **Linter**: golangci-lint (see `../tools/golangci-lint.mk`)
 
 ```bash
 make build                     # Build manager binary
 make test                      # Unit tests (uses envtest for K8s API simulation)
-make test-e2e                  # E2E tests (auto-creates/tears down Kind cluster bare-metal-fulfillment-operator-test-e2e)
-make setup-test-e2e            # Manually create Kind cluster for e2e
-make cleanup-test-e2e          # Manually delete Kind cluster
+make -C ../osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=bmf  # Integration tests
 make lint                      # golangci-lint
 make lint-fix                  # golangci-lint run --fix
 make lint-config               # Verify golangci-lint config
@@ -31,7 +29,7 @@ make helm-crds                 # Sync CRDs to operator-crds chart + operator man
 make check-helm-crds           # Runs helm-crds then verifies no drift (may modify generated files)
 
 make run                       # Run controller locally
-make install                   # Install CRDs via kustomize
+make install                   # Install CRDs via Helm
 make deploy IMG=<registry>/bare-metal-fulfillment-operator:tag
 make undeploy                  # Remove operator from cluster
 make uninstall                 # Remove CRDs from cluster
@@ -65,20 +63,13 @@ bare-metal-fulfillment-operator/
 │   └── operator-crds/         # CRD-only Helm chart
 ├── config/
 │   ├── crd/                   # Generated CRD manifests (DO NOT EDIT)
-│   ├── default/               # Kustomize default overlay
-│   ├── manager/               # Manager deployment manifest
 │   ├── rbac/                  # Generated RBAC rules
-│   ├── manifests/             # Additional operator manifests
-│   ├── network-policy/        # Network policy definitions
-│   ├── prometheus/            # Prometheus monitoring config
-│   ├── samples/               # Example CRs
-│   └── scorecard/             # Operator scorecard config
+│   └── samples/               # Example CRs
 ├── hack/
-│   ├── sync-helm-crds.py      # Sync CRDs to Helm chart
-│   └── sync-helm-operator.py  # Sync operator manifests to Helm chart
+│   └── sync-helm-crds.py      # Sync CRDs to Helm chart
 ├── test/
 │   ├── crds/                  # Test CRD fixtures (e.g., metal3.io BareMetalHost)
-│   ├── e2e/                   # End-to-end tests
+│   ├── integration/           # Integration tests (against a pre-existing Kind cluster)
 │   └── utils/                 # Test utilities
 ├── Makefile                   # Build, test, lint, deploy, Helm targets
 ├── go.mod                     # Go 1.26, controller-runtime, gophercloud
@@ -123,7 +114,7 @@ Two charts in `charts/`:
 - **operator-crds** — CRD definitions only, for installing CRDs independently
 - **operator** — operator deployment, RBAC, service account, metrics
 
-CRDs must stay in sync: after `make manifests`, run `make helm-crds` (uses `hack/sync-helm-crds.py` and `hack/sync-helm-operator.py`). CI enforces sync via `make check-helm-crds`.
+CRDs must stay in sync: after `make manifests`, run `make helm-crds` (uses `hack/sync-helm-crds.py`). CI enforces sync via `make check-helm-crds`.
 
 ## CI Workflows
 
@@ -135,9 +126,9 @@ CRDs must stay in sync: after `make manifests`, run `make helm-crds` (uses `hack
 
 ## Code Quality
 
-- **golangci-lint** (see `Makefile`) with dupl, errcheck, ginkgolinter, goconst, gocyclo, govet, ineffassign, lll, misspell, prealloc, revive, staticcheck, unconvert, unused (see `.golangci.yml`)
+- **golangci-lint** (see `../tools/golangci-lint.mk`) with dupl, errcheck, ginkgolinter, goconst, gocyclo, govet, ineffassign, lll, misspell, prealloc, revive, staticcheck, unconvert, unused (see `.golangci.yml`)
 - **Pre-commit hooks**: trailing-whitespace, check-merge-conflict, end-of-file-fixer, check-added-large-files, check-case-conflict, check-json, check-symlinks, detect-private-key, yamllint --strict (excludes `config/`), golangci-lint run --fix
-- **Tests**: Ginkgo v2 + Gomega with envtest for unit tests; Kind cluster integration tests for e2e (`test/e2e/`)
+- **Tests**: Ginkgo v2 + Gomega with envtest for unit tests; integration tests in `test/integration/` run via `make -C ../osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=bmf`
 - **Test coverage**: Unit tests generate `cover.out`
 
 ## Container Security
@@ -157,7 +148,7 @@ CRDs must stay in sync: after `make manifests`, run `make helm-crds` (uses `hack
 
 - `internal/controller/*_test.go` — controller unit tests with envtest
 - `internal/controller/*_integration_test.go` — Metal3 integration tests
-- `test/e2e/` — end-to-end tests with real Kind cluster (named `bare-metal-fulfillment-operator-test-e2e`)
+- `test/integration/` — integration tests against a pre-existing, persistent Kind cluster (named `osac-dev`)
 - `test/utils/` — test utilities
 - `test/crds/` — external CRDs (metal3.io_baremetalhosts.yaml)
 - **ENVTEST_K8S_VERSION**: Auto-detected from k8s.io/api version in go.mod (e.g., 1.36)

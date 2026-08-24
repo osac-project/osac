@@ -3,12 +3,24 @@
 
 cliImage: quay.io/openshift/origin-cli:4.20.0
 
+# Shared PostgreSQL host for the db-init hook.
+dbInit:
+  host: "postgres.osac-infra.svc.cluster.local"
+
+# Kafka cluster coordinates for per-instance topic/user creation.
+kafka:
+  enabled: true
+  clusterName: osac-kafka
+  clusterNamespace: osac-kafka
+  replicas: 3
+
 # --- Operator CRDs ---
 operatorCrds:
   install: true
 
 # --- Operator ---
 operator:
+  enabled: true
   image:
     repository: ghcr.io/osac-project/osac-operator
     tag: latest  # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
@@ -45,6 +57,7 @@ operator:
 
 # --- Fulfillment Service ---
 service:
+  enabled: true
   variant: openshift
   # [REQUIRED] Hostname for the external API Route (e.g. fulfillment-api-osac.apps.mycluster.example.com)
   externalHostname: ""
@@ -71,7 +84,7 @@ service:
     # Example:
     # connection:
     # - secret:
-    #     name: fulfillment-db
+    #     name: osac-db-config
     #     items:
     #     - key: url
     #       param: url
@@ -259,6 +272,19 @@ bmf:
     inventoryConfig: "osac-inventory-config"
     managementConfig: "osac-management-config"
     osClouds: "osac-os-clouds"
+  # Kind/IT only -- see templates/bmf-metal3-test-secrets.yaml
+  testBackend:
+    metal3:
+      enabled: false
+      namespace: ""
+      # Names for the fake Secrets this seeds -- deliberately a separate field
+      # from bmf.secrets.* (the real-credential defaults) rather than derived
+      # from them, since values/kind/osac.yaml also overrides bmf.secrets.* to
+      # point at these same names, and deriving one from the other here would
+      # be circular. See templates/bmf-metal3-test-secrets.yaml.
+      secretNames:
+        inventoryConfig: "osac-inventory-config-metal3-test"
+        managementConfig: "osac-management-config-metal3-test"
   configMaps:
     profiles: "osac-profiles"
   env:
@@ -275,19 +301,6 @@ metallb:
 
 hubAccess:
   enabled: false
-
-bundledPostgres:
-  enabled: false
-  database:
-    name: service
-    user: service
-  resources:
-    limits:
-      cpu: 500m
-      memory: 512Mi
-    requests:
-      cpu: 50m
-      memory: 128Mi
 
 clusterVersions:
   enabled: false

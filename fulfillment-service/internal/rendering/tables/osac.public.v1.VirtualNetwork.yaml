@@ -22,10 +22,6 @@ columns:
 - header: NAME
   value: "has(this.metadata.name)? this.metadata.name: '-'"
 
-- header: NETWORK-CLASS
-  value: this.spec.network_class.id
-  type: osac.public.v1.NetworkClass
-
 - header: IPV4-CIDR
   value: "has(this.spec.ipv4_cidr)? this.spec.ipv4_cidr: '-'"
 

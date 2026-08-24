@@ -455,9 +455,7 @@ func (c *Reconciler[O]) Start(ctx context.Context) error {
 				)
 				fresh = object
 			}
-			c.logger.DebugContext(
-				ctx,
-				"Reconciling object",
+			c.logger.DebugContext(ctx, "Reconciling object",
 				slog.String("id", fresh.GetId()),
 			)
 			err = c.function(ctx, fresh)
@@ -496,11 +494,6 @@ func (c *Reconciler[O]) watchEvents(ctx context.Context) error {
 		event := response.Event.ProtoReflect()
 		if event.Has(c.payloadField) {
 			object := event.Get(c.payloadField).Message().Interface().(O)
-			c.logger.DebugContext(
-				ctx,
-				"Enqueueing object",
-				slog.Any("object", object),
-			)
 			c.objectChannel <- object
 		} else {
 			c.logger.DebugContext(

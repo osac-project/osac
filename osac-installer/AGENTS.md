@@ -2,7 +2,7 @@
 
 Helm-based deployment orchestrator for OSAC components. No Go code, no builds, no unit tests — only structural validation.
 
-Helm-based deployment system for the OSAC platform. Component repos (osac-operator, osac-fulfillment-service, osac-aap, bare-metal-fulfillment-operator, osac-ui) are aggregated as Git submodules under `base/` for version tracking. Deployment uses three Helm charts in sequence: `charts/osac-operators/` (Phase 1), `charts/osac-prereqs/` (Phase 2), `charts/osac/` (Phase 3).
+Helm-based deployment system for the OSAC platform. Component repos (osac-operator, osac-fulfillment-service, osac-aap, bare-metal-fulfillment-operator, osac-ui) are aggregated as Git submodules under `base/` for version tracking. Deployment uses three Helm charts in sequence: `charts/osac-deps/` (Phase 1), `charts/osac-infra/` (Phase 2), `charts/osac/` (Phase 3).
 
 ## Quick Start
 
@@ -32,16 +32,18 @@ make helm-validate
 # Sync submodules and rebuild chart dependencies
 make sync-charts
 
-# Deploy to OpenShift (three-phase Helm install)
-make install VALUES_FILE=values/<env>/values.yaml
+# Full install (infra + osac)
+make install PLATFORM=openshift PROFILE=<profile> NS=<namespace>
 
-# Individual install phases
-make install-operators VALUES_FILE=values/<env>/values.yaml
-make install-prereqs VALUES_FILE=values/<env>/values.yaml
-make install-osac VALUES_FILE=values/<env>/values.yaml
+# Individual phases
+make install-infra PLATFORM=openshift PROFILE=<profile> NS=<namespace>
+make install-osac  PLATFORM=openshift PROFILE=<profile> NS=<namespace>
 
 # Uninstall
-make uninstall
+make uninstall PLATFORM=openshift PROFILE=<profile> NS=<namespace>
+
+# Integration tests (Kind)
+make test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment
 ```
 
 ## Critical Rules
@@ -77,9 +79,9 @@ See `docs/helm-deployment-guide.md` for complete architecture details, including
 
 ```text
 charts/osac/           # Helm umbrella chart (Chart.yaml, values.yaml, values.schema.json)
-charts/osac-operators/ # Phase 1: OLM operator subscriptions
-charts/osac-prereqs/   # Phase 2: CRD instances, certs, Keycloak
-values/<env>/          # Environment values (development, vmaas-ci, caas-ci)
+charts/osac-deps/      # Phase 1: CRD providers (OLM subscriptions on OpenShift)
+charts/osac-infra/     # Phase 2: Shared infrastructure (CA, Keycloak, Gateway, PostgreSQL)
+values/<profile>/      # Per-profile values (dev, vmaas-ci, bmaas-ci, caas-ci, full-ci)
 base/                  # Git submodules — discover with: git submodule status
 prerequisites/         # Reference manifests for manual prerequisite installation
 scripts/               # Automation scripts (see README.md for full list)
@@ -88,16 +90,17 @@ scripts/               # Automation scripts (see README.md for full list)
 ### Helm Charts (Three-Phase Deployment)
 
 ```text
-Phase 1: charts/osac-operators/         # OLM operator subscriptions
+Phase 1: charts/osac-deps/               # CRD providers
   Installs: cert-manager, AAP, LVMS, CNV, MCE, MetalLB
   Hook scripts wait for operators to be ready before proceeding
 
-Phase 2: charts/osac-prereqs/           # Cluster prerequisites
+Phase 2: charts/osac-infra/             # Shared infrastructure
   Configures: certificates (CA issuer, trust-manager), Keycloak,
-  operator CRs (HyperConverged, LVMCluster, MetalLB, MCE)
+  operator CRs (HyperConverged, LVMCluster, MetalLB, MCE),
+  shared PostgreSQL (dev/CI)
   Hook scripts configure each operator after its CRD is ready
 
-Phase 3: charts/osac/                   # OSAC platform (umbrella chart)
+Phase 3: charts/osac/                   # OSAC platform (per-instance workload)
   Dependencies:
     osac-operator-crds, osac-operator, fulfillment-service, osac-aap,
       bare-metal-fulfillment-operator-crds,
@@ -109,8 +112,8 @@ Phase 3: charts/osac/                   # OSAC platform (umbrella chart)
     osac-ui (conditional: ui.enabled)
       -- a real external chart, via an oci:// reference pinned to a
       released version in Chart.yaml
-  Templates: bundled-postgres, hub-access, hooks (create-hub,
-    pre-install-validate, publish-templates, seed-cluster-versions)
+  Templates: hub-access, hooks (create-hub, pre-install-validate,
+    publish-templates, seed-cluster-versions, register-local-storage)
   values.schema.json validates all configuration
 ```
 
@@ -118,28 +121,29 @@ Phase 3: charts/osac/                   # OSAC platform (umbrella chart)
 
 ```text
 values/
-  development/values.yaml              # All controllers, latest images
-  vmaas-ci/values.yaml                 # VMaaS CI: computeInstance + tenant + networking
-  caas-ci/values.yaml                  # CaaS CI: clusterOrder + tenant + networking
-  bmaas-ci/values.yaml                 # BM-as-a-Service CI: bmf + storage + bareMetalInstance
+  dev/infra.yaml + instance.yaml       # Local dev (Kind + OpenShift)
+  vmaas-ci/infra.yaml + instance.yaml  # VMaaS CI
+  caas-ci/infra.yaml + instance.yaml   # CaaS CI
+  bmaas-ci/infra.yaml + instance.yaml  # BMaaS CI
+  full-ci/infra.yaml + instance.yaml   # Full CI (all components)
 ```
 
 Pull secrets and AAP license files are stored alongside values files (e.g.,
-`values/<env>/pull-secret.json`, `values/<env>/license.zip`).
+`values/<profile>/pull-secret.json`, `values/<profile>/license.zip`).
 
 osac-operator, fulfillment-service, osac-aap, and bare-metal-fulfillment-operator
 are mono-repo-resident directories, not submodules -- they share this repo's own
 commit history with osac-installer itself (only osac-csi-driver, under `base/`,
 remains a real submodule). There is deliberately no image-tag pinning/syncing
-for these four in `values/*/values.yaml`: CI values files use the live tag
+for these four in `values/*/instance.yaml`: CI values files use the live tag
 published by each component's own workflow -- `main` for fulfillment-service
 (the only one of the four that doesn't publish a current `latest`) and
 `latest` for osac-operator, osac-aap, and bare-metal-fulfillment-operator.
 There is no separate commit/tag to keep in sync and no bump-bot involved.
 
-Prerequisites are installed via Phase 1 (`make install-operators`) and Phase 2
-(`make install-prereqs`), each gated by values toggles. `ca-bundle` Bundle is
-cluster-scoped and managed by the `osac-prereqs` chart via trust-manager. See
+Prerequisites are installed via `make install-infra`, which handles both
+osac-deps and osac-infra charts, gated by values toggles. `ca-bundle` Bundle is
+cluster-scoped and managed by the `osac-infra` chart via trust-manager. See
 `Makefile` for underlying commands and `docs/helm-deployment-guide.md` for
 phase details.
 

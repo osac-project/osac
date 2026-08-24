@@ -110,6 +110,7 @@ spec:
       containers:
       - name: grpc-server
         image: {{ .Values.images.service }}
+        imagePullPolicy: {{ .Values.images.pullPolicy }}
         securityContext:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true

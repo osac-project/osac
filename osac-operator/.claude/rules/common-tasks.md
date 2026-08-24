@@ -37,5 +37,5 @@ Update osac-installer hub-access Role if fulfillment controller needs access.
 ```bash
 kubectl describe subnet my-subnet -n osac-networking
 kubectl logs -n osac-system deployment/osac-operator-controller-manager -f
-# Enable debug: add --zap-log-level=debug to config/manager/manager.yaml args
+# Enable debug: add --zap-log-level=debug to charts/operator/values.yaml args
 ```

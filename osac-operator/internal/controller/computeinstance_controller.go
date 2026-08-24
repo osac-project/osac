@@ -589,9 +589,33 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 		}
 	}
 
-	// Inject tenant storage classes into context for AAP extra_vars
+	// Inject tenant storage classes into context for AAP extra_vars.
+	// Prefer Tenant.status.storageClasses (populated by the storage controller);
+	// fall back to resolving labeled StorageClasses on the target cluster only
+	// when the ClusterStorageReady condition is absent (storage controller
+	// disabled or hasn't reconciled this tenant yet).
 	if len(tenant.Status.StorageClasses) > 0 {
 		ctx = provisioning.WithTenantStorageClasses(ctx, tenant.Status.StorageClasses)
+	} else if tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady) == nil {
+		tenantName := tenant.GetName()
+		resolution, err := getTenantStorageClasses(ctx, targetClient, tenantName)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to resolve tenant storage classes from target cluster for tenant %s: %w", tenantName, err)
+		}
+
+		for _, msg := range resolution.duplicateMessages {
+			r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, eventReasonDuplicateStorageClass, eventActionDetectDuplicate, "%s", msg)
+		}
+		if len(resolution.resolved) > 0 {
+			log.Info("resolved tenant storage classes from target cluster (status was empty)", "tenant", tenantName, "storageClasses", resolution.resolved)
+			ctx = provisioning.WithTenantStorageClasses(ctx, resolution.resolved)
+		} else if len(resolution.ambiguousTiers) > 0 {
+			log.Info("no tenant storage classes resolved; all matched tiers are ambiguous (multiple StorageClasses per tier)", "tenant", tenantName, "ambiguousTiers", resolution.ambiguousTiers)
+			r.Recorder.Eventf(instance, nil, corev1.EventTypeWarning, eventReasonDuplicateStorageClass, eventActionDetectDuplicate,
+				"no tenant storage classes resolved for tenant %s; all matched tiers are ambiguous — check StorageClass labels", tenantName)
+		} else {
+			log.Info("no tenant storage classes resolved from target cluster", "tenant", tenantName)
+		}
 	}
 
 	// Inject storage tier definitions and backend connections for JIT storage

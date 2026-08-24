@@ -11,6 +11,7 @@ Unless required by applicable law or agreed to in writing, software distributed 
 specific language governing permissions and limitations under the License.
 */}}
 
+{{- if not .Values.consoleProxy.disabled }}
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
@@ -28,3 +29,4 @@ spec:
   secretName: fulfillment-console-proxy-tls
   privateKey:
     rotationPolicy: Always
+{{- end }}

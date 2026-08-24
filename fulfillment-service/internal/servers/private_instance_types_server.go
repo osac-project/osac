@@ -145,16 +145,6 @@ func (s *PrivateInstanceTypesServer) Create(ctx context.Context,
 		return
 	}
 
-	// Validate required spec fields:
-	if spec.GetCores() <= 0 {
-		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.cores' must be greater than zero")
-		return
-	}
-	if spec.GetMemoryGib() <= 0 {
-		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.memory_gib' must be greater than zero")
-		return
-	}
-
 	// Set id from metadata.name (name-as-primary-key per Phase 1 D-01):
 	request.GetObject().SetId(request.GetObject().GetMetadata().GetName())
 

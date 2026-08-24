@@ -1,0 +1,5 @@
+apiVersion: v2
+name: osac-deps
+description: CRD providers for OSAC (OLM subscriptions on OpenShift, upstream Helm on Kind)
+type: application
+version: 0.0.1

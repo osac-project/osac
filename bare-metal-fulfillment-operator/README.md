@@ -195,21 +195,15 @@ make deploy IMG=<some-registry>/bare-metal-fulfillment-operator:tag
 
 **Create instances of your solution**
 
-You can apply the samples (examples) from the config/sample:
-
-``` sh
-kubectl apply -k config/samples/
-```
-
-> **NOTE**: Ensure that the samples has default values to test it out.
+BareMetalPool / BareMetalInstance resources are provisioned and managed by the
+[fulfillment service](../fulfillment-service/), not applied by hand — drive them
+through its API.
 
 ### To Uninstall
 
 **Delete the instances (CRs) from the cluster:**
 
-``` sh
-kubectl delete -k config/samples/
-```
+Delete resources through the fulfillment service that created them.
 
 **Delete the APIs(CRDs) from the cluster:**
 

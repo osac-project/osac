@@ -120,7 +120,6 @@ func RenderVirtualNetwork(w io.Writer, vn *publicv1.VirtualNetwork) {
 
 	fmt.Fprintf(writer, "ID:\t%s\n", vn.GetId())
 	fmt.Fprintf(writer, "Name:\t%s\n", name)
-	fmt.Fprintf(writer, "Network Class:\t%s\n", vn.GetSpec().GetNetworkClass())
 	fmt.Fprintf(writer, "IPv4 CIDR:\t%s\n", ipv4Cidr)
 	fmt.Fprintf(writer, "IPv6 CIDR:\t%s\n", ipv6Cidr)
 	fmt.Fprintf(writer, "State:\t%s\n", state)

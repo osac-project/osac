@@ -35,20 +35,21 @@ spec:
 
             AAP_URL="http://{{ .Values.aap.aap.instance.name }}"
 
-            echo "Looking up osac-publish-templates job template..."
+            TEMPLATE_NAME="{{ .Values.operator.aap.templatePrefix | default "osac" }}-publish-templates"
+            echo "Looking up ${TEMPLATE_NAME} job template..."
             JT_RESPONSE=$(curl -sf -H "Authorization: Bearer ${AAP_TOKEN}" \
-              "${AAP_URL}/api/controller/v2/job_templates/?name=osac-publish-templates")
+              "${AAP_URL}/api/controller/v2/job_templates/?name=${TEMPLATE_NAME}")
             JT_ID=$(echo "${JT_RESPONSE}" | python3 -c "
             import sys, json
             data = json.load(sys.stdin)
             if data['count'] == 0:
-                print('ERROR: osac-publish-templates not found in AAP', file=sys.stderr)
+                print('ERROR: ${TEMPLATE_NAME} not found in AAP', file=sys.stderr)
                 sys.exit(1)
             print(data['results'][0]['id'])
             ")
             echo "Job template ID: ${JT_ID}"
 
-            echo "Launching osac-publish-templates..."
+            echo "Launching ${TEMPLATE_NAME}..."
             LAUNCH_RESPONSE=$(curl -sf -X POST \
               -H "Authorization: Bearer ${AAP_TOKEN}" \
               -H "Content-Type: application/json" \
@@ -91,6 +92,8 @@ spec:
         env:
         - name: HOME
           value: /tmp
+        - name: OSAC_AAP_TEMPLATE_PREFIX
+          value: {{ .Values.operator.aap.templatePrefix | default "osac" | quote }}
         volumeMounts:
         - name: tmp
           mountPath: /tmp

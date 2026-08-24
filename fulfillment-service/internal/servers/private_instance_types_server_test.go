@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"time"
 
+	"buf.build/go/protovalidate"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
@@ -931,6 +932,70 @@ var _ = Describe("Private instance types server", func() {
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				Expect(getResponse.GetObject().GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
+			})
+		})
+
+		// Field-level validation (cores, memory_gib) is enforced by the
+		// protovalidate interceptor, not the server handler. Unit tests bypass the
+		// interceptor chain, so those constraints cannot be covered here. See
+		// internal/validation/protovalidate_interceptor_test.go for coverage.
+
+		Describe("Cores and memory validation", func() {
+			var validator protovalidate.Validator
+
+			BeforeEach(func() {
+				var err error
+				validator, err = protovalidate.New()
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			It("Accepts valid cores and memory_gib", func() {
+				spec := privatev1.InstanceTypeSpec_builder{
+					Cores:     4,
+					MemoryGib: 16,
+				}.Build()
+				err := validator.Validate(spec)
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			It("Rejects cores equal to zero", func() {
+				spec := privatev1.InstanceTypeSpec_builder{
+					Cores:     0,
+					MemoryGib: 16,
+				}.Build()
+				err := validator.Validate(spec)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("cores"))
+			})
+
+			It("Rejects memory_gib equal to zero", func() {
+				spec := privatev1.InstanceTypeSpec_builder{
+					Cores:     4,
+					MemoryGib: 0,
+				}.Build()
+				err := validator.Validate(spec)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("memory_gib"))
+			})
+
+			It("Rejects negative cores", func() {
+				spec := privatev1.InstanceTypeSpec_builder{
+					Cores:     -1,
+					MemoryGib: 16,
+				}.Build()
+				err := validator.Validate(spec)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("cores"))
+			})
+
+			It("Rejects negative memory_gib", func() {
+				spec := privatev1.InstanceTypeSpec_builder{
+					Cores:     4,
+					MemoryGib: -1,
+				}.Build()
+				err := validator.Validate(spec)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("memory_gib"))
 			})
 		})
 

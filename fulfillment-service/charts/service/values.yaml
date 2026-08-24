@@ -109,6 +109,7 @@ log:
 # Image configuration:
 images:
   service: ghcr.io/osac/fulfillment-service:main  # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
+  pullPolicy: IfNotPresent
   envoy: docker.io/envoyproxy/envoy:v1.37.1
 
 # Database connection configuration. The service expects an external PostgreSQL database to be available. The database
@@ -223,3 +224,6 @@ vault:
 
   # Volume sources for the Keycloak client secret used for Vault authentication.
   credentials: []
+
+consoleProxy:
+  disabled: false

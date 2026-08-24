@@ -8,6 +8,39 @@
       "type": "string",
       "description": "Default OpenShift CLI image used by hook jobs"
     },
+    "dbInit": {
+      "type": "object",
+      "description": "Shared PostgreSQL host for the db-init hook",
+      "properties": {
+        "host": {
+          "type": "string",
+          "description": "PostgreSQL host for db-init hook",
+          "default": "postgres.osac-infra.svc.cluster.local"
+        }
+      }
+    },
+    "kafka": {
+      "type": "object",
+      "description": "Kafka cluster coordinates for per-instance topic/user creation",
+      "properties": {
+        "clusterName": {
+          "type": "string",
+          "description": "Strimzi Kafka cluster name",
+          "default": "osac-kafka"
+        },
+        "clusterNamespace": {
+          "type": "string",
+          "description": "Namespace of the Kafka cluster",
+          "default": "osac-kafka"
+        },
+        "replicas": {
+          "type": "integer",
+          "description": "Kafka broker replica count (drives topic replication factor)",
+          "default": 3,
+          "minimum": 1
+        }
+      }
+    },
     "operatorCrds": {
       "type": "object",
       "description": "OSAC Operator CRDs configuration",
@@ -23,6 +56,11 @@
       "type": "object",
       "description": "OSAC Operator configuration",
       "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Deploy the OSAC operator",
+          "default": true
+        },
         "image": {
           "type": "object",
           "properties": {
@@ -204,6 +242,11 @@
         "certs"
       ],
       "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Deploy the fulfillment service",
+          "default": true
+        },
         "externalHostname": {
           "type": "string",
           "minLength": 1,
@@ -1249,6 +1292,41 @@
             }
           }
         },
+        "testBackend": {
+          "type": "object",
+          "description": "Kind/IT only: seeds a fake backend so BMF can run without real OpenStack/Ironic",
+          "properties": {
+            "metal3": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "description": "Seed osac-inventory-config/osac-management-config pointed at the metal3 backend",
+                  "default": false
+                },
+                "namespace": {
+                  "type": "string",
+                  "description": "Namespace containing the fake BareMetalHost objects (defaults to the release namespace if empty)",
+                  "default": ""
+                },
+                "secretNames": {
+                  "type": "object",
+                  "description": "Names for the fake inventory/management Secrets this seeds -- distinct from bmf.secrets.* on purpose, see values.yaml",
+                  "properties": {
+                    "inventoryConfig": {
+                      "type": "string",
+                      "default": "osac-inventory-config-metal3-test"
+                    },
+                    "managementConfig": {
+                      "type": "string",
+                      "default": "osac-management-config-metal3-test"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
         "configMaps": {
           "type": "object",
           "description": "Names of ConfigMaps mounted into the operator pod",
@@ -1311,61 +1389,6 @@
         }
       }
     },
-    "bundledPostgres": {
-      "type": "object",
-      "description": "Bundled PostgreSQL for CI/dev (ephemeral, not for production)",
-      "properties": {
-        "enabled": {
-          "type": "boolean",
-          "default": false
-        },
-        "database": {
-          "type": "object",
-          "properties": {
-            "name": {
-              "type": "string",
-              "default": "service"
-            },
-            "user": {
-              "type": "string",
-              "default": "service"
-            }
-          }
-        },
-        "resources": {
-          "type": "object",
-          "description": "Container resource requests and limits",
-          "properties": {
-            "limits": {
-              "type": "object",
-              "properties": {
-                "cpu": {
-                  "type": "string",
-                  "description": "CPU limit"
-                },
-                "memory": {
-                  "type": "string",
-                  "description": "Memory limit"
-                }
-              }
-            },
-            "requests": {
-              "type": "object",
-              "properties": {
-                "cpu": {
-                  "type": "string",
-                  "description": "CPU request"
-                },
-                "memory": {
-                  "type": "string",
-                  "description": "Memory request"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "clusterVersions": {
       "type": "object",
       "description": "Seed ClusterVersion records in the fulfillment-service after install",
@@ -1414,5 +1437,6 @@
         }
       }
     }
-  }
+  },
+  "required": []
 }

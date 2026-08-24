@@ -62,9 +62,14 @@ ginkgo run -r internal --skip="database"
 # Lint
 uv run dev.py lint
 
-# Proto: lint and generate
-uv run dev.py lint proto
+# Proto: full build pipeline (public from private, lint, generate)
+uv run dev.py build protos
+
+# Proto: incremental - just generate Go code (skip public proto generation)
 buf generate
+
+# Proto: just lint
+uv run dev.py lint proto
 
 # Run all tests including integration (requires kind cluster)
 ginkgo run -r
@@ -73,17 +78,14 @@ ginkgo run -r
 ### Integration Tests
 
 ```bash
-# Run integration tests (creates a kind cluster)
-ginkgo run it
+# Create Kind cluster + deploy infrastructure
+make -C ../osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac
 
-# Preserve cluster for debugging
-IT_KEEP_KIND=true ginkgo run it
+# Build image, deploy fulfillment-service via osac chart, run tests
+make -C ../osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment
 
-# Run only setup (create cluster without tests)
-IT_KEEP_KIND=true ginkgo run --label-filter=setup it
-
-# Clean up preserved cluster
-kind delete cluster --name fulfillment-service-it
+# Clean up
+make -C ../osac-installer uninstall PLATFORM=kind PROFILE=dev NS=osac
 ```
 
 Requires `/etc/hosts` entries:
@@ -100,7 +102,10 @@ uv run dev.py lint
 # Lint proto files
 uv run dev.py lint proto
 
-# Generate Go code from proto
+# Full proto build pipeline (generate public from private, lint, generate Go code)
+uv run dev.py build protos
+
+# Incremental: just generate Go code from proto (skip public proto generation)
 buf generate
 
 # Regenerate mocks
@@ -113,7 +118,18 @@ uv run ruff check
 go mod tidy
 ```
 
-**CRITICAL**: Always run `uv run dev.py lint proto && buf generate` after any `.proto` file change. Generated code lands in `internal/api/` (never edit manually). Buf is installed via `buf-action` in CI (see the root-level `.github/workflows/check-pull-request.yaml`); for local use, install buf separately following the [official installation guide](https://buf.build/docs/installation).
+**CRITICAL**: After any `.proto` file change:
+- Run `uv run dev.py build protos` for the complete workflow (generates public API from private API, lints, and generates Go code)
+- Or run `uv run dev.py lint proto && buf generate` for incremental builds (skips public proto generation)
+
+Generated code lands in `internal/api/` (never edit manually).
+
+**Proto Workflow**:
+- **Private protos** (`proto/private/`): Full API with internal implementation details. Some resources have `[(cleanapi.field).private = true]` annotations to filter sensitive fields from the public API.
+- **Public protos** (`proto/public/`): Generated from private protos using protoc-gen-cleanapi. Private fields/messages are removed. This is the API published to buf.build.
+- **cleanapi**: The proto file defining annotations is exported from `buf.build/cleanapi/cleanapi:v0.0.7` to `.buf/deps/cleanapi` when running `uv run dev.py build protos`. This directory is gitignored and not committed.
+
+Buf and protoc are installed separately - see the [buf installation guide](https://buf.build/docs/installation) and install protoc with `brew install protobuf` on macOS.
 
 For extending `dev.py` with new commands, see [dev/README.md](dev/README.md).
 
@@ -142,7 +158,7 @@ running tests with specific options, or installing a tool), refer to [dev/README
 - `internal/database/migrations/` - SQL migration files
 - `internal/auth/` - Authentication, tenancy, and attribution logic
 - `internal/controllers/` - Kubernetes controllers
-- `internal/testing/` - Test utilities (test server, database helpers, kind helpers)
+- `internal/testing/` - Test utilities (test server, database helpers)
 - `it/` - Integration tests
 - `charts/` - Helm charts
 
@@ -151,12 +167,14 @@ running tests with specific options, or installing a tool), refer to [dev/README
 Protos are split into public and private APIs under `proto/`:
 
 ```text
-proto/public/osac/public/v1/   - User-facing API (read-heavy, limited write)
-proto/private/osac/private/v1/ - Admin/controller API (full CRUD + Signal RPC)
-proto/tests/osac/tests/v1/     - Test-only proto definitions
+proto/public/osac/public/v1/          - User-facing API (generated from private)
+proto/private/osac/private/v1/        - Admin/controller API (source of truth, full CRUD + Signal RPC)
+proto/tests/osac/tests/v1/            - Test-only proto definitions
 ```
 
 Each resource has `<resource>_type.proto` (message definitions) and `<resource>s_service.proto` (RPC methods). Generated Go code lands in `internal/api/osac/{public,private}/v1/`.
+
+**Public from Private**: The public API is generated from private API using protoc-gen-cleanapi. Fields/messages marked with `[(cleanapi.field).private = true]` are filtered out. Run `uv run dev.py build protos` to regenerate public protos after changing private protos with cleanapi annotations.
 
 ### Server Implementation Pattern
 
@@ -284,7 +302,6 @@ As with any proto change, run `uv run dev.py lint proto && buf generate` afterwa
 - `SERVICE_SUFFIX` lint rule is intentionally excluded in `buf.yaml`
 - Unit tests: run `ginkgo run -r internal` (not `ginkgo run -r`) to avoid triggering integration tests
 - CI timeout: 1 hour for unit and integration test runs
-- Integration test logs uploaded as `logs-helm` and `logs-kustomize` artifacts (always, even on failure)
 
 See [Linting and Code Generation](#linting-and-code-generation) for the required `uv run dev.py lint proto && buf generate` step, and [Files Requiring Extra Caution](#files-requiring-extra-caution) for generated paths that must never be hand-edited.
 
@@ -299,7 +316,7 @@ See [Linting and Code Generation](#linting-and-code-generation) for the required
 
 ### Verify Before Changing
 
-- `charts/` and `it/charts/` - maintained Helm chart sources, not generated; call out the change explicitly in the PR description so a reviewer from [OWNERS](OWNERS) can confirm it's intentional
+- `charts/` - maintained Helm chart sources, not generated; call out the change explicitly in the PR description so a reviewer from [OWNERS](OWNERS) can confirm it's intentional
 - `proto/**/*.proto` - changes cascade to generated code (see [Linting and Code Generation](#linting-and-code-generation))
 - `internal/database/migrations/*.up.sql` - existing migrations must never be modified; only add new numbered files
 - `.goreleaser.yaml`, `buf.yaml`, `buf.gen.yaml` - infrastructure config; call out the change explicitly in the PR description so a reviewer from [OWNERS](OWNERS) can confirm it's intentional (pre-commit/yamllint config now lives in the root-level `.pre-commit-config.yaml`/`.yamllint.yaml`, not here)

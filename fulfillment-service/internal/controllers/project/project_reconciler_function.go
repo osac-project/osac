@@ -430,8 +430,10 @@ func (t *task) deleteProjectMemberships(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 
+	var deletedAny bool
 	for _, membership := range listResp.GetItems() {
 		if membership.HasMetadata() && membership.GetMetadata().HasDeletionTimestamp() {
+			// Already being deleted, will signal us when done
 			continue
 		}
 		t.r.logger.InfoContext(ctx, "Cascade-deleting project membership",
@@ -444,9 +446,11 @@ func (t *task) deleteProjectMemberships(ctx context.Context) (bool, error) {
 		if err != nil && status.Code(err) != codes.NotFound {
 			return true, fmt.Errorf("failed to delete project membership %s: %w", membership.GetId(), err)
 		}
+		deletedAny = true
 	}
 
-	return true, nil
+	// Only wait if we actually triggered new deletions
+	return deletedAny, nil
 }
 
 // setDefaults sets default values for the project.

@@ -162,7 +162,6 @@ var _ = Describe("Reflection helper", func() {
 				"identityprovider",
 				"instancetype",
 				"natgateway",
-				"networkclass",
 				"project",
 				"projectmembership",
 				"role",
@@ -195,7 +194,6 @@ var _ = Describe("Reflection helper", func() {
 				"identityproviders",
 				"instancetypes",
 				"natgateways",
-				"networkclasses",
 				"projectmemberships",
 				"projects",
 				"roles",
@@ -751,7 +749,6 @@ var _ = Describe("Reflection helper", func() {
 		It("Reports platform-scoped types correctly", func() {
 			Expect(helper.Lookup("hosttype").IsTenantScoped()).To(BeFalse())
 			Expect(helper.Lookup("tenant").IsTenantScoped()).To(BeFalse())
-			Expect(helper.Lookup("networkclass").IsTenantScoped()).To(BeFalse())
 			Expect(helper.Lookup("role").IsTenantScoped()).To(BeFalse())
 		})
 

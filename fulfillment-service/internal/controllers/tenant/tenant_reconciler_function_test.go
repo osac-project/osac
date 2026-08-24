@@ -21,7 +21,6 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
-	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
@@ -1152,7 +1151,16 @@ var _ = Describe("Default networking readiness", func() {
 				},
 			}.Build(), nil)
 		mockSGs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
-			privatev1.SecurityGroupsListResponse_builder{}.Build(), nil)
+			privatev1.SecurityGroupsListResponse_builder{
+				Items: []*privatev1.SecurityGroup{
+					privatev1.SecurityGroup_builder{
+						Metadata: privatev1.Metadata_builder{Name: "default"}.Build(),
+						Status: privatev1.SecurityGroupStatus_builder{
+							State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
+						}.Build(),
+					}.Build(),
+				},
+			}.Build(), nil)
 		mockNGs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
 			privatev1.NATGatewaysListResponse_builder{}.Build(), nil)
 
@@ -1184,9 +1192,27 @@ var _ = Describe("Default networking readiness", func() {
 				},
 			}.Build(), nil)
 		mockSubnets.EXPECT().List(gomock.Any(), gomock.Any()).Return(
-			privatev1.SubnetsListResponse_builder{}.Build(), nil)
+			privatev1.SubnetsListResponse_builder{
+				Items: []*privatev1.Subnet{
+					privatev1.Subnet_builder{
+						Metadata: privatev1.Metadata_builder{Name: "default-ipv4"}.Build(),
+						Status: privatev1.SubnetStatus_builder{
+							State: privatev1.SubnetState_SUBNET_STATE_READY,
+						}.Build(),
+					}.Build(),
+				},
+			}.Build(), nil)
 		mockSGs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
-			privatev1.SecurityGroupsListResponse_builder{}.Build(), nil)
+			privatev1.SecurityGroupsListResponse_builder{
+				Items: []*privatev1.SecurityGroup{
+					privatev1.SecurityGroup_builder{
+						Metadata: privatev1.Metadata_builder{Name: "default"}.Build(),
+						Status: privatev1.SecurityGroupStatus_builder{
+							State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
+						}.Build(),
+					}.Build(),
+				},
+			}.Build(), nil)
 		mockNGs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
 			privatev1.NATGatewaysListResponse_builder{}.Build(), nil)
 
@@ -1229,7 +1255,16 @@ var _ = Describe("Default networking readiness", func() {
 				},
 			}.Build(), nil)
 		mockSGs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
-			privatev1.SecurityGroupsListResponse_builder{}.Build(), nil)
+			privatev1.SecurityGroupsListResponse_builder{
+				Items: []*privatev1.SecurityGroup{
+					privatev1.SecurityGroup_builder{
+						Metadata: privatev1.Metadata_builder{Name: "default"}.Build(),
+						Status: privatev1.SecurityGroupStatus_builder{
+							State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
+						}.Build(),
+					}.Build(),
+				},
+			}.Build(), nil)
 		mockNGs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
 			privatev1.NATGatewaysListResponse_builder{}.Build(), nil)
 
@@ -1293,8 +1328,6 @@ var _ = Describe("Default networking provisioning", func() {
 		mockSGs     *MockSecurityGroupsClient
 		mockNGs     *MockNATGatewaysClient
 		mockNCs     *MockNetworkClassesClient
-		mockEIPPs   *MockExternalIPPoolsClient
-		mockEIPs    *MockExternalIPsClient
 		reconciler  *function
 	)
 
@@ -1359,8 +1392,6 @@ var _ = Describe("Default networking provisioning", func() {
 		mockSGs = NewMockSecurityGroupsClient(ctrl)
 		mockNGs = NewMockNATGatewaysClient(ctrl)
 		mockNCs = NewMockNetworkClassesClient(ctrl)
-		mockEIPPs = NewMockExternalIPPoolsClient(ctrl)
-		mockEIPs = NewMockExternalIPsClient(ctrl)
 
 		mockClient := idp.NewMockClientInterface(ctrl)
 		idpManager, err := idp.NewTenantManager().
@@ -1377,12 +1408,10 @@ var _ = Describe("Default networking provisioning", func() {
 			securityGroupsClient:  mockSGs,
 			natGatewaysClient:     mockNGs,
 			networkClassesClient:  mockNCs,
-			externalIPPoolsClient: mockEIPPs,
-			externalIPsClient:     mockEIPs,
 		}
 	})
 
-	It("provisions default networking when default NetworkClass exists", func() {
+	It("sets ResourcesPending when resources are missing and NC exists", func() {
 		tenant := newSyncedTenant("prov-tenant")
 		expectEmptyLists()
 
@@ -1390,41 +1419,6 @@ var _ = Describe("Default networking provisioning", func() {
 			privatev1.NetworkClassesListResponse_builder{
 				Items: []*privatev1.NetworkClass{defaultNC()},
 			}.Build(), nil)
-
-		mockVNs.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
-			func(_ context.Context, req *privatev1.VirtualNetworksCreateRequest, _ ...grpc.CallOption) (*privatev1.VirtualNetworksCreateResponse, error) {
-				vn := req.GetObject()
-				Expect(vn.GetMetadata().GetName()).To(Equal("default"))
-				Expect(vn.GetMetadata().GetTenant()).To(Equal("prov-tenant"))
-				Expect(vn.GetMetadata().GetLabels()).To(HaveKeyWithValue("osac.openshift.io/default", "true"))
-				Expect(vn.GetMetadata().GetCreator()).To(Equal("system"))
-				Expect(vn.GetSpec().GetNetworkClass().GetId()).To(Equal("nc-1"))
-				Expect(vn.GetSpec().GetIpv4Cidr()).To(Equal("10.0.0.0/16"))
-				return privatev1.VirtualNetworksCreateResponse_builder{
-					Object: privatev1.VirtualNetwork_builder{
-						Id: "vn-1",
-					}.Build(),
-				}.Build(), nil
-			})
-
-		mockSubnets.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
-			func(_ context.Context, req *privatev1.SubnetsCreateRequest, _ ...grpc.CallOption) (*privatev1.SubnetsCreateResponse, error) {
-				s := req.GetObject()
-				Expect(s.GetMetadata().GetName()).To(Equal("default-ipv4"))
-				Expect(s.GetMetadata().GetTenant()).To(Equal("prov-tenant"))
-				Expect(s.GetSpec().GetVirtualNetwork().GetId()).To(Equal("vn-1"))
-				Expect(s.GetSpec().GetIpv4Cidr()).To(Equal("10.0.1.0/24"))
-				return privatev1.SubnetsCreateResponse_builder{}.Build(), nil
-			})
-
-		mockSGs.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
-			func(_ context.Context, req *privatev1.SecurityGroupsCreateRequest, _ ...grpc.CallOption) (*privatev1.SecurityGroupsCreateResponse, error) {
-				sg := req.GetObject()
-				Expect(sg.GetMetadata().GetName()).To(Equal("default"))
-				Expect(sg.GetMetadata().GetTenant()).To(Equal("prov-tenant"))
-				Expect(sg.GetSpec().GetVirtualNetwork().GetId()).To(Equal("vn-1"))
-				return privatev1.SecurityGroupsCreateResponse_builder{}.Build(), nil
-			})
 
 		t := &task{r: reconciler, tenant: tenant}
 		t.setDefaults()
@@ -1435,6 +1429,7 @@ var _ = Describe("Default networking provisioning", func() {
 		cond := findCondition(tenant)
 		Expect(cond).ToNot(BeNil())
 		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		Expect(cond.GetReason()).To(Equal("ResourcesPending"))
 	})
 
 	It("sets NoDefaultNetworking when NetworkClass has no defaults", func() {
@@ -1482,227 +1477,6 @@ var _ = Describe("Default networking provisioning", func() {
 		Expect(cond.GetReason()).To(Equal("NoDefaultNetworking"))
 	})
 
-	It("sets ProvisioningFailed condition when VN creation fails", func() {
-		tenant := newSyncedTenant("fail-tenant")
-		expectEmptyLists()
-
-		mockNCs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
-			privatev1.NetworkClassesListResponse_builder{
-				Items: []*privatev1.NetworkClass{defaultNC()},
-			}.Build(), nil)
-
-		mockVNs.EXPECT().Create(gomock.Any(), gomock.Any()).Return(
-			nil, fmt.Errorf("database error"))
-
-		t := &task{r: reconciler, tenant: tenant}
-		t.setDefaults()
-		t.setConditionDefaults()
-		err := t.checkDefaultNetworkingReadiness(ctx)
-		Expect(err).ToNot(HaveOccurred())
-
-		cond := findCondition(tenant)
-		Expect(cond).ToNot(BeNil())
-		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
-		Expect(cond.GetReason()).To(Equal("ProvisioningFailed"))
-		Expect(cond.GetMessage()).To(ContainSubstring("VirtualNetwork"))
-	})
-
-	It("creates NATGateway when ExternalIP becomes ALLOCATED", func() {
-		tenant := newSyncedTenant("nat-tenant")
-
-		ncWithNAT := privatev1.NetworkClass_builder{
-			Id: "nc-nat",
-			Spec: privatev1.NetworkClassSpec_builder{
-				Defaults: privatev1.NetworkDefaults_builder{
-					VirtualNetworkIpv4Cidr: "10.0.0.0/16",
-					SubnetIpv4Cidr:         "10.0.1.0/24",
-					EnableNatGateway:       true,
-				}.Build(),
-			}.Build(),
-		}.Build()
-
-		mockNCs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
-			privatev1.NetworkClassesListResponse_builder{
-				Items: []*privatev1.NetworkClass{ncWithNAT},
-			}.Build(), nil)
-
-		mockVNs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
-			privatev1.VirtualNetworksListResponse_builder{
-				Items: []*privatev1.VirtualNetwork{
-					privatev1.VirtualNetwork_builder{
-						Id:       "vn-1",
-						Metadata: privatev1.Metadata_builder{Name: "default"}.Build(),
-						Status: privatev1.VirtualNetworkStatus_builder{
-							State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
-						}.Build(),
-					}.Build(),
-				},
-			}.Build(), nil)
-		mockSubnets.EXPECT().List(gomock.Any(), gomock.Any()).Return(
-			privatev1.SubnetsListResponse_builder{
-				Items: []*privatev1.Subnet{
-					privatev1.Subnet_builder{
-						Metadata: privatev1.Metadata_builder{Name: "default-ipv4"}.Build(),
-						Status: privatev1.SubnetStatus_builder{
-							State: privatev1.SubnetState_SUBNET_STATE_READY,
-						}.Build(),
-					}.Build(),
-				},
-			}.Build(), nil)
-		mockSGs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
-			privatev1.SecurityGroupsListResponse_builder{
-				Items: []*privatev1.SecurityGroup{
-					privatev1.SecurityGroup_builder{
-						Metadata: privatev1.Metadata_builder{Name: "default"}.Build(),
-						Status: privatev1.SecurityGroupStatus_builder{
-							State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
-						}.Build(),
-					}.Build(),
-				},
-			}.Build(), nil)
-		mockNGs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
-			privatev1.NATGatewaysListResponse_builder{}.Build(), nil)
-
-		mockEIPs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
-			privatev1.ExternalIPsListResponse_builder{
-				Items: []*privatev1.ExternalIP{
-					privatev1.ExternalIP_builder{
-						Id:       "eip-1",
-						Metadata: privatev1.Metadata_builder{Name: "default-nat"}.Build(),
-						Status: privatev1.ExternalIPStatus_builder{
-							State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED,
-						}.Build(),
-					}.Build(),
-				},
-			}.Build(), nil)
-
-		mockNGs.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
-			func(_ context.Context, req *privatev1.NATGatewaysCreateRequest, _ ...grpc.CallOption) (*privatev1.NATGatewaysCreateResponse, error) {
-				ng := req.GetObject()
-				Expect(ng.GetMetadata().GetName()).To(Equal("default"))
-				Expect(ng.GetMetadata().GetTenant()).To(Equal("nat-tenant"))
-				Expect(ng.GetSpec().GetVirtualNetwork().GetId()).To(Equal("vn-1"))
-				Expect(ng.GetSpec().GetExternalIp().GetId()).To(Equal("eip-1"))
-				return privatev1.NATGatewaysCreateResponse_builder{}.Build(), nil
-			})
-
-		t := &task{r: reconciler, tenant: tenant}
-		t.setDefaults()
-		t.setConditionDefaults()
-		err := t.checkDefaultNetworkingReadiness(ctx)
-		Expect(err).ToNot(HaveOccurred())
-	})
-
-	It("provisions ExternalIP when NAT gateway is enabled", func() {
-		tenant := newSyncedTenant("nat-prov-tenant")
-		expectEmptyLists()
-
-		ncWithNAT := privatev1.NetworkClass_builder{
-			Id: "nc-nat",
-			Spec: privatev1.NetworkClassSpec_builder{
-				Defaults: privatev1.NetworkDefaults_builder{
-					VirtualNetworkIpv4Cidr: "10.0.0.0/16",
-					SubnetIpv4Cidr:         "10.0.1.0/24",
-					EnableNatGateway:       true,
-				}.Build(),
-			}.Build(),
-		}.Build()
-
-		mockNCs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
-			privatev1.NetworkClassesListResponse_builder{
-				Items: []*privatev1.NetworkClass{ncWithNAT},
-			}.Build(), nil)
-
-		mockVNs.EXPECT().Create(gomock.Any(), gomock.Any()).Return(
-			privatev1.VirtualNetworksCreateResponse_builder{
-				Object: privatev1.VirtualNetwork_builder{Id: "vn-1"}.Build(),
-			}.Build(), nil)
-		mockSubnets.EXPECT().Create(gomock.Any(), gomock.Any()).Return(
-			privatev1.SubnetsCreateResponse_builder{}.Build(), nil)
-		mockSGs.EXPECT().Create(gomock.Any(), gomock.Any()).Return(
-			privatev1.SecurityGroupsCreateResponse_builder{}.Build(), nil)
-
-		mockEIPs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
-			privatev1.ExternalIPsListResponse_builder{}.Build(), nil)
-
-		mockEIPPs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
-			privatev1.ExternalIPPoolsListResponse_builder{
-				Items: []*privatev1.ExternalIPPool{
-					privatev1.ExternalIPPool_builder{
-						Id: "pool-1",
-						Status: privatev1.ExternalIPPoolStatus_builder{
-							State:     privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY,
-							Available: 5,
-						}.Build(),
-					}.Build(),
-				},
-			}.Build(), nil)
-
-		mockEIPs.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
-			func(_ context.Context, req *privatev1.ExternalIPsCreateRequest, _ ...grpc.CallOption) (*privatev1.ExternalIPsCreateResponse, error) {
-				eip := req.GetObject()
-				Expect(eip.GetMetadata().GetName()).To(Equal("default-nat"))
-				Expect(eip.GetSpec().GetPool().GetId()).To(Equal("pool-1"))
-				return privatev1.ExternalIPsCreateResponse_builder{}.Build(), nil
-			})
-
-		t := &task{r: reconciler, tenant: tenant}
-		t.setDefaults()
-		t.setConditionDefaults()
-		err := t.checkDefaultNetworkingReadiness(ctx)
-		Expect(err).ToNot(HaveOccurred())
-	})
-
-	It("creates missing subnet when VN already exists (self-healing)", func() {
-		tenant := newSyncedTenant("heal-tenant")
-
-		mockNCs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
-			privatev1.NetworkClassesListResponse_builder{
-				Items: []*privatev1.NetworkClass{defaultNC()},
-			}.Build(), nil)
-
-		mockVNs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
-			privatev1.VirtualNetworksListResponse_builder{
-				Items: []*privatev1.VirtualNetwork{
-					privatev1.VirtualNetwork_builder{
-						Id:       "vn-1",
-						Metadata: privatev1.Metadata_builder{Name: "default"}.Build(),
-						Status: privatev1.VirtualNetworkStatus_builder{
-							State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
-						}.Build(),
-					}.Build(),
-				},
-			}.Build(), nil)
-		mockSubnets.EXPECT().List(gomock.Any(), gomock.Any()).Return(
-			privatev1.SubnetsListResponse_builder{}.Build(), nil)
-		mockSGs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
-			privatev1.SecurityGroupsListResponse_builder{
-				Items: []*privatev1.SecurityGroup{
-					privatev1.SecurityGroup_builder{
-						Metadata: privatev1.Metadata_builder{Name: "default"}.Build(),
-						Status: privatev1.SecurityGroupStatus_builder{
-							State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
-						}.Build(),
-					}.Build(),
-				},
-			}.Build(), nil)
-		mockNGs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
-			privatev1.NATGatewaysListResponse_builder{}.Build(), nil)
-
-		mockSubnets.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
-			func(_ context.Context, req *privatev1.SubnetsCreateRequest, _ ...grpc.CallOption) (*privatev1.SubnetsCreateResponse, error) {
-				s := req.GetObject()
-				Expect(s.GetMetadata().GetName()).To(Equal("default-ipv4"))
-				Expect(s.GetSpec().GetVirtualNetwork().GetId()).To(Equal("vn-1"))
-				return privatev1.SubnetsCreateResponse_builder{}.Build(), nil
-			})
-
-		t := &task{r: reconciler, tenant: tenant}
-		t.setDefaults()
-		t.setConditionDefaults()
-		err := t.checkDefaultNetworkingReadiness(ctx)
-		Expect(err).ToNot(HaveOccurred())
-	})
 })
 
 var _ = Describe("Vault namespace provisioning", func() {

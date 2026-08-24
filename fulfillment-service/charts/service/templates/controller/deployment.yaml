@@ -120,6 +120,7 @@ spec:
       containers:
       - name: controller
         image: {{ .Values.images.service }}
+        imagePullPolicy: {{ .Values.images.pullPolicy }}
         volumeMounts:
         - name: cas
           mountPath: /etc/fulfillment-controller/tls/cas

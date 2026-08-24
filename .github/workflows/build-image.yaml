@@ -54,14 +54,9 @@ jobs:
         working-directory: osac-operator
         run: make test
 
-      - name: Validate kustomize configurations
+      - name: Lint Helm charts
         working-directory: osac-operator
-        run: make test-kustomize
-
-      - name: Run smoke test
-        timeout-minutes: 15
-        working-directory: osac-operator
-        run: make test-smoke
+        run: make helm-lint
 
   build:
     needs: test
@@ -156,32 +151,23 @@ jobs:
           echo "Full SHA tag: $FULL_SHA_TAG"
           echo "Manifest tag: $SHA_TAG-manifests"
 
-      # Set up Go for kustomize operations
-      - name: Set up Go for manifest generation
-        if: github.event_name != 'pull_request'
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: 'osac-operator/go.mod'
-
-      # Generate manifests with kustomize pointing to the SHA-tagged image
-      - name: Generate manifests with kustomize
+      # Generate manifests with helm template pointing to the SHA-tagged image
+      - name: Generate manifests with helm template
         if: github.event_name != 'pull_request'
         working-directory: osac-operator
+        env:
+          SHA_IMG: ${{ steps.sha-tag.outputs.full-sha-tag }}
         run: |
-          # Install kustomize
-          make kustomize
-
-          # Create dist directory
           mkdir -p dist
+          REPO="${SHA_IMG%%:*}"
+          TAG="${SHA_IMG##*:}"
+          helm template osac-operator-crds charts/operator-crds/ > dist/install.yaml
+          echo "---" >> dist/install.yaml
+          helm template osac-operator charts/operator/ \
+            --set image.repository="$REPO" \
+            --set image.tag="$TAG" >> dist/install.yaml
 
-          # Set the manager image to the SHA-tagged version
-          cd config/manager && ../../bin/kustomize edit set image controller=${{ steps.sha-tag.outputs.full-sha-tag }}
-
-          # Generate the complete manifest
-          cd ../..
-          ./bin/kustomize build config/default > dist/install.yaml
-
-          echo "Generated manifest with image: ${{ steps.sha-tag.outputs.full-sha-tag }}"
+          echo "Generated manifest with image: $SHA_IMG"
           echo "Manifest content preview:"
           head -20 dist/install.yaml
 

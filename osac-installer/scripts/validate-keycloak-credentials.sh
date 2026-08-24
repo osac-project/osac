@@ -18,7 +18,7 @@ python3 -c "import yaml" 2>/dev/null || {
 }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CHART_DIR="${SCRIPT_DIR}/../charts/osac-prereqs"
+CHART_DIR="${SCRIPT_DIR}/../charts/osac-infra"
 FAILURES=0
 
 fail() {

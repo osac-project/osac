@@ -247,3 +247,90 @@ var _ = Describe("findVersion", func() {
 		Expect(errors.As(err, &exitErr)).To(BeFalse())
 	})
 })
+
+var _ = Describe("Create cluster networking flags", func() {
+	It("should register --network-attachment flag", func() {
+		cmd := Cmd()
+		flag := cmd.Flags().Lookup("network-attachment")
+		Expect(flag).NotTo(BeNil())
+		Expect(flag.DefValue).To(Equal(""))
+	})
+
+	It("should register --external-ip-attachment flag", func() {
+		cmd := Cmd()
+		flag := cmd.Flags().Lookup("external-ip-attachment")
+		Expect(flag).NotTo(BeNil())
+		Expect(flag.Value.Type()).To(Equal("bool"))
+		Expect(flag.DefValue).To(Equal("false"))
+	})
+})
+
+var _ = Describe("parseClusterNetworkAttachmentFlag", func() {
+	It("returns error for empty string", func() {
+		_, err := parseClusterNetworkAttachmentFlag("")
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("parses a bare subnet name", func() {
+		na, err := parseClusterNetworkAttachmentFlag("my-subnet")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(na.GetSubnet().GetName()).To(Equal("my-subnet"))
+		Expect(na.GetSecurityGroups()).To(BeEmpty())
+	})
+
+	It("parses subnet=<name> explicit key", func() {
+		na, err := parseClusterNetworkAttachmentFlag("subnet=my-subnet")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(na.GetSubnet().GetName()).To(Equal("my-subnet"))
+		Expect(na.GetSecurityGroups()).To(BeEmpty())
+	})
+
+	It("parses subnet with one security group", func() {
+		na, err := parseClusterNetworkAttachmentFlag("subnet=my-subnet,security-groups=sg1")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(na.GetSubnet().GetName()).To(Equal("my-subnet"))
+		Expect(na.GetSecurityGroups()).To(HaveLen(1))
+		Expect(na.GetSecurityGroups()[0].GetName()).To(Equal("sg1"))
+	})
+
+	It("parses subnet with multiple security groups", func() {
+		na, err := parseClusterNetworkAttachmentFlag("subnet=my-subnet,security-groups=sg1,sg2")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(na.GetSubnet().GetName()).To(Equal("my-subnet"))
+		Expect(na.GetSecurityGroups()).To(HaveLen(2))
+		Expect(na.GetSecurityGroups()[0].GetName()).To(Equal("sg1"))
+		Expect(na.GetSecurityGroups()[1].GetName()).To(Equal("sg2"))
+	})
+
+	It("returns error when security-groups present but subnet missing", func() {
+		_, err := parseClusterNetworkAttachmentFlag(",security-groups=sg1")
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("subnet"))
+	})
+
+	It("returns error when subnet= key is present but value is empty", func() {
+		_, err := parseClusterNetworkAttachmentFlag("subnet=,security-groups=sg1")
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("empty"))
+	})
+
+	It("returns error for unknown key=value fragment", func() {
+		_, err := parseClusterNetworkAttachmentFlag("foo=bar")
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("unknown key"))
+	})
+
+	It("uses Name (not Id) on SubnetLocalReference", func() {
+		na, err := parseClusterNetworkAttachmentFlag("subnet=named-subnet")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(na.GetSubnet().GetName()).To(Equal("named-subnet"))
+		Expect(na.GetSubnet().GetId()).To(BeEmpty())
+	})
+
+	It("uses Name (not Id) on SecurityGroupLocalReference", func() {
+		na, err := parseClusterNetworkAttachmentFlag("subnet=s,security-groups=named-sg")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(na.GetSecurityGroups()[0].GetName()).To(Equal("named-sg"))
+		Expect(na.GetSecurityGroups()[0].GetId()).To(BeEmpty())
+	})
+})

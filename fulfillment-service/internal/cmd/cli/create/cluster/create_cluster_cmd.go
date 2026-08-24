@@ -35,6 +35,7 @@ import (
 
 	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/fieldutil"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/netutil"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/exit"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
@@ -139,6 +140,18 @@ func Cmd() *cobra.Command {
 		nil,
 		setFlagHelp,
 	)
+	flags.StringVar(
+		&runner.args.networkAttachment,
+		"network-attachment",
+		"",
+		networkAttachmentFlagHelp,
+	)
+	flags.BoolVar(
+		&runner.args.externalIPAttachment,
+		"external-ip-attachment",
+		false,
+		externalIPAttachmentFlagHelp,
+	)
 	result.MarkFlagsMutuallyExclusive("catalog-item", "template")
 	result.MarkFlagsOneRequired("catalog-item", "template")
 	return result
@@ -159,6 +172,8 @@ type runnerContext struct {
 		version                 string
 		podCIDR                 string
 		serviceCIDR             string
+		networkAttachment       string
+		externalIPAttachment    bool
 	}
 	logger                *slog.Logger
 	console               *terminal.Console
@@ -254,6 +269,9 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 			CatalogItem: &publicv1.ClusterCatalogItemReference{Name: c.args.catalogItem},
 		}
 		c.applyOptionalSpecFields(&specBuilder, pullSecret, sshPublicKey)
+		if err := c.applyNetworkingFlags(&specBuilder); err != nil {
+			return err
+		}
 		spec := specBuilder.Build()
 		if err := fieldutil.ApplyFields(spec, c.args.setFields); err != nil {
 			return err
@@ -290,6 +308,9 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		TemplateParameters: templateParameterValues,
 	}
 	c.applyOptionalSpecFields(&specBuilder, pullSecret, sshPublicKey)
+	if err := c.applyNetworkingFlags(&specBuilder); err != nil {
+		return err
+	}
 	return c.createCluster(ctx, specBuilder.Build())
 }
 
@@ -840,6 +861,75 @@ func (c *runnerContext) validTemplateParameters(template *publicv1.ClusterTempla
 	return results
 }
 
+// applyNetworkingFlags sets NetworkAttachment and AutoExternalIpAttachment on the spec
+// builder from CLI flags. Called from run() before Build(), on both code paths.
+func (c *runnerContext) applyNetworkingFlags(specBuilder *publicv1.ClusterSpec_builder) error {
+	specBuilder.AutoExternalIpAttachment = c.args.externalIPAttachment
+	if c.args.networkAttachment != "" {
+		na, err := parseClusterNetworkAttachmentFlag(c.args.networkAttachment)
+		if err != nil {
+			return err
+		}
+		specBuilder.NetworkAttachment = na
+	}
+	return nil
+}
+
+// parseClusterNetworkAttachmentFlag parses one --network-attachment value.
+// Accepted formats:
+//   - bare subnet name:  "my-subnet"
+//   - explicit key:      "subnet=my-subnet"
+//   - with security groups: "subnet=my-subnet,security-groups=sg1,sg2"
+//
+// Subnet and security-group values are treated as metadata names (name lookup).
+func parseClusterNetworkAttachmentFlag(s string) (*publicv1.ClusterNetworkAttachment, error) {
+	if strings.TrimSpace(s) == "" {
+		return nil, fmt.Errorf("empty --network-attachment value")
+	}
+
+	prefix, groups, _ := netutil.ExtractSecurityGroupListSuffix(s)
+
+	subnetName, err := parseClusterSubnetRef(prefix)
+	if err != nil {
+		return nil, err
+	}
+
+	builder := publicv1.ClusterNetworkAttachment_builder{
+		Subnet: publicv1.SubnetLocalReference_builder{Name: subnetName}.Build(),
+	}
+	for _, name := range groups {
+		builder.SecurityGroups = append(builder.SecurityGroups,
+			publicv1.SecurityGroupLocalReference_builder{Name: name}.Build())
+	}
+	return builder.Build(), nil
+}
+
+// parseClusterSubnetRef extracts the subnet name from the subnet portion of a
+// --network-attachment flag value (i.e. the part before any ",security-groups=" clause).
+// Accepts a bare name ("my-subnet") or an explicit key ("subnet=my-subnet").
+func parseClusterSubnetRef(s string) (string, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", fmt.Errorf("--network-attachment must include a subnet name")
+	}
+	lower := strings.ToLower(s)
+	if strings.HasPrefix(lower, "subnet=") {
+		name := strings.TrimSpace(s[len("subnet="):])
+		if name == "" {
+			return "", fmt.Errorf("--network-attachment subnet value is empty")
+		}
+		return name, nil
+	}
+	// Reject unrecognised key=value fragments so users get a clear error
+	// instead of silently treating "foo=bar" as a subnet name.
+	for _, fragment := range strings.Split(s, ",") {
+		if strings.Contains(fragment, "=") {
+			return "", fmt.Errorf("--network-attachment: unknown key in %q (expected subnet=<name>)", strings.TrimSpace(fragment))
+		}
+	}
+	return s, nil
+}
+
 const shortHelp = `Create a cluster`
 
 const longHelp = `
@@ -911,4 +1001,17 @@ _KEY=VALUE_ - Set a spec field or template parameter on the resource.
 Use dot notation for nested fields (e.g.
 {{ bt }}template_parameters.vpc_id=vpc-123{{ bt }}). Only supported
 with {{ bt }}--catalog-item{{ bt }}. Can be specified multiple times.
+`
+
+const networkAttachmentFlagHelp = `
+_[subnet=NAME[,security-groups=NAME,...]]_ - Connect the cluster to a tenant
+subnet. Accepts a bare subnet name or {{ bt }}subnet=<name>{{ bt }} with an
+optional {{ bt }}security-groups=<name>[,<name>...]{{ bt }} clause. All node
+sets share the same subnet. The subnet and any security groups must already
+exist and belong to the same virtual network.
+`
+
+const externalIPAttachmentFlagHelp = `
+_[BOOLEAN]_ - Auto-provision an ExternalIP and ExternalIPAttachment for the
+cluster API endpoint and ingress endpoint. Requires an available ExternalIPPool.
 `

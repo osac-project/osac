@@ -573,8 +573,7 @@ object; otherwise the server returns `InvalidArgument`. The server auto-populate
 is missing after a successful lookup.
 
 Full references are used when the target object may live outside the caller's project — for
-example, cluster templates, catalog items, host types, instance types, network classes, IP pools,
-roles, and users.
+example, cluster templates, catalog items, host types, instance types, IP pools, roles, and users.
 
 ### Local references
 

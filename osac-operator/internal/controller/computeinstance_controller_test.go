@@ -1552,6 +1552,308 @@ var _ = Describe("ComputeInstance Controller", func() {
 		})
 	})
 
+	Context("Tenant storage class fallback resolution", func() {
+		const namespaceName = "default"
+
+		ctx := context.Background()
+
+		deleteCI := func(name string) {
+			ci := &osacv1alpha1.ComputeInstance{}
+			nn := types.NamespacedName{Name: name, Namespace: namespaceName}
+			if err := k8sClient.Get(ctx, nn, ci); err == nil {
+				ci.Finalizers = nil
+				_ = k8sClient.Update(ctx, ci)
+				_ = k8sClient.Delete(ctx, ci)
+			}
+		}
+
+		It("should resolve tenant storage classes from target cluster when status is empty", func() {
+			const resourceName = "test-sc-fallback-resolve"
+			const tenantName = "tenant-sc-fallback-resolve"
+			DeferCleanup(func() {
+				deleteCI(resourceName)
+				deleteTenantInNamespace(ctx, namespaceName, tenantName)
+			})
+
+			createLabeledStorageClass(ctx, "sc-fallback-1", tenantName, "local")
+
+			createReadyTenant(ctx, namespaceName, tenantName)
+
+			var gotSCs []osacv1alpha1.ResolvedStorageClass
+			var sawSCs bool
+			provider := &mockProvisioningProvider{
+				name: "aap",
+				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+					gotSCs = provisioning.TenantStorageClassesFromContext(ctx)
+					sawSCs = true
+					return &provisioning.ProvisionResult{JobID: "mock-job-id", InitialState: osacv1alpha1.JobStatePending}, nil
+				},
+			}
+
+			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
+			resource := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: namespaceName,
+					Annotations: map[string]string{
+						osacTenantKey: tenantName,
+					},
+				},
+				Spec: newTestComputeInstanceSpec("test_template"),
+			}
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+			reconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", provider, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			Eventually(func() error {
+				return reconciler.Client.Get(ctx, nn, &osacv1alpha1.ComputeInstance{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(sawSCs).To(BeTrue())
+			Expect(gotSCs).To(HaveLen(1))
+			Expect(gotSCs[0].Name).To(Equal("sc-fallback-1"))
+			Expect(gotSCs[0].Tier).To(Equal("local"))
+		})
+
+		It("should proceed without storage classes when status is empty and no labeled SCs exist", func() {
+			const resourceName = "test-sc-fallback-none"
+			const tenantName = "tenant-sc-fallback-none"
+			DeferCleanup(func() {
+				deleteCI(resourceName)
+				deleteTenantInNamespace(ctx, namespaceName, tenantName)
+			})
+
+			createReadyTenant(ctx, namespaceName, tenantName)
+
+			var gotSCs []osacv1alpha1.ResolvedStorageClass
+			var sawSCs bool
+			provider := &mockProvisioningProvider{
+				name: "aap",
+				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+					gotSCs = provisioning.TenantStorageClassesFromContext(ctx)
+					sawSCs = true
+					return &provisioning.ProvisionResult{JobID: "mock-job-id", InitialState: osacv1alpha1.JobStatePending}, nil
+				},
+			}
+
+			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
+			resource := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: namespaceName,
+					Annotations: map[string]string{
+						osacTenantKey: tenantName,
+					},
+				},
+				Spec: newTestComputeInstanceSpec("test_template"),
+			}
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+			reconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", provider, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			Eventually(func() error {
+				return reconciler.Client.Get(ctx, nn, &osacv1alpha1.ComputeInstance{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(sawSCs).To(BeTrue())
+			Expect(gotSCs).To(BeNil())
+		})
+
+		It("should use status storage classes when populated (regression)", func() {
+			const resourceName = "test-sc-status-populated"
+			const tenantName = "tenant-sc-status-populated"
+			DeferCleanup(func() {
+				deleteCI(resourceName)
+				deleteTenantInNamespace(ctx, namespaceName, tenantName)
+			})
+
+			// Create a labeled SC that should NOT be used because status is populated
+			createLabeledStorageClass(ctx, "sc-status-ignored", tenantName, "ignored")
+
+			// Create tenant with pre-populated status.storageClasses
+			tenant := &osacv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{Name: tenantName, Namespace: namespaceName},
+			}
+			Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
+			tenant.Status.Phase = osacv1alpha1.TenantPhaseReady
+			tenant.Status.Namespace = namespaceName
+			tenant.Status.StorageClasses = []osacv1alpha1.ResolvedStorageClass{
+				{Name: "ceph-fast", Tier: "fast"},
+			}
+			Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
+
+			var gotSCs []osacv1alpha1.ResolvedStorageClass
+			var sawSCs bool
+			provider := &mockProvisioningProvider{
+				name: "aap",
+				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+					gotSCs = provisioning.TenantStorageClassesFromContext(ctx)
+					sawSCs = true
+					return &provisioning.ProvisionResult{JobID: "mock-job-id", InitialState: osacv1alpha1.JobStatePending}, nil
+				},
+			}
+
+			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
+			resource := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: namespaceName,
+					Annotations: map[string]string{
+						osacTenantKey: tenantName,
+					},
+				},
+				Spec: newTestComputeInstanceSpec("test_template"),
+			}
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+			reconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", provider, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+
+			mgrClient := testMcManager.GetLocalManager().GetClient()
+			Eventually(func(g Gomega) {
+				cached := &osacv1alpha1.Tenant{}
+				g.Expect(mgrClient.Get(ctx, types.NamespacedName{Name: tenantName, Namespace: namespaceName}, cached)).To(Succeed())
+				g.Expect(cached.Status.StorageClasses).To(HaveLen(1))
+			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
+
+			Eventually(func() error {
+				return reconciler.Client.Get(ctx, nn, &osacv1alpha1.ComputeInstance{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(sawSCs).To(BeTrue())
+			Expect(gotSCs).To(HaveLen(1))
+			Expect(gotSCs[0].Name).To(Equal("ceph-fast"))
+			Expect(gotSCs[0].Tier).To(Equal("fast"))
+		})
+
+		It("should skip fallback when ClusterStorageReady condition is set", func() {
+			const resourceName = "test-sc-fallback-skip"
+			const tenantName = "tenant-sc-fallback-skip"
+			DeferCleanup(func() {
+				deleteCI(resourceName)
+				deleteTenantInNamespace(ctx, namespaceName, tenantName)
+			})
+
+			createLabeledStorageClass(ctx, "sc-skip-fallback", tenantName, "local")
+
+			// Create tenant with ClusterStorageReady condition set (storage
+			// controller has run) but no storageClasses in status.
+			tenant := &osacv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{Name: tenantName, Namespace: namespaceName},
+			}
+			Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
+			tenant.Status.Phase = osacv1alpha1.TenantPhaseReady
+			tenant.Status.Namespace = namespaceName
+			tenant.SetStatusCondition(osacv1alpha1.TenantConditionClusterStorageReady, metav1.ConditionTrue,
+				"Ready", "storage controller resolved")
+			Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
+
+			var gotSCs []osacv1alpha1.ResolvedStorageClass
+			var sawSCs bool
+			provider := &mockProvisioningProvider{
+				name: "aap",
+				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+					gotSCs = provisioning.TenantStorageClassesFromContext(ctx)
+					sawSCs = true
+					return &provisioning.ProvisionResult{JobID: "mock-job-id", InitialState: osacv1alpha1.JobStatePending}, nil
+				},
+			}
+
+			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
+			resource := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: namespaceName,
+					Annotations: map[string]string{
+						osacTenantKey: tenantName,
+					},
+				},
+				Spec: newTestComputeInstanceSpec("test_template"),
+			}
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+			reconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", provider, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+
+			mgrClient := testMcManager.GetLocalManager().GetClient()
+			Eventually(func(g Gomega) {
+				cached := &osacv1alpha1.Tenant{}
+				g.Expect(mgrClient.Get(ctx, types.NamespacedName{Name: tenantName, Namespace: namespaceName}, cached)).To(Succeed())
+				g.Expect(cached.GetStatusCondition(osacv1alpha1.TenantConditionClusterStorageReady)).NotTo(BeNil())
+			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
+
+			Eventually(func() error {
+				return reconciler.Client.Get(ctx, nn, &osacv1alpha1.ComputeInstance{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(sawSCs).To(BeTrue())
+			Expect(gotSCs).To(BeNil(), "should not resolve from cluster when storage controller already ran")
+		})
+
+		It("should exclude ambiguous tiers when multiple SCs share the same tenant and tier labels", func() {
+			const resourceName = "test-sc-fallback-ambiguous"
+			const tenantName = "tenant-sc-fallback-ambiguous"
+			DeferCleanup(func() {
+				deleteCI(resourceName)
+				deleteTenantInNamespace(ctx, namespaceName, tenantName)
+			})
+
+			createLabeledStorageClass(ctx, "sc-ambig-a", tenantName, "local")
+			createLabeledStorageClass(ctx, "sc-ambig-b", tenantName, "local")
+
+			createReadyTenant(ctx, namespaceName, tenantName)
+
+			var gotSCs []osacv1alpha1.ResolvedStorageClass
+			var sawSCs bool
+			provider := &mockProvisioningProvider{
+				name: "aap",
+				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+					gotSCs = provisioning.TenantStorageClassesFromContext(ctx)
+					sawSCs = true
+					return &provisioning.ProvisionResult{JobID: "mock-job-id", InitialState: osacv1alpha1.JobStatePending}, nil
+				},
+			}
+
+			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
+			resource := &osacv1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: namespaceName,
+					Annotations: map[string]string{
+						osacTenantKey: tenantName,
+					},
+				},
+				Spec: newTestComputeInstanceSpec("test_template"),
+			}
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+			fakeRecorder := events.NewFakeRecorder(100)
+			reconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, "", provider, 100*time.Millisecond, 0, mcmanager.LocalCluster)
+			reconciler.Recorder = fakeRecorder
+			Eventually(func() error {
+				return reconciler.Client.Get(ctx, nn, &osacv1alpha1.ComputeInstance{})
+			}, 2*time.Second, 10*time.Millisecond).Should(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: nn}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(sawSCs).To(BeTrue())
+			Expect(gotSCs).To(BeNil(), "ambiguous tier should not be injected")
+			Eventually(fakeRecorder.Events).Should(Receive(And(
+				ContainSubstring("Warning"),
+				ContainSubstring(eventReasonDuplicateStorageClass),
+			)))
+			Eventually(fakeRecorder.Events).Should(Receive(And(
+				ContainSubstring("Warning"),
+				ContainSubstring(eventReasonDuplicateStorageClass),
+				ContainSubstring("all matched tiers are ambiguous"),
+			)))
+		})
+	})
+
 	Context("handleKubeVirtVM", func() {
 		var (
 			ctx          context.Context

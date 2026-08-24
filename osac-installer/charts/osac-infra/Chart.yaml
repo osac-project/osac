@@ -1,0 +1,5 @@
+apiVersion: v2
+name: osac-infra
+description: OSAC shared infrastructure - CA chain, Keycloak, Gateway, trust-manager, shared PostgreSQL, CRD instances
+type: application
+version: 0.0.1

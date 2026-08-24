@@ -1,0 +1,38 @@
+# VMaaS CI environment -- infrastructure values for osac-deps + osac-infra charts.
+
+# --- OLM Subscriptions (osac-deps) ---
+certManager:
+  enabled: true
+trustManager:
+  enabled: true
+aapOperator:
+  enabled: true
+lvms:
+  enabled: true
+metallb:
+  enabled: true
+cnv:
+  enabled: true
+mce:
+  enabled: false
+
+# --- Infrastructure (osac-infra) ---
+caIssuer:
+  enabled: true
+keycloak:
+  enabled: true
+  # Seed known passwords for the realm's built-in test users -- the e2e
+  # suite logs in as these accounts by password.
+  devFixtures:
+    enabled: true
+kafka:
+  enabled: true
+
+# --- Bundled PostgreSQL ---
+# Single-pod ephemeral database for testing.
+# Uses fsync=off -- data is lost on restart. Not for production.
+bundledPostgres:
+  enabled: true
+  database:
+    name: service
+    user: service

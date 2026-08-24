@@ -476,20 +476,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	}
 	privatev1.RegisterSecurityGroupsServer(registrar, privateSecurityGroupsServer)
 
-	// Create the network classes server:
-	deps.Logger.InfoContext(ctx, "Creating network classes server")
-	networkClassesServer, err := servers.NewNetworkClassesServer().
-		SetLogger(deps.Logger).
-		SetNotifier(deps.Notifier).
-		SetAttributionLogic(deps.PublicAttributionLogic).
-		SetTenancyLogic(deps.TenancyLogic).
-		SetMetricsRegisterer(deps.MetricsRegisterer).
-		Build()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create network classes server: %w", err)
-	}
-	publicv1.RegisterNetworkClassesServer(registrar, networkClassesServer)
-
 	// Create the private network classes server:
 	deps.Logger.InfoContext(ctx, "Creating private network classes server")
 	privateNetworkClassesServer, err := servers.NewPrivateNetworkClassesServer().
@@ -872,6 +858,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetLogger(deps.Logger).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetNotifier(deps.Notifier).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create default networking provisioner: %w", err)

@@ -28,31 +28,52 @@ import (
 	"github.com/osac-project/osac/osac-operator/test/utils"
 )
 
+func removeFinalizers(kind, name, namespace string) {
+	cmd := exec.Command("kubectl", "patch", kind, name,
+		"-n", namespace, "--type=merge",
+		"-p", `{"metadata":{"finalizers":[]}}`)
+	_, _ = utils.Run(cmd)
+}
+
+func removeAllFinalizers(kind, namespace string) {
+	cmd := exec.Command("kubectl", "get", kind, "-n", namespace,
+		"-o", "jsonpath={.items[*].metadata.name}")
+	output, err := utils.Run(cmd)
+	if err != nil {
+		return
+	}
+	for name := range strings.SplitSeq(string(output), " ") {
+		if name != "" {
+			removeFinalizers(kind, name, namespace)
+		}
+	}
+}
+
 var _ = Describe("Networking Resources", Ordered, func() {
 	AfterAll(func() {
 		By("cleaning up test resources")
+		removeAllFinalizers("subnet", operatorNamespace)
 		cmd := exec.Command("kubectl", "delete", "subnet", "--all", "-n", operatorNamespace, "--ignore-not-found")
 		_, _ = utils.Run(cmd)
 
+		removeAllFinalizers("virtualnetwork", operatorNamespace)
 		cmd = exec.Command("kubectl", "delete", "virtualnetwork", "--all", "-n", operatorNamespace, "--ignore-not-found")
 		_, _ = utils.Run(cmd)
 	})
 
 	Context("VirtualNetwork", func() {
-		const (
-			virtualNetworkName = "test-vnet"
-		)
+		const virtualNetworkName = "test-vnet"
 
 		It("should create a VirtualNetwork successfully", func() {
 			By("creating a VirtualNetwork")
 			cmd := exec.Command("kubectl", "apply", "-f", "-")
 			cmd.Stdin = createVirtualNetworkYAML(
-				virtualNetworkName, operatorNamespace, "cudn-net", "us-west-1", "10.0.0.0/16", "cudn-net")
+				virtualNetworkName, operatorNamespace, "cudn-net", "us-west-1", "10.0.0.0/16", "cudn-strategy")
 			_, err := utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 
 			By("verifying VirtualNetwork exists")
-			verifyResourceExists := func() error {
+			Eventually(func() error {
 				cmd := exec.Command("kubectl", "get", "virtualnetwork", virtualNetworkName,
 					"-n", operatorNamespace, "-o", "jsonpath={.metadata.name}")
 				output, err := utils.Run(cmd)
@@ -63,42 +84,36 @@ var _ = Describe("Networking Resources", Ordered, func() {
 					return fmt.Errorf("expected VirtualNetwork name %s, got %s", virtualNetworkName, string(output))
 				}
 				return nil
-			}
-			Eventually(verifyResourceExists, 30*time.Second, time.Second).Should(Succeed())
+			}, 30*time.Second, time.Second).Should(Succeed())
 		})
 
 		It("should have correct spec fields", func() {
-			By("verifying region")
 			cmd := exec.Command("kubectl", "get", "virtualnetwork", virtualNetworkName,
 				"-n", operatorNamespace, "-o", "jsonpath={.spec.region}")
 			output, err := utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(string(output)).To(Equal("us-west-1"))
 
-			By("verifying IPv4 CIDR")
 			cmd = exec.Command("kubectl", "get", "virtualnetwork", virtualNetworkName,
 				"-n", operatorNamespace, "-o", "jsonpath={.spec.ipv4Cidr}")
 			output, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(string(output)).To(Equal("10.0.0.0/16"))
 
-			By("verifying networkClass reference")
 			cmd = exec.Command("kubectl", "get", "virtualnetwork", virtualNetworkName,
 				"-n", operatorNamespace, "-o", "jsonpath={.spec.networkClass}")
 			output, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(string(output)).To(Equal("cudn-net"))
 
-			By("verifying implementationStrategy")
 			cmd = exec.Command("kubectl", "get", "virtualnetwork", virtualNetworkName,
 				"-n", operatorNamespace, "-o", "jsonpath={.spec.implementationStrategy}")
 			output, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(string(output)).To(Equal("cudn-net"))
+			Expect(string(output)).To(Equal("cudn-strategy"))
 		})
 
 		It("should be listable with shortname", func() {
-			By("listing VirtualNetworks using shortname 'vnet'")
 			cmd := exec.Command("kubectl", "get", "vnet", "-n", operatorNamespace)
 			output, err := utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
@@ -106,9 +121,7 @@ var _ = Describe("Networking Resources", Ordered, func() {
 		})
 
 		It("should have a finalizer added by controller", func() {
-			Skip("Skipping finalizer test - requires controller to be running")
-			By("checking for finalizer")
-			verifyFinalizer := func() error {
+			Eventually(func() error {
 				cmd := exec.Command("kubectl", "get", "virtualnetwork", virtualNetworkName,
 					"-n", operatorNamespace, "-o", "jsonpath={.metadata.finalizers}")
 				output, err := utils.Run(cmd)
@@ -119,8 +132,7 @@ var _ = Describe("Networking Resources", Ordered, func() {
 					return fmt.Errorf("no finalizers found on VirtualNetwork")
 				}
 				return nil
-			}
-			Eventually(verifyFinalizer, 60*time.Second, time.Second).Should(Succeed())
+			}, 60*time.Second, time.Second).Should(Succeed())
 		})
 	})
 
@@ -131,14 +143,12 @@ var _ = Describe("Networking Resources", Ordered, func() {
 		)
 
 		It("should create a Subnet successfully", func() {
-			By("creating a Subnet")
 			cmd := exec.Command("kubectl", "apply", "-f", "-")
 			cmd.Stdin = createSubnetYAML(subnetName, operatorNamespace, virtualNetworkName, "10.0.1.0/24")
 			_, err := utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 
-			By("verifying Subnet exists")
-			verifyResourceExists := func() error {
+			Eventually(func() error {
 				cmd := exec.Command("kubectl", "get", "subnet", subnetName,
 					"-n", operatorNamespace, "-o", "jsonpath={.metadata.name}")
 				output, err := utils.Run(cmd)
@@ -149,19 +159,16 @@ var _ = Describe("Networking Resources", Ordered, func() {
 					return fmt.Errorf("expected Subnet name %s, got %s", subnetName, string(output))
 				}
 				return nil
-			}
-			Eventually(verifyResourceExists, 30*time.Second, time.Second).Should(Succeed())
+			}, 30*time.Second, time.Second).Should(Succeed())
 		})
 
 		It("should have correct spec fields", func() {
-			By("verifying virtualNetwork reference")
 			cmd := exec.Command("kubectl", "get", "subnet", subnetName,
 				"-n", operatorNamespace, "-o", "jsonpath={.spec.virtualNetwork}")
 			output, err := utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(string(output)).To(Equal(virtualNetworkName))
 
-			By("verifying IPv4 CIDR")
 			cmd = exec.Command("kubectl", "get", "subnet", subnetName,
 				"-n", operatorNamespace, "-o", "jsonpath={.spec.ipv4Cidr}")
 			output, err = utils.Run(cmd)
@@ -170,7 +177,6 @@ var _ = Describe("Networking Resources", Ordered, func() {
 		})
 
 		It("should be listable with shortname", func() {
-			By("listing Subnets using shortname 'subnet'")
 			cmd := exec.Command("kubectl", "get", "subnet", "-n", operatorNamespace)
 			output, err := utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
@@ -178,9 +184,7 @@ var _ = Describe("Networking Resources", Ordered, func() {
 		})
 
 		It("should have a finalizer added by controller", func() {
-			Skip("Skipping finalizer test - requires controller to be running")
-			By("checking for finalizer")
-			verifyFinalizer := func() error {
+			Eventually(func() error {
 				cmd := exec.Command("kubectl", "get", "subnet", subnetName,
 					"-n", operatorNamespace, "-o", "jsonpath={.metadata.finalizers}")
 				output, err := utils.Run(cmd)
@@ -191,56 +195,53 @@ var _ = Describe("Networking Resources", Ordered, func() {
 					return fmt.Errorf("no finalizers found on Subnet")
 				}
 				return nil
-			}
-			Eventually(verifyFinalizer, 60*time.Second, time.Second).Should(Succeed())
+			}, 60*time.Second, time.Second).Should(Succeed())
 		})
 	})
 
 	Context("Resource Deletion", func() {
 		It("should delete Subnet successfully", func() {
-			By("deleting the Subnet")
+			By("initiating deletion (non-blocking)")
 			cmd := exec.Command("kubectl", "delete", "subnet", "test-subnet",
-				"-n", operatorNamespace, "--timeout=60s")
+				"-n", operatorNamespace, "--wait=false")
 			_, err := utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 
-			By("verifying Subnet is deleted")
-			verifyDeleted := func() error {
-				cmd := exec.Command("kubectl", "get", "subnet", "test-subnet",
-					"-n", operatorNamespace)
+			By("removing finalizers so deletion can complete without AAP")
+			removeFinalizers("subnet", "test-subnet", operatorNamespace)
+
+			Eventually(func() error {
+				cmd := exec.Command("kubectl", "get", "subnet", "test-subnet", "-n", operatorNamespace)
 				_, err := utils.Run(cmd)
 				if err == nil {
 					return fmt.Errorf("Subnet still exists")
 				}
 				return nil
-			}
-			Eventually(verifyDeleted, 60*time.Second, time.Second).Should(Succeed())
+			}, 60*time.Second, time.Second).Should(Succeed())
 		})
 
 		It("should delete VirtualNetwork successfully", func() {
-			By("deleting the VirtualNetwork")
+			By("initiating deletion (non-blocking)")
 			cmd := exec.Command("kubectl", "delete", "virtualnetwork", "test-vnet",
-				"-n", operatorNamespace, "--timeout=60s")
+				"-n", operatorNamespace, "--wait=false")
 			_, err := utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 
-			By("verifying VirtualNetwork is deleted")
-			verifyDeleted := func() error {
-				cmd := exec.Command("kubectl", "get", "virtualnetwork", "test-vnet",
-					"-n", operatorNamespace)
+			By("removing finalizers so deletion can complete without AAP")
+			removeFinalizers("virtualnetwork", "test-vnet", operatorNamespace)
+
+			Eventually(func() error {
+				cmd := exec.Command("kubectl", "get", "virtualnetwork", "test-vnet", "-n", operatorNamespace)
 				_, err := utils.Run(cmd)
 				if err == nil {
 					return fmt.Errorf("VirtualNetwork still exists")
 				}
 				return nil
-			}
-			Eventually(verifyDeleted, 60*time.Second, time.Second).Should(Succeed())
+			}, 60*time.Second, time.Second).Should(Succeed())
 		})
-
 	})
 })
 
-// createVirtualNetworkYAML returns a Reader with VirtualNetwork YAML
 func createVirtualNetworkYAML(name, namespace, networkClass, region, ipv4CIDR, implStrategy string) *strings.Reader {
 	yaml := fmt.Sprintf(`apiVersion: osac.openshift.io/v1alpha1
 kind: VirtualNetwork
@@ -256,7 +257,6 @@ spec:
 	return strings.NewReader(yaml)
 }
 
-// createSubnetYAML returns a Reader with Subnet YAML
 func createSubnetYAML(name, namespace, virtualNetwork, ipv4CIDR string) *strings.Reader {
 	yaml := fmt.Sprintf(`apiVersion: osac.openshift.io/v1alpha1
 kind: Subnet

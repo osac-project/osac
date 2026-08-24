@@ -26,7 +26,6 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/externalipattachment"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/instancetype"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/natgateway"
-	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/networkclass"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/secret"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/securitygroup"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/describe/storagebackend"
@@ -52,7 +51,6 @@ func Cmd() *cobra.Command {
 	result.AddCommand(externalipattachment.Cmd())
 	result.AddCommand(instancetype.Cmd())
 	result.AddCommand(natgateway.Cmd())
-	result.AddCommand(networkclass.Cmd())
 	result.AddCommand(virtualnetwork.Cmd())
 	result.AddCommand(subnet.Cmd())
 	result.AddCommand(secret.Cmd())

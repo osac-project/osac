@@ -138,12 +138,6 @@ Select clusters using a specific catalog item:
 this.spec.catalog_item.name == "dev-sandbox"
 ```
 
-Select virtual networks using a specific network class:
-
-```cel
-this.spec.network_class.name == "default"
-```
-
 ## Examples
 
 Select objects whose name starts with `prod`:

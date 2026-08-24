@@ -169,9 +169,9 @@ jobs:
       working-directory: ${{ matrix.component }}
       run: |
         if [ -n "${{ matrix.values-file }}" ]; then
-          helm template test "charts/${{ matrix.chart }}/" -f "charts/${{ matrix.chart }}/${{ matrix.values-file }}" > /dev/null
+          helm template test "charts/${{ matrix.chart }}/" -f "charts/${{ matrix.chart }}/${{ matrix.values-file }}"
         else
-          helm template test "charts/${{ matrix.chart }}/" > /dev/null
+          helm template test "charts/${{ matrix.chart }}/"
         fi
 
   # osac-installer's own umbrella chart (charts/osac/) composes every other
@@ -224,22 +224,24 @@ jobs:
       run: |
         set -euo pipefail
         for f in charts/osac/ci/*-values.yaml; do
-          echo "--- helm template with $(basename "$f") ---"
-          helm template osac charts/osac/ --values "$f" > /dev/null
+          echo "--- helm template osac with $(basename "$f") ---"
+          helm template osac charts/osac/ --values "$f"
         done
 
     - name: Template with environment values
       working-directory: osac-installer
       run: |
         set -euo pipefail
-        for f in values/*/values.yaml; do
-          echo "--- helm template with $(dirname "$f" | xargs basename) ---"
-          helm template osac charts/osac/ --values "$f" \
-            --set service.externalHostname=fulfillment-api.example.com \
-            --set service.internalHostname=fulfillment-internal-api.example.com \
-            > /dev/null
+        for d in values/*/; do
+          profile=$(basename "$d")
+          echo "--- profile: ${profile} ---"
+          if [ -f "${d}infra.yaml" ]; then
+            helm template osac-deps charts/osac-deps/ --values "${d}infra.yaml"
+            helm template osac-infra charts/osac-infra/ --values "${d}infra.yaml"
+          fi
+          if [ -f "${d}instance.yaml" ]; then
+            helm template osac charts/osac/ --values "${d}instance.yaml" \
+              --set service.externalHostname=fulfillment-api.example.com \
+              --set service.internalHostname=fulfillment-internal-api.example.com
+          fi
         done
-
-    - name: Validate values schema
-      working-directory: osac-installer
-      run: python3 -m json.tool charts/osac/values.schema.json > /dev/null

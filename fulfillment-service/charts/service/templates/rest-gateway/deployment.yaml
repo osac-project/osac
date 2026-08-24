@@ -40,6 +40,7 @@ spec:
       containers:
       - name: rest-gateway
         image: {{ .Values.images.service }}
+        imagePullPolicy: {{ .Values.images.pullPolicy }}
         volumeMounts:
         - name: cas
           mountPath: /etc/fulfillment-rest-gateway/tls/cas

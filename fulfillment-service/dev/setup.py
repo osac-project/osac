@@ -36,7 +36,6 @@ def setup() -> None:
     """
     install_golangci_lint()
     install_protoc_gen_cleanapi()
-    install_cleanapi_proto()
 
 
 def install_golangci_lint() -> None:
@@ -218,39 +217,3 @@ def install_artifact(path: pathlib.Path, extracted_name: str, tool_name: str) ->
     bin_stat = bin_file.stat()
     bin_file.chmod(bin_stat.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     logging.info(f"Successfully installed '{tool_name}' to '{bin_file}'")
-
-
-def install_cleanapi_proto() -> None:
-    """
-    Downloads the cleanapi.proto file from the protoc-gen-cleanapi repository.
-    """
-    proto_dir = dirs.project() / "proto" / "cleanapi"
-    proto_file = proto_dir / "cleanapi.proto"
-
-    # Check if already installed
-    if proto_file.exists():
-        logging.info(f"cleanapi.proto is already installed at '{proto_file}'")
-        return
-
-    logging.info("Installing cleanapi.proto")
-
-    # Create directory
-    proto_dir.mkdir(parents=True, exist_ok=True)
-
-    # Download the proto file
-    url = f"https://raw.githubusercontent.com/jhernand/protoc-gen-cleanapi/v{tools.PROTOC_GEN_CLEANAPI.version}/proto/cleanapi/cleanapi.proto"
-    commands.run(
-        args=[
-            "curl",
-            "--connect-timeout", "10",
-            "--max-time", "30",
-            "--location",
-            "--proto", "=https",
-            "--silent",
-            "--fail",
-            "--output", str(proto_file),
-            url,
-        ],
-        check=True,
-    )
-    logging.info(f"Successfully installed cleanapi.proto to '{proto_file}'")

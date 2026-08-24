@@ -200,7 +200,7 @@ _parse_db_host_from_url() {
     echo "${hostport%%:*}"
 }
 
-# Resolve a PostgreSQL host from fulfillment-db URL to service and namespace.
+# Resolve a PostgreSQL host from osac-db-config URL to service and namespace.
 # Prints "service target_namespace" on stdout; returns 1 if unrecognized.
 _resolve_postgres_service() {
     local host="$1"
@@ -262,25 +262,25 @@ check_postgres_prerequisites() {
         return 0
     else
         echo "Checking in-cluster PostgreSQL prerequisites..."
-        oc get secret fulfillment-db -n "${namespace}" &>/dev/null || \
-            _postgres_prereq_error "Secret fulfillment-db not found in namespace ${namespace}."
-        oc get secret postgres-client-cert-service -n "${namespace}" &>/dev/null || \
-            _postgres_prereq_error "Secret postgres-client-cert-service not found in namespace ${namespace}."
+        oc get secret osac-db-config -n "${namespace}" &>/dev/null || \
+            _postgres_prereq_error "Secret osac-db-config not found in namespace ${namespace}."
+        oc get secret osac-db-client-cert -n "${namespace}" &>/dev/null || \
+            _postgres_prereq_error "Secret osac-db-client-cert not found in namespace ${namespace}."
 
-        db_url=$(oc get secret fulfillment-db -n "${namespace}" \
+        db_url=$(oc get secret osac-db-config -n "${namespace}" \
             -o jsonpath='{.data.url}' | base64 -d 2>/dev/null || true)
         [[ -n "${db_url}" ]] || \
-            _postgres_prereq_error "Secret fulfillment-db in ${namespace} has an empty url key."
+            _postgres_prereq_error "Secret osac-db-config in ${namespace} has an empty url key."
 
         db_host=$(_parse_db_host_from_url "${db_url}") || \
-            _postgres_prereq_error "Secret fulfillment-db in ${namespace} has an invalid PostgreSQL url."
+            _postgres_prereq_error "Secret osac-db-config in ${namespace} has an invalid PostgreSQL url."
         resolved=$(_resolve_postgres_service "${db_host}" "${namespace}") || \
-            _postgres_prereq_error "Unrecognized database hostname in fulfillment-db url."
+            _postgres_prereq_error "Unrecognized database hostname in osac-db-config url."
         read -r service target_namespace <<< "${resolved}"
     fi
 
     if ! _verify_postgres_endpoints "${service}" "${target_namespace}"; then
-        _postgres_prereq_error "PostgreSQL Service referenced by fulfillment-db has no ready endpoints."
+        _postgres_prereq_error "PostgreSQL Service referenced by osac-db-config has no ready endpoints."
     fi
 
     echo "PostgreSQL prerequisites satisfied."

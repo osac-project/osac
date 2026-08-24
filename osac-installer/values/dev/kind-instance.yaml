@@ -1,0 +1,153 @@
+# Kind dev environment -- instance values for osac chart.
+
+# --- Operator ---
+operator:
+  image:
+    repository: ghcr.io/osac-project/osac-operator
+    tag: latest
+    pullPolicy: Always
+  aap:
+    url: "http://awx-service.awx.svc.cluster.local:80/api"
+    insecureSkipVerify: "true"
+    statusPollInterval: "30s"
+    templatePrefix: "osac"
+    tokenSecret:
+      name: awx-token
+      key: token
+  fulfillment:
+    serverAddress: "fulfillment-internal-api:8001"
+    tokenFile: "/var/run/secrets/kubernetes.io/serviceaccount/token"
+  controllers:
+    clusterOrder: true
+    computeInstance: true
+    tenant: true
+    networking: true
+    bareMetalInstance: true
+  certs:
+    issuerRef:
+      name: default-ca
+  hubAccess:
+    enabled: true
+
+# --- Fulfillment Service ---
+service:
+  variant: kind
+  consoleProxy:
+    disabled: true
+  externalHostname: fulfillment-api.osac.svc.cluster.local
+  internalHostname: fulfillment-internal-api.osac.svc.cluster.local
+  images:
+    service: ghcr.io/osac-project/fulfillment-service:latest
+  certs:
+    issuerRef:
+      kind: ClusterIssuer
+      name: default-ca
+    caBundle:
+      configMap: ca-bundle
+  auth:
+    issuerUrl: https://keycloak.keycloak.svc.cluster.local:8443/realms/osac
+    emergencyServiceAccounts:
+      - admin
+      - osac-operator
+      - osac-operator-controller-manager
+    controllerCredentials:
+      - secret:
+          name: fulfillment-controller-credentials
+          items:
+            - key: client-id
+              param: client-id
+            - key: client-secret
+              param: client-secret
+  idp:
+    provider: keycloak
+    url: https://keycloak.keycloak.svc.cluster.local:8443
+    credentials:
+      - secret:
+          name: fulfillment-controller-credentials
+          items:
+            - key: client-id
+              param: client-id
+            - key: client-secret
+              param: client-secret
+  database:
+    connection:
+      - secret:
+          name: osac-db-config
+          items:
+            - key: url
+              param: url
+      - secret:
+          name: osac-db-client-cert
+          items:
+            - key: tls.crt
+              param: sslcert
+            - key: tls.key
+              param: sslkey
+            - key: ca.crt
+              param: sslrootcert
+  log:
+    level: debug
+  vault:
+    endpoint: ""
+
+# --- AAP (disabled for kind) ---
+aap:
+  apiToken:
+    create: false
+  aap:
+    instance:
+      enabled: false
+  bootstrap:
+    enabled: false
+  instanceGroups:
+    publishTemplates:
+      enabled: false
+
+# --- Bare Metal Fulfillment (disabled) ---
+bmf:
+  enabled: false
+  secrets:
+    inventoryConfig: osac-inventory-config-metal3-test
+    managementConfig: osac-management-config-metal3-test
+  testBackend:
+    metal3:
+      enabled: true
+
+# --- Hub Access ---
+hubAccess:
+  enabled: true
+
+# --- Validation hooks ---
+validation:
+  enabled: false
+
+# --- Database migration ---
+dbMigrate:
+  enabled: false
+
+# --- Instance Groups (disabled) ---
+instanceGroups:
+  enabled: false
+
+# --- Cluster/Network/Storage Fulfillment (disabled) ---
+clusterFulfillment:
+  enabled: false
+networkFulfillment:
+  enabled: false
+storageFulfillment:
+  enabled: false
+
+# --- UI (disabled -- uses OpenShift Route, run via pnpm dev instead) ---
+ui:
+  enabled: false
+
+# --- MetalLB (disabled) ---
+metallb:
+  enabled: false
+
+# --- CAPI Provider (disabled) ---
+capiProvider:
+  enabled: false
+
+kafka:
+  enabled: false

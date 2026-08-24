@@ -76,7 +76,7 @@ the fulfillment instance groups:
 
 ### Enabling the Instance Groups
 
-In your environment values file (e.g., `values/development/values.yaml`):
+In your environment values file (e.g., `values/dev/instance.yaml`):
 
 ```yaml
 clusterFulfillment:
@@ -141,7 +141,7 @@ Pass both files when deploying — Helm deep-merges them:
 
 ```bash
 helm install osac charts/osac \
-  -f values/development/values.yaml \
+  -f values/dev/instance.yaml \
   -f values/development-secrets.local.yaml \
   -n <namespace>
 ```
@@ -149,7 +149,7 @@ helm install osac charts/osac \
 Alternatively, pass secrets directly on the command line:
 
 ```bash
-helm install osac charts/osac -f values/development/values.yaml \
+helm install osac charts/osac -f values/dev/instance.yaml \
   --set clusterFulfillment.secret.NETRIS_PASSWORD=mypass \
   --set networkFulfillment.secret.NETRIS_PASSWORD=mypass
 ```

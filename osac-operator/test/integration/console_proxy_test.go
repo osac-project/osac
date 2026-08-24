@@ -28,74 +28,19 @@ import (
 	"github.com/osac-project/osac/osac-operator/test/utils"
 )
 
-const consoleProxyNamespace = "osac"
-
 var _ = Describe("Console Proxy", Ordered, func() {
 	BeforeAll(func() {
-		By("creating the console-proxy namespace")
-		cmd := exec.Command("kubectl", "create", "ns", consoleProxyNamespace)
-		_, err := utils.Run(cmd)
-		if err != nil && !strings.Contains(err.Error(), "AlreadyExists") {
-			Fail(fmt.Sprintf("failed to create namespace %s: %v", consoleProxyNamespace, err))
-		}
-
-		By("creating a self-signed ClusterIssuer for cert-manager")
-		createClusterIssuer := func() error {
-			cmd := exec.Command("kubectl", "apply", "-f", "-")
-			cmd.Stdin = strings.NewReader(`apiVersion: cert-manager.io/v1
-kind: ClusterIssuer
-metadata:
-  name: default-ca
-spec:
-  selfSigned: {}
-`)
-			_, err := utils.Run(cmd)
-			return err
-		}
-		Eventually(createClusterIssuer, 2*time.Minute, 5*time.Second).Should(Succeed())
-
-		By("deploying the console-proxy")
-		cmd = exec.Command("kubectl", "apply", "-k", "config/testing/console-proxy")
-		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred())
-
-		By("creating auth-reader RoleBinding in kube-system")
-		cmd = exec.Command("kubectl", "apply", "-k", "config/console-proxy-kube-system/")
-		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred())
-
-		By("restarting the console-proxy deployment to pick up auth config")
-		cmd = exec.Command("kubectl", "rollout", "restart",
-			"deployment/osac-console-proxy", "-n", consoleProxyNamespace)
-		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred())
-
 		By("waiting for the console-proxy deployment to be ready")
 		verifyDeployment := func() error {
 			cmd := exec.Command("kubectl", "rollout", "status",
-				"deployment/osac-console-proxy",
-				"-n", consoleProxyNamespace,
+				"deployment/osac-operator-console-proxy",
+				"-n", operatorNamespace,
 				"--timeout=10s",
 			)
 			_, err := utils.Run(cmd)
 			return err
 		}
 		Eventually(verifyDeployment, 2*time.Minute, 5*time.Second).Should(Succeed())
-	})
-
-	AfterAll(func() {
-		By("removing console-proxy resources")
-		cmd := exec.Command("kubectl", "delete", "-k", "config/testing/console-proxy", "--ignore-not-found")
-		_, _ = utils.Run(cmd)
-
-		By("removing auth-reader RoleBinding from kube-system")
-		cmd = exec.Command("kubectl", "delete", "-k",
-			"config/console-proxy-kube-system/", "--ignore-not-found")
-		_, _ = utils.Run(cmd)
-
-		By("removing the self-signed ClusterIssuer")
-		cmd = exec.Command("kubectl", "delete", "clusterissuer", "default-ca", "--ignore-not-found")
-		_, _ = utils.Run(cmd)
 	})
 
 	It("should register the APIService", func() {
@@ -148,14 +93,19 @@ spec:
 	It("should return an error for a compute instance without VM reference", func() {
 		By("creating a ComputeInstance without a VM reference")
 		cmd := exec.Command("kubectl", "apply", "-f", "-")
-		cmd.Stdin = createComputeInstanceYAML("test-ci-no-vm", consoleProxyNamespace)
+		cmd.Stdin = createComputeInstanceYAML("test-ci-no-vm", operatorNamespace)
 		_, err := utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred())
+
+		By("verifying it's listable via the 'ci' shortname")
+		cmd = exec.Command("kubectl", "get", "ci", "test-ci-no-vm", "-n", operatorNamespace)
+		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred())
 
 		By("attempting console access")
 		cmd = exec.Command("kubectl", "get", "--raw",
 			fmt.Sprintf("/apis/console.osac.openshift.io/v1alpha1/namespaces/%s/computeinstances/test-ci-no-vm/console",
-				consoleProxyNamespace),
+				operatorNamespace),
 		)
 		_, err = utils.Run(cmd)
 		Expect(err).To(HaveOccurred())
@@ -163,15 +113,17 @@ spec:
 		By("attempting VNC access")
 		cmd = exec.Command("kubectl", "get", "--raw",
 			fmt.Sprintf("/apis/console.osac.openshift.io/v1alpha1/namespaces/%s/computeinstances/test-ci-no-vm/vnc",
-				consoleProxyNamespace),
+				operatorNamespace),
 		)
 		_, err = utils.Run(cmd)
 		Expect(err).To(HaveOccurred())
 
 		By("cleaning up the ComputeInstance")
+		removeFinalizers("computeinstance", "test-ci-no-vm", operatorNamespace)
 		cmd = exec.Command("kubectl", "delete", "computeinstance", "test-ci-no-vm",
-			"-n", consoleProxyNamespace, "--ignore-not-found")
+			"-n", operatorNamespace, "--wait=false", "--ignore-not-found")
 		_, _ = utils.Run(cmd)
+		removeFinalizers("computeinstance", "test-ci-no-vm", operatorNamespace)
 	})
 })
 

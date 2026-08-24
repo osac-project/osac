@@ -1,0 +1,203 @@
+{{- $serviceDb := include "osac.dbNameService" . }}
+{{- $meteringDb := include "osac.dbNameMetering" . }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "osac.fullname" . }}-db-init
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  issuerRef:
+    kind: {{ .Values.service.certs.issuerRef.kind }}
+    name: {{ .Values.service.certs.issuerRef.name }}
+  commonName: "postgres"
+  usages:
+  - client auth
+  secretName: {{ include "osac.fullname" . }}-db-init-cert
+  privateKey:
+    rotationPolicy: Always
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "osac.fullname" . }}-db-init
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 6
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        {{- include "osac.labels" . | nindent 8 }}
+    spec:
+      initContainers:
+      - name: wait-for-cert
+        image: {{ .Values.cliImage }}
+        command:
+          - /bin/bash
+          - -euo
+          - pipefail
+          - -c
+          - |
+            echo "Waiting for db-init client certificate..."
+            for i in $(seq 1 60); do
+              if kubectl get secret {{ include "osac.fullname" . }}-db-init-cert \
+                -n {{ .Release.Namespace }} -o jsonpath='{.data.tls\.crt}' 2>/dev/null | grep -q .; then
+                echo "Certificate ready."
+                exit 0
+              fi
+              echo "  Attempt ${i}: certificate not ready, retrying in 5s..."
+              sleep 5
+            done
+            echo "ERROR: db-init certificate not ready after 300s"
+            exit 1
+        env:
+        - name: HOME
+          value: /tmp
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+      containers:
+      - name: psql
+        image: quay.io/sclorg/postgresql-18-c10s@sha256:6be2c9d855f06fb665257a6b0911676a38d740be7022cc61acee1c99a832b1b2
+        command: ["/bin/bash", "/scripts/db-init.sh"]
+        env:
+        - name: INSTANCE_PREFIX
+          value: {{ include "osac.pgPrefix" . | quote }}
+        - name: PGSSLMODE
+          value: verify-full
+        - name: PGSSLCERT
+          value: /certs/tls.crt
+        - name: PGSSLKEY
+          value: /certs/tls.key
+        - name: PGSSLROOTCERT
+          value: /certs/ca.crt
+        - name: PGHOST
+          value: {{ .Values.dbInit.host | default "postgres.osac-infra.svc.cluster.local" }}
+        - name: PGPORT
+          value: "5432"
+        - name: PGUSER
+          value: postgres
+        - name: HOME
+          value: /tmp
+        volumeMounts:
+        - name: scripts
+          mountPath: /scripts
+          readOnly: true
+        - name: certs
+          mountPath: /certs
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+      volumes:
+      - name: scripts
+        configMap:
+          name: {{ include "osac.fullname" . }}-db-init-scripts
+          defaultMode: 0555
+      - name: certs
+        secret:
+          secretName: {{ include "osac.fullname" . }}-db-init-cert
+          defaultMode: 0440
+      - name: tmp
+        emptyDir: {}
+      restartPolicy: Never
+      serviceAccountName: {{ include "osac.fullname" . }}-db-init
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "osac.fullname" . }}-db-init-scripts
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-6"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+data:
+  db-init.sh: |
+{{ .Files.Get "files/db-init.sh" | indent 4 }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "osac.fullname" . }}-db-init
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-6"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "osac.fullname" . }}-db-init
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-6"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: ["{{ include "osac.fullname" . }}-db-init-cert"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "osac.fullname" . }}-db-init
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-6"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "osac.fullname" . }}-db-init
+subjects:
+- kind: ServiceAccount
+  name: {{ include "osac.fullname" . }}-db-init
+  namespace: {{ .Release.Namespace }}

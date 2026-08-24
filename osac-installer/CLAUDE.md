@@ -2,7 +2,7 @@
 
 ## Claude Code Tooling
 
-This is an infrastructure/deployment repository (Helm-based) with no Go code, container builds, or unit tests. All validation is structural (YAML lint, Helm lint/template). Legacy overlay directories under `overlays/` store environment-specific secret files (no kustomization.yaml).
+This is an infrastructure/deployment repository (Helm-based) with no Go code, container builds, or unit tests. All validation is structural (YAML lint, Helm lint/template).
 
 ### Read Tool
 

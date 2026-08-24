@@ -1061,6 +1061,69 @@ var _ = Describe("Deletion Cleanup", func() {
 		Expect(project.GetMetadata().GetFinalizers()).To(ContainElement(finalizers.Controller))
 	})
 
+	It("should proceed with deletion when memberships exist but all have deletion timestamps", func() {
+		project := privatev1.Project_builder{
+			Id: "project-1",
+			Metadata: privatev1.Metadata_builder{
+				Name:       "test-project",
+				Tenant:     "acme",
+				Finalizers: []string{finalizers.Controller},
+			}.Build(),
+		}.Build()
+
+		// Expect query for children (returns 0)
+		mockClient.EXPECT().
+			List(gomock.Any(), gomock.Any()).
+			Return(&privatev1.ProjectsListResponse{
+				Size: 0,
+			}, nil)
+
+		// Memberships exist but are already being deleted (have deletion timestamps)
+		deletionTimestamp := timestamppb.Now()
+		mockProjectMembershipsClient.EXPECT().
+			List(gomock.Any(), gomock.Any()).
+			Return(&privatev1.ProjectMembershipsListResponse{
+				Total: 2,
+				Items: []*privatev1.ProjectMembership{
+					privatev1.ProjectMembership_builder{
+						Id: "membership-1",
+						Metadata: privatev1.Metadata_builder{
+							DeletionTimestamp: deletionTimestamp,
+						}.Build(),
+					}.Build(),
+					privatev1.ProjectMembership_builder{
+						Id: "membership-2",
+						Metadata: privatev1.Metadata_builder{
+							DeletionTimestamp: deletionTimestamp,
+						}.Build(),
+					}.Build(),
+				},
+			}, nil)
+
+		// Should NOT attempt to delete memberships (they're already being deleted)
+		// Should proceed directly to Keycloak cleanup
+
+		mockIdpClient.EXPECT().
+			GetGroupIDByPath(gomock.Any(), "acme", "/test-project").
+			Return("project-group-id", nil)
+
+		mockIdpClient.EXPECT().
+			DeleteGroup(gomock.Any(), "acme", "project-group-id").
+			Return(nil)
+
+		task := &task{
+			r:       functionObj,
+			project: project,
+		}
+
+		err := task.delete(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		// Should complete deletion and remove finalizer
+		Expect(project.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.Controller))
+		// State should NOT be DELETING
+		Expect(project.GetStatus().GetState()).ToNot(Equal(privatev1.ProjectState_PROJECT_STATE_DELETING))
+	})
+
 	It("should return error when tenant is missing during deletion", func() {
 		project := privatev1.Project_builder{
 			Id: "project-1",
@@ -1260,7 +1323,7 @@ var _ = Describe("Deletion Cleanup", func() {
 			Expect(project.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.Controller))
 		})
 
-		It("should skip already-deleting memberships", func() {
+		It("should skip already-deleting memberships and proceed with deletion", func() {
 			project := privatev1.Project_builder{
 				Id: "project-1",
 				Metadata: privatev1.Metadata_builder{
@@ -1293,7 +1356,15 @@ var _ = Describe("Deletion Cleanup", func() {
 					Size:  1,
 				}, nil)
 
-			// Should NOT call Delete (already deleting)
+			// Should NOT delete the project membership (already deleting)
+			// Should proceed directly to Keycloak cleanup since we didn't delete anything new
+			mockIdpClient.EXPECT().
+				GetGroupIDByPath(gomock.Any(), "acme", "/test-project").
+				Return("project-group-id", nil)
+
+			mockIdpClient.EXPECT().
+				DeleteGroup(gomock.Any(), "acme", "project-group-id").
+				Return(nil)
 
 			task := &task{
 				r:       functionObj,
@@ -1302,8 +1373,8 @@ var _ = Describe("Deletion Cleanup", func() {
 
 			err := task.delete(ctx)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(project.GetStatus().GetState()).To(Equal(privatev1.ProjectState_PROJECT_STATE_DELETING))
-			Expect(project.GetStatus().GetMessage()).To(Equal("Pending ProjectMembership deletion prior to project deletion"))
+			// Should complete deletion instead of waiting
+			Expect(project.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.Controller))
 		})
 
 		It("should return error when querying for memberships fails", func() {

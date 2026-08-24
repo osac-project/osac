@@ -42,7 +42,7 @@ begin
     select 1
     from active_nat_gateways a
     join nat_gateways n on n.id = a.id
-    where n.data->'spec'->>'external_ip' = old.id
+    where coalesce(n.data->'spec'->'external_ip'->>'id', n.data->'spec'->>'external_ip') = old.id
   ) then
     raise exception using
       errcode = 'Z0003',

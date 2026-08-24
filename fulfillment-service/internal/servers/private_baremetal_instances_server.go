@@ -964,7 +964,7 @@ func (s *PrivateBareMetalInstancesServer) autoProvisionExternalIP(
 	}
 	eipID := eipResp.GetObject().GetId()
 
-	err = s.updatePoolCapacity(ctx, pool.GetId(), 1)
+	err = UpdatePoolCapacity(ctx, s.externalIPPoolDao, pool.GetId(), 1)
 	if err != nil {
 		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "auto_external_ip_attachment: %s", err)
 	}
@@ -1022,30 +1022,6 @@ func (s *PrivateBareMetalInstancesServer) autoProvisionExternalIP(
 	return nil
 }
 
-func (s *PrivateBareMetalInstancesServer) updatePoolCapacity(ctx context.Context, poolID string, delta int64) error {
-	getResponse, err := s.externalIPPoolDao.Get().
-		SetId(poolID).
-		SetLock(true).
-		Do(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get ExternalIPPool for capacity update: %w", err)
-	}
-
-	pool := getResponse.GetObject()
-	newAllocated := pool.GetStatus().GetAllocated() + delta
-	newAvailable := pool.GetStatus().GetAvailable() - delta
-	if newAvailable < 0 {
-		return fmt.Errorf("ExternalIP pool '%s' has no available capacity", poolID)
-	}
-	pool.GetStatus().SetAllocated(newAllocated)
-	pool.GetStatus().SetAvailable(newAvailable)
-
-	_, err = s.externalIPPoolDao.Update().SetObject(pool).Do(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to update ExternalIPPool capacity: %w", err)
-	}
-	return nil
-}
 
 func (s *PrivateBareMetalInstancesServer) updateExternalIPAttachedFlag(ctx context.Context, externalIPID string, attached bool) error {
 	getResponse, err := s.externalIPDao.Get().

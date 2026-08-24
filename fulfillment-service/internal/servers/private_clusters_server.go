@@ -441,8 +441,72 @@ func (s *PrivateClustersServer) Update(ctx context.Context,
 
 func (s *PrivateClustersServer) Delete(ctx context.Context,
 	request *privatev1.ClustersDeleteRequest) (response *privatev1.ClustersDeleteResponse, err error) {
+	id := request.GetId()
+	if id != "" {
+		getResponse, getErr := s.generic.dao.Get().SetId(id).Do(ctx)
+		if getErr != nil {
+			var notFoundErr *dao.ErrNotFound
+			if !errors.As(getErr, &notFoundErr) {
+				err = getErr
+				return
+			}
+		} else if getResponse.GetObject().GetSpec().GetAutoExternalIpAttachment() {
+			err = s.autoCleanupExternalIP(ctx, id)
+			if err != nil {
+				return
+			}
+		}
+	}
 	err = s.generic.Delete(ctx, request, &response)
 	return
+}
+
+func (s *PrivateClustersServer) autoCleanupExternalIP(ctx context.Context, clusterID string) error {
+	filter := fmt.Sprintf(
+		"this.metadata.labels['%s'] == '%s'",
+		autoCreatedForLabel, clusterID,
+	)
+	listResp, err := s.externalIPAttachmentDao.List().SetFilter(filter).Do(ctx)
+	if err != nil {
+		return fmt.Errorf("auto_external_ip_attachment cleanup: failed to list attachments: %w", err)
+	}
+
+	for _, attachment := range listResp.GetItems() {
+		eipRef := attachment.GetSpec().GetExternalIp()
+		eipID := refKey(eipRef)
+
+		_, err = s.externalIPAttachmentDao.Delete().SetId(attachment.GetId()).Do(ctx)
+		if err != nil {
+			return fmt.Errorf("auto_external_ip_attachment cleanup: failed to delete attachment: %w", err)
+		}
+
+		if eipID != "" {
+			err = s.updateExternalIPAttachedFlag(ctx, eipID, false)
+			if err != nil {
+				return fmt.Errorf("auto_external_ip_attachment cleanup: %w", err)
+			}
+
+			eipResp, getErr := s.externalIPDao.Get().SetId(eipID).Do(ctx)
+			if getErr != nil {
+				return fmt.Errorf("auto_external_ip_attachment cleanup: failed to get ExternalIP: %w", getErr)
+			}
+			poolRef := eipResp.GetObject().GetSpec().GetPool()
+
+			_, err = s.externalIPDao.Delete().SetId(eipID).Do(ctx)
+			if err != nil {
+				return fmt.Errorf("auto_external_ip_attachment cleanup: failed to delete ExternalIP: %w", err)
+			}
+
+			if poolRef != nil {
+				err = UpdatePoolCapacity(ctx, s.externalIPPoolDao, refKey(poolRef), -1)
+				if err != nil {
+					return fmt.Errorf("auto_external_ip_attachment cleanup: %w", err)
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 func (s *PrivateClustersServer) Signal(ctx context.Context,
@@ -1598,4 +1662,24 @@ func (s *PrivateClustersServer) lookupCatalogItem(ctx context.Context,
 	}
 	result = items[0]
 	return
+}
+
+func (s *PrivateClustersServer) updateExternalIPAttachedFlag(ctx context.Context, externalIPID string, attached bool) error {
+	getResponse, err := s.externalIPDao.Get().
+		SetId(externalIPID).
+		SetLock(true).
+		Do(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get ExternalIP for attached flag update: %w", err)
+	}
+
+	eip := getResponse.GetObject()
+	eip.GetStatus().SetAttached(attached)
+
+	_, err = s.externalIPDao.Update().SetObject(eip).Do(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update ExternalIP attached flag: %w", err)
+	}
+
+	return nil
 }

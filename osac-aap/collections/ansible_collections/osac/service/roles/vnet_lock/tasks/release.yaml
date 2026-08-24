@@ -1,0 +1,58 @@
+---
+- name: Release V-Net lock
+  block:
+    - name: Read lease
+      kubernetes.core.k8s_info:
+        api_version: coordination.k8s.io/v1
+        kind: Lease
+        name: "{{ vnet_lock_name }}"
+        namespace: "{{ vnet_lock_namespace }}"
+      register: _vnet_lock_release_read
+
+    - name: Skip if lease not found
+      ansible.builtin.debug:
+        msg: "Lease '{{ vnet_lock_name }}' not found, nothing to release"
+      when: _vnet_lock_release_read.resources | length == 0
+
+    - name: Release if held by us
+      when:
+        - _vnet_lock_release_read.resources | length > 0
+        - (_vnet_lock_release_read.resources[0].spec.holderIdentity | default('', true)) == vnet_lock_holder
+      block:
+        - name: CAS update to release
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: coordination.k8s.io/v1
+              kind: Lease
+              metadata:
+                name: "{{ vnet_lock_name }}"
+                namespace: "{{ vnet_lock_namespace }}"
+                resourceVersion: "{{ _vnet_lock_release_read.resources[0].metadata.resourceVersion }}"
+              spec:
+                holderIdentity: null
+                leaseDurationSeconds: "{{ _vnet_lock_release_read.resources[0].spec.leaseDurationSeconds | default(120) | int }}"
+                acquireTime: null
+                renewTime: null
+          register: _vnet_lock_release_result
+          ignore_errors: true
+
+        - name: Display release result
+          ansible.builtin.debug:
+            msg: "{{ (_vnet_lock_release_result is succeeded) | ternary('Released', 'Release conflict (will expire naturally)') }} V-Net lock '{{ vnet_lock_name }}'"
+
+    - name: Warn if held by someone else
+      ansible.builtin.debug:
+        msg: >-
+          Lock '{{ vnet_lock_name }}' held by
+          '{{ _vnet_lock_release_read.resources[0].spec.holderIdentity | default("unknown") }}',
+          not by us ('{{ vnet_lock_holder }}') — skipping release
+      when:
+        - _vnet_lock_release_read.resources | length > 0
+        - (_vnet_lock_release_read.resources[0].spec.holderIdentity | default('', true)) != vnet_lock_holder
+        - (_vnet_lock_release_read.resources[0].spec.holderIdentity | default('', true)) | length > 0
+
+  always:
+    - name: Clear acquired fact
+      ansible.builtin.set_fact:
+        _vnet_lock_acquired: false

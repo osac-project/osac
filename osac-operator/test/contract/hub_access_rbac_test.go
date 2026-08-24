@@ -441,6 +441,12 @@ func TestHubAccessStatusResourcesParity(t *testing.T) {
 			t.Errorf("main resource %q has no corresponding /status subresource entry", res)
 		}
 	}
+
+	for res := range statusResources {
+		if !mainResources[res] {
+			t.Errorf("/status subresource %q/status has no corresponding main resource entry", res)
+		}
+	}
 }
 
 func toSet(items []string) map[string]bool {

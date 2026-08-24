@@ -11,106 +11,17 @@
 -- specific language governing permissions and limitations under the License.
 --
 
--- Adds DB-level archival guards for resources that ExternalIPAttachments reference as targets.
--- Without these, a target (BMI, CI, ClusterOrder) can be archived (hard-deleted from the main
--- table) while an ExternalIPAttachment still references it, causing the fulfillment-controller
--- to fail in a loop when the reference validator can't find the archived target.
+-- Networking dependency guards:
 --
--- These triggers fire BEFORE DELETE (the archive step), not before soft-delete — the target
--- must be allowed to enter the deleting state so its cleanup controller can run. The guard
--- only prevents the final removal from the main table while children still reference it.
+-- 1. Extends check_subnet_not_in_use for BareMetalInstance network_attachments (reverse ref).
+-- 2. Adds insert-time validation of BareMetalInstance subnet references (forward ref).
+-- 3. Adds insert-time validation of ExternalIPAttachment target references (forward ref).
 --
--- Also extends check_subnet_not_in_use to cover BareMetalInstance network_attachments.
+-- These fill gaps identified by audit against the existing CI/Cluster/ExternalIP patterns.
 
 -- =============================================================================
--- 1. Prevent archiving a BareMetalInstance while ExternalIPAttachments target it
--- =============================================================================
-
-create function check_bare_metal_instance_not_in_use() returns trigger as $$
-begin
-  if exists (
-    select 1
-    from active_external_ip_attachments a
-    join external_ip_attachments e on e.id = a.id
-    where e.data->'spec'->'baremetal_instance'->>'id' = old.id
-  ) then
-    raise exception using
-      errcode = 'Z0003',
-      message = format(
-        'cannot archive BareMetalInstance ''%s'': it is referenced by at least one active ExternalIPAttachment',
-        old.id
-      );
-  end if;
-
-  return old;
-end;
-$$ language plpgsql;
-
-create trigger check_bare_metal_instance_not_in_use
-  before delete on bare_metal_instances
-  for each row
-  execute function check_bare_metal_instance_not_in_use();
-
--- =============================================================================
--- 2. Prevent archiving a ComputeInstance while ExternalIPAttachments target it
--- =============================================================================
-
-create function check_compute_instance_not_in_use() returns trigger as $$
-begin
-  if exists (
-    select 1
-    from active_external_ip_attachments a
-    join external_ip_attachments e on e.id = a.id
-    where e.data->'spec'->'compute_instance'->>'id' = old.id
-  ) then
-    raise exception using
-      errcode = 'Z0003',
-      message = format(
-        'cannot archive ComputeInstance ''%s'': it is referenced by at least one active ExternalIPAttachment',
-        old.id
-      );
-  end if;
-
-  return old;
-end;
-$$ language plpgsql;
-
-create trigger check_compute_instance_not_in_use
-  before delete on compute_instances
-  for each row
-  execute function check_compute_instance_not_in_use();
-
--- =============================================================================
--- 3. Prevent archiving a ClusterOrder while ExternalIPAttachments target it
--- =============================================================================
-
-create function check_cluster_not_in_use() returns trigger as $$
-begin
-  if exists (
-    select 1
-    from active_external_ip_attachments a
-    join external_ip_attachments e on e.id = a.id
-    where e.data->'spec'->'cluster'->>'id' = old.id
-  ) then
-    raise exception using
-      errcode = 'Z0003',
-      message = format(
-        'cannot archive Cluster ''%s'': it is referenced by at least one active ExternalIPAttachment',
-        old.id
-      );
-  end if;
-
-  return old;
-end;
-$$ language plpgsql;
-
-create trigger check_cluster_not_in_use
-  before delete on clusters
-  for each row
-  execute function check_cluster_not_in_use();
-
--- =============================================================================
--- 4. Extend check_subnet_not_in_use to cover BareMetalInstance network_attachments
+-- 1. Extend check_subnet_not_in_use for BareMetalInstance network_attachments
+--    (matches existing CI and Cluster checks from migrations 52/87/103)
 -- =============================================================================
 
 create or replace function check_subnet_not_in_use() returns trigger as $$
@@ -186,3 +97,125 @@ begin
   return new;
 end;
 $$ language plpgsql;
+
+-- =============================================================================
+-- 2. Validate BareMetalInstance subnet references on insert
+--    (matches the CI pattern from migration 52 — dropped by migration 90)
+-- =============================================================================
+
+create function check_bmi_subnet_refs() returns trigger as $$
+declare
+  attachment jsonb;
+  subnet_id text;
+  found_id text;
+begin
+  for attachment in select jsonb_array_elements(coalesce(new.data->'spec'->'network_attachments', '[]'::jsonb))
+  loop
+    subnet_id := attachment->'subnet'->>'id';
+    if coalesce(subnet_id, '') != '' then
+      select id into found_id
+      from subnets
+      where id = subnet_id
+        and deletion_timestamp = 'epoch'
+      for share;
+
+      if found_id is null then
+        raise exception using
+          errcode = 'Z0002',
+          message = format(
+            'Subnet ''%s'' does not exist or has been deleted',
+            subnet_id
+          );
+      end if;
+    end if;
+  end loop;
+
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger check_bmi_subnet_refs
+  before insert on bare_metal_instances
+  for each row
+  when (new.deletion_timestamp = 'epoch')
+  execute function check_bmi_subnet_refs();
+
+-- =============================================================================
+-- 3. Validate ExternalIPAttachment target reference on insert
+--    (matches the ExternalIP ref pattern from migration 102)
+-- =============================================================================
+
+create function check_eipa_target_ref_exists() returns trigger as $$
+declare
+  target_id text;
+  found_id text;
+begin
+  -- Check baremetal_instance target
+  target_id := new.data->'spec'->'baremetal_instance'->>'id';
+  if coalesce(target_id, '') != '' then
+    select id into found_id
+    from bare_metal_instances
+    where id = target_id
+      and deletion_timestamp = 'epoch'
+    for share;
+
+    if found_id is null then
+      raise exception using
+        errcode = 'Z0002',
+        message = format(
+          'BareMetalInstance ''%s'' does not exist or has been deleted',
+          target_id
+        );
+    end if;
+    return new;
+  end if;
+
+  -- Check compute_instance target
+  target_id := new.data->'spec'->'compute_instance'->>'id';
+  if coalesce(target_id, '') != '' then
+    select id into found_id
+    from compute_instances
+    where id = target_id
+      and deletion_timestamp = 'epoch'
+    for share;
+
+    if found_id is null then
+      raise exception using
+        errcode = 'Z0002',
+        message = format(
+          'ComputeInstance ''%s'' does not exist or has been deleted',
+          target_id
+        );
+    end if;
+    return new;
+  end if;
+
+  -- Check cluster target
+  target_id := new.data->'spec'->'cluster'->>'id';
+  if coalesce(target_id, '') != '' then
+    select id into found_id
+    from clusters
+    where id = target_id
+      and deletion_timestamp = 'epoch'
+    for share;
+
+    if found_id is null then
+      raise exception using
+        errcode = 'Z0002',
+        message = format(
+          'Cluster ''%s'' does not exist or has been deleted',
+          target_id
+        );
+    end if;
+    return new;
+  end if;
+
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger check_eipa_target_ref_exists
+  before insert on external_ip_attachments
+  for each row
+  when (new.deletion_timestamp = 'epoch')
+  execute function check_eipa_target_ref_exists();

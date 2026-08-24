@@ -165,6 +165,8 @@
       ansible.builtin.set_fact:
         _csi_driver_install_lock_acquired: true
 
+    # Node DaemonSet runs privileged (hostPath mount to /var/lib/kubelet) --
+    # matches ensure_csi_backends.yaml's identical PSA labeling for the same reason.
     - name: Pre-create csi-driver namespace with Helm release ownership metadata
       kubernetes.core.k8s:
         state: present
@@ -175,6 +177,8 @@
             name: "{{ csi_driver_install_namespace }}"
             labels:
               app.kubernetes.io/managed-by: Helm
+              pod-security.kubernetes.io/enforce: privileged
+              pod-security.kubernetes.io/warn: privileged
             annotations:
               meta.helm.sh/release-name: csi-driver
               meta.helm.sh/release-namespace: "{{ csi_driver_install_namespace }}"

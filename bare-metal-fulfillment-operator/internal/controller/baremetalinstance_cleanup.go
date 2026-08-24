@@ -87,6 +87,7 @@ func (r *BareMetalInstanceReconciler) reconcileAutoCleanup(
 		if apimeta.IsNoMatchError(err) {
 			log.Info("ExternalIPAttachment CRD not installed, skipping cleanup",
 				"error", err)
+			attachments = &unstructured.UnstructuredList{}
 		} else {
 			log.Error(err, "Cannot list ExternalIPAttachments, retrying")
 			return ctrl.Result{}, false, err
@@ -122,6 +123,7 @@ func (r *BareMetalInstanceReconciler) reconcileAutoCleanup(
 		if apimeta.IsNoMatchError(err) {
 			log.Info("ExternalIP CRD not installed, skipping cleanup",
 				"error", err)
+			eips = &unstructured.UnstructuredList{}
 		} else {
 			log.Error(err, "Cannot list ExternalIPs, retrying")
 			return ctrl.Result{}, false, err

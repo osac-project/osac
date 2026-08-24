@@ -156,4 +156,5 @@ def test_gpu_compute_instance(
             cli.delete_compute_instance(uuid=ci_uuid)
             if ci_name is not None:
                 wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
+            wait_for_grpc_removal(grpc=grpc, uuid=ci_uuid)
         _delete_instance_type_safe(private_grpc, it_name)

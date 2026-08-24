@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import subprocess
 from typing import Any
-from uuid import uuid4
 
 from tests.catalog.conftest import unique_name
 from tests.core.grpc_client import GRPCClient
@@ -61,7 +60,7 @@ def test_gpu_compute_instance(
     # → reconciler stamps spec.gpu on the CR → AAP creates the VM with hostDevices.
     # The VM won't reach Running without a GPU node, so we skip wait_for_provision
     # and instead verify the VM spec directly while AAP is still waiting for Ready.
-    it_name = f"e2e-gpu-it-{uuid4().hex[:8]}"
+    it_name = unique_name("e2e-gpu-it")
     ci_uuid: str | None = None
     ci_name: str | None = None
 

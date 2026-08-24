@@ -105,11 +105,11 @@ func (b *FunctionBuilder) Build() (result controllers.ReconcilerFunction[*privat
 
 	// Create and populate the object:
 	object := &function{
-		logger:                b.logger,
+		logger:            b.logger,
 		externalIPsClient: privatev1.NewExternalIPsClient(b.connection),
 		hubsClient:        privatev1.NewHubsClient(b.connection),
-		hubCache:              b.hubCache,
-		maskCalculator:        masks.NewCalculator().Build(),
+		hubCache:          b.hubCache,
+		maskCalculator:    masks.NewCalculator().Build(),
 	}
 	result = object.run
 	return

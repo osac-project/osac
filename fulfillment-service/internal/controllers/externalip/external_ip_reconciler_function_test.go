@@ -38,7 +38,6 @@ import (
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
 
-
 var _ = Describe("buildSpec", func() {
 	It("Includes pool in spec", func() {
 		t := &task{

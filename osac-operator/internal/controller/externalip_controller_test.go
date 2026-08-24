@@ -546,7 +546,8 @@ var _ = Describe("ExternalIPReconciler", func() {
 					Name:      "managed-then-unmanaged",
 					Namespace: testNamespace,
 					Annotations: map[string]string{
-						osacManagementStateAnnotation: ManagementStateUnmanaged,
+						osacManagementStateAnnotation:        ManagementStateUnmanaged,
+						osacImplementationStrategyAnnotation: "test-strategy",
 					},
 					Finalizers: []string{osacExternalIPFinalizer},
 				},
@@ -745,6 +746,10 @@ var _ = Describe("ExternalIPReconciler", func() {
 
 			// Start with Allocated state: persist metadata first, then status.
 			publicIP.Finalizers = []string{osacExternalIPFinalizer}
+			if publicIP.Annotations == nil {
+				publicIP.Annotations = map[string]string{}
+			}
+			publicIP.Annotations[osacImplementationStrategyAnnotation] = "test-strategy"
 			Expect(fakeClient.Update(testCtx, publicIP)).To(Succeed())
 
 			publicIP.Status.Phase = osacv1alpha1.ExternalIPPhaseReady

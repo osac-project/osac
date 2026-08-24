@@ -67,16 +67,8 @@
         - not offboard
         - _resolved_attachments | default([]) | selectattr('tenant_vnet', 'equalto', '') | list | length > 0
 
-    - name: Move each fabric port
-      ansible.builtin.include_role:
-        name: "osac.templates.{{ implementation_strategy }}"
-        tasks_from: move_network_attachment
-      vars:
-        network_attachment:
-          host_name: "{{ host_name }}"
-          logical_interface_name: "{{ item.interface }}"
-          from_vnet_name: "{{ offboard | ternary(item.tenant_vnet, provisioning_vnet) }}"
-          to_vnet_name: "{{ offboard | ternary(provisioning_vnet, item.tenant_vnet) }}"
+    - name: Move each fabric port (with V-Net locking)
+      ansible.builtin.include_tasks: _move_one_attachment.yaml
       loop: "{{ _resolved_attachments | default([]) }}"
       loop_control:
         label: >-

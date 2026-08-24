@@ -50,11 +50,11 @@ type FunctionBuilder struct {
 }
 
 type function struct {
-	logger                *slog.Logger
-	hubCache              controllers.HubCache
+	logger               *slog.Logger
+	hubCache             controllers.HubCache
 	securityGroupsClient privatev1.SecurityGroupsClient
 	hubsClient           privatev1.HubsClient
-	maskCalculator        *masks.Calculator
+	maskCalculator       *masks.Calculator
 }
 
 type task struct {
@@ -106,11 +106,11 @@ func (b *FunctionBuilder) Build() (result controllers.ReconcilerFunction[*privat
 
 	// Create and populate the object:
 	object := &function{
-		logger:                b.logger,
+		logger:               b.logger,
 		securityGroupsClient: privatev1.NewSecurityGroupsClient(b.connection),
 		hubsClient:           privatev1.NewHubsClient(b.connection),
-		hubCache:              b.hubCache,
-		maskCalculator:        masks.NewCalculator().Build(),
+		hubCache:             b.hubCache,
+		maskCalculator:       masks.NewCalculator().Build(),
 	}
 	result = object.run
 	return
@@ -231,7 +231,6 @@ func (t *task) validateTenant() error {
 	}
 	return nil
 }
-
 
 func (t *task) delete(ctx context.Context) (err error) {
 	if err = t.selectHub(ctx); err != nil {

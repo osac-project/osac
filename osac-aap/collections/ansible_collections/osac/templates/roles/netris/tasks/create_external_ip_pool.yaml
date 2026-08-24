@@ -31,6 +31,21 @@
     index_var: idx
     label: "{{ item }}"
 
+- name: Create common subnet inside each allocation (required for NAT on /32 subnets)
+  ansible.builtin.include_role:
+    name: netris.controller.ipam
+    tasks_from: create_subnet
+  vars:
+    ipam_name: "{{ (pool_cidrs | length == 1) | ternary(pool_name, pool_name + '-' + (idx | string)) }}-common"
+    ipam_cidr: "{{ item }}"
+    ipam_purpose: "common"
+    ipam_site_id: "{{ netris_site_id }}"
+    ipam_tenant_id: "{{ netris_tenant_id }}"
+  loop: "{{ pool_cidrs }}"
+  loop_control:
+    index_var: idx
+    label: "{{ item }}"
+
 - name: Display ExternalIPPool creation result
   ansible.builtin.debug:
-    msg: "ExternalIPPool '{{ pool_name }}' — {{ pool_cidrs | length }} IPAM allocation(s) registered"
+    msg: "ExternalIPPool '{{ pool_name }}' — {{ pool_cidrs | length }} IPAM allocation(s) with common subnets registered"

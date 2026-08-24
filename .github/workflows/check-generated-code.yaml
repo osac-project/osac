@@ -39,7 +39,7 @@ jobs:
               - '!fulfillment-service/**/*.md'
               - '!fulfillment-service/docs/**'
             osac-operator:
-              - 'osac-operator/**'
+              - '{osac-operator,fulfillment-service/proto}/**'
               - '!osac-operator/OWNERS'
               - '!osac-operator/LICENSE'
               - '!osac-operator/**/*.md'

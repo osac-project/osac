@@ -49,20 +49,20 @@ var _ = DescribeMigration("Networking dependency guards", func() {
 			data = `{"spec":{"network_attachments":[{"subnet":{"id":"` + subnetID + `"}}]}}`
 		}
 		_, err := conn.Exec(ctx,
-			`insert into bare_metal_instances (id, name, tenant, data) values ($1, $1, 'test-tenant', $2::jsonb)`,
+			`insert into bare_metal_instances (id, name, tenant, data) values ($1, $1, 'system', $2::jsonb)`,
 			id, data)
 		Expect(err).ToNot(HaveOccurred())
 	}
 
 	insertCI := func(ctx context.Context, id string) {
 		_, err := conn.Exec(ctx,
-			`insert into compute_instances (id, name, tenant, data) values ($1, $1, 'test-tenant', '{}')`, id)
+			`insert into compute_instances (id, name, tenant, data) values ($1, $1, 'system', '{}')`, id)
 		Expect(err).ToNot(HaveOccurred())
 	}
 
 	insertCluster := func(ctx context.Context, id string) {
 		_, err := conn.Exec(ctx,
-			`insert into clusters (id, name, tenant, data) values ($1, $1, 'test-tenant', '{}')`, id)
+			`insert into clusters (id, name, tenant, data) values ($1, $1, 'system', '{}')`, id)
 		Expect(err).ToNot(HaveOccurred())
 	}
 
@@ -75,7 +75,7 @@ var _ = DescribeMigration("Networking dependency guards", func() {
 	insertEIPA := func(ctx context.Context, id, eipID, targetField, targetID string) {
 		data := `{"spec":{"external_ip":{"id":"` + eipID + `"},"` + targetField + `":{"id":"` + targetID + `"}}}`
 		_, err := conn.Exec(ctx,
-			`insert into external_ip_attachments (id, name, tenant, data) values ($1, $1, 'test-tenant', $2::jsonb)`,
+			`insert into external_ip_attachments (id, name, tenant, data) values ($1, $1, 'system', $2::jsonb)`,
 			id, data)
 		Expect(err).ToNot(HaveOccurred())
 	}
@@ -123,7 +123,7 @@ var _ = DescribeMigration("Networking dependency guards", func() {
 
 	It("Rejects creating a BMI with a non-existent Subnet ref", func(ctx context.Context) {
 		_, err := conn.Exec(ctx,
-			`insert into bare_metal_instances (id, name, tenant, data) values ('bmi-bad', 'bmi-bad', 'test-tenant', $1::jsonb)`,
+			`insert into bare_metal_instances (id, name, tenant, data) values ('bmi-bad', 'bmi-bad', 'system', $1::jsonb)`,
 			`{"spec":{"network_attachments":[{"subnet":{"id":"no-such-subnet"}}]}}`)
 		pgErr := expectPgErr(err, "Z0002")
 		Expect(pgErr.Message).To(ContainSubstring("no-such-subnet"))
@@ -144,7 +144,7 @@ var _ = DescribeMigration("Networking dependency guards", func() {
 	It("Rejects creating an EIPA targeting a non-existent BMI", func(ctx context.Context) {
 		insertEIP(ctx, "eip-20")
 		_, err := conn.Exec(ctx,
-			`insert into external_ip_attachments (id, name, tenant, data) values ('eipa-bad-bmi', 'eipa-bad-bmi', 'test-tenant', $1::jsonb)`,
+			`insert into external_ip_attachments (id, name, tenant, data) values ('eipa-bad-bmi', 'eipa-bad-bmi', 'system', $1::jsonb)`,
 			`{"spec":{"external_ip":{"id":"eip-20"},"baremetal_instance":{"id":"no-such-bmi"}}}`)
 		pgErr := expectPgErr(err, "Z0002")
 		Expect(pgErr.Message).To(ContainSubstring("no-such-bmi"))
@@ -153,7 +153,7 @@ var _ = DescribeMigration("Networking dependency guards", func() {
 	It("Rejects creating an EIPA targeting a non-existent CI", func(ctx context.Context) {
 		insertEIP(ctx, "eip-21")
 		_, err := conn.Exec(ctx,
-			`insert into external_ip_attachments (id, name, tenant, data) values ('eipa-bad-ci', 'eipa-bad-ci', 'test-tenant', $1::jsonb)`,
+			`insert into external_ip_attachments (id, name, tenant, data) values ('eipa-bad-ci', 'eipa-bad-ci', 'system', $1::jsonb)`,
 			`{"spec":{"external_ip":{"id":"eip-21"},"compute_instance":{"id":"no-such-ci"}}}`)
 		pgErr := expectPgErr(err, "Z0002")
 		Expect(pgErr.Message).To(ContainSubstring("no-such-ci"))
@@ -162,7 +162,7 @@ var _ = DescribeMigration("Networking dependency guards", func() {
 	It("Rejects creating an EIPA targeting a non-existent Cluster", func(ctx context.Context) {
 		insertEIP(ctx, "eip-22")
 		_, err := conn.Exec(ctx,
-			`insert into external_ip_attachments (id, name, tenant, data) values ('eipa-bad-co', 'eipa-bad-co', 'test-tenant', $1::jsonb)`,
+			`insert into external_ip_attachments (id, name, tenant, data) values ('eipa-bad-co', 'eipa-bad-co', 'system', $1::jsonb)`,
 			`{"spec":{"external_ip":{"id":"eip-22"},"cluster":{"id":"no-such-cluster"}}}`)
 		pgErr := expectPgErr(err, "Z0002")
 		Expect(pgErr.Message).To(ContainSubstring("no-such-cluster"))

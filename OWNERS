@@ -32,6 +32,7 @@ filters:
     - clobrano
     - Tzif-Morgen
     - udis
+    - ItzikEzra-rh
     reviewers:
     - jhernand
     - adriengentil
@@ -64,3 +65,4 @@ filters:
     - clobrano
     - Tzif-Morgen
     - udis
+    - ItzikEzra-rh

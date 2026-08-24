@@ -1,0 +1,21 @@
+name: Auto-label bot PRs for fullsend review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  label:
+    # Only run for PRs from redhat-chai-bot
+    if: github.event.pull_request.user.login == 'redhat-chai-bot'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Add ready-for-review label to trigger fullsend
+        run: |
+          gh pr edit ${{ github.event.pull_request.number }} \
+            --add-label "ready-for-review" \
+            --repo ${{ github.repository }}
+        env:
+          GH_TOKEN: ${{ github.token }}

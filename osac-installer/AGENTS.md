@@ -41,10 +41,25 @@ make install-osac  PLATFORM=openshift PROFILE=<profile> NS=<namespace>
 
 # Uninstall
 make uninstall PLATFORM=openshift PROFILE=<profile> NS=<namespace>
-
-# Integration tests (Kind)
-make test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment
 ```
+
+## Kind (local dev)
+
+`PLATFORM`, `PROFILE`, and `NS` are required on every deploy/test target (no defaults). Kind only supports `PROFILE=dev`. Cluster name: `osac-dev`.
+
+```bash
+# From osac-installer/
+make install       PLATFORM=kind PROFILE=dev NS=osac   # cluster + infra + OSAC
+make install-infra PLATFORM=kind PROFILE=dev NS=osac   # cluster + infra only
+make test          PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment  # SUITE=all|fulfillment|operator|bmf
+make uninstall     PLATFORM=kind PROFILE=dev NS=osac   # deletes the Kind cluster
+```
+
+Requires `/etc/hosts` entries:
+
+- `127.0.0.1 keycloak.keycloak.svc.cluster.local`
+- `127.0.0.1 fulfillment-api.osac.svc.cluster.local`
+- `127.0.0.1 fulfillment-internal-api.osac.svc.cluster.local`
 
 ## Critical Rules
 

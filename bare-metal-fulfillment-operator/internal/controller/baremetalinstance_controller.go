@@ -352,6 +352,9 @@ func (r *BareMetalInstanceReconciler) reconcileManagement(ctx context.Context, b
 	if result, err := r.reconcileNetworkProvisionAndDiscovery(ctx, bareMetalInstance); err != nil || !result.IsZero() {
 		return result, err
 	}
+	if bareMetalInstance.Status.Phase == v1alpha1.BareMetalInstancePhaseFailed {
+		return ctrl.Result{}, nil
+	}
 
 	// Capture whether power was synced before this reconciliation modifies conditions.
 	// Used to detect stale power state reads during rapid stop/start cycles.

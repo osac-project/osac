@@ -33,6 +33,7 @@ message BareMetalInstanceTemplatesListResponse {
 }
 
 message BareMetalInstanceTemplatesGetRequest {
+  // Unique identifier of the template.
   string id = 1;
 }
 
@@ -54,7 +55,7 @@ message BareMetalInstanceTemplatesUpdateRequest {
 
   // Lock enables optimistic locking. When set to true, the server verifies that the current version of the object
   // matches the value of the metadata.version field of the submitted object. If they differ the update will be
-  // rejected.
+  // rejected. This is useful to prevent lost updates when multiple clients are modifying the same object concurrently.
   bool lock = 3;
 }
 
@@ -63,6 +64,7 @@ message BareMetalInstanceTemplatesUpdateResponse {
 }
 
 message BareMetalInstanceTemplatesDeleteRequest {
+  // Unique identifier of the template.
   string id = 1;
 }
 

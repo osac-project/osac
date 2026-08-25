@@ -15,9 +15,13 @@ syntax = "proto3";
 
 package osac.private.v1;
 
+import "cleanapi/cleanapi.proto";
 import "google/api/annotations.proto";
 import "google/protobuf/field_mask.proto";
 import "osac/private/v1/baremetal_instance_template_type.proto";
+
+option (cleanapi.file).package = "osac.public.v1";
+option (cleanapi.file).http_route_prefix_map = "private:fulfillment";
 
 message BareMetalInstanceTemplatesListRequest {
   optional int32 offset = 1;
@@ -71,11 +75,14 @@ message BareMetalInstanceTemplatesDeleteRequest {
 message BareMetalInstanceTemplatesDeleteResponse {}
 
 message BareMetalInstanceTemplatesSignalRequest {
+  option (cleanapi.message).private = true;
   // Unique identifier of the template.
   string id = 1;
 }
 
-message BareMetalInstanceTemplatesSignalResponse {}
+message BareMetalInstanceTemplatesSignalResponse {
+  option (cleanapi.message).private = true;
+}
 
 service BareMetalInstanceTemplates {
   rpc List(BareMetalInstanceTemplatesListRequest) returns (BareMetalInstanceTemplatesListResponse) {
@@ -106,5 +113,7 @@ service BareMetalInstanceTemplates {
   }
 
   // Indicates that something changed in the object or the system that may require reconciling the object.
-  rpc Signal(BareMetalInstanceTemplatesSignalRequest) returns (BareMetalInstanceTemplatesSignalResponse) {}
+  rpc Signal(BareMetalInstanceTemplatesSignalRequest) returns (BareMetalInstanceTemplatesSignalResponse) {
+    option (cleanapi.method).private = true;
+  }
 }

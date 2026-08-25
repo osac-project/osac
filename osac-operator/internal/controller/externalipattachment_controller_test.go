@@ -1501,7 +1501,7 @@ var _ = Describe("ExternalIPAttachment tenant VPC resolution", func() {
 	It("resolves the VN name from a ComputeInstance primary subnet (looked up by name)", func() {
 		ci := &osacv1alpha1.ComputeInstance{
 			Spec: osacv1alpha1.ComputeInstanceSpec{
-				NetworkAttachments: []osacv1alpha1.NetworkAttachment{{SubnetRef: "subnet-cr-name"}},
+				NetworkAttachments: []osacv1alpha1.ComputeNetworkAttachment{{SubnetRef: "subnet-cr-name"}},
 			},
 		}
 		r := newVPCReconciler(subnetCR("subnet-cr-name"), vnCR())

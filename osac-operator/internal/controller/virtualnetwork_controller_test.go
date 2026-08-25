@@ -620,7 +620,7 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 				},
 				Spec: osacv1alpha1.VirtualNetworkSpec{
 					Region: "us-west-1", IPv4CIDR: "10.1.0.0/16",
-					NetworkClass: "cudn-net", ImplementationStrategy: "cudn-net",
+					NetworkClass: "cudn-net",
 				},
 			}
 			Expect(k8sClient.Create(ctx, gateVnet)).To(Succeed())
@@ -652,7 +652,7 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 				},
 				Spec: osacv1alpha1.VirtualNetworkSpec{
 					Region: "us-west-1", IPv4CIDR: "10.2.0.0/16",
-					NetworkClass: "cudn-net", ImplementationStrategy: "cudn-net",
+					NetworkClass: "cudn-net",
 				},
 			}
 			Expect(k8sClient.Create(ctx, gateVnet)).To(Succeed())
@@ -684,7 +684,7 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 				},
 				Spec: osacv1alpha1.VirtualNetworkSpec{
 					Region: "us-west-1", IPv4CIDR: "10.3.0.0/16",
-					NetworkClass: "cudn-net", ImplementationStrategy: "cudn-net",
+					NetworkClass: "cudn-net",
 				},
 			}
 			Expect(k8sClient.Create(ctx, gateVnet)).To(Succeed())

@@ -426,7 +426,7 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(k8sClient.Create(ctx, testSubnet)).To(Succeed())
 
 			ciSpec := newTestComputeInstanceSpec("test_template")
-			ciSpec.NetworkAttachments = []osacv1alpha1.NetworkAttachment{
+			ciSpec.NetworkAttachments = []osacv1alpha1.ComputeNetworkAttachment{
 				{SubnetRef: testSubnet.Name},
 			}
 			childCI := &osacv1alpha1.ComputeInstance{

@@ -15,9 +15,13 @@ syntax = "proto3";
 
 package osac.private.v1;
 
+import "cleanapi/cleanapi.proto";
 import "google/api/annotations.proto";
 import "google/protobuf/field_mask.proto";
 import "osac/private/v1/external_ip_type.proto";
+
+option (cleanapi.file).package = "osac.public.v1";
+option (cleanapi.file).http_route_prefix_map = "private:fulfillment";
 
 message ExternalIPsListRequest {
   // Index of the first result. If not specified the default value will be zero.
@@ -105,10 +109,13 @@ message ExternalIPsDeleteRequest {
 message ExternalIPsDeleteResponse {}
 
 message ExternalIPsSignalRequest {
+  option (cleanapi.message).private = true;
   string id = 1;
 }
 
-message ExternalIPsSignalResponse {}
+message ExternalIPsSignalResponse {
+  option (cleanapi.message).private = true;
+}
 
 service ExternalIPs {
   // Retrieves the list of external IPs.
@@ -133,7 +140,7 @@ service ExternalIPs {
     };
   }
 
-  // Updates an existing external IP. The spec.pool field is immutable; only metadata can be changed.
+  // Updates an existing external IP. Allows modifying metadata (labels, annotations). The spec.pool field is immutable.
   rpc Update(ExternalIPsUpdateRequest) returns (ExternalIPsUpdateResponse) {
     option (google.api.http) = {
       patch: "/api/private/v1/external_ips/{object.id}"
@@ -149,5 +156,6 @@ service ExternalIPs {
 
   // Indicates that something changed in the object or the system that may require reconciling the object.
   rpc Signal(ExternalIPsSignalRequest) returns (ExternalIPsSignalResponse) {
+    option (cleanapi.method).private = true;
   }
 }

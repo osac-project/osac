@@ -127,7 +127,7 @@ service ExternalIPs {
     };
   }
 
-  // Updates an existing external IP. Allows modifying metadata (labels, annotations).
+  // Updates an existing external IP. Allows modifying metadata (labels, annotations). The spec.pool field is immutable.
   rpc Update(ExternalIPsUpdateRequest) returns (ExternalIPsUpdateResponse) {
     option (google.api.http) = {
       patch: "/api/fulfillment/v1/external_ips/{object.id}"

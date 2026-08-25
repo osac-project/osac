@@ -21,7 +21,7 @@ import (
 )
 
 var _ = DescribeMigration("Remove storage tier protocol and quota", func() {
-	It("Strips protocol and quota_gib from backends for a row with one backend association", func(ctx context.Context) {
+	It("Relocates protocol to spec and strips protocol/quota_gib from backends for a row with one backend association", func(ctx context.Context) {
 		_, err := conn.Exec(ctx,
 			`insert into storage_tiers (id, name, tenant, data)
 			 values ('tier-1', 'tier-1', 'system', $1::jsonb)`,
@@ -40,17 +40,18 @@ var _ = DescribeMigration("Remove storage tier protocol and quota", func() {
 		Expect(backendID).To(Equal("sb-1"))
 		Expect(maxReadBandwidth).To(Equal(100))
 
-		var backendHasProtocol, backendHasQuota, specHasProtocol bool
+		var backendHasProtocol, backendHasQuota bool
+		var specProtocol string
 		err = conn.QueryRow(ctx,
-			`select (data->'spec'->'backends'->0) ? 'protocol', (data->'spec'->'backends'->0) ? 'quota_gib', (data->'spec') ? 'protocol'
-			 from storage_tiers where id = 'tier-1'`).Scan(&backendHasProtocol, &backendHasQuota, &specHasProtocol)
+			`select (data->'spec'->'backends'->0) ? 'protocol', (data->'spec'->'backends'->0) ? 'quota_gib', data->'spec'->>'protocol'
+			 from storage_tiers where id = 'tier-1'`).Scan(&backendHasProtocol, &backendHasQuota, &specProtocol)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(backendHasProtocol).To(BeFalse())
 		Expect(backendHasQuota).To(BeFalse())
-		Expect(specHasProtocol).To(BeFalse())
+		Expect(specProtocol).To(Equal("STORAGE_PROTOCOL_NFS"))
 	})
 
-	It("Leaves a row with no backend associations with an empty backends array and no spec.protocol key", func(ctx context.Context) {
+	It("Backfills UNSPECIFIED protocol for a row with no backend associations", func(ctx context.Context) {
 		_, err := conn.Exec(ctx,
 			`insert into storage_tiers (id, name, tenant, data)
 			 values ('tier-empty', 'tier-empty', 'system', $1::jsonb)`,
@@ -60,17 +61,16 @@ var _ = DescribeMigration("Remove storage tier protocol and quota", func() {
 		err = tool.Migrate(ctx, 102)
 		Expect(err).ToNot(HaveOccurred())
 
-		var backends string
-		var specHasProtocol bool
+		var backends, specProtocol string
 		err = conn.QueryRow(ctx,
-			`select (data->'spec'->'backends')::text, (data->'spec') ? 'protocol'
-			 from storage_tiers where id = 'tier-empty'`).Scan(&backends, &specHasProtocol)
+			`select (data->'spec'->'backends')::text, data->'spec'->>'protocol'
+			 from storage_tiers where id = 'tier-empty'`).Scan(&backends, &specProtocol)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(backends).To(Equal("[]"))
-		Expect(specHasProtocol).To(BeFalse())
+		Expect(specProtocol).To(Equal("STORAGE_PROTOCOL_UNSPECIFIED"))
 	})
 
-	It("Strips protocol and quota_gib from an archived row already in the post-migration-77 nested shape", func(ctx context.Context) {
+	It("Relocates protocol to spec and strips protocol/quota_gib from an archived row already in the post-migration-77 nested shape", func(ctx context.Context) {
 		_, err := conn.Exec(ctx,
 			`insert into archived_storage_tiers (id, tenant, data, creation_timestamp, deletion_timestamp)
 			 values ('archived-tier-nested', 'system', $1::jsonb, now(), now())`,
@@ -80,17 +80,18 @@ var _ = DescribeMigration("Remove storage tier protocol and quota", func() {
 		err = tool.Migrate(ctx, 102)
 		Expect(err).ToNot(HaveOccurred())
 
-		var backendHasProtocol, backendHasQuota, specHasProtocol bool
+		var backendHasProtocol, backendHasQuota bool
+		var specProtocol string
 		err = conn.QueryRow(ctx,
-			`select (data->'spec'->'backends'->0) ? 'protocol', (data->'spec'->'backends'->0) ? 'quota_gib', (data->'spec') ? 'protocol'
-			 from archived_storage_tiers where id = 'archived-tier-nested'`).Scan(&backendHasProtocol, &backendHasQuota, &specHasProtocol)
+			`select (data->'spec'->'backends'->0) ? 'protocol', (data->'spec'->'backends'->0) ? 'quota_gib', data->'spec'->>'protocol'
+			 from archived_storage_tiers where id = 'archived-tier-nested'`).Scan(&backendHasProtocol, &backendHasQuota, &specProtocol)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(backendHasProtocol).To(BeFalse())
 		Expect(backendHasQuota).To(BeFalse())
-		Expect(specHasProtocol).To(BeFalse())
+		Expect(specProtocol).To(Equal("STORAGE_PROTOCOL_BLOCK"))
 	})
 
-	It("Restructures a pre-migration-77 archived row from the flat shape, stripping protocol and quota_gib in the same pass", func(ctx context.Context) {
+	It("Restructures a pre-migration-77 archived row from the flat shape, relocating protocol and stripping quota_gib in the same pass", func(ctx context.Context) {
 		_, err := conn.Exec(ctx,
 			`insert into archived_storage_tiers (id, tenant, data, creation_timestamp, deletion_timestamp)
 			 values ('archived-tier-flat', 'system', $1::jsonb, now(), now())`,
@@ -106,22 +107,22 @@ var _ = DescribeMigration("Remove storage tier protocol and quota", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(data).To(ContainSubstring(`"status"`))
 
-		var description, backendID string
-		var encryptionEnabled, backendHasProtocol, backendHasQuota, specHasProtocol bool
+		var description, backendID, specProtocol string
+		var encryptionEnabled, backendHasProtocol, backendHasQuota bool
 		err = conn.QueryRow(ctx,
 			`select data->'spec'->>'description', data->'spec'->'backends'->0->>'backend_id',
 			        (data->'spec'->'backends'->0->>'encryption_enabled')::boolean,
 			        (data->'spec'->'backends'->0) ? 'protocol', (data->'spec'->'backends'->0) ? 'quota_gib',
-			        (data->'spec') ? 'protocol'
+			        data->'spec'->>'protocol'
 			 from archived_storage_tiers where id = 'archived-tier-flat'`).Scan(
-			&description, &backendID, &encryptionEnabled, &backendHasProtocol, &backendHasQuota, &specHasProtocol)
+			&description, &backendID, &encryptionEnabled, &backendHasProtocol, &backendHasQuota, &specProtocol)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(description).To(Equal("legacy tier"))
 		Expect(backendID).To(Equal("sb-3"))
 		Expect(encryptionEnabled).To(BeTrue())
 		Expect(backendHasProtocol).To(BeFalse())
 		Expect(backendHasQuota).To(BeFalse())
-		Expect(specHasProtocol).To(BeFalse())
+		Expect(specProtocol).To(Equal("STORAGE_PROTOCOL_NFS"))
 
 		// "state" must round-trip as its string enum name here, never a bare int.
 		var state string
@@ -141,14 +142,13 @@ var _ = DescribeMigration("Remove storage tier protocol and quota", func() {
 		err = tool.Migrate(ctx, 102)
 		Expect(err).ToNot(HaveOccurred())
 
-		var stateText string
-		var specHasProtocol bool
+		var stateText, specProtocol string
 		err = conn.QueryRow(ctx,
-			`select (data->'status'->'state')::text, (data->'spec') ? 'protocol'
-			 from archived_storage_tiers where id = 'archived-tier-flat-empty'`).Scan(&stateText, &specHasProtocol)
+			`select (data->'status'->'state')::text, data->'spec'->>'protocol'
+			 from archived_storage_tiers where id = 'archived-tier-flat-empty'`).Scan(&stateText, &specProtocol)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(stateText).To(Equal("0"))
-		Expect(specHasProtocol).To(BeFalse())
+		Expect(specProtocol).To(Equal("STORAGE_PROTOCOL_UNSPECIFIED"))
 
 		var backends string
 		err = conn.QueryRow(ctx,

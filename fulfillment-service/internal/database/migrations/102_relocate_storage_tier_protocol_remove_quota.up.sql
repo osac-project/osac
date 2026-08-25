@@ -11,15 +11,20 @@
 -- specific language governing permissions and limitations under the License.
 --
 
--- Strips "protocol"/"quota_gib" from backends (protocol moves to the new top-level spec.protocol, no
--- backfill -- no real deployment has data) and fixes any pre-migration-77 archived rows still flat.
+-- Relocates each backend's "protocol" up to the new top-level spec.protocol (first backend's value;
+-- the server allows only one), defaulting to UNSPECIFIED when there's no backend to copy from, and
+-- strips "protocol"/"quota_gib" from backends. Also fixes pre-migration-77 archived rows still flat.
 --
 -- Before: {"spec":{"backends":[{"backend_id":"...","protocol":"STORAGE_PROTOCOL_NFS","quota_gib":500,...}]}}
--- After:  {"spec":{"backends":[{"backend_id":"...",...}]}}
+-- After:  {"spec":{"protocol":"STORAGE_PROTOCOL_NFS","backends":[{"backend_id":"...",...}]}}
 
 update storage_tiers
 set data = jsonb_set(
-  data,
+  jsonb_set(
+    data,
+    '{spec,protocol}',
+    coalesce(data->'spec'->'backends'->0->'protocol', '"STORAGE_PROTOCOL_UNSPECIFIED"'::jsonb)
+  ),
   '{spec,backends}',
   (
     select coalesce(jsonb_agg(backend - 'protocol' - 'quota_gib'), '[]'::jsonb)
@@ -31,7 +36,11 @@ update archived_storage_tiers
 set data = case
   when data ? 'spec' then
     jsonb_set(
-      data,
+      jsonb_set(
+        data,
+        '{spec,protocol}',
+        coalesce(data->'spec'->'backends'->0->'protocol', '"STORAGE_PROTOCOL_UNSPECIFIED"'::jsonb)
+      ),
       '{spec,backends}',
       (
         select coalesce(jsonb_agg(backend - 'protocol' - 'quota_gib'), '[]'::jsonb)
@@ -42,6 +51,7 @@ set data = case
     jsonb_build_object(
       'spec', jsonb_build_object(
         'description', coalesce(data->>'description', ''),
+        'protocol', coalesce(data->'backends'->0->'protocol', '"STORAGE_PROTOCOL_UNSPECIFIED"'::jsonb),
         'backends', (
           select coalesce(jsonb_agg(backend - 'protocol' - 'quota_gib'), '[]'::jsonb)
           from jsonb_array_elements(coalesce(data->'backends', '[]'::jsonb)) as backend

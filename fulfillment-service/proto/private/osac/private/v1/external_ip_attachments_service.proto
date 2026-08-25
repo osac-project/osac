@@ -15,9 +15,13 @@ syntax = "proto3";
 
 package osac.private.v1;
 
+import "cleanapi/cleanapi.proto";
 import "google/api/annotations.proto";
 import "google/protobuf/field_mask.proto";
 import "osac/private/v1/external_ip_attachment_type.proto";
+
+option (cleanapi.file).package = "osac.public.v1";
+option (cleanapi.file).http_route_prefix_map = "private:fulfillment";
 
 message ExternalIPAttachmentsListRequest {
   // Index of the first result. If not specified the default value will be zero.
@@ -101,10 +105,13 @@ message ExternalIPAttachmentsDeleteRequest {
 message ExternalIPAttachmentsDeleteResponse {}
 
 message ExternalIPAttachmentsSignalRequest {
+  option (cleanapi.message).private = true;
   string id = 1;
 }
 
-message ExternalIPAttachmentsSignalResponse {}
+message ExternalIPAttachmentsSignalResponse {
+  option (cleanapi.message).private = true;
+}
 
 service ExternalIPAttachments {
   // Retrieves the list of external IP attachments.
@@ -129,7 +136,7 @@ service ExternalIPAttachments {
     };
   }
 
-  // Updates an existing external IP attachment. Only metadata (labels, annotations) can be changed.
+  // Updates an existing external IP attachment. Allows modifying metadata (labels, annotations).
   rpc Update(ExternalIPAttachmentsUpdateRequest) returns (ExternalIPAttachmentsUpdateResponse) {
     option (google.api.http) = {
       patch: "/api/private/v1/external_ip_attachments/{object.id}"
@@ -145,5 +152,6 @@ service ExternalIPAttachments {
 
   // Indicates that something changed in the object or the system that may require reconciling the object.
   rpc Signal(ExternalIPAttachmentsSignalRequest) returns (ExternalIPAttachmentsSignalResponse) {
+    option (cleanapi.method).private = true;
   }
 }

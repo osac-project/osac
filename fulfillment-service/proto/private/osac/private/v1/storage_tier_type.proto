@@ -81,8 +81,9 @@ message StorageTierSpec {
   // List of backend associations that compose this storage tier.
   repeated BackendAssociation backends = 2;
 
-  // Storage protocol used by this storage tier.
-  StorageProtocol protocol = 3 [(buf.validate.field).enum.defined_only = true];
+  // Storage protocol used by this storage tier. Must be an explicit protocol (NFS or BLOCK);
+  // UNSPECIFIED is rejected.
+  StorageProtocol protocol = 3 [(buf.validate.field).enum = {defined_only: true, not_in: [0]}];
 }
 
 // Represents the current operational state of a StorageTier.

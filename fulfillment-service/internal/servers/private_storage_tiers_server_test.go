@@ -16,6 +16,7 @@ package servers
 import (
 	"fmt"
 
+	"buf.build/go/protovalidate"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc/codes"
@@ -459,6 +460,50 @@ var _ = Describe("Private storage tiers server", func() {
 		})
 
 		Describe("Validation", func() {
+			// Create-time enforcement runs in the protovalidate interceptor (bypassed by direct
+			// server.Create calls), so assert the annotation itself rejects an unspecified protocol.
+			// The full Create path through the interceptor is covered in it/it_public_storage_tiers_test.go.
+			It("Rejects a spec with an unspecified protocol", func() {
+				validator, err := protovalidate.New()
+				Expect(err).ToNot(HaveOccurred())
+
+				tier := privatev1.StorageTier_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "test-tier",
+					}.Build(),
+					Spec: privatev1.StorageTierSpec_builder{
+						Backends: []*privatev1.BackendAssociation{
+							privatev1.BackendAssociation_builder{
+								BackendId: backendID,
+							}.Build(),
+						},
+					}.Build(),
+				}.Build()
+
+				err = validator.Validate(tier)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("protocol"))
+			})
+
+			It("Update setting protocol to unspecified fails", func() {
+				created := createStorageTier()
+
+				_, err := server.Update(ctx, privatev1.StorageTiersUpdateRequest_builder{
+					Object: privatev1.StorageTier_builder{
+						Id: created.GetId(),
+						Spec: privatev1.StorageTierSpec_builder{
+							Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_UNSPECIFIED,
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.protocol"}},
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				st, ok := status.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(st.Code()).To(Equal(codes.InvalidArgument))
+				Expect(st.Message()).To(ContainSubstring("protocol"))
+			})
+
 			It("Create without name fails", func() {
 				_, err := server.Create(ctx, privatev1.StorageTiersCreateRequest_builder{
 					Object: privatev1.StorageTier_builder{

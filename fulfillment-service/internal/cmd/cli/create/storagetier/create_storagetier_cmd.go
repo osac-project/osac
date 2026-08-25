@@ -160,7 +160,7 @@ func parseProtocol(value string) (privatev1.StorageProtocol, error) {
 	case "BLOCK":
 		return privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK, nil
 	case "":
-		return privatev1.StorageProtocol_STORAGE_PROTOCOL_UNSPECIFIED, nil
+		return 0, fmt.Errorf("protocol is required, must be NFS or BLOCK")
 	default:
 		return 0, fmt.Errorf("invalid protocol '%s', must be NFS or BLOCK", value)
 	}
@@ -201,7 +201,7 @@ _ID_ - Identifier of the storage backend to associate with this tier.
 `
 
 const protocolFlagHelp = `
-_PROTOCOL_ - Storage protocol: {{ bt }}NFS{{ bt }} or {{ bt }}BLOCK{{ bt }}.
+_PROTOCOL_ - Storage protocol: {{ bt }}NFS{{ bt }} or {{ bt }}BLOCK{{ bt }}. Required.
 `
 
 const maxReadBandwidthFlagHelp = `

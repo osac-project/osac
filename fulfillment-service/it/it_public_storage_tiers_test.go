@@ -228,19 +228,29 @@ var _ = Describe("Public storage tiers", func() {
 		Expect(response.GetItems()[0].GetId()).To(Equal(id1))
 	})
 
-	// The private CreateStorageTier API has no validation constraint rejecting a protocol left at its
-	// zero value, so a StorageTier can be created today with STORAGE_PROTOCOL_UNSPECIFIED. This is
-	// documented, currently-accepted behavior (not a bug introduced by this PR): the public API passes
-	// the value through as-is rather than filtering it out or rejecting it during the private-to-public
-	// conversion.
-	It("Passes through a tier with an unset (UNSPECIFIED) protocol as-is", func() {
-		id := createViaPrivate("unspecified", privatev1.StorageProtocol_STORAGE_PROTOCOL_UNSPECIFIED)
-
-		response, err := publicClient.Get(ctx, publicv1.StorageTiersGetRequest_builder{
-			Id: id,
+	// A StorageTier's protocol must be an explicit NFS or BLOCK; the proto constraint
+	// (enum not_in [0]) rejects UNSPECIFIED at the protovalidate interceptor, before the handler.
+	It("Rejects creating a tier with an unset (UNSPECIFIED) protocol", func() {
+		name := fmt.Sprintf("it-pub-st-unspecified-%s", uuid.New())
+		_, err := privateClient.Create(ctx, privatev1.StorageTiersCreateRequest_builder{
+			Object: privatev1.StorageTier_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: name,
+				}.Build(),
+				Spec: privatev1.StorageTierSpec_builder{
+					Description: "Public IT test storage tier.",
+					Backends: []*privatev1.BackendAssociation{
+						privatev1.BackendAssociation_builder{
+							BackendId: privateBackendID,
+						}.Build(),
+					},
+				}.Build(),
+			}.Build(),
 		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		Expect(response.GetObject().GetSpec().GetProtocol()).To(Equal(
-			publicv1.StorageProtocol_STORAGE_PROTOCOL_UNSPECIFIED))
+		Expect(err).To(HaveOccurred())
+		st, ok := grpcstatus.FromError(err)
+		Expect(ok).To(BeTrue())
+		Expect(st.Code()).To(Equal(grpccodes.InvalidArgument))
+		Expect(st.Message()).To(ContainSubstring("protocol"))
 	})
 })

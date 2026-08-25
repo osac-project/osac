@@ -82,10 +82,10 @@ var _ = Describe("parseProtocol", func() {
 		Expect(result).To(Equal(privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS))
 	})
 
-	It("returns unspecified for an empty value", func() {
-		result, err := parseProtocol("")
-		Expect(err).NotTo(HaveOccurred())
-		Expect(result).To(Equal(privatev1.StorageProtocol_STORAGE_PROTOCOL_UNSPECIFIED))
+	It("rejects an empty value", func() {
+		_, err := parseProtocol("")
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("protocol is required"))
 	})
 
 	It("rejects an invalid protocol", func() {

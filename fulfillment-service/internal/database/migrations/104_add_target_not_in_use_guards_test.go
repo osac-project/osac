@@ -26,6 +26,10 @@ var _ = DescribeMigration("Networking dependency guards", func() {
 	BeforeEach(func(ctx context.Context) {
 		err := tool.Migrate(ctx, 104)
 		Expect(err).ToNot(HaveOccurred())
+
+		_, err = conn.Exec(ctx,
+			`insert into external_ip_pools (id, name, tenant, data) values ('pool-1', 'pool-1', 'shared', '{}')`)
+		Expect(err).ToNot(HaveOccurred())
 	})
 
 	// -- helpers --

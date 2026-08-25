@@ -1,0 +1,100 @@
+---
+name: konflux-auto-label
+
+# Konflux (GitHub App `red-hat-konflux-kflux-prd-rh02[bot]`) opens automated
+# dependency-bump PRs against this repo, but it's an external GitHub App,
+# not an org member -- the usual openshift-ci Prow-plugin automation that
+# applies `lgtm`/`approved` per OWNERS files, and the Jira-title check that
+# applies `jira/valid-reference`, don't reliably (or ever, for the Jira
+# label) apply to it. label-gate.yml's check-labels job requires all three
+# on every PR, so Konflux PRs get stuck permanently -- confirmed live:
+# every open Konflux PR is missing jira/valid-reference (its titles never
+# contain a Jira key), and a couple are also missing lgtm/approved since
+# openshift-ci doesn't apply those reliably to this bot either. Separately,
+# as an external App identity, Konflux's own workflow runs on this repo can
+# land in GitHub's native fork/first-time-contributor `action_required`
+# gate and never execute at all -- mirrors osac-test-infra's
+# slash-command-handler.yml "Handle ok-to-test" step to clear that too.
+#
+# Scoped tightly to this one specific, trusted bot login -- not "any bot"
+# or "any dependency PR" -- per direct instruction; broadening this scope
+# needs a deliberate follow-up decision, not an accidental side effect of
+# editing this file.
+#
+# SECURITY: pull_request_target runs with write permissions and secrets
+# against the BASE repo's copy of this workflow, regardless of what the PR
+# branch contains -- safe here specifically because this workflow never
+# checks out or executes anything from the PR branch. It only reads
+# trusted fields already present on the event context (author login, PR
+# number, head SHA) and mutates via the GitHub API.
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+
+permissions: {}
+
+jobs:
+  auto-label-konflux:
+    if: github.event.pull_request.user.login == 'red-hat-konflux-kflux-prd-rh02[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Apply required labels
+        env:
+          GH_TOKEN: ${{ secrets.MERGE_QUEUE_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Known, accepted race on `synchronize`: ok-to-test-label-cleanup.yml
+          # also reacts to this same event and strips `ok-to-test` if it was
+          # present when the push landed, so the two runs can momentarily
+          # disagree on the label's final state. Left as-is (not sequenced
+          # or exempted) because it's cosmetic, not functional: the actual
+          # action_required unblock below happens via a direct `gh api
+          # .../approve` call that doesn't depend on this label surviving,
+          # and the label gets re-applied again on the PR's next push
+          # regardless. Fixing the flap fully would mean editing that other
+          # workflow or adding workflow_run-chained sequencing here, either
+          # of which is more than this cosmetic race is worth.
+          pr=${{ github.event.pull_request.number }}
+          echo "Applying labels to Konflux PR #${pr}..."
+          gh pr edit "${pr}" --repo "${{ github.repository }}" \
+            --add-label lgtm --add-label approved \
+            --add-label jira/valid-reference --add-label ok-to-test
+
+      - name: Approve pending action_required runs for this PR's head SHA
+        env:
+          GH_TOKEN: ${{ secrets.MERGE_QUEUE_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Same approach as osac-test-infra's slash-command-handler.yml
+          # "Handle ok-to-test" step: an external App identity's workflow
+          # runs can land in GitHub's native fork/first-time-contributor
+          # action_required gate and never execute at all otherwise.
+          head_sha="${{ github.event.pull_request.head.sha }}"
+          approved=0
+          failed=0
+
+          # A real listing failure (auth, rate limit, bad request) must not
+          # be indistinguishable from "no pending runs found" -- no
+          # suppression here, so a non-zero exit propagates and fails the
+          # job immediately, before the loop below can silently do nothing.
+          if ! pending_runs=$(gh api "repos/${{ github.repository }}/actions/runs?head_sha=${head_sha}&status=action_required" \
+            --jq '.workflow_runs[].id'); then
+            echo "::error::Failed to list action_required runs for ${head_sha:0:7}" >&2
+            exit 1
+          fi
+
+          for run_id in ${pending_runs}; do
+            if gh api "repos/${{ github.repository }}/actions/runs/${run_id}/approve" --method POST --silent; then
+              approved=$((approved + 1))
+            else
+              # Don't abort the loop over a single run's failure (e.g. a
+              # race where it was already approved or completed between
+              # listing and approving), but don't silently swallow it
+              # either -- log it and fail the job at the end so a genuine
+              # approval failure is never hidden behind a green check.
+              failed=$((failed + 1))
+              echo "::error::Failed to approve run ${run_id} for ${head_sha:0:7}" >&2
+            fi
+          done
+          echo "Approved ${approved} pending run(s) for ${head_sha:0:7}."
+          [[ "${failed}" -eq 0 ]]

@@ -331,7 +331,7 @@ hubAccess:
 bundledVault:
   enabled: false
   devRootToken: ""
-  image: "ghcr.io/openbao/openbao:2.6.1"
+  image: "ghcr.io/openbao/openbao:2.6.2"
   resources:
     limits:
       cpu: 500m

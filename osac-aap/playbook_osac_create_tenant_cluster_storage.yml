@@ -100,7 +100,11 @@
     # handleBackendReadiness blocks Stage 2 from running until Stage 1
     # (playbook_osac_create_tenant_storage_backend.yml's setup dispatch) has
     # gone green for this tenant. A future change to that controller's
-    # Stage-gating logic could silently break this precondition.
+    # Stage-gating logic could silently break this precondition. That
+    # cross-repo Stage-gating contract is verified in osac-operator's
+    # internal/controller/storage_controller_test.go ("Stage 1: Backend
+    # provisioning" and "Stage 2: Cluster storage provisioning" contexts),
+    # which drive handleBackendReadiness against a real envtest control plane.
     - name: Install OSAC CSI driver on the hub (once per dispatch, regardless of provider count)
       when: osac_job_vars.resource.kind == 'Tenant'
       ansible.builtin.include_role:

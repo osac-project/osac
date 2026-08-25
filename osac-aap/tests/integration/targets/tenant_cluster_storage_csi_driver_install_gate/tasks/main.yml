@@ -8,7 +8,7 @@
 #
 # Verifies the playbook's when: osac_job_vars.resource.kind == 'Tenant' gate by stubbing
 # the real Helm install via csi_driver_install_override (same override mechanism
-# csi_driver_install_playbook_wiring already tests for the tenant storage backend call
+# tenant_storage_backend_csi_driver_install_wiring already tests for the tenant storage backend call
 # site), then runs the rest of the playbook (the real osac.service.storage_provider
 # ensure_storage_class dispatch) for real against the mock VMS server for BOTH cases --
 # proving the gate is the only thing that differs, not that storage provisioning itself
@@ -29,6 +29,18 @@
 # mirror). Does NOT require a published osac-csi-driver chart tag or the local chart
 # registry setup_test_env.sh stands up for csi_driver_install's own role-level test -- the
 # real Helm install is stubbed out entirely here.
+#
+# SCOPE: this test only proves the playbook-level `when: kind == 'Tenant'` gate
+# and that the real storage_provider dispatch still runs -- it does NOT exercise
+# the cross-repo Stage-gating contract that makes the unconditional Tenant-case
+# csi_driver_install safe (that Stage 2 only runs once Stage 1 backend readiness
+# is green). That contract lives in osac-operator, not this playbook, and cannot
+# be exercised here because no osac-operator controller runs in this kind-based
+# Ansible harness. It is verified in osac-operator's
+# internal/controller/storage_controller_test.go ("Stage 1: Backend provisioning"
+# and "Stage 2: Cluster storage provisioning" contexts), which drive
+# handleBackendReadiness against a real envtest control plane. The
+# csi_driver_install_override stub in both cases below is therefore intentional.
 
 # ── Positive case: Tenant kind -- csi_driver_install must fire ──
 - name: "Tenant Cluster Storage CSI Driver Install Gate - Setup (Tenant case)"

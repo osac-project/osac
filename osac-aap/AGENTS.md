@@ -230,7 +230,7 @@ Test targets in `tests/integration/targets/`:
 - `compute_instance_*` — ComputeInstance lifecycle (create, delete, with_gpu)
 - `storage_provider_*` — Storage onboarding, setup, teardown, rollback
 - `storage_provider_ensure_csi_backends` — sole-owner `csi-backends` Helm chart install: cumulative vendor enablement across dispatches, vmsHost resolution, OAuth Secret lifecycle, install-lock contention
-- `csi_driver_install*`, `tenant_cluster_storage_csi_driver_install_gate`, `compute_instance_jit_csi_driver_install_wiring` — OSAC CSI driver Helm chart install (csi-driver only): role behavior, playbook wiring, per-call-site JIT-install gating
+- `csi_driver_install`, `tenant_storage_backend_csi_driver_install_wiring`, `tenant_cluster_storage_csi_driver_install_gate`, `compute_instance_jit_csi_driver_install_wiring` — OSAC CSI driver Helm chart install (csi-driver only): role behavior, playbook wiring, per-call-site JIT-install gating
 - `finalizer`, `lease`, `tenant_target_namespace` — Service role tests
 - `config_as_code_pod_specs` — AAP configuration validation
 

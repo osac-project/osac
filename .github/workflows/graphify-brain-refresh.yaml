@@ -63,7 +63,7 @@ jobs:
           # (Vertex AI backend) and https://github.com/Graphify-Labs/graphify/pull/3087
           # (ci-select + fixes) are merged upstream and a new graphifyy release is published.
           # Then revert to: pip install --user "graphifyy[sql,vertex]==${GRAPHIFY_VERSION}"
-          pip install --user "graphifyy[sql,vertex] @ git+https://github.com/eliorerz/graphify@e700e2b35012696e8b490c13f0ada871977f1a2f"
+          pip install --user "graphifyy[sql,vertex] @ git+https://github.com/eliorerz/graphify@1a122e1"
           echo "${HOME}/.local/bin" >> "$GITHUB_PATH"
 
       - name: Restore prior graphify-out/ state (fast path)

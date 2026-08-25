@@ -1,0 +1,219 @@
+name: Graphify Brain Refresh (Vertex AI POC)
+
+# Temporary, on-demand-only sibling of graphify-brain-refresh.yaml, used to
+# validate the Vertex AI semantic-extraction backend in isolation while
+# eliorerz/graphify's upstream PRs (#3083, #3087) are still pending and
+# osac-ci's gemini-2.5-flash/-pro quota is still the non-adjustable 5 req/min
+# default. graphify-brain-refresh.yaml itself was reverted back to plain
+# code-only extraction so the real hourly job stays reliable in the meantime.
+#
+# Isolation from the production job:
+#   - workflow_dispatch only, no schedule -- never runs unattended.
+#   - Separate concurrency group -- never queues behind/blocks the real job.
+#   - Separate RELEASE_TAG (graph-vertex-poc, not graph-latest) -- can never
+#     publish over the bundle every developer session and ci-select actually
+#     consume.
+#   - No alert-on-repeated-failure job -- failures here are expected while
+#     validating, not something to page anyone over.
+#
+# Delete this file once the Vertex AI backend is proven reliable (upstream
+# PRs merged + a real quota in place), and fold its config back into
+# graphify-brain-refresh.yaml directly.
+
+on:
+  workflow_dispatch: {}
+
+concurrency:
+  group: graphify-brain-refresh-vertex-poc
+  cancel-in-progress: false
+
+permissions: {}
+
+env:
+  RELEASE_TAG: graph-vertex-poc
+
+jobs:
+  refresh:
+    name: Refresh and publish graph (Vertex AI POC)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write  # gh release create/upload against this same repo
+      id-token: write  # WIF auth to osac-ci GCP project for Vertex AI
+    env:
+      # Vertex AI backend configuration -- enables semantic extraction via
+      # Gemini 2.5 Flash using Application Default Credentials (no API key).
+      GOOGLE_CLOUD_PROJECT: osac-ci
+      GOOGLE_CLOUD_LOCATION: us-central1
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Authenticate to Google Cloud (Vertex AI)
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed  # v2.1.13
+        with:
+          workload_identity_provider: projects/1008600636152/locations/global/workloadIdentityPools/github-actions-pool/providers/github-actions-provider
+          service_account: osac-ci@osac-ci.iam.gserviceaccount.com
+
+      - name: Install graphify
+        run: |
+          # TEMPORARY: Install from fork until https://github.com/Graphify-Labs/graphify/pull/3083
+          # (Vertex AI backend) and https://github.com/Graphify-Labs/graphify/pull/3087
+          # (ci-select + fixes) are merged upstream and a new graphifyy release is published.
+          # 653aa4e includes retry/backoff for the vertex client's Vertex AI calls --
+          # needed because osac-ci's gemini-2.5-flash/-pro quota defaults to a
+          # non-adjustable 5 requests/minute (a GCP support request for a higher
+          # quota has been filed separately).
+          pip install --user "graphifyy[sql,vertex] @ git+https://github.com/eliorerz/graphify@653aa4eddc1e5ffe524a8d928b9e6d7c3c31cdf3"
+          echo "${HOME}/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Restore prior graphify-out/ state (fast path)
+        id: cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: graphify-out/
+          # Cache keys are immutable in GH Actions -- a static key would make
+          # every save after the first a silent no-op. Save under a per-run
+          # key and restore via restore-keys prefix match so the fast path
+          # always finds the most recent entry.
+          key: graphify-brain-vertex-poc-cache-${{ github.run_id }}
+          restore-keys: |
+            graphify-brain-vertex-poc-cache-
+
+      - name: Re-pull last published bundle (authoritative)
+        id: repull
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/graphify-repull && mkdir -p /tmp/graphify-repull
+          if gh release download "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
+               --pattern 'graphify-bundle.tar.gz' --dir /tmp/graphify-repull; then
+            rm -rf graphify-out
+            mkdir -p graphify-out
+            tar xzf /tmp/graphify-repull/graphify-bundle.tar.gz -C graphify-out
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No published bundle to re-pull yet (first run, or release missing)."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Determine restore path taken
+        id: restore-path
+        run: |
+          # cache-hit is only true on an exact primary-key match, which never
+          # happens now that the save key is per-run (see restore step above)
+          # -- cache-matched-key is set on both exact and restore-keys/prefix
+          # matches, so it's the correct signal for "did the fast path find
+          # anything at all".
+          if [[ "${{ steps.repull.outputs.ok }}" == "true" ]]; then
+            path="artifact-repull"
+          elif [[ -n "${{ steps.cache.outputs.cache-matched-key }}" ]]; then
+            path="cache-hit"
+          else
+            path="full-rebuild"
+          fi
+          echo "path=${path}" >> "$GITHUB_OUTPUT"
+          echo "::notice::graphify-brain-refresh-vertex-poc restore path: ${path}"
+
+      - name: Extract or update graph
+        run: |
+          set -euo pipefail
+          # Semantic extraction is enabled via the Vertex AI backend --
+          # GOOGLE_CLOUD_PROJECT env var triggers auto-detection, no explicit
+          # --backend flag needed. Removed --code-only to allow semantic pass
+          # on docs/images/etc. Update still defaults to code-only incremental.
+          # Force one full rebuild after semantic extraction is enabled by checking
+          # for a marker in metadata.json. Pre-semantic bundles lack this marker,
+          # so the first run will do a full extraction with --force to ensure a
+          # clean rebuild (not an incremental merge).
+          if [[ -f graphify-out/graph.json && -f graphify-out/manifest.json && \
+                -f graphify-out/metadata.json ]] && \
+             jq -e '.semantic_extraction == true' graphify-out/metadata.json >/dev/null 2>&1; then
+            echo "Prior semantic graph found -- running incremental update."
+            graphify update .
+          else
+            echo "No usable semantic graph -- running full extraction."
+            graphify extract . --force
+          fi
+          # extract doesn't write GRAPH_REPORT.md itself; update sometimes
+          # does. Always (re)generate it explicitly.
+          graphify cluster-only .
+
+      - name: Write metadata.json
+        run: |
+          set -euo pipefail
+          # Extract just the bare numeric version (graphify --version prints
+          # non-numeric text too, e.g. "graphify 0.9.41") so this matches
+          # exactly what the fetch script's own version check expects to
+          # compare against -- see fetch-graphify-brain.sh's Step 5.
+          graphify_version="$(graphify --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+          generated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          jq -n \
+            --arg source_sha "${GITHUB_SHA}" \
+            --arg graphify_version "${graphify_version}" \
+            --arg generated_at "${generated_at}" \
+            '{source_sha: $source_sha, graphify_version: $graphify_version, generated_at: $generated_at, semantic_extraction: true}' \
+            > graphify-out/metadata.json
+
+      - name: Export Obsidian vault (best-effort, independent asset)
+        id: obsidian
+        run: |
+          set -uo pipefail
+          if graphify export obsidian 2>/tmp/obsidian-export.log; then
+            if [[ -d graphify-out/obsidian ]]; then
+              tar czf graphify-obsidian-export.tar.gz -C graphify-out obsidian
+              echo "ok=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "obsidian export reported success but produced no output directory -- skipping asset."
+              echo "ok=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "Obsidian export failed (non-fatal, mechanical export only):"
+            cat /tmp/obsidian-export.log || true
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Bundle core artifacts (single archive for atomic publish)
+        run: |
+          set -euo pipefail
+          # graph.json + GRAPH_REPORT.md + manifest.json + metadata.json travel
+          # together in one archive so a consumer always gets the whole matched
+          # set or a clean 404 -- never a mismatched pair from two publishes.
+          tar czf graphify-bundle.tar.gz -C graphify-out \
+            graph.json GRAPH_REPORT.md manifest.json metadata.json
+
+      - name: Publish to GH Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          assets=(graphify-bundle.tar.gz)
+          if [[ "${{ steps.obsidian.outputs.ok }}" == "true" ]]; then
+            assets+=(graphify-obsidian-export.tar.gz)
+          fi
+          if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            # `gh release upload --clobber` replaces assets in place but does
+            # not move the release's own tag -- move it explicitly so
+            # the tag's git ref (not just metadata.json's source_sha) points
+            # at this run's commit too. `gh release edit --target` cannot
+            # move an existing tag; the Git refs API can.
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${RELEASE_TAG}" \
+              -f sha="${GITHUB_SHA}" -F force=true
+            gh release upload "${RELEASE_TAG}" "${assets[@]}" --repo "${GITHUB_REPOSITORY}" --clobber
+          else
+            gh release create "${RELEASE_TAG}" "${assets[@]}" --repo "${GITHUB_REPOSITORY}" \
+              --target "${GITHUB_SHA}" \
+              --title "graphify brain (Vertex AI POC -- not for consumption)" \
+              --notes "Auto-published by graphify-brain-refresh-vertex-poc.yaml. Experimental -- not consumed by the fetch hook or any real workflow; validates the Vertex AI backend in isolation from graph-latest."
+          fi
+
+      - name: Save graphify-out/ for next run's fast path
+        if: success()
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: graphify-out/
+          key: graphify-brain-vertex-poc-cache-${{ github.run_id }}

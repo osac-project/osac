@@ -38,12 +38,6 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: write  # gh release create/upload against this same repo
-      id-token: write  # WIF auth to osac-ci GCP project for Vertex AI
-    env:
-      # Vertex AI backend configuration -- enables semantic extraction via
-      # Gemini 2.5 Flash using Application Default Credentials (no API key).
-      GOOGLE_CLOUD_PROJECT: osac-ci
-      GOOGLE_CLOUD_LOCATION: us-central1
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -51,19 +45,9 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Authenticate to Google Cloud (Vertex AI)
-        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed  # v2.1.13
-        with:
-          workload_identity_provider: projects/1008600636152/locations/global/workloadIdentityPools/github-actions-pool/providers/github-actions-provider
-          service_account: osac-ci@osac-ci.iam.gserviceaccount.com
-
       - name: Install graphify
         run: |
-          # TEMPORARY: Install from fork until https://github.com/Graphify-Labs/graphify/pull/3083
-          # (Vertex AI backend) and https://github.com/Graphify-Labs/graphify/pull/3087
-          # (ci-select + fixes) are merged upstream and a new graphifyy release is published.
-          # Then revert to: pip install --user "graphifyy[sql,vertex]==${GRAPHIFY_VERSION}"
-          pip install --user "graphifyy[sql,vertex] @ git+https://github.com/eliorerz/graphify@1a122e1"
+          pip install --user "graphifyy[sql]==${GRAPHIFY_VERSION}"
           echo "${HOME}/.local/bin" >> "$GITHUB_PATH"
 
       - name: Restore prior graphify-out/ state (fast path)
@@ -118,22 +102,14 @@ jobs:
       - name: Extract or update graph
         run: |
           set -euo pipefail
-          # Semantic extraction is now enabled via Vertex AI backend --
-          # GOOGLE_CLOUD_PROJECT env var triggers auto-detection, no explicit
-          # --backend flag needed. Removed --code-only to allow semantic pass
-          # on docs/images/etc. Update still defaults to code-only incremental.
-          # Force one full rebuild after semantic extraction is enabled by checking
-          # for a marker in metadata.json. Pre-semantic bundles lack this marker,
-          # so the first run after this PR merges will do a full extraction with
-          # --force to ensure a clean rebuild (not an incremental merge).
-          if [[ -f graphify-out/graph.json && -f graphify-out/manifest.json && \
-                -f graphify-out/metadata.json ]] && \
-             jq -e '.semantic_extraction == true' graphify-out/metadata.json >/dev/null 2>&1; then
-            echo "Prior semantic graph found -- running incremental update."
+          # update has no --code-only flag (already no-LLM by default; only
+          # extract accepts it) -- confirmed against the real CLI.
+          if [[ -f graphify-out/graph.json && -f graphify-out/manifest.json ]]; then
+            echo "Prior graph found -- running incremental update."
             graphify update .
           else
-            echo "No usable semantic graph -- running full extraction."
-            graphify extract . --force
+            echo "No usable prior graph -- running full extraction."
+            graphify extract . --code-only
           fi
           # extract doesn't write GRAPH_REPORT.md itself; update sometimes
           # does. Always (re)generate it explicitly.
@@ -152,7 +128,7 @@ jobs:
             --arg source_sha "${GITHUB_SHA}" \
             --arg graphify_version "${graphify_version}" \
             --arg generated_at "${generated_at}" \
-            '{source_sha: $source_sha, graphify_version: $graphify_version, generated_at: $generated_at, semantic_extraction: true}' \
+            '{source_sha: $source_sha, graphify_version: $graphify_version, generated_at: $generated_at}' \
             > graphify-out/metadata.json
 
       - name: Export Obsidian vault (best-effort, independent asset)

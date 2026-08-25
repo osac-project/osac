@@ -36,6 +36,7 @@ controllers:
   # is empty the controller starts with provisioning disabled (Volumes stay in
   # Progressing) and never fails operator startup.
   volume: true
+  networkingProvisioning: true
 
 # vendorControllers maps StorageBackend names to their vendor CSI controller
 # gRPC endpoints, rendered into OSAC_VENDOR_CONTROLLERS for the Volume

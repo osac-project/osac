@@ -1,7 +1,7 @@
 # Open Sovereign AI Cloud - Unified Helm Values
 # This values file configures all OSAC components via the umbrella chart.
 
-cliImage: quay.io/openshift/origin-cli:4.20.0
+cliImage: quay.io/openshift/origin-cli:4.22.0
 
 # Shared PostgreSQL host for the db-init hook.
 dbInit:

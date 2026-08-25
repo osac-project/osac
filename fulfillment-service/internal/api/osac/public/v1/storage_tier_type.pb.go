@@ -282,8 +282,7 @@ type StorageTierSpec struct {
 	state protoimpl.MessageState `protogen:"hybrid.v1"`
 	// Human-readable description of the storage tier.
 	Description string `protobuf:"bytes,1,opt,name=description,proto3" json:"description,omitempty"`
-	// Storage protocol used by this tier. Must be an explicit protocol (NFS or BLOCK);
-	// UNSPECIFIED is rejected.
+	// Storage protocol used by this tier. Always an explicit protocol (NFS or BLOCK); never UNSPECIFIED.
 	Protocol StorageProtocol `protobuf:"varint,2,opt,name=protocol,proto3,enum=osac.public.v1.StorageProtocol" json:"protocol,omitempty"`
 	// Maximum read bandwidth in megabytes per second.
 	MaxReadBandwidthMbs int32 `protobuf:"varint,3,opt,name=max_read_bandwidth_mbs,json=maxReadBandwidthMbs,proto3" json:"max_read_bandwidth_mbs,omitempty"`
@@ -380,8 +379,7 @@ type StorageTierSpec_builder struct {
 
 	// Human-readable description of the storage tier.
 	Description string
-	// Storage protocol used by this tier. Must be an explicit protocol (NFS or BLOCK);
-	// UNSPECIFIED is rejected.
+	// Storage protocol used by this tier. Always an explicit protocol (NFS or BLOCK); never UNSPECIFIED.
 	Protocol StorageProtocol
 	// Maximum read bandwidth in megabytes per second.
 	MaxReadBandwidthMbs int32

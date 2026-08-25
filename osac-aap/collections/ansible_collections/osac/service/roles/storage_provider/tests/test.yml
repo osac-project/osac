@@ -922,15 +922,14 @@
             success_msg: "Structured failure artifact correctly recorded the unsupported protocol via ensure_storage_class"
 
 # ──────────────────────────────────────────────────────────────
-# Test 22: Empty-string protocol (the real UNSPECIFIED shape from osac-operator) -- error path
+# Test 22: Empty-string protocol (the UNSPECIFIED-derived shape) -- error path, defense in depth
 # Expected: role fails at the dispatcher-level required-fields check (main.yaml), NOT at the
-# unsupported_protocol structured-failure check -- proving the one bad-protocol value that can
-# actually reach AAP in production today (fulfillment-service silently accepts
-# STORAGE_PROTOCOL_UNSPECIFIED at Create and Update; osac-operator maps it to protocol: "" and
-# passes it through unconditionally) is caught cleanly before dispatch ever reaches
-# action-specific protocol validation. Dispatched via ensure_storage_class -- the action Test 21
-# proves now enforces the closed-set check -- to confirm the empty-string case is intercepted
-# even earlier than that, at the dispatcher level.
+# unsupported_protocol structured-failure check. fulfillment-service now rejects
+# STORAGE_PROTOCOL_UNSPECIFIED at Create and Update (proto not_in:[0]), so an empty-string protocol
+# should no longer originate from a validly-created tier; this keeps the AAP-side guard honest
+# however an empty/missing protocol arrives. Dispatched via ensure_storage_class -- the action
+# Test 21 proves now enforces the closed-set check -- to confirm the empty-string case is
+# intercepted even earlier than that, at the dispatcher level.
 # ──────────────────────────────────────────────────────────────
 - name: Test storage_provider -- empty-string protocol from UNSPECIFIED (should fail)
   hosts: localhost

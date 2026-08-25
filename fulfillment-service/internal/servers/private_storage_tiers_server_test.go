@@ -462,7 +462,6 @@ var _ = Describe("Private storage tiers server", func() {
 		Describe("Validation", func() {
 			// Create-time enforcement runs in the protovalidate interceptor (bypassed by direct
 			// server.Create calls), so assert the annotation itself rejects an unspecified protocol.
-			// The full Create path through the interceptor is covered in it/it_public_storage_tiers_test.go.
 			It("Rejects a spec with an unspecified protocol", func() {
 				validator, err := protovalidate.New()
 				Expect(err).ToNot(HaveOccurred())

@@ -370,8 +370,7 @@ type StorageTierSpec_builder struct {
 
 	// Human-readable description of the storage tier.
 	Description string
-	// Storage protocol used by this tier. Must be an explicit protocol (NFS or BLOCK);
-	// UNSPECIFIED is rejected.
+	// Storage protocol used by this tier. Always an explicit protocol (NFS or BLOCK); never UNSPECIFIED.
 	Protocol StorageProtocol
 	// Maximum read bandwidth in megabytes per second.
 	MaxReadBandwidthMbs int32

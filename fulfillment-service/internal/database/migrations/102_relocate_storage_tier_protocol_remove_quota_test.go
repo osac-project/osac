@@ -51,6 +51,26 @@ var _ = DescribeMigration("Remove storage tier protocol and quota", func() {
 		Expect(specProtocol).To(Equal("STORAGE_PROTOCOL_NFS"))
 	})
 
+	It("Relocates a BLOCK protocol to spec for an active row (the local LVMS tier upgrade shape)", func(ctx context.Context) {
+		_, err := conn.Exec(ctx,
+			`insert into storage_tiers (id, name, tenant, data)
+			 values ('tier-block', 'tier-block', 'system', $1::jsonb)`,
+			`{"spec":{"backends":[{"backend_id":"sb-block","protocol":"STORAGE_PROTOCOL_BLOCK"}]}}`)
+		Expect(err).ToNot(HaveOccurred())
+
+		err = tool.Migrate(ctx, 102)
+		Expect(err).ToNot(HaveOccurred())
+
+		var backendHasProtocol bool
+		var specProtocol string
+		err = conn.QueryRow(ctx,
+			`select (data->'spec'->'backends'->0) ? 'protocol', data->'spec'->>'protocol'
+			 from storage_tiers where id = 'tier-block'`).Scan(&backendHasProtocol, &specProtocol)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(backendHasProtocol).To(BeFalse())
+		Expect(specProtocol).To(Equal("STORAGE_PROTOCOL_BLOCK"))
+	})
+
 	It("Backfills UNSPECIFIED protocol for a row with no backend associations", func(ctx context.Context) {
 		_, err := conn.Exec(ctx,
 			`insert into storage_tiers (id, name, tenant, data)

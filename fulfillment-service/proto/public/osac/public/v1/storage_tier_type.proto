@@ -67,8 +67,7 @@ message StorageTierSpec {
   // Human-readable description of the storage tier.
   string description = 1;
 
-  // Storage protocol used by this tier. Must be an explicit protocol (NFS or BLOCK);
-  // UNSPECIFIED is rejected.
+  // Storage protocol used by this tier. Always an explicit protocol (NFS or BLOCK); never UNSPECIFIED.
   StorageProtocol protocol = 2 [(buf.validate.field).enum = {defined_only: true, not_in: [0]}];
 
   // Maximum read bandwidth in megabytes per second.

@@ -64,6 +64,10 @@ type ExternalIPReconciler struct {
 	StatusPollInterval   time.Duration
 	MaxJobHistory        int
 	targetCluster        mc.ClusterName
+	// NetworkProvisioningEnabled controls whether the controller dispatches AAP
+	// provisioning jobs. When false, resources are set to Ready immediately
+	// with a placeholder address.
+	NetworkProvisioningEnabled bool
 }
 
 // NewExternalIPReconciler creates a new reconciler for ExternalIP resources.
@@ -178,6 +182,17 @@ func (r *ExternalIPReconciler) handleUpdate(ctx context.Context, externalIP *v1a
 	if externalIP.Status.Phase == "" {
 		externalIP.Status.Phase = v1alpha1.ExternalIPPhaseProgressing
 		externalIP.Status.State = v1alpha1.ExternalIPStatePending
+	}
+
+	// When networking provisioning is disabled, skip AAP job dispatch and set Ready
+	// immediately with a placeholder address. The placeholder ensures
+	// ExternalIPAttachment's address check doesn't block.
+	if !r.NetworkProvisioningEnabled {
+		externalIP.Status.State = v1alpha1.ExternalIPStateAllocated
+		externalIP.Status.Address = "0.0.0.0"
+		externalIP.Status.Phase = v1alpha1.ExternalIPPhaseReady
+		setReadyConditionTrue(&externalIP.Status.Conditions)
+		return ctrl.Result{}, nil
 	}
 
 	// Resolve the parent ExternalIPPool by the fulfillment-service UUID stored in spec.pool.

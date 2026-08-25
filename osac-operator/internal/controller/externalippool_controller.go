@@ -62,6 +62,9 @@ type ExternalIPPoolReconciler struct {
 	StatusPollInterval   time.Duration
 	MaxJobHistory        int
 	targetCluster        mc.ClusterName
+	// NetworkProvisioningEnabled controls whether the controller dispatches AAP
+	// provisioning jobs. When false, resources are set to Ready immediately.
+	NetworkProvisioningEnabled bool
 }
 
 // NewExternalIPPoolReconciler creates a new reconciler for ExternalIPPool resources.
@@ -159,6 +162,14 @@ func (r *ExternalIPPoolReconciler) handleUpdate(ctx context.Context, pool *v1alp
 	// Set initial phase to Progressing
 	if pool.Status.Phase == "" {
 		pool.Status.Phase = v1alpha1.ExternalIPPoolPhaseProgressing
+	}
+
+	// When networking provisioning is disabled, skip AAP job dispatch and set Ready
+	// immediately.
+	if !r.NetworkProvisioningEnabled {
+		pool.Status.Phase = v1alpha1.ExternalIPPoolPhaseReady
+		setReadyConditionTrue(&pool.Status.Conditions)
+		return ctrl.Result{}, nil
 	}
 
 	// Read implementation strategy from spec

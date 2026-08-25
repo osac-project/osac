@@ -81,6 +81,7 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 					{Id: "some-class"},
 				}, &[]*privatev1.NetworkClass{},
 			)), disc),
+			NetworkProvisioningEnabled: true,
 		}
 
 		// Create VirtualNetwork fixture. Implementation strategy is now resolved

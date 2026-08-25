@@ -54,6 +54,9 @@ type NATGatewayReconciler struct {
 	MaxJobHistory        int
 	targetCluster        mc.ClusterName
 	Resolver             *dispatcher.Resolver
+	// NetworkProvisioningEnabled controls whether the controller dispatches AAP
+	// provisioning jobs. When false, resources are set to Ready immediately.
+	NetworkProvisioningEnabled bool
 }
 
 // NewNATGatewayReconciler creates a new reconciler for NATGateway resources.
@@ -169,6 +172,14 @@ func (r *NATGatewayReconciler) handleUpdate(ctx context.Context, natgw *v1alpha1
 	// Set phase to Progressing only on first reconcile (empty phase).
 	if natgw.Status.Phase == "" {
 		natgw.Status.Phase = v1alpha1.NATGatewayPhaseProgressing
+	}
+
+	// When networking provisioning is disabled, skip AAP job dispatch and set Ready
+	// immediately.
+	if !r.NetworkProvisioningEnabled {
+		natgw.Status.Phase = v1alpha1.NATGatewayPhaseReady
+		setReadyConditionTrue(&natgw.Status.Conditions)
+		return ctrl.Result{}, nil
 	}
 
 	// Get parent VirtualNetwork by UUID label to read implementation strategy

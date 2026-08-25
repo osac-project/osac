@@ -60,6 +60,10 @@ type VirtualNetworkReconciler struct {
 	// in which case the controller cannot resolve an implementation strategy for any
 	// VirtualNetwork and requeues until Resolver is configured.
 	Resolver *dispatcher.Resolver
+	// NetworkProvisioningEnabled controls whether the controller dispatches AAP
+	// provisioning jobs. When false, resources are set to Ready immediately
+	// without triggering any infrastructure provisioning.
+	NetworkProvisioningEnabled bool
 }
 
 // NewVirtualNetworkReconciler creates a new reconciler for VirtualNetwork resources.
@@ -157,6 +161,15 @@ func (r *VirtualNetworkReconciler) handleUpdate(ctx context.Context, vnet *v1alp
 	// by OnSuccess/OnFailed callbacks in RunProvisioningLifecycle.
 	if vnet.Status.Phase == "" {
 		vnet.Status.Phase = v1alpha1.VirtualNetworkPhaseProgressing
+	}
+
+	// When networking provisioning is disabled, skip AAP job dispatch and set Ready
+	// immediately. The finalizer is already present for proper cleanup, but no
+	// infrastructure provisioning is triggered.
+	if !r.NetworkProvisioningEnabled {
+		vnet.Status.Phase = v1alpha1.VirtualNetworkPhaseReady
+		setReadyConditionTrue(&vnet.Status.Conditions)
+		return ctrl.Result{}, nil
 	}
 
 	// Determine implementation strategy from the dispatcher-resolved manager for this

@@ -302,11 +302,20 @@ func (s *PrivateBareMetalInstancesServer) Delete(ctx context.Context,
 				err = getErr
 				return
 			}
+			s.logger.DebugContext(ctx, "BMI not found during delete, skipping auto-EIP cleanup",
+				slog.String("bmi_id", id))
 		} else if getResponse.GetObject().GetSpec().GetAutoExternalIpAttachment() {
+			s.logger.InfoContext(ctx, "BMI has auto_external_ip_attachment, running cascade cleanup",
+				slog.String("bmi_id", id))
 			err = s.autoCleanupExternalIP(ctx, id)
 			if err != nil {
+				s.logger.ErrorContext(ctx, "Auto-EIP cascade cleanup failed",
+					slog.String("bmi_id", id), slog.Any("error", err))
 				return
 			}
+		} else {
+			s.logger.DebugContext(ctx, "BMI does not have auto_external_ip_attachment",
+				slog.String("bmi_id", id))
 		}
 	}
 	err = s.generic.Delete(ctx, request, &response)
@@ -318,18 +327,28 @@ func (s *PrivateBareMetalInstancesServer) autoCleanupExternalIP(ctx context.Cont
 		"this.metadata.labels['%s'] == '%s'",
 		autoCreatedForLabel, bmiID,
 	)
+	s.logger.InfoContext(ctx, "Auto-EIP cleanup: listing attachments",
+		slog.String("bmi_id", bmiID), slog.String("filter", filter))
+
 	listResp, err := s.externalIPAttachmentDao.List().SetFilter(filter).Do(ctx)
 	if err != nil {
 		return fmt.Errorf("auto_external_ip_attachment cleanup: failed to list attachments: %w", err)
 	}
 
-	for _, attachment := range listResp.GetItems() {
+	items := listResp.GetItems()
+	s.logger.InfoContext(ctx, "Auto-EIP cleanup: found attachments",
+		slog.String("bmi_id", bmiID), slog.Int("count", len(items)))
+
+	for _, attachment := range items {
+		attachmentID := attachment.GetId()
 		eipRef := attachment.GetSpec().GetExternalIp()
 		eipID := refKey(eipRef)
+		s.logger.InfoContext(ctx, "Auto-EIP cleanup: deleting attachment",
+			slog.String("attachment_id", attachmentID), slog.String("eip_id", eipID))
 
-		_, err = s.externalIPAttachmentDao.Delete().SetId(attachment.GetId()).Do(ctx)
+		_, err = s.externalIPAttachmentDao.Delete().SetId(attachmentID).Do(ctx)
 		if err != nil {
-			return fmt.Errorf("auto_external_ip_attachment cleanup: failed to delete attachment: %w", err)
+			return fmt.Errorf("auto_external_ip_attachment cleanup: failed to delete attachment %s: %w", attachmentID, err)
 		}
 
 		if eipID != "" {
@@ -346,8 +365,11 @@ func (s *PrivateBareMetalInstancesServer) autoCleanupExternalIP(ctx context.Cont
 
 			_, err = s.externalIPDao.Delete().SetId(eipID).Do(ctx)
 			if err != nil {
-				return fmt.Errorf("auto_external_ip_attachment cleanup: failed to delete ExternalIP: %w", err)
+				return fmt.Errorf("auto_external_ip_attachment cleanup: failed to delete ExternalIP %s: %w", eipID, err)
 			}
+
+			s.logger.InfoContext(ctx, "Auto-EIP cleanup: deleted attachment and EIP",
+				slog.String("attachment_id", attachmentID), slog.String("eip_id", eipID))
 
 			if poolRef != nil {
 				err = UpdatePoolCapacity(ctx, s.externalIPPoolDao, refKey(poolRef), -1)
@@ -356,6 +378,11 @@ func (s *PrivateBareMetalInstancesServer) autoCleanupExternalIP(ctx context.Cont
 				}
 			}
 		}
+	}
+
+	if len(items) == 0 {
+		s.logger.WarnContext(ctx, "Auto-EIP cleanup: no attachments found for BMI",
+			slog.String("bmi_id", bmiID), slog.String("label", autoCreatedForLabel))
 	}
 
 	return nil

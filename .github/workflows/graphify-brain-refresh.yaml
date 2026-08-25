@@ -124,7 +124,8 @@ jobs:
           # on docs/images/etc. Update still defaults to code-only incremental.
           # Force one full rebuild after semantic extraction is enabled by checking
           # for a marker in metadata.json. Pre-semantic bundles lack this marker,
-          # so the first run after this PR merges will do a full extraction.
+          # so the first run after this PR merges will do a full extraction with
+          # --force to ensure a clean rebuild (not an incremental merge).
           if [[ -f graphify-out/graph.json && -f graphify-out/manifest.json && \
                 -f graphify-out/metadata.json ]] && \
              jq -e '.semantic_extraction == true' graphify-out/metadata.json >/dev/null 2>&1; then
@@ -132,7 +133,7 @@ jobs:
             graphify update .
           else
             echo "No usable semantic graph -- running full extraction."
-            graphify extract .
+            graphify extract . --force
           fi
           # extract doesn't write GRAPH_REPORT.md itself; update sometimes
           # does. Always (re)generate it explicitly.

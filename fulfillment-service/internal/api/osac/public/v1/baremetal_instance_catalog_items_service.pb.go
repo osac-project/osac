@@ -266,8 +266,9 @@ func (b0 BareMetalInstanceCatalogItemsListResponse_builder) Build() *BareMetalIn
 }
 
 type BareMetalInstanceCatalogItemsGetRequest struct {
-	state         protoimpl.MessageState `protogen:"hybrid.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	state protoimpl.MessageState `protogen:"hybrid.v1"`
+	// Unique identifier of the catalog item.
+	Id            string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -311,6 +312,7 @@ func (x *BareMetalInstanceCatalogItemsGetRequest) SetId(v string) {
 type BareMetalInstanceCatalogItemsGetRequest_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
+	// Unique identifier of the catalog item.
 	Id string
 }
 
@@ -532,7 +534,7 @@ type BareMetalInstanceCatalogItemsUpdateRequest struct {
 	UpdateMask *fieldmaskpb.FieldMask        `protobuf:"bytes,2,opt,name=update_mask,json=updateMask,proto3" json:"update_mask,omitempty"`
 	// Lock enables optimistic locking. When set to true, the server verifies that the current version of the object
 	// matches the value of the metadata.version field of the submitted object. If they differ the update will be
-	// rejected.
+	// rejected. This is useful to prevent lost updates when multiple clients are modifying the same object concurrently.
 	Lock          bool `protobuf:"varint,3,opt,name=lock,proto3" json:"lock,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -625,7 +627,7 @@ type BareMetalInstanceCatalogItemsUpdateRequest_builder struct {
 	UpdateMask *fieldmaskpb.FieldMask
 	// Lock enables optimistic locking. When set to true, the server verifies that the current version of the object
 	// matches the value of the metadata.version field of the submitted object. If they differ the update will be
-	// rejected.
+	// rejected. This is useful to prevent lost updates when multiple clients are modifying the same object concurrently.
 	Lock bool
 }
 
@@ -708,8 +710,9 @@ func (b0 BareMetalInstanceCatalogItemsUpdateResponse_builder) Build() *BareMetal
 }
 
 type BareMetalInstanceCatalogItemsDeleteRequest struct {
-	state         protoimpl.MessageState `protogen:"hybrid.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	state protoimpl.MessageState `protogen:"hybrid.v1"`
+	// Unique identifier of the catalog item.
+	Id            string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -753,6 +756,7 @@ func (x *BareMetalInstanceCatalogItemsDeleteRequest) SetId(v string) {
 type BareMetalInstanceCatalogItemsDeleteRequest_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
+	// Unique identifier of the catalog item.
 	Id string
 }
 

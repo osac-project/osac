@@ -37,7 +37,6 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// Request message for listing secrets.
 type SecretsListRequest struct {
 	state protoimpl.MessageState `protogen:"hybrid.v1"`
 	// Index of the first result. If not specified the default value will be zero.
@@ -51,9 +50,9 @@ type SecretsListRequest struct {
 	// The value of this parameter is a [CEL](https://cel.dev) expression used to select which objects to return. The
 	// built-in `this` variable refers to the object being tested and `now` refers to the current date and time. If the
 	// expression evaluates to `true` the object is included in the results. For example, to retrieve all secrets with
-	// names starting with `tls`:
+	// a Vault backend:
 	//
-	//	this.metadata.name.startsWith("tls")
+	//	this.backend == SECRET_BACKEND_VAULT
 	//
 	// If this isn't provided, or if the value is empty, then all the secrets that the user has permission to see will be
 	// returned. Not all CEL constructs are currently supported for implementation reasons; see the filter documentation
@@ -200,9 +199,9 @@ type SecretsListRequest_builder struct {
 	// The value of this parameter is a [CEL](https://cel.dev) expression used to select which objects to return. The
 	// built-in `this` variable refers to the object being tested and `now` refers to the current date and time. If the
 	// expression evaluates to `true` the object is included in the results. For example, to retrieve all secrets with
-	// names starting with `tls`:
+	// a Vault backend:
 	//
-	//	this.metadata.name.startsWith("tls")
+	//	this.backend == SECRET_BACKEND_VAULT
 	//
 	// If this isn't provided, or if the value is empty, then all the secrets that the user has permission to see will be
 	// returned. Not all CEL constructs are currently supported for implementation reasons; see the filter documentation
@@ -231,7 +230,6 @@ func (b0 SecretsListRequest_builder) Build() *SecretsListRequest {
 	return m0
 }
 
-// Response message for listing secrets.
 type SecretsListResponse struct {
 	state protoimpl.MessageState `protogen:"hybrid.v1"`
 	// Actual number of items returned. Note that this may be smaller than the value requested in the `limit` parameter
@@ -329,11 +327,9 @@ func (b0 SecretsListResponse_builder) Build() *SecretsListResponse {
 	return m0
 }
 
-// Request message for getting a single secret.
 type SecretsGetRequest struct {
-	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// Unique identifier of the secret to retrieve.
-	Id            string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	state         protoimpl.MessageState `protogen:"hybrid.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -377,7 +373,6 @@ func (x *SecretsGetRequest) SetId(v string) {
 type SecretsGetRequest_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
-	// Unique identifier of the secret to retrieve.
 	Id string
 }
 
@@ -389,11 +384,9 @@ func (b0 SecretsGetRequest_builder) Build() *SecretsGetRequest {
 	return m0
 }
 
-// Response message for getting a single secret.
 type SecretsGetResponse struct {
-	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// The requested secret object.
-	Object        *Secret `protobuf:"bytes,1,opt,name=object,proto3" json:"object,omitempty"`
+	state         protoimpl.MessageState `protogen:"hybrid.v1"`
+	Object        *Secret                `protobuf:"bytes,1,opt,name=object,proto3" json:"object,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -448,7 +441,6 @@ func (x *SecretsGetResponse) ClearObject() {
 type SecretsGetResponse_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
-	// The requested secret object.
 	Object *Secret
 }
 
@@ -460,11 +452,9 @@ func (b0 SecretsGetResponse_builder) Build() *SecretsGetResponse {
 	return m0
 }
 
-// Request message for creating a new secret.
 type SecretsCreateRequest struct {
-	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// The secret object to create.
-	Object        *Secret `protobuf:"bytes,1,opt,name=object,proto3" json:"object,omitempty"`
+	state         protoimpl.MessageState `protogen:"hybrid.v1"`
+	Object        *Secret                `protobuf:"bytes,1,opt,name=object,proto3" json:"object,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -519,7 +509,6 @@ func (x *SecretsCreateRequest) ClearObject() {
 type SecretsCreateRequest_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
-	// The secret object to create.
 	Object *Secret
 }
 
@@ -531,11 +520,9 @@ func (b0 SecretsCreateRequest_builder) Build() *SecretsCreateRequest {
 	return m0
 }
 
-// Response message for creating a new secret.
 type SecretsCreateResponse struct {
-	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// The created secret object, including any server-generated fields.
-	Object        *Secret `protobuf:"bytes,1,opt,name=object,proto3" json:"object,omitempty"`
+	state         protoimpl.MessageState `protogen:"hybrid.v1"`
+	Object        *Secret                `protobuf:"bytes,1,opt,name=object,proto3" json:"object,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -590,7 +577,6 @@ func (x *SecretsCreateResponse) ClearObject() {
 type SecretsCreateResponse_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
-	// The created secret object, including any server-generated fields.
 	Object *Secret
 }
 
@@ -602,12 +588,9 @@ func (b0 SecretsCreateResponse_builder) Build() *SecretsCreateResponse {
 	return m0
 }
 
-// Request message for updating an existing secret.
 type SecretsUpdateRequest struct {
-	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// The secret object with updated fields.
-	Object *Secret `protobuf:"bytes,1,opt,name=object,proto3" json:"object,omitempty"`
-	// Field mask specifying which fields to update. If not provided, all fields will be updated.
+	state      protoimpl.MessageState `protogen:"hybrid.v1"`
+	Object     *Secret                `protobuf:"bytes,1,opt,name=object,proto3" json:"object,omitempty"`
 	UpdateMask *fieldmaskpb.FieldMask `protobuf:"bytes,2,opt,name=update_mask,json=updateMask,proto3" json:"update_mask,omitempty"`
 	// Lock enables optimistic locking. When set to true, the server verifies that the current version of the object
 	// matches the value of the metadata.version field of the submitted object. If they differ the update will be
@@ -700,9 +683,7 @@ func (x *SecretsUpdateRequest) ClearUpdateMask() {
 type SecretsUpdateRequest_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
-	// The secret object with updated fields.
-	Object *Secret
-	// Field mask specifying which fields to update. If not provided, all fields will be updated.
+	Object     *Secret
 	UpdateMask *fieldmaskpb.FieldMask
 	// Lock enables optimistic locking. When set to true, the server verifies that the current version of the object
 	// matches the value of the metadata.version field of the submitted object. If they differ the update will be
@@ -720,11 +701,9 @@ func (b0 SecretsUpdateRequest_builder) Build() *SecretsUpdateRequest {
 	return m0
 }
 
-// Response message for updating an existing secret.
 type SecretsUpdateResponse struct {
-	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// The updated secret object.
-	Object        *Secret `protobuf:"bytes,1,opt,name=object,proto3" json:"object,omitempty"`
+	state         protoimpl.MessageState `protogen:"hybrid.v1"`
+	Object        *Secret                `protobuf:"bytes,1,opt,name=object,proto3" json:"object,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -779,7 +758,6 @@ func (x *SecretsUpdateResponse) ClearObject() {
 type SecretsUpdateResponse_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
-	// The updated secret object.
 	Object *Secret
 }
 
@@ -791,11 +769,9 @@ func (b0 SecretsUpdateResponse_builder) Build() *SecretsUpdateResponse {
 	return m0
 }
 
-// Request message for deleting a secret.
 type SecretsDeleteRequest struct {
-	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// Unique identifier of the secret to delete.
-	Id            string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	state         protoimpl.MessageState `protogen:"hybrid.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -839,7 +815,6 @@ func (x *SecretsDeleteRequest) SetId(v string) {
 type SecretsDeleteRequest_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
-	// Unique identifier of the secret to delete.
 	Id string
 }
 
@@ -851,7 +826,6 @@ func (b0 SecretsDeleteRequest_builder) Build() *SecretsDeleteRequest {
 	return m0
 }
 
-// Response message for deleting a secret.
 type SecretsDeleteResponse struct {
 	state         protoimpl.MessageState `protogen:"hybrid.v1"`
 	unknownFields protoimpl.UnknownFields

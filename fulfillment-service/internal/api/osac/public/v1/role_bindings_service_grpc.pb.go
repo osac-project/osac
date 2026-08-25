@@ -46,23 +46,17 @@ const (
 // Service for managing role bindings.
 //
 // Role bindings grant the permissions defined by a role to a set of users. Only administrators can create, update,
-// or delete role bindings. Regular users can only get and list them.
+// or delete role bindings. Regular users can only list and get role bindings.
 type RoleBindingsClient interface {
 	// Retrieves the list of role bindings.
 	List(ctx context.Context, in *RoleBindingsListRequest, opts ...grpc.CallOption) (*RoleBindingsListResponse, error)
 	// Retrieves the details of one specific role binding.
 	Get(ctx context.Context, in *RoleBindingsGetRequest, opts ...grpc.CallOption) (*RoleBindingsGetResponse, error)
-	// Creates a new role binding.
-	//
-	// This method isn't allowed for regular users, only for administrators.
+	// Creates a new role binding. This operation is only available to administrators.
 	Create(ctx context.Context, in *RoleBindingsCreateRequest, opts ...grpc.CallOption) (*RoleBindingsCreateResponse, error)
-	// Updates an existing role binding.
-	//
-	// This method isn't allowed for regular users, only for administrators.
+	// Updates an existing role binding. This operation is only available to administrators.
 	Update(ctx context.Context, in *RoleBindingsUpdateRequest, opts ...grpc.CallOption) (*RoleBindingsUpdateResponse, error)
-	// Deletes a role binding.
-	//
-	// This method isn't allowed for regular users, only for administrators.
+	// Deletes a role binding. This operation is only available to administrators.
 	Delete(ctx context.Context, in *RoleBindingsDeleteRequest, opts ...grpc.CallOption) (*RoleBindingsDeleteResponse, error)
 }
 
@@ -131,23 +125,17 @@ func (c *roleBindingsClient) Delete(ctx context.Context, in *RoleBindingsDeleteR
 // Service for managing role bindings.
 //
 // Role bindings grant the permissions defined by a role to a set of users. Only administrators can create, update,
-// or delete role bindings. Regular users can only get and list them.
+// or delete role bindings. Regular users can only list and get role bindings.
 type RoleBindingsServer interface {
 	// Retrieves the list of role bindings.
 	List(context.Context, *RoleBindingsListRequest) (*RoleBindingsListResponse, error)
 	// Retrieves the details of one specific role binding.
 	Get(context.Context, *RoleBindingsGetRequest) (*RoleBindingsGetResponse, error)
-	// Creates a new role binding.
-	//
-	// This method isn't allowed for regular users, only for administrators.
+	// Creates a new role binding. This operation is only available to administrators.
 	Create(context.Context, *RoleBindingsCreateRequest) (*RoleBindingsCreateResponse, error)
-	// Updates an existing role binding.
-	//
-	// This method isn't allowed for regular users, only for administrators.
+	// Updates an existing role binding. This operation is only available to administrators.
 	Update(context.Context, *RoleBindingsUpdateRequest) (*RoleBindingsUpdateResponse, error)
-	// Deletes a role binding.
-	//
-	// This method isn't allowed for regular users, only for administrators.
+	// Deletes a role binding. This operation is only available to administrators.
 	Delete(context.Context, *RoleBindingsDeleteRequest) (*RoleBindingsDeleteResponse, error)
 	mustEmbedUnimplementedRoleBindingsServer()
 }

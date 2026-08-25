@@ -50,7 +50,7 @@ type ExternalIPAttachmentsClient interface {
 	Get(ctx context.Context, in *ExternalIPAttachmentsGetRequest, opts ...grpc.CallOption) (*ExternalIPAttachmentsGetResponse, error)
 	// Creates a new external IP attachment. Binds an ExternalIP to a target resource.
 	Create(ctx context.Context, in *ExternalIPAttachmentsCreateRequest, opts ...grpc.CallOption) (*ExternalIPAttachmentsCreateResponse, error)
-	// Updates an existing external IP attachment. Only metadata (labels, annotations) can be changed.
+	// Updates an existing external IP attachment. Allows modifying metadata (labels, annotations).
 	Update(ctx context.Context, in *ExternalIPAttachmentsUpdateRequest, opts ...grpc.CallOption) (*ExternalIPAttachmentsUpdateResponse, error)
 	// Deletes an external IP attachment. Triggers the detach workflow to unbind the ExternalIP from the target.
 	Delete(ctx context.Context, in *ExternalIPAttachmentsDeleteRequest, opts ...grpc.CallOption) (*ExternalIPAttachmentsDeleteResponse, error)
@@ -136,7 +136,7 @@ type ExternalIPAttachmentsServer interface {
 	Get(context.Context, *ExternalIPAttachmentsGetRequest) (*ExternalIPAttachmentsGetResponse, error)
 	// Creates a new external IP attachment. Binds an ExternalIP to a target resource.
 	Create(context.Context, *ExternalIPAttachmentsCreateRequest) (*ExternalIPAttachmentsCreateResponse, error)
-	// Updates an existing external IP attachment. Only metadata (labels, annotations) can be changed.
+	// Updates an existing external IP attachment. Allows modifying metadata (labels, annotations).
 	Update(context.Context, *ExternalIPAttachmentsUpdateRequest) (*ExternalIPAttachmentsUpdateResponse, error)
 	// Deletes an external IP attachment. Triggers the detach workflow to unbind the ExternalIP from the target.
 	Delete(context.Context, *ExternalIPAttachmentsDeleteRequest) (*ExternalIPAttachmentsDeleteResponse, error)

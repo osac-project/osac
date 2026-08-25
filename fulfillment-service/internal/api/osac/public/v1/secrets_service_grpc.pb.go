@@ -43,10 +43,11 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// Service for managing secrets.
+// Service for managing secrets through the private API.
 //
-// Secrets store sensitive key-value data such as TLS certificates, pull secrets, and credentials. They are scoped to
-// a tenant and can be referenced by other resources that require sensitive configuration data.
+// Provides full CRUD access to secrets, including backend and coordinates fields that are not exposed through the
+// public API. Used by controllers and administrators for secret lifecycle management and synchronization with
+// external storage backends.
 type SecretsClient interface {
 	// Retrieves the list of secrets.
 	List(ctx context.Context, in *SecretsListRequest, opts ...grpc.CallOption) (*SecretsListResponse, error)
@@ -122,10 +123,11 @@ func (c *secretsClient) Delete(ctx context.Context, in *SecretsDeleteRequest, op
 // All implementations must embed UnimplementedSecretsServer
 // for forward compatibility.
 //
-// Service for managing secrets.
+// Service for managing secrets through the private API.
 //
-// Secrets store sensitive key-value data such as TLS certificates, pull secrets, and credentials. They are scoped to
-// a tenant and can be referenced by other resources that require sensitive configuration data.
+// Provides full CRUD access to secrets, including backend and coordinates fields that are not exposed through the
+// public API. Used by controllers and administrators for secret lifecycle management and synchronization with
+// external storage backends.
 type SecretsServer interface {
 	// Retrieves the list of secrets.
 	List(context.Context, *SecretsListRequest) (*SecretsListResponse, error)

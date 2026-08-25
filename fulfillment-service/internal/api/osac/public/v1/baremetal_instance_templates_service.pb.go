@@ -266,8 +266,9 @@ func (b0 BareMetalInstanceTemplatesListResponse_builder) Build() *BareMetalInsta
 }
 
 type BareMetalInstanceTemplatesGetRequest struct {
-	state         protoimpl.MessageState `protogen:"hybrid.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	state protoimpl.MessageState `protogen:"hybrid.v1"`
+	// Unique identifier of the template.
+	Id            string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -311,6 +312,7 @@ func (x *BareMetalInstanceTemplatesGetRequest) SetId(v string) {
 type BareMetalInstanceTemplatesGetRequest_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
+	// Unique identifier of the template.
 	Id string
 }
 
@@ -532,7 +534,7 @@ type BareMetalInstanceTemplatesUpdateRequest struct {
 	UpdateMask *fieldmaskpb.FieldMask     `protobuf:"bytes,2,opt,name=update_mask,json=updateMask,proto3" json:"update_mask,omitempty"`
 	// Lock enables optimistic locking. When set to true, the server verifies that the current version of the object
 	// matches the value of the metadata.version field of the submitted object. If they differ the update will be
-	// rejected.
+	// rejected. This is useful to prevent lost updates when multiple clients are modifying the same object concurrently.
 	Lock          bool `protobuf:"varint,3,opt,name=lock,proto3" json:"lock,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -625,7 +627,7 @@ type BareMetalInstanceTemplatesUpdateRequest_builder struct {
 	UpdateMask *fieldmaskpb.FieldMask
 	// Lock enables optimistic locking. When set to true, the server verifies that the current version of the object
 	// matches the value of the metadata.version field of the submitted object. If they differ the update will be
-	// rejected.
+	// rejected. This is useful to prevent lost updates when multiple clients are modifying the same object concurrently.
 	Lock bool
 }
 
@@ -708,8 +710,9 @@ func (b0 BareMetalInstanceTemplatesUpdateResponse_builder) Build() *BareMetalIns
 }
 
 type BareMetalInstanceTemplatesDeleteRequest struct {
-	state         protoimpl.MessageState `protogen:"hybrid.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	state protoimpl.MessageState `protogen:"hybrid.v1"`
+	// Unique identifier of the template.
+	Id            string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -753,6 +756,7 @@ func (x *BareMetalInstanceTemplatesDeleteRequest) SetId(v string) {
 type BareMetalInstanceTemplatesDeleteRequest_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
+	// Unique identifier of the template.
 	Id string
 }
 

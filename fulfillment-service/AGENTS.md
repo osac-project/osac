@@ -321,3 +321,17 @@ See [Linting and Code Generation](#linting-and-code-generation) for the required
 - `proto/**/*.proto` - changes cascade to generated code (see [Linting and Code Generation](#linting-and-code-generation))
 - `internal/database/migrations/*.up.sql` - existing migrations must never be modified; only add new numbered files
 - `.goreleaser.yaml`, `buf.yaml`, `buf.gen.yaml` - infrastructure config; call out the change explicitly in the PR description so a reviewer from [OWNERS](OWNERS) can confirm it's intentional (pre-commit/yamllint config now lives in the root-level `.pre-commit-config.yaml`/`.yamllint.yaml`, not here)
+
+## Common Fix Locations
+
+| Bug pattern | File(s) to check |
+|-------------|-----------------|
+| Public API missing field (Create/Update not persisting a field) | `internal/servers/*_server.go` — `Create()` and `Update()` methods (shared path is `GenericServer`) |
+| Table rendering missing or incorrect column | `internal/rendering/tables/*.yaml` — table definition files |
+
+## OpenShift Deployment
+
+Helm is the install path. Prerequisites are cert-manager, PostgreSQL 18+, and Keycloak
+(any install of each, as long as the service is configured to talk to them). The full
+OpenShift procedure — including enabling HTTP/2 — is in [`docs/INSTALL.md`](docs/INSTALL.md).
+That file is also linked from [Where to Find Information](#where-to-find-information).

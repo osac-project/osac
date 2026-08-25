@@ -2,6 +2,24 @@
 
 OSAC (Open Sovereign AI Cloud) is a fulfillment system for provisioning Kubernetes clusters, compute instances, bare-metal hosts, and networking. This mono-repo contains seven components, each with its own `CLAUDE.md`/`AGENTS.md` — **read the component's docs before making changes in it**.
 
+## Critical Rules
+
+- **Never skip tenant isolation metadata** (`osac.openshift.io/tenant`, `osac.openshift.io/owner-reference` annotations) on new tenant-scoped resources
+- **Always `buf lint` before committing** proto changes; regenerate with `buf generate`
+- **Fork-based workflow**: push to `$PUSH_REMOTE`, never to `$UPSTREAM_REMOTE` — resolve via vendored `resolve-remotes.sh` (see [Git Workflow](#git-workflow))
+- **AI attribution**: use an `Assisted-by: <tool> <contact>` trailer on commits, naming whichever AI tool actually did the work — never use `Co-Authored-By` for AI tools (Red Hat attribution standard)
+- **Edit OSAC skills only in [`osac-project/osac-ai-skills`](https://github.com/osac-project/osac-ai-skills)** — `tools/bootstrap.sh` vendors that repo; do not treat local `skills/` as an editable source
+- **Bump `metadata.version` in any skill you modify in `osac-ai-skills`** — that repo's `check-skill-version-bump` CI enforces semver patch/minor bumps
+- When debugging Kubernetes operators, check for stale `vendor/` directories and cached images before rebuilding
+
+## Dev Environment
+
+Local toolchain: install Go, Node.js, buf, kubectl, kind, jira CLI, gh CLI, and jq.
+
+For a local Kind cluster, see `osac-installer/AGENTS.md` (`PLATFORM=kind`, e.g. `make test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment`) and `fulfillment-service/README.md` for service-level setup. Distrobox/Containerfile tooling lives in `osac-workspace` and is not ported here.
+
+After clone, run `tools/bootstrap.sh` to vendor AI skills and workflows (see [AI-Assisted Development](#ai-assisted-development)).
+
 ## Components
 
 | Component | Description |
@@ -30,6 +48,28 @@ Clone as siblings for cross-repo workflows:
 | [enhancement-proposals](https://github.com/osac-project/enhancement-proposals) | PRDs and design documents (two-stage EP flow) |
 | [docs](https://github.com/osac-project/docs) | Architecture docs and guides |
 
+## AI-Assisted Development
+
+Run `tools/bootstrap.sh` once after clone (and anytime to refresh). It vendors
+[`osac-ai-skills`](https://github.com/osac-project/osac-ai-skills) and
+[`flightctl/ai-workflows`](https://github.com/flightctl/ai-workflows), then links
+Claude Code / Cursor / Gemini CLI skill discovery under this repo. No separate
+checkout of `osac-workspace` or a manual `osac-ai-skills` clone is required.
+
+Edit OSAC-native skills only in `osac-project/osac-ai-skills`. Local `skills/`
+and `.osac-ai-skills/` are bootstrap-managed and gitignored. Bump
+`metadata.version` in any skill you change (see [Critical Rules](#critical-rules)).
+PRD/design ingest reads `.design/context/` (fan-out from osac-ai-skills).
+
+## Git Workflow
+
+Fork-based push rules, branch naming, DCO sign-off, AI attribution, and PR
+title conventions are shared across OSAC repos. After `tools/bootstrap.sh`,
+the canonical copy is [`.claude/rules/dev-conventions.md`](.claude/rules/dev-conventions.md)
+(a symlink into the vendored osac-ai-skills tree). `resolve-remotes.sh` is
+hosted in osac-ai-skills and available at `~/.osac-ai-skills` or
+`./.osac-ai-skills`.
+
 ## Cross-Component Changes
 
 A feature spanning multiple components lands in a single branch and PR. Apply changes in dependency order:
@@ -44,7 +84,63 @@ fulfillment-service (proto)
 └→ osac-installer (RBAC, Helm) — depends on all above
 ```
 
-For deployment coordination (image tags, per-component release tags), see `osac-installer/AGENTS.md`.
+For cross-component dependency checks (new CRD types, CLI flags), see
+[`docs/CONVENTIONS.md`](docs/CONVENTIONS.md). Image tags for mono-repo
+components stay unpinned in `osac-installer/values/*/values.yaml`; release
+CI sets real tags. `osac-ui` is an external OCI chart/image — bump it
+deliberately when a new UI release is needed.
+
+## Architecture
+
+```text
+osac/                              Mono-repo: fulfillment-service + osac-operator + osac-aap + osac-installer + bare-metal-fulfillment-operator + osac-csi-driver + osac-metering
+  fulfillment-service              gRPC/REST API server, PostgreSQL, resource lifecycle
+  osac-operator                    Kubernetes operator, provisions via AAP + Hosted Control Planes
+  osac-aap                         Ansible playbooks for infrastructure provisioning
+  osac-installer                   Helm charts, deploys all components to OpenShift
+  bare-metal-fulfillment-operator  Kubernetes operator for bare metal fulfillment
+  osac-csi-driver                  CSI storage driver, routes to vendor backends via storage tiers
+  osac-metering                    Metering pipeline for usage events and Kafka publishing
+osac-test-infra                    E2E test playbooks against fulfillment-service gRPC API
+osac-ui                            Web console (React, PatternFly 6)
+enhancement-proposals              Design documents and RFCs
+docs                               Architecture docs and guides
+```
+
+### Resource Hierarchy
+
+```text
+Tenant → namespace and network isolation
+ClusterOrder → OpenShift clusters via Hosted Control Planes
+VirtualNetwork → L2 network with CIDR (child of NetworkClass)
+  ├── Subnet → CIDR range within VirtualNetwork
+  └── SecurityGroup → firewall rules
+ComputeInstance → KubeVirt VM, attached to Subnets + SecurityGroups
+Volume → CSI-backed disk from a storage tier
+NATGateway → child of VirtualNetwork, SNATs egress traffic through an ExternalIP
+ExternalIPPool → external IP address ranges
+  ├── ExternalIP → allocated from pool
+  └── ExternalIPAttachment → binds ExternalIP to ComputeInstance
+```
+
+### Operator Architecture (osac-operator)
+
+The osac-operator uses controller-runtime to reconcile OSAC custom resources on Kubernetes. Key patterns:
+
+- **All controllers follow the same reconciliation pattern**: finalizer → status update → provisioning/deprovisioning lifecycle
+- **Shared provisioning lifecycle**: Controllers use `provisioning.RunProvisioningLifecycle()` for provision and manual deprovision handling
+- **CRD types**: ClusterOrder, ComputeInstance, ExternalIP, ExternalIPAttachment, ExternalIPPool, NATGateway, SecurityGroup, Subnet, Tenant, VirtualNetwork, Volume
+- **Multi-cluster support**: Controllers use `multicluster-runtime` for management/workload cluster separation
+- **Management-state annotation**: All controllers should check `osac.openshift.io/management-state` and skip reconciliation when set to `Unmanaged`
+- **Namespace isolation**: Networking controllers filter to a configured namespace via `NetworkingNamespacePredicate`
+
+When fixing bugs or adding features, **check all controllers** that follow the same pattern — a bug in one controller likely exists in others. A missing feature in one controller is also a bug if all controllers are expected to behave consistently.
+
+## Jira Conventions
+
+Issue type is **Task**, not Story. Jira CLI usage and Tasks-not-Stories terminology are documented in the shared `dev-conventions` rule.
+
+OSAC requires a **Component** on every created issue — Jira rejects creates without one. Inherit from the parent Feature; never invent a component the parent lacks. Set on create (`-C "<name>"` / MCP `components`).
 
 ## Knowledge Graph (graphify brain)
 

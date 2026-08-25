@@ -1,11 +1,23 @@
 # AI workflows and skills (installed by tools/bootstrap.sh)
 skills/
 .ai-workflows/
-.claude/skills
-.claude/commands
-.claude/agents
+# Interactive clone populated by tools/bootstrap.sh. A later pin may occupy
+# this path and drop the ignore.
+.osac-ai-skills/
+
+# Harness output and osac-ai-skills fan-out. Keep repo-local Claude settings
+# and hook *scripts* tracked; fan-out only adds .claude/hooks/README.md.
+.claude/*
+!.claude/hooks/
+!.claude/settings.json
+.claude/hooks/README.md
 .cursor/
 .gemini/
+
+# Shared design/prd guidance (fan-out). No repo-local files in these trees —
+# ignore the directories so new shared names do not require a gitignore bump.
+.design/
+.prd/
 
 # graphify knowledge-graph output -- fetched from the published CI bundle
 # (see .github/workflows/graphify-brain-refresh.yaml), never committed.

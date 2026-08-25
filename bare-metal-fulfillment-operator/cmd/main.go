@@ -79,11 +79,12 @@ const (
 	envManagementRecheckInterval = "OSAC_MANAGEMENT_RECHECK_INTERVAL"
 	envProvisionPollInterval     = "OSAC_PROVISION_POLL_INTERVAL"
 
-	envAAPURL                = "OSAC_AAP_URL"
-	envAAPToken              = "OSAC_AAP_TOKEN"
-	envAAPStatusPollInterval = "OSAC_AAP_STATUS_POLL_INTERVAL"
-	envAAPInsecureSkipVerify = "OSAC_AAP_INSECURE_SKIP_VERIFY"
-	envAAPTemplatePrefix     = "OSAC_AAP_TEMPLATE_PREFIX"
+	envAAPURL                       = "OSAC_AAP_URL"
+	envAAPToken                     = "OSAC_AAP_TOKEN"
+	envAAPStatusPollInterval        = "OSAC_AAP_STATUS_POLL_INTERVAL"
+	envAAPInsecureSkipVerify        = "OSAC_AAP_INSECURE_SKIP_VERIFY"
+	envAAPTemplatePrefix            = "OSAC_AAP_TEMPLATE_PREFIX"
+	envEnableNetworkingProvisioning = "OSAC_ENABLE_NETWORKING_PROVISIONING"
 )
 
 func init() {
@@ -286,19 +287,24 @@ func main() {
 			os.Exit(1)
 		}
 
-		// Networking provisioning (onboard) and deprovisioning (offboard) are both a
-		// port move; the single move playbook derives the direction from the CR.
-		networkingProvider = provisioning.NewAAPProvider(
-			aapClient,
-			templatePrefix+"-move-network-attachment",
-			templatePrefix+"-move-network-attachment",
-		)
+		enableNetworkingProvisioning := helpers.GetEnvWithDefault(envEnableNetworkingProvisioning, true)
+		if enableNetworkingProvisioning {
+			// Networking provisioning (onboard) and deprovisioning (offboard) are both a
+			// port move; the single move playbook derives the direction from the CR.
+			networkingProvider = provisioning.NewAAPProvider(
+				aapClient,
+				templatePrefix+"-move-network-attachment",
+				templatePrefix+"-move-network-attachment",
+			)
 
-		ipDiscoveryProvider = provisioning.NewAAPProvider(
-			aapClient,
-			templatePrefix+"-query-dhcp-lease",
-			"",
-		)
+			ipDiscoveryProvider = provisioning.NewAAPProvider(
+				aapClient,
+				templatePrefix+"-query-dhcp-lease",
+				"",
+			)
+		} else {
+			setupLog.Info("BMI networking provisioning disabled, move-network-attachment and query-dhcp-lease will be skipped")
+		}
 
 		setupLog.Info("AAP provisioning provider configured")
 	} else {

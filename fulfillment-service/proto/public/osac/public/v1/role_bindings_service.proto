@@ -126,7 +126,7 @@ message RoleBindingsDeleteResponse {}
 // Service for managing role bindings.
 //
 // Role bindings grant the permissions defined by a role to a set of users. Only administrators can create, update,
-// or delete role bindings. Regular users can only get and list them.
+// or delete role bindings. Regular users can only list and get role bindings.
 service RoleBindings {
   // Retrieves the list of role bindings.
   rpc List(RoleBindingsListRequest) returns (RoleBindingsListResponse) {
@@ -141,9 +141,7 @@ service RoleBindings {
     };
   }
 
-  // Creates a new role binding.
-  //
-  // This method isn't allowed for regular users, only for administrators.
+  // Creates a new role binding. This operation is only available to administrators.
   rpc Create(RoleBindingsCreateRequest) returns (RoleBindingsCreateResponse) {
     option (google.api.http) = {
       post: "/api/fulfillment/v1/role_bindings"
@@ -152,9 +150,7 @@ service RoleBindings {
     };
   }
 
-  // Updates an existing role binding.
-  //
-  // This method isn't allowed for regular users, only for administrators.
+  // Updates an existing role binding. This operation is only available to administrators.
   rpc Update(RoleBindingsUpdateRequest) returns (RoleBindingsUpdateResponse) {
     option (google.api.http) = {
       patch: "/api/fulfillment/v1/role_bindings/{object.id}"
@@ -163,9 +159,7 @@ service RoleBindings {
     };
   }
 
-  // Deletes a role binding.
-  //
-  // This method isn't allowed for regular users, only for administrators.
+  // Deletes a role binding. This operation is only available to administrators.
   rpc Delete(RoleBindingsDeleteRequest) returns (RoleBindingsDeleteResponse) {
     option (google.api.http) = {delete: "/api/fulfillment/v1/role_bindings/{id}"};
   }

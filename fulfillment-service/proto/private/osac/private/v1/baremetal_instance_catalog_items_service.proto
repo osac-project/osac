@@ -15,9 +15,13 @@ syntax = "proto3";
 
 package osac.private.v1;
 
+import "cleanapi/cleanapi.proto";
 import "google/api/annotations.proto";
 import "google/protobuf/field_mask.proto";
 import "osac/private/v1/baremetal_instance_catalog_item_type.proto";
+
+option (cleanapi.file).package = "osac.public.v1";
+option (cleanapi.file).http_route_prefix_map = "private:fulfillment";
 
 message BareMetalInstanceCatalogItemsListRequest {
   optional int32 offset = 1;
@@ -71,11 +75,14 @@ message BareMetalInstanceCatalogItemsDeleteRequest {
 message BareMetalInstanceCatalogItemsDeleteResponse {}
 
 message BareMetalInstanceCatalogItemsSignalRequest {
+  option (cleanapi.message).private = true;
   // Unique identifier of the catalog item.
   string id = 1;
 }
 
-message BareMetalInstanceCatalogItemsSignalResponse {}
+message BareMetalInstanceCatalogItemsSignalResponse {
+  option (cleanapi.message).private = true;
+}
 
 service BareMetalInstanceCatalogItems {
   rpc List(BareMetalInstanceCatalogItemsListRequest) returns (BareMetalInstanceCatalogItemsListResponse) {
@@ -106,5 +113,7 @@ service BareMetalInstanceCatalogItems {
   }
 
   // Indicates that something changed in the object or the system that may require reconciling the object.
-  rpc Signal(BareMetalInstanceCatalogItemsSignalRequest) returns (BareMetalInstanceCatalogItemsSignalResponse) {}
+  rpc Signal(BareMetalInstanceCatalogItemsSignalRequest) returns (BareMetalInstanceCatalogItemsSignalResponse) {
+    option (cleanapi.method).private = true;
+  }
 }

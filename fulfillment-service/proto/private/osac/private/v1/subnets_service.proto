@@ -15,9 +15,13 @@ syntax = "proto3";
 
 package osac.private.v1;
 
+import "cleanapi/cleanapi.proto";
 import "google/api/annotations.proto";
 import "google/protobuf/field_mask.proto";
 import "osac/private/v1/subnet_type.proto";
+
+option (cleanapi.file).package = "osac.public.v1";
+option (cleanapi.file).http_route_prefix_map = "private:fulfillment";
 
 message SubnetsListRequest {
   // Index of the first result. If not specified the default value will be zero.
@@ -105,10 +109,13 @@ message SubnetsDeleteRequest {
 message SubnetsDeleteResponse {}
 
 message SubnetsSignalRequest {
+  option (cleanapi.message).private = true;
   string id = 1;
 }
 
-message SubnetsSignalResponse {}
+message SubnetsSignalResponse {
+  option (cleanapi.message).private = true;
+}
 
 service Subnets {
   // Retrieves the list of subnets.
@@ -149,5 +156,6 @@ service Subnets {
 
   // Indicates that something changed in the object or the system that may require reconciling the object.
   rpc Signal(SubnetsSignalRequest) returns (SubnetsSignalResponse) {
+    option (cleanapi.method).private = true;
   }
 }

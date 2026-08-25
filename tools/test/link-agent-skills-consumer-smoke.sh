@@ -481,6 +481,37 @@ test_targeted_run_preserves_unselected_legacy_umbrella_dirs() {
   pass "targeted --cursor preserves unselected leftover real umbrella dirs"
 }
 
+test_bootstrap_aborts_when_nested_in_workspace() {
+  local nest="${TMPDIR_ROOT}/nested-ws"
+  local empty_home="${TMPDIR_ROOT}/nested-ws-home"
+  mkdir -p "${nest}/osac/tools" "${nest}/bin" "${empty_home}"
+  printf '#!/bin/sh\necho workspace-bootstrap\n' > "${nest}/bootstrap.sh"
+  chmod +x "${nest}/bootstrap.sh"
+  cp "${REPO_ROOT}/tools/bootstrap.sh" "${nest}/osac/tools/bootstrap.sh"
+  chmod +x "${nest}/osac/tools/bootstrap.sh"
+  printf '#!/bin/sh\necho stub-git "$@"; exit 42\n' > "${nest}/bin/git"
+  chmod +x "${nest}/bin/git"
+
+  local out rc=0
+  out=$(HOME="${empty_home}" bash "${nest}/osac/tools/bootstrap.sh" 2>&1) || rc=$?
+  [[ "$rc" -eq 1 ]] || fail "nested bootstrap expected exit 1, got $rc: $out"
+  echo "$out" | grep -q "inside osac-workspace" \
+    || fail "nested abort message missing: $out"
+  [[ ! -e "${nest}/osac/.osac-ai-skills" ]] \
+    || fail "nested bootstrap must not clone a vendor before aborting"
+  pass "bootstrap.sh aborts when nested inside a workspace-shaped parent"
+
+  rc=0
+  out=$(HOME="${empty_home}" PATH="${nest}/bin:${PATH}" \
+    OSAC_ALLOW_NESTED_BOOTSTRAP=1 bash "${nest}/osac/tools/bootstrap.sh" 2>&1) || rc=$?
+  echo "$out" | grep -q "inside osac-workspace" \
+    && fail "override must skip the nested abort: $out"
+  echo "$out" | grep -q "stub-git" \
+    || fail "override should proceed to git (stub): $out"
+  [[ "$rc" -eq 42 ]] || fail "override expected stub git exit 42, got $rc: $out"
+  pass "OSAC_ALLOW_NESTED_BOOTSTRAP=1 skips the nested abort"
+}
+
 test_missing_vendor_fails
 test_prunes_after_vendor_switch
 test_vendor_override_env_var_is_authoritative
@@ -492,5 +523,6 @@ test_verify_shared_files_are_symlinks
 test_promotes_legacy_real_umbrella_dirs
 test_verify_does_not_clear_legacy_umbrella_dirs
 test_targeted_run_preserves_unselected_legacy_umbrella_dirs
+test_bootstrap_aborts_when_nested_in_workspace
 
 echo "All link-agent-skills consumer smoke tests passed."

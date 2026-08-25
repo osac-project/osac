@@ -55,6 +55,9 @@ Run `tools/bootstrap.sh` once after clone (and anytime to refresh). It vendors
 [`flightctl/ai-workflows`](https://github.com/flightctl/ai-workflows), then links
 Claude Code / Cursor / Gemini CLI skill discovery under this repo. No separate
 checkout of `osac-workspace` or a manual `osac-ai-skills` clone is required.
+Do not run this script from an `osac/` nested inside `osac-workspace` — it
+aborts (override: `OSAC_ALLOW_NESTED_BOOTSTRAP=1`). Use the workspace
+`./bootstrap.sh` instead.
 
 Edit OSAC-native skills only in `osac-project/osac-ai-skills`. Local `skills/`
 and `.osac-ai-skills/` are bootstrap-managed and gitignored. Bump

@@ -17,6 +17,21 @@ set -euo pipefail
 SCRIPT_DIR="$(realpath "$(dirname "${BASH_SOURCE[0]}")")"
 PROJECT_ROOT="$(realpath "${SCRIPT_DIR}/..")"
 
+# Nested osac/ inside osac-workspace would install a second skill overlay
+# (two PROJECT_ROOTs). Workspace ./bootstrap.sh already covers this clone.
+# Temporary until osac-workspace is decommissioned.
+# Override: OSAC_ALLOW_NESTED_BOOTSTRAP=1
+if [[ "${OSAC_ALLOW_NESTED_BOOTSTRAP:-}" != "1" ]] \
+   && [[ -x "${PROJECT_ROOT}/../bootstrap.sh" ]]; then
+  nested_osac="$(realpath "${PROJECT_ROOT}/../osac" 2>/dev/null || true)"
+  if [[ -n "${nested_osac}" && "${nested_osac}" == "${PROJECT_ROOT}" ]]; then
+    echo "ERROR: this osac/ checkout is inside osac-workspace." >&2
+    echo "Run the workspace ./bootstrap.sh instead (it already covers this clone)." >&2
+    echo "To force this script anyway: OSAC_ALLOW_NESTED_BOOTSTRAP=1 $0" >&2
+    exit 1
+  fi
+fi
+
 OSAC_AI_SKILLS_REPO="osac-project/osac-ai-skills"
 
 # Git-capable check — gates the git fetch/rebase below. tools/link-agent-skills.sh's

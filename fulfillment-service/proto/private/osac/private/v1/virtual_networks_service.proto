@@ -15,9 +15,13 @@ syntax = "proto3";
 
 package osac.private.v1;
 
+import "cleanapi/cleanapi.proto";
 import "google/api/annotations.proto";
 import "google/protobuf/field_mask.proto";
 import "osac/private/v1/virtual_network_type.proto";
+
+option (cleanapi.file).package = "osac.public.v1";
+option (cleanapi.file).http_route_prefix_map = "private:fulfillment";
 
 message VirtualNetworksListRequest {
   // Index of the first result. If not specified the default value will be zero.
@@ -105,10 +109,13 @@ message VirtualNetworksDeleteRequest {
 message VirtualNetworksDeleteResponse {}
 
 message VirtualNetworksSignalRequest {
+  option (cleanapi.message).private = true;
   string id = 1;
 }
 
-message VirtualNetworksSignalResponse {}
+message VirtualNetworksSignalResponse {
+  option (cleanapi.message).private = true;
+}
 
 service VirtualNetworks {
   // Retrieves the list of virtual networks.
@@ -149,5 +156,6 @@ service VirtualNetworks {
 
   // Indicates that something changed in the object or the system that may require reconciling the object.
   rpc Signal(VirtualNetworksSignalRequest) returns (VirtualNetworksSignalResponse) {
+    option (cleanapi.method).private = true;
   }
 }

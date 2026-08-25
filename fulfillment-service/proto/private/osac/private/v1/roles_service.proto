@@ -15,9 +15,13 @@ syntax = "proto3";
 
 package osac.private.v1;
 
+import "cleanapi/cleanapi.proto";
 import "google/api/annotations.proto";
 import "google/protobuf/field_mask.proto";
 import "osac/private/v1/role_type.proto";
+
+option (cleanapi.file).package = "osac.public.v1";
+option (cleanapi.file).http_route_prefix_map = "private:fulfillment";
 
 // Request message for listing roles.
 message RolesListRequest {
@@ -125,18 +129,21 @@ message RolesDeleteResponse {}
 
 // Request message for signaling a role.
 message RolesSignalRequest {
+  option (cleanapi.message).private = true;
   // Unique identifier of the role to signal.
   string id = 1;
 }
 
 // Response message for signaling a role.
-message RolesSignalResponse {}
+message RolesSignalResponse {
+  option (cleanapi.message).private = true;
+}
 
 // Service for managing roles.
 //
 // Roles represent named permission sets that can be assigned to groups. The system comes with a set of predefined
 // roles such as `cloud-provider-admin`, `cloud-provider-reader`, `tenant-admin`, `tenant-reader`, and `tenant-user`.
-// Only administrators can create, update, or delete roles.
+// Only administrators can create, update, or delete roles. Regular users can only list and get roles.
 service Roles {
   // Retrieves the list of roles.
   rpc List(RolesListRequest) returns (RolesListResponse) {
@@ -151,7 +158,7 @@ service Roles {
     };
   }
 
-  // Creates a new role.
+  // Creates a new role. This operation is only available to administrators.
   rpc Create(RolesCreateRequest) returns (RolesCreateResponse) {
     option (google.api.http) = {
       post: "/api/private/v1/roles"
@@ -160,7 +167,7 @@ service Roles {
     };
   }
 
-  // Updates an existing role.
+  // Updates an existing role. This operation is only available to administrators.
   rpc Update(RolesUpdateRequest) returns (RolesUpdateResponse) {
     option (google.api.http) = {
       patch: "/api/private/v1/roles/{object.id}"
@@ -169,12 +176,13 @@ service Roles {
     };
   }
 
-  // Deletes a role.
+  // Deletes a role. This operation is only available to administrators.
   rpc Delete(RolesDeleteRequest) returns (RolesDeleteResponse) {
     option (google.api.http) = {delete: "/api/private/v1/roles/{id}"};
   }
 
   // Indicates that something changed in the object or the system that may require reconciling the object.
   rpc Signal(RolesSignalRequest) returns (RolesSignalResponse) {
+    option (cleanapi.method).private = true;
   }
 }

@@ -127,7 +127,7 @@ message RolesDeleteResponse {}
 //
 // Roles represent named permission sets that can be assigned to groups. The system comes with a set of predefined
 // roles such as `cloud-provider-admin`, `cloud-provider-reader`, `tenant-admin`, `tenant-reader`, and `tenant-user`.
-// Only administrators can create, update, or delete roles. Regular users can only get and list them.
+// Only administrators can create, update, or delete roles. Regular users can only list and get roles.
 service Roles {
   // Retrieves the list of roles.
   rpc List(RolesListRequest) returns (RolesListResponse) {
@@ -142,9 +142,7 @@ service Roles {
     };
   }
 
-  // Creates a new role.
-  //
-  // This method isn't allowed for regular users, only for administrators.
+  // Creates a new role. This operation is only available to administrators.
   rpc Create(RolesCreateRequest) returns (RolesCreateResponse) {
     option (google.api.http) = {
       post: "/api/fulfillment/v1/roles"
@@ -153,9 +151,7 @@ service Roles {
     };
   }
 
-  // Updates an existing role.
-  //
-  // This method isn't allowed for regular users, only for administrators.
+  // Updates an existing role. This operation is only available to administrators.
   rpc Update(RolesUpdateRequest) returns (RolesUpdateResponse) {
     option (google.api.http) = {
       patch: "/api/fulfillment/v1/roles/{object.id}"
@@ -164,9 +160,7 @@ service Roles {
     };
   }
 
-  // Deletes a role.
-  //
-  // This method isn't allowed for regular users, only for administrators.
+  // Deletes a role. This operation is only available to administrators.
   rpc Delete(RolesDeleteRequest) returns (RolesDeleteResponse) {
     option (google.api.http) = {delete: "/api/fulfillment/v1/roles/{id}"};
   }

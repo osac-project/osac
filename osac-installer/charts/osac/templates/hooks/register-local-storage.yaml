@@ -98,6 +98,28 @@ spec:
             rm -f "${TIER_RESP}"
 
             echo "Local storage registration complete."
+
+            # Step 3: Ensure per-tenant hub Secrets exist so the storage
+            # controller can resolve storage classes immediately.
+            {{- if .Values.operator.tenants }}
+            {{- range .Values.operator.tenants }}
+            echo "Ensuring hub secret for tenant '{{ .name }}'..."
+            kubectl apply -f - <<'EOSECRET'
+            apiVersion: v1
+            kind: Secret
+            metadata:
+              name: lvms-tenant-config-{{ .name }}
+              namespace: {{ $.Release.Namespace }}
+              labels:
+                osac.openshift.io/tenant: {{ .name | quote }}
+                osac.openshift.io/storage-provider: lvms
+            type: Opaque
+            stringData:
+              provider: lvms
+            EOSECRET
+            {{- end }}
+            echo "Per-tenant hub secrets applied."
+            {{- end }}
         env:
         - name: HOME
           value: /tmp

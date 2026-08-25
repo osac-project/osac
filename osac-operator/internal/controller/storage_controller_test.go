@@ -107,14 +107,15 @@ func createReadyTenantForStorage(ctx context.Context, name, namespace string) {
 func createHubSecret(ctx context.Context, tenantName, namespace string) {
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("vast-tenant-config-%s", tenantName),
+			Name:      fmt.Sprintf("lvms-tenant-config-%s", tenantName),
 			Namespace: namespace,
 			Labels: map[string]string{
-				osacTenantKey: tenantName,
+				osacTenantKey:          tenantName,
+				osacStorageProviderKey: "lvms",
 			},
 		},
-		Data: map[string][]byte{
-			"vast_tenant_id": []byte("123"),
+		StringData: map[string]string{
+			"provider": "lvms",
 		},
 	}
 	Expect(k8sClient.Create(ctx, secret)).To(Succeed())
@@ -1566,7 +1567,7 @@ var _ = Describe("Storage Controller", func() {
 
 			secret := &corev1.Secret{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{
-				Name:      fmt.Sprintf("vast-tenant-config-%s", name),
+				Name:      fmt.Sprintf("lvms-tenant-config-%s", name),
 				Namespace: secretsNamespace,
 			}, secret)).To(Succeed())
 			Expect(k8sClient.Delete(ctx, secret)).To(Succeed())
@@ -1588,6 +1589,51 @@ var _ = Describe("Storage Controller", func() {
 				g.Expect(cond).NotTo(BeNil())
 				g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
 			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
+		})
+	})
+
+	Context("hubSecretExists provider filtering", func() {
+		It("should filter by storage-provider label when provider is non-empty", func() {
+			name := "storage-test-provider-filter"
+			// Create a secret with the lvms storage-provider label
+			secret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      fmt.Sprintf("lvms-tenant-config-%s", name),
+					Namespace: secretsNamespace,
+					Labels: map[string]string{
+						osacTenantKey:          name,
+						osacStorageProviderKey: "lvms",
+					},
+				},
+				StringData: map[string]string{
+					"provider": "lvms",
+				},
+			}
+			Expect(k8sClient.Create(ctx, secret)).To(Succeed())
+			DeferCleanup(func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, secret))).To(Succeed())
+			})
+
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, nil, pollInterval,
+				provisioning.DefaultMaxJobHistory,
+			)
+
+			// provider="lvms" → should find the secret
+			found, err := r.hubSecretExists(ctx, name, "lvms")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(found).To(BeTrue(), "expected hub secret to be found when filtering by provider=lvms")
+
+			// provider="vast" → should NOT find the secret (wrong provider)
+			found, err = r.hubSecretExists(ctx, name, "vast")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(found).To(BeFalse(), "expected hub secret NOT to be found when filtering by provider=vast")
+
+			// provider="" → should find the secret (backward compat, no provider filter)
+			found, err = r.hubSecretExists(ctx, name, "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(found).To(BeTrue(), "expected hub secret to be found when provider is empty (backward compat)")
 		})
 	})
 

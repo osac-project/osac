@@ -228,7 +228,7 @@ func (r *StorageReconciler) patchClusterOrderStorageStatus(ctx context.Context, 
 //   - stop: when true, the caller should return (result, err) immediately
 //   - error: any unexpected failure
 func (r *StorageReconciler) handleBackendReadiness(ctx context.Context, instance *v1alpha1.Tenant, tenantName string) (hubSecretReady bool, result ctrl.Result, stop bool, err error) {
-	hubSecretReady, err = r.hubSecretExists(ctx, tenantName)
+	hubSecretReady, err = r.hubSecretExists(ctx, tenantName, "")
 	if err != nil {
 		return false, ctrl.Result{}, true, err
 	}
@@ -870,7 +870,7 @@ func (r *StorageReconciler) handleBackendDeprovisioning(ctx context.Context, ins
 		return ctrl.Result{}, nil
 	}
 
-	hubSecretReady, err := r.hubSecretExists(ctx, instance.GetName())
+	hubSecretReady, err := r.hubSecretExists(ctx, instance.GetName(), "")
 	if err != nil {
 		log.Error(err, "failed to check hub Secret existence, requeueing")
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
@@ -897,11 +897,15 @@ func (r *StorageReconciler) handleBackendDeprovisioning(ctx context.Context, ins
 
 // --- Helpers ---
 
-func (r *StorageReconciler) hubSecretExists(ctx context.Context, tenantName string) (bool, error) {
+func (r *StorageReconciler) hubSecretExists(ctx context.Context, tenantName string, provider string) (bool, error) {
+	labels := map[string]string{osacTenantKey: tenantName}
+	if provider != "" {
+		labels[osacStorageProviderKey] = provider
+	}
 	var secretList corev1.SecretList
 	if err := r.List(ctx, &secretList,
 		client.InNamespace(storageConfigNamespace()),
-		client.MatchingLabels{osacTenantKey: tenantName},
+		client.MatchingLabels(labels),
 	); err != nil {
 		return false, err
 	}

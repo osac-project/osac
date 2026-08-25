@@ -4,11 +4,13 @@
 apiVersion: v1
 kind: Secret
 metadata:
-  name: vast-tenant-config-{{ .name }}
+  name: lvms-tenant-config-{{ .name }}
   namespace: {{ $.Release.Namespace }}
   labels:
     osac.openshift.io/tenant: {{ .name | quote }}
+    osac.openshift.io/storage-provider: lvms
 type: Opaque
-data: {}
+stringData:
+  provider: lvms
 {{- end }}
 {{- end }}

@@ -2298,9 +2298,8 @@ var _ = Describe("Private bare metal instances server", func() {
 		createSubnet := func(fabricManager, k8sManager *string) string {
 			ncResp, err := networkClassDao.Create().SetObject(
 				privatev1.NetworkClass_builder{
-					ImplementationStrategy: "test-strategy",
-					FabricManager:          fabricManager,
-					K8SManager:             k8sManager,
+					FabricManager: fabricManager,
+					K8SManager:    k8sManager,
 					Metadata: privatev1.Metadata_builder{
 						Tenant: testTenant,
 					}.Build(),
@@ -2504,8 +2503,7 @@ var _ = Describe("Private bare metal instances server", func() {
 					Name:   "default-nc",
 					Tenant: "system",
 				}.Build(),
-				FabricManager:          &fabricMgr,
-				ImplementationStrategy: "netris",
+				FabricManager: &fabricMgr,
 			}.Build()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			ncID := ncResp.GetObject().GetId()

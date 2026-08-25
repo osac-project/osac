@@ -1995,6 +1995,72 @@ var _ = Describe("Clusters server", func() {
 			Expect(status.Message()).To(ContainSubstring("service_cidr"))
 		})
 
+		Describe("createKubeClient", func() {
+			It("Creates a client from inline kubeconfig", func() {
+				hub := privatev1.Hub_builder{
+					Id: "hub-inline",
+					Spec: privatev1.HubSpec_builder{
+						Kubeconfig: testKubeconfig,
+						Namespace:  "test-ns",
+					}.Build(),
+				}.Build()
+
+				client, err := server.createKubeClient(ctx, hub)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(client).NotTo(BeNil())
+			})
+
+			It("Creates a client from kubeconfig_secret", func() {
+				secretID := uuid.NewString()
+				secretsDao, err := dao.NewGenericDAO[*privatev1.Secret]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).NotTo(HaveOccurred())
+
+				_, err = secretsDao.Create().SetObject(privatev1.Secret_builder{
+					Id: secretID,
+					Metadata: privatev1.Metadata_builder{
+						Name:   fmt.Sprintf("hub-kubeconfig-%s", uuid.NewString()[:8]),
+						Tenant: auth.SharedTenant,
+					}.Build(),
+					Data: map[string][]byte{
+						"kubeconfig": testKubeconfig,
+					},
+				}.Build()).Do(ctx)
+				Expect(err).NotTo(HaveOccurred())
+
+				hub := privatev1.Hub_builder{
+					Id: "hub-secret",
+					Spec: privatev1.HubSpec_builder{
+						Namespace: "test-ns",
+						KubeconfigSecret: privatev1.SecretLocalReference_builder{
+							Id: secretID,
+						}.Build(),
+					}.Build(),
+				}.Build()
+
+				client, err := server.createKubeClient(ctx, hub)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(client).NotTo(BeNil())
+			})
+
+			It("Fails when the referenced secret is missing", func() {
+				hub := privatev1.Hub_builder{
+					Id: "hub-missing-secret",
+					Spec: privatev1.HubSpec_builder{
+						Namespace: "test-ns",
+						KubeconfigSecret: privatev1.SecretLocalReference_builder{
+							Id: uuid.NewString(),
+						}.Build(),
+					}.Build(),
+				}.Build()
+
+				_, err := server.createKubeClient(ctx, hub)
+				Expect(err).To(HaveOccurred())
+			})
+		})
+
 		Describe("Dry run", func() {
 			It("Returns resolved cluster without persisting", func() {
 				response, err := server.Create(dryRunCtx(), publicv1.ClustersCreateRequest_builder{

@@ -128,6 +128,9 @@ func TestCreateVolumeBlockSuccess(t *testing.T) {
 	if got := req.GetSecrets()["endpoint"]; got != "vms.example.com" {
 		t.Errorf("secrets.endpoint = %q, want vms.example.com", got)
 	}
+	if got := req.GetSecrets()["tenant"]; got != "acme" {
+		t.Errorf("secrets.tenant = %q, want acme", got)
+	}
 	if got := req.GetCapacityRange().GetRequiredBytes(); got != 10*bytesPerGiB {
 		t.Errorf("required_bytes = %d, want %d", got, int64(10)*bytesPerGiB)
 	}
@@ -210,6 +213,9 @@ func TestDeleteVolumeSuccess(t *testing.T) {
 	}
 	if cli.deleteReq.GetSecrets()["username"] != "osac-acme" {
 		t.Errorf("delete secrets.username = %q", cli.deleteReq.GetSecrets()["username"])
+	}
+	if got := cli.deleteReq.GetSecrets()["tenant"]; got != "acme" {
+		t.Errorf("delete secrets.tenant = %q, want acme", got)
 	}
 }
 

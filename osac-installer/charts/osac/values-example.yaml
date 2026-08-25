@@ -298,6 +298,39 @@ aap:
     key: ""
 
 # ---------------------
+# Bare Metal Fulfillment Operator — BCM Backend
+# ---------------------
+# BCM (NVIDIA Base Command Manager) inventory backend configuration for BMaaS.
+# When enabled, the chart creates osac-inventory-config, osac-management-config,
+# and osac-bcm-certs Secrets with BCM backend configuration.
+# The cert volume mount is handled by the operator wiring and sync script.
+bmf:
+  bcm:
+    # Set to true to create BCM config secrets via Helm and mount mTLS certs.
+    # When false (default), secrets must be created manually.
+    enabled: false
+    # [REQUIRED when enabled] BCM head node API endpoint.
+    # Example: "https://bcm-head.example.com:8081"
+    url: ""
+    # [REQUIRED when enabled] PEM-encoded client certificate for BCM mTLS
+    # authentication. The chart creates a Secret from this value.
+    cert: ""
+    # [REQUIRED when enabled] PEM-encoded client private key for BCM mTLS
+    # authentication.
+    key: ""
+    # [OPTIONAL] PEM-encoded CA certificate for verifying BCM server cert.
+    # When empty, system root CAs are used (or InsecureSkipVerify if enabled).
+    caCert: ""
+    # Skip TLS verification of BCM server certificate. Test environments only.
+    insecureSkipVerify: false
+    # Host class identifier written to the inventory config.
+    hostClass: "bcm"
+    # [REQUIRED when enabled] Namespace where BareMetalHost CRs are created.
+    # BCM uses Metal3 for power management via BareMetalHost CRs.
+    # Example: "hardware-inventory"
+    bmhNamespace: ""
+
+# ---------------------
 # Bundled PostgreSQL (dev/test)
 # ---------------------
 # NOTE: bundledPostgres has moved to the osac-infra chart. Configure it

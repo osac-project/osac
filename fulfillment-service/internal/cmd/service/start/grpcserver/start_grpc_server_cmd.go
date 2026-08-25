@@ -685,6 +685,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	}
 	privateHubsServer := resourceServers.PrivateHubsServer
 	privateComputeInstancesServer := resourceServers.PrivateComputeInstancesServer
+	privateSecretsServer := resourceServers.PrivateSecretsServer
 
 	// Create the token sealer (sign + encrypt infrastructure):
 	c.logger.InfoContext(ctx, "Creating token sealer")
@@ -715,7 +716,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	publicv1.RegisterJsonWebKeySetServer(grpcServer, jsonWebKeySetServer)
 
 	// Build the console target resolver (lookup/policy only):
-	hubLookup := servers.NewPrivateServerHubLookup(privateHubsServer)
+	hubLookup := servers.NewPrivateServerHubLookup(privateHubsServer, privateSecretsServer)
 	consoleResolver, err := servers.NewConsoleTargetResolver().
 		SetLogger(c.logger).
 		SetComputeInstanceLookup(servers.NewPrivateServerCILookup(privateComputeInstancesServer)).

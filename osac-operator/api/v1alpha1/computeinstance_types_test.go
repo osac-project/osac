@@ -182,7 +182,7 @@ var _ = Describe("ComputeInstance", func() {
 	Describe("PrimarySubnetRef", func() {
 		It("should return the first networkAttachments subnet when set", func() {
 			spec := v1alpha1.ComputeInstanceSpec{
-				NetworkAttachments: []v1alpha1.NetworkAttachment{
+				NetworkAttachments: []v1alpha1.ComputeNetworkAttachment{
 					{SubnetRef: "subnet-A", SecurityGroupRefs: []string{"sg-1"}},
 					{SubnetRef: "subnet-B", SecurityGroupRefs: []string{"sg-2"}},
 				},
@@ -210,7 +210,7 @@ var _ = Describe("ComputeInstance", func() {
 				MemoryGiB:   4,
 				BootDisk:    v1alpha1.DiskSpec{SizeGiB: 10, StorageTier: "standard"},
 				RunStrategy: v1alpha1.RunStrategyAlways,
-				NetworkAttachments: []v1alpha1.NetworkAttachment{
+				NetworkAttachments: []v1alpha1.ComputeNetworkAttachment{
 					{
 						SubnetRef:         "subnet-A",
 						SecurityGroupRefs: []string{"sg-1", "sg-2"},
@@ -234,7 +234,7 @@ var _ = Describe("ComputeInstance", func() {
 				MemoryGiB:   4,
 				BootDisk:    v1alpha1.DiskSpec{SizeGiB: 10, StorageTier: "standard"},
 				RunStrategy: v1alpha1.RunStrategyAlways,
-				NetworkAttachments: []v1alpha1.NetworkAttachment{
+				NetworkAttachments: []v1alpha1.ComputeNetworkAttachment{
 					{SubnetRef: "subnet-A", SecurityGroupRefs: []string{"web-sg"}},
 					{SubnetRef: "subnet-B", SecurityGroupRefs: []string{"db-sg"}},
 					{SubnetRef: "subnet-C", SecurityGroupRefs: []string{"mon-sg"}},
@@ -258,7 +258,7 @@ var _ = Describe("ComputeInstance", func() {
 				MemoryGiB:   4,
 				BootDisk:    v1alpha1.DiskSpec{SizeGiB: 10, StorageTier: "standard"},
 				RunStrategy: v1alpha1.RunStrategyAlways,
-				NetworkAttachments: []v1alpha1.NetworkAttachment{
+				NetworkAttachments: []v1alpha1.ComputeNetworkAttachment{
 					{SubnetRef: "subnet-A"},
 				},
 			}
@@ -282,7 +282,7 @@ var _ = Describe("ComputeInstance", func() {
 				MemoryGiB:   4,
 				BootDisk:    v1alpha1.DiskSpec{SizeGiB: 10, StorageTier: "standard"},
 				RunStrategy: v1alpha1.RunStrategyAlways,
-				NetworkAttachments: []v1alpha1.NetworkAttachment{
+				NetworkAttachments: []v1alpha1.ComputeNetworkAttachment{
 					{SubnetRef: "subnet-A", SecurityGroupRefs: []string{"sg-1"}},
 				},
 			}
@@ -306,7 +306,7 @@ var _ = Describe("ComputeInstance", func() {
 			// - Adding/removing network attachments → REJECTED (array size validation)
 			// - Changing security groups → ALLOWED (no validation on that field)
 			spec := v1alpha1.ComputeInstanceSpec{
-				NetworkAttachments: []v1alpha1.NetworkAttachment{
+				NetworkAttachments: []v1alpha1.ComputeNetworkAttachment{
 					{SubnetRef: "subnet-A", SecurityGroupRefs: []string{"sg-1"}},
 				},
 			}

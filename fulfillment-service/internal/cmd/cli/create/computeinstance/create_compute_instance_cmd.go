@@ -771,7 +771,7 @@ func (c *runnerContext) applyNetworkingFlags(spec *publicv1.ComputeInstanceSpec_
 		return nil
 	}
 
-	attachments := make([]*publicv1.NetworkAttachment, 0, len(c.args.networkAttachments))
+	attachments := make([]*publicv1.ComputeNetworkAttachment, 0, len(c.args.networkAttachments))
 	for _, raw := range c.args.networkAttachments {
 		na, err := parseNetworkAttachmentFlag(raw)
 		if err != nil {
@@ -824,7 +824,7 @@ func parseMainSubnetOnly(main string) (string, error) {
 
 // parseNetworkAttachmentFlag parses one --network-attachment value: a bare subnet id, or subnet=<id> with optional
 // security-groups=/security_groups= suffix (commas allowed in the group list).
-func parseNetworkAttachmentFlag(s string) (*publicv1.NetworkAttachment, error) {
+func parseNetworkAttachmentFlag(s string) (*publicv1.ComputeNetworkAttachment, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return nil, fmt.Errorf("empty --network-attachment value")
@@ -835,13 +835,13 @@ func parseNetworkAttachmentFlag(s string) (*publicv1.NetworkAttachment, error) {
 		return nil, err
 	}
 	if !hadGroups && !strings.Contains(s, "=") {
-		return publicv1.NetworkAttachment_builder{Subnet: &publicv1.SubnetLocalReference{Id: s}}.Build(), nil
+		return publicv1.ComputeNetworkAttachment_builder{Subnet: &publicv1.SubnetLocalReference{Id: s}}.Build(), nil
 	}
 	sgRefs := make([]*publicv1.SecurityGroupLocalReference, len(securityGroups))
 	for i, sg := range securityGroups {
 		sgRefs[i] = &publicv1.SecurityGroupLocalReference{Id: sg}
 	}
-	return publicv1.NetworkAttachment_builder{
+	return publicv1.ComputeNetworkAttachment_builder{
 		Subnet:         &publicv1.SubnetLocalReference{Id: subnet},
 		SecurityGroups: sgRefs,
 	}.Build(), nil

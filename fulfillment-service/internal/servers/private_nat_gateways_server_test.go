@@ -89,9 +89,8 @@ var _ = Describe("Private NAT gateways server", func() {
 	createNetworkClass := func(fabricManager, k8sManager *string) *privatev1.NetworkClass {
 		resp, err := networkClassDao.Create().SetObject(
 			privatev1.NetworkClass_builder{
-				ImplementationStrategy: "test-strategy",
-				FabricManager:          fabricManager,
-				K8SManager:             k8sManager,
+				FabricManager: fabricManager,
+				K8SManager:    k8sManager,
 				Metadata: privatev1.Metadata_builder{
 					Tenant: testTenant,
 					Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),

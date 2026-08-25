@@ -1,0 +1,8 @@
+---
+# k8s_only delegates ExternalIP provisioning to metallb_l2 (MetalLB LoadBalancer
+# Service). See README.md for the rationale.
+
+- name: Delegate ExternalIP creation to metallb_l2 role
+  ansible.builtin.include_role:
+    name: osac.templates.metallb_l2
+    tasks_from: create_external_ip

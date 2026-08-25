@@ -55,6 +55,7 @@ type ResourceServerDeps struct {
 type ResourceServers struct {
 	PrivateHubsServer             privatev1.HubsServer
 	PrivateComputeInstancesServer privatev1.ComputeInstancesServer
+	PrivateSecretsServer          privatev1.SecretsServer
 }
 
 // RegisterResourceServers constructs and registers every filterable resource's public and private server onto
@@ -162,6 +163,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
 		SetScheme(deps.HubScheme).
+		SetSecretStore(deps.SecretStore).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create clusters server: %w", err)
@@ -970,5 +972,6 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	return &ResourceServers{
 		PrivateHubsServer:             privateHubsServer,
 		PrivateComputeInstancesServer: privateComputeInstancesServer,
+		PrivateSecretsServer:          privateSecretsServer,
 	}, nil
 }

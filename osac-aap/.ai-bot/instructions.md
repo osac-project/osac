@@ -19,9 +19,15 @@ runtime behavior:
 1. **Use FQCN for all modules**: `ansible.builtin.debug`, not `debug`.
    ansible-lint enforces this.
 2. **Every task must have a `name:` field.** No unnamed tasks.
-3. **Use underscores in role names and `implementation_strategy`**, never
-   hyphens. Role directory name, `meta/osac.yaml`, and CR annotation must
-   all match.
+3. **Use underscores in role names, `implementation_strategy`, and
+   `fabric_manager`/`k8s_manager` values**, never hyphens. Role directory
+   name, `meta/osac.yaml`, and the value stamped into the CR annotation must
+   all match. This underscore convention applies to those *values*, not to
+   the fixed, hyphenated annotation **key** itself
+   (`osac.openshift.io/implementation-strategy`) — never rename that key.
+   Network roles identify themselves via `fabric_manager`/`k8s_manager`;
+   other template types (compute, storage, cluster) still use
+   `implementation_strategy`.
 4. **Always include `osac.service.common`** (with
    `tasks_from: get_remote_cluster_kubeconfig`) before creating K8s resources
    on remote clusters.
@@ -122,12 +128,12 @@ matching role from `osac.templates`:
 ## Template Role Requirements
 
 Every template role needs:
-1. `meta/osac.yaml` with `implementation_strategy`, `template_type`, and
-   `capabilities`
+1. `meta/osac.yaml` with `template_type` and `capabilities`, plus an identity
+   field: `fabric_manager`/`k8s_manager` for `template_type: network`, or
+   `implementation_strategy` for other template types
 2. Task files named `tasks/create_<resource>.yaml` and
    `tasks/delete_<resource>.yaml`
-3. Underscore naming throughout (directory name matches
-   `implementation_strategy`)
+3. Underscore naming throughout (directory name matches the identity field)
 
 ## ansible-lint Configuration
 

@@ -45,12 +45,13 @@ type SettingsBuilder struct {
 // Settings is the type used to store the configuration of the client. General settings are persisted to a JSON file,
 // while secret data (tokens, credentials) is stored in the operating system keyring.
 type Settings struct {
-	logger  *slog.Logger
-	lock    *sync.RWMutex
-	dir     string
-	general generalSettings
-	secret  secretSettings
-	caPool  *x509.CertPool
+	logger             *slog.Logger
+	lock               *sync.RWMutex
+	dir                string
+	general            generalSettings
+	secret             secretSettings
+	caPool             *x509.CertPool
+	secretStoreBackend string
 }
 
 // NewSettings creates a builder that can then be used to configure and create a Settings object.
@@ -131,11 +132,18 @@ func (s *Settings) Armed() bool {
 	return s != nil && s.general.Address != ""
 }
 
+// UsingFileSecretStore reports whether the most recent Save wrote secrets to the file-based fallback store
+// instead of the operating system keyring.
+func (s *Settings) UsingFileSecretStore() bool {
+	return s.secretStoreBackend == "file"
+}
+
 // Reset resets all settings to their zero values.
 func (s *Settings) Reset() {
 	s.general = generalSettings{}
 	s.secret = secretSettings{}
 	s.caPool = nil
+	s.secretStoreBackend = ""
 }
 
 // Address returns the server address.
@@ -397,6 +405,7 @@ func (s *Settings) saveSecret(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to create secret store: %w", err)
 	}
+	s.secretStoreBackend = store.Backend()
 	var object any
 	if s.secret != (secretSettings{}) {
 		object = &s.secret

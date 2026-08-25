@@ -21,7 +21,7 @@ import (
 
 var _ = Describe("ValidateNetworkAttachments", func() {
 	DescribeTable("validates network attachments",
-		func(attachments []*privatev1.NetworkAttachment, shouldError bool) {
+		func(attachments []*privatev1.ComputeNetworkAttachment, shouldError bool) {
 			err := ValidateNetworkAttachments(attachments)
 			if shouldError {
 				Expect(err).To(HaveOccurred())
@@ -34,19 +34,19 @@ var _ = Describe("ValidateNetworkAttachments", func() {
 			false,
 		),
 		Entry("empty attachments array (pod network)",
-			[]*privatev1.NetworkAttachment{},
+			[]*privatev1.ComputeNetworkAttachment{},
 			false,
 		),
 		Entry("valid attachments with subnets",
-			[]*privatev1.NetworkAttachment{
-				privatev1.NetworkAttachment_builder{Subnet: privatev1.SubnetLocalReference_builder{Id: "subnet-a"}.Build()}.Build(),
-				privatev1.NetworkAttachment_builder{Subnet: privatev1.SubnetLocalReference_builder{Id: "subnet-b"}.Build()}.Build(),
+			[]*privatev1.ComputeNetworkAttachment{
+				privatev1.ComputeNetworkAttachment_builder{Subnet: privatev1.SubnetLocalReference_builder{Id: "subnet-a"}.Build()}.Build(),
+				privatev1.ComputeNetworkAttachment_builder{Subnet: privatev1.SubnetLocalReference_builder{Id: "subnet-b"}.Build()}.Build(),
 			},
 			false,
 		),
 		Entry("valid attachment with subnet and security groups",
-			[]*privatev1.NetworkAttachment{
-				privatev1.NetworkAttachment_builder{
+			[]*privatev1.ComputeNetworkAttachment{
+				privatev1.ComputeNetworkAttachment_builder{
 					Subnet: privatev1.SubnetLocalReference_builder{Id: "subnet-a"}.Build(),
 					SecurityGroups: []*privatev1.SecurityGroupLocalReference{
 						privatev1.SecurityGroupLocalReference_builder{Id: "sg-1"}.Build(),
@@ -57,15 +57,15 @@ var _ = Describe("ValidateNetworkAttachments", func() {
 			false,
 		),
 		Entry("invalid attachment with empty subnet",
-			[]*privatev1.NetworkAttachment{
-				privatev1.NetworkAttachment_builder{Subnet: privatev1.SubnetLocalReference_builder{Id: ""}.Build()}.Build(),
+			[]*privatev1.ComputeNetworkAttachment{
+				privatev1.ComputeNetworkAttachment_builder{Subnet: privatev1.SubnetLocalReference_builder{Id: ""}.Build()}.Build(),
 			},
 			true,
 		),
 		Entry("invalid second attachment with empty subnet",
-			[]*privatev1.NetworkAttachment{
-				privatev1.NetworkAttachment_builder{Subnet: privatev1.SubnetLocalReference_builder{Id: "subnet-a"}.Build()}.Build(),
-				privatev1.NetworkAttachment_builder{Subnet: privatev1.SubnetLocalReference_builder{Id: ""}.Build()}.Build(),
+			[]*privatev1.ComputeNetworkAttachment{
+				privatev1.ComputeNetworkAttachment_builder{Subnet: privatev1.SubnetLocalReference_builder{Id: "subnet-a"}.Build()}.Build(),
+				privatev1.ComputeNetworkAttachment_builder{Subnet: privatev1.SubnetLocalReference_builder{Id: ""}.Build()}.Build(),
 			},
 			true,
 		),

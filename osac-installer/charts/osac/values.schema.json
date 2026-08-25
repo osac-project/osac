@@ -1348,6 +1348,47 @@
               "default": ""
             }
           }
+        },
+        "bcm": {
+          "type": "object",
+          "description": "BCM inventory backend configuration. When enabled, creates osac-inventory-config and osac-management-config Secrets and mounts BCM mTLS credentials.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Create BCM inventory and management config Secrets and mount mTLS credentials",
+              "default": false
+            },
+            "url": {
+              "type": "string",
+              "description": "BCM head node API endpoint (e.g. https://bcm-head:8081)"
+            },
+            "insecureSkipVerify": {
+              "type": "boolean",
+              "description": "Skip TLS verification of BCM server certificate (test environments only)",
+              "default": false
+            },
+            "hostClass": {
+              "type": "string",
+              "description": "Host class identifier for BCM inventory",
+              "default": "bcm"
+            },
+            "bmhNamespace": {
+              "type": "string",
+              "description": "Kubernetes namespace where BareMetalHost CRs are created for Metal3 power management"
+            },
+            "cert": {
+              "type": "string",
+              "description": "PEM-encoded client certificate for BCM mTLS authentication"
+            },
+            "key": {
+              "type": "string",
+              "description": "PEM-encoded client private key for BCM mTLS authentication"
+            },
+            "caCert": {
+              "type": "string",
+              "description": "PEM-encoded CA certificate for verifying BCM server certificate (optional)"
+            }
+          }
         }
       }
     },
@@ -1386,6 +1427,46 @@
           "type": "boolean",
           "description": "Create hub-access resources and register local cluster as hub",
           "default": false
+        }
+      }
+    },
+    "bundledVault": {
+      "type": "object",
+      "description": "Bundled OpenBao (Vault-compatible) secret store for dev/CI environments. When enabled, deploys a single-replica OpenBao instance in dev mode with emptyDir storage.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Deploy a bundled OpenBao instance for development/CI use",
+          "default": false
+        },
+        "devRootToken": {
+          "type": "string",
+          "description": "Root token for OpenBao dev mode (required when enabled)"
+        },
+        "image": {
+          "type": "string",
+          "description": "OpenBao container image (must be 2.5+ for namespace support)",
+          "default": "ghcr.io/openbao/openbao:2.6.1"
+        },
+        "resources": {
+          "type": "object",
+          "description": "Container resource requests and limits",
+          "properties": {
+            "limits": {
+              "type": "object",
+              "properties": {
+                "cpu": { "type": "string", "description": "CPU limit" },
+                "memory": { "type": "string", "description": "Memory limit" }
+              }
+            },
+            "requests": {
+              "type": "object",
+              "properties": {
+                "cpu": { "type": "string", "description": "CPU request" },
+                "memory": { "type": "string", "description": "Memory request" }
+              }
+            }
+          }
         }
       }
     },
@@ -1434,6 +1515,99 @@
           "type": "boolean",
           "description": "Run the register-local-storage hook job when LVMS is deployed",
           "default": false
+        }
+      }
+    },
+    "networkClass": {
+      "type": "object",
+      "description": "Create a NetworkClass in the fulfillment service after install. At least one of k8sManager/fabricManager must be set when enabled.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Run the create-network-class hook job",
+          "default": false
+        },
+        "title": {
+          "type": "string",
+          "description": "Human-friendly short title for the NetworkClass. Required when enabled — the fulfillment service rejects NetworkClass creation without one.",
+          "default": ""
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-friendly long description for the NetworkClass (Markdown)",
+          "default": ""
+        },
+        "k8sManager": {
+          "type": "string",
+          "description": "k8sManager name to set on the NetworkClass (must match a manager already registered via operator.networkManagers.k8sManagers)",
+          "default": ""
+        },
+        "fabricManager": {
+          "type": "string",
+          "description": "fabricManager name to set on the NetworkClass (must match a manager already registered via operator.networkManagers.fabricManagers)",
+          "default": ""
+        },
+        "isDefault": {
+          "type": "boolean",
+          "description": "Mark this as the default NetworkClass used when a VirtualNetwork doesn't specify one",
+          "default": true
+        },
+        "defaults": {
+          "type": "object",
+          "description": "Tenant-onboarding defaults. Required for this NetworkClass to auto-create a default VirtualNetwork/Subnet/SecurityGroup for new tenants.",
+          "properties": {
+            "virtualNetworkIPv4CIDR": {
+              "type": "string",
+              "description": "IPv4 CIDR for the auto-created tenant VirtualNetwork (e.g. 10.200.0.0/16)"
+            },
+            "subnetIPv4CIDR": {
+              "type": "string",
+              "description": "IPv4 CIDR for the auto-created tenant Subnet (e.g. 10.200.0.0/20)"
+            },
+            "enableNatGateway": {
+              "type": "boolean",
+              "description": "Auto-create a NATGateway for the tenant's default VirtualNetwork",
+              "default": false
+            },
+            "egressRules": {
+              "type": "array",
+              "description": "Default egress rules for the auto-created tenant SecurityGroup",
+              "items": {
+                "type": "object",
+                "required": [
+                  "protocol"
+                ],
+                "properties": {
+                  "protocol": {
+                    "type": "string",
+                    "description": "Rule protocol",
+                    "enum": [
+                      "PROTOCOL_TCP",
+                      "PROTOCOL_UDP",
+                      "PROTOCOL_ICMP",
+                      "PROTOCOL_ALL"
+                    ]
+                  },
+                  "ipv4Cidr": {
+                    "type": "string",
+                    "description": "IPv4 CIDR for this rule (e.g. 0.0.0.0/0)"
+                  },
+                  "ipv6Cidr": {
+                    "type": "string",
+                    "description": "IPv6 CIDR for this rule"
+                  },
+                  "portFrom": {
+                    "type": "integer",
+                    "description": "Starting port (tcp/udp only)"
+                  },
+                  "portTo": {
+                    "type": "integer",
+                    "description": "Ending port (tcp/udp only)"
+                  }
+                }
+              }
+            }
+          }
         }
       }
     }

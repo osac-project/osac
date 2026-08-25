@@ -626,7 +626,7 @@ func (t *task) buildSpecNetworkAttachments(ctx context.Context, spec *osacv1alph
 			"invalid network_attachments in database: %w", err)
 	}
 
-	networkAttachments := make([]osacv1alpha1.NetworkAttachment, 0, len(ciSpec.GetNetworkAttachments()))
+	networkAttachments := make([]osacv1alpha1.ComputeNetworkAttachment, 0, len(ciSpec.GetNetworkAttachments()))
 	for i, att := range ciSpec.GetNetworkAttachments() {
 		subnetID := att.GetSubnet()
 		// subnetID is guaranteed to be non-empty by ValidateNetworkAttachments
@@ -675,7 +675,7 @@ func (t *task) buildSpecNetworkAttachments(ctx context.Context, spec *osacv1alph
 			)
 		}
 
-		networkAttachments = append(networkAttachments, osacv1alpha1.NetworkAttachment{
+		networkAttachments = append(networkAttachments, osacv1alpha1.ComputeNetworkAttachment{
 			SubnetRef:         subnetRef,
 			SecurityGroupRefs: sgRefs,
 		})

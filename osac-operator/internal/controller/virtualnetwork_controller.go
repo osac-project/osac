@@ -57,7 +57,8 @@ type VirtualNetworkReconciler struct {
 	targetCluster        mc.ClusterName
 	// Resolver resolves a NetworkClass to its registered managers. Nil when the
 	// two-manager model isn't configured (no gRPC connection / networking namespace),
-	// in which case the controller always uses the legacy implementation-strategy path.
+	// in which case the controller cannot resolve an implementation strategy for any
+	// VirtualNetwork and requeues until Resolver is configured.
 	Resolver *dispatcher.Resolver
 }
 
@@ -155,15 +156,16 @@ func (r *VirtualNetworkReconciler) handleUpdate(ctx context.Context, vnet *v1alp
 		vnet.Status.Phase = v1alpha1.VirtualNetworkPhaseProgressing
 	}
 
-	// Determine implementation strategy: dispatcher path when the NetworkClass has a
-	// fabricManager registered, else the legacy implementation_strategy annotation path
-	// (populated by fulfillment-service from NetworkClass).
+	// Determine implementation strategy from the dispatcher-resolved manager for this
+	// VirtualNetwork's NetworkClass (fabric_manager, falling back to k8s_manager).
 	implementationStrategy, err := resolveImplementationStrategy(
-		ctx, r.Resolver, "VirtualNetwork", vnet.Spec.NetworkClass, vnet.Spec.ImplementationStrategy)
+		ctx, r.Resolver, "VirtualNetwork", vnet.Spec.NetworkClass, "")
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	if implementationStrategy == "" {
+		msg := fmt.Sprintf("NetworkClass '%s' has no fabric_manager or k8s_manager configured", vnet.Spec.NetworkClass)
+		setReadyConditionBlocked(&vnet.Status.Conditions, v1alpha1.ReasonNoManagerConfigured, msg)
 		log.Info("implementation strategy not set, requeueing", "virtualNetwork", vnet.Name)
 		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
@@ -275,6 +277,21 @@ func (r *VirtualNetworkReconciler) handleDeprovisioning(ctx context.Context, vne
 		ctrllog.FromContext(ctx).Info("no provisioning provider configured, skipping deprovisioning")
 		return ctrl.Result{}, nil
 	}
+
+	// handleUpdate always stamps osacImplementationStrategyAnnotation before any
+	// provisioning job is ever triggered, so by the time a job exists the annotation
+	// is guaranteed present. A VirtualNetwork deleted before its first successful
+	// handleUpdate reconcile (e.g. immediately after creation, before the dispatcher
+	// resolved a manager) has neither: nothing was ever provisioned, and — unlike
+	// Subnet's playbooks — the VirtualNetwork delete playbook indexes the annotation
+	// directly with no spec-field fallback, so triggering a deprovision job here would
+	// just fail with an undefined implementation_strategy. Skip deprovisioning
+	// entirely in that case; there is nothing to tear down.
+	if vnet.Annotations[osacImplementationStrategyAnnotation] == "" && len(vnet.Status.ProvisioningJobs) == 0 {
+		ctrllog.FromContext(ctx).Info("no implementation-strategy annotation and no job history, skipping deprovisioning")
+		return ctrl.Result{}, nil
+	}
+
 	result, done, err := provisioning.RunDeprovisioningLifecycle(ctx, r.ProvisioningProvider, vnet,
 		&vnet.Status.ProvisioningJobs, r.MaxJobHistory, r.StatusPollInterval)
 	if err != nil || !done {

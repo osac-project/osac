@@ -37,7 +37,7 @@ message TestOtherTargetLocalReference {
   string name = 2;
 }
 
-// Nested message containing reference fields (mirrors NetworkAttachment).
+// Nested message containing reference fields (mirrors ComputeNetworkAttachment).
 message TestRefAttachment {
   TestTargetLocalReference subnet = 1;
   repeated TestOtherTargetLocalReference security_groups = 2;

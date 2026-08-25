@@ -16,6 +16,7 @@ syntax = "proto3";
 package osac.private.v1;
 
 import "osac/private/v1/metadata_type.proto";
+import "osac/private/v1/secret_type.proto";
 
 // Contains the details of a hub.
 message Hub {
@@ -35,10 +36,18 @@ message Hub {
 // Desired state of the hub.
 message HubSpec {
   // The Kubeconfig containing the address and credentials that the service will use to connect to the hub.
+  //
+  // Mutually exclusive with `kubeconfig_secret`.
   bytes kubeconfig = 3;
 
   // Namespace where the cluster orders will be created.
   string namespace = 4;
+
+  // Reference to a Secret resource containing kubeconfig credentials.
+  //
+  // Mutually exclusive with `kubeconfig`. When set, the system resolves the referenced Secret and reads the
+  // `kubeconfig` data key. The referenced Secret must exist in the same tenant.
+  SecretLocalReference kubeconfig_secret = 5;
 }
 
 // Current state of the hub.

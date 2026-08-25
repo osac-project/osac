@@ -24,6 +24,11 @@ AAP job templates: `osac-{action}-{resource}`
   vars:
     subnet: "{{ osac_job_vars.resource }}"
     subnet_name: "{{ osac_job_vars.resource.metadata.name }}"
+    # Subnet's spec still carries a legacy implementationStrategy field, so its
+    # playbooks fall back to it when the annotation is absent. VirtualNetwork's
+    # spec field was removed once the dispatcher became the sole routing
+    # mechanism (OSAC-1468) — its playbooks read the annotation only, with no
+    # fallback (see playbook_osac_create_virtual_network.yml).
     implementation_strategy: >-
       {{ osac_job_vars.resource.metadata.annotations
          ['osac.openshift.io/implementation-strategy']
@@ -43,7 +48,7 @@ AAP job templates: `osac-{action}-{resource}`
 
 **Key pattern:**
 1. Playbook receives K8s CR as `osac_job_vars.resource`
-2. Extracts implementation strategy from CR annotation (`osac.openshift.io/implementation-strategy`) or `spec.implementationStrategy` — annotation takes precedence when both are present
+2. Extracts implementation strategy from the `osac.openshift.io/implementation-strategy` CR annotation, which osac-operator's dispatcher stamps from the NetworkClass's `fabric_manager`/`k8s_manager`. Subnet playbooks fall back to the legacy `spec.implementationStrategy` when the annotation is absent; VirtualNetwork playbooks do not (no such spec field exists anymore).
 3. Dynamically includes the appropriate role from `osac.templates`
 4. Role performs actual provisioning (creates K8s resources, updates CR)
 
@@ -83,7 +88,7 @@ Live in `collections/ansible_collections/osac/templates/roles/`. Each must have 
 title: CUDN Network Implementation
 description: Provisions networking resources using CUDN
 template_type: network
-implementation_strategy: cudn_net
+fabric_manager: cudn_net
 capabilities:
   supports_ipv4: true
   supports_ipv6: true
@@ -91,11 +96,11 @@ capabilities:
 ```
 
 **Fields:**
-- `implementation_strategy` — matches annotation value, role name, and NetworkClass strategy
+- `fabric_manager`/`k8s_manager` — at least one required for `template_type: network`; matches the annotation value osac-operator's dispatcher stamps and the role directory name
 - `template_type` — `network`, `compute`, or `cluster`
 - `capabilities` — feature flags published to NetworkClass
 
-**Note:** Use underscores (`_`), not hyphens (`-`), in role names and `implementation_strategy`.
+**Note:** Use underscores (`_`), not hyphens (`-`), in role names and `fabric_manager`/`k8s_manager`. `implementation_strategy` is no longer read here — it was reserved on the NetworkClass/VirtualNetwork protos once the dispatcher became the sole routing mechanism (OSAC-1468).
 
 ## Service Roles
 

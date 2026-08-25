@@ -35,8 +35,10 @@ spec:
       containers:
         - name: vast-csi
           image: "{{ .Values.vast.image.repository }}:{{ .Values.vast.image.tag }}"
-          args: ["serve"]
+          args: ["serve", "--plugin", {{ .Values.vast.config.plugin | quote }}]
           env:
+            - name: X_CSI_MODE
+              value: {{ .Values.vast.config.mode | quote }}
             - name: CSI_ENDPOINT
               value: "tcp://0.0.0.0:{{ .Values.vast.service.port }}"
             - name: X_CSI_VMS_HOST

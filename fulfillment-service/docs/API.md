@@ -591,7 +591,7 @@ As with full references, callers may supply `id`, `name`, or both, and the serve
 the other.
 
 Local references are used when the target is always co-located — for example, a `Subnet`
-referencing its parent `VirtualNetwork`, or a `NetworkAttachment` referencing a `Subnet` and
+referencing its parent `VirtualNetwork`, or a `ComputeNetworkAttachment` referencing a `Subnet` and
 `SecurityGroup`.
 
 ### Naming convention

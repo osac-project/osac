@@ -93,27 +93,32 @@
         that:
           - osac_network_classes is defined
           - osac_network_classes | length >= 1
-          - osac_network_classes | map(attribute='id') | list is superset(['osac.templates.cudn_net'])
+          - osac_network_classes | map(attribute='metadata') | map(attribute='name') | list is superset(['cudn-net'])
         fail_msg: >-
-          Expected at least 1 network class (cudn_net).
-          Got: {{ osac_network_classes | default([]) | map(attribute='id') | list }}
+          Expected at least 1 network class (cudn-net).
+          Got: {{ osac_network_classes | default([]) | map(attribute='metadata') | map(attribute='name') | list }}
         success_msg: "Found {{ osac_network_classes | length }} network class(es)"
       when: test_discover_all | default(false) | bool
 
     - name: Verify network class structure
       ansible.builtin.assert:
         that:
-          - item.id is defined
           - item.title is defined
-          - item.implementation_strategy is defined
-          - item.implementation_strategy | length > 0
+          - item.metadata is defined
+          - item.metadata.name is defined
+          - item.metadata.name | length > 0
           - (item.fabric_manager is defined and item.fabric_manager | length > 0) or (item.k8s_manager is defined and item.k8s_manager | length > 0)
           - item.capabilities is defined
-        fail_msg: "Network class '{{ item.id }}' missing required fields, or has neither fabric_manager nor k8s_manager set"
-        success_msg: "Network class '{{ item.id }}' has correct structure (strategy={{ item.implementation_strategy }}, fabric_manager={{ item.fabric_manager | default('unset') }}, k8s_manager={{ item.k8s_manager | default('unset') }})"
+        fail_msg: >-
+          Network class '{{ item.metadata.name | default('unknown') }}' missing required
+          fields, or has neither fabric_manager nor k8s_manager set
+        success_msg: >-
+          Network class '{{ item.metadata.name }}' has correct structure
+          (fabric_manager={{ item.fabric_manager | default('unset') }},
+          k8s_manager={{ item.k8s_manager | default('unset') }})
       loop: "{{ osac_network_classes }}"
       loop_control:
-        label: "{{ item.id }}"
+        label: "{{ item.metadata.name }}"
       when: test_discover_all | default(false) | bool
 
 # ──────────────────────────────────────────────────────────────

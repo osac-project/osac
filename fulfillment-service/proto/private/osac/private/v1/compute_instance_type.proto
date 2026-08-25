@@ -38,7 +38,7 @@ message ComputeInstance {
 }
 
 // Groups one subnet with security groups for that network attachment (multi-NIC VMs).
-message NetworkAttachment {
+message ComputeNetworkAttachment {
   // Reference to the Subnet for this NIC.
   SubnetLocalReference subnet = 1;
 
@@ -76,7 +76,7 @@ message ComputeInstanceSpec {
   reserved "subnet", "security_groups";
 
   // Network attachments: one entry per NIC.
-  repeated NetworkAttachment network_attachments = 14;
+  repeated ComputeNetworkAttachment network_attachments = 14;
 
   // Reference to a compute instance catalog item. Mutually exclusive with template during the migration period.
   // When set, the server fetches the catalog item and applies its field definitions.

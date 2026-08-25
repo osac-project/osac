@@ -176,6 +176,30 @@ func (r *SubnetReconciler) SetupWithManager(mgr mcmanager.Manager) error {
 		Complete(r)
 }
 
+// getParentVirtualNetwork looks up the Subnet's parent VirtualNetwork by UUID label. A nil
+// VirtualNetwork with a nil error means the caller should requeue (parent not found yet); a
+// nil VirtualNetwork with a non-nil error means the caller should propagate the error.
+func (r *SubnetReconciler) getParentVirtualNetwork(ctx context.Context, subnet *v1alpha1.Subnet) (*v1alpha1.VirtualNetwork, ctrl.Result, error) {
+	vnetList := &v1alpha1.VirtualNetworkList{}
+	err := r.List(ctx, vnetList,
+		client.InNamespace(subnet.Namespace),
+		client.MatchingLabels{osacVirtualNetworkIDLabel: subnet.Spec.VirtualNetwork},
+	)
+	if err != nil {
+		return nil, ctrl.Result{}, err
+	}
+	if len(vnetList.Items) == 0 {
+		ctrllog.FromContext(ctx).Info("parent VirtualNetwork not found, requeueing", "uuid", subnet.Spec.VirtualNetwork)
+		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+	}
+	if len(vnetList.Items) > 1 {
+		return nil, ctrl.Result{}, fmt.Errorf(
+			"expected exactly one parent VirtualNetwork with uuid %q but found %d",
+			subnet.Spec.VirtualNetwork, len(vnetList.Items))
+	}
+	return &vnetList.Items[0], ctrl.Result{}, nil
+}
+
 func (r *SubnetReconciler) handleUpdate(ctx context.Context, subnet *v1alpha1.Subnet) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
@@ -194,35 +218,22 @@ func (r *SubnetReconciler) handleUpdate(ctx context.Context, subnet *v1alpha1.Su
 	}
 
 	// Get parent VirtualNetwork by UUID label to read implementation strategy
-	vnetList := &v1alpha1.VirtualNetworkList{}
-	err := r.List(ctx, vnetList,
-		client.InNamespace(subnet.Namespace),
-		client.MatchingLabels{osacVirtualNetworkIDLabel: subnet.Spec.VirtualNetwork},
-	)
-	if err != nil {
-		return ctrl.Result{}, err
+	vnet, result, err := r.getParentVirtualNetwork(ctx, subnet)
+	if err != nil || vnet == nil {
+		return result, err
 	}
-	if len(vnetList.Items) == 0 {
-		log.Info("parent VirtualNetwork not found, requeueing", "uuid", subnet.Spec.VirtualNetwork)
-		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
-	}
-	if len(vnetList.Items) > 1 {
-		return ctrl.Result{}, fmt.Errorf(
-			"expected exactly one parent VirtualNetwork with uuid %q but found %d",
-			subnet.Spec.VirtualNetwork, len(vnetList.Items))
-	}
-	vnet := &vnetList.Items[0]
 
 	// Resolve the dispatch plan: dispatcher path when the parent VirtualNetwork's
-	// NetworkClass has a fabricManager registered (plan non-nil), else the legacy
-	// implementation_strategy annotation path (from the parent VirtualNetwork spec,
-	// plan nil). Subnet is the only resource kind whose plan can carry a k8s target
-	// alongside the fabric one — see pkg/dispatcher's dispatch table.
+	// NetworkClass has a fabricManager registered (plan non-nil), else fall back to
+	// whatever implementation-strategy annotation the parent VirtualNetwork's own
+	// controller has already resolved and written onto it. Subnet is the only
+	// resource kind whose plan can carry a k8s target alongside the fabric one — see
+	// pkg/dispatcher's dispatch table.
 	plan, err := resolveDispatchPlan(ctx, r.Resolver, "Subnet", vnet.Spec.NetworkClass)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	implementationStrategy := vnet.Spec.ImplementationStrategy
+	implementationStrategy := vnet.Annotations[osacImplementationStrategyAnnotation]
 	// plan may be nil here (no-dispatcher legacy path); FabricTarget/K8sTarget have
 	// nil-receiver-safe implementations that return nil in that case, so this — unlike
 	// sibling controllers' resolveImplementationStrategy — deliberately calls the

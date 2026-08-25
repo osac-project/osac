@@ -2602,7 +2602,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 				},
 				Spec: newTestComputeInstanceSpec("test_template"),
 			}
-			instance.Spec.NetworkAttachments = []osacv1alpha1.NetworkAttachment{{SubnetRef: subnetRef}}
+			instance.Spec.NetworkAttachments = []osacv1alpha1.ComputeNetworkAttachment{{SubnetRef: subnetRef}}
 
 			// Wait for Subnet CR to be cached
 			Eventually(func() error {
@@ -2622,7 +2622,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 				},
 				Spec: newTestComputeInstanceSpec("test_template"),
 			}
-			instance.Spec.NetworkAttachments = []osacv1alpha1.NetworkAttachment{{SubnetRef: "nonexistent-subnet"}}
+			instance.Spec.NetworkAttachments = []osacv1alpha1.ComputeNetworkAttachment{{SubnetRef: "nonexistent-subnet"}}
 
 			subnetNS, err := reconciler.resolveSubnetTargetNamespace(ctx, instance)
 			Expect(err).To(HaveOccurred())
@@ -2677,7 +2677,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 
 			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
 			spec := newTestComputeInstanceSpec("test_template")
-			spec.NetworkAttachments = []osacv1alpha1.NetworkAttachment{{SubnetRef: subnetRef}}
+			spec.NetworkAttachments = []osacv1alpha1.ComputeNetworkAttachment{{SubnetRef: subnetRef}}
 			resource := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      resourceName,
@@ -2718,7 +2718,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 
 			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
 			spec := newTestComputeInstanceSpec("test_template")
-			spec.NetworkAttachments = []osacv1alpha1.NetworkAttachment{{SubnetRef: "nonexistent-subnet-cr"}}
+			spec.NetworkAttachments = []osacv1alpha1.ComputeNetworkAttachment{{SubnetRef: "nonexistent-subnet-cr"}}
 			resource := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      resourceName,
@@ -2776,7 +2776,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 
 			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
 			spec := newTestComputeInstanceSpec("test_template")
-			spec.NetworkAttachments = []osacv1alpha1.NetworkAttachment{{SubnetRef: subnetRef}}
+			spec.NetworkAttachments = []osacv1alpha1.ComputeNetworkAttachment{{SubnetRef: subnetRef}}
 			resource := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      resourceName,
@@ -2837,7 +2837,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 
 			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
 			spec := newTestComputeInstanceSpec("test_template")
-			spec.NetworkAttachments = []osacv1alpha1.NetworkAttachment{{SubnetRef: subnetRef}}
+			spec.NetworkAttachments = []osacv1alpha1.ComputeNetworkAttachment{{SubnetRef: subnetRef}}
 			resource := &osacv1alpha1.ComputeInstance{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      resourceName,
@@ -3134,14 +3134,14 @@ var _ = Describe("ComputeInstance Controller", func() {
 
 		It("should return empty when networkAttachments is empty", func() {
 			spec := osacv1alpha1.ComputeInstanceSpec{
-				NetworkAttachments: []osacv1alpha1.NetworkAttachment{},
+				NetworkAttachments: []osacv1alpha1.ComputeNetworkAttachment{},
 			}
 			Expect(spec.PrimarySubnetRef()).To(Equal(""))
 		})
 
 		It("should return networkAttachments[0].subnetRef when networkAttachments is set", func() {
 			spec := osacv1alpha1.ComputeInstanceSpec{
-				NetworkAttachments: []osacv1alpha1.NetworkAttachment{
+				NetworkAttachments: []osacv1alpha1.ComputeNetworkAttachment{
 					{SubnetRef: "primary-subnet", SecurityGroupRefs: []string{"sg-1"}},
 					{SubnetRef: "secondary-subnet", SecurityGroupRefs: []string{"sg-2"}},
 				},
@@ -3195,7 +3195,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 
 			nn := types.NamespacedName{Name: resourceName, Namespace: namespaceName}
 			spec := newTestComputeInstanceSpec("test_template")
-			spec.NetworkAttachments = []osacv1alpha1.NetworkAttachment{
+			spec.NetworkAttachments = []osacv1alpha1.ComputeNetworkAttachment{
 				{SubnetRef: subnetRef, SecurityGroupRefs: []string{"sg-test"}},
 			}
 			resource := &osacv1alpha1.ComputeInstance{

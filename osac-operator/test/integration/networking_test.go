@@ -68,7 +68,7 @@ var _ = Describe("Networking Resources", Ordered, func() {
 			By("creating a VirtualNetwork")
 			cmd := exec.Command("kubectl", "apply", "-f", "-")
 			cmd.Stdin = createVirtualNetworkYAML(
-				virtualNetworkName, operatorNamespace, "cudn-net", "us-west-1", "10.0.0.0/16", "cudn-strategy")
+				virtualNetworkName, operatorNamespace, "cudn-net", "us-west-1", "10.0.0.0/16")
 			_, err := utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 
@@ -105,12 +105,6 @@ var _ = Describe("Networking Resources", Ordered, func() {
 			output, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(string(output)).To(Equal("cudn-net"))
-
-			cmd = exec.Command("kubectl", "get", "virtualnetwork", virtualNetworkName,
-				"-n", operatorNamespace, "-o", "jsonpath={.spec.implementationStrategy}")
-			output, err = utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(string(output)).To(Equal("cudn-strategy"))
 		})
 
 		It("should be listable with shortname", func() {
@@ -242,7 +236,7 @@ var _ = Describe("Networking Resources", Ordered, func() {
 	})
 })
 
-func createVirtualNetworkYAML(name, namespace, networkClass, region, ipv4CIDR, implStrategy string) *strings.Reader {
+func createVirtualNetworkYAML(name, namespace, networkClass, region, ipv4CIDR string) *strings.Reader {
 	yaml := fmt.Sprintf(`apiVersion: osac.openshift.io/v1alpha1
 kind: VirtualNetwork
 metadata:
@@ -252,8 +246,7 @@ spec:
   region: %s
   ipv4Cidr: %s
   networkClass: %s
-  implementationStrategy: %s
-`, name, namespace, region, ipv4CIDR, networkClass, implStrategy)
+`, name, namespace, region, ipv4CIDR, networkClass)
 	return strings.NewReader(yaml)
 }
 

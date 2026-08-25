@@ -166,6 +166,7 @@ func (p *VastVendorProvisioner) CreateVolume(ctx context.Context, req VendorCrea
 			"username": creds.username,
 			"password": creds.password,
 			"endpoint": creds.vastEndpoint,
+			"tenant":   req.Tenant,
 		},
 	}
 	creds.applyVipPool(csiReq.Parameters)
@@ -211,6 +212,7 @@ func (p *VastVendorProvisioner) DeleteVolume(ctx context.Context, req VendorDele
 			"username": creds.username,
 			"password": creds.password,
 			"endpoint": creds.vastEndpoint,
+			"tenant":   req.Tenant,
 		},
 	})
 	if err != nil {

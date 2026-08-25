@@ -279,7 +279,7 @@ func (b0 TestOtherTargetLocalReference_builder) Build() *TestOtherTargetLocalRef
 	return m0
 }
 
-// Nested message containing reference fields (mirrors NetworkAttachment).
+// Nested message containing reference fields (mirrors ComputeNetworkAttachment).
 type TestRefAttachment struct {
 	state          protoimpl.MessageState           `protogen:"hybrid.v1"`
 	Subnet         *TestTargetLocalReference        `protobuf:"bytes,1,opt,name=subnet,proto3" json:"subnet,omitempty"`

@@ -30,6 +30,7 @@ import (
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/console"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
 )
@@ -324,12 +325,16 @@ func (l *privateServerCILookup) GetForConsole(ctx context.Context, id string) (*
 // privateServerHubLookup wraps the private HubsServer to implement HubLookup.
 // It is a pure reader -- the caller provides a tx-bound context.
 type privateServerHubLookup struct {
-	hubServer privatev1.HubsServer
+	hubServer     privatev1.HubsServer
+	secretsServer privatev1.SecretsServer
 }
 
-// NewPrivateServerHubLookup creates a HubLookup backed by the private Hubs server.
-func NewPrivateServerHubLookup(hubServer privatev1.HubsServer) HubLookup {
-	return &privateServerHubLookup{hubServer: hubServer}
+// NewPrivateServerHubLookup creates a HubLookup backed by the private Hubs and Secrets servers.
+func NewPrivateServerHubLookup(hubServer privatev1.HubsServer, secretsServer privatev1.SecretsServer) HubLookup {
+	return &privateServerHubLookup{
+		hubServer:     hubServer,
+		secretsServer: secretsServer,
+	}
 }
 
 func (l *privateServerHubLookup) GetKubeconfig(ctx context.Context, hubID string) (kubeconfig []byte, namespace string, err error) {
@@ -340,5 +345,22 @@ func (l *privateServerHubLookup) GetKubeconfig(ctx context.Context, hubID string
 		return nil, "", err
 	}
 	hub := hubResp.GetObject()
-	return hub.GetSpec().GetKubeconfig(), hub.GetSpec().GetNamespace(), nil
+	kubeconfig, err = controllers.ResolveHubKubeconfig(ctx, hub.GetSpec(), l.getSecret)
+	if err != nil {
+		return nil, "", err
+	}
+	return kubeconfig, hub.GetSpec().GetNamespace(), nil
+}
+
+func (l *privateServerHubLookup) getSecret(ctx context.Context, id string) (*privatev1.Secret, error) {
+	if l.secretsServer == nil {
+		return nil, fmt.Errorf("secrets server is required to resolve kubeconfig_secret")
+	}
+	response, err := l.secretsServer.Get(ctx, privatev1.SecretsGetRequest_builder{
+		Id: id,
+	}.Build())
+	if err != nil {
+		return nil, err
+	}
+	return response.GetObject(), nil
 }

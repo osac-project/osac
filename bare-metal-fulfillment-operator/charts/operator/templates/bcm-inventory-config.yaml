@@ -1,0 +1,26 @@
+{{- if .Values.bcm.enabled }}
+{{- if not .Values.bcm.url }}
+{{- fail "bcm.enabled is true but bcm.url is not set" }}
+{{- end }}
+{{- if not .Values.bcm.bmhNamespace }}
+{{- fail "bcm.enabled is true but bcm.bmhNamespace is not set" }}
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Values.secrets.inventoryConfig }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "bare-metal-fulfillment-operator.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  inventory.yaml: |
+    name: bcm-inventory
+    type: bcm
+    hostClass: {{ .Values.bcm.hostClass | quote }}
+    options:
+      bcm:
+        url: {{ .Values.bcm.url | quote }}
+        credentialsSecret: {{ .Values.secrets.bcmCerts | quote }}
+        insecureSkipVerify: {{ .Values.bcm.insecureSkipVerify }}
+{{- end }}

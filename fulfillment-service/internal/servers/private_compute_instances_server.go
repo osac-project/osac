@@ -282,7 +282,7 @@ func (s *PrivateComputeInstancesServer) injectDefaultNetworkAttachments(ctx cont
 			"spec.network_attachments: at least one network attachment is required for new compute instances")
 	}
 
-	attachment := privatev1.NetworkAttachment_builder{
+	attachment := privatev1.ComputeNetworkAttachment_builder{
 		Subnet: privatev1.SubnetLocalReference_builder{Id: subnet.GetId()}.Build(),
 	}.Build()
 
@@ -297,7 +297,7 @@ func (s *PrivateComputeInstancesServer) injectDefaultNetworkAttachments(ctx cont
 		})
 	}
 
-	spec.SetNetworkAttachments([]*privatev1.NetworkAttachment{attachment})
+	spec.SetNetworkAttachments([]*privatev1.ComputeNetworkAttachment{attachment})
 
 	attrs := []slog.Attr{
 		slog.String("subnet_id", subnet.GetId()),

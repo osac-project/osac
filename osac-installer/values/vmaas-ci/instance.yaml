@@ -91,6 +91,23 @@ service:
           param: sslrootcert
   log:
     level: debug
+  vault:
+    endpoint: "https://openbao.osac.svc.cluster.local:8200"
+    namespace: osac
+    kvMountPath: secret
+    lifecycleRole: lifecycle
+    lifecycleMountPath: jwt
+    keycloakClientId: osac-controller
+    keycloakIssuerUrl: "https://keycloak.keycloak.svc.cluster.local/realms/osac"
+    keycloakAudience: osac-api
+    caBundle:
+      configMap: ca-bundle
+    credentials:
+    - secret:
+        name: fulfillment-controller-credentials
+        items:
+        - key: client-secret
+          param: client-secret
 
 # --- UI ---
 ui:

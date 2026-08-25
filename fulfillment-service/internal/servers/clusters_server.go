@@ -36,11 +36,13 @@ import (
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	"github.com/osac-project/osac/fulfillment-service/internal/jq"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/gvks"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
+	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 )
 
 type ClustersServerBuilder struct {
@@ -50,6 +52,7 @@ type ClustersServerBuilder struct {
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
 	scheme            *runtime.Scheme
+	secretStore       vault.SecretStore
 }
 
 var _ publicv1.ClustersServer = (*ClustersServer)(nil)
@@ -63,6 +66,7 @@ type ClustersServer struct {
 	outMapper       *GenericMapper[*privatev1.Cluster, *publicv1.Cluster]
 	jqTool          *jq.Tool
 	hubsDao         *dao.GenericDAO[*privatev1.Hub]
+	secretsServer   privatev1.SecretsServer
 	kubeClients     map[string]clnt.Client
 	kubeClientsLock *sync.Mutex
 	scheme          *runtime.Scheme
@@ -107,6 +111,13 @@ func (b *ClustersServerBuilder) SetMetricsRegisterer(value prometheus.Registerer
 // This is mandatory.
 func (b *ClustersServerBuilder) SetScheme(value *runtime.Scheme) *ClustersServerBuilder {
 	b.scheme = value
+	return b
+}
+
+// SetSecretStore sets the Vault-backed secret store used to hydrate kubeconfig secrets.
+// This is optional. When unset, secret data is read from the database only.
+func (b *ClustersServerBuilder) SetSecretStore(value vault.SecretStore) *ClustersServerBuilder {
+	b.secretStore = value
 	return b
 }
 
@@ -184,11 +195,24 @@ func (b *ClustersServerBuilder) Build() (result *ClustersServer, err error) {
 		return
 	}
 
+	secretsServer, err := NewPrivateSecretsServer().
+		SetLogger(b.logger).
+		SetNotifier(b.notifier).
+		SetAttributionLogic(b.attributionLogic).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		SetSecretStore(b.secretStore).
+		Build()
+	if err != nil {
+		return
+	}
+
 	// Create and populate the object:
 	result = &ClustersServer{
 		logger:          b.logger,
 		jqTool:          jqTool,
 		hubsDao:         hubsDao,
+		secretsServer:   secretsServer,
 		kubeClients:     map[string]clnt.Client{},
 		kubeClientsLock: &sync.Mutex{},
 		private:         delegate,
@@ -690,12 +714,29 @@ func (s *ClustersServer) getKubeClient(ctx context.Context, hub *privatev1.Hub) 
 }
 
 func (s *ClustersServer) createKubeClient(ctx context.Context, hub *privatev1.Hub) (result clnt.Client, err error) {
-	config, err := clientcmd.RESTConfigFromKubeConfig(hub.GetSpec().GetKubeconfig())
+	kubeconfig, err := controllers.ResolveHubKubeconfig(ctx, hub.GetSpec(), s.getHubSecret)
+	if err != nil {
+		return
+	}
+	config, err := clientcmd.RESTConfigFromKubeConfig(kubeconfig)
 	if err != nil {
 		return
 	}
 	result, err = clnt.New(config, clnt.Options{Scheme: s.scheme})
 	return
+}
+
+func (s *ClustersServer) getHubSecret(ctx context.Context, id string) (*privatev1.Secret, error) {
+	if s.secretsServer == nil {
+		return nil, fmt.Errorf("secrets server is required to resolve kubeconfig_secret")
+	}
+	response, err := s.secretsServer.Get(ctx, privatev1.SecretsGetRequest_builder{
+		Id: id,
+	}.Build())
+	if err != nil {
+		return nil, err
+	}
+	return response.GetObject(), nil
 }
 
 func (s *ClustersServer) getKubeClusterOrder(ctx context.Context, client clnt.Client,

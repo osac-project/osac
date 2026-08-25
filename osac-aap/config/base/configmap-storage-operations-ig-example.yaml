@@ -16,7 +16,15 @@ data:
   # Set to "false" for self-signed certificates in dev/test environments.
   # VAST_VALIDATE_CERTS: "true"
 
-  # Gateway IP for cross-subnet VIP routing (optional).
+  # Per-tenant VIP pool (osac-<tenant>-vippool). OSAC reuses the pool if it already
+  # exists (pre-created by the cloud admin). To let OSAC self-create a dedicated pool
+  # per tenant when missing, set a routable supernet on the VAST data network; each
+  # tenant gets a slice of VAST_VIP_POOL_SLICE_SIZE addresses (default 4) at offset
+  # tenant_id * slice_size. Leave the supernet empty to require pre-created pools.
+  # VAST_VIP_POOL_SUPERNET: "10.100.0.0/22"
+  # VAST_VIP_POOL_SLICE_SIZE: "4"
+
+  # Gateway IP applied to self-created VIP pools (optional).
   # VAST_VIP_POOL_GW_IP: ""
   # VAST_VIP_POOL_GW_IPV6: ""
 

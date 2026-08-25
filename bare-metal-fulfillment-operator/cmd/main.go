@@ -507,11 +507,17 @@ func createBCMInventoryClient(
 	}
 
 	certDir := filepath.Join("/etc/osac/certs", bcmCfg.CredentialsSecret)
+	// Only set CAFile if ca.crt exists in the mounted Secret.
+	// When caCert is not provided in Helm values, ca.crt won't be present.
+	caFile := filepath.Join(certDir, "ca.crt")
+	if _, err := os.Stat(caFile); os.IsNotExist(err) {
+		caFile = ""
+	}
 	bcmClient, err := bcmclient.NewClient(ctx, &bcmclient.Config{
 		URL:                bcmCfg.URL,
 		CertFile:           filepath.Join(certDir, "tls.crt"),
 		KeyFile:            filepath.Join(certDir, "tls.key"),
-		CAFile:             filepath.Join(certDir, "ca.crt"),
+		CAFile:             caFile,
 		InsecureSkipVerify: bcmCfg.InsecureSkipVerify,
 	})
 	if err != nil {

@@ -1,0 +1,22 @@
+{{- if .Values.bcm.enabled }}
+{{- if not .Values.bcm.cert }}
+{{- fail "bcm.enabled is true but bcm.cert is not set" }}
+{{- end }}
+{{- if not .Values.bcm.key }}
+{{- fail "bcm.enabled is true but bcm.key is not set" }}
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Values.secrets.bcmCerts }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "bare-metal-fulfillment-operator.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  tls.crt: {{ .Values.bcm.cert | quote }}
+  tls.key: {{ .Values.bcm.key | quote }}
+  {{- if .Values.bcm.caCert }}
+  ca.crt: {{ .Values.bcm.caCert | quote }}
+  {{- end }}
+{{- end }}

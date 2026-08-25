@@ -56,7 +56,10 @@ var _ = Describe("NATGatewayReconciler", func() {
 			MaxJobHistory:        10,
 		}
 
-		// Create VirtualNetwork fixture with ImplementationStrategy set
+		// Create VirtualNetwork fixture. NATGatewayReconciler reads the implementation
+		// strategy from the parent VirtualNetwork's annotation (already resolved by the
+		// VirtualNetwork's own controller), so set it directly here rather than via a
+		// dispatcher Resolver.
 		vnet = &osacv1alpha1.VirtualNetwork{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "test-vnet-natgw",
@@ -64,12 +67,14 @@ var _ = Describe("NATGatewayReconciler", func() {
 				Labels: map[string]string{
 					osacVirtualNetworkIDLabel: "test-vnet-natgw-uuid",
 				},
+				Annotations: map[string]string{
+					osacImplementationStrategyAnnotation: "cudn-net",
+				},
 			},
 			Spec: osacv1alpha1.VirtualNetworkSpec{
-				Region:                 "us-west-1",
-				IPv4CIDR:               "10.0.0.0/16",
-				NetworkClass:           "cudn-net",
-				ImplementationStrategy: "cudn-net",
+				Region:       "us-west-1",
+				IPv4CIDR:     "10.0.0.0/16",
+				NetworkClass: "cudn-net",
 			},
 		}
 		Expect(k8sClient.Create(ctx, vnet)).To(Succeed())
@@ -173,7 +178,7 @@ var _ = Describe("NATGatewayReconciler", func() {
 			_ = k8sClient.Delete(ctx, natgwNoParent)
 		})
 
-		It("should requeue when parent VirtualNetwork has no ImplementationStrategy", func() {
+		It("should requeue when parent VirtualNetwork has no implementation-strategy annotation", func() {
 			vnetNoStrategy := &osacv1alpha1.VirtualNetwork{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "vnet-no-strategy-natgw",

@@ -133,8 +133,7 @@ var _ = Describe("Public NAT gateways server", func() {
 		createVirtualNetwork := func() string {
 			ncResp, err := networkClassDao.Create().SetObject(
 				privatev1.NetworkClass_builder{
-					ImplementationStrategy: "test-strategy",
-					FabricManager:          new("netris"),
+					FabricManager: new("netris"),
 					Metadata: privatev1.Metadata_builder{
 						Tenant: auth.SharedTenant,
 						Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),

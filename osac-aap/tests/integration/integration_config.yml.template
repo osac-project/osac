@@ -39,10 +39,8 @@ vast_tenant_prefix: "osac-test-"
 # TLS validation — set to false for mock server or self-signed cert testing
 vast_validate_certs: ${VAST_VALIDATE_CERTS}
 
-# Shared VIP pool configuration
-vast_vip_pool_name: "${VAST_VIP_POOL_NAME}"
-vast_vip_pool_ip_ranges: '${VAST_VIP_POOL_IP_RANGES}'
-vast_vip_pool_subnet_cidr: ${VAST_VIP_POOL_SUBNET_CIDR}
+# Per-tenant VIP pool configuration (supernet for self-created dedicated pools)
+vast_vip_pool_supernet: "${VAST_VIP_POOL_SUPERNET}"
 
 # Storage tier definitions — JSON array with per-tier provider selection and backend_id,
 # matching the storage_provider_tiers/osac_job_vars.storage_tier_definitions shape.

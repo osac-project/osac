@@ -4,12 +4,24 @@
 # Persists tenant config + credentials to hub Secret.
 # Hub Secret write is INSIDE the block so rescue can clean up the user on failure.
 #
-# VIP pool: Uses a globally-shared pool (vast_storage_vip_pool_name) instead of
-# per-tenant pools. The pool is created idempotently on the first tenant setup
-# using VAST_VIP_POOL_IP_RANGES and VAST_VIP_POOL_SUBNET_CIDR from the IG ConfigMap.
-# Tenant isolation relies on source-based access control.
-# Limitation: All tenants share the same pool IP addresses. For dedicated
-# per-tenant IPs, future work could add IP range allocation from an IPAM source.
+# VIP pool: per-tenant pool referenced by CONVENTION — osac-<tenant>-vippool.
+#   - If the pool already exists (pre-created by the cloud admin or a prior run),
+#     OSAC reuses it — works even when the admin credentials lack VIP-pool write
+#     access.
+#   - If it is missing AND vast_storage_vip_pool_supernet is set, OSAC
+#     self-creates a dedicated pool owned by this tenant (tenant_id) with a
+#     deterministic IP slice carved from the supernet by VAST tenant_id.
+#   - If it is missing and no supernet is set, onboarding fails with pre-create
+#     instructions.
+# For block/NVMe the CSI TENANT_ADMIN resolves the pool by name via
+# GET /vippools/, so it must exist and be tenant-visible; a missing or
+# wrong-owned pool is the OSAC-4260 attach failure. The existence check runs
+# before tenant creation (fail fast); the actual create runs after, since a
+# tenant-owned pool needs the tenant's VAST id.
+# KNOWN LIMITATION (follow-up): a self-created dedicated pool is NOT deleted on
+# teardown/rollback, so the pool and its carved IP slice leak until addressed.
+# Fix by recording a vip_pool_self_created flag in the hub Secret and deleting
+# the pool by name on teardown only when self-created (never a pre-created pool).
 
 - name: Assert _provider_tiers is defined and non-empty
   ansible.builtin.assert:
@@ -69,29 +81,19 @@
           timeout: "{{ vast_storage_api_timeout }}"
       no_log: true
 
-    - name: Validate VIP pool IP ranges are configured
-      ansible.builtin.fail:
-        msg: >-
-          VAST_VIP_POOL_IP_RANGES must be set in the storage-operations-ig ConfigMap.
-          Example: '[["10.0.100.10","10.0.100.50"]]' (JSON array of [start, end] pairs).
-      when: vast_storage_vip_pool_ip_ranges | length == 0
-
-    - name: Validate VIP pool subnet CIDR is configured
-      ansible.builtin.fail:
-        msg: >-
-          VAST_VIP_POOL_SUBNET_CIDR must be set in the storage-operations-ig ConfigMap.
-          This is the subnet prefix length (e.g., 24 for a /24 network).
-      when: vast_storage_vip_pool_subnet_cidr | string | length == 0
-
-    - name: Parse VIP pool IP ranges from JSON
+    # ── VIP pool existence check (fail fast, before creating the tenant) ──
+    # The tenant-owned create happens later (needs the VAST tenant id); here we
+    # only decide whether the conventional pool already exists and, if not,
+    # whether we are allowed to self-create it (supernet configured).
+    - name: Resolve the tenant's VIP pool name by convention
       ansible.builtin.set_fact:
-        _vast_vip_pool_ip_ranges: >-
-          {{ vast_storage_vip_pool_ip_ranges if (vast_storage_vip_pool_ip_ranges is not string)
-             else (vast_storage_vip_pool_ip_ranges | from_json) }}
+        vast_storage_vip_pool_name: "osac-{{ tenant_name }}-vippool"
 
-    - name: Look up existing VIP pools to find one matching the configured IP ranges
+    # Server-side name filter keeps this O(1) as per-tenant pools grow with
+    # tenant count (mirrors the ?name= lookups for tenants/localproviders below).
+    - name: Look up the conventional VIP pool by name
       ansible.builtin.uri:
-        url: "https://{{ vast_endpoint }}/api/vippools/"
+        url: "https://{{ vast_endpoint }}/api/vippools/?name={{ vast_storage_vip_pool_name }}"
         method: GET
         url_username: "{{ vast_username }}"
         url_password: "{{ vast_password }}"
@@ -99,51 +101,38 @@
         validate_certs: "{{ vast_storage_validate_certs }}"
         timeout: "{{ vast_storage_api_timeout | int }}"
         status_code: [200]
-      register: _vast_vip_pool_lookup
+      register: _vast_vip_pool_check
       no_log: true
 
-    - name: Check if any existing pool matches the configured IP ranges
+    # Re-check the exact name client-side too: ?name= may match as a substring
+    # on some VAST versions, and the filtered list is now small either way.
+    # Capture the matched pool so its ownership can be verified after the tenant
+    # id is known (a wrong-owned pool with the conventional name is OSAC-4260).
+    - name: Capture the matched pre-existing VIP pool (if any)
       ansible.builtin.set_fact:
-        _vast_vip_pool_match: >-
-          {{ _vast_vip_pool_lookup.json
-             | selectattr('ip_ranges', 'equalto', _vast_vip_pool_ip_ranges)
+        _vast_vip_pool_existing: >-
+          {{ _vast_vip_pool_check.json
+             | selectattr('name', 'equalto', vast_storage_vip_pool_name)
              | list | first | default({}) }}
 
-    - name: Use existing VIP pool when IP ranges match
-      when: _vast_vip_pool_match | length > 0
-      block:
-        - name: Override VIP pool name to match existing pool
-          ansible.builtin.set_fact:
-            vast_storage_vip_pool_name: "{{ _vast_vip_pool_match.name }}"
+    - name: Record whether the conventional VIP pool already exists
+      ansible.builtin.set_fact:
+        _vast_vip_pool_present: "{{ _vast_vip_pool_existing | length > 0 }}"
 
-        - name: Log existing VIP pool reuse
-          ansible.builtin.debug:
-            msg: "Found existing VIP pool '{{ vast_storage_vip_pool_name }}' (id: {{ _vast_vip_pool_match.id }}) with matching IP ranges — reusing."
-
-    - name: Create shared VIP pool when no match exists
-      when: _vast_vip_pool_match | length == 0
-      block:
-        - name: Create VIP pool with configured name and ranges
-          vastdata.vms.vippools:
-            vms:
-              host: "{{ vast_endpoint }}"
-              username: "{{ vast_username }}"
-              password: "{{ vast_password }}"
-              validate_certs: "{{ vast_storage_validate_certs }}"
-              timeout: "{{ vast_storage_api_timeout }}"
-            name: "{{ vast_storage_vip_pool_name }}"
-            ip_ranges: "{{ _vast_vip_pool_ip_ranges }}"
-            subnet_cidr: "{{ vast_storage_vip_pool_subnet_cidr | int }}"
-            gw_ip: "{{ vast_storage_vip_pool_gw_ip if (vast_storage_vip_pool_gw_ip | default('') | length > 0) else omit }}"
-            gw_ipv6: "{{ vast_storage_vip_pool_gw_ipv6 if (vast_storage_vip_pool_gw_ipv6 | default('') | length > 0) else omit }}"
-            role: PROTOCOLS
-            state: present
-          register: _vast_vip_pool_result
-          no_log: true
-
-        - name: Log VIP pool creation
-          ansible.builtin.debug:
-            msg: "Created VIP pool '{{ vast_storage_vip_pool_name }}' (id: {{ _vast_vip_pool_result.vippools.id | default('unknown') }})"
+    - name: Require a pre-created pool or a supernet for self-creation
+      ansible.builtin.fail:
+        msg: >-
+          VIP pool '{{ vast_storage_vip_pool_name }}' does not exist and no
+          VAST_VIP_POOL_SUPERNET is configured for self-creation. Either set
+          VAST_VIP_POOL_SUPERNET (e.g. '10.100.0.0/22') in the storage-operations-ig
+          ConfigMap, or ask the cloud admin to pre-create a PROTOCOLS VIP pool named
+          '{{ vast_storage_vip_pool_name }}', owned by tenant '{{ tenant_name }}'
+          (or All-Tenants), with a routable IP range on the VAST data network.
+          Block/NVMe attach (ControllerPublishVolume) cannot resolve the pool until
+          it exists and is visible to the tenant.
+      when:
+        - not (_vast_vip_pool_present | bool)
+        - vast_storage_vip_pool_supernet | length == 0
 
     - name: Ensure VAST CSI Operator is installed
       ansible.builtin.include_tasks: ensure_csi_operator.yaml
@@ -258,6 +247,87 @@
         - name: Set tenant ID for downstream tasks
           ansible.builtin.set_fact:
             _vast_tenant_id: "{{ _vast_tenant_result.tenants.id | string }}"
+
+        # A pre-existing pool with the conventional name must be owned by this
+        # tenant (or All-Tenants), or a block TENANT_ADMIN still can't resolve
+        # it — the exact OSAC-4260 failure. Reject a wrong-owned pool instead of
+        # silently adopting it.
+        - name: Verify a pre-existing VIP pool is owned by this tenant (or All-Tenants)
+          ansible.builtin.fail:
+            msg: >-
+              VIP pool '{{ vast_storage_vip_pool_name }}' already exists but is owned by
+              VAST tenant_id {{ _vast_vip_pool_existing.tenant_id | default('unknown') }},
+              which is neither this tenant ({{ _vast_tenant_id }}) nor All-Tenants. A
+              block/NVMe TENANT_ADMIN cannot resolve a pool owned by another tenant
+              (the OSAC-4260 failure mode). Re-create it owned by tenant
+              '{{ tenant_name }}' or as All-Tenants.
+          when:
+            - _vast_vip_pool_present | bool
+            - _vast_vip_pool_existing.tenant_id is defined
+            - _vast_vip_pool_existing.tenant_id is not none
+            - (_vast_vip_pool_existing.tenant_id | int) != (_vast_tenant_id | int)
+
+        # ── Self-create the tenant's dedicated VIP pool when it is missing ──
+        # Only runs when the pool did not already exist (checked pre-tenant). The
+        # pre-tenant gate guarantees a supernet is configured when we reach here.
+        - name: Create the tenant's dedicated VIP pool when absent
+          when: not (_vast_vip_pool_present | bool)
+          block:
+            - name: Carve a deterministic per-tenant slice from the supernet by VAST tenant_id
+              ansible.builtin.set_fact:
+                _vast_vip_slice_start: >-
+                  {{ vast_storage_vip_pool_supernet | ansible.utils.ipaddr('network')
+                     | ansible.utils.ipmath((_vast_tenant_id | int) * (vast_storage_vip_pool_slice_size | int)) }}
+
+            - name: Compute the per-tenant slice end
+              ansible.builtin.set_fact:
+                _vast_vip_slice_end: >-
+                  {{ _vast_vip_slice_start
+                     | ansible.utils.ipmath((vast_storage_vip_pool_slice_size | int) - 1) }}
+
+            - name: Fail when the carved slice overflows the supernet
+              ansible.builtin.fail:
+                msg: >-
+                  Per-tenant VIP slice [{{ _vast_vip_slice_start }}..{{ _vast_vip_slice_end }}]
+                  for VAST tenant_id {{ _vast_tenant_id }} exceeds supernet
+                  {{ vast_storage_vip_pool_supernet }}. Enlarge VAST_VIP_POOL_SUPERNET or
+                  reduce VAST_VIP_POOL_SLICE_SIZE.
+              when: >-
+                (_vast_vip_slice_end | ansible.utils.ipaddr('int'))
+                > (vast_storage_vip_pool_supernet | ansible.utils.ipaddr('last_usable') | ansible.utils.ipaddr('int'))
+
+            - name: Create the dedicated per-tenant VIP pool (falls back to pre-create on permission denial)
+              block:
+                - name: Create dedicated VIP pool owned by the tenant
+                  vastdata.vms.vippools:
+                    vms: "{{ _vast_vms_conn }}"
+                    name: "{{ vast_storage_vip_pool_name }}"
+                    tenant_id: "{{ _vast_tenant_id | int }}"
+                    ip_ranges: [["{{ _vast_vip_slice_start }}", "{{ _vast_vip_slice_end }}"]]
+                    subnet_cidr: "{{ vast_storage_vip_pool_supernet | ansible.utils.ipaddr('prefix') | int }}"
+                    gw_ip: "{{ vast_storage_vip_pool_gw_ip if (vast_storage_vip_pool_gw_ip | default('') | length > 0) else omit }}"
+                    gw_ipv6: "{{ vast_storage_vip_pool_gw_ipv6 if (vast_storage_vip_pool_gw_ipv6 | default('') | length > 0) else omit }}"
+                    role: PROTOCOLS
+                    state: present
+                  register: _vast_vip_pool_result
+                  no_log: true
+
+                - name: Log VIP pool creation
+                  ansible.builtin.debug:
+                    msg: >-
+                      Created dedicated VIP pool '{{ vast_storage_vip_pool_name }}'
+                      (tenant_id {{ _vast_tenant_id }}, range
+                      {{ _vast_vip_slice_start }}..{{ _vast_vip_slice_end }}).
+              rescue:
+                - name: Fail with pre-create instructions when VIP pool creation is not permitted
+                  ansible.builtin.fail:
+                    msg: >-
+                      Could not create VIP pool '{{ vast_storage_vip_pool_name }}'
+                      ({{ ansible_failed_result.msg | default('permission denied') }}).
+                      If the admin credentials lack VIP-pool write access, ask the cloud
+                      admin to pre-create a PROTOCOLS pool named
+                      '{{ vast_storage_vip_pool_name }}', owned by tenant '{{ tenant_name }}'
+                      (or All-Tenants), with a routable IP range on the VAST data network.
 
         - name: Configure tenant client IP ranges for shared VIP pool NFS access
           block:
@@ -465,8 +535,12 @@
         _vast_lp_create_result: {}
         _vast_client_ip_ranges: []
         _vast_node_list: {}
-        _vast_vip_pool_lookup: {}
-        _vast_vip_pool_match: {}
+        _vast_vip_pool_check: {}
+        _vast_vip_pool_existing: {}
+        _vast_vip_pool_present: false
+        _vast_vip_slice_start: ""
+        _vast_vip_slice_end: ""
+        _vast_vip_pool_result: {}
       no_log: true
 
 - name: Set storage_provider_tenant_config output fact

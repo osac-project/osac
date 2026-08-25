@@ -6,8 +6,10 @@
   vars:
     virtual_network: "{{ osac_job_vars.resource }}"
     virtual_network_name: "{{ osac_job_vars.resource.metadata.name }}"
-    # Implementation strategy set by fulfillment-service in VirtualNetwork spec
-    implementation_strategy: "{{ osac_job_vars.resource.spec.implementationStrategy }}"
+    # Implementation strategy set by osac-operator from the dispatcher-resolved manager
+    implementation_strategy: >-
+      {{ osac_job_vars.resource.metadata.annotations
+         ['osac.openshift.io/implementation-strategy'] }}
     template_parameters: {}
 
   pre_tasks:

@@ -33,3 +33,13 @@ env:
   aapTokenSecretName: "osac-aap-api-token"
   aapTokenSecretKey: "token"
   aapInsecureSkipVerify: ""
+
+bcm:
+  enabled: false
+  url: ""
+  cert: ""
+  key: ""
+  caCert: ""
+  insecureSkipVerify: false
+  hostClass: "bcm"
+  bmhNamespace: ""

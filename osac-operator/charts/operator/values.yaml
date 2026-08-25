@@ -101,4 +101,12 @@ networkManagers:
         VirtualNetwork/Subnet provisioning with no separate physical fabric to
         bridge into — used as the platform default NetworkClass.
       capabilities: "ipv4,ipv6,dualStack"
-  k8sManagers: {}
+  k8sManagers:
+    k8s_only:
+      enabled: false
+      description: >-
+        Composite k8s-native networking (CUDN, Kubernetes NetworkPolicy, MetalLB
+        L2) with no separate physical fabric. Delegates each resource type to an
+        existing k8s-native implementation — see osac-aap's osac.templates.k8s_only
+        role.
+      capabilities: "ipv4,ipv6"

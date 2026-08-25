@@ -280,8 +280,8 @@ var _ = Describe("Compute instances server", func() {
 					Spec: publicv1.ComputeInstanceSpec_builder{
 						Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: "general.small"}.Build(),
 						TemplateParameters: templateParams,
-						NetworkAttachments: []*publicv1.NetworkAttachment{
-							publicv1.NetworkAttachment_builder{
+						NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
+							publicv1.ComputeNetworkAttachment_builder{
 								Subnet: publicv1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
 							}.Build(),
 						},
@@ -314,8 +314,8 @@ var _ = Describe("Compute instances server", func() {
 						}.Build(),
 						Spec: publicv1.ComputeInstanceSpec_builder{
 							Template: publicv1.ComputeInstanceTemplateReference_builder{Id: templateID}.Build(),
-							NetworkAttachments: []*publicv1.NetworkAttachment{
-								publicv1.NetworkAttachment_builder{
+							NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
+								publicv1.ComputeNetworkAttachment_builder{
 									Subnet: publicv1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
 								}.Build(),
 							},
@@ -350,8 +350,8 @@ var _ = Describe("Compute instances server", func() {
 						}.Build(),
 						Spec: publicv1.ComputeInstanceSpec_builder{
 							Template: publicv1.ComputeInstanceTemplateReference_builder{Id: templateID}.Build(),
-							NetworkAttachments: []*publicv1.NetworkAttachment{
-								publicv1.NetworkAttachment_builder{
+							NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
+								publicv1.ComputeNetworkAttachment_builder{
 									Subnet: publicv1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
 								}.Build(),
 							},
@@ -388,8 +388,8 @@ var _ = Describe("Compute instances server", func() {
 						}.Build(),
 						Spec: publicv1.ComputeInstanceSpec_builder{
 							Template: publicv1.ComputeInstanceTemplateReference_builder{Id: templateID}.Build(),
-							NetworkAttachments: []*publicv1.NetworkAttachment{
-								publicv1.NetworkAttachment_builder{
+							NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
+								publicv1.ComputeNetworkAttachment_builder{
 									Subnet: publicv1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
 								}.Build(),
 							},
@@ -424,8 +424,8 @@ var _ = Describe("Compute instances server", func() {
 					}.Build(),
 					Spec: publicv1.ComputeInstanceSpec_builder{
 						Template: publicv1.ComputeInstanceTemplateReference_builder{Id: "general.small"}.Build(),
-						NetworkAttachments: []*publicv1.NetworkAttachment{
-							publicv1.NetworkAttachment_builder{
+						NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
+							publicv1.ComputeNetworkAttachment_builder{
 								Subnet: publicv1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
 							}.Build(),
 						},
@@ -474,8 +474,8 @@ var _ = Describe("Compute instances server", func() {
 							SizeGib:     20,
 							StorageTier: new("standard"),
 						}.Build(),
-						NetworkAttachments: []*publicv1.NetworkAttachment{
-							publicv1.NetworkAttachment_builder{
+						NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
+							publicv1.ComputeNetworkAttachment_builder{
 								Subnet: publicv1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
 							}.Build(),
 						},
@@ -542,8 +542,8 @@ var _ = Describe("Compute instances server", func() {
 					}.Build(),
 					Spec: publicv1.ComputeInstanceSpec_builder{
 						Template: publicv1.ComputeInstanceTemplateReference_builder{Id: "general.small"}.Build(),
-						NetworkAttachments: []*publicv1.NetworkAttachment{
-							publicv1.NetworkAttachment_builder{
+						NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
+							publicv1.ComputeNetworkAttachment_builder{
 								Subnet: publicv1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
 							}.Build(),
 						},
@@ -624,8 +624,8 @@ var _ = Describe("Compute instances server", func() {
 					Spec: publicv1.ComputeInstanceSpec_builder{
 						Template:    publicv1.ComputeInstanceTemplateReference_builder{Id: "mapping_template"}.Build(),
 						RunStrategy: new("Halted"),
-						NetworkAttachments: []*publicv1.NetworkAttachment{
-							publicv1.NetworkAttachment_builder{
+						NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
+							publicv1.ComputeNetworkAttachment_builder{
 								Subnet: publicv1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
 							}.Build(),
 						},

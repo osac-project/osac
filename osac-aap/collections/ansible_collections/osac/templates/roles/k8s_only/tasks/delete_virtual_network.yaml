@@ -1,0 +1,8 @@
+---
+# k8s_only delegates VirtualNetwork deletion to cudn_net (ClusterUserDefinedNetwork).
+# See README.md for the rationale.
+
+- name: Delegate VirtualNetwork deletion to cudn_net role
+  ansible.builtin.include_role:
+    name: osac.templates.cudn_net
+    tasks_from: delete_virtual_network

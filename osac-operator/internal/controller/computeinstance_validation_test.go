@@ -77,7 +77,7 @@ var _ = Describe("ComputeInstance CEL Validation", func() {
 
 	It("should allow creation with networkAttachments", func() {
 		instance := createValidInstance("test-network-attachments")
-		instance.Spec.NetworkAttachments = []osacv1alpha1.NetworkAttachment{
+		instance.Spec.NetworkAttachments = []osacv1alpha1.ComputeNetworkAttachment{
 			{SubnetRef: "subnet-a"},
 		}
 
@@ -103,7 +103,7 @@ var _ = Describe("ComputeInstance CEL Validation", func() {
 			// In practice, this is unlikely to occur accidentally since changing a VM's subnet
 			// typically requires explicit user action, and the VM would need to be recreated anyway.
 			instance := createValidInstance("test-subnet-replacement")
-			instance.Spec.NetworkAttachments = []osacv1alpha1.NetworkAttachment{
+			instance.Spec.NetworkAttachments = []osacv1alpha1.ComputeNetworkAttachment{
 				{SubnetRef: "subnet-a", SecurityGroupRefs: []string{"sg-1"}},
 			}
 
@@ -114,7 +114,7 @@ var _ = Describe("ComputeInstance CEL Validation", func() {
 
 			// Replace with different subnetRef (same size, different key)
 			// This currently is NOT prevented by CEL validations
-			instance.Spec.NetworkAttachments = []osacv1alpha1.NetworkAttachment{
+			instance.Spec.NetworkAttachments = []osacv1alpha1.ComputeNetworkAttachment{
 				{SubnetRef: "subnet-b", SecurityGroupRefs: []string{"sg-1"}},
 			}
 			err := k8sClient.Update(ctx, instance)
@@ -124,7 +124,7 @@ var _ = Describe("ComputeInstance CEL Validation", func() {
 
 		It("should allow changing securityGroupRefs without changing subnetRef", func() {
 			instance := createValidInstance("test-sg-mutable")
-			instance.Spec.NetworkAttachments = []osacv1alpha1.NetworkAttachment{
+			instance.Spec.NetworkAttachments = []osacv1alpha1.ComputeNetworkAttachment{
 				{SubnetRef: "subnet-a", SecurityGroupRefs: []string{"sg-1"}},
 			}
 
@@ -140,7 +140,7 @@ var _ = Describe("ComputeInstance CEL Validation", func() {
 
 		It("should reject adding networkAttachment entries", func() {
 			instance := createValidInstance("test-add-attachment")
-			instance.Spec.NetworkAttachments = []osacv1alpha1.NetworkAttachment{
+			instance.Spec.NetworkAttachments = []osacv1alpha1.ComputeNetworkAttachment{
 				{SubnetRef: "subnet-a"},
 			}
 
@@ -151,7 +151,7 @@ var _ = Describe("ComputeInstance CEL Validation", func() {
 
 			// Try to add another networkAttachment
 			instance.Spec.NetworkAttachments = append(instance.Spec.NetworkAttachments,
-				osacv1alpha1.NetworkAttachment{SubnetRef: "subnet-b"},
+				osacv1alpha1.ComputeNetworkAttachment{SubnetRef: "subnet-b"},
 			)
 			err := k8sClient.Update(ctx, instance)
 			Expect(err).To(HaveOccurred())
@@ -160,7 +160,7 @@ var _ = Describe("ComputeInstance CEL Validation", func() {
 
 		It("should reject removing networkAttachment entries", func() {
 			instance := createValidInstance("test-remove-attachment")
-			instance.Spec.NetworkAttachments = []osacv1alpha1.NetworkAttachment{
+			instance.Spec.NetworkAttachments = []osacv1alpha1.ComputeNetworkAttachment{
 				{SubnetRef: "subnet-a"},
 				{SubnetRef: "subnet-b"},
 			}
@@ -605,7 +605,7 @@ var _ = Describe("ComputeInstance CEL Validation", func() {
 	Describe("MaxItems validation", func() {
 		It("should reject creating ComputeInstance with more than 8 networkAttachments", func() {
 			instance := createValidInstance("test-max-attachments")
-			instance.Spec.NetworkAttachments = []osacv1alpha1.NetworkAttachment{
+			instance.Spec.NetworkAttachments = []osacv1alpha1.ComputeNetworkAttachment{
 				{SubnetRef: "subnet-1"},
 				{SubnetRef: "subnet-2"},
 				{SubnetRef: "subnet-3"},
@@ -625,7 +625,7 @@ var _ = Describe("ComputeInstance CEL Validation", func() {
 
 		It("should allow creating ComputeInstance with exactly 8 networkAttachments", func() {
 			instance := createValidInstance("test-exactly-8-attachments")
-			instance.Spec.NetworkAttachments = []osacv1alpha1.NetworkAttachment{
+			instance.Spec.NetworkAttachments = []osacv1alpha1.ComputeNetworkAttachment{
 				{SubnetRef: "subnet-1"},
 				{SubnetRef: "subnet-2"},
 				{SubnetRef: "subnet-3"},

@@ -52,8 +52,8 @@ var _ = Describe("Virtual networks server", func() {
 		Expect(err).ToNot(HaveOccurred())
 
 		nc := privatev1.NetworkClass_builder{
-			Id:                     "default",
-			ImplementationStrategy: "ovn-kubernetes",
+			Id:            "default",
+			FabricManager: new("ovn-kubernetes"),
 			Metadata: privatev1.Metadata_builder{
 				Tenant: testTenant,
 			}.Build(),
@@ -151,10 +151,9 @@ var _ = Describe("Virtual networks server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.VirtualNetworkSpec_builder{
-						Region:                 "us-east-1",
-						NetworkClass:           privatev1.NetworkClassReference_builder{Id: "default"}.Build(),
-						ImplementationStrategy: "ovn-kubernetes",
-						Ipv4Cidr:               new("10.0.0.0/16"),
+						Region:       "us-east-1",
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: "default"}.Build(),
+						Ipv4Cidr:     new("10.0.0.0/16"),
 					}.Build(),
 				}.Build(),
 			}.Build())

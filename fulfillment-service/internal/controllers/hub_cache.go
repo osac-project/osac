@@ -16,6 +16,7 @@ package controllers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -38,6 +39,7 @@ const (
 //
 //go:generate mockgen -destination=hub_cache_mock.go -package=controllers . HubCache
 //go:generate mockgen -source=../api/osac/private/v1/hubs_service_grpc.pb.go -destination=hubs_client_mock.go -package=controllers HubsClient
+//go:generate mockgen -source=../api/osac/private/v1/secrets_service_grpc.pb.go -destination=secrets_client_mock.go -package=controllers SecretsClient
 type HubCache interface {
 	Get(ctx context.Context, id string) (*HubEntry, error)
 }
@@ -52,12 +54,13 @@ type HubCacheBuilder struct {
 
 // hubCache caches the information and connections to the hubs.
 type hubCache struct {
-	logger      *slog.Logger
-	client      privatev1.HubsClient
-	scheme      *runtime.Scheme
-	entries     map[string]*cachedHubEntry
-	entriesLock *sync.Mutex
-	ttl         time.Duration
+	logger        *slog.Logger
+	client        privatev1.HubsClient
+	secretsClient privatev1.SecretsClient
+	scheme        *runtime.Scheme
+	entries       map[string]*cachedHubEntry
+	entriesLock   *sync.Mutex
+	ttl           time.Duration
 }
 
 type HubEntry struct {
@@ -124,12 +127,13 @@ func (b *HubCacheBuilder) Build() (result HubCache, err error) {
 
 	// Create and populate the object:
 	result = &hubCache{
-		logger:      b.logger,
-		client:      privatev1.NewHubsClient(b.connection),
-		scheme:      b.scheme,
-		entries:     map[string]*cachedHubEntry{},
-		entriesLock: &sync.Mutex{},
-		ttl:         ttl,
+		logger:        b.logger,
+		client:        privatev1.NewHubsClient(b.connection),
+		secretsClient: privatev1.NewSecretsClient(b.connection),
+		scheme:        b.scheme,
+		entries:       map[string]*cachedHubEntry{},
+		entriesLock:   &sync.Mutex{},
+		ttl:           ttl,
 	}
 	return
 }
@@ -150,9 +154,6 @@ func (r *hubCache) Get(ctx context.Context, id string) (result *HubEntry, err er
 
 	hubEntry, err := r.create(ctx, id)
 	if err != nil {
-		// Classify the error to distinguish decommissioned hubs (NotFound)
-		// from transient failures (network, timeout, etc.)
-		err = ClassifyHubError(err)
 		return
 	}
 
@@ -169,10 +170,17 @@ func (r *hubCache) create(ctx context.Context, id string) (result *HubEntry, err
 		Id: id,
 	}.Build())
 	if err != nil {
+		// Classify only hub Get failures so a missing kubeconfig secret is not
+		// treated as a decommissioned hub.
+		err = ClassifyHubError(err)
 		return
 	}
 	hub := response.GetObject()
-	config, err := clientcmd.RESTConfigFromKubeConfig(hub.GetSpec().GetKubeconfig())
+	kubeconfig, err := r.resolveKubeconfig(ctx, hub.GetSpec())
+	if err != nil {
+		return
+	}
+	config, err := clientcmd.RESTConfigFromKubeConfig(kubeconfig)
 	if err != nil {
 		return
 	}
@@ -185,4 +193,25 @@ func (r *hubCache) create(ctx context.Context, id string) (result *HubEntry, err
 		Client:    client,
 	}
 	return
+}
+
+func (r *hubCache) resolveKubeconfig(ctx context.Context, spec *privatev1.HubSpec) ([]byte, error) {
+	return ResolveHubKubeconfig(ctx, spec, r.getSecret)
+}
+
+func (r *hubCache) getSecret(ctx context.Context, id string) (*privatev1.Secret, error) {
+	if r.secretsClient == nil {
+		return nil, fmt.Errorf("secrets client is required to resolve kubeconfig_secret")
+	}
+	response, err := r.secretsClient.Get(ctx, privatev1.SecretsGetRequest_builder{
+		Id: id,
+	}.Build())
+	if err != nil {
+		return nil, fmt.Errorf("failed to get kubeconfig secret '%s': %w", id, err)
+	}
+	object := response.GetObject()
+	if object == nil {
+		return nil, fmt.Errorf("kubeconfig secret '%s' not found", id)
+	}
+	return object, nil
 }

@@ -28,13 +28,28 @@ vast_storage_validate_certs: "{{ lookup('env', 'VAST_VALIDATE_CERTS') | default(
 # API timeout (seconds) passed to the vastdata.vms modules via the vms: connection dict.
 vast_storage_api_timeout: 30
 
-# Shared VIP pool configuration — one pool for all tenants.
-# Tenant isolation relies on source-based access control, not per-pool separation.
-# The pool is created idempotently during the first tenant setup.
-vast_storage_vip_pool_name: "{{ lookup('env', 'VAST_VIP_POOL_NAME') | default('osac-shared', true) }}"
+# Per-tenant VIP pool, referenced by CONVENTION: osac-<tenant>-vippool.
+# OSAC reuses the pool if it already exists (pre-created by the cloud admin or a
+# prior run). If it is missing and vast_storage_vip_pool_supernet is set, OSAC
+# self-creates a dedicated pool owned by the tenant with a carved IP slice; if
+# missing and no supernet is set, onboarding fails with pre-create instructions.
+# For block/NVMe the CSI TENANT_ADMIN resolves the pool by name, so it must exist
+# and be tenant-visible (OSAC-4260). setup.yaml sets this name per tenant; the
+# default documents the convention.
+vast_storage_vip_pool_name: "osac-{{ tenant_name }}-vippool"
+
+# Optional DNS-based VIP resolution: when set, StorageClasses use vip_pool_fqdn
+# instead of vip_pool_name.
 vast_storage_vip_pool_fqdn: "{{ lookup('env', 'VAST_VIP_POOL_FQDN') | default('', true) }}"
-vast_storage_vip_pool_ip_ranges: "{{ lookup('env', 'VAST_VIP_POOL_IP_RANGES') | default('', true) }}"
-vast_storage_vip_pool_subnet_cidr: "{{ lookup('env', 'VAST_VIP_POOL_SUBNET_CIDR') | default('', true) }}"
+
+# Supernet for self-creating dedicated per-tenant VIP pools (optional). When set,
+# tenant N (by VAST tenant_id) gets vast_storage_vip_pool_slice_size addresses at
+# offset tenant_id * slice_size within this supernet. Must be a real routable
+# range on the VAST data network. Leave empty to require pre-created pools.
+vast_storage_vip_pool_supernet: "{{ lookup('env', 'VAST_VIP_POOL_SUPERNET') | default('', true) }}"
+vast_storage_vip_pool_slice_size: "{{ lookup('env', 'VAST_VIP_POOL_SLICE_SIZE') | default('4', true) | int }}"
+
+# Optional gateway IPs applied to self-created VIP pools.
 vast_storage_vip_pool_gw_ip: "{{ lookup('env', 'VAST_VIP_POOL_GW_IP') | default('', true) }}"
 vast_storage_vip_pool_gw_ipv6: "{{ lookup('env', 'VAST_VIP_POOL_GW_IPV6') | default('', true) }}"
 

@@ -43,8 +43,8 @@ var _ = Describe("SecurityGroups server", func() {
 		Expect(err).ToNot(HaveOccurred())
 
 		nc := privatev1.NetworkClass_builder{
-			Id:                     "default",
-			ImplementationStrategy: "ovn-kubernetes",
+			Id:            "default",
+			FabricManager: new("ovn-kubernetes"),
 			Metadata: privatev1.Metadata_builder{
 				Tenant: testTenant,
 			}.Build(),

@@ -302,6 +302,7 @@ As with any proto change, run `uv run dev.py lint proto && buf generate` afterwa
 - `SERVICE_SUFFIX` lint rule is intentionally excluded in `buf.yaml`
 - Unit tests: run `ginkgo run -r internal` (not `ginkgo run -r`) to avoid triggering integration tests
 - CI timeout: 1 hour for unit and integration test runs
+- Platform-gated tests (`//go:build darwin`, e.g. `internal/config/config_secret_store_darwin_test.go`) are skipped by `ginkgo run -r internal` on non-macOS machines and in the default Linux CI; they run separately in `.github/workflows/darwin-keychain-tests.yml` on a `macos-latest` runner
 
 See [Linting and Code Generation](#linting-and-code-generation) for the required `uv run dev.py lint proto && buf generate` step, and [Files Requiring Extra Caution](#files-requiring-extra-caution) for generated paths that must never be hand-edited.
 

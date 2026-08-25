@@ -54,11 +54,10 @@ var _ = Describe("Default networking provisioning", func() {
 		// Create a default NetworkClass with defaults so ensureDefaultNetworking fires.
 		ncResp, err := networkClassesClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 			Object: privatev1.NetworkClass_builder{
-				Metadata:               privatev1.Metadata_builder{Name: fmt.Sprintf("test-default-nc-%s", uuid.New())}.Build(),
-				Title:                  "Test Default Network Class",
-				ImplementationStrategy: "cudn_net",
-				FabricManager:          new("cudn_net"),
-				IsDefault:              new(true),
+				Metadata:      privatev1.Metadata_builder{Name: fmt.Sprintf("test-default-nc-%s", uuid.New())}.Build(),
+				Title:         "Test Default Network Class",
+				FabricManager: new("cudn_net"),
+				IsDefault:     new(true),
 				Spec: privatev1.NetworkClassSpec_builder{
 					Defaults: privatev1.NetworkDefaults_builder{
 						VirtualNetworkIpv4Cidr: "10.200.0.0/16",

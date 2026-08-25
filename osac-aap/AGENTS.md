@@ -87,8 +87,7 @@ Running `playbook_osac_config_as_code.yml` publishes these as NetworkClass/Compu
 **Network templates** (e.g., `cudn_net`, `metallb_l2`):
 ```yaml
 template_type: network
-implementation_strategy: <name>
-fabric_manager: <name>       # optional
+fabric_manager: <name>       # at least one of fabric_manager/k8s_manager is required
 k8s_manager: <name>          # optional
 is_default: true/false       # optional
 capabilities:
@@ -96,6 +95,12 @@ capabilities:
   supports_ipv6: true
   supports_dual_stack: true
 ```
+NetworkClass identity (`metadata.name`) is derived from `fabric_manager`, falling back to
+`k8s_manager`, unless the role sets an explicit `name:` at the top of `osac.yaml`.
+`implementation_strategy` is no longer read here — it was reserved on the NetworkClass/
+VirtualNetwork protos once the fabric_manager/k8s_manager dispatcher became the sole
+routing mechanism (see `playbook_osac_create_virtual_network.yml`, which now reads the
+`osac.openshift.io/implementation-strategy` annotation set by osac-operator instead).
 
 **Compute instance templates** (e.g., `ocp_virt_vm`):
 ```yaml
@@ -288,9 +293,10 @@ Validation: CI runs `helm lint` on all PRs
 
 - **Playbooks**: `playbook_osac_{action}_{resource}.yml`
 - **Roles**: Use underscores, not hyphens (e.g., `cudn_net`, not `cudn-net`)
-- **Implementation strategy**: Should match role name exactly (underscores) for new roles.
-  Existing exceptions: `metallb_l2` role publishes `implementation_strategy: metallb-l2`
-  (hyphen), and `vast_storage` role publishes `implementation_strategy: vast`
+- **fabric_manager/k8s_manager**: Should match the role directory name exactly (underscores)
+  for new network roles — this is the value the dispatcher resolves and osac-operator writes
+  into the `osac.openshift.io/implementation-strategy` annotation, which playbooks then use
+  to select `osac.templates.{{ implementation_strategy }}` via `include_role`.
 - **Collections**: Namespace `osac.*` (service, templates, workflows, config_as_code, esi, steps, test_overrides)
 
 ### Ansible-lint Rules
@@ -431,8 +437,7 @@ OPA policies enforce isolation at runtime (handled by fulfillment-service).
 2. Add `meta/osac.yaml`:
    ```yaml
    template_type: network
-   implementation_strategy: <backend>
-   fabric_manager: <backend>       # optional
+   fabric_manager: <backend>       # at least one of fabric_manager/k8s_manager is required
    k8s_manager: <k8s_component>    # optional
    is_default: false               # optional
    capabilities:

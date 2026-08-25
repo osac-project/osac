@@ -248,6 +248,37 @@ var _ = Describe("findVersion", func() {
 	})
 })
 
+var _ = Describe("Create cluster pull secret flags", func() {
+	It("should register --pull-secret flag", func() {
+		cmd := Cmd()
+		cmd.SetOut(GinkgoWriter)
+		cmd.SetErr(GinkgoWriter)
+		flag := cmd.Flags().Lookup("pull-secret")
+		Expect(flag).NotTo(BeNil())
+		Expect(flag.DefValue).To(Equal(""))
+	})
+
+	It("should register --pull-secret-file flag", func() {
+		cmd := Cmd()
+		cmd.SetOut(GinkgoWriter)
+		cmd.SetErr(GinkgoWriter)
+		flag := cmd.Flags().Lookup("pull-secret-file")
+		Expect(flag).NotTo(BeNil())
+		Expect(flag.DefValue).To(Equal(""))
+	})
+
+	It("should reject both --pull-secret and --pull-secret-file", func() {
+		cmd := Cmd()
+		cmd.SetOut(GinkgoWriter)
+		cmd.SetErr(GinkgoWriter)
+		cmd.SetArgs([]string{"--catalog-item", "cat-001", "--name", "test", "--pull-secret", "my-secret", "--pull-secret-file", "/tmp/secret"})
+		err := cmd.Execute()
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("if any flags in the group"))
+		Expect(err.Error()).To(ContainSubstring("pull-secret"))
+	})
+})
+
 var _ = Describe("Create cluster networking flags", func() {
 	It("should register --network-attachment flag", func() {
 		cmd := Cmd()

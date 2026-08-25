@@ -1,0 +1,22 @@
+# CODEOWNERS
+#
+# This file defines code ownership for automated review assignment.
+# See: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+#
+# Patterns are evaluated top-to-bottom (last matching pattern takes precedence).
+
+# CODEOWNERS Self-Protection
+# Protects this file from unauthorized modification
+/CODEOWNERS @osac-project/wg-infra
+
+# fullsend Configuration Protection
+# Prevents pull_request_target misconfiguration and unauthorized workflow changes
+# per ADR-0033 security requirements.
+#
+# These files control CI/CD execution with access to repository secrets.
+# Changes require review from infrastructure team to prevent:
+# - Credential exfiltration via pull_request_target
+# - Unauthorized workflow modifications
+# - Accidental security regressions
+.github/workflows/fullsend.yaml @osac-project/wg-infra
+.fullsend/ @osac-project/wg-infra

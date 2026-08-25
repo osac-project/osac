@@ -20,6 +20,19 @@ vast:
   service:
     port: 50051
   config:
+    # Vendor plugin this controller serves. VAST selects one plugin per process:
+    #   "block" -> raw-block (support_block=True)
+    #   "csi"   -> NFS/filesystem (support_block=False)
+    # Block is the priority; file/NFS (and object storage, later) need their own
+    # separate deployment rather than sharing this one. See OSAC-4262.
+    plugin: block
+    # X_CSI_MODE for the vendor controller:
+    #   "controller"           -> controller-only; the operator issues only
+    #                             controller RPCs, so node-side NVMe probes
+    #                             (which need the host FS at /host) are skipped.
+    #   "controller_and_node"  -> vendor default; crashes for the block plugin
+    #                             where /host is unavailable.
+    mode: controller
     vmsHost: ""
     vipPoolName: ""
     nfsExport: /k8s

@@ -47,4 +47,5 @@ const (
 	ReasonScheduling          = "Scheduling"
 	ReasonInfrastructureReady = "InfrastructureReady"
 	ReasonProvisioningFailed  = "ProvisioningFailed"
+	ReasonNoManagerConfigured = "NoManagerConfigured"
 )

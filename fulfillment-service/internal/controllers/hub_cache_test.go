@@ -208,5 +208,282 @@ var _ = Describe("HubCache", func() {
 				// gomock will verify Times(1) - proving the recreation attempt was made
 			})
 		})
+
+		Context("kubeconfig_secret", func() {
+			var mockSecrets *MockSecretsClient
+
+			BeforeEach(func() {
+				mockSecrets = NewMockSecretsClient(ctrl)
+			})
+
+			It("should resolve kubeconfig from the referenced secret", func() {
+				mockClient.EXPECT().
+					Get(gomock.Any(), gomock.Any()).
+					Return(privatev1.HubsGetResponse_builder{
+						Object: privatev1.Hub_builder{
+							Spec: privatev1.HubSpec_builder{
+								Namespace: "secret-namespace",
+								KubeconfigSecret: privatev1.SecretLocalReference_builder{
+									Id: "kubeconfig-secret-id",
+								}.Build(),
+							}.Build(),
+						}.Build(),
+					}.Build(), nil)
+
+				mockSecrets.EXPECT().
+					Get(gomock.Any(), gomock.Any()).
+					Return(privatev1.SecretsGetResponse_builder{
+						Object: privatev1.Secret_builder{
+							Id: "kubeconfig-secret-id",
+							Data: map[string][]byte{
+								kubeconfigSecretKey: testKubeconfig,
+							},
+						}.Build(),
+					}.Build(), nil)
+
+				cache := &hubCache{
+					logger:        logger,
+					client:        mockClient,
+					secretsClient: mockSecrets,
+					scheme:        scheme,
+					entries:       map[string]*cachedHubEntry{},
+					entriesLock:   &sync.Mutex{},
+					ttl:           DefaultHubCacheTTL,
+				}
+
+				entry, err := cache.Get(ctx, "test-hub-id")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(entry.Namespace).To(Equal("secret-namespace"))
+				Expect(entry.Client).ToNot(BeNil())
+			})
+
+			It("should fall back to inline kubeconfig when kubeconfig_secret is not set", func() {
+				mockClient.EXPECT().
+					Get(gomock.Any(), gomock.Any()).
+					Return(privatev1.HubsGetResponse_builder{
+						Object: privatev1.Hub_builder{
+							Spec: privatev1.HubSpec_builder{
+								Namespace:  "inline-namespace",
+								Kubeconfig: testKubeconfig,
+							}.Build(),
+						}.Build(),
+					}.Build(), nil)
+
+				cache := &hubCache{
+					logger:        logger,
+					client:        mockClient,
+					secretsClient: mockSecrets,
+					scheme:        scheme,
+					entries:       map[string]*cachedHubEntry{},
+					entriesLock:   &sync.Mutex{},
+					ttl:           DefaultHubCacheTTL,
+				}
+
+				entry, err := cache.Get(ctx, "test-hub-id")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(entry.Namespace).To(Equal("inline-namespace"))
+				Expect(entry.Client).ToNot(BeNil())
+			})
+
+			It("should not cache secret resolution errors and should not classify them as hub not found", func() {
+				mockClient.EXPECT().
+					Get(gomock.Any(), gomock.Any()).
+					Return(privatev1.HubsGetResponse_builder{
+						Object: privatev1.Hub_builder{
+							Spec: privatev1.HubSpec_builder{
+								Namespace: "secret-namespace",
+								KubeconfigSecret: privatev1.SecretLocalReference_builder{
+									Id: "missing-secret-id",
+								}.Build(),
+							}.Build(),
+						}.Build(),
+					}.Build(), nil).
+					Times(2)
+
+				mockSecrets.EXPECT().
+					Get(gomock.Any(), gomock.Any()).
+					Return(nil, status.Error(codes.NotFound, "secret not found")).
+					Times(2)
+
+				cache := &hubCache{
+					logger:        logger,
+					client:        mockClient,
+					secretsClient: mockSecrets,
+					scheme:        scheme,
+					entries:       map[string]*cachedHubEntry{},
+					entriesLock:   &sync.Mutex{},
+					ttl:           DefaultHubCacheTTL,
+				}
+
+				_, err := cache.Get(ctx, "test-hub-id")
+				Expect(err).To(HaveOccurred())
+				Expect(errors.Is(err, ErrHubNotFound)).To(BeFalse())
+
+				_, err = cache.Get(ctx, "test-hub-id")
+				Expect(err).To(HaveOccurred())
+				Expect(errors.Is(err, ErrHubNotFound)).To(BeFalse())
+			})
+
+			It("should not cache errors when the secret is missing the kubeconfig key", func() {
+				mockClient.EXPECT().
+					Get(gomock.Any(), gomock.Any()).
+					Return(privatev1.HubsGetResponse_builder{
+						Object: privatev1.Hub_builder{
+							Spec: privatev1.HubSpec_builder{
+								Namespace: "secret-namespace",
+								KubeconfigSecret: privatev1.SecretLocalReference_builder{
+									Id: "kubeconfig-secret-id",
+								}.Build(),
+							}.Build(),
+						}.Build(),
+					}.Build(), nil).
+					Times(2)
+
+				mockSecrets.EXPECT().
+					Get(gomock.Any(), gomock.Any()).
+					Return(privatev1.SecretsGetResponse_builder{
+						Object: privatev1.Secret_builder{
+							Id: "kubeconfig-secret-id",
+							Data: map[string][]byte{
+								"other": []byte("value"),
+							},
+						}.Build(),
+					}.Build(), nil).
+					Times(2)
+
+				cache := &hubCache{
+					logger:        logger,
+					client:        mockClient,
+					secretsClient: mockSecrets,
+					scheme:        scheme,
+					entries:       map[string]*cachedHubEntry{},
+					entriesLock:   &sync.Mutex{},
+					ttl:           DefaultHubCacheTTL,
+				}
+
+				_, err := cache.Get(ctx, "test-hub-id")
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring(kubeconfigSecretKey))
+
+				_, err = cache.Get(ctx, "test-hub-id")
+				Expect(err).To(HaveOccurred())
+			})
+
+			It("should re-fetch the secret after the cache TTL expires", func() {
+				ttl := 50 * time.Millisecond
+
+				mockClient.EXPECT().
+					Get(gomock.Any(), gomock.Any()).
+					Return(privatev1.HubsGetResponse_builder{
+						Object: privatev1.Hub_builder{
+							Spec: privatev1.HubSpec_builder{
+								Namespace: "secret-namespace",
+								KubeconfigSecret: privatev1.SecretLocalReference_builder{
+									Id: "kubeconfig-secret-id",
+								}.Build(),
+							}.Build(),
+						}.Build(),
+					}.Build(), nil).
+					Times(2)
+
+				mockSecrets.EXPECT().
+					Get(gomock.Any(), gomock.Any()).
+					Return(privatev1.SecretsGetResponse_builder{
+						Object: privatev1.Secret_builder{
+							Id: "kubeconfig-secret-id",
+							Data: map[string][]byte{
+								kubeconfigSecretKey: testKubeconfig,
+							},
+						}.Build(),
+					}.Build(), nil).
+					Times(2)
+
+				cache := &hubCache{
+					logger:        logger,
+					client:        mockClient,
+					secretsClient: mockSecrets,
+					scheme:        scheme,
+					entries:       map[string]*cachedHubEntry{},
+					entriesLock:   &sync.Mutex{},
+					ttl:           ttl,
+				}
+
+				first, err := cache.Get(ctx, "test-hub-id")
+				Expect(err).ToNot(HaveOccurred())
+
+				cache.entriesLock.Lock()
+				cache.entries["test-hub-id"].createdAt = time.Now().Add(-ttl - 20*time.Millisecond)
+				cache.entriesLock.Unlock()
+
+				second, err := cache.Get(ctx, "test-hub-id")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(second.Namespace).To(Equal(first.Namespace))
+			})
+
+			It("should return a cached entry without fetching the secret again", func() {
+				mockClient.EXPECT().
+					Get(gomock.Any(), gomock.Any()).
+					Return(privatev1.HubsGetResponse_builder{
+						Object: privatev1.Hub_builder{
+							Spec: privatev1.HubSpec_builder{
+								Namespace: "secret-namespace",
+								KubeconfigSecret: privatev1.SecretLocalReference_builder{
+									Id: "kubeconfig-secret-id",
+								}.Build(),
+							}.Build(),
+						}.Build(),
+					}.Build(), nil).
+					Times(1)
+
+				mockSecrets.EXPECT().
+					Get(gomock.Any(), gomock.Any()).
+					Return(privatev1.SecretsGetResponse_builder{
+						Object: privatev1.Secret_builder{
+							Id: "kubeconfig-secret-id",
+							Data: map[string][]byte{
+								kubeconfigSecretKey: testKubeconfig,
+							},
+						}.Build(),
+					}.Build(), nil).
+					Times(1)
+
+				cache := &hubCache{
+					logger:        logger,
+					client:        mockClient,
+					secretsClient: mockSecrets,
+					scheme:        scheme,
+					entries:       map[string]*cachedHubEntry{},
+					entriesLock:   &sync.Mutex{},
+					ttl:           DefaultHubCacheTTL,
+				}
+
+				first, err := cache.Get(ctx, "test-hub-id")
+				Expect(err).ToNot(HaveOccurred())
+
+				second, err := cache.Get(ctx, "test-hub-id")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(second).To(BeIdenticalTo(first))
+			})
+		})
 	})
 })
+
+// testKubeconfig is a minimal valid kubeconfig YAML for tests.
+var testKubeconfig = []byte(`apiVersion: v1
+kind: Config
+clusters:
+- cluster:
+    server: https://test-hub.example.com:6443
+    insecure-skip-tls-verify: true
+  name: test
+contexts:
+- context:
+    cluster: test
+    user: test
+  name: test
+current-context: test
+users:
+- name: test
+  user:
+    token: test-hub-token
+`)

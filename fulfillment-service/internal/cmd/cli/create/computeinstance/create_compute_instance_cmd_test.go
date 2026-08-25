@@ -73,9 +73,9 @@ var _ = Describe("buildSpec", func() {
 
 		want := publicv1.ComputeInstanceSpec_builder{
 			Template: publicv1.ComputeInstanceTemplateReference_builder{Id: "tmpl"}.Build(),
-			NetworkAttachments: []*publicv1.NetworkAttachment{
-				publicv1.NetworkAttachment_builder{Subnet: publicv1.SubnetLocalReference_builder{Id: "n1"}.Build()}.Build(),
-				publicv1.NetworkAttachment_builder{
+			NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
+				publicv1.ComputeNetworkAttachment_builder{Subnet: publicv1.SubnetLocalReference_builder{Id: "n1"}.Build()}.Build(),
+				publicv1.ComputeNetworkAttachment_builder{
 					Subnet:         publicv1.SubnetLocalReference_builder{Id: "n2"}.Build(),
 					SecurityGroups: []*publicv1.SecurityGroupLocalReference{publicv1.SecurityGroupLocalReference_builder{Id: "g1"}.Build()},
 				}.Build(),
@@ -113,9 +113,9 @@ var _ = Describe("buildSpecFromCatalogItem", func() {
 
 		want := publicv1.ComputeInstanceSpec_builder{
 			CatalogItem: publicv1.ComputeInstanceCatalogItemReference_builder{Id: "cat-001"}.Build(),
-			NetworkAttachments: []*publicv1.NetworkAttachment{
-				publicv1.NetworkAttachment_builder{Subnet: publicv1.SubnetLocalReference_builder{Id: "n1"}.Build()}.Build(),
-				publicv1.NetworkAttachment_builder{
+			NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
+				publicv1.ComputeNetworkAttachment_builder{Subnet: publicv1.SubnetLocalReference_builder{Id: "n1"}.Build()}.Build(),
+				publicv1.ComputeNetworkAttachment_builder{
 					Subnet:         publicv1.SubnetLocalReference_builder{Id: "n2"}.Build(),
 					SecurityGroups: []*publicv1.SecurityGroupLocalReference{publicv1.SecurityGroupLocalReference_builder{Id: "g1"}.Build()},
 				}.Build(),

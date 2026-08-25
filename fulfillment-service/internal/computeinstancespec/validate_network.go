@@ -26,7 +26,7 @@ import (
 // - No null attachments in the array
 // Note: Empty network_attachments is allowed for backward compatibility (pod network).
 // Creation-time validation is enforced separately in the server layer.
-func ValidateNetworkAttachments(networkAttachments []*privatev1.NetworkAttachment) error {
+func ValidateNetworkAttachments(networkAttachments []*privatev1.ComputeNetworkAttachment) error {
 	// Allow empty for backward compatibility (pod network)
 	if len(networkAttachments) == 0 {
 		return nil

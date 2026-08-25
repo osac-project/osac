@@ -21,9 +21,14 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/events"
 )
 
@@ -272,6 +277,256 @@ var _ = Describe("Private hubs server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(getResponse.GetObject().GetSpec().GetKubeconfig()).To(Equal([]byte("your_config")))
 			Expect(getResponse.GetObject().GetSpec().GetNamespace()).To(Equal("your_ns"))
+		})
+
+		Describe("Kubeconfig secret reference", func() {
+			var secretsDao *dao.GenericDAO[*privatev1.Secret]
+
+			BeforeEach(func() {
+				var err error
+				secretsDao, err = dao.NewGenericDAO[*privatev1.Secret]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = secretsDao.Create().SetObject(privatev1.Secret_builder{
+					Id: "my-secret-id",
+					Metadata: privatev1.Metadata_builder{
+						Name:   "my-secret-name",
+						Tenant: auth.SharedTenant,
+					}.Build(),
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			It("Creates a hub with kubeconfig_secret reference by id", func() {
+				response, err := server.Create(ctx, privatev1.HubsCreateRequest_builder{
+					Object: privatev1.Hub_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
+						Spec: privatev1.HubSpec_builder{
+							Namespace: "my_ns",
+							KubeconfigSecret: privatev1.SecretLocalReference_builder{
+								Id: "my-secret-id",
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				ref := response.GetObject().GetSpec().GetKubeconfigSecret()
+				Expect(ref.GetId()).To(Equal("my-secret-id"))
+				Expect(ref.GetName()).To(Equal("my-secret-name"))
+			})
+
+			It("Creates a hub with kubeconfig_secret reference by name", func() {
+				response, err := server.Create(ctx, privatev1.HubsCreateRequest_builder{
+					Object: privatev1.Hub_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
+						Spec: privatev1.HubSpec_builder{
+							Namespace: "my_ns",
+							KubeconfigSecret: privatev1.SecretLocalReference_builder{
+								Name: "my-secret-name",
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				ref := response.GetObject().GetSpec().GetKubeconfigSecret()
+				Expect(ref.GetId()).To(Equal("my-secret-id"))
+				Expect(ref.GetName()).To(Equal("my-secret-name"))
+			})
+
+			It("Rejects create when kubeconfig and kubeconfig_secret are both set", func() {
+				_, err := server.Create(ctx, privatev1.HubsCreateRequest_builder{
+					Object: privatev1.Hub_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
+						Spec: privatev1.HubSpec_builder{
+							Kubeconfig: []byte("my_config"),
+							Namespace:  "my_ns",
+							KubeconfigSecret: privatev1.SecretLocalReference_builder{
+								Id: "my-secret-id",
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("mutually exclusive"))
+			})
+
+			It("Rejects create when kubeconfig_secret references a non-existent secret", func() {
+				_, err := server.Create(ctx, privatev1.HubsCreateRequest_builder{
+					Object: privatev1.Hub_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
+						Spec: privatev1.HubSpec_builder{
+							Namespace: "my_ns",
+							KubeconfigSecret: privatev1.SecretLocalReference_builder{
+								Id: "missing-secret-id",
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("no secret"))
+			})
+
+			It("Updates a hub with kubeconfig_secret reference", func() {
+				createResponse, err := server.Create(ctx, privatev1.HubsCreateRequest_builder{
+					Object: privatev1.Hub_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
+						Spec: privatev1.HubSpec_builder{
+							Namespace: "my_ns",
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				updateMask, err := fieldmaskpb.New(createResponse.GetObject(), "spec.kubeconfig_secret")
+				Expect(err).ToNot(HaveOccurred())
+
+				updateResponse, err := server.Update(ctx, privatev1.HubsUpdateRequest_builder{
+					Object: privatev1.Hub_builder{
+						Id: createResponse.GetObject().GetId(),
+						Spec: privatev1.HubSpec_builder{
+							KubeconfigSecret: privatev1.SecretLocalReference_builder{
+								Id: "my-secret-id",
+							}.Build(),
+						}.Build(),
+					}.Build(),
+					UpdateMask: updateMask,
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				ref := updateResponse.GetObject().GetSpec().GetKubeconfigSecret()
+				Expect(ref.GetId()).To(Equal("my-secret-id"))
+				Expect(ref.GetName()).To(Equal("my-secret-name"))
+			})
+
+			It("Rejects create when kubeconfig_secret specifies neither id nor name", func() {
+				_, err := server.Create(ctx, privatev1.HubsCreateRequest_builder{
+					Object: privatev1.Hub_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
+						Spec: privatev1.HubSpec_builder{
+							Namespace:        "my_ns",
+							KubeconfigSecret: privatev1.SecretLocalReference_builder{}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("must specify id or name"))
+			})
+
+			It("Rejects update when kubeconfig and kubeconfig_secret are both set", func() {
+				createResponse, err := server.Create(ctx, privatev1.HubsCreateRequest_builder{
+					Object: privatev1.Hub_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
+						Spec: privatev1.HubSpec_builder{
+							Namespace: "my_ns",
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				updateMask, err := fieldmaskpb.New(createResponse.GetObject(), "spec")
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = server.Update(ctx, privatev1.HubsUpdateRequest_builder{
+					Object: privatev1.Hub_builder{
+						Id: createResponse.GetObject().GetId(),
+						Spec: privatev1.HubSpec_builder{
+							Kubeconfig: []byte("inline-kubeconfig"),
+							KubeconfigSecret: privatev1.SecretLocalReference_builder{
+								Id: "my-secret-id",
+							}.Build(),
+						}.Build(),
+					}.Build(),
+					UpdateMask: updateMask,
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("mutually exclusive"))
+			})
+
+			It("Rejects update when kubeconfig conflicts with existing kubeconfig_secret in DB", func() {
+				createResponse, err := server.Create(ctx, privatev1.HubsCreateRequest_builder{
+					Object: privatev1.Hub_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
+						Spec: privatev1.HubSpec_builder{
+							Namespace: "my_ns",
+							KubeconfigSecret: privatev1.SecretLocalReference_builder{
+								Id: "my-secret-id",
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				updateMask, err := fieldmaskpb.New(createResponse.GetObject(), "spec.kubeconfig")
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = server.Update(ctx, privatev1.HubsUpdateRequest_builder{
+					Object: privatev1.Hub_builder{
+						Id: createResponse.GetObject().GetId(),
+						Spec: privatev1.HubSpec_builder{
+							Kubeconfig: []byte("inline-kubeconfig"),
+						}.Build(),
+					}.Build(),
+					UpdateMask: updateMask,
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("mutually exclusive"))
+			})
+
+			It("Rejects update when kubeconfig_secret conflicts with existing kubeconfig in DB", func() {
+				createResponse, err := server.Create(ctx, privatev1.HubsCreateRequest_builder{
+					Object: privatev1.Hub_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
+						Spec: privatev1.HubSpec_builder{
+							Kubeconfig: []byte("existing-kubeconfig"),
+							Namespace:  "my_ns",
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				updateMask, err := fieldmaskpb.New(createResponse.GetObject(), "spec.kubeconfig_secret")
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = server.Update(ctx, privatev1.HubsUpdateRequest_builder{
+					Object: privatev1.Hub_builder{
+						Id: createResponse.GetObject().GetId(),
+						Spec: privatev1.HubSpec_builder{
+							KubeconfigSecret: privatev1.SecretLocalReference_builder{
+								Id: "my-secret-id",
+							}.Build(),
+						}.Build(),
+					}.Build(),
+					UpdateMask: updateMask,
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("mutually exclusive"))
+			})
 		})
 
 		It("Delete object", func() {

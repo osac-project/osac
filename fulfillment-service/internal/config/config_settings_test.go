@@ -186,6 +186,7 @@ var _ = Describe("Settings", func() {
 	When("Keyring available", func() {
 		BeforeEach(func() {
 			keyring.MockInit()
+			pinKeychainAvailable(true)
 		})
 
 		It("Saves secrets in the keyring, not in the config file", func(ctx context.Context) {
@@ -258,6 +259,8 @@ var _ = Describe("Settings", func() {
 	When("Keyring is not available", func() {
 		BeforeEach(func() {
 			keyring.MockInitWithError(fmt.Errorf("keyring backend not available"))
+			// Pinned to "available" so this exercises the mocked keyring-probe fallback, not a darwin gate short-circuit.
+			pinKeychainAvailable(true)
 		})
 
 		It("Saves secrets in the secrets file, not in the keyring", func(ctx context.Context) {

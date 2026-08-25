@@ -292,7 +292,7 @@ class TestMetadataTemplateTypes:
             path=Path("/tmp/test"),
             name="test_net",
             title="Test Network",
-            implementation_strategy="test_net",
+            fabric_manager="test_net",
             capabilities=NetworkClassCapabilities(supports_ipv4=True),
             defaults=NetworkDefaults(
                 virtual_network_ipv4_cidr="10.200.0.0/16",
@@ -314,16 +314,53 @@ class TestMetadataTemplateTypes:
             path=Path("/tmp/test"),
             name="test_net",
             title="Test Network",
-            implementation_strategy="test_net",
+            fabric_manager="test_net",
             capabilities=NetworkClassCapabilities(supports_ipv4=True),
         )
         payload = template.model_dump(by_alias=True, exclude_none=True)
         assert "defaults" not in payload
         assert "spec" not in payload
 
+    def test_network_payload_has_no_implementation_strategy(self):
+        """implementation_strategy is reserved on the NetworkClass proto and must
+        no longer be forwarded in the API payload — fabric_manager/k8s_manager and
+        metadata.name are the identity source now. `name` is deliberately distinct
+        from `fabric_manager` here so the metadata.name assertion actually proves
+        derivation from fabric_manager, not from `name`."""
+        template = NetworkClassTemplate(
+            collection="test",
+            path=Path("/tmp/test"),
+            name="role_name",
+            title="Test Network",
+            fabric_manager="fabric_net",
+            capabilities=NetworkClassCapabilities(supports_ipv4=True),
+        )
+        payload = template.model_dump(by_alias=True, exclude_none=True)
+        assert "implementation_strategy" not in payload
+        assert payload["fabric_manager"] == "fabric_net"
+        assert payload["metadata"]["name"] == "fabric-net"
+
+    def test_network_metadata_name_falls_back_to_k8s_manager(self):
+        """A network role that registers only a k8s_manager (no fabric_manager) must
+        still derive a non-empty metadata.name — from k8s_manager, not fabric_manager.
+        `name` is deliberately distinct from `k8s_manager` here so the metadata.name
+        assertion actually proves derivation from k8s_manager, not from `name`."""
+        template = NetworkClassTemplate(
+            collection="test",
+            path=Path("/tmp/test"),
+            name="role_name",
+            title="Test K8s-Only Network",
+            k8s_manager="k8s_net",
+            capabilities=NetworkClassCapabilities(supports_ipv4=True),
+        )
+        payload = template.model_dump(by_alias=True, exclude_none=True)
+        assert "fabric_manager" not in payload
+        assert payload["k8s_manager"] == "k8s_net"
+        assert payload["metadata"]["name"] == "k8s-net"
+
     def test_network_defaults_propagate_through_discovery(self):
         payloads = find_network_class_roles_filter(["osac.templates"])
-        cudn = next((p for p in payloads if p["implementation_strategy"] == "cudn_net"), None)
+        cudn = next((p for p in payloads if p["metadata"]["name"] == "cudn-net"), None)
         assert cudn is not None
         assert "spec" in cudn
         assert cudn["spec"]["defaults"]["virtual_network_ipv4_cidr"] == "10.200.0.0/16"

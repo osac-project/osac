@@ -74,6 +74,17 @@ func (m *mockHubServer) Get(ctx context.Context, req *privatev1.HubsGetRequest) 
 	return m.getResponse, m.getError
 }
 
+// mockSecretsServer implements just the Get method of privatev1.SecretsServer.
+type mockSecretsServer struct {
+	privatev1.UnimplementedSecretsServer
+	getResponse *privatev1.SecretsGetResponse
+	getError    error
+}
+
+func (m *mockSecretsServer) Get(ctx context.Context, req *privatev1.SecretsGetRequest) (*privatev1.SecretsGetResponse, error) {
+	return m.getResponse, m.getError
+}
+
 // mockBackendForServer is a test backend that returns a mockConn.
 type mockBackendForServer struct {
 	conn       io.ReadWriteCloser
@@ -383,7 +394,7 @@ var _ = Describe("Console Server", func() {
 			resolver, err := NewConsoleTargetResolver().
 				SetLogger(logger).
 				SetComputeInstanceLookup(NewPrivateServerCILookup(ciServer)).
-				SetHubLookup(NewPrivateServerHubLookup(hubServer)).
+				SetHubLookup(NewPrivateServerHubLookup(hubServer, nil)).
 				SetHubClientFactory(newFakeHubClientFactory(fakeK8s)).
 				Build()
 			Expect(err).NotTo(HaveOccurred())
@@ -489,6 +500,77 @@ var _ = Describe("Console Server", func() {
 			Expect(status.Code(err)).To(Equal(codes.Unimplemented))
 		})
 
+		It("should create a ticket when the hub kubeconfig is stored in a secret", func() {
+			ciServer.getResponse = privatev1.ComputeInstancesGetResponse_builder{
+				Object: privatev1.ComputeInstance_builder{
+					Id: "ci-123",
+					Status: privatev1.ComputeInstanceStatus_builder{
+						State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
+						Hub:   "hub-1",
+					}.Build(),
+				}.Build(),
+			}.Build()
+
+			hubServer.getResponse = privatev1.HubsGetResponse_builder{
+				Object: privatev1.Hub_builder{
+					Id: "hub-1",
+					Spec: privatev1.HubSpec_builder{
+						Namespace: "test-ns",
+						KubeconfigSecret: privatev1.SecretLocalReference_builder{
+							Id: "kubeconfig-secret-id",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build()
+			secretsServer := &mockSecretsServer{
+				getResponse: privatev1.SecretsGetResponse_builder{
+					Object: privatev1.Secret_builder{
+						Id: "kubeconfig-secret-id",
+						Data: map[string][]byte{
+							"kubeconfig": testKubeconfig,
+						},
+					}.Build(),
+				}.Build(),
+			}
+
+			fakeK8s = newFakeClient(newComputeInstanceCR("ci-123", "test-ns", osacv1alpha1.ComputeInstancePhaseRunning))
+			resolver, err := NewConsoleTargetResolver().
+				SetLogger(logger).
+				SetComputeInstanceLookup(NewPrivateServerCILookup(ciServer)).
+				SetHubLookup(NewPrivateServerHubLookup(hubServer, secretsServer)).
+				SetHubClientFactory(newFakeHubClientFactory(fakeK8s)).
+				Build()
+			Expect(err).NotTo(HaveOccurred())
+
+			sessionService, err := console.NewSessionService().
+				SetLogger(logger).
+				SetResolver(resolver).
+				SetSealer(sealer).
+				Build()
+			Expect(err).NotTo(HaveOccurred())
+
+			server, err = NewConsoleServer().
+				SetLogger(logger).
+				SetSessionService(sessionService).
+				Build()
+			Expect(err).NotTo(HaveOccurred())
+
+			ctx := authpkg.ContextWithSubject(context.Background(), &authpkg.Subject{
+				User: "testuser",
+			})
+			ctx = database.TxManagerIntoContext(ctx, &mockTxManager{})
+			resp, err := server.Create(ctx, publicv1.ConsoleSessionsCreateRequest_builder{
+				Object: publicv1.ConsoleSession_builder{
+					ResourceType: publicv1.ConsoleResourceType_CONSOLE_RESOURCE_TYPE_COMPUTE_INSTANCE,
+					ResourceId:   "ci-123",
+					Type:         publicv1.ConsoleType_CONSOLE_TYPE_VNC,
+					ClientId:     "550e8400-e29b-41d4-a716-446655440000",
+				}.Build(),
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resp.GetObject().GetTicket()).NotTo(BeEmpty())
+		})
+
 		It("should reject unsupported console type", func() {
 			ciServer.getResponse = privatev1.ComputeInstancesGetResponse_builder{
 				Object: privatev1.ComputeInstance_builder{
@@ -512,6 +594,77 @@ var _ = Describe("Console Server", func() {
 			}.Build())
 			Expect(err).To(HaveOccurred())
 			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+		})
+	})
+
+	Describe("privateServerHubLookup", func() {
+		It("returns inline kubeconfig without a secrets server", func() {
+			hubServer.getResponse = privatev1.HubsGetResponse_builder{
+				Object: privatev1.Hub_builder{
+					Id: "hub-1",
+					Spec: privatev1.HubSpec_builder{
+						Kubeconfig: testKubeconfig,
+						Namespace:  "test-ns",
+					}.Build(),
+				}.Build(),
+			}.Build()
+
+			lookup := NewPrivateServerHubLookup(hubServer, nil)
+			kubeconfig, namespace, err := lookup.GetKubeconfig(ctx, "hub-1")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(kubeconfig).To(Equal(testKubeconfig))
+			Expect(namespace).To(Equal("test-ns"))
+		})
+
+		It("resolves kubeconfig from the referenced secret", func() {
+			hubServer.getResponse = privatev1.HubsGetResponse_builder{
+				Object: privatev1.Hub_builder{
+					Id: "hub-1",
+					Spec: privatev1.HubSpec_builder{
+						Namespace: "secret-ns",
+						KubeconfigSecret: privatev1.SecretLocalReference_builder{
+							Id: "kubeconfig-secret-id",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build()
+			secretsServer := &mockSecretsServer{
+				getResponse: privatev1.SecretsGetResponse_builder{
+					Object: privatev1.Secret_builder{
+						Id: "kubeconfig-secret-id",
+						Data: map[string][]byte{
+							"kubeconfig": testKubeconfig,
+						},
+					}.Build(),
+				}.Build(),
+			}
+
+			lookup := NewPrivateServerHubLookup(hubServer, secretsServer)
+			kubeconfig, namespace, err := lookup.GetKubeconfig(ctx, "hub-1")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(kubeconfig).To(Equal(testKubeconfig))
+			Expect(namespace).To(Equal("secret-ns"))
+		})
+
+		It("returns an error when the referenced secret is missing", func() {
+			hubServer.getResponse = privatev1.HubsGetResponse_builder{
+				Object: privatev1.Hub_builder{
+					Id: "hub-1",
+					Spec: privatev1.HubSpec_builder{
+						Namespace: "secret-ns",
+						KubeconfigSecret: privatev1.SecretLocalReference_builder{
+							Id: "missing-secret",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build()
+			secretsServer := &mockSecretsServer{
+				getError: status.Error(codes.NotFound, "object with identifier 'missing-secret' not found"),
+			}
+
+			lookup := NewPrivateServerHubLookup(hubServer, secretsServer)
+			_, _, err := lookup.GetKubeconfig(ctx, "hub-1")
+			Expect(err).To(HaveOccurred())
 		})
 	})
 })

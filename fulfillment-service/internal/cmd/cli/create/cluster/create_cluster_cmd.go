@@ -154,6 +154,7 @@ func Cmd() *cobra.Command {
 	)
 	result.MarkFlagsMutuallyExclusive("catalog-item", "template")
 	result.MarkFlagsOneRequired("catalog-item", "template")
+	result.MarkFlagsMutuallyExclusive("pull-secret", "pull-secret-file")
 	return result
 }
 
@@ -316,7 +317,6 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 // resolveCredentials reads pull secret and SSH public key from file flags when specified.
 func (c *runnerContext) resolveCredentials() (pullSecret, sshPublicKey string, err error) {
-	pullSecret = c.args.pullSecret
 	if c.args.pullSecretFile != "" {
 		data, readErr := os.ReadFile(c.args.pullSecretFile)
 		if readErr != nil {
@@ -344,6 +344,11 @@ func (c *runnerContext) applyOptionalSpecFields(
 ) {
 	if pullSecret != "" {
 		specBuilder.PullSecret = &pullSecret
+	}
+	if c.args.pullSecret != "" {
+		specBuilder.PullSecretSecret = publicv1.SecretLocalReference_builder{
+			Name: c.args.pullSecret,
+		}.Build()
 	}
 	if sshPublicKey != "" {
 		specBuilder.SshPublicKey = &sshPublicKey
@@ -962,12 +967,14 @@ times.
 `
 
 const pullSecretFlagHelp = `
-_SECRET_ - Pull secret for authenticating to image repositories, provided as
-an inline value. See also {{ bt }}--pull-secret-file{{ bt }}.
+_NAME_ - Name of a Secret resource containing pull secret credentials.
+Mutually exclusive with {{ bt }}--pull-secret-file{{ bt }}. The secret must
+exist in the same tenant. See also {{ bt }}osac create secret{{ bt }}.
 `
 
 const pullSecretFileFlagHelp = `
-_FILE_ - Path to a file containing the pull secret.
+_FILE_ - Path to a file containing the pull secret, provided as inline
+credentials. Mutually exclusive with {{ bt }}--pull-secret{{ bt }}.
 `
 
 const sshPublicKeyFlagHelp = `

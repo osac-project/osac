@@ -1,0 +1,9 @@
+---
+# k8s_only delegates SecurityGroup enforcement to the standalone network_policy
+# role (NetworkPolicy-based), which is reusable across any K8s-based NetworkClass.
+# See README.md for the rationale.
+
+- name: Delegate SecurityGroup deletion to network_policy role
+  ansible.builtin.include_role:
+    name: osac.templates.network_policy
+    tasks_from: delete_security_group

@@ -9,9 +9,7 @@
   gather_facts: false
 
   environment:
-    VAST_VIP_POOL_NAME: "osac-test-pool"
-    VAST_VIP_POOL_IP_RANGES: '[["10.0.0.10","10.0.0.50"]]'
-    VAST_VIP_POOL_SUBNET_CIDR: "24"
+    VAST_VIP_POOL_SUPERNET: "10.0.0.0/24"
     OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
 
   vars:
@@ -135,8 +133,8 @@
     - name: Assert hub Secret has VIP pool name
       ansible.builtin.assert:
         that:
-          - _secret_data.vip_pool_name == "osac-test-pool"
-        fail_msg: "Expected vip_pool_name 'osac-test-pool', got '{{ _secret_data.vip_pool_name }}'"
+          - _secret_data.vip_pool_name == "osac-test-setup-vippool"
+        fail_msg: "Expected vip_pool_name 'osac-test-setup-vippool', got '{{ _secret_data.vip_pool_name }}'"
         success_msg: "vip_pool_name correct"
 
     - name: Assert hub Secret has endpoint
@@ -175,7 +173,7 @@
           - storage_provider_tenant_configs is mapping
           - "'vast' in storage_provider_tenant_configs"
           - storage_provider_tenant_configs.vast.vast_tenant_id is defined
-          - storage_provider_tenant_configs.vast.vip_pool_name == "osac-test-pool"
+          - storage_provider_tenant_configs.vast.vip_pool_name == "osac-test-setup-vippool"
         fail_msg: "storage_provider_tenant_configs output not set correctly: {{ storage_provider_tenant_configs | default('undefined') }}"
         success_msg: "storage_provider_tenant_configs output correct"
 

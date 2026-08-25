@@ -35,9 +35,8 @@ var _ = Describe("Default networking provisioner", func() {
 				Name:   "test-network-class",
 				Tenant: "system",
 			}.Build(),
-			IsDefault:              new(true),
-			FabricManager:          new("netris"),
-			ImplementationStrategy: "netris",
+			IsDefault:     new(true),
+			FabricManager: new("netris"),
 			Spec: privatev1.NetworkClassSpec_builder{
 				Defaults: defaults,
 			}.Build(),
@@ -151,7 +150,6 @@ var _ = Describe("Default networking provisioner", func() {
 			Expect(vn.GetSpec().GetIpv4Cidr()).To(Equal("10.0.0.0/16"))
 			Expect(vn.GetSpec().GetIpv6Cidr()).To(Equal("fd00::/48"))
 			Expect(vn.GetSpec().GetNetworkClass().GetId()).ToNot(BeEmpty())
-			Expect(vn.GetSpec().GetImplementationStrategy()).ToNot(BeEmpty())
 			Expect(vn.GetStatus().GetState()).To(Equal(
 				privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING))
 		})
@@ -260,18 +258,6 @@ var _ = Describe("Default networking provisioner", func() {
 				Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(ngList.GetItems()).To(BeEmpty())
-		})
-
-		It("sets implementation_strategy on VN from NetworkClass", func() {
-			err := provisioner.Provision(ctx, "test-tenant")
-			Expect(err).ToNot(HaveOccurred())
-
-			vnList, err := provisioner.virtualNetworkDao.List().
-				SetFilter("this.metadata.tenant == 'test-tenant'").
-				Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(vnList.GetItems()).To(HaveLen(1))
-			Expect(vnList.GetItems()[0].GetSpec().GetImplementationStrategy()).To(Equal("netris"))
 		})
 
 		It("creates all four resources in a single Provision call", func() {

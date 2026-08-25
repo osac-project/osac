@@ -1,0 +1,102 @@
+{{- if .Values.networkClass.enabled }}
+{{- $egressRules := list -}}
+{{- range .Values.networkClass.defaults.egressRules }}
+{{- $rule := dict "protocol" .protocol -}}
+{{- if .ipv4Cidr }}{{ $_ := set $rule "ipv4_cidr" .ipv4Cidr }}{{ end -}}
+{{- if .ipv6Cidr }}{{ $_ := set $rule "ipv6_cidr" .ipv6Cidr }}{{ end -}}
+{{- if .portFrom }}{{ $_ := set $rule "port_from" .portFrom }}{{ end -}}
+{{- if .portTo }}{{ $_ := set $rule "port_to" .portTo }}{{ end -}}
+{{- $egressRules = append $egressRules $rule -}}
+{{- end }}
+{{- $body := dict
+      "title" (required "networkClass.title is required when networkClass.enabled is true" .Values.networkClass.title)
+      "is_default" .Values.networkClass.isDefault
+      "spec" (dict "defaults" (dict
+        "virtual_network_ipv4_cidr" .Values.networkClass.defaults.virtualNetworkIPv4CIDR
+        "subnet_ipv4_cidr" .Values.networkClass.defaults.subnetIPv4CIDR
+        "enable_nat_gateway" .Values.networkClass.defaults.enableNatGateway
+        "egress_rules" $egressRules
+      ))
+    -}}
+{{- if .Values.networkClass.description }}{{ $_ := set $body "description" .Values.networkClass.description }}{{ end -}}
+{{- if .Values.networkClass.k8sManager }}{{ $_ := set $body "k8s_manager" .Values.networkClass.k8sManager }}{{ end -}}
+{{- if .Values.networkClass.fabricManager }}{{ $_ := set $body "fabric_manager" .Values.networkClass.fabricManager }}{{ end -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: create-network-class
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "25"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 5
+  activeDeadlineSeconds: 900
+  template:
+    metadata:
+      labels:
+        {{- include "osac.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: admin
+      initContainers:
+      {{- include "osac.waitForFulfillment" . | nindent 6 }}
+      containers:
+      - name: create-network-class
+        image: {{ .Values.cliImage }}
+        command:
+          - /bin/bash
+          - -euo
+          - pipefail
+          - -c
+          - |
+            AUTH_TOKEN=$(< /var/run/secrets/kubernetes.io/serviceaccount/token)
+            API="https://fulfillment-internal-api:8001/api/private/v1/network_classes"
+            RESPONSE=/tmp/nc-response.json
+
+            CODE=$(curl -skS \
+              --connect-timeout 5 --max-time 30 \
+              -o "${RESPONSE}" -w '%{http_code}' \
+              -X POST "${API}" \
+              -H "Authorization: Bearer ${AUTH_TOKEN}" \
+              -H "Content-Type: application/json" \
+              --data-binary {{ $body | toJson | quote }})
+
+            case "${CODE}" in
+              2??)
+                echo "NetworkClass created."
+                ;;
+              409)
+                echo "NetworkClass already exists, skipping."
+                ;;
+              *)
+                echo "ERROR: Failed to create NetworkClass (HTTP ${CODE})" >&2
+                cat "${RESPONSE}" >&2
+                exit 1
+                ;;
+            esac
+        env:
+        - name: HOME
+          value: /tmp
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      restartPolicy: OnFailure
+{{- end }}

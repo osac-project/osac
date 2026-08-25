@@ -1380,7 +1380,7 @@ var _ = Describe("Default networking provisioning", func() {
 					SubnetIpv4Cidr:         "10.0.1.0/24",
 				}.Build(),
 			}.Build(),
-			ImplementationStrategy: "test-strategy",
+			FabricManager: new("test-strategy"),
 		}.Build()
 	}
 

@@ -722,10 +722,9 @@ var _ = Describe("Multi-tenant resource isolation", func() {
 				Metadata: privatev1.Metadata_builder{
 					Name: fmt.Sprintf("test-default-nc-%s", uuid.New()),
 				}.Build(),
-				Title:                  "Default Network Class",
-				ImplementationStrategy: fmt.Sprintf("ovn-%s", uuid.New()),
-				FabricManager:          new("netris"),
-				IsDefault:              new(true),
+				Title:         "Default Network Class",
+				FabricManager: new("netris"),
+				IsDefault:     new(true),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())

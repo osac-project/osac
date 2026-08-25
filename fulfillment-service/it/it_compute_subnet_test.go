@@ -156,10 +156,9 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 		ncName := fmt.Sprintf("cudn-subnet-%s", uuid.New())
 		ncResp, err := networkClassesClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 			Object: privatev1.NetworkClass_builder{
-				Metadata:               privatev1.Metadata_builder{Name: ncName}.Build(),
-				Title:                  "Test CUDN Network Class",
-				ImplementationStrategy: "cudn",
-				FabricManager:          new("netris"),
+				Metadata:      privatev1.Metadata_builder{Name: ncName}.Build(),
+				Title:         "Test CUDN Network Class",
+				FabricManager: new("netris"),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
@@ -338,8 +337,8 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 						StorageTier: &storageTierId,
 					}.Build(),
 					DiskImage: &publicv1.DiskImageReference{Id: diskImageId},
-					NetworkAttachments: []*publicv1.NetworkAttachment{
-						publicv1.NetworkAttachment_builder{
+					NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
+						publicv1.ComputeNetworkAttachment_builder{
 							Subnet: publicv1.SubnetLocalReference_builder{Id: subnetId}.Build(),
 						}.Build(),
 					},
@@ -376,8 +375,8 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 						StorageTier: &storageTierId,
 					}.Build(),
 					DiskImage: &publicv1.DiskImageReference{Id: diskImageId},
-					NetworkAttachments: []*publicv1.NetworkAttachment{
-						publicv1.NetworkAttachment_builder{
+					NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
+						publicv1.ComputeNetworkAttachment_builder{
 							Subnet: publicv1.SubnetLocalReference_builder{Name: "non-existent-subnet"}.Build(),
 						}.Build(),
 					},

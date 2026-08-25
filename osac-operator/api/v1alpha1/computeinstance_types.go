@@ -91,8 +91,8 @@ const (
 	RunStrategyHalted RunStrategyType = "Halted"
 )
 
-// NetworkAttachment defines one NIC: a Subnet CR on the hub plus optional SecurityGroup CR names.
-type NetworkAttachment struct {
+// ComputeNetworkAttachment defines one NIC: a Subnet CR on the hub plus optional SecurityGroup CR names.
+type ComputeNetworkAttachment struct {
 	// SubnetRef is the name of the Subnet CR in the same namespace as the ComputeInstance.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
@@ -177,7 +177,7 @@ type ComputeInstanceSpec struct {
 
 	// NetworkAttachments defines multiple NICs when more than one subnet (and optional security groups per NIC) is required.
 	// The first entry is the primary subnet for VM placement (subnet-namespace annotation).
-	// Subnet references (per NetworkAttachment) are immutable but security groups can be changed.
+	// Subnet references (per ComputeNetworkAttachment) are immutable but security groups can be changed.
 	//
 	// Why immutability is required:
 	// Currently, ComputeInstances are created with a single NIC. The VM instance must be created in the namespace
@@ -192,7 +192,7 @@ type ComputeInstanceSpec struct {
 	// - The per-item subnetRef validation (self == oldSelf) prevents changing keys of existing entries
 	// Combined, these ensure only securityGroupRefs can be modified.
 	//
-	// MaxItems is required for CEL cost budget calculation: NetworkAttachment.SubnetRef has a CEL validation
+	// MaxItems is required for CEL cost budget calculation: ComputeNetworkAttachment.SubnetRef has a CEL validation
 	// rule (self == oldSelf for immutability). Without maxItems, Kubernetes cannot bound the cost of iterating
 	// over array items to validate this rule, causing CRD installation to fail with "estimated rule cost exceeds budget".
 	// +kubebuilder:validation:Optional
@@ -200,7 +200,7 @@ type ComputeInstanceSpec struct {
 	// +kubebuilder:validation:XValidation:rule="size(oldSelf) == 0 || (size(self) == size(oldSelf) && self.all(na, oldSelf.exists(old, old.subnetRef == na.subnetRef)))",message="cannot change or add/remove network attachments after initial assignment"
 	// +listType=map
 	// +listMapKey=subnetRef
-	NetworkAttachments []NetworkAttachment `json:"networkAttachments,omitempty"`
+	NetworkAttachments []ComputeNetworkAttachment `json:"networkAttachments,omitempty"`
 
 	// RestartRequestedAt is a timestamp signal to request a VM restart (MUTABLE).
 	//

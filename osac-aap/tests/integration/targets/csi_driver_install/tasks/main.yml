@@ -316,7 +316,8 @@
           - >-
             ('vast=vast-csi-controller.osac-csi-backends.svc.cluster.local:' ~ (_vast_service_fixture.resources[0].spec.ports[0].port | string))
             in _driver_release_info.status['values'].controller.vendorSockets
-          - "'vast=' in _driver_release_info.status['values'].node.vendorSockets"
+          # Test 1 dispatches only vast, so node.vendorSockets is exactly the chart-default socketPath + '/csi.sock'.
+          - _driver_release_info.status['values'].node.vendorSockets == 'vast=/var/lib/kubelet/plugins/csi.vast.vastdata.com/csi.sock'
         fail_msg: "csi-driver release values did not reflect the dispatched vast vendor: {{ _driver_release_info.status['values'] }}"
         success_msg: "csi-driver release correctly enables vast with the live-resolved controller socket and node socket populated"
 
@@ -337,14 +338,15 @@
       ansible.builtin.include_role:
         name: osac.service.csi_driver_install
 
-    - name: Assert the Helm release reported no change on the identical re-dispatch
+    - name: Assert the identical re-dispatch was detected as converged and short-circuited
       ansible.builtin.assert:
         that:
-          - not _csi_driver_install_driver_result.changed
+          - _csi_driver_install_converged | bool
         fail_msg: >-
-          Expected an idempotent no-op re-dispatch, but the Helm release reported changed=true:
-          csi-driver={{ _csi_driver_install_driver_result.changed }}
-        success_msg: "csi-driver Helm release correctly reported no change on the identical re-dispatch"
+          Expected an identical re-dispatch to be detected as already converged and skip the
+          install lock + Helm upgrade entirely, but the convergence pre-check returned:
+          converged={{ _csi_driver_install_converged | default('undefined') }}
+        success_msg: "Identical re-dispatch correctly detected as converged -- install block short-circuited (no lock, no Helm upgrade)"
 
 # ── Test 3: A dispatch adding a second provider accumulates, does not clear the first ──
 - name: "CSI Driver Install - Third dispatch adds pure, vast wiring survives"
@@ -376,8 +378,8 @@
           - _driver_release_after_pure.status['values'].vendors.pure.enabled | bool
           - "'vast=' in _driver_release_after_pure.status['values'].controller.vendorSockets"
           - "'pure=' in _driver_release_after_pure.status['values'].controller.vendorSockets"
-          - "'vast=' in _driver_release_after_pure.status['values'].node.vendorSockets"
-          - "'pure=' in _driver_release_after_pure.status['values'].node.vendorSockets"
+          - "'vast=/var/lib/kubelet/plugins/csi.vast.vastdata.com/csi.sock' in _driver_release_after_pure.status['values'].node.vendorSockets"
+          - "'pure=/var/lib/kubelet/plugins/csi.pure.purestorage.com/csi.sock' in _driver_release_after_pure.status['values'].node.vendorSockets"
         fail_msg: >-
           Dispatching a second provider must not clear the first provider's wiring:
           {{ _driver_release_after_pure.status['values'] }}
@@ -456,7 +458,7 @@
           - "'lvms=' not in _driver_release_after_mixed_dispatch.status['values'].node.vendorSockets"
           - _driver_release_after_mixed_dispatch.status['values'].vendors.vast.enabled | bool
           - "'vast=' in _driver_release_after_mixed_dispatch.status['values'].controller.vendorSockets"
-          - "'vast=' in _driver_release_after_mixed_dispatch.status['values'].node.vendorSockets"
+          - "'vast=/var/lib/kubelet/plugins/csi.vast.vastdata.com/csi.sock' in _driver_release_after_mixed_dispatch.status['values'].node.vendorSockets"
         fail_msg: >-
           Dispatching an unsupported provider (lvms) alongside a supported one (vast) must warn
           and skip lvms while leaving vast enabled: {{ _driver_release_after_mixed_dispatch.status['values'] }}
@@ -590,6 +592,8 @@
           later dispatch's missing-Service failure intact: {{ _driver_release_after_missing_service.status }}
         success_msg: "Pre-existing csi-driver release survived the missing-Service failure untouched"
 
+# Test 6's multi-backend_id ambiguous-dispatch validation lives in the
+# storage_provider_ensure_csi_backends target.
 # ── Test 7: The install lock is already held by a DIFFERENT dispatch --
 # acquisition must fail (after exhausting its retry budget) without ever
 # releasing or overwriting the other holder's lock. This is the scenario the
@@ -603,7 +607,14 @@
   gather_facts: false
 
   vars:
-    csi_driver_install_chart_version: "0.1.1"
+    # Pin a chart version DIFFERENT from the deployed release (0.1.1, from Test 4)
+    # so the convergence pre-check reports "not converged" and the role actually
+    # enters the install block and attempts lock acquisition -- the whole point of
+    # this scenario. (An identical, already-converged dispatch now short-circuits
+    # before ever touching the lock.) The role fails at lock acquisition, long
+    # before the Helm upgrade, so this pinned version is never actually applied and
+    # the pre-existing 0.1.1 release below stays intact.
+    csi_driver_install_chart_version: "0.1.0"
     csi_driver_install_tiers:
       - name: default
         protocol: nfs

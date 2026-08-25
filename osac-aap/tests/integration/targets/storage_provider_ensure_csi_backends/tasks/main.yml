@@ -17,7 +17,9 @@
 # own deleted Test 6 for the same validation, which lived there before OSAC-3290's
 # reconciliation moved it into this task file), cumulative enablement across two
 # dispatches (proves the union-with-live-Deployments logic, now under a lock, still
-# works), OAuth Secret creation and its don't-blank-real-creds guard, lock
+# works), the backend-id gate dropping a lingering vendor with zero remaining
+# backends without wiping its already-deployed config, OAuth Secret creation and
+# its don't-blank-real-creds guard, lock
 # contention (mirrors csi_driver_install's own Test 7 for its sibling lock), and the
 # rescue/always rollback path -- a fresh install's Helm release and OAuth Secret are
 # both torn down on a forced mid-block failure (Test 5a), while a genuinely
@@ -503,7 +505,65 @@
         lease_name: "csi-backends-install-lock"
         lease_holder: "a-different-concurrent-dispatch"
 
-# ── Reset: Tests 1-4 leave a real csi-backends release/Secret behind --
+# ── Test 4.5: vast's last backend is removed from the platform-wide catalog
+# entirely while its controller Deployment still lingers on the hub. The
+# backend-id gate drops vast from the enabled set (a vendor is enabled off a
+# lingering Deployment only while a backend_id still resolves), so this dispatch
+# enables no vendor at all: the Helm upgrade is skipped and the already-deployed
+# release is left untouched, preserving vast's last-good config.vmsHost. This is
+# the regression guard for the config wipe the gate prevents -- without it, vast
+# would stay enabled off its lingering Deployment with an unresolved (blank)
+# vmsHost, and the wholesale values replace would silently overwrite the working
+# vmsHost on this shared, hub-wide release. ──
+- name: "Storage Provider Ensure CSI Backends - vast backend removed platform-wide, lingering Deployment does not wipe config"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    # This dispatch's tenant needs nothing, and the platform-wide catalog has zero
+    # vast tiers -- so no vast backend_id resolves, even though vast-csi-controller
+    # still exists on the hub from the earlier dispatches.
+    _unique_providers: []
+    storage_provider_tiers: []
+    storage_provider_backend_connections: {}
+
+  tasks:
+    - name: Read the vast controller Deployment before the zero-backend dispatch
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: "vast-csi-controller"
+        namespace: "osac-csi-backends"
+      register: _vast_deployment_before_backend_removal
+
+    - name: Assert the vast controller Deployment lingers (precondition for the zero-backend gate path)
+      ansible.builtin.assert:
+        that:
+          - _vast_deployment_before_backend_removal.resources | length == 1
+        fail_msg: "Precondition failed: vast-csi-controller Deployment should still exist from the earlier dispatches"
+        success_msg: "vast-csi-controller Deployment lingers as expected -- exercising the zero-backend gate path"
+
+    - name: Call ensure_csi_backends.yaml with zero vast backends in the platform-wide catalog
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+        tasks_from: ensure_csi_backends
+
+    - name: Read the csi-backends release after the zero-vast-backend dispatch
+      kubernetes.core.helm_info:
+        name: osac-csi-backends
+        release_namespace: osac-csi-backends
+      register: _backends_release_after_backend_removal
+
+    - name: Assert vast's last-good vmsHost was preserved, not wiped, by the zero-backend dispatch
+      ansible.builtin.assert:
+        that:
+          - _backends_release_after_backend_removal.status['values'].vast.config.vmsHost == "vast-mock.example.com:443"
+        fail_msg: >-
+          The backend-id gate must not let a zero-vast-backend dispatch wipe the already-deployed
+          vast config.vmsHost on this shared release: {{ _backends_release_after_backend_removal.status['values'] }}
+        success_msg: "vast's last-good vmsHost correctly preserved -- the zero-backend gate prevented the config wipe"
+
+# ── Reset: Tests 1-4.5 leave a real csi-backends release/Secret behind --
 # Test 5a needs a genuinely fresh (neither exists) starting point. ──
 - name: "Storage Provider Ensure CSI Backends - Reset to a clean slate before Test 5"
   hosts: localhost

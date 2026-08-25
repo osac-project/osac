@@ -80,34 +80,76 @@
       {% endfor -%}
       {{ _map }}
 
-- name: Default csi-driver chart values to empty maps (overwritten below when vendors are dispatched)
-  ansible.builtin.set_fact:
-    _csi_driver_install_chart_defaults: {}
-
-# Pure function of static role config (chart_registry/chart_version) and the
-# dispatched-vendor count -- reads/writes nothing the install lock below
-# protects (that lock exists for the vendorSockets read-modify-write against
-# the live Helm release, not for OCI registry reads), so it runs before lock
-# acquisition rather than needlessly extending the critical section with one
-# external network round trip.
-- name: Fetch and parse csi-driver chart's default values (skipped when no supported vendor is dispatched)
+# Convergence pre-check (lock-free). Read the currently-deployed csi-driver
+# release and decide whether this dispatch would change anything at all: same
+# pinned chart version, and every dispatched vendor already enabled with the
+# exact controller + node vendorSockets it would be assigned now. In the
+# overwhelmingly common steady state (a vendor already onboarded by an earlier
+# dispatch) this holds, so the whole install block below -- install-lock
+# acquisition (up to 20x5s under contention), namespace apply, and the Helm
+# upgrade -- is skipped outright instead of re-running on every storage
+# dispatch forever.
+#
+# Deliberately benign check-then-act: the authoritative read-modify-write of
+# vendorSockets still happens under the install lock in the block below, which
+# re-reads the live release before merging. A converged dispatch adds nothing,
+# so a converged skip can never drop a concurrent dispatch's wiring. The
+# pre-check read is purely local -- node socketPaths come from the static
+# csi_driver_install_vendor_node_socket_paths default. failed_when: false on the
+# helm_info read means any read problem (e.g. a not-yet-created namespace on a
+# first install) leaves the status absent, which the convergence check reads as
+# "not converged", so the block runs and its own unguarded helm_info surfaces
+# genuine errors. The convergence set_fact assumes csi_driver_install_supported_vendors
+# and csi_driver_install_vendor_node_socket_paths cover the same vendor set (as the
+# defaults do); a supported vendor missing a socketPath fails loudly here and at
+# the accumulate below, by design.
+- name: Convergence pre-check for the csi-driver release (skipped when no supported vendor is dispatched)
   when: _csi_driver_install_dispatched_vendors | length > 0
   block:
-    - name: Fetch csi-driver chart's default values (single source for vendor node socketPath)
-      ansible.builtin.command:
-        argv:
-          - helm
-          - show
-          - values
-          - "{{ csi_driver_install_chart_registry }}/csi-driver"
-          - --version
-          - "{{ csi_driver_install_chart_version }}"
-      register: _csi_driver_install_chart_defaults_raw
-      changed_when: false
+    - name: Read currently installed csi-driver release (lock-free convergence pre-check)
+      kubernetes.core.helm_info:
+        name: csi-driver
+        release_namespace: "{{ csi_driver_install_namespace }}"
+      register: _csi_driver_install_precheck_release_info
+      failed_when: false
 
-    - name: Parse csi-driver chart's default values
+    - name: Extract the pre-check release status (None if not installed or unreadable)
       ansible.builtin.set_fact:
-        _csi_driver_install_chart_defaults: "{{ _csi_driver_install_chart_defaults_raw.stdout | from_yaml }}"
+        _csi_driver_install_precheck_status: "{{ _csi_driver_install_precheck_release_info.status | default(none, true) }}"
+
+    # True only when the deployed release is at the pinned chart version AND
+    # every dispatched vendor is already enabled with the exact controller and
+    # node vendorSockets it would be assigned now -- i.e. a Helm upgrade would
+    # be a no-op. Errs toward false on any mismatch or missing data, so an
+    # uncertain pre-check simply falls back to running the install block.
+    - name: Determine whether this dispatch is already fully converged
+      ansible.builtin.set_fact:
+        _csi_driver_install_converged: >-
+          {% set _ns = namespace(ok=false) -%}
+          {% if _csi_driver_install_precheck_status is not none -%}
+          {% set _s = _csi_driver_install_precheck_status -%}
+          {% set _ctrl = {} -%}
+          {% for _pair in (_s['values'].controller.vendorSockets | default('', true) | trim).split(',') if _pair | trim | length > 0 -%}
+          {% set _kv = _pair.split('=', 1) -%}
+          {% set _ = _ctrl.update({_kv[0]: _kv[1]}) -%}
+          {% endfor -%}
+          {% set _node = {} -%}
+          {% for _pair in (_s['values'].node.vendorSockets | default('', true) | trim).split(',') if _pair | trim | length > 0 -%}
+          {% set _kv = _pair.split('=', 1) -%}
+          {% set _ = _node.update({_kv[0]: _kv[1]}) -%}
+          {% endfor -%}
+          {% set _vendors = _s['values'].vendors | default({}, true) -%}
+          {% set _ns.ok = (_s.chart | default('') == 'csi-driver-' ~ csi_driver_install_chart_version) -%}
+          {% for _v in _csi_driver_install_dispatched_vendors -%}
+          {% if _ctrl.get(_v) != (_v ~ '-csi-controller.'
+             ~ csi_driver_install_backends_namespace ~ '.svc.cluster.local:' ~ (_csi_driver_install_vendor_service_ports[_v] | string))
+             or _node.get(_v) != (csi_driver_install_vendor_node_socket_paths[_v] ~ '/csi.sock')
+             or not (_vendors.get(_v, {}).get('enabled', false)) -%}
+          {% set _ns.ok = false -%}
+          {% endif -%}
+          {% endfor -%}
+          {% endif -%}
+          {{ _ns.ok | bool }}
 
 # Skipped entirely when zero CSI-driver-supported vendors are dispatched --
 # e.g. every JIT compute-instance dispatch today, which sends the
@@ -116,7 +158,9 @@
 # paying for the install lock plus one Helm install/upgrade call on every
 # such dispatch just to leave csi-driver unchanged.
 - name: Install OSAC CSI driver
-  when: _csi_driver_install_dispatched_vendors | length > 0
+  when:
+    - _csi_driver_install_dispatched_vendors | length > 0
+    - not (_csi_driver_install_converged | default(false))
   block:
     - name: Set CSI driver install lock holder identity
       ansible.builtin.set_fact:
@@ -256,7 +300,7 @@
         _csi_driver_install_node_socket_map: >-
           {{
             _csi_driver_install_node_socket_map | combine({
-              item: _csi_driver_install_chart_defaults.vendors[item].node.socketPath ~ '/csi.sock'
+              item: csi_driver_install_vendor_node_socket_paths[item] ~ '/csi.sock'
             })
           }}
         _csi_driver_install_vendors_enabled: "{{ _csi_driver_install_vendors_enabled | combine({item: {'enabled': true}}) }}"

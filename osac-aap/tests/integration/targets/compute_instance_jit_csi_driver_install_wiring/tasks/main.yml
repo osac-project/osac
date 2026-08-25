@@ -8,7 +8,7 @@
 #
 # Verifies the playbook's own when: _jit_storage_tiers | length > 0 gate and vars: mapping
 # into csi_driver_install by stubbing the real Helm install via csi_driver_install_override
-# (same override mechanism csi_driver_install_playbook_wiring already tests for the tenant
+# (same override mechanism tenant_storage_backend_csi_driver_install_wiring already tests for the tenant
 # storage backend call site) and template_id (osac.test_overrides.noop_template, so no real
 # KubeVirt VM is created), then runs the rest of the playbook (the real
 # osac.service.storage_provider ensure_storage_class dispatch) for real against the mock

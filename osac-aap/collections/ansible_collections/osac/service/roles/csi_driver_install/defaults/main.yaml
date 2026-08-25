@@ -19,3 +19,14 @@ csi_driver_install_supported_vendors:
   - vast
   - pure
   - trident
+
+# Per-vendor node CSI socket directory, mirroring the csi-driver chart's own
+# vendors.<name>.node.socketPath defaults (osac-csi-driver/charts/csi-driver/
+# values.yaml). These are chart-version-invariant constants, so the role reads
+# them from here instead of fetching the chart's default values over the OCI
+# registry on every dispatch. Keep in sync with the chart if a vendor's
+# socketPath ever changes there; the role appends '/csi.sock' to each.
+csi_driver_install_vendor_node_socket_paths:
+  vast: /var/lib/kubelet/plugins/csi.vast.vastdata.com
+  pure: /var/lib/kubelet/plugins/csi.pure.purestorage.com
+  trident: /var/lib/kubelet/plugins/csi.trident.netapp.io

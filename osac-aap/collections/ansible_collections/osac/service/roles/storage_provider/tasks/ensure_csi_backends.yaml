@@ -129,10 +129,19 @@
           ansible.builtin.set_fact:
             # A vendor stays/gets enabled if THIS tenant needs it OR its controller already
             # exists — the union is what keeps a per-tenant run from clobbering others.
+            # vast is additionally gated on a vast backend_id still being registered
+            # platform-wide. A vast controller can linger on the hub after its last backend
+            # is removed; enabling vast off that lingering Deployment alone — with zero vast
+            # backend_ids left, so _csi_backends_vast_vms_host never resolves — would push
+            # vast.enabled:true with an unset config.vmsHost on the next wholesale values
+            # replace, silently wiping a working vast config. Zero backends left → vast
+            # auto-disables (helm prunes the controller when another enabled vendor keeps
+            # the release installed).
             _csi_backends_enabled_vendors: >-
               {{
-                (['vast'] if ('vast' in _this_tenant_vendors
-                              or 'vast-csi-controller' in _existing_controller_names) else [])
+                (['vast'] if (('vast' in _this_tenant_vendors
+                               or 'vast-csi-controller' in _existing_controller_names)
+                              and _csi_backends_vast_backend_ids | length > 0) else [])
                 + (['trident'] if ('trident' in _this_tenant_vendors
                                    or 'trident-csi-controller' in _existing_controller_names) else [])
                 + (['pure'] if ('pure' in _this_tenant_vendors
@@ -151,8 +160,9 @@
                 enabled: "{{ 'pure' in _csi_backends_enabled_vendors }}"
             _csi_backends_any_enabled: "{{ _csi_backends_enabled_vendors | length > 0 }}"
 
-        # is defined guard: vast can be enabled purely via a lingering Deployment with
-        # zero vast backends left in the platform-wide catalog, leaving this fact unset.
+        # is defined guard is belt-and-suspenders: the enablement set above only adds
+        # vast when a vast backend_id (hence a resolvable vmsHost) remains, so vast being
+        # in _csi_backends_enabled_vendors already implies this fact is set.
         - name: Layer vast-specific config onto csi-backends chart values
           ansible.builtin.set_fact:
             _csi_backends_values: >-

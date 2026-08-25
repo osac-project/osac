@@ -1,4 +1,4 @@
-cliImage: quay.io/openshift/origin-cli:4.20.0
+cliImage: quay.io/openshift/origin-cli:5.1.0
 osacNamespace: osac
 
 certManager:

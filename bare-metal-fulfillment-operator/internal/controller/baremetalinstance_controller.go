@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -143,7 +144,7 @@ func (r *BareMetalInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	if !equality.Semantic.DeepEqual(bareMetalInstance.Status, *oldstatus) {
 		log.Info("Updating BareMetalInstance status")
-		if statusErr := r.Status().Update(ctx, bareMetalInstance); client.IgnoreNotFound(statusErr) != nil {
+		if statusErr := r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(bareMetalInstance), bareMetalInstance.Status); client.IgnoreNotFound(statusErr) != nil {
 			return result, statusErr
 		}
 	}
@@ -172,6 +173,22 @@ func (r *BareMetalInstanceReconciler) apiReaderOrClient() client.Reader {
 		return r.APIReader
 	}
 	return r.Client
+}
+
+// updateStatusWithRetry updates the BMI status with retry on conflict.
+// The feedback controller may concurrently modify the resource (e.g. adding
+// its finalizer), changing the resourceVersion. A plain Status().Update would
+// fail with a conflict, causing the provisioning job to go unrecorded and a
+// duplicate to be triggered on the next reconcile.
+func (r *BareMetalInstanceReconciler) updateStatusWithRetry(ctx context.Context, key client.ObjectKey, newStatus v1alpha1.BareMetalInstanceStatus) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		latest := &v1alpha1.BareMetalInstance{}
+		if err := r.Get(ctx, key, latest); err != nil {
+			return err
+		}
+		latest.Status = newStatus
+		return r.Status().Update(ctx, latest)
+	})
 }
 
 // handleUpdate assigns an inventory node to the BareMetalInstance CR and marks it as acquired.
@@ -640,7 +657,7 @@ func (r *BareMetalInstanceReconciler) reconcileProvisioning(ctx context.Context,
 			)
 		},
 		func() error {
-			return r.Status().Update(ctx, bareMetalInstance)
+			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(bareMetalInstance), bareMetalInstance.Status)
 		},
 	)
 	if err != nil {

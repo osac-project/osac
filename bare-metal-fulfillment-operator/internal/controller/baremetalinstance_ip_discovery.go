@@ -160,7 +160,7 @@ func (r *BareMetalInstanceReconciler) reconcileIPDiscovery(
 			)
 		},
 		func() error {
-			return r.Status().Update(ctx, bareMetalInstance)
+			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(bareMetalInstance), bareMetalInstance.Status)
 		},
 	)
 	if err != nil {

@@ -225,7 +225,7 @@ if [ "${STORAGE_TESTS_ENABLED:-}" = "true" ]; then
     # point: tenant storage backend (setup), compute-instance JIT storage
     # (ensure_storage_class), and tenant/cluster storage's Tenant-vs-ClusterOrder
     # gate (ensure_storage_class).
-    "csi_driver_install_playbook_wiring"
+    "tenant_storage_backend_csi_driver_install_wiring"
     "compute_instance_jit_csi_driver_install_wiring"
     "tenant_cluster_storage_csi_driver_install_gate"
     # csi_driver_install's own role-level test. Runs unconditionally alongside the

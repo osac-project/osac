@@ -63,7 +63,7 @@ jobs:
           # (Vertex AI backend) and https://github.com/Graphify-Labs/graphify/pull/3087
           # (ci-select + fixes) are merged upstream and a new graphifyy release is published.
           # Then revert to: pip install --user "graphifyy[sql,vertex]==${GRAPHIFY_VERSION}"
-          pip install --user "git+https://github.com/eliorerz/graphify@v8#egg=graphifyy[sql,vertex]"
+          pip install --user "graphifyy[sql,vertex] @ git+https://github.com/eliorerz/graphify@e700e2b35012696e8b490c13f0ada871977f1a2f"
           echo "${HOME}/.local/bin" >> "$GITHUB_PATH"
 
       - name: Restore prior graphify-out/ state (fast path)
@@ -122,11 +122,16 @@ jobs:
           # GOOGLE_CLOUD_PROJECT env var triggers auto-detection, no explicit
           # --backend flag needed. Removed --code-only to allow semantic pass
           # on docs/images/etc. Update still defaults to code-only incremental.
-          if [[ -f graphify-out/graph.json && -f graphify-out/manifest.json ]]; then
-            echo "Prior graph found -- running incremental update."
+          # Force one full rebuild after semantic extraction is enabled by checking
+          # for a marker in metadata.json. Pre-semantic bundles lack this marker,
+          # so the first run after this PR merges will do a full extraction.
+          if [[ -f graphify-out/graph.json && -f graphify-out/manifest.json && \
+                -f graphify-out/metadata.json ]] && \
+             jq -e '.semantic_extraction == true' graphify-out/metadata.json >/dev/null 2>&1; then
+            echo "Prior semantic graph found -- running incremental update."
             graphify update .
           else
-            echo "No usable prior graph -- running full extraction."
+            echo "No usable semantic graph -- running full extraction."
             graphify extract .
           fi
           # extract doesn't write GRAPH_REPORT.md itself; update sometimes
@@ -146,7 +151,7 @@ jobs:
             --arg source_sha "${GITHUB_SHA}" \
             --arg graphify_version "${graphify_version}" \
             --arg generated_at "${generated_at}" \
-            '{source_sha: $source_sha, graphify_version: $graphify_version, generated_at: $generated_at}' \
+            '{source_sha: $source_sha, graphify_version: $graphify_version, generated_at: $generated_at, semantic_extraction: true}' \
             > graphify-out/metadata.json
 
       - name: Export Obsidian vault (best-effort, independent asset)

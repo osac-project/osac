@@ -38,6 +38,12 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: write  # gh release create/upload against this same repo
+      id-token: write  # WIF auth to osac-ci GCP project for Vertex AI
+    env:
+      # Vertex AI backend configuration -- enables semantic extraction via
+      # Gemini 2.5 Flash using Application Default Credentials (no API key).
+      GOOGLE_CLOUD_PROJECT: osac-ci
+      GOOGLE_CLOUD_LOCATION: us-central1
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -45,9 +51,19 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Authenticate to Google Cloud (Vertex AI)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/1008600636152/locations/global/workloadIdentityPools/github-actions-pool/providers/github-actions-provider
+          service_account: osac-ci@osac-ci.iam.gserviceaccount.com
+
       - name: Install graphify
         run: |
-          pip install --user "graphifyy[sql]==${GRAPHIFY_VERSION}"
+          # TEMPORARY: Install from fork until https://github.com/Graphify-Labs/graphify/pull/3083
+          # (Vertex AI backend) and https://github.com/Graphify-Labs/graphify/pull/3087
+          # (ci-select + fixes) are merged upstream and a new graphifyy release is published.
+          # Then revert to: pip install --user "graphifyy[sql,vertex]==${GRAPHIFY_VERSION}"
+          pip install --user "git+https://github.com/eliorerz/graphify@v8#egg=graphifyy[sql,vertex]"
           echo "${HOME}/.local/bin" >> "$GITHUB_PATH"
 
       - name: Restore prior graphify-out/ state (fast path)
@@ -102,14 +118,16 @@ jobs:
       - name: Extract or update graph
         run: |
           set -euo pipefail
-          # update has no --code-only flag (already no-LLM by default; only
-          # extract accepts it) -- confirmed against the real CLI.
+          # Semantic extraction is now enabled via Vertex AI backend --
+          # GOOGLE_CLOUD_PROJECT env var triggers auto-detection, no explicit
+          # --backend flag needed. Removed --code-only to allow semantic pass
+          # on docs/images/etc. Update still defaults to code-only incremental.
           if [[ -f graphify-out/graph.json && -f graphify-out/manifest.json ]]; then
             echo "Prior graph found -- running incremental update."
             graphify update .
           else
             echo "No usable prior graph -- running full extraction."
-            graphify extract . --code-only
+            graphify extract .
           fi
           # extract doesn't write GRAPH_REPORT.md itself; update sometimes
           # does. Always (re)generate it explicitly.

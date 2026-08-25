@@ -172,11 +172,8 @@ func (r *ExternalIPPoolReconciler) handleUpdate(ctx context.Context, pool *v1alp
 		return ctrl.Result{}, nil
 	}
 
-	// Read implementation strategy from spec
-	implementationStrategy := pool.Spec.ImplementationStrategy
-	if implementationStrategy == "" {
-		implementationStrategy = defaultExternalIPPoolImplementationStrategy
-	}
+	// TEST BRANCH ONLY: force netris for all networking resources.
+	implementationStrategy := "netris"
 
 	// Stamp the implementation-strategy annotation so AAP playbooks can read it
 	// without having to look up a parent resource. Return early so the next

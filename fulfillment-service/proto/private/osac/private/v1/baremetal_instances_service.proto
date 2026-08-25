@@ -15,9 +15,13 @@ syntax = "proto3";
 
 package osac.private.v1;
 
+import "cleanapi/cleanapi.proto";
 import "google/api/annotations.proto";
 import "google/protobuf/field_mask.proto";
 import "osac/private/v1/baremetal_instance_type.proto";
+
+option (cleanapi.file).package = "osac.public.v1";
+option (cleanapi.file).http_route_prefix_map = "private:fulfillment";
 
 message BareMetalInstancesListRequest {
   optional int32 offset = 1;
@@ -71,11 +75,14 @@ message BareMetalInstancesDeleteRequest {
 message BareMetalInstancesDeleteResponse {}
 
 message BareMetalInstancesSignalRequest {
+  option (cleanapi.message).private = true;
   // Unique identifier of the bare metal instance.
   string id = 1;
 }
 
-message BareMetalInstancesSignalResponse {}
+message BareMetalInstancesSignalResponse {
+  option (cleanapi.message).private = true;
+}
 
 service BareMetalInstances {
   rpc List(BareMetalInstancesListRequest) returns (BareMetalInstancesListResponse) {
@@ -106,5 +113,7 @@ service BareMetalInstances {
   }
 
   // Indicates that something changed in the object or the system that may require reconciling the object.
-  rpc Signal(BareMetalInstancesSignalRequest) returns (BareMetalInstancesSignalResponse) {}
+  rpc Signal(BareMetalInstancesSignalRequest) returns (BareMetalInstancesSignalResponse) {
+    option (cleanapi.method).private = true;
+  }
 }

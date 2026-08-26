@@ -15,9 +15,13 @@ syntax = "proto3";
 
 package osac.private.v1;
 
+import "cleanapi/cleanapi.proto";
 import "google/api/annotations.proto";
 import "google/protobuf/field_mask.proto";
 import "osac/private/v1/project_membership_type.proto";
+
+option (cleanapi.file).package = "osac.public.v1";
+option (cleanapi.file).http_route_prefix_map = "private:fulfillment";
 
 // Request message for listing project memberships.
 message ProjectMembershipsListRequest {
@@ -37,6 +41,14 @@ message ProjectMembershipsListRequest {
   // for a specific project:
   //
   //     this.spec.project == "019dd9f6-36cb-7824-ac1c-6455d8a7a9b5"
+  //
+  // To retrieve all memberships for a specific user:
+  //
+  //     this.spec.user == "019dd9f7-8823-7b24-8c1d-123456789abc"
+  //
+  // To retrieve all manager memberships:
+  //
+  //     this.spec.role == osac.public.v1.ProjectMembershipRole.PROJECT_MEMBERSHIP_ROLE_MANAGER
   //
   // If this isn't provided, or if the value is empty, then all the project memberships that the user has permission to
   // see will be returned. Not all CEL constructs are currently supported for implementation reasons; see the filter
@@ -125,12 +137,15 @@ message ProjectMembershipsDeleteResponse {}
 
 // Request message for signaling a project membership.
 message ProjectMembershipsSignalRequest {
+  option (cleanapi.message).private = true;
   // Unique identifier of the project membership to signal.
   string id = 1;
 }
 
 // Response message for signaling a project membership.
-message ProjectMembershipsSignalResponse {}
+message ProjectMembershipsSignalResponse {
+  option (cleanapi.message).private = true;
+}
 
 // Service for managing project memberships.
 //
@@ -175,5 +190,6 @@ service ProjectMemberships {
 
   // Indicates that something changed in the object or the system that may require reconciling the object.
   rpc Signal(ProjectMembershipsSignalRequest) returns (ProjectMembershipsSignalResponse) {
+    option (cleanapi.method).private = true;
   }
 }

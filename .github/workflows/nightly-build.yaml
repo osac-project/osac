@@ -461,7 +461,7 @@ jobs:
         echo "Tagged: ${TAG}"
 
     - name: Download chart manifest
-      uses: actions/download-artifact@65a9edc588058a7f27ea910f833ef1ec12f0aefd  # v4.1.8
+      uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16  # v4.1.8
       with:
         name: nightly-${{ env.VERSION }}
         path: nightly-artifacts

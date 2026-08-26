@@ -138,13 +138,24 @@ jobs:
             echo "No usable graph yet -- running extraction (cache-aware, resumes any partial progress)."
             graphify extract .
           fi
-          # extract doesn't write GRAPH_REPORT.md itself; update sometimes
-          # does. Always (re)generate it explicitly.
-          graphify cluster-only .
 
       - name: Write metadata.json
         run: |
           set -euo pipefail
+          # Deliberately runs right after extract/update, BEFORE cluster-only
+          # below -- graphify extract/update already wrote a complete,
+          # correct graph.json by this point; cluster-only only adds
+          # GRAPH_REPORT.md/labels on top of it and can fail independently
+          # (confirmed live: a 1-node discrepancy between extract's write and
+          # cluster-only's re-clustering tripped the shrink guard on
+          # cluster-only's own write, even though extract's graph.json was
+          # already complete and correct). Writing metadata.json here means
+          # the semantic_extraction marker is set as soon as a genuinely good
+          # graph.json exists, so a NEXT run correctly takes the cheap
+          # `update .` path instead of misreading a cluster-only failure as
+          # "no valid semantic graph yet" and wastefully re-running a full,
+          # cache-skipping --force extraction.
+          #
           # Extract just the bare numeric version (graphify --version prints
           # non-numeric text too, e.g. "graphify 0.9.41") so this matches
           # exactly what the fetch script's own version check expects to
@@ -157,6 +168,15 @@ jobs:
             --arg generated_at "${generated_at}" \
             '{source_sha: $source_sha, graphify_version: $graphify_version, generated_at: $generated_at, semantic_extraction: true}' \
             > graphify-out/metadata.json
+
+      - name: Generate cluster report (GRAPH_REPORT.md, community labels)
+        run: |
+          set -euo pipefail
+          # Separate step, after metadata.json is already durably marked
+          # semantic -- see the comment above. extract doesn't write
+          # GRAPH_REPORT.md itself; update sometimes does. Always
+          # (re)generate it explicitly.
+          graphify cluster-only .
 
       - name: Export Obsidian vault (best-effort, independent asset)
         id: obsidian

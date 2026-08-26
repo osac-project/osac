@@ -11,8 +11,7 @@ Unless required by applicable law or agreed to in writing, software distributed 
 language governing permissions and limitations under the License.
 */
 
-// This package and this file only exist because there is no way to tell the protobuf Go code generator that we are not
-// generating code for the 'cleanapi' module. We only import that module to use its annotations, but the Go code generator
-// will anyhow include an import statement for the package. So keep this, even if it is empty.
-
+// Package cleanapi is an empty stub that exists only because there is no way to tell the protobuf Go code generator that
+// we are not generating code for the 'cleanapi' module. We only import that module to use its annotations, but the Go
+// code generator will anyhow include an import statement for the package. So keep this, even if it is empty.
 package cleanapi

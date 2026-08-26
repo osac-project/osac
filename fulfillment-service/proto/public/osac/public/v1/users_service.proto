@@ -74,6 +74,12 @@ message UsersCreateResponse {
   User object = 1;
 }
 
+message UsersDeleteRequest {
+  string id = 1;
+}
+
+message UsersDeleteResponse {}
+
 message UsersUpdateRequest {
   User object = 1;
   google.protobuf.FieldMask update_mask = 2;
@@ -87,12 +93,6 @@ message UsersUpdateRequest {
 message UsersUpdateResponse {
   User object = 1;
 }
-
-message UsersDeleteRequest {
-  string id = 1;
-}
-
-message UsersDeleteResponse {}
 
 service Users {
   // Retrieves the list of users.
@@ -117,6 +117,11 @@ service Users {
     };
   }
 
+  // Deletes a user.
+  rpc Delete(UsersDeleteRequest) returns (UsersDeleteResponse) {
+    option (google.api.http) = {delete: "/api/fulfillment/v1/users/{id}"};
+  }
+
   // Updates an existing user.
   rpc Update(UsersUpdateRequest) returns (UsersUpdateResponse) {
     option (google.api.http) = {
@@ -124,10 +129,5 @@ service Users {
       body: "object"
       response_body: "object"
     };
-  }
-
-  // Deletes a user.
-  rpc Delete(UsersDeleteRequest) returns (UsersDeleteResponse) {
-    option (google.api.http) = {delete: "/api/fulfillment/v1/users/{id}"};
   }
 }

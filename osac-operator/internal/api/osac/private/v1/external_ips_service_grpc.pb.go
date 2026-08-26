@@ -50,7 +50,7 @@ type ExternalIPsClient interface {
 	Get(ctx context.Context, in *ExternalIPsGetRequest, opts ...grpc.CallOption) (*ExternalIPsGetResponse, error)
 	// Creates a new external IP. The spec.pool field determines which ExternalIPPool the address is allocated from.
 	Create(ctx context.Context, in *ExternalIPsCreateRequest, opts ...grpc.CallOption) (*ExternalIPsCreateResponse, error)
-	// Updates an existing external IP. The spec.pool field is immutable; only metadata can be changed.
+	// Updates an existing external IP. Allows modifying metadata (labels, annotations). The spec.pool field is immutable.
 	Update(ctx context.Context, in *ExternalIPsUpdateRequest, opts ...grpc.CallOption) (*ExternalIPsUpdateResponse, error)
 	// Deletes an external IP. The allocated address is returned to the parent pool's available capacity.
 	Delete(ctx context.Context, in *ExternalIPsDeleteRequest, opts ...grpc.CallOption) (*ExternalIPsDeleteResponse, error)
@@ -136,7 +136,7 @@ type ExternalIPsServer interface {
 	Get(context.Context, *ExternalIPsGetRequest) (*ExternalIPsGetResponse, error)
 	// Creates a new external IP. The spec.pool field determines which ExternalIPPool the address is allocated from.
 	Create(context.Context, *ExternalIPsCreateRequest) (*ExternalIPsCreateResponse, error)
-	// Updates an existing external IP. The spec.pool field is immutable; only metadata can be changed.
+	// Updates an existing external IP. Allows modifying metadata (labels, annotations). The spec.pool field is immutable.
 	Update(context.Context, *ExternalIPsUpdateRequest) (*ExternalIPsUpdateResponse, error)
 	// Deletes an external IP. The allocated address is returned to the parent pool's available capacity.
 	Delete(context.Context, *ExternalIPsDeleteRequest) (*ExternalIPsDeleteResponse, error)

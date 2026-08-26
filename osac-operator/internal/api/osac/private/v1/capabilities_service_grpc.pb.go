@@ -40,7 +40,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
 // Provides information about the capabilities of the server, such as the list of trusted token issuers for
-// authentication. This is the private API equivalent and requires authentication.
+// authentication.
 type CapabilitiesClient interface {
 	// Returns the capabilities of the server, including the authentication configuration that clients need in order to
 	// obtain access tokens.
@@ -70,7 +70,7 @@ func (c *capabilitiesClient) Get(ctx context.Context, in *CapabilitiesGetRequest
 // for forward compatibility.
 //
 // Provides information about the capabilities of the server, such as the list of trusted token issuers for
-// authentication. This is the private API equivalent and requires authentication.
+// authentication.
 type CapabilitiesServer interface {
 	// Returns the capabilities of the server, including the authentication configuration that clients need in order to
 	// obtain access tokens.

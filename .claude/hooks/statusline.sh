@@ -1,7 +1,8 @@
 #!/bin/bash
-# Project statusline: extends user statusline with osac + ai-workflows sync status
+# Project statusline: extends user statusline with osac, osac-ai-skills, and
+# ai-workflows sync status.
 # Opt out: set CLAUDE_REPO_STATUSLINE_DISABLED=1 in .claude/settings.local.json env
-# to skip the osac + ai-workflows sync status (the user's own statusline still runs)
+# to skip the repo sync status (the user's own statusline still runs)
 
 input=$(cat)
 
@@ -43,10 +44,20 @@ repo_status() {
   fi
 }
 
+resolve_osac_ai_skills_dir() {
+  if [[ -d "${HOME}/.osac-ai-skills/.git" ]]; then
+    printf '%s\n' "${HOME}/.osac-ai-skills"
+  else
+    printf '%s\n' "${REPO_DIR}/.osac-ai-skills"
+  fi
+}
+
 REPO_DIR="${project_dir:-$(printf '%s' "$input" | jq -r '.workspace.project_dir // empty' 2>/dev/null)}"
 AI_DIR="${HOME}/.ai-workflows"
+SKILLS_DIR="$(resolve_osac_ai_skills_dir)"
 
 ws=$(repo_status "$REPO_DIR" "osac")
+sk=$(repo_status "$SKILLS_DIR" "osac-ai-skills")
 ai=$(repo_status "$AI_DIR" "ai-workflows")
 
-printf '%b %b %b\n' "$ws" "${GRAY}|${RESET}" "$ai"
+printf '%b %b %b %b %b\n' "$ws" "${GRAY}|${RESET}" "$sk" "${GRAY}|${RESET}" "$ai"

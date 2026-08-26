@@ -2,10 +2,9 @@ name: Graphify Brain Refresh (Vertex AI POC)
 
 # Temporary, on-demand-only sibling of graphify-brain-refresh.yaml, used to
 # validate the Vertex AI semantic-extraction backend in isolation while
-# eliorerz/graphify's upstream PRs (#3083, #3087) are still pending and
-# osac-ci's gemini-2.5-flash/-pro quota is still the non-adjustable 5 req/min
-# default. graphify-brain-refresh.yaml itself was reverted back to plain
-# code-only extraction so the real hourly job stays reliable in the meantime.
+# eliorerz/graphify's upstream PRs (#3083, #3087) are still pending. graphify-
+# brain-refresh.yaml itself was reverted back to plain code-only extraction
+# so the real hourly job stays reliable in the meantime.
 #
 # Isolation from the production job:
 #   - workflow_dispatch only, no schedule -- never runs unattended.
@@ -15,6 +14,19 @@ name: Graphify Brain Refresh (Vertex AI POC)
 #     consume.
 #   - No alert-on-repeated-failure job -- failures here are expected while
 #     validating, not something to page anyone over.
+#
+# Runs on osac-ci-1 (self-hosted, llm-labeled runners) instead of an
+# ephemeral GH-hosted runner, with graphify-out/ symlinked to a dedicated
+# persistent directory on that machine (see "Link graphify-out/..." below).
+# This is the ONLY workflow that should ever touch that directory. Rationale:
+# a failed run (e.g. one bad chunk out of many) previously lost ALL progress,
+# since GH Actions' own cache only saves on success and the GH Release
+# re-pull only reflects the last fully-successful run. graphify's semantic
+# extraction cache is file-level (keyed by content hash + prompt hash), so a
+# persistent directory that survives failures lets a resumed run skip
+# straight to re-extracting only what's actually missing, confirmed live:
+# run 32983459202 got 15/16 chunks done before one transient "Server
+# disconnected" error killed the whole run's progress under the old scheme.
 #
 # Delete this file once the Vertex AI backend is proven reliable (upstream
 # PRs merged + a real quota in place), and fold its config back into
@@ -35,8 +47,8 @@ env:
 jobs:
   refresh:
     name: Refresh and publish graph (Vertex AI POC)
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+    runs-on: [self-hosted, llm]
+    timeout-minutes: 120
     permissions:
       contents: write  # gh release create/upload against this same repo
       id-token: write  # WIF auth to osac-ci GCP project for Vertex AI
@@ -70,54 +82,24 @@ jobs:
           pip install --user "graphifyy[sql,vertex] @ git+https://github.com/eliorerz/graphify@653aa4eddc1e5ffe524a8d928b9e6d7c3c31cdf3"
           echo "${HOME}/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Restore prior graphify-out/ state (fast path)
-        id: cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
-        with:
-          path: graphify-out/
-          # Cache keys are immutable in GH Actions -- a static key would make
-          # every save after the first a silent no-op. Save under a per-run
-          # key and restore via restore-keys prefix match so the fast path
-          # always finds the most recent entry.
-          key: graphify-brain-vertex-poc-cache-${{ github.run_id }}
-          restore-keys: |
-            graphify-brain-vertex-poc-cache-
-
-      - name: Re-pull last published bundle (authoritative)
-        id: repull
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Link graphify-out/ to persistent state directory
         run: |
           set -euo pipefail
-          rm -rf /tmp/graphify-repull && mkdir -p /tmp/graphify-repull
-          if gh release download "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
-               --pattern 'graphify-bundle.tar.gz' --dir /tmp/graphify-repull; then
-            rm -rf graphify-out
-            mkdir -p graphify-out
-            tar xzf /tmp/graphify-repull/graphify-bundle.tar.gz -C graphify-out
-            echo "ok=true" >> "$GITHUB_OUTPUT"
+          # Dedicated to this workflow only -- nothing else on osac-ci-1
+          # should read or write here. A symlink (not a copy-in/copy-out
+          # pair) means graphify's writes -- including partial progress from
+          # a run that later fails -- land directly in durable storage, with
+          # no separate "save" step needed and no way to lose progress on
+          # a mid-run failure.
+          PERSIST_DIR="/home/github-runner/graphify-vertex-poc-out"
+          mkdir -p "${PERSIST_DIR}"
+          rm -rf graphify-out
+          ln -s "${PERSIST_DIR}" graphify-out
+          if [[ -f graphify-out/graph.json ]]; then
+            echo "::notice::Resuming from persistent state at ${PERSIST_DIR} ($(du -sh "${PERSIST_DIR}" | cut -f1))"
           else
-            echo "No published bundle to re-pull yet (first run, or release missing)."
-            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No persistent state found at ${PERSIST_DIR} -- starting fresh"
           fi
-
-      - name: Determine restore path taken
-        id: restore-path
-        run: |
-          # cache-hit is only true on an exact primary-key match, which never
-          # happens now that the save key is per-run (see restore step above)
-          # -- cache-matched-key is set on both exact and restore-keys/prefix
-          # matches, so it's the correct signal for "did the fast path find
-          # anything at all".
-          if [[ "${{ steps.repull.outputs.ok }}" == "true" ]]; then
-            path="artifact-repull"
-          elif [[ -n "${{ steps.cache.outputs.cache-matched-key }}" ]]; then
-            path="cache-hit"
-          else
-            path="full-rebuild"
-          fi
-          echo "path=${path}" >> "$GITHUB_OUTPUT"
-          echo "::notice::graphify-brain-refresh-vertex-poc restore path: ${path}"
 
       - name: Extract or update graph
         run: |
@@ -211,9 +193,7 @@ jobs:
               --notes "Auto-published by graphify-brain-refresh-vertex-poc.yaml. Experimental -- not consumed by the fetch hook or any real workflow; validates the Vertex AI backend in isolation from graph-latest."
           fi
 
-      - name: Save graphify-out/ for next run's fast path
-        if: success()
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
-        with:
-          path: graphify-out/
-          key: graphify-brain-vertex-poc-cache-${{ github.run_id }}
+      # No separate "save" step needed -- graphify-out/ is a symlink into
+      # persistent storage (see "Link graphify-out/..." above), so every
+      # write already landed there directly, including partial progress
+      # from a run that fails after this point.

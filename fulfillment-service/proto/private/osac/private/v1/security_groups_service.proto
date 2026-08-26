@@ -15,9 +15,13 @@ syntax = "proto3";
 
 package osac.private.v1;
 
+import "cleanapi/cleanapi.proto";
 import "google/api/annotations.proto";
 import "google/protobuf/field_mask.proto";
 import "osac/private/v1/security_group_type.proto";
+
+option (cleanapi.file).package = "osac.public.v1";
+option (cleanapi.file).http_route_prefix_map = "private:fulfillment";
 
 message SecurityGroupsListRequest {
   // Index of the first result. If not specified the default value will be zero.
@@ -105,10 +109,13 @@ message SecurityGroupsDeleteRequest {
 message SecurityGroupsDeleteResponse {}
 
 message SecurityGroupsSignalRequest {
+  option (cleanapi.message).private = true;
   string id = 1;
 }
 
-message SecurityGroupsSignalResponse {}
+message SecurityGroupsSignalResponse {
+  option (cleanapi.message).private = true;
+}
 
 service SecurityGroups {
   // Retrieves the list of security groups.
@@ -149,5 +156,6 @@ service SecurityGroups {
 
   // Indicates that something changed in the object or the system that may require reconciling the object.
   rpc Signal(SecurityGroupsSignalRequest) returns (SecurityGroupsSignalResponse) {
+    option (cleanapi.method).private = true;
   }
 }

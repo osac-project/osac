@@ -15,9 +15,13 @@ syntax = "proto3";
 
 package osac.private.v1;
 
+import "cleanapi/cleanapi.proto";
 import "google/api/annotations.proto";
 import "google/protobuf/field_mask.proto";
 import "osac/private/v1/nat_gateway_type.proto";
+
+option (cleanapi.file).package = "osac.public.v1";
+option (cleanapi.file).http_route_prefix_map = "private:fulfillment";
 
 message NATGatewaysListRequest {
   // Index of the first result. If not specified the default value will be zero.
@@ -105,10 +109,13 @@ message NATGatewaysDeleteRequest {
 message NATGatewaysDeleteResponse {}
 
 message NATGatewaysSignalRequest {
+  option (cleanapi.message).private = true;
   string id = 1;
 }
 
-message NATGatewaysSignalResponse {}
+message NATGatewaysSignalResponse {
+  option (cleanapi.message).private = true;
+}
 
 service NATGateways {
   // Retrieves the list of NAT gateways.
@@ -133,7 +140,7 @@ service NATGateways {
     };
   }
 
-  // Updates an existing NAT gateway. The spec fields are immutable; only metadata can be changed.
+  // Updates an existing NAT gateway. The spec fields are immutable; only metadata (labels, annotations) can be changed.
   rpc Update(NATGatewaysUpdateRequest) returns (NATGatewaysUpdateResponse) {
     option (google.api.http) = {
       patch: "/api/private/v1/nat_gateways/{object.id}"
@@ -149,5 +156,6 @@ service NATGateways {
 
   // Indicates that something changed in the object or the system that may require reconciling the object.
   rpc Signal(NATGatewaysSignalRequest) returns (NATGatewaysSignalResponse) {
+    option (cleanapi.method).private = true;
   }
 }

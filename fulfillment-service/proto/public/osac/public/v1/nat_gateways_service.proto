@@ -127,7 +127,7 @@ service NATGateways {
     };
   }
 
-  // Updates an existing NAT gateway. Allows modifying metadata (labels, annotations).
+  // Updates an existing NAT gateway. The spec fields are immutable; only metadata (labels, annotations) can be changed.
   rpc Update(NATGatewaysUpdateRequest) returns (NATGatewaysUpdateResponse) {
     option (google.api.http) = {
       patch: "/api/fulfillment/v1/nat_gateways/{object.id}"

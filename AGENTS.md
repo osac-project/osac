@@ -88,10 +88,10 @@ fulfillment-service (proto)
 ```
 
 For cross-component dependency checks (new CRD types, CLI flags), see
-[`docs/CONVENTIONS.md`](docs/CONVENTIONS.md). Image tags for mono-repo
-components stay unpinned in `osac-installer/values/*/values.yaml`; release
-CI sets real tags. `osac-ui` is an external OCI chart/image — bump it
-deliberately when a new UI release is needed.
+[`docs/CONVENTIONS.md`](docs/CONVENTIONS.md). For image tags and
+per-component release tags, see [`osac-installer/AGENTS.md`](osac-installer/AGENTS.md)
+— leave mono-repo component tags unpinned on a feature PR; bump `osac-ui`
+when a new UI release is needed.
 
 ## Architecture
 

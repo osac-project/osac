@@ -604,7 +604,7 @@ def find_csv(*, namespace: str, deploy_name: str) -> str:
 
 
 def adopt_resources_for_helm(config: RefreshConfig) -> None:
-    """Adopt vast-tenant-config-* secrets for Helm.
+    """Adopt lvms-tenant-config-* secrets for Helm.
 
     The osac-operator chart creates these as empty shells (tenants.yaml
     template), then AAP's storage_provider role deletes and recreates them
@@ -614,7 +614,7 @@ def adopt_resources_for_helm(config: RefreshConfig) -> None:
     """
     result = oc("get", "secret", "-n", config.namespace, "-o", "name", capture=True)
     resources = [r for r in result.stdout.strip().splitlines()
-                 if r.startswith("secret/vast-tenant-config-")]
+                 if r.startswith("secret/lvms-tenant-config-")]
     if not resources:
         return
     print(f"  Adopting {len(resources)} tenant secret(s) for Helm...")

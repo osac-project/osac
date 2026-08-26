@@ -900,7 +900,7 @@ func (r *StorageReconciler) handleBackendDeprovisioning(ctx context.Context, ins
 func (r *StorageReconciler) hubSecretExists(ctx context.Context, tenantName string, provider string) (bool, error) {
 	labels := map[string]string{osacTenantKey: tenantName}
 	if provider != "" {
-		labels[osacStorageProviderKey] = provider
+		labels[osacStorageProviderLabel] = provider
 	}
 	var secretList corev1.SecretList
 	if err := r.List(ctx, &secretList,

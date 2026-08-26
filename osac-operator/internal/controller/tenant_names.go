@@ -57,8 +57,8 @@ var (
 	// osacStorageTierLabel is the label key that identifies the storage tier of a StorageClass
 	osacStorageTierLabel string = fmt.Sprintf("%s/storage-tier", osacPrefix)
 
-	// osacStorageProviderKey is the label key that identifies the storage provider of a hub Secret
-	osacStorageProviderKey string = fmt.Sprintf("%s/storage-provider", osacPrefix)
+	// osacStorageProviderLabel is the label key that identifies the storage provider of a hub Secret
+	osacStorageProviderLabel string = fmt.Sprintf("%s/storage-provider", osacPrefix)
 )
 
 func tenantNamespacePredicate(namespace string) predicate.Predicate {

@@ -16,7 +16,15 @@ version: v2
 managed:
   enabled: true
   override:
-  - file_option: go_package_prefix
+  # internal/dummy is only for the 'cleanapi' module because there is no way
+  # to tell the Go code generator that we will not be generating code for this
+  # module: it will always include an import statement for this package. We
+  # solve that creating a dummy package.
+  - module: buf.build/cleanapi/cleanapi
+    file_option: go_package_prefix
+    value: github.com/osac-project/osac/osac-operator/internal/dummy
+  - module: buf.build/osac-project/private-api
+    file_option: go_package_prefix
     value: github.com/osac-project/osac/osac-operator/internal/api
   disable:
   - module: buf.build/googleapis/googleapis
@@ -26,6 +34,7 @@ managed:
 inputs:
 
 - directory: ../fulfillment-service/proto/private
+- module: buf.build/cleanapi/cleanapi:v0.0.8
 
 plugins:
 

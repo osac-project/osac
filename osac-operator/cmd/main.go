@@ -85,7 +85,7 @@ const (
 	envBareMetalInstanceNamespace = "OSAC_BARE_METAL_INSTANCE_NAMESPACE"
 	envVolumeNamespace            = "OSAC_VOLUME_NAMESPACE"
 	// envStorageConfigNamespace is the namespace holding the per-tenant
-	// "vast-tenant-config-<tenant>" Secrets the Volume controller reads.
+	// "lvms-tenant-config-<tenant>" Secrets the storage controller reads.
 	envStorageConfigNamespace = "OSAC_STORAGE_CONFIG_NAMESPACE"
 	// envVendorControllers maps StorageBackend names to vendor CSI controller
 	// gRPC endpoints, comma-separated (e.g.

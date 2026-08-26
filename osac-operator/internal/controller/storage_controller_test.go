@@ -110,8 +110,8 @@ func createHubSecret(ctx context.Context, tenantName, namespace string) {
 			Name:      fmt.Sprintf("lvms-tenant-config-%s", tenantName),
 			Namespace: namespace,
 			Labels: map[string]string{
-				osacTenantKey:          tenantName,
-				osacStorageProviderKey: "lvms",
+				osacTenantKey:            tenantName,
+				osacStorageProviderLabel: "lvms",
 			},
 		},
 		StringData: map[string]string{
@@ -1601,8 +1601,8 @@ var _ = Describe("Storage Controller", func() {
 					Name:      fmt.Sprintf("lvms-tenant-config-%s", name),
 					Namespace: secretsNamespace,
 					Labels: map[string]string{
-						osacTenantKey:          name,
-						osacStorageProviderKey: "lvms",
+						osacTenantKey:            name,
+						osacStorageProviderLabel: "lvms",
 					},
 				},
 				StringData: map[string]string{

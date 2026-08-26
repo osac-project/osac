@@ -19,6 +19,7 @@ import "google/api/annotations.proto";
 import "google/protobuf/field_mask.proto";
 import "osac/public/v1/project_type.proto";
 
+// Request to list projects with optional pagination and filtering.
 message ProjectsListRequest {
   // Index of the first result. If not specified the default value will be zero.
   optional int32 offset = 1;
@@ -54,35 +55,50 @@ message ProjectsListRequest {
   optional string order = 4;
 }
 
+// Response containing a paginated list of projects.
 message ProjectsListResponse {
-  // Actual number of items returned.
+  // Actual number of items returned in this response.
   int32 size = 1;
 
-  // Total number of items of the collection that match the search criteria.
+  // Total number of items in the collection that match the search criteria, regardless of pagination.
   int32 total = 2;
 
-  // List of results.
+  // The projects that match the request criteria, limited by pagination parameters.
   repeated Project items = 3;
 }
 
+// Request to retrieve a single project by ID.
 message ProjectsGetRequest {
+  // Unique identifier of the project to retrieve.
   string id = 1;
 }
 
+// Response containing the requested project.
 message ProjectsGetResponse {
+  // The requested project object.
   Project object = 1;
 }
 
+// Request to create a new project.
 message ProjectsCreateRequest {
+  // The project to create. The server will populate the ID and system-managed fields.
   Project object = 1;
 }
 
+// Response containing the newly created project.
 message ProjectsCreateResponse {
+  // The created project with server-populated fields (ID, timestamps, status, etc.).
   Project object = 1;
 }
 
+// Request to update an existing project.
 message ProjectsUpdateRequest {
+  // The project with updated fields. The ID must match an existing project.
   Project object = 1;
+
+  // Field mask indicating which fields to update. If not provided, all fields are updated.
+  // Only fields specified in the mask will be modified. Nested fields can be specified using dot notation.
+  // Example: "metadata.labels", "spec.description"
   google.protobuf.FieldMask update_mask = 2;
 
   // Lock enables optimistic locking. When set to true, the server verifies that the current version of the object
@@ -91,14 +107,19 @@ message ProjectsUpdateRequest {
   bool lock = 3;
 }
 
+// Response containing the updated project.
 message ProjectsUpdateResponse {
+  // The updated project object with incremented version number.
   Project object = 1;
 }
 
+// Request to delete a project.
 message ProjectsDeleteRequest {
+  // Unique identifier of the project to delete.
   string id = 1;
 }
 
+// Response for a successful project deletion.
 message ProjectsDeleteResponse {}
 
 service Projects {

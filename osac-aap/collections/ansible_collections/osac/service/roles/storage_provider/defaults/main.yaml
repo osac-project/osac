@@ -5,8 +5,8 @@
 #
 # Default: OCI registry. For local development or CI, override via the
 # OSAC_CSI_BACKENDS_CHART_REF env var (e.g., path to the local chart).
-# Gated by storage_provider_csi_backends_enabled (default true).
-storage_provider_csi_backends_enabled: true
+# Gated by storage_provider_csi_backends_enabled (default false; umbrella owns csi-backends).
+storage_provider_csi_backends_enabled: false
 storage_provider_csi_backends_chart_ref: >-
   {{ lookup('env', 'OSAC_CSI_BACKENDS_CHART_REF')
      | default('oci://ghcr.io/osac-project/charts/csi-backends', true) }}

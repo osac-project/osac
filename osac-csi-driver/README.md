@@ -41,6 +41,10 @@ make image-push   # Push container image
 | `--node-id` | (required) | Node ID for NodeGetInfo |
 | `--driver-name` | `csi.osac.openshift.io` | CSI driver name |
 | `--fulfillment-endpoint` | (empty, uses stub) | gRPC endpoint for the OSAC fulfillment service |
+| `--fulfillment-client-id` | (empty) | OAuth2 client ID for fulfillment-service authentication |
+| `--fulfillment-client-secret-file` | (empty) | Path to file containing the OAuth2 client secret |
+| `--fulfillment-issuer-url` | (empty) | Keycloak issuer URL for `client_credentials` token exchange |
+| `--grpc-insecure` | `false` | Skip TLS server certificate verification |
 | `--vendor-sockets` | (empty) | Comma-separated `backend=socketpath` pairs |
 
 ## License

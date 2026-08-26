@@ -112,6 +112,15 @@
         "clientRole": false,
         "containerId": "01e6c34f-6906-4907-9cbd-2dec7a6a0e1d",
         "attributes": {}
+      },
+      {
+        "id": "c4d5e6f7-a8b9-0c1d-2e3f-456789abcdef",
+        "name": "osac-csi-driver",
+        "description": "OSAC CSI driver service role for fulfillment-service access",
+        "composite": false,
+        "clientRole": false,
+        "containerId": "01e6c34f-6906-4907-9cbd-2dec7a6a0e1d",
+        "attributes": {}
       }
     ],
     "client": {
@@ -756,6 +765,25 @@
       "clientRoles": {},
       "notBefore": 0,
       "groups": []
+    },
+    {
+      "id": "e6f7a8b9-c0d1-4e2f-3a4b-6789abcdef01",
+      "username": "service-account-osac-csi-driver",
+      "enabled": true,
+      "totp": false,
+      "emailVerified": false,
+      "serviceAccountClientId": "osac-csi-driver",
+      "createdTimestamp": 1757683950000,
+      "credentials": [],
+      "disableableCredentialTypes": [],
+      "requiredActions": [],
+      "realmRoles": [
+        "default-roles-my realm",
+        "osac-csi-driver"
+      ],
+      "clientRoles": {},
+      "notBefore": 0,
+      "groups": []
     }
   ],
   "scopeMappings": [
@@ -1190,6 +1218,61 @@
       ]
     },
     {
+      "id": "d5e6f7a8-b9c0-4d1e-2f3a-567890abcdef",
+      "clientId": "osac-csi-driver",
+      "name": "OSAC CSI driver",
+      "description": "OSAC CSI driver service account for fulfillment-service access",
+      "rootUrl": "",
+      "adminUrl": "",
+      "baseUrl": "",
+      "surrogateAuthRequired": false,
+      "enabled": true,
+      "alwaysDisplayInConsole": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "__OSAC_CSI_DRIVER_CLIENT_SECRET__",
+      "redirectUris": [],
+      "webOrigins": [],
+      "notBefore": 0,
+      "bearerOnly": false,
+      "consentRequired": false,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "publicClient": false,
+      "frontchannelLogout": true,
+      "protocol": "openid-connect",
+      "attributes": {
+        "realm_client": "false",
+        "oidc.ciba.grant.enabled": "false",
+        "client.secret.creation.time": "1757684016",
+        "backchannel.logout.session.required": "true",
+        "standard.token.exchange.enabled": "false",
+        "post.logout.redirect.uris": "+",
+        "oauth2.device.authorization.grant.enabled": "false",
+        "backchannel.logout.revoke.offline.tokens": "false"
+      },
+      "authenticationFlowBindingOverrides": {},
+      "fullScopeAllowed": false,
+      "nodeReRegistrationTimeout": -1,
+      "defaultClientScopes": [
+        "web-origins",
+        "acr",
+        "profile",
+        "roles",
+        "basic",
+        "email",
+        "osac-api"
+      ],
+      "optionalClientScopes": [
+        "address",
+        "phone",
+        "organization",
+        "offline_access",
+        "microprofile-jwt"
+      ]
+    },
+    {
       "id": "e37d4620-4ae2-432e-90d8-2b7f6a662f43",
       "clientId": "realm-management",
       "name": "${client_realm-management}",
@@ -1519,7 +1602,8 @@
             "access.token.claim": "true",
             "claim.name": "organization"
           }
-        }, {
+        },
+        {
           "id": "org-group-membership-001",
           "name": "organization-groups",
           "protocol": "openid-connect",

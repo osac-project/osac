@@ -26,20 +26,27 @@ controller:
   # OSAC-4187 (0.2, temporary): direct vendor-controller proxying; reworked in 0.3.
   vendorControllers: "local=none,vast=vast-csi-controller.osac-csi-backends.svc:50051,pure=pure-csi-controller.osac-csi-backends.svc:50051,ontap=trident-csi-controller.osac-csi-backends.svc:50051"
   # Connection to the OSAC fulfillment-service (runs on the hub / control plane cluster).
-  # The CSI driver runs on tenant clusters and needs credentials that the
-  # fulfillment-service recognises. AAP provisions a Secret with a bearer token
-  # onto each tenant cluster during cluster setup.
+  # The CSI driver runs on tenant clusters and authenticates to the
+  # fulfillment-service using OAuth2 client_credentials via Keycloak. The
+  # credentials Secret must be provisioned in the release namespace before
+  # the chart is installed.
   fulfillment:
     # gRPC endpoint of the fulfillment-service (e.g. "fulfillment-api.osac.svc:8000").
     # Leave empty to use in-memory stubs.
     endpoint: ""
-    # Secret containing a bearer token for fulfillment-service authentication.
-    # The Secret must exist in the release namespace before the chart is installed.
+    # OIDC issuer URL for token endpoint discovery
+    # (e.g. "https://keycloak.example.com/realms/myrealm").
+    issuerUrl: ""
+    # Secret containing OAuth2 client credentials for fulfillment-service
+    # authentication via the client_credentials grant. The Secret must exist
+    # in the release namespace before the chart is installed.
     credentials:
       # Name of the Kubernetes Secret (required when endpoint is set).
       secretName: ""
-      # Key inside the Secret that holds the bearer token.
-      key: "token"
+      # Key inside the Secret that holds the OAuth2 client ID.
+      clientIdKey: "client-id"
+      # Key inside the Secret that holds the OAuth2 client secret.
+      clientSecretKey: "client-secret"
     tls:
       # Skip server certificate verification (use for self-signed certs).
       insecureSkipVerify: false

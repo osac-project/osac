@@ -109,7 +109,7 @@ The controller sets these keys in volume context at creation time, consumed by t
 
 ### Stub Mode
 
-The real gRPC fulfillment client is not yet implemented. If `--fulfillment-endpoint` is not set, the driver uses an in-memory `VolumeStub` for development, which reports the `local` backend so attach/detach no-op against the chart's default `local=none` mapping. Setting `--fulfillment-endpoint` currently exits with an error.
+If `--fulfillment-endpoint` is not set, the driver uses an in-memory `VolumeStub` for development, which reports the `local` backend so attach/detach no-op against the chart's default `local=none` mapping. When `--fulfillment-endpoint` is set, the driver authenticates to the fulfillment-service using OAuth2 `client_credentials` via `--fulfillment-client-id`, `--fulfillment-client-secret-file`, and `--fulfillment-issuer-url` (all three required together). The issuer URL points at the Keycloak realm and the driver constructs the token endpoint from it.
 
 ## Configuration
 

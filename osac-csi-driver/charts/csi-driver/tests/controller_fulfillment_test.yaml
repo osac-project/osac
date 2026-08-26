@@ -1,0 +1,125 @@
+suite: controller fulfillment args
+templates:
+  - templates/controller-deployment.yaml
+tests:
+  - it: should not include fulfillment args when endpoint is empty
+    set:
+      controller.fulfillment.endpoint: ""
+    asserts:
+      - isKind:
+          of: Deployment
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: "--fulfillment-endpoint="
+        any: true
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: "--fulfillment-client-id=$(FULFILLMENT_CLIENT_ID)"
+        any: true
+
+  - it: should include fulfillment args when endpoint is set
+    set:
+      controller.fulfillment.endpoint: "fulfillment-api.osac.svc:8000"
+      controller.fulfillment.issuerUrl: "https://keycloak.example.com/realms/myrealm"
+      controller.fulfillment.credentials.secretName: "osac-csi-credentials"
+      controller.fulfillment.credentials.clientIdKey: "client-id"
+      controller.fulfillment.credentials.clientSecretKey: "client-secret"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--fulfillment-endpoint=fulfillment-api.osac.svc:8000"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--fulfillment-client-id=$(FULFILLMENT_CLIENT_ID)"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--fulfillment-client-secret-file=/etc/osac-csi/credentials/client-secret"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--fulfillment-issuer-url=https://keycloak.example.com/realms/myrealm"
+
+  - it: should not include fulfillment args when endpoint set without credentials
+    set:
+      controller.fulfillment.endpoint: "fulfillment-api.osac.svc:8000"
+      controller.fulfillment.credentials.secretName: ""
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: "--fulfillment-endpoint=fulfillment-api.osac.svc:8000"
+
+  - it: should include grpc-insecure flag when insecureSkipVerify is true
+    set:
+      controller.fulfillment.endpoint: "fulfillment-api.osac.svc:8000"
+      controller.fulfillment.issuerUrl: "https://keycloak.example.com/realms/myrealm"
+      controller.fulfillment.credentials.secretName: "osac-csi-credentials"
+      controller.fulfillment.tls.insecureSkipVerify: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--grpc-insecure"
+
+  - it: should not include grpc-insecure flag when insecureSkipVerify is false
+    set:
+      controller.fulfillment.endpoint: "fulfillment-api.osac.svc:8000"
+      controller.fulfillment.issuerUrl: "https://keycloak.example.com/realms/myrealm"
+      controller.fulfillment.credentials.secretName: "osac-csi-credentials"
+      controller.fulfillment.tls.insecureSkipVerify: false
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: "--grpc-insecure"
+
+  - it: should mount credentials volume when endpoint and secretName are set
+    set:
+      controller.fulfillment.endpoint: "fulfillment-api.osac.svc:8000"
+      controller.fulfillment.issuerUrl: "https://keycloak.example.com/realms/myrealm"
+      controller.fulfillment.credentials.secretName: "osac-csi-credentials"
+      controller.fulfillment.credentials.clientSecretKey: "client-secret"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: fulfillment-credentials
+            mountPath: /etc/osac-csi/credentials
+            readOnly: true
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: fulfillment-credentials
+            secret:
+              secretName: osac-csi-credentials
+              items:
+                - key: client-secret
+                  path: client-secret
+
+  - it: should not mount credentials volume when endpoint is empty
+    set:
+      controller.fulfillment.endpoint: ""
+      controller.fulfillment.credentials.secretName: "osac-csi-credentials"
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: fulfillment-credentials
+        any: true
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: fulfillment-credentials
+        any: true
+
+  - it: should set FULFILLMENT_CLIENT_ID env var from secret
+    set:
+      controller.fulfillment.endpoint: "fulfillment-api.osac.svc:8000"
+      controller.fulfillment.issuerUrl: "https://keycloak.example.com/realms/myrealm"
+      controller.fulfillment.credentials.secretName: "osac-csi-credentials"
+      controller.fulfillment.credentials.clientIdKey: "client-id"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: FULFILLMENT_CLIENT_ID
+            valueFrom:
+              secretKeyRef:
+                name: osac-csi-credentials
+                key: client-id

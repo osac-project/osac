@@ -30,11 +30,11 @@ spec:
             - "--cluster-id={{ .Values.controller.clusterID }}"
             {{- end }}
             {{- with .Values.controller.fulfillment }}
-            {{- if .endpoint }}
+            {{- if and .endpoint .credentials.secretName .issuerUrl }}
             - "--fulfillment-endpoint={{ .endpoint }}"
-            {{- if .credentials.secretName }}
-            - "--fulfillment-token-file=/etc/osac-csi/credentials/{{ .credentials.key }}"
-            {{- end }}
+            - "--fulfillment-client-id=$(FULFILLMENT_CLIENT_ID)"
+            - "--fulfillment-client-secret-file=/etc/osac-csi/credentials/client-secret"
+            - "--fulfillment-issuer-url={{ .issuerUrl }}"
             {{- if .tls.insecureSkipVerify }}
             - "--grpc-insecure"
             {{- end }}
@@ -47,10 +47,20 @@ spec:
             - "--vendor-controllers={{ .Values.controller.vendorControllers }}"
             {{- end }}
             - "--v=2"
+          {{- with .Values.controller.fulfillment }}
+          {{- if and .endpoint .credentials.secretName .issuerUrl }}
+          env:
+            - name: FULFILLMENT_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .credentials.secretName }}
+                  key: {{ .credentials.clientIdKey }}
+          {{- end }}
+          {{- end }}
           volumeMounts:
             - name: osac-socket-dir
               mountPath: /csi/osac
-            {{- if and .Values.controller.fulfillment.endpoint .Values.controller.fulfillment.credentials.secretName }}
+            {{- if and .Values.controller.fulfillment.endpoint .Values.controller.fulfillment.credentials.secretName .Values.controller.fulfillment.issuerUrl }}
             - name: fulfillment-credentials
               mountPath: /etc/osac-csi/credentials
               readOnly: true
@@ -98,11 +108,11 @@ spec:
       volumes:
         - name: osac-socket-dir
           emptyDir: {}
-        {{- if and .Values.controller.fulfillment.endpoint .Values.controller.fulfillment.credentials.secretName }}
+        {{- if and .Values.controller.fulfillment.endpoint .Values.controller.fulfillment.credentials.secretName .Values.controller.fulfillment.issuerUrl }}
         - name: fulfillment-credentials
           secret:
             secretName: {{ .Values.controller.fulfillment.credentials.secretName }}
             items:
-              - key: {{ .Values.controller.fulfillment.credentials.key }}
-                path: {{ .Values.controller.fulfillment.credentials.key }}
+              - key: {{ .Values.controller.fulfillment.credentials.clientSecretKey }}
+                path: client-secret
         {{- end }}

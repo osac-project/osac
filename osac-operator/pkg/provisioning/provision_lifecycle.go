@@ -40,6 +40,16 @@ import (
 type State struct {
 	Jobs                 *[]v1alpha1.JobStatus
 	DesiredConfigVersion string
+
+	// ResourceExists is an optional callback that checks whether the
+	// provisioned resource already exists (e.g. a HostedCluster, a VM, a
+	// Subnet backend). When non-nil and returning true while no tracked
+	// provision job exists (crash recovery: the operator crashed before
+	// statusFlush persisted the job record), the lifecycle inserts a
+	// synthetic adopted-orphan job instead of triggering a duplicate
+	// provision through AAP. Callers that do not need orphan adoption can
+	// leave this nil (the default).
+	ResourceExists func() bool
 }
 
 // JobsExtractor extracts a jobs array from a resource. Used by CheckAPIServerForNonTerminalProvisionJob
@@ -209,7 +219,7 @@ func RunProvisioningLifecycle(
 	checkAPIServer func() bool,
 	statusFlush func() error,
 ) (ctrl.Result, error) {
-	result, triggered, err := runLifecycleCore(ctx, provider, resource, provState, "", maxHistory, pollInterval, callbacks, checkAPIServer)
+	result, triggered, err := runLifecycleCore(ctx, provider, resource, provState, "", maxHistory, pollInterval, callbacks, checkAPIServer, provState.ResourceExists)
 	if err != nil {
 		return result, err
 	}
@@ -237,8 +247,30 @@ func runLifecycleCore(
 	pollInterval time.Duration,
 	callbacks *PollCallbacks,
 	checkAPIServer func() bool,
+	resourceExists func() bool,
 ) (ctrl.Result, bool, error) {
 	action, latestJob := evaluateActionForTarget(provState, target, checkAPIServer)
+
+	// Orphan adoption: when a Trigger action would fire for a resource that
+	// has no tracked provision job (latestJob is nil — the operator crashed
+	// before statusFlush persisted the job record) but the provisioned
+	// resource already exists, adopt the orphan by inserting a synthetic job
+	// instead of triggering a duplicate provision through AAP.
+	if action == Trigger && latestJob == nil && resourceExists != nil && resourceExists() {
+		log := ctrllog.FromContext(ctx)
+		log.Info("adopting orphaned resource — operator likely crashed before job record was flushed",
+			"target", target)
+		*provState.Jobs = AppendJob(*provState.Jobs, v1alpha1.JobStatus{
+			JobID:         "adopted-orphan",
+			Type:          v1alpha1.JobTypeProvision,
+			State:         v1alpha1.JobStateSucceeded,
+			Message:       "Adopted from orphaned resource (crash recovery)",
+			ConfigVersion: provState.DesiredConfigVersion,
+			Timestamp:     metav1.NewTime(time.Now().UTC()),
+			Target:        target,
+		}, maxHistory)
+		return ctrl.Result{}, true, nil // triggered=true so statusFlush persists the adoption record
+	}
 
 	triggered := false
 	trigger := func() (ctrl.Result, error) {
@@ -301,6 +333,14 @@ type JobTarget struct {
 	// non-"" target.
 	CheckAPIServer func() bool
 
+	// ResourceExists is an optional callback that checks whether the
+	// provisioned resource for this target already exists. When non-nil and
+	// returning true while no tracked provision job exists for this target,
+	// the lifecycle inserts a synthetic adopted-orphan job instead of
+	// triggering a duplicate provision. See State.ResourceExists for the
+	// single-target equivalent.
+	ResourceExists func() bool
+
 	// AbsorbsLegacyHistory marks this target as the successor to a resource's
 	// pre-multi-target job history. A resource that switches from
 	// RunProvisioningLifecycle (single, untargeted job history) to
@@ -352,7 +392,7 @@ func RunMultiTargetProvisioningLifecycle(
 	)
 
 	for _, t := range targets {
-		res, triggered, err := runLifecycleCore(ctx, t.Provider, resource, provState, t.Name, maxHistory, pollInterval, t.Callbacks, t.CheckAPIServer)
+		res, triggered, err := runLifecycleCore(ctx, t.Provider, resource, provState, t.Name, maxHistory, pollInterval, t.Callbacks, t.CheckAPIServer, t.ResourceExists)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("target %q: %w", t.Name, err))
 		}

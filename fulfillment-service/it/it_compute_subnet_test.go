@@ -93,6 +93,7 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 				}.Build(),
 				Spec: privatev1.StorageTierSpec_builder{
 					Description: "Test storage tier for subnet tests",
+					Protocol:    privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
 					Backends: []*privatev1.BackendAssociation{
 						privatev1.BackendAssociation_builder{
 							BackendId: storageBackendId,

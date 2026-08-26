@@ -37,6 +37,7 @@ import (
 
 	bmfov1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	privatev1 "github.com/osac-project/osac/osac-operator/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 )
 
@@ -325,6 +326,80 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 			updated := &osacv1alpha1.ExternalIPAttachment{}
 			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
 			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal(defaultExternalIPPoolImplementationStrategy))
+		})
+	})
+
+	Context("dispatcher path", func() {
+		It("uses the resolved fabric manager name from the default NetworkClass", func() {
+			fakeClient = buildClient(attachment, publicIP, pool, ci)
+			setupReconciler(fakeClient)
+			Expect(fakeClient.Create(testCtx, newFabricManagerConfigMap("fm-netris", testNetworkingNamespace, "netris"))).To(Succeed())
+			resolver, ncClient := wireExternalIPDispatcher(fakeClient, testNetworkingNamespace, []*privatev1.NetworkClass{{
+				Id: "nc-dispatch", FabricManager: ptr.To("netris"), IsDefault: ptr.To(true),
+			}})
+			reconciler.Resolver = resolver
+			reconciler.networkClassesClient = ncClient
+
+			_, err := reconcileOnce()
+			Expect(err).NotTo(HaveOccurred())
+			_, err = reconcileOnce()
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &osacv1alpha1.ExternalIPAttachment{}
+			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
+			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("netris"))
+		})
+
+		It("uses the k8s manager name when the NetworkClass has no fabricManager", func() {
+			fakeClient = buildClient(attachment, publicIP, pool, ci)
+			setupReconciler(fakeClient)
+			Expect(fakeClient.Create(testCtx, newK8sManagerConfigMap("km-k8s-only", testNetworkingNamespace, "k8s_only", "ipv4"))).To(Succeed())
+			resolver, ncClient := wireExternalIPDispatcher(fakeClient, testNetworkingNamespace, []*privatev1.NetworkClass{{
+				Id: "nc-k8s", K8SManager: ptr.To("k8s_only"), IsDefault: ptr.To(true),
+			}})
+			reconciler.Resolver = resolver
+			reconciler.networkClassesClient = ncClient
+
+			_, err := reconcileOnce()
+			Expect(err).NotTo(HaveOccurred())
+			_, err = reconcileOnce()
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &osacv1alpha1.ExternalIPAttachment{}
+			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
+			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("k8s_only"))
+		})
+
+		It("falls back to the parent pool spec when the NetworkClass has no managers", func() {
+			fakeClient = buildClient(attachment, publicIP, pool, ci)
+			setupReconciler(fakeClient)
+			resolver, ncClient := wireExternalIPDispatcher(fakeClient, testNetworkingNamespace, []*privatev1.NetworkClass{{
+				Id: "nc-empty", IsDefault: ptr.To(true),
+			}})
+			reconciler.Resolver = resolver
+			reconciler.networkClassesClient = ncClient
+
+			_, err := reconcileOnce()
+			Expect(err).NotTo(HaveOccurred())
+			_, err = reconcileOnce()
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &osacv1alpha1.ExternalIPAttachment{}
+			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
+			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("metallb-l2"))
+		})
+
+		It("returns a reconcile error when the NetworkClass references an unregistered manager", func() {
+			fakeClient = buildClient(attachment, publicIP, pool, ci)
+			setupReconciler(fakeClient)
+			resolver, ncClient := wireExternalIPDispatcher(fakeClient, testNetworkingNamespace, []*privatev1.NetworkClass{{
+				Id: "nc-broken", FabricManager: ptr.To("does-not-exist"), IsDefault: ptr.To(true),
+			}})
+			reconciler.Resolver = resolver
+			reconciler.networkClassesClient = ncClient
+
+			_, err := reconcileOnce()
+			Expect(err).To(HaveOccurred())
 		})
 	})
 

@@ -675,8 +675,8 @@ func setupNetworkingControllers(
 	}
 
 	// Build a shared dispatcher Resolver for controllers that support the two-manager
-	// model (VirtualNetwork, Subnet, SecurityGroup). Only available when a
-	// fulfillment-service connection and networking namespace are both configured;
+	// model (VirtualNetwork, Subnet, SecurityGroup, ExternalIP family). Only available
+	// when a fulfillment-service connection and networking namespace are both configured;
 	// nil otherwise, in which case those controllers always use the legacy
 	// implementation-strategy path.
 	var resolver *dispatcher.Resolver
@@ -723,23 +723,23 @@ func setupNetworkingControllers(
 	}
 	if err := setupExternalIPPoolControllers(
 		mgr, localMgr, grpcConn, networkingNamespace,
-		networkingProvider, statusPollInterval, maxJobHistory, targetCluster,
-		networkProvisioningEnabled,
+		networkingProvider, statusPollInterval, maxJobHistory, targetCluster, resolver,
+		networkClassesClient, networkProvisioningEnabled,
 	); err != nil {
 		return err
 	}
 	if err := setupExternalIPControllers(
 		mgr, localMgr, grpcConn, networkingNamespace,
-		networkingProvider, statusPollInterval, maxJobHistory, targetCluster,
-		networkProvisioningEnabled,
+		networkingProvider, statusPollInterval, maxJobHistory, targetCluster, resolver,
+		networkClassesClient, networkProvisioningEnabled,
 	); err != nil {
 		return err
 	}
 	if err := setupExternalIPAttachmentControllers(
 		mgr, localMgr, grpcConn,
 		networkingNamespace, computeInstanceNamespace, clusterOrderNamespace, bareMetalInstanceNamespace,
-		externalIPAttachmentProvider, statusPollInterval, maxJobHistory, targetCluster,
-		networkProvisioningEnabled,
+		externalIPAttachmentProvider, statusPollInterval, maxJobHistory, targetCluster, resolver,
+		networkClassesClient, networkProvisioningEnabled,
 	); err != nil {
 		return err
 	}
@@ -857,6 +857,7 @@ func setupExternalIPPoolControllers(
 	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn *grpc.ClientConn,
 	networkingNamespace string, provider provisioning.ProvisioningProvider,
 	statusPollInterval time.Duration, maxJobHistory int, targetCluster multicluster.ClusterName,
+	resolver *dispatcher.Resolver, networkClassesClient privatev1.NetworkClassesClient,
 	networkProvisioningEnabled bool,
 ) error {
 	if grpcConn != nil {
@@ -868,6 +869,7 @@ func setupExternalIPPoolControllers(
 	}
 	reconciler := controller.NewExternalIPPoolReconciler(
 		mgr, networkingNamespace, provider, statusPollInterval, maxJobHistory, targetCluster,
+		resolver, networkClassesClient,
 	)
 	reconciler.NetworkProvisioningEnabled = networkProvisioningEnabled
 	if err := reconciler.SetupWithManager(mgr); err != nil {
@@ -880,10 +882,12 @@ func setupExternalIPControllers(
 	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn *grpc.ClientConn,
 	networkingNamespace string, provider provisioning.ProvisioningProvider,
 	statusPollInterval time.Duration, maxJobHistory int, targetCluster multicluster.ClusterName,
+	resolver *dispatcher.Resolver, networkClassesClient privatev1.NetworkClassesClient,
 	networkProvisioningEnabled bool,
 ) error {
 	reconciler := controller.NewExternalIPReconciler(
 		mgr, networkingNamespace, provider, statusPollInterval, maxJobHistory, targetCluster,
+		resolver, networkClassesClient,
 	)
 	reconciler.NetworkProvisioningEnabled = networkProvisioningEnabled
 	if err := reconciler.SetupWithManager(mgr); err != nil {
@@ -904,12 +908,14 @@ func setupExternalIPAttachmentControllers(
 	networkingNamespace, computeInstanceNamespace, clusterOrderNamespace, baremetalInstanceNamespace string,
 	provider provisioning.ProvisioningProvider,
 	statusPollInterval time.Duration, maxJobHistory int, targetCluster multicluster.ClusterName,
+	resolver *dispatcher.Resolver, networkClassesClient privatev1.NetworkClassesClient,
 	networkProvisioningEnabled bool,
 ) error {
 	reconciler := controller.NewExternalIPAttachmentReconciler(
 		mgr, networkingNamespace, computeInstanceNamespace,
 		clusterOrderNamespace, baremetalInstanceNamespace,
 		provider, statusPollInterval, maxJobHistory, targetCluster,
+		resolver, networkClassesClient,
 	)
 	reconciler.NetworkProvisioningEnabled = networkProvisioningEnabled
 	if err := reconciler.SetupWithManager(mgr); err != nil {

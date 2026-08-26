@@ -37,6 +37,8 @@ import (
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	privatev1 "github.com/osac-project/osac/osac-operator/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/osac-operator/pkg/dispatcher"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 )
 
@@ -47,9 +49,10 @@ const (
 // ExternalIPReconciler reconciles ExternalIP CRs created by the fulfillment-service.
 //
 // Each ExternalIP belongs to a parent ExternalIPPool (referenced by UUID in spec.pool).
-// The controller adds a finalizer, inherits the implementation strategy from the
-// parent pool, then delegates to the shared provisioning lifecycle to trigger AAP
-// jobs for allocation and deallocation.
+// The controller adds a finalizer, resolves the implementation strategy from the
+// default NetworkClass via the dispatcher (falling back to the parent pool's spec
+// and defaultExternalIPPoolImplementationStrategy), then delegates to the shared
+// provisioning lifecycle to trigger AAP jobs for allocation and deallocation.
 //
 // Attach/detach is handled by the ExternalIPAttachment controller.
 //
@@ -64,6 +67,13 @@ type ExternalIPReconciler struct {
 	StatusPollInterval   time.Duration
 	MaxJobHistory        int
 	targetCluster        mc.ClusterName
+	// Resolver resolves a NetworkClass to its registered managers. Nil when the
+	// two-manager model isn't configured (no gRPC connection / networking namespace),
+	// in which case the controller always uses the legacy implementation-strategy path.
+	Resolver *dispatcher.Resolver
+	// networkClassesClient lists NetworkClasses to find the default/singleton used
+	// as the dispatcher input. Nil when gRPC is not configured.
+	networkClassesClient privatev1.NetworkClassesClient
 	// NetworkProvisioningEnabled controls whether the controller dispatches AAP
 	// provisioning jobs. When false, resources are set to Ready immediately
 	// with a placeholder address.
@@ -78,6 +88,8 @@ func NewExternalIPReconciler(
 	statusPollInterval time.Duration,
 	maxJobHistory int,
 	targetCluster mc.ClusterName,
+	resolver *dispatcher.Resolver,
+	networkClassesClient privatev1.NetworkClassesClient,
 ) *ExternalIPReconciler {
 	if mgr == nil {
 		panic("mgr must not be nil")
@@ -98,6 +110,8 @@ func NewExternalIPReconciler(
 		StatusPollInterval:   statusPollInterval,
 		MaxJobHistory:        maxJobHistory,
 		targetCluster:        targetCluster,
+		Resolver:             resolver,
+		networkClassesClient: networkClassesClient,
 	}
 }
 
@@ -213,11 +227,21 @@ func (r *ExternalIPReconciler) handleUpdate(ctx context.Context, externalIP *v1a
 	pool := &poolList.Items[0]
 	log.Info("resolved parent ExternalIPPool", "poolName", pool.Name, "poolUUID", externalIP.Spec.Pool)
 
-	// Inherit implementation strategy from the parent pool. Unlike ExternalIPPool (which
-	// reads strategy from its own spec), ExternalIP must look it up from the parent.
-	implementationStrategy := pool.Spec.ImplementationStrategy
-	if implementationStrategy == "" {
-		implementationStrategy = defaultExternalIPPoolImplementationStrategy
+	// Resolve implementation strategy from the default NetworkClass via the
+	// dispatcher. The parent pool's spec.implementationStrategy (then the
+	// metallb-l2 constant) is only used when the dispatcher path is not active.
+	legacyStrategy := pool.Spec.ImplementationStrategy
+	if legacyStrategy == "" {
+		legacyStrategy = defaultExternalIPPoolImplementationStrategy
+	}
+	networkClassID, err := lookupDefaultNetworkClassID(ctx, r.networkClassesClient)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	implementationStrategy, err := resolveImplementationStrategy(
+		ctx, r.Resolver, "ExternalIP", networkClassID, legacyStrategy)
+	if err != nil {
+		return ctrl.Result{}, err
 	}
 
 	if externalIP.Annotations == nil {

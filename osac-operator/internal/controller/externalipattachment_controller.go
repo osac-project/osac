@@ -38,6 +38,8 @@ import (
 
 	bmfov1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	privatev1 "github.com/osac-project/osac/osac-operator/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/osac-operator/pkg/dispatcher"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 )
 
@@ -67,6 +69,13 @@ type ExternalIPAttachmentReconciler struct {
 	StatusPollInterval         time.Duration
 	MaxJobHistory              int
 	targetCluster              mc.ClusterName
+	// Resolver resolves a NetworkClass to its registered managers. Nil when the
+	// two-manager model isn't configured (no gRPC connection / networking namespace),
+	// in which case the controller always uses the legacy implementation-strategy path.
+	Resolver *dispatcher.Resolver
+	// networkClassesClient lists NetworkClasses to find the default/singleton used
+	// as the dispatcher input. Nil when gRPC is not configured.
+	networkClassesClient privatev1.NetworkClassesClient
 	// NetworkProvisioningEnabled controls whether the controller dispatches AAP
 	// provisioning jobs. When false, resources are set to Ready immediately.
 	NetworkProvisioningEnabled bool
@@ -83,6 +92,8 @@ func NewExternalIPAttachmentReconciler(
 	statusPollInterval time.Duration,
 	maxJobHistory int,
 	targetCluster mc.ClusterName,
+	resolver *dispatcher.Resolver,
+	networkClassesClient privatev1.NetworkClassesClient,
 ) *ExternalIPAttachmentReconciler {
 	if mgr == nil {
 		panic("mgr must not be nil")
@@ -115,6 +126,8 @@ func NewExternalIPAttachmentReconciler(
 		StatusPollInterval:         statusPollInterval,
 		MaxJobHistory:              maxJobHistory,
 		targetCluster:              targetCluster,
+		Resolver:                   resolver,
+		networkClassesClient:       networkClassesClient,
 	}
 }
 
@@ -244,9 +257,18 @@ func (r *ExternalIPAttachmentReconciler) handleUpdate(ctx context.Context, attac
 	}
 	pool := &poolList.Items[0]
 
-	implementationStrategy := pool.Spec.ImplementationStrategy
-	if implementationStrategy == "" {
-		implementationStrategy = defaultExternalIPPoolImplementationStrategy
+	legacyStrategy := pool.Spec.ImplementationStrategy
+	if legacyStrategy == "" {
+		legacyStrategy = defaultExternalIPPoolImplementationStrategy
+	}
+	networkClassID, err := lookupDefaultNetworkClassID(ctx, r.networkClassesClient)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	implementationStrategy, err := resolveImplementationStrategy(
+		ctx, r.Resolver, "ExternalIPAttachment", networkClassID, legacyStrategy)
+	if err != nil {
+		return ctrl.Result{}, err
 	}
 
 	// BMI DNAT precondition: wait for primary IP to be discovered

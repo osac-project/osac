@@ -20,11 +20,15 @@ import (
 	"context"
 	"fmt"
 
+	. "github.com/onsi/gomega"
 	"google.golang.org/grpc"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	privatev1 "github.com/osac-project/osac/osac-operator/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/osac-operator/internal/dispatcheradapter"
+	"github.com/osac-project/osac/osac-operator/pkg/dispatcher"
 	"github.com/osac-project/osac/osac-operator/pkg/networkmanager"
 )
 
@@ -115,4 +119,18 @@ func newManagerConfigMap(name, namespace, managerName, labelKey, capabilities st
 			"capabilities": capabilities,
 		},
 	}
+}
+
+// wireExternalIPDispatcher builds a Resolver and NetworkClassesClient for ExternalIP-family
+// controller tests. ncs is the NetworkClass list returned by List/Get; callers must create
+// matching manager ConfigMaps on fakeClient in namespace before calling this.
+func wireExternalIPDispatcher(
+	fakeClient client.Client,
+	namespace string,
+	ncs []*privatev1.NetworkClass,
+) (*dispatcher.Resolver, privatev1.NetworkClassesClient) {
+	disc, err := networkmanager.NewDiscovery(fakeClient, namespace)
+	Expect(err).NotTo(HaveOccurred())
+	stub := newListingNetworkClassClient(ncs, &[]*privatev1.NetworkClass{})
+	return dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(stub), disc), stub
 }

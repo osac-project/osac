@@ -35,6 +35,8 @@ import (
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	privatev1 "github.com/osac-project/osac/osac-operator/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/osac-operator/pkg/dispatcher"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 )
 
@@ -46,8 +48,9 @@ const (
 // ExternalIPPoolReconciler reconciles ExternalIPPool CRs created by the fulfillment-service.
 //
 // A ExternalIPPool defines a range of external IP addresses (CIDRs) that can be allocated
-// as individual ExternalIP resources. Unlike ExternalIP (which inherits its strategy from
-// the parent pool), ExternalIPPool reads the implementation strategy from its own spec.
+// as individual ExternalIP resources. Implementation strategy is resolved from the default
+// NetworkClass via the dispatcher; pool spec.implementationStrategy is a backward-compat
+// fallback (along with defaultExternalIPPoolImplementationStrategy).
 //
 // The controller adds a finalizer, triggers AAP provisioning/deprovisioning jobs via
 // the shared provisioning lifecycle, and transitions phases:
@@ -62,6 +65,13 @@ type ExternalIPPoolReconciler struct {
 	StatusPollInterval   time.Duration
 	MaxJobHistory        int
 	targetCluster        mc.ClusterName
+	// Resolver resolves a NetworkClass to its registered managers. Nil when the
+	// two-manager model isn't configured (no gRPC connection / networking namespace),
+	// in which case the controller always uses the legacy implementation-strategy path.
+	Resolver *dispatcher.Resolver
+	// networkClassesClient lists NetworkClasses to find the default/singleton used
+	// as the dispatcher input. Nil when gRPC is not configured.
+	networkClassesClient privatev1.NetworkClassesClient
 	// NetworkProvisioningEnabled controls whether the controller dispatches AAP
 	// provisioning jobs. When false, resources are set to Ready immediately.
 	NetworkProvisioningEnabled bool
@@ -75,6 +85,8 @@ func NewExternalIPPoolReconciler(
 	statusPollInterval time.Duration,
 	maxJobHistory int,
 	targetCluster mc.ClusterName,
+	resolver *dispatcher.Resolver,
+	networkClassesClient privatev1.NetworkClassesClient,
 ) *ExternalIPPoolReconciler {
 	if mgr == nil {
 		panic("mgr must not be nil")
@@ -95,6 +107,8 @@ func NewExternalIPPoolReconciler(
 		StatusPollInterval:   statusPollInterval,
 		MaxJobHistory:        maxJobHistory,
 		targetCluster:        targetCluster,
+		Resolver:             resolver,
+		networkClassesClient: networkClassesClient,
 	}
 }
 
@@ -104,7 +118,7 @@ func NewExternalIPPoolReconciler(
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=externalips,verbs=list
 
 // Reconcile handles create/update/delete for a ExternalIPPool CR.
-// On create/update it ensures a finalizer, reads the implementation strategy from spec,
+// On create/update it ensures a finalizer, resolves the implementation strategy,
 // and runs provisioning. On delete it triggers deprovisioning and removes the finalizer.
 func (r *ExternalIPPoolReconciler) Reconcile(ctx context.Context, req mcreconcile.Request) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
@@ -172,10 +186,21 @@ func (r *ExternalIPPoolReconciler) handleUpdate(ctx context.Context, pool *v1alp
 		return ctrl.Result{}, nil
 	}
 
-	// Read implementation strategy from spec
-	implementationStrategy := pool.Spec.ImplementationStrategy
-	if implementationStrategy == "" {
-		implementationStrategy = defaultExternalIPPoolImplementationStrategy
+	// Resolve implementation strategy from the default NetworkClass via the
+	// dispatcher. pool spec.implementationStrategy (then the metallb-l2 constant)
+	// is only used when the dispatcher path is not active.
+	legacyStrategy := pool.Spec.ImplementationStrategy
+	if legacyStrategy == "" {
+		legacyStrategy = defaultExternalIPPoolImplementationStrategy
+	}
+	networkClassID, err := lookupDefaultNetworkClassID(ctx, r.networkClassesClient)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	implementationStrategy, err := resolveImplementationStrategy(
+		ctx, r.Resolver, "ExternalIPPool", networkClassID, legacyStrategy)
+	if err != nil {
+		return ctrl.Result{}, err
 	}
 
 	// Stamp the implementation-strategy annotation so AAP playbooks can read it

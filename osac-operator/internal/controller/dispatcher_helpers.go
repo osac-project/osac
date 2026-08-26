@@ -21,12 +21,23 @@ import (
 	"errors"
 	"fmt"
 
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	privatev1 "github.com/osac-project/osac/osac-operator/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/osac-operator/pkg/dispatcher"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 )
+
+// networkClassListPageSize is the page size used to list NetworkClasses. It matches
+// the fulfillment-service's maximum allowed limit, so listing every NetworkClass
+// takes the fewest possible round trips.
+//
+// A single unbounded List call is not sufficient: the server defaults an unset
+// limit to a fixed page size (currently 100) rather than "no limit", so without
+// paging, any NetworkClasses beyond the first page would be silently skipped.
+const networkClassListPageSize = 1000
 
 // resolveDispatchPlan resolves the full DispatchPlan for a resource kind.
 //
@@ -91,6 +102,79 @@ func resolveImplementationStrategy(
 		return legacyStrategy, nil
 	}
 	return target.Manager.Name, nil
+}
+
+// listAllNetworkClasses fetches every NetworkClass from the fulfillment service,
+// paging through results with offset/limit rather than issuing a single List call
+// with neither set (see networkClassListPageSize for why that would silently
+// truncate).
+func listAllNetworkClasses(
+	ctx context.Context, ncClient privatev1.NetworkClassesClient,
+) ([]*privatev1.NetworkClass, error) {
+	var items []*privatev1.NetworkClass
+	offset := int32(0)
+	for {
+		resp, err := ncClient.List(ctx, privatev1.NetworkClassesListRequest_builder{
+			Offset: ptr.To(offset),
+			Limit:  ptr.To(int32(networkClassListPageSize)),
+		}.Build())
+		if err != nil {
+			return nil, err
+		}
+
+		items = append(items, resp.GetItems()...)
+		offset += resp.GetSize()
+
+		// resp.GetSize() == 0 guards against an infinite loop if the server ever
+		// reports a total larger than what it actually returns.
+		if resp.GetSize() == 0 || offset >= resp.GetTotal() {
+			return items, nil
+		}
+	}
+}
+
+// lookupDefaultNetworkClassID returns the ID of the default NetworkClass for this
+// deployment, used by ExternalIP-family controllers that have no parent VirtualNetwork
+// to inherit a NetworkClass from.
+//
+// Returns ("", nil) when the dispatcher path is not available (nil client, no live
+// NetworkClass, or more than one live NetworkClass with none marked default) so the
+// caller falls through to its legacy implementation-strategy. List errors are returned
+// as real reconcile errors.
+//
+// Preference: a non-deleted NetworkClass with is_default=true, else the single live
+// NetworkClass if exactly one exists (one-per-deployment).
+func lookupDefaultNetworkClassID(
+	ctx context.Context, ncClient privatev1.NetworkClassesClient,
+) (string, error) {
+	if ncClient == nil {
+		return "", nil
+	}
+
+	items, err := listAllNetworkClasses(ctx, ncClient)
+	if err != nil {
+		return "", fmt.Errorf("listing NetworkClasses: %w", err)
+	}
+
+	var live, defaults []*privatev1.NetworkClass
+	for _, nc := range items {
+		if nc.GetMetadata().HasDeletionTimestamp() {
+			continue
+		}
+		live = append(live, nc)
+		if nc.GetIsDefault() {
+			defaults = append(defaults, nc)
+		}
+	}
+
+	switch {
+	case len(defaults) >= 1:
+		return defaults[0].GetId(), nil
+	case len(live) == 1:
+		return live[0].GetId(), nil
+	default:
+		return "", nil
+	}
 }
 
 // dispatchTargetProvider decorates a shared provisioning.ProvisioningProvider so that

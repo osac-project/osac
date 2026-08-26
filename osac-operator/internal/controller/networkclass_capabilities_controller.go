@@ -25,7 +25,6 @@ import (
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
@@ -107,15 +106,6 @@ func (r *NetworkClassCapabilitiesReconciler) Reconcile(ctx context.Context, _ ct
 	return ctrl.Result{}, r.resyncAll(ctx)
 }
 
-// networkClassListPageSize is the page size used to list NetworkClasses for a full
-// capabilities resync. It matches the fulfillment-service's maximum allowed limit, so
-// listing every NetworkClass takes the fewest possible round trips.
-//
-// A single unbounded List call is not sufficient here: the server defaults an unset
-// limit to a fixed page size (currently 100) rather than "no limit", so without paging,
-// any NetworkClasses beyond the first page would be silently skipped on every resync.
-const networkClassListPageSize = 1000
-
 // resyncAll recomputes capabilities for every NetworkClass, waiting for any resync
 // already in progress (e.g. a concurrent periodic tick) to finish first. Used by the
 // ConfigMap-triggered Reconcile path, where a ConfigMap change must eventually be
@@ -133,7 +123,7 @@ func (r *NetworkClassCapabilitiesReconciler) resyncAll(ctx context.Context) erro
 func (r *NetworkClassCapabilitiesReconciler) resyncAllLocked(ctx context.Context) error {
 	log := ctrllog.FromContext(ctx)
 
-	items, err := r.listAllNetworkClasses(ctx)
+	items, err := listAllNetworkClasses(ctx, r.networkClassesClient)
 	if err != nil {
 		return fmt.Errorf("listing network classes: %w", err)
 	}
@@ -148,30 +138,9 @@ func (r *NetworkClassCapabilitiesReconciler) resyncAllLocked(ctx context.Context
 	return errors.Join(errs...)
 }
 
-// listAllNetworkClasses fetches every NetworkClass from the fulfillment service,
-// paging through results with offset/limit rather than issuing a single List call with
-// neither set (see networkClassListPageSize for why that would silently truncate).
+// listAllNetworkClasses fetches every NetworkClass from the fulfillment service.
 func (r *NetworkClassCapabilitiesReconciler) listAllNetworkClasses(ctx context.Context) ([]*privatev1.NetworkClass, error) {
-	var items []*privatev1.NetworkClass
-	offset := int32(0)
-	for {
-		resp, err := r.networkClassesClient.List(ctx, privatev1.NetworkClassesListRequest_builder{
-			Offset: ptr.To(offset),
-			Limit:  ptr.To(int32(networkClassListPageSize)),
-		}.Build())
-		if err != nil {
-			return nil, err
-		}
-
-		items = append(items, resp.GetItems()...)
-		offset += resp.GetSize()
-
-		// resp.GetSize() == 0 guards against an infinite loop if the server ever
-		// reports a total larger than what it actually returns.
-		if resp.GetSize() == 0 || offset >= resp.GetTotal() {
-			return items, nil
-		}
-	}
+	return listAllNetworkClasses(ctx, r.networkClassesClient)
 }
 
 // syncOne resolves and applies the capability intersection for a single NetworkClass,

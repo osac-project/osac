@@ -15,14 +15,25 @@ syntax = "proto3";
 
 package osac.private.v1;
 
+import "cleanapi/cleanapi.proto";
 import "google/api/annotations.proto";
 import "google/protobuf/field_mask.proto";
 import "osac/private/v1/compute_instance_catalog_item_type.proto";
 
+option (cleanapi.file).package = "osac.public.v1";
+option (cleanapi.file).http_route_prefix_map = "private:fulfillment";
+
 message ComputeInstanceCatalogItemsListRequest {
+  // Index of the first result. If not specified the default value will be zero.
   optional int32 offset = 1;
+
+  // Maximum number of results to be returned by the server.
   optional int32 limit = 2;
+
+  // Filter criteria using CEL expressions.
   optional string filter = 3;
+
+  // Order criteria, similar to SQL ORDER BY syntax.
   optional string order = 4;
 }
 
@@ -51,12 +62,6 @@ message ComputeInstanceCatalogItemsCreateResponse {
   repeated string warnings = 2;
 }
 
-message ComputeInstanceCatalogItemsDeleteRequest {
-  string id = 1;
-}
-
-message ComputeInstanceCatalogItemsDeleteResponse {}
-
 message ComputeInstanceCatalogItemsUpdateRequest {
   ComputeInstanceCatalogItem object = 1;
   google.protobuf.FieldMask update_mask = 2;
@@ -74,22 +79,36 @@ message ComputeInstanceCatalogItemsUpdateResponse {
   repeated string warnings = 2;
 }
 
-message ComputeInstanceCatalogItemsSignalRequest {
+message ComputeInstanceCatalogItemsDeleteRequest {
   string id = 1;
 }
 
-message ComputeInstanceCatalogItemsSignalResponse {}
+message ComputeInstanceCatalogItemsDeleteResponse {}
+
+message ComputeInstanceCatalogItemsSignalRequest {
+  option (cleanapi.message).private = true;
+  string id = 1;
+}
+
+message ComputeInstanceCatalogItemsSignalResponse {
+  option (cleanapi.message).private = true;
+}
 
 service ComputeInstanceCatalogItems {
+  // Retrieves the list of compute instance catalog items.
   rpc List(ComputeInstanceCatalogItemsListRequest) returns (ComputeInstanceCatalogItemsListResponse) {
     option (google.api.http) = {get: "/api/private/v1/compute_instance_catalog_items"};
   }
+
+  // Retrieves the details of one specific compute instance catalog item.
   rpc Get(ComputeInstanceCatalogItemsGetRequest) returns (ComputeInstanceCatalogItemsGetResponse) {
     option (google.api.http) = {
       get: "/api/private/v1/compute_instance_catalog_items/{id}"
       response_body: "object"
     };
   }
+
+  // Creates a new compute instance catalog item.
   rpc Create(ComputeInstanceCatalogItemsCreateRequest) returns (ComputeInstanceCatalogItemsCreateResponse) {
     option (google.api.http) = {
       post: "/api/private/v1/compute_instance_catalog_items"
@@ -97,9 +116,8 @@ service ComputeInstanceCatalogItems {
       response_body: "object"
     };
   }
-  rpc Delete(ComputeInstanceCatalogItemsDeleteRequest) returns (ComputeInstanceCatalogItemsDeleteResponse) {
-    option (google.api.http) = {delete: "/api/private/v1/compute_instance_catalog_items/{id}"};
-  }
+
+  // Updates an existing compute instance catalog item.
   rpc Update(ComputeInstanceCatalogItemsUpdateRequest) returns (ComputeInstanceCatalogItemsUpdateResponse) {
     option (google.api.http) = {
       patch: "/api/private/v1/compute_instance_catalog_items/{object.id}"
@@ -108,6 +126,13 @@ service ComputeInstanceCatalogItems {
     };
   }
 
+  // Deletes a compute instance catalog item.
+  rpc Delete(ComputeInstanceCatalogItemsDeleteRequest) returns (ComputeInstanceCatalogItemsDeleteResponse) {
+    option (google.api.http) = {delete: "/api/private/v1/compute_instance_catalog_items/{id}"};
+  }
+
   // Indicates that something changed in the object or the system that may require reconciling the object.
-  rpc Signal(ComputeInstanceCatalogItemsSignalRequest) returns (ComputeInstanceCatalogItemsSignalResponse) {}
+  rpc Signal(ComputeInstanceCatalogItemsSignalRequest) returns (ComputeInstanceCatalogItemsSignalResponse) {
+    option (cleanapi.method).private = true;
+  }
 }

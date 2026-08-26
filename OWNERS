@@ -36,6 +36,7 @@ filters:
     - ItzikEzra-rh
     - carbonin
     - maorfr
+    - tchughesiv
     reviewers:
     - jhernand
     - adriengentil
@@ -72,3 +73,4 @@ filters:
     - ItzikEzra-rh
     - carbonin
     - maorfr
+    - tchughesiv

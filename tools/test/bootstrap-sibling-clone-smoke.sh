@@ -117,7 +117,7 @@ assert_expected_clones() {
     || fail "clone log missing osac-test-infra: $(cat "$log")"
   grep -q 'osac-project/docs' "$log" || fail "clone log missing osac-project/docs: $(cat "$log")"
   grep -q "${root}/osac-docs" "$log" || fail "docs repo dest must be osac-docs: $(cat "$log")"
-  if grep -E 'osac-project/docs .*/docs$' "$log" | grep -vq osac-docs; then
+  if grep -F "osac-project/docs.git ${root}/docs" "$log"; then
     fail "docs repo cloned to docs/ rather than osac-docs/: $(cat "$log")"
   fi
 }
@@ -181,6 +181,10 @@ test_skips_unrelated_existing_dir() {
   echo "$out" | grep -qi 'skip' \
     || fail "expected skip warning for unrelated osac-ux/: $out"
   [[ ! -d "${root}/osac-ux/.git" ]] || fail "skip path must not init a git repo"
+  [[ -d "${root}/osac-ui/.git" ]] \
+    || fail "skip of osac-ux must still clone later siblings (osac-ui)"
+  [[ -d "${root}/osac-docs/.git" ]] \
+    || fail "skip of osac-ux must still clone later siblings (osac-docs)"
   pass "skips an existing dir that is not the expected clone"
 }
 

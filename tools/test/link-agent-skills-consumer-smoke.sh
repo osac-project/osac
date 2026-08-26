@@ -147,14 +147,16 @@ run_wrapper() {
 seed_shared_canonicals() {
   local vendor="$1"
   local fanout_root rel
-  fanout_root=$(cd "$(dirname "$VENDOR_FANOUT")/.." && pwd)
-  for rel in .claude/rules .claude/agents .claude/hooks \
-    .design/context .design/templates .prd/templates; do
-    if [[ -d "${fanout_root}/${rel}" ]]; then
-      mkdir -p "${vendor}/${rel}"
-      cp -R "${fanout_root}/${rel}/." "${vendor}/${rel}/"
-    fi
-  done
+  if [[ "$USING_STUB" != true ]]; then
+    fanout_root=$(cd "$(dirname "$VENDOR_FANOUT")/.." && pwd)
+    for rel in .claude/rules .claude/agents .claude/hooks \
+      .design/context .design/templates .prd/templates; do
+      if [[ -d "${fanout_root}/${rel}" ]]; then
+        mkdir -p "${vendor}/${rel}"
+        cp -R "${fanout_root}/${rel}/." "${vendor}/${rel}/"
+      fi
+    done
+  fi
   mkdir -p "${vendor}/.claude/rules"
   if [[ ! -f "${vendor}/.claude/rules/architecture-patterns.md" ]]; then
     echo "# stub architecture-patterns" >"${vendor}/.claude/rules/architecture-patterns.md"

@@ -457,6 +457,11 @@ func (t *task) delete(ctx context.Context) error {
 	}
 	t.clearBreakGlassSecretRef()
 
+	// Delete the auto-created unnamed root project so it does not block tenant deletion.
+	if err := t.deleteRootProject(ctx); err != nil {
+		return err
+	}
+
 	// Block until all projects are deleted by the administrator.
 	remaining, err := t.countRemainingProjects(ctx)
 	if err != nil {
@@ -566,6 +571,42 @@ func (t *task) countRemainingProjects(ctx context.Context) (int32, error) {
 		return 0, err
 	}
 	return listResp.GetTotal(), nil
+}
+
+// deleteRootProject deletes the auto-created unnamed root project (empty name) that is
+// automatically created for each tenant. Without this, the root project blocks tenant
+// deletion because countRemainingProjects never reaches zero.
+func (t *task) deleteRootProject(ctx context.Context) error {
+	tenantName := t.tenant.GetMetadata().GetName()
+	listFilter := fmt.Sprintf(
+		"this.metadata.name == '' && this.metadata.tenant == %q",
+		tenantName,
+	)
+	listResp, err := t.r.projectsClient.List(ctx, privatev1.ProjectsListRequest_builder{
+		Filter: new(listFilter),
+	}.Build())
+	if err != nil {
+		return fmt.Errorf("failed to list root project: %w", err)
+	}
+	for _, project := range listResp.GetItems() {
+		if project.GetMetadata().HasDeletionTimestamp() {
+			continue
+		}
+		_, err = t.r.projectsClient.Delete(ctx, privatev1.ProjectsDeleteRequest_builder{
+			Id: project.GetId(),
+		}.Build())
+		if err != nil {
+			if grpcstatus.Code(err) == grpccodes.NotFound {
+				continue
+			}
+			return fmt.Errorf("failed to delete root project: %w", err)
+		}
+		t.r.logger.DebugContext(ctx, "Deleted root project for tenant",
+			slog.String("tenant_id", t.tenant.GetId()),
+			slog.String("project_id", project.GetId()),
+		)
+	}
+	return nil
 }
 
 var tenantConditionTypes = []privatev1.TenantConditionType{

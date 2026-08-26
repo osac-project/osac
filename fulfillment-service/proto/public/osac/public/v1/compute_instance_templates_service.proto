@@ -142,7 +142,7 @@ service ComputeInstanceTemplates {
     };
   }
 
-  // Delete a compute instance template.
+  // Deletes a compute instance template.
   rpc Delete(ComputeInstanceTemplatesDeleteRequest) returns (ComputeInstanceTemplatesDeleteResponse) {
     option (google.api.http) = {delete: "/api/fulfillment/v1/compute_instance_templates/{id}"};
   }

@@ -90,6 +90,11 @@ sibling checkouts listed under [External Repos](#external-repos). Bump
 `metadata.version` in any skill you change (see [Critical Rules](#critical-rules)).
 PRD/design ingest reads `.design/context/` (fan-out from osac-ai-skills).
 
+Recommended skill sequence (Feature → PRD → Design → Jira sync → Implement →
+E2E) lives in osac-ai-skills, not in this repo. After bootstrap, see
+`.osac-ai-skills/README.md` (section **Recommended Skill Sequence**), or the
+[upstream README](https://github.com/osac-project/osac-ai-skills#recommended-skill-sequence).
+
 ## Git Workflow
 
 Fork-based push rules, branch naming, DCO sign-off, AI attribution, and PR

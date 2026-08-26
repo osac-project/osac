@@ -39,6 +39,20 @@ cross-module changes can be built and tested locally without publishing intermed
 versions. Go tooling run from the repo root will automatically use the workspace; no
 extra flags are needed.
 
+## AI-assisted development
+
+After clone, run `tools/bootstrap.sh` from this repo root. It vendors
+[osac-ai-skills](https://github.com/osac-project/osac-ai-skills) and
+[flightctl/ai-workflows](https://github.com/flightctl/ai-workflows), clones
+skill-relative sibling repos (see `AGENTS.md`), and links Claude Code / Cursor /
+Gemini CLI skill discovery. Do not run it from an `osac/` nested inside
+`osac-workspace`.
+
+The Feature → PRD → Design → Implement sequence is documented in
+[osac-ai-skills](https://github.com/osac-project/osac-ai-skills#recommended-skill-sequence)
+(local after bootstrap: `.osac-ai-skills/README.md`). See [`AGENTS.md`](AGENTS.md)
+for bootstrap details and component conventions.
+
 > [!WARNING]
 > Be mindful of the content you commit to this repository. Do not commit any
 > material containing Red Hat confidential content, including information about

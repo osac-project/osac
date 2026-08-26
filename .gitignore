@@ -5,6 +5,14 @@ skills/
 # this path and drop the ignore.
 .osac-ai-skills/
 
+# Skill-relative sibling checkouts (tools/bootstrap.sh). osac-docs is
+# osac-project/docs — do not ignore docs/ (in-tree ARCHITECTURE/CONVENTIONS).
+enhancement-proposals/
+osac-ux/
+osac-ui/
+osac-test-infra/
+osac-docs/
+
 # Harness output and osac-ai-skills fan-out. Keep repo-local Claude settings
 # and hook *scripts* tracked; fan-out only adds .claude/hooks/README.md.
 .claude/*

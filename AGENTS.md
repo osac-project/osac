@@ -39,14 +39,39 @@ covers broader project-level architecture guides and diagrams).
 
 ## External Repos
 
-Clone as siblings for cross-repo workflows:
+`tools/bootstrap.sh` clones these into gitignored directories at this repo
+root (skill-relative paths when this checkout is the project root):
 
-| Repo | Description |
-|------|-------------|
-| [osac-test-infra](https://github.com/osac-project/osac-test-infra) | E2E pytest tests against the fulfillment-service gRPC API |
-| [osac-ui](https://github.com/osac-project/osac-ui) | Web console (React, PatternFly 6) |
-| [enhancement-proposals](https://github.com/osac-project/enhancement-proposals) | PRDs and design documents (two-stage EP flow) |
-| [docs](https://github.com/osac-project/docs) | Architecture docs and guides |
+| Repo | Local path | Description |
+|------|------------|-------------|
+| [osac-test-infra](https://github.com/osac-project/osac-test-infra) | `osac-test-infra/` | E2E pytest tests against the fulfillment-service gRPC API |
+| [osac-ui](https://github.com/osac-project/osac-ui) | `osac-ui/` | Web console (React, PatternFly 6) |
+| [osac-ux](https://github.com/osac-project/osac-ux) | `osac-ux/` | Read-only UI reference (`@temp-api` types) |
+| [enhancement-proposals](https://github.com/osac-project/enhancement-proposals) | `enhancement-proposals/` | PRDs and design documents (two-stage EP flow) |
+| [docs](https://github.com/osac-project/docs) | `osac-docs/` | Architecture guides and personas |
+
+In-tree [`docs/`](docs/) (`ARCHITECTURE.md`, `CONVENTIONS.md`) is **not** that
+repo. Skills read `osac-docs/personas.md`.
+
+## UI Reference (osac-ux)
+
+`osac-ux/` is cloned read-only from [osac-project/osac-ux](https://github.com/osac-project/osac-ux).
+No PRs against it from backend workflow sessions.
+
+### What to read during /design:research and /implement:ingest
+
+| Path | Purpose |
+|------|---------|
+| `osac-ux/libs/ui-components/src/pages/tenant/` | Tenant screens — form fields, list columns, actions |
+| `osac-ux/libs/ui-components/src/pages/provider/` | Provider admin screens |
+| `osac-ux/libs/ui-components/src/pages/admin/` | Tenant admin screens |
+| `osac-ux/libs/ui-components/src/api/v1/` | @temp-api types — use as primary proto field input |
+| `osac-ux/apps/e2e/cypress/e2e/flows/` | User journeys for Cypress scenario planning |
+
+For **any EP**, if `osac-ux/libs/ui-components/src/api/v1/<resource>.ts` exists,
+use those TypeScript fields as proto names (camelCase → snake_case) and include
+a `## UX Alignment` mapping table. `cd osac-ux && node scripts/gen-api-diff.mjs`
+surfaces API gaps against the current UI.
 
 ## AI-Assisted Development
 
@@ -60,7 +85,8 @@ aborts (override: `OSAC_ALLOW_NESTED_BOOTSTRAP=1`). Use the workspace
 `./bootstrap.sh` instead.
 
 Edit OSAC-native skills only in `osac-project/osac-ai-skills`. Local `skills/`
-and `.osac-ai-skills/` are bootstrap-managed and gitignored. Bump
+and `.osac-ai-skills/` are bootstrap-managed and gitignored, as are the
+sibling checkouts listed under [External Repos](#external-repos). Bump
 `metadata.version` in any skill you change (see [Critical Rules](#critical-rules)).
 PRD/design ingest reads `.design/context/` (fan-out from osac-ai-skills).
 
@@ -106,8 +132,9 @@ osac/                              Mono-repo: fulfillment-service + osac-operato
   osac-metering                    Metering pipeline for usage events and Kafka publishing
 osac-test-infra                    E2E test playbooks against fulfillment-service gRPC API
 osac-ui                            Web console (React, PatternFly 6)
+osac-ux                            Read-only UI reference (@temp-api)
 enhancement-proposals              Design documents and RFCs
-docs                               Architecture docs and guides
+osac-docs                          Architecture docs and guides (osac-project/docs)
 ```
 
 ### Resource Hierarchy

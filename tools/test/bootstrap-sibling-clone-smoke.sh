@@ -50,6 +50,9 @@ if [[ " \$* " == *" clone "* ]]; then
   "\$REAL" -C "\$dest" remote add origin "\$url"
   exit 0
 fi
+if [[ " \$* " == *" fetch "* ]] || [[ " \$* " == *" rebase "* ]]; then
+  exit 0
+fi
 exec "\$REAL" "\$@"
 EOF
   chmod +x "$dest"

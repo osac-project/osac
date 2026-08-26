@@ -10,6 +10,9 @@
 #      (umbrella symlinks must exist before ai-workflows install.sh, which
 #      writes workflow links into those paths)
 #   4. Installs workflows (bugfix, implement, prd, design, e2e)
+#   5. Clones skill-relative sibling repos under this checkout
+#      (enhancement-proposals, osac-ux, osac-ui, osac-test-infra,
+#      osac-docs). osac-docs is osac-project/docs — not docs/.
 #
 # Re-run anytime to update to latest main.
 set -euo pipefail
@@ -120,6 +123,52 @@ OSAC_AI_SKILLS_VENDOR_DIR="${OSAC_AI_SKILLS_DIR}" "${PROJECT_ROOT}/tools/link-ag
 echo "Installing ai-workflows skills..."
 AI_WORKFLOWS="bugfix,implement,prd,design,e2e"
 "${AI_WORKFLOWS_DIR}/install.sh" all --project "${PROJECT_ROOT}" --workflows "${AI_WORKFLOWS}"
+
+# Skill-relative sibling checkouts (gitignored). Local dir name follows the
+# GitHub repo except docs → osac-docs (docs/ is in-tree conventions).
+SIBLINGS=(
+  "enhancement-proposals"
+  "osac-ux"
+  "osac-ui"
+  "osac-test-infra"
+  "docs:osac-docs"
+)
+
+is_expected_sibling() {
+  local dir="$1" repo="$2"
+  local expected_suffix="osac-project/${repo}"
+  local remote url
+  for remote in $(git -C "$dir" remote 2>/dev/null); do
+    url=$(git -C "$dir" remote get-url "$remote" 2>/dev/null) || continue
+    if [[ "${url%.git}" == *"$expected_suffix" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+ensure_sibling() {
+  local repo="$1" dir="$2"
+  local dest="${PROJECT_ROOT}/${dir}"
+  if [[ -d "${dest}" ]] && is_expected_sibling "${dest}" "${repo}"; then
+    echo "Updating ${dir}..."
+    update_git_repo "${dest}" "${dir}"
+  elif [[ -d "${dest}" ]]; then
+    echo "Skipping ${dir} — directory exists but is not a clone of osac-project/${repo}."
+  else
+    echo "Cloning ${repo} into ${dir}..."
+    if ! git clone "https://github.com/osac-project/${repo}.git" "${dest}"; then
+      echo "  Clone failed for ${repo}. Skipping."
+    fi
+  fi
+}
+
+echo "Cloning sibling repos..."
+for entry in "${SIBLINGS[@]}"; do
+  repo="${entry%%:*}"
+  dir="${entry#*:}"
+  ensure_sibling "${repo}" "${dir}"
+done
 
 echo ""
 echo "AI workflows and OSAC skills installed."

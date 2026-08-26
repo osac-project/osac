@@ -16,6 +16,14 @@ name: konflux-auto-label
 # gate and never execute at all -- mirrors osac-test-infra's
 # slash-command-handler.yml "Handle ok-to-test" step to clear that too.
 #
+# Also prefixes the PR title with NO-ISSUE: when it has no Jira-key/
+# NO-ISSUE prefix already, matching this repo's own commit-message
+# convention for ticket-less changes. Note: this is cosmetic/consistency
+# only -- the jira/valid-reference *label* above is what actually
+# satisfies label-gate.yml's check-labels job; confirmed live that a
+# correctly-labeled Konflux PR's check-labels passes regardless of title
+# text, since that job only checks label presence, not title content.
+#
 # Scoped tightly to this one specific, trusted bot login -- not "any bot"
 # or "any dependency PR" -- per direct instruction; broadening this scope
 # needs a deliberate follow-up decision, not an accidental side effect of
@@ -59,6 +67,27 @@ jobs:
           gh pr edit "${pr}" --repo "${{ github.repository }}" \
             --add-label lgtm --add-label approved \
             --add-label jira/valid-reference --add-label ok-to-test
+
+      - name: Prefix title with NO-ISSUE when it has no Jira reference
+        env:
+          GH_TOKEN: ${{ secrets.MERGE_QUEUE_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Konflux titles ("Update dependency X to vY.Y.Y") never contain a
+          # Jira key -- this repo's NO-ISSUE: convention (already used in
+          # commit messages here) is the closest match. Re-fetches the live
+          # title rather than trusting the event payload, and checks for an
+          # existing NO-ISSUE/Jira-key prefix first, so repeated synchronize
+          # events on the same PR don't stack prefixes.
+          pr=${{ github.event.pull_request.number }}
+          title=$(gh pr view "${pr}" --repo "${{ github.repository }}" --json title --jq '.title')
+          if [[ "${title}" =~ ^(NO-ISSUE|[A-Z][A-Z0-9]*-[0-9]+): ]]; then
+            echo "Title already has a NO-ISSUE/Jira-key prefix, leaving as-is: ${title}"
+          else
+            new_title="NO-ISSUE: ${title}"
+            echo "Prefixing title: ${new_title}"
+            gh pr edit "${pr}" --repo "${{ github.repository }}" --title "${new_title}"
+          fi
 
       - name: Approve pending action_required runs for this PR's head SHA
         env:

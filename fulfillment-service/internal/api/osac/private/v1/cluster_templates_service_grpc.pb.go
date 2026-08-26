@@ -44,10 +44,15 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type ClusterTemplatesClient interface {
+	// Retrieves the list of cluster templates.
 	List(ctx context.Context, in *ClusterTemplatesListRequest, opts ...grpc.CallOption) (*ClusterTemplatesListResponse, error)
+	// Retrieves the details of one specific cluster template.
 	Get(ctx context.Context, in *ClusterTemplatesGetRequest, opts ...grpc.CallOption) (*ClusterTemplatesGetResponse, error)
+	// Creates a new cluster template.
 	Create(ctx context.Context, in *ClusterTemplatesCreateRequest, opts ...grpc.CallOption) (*ClusterTemplatesCreateResponse, error)
+	// Deletes a cluster template.
 	Delete(ctx context.Context, in *ClusterTemplatesDeleteRequest, opts ...grpc.CallOption) (*ClusterTemplatesDeleteResponse, error)
+	// Updates an existing cluster template.
 	Update(ctx context.Context, in *ClusterTemplatesUpdateRequest, opts ...grpc.CallOption) (*ClusterTemplatesUpdateResponse, error)
 	// Indicates that something changed in the object or the system that may require reconciling the object.
 	Signal(ctx context.Context, in *ClusterTemplatesSignalRequest, opts ...grpc.CallOption) (*ClusterTemplatesSignalResponse, error)
@@ -125,10 +130,15 @@ func (c *clusterTemplatesClient) Signal(ctx context.Context, in *ClusterTemplate
 // All implementations must embed UnimplementedClusterTemplatesServer
 // for forward compatibility.
 type ClusterTemplatesServer interface {
+	// Retrieves the list of cluster templates.
 	List(context.Context, *ClusterTemplatesListRequest) (*ClusterTemplatesListResponse, error)
+	// Retrieves the details of one specific cluster template.
 	Get(context.Context, *ClusterTemplatesGetRequest) (*ClusterTemplatesGetResponse, error)
+	// Creates a new cluster template.
 	Create(context.Context, *ClusterTemplatesCreateRequest) (*ClusterTemplatesCreateResponse, error)
+	// Deletes a cluster template.
 	Delete(context.Context, *ClusterTemplatesDeleteRequest) (*ClusterTemplatesDeleteResponse, error)
+	// Updates an existing cluster template.
 	Update(context.Context, *ClusterTemplatesUpdateRequest) (*ClusterTemplatesUpdateResponse, error)
 	// Indicates that something changed in the object or the system that may require reconciling the object.
 	Signal(context.Context, *ClusterTemplatesSignalRequest) (*ClusterTemplatesSignalResponse, error)

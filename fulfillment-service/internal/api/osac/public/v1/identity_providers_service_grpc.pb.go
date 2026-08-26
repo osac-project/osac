@@ -53,7 +53,7 @@ type IdentityProvidersClient interface {
 	// Lists identity providers assigned to a tenant.
 	// Use filter with metadata.tenant to scope to a specific tenant.
 	List(ctx context.Context, in *IdentityProvidersListRequest, opts ...grpc.CallOption) (*IdentityProvidersListResponse, error)
-	// Retrieves an identity provider by ID.
+	// Retrieves an identity provider by name.
 	Get(ctx context.Context, in *IdentityProvidersGetRequest, opts ...grpc.CallOption) (*IdentityProvidersGetResponse, error)
 	// Updates an existing identity provider.
 	Update(ctx context.Context, in *IdentityProvidersUpdateRequest, opts ...grpc.CallOption) (*IdentityProvidersUpdateResponse, error)
@@ -133,7 +133,7 @@ type IdentityProvidersServer interface {
 	// Lists identity providers assigned to a tenant.
 	// Use filter with metadata.tenant to scope to a specific tenant.
 	List(context.Context, *IdentityProvidersListRequest) (*IdentityProvidersListResponse, error)
-	// Retrieves an identity provider by ID.
+	// Retrieves an identity provider by name.
 	Get(context.Context, *IdentityProvidersGetRequest) (*IdentityProvidersGetResponse, error)
 	// Updates an existing identity provider.
 	Update(context.Context, *IdentityProvidersUpdateRequest) (*IdentityProvidersUpdateResponse, error)

@@ -49,7 +49,7 @@ type NATGatewaysClient interface {
 	Get(ctx context.Context, in *NATGatewaysGetRequest, opts ...grpc.CallOption) (*NATGatewaysGetResponse, error)
 	// Creates a new NAT gateway. Configures outbound SNAT for a VirtualNetwork using an ExternalIP.
 	Create(ctx context.Context, in *NATGatewaysCreateRequest, opts ...grpc.CallOption) (*NATGatewaysCreateResponse, error)
-	// Updates an existing NAT gateway. Allows modifying metadata (labels, annotations).
+	// Updates an existing NAT gateway. The spec fields are immutable; only metadata (labels, annotations) can be changed.
 	Update(ctx context.Context, in *NATGatewaysUpdateRequest, opts ...grpc.CallOption) (*NATGatewaysUpdateResponse, error)
 	// Deletes a NAT gateway. The SNAT rule is removed and the ExternalIP is released for other use.
 	Delete(ctx context.Context, in *NATGatewaysDeleteRequest, opts ...grpc.CallOption) (*NATGatewaysDeleteResponse, error)
@@ -123,7 +123,7 @@ type NATGatewaysServer interface {
 	Get(context.Context, *NATGatewaysGetRequest) (*NATGatewaysGetResponse, error)
 	// Creates a new NAT gateway. Configures outbound SNAT for a VirtualNetwork using an ExternalIP.
 	Create(context.Context, *NATGatewaysCreateRequest) (*NATGatewaysCreateResponse, error)
-	// Updates an existing NAT gateway. Allows modifying metadata (labels, annotations).
+	// Updates an existing NAT gateway. The spec fields are immutable; only metadata (labels, annotations) can be changed.
 	Update(context.Context, *NATGatewaysUpdateRequest) (*NATGatewaysUpdateResponse, error)
 	// Deletes a NAT gateway. The SNAT rule is removed and the ExternalIP is released for other use.
 	Delete(context.Context, *NATGatewaysDeleteRequest) (*NATGatewaysDeleteResponse, error)

@@ -44,10 +44,21 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type InstanceTypesClient interface {
+	// Retrieves the list of instance types.
 	List(ctx context.Context, in *InstanceTypesListRequest, opts ...grpc.CallOption) (*InstanceTypesListResponse, error)
+	// Retrieves the details of one specific instance type.
 	Get(ctx context.Context, in *InstanceTypesGetRequest, opts ...grpc.CallOption) (*InstanceTypesGetResponse, error)
+	// Creates a new instance type.
+	//
+	// This method isn't allowed for regular users, only for the system itself.
 	Create(ctx context.Context, in *InstanceTypesCreateRequest, opts ...grpc.CallOption) (*InstanceTypesCreateResponse, error)
+	// Updates an existing instance type.
+	//
+	// This method isn't allowed for regular users, only for the system itself.
 	Update(ctx context.Context, in *InstanceTypesUpdateRequest, opts ...grpc.CallOption) (*InstanceTypesUpdateResponse, error)
+	// Deletes an instance type.
+	//
+	// This method isn't allowed for regular users, only for the system itself.
 	Delete(ctx context.Context, in *InstanceTypesDeleteRequest, opts ...grpc.CallOption) (*InstanceTypesDeleteResponse, error)
 	// Indicates that something changed in the object or the system that may require reconciling the object.
 	Signal(ctx context.Context, in *InstanceTypesSignalRequest, opts ...grpc.CallOption) (*InstanceTypesSignalResponse, error)
@@ -125,10 +136,21 @@ func (c *instanceTypesClient) Signal(ctx context.Context, in *InstanceTypesSigna
 // All implementations must embed UnimplementedInstanceTypesServer
 // for forward compatibility.
 type InstanceTypesServer interface {
+	// Retrieves the list of instance types.
 	List(context.Context, *InstanceTypesListRequest) (*InstanceTypesListResponse, error)
+	// Retrieves the details of one specific instance type.
 	Get(context.Context, *InstanceTypesGetRequest) (*InstanceTypesGetResponse, error)
+	// Creates a new instance type.
+	//
+	// This method isn't allowed for regular users, only for the system itself.
 	Create(context.Context, *InstanceTypesCreateRequest) (*InstanceTypesCreateResponse, error)
+	// Updates an existing instance type.
+	//
+	// This method isn't allowed for regular users, only for the system itself.
 	Update(context.Context, *InstanceTypesUpdateRequest) (*InstanceTypesUpdateResponse, error)
+	// Deletes an instance type.
+	//
+	// This method isn't allowed for regular users, only for the system itself.
 	Delete(context.Context, *InstanceTypesDeleteRequest) (*InstanceTypesDeleteResponse, error)
 	// Indicates that something changed in the object or the system that may require reconciling the object.
 	Signal(context.Context, *InstanceTypesSignalRequest) (*InstanceTypesSignalResponse, error)

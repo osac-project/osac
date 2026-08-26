@@ -45,13 +45,13 @@ const (
 type HostTypesClient interface {
 	// Retrieves the list of host types.
 	List(ctx context.Context, in *HostTypesListRequest, opts ...grpc.CallOption) (*HostTypesListResponse, error)
-	// Retrieves the details of one specific host types.
+	// Retrieves the details of one specific host type.
 	Get(ctx context.Context, in *HostTypesGetRequest, opts ...grpc.CallOption) (*HostTypesGetResponse, error)
 	// Creates a new host type.
 	//
 	// This method isn't allowed for regular users, only for the system itself.
 	Create(ctx context.Context, in *HostTypesCreateRequest, opts ...grpc.CallOption) (*HostTypesCreateResponse, error)
-	// Updates an existint host type.
+	// Updates an existing host type.
 	//
 	// This method isn't allowed for regular users, only for the system itself.
 	Update(ctx context.Context, in *HostTypesUpdateRequest, opts ...grpc.CallOption) (*HostTypesUpdateResponse, error)
@@ -125,13 +125,13 @@ func (c *hostTypesClient) Delete(ctx context.Context, in *HostTypesDeleteRequest
 type HostTypesServer interface {
 	// Retrieves the list of host types.
 	List(context.Context, *HostTypesListRequest) (*HostTypesListResponse, error)
-	// Retrieves the details of one specific host types.
+	// Retrieves the details of one specific host type.
 	Get(context.Context, *HostTypesGetRequest) (*HostTypesGetResponse, error)
 	// Creates a new host type.
 	//
 	// This method isn't allowed for regular users, only for the system itself.
 	Create(context.Context, *HostTypesCreateRequest) (*HostTypesCreateResponse, error)
-	// Updates an existint host type.
+	// Updates an existing host type.
 	//
 	// This method isn't allowed for regular users, only for the system itself.
 	Update(context.Context, *HostTypesUpdateRequest) (*HostTypesUpdateResponse, error)

@@ -37,6 +37,7 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// Request to list projects with optional pagination and filtering.
 type ProjectsListRequest struct {
 	state protoimpl.MessageState `protogen:"hybrid.v1"`
 	// Index of the first result. If not specified the default value will be zero.
@@ -230,13 +231,14 @@ func (b0 ProjectsListRequest_builder) Build() *ProjectsListRequest {
 	return m0
 }
 
+// Response containing a paginated list of projects.
 type ProjectsListResponse struct {
 	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// Actual number of items returned.
+	// Actual number of items returned in this response.
 	Size int32 `protobuf:"varint,1,opt,name=size,proto3" json:"size,omitempty"`
-	// Total number of items of the collection that match the search criteria.
+	// Total number of items in the collection that match the search criteria, regardless of pagination.
 	Total int32 `protobuf:"varint,2,opt,name=total,proto3" json:"total,omitempty"`
-	// List of results.
+	// The projects that match the request criteria, limited by pagination parameters.
 	Items         []*Project `protobuf:"bytes,3,rep,name=items,proto3" json:"items,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -303,11 +305,11 @@ func (x *ProjectsListResponse) SetItems(v []*Project) {
 type ProjectsListResponse_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
-	// Actual number of items returned.
+	// Actual number of items returned in this response.
 	Size int32
-	// Total number of items of the collection that match the search criteria.
+	// Total number of items in the collection that match the search criteria, regardless of pagination.
 	Total int32
-	// List of results.
+	// The projects that match the request criteria, limited by pagination parameters.
 	Items []*Project
 }
 
@@ -321,9 +323,11 @@ func (b0 ProjectsListResponse_builder) Build() *ProjectsListResponse {
 	return m0
 }
 
+// Request to retrieve a single project by ID.
 type ProjectsGetRequest struct {
-	state         protoimpl.MessageState `protogen:"hybrid.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	state protoimpl.MessageState `protogen:"hybrid.v1"`
+	// Unique identifier of the project to retrieve.
+	Id            string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -367,6 +371,7 @@ func (x *ProjectsGetRequest) SetId(v string) {
 type ProjectsGetRequest_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
+	// Unique identifier of the project to retrieve.
 	Id string
 }
 
@@ -378,9 +383,11 @@ func (b0 ProjectsGetRequest_builder) Build() *ProjectsGetRequest {
 	return m0
 }
 
+// Response containing the requested project.
 type ProjectsGetResponse struct {
-	state         protoimpl.MessageState `protogen:"hybrid.v1"`
-	Object        *Project               `protobuf:"bytes,1,opt,name=object,proto3" json:"object,omitempty"`
+	state protoimpl.MessageState `protogen:"hybrid.v1"`
+	// The requested project object.
+	Object        *Project `protobuf:"bytes,1,opt,name=object,proto3" json:"object,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -435,6 +442,7 @@ func (x *ProjectsGetResponse) ClearObject() {
 type ProjectsGetResponse_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
+	// The requested project object.
 	Object *Project
 }
 
@@ -446,9 +454,11 @@ func (b0 ProjectsGetResponse_builder) Build() *ProjectsGetResponse {
 	return m0
 }
 
+// Request to create a new project.
 type ProjectsCreateRequest struct {
-	state         protoimpl.MessageState `protogen:"hybrid.v1"`
-	Object        *Project               `protobuf:"bytes,1,opt,name=object,proto3" json:"object,omitempty"`
+	state protoimpl.MessageState `protogen:"hybrid.v1"`
+	// The project to create. The server will populate the ID and system-managed fields.
+	Object        *Project `protobuf:"bytes,1,opt,name=object,proto3" json:"object,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -503,6 +513,7 @@ func (x *ProjectsCreateRequest) ClearObject() {
 type ProjectsCreateRequest_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
+	// The project to create. The server will populate the ID and system-managed fields.
 	Object *Project
 }
 
@@ -514,9 +525,11 @@ func (b0 ProjectsCreateRequest_builder) Build() *ProjectsCreateRequest {
 	return m0
 }
 
+// Response containing the newly created project.
 type ProjectsCreateResponse struct {
-	state         protoimpl.MessageState `protogen:"hybrid.v1"`
-	Object        *Project               `protobuf:"bytes,1,opt,name=object,proto3" json:"object,omitempty"`
+	state protoimpl.MessageState `protogen:"hybrid.v1"`
+	// The created project with server-populated fields (ID, timestamps, status, etc.).
+	Object        *Project `protobuf:"bytes,1,opt,name=object,proto3" json:"object,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -571,6 +584,7 @@ func (x *ProjectsCreateResponse) ClearObject() {
 type ProjectsCreateResponse_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
+	// The created project with server-populated fields (ID, timestamps, status, etc.).
 	Object *Project
 }
 
@@ -582,9 +596,14 @@ func (b0 ProjectsCreateResponse_builder) Build() *ProjectsCreateResponse {
 	return m0
 }
 
+// Request to update an existing project.
 type ProjectsUpdateRequest struct {
-	state      protoimpl.MessageState `protogen:"hybrid.v1"`
-	Object     *Project               `protobuf:"bytes,1,opt,name=object,proto3" json:"object,omitempty"`
+	state protoimpl.MessageState `protogen:"hybrid.v1"`
+	// The project with updated fields. The ID must match an existing project.
+	Object *Project `protobuf:"bytes,1,opt,name=object,proto3" json:"object,omitempty"`
+	// Field mask indicating which fields to update. If not provided, all fields are updated.
+	// Only fields specified in the mask will be modified. Nested fields can be specified using dot notation.
+	// Example: "metadata.labels", "spec.description"
 	UpdateMask *fieldmaskpb.FieldMask `protobuf:"bytes,2,opt,name=update_mask,json=updateMask,proto3" json:"update_mask,omitempty"`
 	// Lock enables optimistic locking. When set to true, the server verifies that the current version of the object
 	// matches the value of the metadata.version field of the submitted object. If they differ the update will be
@@ -677,7 +696,11 @@ func (x *ProjectsUpdateRequest) ClearUpdateMask() {
 type ProjectsUpdateRequest_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
-	Object     *Project
+	// The project with updated fields. The ID must match an existing project.
+	Object *Project
+	// Field mask indicating which fields to update. If not provided, all fields are updated.
+	// Only fields specified in the mask will be modified. Nested fields can be specified using dot notation.
+	// Example: "metadata.labels", "spec.description"
 	UpdateMask *fieldmaskpb.FieldMask
 	// Lock enables optimistic locking. When set to true, the server verifies that the current version of the object
 	// matches the value of the metadata.version field of the submitted object. If they differ the update will be
@@ -695,9 +718,11 @@ func (b0 ProjectsUpdateRequest_builder) Build() *ProjectsUpdateRequest {
 	return m0
 }
 
+// Response containing the updated project.
 type ProjectsUpdateResponse struct {
-	state         protoimpl.MessageState `protogen:"hybrid.v1"`
-	Object        *Project               `protobuf:"bytes,1,opt,name=object,proto3" json:"object,omitempty"`
+	state protoimpl.MessageState `protogen:"hybrid.v1"`
+	// The updated project object with incremented version number.
+	Object        *Project `protobuf:"bytes,1,opt,name=object,proto3" json:"object,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -752,6 +777,7 @@ func (x *ProjectsUpdateResponse) ClearObject() {
 type ProjectsUpdateResponse_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
+	// The updated project object with incremented version number.
 	Object *Project
 }
 
@@ -763,9 +789,11 @@ func (b0 ProjectsUpdateResponse_builder) Build() *ProjectsUpdateResponse {
 	return m0
 }
 
+// Request to delete a project.
 type ProjectsDeleteRequest struct {
-	state         protoimpl.MessageState `protogen:"hybrid.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	state protoimpl.MessageState `protogen:"hybrid.v1"`
+	// Unique identifier of the project to delete.
+	Id            string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -809,6 +837,7 @@ func (x *ProjectsDeleteRequest) SetId(v string) {
 type ProjectsDeleteRequest_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
+	// Unique identifier of the project to delete.
 	Id string
 }
 
@@ -820,6 +849,7 @@ func (b0 ProjectsDeleteRequest_builder) Build() *ProjectsDeleteRequest {
 	return m0
 }
 
+// Response for a successful project deletion.
 type ProjectsDeleteResponse struct {
 	state         protoimpl.MessageState `protogen:"hybrid.v1"`
 	unknownFields protoimpl.UnknownFields

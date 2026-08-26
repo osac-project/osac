@@ -37,148 +37,6 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// Request to create an identity provider.
-type IdentityProvidersCreateRequest struct {
-	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// The identity provider to create.
-	Object        *IdentityProvider `protobuf:"bytes,1,opt,name=object,proto3" json:"object,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *IdentityProvidersCreateRequest) Reset() {
-	*x = IdentityProvidersCreateRequest{}
-	mi := &file_osac_public_v1_identity_providers_service_proto_msgTypes[0]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *IdentityProvidersCreateRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*IdentityProvidersCreateRequest) ProtoMessage() {}
-
-func (x *IdentityProvidersCreateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_osac_public_v1_identity_providers_service_proto_msgTypes[0]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-func (x *IdentityProvidersCreateRequest) GetObject() *IdentityProvider {
-	if x != nil {
-		return x.Object
-	}
-	return nil
-}
-
-func (x *IdentityProvidersCreateRequest) SetObject(v *IdentityProvider) {
-	x.Object = v
-}
-
-func (x *IdentityProvidersCreateRequest) HasObject() bool {
-	if x == nil {
-		return false
-	}
-	return x.Object != nil
-}
-
-func (x *IdentityProvidersCreateRequest) ClearObject() {
-	x.Object = nil
-}
-
-type IdentityProvidersCreateRequest_builder struct {
-	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
-
-	// The identity provider to create.
-	Object *IdentityProvider
-}
-
-func (b0 IdentityProvidersCreateRequest_builder) Build() *IdentityProvidersCreateRequest {
-	m0 := &IdentityProvidersCreateRequest{}
-	b, x := &b0, m0
-	_, _ = b, x
-	x.Object = b.Object
-	return m0
-}
-
-// Response containing the created identity provider.
-type IdentityProvidersCreateResponse struct {
-	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// The created identity provider.
-	Object        *IdentityProvider `protobuf:"bytes,1,opt,name=object,proto3" json:"object,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *IdentityProvidersCreateResponse) Reset() {
-	*x = IdentityProvidersCreateResponse{}
-	mi := &file_osac_public_v1_identity_providers_service_proto_msgTypes[1]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *IdentityProvidersCreateResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*IdentityProvidersCreateResponse) ProtoMessage() {}
-
-func (x *IdentityProvidersCreateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_osac_public_v1_identity_providers_service_proto_msgTypes[1]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-func (x *IdentityProvidersCreateResponse) GetObject() *IdentityProvider {
-	if x != nil {
-		return x.Object
-	}
-	return nil
-}
-
-func (x *IdentityProvidersCreateResponse) SetObject(v *IdentityProvider) {
-	x.Object = v
-}
-
-func (x *IdentityProvidersCreateResponse) HasObject() bool {
-	if x == nil {
-		return false
-	}
-	return x.Object != nil
-}
-
-func (x *IdentityProvidersCreateResponse) ClearObject() {
-	x.Object = nil
-}
-
-type IdentityProvidersCreateResponse_builder struct {
-	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
-
-	// The created identity provider.
-	Object *IdentityProvider
-}
-
-func (b0 IdentityProvidersCreateResponse_builder) Build() *IdentityProvidersCreateResponse {
-	m0 := &IdentityProvidersCreateResponse{}
-	b, x := &b0, m0
-	_, _ = b, x
-	x.Object = b.Object
-	return m0
-}
-
 // Request to list identity providers for a tenant.
 type IdentityProvidersListRequest struct {
 	state protoimpl.MessageState `protogen:"hybrid.v1"`
@@ -195,7 +53,7 @@ type IdentityProvidersListRequest struct {
 
 func (x *IdentityProvidersListRequest) Reset() {
 	*x = IdentityProvidersListRequest{}
-	mi := &file_osac_public_v1_identity_providers_service_proto_msgTypes[2]
+	mi := &file_osac_public_v1_identity_providers_service_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -207,7 +65,7 @@ func (x *IdentityProvidersListRequest) String() string {
 func (*IdentityProvidersListRequest) ProtoMessage() {}
 
 func (x *IdentityProvidersListRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_osac_public_v1_identity_providers_service_proto_msgTypes[2]
+	mi := &file_osac_public_v1_identity_providers_service_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -321,7 +179,7 @@ type IdentityProvidersListResponse struct {
 
 func (x *IdentityProvidersListResponse) Reset() {
 	*x = IdentityProvidersListResponse{}
-	mi := &file_osac_public_v1_identity_providers_service_proto_msgTypes[3]
+	mi := &file_osac_public_v1_identity_providers_service_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -333,7 +191,7 @@ func (x *IdentityProvidersListResponse) String() string {
 func (*IdentityProvidersListResponse) ProtoMessage() {}
 
 func (x *IdentityProvidersListResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_osac_public_v1_identity_providers_service_proto_msgTypes[3]
+	mi := &file_osac_public_v1_identity_providers_service_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -398,7 +256,7 @@ func (b0 IdentityProvidersListResponse_builder) Build() *IdentityProvidersListRe
 	return m0
 }
 
-// Request to get a tenant's identity provider by ID.
+// Request to get an identity provider by ID.
 type IdentityProvidersGetRequest struct {
 	state protoimpl.MessageState `protogen:"hybrid.v1"`
 	// ID of the identity provider.
@@ -409,7 +267,7 @@ type IdentityProvidersGetRequest struct {
 
 func (x *IdentityProvidersGetRequest) Reset() {
 	*x = IdentityProvidersGetRequest{}
-	mi := &file_osac_public_v1_identity_providers_service_proto_msgTypes[4]
+	mi := &file_osac_public_v1_identity_providers_service_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -421,7 +279,7 @@ func (x *IdentityProvidersGetRequest) String() string {
 func (*IdentityProvidersGetRequest) ProtoMessage() {}
 
 func (x *IdentityProvidersGetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_osac_public_v1_identity_providers_service_proto_msgTypes[4]
+	mi := &file_osac_public_v1_identity_providers_service_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -469,7 +327,7 @@ type IdentityProvidersGetResponse struct {
 
 func (x *IdentityProvidersGetResponse) Reset() {
 	*x = IdentityProvidersGetResponse{}
-	mi := &file_osac_public_v1_identity_providers_service_proto_msgTypes[5]
+	mi := &file_osac_public_v1_identity_providers_service_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -481,7 +339,7 @@ func (x *IdentityProvidersGetResponse) String() string {
 func (*IdentityProvidersGetResponse) ProtoMessage() {}
 
 func (x *IdentityProvidersGetResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_osac_public_v1_identity_providers_service_proto_msgTypes[5]
+	mi := &file_osac_public_v1_identity_providers_service_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -523,6 +381,148 @@ type IdentityProvidersGetResponse_builder struct {
 
 func (b0 IdentityProvidersGetResponse_builder) Build() *IdentityProvidersGetResponse {
 	m0 := &IdentityProvidersGetResponse{}
+	b, x := &b0, m0
+	_, _ = b, x
+	x.Object = b.Object
+	return m0
+}
+
+// Request to create an identity provider.
+type IdentityProvidersCreateRequest struct {
+	state protoimpl.MessageState `protogen:"hybrid.v1"`
+	// The identity provider to create.
+	Object        *IdentityProvider `protobuf:"bytes,1,opt,name=object,proto3" json:"object,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *IdentityProvidersCreateRequest) Reset() {
+	*x = IdentityProvidersCreateRequest{}
+	mi := &file_osac_public_v1_identity_providers_service_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *IdentityProvidersCreateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*IdentityProvidersCreateRequest) ProtoMessage() {}
+
+func (x *IdentityProvidersCreateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_osac_public_v1_identity_providers_service_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+func (x *IdentityProvidersCreateRequest) GetObject() *IdentityProvider {
+	if x != nil {
+		return x.Object
+	}
+	return nil
+}
+
+func (x *IdentityProvidersCreateRequest) SetObject(v *IdentityProvider) {
+	x.Object = v
+}
+
+func (x *IdentityProvidersCreateRequest) HasObject() bool {
+	if x == nil {
+		return false
+	}
+	return x.Object != nil
+}
+
+func (x *IdentityProvidersCreateRequest) ClearObject() {
+	x.Object = nil
+}
+
+type IdentityProvidersCreateRequest_builder struct {
+	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
+
+	// The identity provider to create.
+	Object *IdentityProvider
+}
+
+func (b0 IdentityProvidersCreateRequest_builder) Build() *IdentityProvidersCreateRequest {
+	m0 := &IdentityProvidersCreateRequest{}
+	b, x := &b0, m0
+	_, _ = b, x
+	x.Object = b.Object
+	return m0
+}
+
+// Response containing the created identity provider.
+type IdentityProvidersCreateResponse struct {
+	state protoimpl.MessageState `protogen:"hybrid.v1"`
+	// The created identity provider.
+	Object        *IdentityProvider `protobuf:"bytes,1,opt,name=object,proto3" json:"object,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *IdentityProvidersCreateResponse) Reset() {
+	*x = IdentityProvidersCreateResponse{}
+	mi := &file_osac_public_v1_identity_providers_service_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *IdentityProvidersCreateResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*IdentityProvidersCreateResponse) ProtoMessage() {}
+
+func (x *IdentityProvidersCreateResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_osac_public_v1_identity_providers_service_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+func (x *IdentityProvidersCreateResponse) GetObject() *IdentityProvider {
+	if x != nil {
+		return x.Object
+	}
+	return nil
+}
+
+func (x *IdentityProvidersCreateResponse) SetObject(v *IdentityProvider) {
+	x.Object = v
+}
+
+func (x *IdentityProvidersCreateResponse) HasObject() bool {
+	if x == nil {
+		return false
+	}
+	return x.Object != nil
+}
+
+func (x *IdentityProvidersCreateResponse) ClearObject() {
+	x.Object = nil
+}
+
+type IdentityProvidersCreateResponse_builder struct {
+	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
+
+	// The created identity provider.
+	Object *IdentityProvider
+}
+
+func (b0 IdentityProvidersCreateResponse_builder) Build() *IdentityProvidersCreateResponse {
+	m0 := &IdentityProvidersCreateResponse{}
 	b, x := &b0, m0
 	_, _ = b, x
 	x.Object = b.Object
@@ -835,41 +835,41 @@ var file_osac_public_v1_identity_providers_service_proto_rawDesc = string([]byte
 	0x2f, 0x66, 0x69, 0x65, 0x6c, 0x64, 0x5f, 0x6d, 0x61, 0x73, 0x6b, 0x2e, 0x70, 0x72, 0x6f, 0x74,
 	0x6f, 0x1a, 0x2b, 0x6f, 0x73, 0x61, 0x63, 0x2f, 0x70, 0x75, 0x62, 0x6c, 0x69, 0x63, 0x2f, 0x76,
 	0x31, 0x2f, 0x69, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x74, 0x79, 0x5f, 0x70, 0x72, 0x6f, 0x76, 0x69,
-	0x64, 0x65, 0x72, 0x5f, 0x74, 0x79, 0x70, 0x65, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x22, 0x5a,
-	0x0a, 0x1e, 0x49, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x74, 0x79, 0x50, 0x72, 0x6f, 0x76, 0x69, 0x64,
-	0x65, 0x72, 0x73, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74,
-	0x12, 0x38, 0x0a, 0x06, 0x6f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b,
-	0x32, 0x20, 0x2e, 0x6f, 0x73, 0x61, 0x63, 0x2e, 0x70, 0x75, 0x62, 0x6c, 0x69, 0x63, 0x2e, 0x76,
-	0x31, 0x2e, 0x49, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x74, 0x79, 0x50, 0x72, 0x6f, 0x76, 0x69, 0x64,
-	0x65, 0x72, 0x52, 0x06, 0x6f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x22, 0x5b, 0x0a, 0x1f, 0x49, 0x64,
-	0x65, 0x6e, 0x74, 0x69, 0x74, 0x79, 0x50, 0x72, 0x6f, 0x76, 0x69, 0x64, 0x65, 0x72, 0x73, 0x43,
-	0x72, 0x65, 0x61, 0x74, 0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x38, 0x0a,
-	0x06, 0x6f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x20, 0x2e,
-	0x6f, 0x73, 0x61, 0x63, 0x2e, 0x70, 0x75, 0x62, 0x6c, 0x69, 0x63, 0x2e, 0x76, 0x31, 0x2e, 0x49,
-	0x64, 0x65, 0x6e, 0x74, 0x69, 0x74, 0x79, 0x50, 0x72, 0x6f, 0x76, 0x69, 0x64, 0x65, 0x72, 0x52,
-	0x06, 0x6f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x22, 0x93, 0x01, 0x0a, 0x1c, 0x49, 0x64, 0x65, 0x6e,
-	0x74, 0x69, 0x74, 0x79, 0x50, 0x72, 0x6f, 0x76, 0x69, 0x64, 0x65, 0x72, 0x73, 0x4c, 0x69, 0x73,
-	0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x1b, 0x0a, 0x06, 0x6f, 0x66, 0x66, 0x73,
-	0x65, 0x74, 0x18, 0x01, 0x20, 0x01, 0x28, 0x05, 0x48, 0x00, 0x52, 0x06, 0x6f, 0x66, 0x66, 0x73,
-	0x65, 0x74, 0x88, 0x01, 0x01, 0x12, 0x19, 0x0a, 0x05, 0x6c, 0x69, 0x6d, 0x69, 0x74, 0x18, 0x02,
-	0x20, 0x01, 0x28, 0x05, 0x48, 0x01, 0x52, 0x05, 0x6c, 0x69, 0x6d, 0x69, 0x74, 0x88, 0x01, 0x01,
-	0x12, 0x1b, 0x0a, 0x06, 0x66, 0x69, 0x6c, 0x74, 0x65, 0x72, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09,
-	0x48, 0x02, 0x52, 0x06, 0x66, 0x69, 0x6c, 0x74, 0x65, 0x72, 0x88, 0x01, 0x01, 0x42, 0x09, 0x0a,
-	0x07, 0x5f, 0x6f, 0x66, 0x66, 0x73, 0x65, 0x74, 0x42, 0x08, 0x0a, 0x06, 0x5f, 0x6c, 0x69, 0x6d,
-	0x69, 0x74, 0x42, 0x09, 0x0a, 0x07, 0x5f, 0x66, 0x69, 0x6c, 0x74, 0x65, 0x72, 0x22, 0x81, 0x01,
-	0x0a, 0x1d, 0x49, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x74, 0x79, 0x50, 0x72, 0x6f, 0x76, 0x69, 0x64,
-	0x65, 0x72, 0x73, 0x4c, 0x69, 0x73, 0x74, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12,
-	0x12, 0x0a, 0x04, 0x73, 0x69, 0x7a, 0x65, 0x18, 0x01, 0x20, 0x01, 0x28, 0x05, 0x52, 0x04, 0x73,
-	0x69, 0x7a, 0x65, 0x12, 0x14, 0x0a, 0x05, 0x74, 0x6f, 0x74, 0x61, 0x6c, 0x18, 0x02, 0x20, 0x01,
-	0x28, 0x05, 0x52, 0x05, 0x74, 0x6f, 0x74, 0x61, 0x6c, 0x12, 0x36, 0x0a, 0x05, 0x69, 0x74, 0x65,
-	0x6d, 0x73, 0x18, 0x03, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x20, 0x2e, 0x6f, 0x73, 0x61, 0x63, 0x2e,
-	0x70, 0x75, 0x62, 0x6c, 0x69, 0x63, 0x2e, 0x76, 0x31, 0x2e, 0x49, 0x64, 0x65, 0x6e, 0x74, 0x69,
-	0x74, 0x79, 0x50, 0x72, 0x6f, 0x76, 0x69, 0x64, 0x65, 0x72, 0x52, 0x05, 0x69, 0x74, 0x65, 0x6d,
-	0x73, 0x22, 0x2d, 0x0a, 0x1b, 0x49, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x74, 0x79, 0x50, 0x72, 0x6f,
-	0x76, 0x69, 0x64, 0x65, 0x72, 0x73, 0x47, 0x65, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74,
-	0x12, 0x0e, 0x0a, 0x02, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x02, 0x69, 0x64,
-	0x22, 0x58, 0x0a, 0x1c, 0x49, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x74, 0x79, 0x50, 0x72, 0x6f, 0x76,
-	0x69, 0x64, 0x65, 0x72, 0x73, 0x47, 0x65, 0x74, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65,
+	0x64, 0x65, 0x72, 0x5f, 0x74, 0x79, 0x70, 0x65, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x22, 0x93,
+	0x01, 0x0a, 0x1c, 0x49, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x74, 0x79, 0x50, 0x72, 0x6f, 0x76, 0x69,
+	0x64, 0x65, 0x72, 0x73, 0x4c, 0x69, 0x73, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12,
+	0x1b, 0x0a, 0x06, 0x6f, 0x66, 0x66, 0x73, 0x65, 0x74, 0x18, 0x01, 0x20, 0x01, 0x28, 0x05, 0x48,
+	0x00, 0x52, 0x06, 0x6f, 0x66, 0x66, 0x73, 0x65, 0x74, 0x88, 0x01, 0x01, 0x12, 0x19, 0x0a, 0x05,
+	0x6c, 0x69, 0x6d, 0x69, 0x74, 0x18, 0x02, 0x20, 0x01, 0x28, 0x05, 0x48, 0x01, 0x52, 0x05, 0x6c,
+	0x69, 0x6d, 0x69, 0x74, 0x88, 0x01, 0x01, 0x12, 0x1b, 0x0a, 0x06, 0x66, 0x69, 0x6c, 0x74, 0x65,
+	0x72, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x48, 0x02, 0x52, 0x06, 0x66, 0x69, 0x6c, 0x74, 0x65,
+	0x72, 0x88, 0x01, 0x01, 0x42, 0x09, 0x0a, 0x07, 0x5f, 0x6f, 0x66, 0x66, 0x73, 0x65, 0x74, 0x42,
+	0x08, 0x0a, 0x06, 0x5f, 0x6c, 0x69, 0x6d, 0x69, 0x74, 0x42, 0x09, 0x0a, 0x07, 0x5f, 0x66, 0x69,
+	0x6c, 0x74, 0x65, 0x72, 0x22, 0x81, 0x01, 0x0a, 0x1d, 0x49, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x74,
+	0x79, 0x50, 0x72, 0x6f, 0x76, 0x69, 0x64, 0x65, 0x72, 0x73, 0x4c, 0x69, 0x73, 0x74, 0x52, 0x65,
+	0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x12, 0x0a, 0x04, 0x73, 0x69, 0x7a, 0x65, 0x18, 0x01,
+	0x20, 0x01, 0x28, 0x05, 0x52, 0x04, 0x73, 0x69, 0x7a, 0x65, 0x12, 0x14, 0x0a, 0x05, 0x74, 0x6f,
+	0x74, 0x61, 0x6c, 0x18, 0x02, 0x20, 0x01, 0x28, 0x05, 0x52, 0x05, 0x74, 0x6f, 0x74, 0x61, 0x6c,
+	0x12, 0x36, 0x0a, 0x05, 0x69, 0x74, 0x65, 0x6d, 0x73, 0x18, 0x03, 0x20, 0x03, 0x28, 0x0b, 0x32,
+	0x20, 0x2e, 0x6f, 0x73, 0x61, 0x63, 0x2e, 0x70, 0x75, 0x62, 0x6c, 0x69, 0x63, 0x2e, 0x76, 0x31,
+	0x2e, 0x49, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x74, 0x79, 0x50, 0x72, 0x6f, 0x76, 0x69, 0x64, 0x65,
+	0x72, 0x52, 0x05, 0x69, 0x74, 0x65, 0x6d, 0x73, 0x22, 0x2d, 0x0a, 0x1b, 0x49, 0x64, 0x65, 0x6e,
+	0x74, 0x69, 0x74, 0x79, 0x50, 0x72, 0x6f, 0x76, 0x69, 0x64, 0x65, 0x72, 0x73, 0x47, 0x65, 0x74,
+	0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x0e, 0x0a, 0x02, 0x69, 0x64, 0x18, 0x01, 0x20,
+	0x01, 0x28, 0x09, 0x52, 0x02, 0x69, 0x64, 0x22, 0x58, 0x0a, 0x1c, 0x49, 0x64, 0x65, 0x6e, 0x74,
+	0x69, 0x74, 0x79, 0x50, 0x72, 0x6f, 0x76, 0x69, 0x64, 0x65, 0x72, 0x73, 0x47, 0x65, 0x74, 0x52,
+	0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x38, 0x0a, 0x06, 0x6f, 0x62, 0x6a, 0x65, 0x63,
+	0x74, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x20, 0x2e, 0x6f, 0x73, 0x61, 0x63, 0x2e, 0x70,
+	0x75, 0x62, 0x6c, 0x69, 0x63, 0x2e, 0x76, 0x31, 0x2e, 0x49, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x74,
+	0x79, 0x50, 0x72, 0x6f, 0x76, 0x69, 0x64, 0x65, 0x72, 0x52, 0x06, 0x6f, 0x62, 0x6a, 0x65, 0x63,
+	0x74, 0x22, 0x5a, 0x0a, 0x1e, 0x49, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x74, 0x79, 0x50, 0x72, 0x6f,
+	0x76, 0x69, 0x64, 0x65, 0x72, 0x73, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x52, 0x65, 0x71, 0x75,
+	0x65, 0x73, 0x74, 0x12, 0x38, 0x0a, 0x06, 0x6f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x18, 0x01, 0x20,
+	0x01, 0x28, 0x0b, 0x32, 0x20, 0x2e, 0x6f, 0x73, 0x61, 0x63, 0x2e, 0x70, 0x75, 0x62, 0x6c, 0x69,
+	0x63, 0x2e, 0x76, 0x31, 0x2e, 0x49, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x74, 0x79, 0x50, 0x72, 0x6f,
+	0x76, 0x69, 0x64, 0x65, 0x72, 0x52, 0x06, 0x6f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x22, 0x5b, 0x0a,
+	0x1f, 0x49, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x74, 0x79, 0x50, 0x72, 0x6f, 0x76, 0x69, 0x64, 0x65,
+	0x72, 0x73, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65,
 	0x12, 0x38, 0x0a, 0x06, 0x6f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b,
 	0x32, 0x20, 0x2e, 0x6f, 0x73, 0x61, 0x63, 0x2e, 0x70, 0x75, 0x62, 0x6c, 0x69, 0x63, 0x2e, 0x76,
 	0x31, 0x2e, 0x49, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x74, 0x79, 0x50, 0x72, 0x6f, 0x76, 0x69, 0x64,
@@ -967,12 +967,12 @@ var file_osac_public_v1_identity_providers_service_proto_rawDesc = string([]byte
 
 var file_osac_public_v1_identity_providers_service_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_osac_public_v1_identity_providers_service_proto_goTypes = []any{
-	(*IdentityProvidersCreateRequest)(nil),  // 0: osac.public.v1.IdentityProvidersCreateRequest
-	(*IdentityProvidersCreateResponse)(nil), // 1: osac.public.v1.IdentityProvidersCreateResponse
-	(*IdentityProvidersListRequest)(nil),    // 2: osac.public.v1.IdentityProvidersListRequest
-	(*IdentityProvidersListResponse)(nil),   // 3: osac.public.v1.IdentityProvidersListResponse
-	(*IdentityProvidersGetRequest)(nil),     // 4: osac.public.v1.IdentityProvidersGetRequest
-	(*IdentityProvidersGetResponse)(nil),    // 5: osac.public.v1.IdentityProvidersGetResponse
+	(*IdentityProvidersListRequest)(nil),    // 0: osac.public.v1.IdentityProvidersListRequest
+	(*IdentityProvidersListResponse)(nil),   // 1: osac.public.v1.IdentityProvidersListResponse
+	(*IdentityProvidersGetRequest)(nil),     // 2: osac.public.v1.IdentityProvidersGetRequest
+	(*IdentityProvidersGetResponse)(nil),    // 3: osac.public.v1.IdentityProvidersGetResponse
+	(*IdentityProvidersCreateRequest)(nil),  // 4: osac.public.v1.IdentityProvidersCreateRequest
+	(*IdentityProvidersCreateResponse)(nil), // 5: osac.public.v1.IdentityProvidersCreateResponse
 	(*IdentityProvidersUpdateRequest)(nil),  // 6: osac.public.v1.IdentityProvidersUpdateRequest
 	(*IdentityProvidersUpdateResponse)(nil), // 7: osac.public.v1.IdentityProvidersUpdateResponse
 	(*IdentityProvidersDeleteRequest)(nil),  // 8: osac.public.v1.IdentityProvidersDeleteRequest
@@ -981,21 +981,21 @@ var file_osac_public_v1_identity_providers_service_proto_goTypes = []any{
 	(*fieldmaskpb.FieldMask)(nil),           // 11: google.protobuf.FieldMask
 }
 var file_osac_public_v1_identity_providers_service_proto_depIdxs = []int32{
-	10, // 0: osac.public.v1.IdentityProvidersCreateRequest.object:type_name -> osac.public.v1.IdentityProvider
-	10, // 1: osac.public.v1.IdentityProvidersCreateResponse.object:type_name -> osac.public.v1.IdentityProvider
-	10, // 2: osac.public.v1.IdentityProvidersListResponse.items:type_name -> osac.public.v1.IdentityProvider
-	10, // 3: osac.public.v1.IdentityProvidersGetResponse.object:type_name -> osac.public.v1.IdentityProvider
+	10, // 0: osac.public.v1.IdentityProvidersListResponse.items:type_name -> osac.public.v1.IdentityProvider
+	10, // 1: osac.public.v1.IdentityProvidersGetResponse.object:type_name -> osac.public.v1.IdentityProvider
+	10, // 2: osac.public.v1.IdentityProvidersCreateRequest.object:type_name -> osac.public.v1.IdentityProvider
+	10, // 3: osac.public.v1.IdentityProvidersCreateResponse.object:type_name -> osac.public.v1.IdentityProvider
 	10, // 4: osac.public.v1.IdentityProvidersUpdateRequest.object:type_name -> osac.public.v1.IdentityProvider
 	11, // 5: osac.public.v1.IdentityProvidersUpdateRequest.update_mask:type_name -> google.protobuf.FieldMask
 	10, // 6: osac.public.v1.IdentityProvidersUpdateResponse.object:type_name -> osac.public.v1.IdentityProvider
-	0,  // 7: osac.public.v1.IdentityProviders.Create:input_type -> osac.public.v1.IdentityProvidersCreateRequest
-	2,  // 8: osac.public.v1.IdentityProviders.List:input_type -> osac.public.v1.IdentityProvidersListRequest
-	4,  // 9: osac.public.v1.IdentityProviders.Get:input_type -> osac.public.v1.IdentityProvidersGetRequest
+	4,  // 7: osac.public.v1.IdentityProviders.Create:input_type -> osac.public.v1.IdentityProvidersCreateRequest
+	0,  // 8: osac.public.v1.IdentityProviders.List:input_type -> osac.public.v1.IdentityProvidersListRequest
+	2,  // 9: osac.public.v1.IdentityProviders.Get:input_type -> osac.public.v1.IdentityProvidersGetRequest
 	6,  // 10: osac.public.v1.IdentityProviders.Update:input_type -> osac.public.v1.IdentityProvidersUpdateRequest
 	8,  // 11: osac.public.v1.IdentityProviders.Delete:input_type -> osac.public.v1.IdentityProvidersDeleteRequest
-	1,  // 12: osac.public.v1.IdentityProviders.Create:output_type -> osac.public.v1.IdentityProvidersCreateResponse
-	3,  // 13: osac.public.v1.IdentityProviders.List:output_type -> osac.public.v1.IdentityProvidersListResponse
-	5,  // 14: osac.public.v1.IdentityProviders.Get:output_type -> osac.public.v1.IdentityProvidersGetResponse
+	5,  // 12: osac.public.v1.IdentityProviders.Create:output_type -> osac.public.v1.IdentityProvidersCreateResponse
+	1,  // 13: osac.public.v1.IdentityProviders.List:output_type -> osac.public.v1.IdentityProvidersListResponse
+	3,  // 14: osac.public.v1.IdentityProviders.Get:output_type -> osac.public.v1.IdentityProvidersGetResponse
 	7,  // 15: osac.public.v1.IdentityProviders.Update:output_type -> osac.public.v1.IdentityProvidersUpdateResponse
 	9,  // 16: osac.public.v1.IdentityProviders.Delete:output_type -> osac.public.v1.IdentityProvidersDeleteResponse
 	12, // [12:17] is the sub-list for method output_type
@@ -1011,7 +1011,7 @@ func file_osac_public_v1_identity_providers_service_proto_init() {
 		return
 	}
 	file_osac_public_v1_identity_provider_type_proto_init()
-	file_osac_public_v1_identity_providers_service_proto_msgTypes[2].OneofWrappers = []any{}
+	file_osac_public_v1_identity_providers_service_proto_msgTypes[0].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

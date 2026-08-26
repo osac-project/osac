@@ -35,8 +35,8 @@ const (
 	Tenants_List_FullMethodName   = "/osac.public.v1.Tenants/List"
 	Tenants_Get_FullMethodName    = "/osac.public.v1.Tenants/Get"
 	Tenants_Create_FullMethodName = "/osac.public.v1.Tenants/Create"
-	Tenants_Update_FullMethodName = "/osac.public.v1.Tenants/Update"
 	Tenants_Delete_FullMethodName = "/osac.public.v1.Tenants/Delete"
+	Tenants_Update_FullMethodName = "/osac.public.v1.Tenants/Update"
 )
 
 // TenantsClient is the client API for Tenants service.
@@ -49,10 +49,10 @@ type TenantsClient interface {
 	Get(ctx context.Context, in *TenantsGetRequest, opts ...grpc.CallOption) (*TenantsGetResponse, error)
 	// Creates a new tenant.
 	Create(ctx context.Context, in *TenantsCreateRequest, opts ...grpc.CallOption) (*TenantsCreateResponse, error)
-	// Updates an existing tenant.
-	Update(ctx context.Context, in *TenantsUpdateRequest, opts ...grpc.CallOption) (*TenantsUpdateResponse, error)
 	// Deletes a tenant.
 	Delete(ctx context.Context, in *TenantsDeleteRequest, opts ...grpc.CallOption) (*TenantsDeleteResponse, error)
+	// Updates an existing tenant.
+	Update(ctx context.Context, in *TenantsUpdateRequest, opts ...grpc.CallOption) (*TenantsUpdateResponse, error)
 }
 
 type tenantsClient struct {
@@ -93,20 +93,20 @@ func (c *tenantsClient) Create(ctx context.Context, in *TenantsCreateRequest, op
 	return out, nil
 }
 
-func (c *tenantsClient) Update(ctx context.Context, in *TenantsUpdateRequest, opts ...grpc.CallOption) (*TenantsUpdateResponse, error) {
+func (c *tenantsClient) Delete(ctx context.Context, in *TenantsDeleteRequest, opts ...grpc.CallOption) (*TenantsDeleteResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(TenantsUpdateResponse)
-	err := c.cc.Invoke(ctx, Tenants_Update_FullMethodName, in, out, cOpts...)
+	out := new(TenantsDeleteResponse)
+	err := c.cc.Invoke(ctx, Tenants_Delete_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *tenantsClient) Delete(ctx context.Context, in *TenantsDeleteRequest, opts ...grpc.CallOption) (*TenantsDeleteResponse, error) {
+func (c *tenantsClient) Update(ctx context.Context, in *TenantsUpdateRequest, opts ...grpc.CallOption) (*TenantsUpdateResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(TenantsDeleteResponse)
-	err := c.cc.Invoke(ctx, Tenants_Delete_FullMethodName, in, out, cOpts...)
+	out := new(TenantsUpdateResponse)
+	err := c.cc.Invoke(ctx, Tenants_Update_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -123,10 +123,10 @@ type TenantsServer interface {
 	Get(context.Context, *TenantsGetRequest) (*TenantsGetResponse, error)
 	// Creates a new tenant.
 	Create(context.Context, *TenantsCreateRequest) (*TenantsCreateResponse, error)
-	// Updates an existing tenant.
-	Update(context.Context, *TenantsUpdateRequest) (*TenantsUpdateResponse, error)
 	// Deletes a tenant.
 	Delete(context.Context, *TenantsDeleteRequest) (*TenantsDeleteResponse, error)
+	// Updates an existing tenant.
+	Update(context.Context, *TenantsUpdateRequest) (*TenantsUpdateResponse, error)
 	mustEmbedUnimplementedTenantsServer()
 }
 
@@ -146,11 +146,11 @@ func (UnimplementedTenantsServer) Get(context.Context, *TenantsGetRequest) (*Ten
 func (UnimplementedTenantsServer) Create(context.Context, *TenantsCreateRequest) (*TenantsCreateResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Create not implemented")
 }
-func (UnimplementedTenantsServer) Update(context.Context, *TenantsUpdateRequest) (*TenantsUpdateResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Update not implemented")
-}
 func (UnimplementedTenantsServer) Delete(context.Context, *TenantsDeleteRequest) (*TenantsDeleteResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
+}
+func (UnimplementedTenantsServer) Update(context.Context, *TenantsUpdateRequest) (*TenantsUpdateResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Update not implemented")
 }
 func (UnimplementedTenantsServer) mustEmbedUnimplementedTenantsServer() {}
 func (UnimplementedTenantsServer) testEmbeddedByValue()                 {}
@@ -227,24 +227,6 @@ func _Tenants_Create_Handler(srv interface{}, ctx context.Context, dec func(inte
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Tenants_Update_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(TenantsUpdateRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(TenantsServer).Update(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Tenants_Update_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(TenantsServer).Update(ctx, req.(*TenantsUpdateRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _Tenants_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(TenantsDeleteRequest)
 	if err := dec(in); err != nil {
@@ -259,6 +241,24 @@ func _Tenants_Delete_Handler(srv interface{}, ctx context.Context, dec func(inte
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(TenantsServer).Delete(ctx, req.(*TenantsDeleteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Tenants_Update_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TenantsUpdateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TenantsServer).Update(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Tenants_Update_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TenantsServer).Update(ctx, req.(*TenantsUpdateRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -283,12 +283,12 @@ var Tenants_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Tenants_Create_Handler,
 		},
 		{
-			MethodName: "Update",
-			Handler:    _Tenants_Update_Handler,
-		},
-		{
 			MethodName: "Delete",
 			Handler:    _Tenants_Delete_Handler,
+		},
+		{
+			MethodName: "Update",
+			Handler:    _Tenants_Update_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

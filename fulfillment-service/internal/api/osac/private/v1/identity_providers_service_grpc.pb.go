@@ -44,11 +44,14 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// IdentityProviders service provides internal operations for managing identity providers.
+// IdentityProviders service provides operations for managing tenant identity providers.
+// Users can only access identity providers for their tenant.
+// Identity providers enable users to authenticate using their existing corporate credentials
+// (LDAP, Active Directory, OIDC, SAML, etc.).
 type IdentityProvidersClient interface {
 	// Creates a new identity provider.
 	Create(ctx context.Context, in *IdentityProvidersCreateRequest, opts ...grpc.CallOption) (*IdentityProvidersCreateResponse, error)
-	// Lists all identity providers.
+	// Lists identity providers assigned to a tenant.
 	// Use filter with metadata.tenant to scope to a specific tenant.
 	List(ctx context.Context, in *IdentityProvidersListRequest, opts ...grpc.CallOption) (*IdentityProvidersListResponse, error)
 	// Retrieves an identity provider by name.
@@ -133,11 +136,14 @@ func (c *identityProvidersClient) Signal(ctx context.Context, in *IdentityProvid
 // All implementations must embed UnimplementedIdentityProvidersServer
 // for forward compatibility.
 //
-// IdentityProviders service provides internal operations for managing identity providers.
+// IdentityProviders service provides operations for managing tenant identity providers.
+// Users can only access identity providers for their tenant.
+// Identity providers enable users to authenticate using their existing corporate credentials
+// (LDAP, Active Directory, OIDC, SAML, etc.).
 type IdentityProvidersServer interface {
 	// Creates a new identity provider.
 	Create(context.Context, *IdentityProvidersCreateRequest) (*IdentityProvidersCreateResponse, error)
-	// Lists all identity providers.
+	// Lists identity providers assigned to a tenant.
 	// Use filter with metadata.tenant to scope to a specific tenant.
 	List(context.Context, *IdentityProvidersListRequest) (*IdentityProvidersListResponse, error)
 	// Retrieves an identity provider by name.

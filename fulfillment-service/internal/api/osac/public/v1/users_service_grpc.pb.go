@@ -35,8 +35,8 @@ const (
 	Users_List_FullMethodName   = "/osac.public.v1.Users/List"
 	Users_Get_FullMethodName    = "/osac.public.v1.Users/Get"
 	Users_Create_FullMethodName = "/osac.public.v1.Users/Create"
-	Users_Update_FullMethodName = "/osac.public.v1.Users/Update"
 	Users_Delete_FullMethodName = "/osac.public.v1.Users/Delete"
+	Users_Update_FullMethodName = "/osac.public.v1.Users/Update"
 )
 
 // UsersClient is the client API for Users service.
@@ -49,10 +49,10 @@ type UsersClient interface {
 	Get(ctx context.Context, in *UsersGetRequest, opts ...grpc.CallOption) (*UsersGetResponse, error)
 	// Creates a new user.
 	Create(ctx context.Context, in *UsersCreateRequest, opts ...grpc.CallOption) (*UsersCreateResponse, error)
-	// Updates an existing user.
-	Update(ctx context.Context, in *UsersUpdateRequest, opts ...grpc.CallOption) (*UsersUpdateResponse, error)
 	// Deletes a user.
 	Delete(ctx context.Context, in *UsersDeleteRequest, opts ...grpc.CallOption) (*UsersDeleteResponse, error)
+	// Updates an existing user.
+	Update(ctx context.Context, in *UsersUpdateRequest, opts ...grpc.CallOption) (*UsersUpdateResponse, error)
 }
 
 type usersClient struct {
@@ -93,20 +93,20 @@ func (c *usersClient) Create(ctx context.Context, in *UsersCreateRequest, opts .
 	return out, nil
 }
 
-func (c *usersClient) Update(ctx context.Context, in *UsersUpdateRequest, opts ...grpc.CallOption) (*UsersUpdateResponse, error) {
+func (c *usersClient) Delete(ctx context.Context, in *UsersDeleteRequest, opts ...grpc.CallOption) (*UsersDeleteResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(UsersUpdateResponse)
-	err := c.cc.Invoke(ctx, Users_Update_FullMethodName, in, out, cOpts...)
+	out := new(UsersDeleteResponse)
+	err := c.cc.Invoke(ctx, Users_Delete_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *usersClient) Delete(ctx context.Context, in *UsersDeleteRequest, opts ...grpc.CallOption) (*UsersDeleteResponse, error) {
+func (c *usersClient) Update(ctx context.Context, in *UsersUpdateRequest, opts ...grpc.CallOption) (*UsersUpdateResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(UsersDeleteResponse)
-	err := c.cc.Invoke(ctx, Users_Delete_FullMethodName, in, out, cOpts...)
+	out := new(UsersUpdateResponse)
+	err := c.cc.Invoke(ctx, Users_Update_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -123,10 +123,10 @@ type UsersServer interface {
 	Get(context.Context, *UsersGetRequest) (*UsersGetResponse, error)
 	// Creates a new user.
 	Create(context.Context, *UsersCreateRequest) (*UsersCreateResponse, error)
-	// Updates an existing user.
-	Update(context.Context, *UsersUpdateRequest) (*UsersUpdateResponse, error)
 	// Deletes a user.
 	Delete(context.Context, *UsersDeleteRequest) (*UsersDeleteResponse, error)
+	// Updates an existing user.
+	Update(context.Context, *UsersUpdateRequest) (*UsersUpdateResponse, error)
 	mustEmbedUnimplementedUsersServer()
 }
 
@@ -146,11 +146,11 @@ func (UnimplementedUsersServer) Get(context.Context, *UsersGetRequest) (*UsersGe
 func (UnimplementedUsersServer) Create(context.Context, *UsersCreateRequest) (*UsersCreateResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Create not implemented")
 }
-func (UnimplementedUsersServer) Update(context.Context, *UsersUpdateRequest) (*UsersUpdateResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Update not implemented")
-}
 func (UnimplementedUsersServer) Delete(context.Context, *UsersDeleteRequest) (*UsersDeleteResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
+}
+func (UnimplementedUsersServer) Update(context.Context, *UsersUpdateRequest) (*UsersUpdateResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Update not implemented")
 }
 func (UnimplementedUsersServer) mustEmbedUnimplementedUsersServer() {}
 func (UnimplementedUsersServer) testEmbeddedByValue()               {}
@@ -227,24 +227,6 @@ func _Users_Create_Handler(srv interface{}, ctx context.Context, dec func(interf
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Users_Update_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(UsersUpdateRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(UsersServer).Update(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Users_Update_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(UsersServer).Update(ctx, req.(*UsersUpdateRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _Users_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(UsersDeleteRequest)
 	if err := dec(in); err != nil {
@@ -259,6 +241,24 @@ func _Users_Delete_Handler(srv interface{}, ctx context.Context, dec func(interf
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(UsersServer).Delete(ctx, req.(*UsersDeleteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Users_Update_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UsersUpdateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UsersServer).Update(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Users_Update_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UsersServer).Update(ctx, req.(*UsersUpdateRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -283,12 +283,12 @@ var Users_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Users_Create_Handler,
 		},
 		{
-			MethodName: "Update",
-			Handler:    _Users_Update_Handler,
-		},
-		{
 			MethodName: "Delete",
 			Handler:    _Users_Delete_Handler,
+		},
+		{
+			MethodName: "Update",
+			Handler:    _Users_Update_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

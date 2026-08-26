@@ -51,7 +51,7 @@ type ComputeInstanceTemplatesClient interface {
 	Create(ctx context.Context, in *ComputeInstanceTemplatesCreateRequest, opts ...grpc.CallOption) (*ComputeInstanceTemplatesCreateResponse, error)
 	// Updates an existing compute instance template.
 	Update(ctx context.Context, in *ComputeInstanceTemplatesUpdateRequest, opts ...grpc.CallOption) (*ComputeInstanceTemplatesUpdateResponse, error)
-	// Delete a compute instance template.
+	// Deletes a compute instance template.
 	Delete(ctx context.Context, in *ComputeInstanceTemplatesDeleteRequest, opts ...grpc.CallOption) (*ComputeInstanceTemplatesDeleteResponse, error)
 }
 
@@ -125,7 +125,7 @@ type ComputeInstanceTemplatesServer interface {
 	Create(context.Context, *ComputeInstanceTemplatesCreateRequest) (*ComputeInstanceTemplatesCreateResponse, error)
 	// Updates an existing compute instance template.
 	Update(context.Context, *ComputeInstanceTemplatesUpdateRequest) (*ComputeInstanceTemplatesUpdateResponse, error)
-	// Delete a compute instance template.
+	// Deletes a compute instance template.
 	Delete(context.Context, *ComputeInstanceTemplatesDeleteRequest) (*ComputeInstanceTemplatesDeleteResponse, error)
 	mustEmbedUnimplementedComputeInstanceTemplatesServer()
 }

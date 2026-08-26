@@ -44,10 +44,15 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type ClusterCatalogItemsClient interface {
+	// Retrieves the list of cluster catalog items.
 	List(ctx context.Context, in *ClusterCatalogItemsListRequest, opts ...grpc.CallOption) (*ClusterCatalogItemsListResponse, error)
+	// Retrieves the details of one specific cluster catalog item.
 	Get(ctx context.Context, in *ClusterCatalogItemsGetRequest, opts ...grpc.CallOption) (*ClusterCatalogItemsGetResponse, error)
+	// Creates a new cluster catalog item.
 	Create(ctx context.Context, in *ClusterCatalogItemsCreateRequest, opts ...grpc.CallOption) (*ClusterCatalogItemsCreateResponse, error)
+	// Deletes a cluster catalog item.
 	Delete(ctx context.Context, in *ClusterCatalogItemsDeleteRequest, opts ...grpc.CallOption) (*ClusterCatalogItemsDeleteResponse, error)
+	// Updates an existing cluster catalog item.
 	Update(ctx context.Context, in *ClusterCatalogItemsUpdateRequest, opts ...grpc.CallOption) (*ClusterCatalogItemsUpdateResponse, error)
 	// Indicates that something changed in the object or the system that may require reconciling the object.
 	Signal(ctx context.Context, in *ClusterCatalogItemsSignalRequest, opts ...grpc.CallOption) (*ClusterCatalogItemsSignalResponse, error)
@@ -125,10 +130,15 @@ func (c *clusterCatalogItemsClient) Signal(ctx context.Context, in *ClusterCatal
 // All implementations must embed UnimplementedClusterCatalogItemsServer
 // for forward compatibility.
 type ClusterCatalogItemsServer interface {
+	// Retrieves the list of cluster catalog items.
 	List(context.Context, *ClusterCatalogItemsListRequest) (*ClusterCatalogItemsListResponse, error)
+	// Retrieves the details of one specific cluster catalog item.
 	Get(context.Context, *ClusterCatalogItemsGetRequest) (*ClusterCatalogItemsGetResponse, error)
+	// Creates a new cluster catalog item.
 	Create(context.Context, *ClusterCatalogItemsCreateRequest) (*ClusterCatalogItemsCreateResponse, error)
+	// Deletes a cluster catalog item.
 	Delete(context.Context, *ClusterCatalogItemsDeleteRequest) (*ClusterCatalogItemsDeleteResponse, error)
+	// Updates an existing cluster catalog item.
 	Update(context.Context, *ClusterCatalogItemsUpdateRequest) (*ClusterCatalogItemsUpdateResponse, error)
 	// Indicates that something changed in the object or the system that may require reconciling the object.
 	Signal(context.Context, *ClusterCatalogItemsSignalRequest) (*ClusterCatalogItemsSignalResponse, error)

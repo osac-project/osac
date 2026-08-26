@@ -48,35 +48,10 @@ type ComputeInstancesClient interface {
 	// Retrieves the details of one specific compute instance.
 	Get(ctx context.Context, in *ComputeInstancesGetRequest, opts ...grpc.CallOption) (*ComputeInstancesGetResponse, error)
 	// Creates a new compute instance.
-	//
-	// Note that this operation is not allowed for regular users, only for the server. Regular users create compute instances
-	// indirectly, creating a compute instance order that will eventually result in the system creating a compute instance.
 	Create(ctx context.Context, in *ComputeInstancesCreateRequest, opts ...grpc.CallOption) (*ComputeInstancesCreateResponse, error)
 	// Updates an existing compute instance.
-	//
-	// In the HTTP+JSON version of the API this is mapped to the `PATCH` verb and the `update_mask` field is automatically
-	// populated from the list of fields present in the request body. For example, to update the `state` of a compute instance to
-	// `READY` the request line should be like this:
-	//
-	// ```http
-	// PATCH /api/fulfillment/v1/compute_instances/123
-	// ```
-	//
-	// And the request body should be like this:
-	//
-	// ```json
-	//
-	//	{
-	//	  "status": {
-	//	    "state": "COMPUTE_INSTANCE_STATE_READY"
-	//	  }
-	//	}
-	//
-	// ```
-	//
-	// The response body will contain the modified object.
 	Update(ctx context.Context, in *ComputeInstancesUpdateRequest, opts ...grpc.CallOption) (*ComputeInstancesUpdateResponse, error)
-	// Delete a compute instance.
+	// Deletes a compute instance.
 	Delete(ctx context.Context, in *ComputeInstancesDeleteRequest, opts ...grpc.CallOption) (*ComputeInstancesDeleteResponse, error)
 }
 
@@ -147,35 +122,10 @@ type ComputeInstancesServer interface {
 	// Retrieves the details of one specific compute instance.
 	Get(context.Context, *ComputeInstancesGetRequest) (*ComputeInstancesGetResponse, error)
 	// Creates a new compute instance.
-	//
-	// Note that this operation is not allowed for regular users, only for the server. Regular users create compute instances
-	// indirectly, creating a compute instance order that will eventually result in the system creating a compute instance.
 	Create(context.Context, *ComputeInstancesCreateRequest) (*ComputeInstancesCreateResponse, error)
 	// Updates an existing compute instance.
-	//
-	// In the HTTP+JSON version of the API this is mapped to the `PATCH` verb and the `update_mask` field is automatically
-	// populated from the list of fields present in the request body. For example, to update the `state` of a compute instance to
-	// `READY` the request line should be like this:
-	//
-	// ```http
-	// PATCH /api/fulfillment/v1/compute_instances/123
-	// ```
-	//
-	// And the request body should be like this:
-	//
-	// ```json
-	//
-	//	{
-	//	  "status": {
-	//	    "state": "COMPUTE_INSTANCE_STATE_READY"
-	//	  }
-	//	}
-	//
-	// ```
-	//
-	// The response body will contain the modified object.
 	Update(context.Context, *ComputeInstancesUpdateRequest) (*ComputeInstancesUpdateResponse, error)
-	// Delete a compute instance.
+	// Deletes a compute instance.
 	Delete(context.Context, *ComputeInstancesDeleteRequest) (*ComputeInstancesDeleteResponse, error)
 	mustEmbedUnimplementedComputeInstancesServer()
 }

@@ -44,10 +44,15 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type UsersClient interface {
+	// Retrieves the list of users.
 	List(ctx context.Context, in *UsersListRequest, opts ...grpc.CallOption) (*UsersListResponse, error)
+	// Retrieves the details of one specific user.
 	Get(ctx context.Context, in *UsersGetRequest, opts ...grpc.CallOption) (*UsersGetResponse, error)
+	// Creates a new user.
 	Create(ctx context.Context, in *UsersCreateRequest, opts ...grpc.CallOption) (*UsersCreateResponse, error)
+	// Deletes a user.
 	Delete(ctx context.Context, in *UsersDeleteRequest, opts ...grpc.CallOption) (*UsersDeleteResponse, error)
+	// Updates an existing user.
 	Update(ctx context.Context, in *UsersUpdateRequest, opts ...grpc.CallOption) (*UsersUpdateResponse, error)
 	Signal(ctx context.Context, in *UsersSignalRequest, opts ...grpc.CallOption) (*UsersSignalResponse, error)
 }
@@ -124,10 +129,15 @@ func (c *usersClient) Signal(ctx context.Context, in *UsersSignalRequest, opts .
 // All implementations must embed UnimplementedUsersServer
 // for forward compatibility.
 type UsersServer interface {
+	// Retrieves the list of users.
 	List(context.Context, *UsersListRequest) (*UsersListResponse, error)
+	// Retrieves the details of one specific user.
 	Get(context.Context, *UsersGetRequest) (*UsersGetResponse, error)
+	// Creates a new user.
 	Create(context.Context, *UsersCreateRequest) (*UsersCreateResponse, error)
+	// Deletes a user.
 	Delete(context.Context, *UsersDeleteRequest) (*UsersDeleteResponse, error)
+	// Updates an existing user.
 	Update(context.Context, *UsersUpdateRequest) (*UsersUpdateResponse, error)
 	Signal(context.Context, *UsersSignalRequest) (*UsersSignalResponse, error)
 	mustEmbedUnimplementedUsersServer()

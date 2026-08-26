@@ -48,14 +48,20 @@ type ClusterVersionsClient interface {
 	List(ctx context.Context, in *ClusterVersionsListRequest, opts ...grpc.CallOption) (*ClusterVersionsListResponse, error)
 	// Retrieves the details of one specific cluster version.
 	Get(ctx context.Context, in *ClusterVersionsGetRequest, opts ...grpc.CallOption) (*ClusterVersionsGetResponse, error)
-	// Registers a new OpenShift version in the catalog. Requires `spec.version` and `spec.image`;
-	// `spec.enabled` defaults to true and `spec.state` defaults to ACTIVE.
+	// Registers a new OpenShift version in the catalog. Requires `spec.version`; `spec.enabled` defaults to true
+	// and `spec.state` defaults to ACTIVE.
+	//
+	// This method isn't allowed for regular users, only for the system itself.
 	Create(ctx context.Context, in *ClusterVersionsCreateRequest, opts ...grpc.CallOption) (*ClusterVersionsCreateResponse, error)
 	// Updates a cluster version. Allows modifying lifecycle state, availability, and upgrade constraints. The
-	// `spec.version` and `spec.image` fields are immutable.
+	// `spec.version` field is immutable.
+	//
+	// This method isn't allowed for regular users, only for the system itself.
 	Update(ctx context.Context, in *ClusterVersionsUpdateRequest, opts ...grpc.CallOption) (*ClusterVersionsUpdateResponse, error)
 	// Removes a cluster version from the catalog. Rejected if the version is referenced by active clusters,
 	// templates, or catalog items.
+	//
+	// This method isn't allowed for regular users, only for the system itself.
 	Delete(ctx context.Context, in *ClusterVersionsDeleteRequest, opts ...grpc.CallOption) (*ClusterVersionsDeleteResponse, error)
 	// Indicates that something changed in the object or the system that may require reconciling the object.
 	Signal(ctx context.Context, in *ClusterVersionsSignalRequest, opts ...grpc.CallOption) (*ClusterVersionsSignalResponse, error)
@@ -137,14 +143,20 @@ type ClusterVersionsServer interface {
 	List(context.Context, *ClusterVersionsListRequest) (*ClusterVersionsListResponse, error)
 	// Retrieves the details of one specific cluster version.
 	Get(context.Context, *ClusterVersionsGetRequest) (*ClusterVersionsGetResponse, error)
-	// Registers a new OpenShift version in the catalog. Requires `spec.version` and `spec.image`;
-	// `spec.enabled` defaults to true and `spec.state` defaults to ACTIVE.
+	// Registers a new OpenShift version in the catalog. Requires `spec.version`; `spec.enabled` defaults to true
+	// and `spec.state` defaults to ACTIVE.
+	//
+	// This method isn't allowed for regular users, only for the system itself.
 	Create(context.Context, *ClusterVersionsCreateRequest) (*ClusterVersionsCreateResponse, error)
 	// Updates a cluster version. Allows modifying lifecycle state, availability, and upgrade constraints. The
-	// `spec.version` and `spec.image` fields are immutable.
+	// `spec.version` field is immutable.
+	//
+	// This method isn't allowed for regular users, only for the system itself.
 	Update(context.Context, *ClusterVersionsUpdateRequest) (*ClusterVersionsUpdateResponse, error)
 	// Removes a cluster version from the catalog. Rejected if the version is referenced by active clusters,
 	// templates, or catalog items.
+	//
+	// This method isn't allowed for regular users, only for the system itself.
 	Delete(context.Context, *ClusterVersionsDeleteRequest) (*ClusterVersionsDeleteResponse, error)
 	// Indicates that something changed in the object or the system that may require reconciling the object.
 	Signal(context.Context, *ClusterVersionsSignalRequest) (*ClusterVersionsSignalResponse, error)

@@ -84,6 +84,12 @@ message ClusterTemplatesCreateResponse {
   ClusterTemplate object = 1;
 }
 
+message ClusterTemplatesDeleteRequest {
+  string id = 1;
+}
+
+message ClusterTemplatesDeleteResponse {}
+
 message ClusterTemplatesUpdateRequest {
   ClusterTemplate object = 1;
   google.protobuf.FieldMask update_mask = 2;
@@ -97,12 +103,6 @@ message ClusterTemplatesUpdateRequest {
 message ClusterTemplatesUpdateResponse {
   ClusterTemplate object = 1;
 }
-
-message ClusterTemplatesDeleteRequest {
-  string id = 1;
-}
-
-message ClusterTemplatesDeleteResponse {}
 
 service ClusterTemplates {
   // Retrieves the list of cluster templates.
@@ -127,17 +127,17 @@ service ClusterTemplates {
     };
   }
 
-  // Updates an existint cluster template.
+  // Deletes a cluster template.
+  rpc Delete(ClusterTemplatesDeleteRequest) returns (ClusterTemplatesDeleteResponse) {
+    option (google.api.http) = {delete: "/api/fulfillment/v1/cluster_templates/{id}"};
+  }
+
+  // Updates an existing cluster template.
   rpc Update(ClusterTemplatesUpdateRequest) returns (ClusterTemplatesUpdateResponse) {
     option (google.api.http) = {
       patch: "/api/fulfillment/v1/cluster_templates/{object.id}"
       body: "object"
       response_body: "object"
     };
-  }
-
-  // Delete a cluster template.
-  rpc Delete(ClusterTemplatesDeleteRequest) returns (ClusterTemplatesDeleteResponse) {
-    option (google.api.http) = {delete: "/api/fulfillment/v1/cluster_templates/{id}"};
   }
 }

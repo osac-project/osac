@@ -15,19 +15,60 @@ syntax = "proto3";
 
 package osac.private.v1;
 
+import "cleanapi/cleanapi.proto";
 import "google/api/annotations.proto";
 import "google/protobuf/field_mask.proto";
 import "osac/private/v1/cluster_template_type.proto";
 
+option (cleanapi.file).package = "osac.public.v1";
+option (cleanapi.file).http_route_prefix_map = "private:fulfillment";
+
 message ClusterTemplatesListRequest {
+  // Index of the first result. If not specified the default value will be zero.
   optional int32 offset = 1;
+
+  // Maximum number of results to be returned by the server. When not specified all the results will be returned. Note
+  // that there may not be enough results to return, and that the server may decide, for performance reasons, to return
+  // less results than requested.
   optional int32 limit = 2;
+
+  // Filter criteria.
+  //
+  // The value of this parameter is a [CEL](https://cel.dev) expression used to select which objects to return. The
+  // built-in `this` variable refers to the object being tested and `now` refers to the current date and time. If the
+  // expression evaluates to `true` the object is included in the results. For example, to retrieve all templates with
+  // names starting with `large`:
+  //
+  //     this.metadata.name.startsWith("large")
+  //
+  // If this isn't provided, or if the value is empty, then all the templates that the user has permission to see will
+  // be returned. Not all CEL constructs are currently supported for implementation reasons; see the filter
+  // documentation (docs/FILTER.md) for the full details.
   optional string filter = 3;
+
+  // Order criteria.
+  //
+  // The syntax of this parameter is similar to the syntax of the _order by_ clause of a SQL statement, but using the
+  // names of the attributes of the templated instead of the names of the columns of a table. For example, in order to
+  // sort the templates descending by title the value should be:
+  //
+  //     name desc
+  //
+  // If the parameter isn't provided, or if the value is empty, then the order of the results is undefined.
+  optional string order = 4;
 }
 
 message ClusterTemplatesListResponse {
+  // Actual number of items returned. Note that this may be smaller than the value requested in the `limit` parameter
+  // of the request if there are not enough items, or of the system decides that returning that number of items isn't
+  // feasible or convenient for performance reasons.
   int32 size = 1;
+
+  // Total number of items of the collection that match the search criteria, regardless of the number of results
+  // requested with the `limit` parameter.
   int32 total = 2;
+
+  // List of results.
   repeated ClusterTemplate items = 3;
 }
 
@@ -68,21 +109,29 @@ message ClusterTemplatesUpdateResponse {
 }
 
 message ClusterTemplatesSignalRequest {
+  option (cleanapi.message).private = true;
   string id = 1;
 }
 
-message ClusterTemplatesSignalResponse {}
+message ClusterTemplatesSignalResponse {
+  option (cleanapi.message).private = true;
+}
 
 service ClusterTemplates {
+  // Retrieves the list of cluster templates.
   rpc List(ClusterTemplatesListRequest) returns (ClusterTemplatesListResponse) {
     option (google.api.http) = {get: "/api/private/v1/cluster_templates"};
   }
+
+  // Retrieves the details of one specific cluster template.
   rpc Get(ClusterTemplatesGetRequest) returns (ClusterTemplatesGetResponse) {
     option (google.api.http) = {
       get: "/api/private/v1/cluster_templates/{id}"
       response_body: "object"
     };
   }
+
+  // Creates a new cluster template.
   rpc Create(ClusterTemplatesCreateRequest) returns (ClusterTemplatesCreateResponse) {
     option (google.api.http) = {
       post: "/api/private/v1/cluster_templates"
@@ -90,9 +139,13 @@ service ClusterTemplates {
       response_body: "object"
     };
   }
+
+  // Deletes a cluster template.
   rpc Delete(ClusterTemplatesDeleteRequest) returns (ClusterTemplatesDeleteResponse) {
     option (google.api.http) = {delete: "/api/private/v1/cluster_templates/{id}"};
   }
+
+  // Updates an existing cluster template.
   rpc Update(ClusterTemplatesUpdateRequest) returns (ClusterTemplatesUpdateResponse) {
     option (google.api.http) = {
       patch: "/api/private/v1/cluster_templates/{object.id}"
@@ -102,5 +155,7 @@ service ClusterTemplates {
   }
 
   // Indicates that something changed in the object or the system that may require reconciling the object.
-  rpc Signal(ClusterTemplatesSignalRequest) returns (ClusterTemplatesSignalResponse) {}
+  rpc Signal(ClusterTemplatesSignalRequest) returns (ClusterTemplatesSignalResponse) {
+    option (cleanapi.method).private = true;
+  }
 }

@@ -110,7 +110,7 @@ service HostTypes {
     option (google.api.http) = {get: "/api/fulfillment/v1/host_types"};
   }
 
-  // Retrieves the details of one specific host types.
+  // Retrieves the details of one specific host type.
   rpc Get(HostTypesGetRequest) returns (HostTypesGetResponse) {
     option (google.api.http) = {
       get: "/api/fulfillment/v1/host_types/{id}"
@@ -129,7 +129,7 @@ service HostTypes {
     };
   }
 
-  // Updates an existint host type.
+  // Updates an existing host type.
   //
   // This method isn't allowed for regular users, only for the system itself.
   rpc Update(HostTypesUpdateRequest) returns (HostTypesUpdateResponse) {

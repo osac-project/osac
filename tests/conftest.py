@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import os
 import subprocess
+import textwrap
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -109,7 +110,7 @@ def private_grpc(fulfillment_private_address: str, namespace: str, service_accou
 
 
 @pytest.fixture(scope="session", autouse=True)
-def ensure_tenants(private_grpc: GRPCClient) -> None:
+def ensure_tenants(ensure_k8s_only_network_class: None, private_grpc: GRPCClient) -> None:
     for name in ("tenant1", "tenant2"):
         private_grpc.ensure_tenant(name=name)
 
@@ -197,6 +198,42 @@ def setup_organization_memberships(
 @pytest.fixture(scope="session")
 def k8s_hub_client(namespace: str) -> K8sClient:
     return K8sClient(namespace=namespace)
+
+
+_K8S_ONLY_NETWORK_MANAGER_CONFIGMAP = textwrap.dedent("""\
+    apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: osac-network-k8s-manager-k8s-only
+      namespace: {namespace}
+      labels:
+        osac.openshift.io/network-k8s-manager: "true"
+    data:
+      name: k8s_only
+      description: "Composite k8s-only manager (CUDN + NetworkPolicy + MetalLB), no separate physical fabric"
+      capabilities: "ipv4,ipv6,dualStack"
+""")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def ensure_k8s_only_network_class(private_grpc: GRPCClient, k8s_hub_client: K8sClient, namespace: str) -> None:
+    """No-op unless OSAC_NETWORK_CLASS_K8S_ONLY is set. When set, registers the
+    k8s_only k8s-manager ConfigMap and points the environment's singleton
+    NetworkClass at it (k8s_manager: k8s_only, fabric_manager cleared)."""
+    if not env("OSAC_NETWORK_CLASS_K8S_ONLY", ""):
+        return
+
+    k8s_hub_client.apply(manifest=_K8S_ONLY_NETWORK_MANAGER_CONFIGMAP.format(namespace=namespace))
+
+    network_classes = private_grpc.list_network_classes()
+    if not network_classes:
+        raise RuntimeError(
+            "OSAC_NETWORK_CLASS_K8S_ONLY is set but no NetworkClass exists — "
+            "expected the platform default to already be published by the publish-templates job"
+        )
+    private_grpc.update_network_class(
+        network_class_id=network_classes[0]["id"], fabric_manager="", k8s_manager="k8s_only"
+    )
 
 
 @pytest.fixture(scope="session")

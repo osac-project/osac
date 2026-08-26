@@ -123,9 +123,6 @@ service ComputeInstances {
   }
 
   // Creates a new compute instance.
-  //
-  // Note that this operation is not allowed for regular users, only for the server. Regular users create compute instances
-  // indirectly, creating a compute instance order that will eventually result in the system creating a compute instance.
   rpc Create(ComputeInstancesCreateRequest) returns (ComputeInstancesCreateResponse) {
     option (google.api.http) = {
       post: "/api/fulfillment/v1/compute_instances"
@@ -135,26 +132,6 @@ service ComputeInstances {
   }
 
   // Updates an existing compute instance.
-  //
-  // In the HTTP+JSON version of the API this is mapped to the `PATCH` verb and the `update_mask` field is automatically
-  // populated from the list of fields present in the request body. For example, to update the `state` of a compute instance to
-  // `READY` the request line should be like this:
-  //
-  // ```http
-  // PATCH /api/fulfillment/v1/compute_instances/123
-  // ```
-  //
-  // And the request body should be like this:
-  //
-  // ```json
-  // {
-  //   "status": {
-  //     "state": "COMPUTE_INSTANCE_STATE_READY"
-  //   }
-  // }
-  // ```
-  //
-  // The response body will contain the modified object.
   rpc Update(ComputeInstancesUpdateRequest) returns (ComputeInstancesUpdateResponse) {
     option (google.api.http) = {
       patch: "/api/fulfillment/v1/compute_instances/{object.id}"
@@ -163,7 +140,7 @@ service ComputeInstances {
     };
   }
 
-  // Delete a compute instance.
+  // Deletes a compute instance.
   rpc Delete(ComputeInstancesDeleteRequest) returns (ComputeInstancesDeleteResponse) {
     option (google.api.http) = {delete: "/api/fulfillment/v1/compute_instances/{id}"};
   }

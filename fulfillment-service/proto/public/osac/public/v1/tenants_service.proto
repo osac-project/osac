@@ -73,6 +73,12 @@ message TenantsCreateResponse {
   Tenant object = 1;
 }
 
+message TenantsDeleteRequest {
+  string id = 1;
+}
+
+message TenantsDeleteResponse {}
+
 message TenantsUpdateRequest {
   Tenant object = 1;
   google.protobuf.FieldMask update_mask = 2;
@@ -86,12 +92,6 @@ message TenantsUpdateRequest {
 message TenantsUpdateResponse {
   Tenant object = 1;
 }
-
-message TenantsDeleteRequest {
-  string id = 1;
-}
-
-message TenantsDeleteResponse {}
 
 service Tenants {
   // Retrieves the list of tenants.
@@ -116,6 +116,11 @@ service Tenants {
     };
   }
 
+  // Deletes a tenant.
+  rpc Delete(TenantsDeleteRequest) returns (TenantsDeleteResponse) {
+    option (google.api.http) = {delete: "/api/fulfillment/v1/tenants/{id}"};
+  }
+
   // Updates an existing tenant.
   rpc Update(TenantsUpdateRequest) returns (TenantsUpdateResponse) {
     option (google.api.http) = {
@@ -123,10 +128,5 @@ service Tenants {
       body: "object"
       response_body: "object"
     };
-  }
-
-  // Deletes a tenant.
-  rpc Delete(TenantsDeleteRequest) returns (TenantsDeleteResponse) {
-    option (google.api.http) = {delete: "/api/fulfillment/v1/tenants/{id}"};
   }
 }

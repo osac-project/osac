@@ -80,7 +80,7 @@ func newAdapterMetrics() *adapterMetrics {
 		}, []string{"provider"}),
 		dlqDepth: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "osac_adapter_dlq_depth",
-			Help: "Events this adapter process has sent to the DLQ.",
+			Help: "Records currently retained in the DLQ topic (log occupancy).",
 		}, []string{"provider"}),
 		dlqSize: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "osac_adapter_dlq_bytes_total",

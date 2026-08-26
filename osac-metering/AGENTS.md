@@ -110,7 +110,7 @@ The `adapters/` package is a standalone Go module that provides everything a bil
 - `osac_adapter_dlq_events_total` (provider)
 - `osac_adapter_dlq_send_errors_total` (provider)
 - `osac_adapter_dlq_bytes_total` (provider)
-- `osac_adapter_dlq_depth` (provider) — events this adapter process has sent to the DLQ
+- `osac_adapter_dlq_depth` (provider) — records currently retained in the DLQ topic (sum of newest−oldest offsets; not consumer lag). Scraped periodically from Kafka. Multiple replicas export the same value; aggregate with `max` or `avg`, not `sum`.
 
 ### Echo Adapter
 

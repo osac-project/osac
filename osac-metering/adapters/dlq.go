@@ -10,6 +10,7 @@ in compliance with the License. You may obtain a copy of the License at
 package adapters
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -27,9 +28,24 @@ type DLQSender interface {
 	Close() error
 }
 
+// DLQOccupier reports how many records are currently retained in the DLQ topic.
+type DLQOccupier interface {
+	Occupancy() (int64, error)
+}
+
+// kafkaOffsets is the subset of sarama.Client used to scrape DLQ log occupancy.
+type kafkaOffsets interface {
+	Partitions(topic string) ([]int32, error)
+	GetOffset(topic string, partitionID int32, time int64) (int64, error)
+}
+
+var _ kafkaOffsets = sarama.Client(nil)
+
 // DLQProducer publishes failed events to a Kafka DLQ topic.
 type DLQProducer struct {
 	producer sarama.SyncProducer
+	client   sarama.Client
+	offsets  kafkaOffsets
 	topic    string
 }
 
@@ -41,12 +57,18 @@ func NewDLQProducer(brokers string, topic string, kafkaCfg KafkaConfig) (*DLQPro
 	}
 
 	addrs := splitAndTrimBrokers(brokers, ",")
-	producer, err := sarama.NewSyncProducer(addrs, sc)
+	client, err := sarama.NewClient(addrs, sc)
 	if err != nil {
+		return nil, fmt.Errorf("creating DLQ Kafka client: %w", err)
+	}
+
+	producer, err := sarama.NewSyncProducerFromClient(client)
+	if err != nil {
+		_ = client.Close()
 		return nil, fmt.Errorf("creating DLQ sync producer: %w", err)
 	}
 
-	return &DLQProducer{producer: producer, topic: topic}, nil
+	return &DLQProducer{producer: producer, client: client, offsets: client, topic: topic}, nil
 }
 
 // NewDLQProducerFromSyncProducer creates a DLQ producer from an existing
@@ -92,9 +114,47 @@ func (d *DLQProducer) Send(msg *sarama.ConsumerMessage, reason string, attempts 
 	return nil
 }
 
-// Close shuts down the underlying Kafka producer.
+// Occupancy returns the number of records currently retained in the DLQ topic
+// (sum over partitions of OffsetNewest − OffsetOldest). It does not measure
+// consumer lag. Test-only producers constructed without a Kafka client return
+// an error.
+func (d *DLQProducer) Occupancy() (int64, error) {
+	if d.offsets == nil {
+		return 0, fmt.Errorf("DLQ occupancy requires a Kafka client")
+	}
+
+	partitions, err := d.offsets.Partitions(d.topic)
+	if err != nil {
+		return 0, fmt.Errorf("listing DLQ partitions for %s: %w", d.topic, err)
+	}
+
+	var total int64
+	for _, p := range partitions {
+		newest, err := d.offsets.GetOffset(d.topic, p, sarama.OffsetNewest)
+		if err != nil {
+			return 0, fmt.Errorf("newest offset for %s/%d: %w", d.topic, p, err)
+		}
+		oldest, err := d.offsets.GetOffset(d.topic, p, sarama.OffsetOldest)
+		if err != nil {
+			return 0, fmt.Errorf("oldest offset for %s/%d: %w", d.topic, p, err)
+		}
+		if newest > oldest {
+			total += newest - oldest
+		}
+	}
+	return total, nil
+}
+
+// Close shuts down the underlying Kafka producer and client.
 func (d *DLQProducer) Close() error {
-	return d.producer.Close()
+	var errs []error
+	if d.producer != nil {
+		errs = append(errs, d.producer.Close())
+	}
+	if d.client != nil {
+		errs = append(errs, d.client.Close())
+	}
+	return errors.Join(errs...)
 }
 
 // DLQOptionFromEnv creates a DLQ RunnerOption from environment variables.

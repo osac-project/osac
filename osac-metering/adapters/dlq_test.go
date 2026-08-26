@@ -242,6 +242,116 @@ var _ = Describe("DLQOptionFromEnv", func() {
 	})
 })
 
+type fakeOffsets struct {
+	partitions    []int32
+	newest        map[int32]int64
+	oldest        map[int32]int64
+	partitionsErr error
+	offsetErr     error
+}
+
+func (f *fakeOffsets) Partitions(string) ([]int32, error) {
+	if f.partitionsErr != nil {
+		return nil, f.partitionsErr
+	}
+	return f.partitions, nil
+}
+
+func (f *fakeOffsets) GetOffset(_ string, partitionID int32, time int64) (int64, error) {
+	if f.offsetErr != nil {
+		return 0, f.offsetErr
+	}
+	switch time {
+	case sarama.OffsetNewest:
+		return f.newest[partitionID], nil
+	case sarama.OffsetOldest:
+		return f.oldest[partitionID], nil
+	default:
+		return 0, errors.New("unexpected offset time")
+	}
+}
+
+var _ = Describe("DLQProducer Occupancy", func() {
+	It("sums newest minus oldest across partitions", func() {
+		dlq := &DLQProducer{
+			topic: TopicDLQ,
+			offsets: &fakeOffsets{
+				partitions: []int32{0, 1, 2},
+				newest:     map[int32]int64{0: 10, 1: 5, 2: 20},
+				oldest:     map[int32]int64{0: 3, 1: 5, 2: 12},
+			},
+		}
+
+		n, err := dlq.Occupancy()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(n).To(Equal(int64(15))) // (10-3) + (5-5) + (20-12)
+	})
+
+	It("treats empty partitions as zero", func() {
+		dlq := &DLQProducer{
+			topic: TopicDLQ,
+			offsets: &fakeOffsets{
+				partitions: []int32{0},
+				newest:     map[int32]int64{0: 0},
+				oldest:     map[int32]int64{0: 0},
+			},
+		}
+
+		n, err := dlq.Occupancy()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(n).To(Equal(int64(0)))
+	})
+
+	It("clamps inverted offsets to zero for that partition", func() {
+		dlq := &DLQProducer{
+			topic: TopicDLQ,
+			offsets: &fakeOffsets{
+				partitions: []int32{0, 1},
+				newest:     map[int32]int64{0: 4, 1: 1},
+				oldest:     map[int32]int64{0: 8, 1: 0},
+			},
+		}
+
+		n, err := dlq.Occupancy()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(n).To(Equal(int64(1)))
+	})
+
+	It("returns an error when no Kafka client is attached", func() {
+		dlq := NewDLQProducerFromSyncProducer(nil, TopicDLQ)
+		_, err := dlq.Occupancy()
+		Expect(err).To(MatchError(ContainSubstring("Kafka client")))
+	})
+
+	It("returns an error when partition listing fails", func() {
+		dlq := &DLQProducer{
+			topic: TopicDLQ,
+			offsets: &fakeOffsets{
+				partitionsErr: errors.New("broker down"),
+			},
+		}
+
+		_, err := dlq.Occupancy()
+		Expect(err).To(MatchError(ContainSubstring("listing DLQ partitions")))
+	})
+
+	It("returns an error when GetOffset fails and does not report a partial total", func() {
+		dlq := &DLQProducer{
+			topic: TopicDLQ,
+			offsets: &fakeOffsets{
+				partitions: []int32{0, 1},
+				newest:     map[int32]int64{0: 10},
+				oldest:     map[int32]int64{0: 0},
+				offsetErr:  errors.New("offset unavailable"),
+			},
+		}
+
+		n, err := dlq.Occupancy()
+		Expect(err).To(HaveOccurred())
+		Expect(n).To(Equal(int64(0)))
+	})
+})
+
 func headerMap(headers []sarama.RecordHeader) map[string]string {
 	m := make(map[string]string, len(headers))
 	for _, h := range headers {
@@ -270,3 +380,4 @@ var _ = Describe("newProducerConfig", func() {
 })
 
 var _ DLQSender = (*DLQProducer)(nil)
+var _ DLQOccupier = (*DLQProducer)(nil)

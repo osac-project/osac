@@ -134,6 +134,16 @@ func (m *mockDLQSender) Close() error {
 	return nil
 }
 
+type mockDLQOccupier struct {
+	mockDLQSender
+	occupancy    int64
+	occupancyErr error
+}
+
+func (m *mockDLQOccupier) Occupancy() (int64, error) {
+	return m.occupancy, m.occupancyErr
+}
+
 // --- Helpers ---
 
 func newTestMessage(id, resourceID string, offset int64) *sarama.ConsumerMessage {
@@ -630,7 +640,7 @@ var _ = Describe("Runner DLQ integration", func() {
 			Expect(runner.offsets[tp]).To(Equal(int64(7)))
 		})
 
-		It("increments dlq_events_total and dlq_depth metrics", func() {
+		It("increments dlq_events_total without changing occupancy-based dlq_depth", func() {
 			adapter.submitErr = &NonRetryableError{Err: errors.New("bad")}
 			feedMessages(claim, newTestMessage("evt-1", "res-1", 0))
 
@@ -640,7 +650,7 @@ var _ = Describe("Runner DLQ integration", func() {
 			val := testutil.ToFloat64(runner.metrics.dlqEventsTotal.WithLabelValues("test-provider"))
 			Expect(val).To(Equal(float64(1)))
 			depth := testutil.ToFloat64(runner.metrics.dlqDepth.WithLabelValues("test-provider"))
-			Expect(depth).To(Equal(float64(1)))
+			Expect(depth).To(Equal(float64(0)))
 		})
 	})
 
@@ -793,5 +803,49 @@ var _ = Describe("Runner DLQ integration", func() {
 			dropped := testutil.ToFloat64(noDLQRunner.metrics.eventsDropped.WithLabelValues("test-provider"))
 			Expect(dropped).To(Equal(float64(1)))
 		})
+	})
+})
+
+var _ = Describe("Runner DLQ occupancy metrics", func() {
+	var (
+		adapter *mockAdapter
+		runner  *Runner
+		occ     *mockDLQOccupier
+	)
+
+	BeforeEach(func() {
+		adapter = &mockAdapter{name: "test-provider"}
+		occ = &mockDLQOccupier{occupancy: 42}
+		runner = NewRunner(adapter, RunnerConfig{
+			Brokers:       "localhost:9092",
+			ConsumerGroup: "test-group",
+			Topics:        []string{TopicLifecycle},
+		}, logr.Discard(), WithDLQ(occ))
+	})
+
+	It("sets dlq_depth from topic occupancy", func() {
+		runner.updateDLQDepthMetrics(occ)
+		depth := testutil.ToFloat64(runner.metrics.dlqDepth.WithLabelValues("test-provider"))
+		Expect(depth).To(Equal(float64(42)))
+	})
+
+	It("keeps the last dlq_depth when occupancy scrape fails", func() {
+		runner.updateDLQDepthMetrics(occ)
+		occ.occupancyErr = errors.New("broker timeout")
+		occ.occupancy = 0
+
+		runner.updateDLQDepthMetrics(occ)
+
+		depth := testutil.ToFloat64(runner.metrics.dlqDepth.WithLabelValues("test-provider"))
+		Expect(depth).To(Equal(float64(42)))
+	})
+
+	It("scrapes occupancy immediately then returns when the context is already cancelled", func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		runner.dlqDepthMetricsLoop(ctx, occ)
+
+		depth := testutil.ToFloat64(runner.metrics.dlqDepth.WithLabelValues("test-provider"))
+		Expect(depth).To(Equal(float64(42)))
 	})
 })

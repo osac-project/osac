@@ -28,6 +28,7 @@ const (
 	shutdownFlushTimeout = 30 * time.Second
 	shutdownCloseTimeout = 10 * time.Second
 	consumeErrorBackoff  = 5 * time.Second
+	dlqMetricsInterval   = 30 * time.Second
 )
 
 // RunnerConfig configures the adapter Runner.
@@ -121,6 +122,10 @@ func (r *Runner) Run(ctx context.Context) error {
 	flushDone := make(chan struct{})
 	go r.flushLoop(ctx, flushDone)
 
+	if occ, ok := r.dlq.(DLQOccupier); ok {
+		go r.dlqDepthMetricsLoop(ctx, occ)
+	}
+
 	r.logger.Info("starting consumer group", "topics", r.cfg.Topics)
 
 	for {
@@ -178,6 +183,31 @@ func (r *Runner) flushLoop(ctx context.Context, done chan<- struct{}) {
 			}
 		}
 	}
+}
+
+func (r *Runner) dlqDepthMetricsLoop(ctx context.Context, occ DLQOccupier) {
+	r.updateDLQDepthMetrics(occ)
+
+	ticker := time.NewTicker(dlqMetricsInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			r.updateDLQDepthMetrics(occ)
+		}
+	}
+}
+
+func (r *Runner) updateDLQDepthMetrics(occ DLQOccupier) {
+	n, err := occ.Occupancy()
+	if err != nil {
+		r.logger.Error(err, "failed to scrape DLQ topic occupancy")
+		return
+	}
+	r.metrics.dlqDepth.WithLabelValues(r.adapter.Name()).Set(float64(n))
 }
 
 func (r *Runner) flush(ctx context.Context) error {

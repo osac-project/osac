@@ -124,7 +124,6 @@ func (r *Runner) sendToDLQ(msg *sarama.ConsumerMessage, reason string, attempts 
 		return err
 	}
 	r.metrics.dlqEventsTotal.WithLabelValues(provider).Inc()
-	r.metrics.dlqDepth.WithLabelValues(provider).Inc()
 	r.metrics.dlqSize.WithLabelValues(provider).Add(float64(len(msg.Value)))
 	return nil
 }

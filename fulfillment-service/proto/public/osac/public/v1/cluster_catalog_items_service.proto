@@ -55,6 +55,12 @@ message ClusterCatalogItemsCreateResponse {
   ClusterCatalogItem object = 1;
 }
 
+message ClusterCatalogItemsDeleteRequest {
+  string id = 1;
+}
+
+message ClusterCatalogItemsDeleteResponse {}
+
 message ClusterCatalogItemsUpdateRequest {
   ClusterCatalogItem object = 1;
   google.protobuf.FieldMask update_mask = 2;
@@ -68,12 +74,6 @@ message ClusterCatalogItemsUpdateRequest {
 message ClusterCatalogItemsUpdateResponse {
   ClusterCatalogItem object = 1;
 }
-
-message ClusterCatalogItemsDeleteRequest {
-  string id = 1;
-}
-
-message ClusterCatalogItemsDeleteResponse {}
 
 service ClusterCatalogItems {
   // Retrieves the list of cluster catalog items.
@@ -98,6 +98,11 @@ service ClusterCatalogItems {
     };
   }
 
+  // Deletes a cluster catalog item.
+  rpc Delete(ClusterCatalogItemsDeleteRequest) returns (ClusterCatalogItemsDeleteResponse) {
+    option (google.api.http) = {delete: "/api/fulfillment/v1/cluster_catalog_items/{id}"};
+  }
+
   // Updates an existing cluster catalog item.
   rpc Update(ClusterCatalogItemsUpdateRequest) returns (ClusterCatalogItemsUpdateResponse) {
     option (google.api.http) = {
@@ -105,10 +110,5 @@ service ClusterCatalogItems {
       body: "object"
       response_body: "object"
     };
-  }
-
-  // Deletes a cluster catalog item.
-  rpc Delete(ClusterCatalogItemsDeleteRequest) returns (ClusterCatalogItemsDeleteResponse) {
-    option (google.api.http) = {delete: "/api/fulfillment/v1/cluster_catalog_items/{id}"};
   }
 }

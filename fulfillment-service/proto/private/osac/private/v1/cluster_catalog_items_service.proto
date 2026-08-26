@@ -15,14 +15,25 @@ syntax = "proto3";
 
 package osac.private.v1;
 
+import "cleanapi/cleanapi.proto";
 import "google/api/annotations.proto";
 import "google/protobuf/field_mask.proto";
 import "osac/private/v1/cluster_catalog_item_type.proto";
 
+option (cleanapi.file).package = "osac.public.v1";
+option (cleanapi.file).http_route_prefix_map = "private:fulfillment";
+
 message ClusterCatalogItemsListRequest {
+  // Index of the first result. If not specified the default value will be zero.
   optional int32 offset = 1;
+
+  // Maximum number of results to be returned by the server.
   optional int32 limit = 2;
+
+  // Filter criteria using CEL expressions.
   optional string filter = 3;
+
+  // Order criteria, similar to SQL ORDER BY syntax.
   optional string order = 4;
 }
 
@@ -69,21 +80,29 @@ message ClusterCatalogItemsUpdateResponse {
 }
 
 message ClusterCatalogItemsSignalRequest {
+  option (cleanapi.message).private = true;
   string id = 1;
 }
 
-message ClusterCatalogItemsSignalResponse {}
+message ClusterCatalogItemsSignalResponse {
+  option (cleanapi.message).private = true;
+}
 
 service ClusterCatalogItems {
+  // Retrieves the list of cluster catalog items.
   rpc List(ClusterCatalogItemsListRequest) returns (ClusterCatalogItemsListResponse) {
     option (google.api.http) = {get: "/api/private/v1/cluster_catalog_items"};
   }
+
+  // Retrieves the details of one specific cluster catalog item.
   rpc Get(ClusterCatalogItemsGetRequest) returns (ClusterCatalogItemsGetResponse) {
     option (google.api.http) = {
       get: "/api/private/v1/cluster_catalog_items/{id}"
       response_body: "object"
     };
   }
+
+  // Creates a new cluster catalog item.
   rpc Create(ClusterCatalogItemsCreateRequest) returns (ClusterCatalogItemsCreateResponse) {
     option (google.api.http) = {
       post: "/api/private/v1/cluster_catalog_items"
@@ -91,9 +110,13 @@ service ClusterCatalogItems {
       response_body: "object"
     };
   }
+
+  // Deletes a cluster catalog item.
   rpc Delete(ClusterCatalogItemsDeleteRequest) returns (ClusterCatalogItemsDeleteResponse) {
     option (google.api.http) = {delete: "/api/private/v1/cluster_catalog_items/{id}"};
   }
+
+  // Updates an existing cluster catalog item.
   rpc Update(ClusterCatalogItemsUpdateRequest) returns (ClusterCatalogItemsUpdateResponse) {
     option (google.api.http) = {
       patch: "/api/private/v1/cluster_catalog_items/{object.id}"
@@ -103,5 +126,7 @@ service ClusterCatalogItems {
   }
 
   // Indicates that something changed in the object or the system that may require reconciling the object.
-  rpc Signal(ClusterCatalogItemsSignalRequest) returns (ClusterCatalogItemsSignalResponse) {}
+  rpc Signal(ClusterCatalogItemsSignalRequest) returns (ClusterCatalogItemsSignalResponse) {
+    option (cleanapi.method).private = true;
+  }
 }

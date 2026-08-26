@@ -15,19 +15,61 @@ syntax = "proto3";
 
 package osac.private.v1;
 
+import "cleanapi/cleanapi.proto";
 import "google/api/annotations.proto";
+import "google/api/httpbody.proto";
 import "google/protobuf/field_mask.proto";
 import "osac/private/v1/cluster_type.proto";
 
+option (cleanapi.file).package = "osac.public.v1";
+option (cleanapi.file).http_route_prefix_map = "private:fulfillment";
+
 message ClustersListRequest {
+  // Index of the first result. If not specified the default value will be zero.
   optional int32 offset = 1;
+
+  // Maximum number of results to be returned by the server. When not specified all the results will be returned. Note
+  // that there may not be enough results to return, and that the server may decide, for performance reasons, to return
+  // less results than requested.
   optional int32 limit = 2;
+
+  // Filter criteria.
+  //
+  // The value of this parameter is a [CEL](https://cel.dev) expression used to select which objects to return. The
+  // built-in `this` variable refers to the object being tested and `now` refers to the current date and time. If the
+  // expression evaluates to `true` the object is included in the results. For example, to retrieve all clusters with
+  // names starting with `my`:
+  //
+  //     this.metadata.name.startsWith("my")
+  //
+  // If this isn't provided, or if the value is empty, then all the clusters that the user has permission to see will be
+  // returned. Not all CEL constructs are currently supported for implementation reasons; see the filter documentation
+  // (docs/FILTER.md) for the full details.
   optional string filter = 3;
+
+  // Order criteria.
+  //
+  // The syntax of this parameter is similar to the syntax of the _order by_ clause of a SQL statement, but using the
+  // names of the attributes of the cluster instead of the names of the columns of a table. For example, in order to
+  // sort the clusters descending by API URL the value should be:
+  //
+  //     api_url desc
+  //
+  // If the parameter isn't provided, or if the value is empty, then the order of the results is undefined.
+  optional string order = 4;
 }
 
 message ClustersListResponse {
+  // Actual number of items returned. Note that this may be smaller than the value requested in the `limit` parameter
+  // of the request if there are not enough items, or of the system decides that returning that number of items isn't
+  // feasible or convenient for performance reasons.
   int32 size = 1;
+
+  // Total number of items of the collection that match the search criteria, regardless of the number of results
+  // requested with the `limit` parameter.
   int32 total = 2;
+
+  // List of results.
   repeated Cluster items = 3;
 }
 
@@ -39,6 +81,30 @@ message ClustersGetResponse {
   Cluster object = 1;
 }
 
+message ClustersGetKubeconfigRequest {
+  string id = 1;
+}
+
+message ClustersGetKubeconfigResponse {
+  string kubeconfig = 1;
+}
+
+message ClustersGetKubeconfigViaHttpRequest {
+  string id = 1;
+}
+
+message ClustersGetPasswordRequest {
+  string id = 1;
+}
+
+message ClustersGetPasswordResponse {
+  string password = 1;
+}
+
+message ClustersGetPasswordViaHttpRequest {
+  string id = 1;
+}
+
 message ClustersCreateRequest {
   Cluster object = 1;
 }
@@ -46,12 +112,6 @@ message ClustersCreateRequest {
 message ClustersCreateResponse {
   Cluster object = 1;
 }
-
-message ClustersDeleteRequest {
-  string id = 1;
-}
-
-message ClustersDeleteResponse {}
 
 message ClustersUpdateRequest {
   Cluster object = 1;
@@ -67,22 +127,73 @@ message ClustersUpdateResponse {
   Cluster object = 1;
 }
 
-message ClustersSignalRequest {
+message ClustersDeleteRequest {
   string id = 1;
 }
 
-message ClustersSignalResponse {}
+message ClustersDeleteResponse {}
+
+message ClustersSignalRequest {
+  option (cleanapi.message).private = true;
+  string id = 1;
+}
+
+message ClustersSignalResponse {
+  option (cleanapi.message).private = true;
+}
 
 service Clusters {
+  // Retrieves the list of clusters.
   rpc List(ClustersListRequest) returns (ClustersListResponse) {
     option (google.api.http) = {get: "/api/private/v1/clusters"};
   }
+
+  // Retrieves the details of one specific cluster.
   rpc Get(ClustersGetRequest) returns (ClustersGetResponse) {
     option (google.api.http) = {
       get: "/api/private/v1/clusters/{id}"
       response_body: "object"
     };
   }
+
+  // Returns the admin Kubeconfig of the cluster.
+  //
+  // This intended for use with the gRPC protocol, and it isn't mapped to an HTTP endpoint. To retrieve the Kubeconfig
+  // via HTTP see the `ClustersGetKubeconfigViaHttp` method below.
+  rpc GetKubeconfig(ClustersGetKubeconfigRequest) returns (ClustersGetKubeconfigResponse) {}
+
+  // Returns the admin Kubeconfig of the cluster.
+  //
+  // This is intended for use with HTTP and returns the YAML text of the Kubeconfig directly using the content type
+  // `application/yaml`.
+  //
+  // buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+  // buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
+  rpc GetKubeconfigViaHttp(ClustersGetKubeconfigViaHttpRequest) returns (google.api.HttpBody) {
+    option (google.api.http) = {get: "/api/private/v1/clusters/{id}/kubeconfig"};
+  }
+
+  // Returns the admin password of the cluster.
+  //
+  // This intended for use with the gRPC protocol, and it isn't mapped to an HTTP endpoint. To retrieve the password
+  // via HTTP see the `ClustersGetPasswordViaHttp` method below.
+  rpc GetPassword(ClustersGetPasswordRequest) returns (ClustersGetPasswordResponse) {}
+
+  // Returns the admin password of the cluster.
+  //
+  // This is intended for use with HTTP and returns the YAML text of the password directly using the content type
+  // `text/plain`.
+  //
+  // buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+  // buf:lint:ignore RPC_REQUEST_RESPONSE_UNIQUE
+  rpc GetPasswordViaHttp(ClustersGetPasswordViaHttpRequest) returns (google.api.HttpBody) {
+    option (google.api.http) = {get: "/api/private/v1/clusters/{id}/password"};
+  }
+
+  // Creates a new cluster.
+  //
+  // Note that this operation is not allowed for regular users, only for the server. Regular users create clusters
+  // indirectly, creating a cluster order that will eventually result in the system creating a cluster.
   rpc Create(ClustersCreateRequest) returns (ClustersCreateResponse) {
     option (google.api.http) = {
       post: "/api/private/v1/clusters"
@@ -90,9 +201,28 @@ service Clusters {
       response_body: "object"
     };
   }
-  rpc Delete(ClustersDeleteRequest) returns (ClustersDeleteResponse) {
-    option (google.api.http) = {delete: "/api/private/v1/clusters/{id}"};
-  }
+
+  // Updates an existing cluster.
+  //
+  // In the HTTP+JSON version of the API this is mapped to the `PATCH` verb and the `update_mask` field is automatically
+  // populated from the list of fields present in the request body. For example, to update the `state` of a cluster to
+  // `READY` the request line should be like this:
+  //
+  // ```http
+  // PATCH /api/fulfillment/v1/clusters/123
+  // ```
+  //
+  // And the request body should be like this:
+  //
+  // ```json
+  // {
+  //   "status": {
+  //     "state": "CLUSTER_STATE_READY"
+  //   }
+  // }
+  // ```
+  //
+  // The response body will contain the modified object.
   rpc Update(ClustersUpdateRequest) returns (ClustersUpdateResponse) {
     option (google.api.http) = {
       patch: "/api/private/v1/clusters/{object.id}"
@@ -101,6 +231,13 @@ service Clusters {
     };
   }
 
+  // Delete a cluster.
+  rpc Delete(ClustersDeleteRequest) returns (ClustersDeleteResponse) {
+    option (google.api.http) = {delete: "/api/private/v1/clusters/{id}"};
+  }
+
   // Indicates that something changed in the object or the system that may require reconciling the object.
-  rpc Signal(ClustersSignalRequest) returns (ClustersSignalResponse) {}
+  rpc Signal(ClustersSignalRequest) returns (ClustersSignalResponse) {
+    option (cleanapi.method).private = true;
+  }
 }

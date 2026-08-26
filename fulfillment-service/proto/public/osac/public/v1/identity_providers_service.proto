@@ -19,18 +19,6 @@ import "google/api/annotations.proto";
 import "google/protobuf/field_mask.proto";
 import "osac/public/v1/identity_provider_type.proto";
 
-// Request to create an identity provider.
-message IdentityProvidersCreateRequest {
-  // The identity provider to create.
-  IdentityProvider object = 1;
-}
-
-// Response containing the created identity provider.
-message IdentityProvidersCreateResponse {
-  // The created identity provider.
-  IdentityProvider object = 1;
-}
-
 // Request to list identity providers for a tenant.
 message IdentityProvidersListRequest {
   // Index of the first result. If not specified the default value will be zero.
@@ -56,7 +44,7 @@ message IdentityProvidersListResponse {
   repeated IdentityProvider items = 3;
 }
 
-// Request to get a tenant's identity provider by ID.
+// Request to get an identity provider by ID.
 message IdentityProvidersGetRequest {
   // ID of the identity provider.
   string id = 1;
@@ -65,6 +53,18 @@ message IdentityProvidersGetRequest {
 // Response containing the identity provider.
 message IdentityProvidersGetResponse {
   // The identity provider.
+  IdentityProvider object = 1;
+}
+
+// Request to create an identity provider.
+message IdentityProvidersCreateRequest {
+  // The identity provider to create.
+  IdentityProvider object = 1;
+}
+
+// Response containing the created identity provider.
+message IdentityProvidersCreateResponse {
+  // The created identity provider.
   IdentityProvider object = 1;
 }
 
@@ -118,7 +118,7 @@ service IdentityProviders {
     };
   }
 
-  // Retrieves an identity provider by ID.
+  // Retrieves an identity provider by name.
   rpc Get(IdentityProvidersGetRequest) returns (IdentityProvidersGetResponse) {
     option (google.api.http) = {
       get: "/api/fulfillment/v1/identity_providers/{id}"

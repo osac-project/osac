@@ -15,19 +15,24 @@ syntax = "proto3";
 
 package osac.private.v1;
 
+import "cleanapi/cleanapi.proto";
 import "google/api/annotations.proto";
 import "google/protobuf/field_mask.proto";
 import "osac/private/v1/identity_provider_type.proto";
 
-// Request to list all identity providers.
+option (cleanapi.file).package = "osac.public.v1";
+option (cleanapi.file).http_route_prefix_map = "private:fulfillment";
+
+// Request to list identity providers for a tenant.
 message IdentityProvidersListRequest {
-  // Index of the first result.
+  // Index of the first result. If not specified the default value will be zero.
   optional int32 offset = 1;
 
-  // Maximum number of results.
+  // Maximum number of results to be returned by the server.
   optional int32 limit = 2;
 
-  // Filter criteria.
+  // Filter criteria. CEL expression to filter identity providers.
+  // Use metadata.tenant to scope to a specific tenant.
   optional string filter = 3;
 }
 
@@ -36,7 +41,7 @@ message IdentityProvidersListResponse {
   // Actual number of items returned.
   int32 size = 1;
 
-  // Total number of items.
+  // Total number of items that match the search criteria.
   int32 total = 2;
 
   // List of identity providers.
@@ -98,13 +103,19 @@ message IdentityProvidersDeleteResponse {}
 
 // Request to signal that an identity provider needs reconciliation.
 message IdentityProvidersSignalRequest {
+  option (cleanapi.message).private = true;
   string id = 1;
 }
 
 // Response for signal operation.
-message IdentityProvidersSignalResponse {}
+message IdentityProvidersSignalResponse {
+  option (cleanapi.message).private = true;
+}
 
-// IdentityProviders service provides internal operations for managing identity providers.
+// IdentityProviders service provides operations for managing tenant identity providers.
+// Users can only access identity providers for their tenant.
+// Identity providers enable users to authenticate using their existing corporate credentials
+// (LDAP, Active Directory, OIDC, SAML, etc.).
 service IdentityProviders {
   // Creates a new identity provider.
   rpc Create(IdentityProvidersCreateRequest) returns (IdentityProvidersCreateResponse) {
@@ -114,7 +125,7 @@ service IdentityProviders {
     };
   }
 
-  // Lists all identity providers.
+  // Lists identity providers assigned to a tenant.
   // Use filter with metadata.tenant to scope to a specific tenant.
   rpc List(IdentityProvidersListRequest) returns (IdentityProvidersListResponse) {
     option (google.api.http) = {
@@ -146,5 +157,7 @@ service IdentityProviders {
   }
 
   // Indicates that something changed in the object or the system that may require reconciling the object.
-  rpc Signal(IdentityProvidersSignalRequest) returns (IdentityProvidersSignalResponse) {}
+  rpc Signal(IdentityProvidersSignalRequest) returns (IdentityProvidersSignalResponse) {
+    option (cleanapi.method).private = true;
+  }
 }

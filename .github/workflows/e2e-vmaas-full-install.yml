@@ -147,8 +147,12 @@ jobs:
       fork-pr-author: ${{ github.event.pull_request.head.repo.fork && github.event.pull_request.user.login || '' }}
       pr-number: ${{ github.event.pull_request.number }}
       # Checkout osac-test-infra for tests/Containerfile (not the caller repo)
-      test-infra-repository: osac-project/osac-test-infra
-      test-infra-ref: ${{ inputs.test-infra-ref || 'main' }}
+      # TEMP (OSAC-3995): validate against the osac-test-infra fix branch (PR
+      # osac-project/osac-test-infra#417) that moves storage-tier protocol to spec
+      # level, proving this PR's API change + that test change pass VMaaS e2e
+      # together. REVERT to osac-project/osac-test-infra + 'main' before merging.
+      test-infra-repository: wgordon17/osac-test-infra
+      test-infra-ref: ${{ inputs.test-infra-ref || 'OSAC-3995-storage-tier-protocol-spec' }}
 
   e2e-vmaas-gate:
     if: always()

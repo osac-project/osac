@@ -44,6 +44,8 @@ repo_status() {
   fi
 }
 
+REPO_DIR="${project_dir:-$(printf '%s' "$input" | jq -r '.workspace.project_dir // empty' 2>/dev/null)}"
+
 resolve_osac_ai_skills_dir() {
   if [[ -d "${HOME}/.osac-ai-skills/.git" ]]; then
     printf '%s\n' "${HOME}/.osac-ai-skills"
@@ -52,7 +54,6 @@ resolve_osac_ai_skills_dir() {
   fi
 }
 
-REPO_DIR="${project_dir:-$(printf '%s' "$input" | jq -r '.workspace.project_dir // empty' 2>/dev/null)}"
 AI_DIR="${HOME}/.ai-workflows"
 SKILLS_DIR="$(resolve_osac_ai_skills_dir)"
 

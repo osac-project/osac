@@ -43,6 +43,11 @@ if [[ " \$* " == *" clone "* ]]; then
     fi
     prev="\$a"
   done
+  if [[ -n "\${OSAC_SMOKE_FAIL_CLONE:-}" && "\$dest" == *"\${OSAC_SMOKE_FAIL_CLONE}" ]]; then
+    mkdir -p "\$dest"
+    echo partial > "\$dest/partial"
+    exit 1
+  fi
   printf '%s %s\\n' "\$url" "\$dest" >> "\$LOG"
   mkdir -p "\$dest"
   "\$REAL" init -q "\$dest"
@@ -239,10 +244,69 @@ test_nested_abort_skips_sibling_clones() {
   pass "nested workspace abort happens before sibling clones"
 }
 
+test_failed_clone_cleans_dest() {
+  local home="${TMPDIR_ROOT}/home-fail"
+  local root="${TMPDIR_ROOT}/osac-fail"
+  local bin="${TMPDIR_ROOT}/bin-fail"
+  mkdir -p "$home" "$bin"
+  write_git_wrapper "${bin}/git"
+  seed_vendor_ok "${home}/.osac-ai-skills"
+  seed_ai_workflows "${home}/.ai-workflows"
+  prepare_osac "$root"
+
+  local out
+  out=$(OSAC_SMOKE_FAIL_CLONE=osac-ux run_bootstrap "$root" "$home" "$bin" 2>&1) \
+    || fail "bootstrap should continue after a sibling clone failure: $out"
+  echo "$out" | grep -qi 'Clone failed for osac-ux' \
+    || fail "expected clone-failed message for osac-ux: $out"
+  [[ ! -e "${root}/osac-ux" ]] \
+    || fail "failed clone must not leave dest behind: $(ls -la "${root}/osac-ux" 2>/dev/null || true)"
+  [[ -d "${root}/osac-ui/.git" ]] \
+    || fail "clone failure of osac-ux must still clone later siblings"
+  [[ -d "${root}/enhancement-proposals/.git" ]] \
+    || fail "clone failure of osac-ux must still clone earlier siblings"
+
+  out=$(run_bootstrap "$root" "$home" "$bin" 2>&1) || fail "retry after failed clone failed: $out"
+  [[ -d "${root}/osac-ux/.git" ]] || fail "retry did not clone osac-ux after cleanup"
+  pass "failed clone removes dest so a later run can retry"
+}
+
+test_expected_sibling_requires_org_boundary() {
+  local home="${TMPDIR_ROOT}/home-boundary"
+  local root="${TMPDIR_ROOT}/osac-boundary"
+  local bin="${TMPDIR_ROOT}/bin-boundary"
+  mkdir -p "$home" "$bin"
+  write_git_wrapper "${bin}/git"
+  seed_vendor_ok "${home}/.osac-ai-skills"
+  seed_ai_workflows "${home}/.ai-workflows"
+  prepare_osac "$root"
+
+  run_bootstrap "$root" "$home" "$bin" >/dev/null
+  "$REAL_GIT" -C "${root}/osac-docs" remote set-url origin \
+    "https://github.com/evil-osac-project/docs.git"
+  echo keep > "${root}/osac-docs/keep-me"
+
+  local out
+  out=$(run_bootstrap "$root" "$home" "$bin" 2>&1) || fail "bootstrap failed: $out"
+  echo "$out" | grep -qi 'skip' \
+    || fail "evil-osac-project/docs must not count as osac-project/docs: $out"
+  grep -q keep "${root}/osac-docs/keep-me" \
+    || fail "unrelated osac-docs/ dir was overwritten"
+
+  "$REAL_GIT" -C "${root}/enhancement-proposals" remote set-url origin \
+    "git@github.com:osac-project/enhancement-proposals.git"
+  out=$(run_bootstrap "$root" "$home" "$bin" 2>&1) || fail "bootstrap failed on SSH remote: $out"
+  echo "$out" | grep -q 'Updating enhancement-proposals' \
+    || fail "SSH osac-project remote should still update: $out"
+  pass "expected-clone match requires / or : before osac-project"
+}
+
 test_clones_all_five_into_project_root
 test_rerun_updates_expected_clone
 test_skips_unrelated_existing_dir
 test_extra_list_entry_clones_without_other_edits
 test_nested_abort_skips_sibling_clones
+test_failed_clone_cleans_dest
+test_expected_sibling_requires_org_boundary
 
 echo "All bootstrap sibling-clone smoke tests passed."

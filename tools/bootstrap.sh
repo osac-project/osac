@@ -126,6 +126,7 @@ AI_WORKFLOWS="bugfix,implement,prd,design,e2e"
 
 # Skill-relative sibling checkouts (gitignored). Local dir name follows the
 # GitHub repo except docs → osac-docs (docs/ is in-tree conventions).
+# Format: "repo" or "repo:local-dir"
 SIBLINGS=(
   "enhancement-proposals"
   "osac-ux"
@@ -140,7 +141,8 @@ is_expected_sibling() {
   local remote url
   for remote in $(git -C "$dir" remote 2>/dev/null); do
     url=$(git -C "$dir" remote get-url "$remote" 2>/dev/null) || continue
-    if [[ "${url%.git}" == *"$expected_suffix" ]]; then
+    # Require a path or SSH separator so evil-osac-project/<repo> does not match.
+    if [[ "${url%.git}" == *"/${expected_suffix}" || "${url%.git}" == *":${expected_suffix}" ]]; then
       return 0
     fi
   done
@@ -159,11 +161,12 @@ ensure_sibling() {
     echo "Cloning ${repo} into ${dir}..."
     if ! git clone "https://github.com/osac-project/${repo}.git" "${dest}"; then
       echo "  Clone failed for ${repo}. Skipping."
+      rm -rf "${dest}" 2>/dev/null || true
     fi
   fi
 }
 
-echo "Cloning sibling repos..."
+echo "Ensuring sibling repos..."
 for entry in "${SIBLINGS[@]}"; do
   repo="${entry%%:*}"
   dir="${entry#*:}"

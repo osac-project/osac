@@ -48,7 +48,7 @@ skill-relative sibling repos (see `AGENTS.md`), and links Claude Code / Cursor /
 Gemini CLI skill discovery. Do not run it from an `osac/` nested inside
 `osac-workspace`.
 
-The Feature → PRD → Design → Implement sequence is documented in
+The Feature → PRD → Design → Jira sync → Implement → E2E sequence is documented in
 [osac-ai-skills](https://github.com/osac-project/osac-ai-skills#recommended-skill-sequence)
 (local after bootstrap: `~/.osac-ai-skills/README.md` or
 `.osac-ai-skills/README.md`). See [`AGENTS.md`](AGENTS.md)

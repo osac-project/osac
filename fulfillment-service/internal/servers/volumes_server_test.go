@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"google.golang.org/protobuf/reflect/protoreflect"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
@@ -168,6 +169,51 @@ var _ = Describe("Public volumes server", func() {
 			response, err := publicServer.List(ctx, listRequest)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(response.GetItems()).ToNot(BeEmpty())
+		})
+
+		It("Rejects a CEL filter that references a private-only field", func() {
+			createVolume("filter-private-vol")
+
+			// status.backend exists on the private Volume but not the public one; SetFilterDesc
+			// restricts the public filter surface to public fields, so this must be rejected rather
+			// than silently ignored (which would let callers probe hidden fields).
+			listRequest := &publicv1.VolumesListRequest{}
+			listRequest.SetFilter(`this.status.backend == "internal-backend"`)
+			_, err := publicServer.List(ctx, listRequest)
+			Expect(err).To(HaveOccurred())
+		})
+	})
+
+	// Guards the private→public field-hiding contract at the schema level: if a private field is
+	// ever added without a `[(cleanapi.field).private = true]` annotation, it would appear in the
+	// generated public Volume and fail this test instead of silently leaking.
+	Describe("Public schema", func() {
+		It("Does not expose any internal routing field", func() {
+			forbidden := []string{"backend", "protocol", "hub", "vendor_volume_id"}
+
+			// Recursively collect every field name reachable from the public Volume message.
+			names := map[string]bool{}
+			var walk func(md protoreflect.MessageDescriptor, seen map[string]bool)
+			walk = func(md protoreflect.MessageDescriptor, seen map[string]bool) {
+				if seen[string(md.FullName())] {
+					return
+				}
+				seen[string(md.FullName())] = true
+				fields := md.Fields()
+				for i := range fields.Len() {
+					f := fields.Get(i)
+					names[string(f.Name())] = true
+					if f.Kind() == protoreflect.MessageKind && f.Message() != nil {
+						walk(f.Message(), seen)
+					}
+				}
+			}
+			walk((*publicv1.Volume)(nil).ProtoReflect().Descriptor(), map[string]bool{})
+
+			for _, name := range forbidden {
+				Expect(names).ToNot(HaveKey(name),
+					fmt.Sprintf("internal field %q must not appear in the public Volume schema", name))
+			}
 		})
 	})
 })

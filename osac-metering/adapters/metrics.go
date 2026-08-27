@@ -79,9 +79,9 @@ func newAdapterMetrics() *adapterMetrics {
 			Help: "Total DLQ send failures.",
 		}, []string{"provider"}),
 		dlqDepth: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "osac_adapter_dlq_depth",
-			Help: "Records currently retained in the DLQ topic (log occupancy).",
-		}, []string{"provider"}),
+			Name: "osac_metering_dlq_depth",
+			Help: "Records currently retained in the DLQ topic (log occupancy, not consumer lag).",
+		}, []string{"topic"}),
 		dlqSize: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "osac_adapter_dlq_bytes_total",
 			Help: "Total payload bytes sent to the DLQ.",

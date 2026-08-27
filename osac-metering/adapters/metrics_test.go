@@ -86,5 +86,19 @@ var _ = Describe("adapterMetrics", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(strings.Contains(string(body), "osac_adapter_events_submitted_total")).To(BeTrue())
 		})
+
+		It("exposes osac_metering_dlq_depth labeled by topic", func() {
+			m.dlqDepth.WithLabelValues(TopicDLQ).Set(7)
+
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+			m.handler().ServeHTTP(w, req)
+
+			body, err := io.ReadAll(w.Result().Body)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(body)).To(ContainSubstring("osac_metering_dlq_depth"))
+			Expect(string(body)).To(ContainSubstring(`topic="osac.metering.dlq"`))
+			Expect(string(body)).NotTo(ContainSubstring("osac_adapter_dlq_depth"))
+		})
 	})
 })

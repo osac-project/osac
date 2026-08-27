@@ -207,7 +207,7 @@ func (r *Runner) updateDLQDepthMetrics(occ DLQOccupier) {
 		r.logger.Error(err, "failed to scrape DLQ topic occupancy")
 		return
 	}
-	r.metrics.dlqDepth.WithLabelValues(r.adapter.Name()).Set(float64(n))
+	r.metrics.dlqDepth.WithLabelValues(occ.Topic()).Set(float64(n))
 }
 
 func (r *Runner) flush(ctx context.Context) error {

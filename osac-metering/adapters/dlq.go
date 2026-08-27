@@ -28,9 +28,10 @@ type DLQSender interface {
 	Close() error
 }
 
-// DLQOccupier reports how many records are currently retained in the DLQ topic.
+// DLQOccupier reports how many records are currently retained in a DLQ topic.
 type DLQOccupier interface {
 	Occupancy() (int64, error)
+	Topic() string
 }
 
 // kafkaOffsets is the subset of sarama.Client used to scrape DLQ log occupancy.
@@ -75,6 +76,11 @@ func NewDLQProducer(brokers string, topic string, kafkaCfg KafkaConfig) (*DLQPro
 // Sarama SyncProducer. Useful for testing with mock producers.
 func NewDLQProducerFromSyncProducer(producer sarama.SyncProducer, topic string) *DLQProducer {
 	return &DLQProducer{producer: producer, topic: topic}
+}
+
+// Topic returns the DLQ topic this producer writes to.
+func (d *DLQProducer) Topic() string {
+	return d.topic
 }
 
 // Send publishes a failed consumer message to the DLQ topic. The original

@@ -138,10 +138,18 @@ type mockDLQOccupier struct {
 	mockDLQSender
 	occupancy    int64
 	occupancyErr error
+	topic        string
 }
 
 func (m *mockDLQOccupier) Occupancy() (int64, error) {
 	return m.occupancy, m.occupancyErr
+}
+
+func (m *mockDLQOccupier) Topic() string {
+	if m.topic == "" {
+		return TopicDLQ
+	}
+	return m.topic
 }
 
 // --- Helpers ---
@@ -649,7 +657,7 @@ var _ = Describe("Runner DLQ integration", func() {
 
 			val := testutil.ToFloat64(runner.metrics.dlqEventsTotal.WithLabelValues("test-provider"))
 			Expect(val).To(Equal(float64(1)))
-			depth := testutil.ToFloat64(runner.metrics.dlqDepth.WithLabelValues("test-provider"))
+			depth := testutil.ToFloat64(runner.metrics.dlqDepth.WithLabelValues(TopicDLQ))
 			Expect(depth).To(Equal(float64(0)))
 		})
 	})
@@ -825,8 +833,16 @@ var _ = Describe("Runner DLQ occupancy metrics", func() {
 
 	It("sets dlq_depth from topic occupancy", func() {
 		runner.updateDLQDepthMetrics(occ)
-		depth := testutil.ToFloat64(runner.metrics.dlqDepth.WithLabelValues("test-provider"))
+		depth := testutil.ToFloat64(runner.metrics.dlqDepth.WithLabelValues(TopicDLQ))
 		Expect(depth).To(Equal(float64(42)))
+	})
+
+	It("labels dlq_depth by topic, not provider", func() {
+		occ.topic = "custom.dlq"
+		runner.updateDLQDepthMetrics(occ)
+
+		Expect(testutil.ToFloat64(runner.metrics.dlqDepth.WithLabelValues("custom.dlq"))).To(Equal(float64(42)))
+		Expect(testutil.ToFloat64(runner.metrics.dlqDepth.WithLabelValues("test-provider"))).To(Equal(float64(0)))
 	})
 
 	It("keeps the last dlq_depth when occupancy scrape fails", func() {
@@ -836,7 +852,7 @@ var _ = Describe("Runner DLQ occupancy metrics", func() {
 
 		runner.updateDLQDepthMetrics(occ)
 
-		depth := testutil.ToFloat64(runner.metrics.dlqDepth.WithLabelValues("test-provider"))
+		depth := testutil.ToFloat64(runner.metrics.dlqDepth.WithLabelValues(TopicDLQ))
 		Expect(depth).To(Equal(float64(42)))
 	})
 
@@ -845,7 +861,7 @@ var _ = Describe("Runner DLQ occupancy metrics", func() {
 		cancel()
 		runner.dlqDepthMetricsLoop(ctx, occ)
 
-		depth := testutil.ToFloat64(runner.metrics.dlqDepth.WithLabelValues("test-provider"))
+		depth := testutil.ToFloat64(runner.metrics.dlqDepth.WithLabelValues(TopicDLQ))
 		Expect(depth).To(Equal(float64(42)))
 	})
 })

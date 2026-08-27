@@ -175,7 +175,7 @@ oslo-serialization==5.9.1
     # via
     #   python-keystoneclient
     #   python-novaclient
-oslo-utils==10.0.0
+oslo-utils==10.2.0
     # via
     #   osc-lib
     #   oslo-serialization

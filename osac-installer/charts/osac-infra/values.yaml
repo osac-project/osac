@@ -1,6 +1,13 @@
 cliImage: quay.io/openshift/origin-cli:4.20.0
 osacNamespace: osac
 csiNamespace: osac-csi
+# Name of the "osac" umbrella chart's Helm release. The csi-driver subchart
+# (a dependency of that release) owns a Namespace template for csiNamespace,
+# so the create-csi-driver-credentials hook must pre-stamp that namespace
+# with this release's identity (name + osacNamespace) before it's created --
+# otherwise the later `helm upgrade --install osac` fails to adopt it
+# ("invalid ownership metadata").
+csiReleaseName: osac
 
 certManager:
   enabled: true

@@ -288,7 +288,7 @@ func main() {
 			os.Exit(1)
 		}
 
-		enableNetworkingProvisioning := helpers.GetEnvWithDefault(envEnableNetworkingProvisioning, true)
+		enableNetworkingProvisioning := helpers.GetEnvWithDefault(envEnableNetworkingProvisioning, false)
 		if enableNetworkingProvisioning {
 			// Networking provisioning (onboard) and deprovisioning (offboard) are both a
 			// port move; the single move playbook derives the direction from the CR.
@@ -441,8 +441,8 @@ func setupBareMetalInstanceController(
 		return fmt.Errorf("failed to parse inventory config: %w", err)
 	}
 
-	// Parse management config before inventory client — Metal3 management
-	// triggers BMH manager wiring on the inventory config.
+	// Parse management config before inventory client — the bare-metal management
+	// backend may trigger additional wiring on the inventory config.
 	managementConfigPath := helpers.GetEnvWithDefault(envManagementConfigPath, "/etc/osac/management/management.yaml")
 	managementConfigData, err := os.ReadFile(managementConfigPath)
 	if err != nil {

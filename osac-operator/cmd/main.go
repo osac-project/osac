@@ -649,7 +649,7 @@ func setupNetworkingControllers(
 	clusterOrderNamespace := os.Getenv(envClusterOrderNamespace)
 	bareMetalInstanceNamespace := os.Getenv(envBareMetalInstanceNamespace)
 
-	networkProvisioningEnabled := helpers.GetEnvWithDefault(envEnableNetworkingProvisioning, true)
+	networkProvisioningEnabled := helpers.GetEnvWithDefault(envEnableNetworkingProvisioning, false)
 	setupLog.Info("networking provisioning feature gate", "enabled", networkProvisioningEnabled)
 
 	aapURL := os.Getenv(envAAPURL)

@@ -48,7 +48,7 @@ const (
 // ExternalIPAttachmentReconciler reconciles ExternalIPAttachment CRs.
 //
 // Creating a ExternalIPAttachment triggers an attach operation (osac-attach-external-ip AAP
-// template) that moves the MetalLB Service from the parking namespace to the VM namespace.
+// template) that binds the ExternalIP to the target's namespace.
 // Deleting the CR triggers detach (osac-detach-external-ip) which reverses that.
 //
 // The controller uses RunProvisioningLifecycle for provisioning, giving automatic
@@ -358,7 +358,7 @@ func (r *ExternalIPAttachmentReconciler) syncAnnotations(
 // resolveTargetVirtualNetworkName resolves the tenant VirtualNetwork CR name for the
 // attachment's target — the parent VirtualNetwork of the target's primary subnet.
 // Returns "" when the target is not a tenant resource (e.g. a cluster attachment).
-// The AAP netris role resolves the Netris VPC from this name (VPC name == VN name).
+// The AAP role uses this name to resolve the target network on the fabric backend.
 func (r *ExternalIPAttachmentReconciler) resolveTargetVirtualNetworkName(
 	ctx context.Context,
 	ci *v1alpha1.ComputeInstance,

@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	// MetalLB fallback constants — used until all strategies write the allocated-address annotation.
+	// Legacy LoadBalancer fallback constants — used until all strategies write the allocated-address annotation.
 	externalIPServiceNamePrefix       = "osac-eip-"
 	externalIPDefaultMetalLBNamespace = "metallb-system"
 )

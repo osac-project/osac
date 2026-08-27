@@ -294,8 +294,8 @@ func (r *ExternalIPReconciler) handleUpdate(ctx context.Context, externalIP *v1a
 // The AAP provisioning role for each implementation strategy writes the allocated
 // address to the osac.openshift.io/allocated-address annotation on the ExternalIP
 // CR. This function reads it. As a fallback for strategies that haven't been
-// updated to write the annotation (e.g., MetalLB), it also checks the
-// LoadBalancer Service in metallb-system.
+// updated to write the annotation, it also checks the legacy
+// LoadBalancer Service as a fallback.
 //
 // State == Allocated is set exclusively by OnSuccess after the AAP provisioning
 // job reports success, so this guard ensures address population happens strictly
@@ -313,9 +313,9 @@ func (r *ExternalIPReconciler) populateAddressIfMissing(ctx context.Context, ext
 		return
 	}
 
-	// Fallback: check MetalLB LoadBalancer Service for strategies that write the
-	// address there instead of the annotation. Remove once all strategies use
-	// the allocated-address annotation.
+	// Fallback: check LoadBalancer Service for strategies that write the address
+	// there instead of the annotation. Remove once all strategies use the
+	// allocated-address annotation.
 	targetClient, err := getTargetClient(ctx, r.mgr, r.targetCluster)
 	if err != nil {
 		log.V(1).Info("allocated-address annotation not set and target client unavailable, will retry")
@@ -452,8 +452,8 @@ func (r *ExternalIPReconciler) handleDeprovisioning(ctx context.Context, externa
 	return ctrl.Result{}, nil
 }
 
-// getExternalIPAddress fetches the LoadBalancer Service created by the MetalLB AAP role
-// and returns the assigned IP. This is a fallback for strategies that haven't been
+// getExternalIPAddress fetches the LoadBalancer Service created by the AAP provisioning
+// role and returns the assigned IP. This is a fallback for strategies that haven't been
 // updated to write the allocated-address annotation.
 func (r *ExternalIPReconciler) getExternalIPAddress(ctx context.Context, targetClient client.Client, externalIPName string) string {
 	log := ctrllog.FromContext(ctx)

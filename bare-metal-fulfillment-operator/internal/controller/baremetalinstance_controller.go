@@ -757,7 +757,7 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkHandoffReboot(
 // the fabric port moves back to the provisioning network. This ensures tenant
 // workloads never run on the provisioning network — the workload stops while
 // the port is still on the tenant network, and by the time anything boots on
-// provisioning network it is Ironic's cleaning ramdisk, not the tenant OS.
+// provisioning network it is the bare-metal management backend's cleaning image, not the tenant OS.
 func (r *BareMetalInstanceReconciler) reconcileNetworkOffboardShutdown(
 	ctx context.Context, bmi *v1alpha1.BareMetalInstance,
 ) (ctrl.Result, error) {

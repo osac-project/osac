@@ -81,10 +81,10 @@ func (r *BareMetalInstanceReconciler) reconcileIPDiscovery(
 
 	log.Info("Reconciling IP discovery", "attachments", len(bareMetalInstance.Spec.NetworkAttachments))
 
-	// Resolve each attachment's NIC MAC from the host's BareMetalHost annotation and
+	// Resolve each attachment's NIC MAC from the bare-metal management backend and
 	// plumb a subnet-ref → MAC map into the job's extra_vars. The query_dhcp_lease role
-	// matches DHCP leases by MAC for bare-metal hosts (which are not registered as named
-	// fabric servers); an absent or partial mapping degrades to name-based matching.
+	// matches DHCP leases by MAC when the host is not registered as a named fabric
+	// server; an absent or partial mapping degrades to name-based matching.
 	if r.ManagementClient != nil && bareMetalInstance.Spec.ExternalHostID != "" {
 		ifaceMACs, macErr := r.ManagementClient.GetHostInterfaceMACs(ctx, bareMetalInstance.Spec.ExternalHostID)
 		if macErr != nil {

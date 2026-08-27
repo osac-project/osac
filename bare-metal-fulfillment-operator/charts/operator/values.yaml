@@ -33,7 +33,7 @@ env:
   aapTokenSecretName: "osac-aap-api-token"
   aapTokenSecretKey: "token"
   aapInsecureSkipVerify: ""
-  enableNetworkingProvisioning: "true"
+  enableNetworkingProvisioning: "false"
 
 bcm:
   enabled: false

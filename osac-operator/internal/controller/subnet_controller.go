@@ -233,8 +233,8 @@ func (r *SubnetReconciler) handleUpdate(ctx context.Context, subnet *v1alpha1.Su
 	}
 
 	// When networking provisioning is disabled, skip AAP job dispatch and set Ready
-	// immediately. MetalLB IPAddressPool creation is also skipped since there is no
-	// MetalLB to configure in noop mode.
+	// immediately. IP address pool creation on the target cluster is also skipped
+	// since there is no backend to configure in noop mode.
 	if !r.NetworkProvisioningEnabled {
 		subnet.Status.Phase = v1alpha1.SubnetPhaseReady
 		setReadyConditionTrue(&subnet.Status.Conditions)
@@ -500,7 +500,7 @@ func (r *SubnetReconciler) handleDelete(ctx context.Context, subnet *v1alpha1.Su
 	if subnet.Annotations[osacImplementationStrategyAnnotation] == "" {
 		log.Info("skipping deprovisioning — resource was never provisioned")
 	} else {
-		// Remove MetalLB IPAddressPool before AAP deprovisioning (which removes the CUDN)
+		// Remove the target-cluster IP address pool before AAP deprovisioning
 		if err := r.deleteMetalLBIPAddressPool(ctx, subnet); err != nil {
 			return ctrl.Result{}, fmt.Errorf("deleting MetalLB IPAddressPool: %w", err)
 		}

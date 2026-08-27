@@ -100,7 +100,7 @@ spec:
             value: {{ .Values.env.aapInsecureSkipVerify | quote }}
           {{- end }}
           - name: OSAC_ENABLE_NETWORKING_PROVISIONING
-            value: {{ .Values.env.enableNetworkingProvisioning | default "true" | quote }}
+            value: {{ .Values.env.enableNetworkingProvisioning | default "false" | quote }}
         volumeMounts:
           - name: inventory-config
             mountPath: /etc/osac/inventory/

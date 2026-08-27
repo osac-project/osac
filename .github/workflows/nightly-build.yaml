@@ -477,6 +477,11 @@ jobs:
   e2e-test:
     name: E2E validation
     needs: [prepare, build]
+    # TEMPORARY -- DO NOT MERGE: skip e2e-test to smoke-test the new
+    # prepare/build/publish job graph on this PR branch without waiting on
+    # E2E infra. Revert this hunk (and the matching publish `if:` below)
+    # before merging.
+    if: false
     permissions:
       contents: read
     uses: osac-project/osac-test-infra/.github/workflows/e2e-vmaas-full-install.yml@main
@@ -497,6 +502,13 @@ jobs:
   publish:
     name: Publish nightly chart
     needs: [prepare, build, e2e-test]
+    # TEMPORARY -- DO NOT MERGE: needs.e2e-test is intentionally skipped
+    # above. GitHub Actions skip-cascades a job whenever any of its `needs`
+    # was skipped, regardless of a custom `if:`, unless the expression
+    # includes always() -- so always() is required here even though this
+    # job doesn't otherwise want to run after a failure. Revert to no
+    # explicit `if:` (implicit success()) once the e2e-test skip is reverted.
+    if: always() && needs.prepare.result == 'success' && needs.build.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -730,7 +742,11 @@ jobs:
     needs: [prepare, publish]
     runs-on: osac-ci
     timeout-minutes: 15
-    if: success()
+    # TEMPORARY -- DO NOT MERGE: success() still skip-cascades transitively
+    # through e2e-test (intentionally skipped above), even though it's not
+    # a direct need here -- only always() bypasses that. Revert to plain
+    # `if: success()` once the e2e-test skip is reverted.
+    if: always() && needs.prepare.result == 'success' && needs.publish.result == 'success'
     permissions:
       # Create the nightly git tag
       contents: write

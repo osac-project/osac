@@ -197,6 +197,24 @@ class K8sClient:
             *self._base(), "get", "virtualmachine", name, "-n", vm_namespace, "-o", "jsonpath={.spec.runStrategy}"
         )
 
+    # Storage tier resolution
+
+    def get_storage_class_for_tier(self, *, tier_name: str) -> str:
+        """Resolve StorageClass name from tier name via Tenant.status.storageClasses."""
+        tenant = self.get_json(resource="tenant", name=self.namespace)
+        storage_classes = tenant.get("status", {}).get("storageClasses", [])
+
+        for sc in storage_classes:
+            if sc.get("tier", "").lower() == tier_name.lower():
+                return sc.get("name", "")
+
+        raise ValueError(f"No StorageClass found for tier '{tier_name}' in Tenant {self.namespace}")
+
+    def get_datavolume_storage_class(self, *, name: str) -> str:
+        """Get the StorageClass name from a DataVolume's PVC spec."""
+        dv = self.get_json(resource="datavolume", name=name)
+        return dv.get("spec", {}).get("pvc", {}).get("storageClassName", "")
+
     # ExternalIPPool queries
 
     def get_external_ip_pool_name(self, *, uuid: str, checked: bool = True) -> str:

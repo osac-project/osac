@@ -183,6 +183,52 @@ def default_disk_image(grpc: GRPCClient, test_run_id: str) -> Iterator[str]:
             raise
 
 
+@pytest.fixture(scope="session")
+def default_storage_tier() -> str:
+    """
+    Reference installer-provided storage tier (matches network_class pattern).
+
+    Defaults to "local" tier created by osac-installer when lvms.enabled=true.
+    """
+    return env("OSAC_STORAGE_TIER", "local")
+
+
+@pytest.fixture(scope="session")
+def additional_storage_tiers(private_grpc: GRPCClient, test_run_id: str) -> Iterator[dict[str, dict[str, str]]]:
+    """
+    Create additional storage tiers on the real backend for multi-tier tests.
+
+    Uses the installer-provided "local" backend (real LVMS infrastructure).
+    """
+    # Get the real backend ID from the "local" tier
+    local_tier = private_grpc.get_storage_tier(name="local")
+    real_backend_id = local_tier["spec"]["backends"][0]["backendId"]
+
+    created_tiers: dict[str, dict[str, str]] = {}
+
+    try:
+        # Create fast tier on REAL backend
+        fast_name = f"e2e-tier-fast-{test_run_id}"
+        fast_id = private_grpc.create_storage_tier(name=fast_name, backend_id=real_backend_id)
+        created_tiers["fast"] = {"name": fast_name, "id": fast_id}
+
+        # Create archive tier on REAL backend
+        archive_name = f"e2e-tier-archive-{test_run_id}"
+        archive_id = private_grpc.create_storage_tier(name=archive_name, backend_id=real_backend_id)
+        created_tiers["archive"] = {"name": archive_name, "id": archive_id}
+
+        yield created_tiers
+    finally:
+        # Cleanup tiers (but NOT the backend - it's real infrastructure)
+        for tier_info in created_tiers.values():
+            try:
+                private_grpc.delete_storage_tier(tier_id=tier_info["id"])
+            except subprocess.CalledProcessError as e:
+                output = ((e.stdout or "") + (e.stderr or "")).lower()
+                if "not found" not in output:
+                    raise
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _wait_for_tenant_storage_ready(k8s_hub_client: K8sClient, namespace: str) -> None:
     """Wait for ClusterStorageReady=True before any VMaaS tests if storage is configured.
@@ -229,3 +275,9 @@ def _set_cli_default_instance_type(cli: OsacCLI, default_instance_type: str) -> 
 def _set_cli_default_disk_image(cli: OsacCLI, default_disk_image: str) -> None:
     """Wire the session-scoped default disk image into the shared CLI fixture."""
     cli.default_disk_image = default_disk_image
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _set_cli_default_storage_tier(cli: OsacCLI, default_storage_tier: str) -> None:
+    """Wire the session-scoped default storage tier into the shared CLI fixture."""
+    cli.default_storage_tier = default_storage_tier

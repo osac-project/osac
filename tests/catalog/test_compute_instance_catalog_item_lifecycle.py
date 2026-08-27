@@ -89,7 +89,7 @@ def test_compute_instance_catalog_item_field_definitions(
             "path": "spec.instance_type",
             "display_name": "Instance Type",
             "editable": True,
-            "default": {"stringValue": "standard-2x4"},
+            "default": "standard-2x4",
         },
     ]
     name = unique_name("e2e-ci-fd")
@@ -110,7 +110,7 @@ def test_compute_instance_catalog_item_field_definitions(
                 "path": "spec.instance_type",
                 "display_name": "VM Size",
                 "editable": True,
-                "default": {"stringValue": "standard-2x4"},
+                "default": "standard-2x4",
             },
         ]
         grpc.update_compute_instance_catalog_item(catalog_item_id=catalog_item_id, field_definitions=updated_fds)
@@ -126,7 +126,7 @@ def test_compute_instance_catalog_item_field_definitions(
                 "path": "spec.instance_type",
                 "display_name": "VM Size",
                 "editable": False,
-                "default": {"stringValue": "standard-4x8"},
+                "default": "standard-4x8",
             },
         ]
         grpc.update_compute_instance_catalog_item(catalog_item_id=catalog_item_id, field_definitions=updated_fds_v2)

@@ -707,3 +707,51 @@ class GRPCClient:
 
     def delete_project_membership(self, *, membership_id: str) -> None:
         self.call(service=f"{PUBLIC_API}.ProjectMemberships/Delete", data={"id": membership_id})
+
+    # NetworkClass operations (private API only)
+
+    def list_network_classes(self) -> list[dict[str, Any]]:
+        response: dict[str, Any] = self.call(service=f"{PRIVATE_API}.NetworkClasses/List")
+        return response.get("items", [])
+
+    def update_network_class(self, *, network_class_id: str, **fields: Any) -> dict[str, Any]:
+        if not fields:
+            raise ValueError("update_network_class requires at least one field to update")
+        obj: dict[str, Any] = {"id": network_class_id, **fields}
+        data: dict[str, Any] = {"object": obj, "updateMask": {"paths": list(fields.keys())}}
+        return self.call(service=f"{PRIVATE_API}.NetworkClasses/Update", data=data)
+
+    # StorageTier operations (private API)
+
+    def get_storage_tier(self, *, name: str) -> dict[str, Any]:
+        response: dict[str, Any] = self.call(
+            service=f"{PRIVATE_API}.StorageTiers/List",
+            data={"filter": f'this.metadata.name == "{name}"'},
+        )
+        items = response.get("items", [])
+        if not items:
+            raise ValueError(f"StorageTier '{name}' not found")
+        return items[0]
+
+    def create_storage_tier(self, *, name: str, backend_id: str) -> str:
+        response: dict[str, Any] = self.call(
+            service=f"{PRIVATE_API}.StorageTiers/Create",
+            data={
+                "object": {
+                    "metadata": {"name": name},
+                    "spec": {
+                        "description": "E2E test storage tier",
+                        "backends": [
+                            {
+                                "backend_id": backend_id,
+                                "protocol": "STORAGE_PROTOCOL_BLOCK",
+                            }
+                        ],
+                    },
+                }
+            },
+        )
+        return response["object"]["id"]
+
+    def delete_storage_tier(self, *, tier_id: str) -> None:
+        self.call(service=f"{PRIVATE_API}.StorageTiers/Delete", data={"id": tier_id})

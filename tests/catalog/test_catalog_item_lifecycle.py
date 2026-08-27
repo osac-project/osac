@@ -86,13 +86,13 @@ def test_catalog_item_field_definitions(grpc: GRPCClient, cluster_template: str)
             "path": "spec.network.pod_cidr",
             "display_name": "Pod CIDR",
             "editable": True,
-            "default": {"stringValue": "10.128.0.0/14"},
+            "default": "10.128.0.0/14",
         },
         {
             "path": "spec.network.service_cidr",
             "display_name": "Service CIDR",
             "editable": False,
-            "default": {"stringValue": "172.30.0.0/16"},
+            "default": "172.30.0.0/16",
         },
     ]
     name = unique_name("e2e-fd")
@@ -117,13 +117,13 @@ def test_catalog_item_field_definitions(grpc: GRPCClient, cluster_template: str)
                 "path": "spec.network.pod_cidr",
                 "display_name": "Pod Network CIDR",
                 "editable": True,
-                "default": {"stringValue": "10.128.0.0/14"},
+                "default": "10.128.0.0/14",
             },
             {
                 "path": "spec.network.service_cidr",
                 "display_name": "Service CIDR",
                 "editable": False,
-                "default": {"stringValue": "172.30.0.0/16"},
+                "default": "172.30.0.0/16",
             },
         ]
         grpc.update_cluster_catalog_item(catalog_item_id=catalog_item_id, field_definitions=updated_fds)
@@ -139,7 +139,7 @@ def test_catalog_item_field_definitions(grpc: GRPCClient, cluster_template: str)
                 "path": "spec.network.pod_cidr",
                 "display_name": "Pod Network CIDR",
                 "editable": True,
-                "default": {"stringValue": "10.128.0.0/14"},
+                "default": "10.128.0.0/14",
             },
         ]
         grpc.update_cluster_catalog_item(catalog_item_id=catalog_item_id, field_definitions=reduced_fds)
@@ -236,7 +236,7 @@ def test_create_cluster_with_catalog_item_version(
                 "path": "version",
                 "display_name": "Version",
                 "editable": True,
-                "default": {"stringValue": version["name"]},
+                "default": version["name"],
             }
         ],
     )

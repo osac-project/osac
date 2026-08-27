@@ -30,7 +30,7 @@ def test_catalog_item_disk_image_default_applied(
         # paths, then rejects any other spec leaf. The CI-create below sends network_attachments
         # (the subnet), so it must be a declared field or the create is rejected InvalidArgument.
         field_defs = [
-            {"path": "disk_image", "display_name": "Disk Image", "editable": True, "default": {"stringValue": di_name}},
+            {"path": "disk_image", "display_name": "Disk Image", "editable": True, "default": di_name},
             {"path": "network_attachments", "display_name": "Network", "editable": True},
         ]
         catalog_item_id = grpc.create_compute_instance_catalog_item(
@@ -72,7 +72,7 @@ def test_disk_image_deletion_protection_catalog_item(grpc: GRPCClient, compute_i
         # Same field_definition shape as the default-application test: prefix-less
         # "disk_image" + DiskImage name.
         field_defs = [
-            {"path": "disk_image", "display_name": "Disk Image", "editable": True, "default": {"stringValue": di_name}}
+            {"path": "disk_image", "display_name": "Disk Image", "editable": True, "default": di_name}
         ]
         catalog_item_id = grpc.create_compute_instance_catalog_item(
             name=unique_name("e2e-cidi-cat"),

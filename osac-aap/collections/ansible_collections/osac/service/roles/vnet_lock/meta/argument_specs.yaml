@@ -1,0 +1,35 @@
+argument_specs:
+  acquire:
+    description: >-
+      Acquire a K8s Lease for exclusive V-Net access. Retries until the Lease
+      is available or expired, using resourceVersion CAS to prevent races.
+    options:
+      vnet_lock_name:
+        type: str
+        required: true
+        description: Name of the Lease resource (e.g. netris-vnet-lock-<subnet-name>)
+      vnet_lock_namespace:
+        type: str
+        required: true
+        description: Namespace of the Lease resource
+      vnet_lock_holder:
+        type: str
+        required: true
+        description: Unique identifier for this lock holder (e.g. AAP job ID)
+  release:
+    description: >-
+      Release a previously acquired K8s Lease. No-op if the Lease is held
+      by a different holder (e.g. after expiry takeover).
+    options:
+      vnet_lock_name:
+        type: str
+        required: true
+        description: Name of the Lease resource
+      vnet_lock_namespace:
+        type: str
+        required: true
+        description: Namespace of the Lease resource
+      vnet_lock_holder:
+        type: str
+        required: true
+        description: Holder identity to match before releasing

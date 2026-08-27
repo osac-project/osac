@@ -252,15 +252,19 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
 		})
 
-		It("should requeue when ComputeInstance not found", func() {
+		It("should auto-detach when ComputeInstance not found", func() {
 			fakeClient = buildClient(attachment, publicIP, pool) // no CI
 			setupReconciler(fakeClient)
 
 			_, _ = reconcileOnce() // finalizer
+			_, _ = reconcileOnce() // auto-detach: sets DeletionTimestamp
+			_, _ = reconcileOnce() // handleDelete: removes finalizer
 
-			result, err := reconcileOnce()
-			Expect(err).NotTo(HaveOccurred())
-			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			fetched := &osacv1alpha1.ExternalIPAttachment{}
+			err := fakeClient.Get(ctx, types.NamespacedName{
+				Namespace: attachment.Namespace, Name: attachment.Name,
+			}, fetched)
+			Expect(apierrors.IsNotFound(err)).To(BeTrue())
 		})
 
 		It("should requeue when CI has no VirtualMachineReference", func() {
@@ -896,15 +900,19 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 			return reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: clusterKey}})
 		}
 
-		It("should requeue when ClusterOrder not found", func() {
+		It("should auto-detach when ClusterOrder not found", func() {
 			fakeClient = buildClient(clusterAttachment, publicIP, pool)
 			setupReconciler(fakeClient)
 
 			_, _ = clusterReconcileOnce() // finalizer
+			_, _ = clusterReconcileOnce() // auto-detach: sets DeletionTimestamp
+			_, _ = clusterReconcileOnce() // handleDelete: removes finalizer
 
-			result, err := clusterReconcileOnce()
-			Expect(err).NotTo(HaveOccurred())
-			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			fetched := &osacv1alpha1.ExternalIPAttachment{}
+			err := fakeClient.Get(ctx, types.NamespacedName{
+				Namespace: clusterAttachment.Namespace, Name: clusterAttachment.Name,
+			}, fetched)
+			Expect(apierrors.IsNotFound(err)).To(BeTrue())
 		})
 
 		It("should requeue when ClusterOrder has no API endpoint", func() {
@@ -1285,15 +1293,19 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 			})
 		}
 
-		It("should requeue when BareMetalInstance not found", func() {
+		It("should auto-detach when BareMetalInstance not found", func() {
 			fakeClient = buildClient(bmiAttachment, publicIP, pool)
 			setupReconciler(fakeClient)
 
 			_, _ = bmiReconcileOnce() // finalizer
+			_, _ = bmiReconcileOnce() // auto-detach: sets DeletionTimestamp
+			_, _ = bmiReconcileOnce() // handleDelete: removes finalizer
 
-			result, err := bmiReconcileOnce()
-			Expect(err).NotTo(HaveOccurred())
-			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			fetched := &osacv1alpha1.ExternalIPAttachment{}
+			err := fakeClient.Get(ctx, types.NamespacedName{
+				Namespace: bmiAttachment.Namespace, Name: bmiAttachment.Name,
+			}, fetched)
+			Expect(apierrors.IsNotFound(err)).To(BeTrue())
 		})
 
 		It("should add detach finalizer to BareMetalInstance", func() {
@@ -1489,7 +1501,7 @@ var _ = Describe("ExternalIPAttachment tenant VPC resolution", func() {
 	It("resolves the VN name from a ComputeInstance primary subnet (looked up by name)", func() {
 		ci := &osacv1alpha1.ComputeInstance{
 			Spec: osacv1alpha1.ComputeInstanceSpec{
-				NetworkAttachments: []osacv1alpha1.NetworkAttachment{{SubnetRef: "subnet-cr-name"}},
+				NetworkAttachments: []osacv1alpha1.ComputeNetworkAttachment{{SubnetRef: "subnet-cr-name"}},
 			},
 		}
 		r := newVPCReconciler(subnetCR("subnet-cr-name"), vnCR())

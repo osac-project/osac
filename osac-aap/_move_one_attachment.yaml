@@ -1,0 +1,37 @@
+---
+- name: Set lock holder identity
+  ansible.builtin.set_fact:
+    _move_lock_holder: "{{ lookup('env', 'AWX_JOB_ID') | default(resource_name ~ '-' ~ item.interface, true) }}"
+
+- name: Acquire V-Net lock for tenant network
+  ansible.builtin.include_role:
+    name: osac.service.vnet_lock
+    tasks_from: acquire
+  vars:
+    vnet_lock_name: "netris-vnet-lock-{{ item.tenant_vnet }}"
+    vnet_lock_namespace: "{{ resource.metadata.namespace }}"
+    vnet_lock_holder: "{{ _move_lock_holder }}"
+  when: item.tenant_vnet | length > 0
+
+- name: Move port with lock held
+  block:
+    - name: Execute move
+      ansible.builtin.include_role:
+        name: "osac.templates.{{ implementation_strategy }}"
+        tasks_from: move_network_attachment
+      vars:
+        network_attachment:
+          host_name: "{{ host_name }}"
+          logical_interface_name: "{{ item.interface }}"
+          from_vnet_name: "{{ offboard | ternary(item.tenant_vnet, provisioning_vnet) }}"
+          to_vnet_name: "{{ offboard | ternary(provisioning_vnet, item.tenant_vnet) }}"
+  always:
+    - name: Release V-Net lock for tenant network
+      ansible.builtin.include_role:
+        name: osac.service.vnet_lock
+        tasks_from: release
+      vars:
+        vnet_lock_name: "netris-vnet-lock-{{ item.tenant_vnet }}"
+        vnet_lock_namespace: "{{ resource.metadata.namespace }}"
+        vnet_lock_holder: "{{ _move_lock_holder }}"
+      when: item.tenant_vnet | length > 0

@@ -23,6 +23,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -119,6 +120,13 @@ var _ = Describe("SubnetReconciler", func() {
 			existingSubnet.Finalizers = nil
 			_ = k8sClient.Update(ctx, existingSubnet)
 			_ = k8sClient.Delete(ctx, existingSubnet)
+		}
+
+		// Cleanup Lease
+		leaseKey := types.NamespacedName{Name: "netris-vnet-lock-" + subnet.Name, Namespace: subnet.Namespace}
+		existingLease := &coordinationv1.Lease{}
+		if err := k8sClient.Get(ctx, leaseKey, existingLease); err == nil {
+			_ = k8sClient.Delete(ctx, existingLease)
 		}
 	})
 
@@ -345,6 +353,64 @@ var _ = Describe("SubnetReconciler", func() {
 			_ = k8sClient.Delete(ctx, unmanagedSubnet)
 		})
 
+		It("should create V-Net lock lease on first reconcile", func() {
+			Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
+
+			req := mcreconcile.Request{Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      subnet.Name,
+					Namespace: subnet.Namespace,
+				},
+			}}
+
+			_, err := reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify Lease was created
+			lease := &coordinationv1.Lease{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name:      "netris-vnet-lock-" + subnet.Name,
+				Namespace: subnet.Namespace,
+			}, lease)).To(Succeed())
+
+			// Verify owner reference
+			Expect(lease.OwnerReferences).To(HaveLen(1))
+			Expect(lease.OwnerReferences[0].Kind).To(Equal("Subnet"))
+			Expect(lease.OwnerReferences[0].Name).To(Equal(subnet.Name))
+			Expect(*lease.OwnerReferences[0].Controller).To(BeTrue())
+			Expect(*lease.OwnerReferences[0].BlockOwnerDeletion).To(BeFalse())
+
+			// Verify lease duration
+			Expect(*lease.Spec.LeaseDurationSeconds).To(Equal(int32(120)))
+		})
+
+		It("should be idempotent when lease already exists", func() {
+			Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
+
+			req := mcreconcile.Request{Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      subnet.Name,
+					Namespace: subnet.Namespace,
+				},
+			}}
+
+			// First reconcile creates the lease
+			_, err := reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Second reconcile should not error (lease already exists)
+			_, err = reconciler.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify lease still exists with same properties
+			lease := &coordinationv1.Lease{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name:      "netris-vnet-lock-" + subnet.Name,
+				Namespace: subnet.Namespace,
+			}, lease)).To(Succeed())
+			Expect(*lease.Spec.LeaseDurationSeconds).To(Equal(int32(120)))
+		})
+
 		It("should wait for child ComputeInstance before deprovisioning", func() {
 			testSubnet := &osacv1alpha1.Subnet{
 				ObjectMeta: metav1.ObjectMeta{
@@ -360,7 +426,7 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(k8sClient.Create(ctx, testSubnet)).To(Succeed())
 
 			ciSpec := newTestComputeInstanceSpec("test_template")
-			ciSpec.NetworkAttachments = []osacv1alpha1.NetworkAttachment{
+			ciSpec.NetworkAttachments = []osacv1alpha1.ComputeNetworkAttachment{
 				{SubnetRef: testSubnet.Name},
 			}
 			childCI := &osacv1alpha1.ComputeInstance{

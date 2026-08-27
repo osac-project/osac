@@ -539,15 +539,15 @@ var _ = Describe("NATGatewayReconciler", func() {
 
 			dispatchVnet := &osacv1alpha1.VirtualNetwork{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      "dispatch-vnet-natgw",
-					Namespace: "test-ns",
-					Labels:    map[string]string{osacVirtualNetworkIDLabel: "dispatch-vnet-uuid"},
+					Name:        "dispatch-vnet-natgw",
+					Namespace:   "test-ns",
+					Labels:      map[string]string{osacVirtualNetworkIDLabel: "dispatch-vnet-uuid"},
+					Annotations: map[string]string{osacImplementationStrategyAnnotation: "netris"},
 				},
 				Spec: osacv1alpha1.VirtualNetworkSpec{
-					Region:                 "us-west-1",
-					IPv4CIDR:               "10.0.0.0/16",
-					NetworkClass:           "nc-netris",
-					ImplementationStrategy: "cudn_net",
+					Region:       "us-west-1",
+					IPv4CIDR:     "10.0.0.0/16",
+					NetworkClass: "nc-netris",
 				},
 				Status: osacv1alpha1.VirtualNetworkStatus{Phase: osacv1alpha1.VirtualNetworkPhaseReady},
 			}
@@ -626,48 +626,47 @@ var _ = Describe("NATGatewayReconciler", func() {
 			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("netris"))
 		})
 
-		It("falls back to VNet implementation strategy when no dispatcher is configured", func() {
+		It("requeues when the parent VirtualNetwork has no implementation-strategy annotation", func() {
 			testScheme := runtime.NewScheme()
 			Expect(osacv1alpha1.AddToScheme(testScheme)).To(Succeed())
 			Expect(scheme.AddToScheme(testScheme)).To(Succeed())
 
-			fallbackVnet := &osacv1alpha1.VirtualNetwork{
+			noAnnotationVnet := &osacv1alpha1.VirtualNetwork{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      "fallback-vnet-natgw",
+					Name:      "no-annotation-vnet-natgw",
 					Namespace: "test-ns",
-					Labels:    map[string]string{osacVirtualNetworkIDLabel: "fallback-vnet-uuid"},
+					Labels:    map[string]string{osacVirtualNetworkIDLabel: "no-annotation-vnet-uuid"},
 				},
 				Spec: osacv1alpha1.VirtualNetworkSpec{
-					Region:                 "us-west-1",
-					IPv4CIDR:               "10.0.0.0/16",
-					NetworkClass:           "some-class",
-					ImplementationStrategy: "cudn_net",
+					Region:       "us-west-1",
+					IPv4CIDR:     "10.0.0.0/16",
+					NetworkClass: "some-class",
 				},
 			}
 
-			fallbackEIP := &osacv1alpha1.ExternalIP{
+			noAnnotationEIP := &osacv1alpha1.ExternalIP{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      "fallback-eip-natgw",
+					Name:      "no-annotation-eip-natgw",
 					Namespace: "test-ns",
-					Labels:    map[string]string{osacExternalIPIDLabel: "fallback-eip-uuid"},
+					Labels:    map[string]string{osacExternalIPIDLabel: "no-annotation-eip-uuid"},
 				},
 				Spec: osacv1alpha1.ExternalIPSpec{Pool: "some-pool"},
 			}
 
-			fallbackNATGW := &osacv1alpha1.NATGateway{
+			noAnnotationNATGW := &osacv1alpha1.NATGateway{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      "fallback-natgw",
+					Name:      "no-annotation-natgw",
 					Namespace: "test-ns",
 				},
 				Spec: osacv1alpha1.NATGatewaySpec{
-					VirtualNetwork: "fallback-vnet-uuid",
-					ExternalIP:     "fallback-eip-uuid",
+					VirtualNetwork: "no-annotation-vnet-uuid",
+					ExternalIP:     "no-annotation-eip-uuid",
 				},
 			}
 
 			fakeClient := fake.NewClientBuilder().
 				WithScheme(testScheme).
-				WithObjects(fallbackVnet, fallbackEIP, fallbackNATGW).
+				WithObjects(noAnnotationVnet, noAnnotationEIP, noAnnotationNATGW).
 				WithStatusSubresource(
 					&osacv1alpha1.VirtualNetwork{},
 					&osacv1alpha1.ExternalIP{},
@@ -675,14 +674,16 @@ var _ = Describe("NATGatewayReconciler", func() {
 				).
 				Build()
 
-			fallbackVnet.Status.Phase = osacv1alpha1.VirtualNetworkPhaseReady
-			Expect(fakeClient.Status().Update(ctx, fallbackVnet)).To(Succeed())
-			fallbackEIP.Status.Address = "198.51.100.2"
-			Expect(fakeClient.Status().Update(ctx, fallbackEIP)).To(Succeed())
+			noAnnotationVnet.Status.Phase = osacv1alpha1.VirtualNetworkPhaseReady
+			Expect(fakeClient.Status().Update(ctx, noAnnotationVnet)).To(Succeed())
+			noAnnotationEIP.Status.Address = "198.51.100.2"
+			Expect(fakeClient.Status().Update(ctx, noAnnotationEIP)).To(Succeed())
 
-			fallbackMock := &mockNATGatewayProvider{}
-			fallbackMock.triggerProvisionFunc = func(_ context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
-				return &provisioning.ProvisionResult{JobID: "job-fallback", InitialState: osacv1alpha1.JobStatePending}, nil
+			noAnnotationMock := &mockNATGatewayProvider{}
+			provisionCalled := false
+			noAnnotationMock.triggerProvisionFunc = func(_ context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
+				provisionCalled = true
+				return &provisioning.ProvisionResult{JobID: "job-none", InitialState: osacv1alpha1.JobStatePending}, nil
 			}
 
 			r := &NATGatewayReconciler{
@@ -690,21 +691,20 @@ var _ = Describe("NATGatewayReconciler", func() {
 				APIReader:            fakeClient,
 				Scheme:               testScheme,
 				NetworkingNamespace:  "test-ns",
-				ProvisioningProvider: fallbackMock,
+				ProvisioningProvider: noAnnotationMock,
 				StatusPollInterval:   1 * time.Second,
 				MaxJobHistory:        10,
-				// No Resolver — falls back to legacy strategy
 			}
 
-			key := types.NamespacedName{Name: fallbackNATGW.Name, Namespace: fallbackNATGW.Namespace}
+			key := types.NamespacedName{Name: noAnnotationNATGW.Name, Namespace: noAnnotationNATGW.Namespace}
+			// First reconcile adds finalizer
 			_, err := r.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
-			_, err = r.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			// Second reconcile should requeue waiting for annotation
+			result, err := r.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
-
-			updated := &osacv1alpha1.NATGateway{}
-			Expect(fakeClient.Get(ctx, key, updated)).To(Succeed())
-			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("cudn_net"))
+			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(provisionCalled).To(BeFalse())
 		})
 	})
 })

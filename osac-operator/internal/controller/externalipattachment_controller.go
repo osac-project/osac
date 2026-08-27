@@ -180,6 +180,25 @@ func (r *ExternalIPAttachmentReconciler) handleUpdate(ctx context.Context, attac
 		attachment.Status.Phase = v1alpha1.ExternalIPAttachmentPhaseProgressing
 	}
 
+	// Resolve target first — adds the externalip-detach finalizer to the target CR,
+	// which prevents it from being fully deleted while the attachment exists. This must
+	// happen before ExternalIP/Pool resolution because those preconditions can take time,
+	// and the target could be deleted in that window.
+	ci, result, err := r.resolveComputeInstance(ctx, attachment)
+	if err != nil || result.RequeueAfter > 0 {
+		return result, err
+	}
+
+	co, result, err := r.resolveClusterOrder(ctx, attachment)
+	if err != nil || result.RequeueAfter > 0 {
+		return result, err
+	}
+
+	bmi, result, err := r.resolveBaremetalInstance(ctx, attachment)
+	if err != nil || result.RequeueAfter > 0 {
+		return result, err
+	}
+
 	// Resolve parent ExternalIP by UUID label (spec.externalIP contains the fulfillment-service UUID)
 	externalIPList := &v1alpha1.ExternalIPList{}
 	if err := r.List(ctx, externalIPList,
@@ -216,24 +235,6 @@ func (r *ExternalIPAttachmentReconciler) handleUpdate(ctx context.Context, attac
 	implementationStrategy := pool.Spec.ImplementationStrategy
 	if implementationStrategy == "" {
 		implementationStrategy = defaultExternalIPPoolImplementationStrategy
-	}
-
-	// Resolve target ComputeInstance
-	ci, result, err := r.resolveComputeInstance(ctx, attachment)
-	if err != nil || result.RequeueAfter > 0 {
-		return result, err
-	}
-
-	// Resolve target ClusterOrder
-	co, result, err := r.resolveClusterOrder(ctx, attachment)
-	if err != nil || result.RequeueAfter > 0 {
-		return result, err
-	}
-
-	// Resolve target BareMetalInstance
-	bmi, result, err := r.resolveBaremetalInstance(ctx, attachment)
-	if err != nil || result.RequeueAfter > 0 {
-		return result, err
 	}
 
 	// BMI DNAT precondition: wait for primary IP to be discovered
@@ -436,8 +437,11 @@ func (r *ExternalIPAttachmentReconciler) resolveComputeInstance(
 		return nil, ctrl.Result{}, err
 	}
 	if len(ciList.Items) == 0 {
-		log.Info("ComputeInstance not found, requeueing", "computeInstanceUUID", *attachment.Spec.ComputeInstance)
-		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+		log.Info("auto-detaching: ComputeInstance no longer exists", "computeInstanceUUID", *attachment.Spec.ComputeInstance)
+		if err := r.Delete(ctx, attachment); err != nil {
+			return nil, ctrl.Result{}, client.IgnoreNotFound(err)
+		}
+		return nil, ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 	ci := &ciList.Items[0]
 
@@ -486,8 +490,11 @@ func (r *ExternalIPAttachmentReconciler) resolveClusterOrder(
 		return nil, ctrl.Result{}, err
 	}
 	if len(coList.Items) == 0 {
-		log.Info("ClusterOrder not found, requeueing", "clusterOrderUUID", *attachment.Spec.Cluster)
-		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+		log.Info("auto-detaching: ClusterOrder no longer exists", "clusterOrderUUID", *attachment.Spec.Cluster)
+		if err := r.Delete(ctx, attachment); err != nil {
+			return nil, ctrl.Result{}, client.IgnoreNotFound(err)
+		}
+		return nil, ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 	co := &coList.Items[0]
 
@@ -555,8 +562,11 @@ func (r *ExternalIPAttachmentReconciler) resolveBaremetalInstance(
 		return nil, ctrl.Result{}, err
 	}
 	if len(bmiList.Items) == 0 {
-		log.Info("BareMetalInstance not found, requeueing", "baremetalInstanceUUID", *attachment.Spec.BaremetalInstance)
-		return nil, ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+		log.Info("auto-detaching: BareMetalInstance no longer exists", "baremetalInstanceUUID", *attachment.Spec.BaremetalInstance)
+		if err := r.Delete(ctx, attachment); err != nil {
+			return nil, ctrl.Result{}, client.IgnoreNotFound(err)
+		}
+		return nil, ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 	bmi := &bmiList.Items[0]
 

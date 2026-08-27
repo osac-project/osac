@@ -1,0 +1,95 @@
+---
+- name: Initialize lock attempt counter
+  ansible.builtin.set_fact:
+    _vnet_lock_attempt: "{{ _vnet_lock_attempt | default(0) | int }}"
+    _vnet_lock_max_retries: "{{ _vnet_lock_max_retries | default(24) | int }}"
+    _vnet_lock_retry_delay: "{{ _vnet_lock_retry_delay | default(5) | int }}"
+    _vnet_lock_acquired: false
+
+- name: Attempt lock acquisition
+  block:
+    - name: Read lease
+      kubernetes.core.k8s_info:
+        api_version: coordination.k8s.io/v1
+        kind: Lease
+        name: "{{ vnet_lock_name }}"
+        namespace: "{{ vnet_lock_namespace }}"
+      register: _vnet_lock_read
+
+    - name: Fail if lease not found
+      ansible.builtin.fail:
+        msg: "Lease '{{ vnet_lock_name }}' not yet created"
+      when: _vnet_lock_read.resources | length == 0
+
+    - name: Set lease facts
+      ansible.builtin.set_fact:
+        _vnet_lock_resource_version: "{{ _vnet_lock_read.resources[0].metadata.resourceVersion }}"
+        _vnet_lock_holder_current: "{{ _vnet_lock_read.resources[0].spec.holderIdentity | default('', true) }}"
+        _vnet_lock_renew_time: "{{ _vnet_lock_read.resources[0].spec.renewTime | default('', true) }}"
+        _vnet_lock_duration: "{{ _vnet_lock_read.resources[0].spec.leaseDurationSeconds | default(120) }}"
+
+    - name: Check if already held by us
+      when: _vnet_lock_holder_current == vnet_lock_holder
+      block:
+        - name: Set acquired (re-entrant)
+          ansible.builtin.set_fact:
+            _vnet_lock_acquired: true
+        - name: Display re-entrant lock
+          ansible.builtin.debug:
+            msg: "Lock '{{ vnet_lock_name }}' already held by us"
+
+    - name: Try to acquire when not already ours
+      when:
+        - _vnet_lock_holder_current != vnet_lock_holder
+        - not _vnet_lock_acquired
+      block:
+        - name: Fail if held by another and not expired
+          ansible.builtin.fail:
+            msg: "Lease held by '{{ _vnet_lock_holder_current }}'"
+          when:
+            - _vnet_lock_holder_current | length > 0
+            - _vnet_lock_renew_time | length > 0
+            - (now(utc=true) - (_vnet_lock_renew_time | to_datetime('%Y-%m-%dT%H:%M:%S.%fZ'))).total_seconds() < (_vnet_lock_duration | int)
+
+        - name: CAS update to acquire
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: coordination.k8s.io/v1
+              kind: Lease
+              metadata:
+                name: "{{ vnet_lock_name }}"
+                namespace: "{{ vnet_lock_namespace }}"
+                resourceVersion: "{{ _vnet_lock_resource_version }}"
+              spec:
+                holderIdentity: "{{ vnet_lock_holder }}"
+                leaseDurationSeconds: "{{ _vnet_lock_duration | int }}"
+                acquireTime: "{{ now(utc=true).strftime('%Y-%m-%dT%H:%M:%S.000000Z') }}"
+                renewTime: "{{ now(utc=true).strftime('%Y-%m-%dT%H:%M:%S.000000Z') }}"
+
+        - name: Set acquired
+          ansible.builtin.set_fact:
+            _vnet_lock_acquired: true
+
+        - name: Display lock acquired
+          ansible.builtin.debug:
+            msg: "Acquired V-Net lock '{{ vnet_lock_name }}' as '{{ vnet_lock_holder }}'"
+
+  rescue:
+    - name: Increment attempt counter
+      ansible.builtin.set_fact:
+        _vnet_lock_attempt: "{{ _vnet_lock_attempt | int + 1 }}"
+
+    - name: Fail after max retries
+      ansible.builtin.fail:
+        msg: >-
+          Failed to acquire V-Net lock '{{ vnet_lock_name }}' after
+          {{ _vnet_lock_max_retries }} attempts
+      when: _vnet_lock_attempt | int >= _vnet_lock_max_retries | int
+
+    - name: Wait before retry
+      ansible.builtin.pause:
+        seconds: "{{ _vnet_lock_retry_delay }}"
+
+    - name: Retry acquisition
+      ansible.builtin.include_tasks: acquire.yaml

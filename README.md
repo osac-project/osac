@@ -50,7 +50,8 @@ Gemini CLI skill discovery. Do not run it from an `osac/` nested inside
 
 The Feature → PRD → Design → Implement sequence is documented in
 [osac-ai-skills](https://github.com/osac-project/osac-ai-skills#recommended-skill-sequence)
-(local after bootstrap: `.osac-ai-skills/README.md`). See [`AGENTS.md`](AGENTS.md)
+(local after bootstrap: `~/.osac-ai-skills/README.md` or
+`.osac-ai-skills/README.md`). See [`AGENTS.md`](AGENTS.md)
 for bootstrap details and component conventions.
 
 > [!WARNING]

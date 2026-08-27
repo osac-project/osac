@@ -175,6 +175,7 @@ Key configuration parameters in `charts/osac-metering/values.yaml`:
 - **build-metering-echo-adapter-image.yaml** — Builds echo-adapter image on `osac-metering/adapters/**` changes
 - **build-metering-m360-adapter-image.yaml** — Builds m360-adapter image on `osac-metering/adapters/**` changes
 - **run-osac-metering-tests** — Runs unit tests as part of the mono-repo test suite
+- **publish-charts.yaml** — Publishes the osac-metering Helm chart to GHCR and creates a GitHub Release when `osac-metering/vX.Y.Z` tags are pushed
 - **E2E workflows** (CaaS, VMaaS, BMaaS) — Tests metering in full OSAC deployments
 
 ## Testing

@@ -21,7 +21,7 @@ on:
     # this workflow at all without each component's build workflow name also
     # present in this list (missed once for osac-aap, see OSAC-3511/#49 --
     # don't repeat that).
-    workflows: ["Container image", "Build container image", "Build execution environment", "Build bare-metal-fulfillment-operator image", "Build osac-csi-driver image"]
+    workflows: ["Container image", "Build container image", "Build execution environment", "Build bare-metal-fulfillment-operator image", "Build osac-csi-driver image", "Build metering-service image"]
     types: [completed]
 
 env:
@@ -48,7 +48,8 @@ jobs:
        startsWith(github.event.workflow_run.head_branch, 'osac-operator/v') ||
        startsWith(github.event.workflow_run.head_branch, 'osac-aap/v') ||
        startsWith(github.event.workflow_run.head_branch, 'bare-metal-fulfillment-operator/v') ||
-       startsWith(github.event.workflow_run.head_branch, 'osac-csi-driver/v'))
+       startsWith(github.event.workflow_run.head_branch, 'osac-csi-driver/v') ||
+       startsWith(github.event.workflow_run.head_branch, 'osac-metering/v'))
     outputs:
       tag: ${{ github.event.workflow_run.head_branch }}
       version: ${{ steps.check.outputs.version }}
@@ -70,6 +71,7 @@ jobs:
           osac-aap/v*) VERSION="${HEAD_BRANCH#osac-aap/}" ;;
           bare-metal-fulfillment-operator/v*) VERSION="${HEAD_BRANCH#bare-metal-fulfillment-operator/}" ;;
           osac-csi-driver/v*) VERSION="${HEAD_BRANCH#osac-csi-driver/}" ;;
+          osac-metering/v*) VERSION="${HEAD_BRANCH#osac-metering/}" ;;
           *) echo "::error::Tag '$HEAD_BRANCH' does not match a known component prefix"; exit 1 ;;
         esac
 
@@ -701,6 +703,122 @@ jobs:
         || gh release edit "${TAG}" \
           --repo "${REPO}" \
           --title "osac-csi-driver ${VERSION}"
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG: ${{ needs.guard.outputs.tag }}
+        VERSION: ${{ needs.guard.outputs.version }}
+        REPO: ${{ github.repository }}
+
+  publish-metering-chart:
+    name: Publish metering chart
+    needs: guard
+    if: success() && github.event.workflow_run.name == 'Build metering-service image'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      with:
+        ref: ${{ needs.guard.outputs.sha }}
+        persist-credentials: false
+
+    - name: Verify tag still points at the guarded commit
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG: ${{ needs.guard.outputs.tag }}
+        GUARDED_SHA: ${{ needs.guard.outputs.sha }}
+        REPO: ${{ github.repository }}
+      run: .github/scripts/osac-metering-verify-tag-matches-sha.sh
+
+    - name: Set up Helm
+      uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+      with:
+        version: v3.17.0
+
+    - name: Log in to GHCR
+      env:
+        REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        REGISTRY_USERNAME: ${{ github.actor }}
+      run: echo "${REGISTRY_PASSWORD}" | helm registry login "${REGISTRY}" -u "${REGISTRY_USERNAME}" --password-stdin
+
+    - name: Extract version from tag
+      id: version
+      run: echo "version=${VERSION#v}" >> "$GITHUB_OUTPUT"
+      env:
+        VERSION: ${{ needs.guard.outputs.version }}
+
+    - name: Validate version format
+      run: |
+        VERSION="${{ steps.version.outputs.version }}"
+        if [[ ! "$VERSION" =~ ^[0-9A-Za-z._-]+$ ]]; then
+          echo "::error::Invalid version format: '${VERSION}'"
+          exit 1
+        fi
+
+    - name: Update image tags in values.yaml
+      working-directory: osac-metering
+      # sed exits 0 even when a pattern matches zero lines, so a future values.yaml
+      # format change could silently leave a placeholder unpinned. Verify the
+      # expected replacements actually landed and fail the release instead of
+      # packaging stale values (same pattern as publish-osac-aap-chart above).
+      # The metering chart has two images (metering-service and m360-adapter)
+      # that both need pinning.
+      run: |
+        OLD="tag: latest  # PLACEHOLDER -- overwritten at release time by publish-charts.yaml"
+        NEW="tag: v${{ steps.version.outputs.version }}"
+        sed -i "s|${OLD}|${NEW}|" charts/osac-metering/values.yaml
+        if grep -qF -- "# PLACEHOLDER -- overwritten at release time by publish-charts.yaml" charts/osac-metering/values.yaml; then
+          echo "::error::PLACEHOLDER comment still found in charts/osac-metering/values.yaml after substitution (not all image tags were pinned)" >&2
+          exit 1
+        fi
+
+    - name: Package chart
+      working-directory: osac-metering
+      run: |
+        helm package charts/osac-metering/ \
+          --version "${{ steps.version.outputs.version }}" \
+          --app-version "${{ steps.version.outputs.version }}"
+
+    - name: Push chart to GHCR
+      working-directory: osac-metering
+      run: |
+        helm push osac-metering-${{ steps.version.outputs.version }}.tgz \
+          oci://${{ env.REGISTRY }}/${{ env.CHARTS_REPO }}
+
+  create-metering-release:
+    name: Create GitHub Release (osac-metering)
+    runs-on: ubuntu-latest
+    needs: [guard, publish-metering-chart]
+    if: success() && github.event.workflow_run.name == 'Build metering-service image'
+    permissions:
+      contents: write
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      with:
+        ref: ${{ needs.guard.outputs.sha }}
+        persist-credentials: false
+
+    - name: Verify tag still points at the guarded commit
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG: ${{ needs.guard.outputs.tag }}
+        GUARDED_SHA: ${{ needs.guard.outputs.sha }}
+        REPO: ${{ github.repository }}
+      run: .github/scripts/osac-metering-verify-tag-matches-sha.sh
+
+    - name: Create GitHub Release
+      run: |
+        gh release create "${TAG}" \
+          --repo "${REPO}" \
+          --title "osac-metering ${VERSION}" \
+          --generate-notes \
+          --verify-tag \
+        || gh release edit "${TAG}" \
+          --repo "${REPO}" \
+          --title "osac-metering ${VERSION}"
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         TAG: ${{ needs.guard.outputs.tag }}

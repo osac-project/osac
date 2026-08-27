@@ -56,7 +56,7 @@ metering-service (event mapping, heartbeats, reconciliation)
   ↓ CloudEvents
 Kafka Topics
   ↓ Sarama consumer group
-adapters.Runner (dedup → out-of-order check → retry → Submit [→ DLQ on failure] → Flush → offset commit)
+adapters.Runner (deserialize → [DLQ on deserialization failure] → dedup → out-of-order check → retry → Submit [→ DLQ on failure] → Flush → offset commit)
   ↓ ProviderAdapter interface
 Concrete Adapters (echo-adapter, m360-adapter, billing providers)
 ```

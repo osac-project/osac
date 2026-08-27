@@ -74,7 +74,7 @@ var _ = Describe("REST gateway", func() {
 		})
 
 		// Create a cluster template:
-		templateID := fmt.Sprintf("my_%s", uuid.New())
+		templateId := newTemplateID("my")
 		nodeSets := map[string]*privatev1.ClusterTemplateNodeSet{
 			"compute": privatev1.ClusterTemplateNodeSet_builder{
 				HostType: privatev1.HostTypeReference_builder{Id: computeHostTypeID}.Build(),
@@ -87,7 +87,7 @@ var _ = Describe("REST gateway", func() {
 		}
 		_, err = templatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
-				Id:          templateID,
+				Id:          templateId,
 				Title:       "My template",
 				Description: "My template.",
 				NodeSets:    nodeSets,
@@ -96,7 +96,7 @@ var _ = Describe("REST gateway", func() {
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func() {
 			_, err := templatesClient.Delete(ctx, privatev1.ClusterTemplatesDeleteRequest_builder{
-				Id: templateID,
+				Id: templateId,
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 		})
@@ -105,7 +105,7 @@ var _ = Describe("REST gateway", func() {
 		request, err := http.NewRequestWithContext(
 			ctx,
 			http.MethodGet,
-			fmt.Sprintf("/api/fulfillment/v1/cluster_templates/%s", templateID),
+			fmt.Sprintf("/api/fulfillment/v1/cluster_templates/%s", templateId),
 			nil,
 		)
 		Expect(err).ToNot(HaveOccurred())
@@ -157,7 +157,7 @@ var _ = Describe("REST gateway", func() {
 		})
 
 		// Create a cluster template:
-		templateID := fmt.Sprintf("my_%s", uuid.New())
+		templateId := newTemplateID("my")
 		nodeSets := map[string]*privatev1.ClusterTemplateNodeSet{
 			"compute": privatev1.ClusterTemplateNodeSet_builder{
 				HostType: privatev1.HostTypeReference_builder{Id: computeHostTypeID}.Build(),
@@ -170,7 +170,7 @@ var _ = Describe("REST gateway", func() {
 		}
 		_, err = templatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
-				Id:          templateID,
+				Id:          templateId,
 				Title:       "My private template",
 				Description: "My private template.",
 				NodeSets:    nodeSets,
@@ -179,7 +179,7 @@ var _ = Describe("REST gateway", func() {
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func() {
 			_, err := templatesClient.Delete(ctx, privatev1.ClusterTemplatesDeleteRequest_builder{
-				Id: templateID,
+				Id: templateId,
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 		})
@@ -188,7 +188,7 @@ var _ = Describe("REST gateway", func() {
 		request, err := http.NewRequestWithContext(
 			ctx,
 			http.MethodGet,
-			fmt.Sprintf("/api/private/v1/cluster_templates/%s", templateID),
+			fmt.Sprintf("/api/private/v1/cluster_templates/%s", templateId),
 			nil,
 		)
 		Expect(err).ToNot(HaveOccurred())
@@ -207,7 +207,7 @@ var _ = Describe("REST gateway", func() {
 		Expect(body).To(HaveKey("title"))
 		Expect(body).To(HaveKey("description"))
 		Expect(body).To(HaveKey("node_sets"))
-		Expect(body["id"]).To(Equal(templateID))
+		Expect(body["id"]).To(Equal(templateId))
 		Expect(body["title"]).To(Equal("My private template"))
 		Expect(body["description"]).To(Equal("My private template."))
 

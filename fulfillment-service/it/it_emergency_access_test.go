@@ -24,7 +24,6 @@ import (
 	. "github.com/onsi/gomega"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
-	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 )
 
 var _ = Describe("Emergency access", func() {
@@ -39,7 +38,7 @@ var _ = Describe("Emergency access", func() {
 		client := privatev1.NewClusterTemplatesClient(tool.InternalView().EmergencyConn())
 
 		// Create the object:
-		id := fmt.Sprintf("emergency_grpc_%s", uuid.New())
+		id := newTemplateID("emergency_grpc")
 		_, err := client.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
 				Id:          id,
@@ -58,7 +57,7 @@ var _ = Describe("Emergency access", func() {
 
 	It("Can create objects using REST and the emergency admin service account", func() {
 		// Prepare the request body:
-		id := fmt.Sprintf("emergency_rest_%s", uuid.New())
+		id := newTemplateID("emergency_rest")
 		requestBody := map[string]any{
 			"id":          id,
 			"title":       "Emergency REST template",

@@ -100,7 +100,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 					}.Build(),
 					Title:       "My CI catalog item",
 					Description: "My description.",
-					Template:    privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+					Template:    privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 					Published:   true,
 					Tenant:      "my-tenant",
 				}.Build(),
@@ -111,7 +111,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 			Expect(object).ToNot(BeNil())
 			Expect(object.GetId()).ToNot(BeEmpty())
 			Expect(object.GetTitle()).To(Equal("My CI catalog item"))
-			Expect(object.GetTemplate().GetId()).To(Equal("my-ci-template-id"))
+			Expect(object.GetTemplate().GetId()).To(Equal("my_ci_template_id"))
 			Expect(object.GetPublished()).To(BeTrue())
 			Expect(object.GetTenant()).To(Equal("my-tenant"))
 		})
@@ -125,7 +125,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 						}.Build(),
 						Title:    fmt.Sprintf("CI catalog item %d", i),
-						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -147,7 +147,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 						}.Build(),
 						Title:    fmt.Sprintf("CI catalog item %d", i),
-						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -170,7 +170,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 						}.Build(),
 						Title:    fmt.Sprintf("CI catalog item %d", i),
-						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -203,7 +203,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 					}.Build(),
 					Title:       "My CI catalog item",
 					Description: "My description.",
-					Template:    privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+					Template:    privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 					Published:   true,
 				}.Build(),
 			}.Build())
@@ -231,7 +231,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 					}.Build(),
 					Title:       "Original title",
 					Description: "Original description.",
-					Template:    privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+					Template:    privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -249,7 +249,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 					Metadata:    privatev1.Metadata_builder{Name: name}.Build(),
 					Title:       "Updated title",
 					Description: "Updated description.",
-					Template:    privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+					Template:    privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -271,7 +271,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Name: "test-ci-catalog-published",
 					}.Build(),
 					Title:     "My CI catalog item",
-					Template:  privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+					Template:  privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 					Published: false,
 				}.Build(),
 			}.Build())
@@ -310,7 +310,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Title:    "CI catalog item with fields",
-					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 					FieldDefinitions: []*privatev1.FieldDefinition{
 						privatev1.FieldDefinition_builder{
 							Path:             "spec.ssh_public_key",
@@ -365,7 +365,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Finalizers: []string{"a"},
 					}.Build(),
 					Title:    "My CI catalog item",
-					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -390,7 +390,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Title:     "Referenced CI catalog item",
-					Template:  privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+					Template:  privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 					Published: true,
 				}.Build(),
 			}.Build())
@@ -410,7 +410,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 					}.Build(),
 					Spec: privatev1.ComputeInstanceSpec_builder{
 						CatalogItem: privatev1.ComputeInstanceCatalogItemReference_builder{Id: catalogItem.GetId()}.Build(),
-						Template:    privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+						Template:    privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 					}.Build(),
 				}.Build(),
 			).Do(ctx)
@@ -433,7 +433,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Name: "dev-sandbox",
 					}.Build(),
 					Title:    "First CI catalog item",
-					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -444,7 +444,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Name: "dev-sandbox",
 					}.Build(),
 					Title:    "Second CI catalog item",
-					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).To(HaveOccurred())
@@ -462,7 +462,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Tenant: testTenant,
 					}.Build(),
 					Title:    "CI catalog item for test tenant",
-					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -474,7 +474,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Tenant: "shared",
 					}.Build(),
 					Title:    "CI catalog item for shared tenant",
-					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -487,7 +487,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Title:    "Bad CI catalog item",
-					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 					FieldDefinitions: []*privatev1.FieldDefinition{
 						privatev1.FieldDefinition_builder{
 							Path:     "spec.pull_secret",
@@ -511,7 +511,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Title:    "Good CI catalog item",
-					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 					FieldDefinitions: []*privatev1.FieldDefinition{
 						privatev1.FieldDefinition_builder{
 							Path:     "spec.pull_secret",
@@ -539,7 +539,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Title:    "Editable no default",
-					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 					FieldDefinitions: []*privatev1.FieldDefinition{
 						privatev1.FieldDefinition_builder{
 							Path:     "spec.pull_secret",
@@ -566,7 +566,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Title:    "Bad catalog item",
-					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 					FieldDefinitions: []*privatev1.FieldDefinition{
 						privatev1.FieldDefinition_builder{
 							Path:     "spec.cores",
@@ -593,7 +593,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Title:    "Bad schema catalog item",
-					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 					FieldDefinitions: []*privatev1.FieldDefinition{
 						privatev1.FieldDefinition_builder{
 							Path:             "spec.cores",
@@ -618,7 +618,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Title:    "Valid schema catalog item",
-					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 					FieldDefinitions: []*privatev1.FieldDefinition{
 						privatev1.FieldDefinition_builder{
 							Path:             "spec.cores",
@@ -646,7 +646,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Name: "test-ci-catalog-nodefault",
 					}.Build(),
 					Title:    "Valid catalog item",
-					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -687,7 +687,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Name: "test-ci-catalog-badschema",
 					}.Build(),
 					Title:    "Valid catalog item",
-					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -728,7 +728,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Name: "test-ci-catalog-validfd",
 					}.Build(),
 					Title:    "Valid catalog item",
-					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -823,7 +823,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 						}.Build(),
 						Title:    "Catalog item with deprecated default",
-						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 						FieldDefinitions: []*privatev1.FieldDefinition{
 							privatev1.FieldDefinition_builder{
 								Path:     "spec.instance_type",
@@ -846,7 +846,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 							Name: "test-ci-catalog-deprecated-upd",
 						}.Build(),
 						Title:    "Catalog item to update",
-						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -860,7 +860,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Id:       catalogItemId,
 						Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 						Title:    "Catalog item to update",
-						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 						FieldDefinitions: []*privatev1.FieldDefinition{
 							privatev1.FieldDefinition_builder{
 								Path:     "spec.instance_type",
@@ -884,7 +884,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 						}.Build(),
 						Title:    "Catalog item with obsolete default",
-						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 						FieldDefinitions: []*privatev1.FieldDefinition{
 							privatev1.FieldDefinition_builder{
 								Path:     "spec.instance_type",
@@ -909,7 +909,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 							Name: "test-ci-catalog-obsolete-upd",
 						}.Build(),
 						Title:    "Catalog item for obsolete update",
-						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -922,7 +922,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 					Object: privatev1.ComputeInstanceCatalogItem_builder{
 						Id:       catalogItemId,
 						Title:    "Catalog item for obsolete update",
-						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 						FieldDefinitions: []*privatev1.FieldDefinition{
 							privatev1.FieldDefinition_builder{
 								Path:     "spec.instance_type",
@@ -948,7 +948,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 						}.Build(),
 						Title:    "Catalog item with active default",
-						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 						FieldDefinitions: []*privatev1.FieldDefinition{
 							privatev1.FieldDefinition_builder{
 								Path:     "spec.instance_type",
@@ -969,7 +969,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 						}.Build(),
 						Title:    "Catalog item with missing type",
-						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 						FieldDefinitions: []*privatev1.FieldDefinition{
 							privatev1.FieldDefinition_builder{
 								Path:     "spec.instance_type",
@@ -992,7 +992,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 						}.Build(),
 						Title:    "Catalog item without instance type field",
-						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 						FieldDefinitions: []*privatev1.FieldDefinition{
 							privatev1.FieldDefinition_builder{
 								Path:     "spec.ssh_public_key",
@@ -1022,7 +1022,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 						}.Build(),
 						Title:    "Catalog item with deprecated disk image default",
-						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 						FieldDefinitions: []*privatev1.FieldDefinition{
 							privatev1.FieldDefinition_builder{
 								Path:     "disk_image",
@@ -1046,7 +1046,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 							Name: "test-ci-catalog-di-deprecated-upd",
 						}.Build(),
 						Title:    "Catalog item to update",
-						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -1061,7 +1061,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Id:       catalogItemId,
 						Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 						Title:    "Catalog item to update",
-						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 						FieldDefinitions: []*privatev1.FieldDefinition{
 							privatev1.FieldDefinition_builder{
 								Path:     "disk_image",
@@ -1086,7 +1086,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 						}.Build(),
 						Title:    "Catalog item with obsolete disk image default",
-						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 						FieldDefinitions: []*privatev1.FieldDefinition{
 							privatev1.FieldDefinition_builder{
 								Path:     "disk_image",
@@ -1111,7 +1111,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 							Name: "test-ci-catalog-di-obsolete-upd",
 						}.Build(),
 						Title:    "Catalog item for obsolete disk image update",
-						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -1124,7 +1124,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 					Object: privatev1.ComputeInstanceCatalogItem_builder{
 						Id:       catalogItemId,
 						Title:    "Catalog item for obsolete disk image update",
-						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 						FieldDefinitions: []*privatev1.FieldDefinition{
 							privatev1.FieldDefinition_builder{
 								Path:     "disk_image",
@@ -1150,7 +1150,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 						}.Build(),
 						Title:    "Catalog item with available disk image default",
-						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 						FieldDefinitions: []*privatev1.FieldDefinition{
 							privatev1.FieldDefinition_builder{
 								Path:     "disk_image",
@@ -1188,7 +1188,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 						}.Build(),
 						Title:    "Catalog item with missing disk image",
-						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 						FieldDefinitions: []*privatev1.FieldDefinition{
 							privatev1.FieldDefinition_builder{
 								Path:     "disk_image",
@@ -1275,7 +1275,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 						}.Build(),
 						Title:    "Catalog item referencing a cross-tenant disk image",
-						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 						FieldDefinitions: []*privatev1.FieldDefinition{
 							privatev1.FieldDefinition_builder{
 								Path:     "disk_image",
@@ -1340,7 +1340,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 								Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 							}.Build(),
 							Title:    "Catalog item for disk image precedence",
-							Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+							Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 							FieldDefinitions: []*privatev1.FieldDefinition{
 								privatev1.FieldDefinition_builder{
 									Path:     "disk_image",
@@ -1451,7 +1451,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 						}.Build(),
 						Title:    "Catalog item without disk image field",
-						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
+						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my_ci_template_id"}.Build(),
 						FieldDefinitions: []*privatev1.FieldDefinition{
 							privatev1.FieldDefinition_builder{
 								Path:     "spec.ssh_public_key",

@@ -133,12 +133,12 @@ To invoke a method, for example the `List` method of the `ClusterTemplates` serv
       "total": 2,
       "items": [
         {
-          "id": "my-template",
+          "id": "my_template",
           "title": "My template",
           "description": "My template is *nice*."
         },
         {
-          "id": "your-template",
+          "id": "your_template",
           "title": "Your template",
           "description": "Your template is _ugly_."
         }
@@ -153,12 +153,12 @@ To verify that the REST gateway is working use `curl`. For example, to get the l
       "total": 2,
       "items": [
         {
-          "id": "my-template",
+          "id": "my_template",
           "title": "My template",
           "description": "My template is *nice*."
         },
         {
-          "id": "your-template",
+          "id": "your_template",
           "title": "Your template",
           "description": "Your template is _ugly_."
         }

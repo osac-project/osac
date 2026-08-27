@@ -60,7 +60,7 @@ var _ = Describe("Labels", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		templateId = fmt.Sprintf("my-template-%s", uuid.New())
+		templateId = newTemplateID("my_template")
 		_, err = templatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
 				Id: templateId,

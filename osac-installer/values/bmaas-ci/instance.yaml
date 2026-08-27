@@ -21,6 +21,7 @@ operator:
     computeInstance: false
     tenant: true
     networking: true
+    networkingProvisioning: false
     storage: true
     bareMetalInstance: true
   hubAccess:
@@ -158,6 +159,7 @@ bmf:
   env:
     aapUrl: "http://osac-aap/api/controller"
     aapInsecureSkipVerify: "true"
+    enableNetworkingProvisioning: "false"
 
 # --- Hub Access ---
 hubAccess:

@@ -146,14 +146,15 @@ var _ = Describe("ExternalIPReconciler", func() {
 		emptyTargetClient := fake.NewClientBuilder().WithScheme(testScheme).Build()
 
 		reconciler = &ExternalIPReconciler{
-			Client:               fakeClient,
-			APIReader:            fakeClient,
-			Scheme:               testScheme,
-			mgr:                  &mockExternalIPMulticlusterManager{targetClient: emptyTargetClient},
-			NetworkingNamespace:  testNamespace,
-			ProvisioningProvider: mockProvider,
-			StatusPollInterval:   1 * time.Second,
-			MaxJobHistory:        10,
+			Client:                     fakeClient,
+			APIReader:                  fakeClient,
+			Scheme:                     testScheme,
+			mgr:                        &mockExternalIPMulticlusterManager{targetClient: emptyTargetClient},
+			NetworkingNamespace:        testNamespace,
+			ProvisioningProvider:       mockProvider,
+			StatusPollInterval:         1 * time.Second,
+			MaxJobHistory:              10,
+			NetworkProvisioningEnabled: true,
 		}
 	})
 

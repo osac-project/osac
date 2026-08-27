@@ -90,13 +90,14 @@ var _ = Describe("ExternalIPPoolReconciler", func() {
 		mockProvider = &mockProvisioningProvider{name: "mock-aap"}
 
 		reconciler = &ExternalIPPoolReconciler{
-			Client:               fakeClient,
-			APIReader:            fakeClient,
-			Scheme:               testScheme,
-			NetworkingNamespace:  "test-namespace",
-			ProvisioningProvider: mockProvider,
-			StatusPollInterval:   1 * time.Second,
-			MaxJobHistory:        10,
+			Client:                     fakeClient,
+			APIReader:                  fakeClient,
+			Scheme:                     testScheme,
+			NetworkingNamespace:        "test-namespace",
+			ProvisioningProvider:       mockProvider,
+			StatusPollInterval:         1 * time.Second,
+			MaxJobHistory:              10,
+			NetworkProvisioningEnabled: true,
 		}
 	})
 

@@ -56,13 +56,14 @@ var _ = Describe("NATGatewayReconciler", func() {
 		ctx = context.TODO()
 		mockProvider = &mockNATGatewayProvider{}
 		reconciler = &NATGatewayReconciler{
-			Client:               k8sClient,
-			APIReader:            k8sClient,
-			Scheme:               k8sClient.Scheme(),
-			NetworkingNamespace:  "default",
-			ProvisioningProvider: mockProvider,
-			StatusPollInterval:   1 * time.Second,
-			MaxJobHistory:        10,
+			Client:                     k8sClient,
+			APIReader:                  k8sClient,
+			Scheme:                     k8sClient.Scheme(),
+			NetworkingNamespace:        "default",
+			ProvisioningProvider:       mockProvider,
+			StatusPollInterval:         1 * time.Second,
+			MaxJobHistory:              10,
+			NetworkProvisioningEnabled: true,
 		}
 
 		// Create VirtualNetwork fixture. NATGatewayReconciler reads the implementation
@@ -604,14 +605,15 @@ var _ = Describe("NATGatewayReconciler", func() {
 			}
 
 			r := &NATGatewayReconciler{
-				Client:               fakeClient,
-				APIReader:            fakeClient,
-				Scheme:               testScheme,
-				NetworkingNamespace:  "test-ns",
-				ProvisioningProvider: dispatchMock,
-				StatusPollInterval:   1 * time.Second,
-				MaxJobHistory:        10,
-				Resolver:             resolver,
+				Client:                     fakeClient,
+				APIReader:                  fakeClient,
+				Scheme:                     testScheme,
+				NetworkingNamespace:        "test-ns",
+				ProvisioningProvider:       dispatchMock,
+				StatusPollInterval:         1 * time.Second,
+				MaxJobHistory:              10,
+				Resolver:                   resolver,
+				NetworkProvisioningEnabled: true,
 			}
 
 			key := types.NamespacedName{Name: dispatchNATGW.Name, Namespace: dispatchNATGW.Namespace}
@@ -687,13 +689,14 @@ var _ = Describe("NATGatewayReconciler", func() {
 			}
 
 			r := &NATGatewayReconciler{
-				Client:               fakeClient,
-				APIReader:            fakeClient,
-				Scheme:               testScheme,
-				NetworkingNamespace:  "test-ns",
-				ProvisioningProvider: noAnnotationMock,
-				StatusPollInterval:   1 * time.Second,
-				MaxJobHistory:        10,
+				Client:                     fakeClient,
+				APIReader:                  fakeClient,
+				Scheme:                     testScheme,
+				NetworkingNamespace:        "test-ns",
+				ProvisioningProvider:       noAnnotationMock,
+				StatusPollInterval:         1 * time.Second,
+				MaxJobHistory:              10,
+				NetworkProvisioningEnabled: true,
 			}
 
 			key := types.NamespacedName{Name: noAnnotationNATGW.Name, Namespace: noAnnotationNATGW.Namespace}

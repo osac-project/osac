@@ -58,6 +58,9 @@ type SecurityGroupReconciler struct {
 	// two-manager model isn't configured (no gRPC connection / networking namespace),
 	// in which case the controller always uses the legacy implementation-strategy path.
 	Resolver *dispatcher.Resolver
+	// NetworkProvisioningEnabled controls whether the controller dispatches AAP
+	// provisioning jobs. When false, resources are set to Ready immediately.
+	NetworkProvisioningEnabled bool
 }
 
 // NewSecurityGroupReconciler creates a new reconciler for SecurityGroup resources.
@@ -154,6 +157,14 @@ func (r *SecurityGroupReconciler) handleUpdate(ctx context.Context, sg *v1alpha1
 	// Set initial phase to Progressing
 	if sg.Status.Phase == "" {
 		sg.Status.Phase = v1alpha1.SecurityGroupPhaseProgressing
+	}
+
+	// When networking provisioning is disabled, skip AAP job dispatch and set Ready
+	// immediately.
+	if !r.NetworkProvisioningEnabled {
+		sg.Status.Phase = v1alpha1.SecurityGroupPhaseReady
+		setReadyConditionTrue(&sg.Status.Conditions)
+		return ctrl.Result{}, nil
 	}
 
 	// Look up the parent VirtualNetwork's NetworkClass to check whether it has a

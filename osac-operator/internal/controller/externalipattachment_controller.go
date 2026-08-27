@@ -67,6 +67,9 @@ type ExternalIPAttachmentReconciler struct {
 	StatusPollInterval         time.Duration
 	MaxJobHistory              int
 	targetCluster              mc.ClusterName
+	// NetworkProvisioningEnabled controls whether the controller dispatches AAP
+	// provisioning jobs. When false, resources are set to Ready immediately.
+	NetworkProvisioningEnabled bool
 }
 
 // NewExternalIPAttachmentReconciler creates a new reconciler for ExternalIPAttachment resources.
@@ -178,6 +181,15 @@ func (r *ExternalIPAttachmentReconciler) handleUpdate(ctx context.Context, attac
 
 	if attachment.Status.Phase == "" {
 		attachment.Status.Phase = v1alpha1.ExternalIPAttachmentPhaseProgressing
+	}
+
+	// When networking provisioning is disabled, skip AAP job dispatch and set Ready
+	// immediately. This must be checked before the BMI primary IP check to avoid
+	// blocking forever waiting for a BMI IP that will never be discovered in noop mode.
+	if !r.NetworkProvisioningEnabled {
+		attachment.Status.Phase = v1alpha1.ExternalIPAttachmentPhaseReady
+		setReadyConditionTrue(&attachment.Status.Conditions)
+		return ctrl.Result{}, nil
 	}
 
 	// Resolve target first — adds the externalip-detach finalizer to the target CR,

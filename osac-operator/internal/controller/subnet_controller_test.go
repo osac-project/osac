@@ -58,13 +58,14 @@ var _ = Describe("SubnetReconciler", func() {
 		ctx = context.TODO()
 		mockProvider = &mockSubnetProvider{}
 		reconciler = &SubnetReconciler{
-			Client:               k8sClient,
-			APIReader:            k8sClient,
-			Scheme:               k8sClient.Scheme(),
-			NetworkingNamespace:  "default",
-			ProvisioningProvider: mockProvider,
-			StatusPollInterval:   1 * time.Second,
-			MaxJobHistory:        10,
+			Client:                     k8sClient,
+			APIReader:                  k8sClient,
+			Scheme:                     k8sClient.Scheme(),
+			NetworkingNamespace:        "default",
+			ProvisioningProvider:       mockProvider,
+			StatusPollInterval:         1 * time.Second,
+			MaxJobHistory:              10,
+			NetworkProvisioningEnabled: true,
 		}
 
 		// Create VirtualNetwork fixture. SubnetReconciler reads the fabric implementation

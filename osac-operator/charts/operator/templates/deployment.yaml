@@ -112,6 +112,8 @@ spec:
             value: {{ .Values.controllers.storage | quote }}
           - name: OSAC_ENABLE_VOLUME_CONTROLLER
             value: {{ .Values.controllers.volume | quote }}
+          - name: OSAC_ENABLE_NETWORKING_PROVISIONING
+            value: {{ .Values.controllers.networkingProvisioning | default true | quote }}
 {{- if .Values.vendorControllers }}
 {{- $pairs := list }}
 {{- range $k, $v := .Values.vendorControllers }}

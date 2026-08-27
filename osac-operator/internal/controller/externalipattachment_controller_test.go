@@ -170,6 +170,7 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 			ProvisioningProvider:       mockProvider,
 			StatusPollInterval:         1 * time.Second,
 			MaxJobHistory:              10,
+			NetworkProvisioningEnabled: true,
 		}
 	}
 

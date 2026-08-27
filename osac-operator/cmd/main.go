@@ -135,6 +135,9 @@ const (
 	envEnableNetworkingController        = "OSAC_ENABLE_NETWORKING_CONTROLLER"
 	envEnableBareMetalInstanceController = "OSAC_ENABLE_BAREMETAL_INSTANCE_CONTROLLER"
 
+	// Networking provisioning feature gate
+	envEnableNetworkingProvisioning = "OSAC_ENABLE_NETWORKING_PROVISIONING"
+
 	remoteClusterName = "remote"
 
 	// defaultNetworkClassSyncInterval is the fallback periodic resync interval for
@@ -646,6 +649,9 @@ func setupNetworkingControllers(
 	clusterOrderNamespace := os.Getenv(envClusterOrderNamespace)
 	bareMetalInstanceNamespace := os.Getenv(envBareMetalInstanceNamespace)
 
+	networkProvisioningEnabled := helpers.GetEnvWithDefault(envEnableNetworkingProvisioning, true)
+	setupLog.Info("networking provisioning feature gate", "enabled", networkProvisioningEnabled)
+
 	aapURL := os.Getenv(envAAPURL)
 	aapToken := os.Getenv(envAAPToken)
 	aapInsecureSkipVerify := helpers.GetEnvWithDefault(envAAPInsecureSkipVerify, false)
@@ -696,6 +702,7 @@ func setupNetworkingControllers(
 	if err := setupVirtualNetworkControllers(
 		mgr, localMgr, grpcConn, networkingNamespace,
 		networkingProvider, statusPollInterval, maxJobHistory, targetCluster, resolver,
+		networkProvisioningEnabled,
 	); err != nil {
 		return err
 	}
@@ -703,25 +710,28 @@ func setupNetworkingControllers(
 	if err := setupSubnetControllers(
 		mgr, localMgr, grpcConn, networkingNamespace,
 		networkingProvider, statusPollInterval, maxJobHistory, targetCluster, resolver,
-		networkClassesClient,
+		networkClassesClient, networkProvisioningEnabled,
 	); err != nil {
 		return err
 	}
 	if err := setupSecurityGroupControllers(
 		mgr, localMgr, grpcConn, networkingNamespace,
 		networkingProvider, statusPollInterval, maxJobHistory, targetCluster, resolver,
+		networkProvisioningEnabled,
 	); err != nil {
 		return err
 	}
 	if err := setupExternalIPPoolControllers(
 		mgr, localMgr, grpcConn, networkingNamespace,
 		networkingProvider, statusPollInterval, maxJobHistory, targetCluster,
+		networkProvisioningEnabled,
 	); err != nil {
 		return err
 	}
 	if err := setupExternalIPControllers(
 		mgr, localMgr, grpcConn, networkingNamespace,
 		networkingProvider, statusPollInterval, maxJobHistory, targetCluster,
+		networkProvisioningEnabled,
 	); err != nil {
 		return err
 	}
@@ -729,12 +739,14 @@ func setupNetworkingControllers(
 		mgr, localMgr, grpcConn,
 		networkingNamespace, computeInstanceNamespace, clusterOrderNamespace, bareMetalInstanceNamespace,
 		externalIPAttachmentProvider, statusPollInterval, maxJobHistory, targetCluster,
+		networkProvisioningEnabled,
 	); err != nil {
 		return err
 	}
 	if err := setupNATGatewayControllers(
 		mgr, localMgr, grpcConn, networkingNamespace,
 		networkingProvider, statusPollInterval, maxJobHistory, targetCluster, resolver,
+		networkProvisioningEnabled,
 	); err != nil {
 		return err
 	}
@@ -774,7 +786,7 @@ func setupVirtualNetworkControllers(
 	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn *grpc.ClientConn,
 	networkingNamespace string, provider provisioning.ProvisioningProvider,
 	statusPollInterval time.Duration, maxJobHistory int, targetCluster multicluster.ClusterName,
-	resolver *dispatcher.Resolver,
+	resolver *dispatcher.Resolver, networkProvisioningEnabled bool,
 ) error {
 	if grpcConn != nil {
 		if err := controller.NewVirtualNetworkFeedbackReconciler(
@@ -783,9 +795,11 @@ func setupVirtualNetworkControllers(
 			return fmt.Errorf("virtualnetwork feedback controller: %w", err)
 		}
 	}
-	if err := controller.NewVirtualNetworkReconciler(
+	reconciler := controller.NewVirtualNetworkReconciler(
 		mgr, networkingNamespace, provider, statusPollInterval, maxJobHistory, targetCluster, resolver,
-	).SetupWithManager(mgr); err != nil {
+	)
+	reconciler.NetworkProvisioningEnabled = networkProvisioningEnabled
+	if err := reconciler.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("virtualnetwork controller: %w", err)
 	}
 	return nil
@@ -796,7 +810,7 @@ func setupSubnetControllers(
 	networkingNamespace string, provider provisioning.ProvisioningProvider,
 	statusPollInterval time.Duration, maxJobHistory int, targetCluster multicluster.ClusterName,
 	resolver *dispatcher.Resolver,
-	networkClassesClient privatev1.NetworkClassesClient,
+	networkClassesClient privatev1.NetworkClassesClient, networkProvisioningEnabled bool,
 ) error {
 	if grpcConn != nil {
 		if err := controller.NewSubnetFeedbackReconciler(
@@ -805,10 +819,12 @@ func setupSubnetControllers(
 			return fmt.Errorf("subnet feedback controller: %w", err)
 		}
 	}
-	if err := controller.NewSubnetReconciler(
+	reconciler := controller.NewSubnetReconciler(
 		mgr, networkingNamespace, provider, statusPollInterval, maxJobHistory, targetCluster, resolver,
 		networkClassesClient,
-	).SetupWithManager(mgr); err != nil {
+	)
+	reconciler.NetworkProvisioningEnabled = networkProvisioningEnabled
+	if err := reconciler.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("subnet controller: %w", err)
 	}
 	return nil
@@ -818,7 +834,7 @@ func setupSecurityGroupControllers(
 	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn *grpc.ClientConn,
 	networkingNamespace string, provider provisioning.ProvisioningProvider,
 	statusPollInterval time.Duration, maxJobHistory int, targetCluster multicluster.ClusterName,
-	resolver *dispatcher.Resolver,
+	resolver *dispatcher.Resolver, networkProvisioningEnabled bool,
 ) error {
 	if grpcConn != nil {
 		if err := controller.NewSecurityGroupFeedbackReconciler(
@@ -827,9 +843,11 @@ func setupSecurityGroupControllers(
 			return fmt.Errorf("securitygroup feedback controller: %w", err)
 		}
 	}
-	if err := controller.NewSecurityGroupReconciler(
+	reconciler := controller.NewSecurityGroupReconciler(
 		mgr, networkingNamespace, provider, statusPollInterval, maxJobHistory, targetCluster, resolver,
-	).SetupWithManager(mgr); err != nil {
+	)
+	reconciler.NetworkProvisioningEnabled = networkProvisioningEnabled
+	if err := reconciler.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("securitygroup controller: %w", err)
 	}
 	return nil
@@ -839,6 +857,7 @@ func setupExternalIPPoolControllers(
 	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn *grpc.ClientConn,
 	networkingNamespace string, provider provisioning.ProvisioningProvider,
 	statusPollInterval time.Duration, maxJobHistory int, targetCluster multicluster.ClusterName,
+	networkProvisioningEnabled bool,
 ) error {
 	if grpcConn != nil {
 		if err := controller.NewExternalIPPoolFeedbackReconciler(
@@ -847,9 +866,11 @@ func setupExternalIPPoolControllers(
 			return fmt.Errorf("externalippool feedback controller: %w", err)
 		}
 	}
-	if err := controller.NewExternalIPPoolReconciler(
+	reconciler := controller.NewExternalIPPoolReconciler(
 		mgr, networkingNamespace, provider, statusPollInterval, maxJobHistory, targetCluster,
-	).SetupWithManager(mgr); err != nil {
+	)
+	reconciler.NetworkProvisioningEnabled = networkProvisioningEnabled
+	if err := reconciler.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("externalippool controller: %w", err)
 	}
 	return nil
@@ -859,10 +880,13 @@ func setupExternalIPControllers(
 	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn *grpc.ClientConn,
 	networkingNamespace string, provider provisioning.ProvisioningProvider,
 	statusPollInterval time.Duration, maxJobHistory int, targetCluster multicluster.ClusterName,
+	networkProvisioningEnabled bool,
 ) error {
-	if err := controller.NewExternalIPReconciler(
+	reconciler := controller.NewExternalIPReconciler(
 		mgr, networkingNamespace, provider, statusPollInterval, maxJobHistory, targetCluster,
-	).SetupWithManager(mgr); err != nil {
+	)
+	reconciler.NetworkProvisioningEnabled = networkProvisioningEnabled
+	if err := reconciler.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("externalip controller: %w", err)
 	}
 	if grpcConn != nil {
@@ -880,12 +904,15 @@ func setupExternalIPAttachmentControllers(
 	networkingNamespace, computeInstanceNamespace, clusterOrderNamespace, baremetalInstanceNamespace string,
 	provider provisioning.ProvisioningProvider,
 	statusPollInterval time.Duration, maxJobHistory int, targetCluster multicluster.ClusterName,
+	networkProvisioningEnabled bool,
 ) error {
-	if err := controller.NewExternalIPAttachmentReconciler(
+	reconciler := controller.NewExternalIPAttachmentReconciler(
 		mgr, networkingNamespace, computeInstanceNamespace,
 		clusterOrderNamespace, baremetalInstanceNamespace,
 		provider, statusPollInterval, maxJobHistory, targetCluster,
-	).SetupWithManager(mgr); err != nil {
+	)
+	reconciler.NetworkProvisioningEnabled = networkProvisioningEnabled
+	if err := reconciler.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("externalipattachment controller: %w", err)
 	}
 	if grpcConn != nil {
@@ -902,7 +929,7 @@ func setupNATGatewayControllers(
 	mgr mcmanager.Manager, localMgr ctrl.Manager, grpcConn *grpc.ClientConn,
 	networkingNamespace string, provider provisioning.ProvisioningProvider,
 	statusPollInterval time.Duration, maxJobHistory int, targetCluster multicluster.ClusterName,
-	resolver *dispatcher.Resolver,
+	resolver *dispatcher.Resolver, networkProvisioningEnabled bool,
 ) error {
 	if grpcConn != nil {
 		if err := controller.NewNATGatewayFeedbackReconciler(
@@ -911,9 +938,11 @@ func setupNATGatewayControllers(
 			return fmt.Errorf("natgateway feedback controller: %w", err)
 		}
 	}
-	if err := controller.NewNATGatewayReconciler(
+	reconciler := controller.NewNATGatewayReconciler(
 		mgr, networkingNamespace, provider, statusPollInterval, maxJobHistory, targetCluster, resolver,
-	).SetupWithManager(mgr); err != nil {
+	)
+	reconciler.NetworkProvisioningEnabled = networkProvisioningEnabled
+	if err := reconciler.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("natgateway controller: %w", err)
 	}
 	return nil

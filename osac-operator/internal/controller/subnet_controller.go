@@ -76,6 +76,9 @@ type SubnetReconciler struct {
 	// two-manager model isn't configured (no gRPC connection / networking namespace),
 	// in which case the controller always uses the legacy implementation-strategy path.
 	Resolver *dispatcher.Resolver
+	// NetworkProvisioningEnabled controls whether the controller dispatches AAP
+	// provisioning jobs. When false, resources are set to Ready immediately.
+	NetworkProvisioningEnabled bool
 }
 
 // NewSubnetReconciler creates a new reconciler for Subnet resources.
@@ -227,6 +230,15 @@ func (r *SubnetReconciler) handleUpdate(ctx context.Context, subnet *v1alpha1.Su
 	// by OnSuccess/OnFailed callbacks in RunProvisioningLifecycle.
 	if subnet.Status.Phase == "" {
 		subnet.Status.Phase = v1alpha1.SubnetPhaseProgressing
+	}
+
+	// When networking provisioning is disabled, skip AAP job dispatch and set Ready
+	// immediately. MetalLB IPAddressPool creation is also skipped since there is no
+	// MetalLB to configure in noop mode.
+	if !r.NetworkProvisioningEnabled {
+		subnet.Status.Phase = v1alpha1.SubnetPhaseReady
+		setReadyConditionTrue(&subnet.Status.Conditions)
+		return ctrl.Result{}, nil
 	}
 
 	// Get parent VirtualNetwork by UUID label to read implementation strategy

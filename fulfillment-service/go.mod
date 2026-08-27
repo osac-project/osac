@@ -166,7 +166,7 @@ require (
 
 require (
 	github.com/DataDog/gostackparse v0.7.0
-	github.com/bits-and-blooms/bitset v1.24.6
+	github.com/bits-and-blooms/bitset v1.25.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/google/cel-go v0.30.0

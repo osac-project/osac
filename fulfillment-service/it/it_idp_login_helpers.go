@@ -183,48 +183,6 @@ func parseFirstIPv4Line(s string) (string, error) {
 	return "", fmt.Errorf("no IPv4 address found in output: %q", s)
 }
 
-// RegisterMockOIDCIdP creates an OIDC identity provider entry in Keycloak directly via the
-// admin API, wired to the running MockOIDCState. It does NOT go through the OSAC API so
-// that it can be used to test the login flow independently of the OSAC controller.
-//
-// Returns the Keycloak IdP alias ("<tenantName>-<idpName>").
-func (t *Tool) RegisterMockOIDCIdP(
-	ctx context.Context,
-	state *MockOIDCState,
-	tenantName, idpName string,
-) (alias string, err error) {
-	alias = fmt.Sprintf("%s-%s", tenantName, idpName)
-	payload := map[string]any{
-		"providerId":  "oidc",
-		"alias":       alias,
-		"displayName": fmt.Sprintf("Mock OIDC (%s)", idpName),
-		"enabled":     true,
-		"config": map[string]any{
-			"clientId":          state.ClientID(),
-			"clientSecret":      state.ClientSecret(),
-			"authorizationUrl":  state.LocalAuthURL(),
-			"tokenUrl":          state.ClusterTokenURL(),
-			"jwksUrl":           state.ClusterJWKSURL(),
-			"issuer":            state.LocalIssuer(),
-			"useJwksUrl":        "true",
-			"validateSignature": "true",
-			"allowedClockSkew":  "5",
-			// Required to allow HTTP token/JWKS endpoints from within Kind.
-			"allowHttpScheme": "true",
-		},
-	}
-	code, body, createErr := t.KeycloakAdminRequest(ctx, http.MethodPost, "/identity-provider/instances", payload)
-	if createErr != nil {
-		err = fmt.Errorf("failed to create IdP in Keycloak: %w", createErr)
-		return
-	}
-	if code != http.StatusCreated && code != http.StatusConflict {
-		err = fmt.Errorf("unexpected HTTP status creating IdP: %d body=%s", code, string(body))
-		return
-	}
-	return alias, nil
-}
-
 // ProvisionOIDCUser creates a Keycloak user with a password, links them to the given IdP
 // alias using the provided external subject, and adds them to the tenant's Keycloak
 // organization so the organization claim appears in their JWT.

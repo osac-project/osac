@@ -1,163 +1,209 @@
 # Testing External Identity Provider Login
 
-This document covers how the integration tests exercise the full OIDC authorization code flow
-for external identity providers (IdPs) configured in OSAC.
-
 ## Overview
 
-OSAC lets platform administrators configure external OIDC identity providers per tenant.
-When an IdP is created via the OSAC API the fulfillment-service controller reconciles it
-into Keycloak as an identity brokering provider. End users can then log in via their
-organization's IdP and receive a Keycloak-scoped JWT that carries their tenant membership.
+The integration tests in `it/it_identity_providers_login_test.go` verify the end-to-end
+external IdP login flow for OSAC. The test philosophy is:
 
-The integration tests in `it/it_identity_providers_login_test.go` verify this end-to-end:
+> Test exactly what a user does: register an IdP through OSAC, log in through the OIDC
+> redirect chain (the same path as `osac login`), and assert access via OSAC API calls.
 
-```
-External IdP user → OIDC redirect chain → Keycloak JWT → OSAC API (tenant-scoped)
-```
+No direct Keycloak admin API calls are used for authentication. Keycloak admin calls are
+limited to test scaffolding (user provisioning), which is analogous to how other tests
+create tenants or hubs via the private API.
+
+---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────┐
-│  Test runner (host)                         │
-│                                             │
-│   mockoidc server        SimulateOIDCLogin  │
-│   0.0.0.0:<port>    ◄──  (http.Client with  │
-│                          cookie jar +       │
-│                          CheckRedirect)     │
-└───────────────┬─────────────────────────────┘
-                │ bridge IP (172.18.x.1)
-┌───────────────▼─────────────────────────────┐
-│  Kind cluster                               │
-│                                             │
-│   Keycloak  ──► token endpoint (bridge IP)  │
-│            ──► JWKS endpoint (bridge IP)    │
-│                                             │
-│   fulfillment-service  ◄── OSAC API calls   │
-└─────────────────────────────────────────────┘
+Test runner (host)
+│
+│  /etc/hosts: 127.0.0.1 keycloak.keycloak.svc.cluster.local
+│              127.0.0.1 fulfillment-api.osac.svc.cluster.local
+│              ...
+│
+│  mockoidc server (bound to 0.0.0.0:<random-port>)
+│  ├─ 127.0.0.1:<port>       ← test runner follows OIDC redirects here
+│  └─ <bridge-ip>:<port>     ← Keycloak inside Kind exchanges codes here
+│
+↓ 127.0.0.1:8443 (Kind NodePort → Envoy Gateway)
+┌────────────────────────────────────────────────────────────┐
+│  Kind cluster                                              │
+│                                                            │
+│  Keycloak (keycloak ns)                                    │
+│  └─ IdP registered via OSAC controller                    │
+│     authorizationUrl → 127.0.0.1:<port> (test runner)     │
+│     tokenUrl         → <bridge-ip>:<port> (in-cluster)    │
+│                                                            │
+│  fulfillment-service (osac ns)                             │
+│  └─ IdentityProvider controller → reconciles IdP to KC    │
+│                                                            │
+│  OSAC public API (osac ns)                                 │
+│  └─ asserts token accepted, tenant scoped correctly        │
+└────────────────────────────────────────────────────────────┘
 ```
 
-The mock OIDC server (`github.com/oauth2-proxy/mockoidc`) listens on `0.0.0.0` so that:
+### OIDC Redirect Chain (SimulateOIDCLogin)
 
-- The **test runner** reaches it at `127.0.0.1:<port>` (authorization redirect)
-- **Keycloak** (inside Kind) reaches it at `<bridge-ip>:<port>` (token exchange, JWKS)
+```
+1. Test runner  → KC /auth?kc_idp_hint=<alias>&code_challenge=...   (PKCE S256)
+2.              ← 302 → mockoidc /oidc/authorize
+3. Test runner  → mockoidc /authorize   (pre-queued user auto-approved)
+4.              ← 302 → KC /broker/<alias>/endpoint?code=<mock-code>
+5. Test runner  → KC broker callback
+6. KC (in-Kind) → POST mockoidc /oidc/token  (<bridge-ip>:<port>)
+7. KC (in-Kind) → GET  mockoidc /oidc/.well-known/jwks.json
+8.              ← 302 → http://localhost?code=<kc-code>
+9. Test runner intercepts redirect, extracts kc-code
+10. Test runner → POST KC /token (authorization_code grant + PKCE verifier)
+11.             ← KC JWT access_token
+12. Test runner → OSAC public API with JWT → assert correct tenant scoping
+```
+
+---
 
 ## Test Suite
 
-Located in `it/it_identity_providers_login_test.go`, these tests require a running Kind cluster.
+All 5 specs share a `BeforeEach` that:
 
-| Test | What it verifies |
-|------|-----------------|
-| Allows an IdP user to authenticate | Full OIDC redirect chain returns a KC JWT |
-| Scopes IdP user access to their tenant | Token gives access to the correct tenant's resources |
-| Denies access to a different tenant | Cross-tenant isolation enforced after IdP login |
-| Rejects token from unregistered IdP | Unknown alias → redirect chain fails as expected |
-| Reconciles OSAC IdP then allows login | Full path: OSAC API → controller → KC reconcile → login |
+1. Creates a fresh OSAC tenant
+2. Starts a `mockoidc` server (bound to `0.0.0.0:0`)
+3. **Registers the IdP via the OSAC private API** → waits up to 2 minutes for the
+   `IdentityProvider` controller to reconcile it to Keycloak (`READY` phase)
+
+### Spec 1 — Allows an IdP-linked user to authenticate and obtain a token
+
+Provisions a user, runs `SimulateOIDCLogin`, asserts a non-empty KC JWT is returned.
+
+### Spec 2 — Scopes IdP user access to their tenant
+
+Authenticates, then calls `Capabilities.Get` on the OSAC public API to confirm the token
+is accepted and tenant-scoped correctly.
+
+### Spec 3 — Denies an IdP user access to resources in a different tenant
+
+Authenticates as a user in tenant A, attempts to create an IdP in tenant B. Expects
+`PermissionDenied` or `Unauthenticated`.
+
+### Spec 4 — Rejects login via an unregistered IdP alias
+
+`SimulateOIDCLogin` with a random alias that doesn't exist in KC. Expects an error.
+
+### Spec 5 — Verifies OSAC controller status and alias reported
+
+Reads back the OSAC `IdentityProvider` object, asserts `phase == READY` and the status
+message contains the KC alias (`<tenantName>-<idpName>`). Then authenticates to confirm
+the reconciled IdP is functional.
+
+---
+
+## Key Helpers
+
+### `StartMockOIDC() (*MockOIDCState, error)`
+
+Starts an in-process mock OIDC server on all interfaces. Returns:
+
+- `LocalAuthURL()` — `http://127.0.0.1:<port>/oidc/authorize` (test runner follows redirects here)
+- `ClusterTokenURL()` — `http://<bridge-ip>:<port>/oidc/token` (Keycloak exchanges codes here)
+- `LocalIssuer()` — the `iss` claim value mockoidc puts in every token it issues
+
+### `MockOIDCState.QueueUser(subject, email, username)`
+
+Enqueues a user for the next authorization request. mockoidc auto-approves the login and
+returns this user's claims. **Must be called before `SimulateOIDCLogin`** so the
+subject matches the federated identity link set up in Keycloak.
+
+### `ProvisionOIDCUser(ctx, username, email, tenantName, idpAlias, externalSubject)`
+
+Test scaffolding — creates a Keycloak user with:
+1. A password (via `PUT /users/{id}/reset-password`)
+2. A federated identity link to the IdP (`externalSubject` = the mock user's `Subject`)
+3. KC organization membership (for the `organization` claim in the JWT)
+
+Keycloak's first-broker-login flow matches returning users by their external subject.
+Pre-creating the link prevents KC from interrupting the OIDC flow to prompt the user to
+review their profile.
+
+### `SimulateOIDCLogin(ctx, idpAlias) (token, error)`
+
+Drives the full OIDC authorization code redirect chain with PKCE (RFC 7636). Returns a
+Keycloak JWT access token. The redirect chain mirrors what `osac login` does.
+
+### `MakeOIDCGRPCConn(ctx, jwtToken) (*grpc.ClientConn, error)`
+
+Wraps a raw JWT into a gRPC connection to the OSAC external API for asserting access.
+
+---
 
 ## Running the Tests
 
 ### Prerequisites
 
-1. The Kind dev cluster must be running:
-
+1. Kind cluster running with OSAC deployed:
    ```bash
+   cd osac/fulfillment-service
    make -C ../osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac
+   make -C ../osac-installer install-osac  PLATFORM=kind PROFILE=dev NS=osac
    ```
 
-2. `/etc/hosts` entries must be present (set up by the installer):
-
+2. `/etc/hosts` entries (set once when the dev cluster is created):
    ```
    127.0.0.1  keycloak.keycloak.svc.cluster.local
    127.0.0.1  fulfillment-api.osac.svc.cluster.local
    127.0.0.1  fulfillment-internal-api.osac.svc.cluster.local
    ```
 
-3. Docker must be available so the test can detect the Kind bridge IP via
-   `docker network inspect kind`.
-
-### Running only the IdP login tests
+### Run
 
 ```bash
-cd fulfillment-service
-ginkgo run it --focus="Identity provider login flow"
+cd osac/fulfillment-service
+
+# All IdP login specs (each BeforeEach waits ~60s for controller reconciliation)
+ginkgo run -v --focus="Identity provider login flow" it
+
+# Single spec
+ginkgo run -v --focus="Scopes IdP user access to their tenant" it
 ```
 
-### Running the full integration suite
+---
+
+## If SimulateOIDCLogin Fails (Networking)
+
+`SimulateOIDCLogin` requires Keycloak (inside Kind) to reach the mockoidc server on the
+host via the Podman bridge IP for the code exchange (step 6 above). If this fails with
+a 502 or connection error, the test will report something like:
+
+```
+redirect chain stopped without KC code — redirects:
+redirect #1 → http://localhost?error=...
+```
+
+**Diagnosis:**
 
 ```bash
-cd fulfillment-service
-ginkgo run -r
+# Find the bridge IP Keycloak would use
+podman network inspect kind | python3 -c \
+  "import sys,json; nets=json.load(sys.stdin); \
+   print([s['gateway'] for n in nets for s in n.get('subnets',[])])"
+
+# Check if Keycloak can reach the host at that IP (run from inside KC pod)
+kubectl exec -n keycloak deployment/keycloak-service -- \
+  curl -sf http://<bridge-ip>:<mockoidc-port>/oidc/.well-known/openid-configuration
 ```
 
-### Preserving the cluster on failure (for debugging)
+**If Keycloak cannot reach the host (Podman network isolation):**
 
-```bash
-IT_KEEP_KIND=true ginkgo run it --focus="Identity provider login flow"
-```
+The long-term fix is to deploy Dex (or another OIDC provider) as a pod inside the Kind
+cluster so Keycloak can reach it via cluster DNS. This eliminates the host-to-cluster
+networking requirement entirely. See the [Dex deployment plan](../docs/DEX_IDP_PLAN.md)
+for the implementation roadmap.
 
-## How `SimulateOIDCLogin` Works
+---
 
-`SimulateOIDCLogin` in `it/it_idp_login_helpers.go` uses a single `http.Client` with a
-cookie jar to drive the entire redirect chain:
+## Adding New Tests
 
-1. **GET** KC authorization endpoint with `kc_idp_hint=<alias>` — KC skips its login
-   page and redirects straight to the external IdP.
-2. **GET** mockoidc `/oidc/authorize` — the queued `MockUser` is popped and an
-   authorization code is issued; mockoidc redirects to the KC broker callback.
-3. **GET** KC `/broker/<alias>/endpoint?code=<mock-code>` — KC exchanges the code with
-   mockoidc's token endpoint (bridge IP), validates the JWKS, creates or links the KC
-   user, then redirects to the original `redirect_uri`.
-4. `CheckRedirect` intercepts the final redirect to the dummy `redirect_uri` and extracts
-   the KC authorization code from the `Location` query string.
-5. **POST** KC token endpoint — exchanges the KC code for a KC JWT (`access_token`).
-
-The returned JWT is a normal Keycloak token and can be used directly as a Bearer token
-against the OSAC gRPC or REST API.
-
-## Provisioning Test Users
-
-`ProvisionOIDCUser` creates the necessary Keycloak state for a test user:
-
-1. Creates a KC user via the admin API.
-2. Links the KC user to the external IdP via a federated identity entry
-   (`/users/{id}/federated-identity/{alias}`).
-3. Adds the user to the tenant's KC organization so the `organization` claim
-   (required by OSAC's OPA policies) appears in the JWT.
-
-Call `MockOIDCState.QueueUser(subject, email, username)` before `SimulateOIDCLogin` to
-control which external identity is presented. If the queue is empty, mockoidc uses a
-built-in `DefaultUser`.
-
-## Adding New IdP Login Tests
-
-1. Use `BeforeEach` (already done in the suite) to get a fresh `MockOIDCState`, tenant,
-   and KC IdP alias.
-2. Call `ProvisionOIDCUser` to create the KC user and link them to the IdP.
-3. Call `QueueUser` on the `MockOIDCState` to set the external identity that will be
-   returned by mockoidc's authorization endpoint.
-4. Call `SimulateOIDCLogin` to obtain a KC JWT and optionally `MakeOIDCGRPCConn` to make
-   OSAC API calls.
-
-Example:
-
-```go
-It("My new IdP login scenario", func() {
-    subject := "my-subject-" + uuid.New()
-    _, err := tool.ProvisionOIDCUser(ctx,
-        "myuser", "myuser@example.com",
-        fx.tenantName, fx.idpAlias, subject,
-    )
-    Expect(err).ToNot(HaveOccurred())
-
-    fx.mockOIDC.QueueUser(subject, "myuser@example.com", "myuser")
-    token, err := tool.SimulateOIDCLogin(ctx, fx.idpAlias)
-    Expect(err).ToNot(HaveOccurred())
-
-    conn, err := tool.MakeOIDCGRPCConn(ctx, token)
-    Expect(err).ToNot(HaveOccurred())
-    defer conn.Close()
-
-    // ... make assertions using conn
-})
-```
+1. Add a new `It` block in `it_identity_providers_login_test.go`
+2. Use `provisionAndLogin(ctx, tenantName, idpAlias)` for authentication
+3. Assert using OSAC public API clients (`publicv1.New*Client(conn)`)
+4. Never authenticate via Keycloak admin endpoints — use `SimulateOIDCLogin`

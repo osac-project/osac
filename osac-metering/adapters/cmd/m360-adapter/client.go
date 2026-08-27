@@ -35,8 +35,15 @@ const (
 	maxBodyLog = 256
 )
 
-// m360Client sends events to the M360 Usage API.
-type m360Client struct {
+// routeEndpoints maps protocol-neutral route keys to M360 REST endpoints.
+var routeEndpoints = map[string]string{
+	routeVMaaS: "/vmaas/event",
+	routeCaaS:  "/caas/event",
+	routeMaaS:  "/maas/event",
+}
+
+// restSubmitter sends events to the M360 Usage API via REST.
+type restSubmitter struct {
 	httpClient *http.Client
 	baseURL    string
 	apiVersion string
@@ -44,21 +51,32 @@ type m360Client struct {
 	logger     logr.Logger
 }
 
-// newM360Client creates a client for the M360 Usage API.
-func newM360Client(baseURL, apiVersion, apiKey string) *m360Client {
-	return &m360Client{
+// newRESTSubmitter creates a REST submitter for the M360 Usage API.
+func newRESTSubmitter(baseURL, apiVersion, apiKey string, logger logr.Logger) *restSubmitter {
+	return &restSubmitter{
 		httpClient: &http.Client{Timeout: httpTimeout},
 		baseURL:    baseURL,
 		apiVersion: apiVersion,
 		apiKey:     apiKey,
-		logger:     logr.Discard(),
+		logger:     logger,
 	}
+}
+
+// submit looks up the REST endpoint for the given route key and posts the payload.
+func (s *restSubmitter) submit(ctx context.Context, route string, payload map[string]any) error {
+	endpoint, ok := routeEndpoints[route]
+	if !ok {
+		return &adapters.NonRetryableError{
+			Err: fmt.Errorf("unknown route %q", route),
+		}
+	}
+	return s.post(ctx, endpoint, payload)
 }
 
 // post sends a flat M360 payload to the given endpoint.
 // Returns NonRetryableError for 4xx responses (except 408 and 429,
 // which are retryable), plain error for 5xx.
-func (c *m360Client) post(ctx context.Context, endpoint string, payload map[string]any) error {
+func (s *restSubmitter) post(ctx context.Context, endpoint string, payload map[string]any) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return &adapters.NonRetryableError{
@@ -66,16 +84,16 @@ func (c *m360Client) post(ctx context.Context, endpoint string, payload map[stri
 		}
 	}
 
-	url := fmt.Sprintf("%s/api/%s/external/run%s", c.baseURL, c.apiVersion, endpoint)
+	url := fmt.Sprintf("%s/api/%s/external/run%s", s.baseURL, s.apiVersion, endpoint)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("create M360 request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("Authorization", "Bearer "+s.apiKey)
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("M360 request to %s: %w", endpoint, err)
 	}
@@ -87,7 +105,7 @@ func (c *m360Client) post(ctx context.Context, endpoint string, payload map[stri
 	}
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		c.logResponse(respBody)
+		s.logResponse(respBody)
 		return nil
 	}
 
@@ -110,16 +128,16 @@ func (c *m360Client) post(ctx context.Context, endpoint string, payload map[stri
 // Only connection-level errors (timeout, refused, DNS) cause failure.
 // Auth and API route failures surface as post() errors /
 // osac_adapter_events_failed_total, not here.
-func (c *m360Client) healthCheck(ctx context.Context) error {
+func (s *restSubmitter) healthCheck(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, healthCheckTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodHead, c.baseURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, s.baseURL, nil)
 	if err != nil {
 		return fmt.Errorf("create health check request: %w", err)
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("M360 health check: %w", err)
 	}
@@ -127,14 +145,17 @@ func (c *m360Client) healthCheck(ctx context.Context) error {
 	return nil
 }
 
+// close releases resources held by the REST submitter.
+func (s *restSubmitter) close() error { return nil }
+
 // logResponse extracts event_id from a successful M360 response for debug logging.
-func (c *m360Client) logResponse(body []byte) {
+func (s *restSubmitter) logResponse(body []byte) {
 	var resp struct {
 		Output struct {
 			EventID string `json:"event_id"`
 		} `json:"output"`
 	}
 	if err := json.Unmarshal(body, &resp); err == nil && resp.Output.EventID != "" {
-		c.logger.V(1).Info("M360 event accepted", "m360_event_id", resp.Output.EventID)
+		s.logger.V(1).Info("M360 event accepted", "m360_event_id", resp.Output.EventID)
 	}
 }

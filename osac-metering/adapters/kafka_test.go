@@ -10,6 +10,9 @@ in compliance with the License. You may obtain a copy of the License at
 package adapters
 
 import (
+	"time"
+
+	"github.com/IBM/sarama"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -33,6 +36,28 @@ var _ = Describe("newConsumerConfig", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(sc.Consumer.Return.Errors).To(BeTrue())
 		Expect(sc.Consumer.Offsets.AutoCommit.Enable).To(BeFalse())
+	})
+})
+
+var _ = Describe("NewProducerConfig", func() {
+	It("returns idempotent producer config with no TLS or SASL", func() {
+		sc, err := NewProducerConfig(KafkaConfig{TLSEnabled: false})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(sc.Producer.RequiredAcks).To(Equal(sarama.WaitForAll))
+		Expect(sc.Producer.Idempotent).To(BeTrue())
+		Expect(sc.Producer.Return.Successes).To(BeTrue())
+		Expect(sc.Net.MaxOpenRequests).To(Equal(1))
+		Expect(sc.Net.DialTimeout).To(Equal(5 * time.Second))
+		Expect(sc.Net.ReadTimeout).To(Equal(5 * time.Second))
+		Expect(sc.Net.WriteTimeout).To(Equal(5 * time.Second))
+		Expect(sc.Net.TLS.Enable).To(BeFalse())
+	})
+
+	It("enables TLS when TLSEnabled is true", func() {
+		sc, err := NewProducerConfig(KafkaConfig{TLSEnabled: true})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(sc.Net.TLS.Enable).To(BeTrue())
+		Expect(sc.Net.TLS.Config).NotTo(BeNil())
 	})
 })
 

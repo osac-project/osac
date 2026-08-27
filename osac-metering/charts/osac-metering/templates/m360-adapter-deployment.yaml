@@ -1,4 +1,5 @@
 {{- if .Values.m360Adapter.enabled }}
+{{- $protocol := default "rest" .Values.m360Adapter.output.protocol -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -30,9 +31,32 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 1Mi
+        {{- if eq $protocol "rest" }}
         - name: m360-api-key
           secret:
-            secretName: {{ required "m360Adapter.m360.apiKeySecret is required when m360Adapter is enabled" .Values.m360Adapter.m360.apiKeySecret }}
+            secretName: {{ required "m360Adapter.m360.apiKeySecret is required when output.protocol=rest" .Values.m360Adapter.m360.apiKeySecret }}
+        {{- end }}
+        {{- if eq $protocol "kafka" }}
+        {{- if or .Values.m360Adapter.output.kafka.tls.caCertSecret .Values.m360Adapter.output.kafka.sasl.passwordSecret }}
+        - name: m360-kafka-secrets
+          projected:
+            sources:
+              {{- if .Values.m360Adapter.output.kafka.tls.caCertSecret }}
+              - secret:
+                  name: {{ .Values.m360Adapter.output.kafka.tls.caCertSecret }}
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+              {{- end }}
+              {{- if .Values.m360Adapter.output.kafka.sasl.passwordSecret }}
+              - secret:
+                  name: {{ .Values.m360Adapter.output.kafka.sasl.passwordSecret }}
+                  items:
+                    - key: password
+                      path: password
+              {{- end }}
+        {{- end }}
+        {{- end }}
         - name: tmp
           emptyDir:
             sizeLimit: 10Mi
@@ -108,21 +132,56 @@ spec:
               value: osac-metering-m360-adapter
             - name: KAFKA_SASL_PASSWORD_FILE
               value: /etc/kafka-secrets/password
+            - name: M360_OUTPUT_PROTOCOL
+              value: {{ $protocol | quote }}
+            {{- if eq $protocol "rest" }}
             - name: M360_API_URL
-              value: {{ required "m360Adapter.m360.apiUrl is required when m360Adapter is enabled" .Values.m360Adapter.m360.apiUrl | quote }}
+              value: {{ required "m360Adapter.m360.apiUrl is required when output.protocol=rest" .Values.m360Adapter.m360.apiUrl | quote }}
             - name: M360_API_KEY_FILE
               value: /etc/m360/api-key
             - name: M360_API_VERSION
               value: {{ .Values.m360Adapter.m360.apiVersion | default "v1" | quote }}
+            {{- end }}
+            {{- if eq $protocol "kafka" }}
+            - name: M360_KAFKA_BROKERS
+              value: {{ required "m360Adapter.output.kafka.brokers is required when output.protocol=kafka" .Values.m360Adapter.output.kafka.brokers | quote }}
+            - name: M360_KAFKA_TLS_ENABLED
+              value: {{ .Values.m360Adapter.output.kafka.tls.enabled | quote }}
+            {{- if .Values.m360Adapter.output.kafka.tls.caCertSecret }}
+            - name: M360_KAFKA_TLS_CA_CERT
+              value: /etc/m360-kafka-secrets/ca.crt
+            {{- end }}
+            {{- if and .Values.m360Adapter.output.kafka.sasl.username .Values.m360Adapter.output.kafka.sasl.passwordSecret }}
+            - name: M360_KAFKA_SASL_USERNAME
+              value: {{ .Values.m360Adapter.output.kafka.sasl.username | quote }}
+            - name: M360_KAFKA_SASL_PASSWORD_FILE
+              value: /etc/m360-kafka-secrets/password
+            {{- end }}
+            - name: M360_KAFKA_TOPIC_VMAAS
+              value: {{ .Values.m360Adapter.output.kafka.topics.vmaas | default "m360.metering.vmaas" | quote }}
+            - name: M360_KAFKA_TOPIC_CAAS
+              value: {{ .Values.m360Adapter.output.kafka.topics.caas | default "m360.metering.caas" | quote }}
+            - name: M360_KAFKA_TOPIC_MAAS
+              value: {{ .Values.m360Adapter.output.kafka.topics.maas | default "m360.metering.maas" | quote }}
+            {{- end }}
             - name: METRICS_ADDR
               value: ":8080"
           volumeMounts:
             - name: kafka-secrets
               mountPath: /etc/kafka-secrets
               readOnly: true
+            {{- if eq $protocol "rest" }}
             - name: m360-api-key
               mountPath: /etc/m360
               readOnly: true
+            {{- end }}
+            {{- if eq $protocol "kafka" }}
+            {{- if or .Values.m360Adapter.output.kafka.tls.caCertSecret .Values.m360Adapter.output.kafka.sasl.passwordSecret }}
+            - name: m360-kafka-secrets
+              mountPath: /etc/m360-kafka-secrets
+              readOnly: true
+            {{- end }}
+            {{- end }}
           ports:
             - name: http
               containerPort: 8080

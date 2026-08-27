@@ -19,6 +19,10 @@ logger = logging.getLogger(__name__)
 _ENV_SKIP_PATTERNS = [re.compile(r"no host type"), re.compile(r"no instance type")]
 _FABRIC_MANAGER_SKIP_PATTERN = re.compile(r"require a fabric manager")
 
+# A BareMetalInstance requires at least one authentication method (ssh_public_key or
+# user_data) at create time, otherwise the resulting host would be inaccessible.
+_TEST_SSH_PUBLIC_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8K1ZuSC7tmzxD5LJJXwkCfStVEjzXWYCFhJaLBxWAn test@example.com"
+
 
 def _create_cluster_or_skip(cli: OsacCLI, *, catalog_item: str, name: str, version: str) -> str:
     try:
@@ -152,7 +156,12 @@ class TestClusterBareMetalReferences:
 
             bmi_response: dict[str, Any] = _create_bmi_or_skip(
                 grpc,
-                data={"object": {"metadata": {"name": f"ref-bmi-{tag}"}, "spec": {"catalog_item": {"name": cat_name}}}},
+                data={
+                    "object": {
+                        "metadata": {"name": f"ref-bmi-{tag}"},
+                        "spec": {"catalog_item": {"name": cat_name}, "ssh_public_key": _TEST_SSH_PUBLIC_KEY},
+                    }
+                },
             )
             bmi_id = bmi_response["object"]["id"]
             spec = bmi_response["object"]["spec"]

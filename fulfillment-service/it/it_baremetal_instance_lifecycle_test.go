@@ -34,6 +34,11 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 )
 
+// bmiTestSSHPublicKey is a valid OpenSSH public key used to satisfy the
+// requirement that a BareMetalInstance provide at least one authentication
+// method (ssh_public_key or user_data) at create time.
+const bmiTestSSHPublicKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8K1ZuSC7tmzxD5LJJXwkCfStVEjzXWYCFhJaLBxWAn test@example.com"
+
 var _ = Describe("BareMetalInstance lifecycle", func() {
 	var (
 		bareMetalInstancesClient            publicv1.BareMetalInstancesClient
@@ -142,6 +147,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					InstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: instanceTypeId}.Build(),
+					SshPublicKey: new(bmiTestSSHPublicKey),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -210,6 +216,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: "non-existent-catalog-item"}.Build(),
 					InstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: instanceTypeId}.Build(),
+					SshPublicKey: new(bmiTestSSHPublicKey),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -316,6 +323,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					InstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: instanceTypeId}.Build(),
+					SshPublicKey: new(bmiTestSSHPublicKey),
 					NetworkAttachments: []*publicv1.BareMetalNetworkAttachment{
 						publicv1.BareMetalNetworkAttachment_builder{
 							Subnet: publicv1.SubnetLocalReference_builder{Id: subnetId}.Build(),
@@ -337,6 +345,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					InstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: instanceTypeId}.Build(),
+					SshPublicKey: new(bmiTestSSHPublicKey),
 					Image: publicv1.BareMetalInstanceImage_builder{
 						SourceType: "registry",
 						SourceRef:  "quay.io/test/rhel9:latest",
@@ -426,6 +435,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					InstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: instanceTypeId}.Build(),
+					SshPublicKey: new(bmiTestSSHPublicKey),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -511,6 +521,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: imageCatalogItemId}.Build(),
 					InstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: instanceTypeId}.Build(),
+					SshPublicKey: new(bmiTestSSHPublicKey),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -600,6 +611,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: imageCatalogItemId}.Build(),
 					InstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: instanceTypeId}.Build(),
+					SshPublicKey: new(bmiTestSSHPublicKey),
 					Image: publicv1.BareMetalInstanceImage_builder{
 						SourceType: "registry",
 						SourceRef:  "quay.io/user/custom:v2",
@@ -645,6 +657,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					InstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: instanceTypeId}.Build(),
+					SshPublicKey: new(bmiTestSSHPublicKey),
 					Image: publicv1.BareMetalInstanceImage_builder{
 						SourceRef: "quay.io/test:latest",
 					}.Build(),
@@ -667,6 +680,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					InstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: instanceTypeId}.Build(),
+					SshPublicKey: new(bmiTestSSHPublicKey),
 					Image: publicv1.BareMetalInstanceImage_builder{
 						SourceType: "registry",
 					}.Build(),
@@ -689,6 +703,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					InstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: instanceTypeId}.Build(),
+					SshPublicKey: new(bmiTestSSHPublicKey),
 					Image: publicv1.BareMetalInstanceImage_builder{
 						SourceType: "registry",
 						SourceRef:  "quay.io/test:latest",
@@ -750,6 +765,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					InstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: instanceTypeId}.Build(),
+					SshPublicKey: new(bmiTestSSHPublicKey),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -862,7 +878,8 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
-					CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
+					CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
+					SshPublicKey: new(bmiTestSSHPublicKey),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -972,6 +989,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 						CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{
 							Name: catName,
 						}.Build(),
+						SshPublicKey: new(bmiTestSSHPublicKey),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -1040,6 +1058,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 					Spec: publicv1.BareMetalInstanceSpec_builder{
 						Template:     publicv1.BareMetalInstanceTemplateReference_builder{Id: directTemplateId}.Build(),
 						InstanceType: publicv1.BareMetalInstanceTypeLocalReference_builder{Id: instanceTypeId}.Build(),
+						SshPublicKey: new(bmiTestSSHPublicKey),
 						Image: publicv1.BareMetalInstanceImage_builder{
 							SourceType: "registry",
 							SourceRef:  "quay.io/test/rhel9:latest",

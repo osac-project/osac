@@ -469,6 +469,12 @@ func (s *PrivateBareMetalInstancesServer) validateSpec(bmi *privatev1.BareMetalI
 		}
 	}
 
+	// If none of ssh keys and user data are set, server cannot be accessed after deployment
+	if spec.GetSshPublicKey() == "" && spec.GetUserData() == "" {
+		return grpcstatus.Error(grpccodes.InvalidArgument,
+			"at least one authentication method must be provided: spec.ssh_public_key or spec.user_data")
+	}
+
 	if spec.HasImage() {
 		if err := s.validateBareMetalInstanceImage(spec.GetImage()); err != nil {
 			return err

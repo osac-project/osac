@@ -48,17 +48,17 @@ const (
 //
 // Roles represent named permission sets that can be assigned to groups. The system comes with a set of predefined
 // roles such as `cloud-provider-admin`, `cloud-provider-reader`, `tenant-admin`, `tenant-reader`, and `tenant-user`.
-// Only administrators can create, update, or delete roles.
+// Only administrators can create, update, or delete roles. Regular users can only list and get roles.
 type RolesClient interface {
 	// Retrieves the list of roles.
 	List(ctx context.Context, in *RolesListRequest, opts ...grpc.CallOption) (*RolesListResponse, error)
 	// Retrieves the details of one specific role.
 	Get(ctx context.Context, in *RolesGetRequest, opts ...grpc.CallOption) (*RolesGetResponse, error)
-	// Creates a new role.
+	// Creates a new role. This operation is only available to administrators.
 	Create(ctx context.Context, in *RolesCreateRequest, opts ...grpc.CallOption) (*RolesCreateResponse, error)
-	// Updates an existing role.
+	// Updates an existing role. This operation is only available to administrators.
 	Update(ctx context.Context, in *RolesUpdateRequest, opts ...grpc.CallOption) (*RolesUpdateResponse, error)
-	// Deletes a role.
+	// Deletes a role. This operation is only available to administrators.
 	Delete(ctx context.Context, in *RolesDeleteRequest, opts ...grpc.CallOption) (*RolesDeleteResponse, error)
 	// Indicates that something changed in the object or the system that may require reconciling the object.
 	Signal(ctx context.Context, in *RolesSignalRequest, opts ...grpc.CallOption) (*RolesSignalResponse, error)
@@ -140,17 +140,17 @@ func (c *rolesClient) Signal(ctx context.Context, in *RolesSignalRequest, opts .
 //
 // Roles represent named permission sets that can be assigned to groups. The system comes with a set of predefined
 // roles such as `cloud-provider-admin`, `cloud-provider-reader`, `tenant-admin`, `tenant-reader`, and `tenant-user`.
-// Only administrators can create, update, or delete roles.
+// Only administrators can create, update, or delete roles. Regular users can only list and get roles.
 type RolesServer interface {
 	// Retrieves the list of roles.
 	List(context.Context, *RolesListRequest) (*RolesListResponse, error)
 	// Retrieves the details of one specific role.
 	Get(context.Context, *RolesGetRequest) (*RolesGetResponse, error)
-	// Creates a new role.
+	// Creates a new role. This operation is only available to administrators.
 	Create(context.Context, *RolesCreateRequest) (*RolesCreateResponse, error)
-	// Updates an existing role.
+	// Updates an existing role. This operation is only available to administrators.
 	Update(context.Context, *RolesUpdateRequest) (*RolesUpdateResponse, error)
-	// Deletes a role.
+	// Deletes a role. This operation is only available to administrators.
 	Delete(context.Context, *RolesDeleteRequest) (*RolesDeleteResponse, error)
 	// Indicates that something changed in the object or the system that may require reconciling the object.
 	Signal(context.Context, *RolesSignalRequest) (*RolesSignalResponse, error)

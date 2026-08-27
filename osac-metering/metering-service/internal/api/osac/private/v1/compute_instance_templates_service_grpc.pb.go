@@ -35,8 +35,8 @@ const (
 	ComputeInstanceTemplates_List_FullMethodName   = "/osac.private.v1.ComputeInstanceTemplates/List"
 	ComputeInstanceTemplates_Get_FullMethodName    = "/osac.private.v1.ComputeInstanceTemplates/Get"
 	ComputeInstanceTemplates_Create_FullMethodName = "/osac.private.v1.ComputeInstanceTemplates/Create"
-	ComputeInstanceTemplates_Delete_FullMethodName = "/osac.private.v1.ComputeInstanceTemplates/Delete"
 	ComputeInstanceTemplates_Update_FullMethodName = "/osac.private.v1.ComputeInstanceTemplates/Update"
+	ComputeInstanceTemplates_Delete_FullMethodName = "/osac.private.v1.ComputeInstanceTemplates/Delete"
 	ComputeInstanceTemplates_Signal_FullMethodName = "/osac.private.v1.ComputeInstanceTemplates/Signal"
 )
 
@@ -44,11 +44,16 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type ComputeInstanceTemplatesClient interface {
+	// Retrieves the list of compute instance templates.
 	List(ctx context.Context, in *ComputeInstanceTemplatesListRequest, opts ...grpc.CallOption) (*ComputeInstanceTemplatesListResponse, error)
+	// Retrieves the details of one specific compute instance template.
 	Get(ctx context.Context, in *ComputeInstanceTemplatesGetRequest, opts ...grpc.CallOption) (*ComputeInstanceTemplatesGetResponse, error)
+	// Creates a new compute instance template.
 	Create(ctx context.Context, in *ComputeInstanceTemplatesCreateRequest, opts ...grpc.CallOption) (*ComputeInstanceTemplatesCreateResponse, error)
-	Delete(ctx context.Context, in *ComputeInstanceTemplatesDeleteRequest, opts ...grpc.CallOption) (*ComputeInstanceTemplatesDeleteResponse, error)
+	// Updates an existing compute instance template.
 	Update(ctx context.Context, in *ComputeInstanceTemplatesUpdateRequest, opts ...grpc.CallOption) (*ComputeInstanceTemplatesUpdateResponse, error)
+	// Deletes a compute instance template.
+	Delete(ctx context.Context, in *ComputeInstanceTemplatesDeleteRequest, opts ...grpc.CallOption) (*ComputeInstanceTemplatesDeleteResponse, error)
 	// Indicates that something changed in the object or the system that may require reconciling the object.
 	Signal(ctx context.Context, in *ComputeInstanceTemplatesSignalRequest, opts ...grpc.CallOption) (*ComputeInstanceTemplatesSignalResponse, error)
 }
@@ -91,20 +96,20 @@ func (c *computeInstanceTemplatesClient) Create(ctx context.Context, in *Compute
 	return out, nil
 }
 
-func (c *computeInstanceTemplatesClient) Delete(ctx context.Context, in *ComputeInstanceTemplatesDeleteRequest, opts ...grpc.CallOption) (*ComputeInstanceTemplatesDeleteResponse, error) {
+func (c *computeInstanceTemplatesClient) Update(ctx context.Context, in *ComputeInstanceTemplatesUpdateRequest, opts ...grpc.CallOption) (*ComputeInstanceTemplatesUpdateResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ComputeInstanceTemplatesDeleteResponse)
-	err := c.cc.Invoke(ctx, ComputeInstanceTemplates_Delete_FullMethodName, in, out, cOpts...)
+	out := new(ComputeInstanceTemplatesUpdateResponse)
+	err := c.cc.Invoke(ctx, ComputeInstanceTemplates_Update_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *computeInstanceTemplatesClient) Update(ctx context.Context, in *ComputeInstanceTemplatesUpdateRequest, opts ...grpc.CallOption) (*ComputeInstanceTemplatesUpdateResponse, error) {
+func (c *computeInstanceTemplatesClient) Delete(ctx context.Context, in *ComputeInstanceTemplatesDeleteRequest, opts ...grpc.CallOption) (*ComputeInstanceTemplatesDeleteResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ComputeInstanceTemplatesUpdateResponse)
-	err := c.cc.Invoke(ctx, ComputeInstanceTemplates_Update_FullMethodName, in, out, cOpts...)
+	out := new(ComputeInstanceTemplatesDeleteResponse)
+	err := c.cc.Invoke(ctx, ComputeInstanceTemplates_Delete_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -125,11 +130,16 @@ func (c *computeInstanceTemplatesClient) Signal(ctx context.Context, in *Compute
 // All implementations must embed UnimplementedComputeInstanceTemplatesServer
 // for forward compatibility.
 type ComputeInstanceTemplatesServer interface {
+	// Retrieves the list of compute instance templates.
 	List(context.Context, *ComputeInstanceTemplatesListRequest) (*ComputeInstanceTemplatesListResponse, error)
+	// Retrieves the details of one specific compute instance template.
 	Get(context.Context, *ComputeInstanceTemplatesGetRequest) (*ComputeInstanceTemplatesGetResponse, error)
+	// Creates a new compute instance template.
 	Create(context.Context, *ComputeInstanceTemplatesCreateRequest) (*ComputeInstanceTemplatesCreateResponse, error)
-	Delete(context.Context, *ComputeInstanceTemplatesDeleteRequest) (*ComputeInstanceTemplatesDeleteResponse, error)
+	// Updates an existing compute instance template.
 	Update(context.Context, *ComputeInstanceTemplatesUpdateRequest) (*ComputeInstanceTemplatesUpdateResponse, error)
+	// Deletes a compute instance template.
+	Delete(context.Context, *ComputeInstanceTemplatesDeleteRequest) (*ComputeInstanceTemplatesDeleteResponse, error)
 	// Indicates that something changed in the object or the system that may require reconciling the object.
 	Signal(context.Context, *ComputeInstanceTemplatesSignalRequest) (*ComputeInstanceTemplatesSignalResponse, error)
 	mustEmbedUnimplementedComputeInstanceTemplatesServer()
@@ -151,11 +161,11 @@ func (UnimplementedComputeInstanceTemplatesServer) Get(context.Context, *Compute
 func (UnimplementedComputeInstanceTemplatesServer) Create(context.Context, *ComputeInstanceTemplatesCreateRequest) (*ComputeInstanceTemplatesCreateResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Create not implemented")
 }
-func (UnimplementedComputeInstanceTemplatesServer) Delete(context.Context, *ComputeInstanceTemplatesDeleteRequest) (*ComputeInstanceTemplatesDeleteResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
-}
 func (UnimplementedComputeInstanceTemplatesServer) Update(context.Context, *ComputeInstanceTemplatesUpdateRequest) (*ComputeInstanceTemplatesUpdateResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Update not implemented")
+}
+func (UnimplementedComputeInstanceTemplatesServer) Delete(context.Context, *ComputeInstanceTemplatesDeleteRequest) (*ComputeInstanceTemplatesDeleteResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
 }
 func (UnimplementedComputeInstanceTemplatesServer) Signal(context.Context, *ComputeInstanceTemplatesSignalRequest) (*ComputeInstanceTemplatesSignalResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Signal not implemented")
@@ -236,24 +246,6 @@ func _ComputeInstanceTemplates_Create_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
-func _ComputeInstanceTemplates_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ComputeInstanceTemplatesDeleteRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ComputeInstanceTemplatesServer).Delete(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ComputeInstanceTemplates_Delete_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ComputeInstanceTemplatesServer).Delete(ctx, req.(*ComputeInstanceTemplatesDeleteRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _ComputeInstanceTemplates_Update_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ComputeInstanceTemplatesUpdateRequest)
 	if err := dec(in); err != nil {
@@ -268,6 +260,24 @@ func _ComputeInstanceTemplates_Update_Handler(srv interface{}, ctx context.Conte
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ComputeInstanceTemplatesServer).Update(ctx, req.(*ComputeInstanceTemplatesUpdateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ComputeInstanceTemplates_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ComputeInstanceTemplatesDeleteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ComputeInstanceTemplatesServer).Delete(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ComputeInstanceTemplates_Delete_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ComputeInstanceTemplatesServer).Delete(ctx, req.(*ComputeInstanceTemplatesDeleteRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -310,12 +320,12 @@ var ComputeInstanceTemplates_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _ComputeInstanceTemplates_Create_Handler,
 		},
 		{
-			MethodName: "Delete",
-			Handler:    _ComputeInstanceTemplates_Delete_Handler,
-		},
-		{
 			MethodName: "Update",
 			Handler:    _ComputeInstanceTemplates_Update_Handler,
+		},
+		{
+			MethodName: "Delete",
+			Handler:    _ComputeInstanceTemplates_Delete_Handler,
 		},
 		{
 			MethodName: "Signal",

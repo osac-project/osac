@@ -44,10 +44,15 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type DiskImagesClient interface {
+	// Retrieves the list of disk images.
 	List(ctx context.Context, in *DiskImagesListRequest, opts ...grpc.CallOption) (*DiskImagesListResponse, error)
+	// Retrieves the details of one specific disk image.
 	Get(ctx context.Context, in *DiskImagesGetRequest, opts ...grpc.CallOption) (*DiskImagesGetResponse, error)
+	// Creates a new disk image.
 	Create(ctx context.Context, in *DiskImagesCreateRequest, opts ...grpc.CallOption) (*DiskImagesCreateResponse, error)
+	// Updates an existing disk image.
 	Update(ctx context.Context, in *DiskImagesUpdateRequest, opts ...grpc.CallOption) (*DiskImagesUpdateResponse, error)
+	// Deletes a disk image.
 	Delete(ctx context.Context, in *DiskImagesDeleteRequest, opts ...grpc.CallOption) (*DiskImagesDeleteResponse, error)
 	// Indicates that something changed in the object or the system that may require reconciling the object.
 	Signal(ctx context.Context, in *DiskImagesSignalRequest, opts ...grpc.CallOption) (*DiskImagesSignalResponse, error)
@@ -125,10 +130,15 @@ func (c *diskImagesClient) Signal(ctx context.Context, in *DiskImagesSignalReque
 // All implementations must embed UnimplementedDiskImagesServer
 // for forward compatibility.
 type DiskImagesServer interface {
+	// Retrieves the list of disk images.
 	List(context.Context, *DiskImagesListRequest) (*DiskImagesListResponse, error)
+	// Retrieves the details of one specific disk image.
 	Get(context.Context, *DiskImagesGetRequest) (*DiskImagesGetResponse, error)
+	// Creates a new disk image.
 	Create(context.Context, *DiskImagesCreateRequest) (*DiskImagesCreateResponse, error)
+	// Updates an existing disk image.
 	Update(context.Context, *DiskImagesUpdateRequest) (*DiskImagesUpdateResponse, error)
+	// Deletes a disk image.
 	Delete(context.Context, *DiskImagesDeleteRequest) (*DiskImagesDeleteResponse, error)
 	// Indicates that something changed in the object or the system that may require reconciling the object.
 	Signal(context.Context, *DiskImagesSignalRequest) (*DiskImagesSignalResponse, error)

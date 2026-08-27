@@ -35,8 +35,8 @@ const (
 	ComputeInstances_List_FullMethodName   = "/osac.private.v1.ComputeInstances/List"
 	ComputeInstances_Get_FullMethodName    = "/osac.private.v1.ComputeInstances/Get"
 	ComputeInstances_Create_FullMethodName = "/osac.private.v1.ComputeInstances/Create"
-	ComputeInstances_Delete_FullMethodName = "/osac.private.v1.ComputeInstances/Delete"
 	ComputeInstances_Update_FullMethodName = "/osac.private.v1.ComputeInstances/Update"
+	ComputeInstances_Delete_FullMethodName = "/osac.private.v1.ComputeInstances/Delete"
 	ComputeInstances_Signal_FullMethodName = "/osac.private.v1.ComputeInstances/Signal"
 )
 
@@ -44,11 +44,16 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type ComputeInstancesClient interface {
+	// Retrieves the list of compute instances.
 	List(ctx context.Context, in *ComputeInstancesListRequest, opts ...grpc.CallOption) (*ComputeInstancesListResponse, error)
+	// Retrieves the details of one specific compute instance.
 	Get(ctx context.Context, in *ComputeInstancesGetRequest, opts ...grpc.CallOption) (*ComputeInstancesGetResponse, error)
+	// Creates a new compute instance.
 	Create(ctx context.Context, in *ComputeInstancesCreateRequest, opts ...grpc.CallOption) (*ComputeInstancesCreateResponse, error)
-	Delete(ctx context.Context, in *ComputeInstancesDeleteRequest, opts ...grpc.CallOption) (*ComputeInstancesDeleteResponse, error)
+	// Updates an existing compute instance.
 	Update(ctx context.Context, in *ComputeInstancesUpdateRequest, opts ...grpc.CallOption) (*ComputeInstancesUpdateResponse, error)
+	// Deletes a compute instance.
+	Delete(ctx context.Context, in *ComputeInstancesDeleteRequest, opts ...grpc.CallOption) (*ComputeInstancesDeleteResponse, error)
 	// Indicates that something changed in the object or the system that may require reconciling the object.
 	Signal(ctx context.Context, in *ComputeInstancesSignalRequest, opts ...grpc.CallOption) (*ComputeInstancesSignalResponse, error)
 }
@@ -91,20 +96,20 @@ func (c *computeInstancesClient) Create(ctx context.Context, in *ComputeInstance
 	return out, nil
 }
 
-func (c *computeInstancesClient) Delete(ctx context.Context, in *ComputeInstancesDeleteRequest, opts ...grpc.CallOption) (*ComputeInstancesDeleteResponse, error) {
+func (c *computeInstancesClient) Update(ctx context.Context, in *ComputeInstancesUpdateRequest, opts ...grpc.CallOption) (*ComputeInstancesUpdateResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ComputeInstancesDeleteResponse)
-	err := c.cc.Invoke(ctx, ComputeInstances_Delete_FullMethodName, in, out, cOpts...)
+	out := new(ComputeInstancesUpdateResponse)
+	err := c.cc.Invoke(ctx, ComputeInstances_Update_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *computeInstancesClient) Update(ctx context.Context, in *ComputeInstancesUpdateRequest, opts ...grpc.CallOption) (*ComputeInstancesUpdateResponse, error) {
+func (c *computeInstancesClient) Delete(ctx context.Context, in *ComputeInstancesDeleteRequest, opts ...grpc.CallOption) (*ComputeInstancesDeleteResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ComputeInstancesUpdateResponse)
-	err := c.cc.Invoke(ctx, ComputeInstances_Update_FullMethodName, in, out, cOpts...)
+	out := new(ComputeInstancesDeleteResponse)
+	err := c.cc.Invoke(ctx, ComputeInstances_Delete_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -125,11 +130,16 @@ func (c *computeInstancesClient) Signal(ctx context.Context, in *ComputeInstance
 // All implementations must embed UnimplementedComputeInstancesServer
 // for forward compatibility.
 type ComputeInstancesServer interface {
+	// Retrieves the list of compute instances.
 	List(context.Context, *ComputeInstancesListRequest) (*ComputeInstancesListResponse, error)
+	// Retrieves the details of one specific compute instance.
 	Get(context.Context, *ComputeInstancesGetRequest) (*ComputeInstancesGetResponse, error)
+	// Creates a new compute instance.
 	Create(context.Context, *ComputeInstancesCreateRequest) (*ComputeInstancesCreateResponse, error)
-	Delete(context.Context, *ComputeInstancesDeleteRequest) (*ComputeInstancesDeleteResponse, error)
+	// Updates an existing compute instance.
 	Update(context.Context, *ComputeInstancesUpdateRequest) (*ComputeInstancesUpdateResponse, error)
+	// Deletes a compute instance.
+	Delete(context.Context, *ComputeInstancesDeleteRequest) (*ComputeInstancesDeleteResponse, error)
 	// Indicates that something changed in the object or the system that may require reconciling the object.
 	Signal(context.Context, *ComputeInstancesSignalRequest) (*ComputeInstancesSignalResponse, error)
 	mustEmbedUnimplementedComputeInstancesServer()
@@ -151,11 +161,11 @@ func (UnimplementedComputeInstancesServer) Get(context.Context, *ComputeInstance
 func (UnimplementedComputeInstancesServer) Create(context.Context, *ComputeInstancesCreateRequest) (*ComputeInstancesCreateResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Create not implemented")
 }
-func (UnimplementedComputeInstancesServer) Delete(context.Context, *ComputeInstancesDeleteRequest) (*ComputeInstancesDeleteResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
-}
 func (UnimplementedComputeInstancesServer) Update(context.Context, *ComputeInstancesUpdateRequest) (*ComputeInstancesUpdateResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Update not implemented")
+}
+func (UnimplementedComputeInstancesServer) Delete(context.Context, *ComputeInstancesDeleteRequest) (*ComputeInstancesDeleteResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
 }
 func (UnimplementedComputeInstancesServer) Signal(context.Context, *ComputeInstancesSignalRequest) (*ComputeInstancesSignalResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Signal not implemented")
@@ -235,24 +245,6 @@ func _ComputeInstances_Create_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
-func _ComputeInstances_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ComputeInstancesDeleteRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ComputeInstancesServer).Delete(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ComputeInstances_Delete_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ComputeInstancesServer).Delete(ctx, req.(*ComputeInstancesDeleteRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _ComputeInstances_Update_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ComputeInstancesUpdateRequest)
 	if err := dec(in); err != nil {
@@ -267,6 +259,24 @@ func _ComputeInstances_Update_Handler(srv interface{}, ctx context.Context, dec 
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ComputeInstancesServer).Update(ctx, req.(*ComputeInstancesUpdateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ComputeInstances_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ComputeInstancesDeleteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ComputeInstancesServer).Delete(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ComputeInstances_Delete_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ComputeInstancesServer).Delete(ctx, req.(*ComputeInstancesDeleteRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -309,12 +319,12 @@ var ComputeInstances_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _ComputeInstances_Create_Handler,
 		},
 		{
-			MethodName: "Delete",
-			Handler:    _ComputeInstances_Delete_Handler,
-		},
-		{
 			MethodName: "Update",
 			Handler:    _ComputeInstances_Update_Handler,
+		},
+		{
+			MethodName: "Delete",
+			Handler:    _ComputeInstances_Delete_Handler,
 		},
 		{
 			MethodName: "Signal",

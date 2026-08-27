@@ -35,8 +35,8 @@ const (
 	ComputeInstanceCatalogItems_List_FullMethodName   = "/osac.private.v1.ComputeInstanceCatalogItems/List"
 	ComputeInstanceCatalogItems_Get_FullMethodName    = "/osac.private.v1.ComputeInstanceCatalogItems/Get"
 	ComputeInstanceCatalogItems_Create_FullMethodName = "/osac.private.v1.ComputeInstanceCatalogItems/Create"
-	ComputeInstanceCatalogItems_Delete_FullMethodName = "/osac.private.v1.ComputeInstanceCatalogItems/Delete"
 	ComputeInstanceCatalogItems_Update_FullMethodName = "/osac.private.v1.ComputeInstanceCatalogItems/Update"
+	ComputeInstanceCatalogItems_Delete_FullMethodName = "/osac.private.v1.ComputeInstanceCatalogItems/Delete"
 	ComputeInstanceCatalogItems_Signal_FullMethodName = "/osac.private.v1.ComputeInstanceCatalogItems/Signal"
 )
 
@@ -44,11 +44,16 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type ComputeInstanceCatalogItemsClient interface {
+	// Retrieves the list of compute instance catalog items.
 	List(ctx context.Context, in *ComputeInstanceCatalogItemsListRequest, opts ...grpc.CallOption) (*ComputeInstanceCatalogItemsListResponse, error)
+	// Retrieves the details of one specific compute instance catalog item.
 	Get(ctx context.Context, in *ComputeInstanceCatalogItemsGetRequest, opts ...grpc.CallOption) (*ComputeInstanceCatalogItemsGetResponse, error)
+	// Creates a new compute instance catalog item.
 	Create(ctx context.Context, in *ComputeInstanceCatalogItemsCreateRequest, opts ...grpc.CallOption) (*ComputeInstanceCatalogItemsCreateResponse, error)
-	Delete(ctx context.Context, in *ComputeInstanceCatalogItemsDeleteRequest, opts ...grpc.CallOption) (*ComputeInstanceCatalogItemsDeleteResponse, error)
+	// Updates an existing compute instance catalog item.
 	Update(ctx context.Context, in *ComputeInstanceCatalogItemsUpdateRequest, opts ...grpc.CallOption) (*ComputeInstanceCatalogItemsUpdateResponse, error)
+	// Deletes a compute instance catalog item.
+	Delete(ctx context.Context, in *ComputeInstanceCatalogItemsDeleteRequest, opts ...grpc.CallOption) (*ComputeInstanceCatalogItemsDeleteResponse, error)
 	// Indicates that something changed in the object or the system that may require reconciling the object.
 	Signal(ctx context.Context, in *ComputeInstanceCatalogItemsSignalRequest, opts ...grpc.CallOption) (*ComputeInstanceCatalogItemsSignalResponse, error)
 }
@@ -91,20 +96,20 @@ func (c *computeInstanceCatalogItemsClient) Create(ctx context.Context, in *Comp
 	return out, nil
 }
 
-func (c *computeInstanceCatalogItemsClient) Delete(ctx context.Context, in *ComputeInstanceCatalogItemsDeleteRequest, opts ...grpc.CallOption) (*ComputeInstanceCatalogItemsDeleteResponse, error) {
+func (c *computeInstanceCatalogItemsClient) Update(ctx context.Context, in *ComputeInstanceCatalogItemsUpdateRequest, opts ...grpc.CallOption) (*ComputeInstanceCatalogItemsUpdateResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ComputeInstanceCatalogItemsDeleteResponse)
-	err := c.cc.Invoke(ctx, ComputeInstanceCatalogItems_Delete_FullMethodName, in, out, cOpts...)
+	out := new(ComputeInstanceCatalogItemsUpdateResponse)
+	err := c.cc.Invoke(ctx, ComputeInstanceCatalogItems_Update_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *computeInstanceCatalogItemsClient) Update(ctx context.Context, in *ComputeInstanceCatalogItemsUpdateRequest, opts ...grpc.CallOption) (*ComputeInstanceCatalogItemsUpdateResponse, error) {
+func (c *computeInstanceCatalogItemsClient) Delete(ctx context.Context, in *ComputeInstanceCatalogItemsDeleteRequest, opts ...grpc.CallOption) (*ComputeInstanceCatalogItemsDeleteResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ComputeInstanceCatalogItemsUpdateResponse)
-	err := c.cc.Invoke(ctx, ComputeInstanceCatalogItems_Update_FullMethodName, in, out, cOpts...)
+	out := new(ComputeInstanceCatalogItemsDeleteResponse)
+	err := c.cc.Invoke(ctx, ComputeInstanceCatalogItems_Delete_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -125,11 +130,16 @@ func (c *computeInstanceCatalogItemsClient) Signal(ctx context.Context, in *Comp
 // All implementations must embed UnimplementedComputeInstanceCatalogItemsServer
 // for forward compatibility.
 type ComputeInstanceCatalogItemsServer interface {
+	// Retrieves the list of compute instance catalog items.
 	List(context.Context, *ComputeInstanceCatalogItemsListRequest) (*ComputeInstanceCatalogItemsListResponse, error)
+	// Retrieves the details of one specific compute instance catalog item.
 	Get(context.Context, *ComputeInstanceCatalogItemsGetRequest) (*ComputeInstanceCatalogItemsGetResponse, error)
+	// Creates a new compute instance catalog item.
 	Create(context.Context, *ComputeInstanceCatalogItemsCreateRequest) (*ComputeInstanceCatalogItemsCreateResponse, error)
-	Delete(context.Context, *ComputeInstanceCatalogItemsDeleteRequest) (*ComputeInstanceCatalogItemsDeleteResponse, error)
+	// Updates an existing compute instance catalog item.
 	Update(context.Context, *ComputeInstanceCatalogItemsUpdateRequest) (*ComputeInstanceCatalogItemsUpdateResponse, error)
+	// Deletes a compute instance catalog item.
+	Delete(context.Context, *ComputeInstanceCatalogItemsDeleteRequest) (*ComputeInstanceCatalogItemsDeleteResponse, error)
 	// Indicates that something changed in the object or the system that may require reconciling the object.
 	Signal(context.Context, *ComputeInstanceCatalogItemsSignalRequest) (*ComputeInstanceCatalogItemsSignalResponse, error)
 	mustEmbedUnimplementedComputeInstanceCatalogItemsServer()
@@ -151,11 +161,11 @@ func (UnimplementedComputeInstanceCatalogItemsServer) Get(context.Context, *Comp
 func (UnimplementedComputeInstanceCatalogItemsServer) Create(context.Context, *ComputeInstanceCatalogItemsCreateRequest) (*ComputeInstanceCatalogItemsCreateResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Create not implemented")
 }
-func (UnimplementedComputeInstanceCatalogItemsServer) Delete(context.Context, *ComputeInstanceCatalogItemsDeleteRequest) (*ComputeInstanceCatalogItemsDeleteResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
-}
 func (UnimplementedComputeInstanceCatalogItemsServer) Update(context.Context, *ComputeInstanceCatalogItemsUpdateRequest) (*ComputeInstanceCatalogItemsUpdateResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Update not implemented")
+}
+func (UnimplementedComputeInstanceCatalogItemsServer) Delete(context.Context, *ComputeInstanceCatalogItemsDeleteRequest) (*ComputeInstanceCatalogItemsDeleteResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
 }
 func (UnimplementedComputeInstanceCatalogItemsServer) Signal(context.Context, *ComputeInstanceCatalogItemsSignalRequest) (*ComputeInstanceCatalogItemsSignalResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Signal not implemented")
@@ -236,24 +246,6 @@ func _ComputeInstanceCatalogItems_Create_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
-func _ComputeInstanceCatalogItems_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ComputeInstanceCatalogItemsDeleteRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ComputeInstanceCatalogItemsServer).Delete(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ComputeInstanceCatalogItems_Delete_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ComputeInstanceCatalogItemsServer).Delete(ctx, req.(*ComputeInstanceCatalogItemsDeleteRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _ComputeInstanceCatalogItems_Update_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ComputeInstanceCatalogItemsUpdateRequest)
 	if err := dec(in); err != nil {
@@ -268,6 +260,24 @@ func _ComputeInstanceCatalogItems_Update_Handler(srv interface{}, ctx context.Co
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ComputeInstanceCatalogItemsServer).Update(ctx, req.(*ComputeInstanceCatalogItemsUpdateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ComputeInstanceCatalogItems_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ComputeInstanceCatalogItemsDeleteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ComputeInstanceCatalogItemsServer).Delete(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ComputeInstanceCatalogItems_Delete_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ComputeInstanceCatalogItemsServer).Delete(ctx, req.(*ComputeInstanceCatalogItemsDeleteRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -310,12 +320,12 @@ var ComputeInstanceCatalogItems_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _ComputeInstanceCatalogItems_Create_Handler,
 		},
 		{
-			MethodName: "Delete",
-			Handler:    _ComputeInstanceCatalogItems_Delete_Handler,
-		},
-		{
 			MethodName: "Update",
 			Handler:    _ComputeInstanceCatalogItems_Update_Handler,
+		},
+		{
+			MethodName: "Delete",
+			Handler:    _ComputeInstanceCatalogItems_Delete_Handler,
 		},
 		{
 			MethodName: "Signal",

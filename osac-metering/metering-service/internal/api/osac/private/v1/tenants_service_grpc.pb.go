@@ -44,10 +44,15 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type TenantsClient interface {
+	// Retrieves the list of tenants.
 	List(ctx context.Context, in *TenantsListRequest, opts ...grpc.CallOption) (*TenantsListResponse, error)
+	// Retrieves the details of one specific tenant.
 	Get(ctx context.Context, in *TenantsGetRequest, opts ...grpc.CallOption) (*TenantsGetResponse, error)
+	// Creates a new tenant.
 	Create(ctx context.Context, in *TenantsCreateRequest, opts ...grpc.CallOption) (*TenantsCreateResponse, error)
+	// Deletes a tenant.
 	Delete(ctx context.Context, in *TenantsDeleteRequest, opts ...grpc.CallOption) (*TenantsDeleteResponse, error)
+	// Updates an existing tenant.
 	Update(ctx context.Context, in *TenantsUpdateRequest, opts ...grpc.CallOption) (*TenantsUpdateResponse, error)
 	// Indicates that something changed in the object or the system that may require reconciling the object.
 	Signal(ctx context.Context, in *TenantsSignalRequest, opts ...grpc.CallOption) (*TenantsSignalResponse, error)
@@ -125,10 +130,15 @@ func (c *tenantsClient) Signal(ctx context.Context, in *TenantsSignalRequest, op
 // All implementations must embed UnimplementedTenantsServer
 // for forward compatibility.
 type TenantsServer interface {
+	// Retrieves the list of tenants.
 	List(context.Context, *TenantsListRequest) (*TenantsListResponse, error)
+	// Retrieves the details of one specific tenant.
 	Get(context.Context, *TenantsGetRequest) (*TenantsGetResponse, error)
+	// Creates a new tenant.
 	Create(context.Context, *TenantsCreateRequest) (*TenantsCreateResponse, error)
+	// Deletes a tenant.
 	Delete(context.Context, *TenantsDeleteRequest) (*TenantsDeleteResponse, error)
+	// Updates an existing tenant.
 	Update(context.Context, *TenantsUpdateRequest) (*TenantsUpdateResponse, error)
 	// Indicates that something changed in the object or the system that may require reconciling the object.
 	Signal(context.Context, *TenantsSignalRequest) (*TenantsSignalResponse, error)

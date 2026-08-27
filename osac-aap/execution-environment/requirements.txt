@@ -43,7 +43,7 @@ cffi==2.0.0
     # via cryptography
 charset-normalizer==3.4.6
     # via requests
-cliff==4.13.2
+cliff==4.16.0
     # via
     #   osc-lib
     #   python-ironicclient

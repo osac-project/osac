@@ -142,8 +142,10 @@ func listAllNetworkClasses(
 // caller falls through to its legacy implementation-strategy. List errors are returned
 // as real reconcile errors.
 //
-// Preference: a non-deleted NetworkClass with is_default=true, else the single live
-// NetworkClass if exactly one exists (one-per-deployment).
+// Selection order: a non-deleted NetworkClass with is_default=true (the first match in
+// list order if multiple are marked default — fulfillment-service enforces at most one
+// active default via a unique partial index, so this should not occur in normal
+// operation), else the single live NetworkClass if exactly one exists (one-per-deployment).
 func lookupDefaultNetworkClassID(
 	ctx context.Context, ncClient privatev1.NetworkClassesClient,
 ) (string, error) {

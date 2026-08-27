@@ -241,6 +241,18 @@ var _ = Describe("lookupDefaultNetworkClassID", func() {
 		Expect(id).To(Equal("nc-default"))
 	})
 
+	It("returns the first default in list order when multiple live NetworkClasses are marked default", func() {
+		// fulfillment-service enforces at most one active default via a unique partial index;
+		// this documents operator behavior if that invariant is ever violated.
+		stub := newListingNetworkClassClient([]*privatev1.NetworkClass{
+			{Id: "nc-default-a", IsDefault: ptr.To(true)},
+			{Id: "nc-default-b", IsDefault: ptr.To(true)},
+		}, &[]*privatev1.NetworkClass{})
+		id, err := lookupDefaultNetworkClassID(ctx, stub)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(id).To(Equal("nc-default-a"))
+	})
+
 	It("returns the only live NetworkClass when none is marked default", func() {
 		stub := newListingNetworkClassClient([]*privatev1.NetworkClass{
 			{Id: "nc-singleton"},

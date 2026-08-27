@@ -240,8 +240,7 @@ var _ = Describe("listAllNetworkClasses", func() {
 		}
 		stub, offsetsSeen := pagingNetworkClassClient(all, 2)
 
-		reconciler := NewNetworkClassCapabilitiesReconciler(stub, nil, "default")
-		items, err := reconciler.listAllNetworkClasses(ctx)
+		items, err := listAllNetworkClasses(ctx, stub)
 		Expect(err).NotTo(HaveOccurred())
 
 		ids := make([]string, 0, len(items))
@@ -256,8 +255,7 @@ var _ = Describe("listAllNetworkClasses", func() {
 	It("stops after a single call when the server reports no results", func() {
 		stub, offsetsSeen := pagingNetworkClassClient(nil, 2)
 
-		reconciler := NewNetworkClassCapabilitiesReconciler(stub, nil, "default")
-		items, err := reconciler.listAllNetworkClasses(ctx)
+		items, err := listAllNetworkClasses(ctx, stub)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(items).To(BeEmpty())
 		Expect(*offsetsSeen).To(Equal([]int32{0}))
@@ -270,8 +268,7 @@ var _ = Describe("listAllNetworkClasses", func() {
 			},
 		}
 
-		reconciler := NewNetworkClassCapabilitiesReconciler(stub, nil, "default")
-		_, err := reconciler.listAllNetworkClasses(ctx)
+		_, err := listAllNetworkClasses(ctx, stub)
 		Expect(err).To(MatchError(ContainSubstring("fulfillment-service unavailable")))
 	})
 })

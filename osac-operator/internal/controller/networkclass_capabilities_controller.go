@@ -138,11 +138,6 @@ func (r *NetworkClassCapabilitiesReconciler) resyncAllLocked(ctx context.Context
 	return errors.Join(errs...)
 }
 
-// listAllNetworkClasses fetches every NetworkClass from the fulfillment service.
-func (r *NetworkClassCapabilitiesReconciler) listAllNetworkClasses(ctx context.Context) ([]*privatev1.NetworkClass, error) {
-	return listAllNetworkClasses(ctx, r.networkClassesClient)
-}
-
 // syncOne resolves and applies the capability intersection for a single NetworkClass,
 // updating it via the fulfillment service only when the computed capabilities differ
 // from what's already stored.

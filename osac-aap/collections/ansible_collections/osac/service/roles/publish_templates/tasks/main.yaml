@@ -7,6 +7,3 @@
 
 - name: Apply templates for bare metal instances
   ansible.builtin.import_tasks: bare_metal_instances.yaml
-
-- name: Apply network classes
-  ansible.builtin.import_tasks: network_classes.yaml

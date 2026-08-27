@@ -73,11 +73,6 @@
         osac_compute_instance_templates:
           - id: "new-ci-template"
             title: "Test CI"
-        osac_network_classes:
-          - metadata:
-              name: "new-network-class"
-            fabric_manager: "new-network-class"
-            title: "Test NC"
       when: test_empty | default(false) | bool
 
     - name: Fetch API call log
@@ -90,12 +85,12 @@
     - name: Verify POST calls were made for all templates (empty = create new)
       ansible.builtin.assert:
         that:
-          - call_log.json | selectattr('method', 'equalto', 'POST') | list | length == 3
+          - call_log.json | selectattr('method', 'equalto', 'POST') | list | length == 2
           - call_log.json | selectattr('method', 'equalto', 'PATCH') | list | length == 0
         fail_msg: >-
-          Expected 3 POSTs and 0 PATCHes for empty scenario.
+          Expected 2 POSTs and 0 PATCHes for empty scenario.
           Calls: {{ call_log.json }}
-        success_msg: "Empty scenario passed: all 3 templates created via POST"
+        success_msg: "Empty scenario passed: all 2 templates created via POST"
       when: test_empty | default(false) | bool
 
     - name: Stop mock server
@@ -150,15 +145,6 @@
         osac_compute_instance_templates:
           - id: "existing-ci-template"
             title: "Updated CI"
-        osac_network_classes:
-          - metadata:
-              name: "cudn-net"
-            fabric_manager: "cudn_net"
-            title: "Updated NC"
-          - metadata:
-              name: "brand-new-nc"
-            fabric_manager: "brand-new-nc"
-            title: "New NC"
       when: test_populated | default(false) | bool
 
     - name: Fetch API call log
@@ -171,15 +157,14 @@
     - name: Verify PATCH calls for existing items and POST for new
       ansible.builtin.assert:
         that:
-          - call_log.json | selectattr('method', 'equalto', 'PATCH') | list | length == 3
-          - call_log.json | selectattr('method', 'equalto', 'POST') | list | length == 2
+          - call_log.json | selectattr('method', 'equalto', 'PATCH') | list | length == 2
+          - call_log.json | selectattr('method', 'equalto', 'POST') | list | length == 1
           - call_log.json | selectattr('method', 'equalto', 'PATCH') | selectattr('path', 'contains', 'cluster_templates') | list | length == 1
           - call_log.json | selectattr('method', 'equalto', 'PATCH') | selectattr('path', 'contains', 'compute_instance_templates') | list | length == 1
-          - call_log.json | selectattr('method', 'equalto', 'PATCH') | selectattr('path', 'contains', 'network_classes') | list | length == 1
         fail_msg: >-
-          Expected 3 PATCHes (existing items) and 2 POSTs (new items).
+          Expected 2 PATCHes (existing items) and 1 POST (new item).
           Calls: {{ call_log.json }}
-        success_msg: "Populated scenario passed: 3 existing PATCHed, 2 new POSTed"
+        success_msg: "Populated scenario passed: 2 existing PATCHed, 1 new POSTed"
       when: test_populated | default(false) | bool
 
     - name: Stop mock server
@@ -232,11 +217,6 @@
         osac_compute_instance_templates:
           - id: "edge-case-ci"
             title: "Edge CI"
-        osac_network_classes:
-          - metadata:
-              name: "edge-case-nc"
-            fabric_manager: "edge-case-nc"
-            title: "Edge NC"
       when: test_no_items_key | default(false) | bool
 
     - name: Fetch API call log
@@ -249,12 +229,12 @@
     - name: Verify all templates created via POST (no items = all new)
       ansible.builtin.assert:
         that:
-          - call_log.json | selectattr('method', 'equalto', 'POST') | list | length == 3
+          - call_log.json | selectattr('method', 'equalto', 'POST') | list | length == 2
           - call_log.json | selectattr('method', 'equalto', 'PATCH') | list | length == 0
         fail_msg: >-
-          Expected 3 POSTs and 0 PATCHes for no-items-key scenario.
+          Expected 2 POSTs and 0 PATCHes for no-items-key scenario.
           Calls: {{ call_log.json }}
-        success_msg: "No-items-key edge case passed: all 3 templates created via POST"
+        success_msg: "No-items-key edge case passed: all 2 templates created via POST"
       when: test_no_items_key | default(false) | bool
 
     - name: Stop mock server

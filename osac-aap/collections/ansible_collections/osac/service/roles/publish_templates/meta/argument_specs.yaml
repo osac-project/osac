@@ -21,10 +21,3 @@ argument_specs:
         type: str
         description: API endpoint for ComputeInstance templates
         default: "{{ osac_fulfillment_service_uri }}/api/private/v1/compute_instance_templates"
-      osac_network_classes:
-        type: list
-        description: NetworkClass definitions to publish to the network_classes endpoint
-      publish_templates_network_class_api_endpoint:
-        type: str
-        description: API endpoint for NetworkClass resources
-        default: "{{ osac_fulfillment_service_uri }}/api/private/v1/network_classes"

@@ -293,36 +293,6 @@ class TemplateTypeEnum(StrEnum):
     bare_metal_instance = "bare_metal_instance"
 
 
-class SecurityRule(Base):
-    """A security rule for ingress or egress."""
-
-    protocol: str
-    port_from: int | None = None
-    port_to: int | None = None
-    ipv4_cidr: str | None = None
-    ipv6_cidr: str | None = None
-
-
-class NetworkDefaults(Base):
-    """Default networking configuration for tenant onboarding."""
-
-    virtual_network_ipv4_cidr: str | None = None
-    virtual_network_ipv6_cidr: str | None = None
-    subnet_ipv4_cidr: str | None = None
-    subnet_ipv6_cidr: str | None = None
-    enable_nat_gateway: bool = False
-    ingress_rules: list[SecurityRule] | None = None
-    egress_rules: list[SecurityRule] | None = None
-
-
-class NetworkClassCapabilities(Base):
-    """Capabilities supported by a network class"""
-
-    supports_ipv4: bool = False
-    supports_ipv6: bool = False
-    supports_dual_stack: bool = False
-
-
 class Metadata(Base):
     """Metadata about the template"""
 
@@ -334,19 +304,6 @@ class Metadata(Base):
     )
     default_node_request: list[NodeRequest] = pydantic.Field(default_factory=list)
     allowed_resource_classes: list[str] | None = None
-    # Network-specific fields. implementation_strategy is no longer forwarded to the
-    # NetworkClass API (fulfillment-service reserved the field) — fabric_manager/
-    # k8s_manager are now the identity source. An implementation_strategy key left
-    # over in a role's osac.yaml is silently dropped rather than rejected, but only
-    # because Base's model_config above doesn't set extra="forbid" (Pydantic v2
-    # defaults to extra="ignore"). If that config is ever tightened, either add
-    # implementation_strategy back here as a deprecated no-op field or strip it from
-    # osac.yaml files first.
-    fabric_manager: str | None = None
-    k8s_manager: str | None = None
-    is_default: bool = False
-    capabilities: NetworkClassCapabilities | None = None
-    defaults: NetworkDefaults | None = None
     parameters: list[TemplateParameterDefinition] = pydantic.Field(default_factory=list)
 
     # spec_defaults is used to set optional default values for the related spec fields associated
@@ -420,64 +377,6 @@ class BareMetalInstanceTemplate(BaseTemplate):
     )
     # BareMetalInstanceTemplate API does not support parameters field
     parameters: list[TemplateParameter] = pydantic.Field(default_factory=list, exclude=True)
-
-
-class NetworkClassSpec(Base):
-    """Spec for a NetworkClass, containing defaults."""
-
-    defaults: NetworkDefaults | None = None
-
-
-class NetworkClassTemplate(Base):
-    """Template for NetworkClass registration.
-
-    Unlike cluster/compute_instance templates, NetworkClass resources have a different
-    shape (fabric_manager/k8s_manager, capabilities) rather than parameters. This model
-    serializes directly to the NetworkClass API payload.
-    """
-
-    collection: str = pydantic.Field(..., exclude=True)
-    path: Path = pydantic.Field(..., exclude=True)
-    name: str = pydantic.Field(..., exclude=True)
-    metadata_name: str | None = pydantic.Field(None, exclude=True)
-    template_type: Literal[TemplateTypeEnum.network] = pydantic.Field(
-        default=TemplateTypeEnum.network, exclude=True
-    )
-    defaults: NetworkDefaults | None = pydantic.Field(default=None, exclude=True)
-    title: str
-    description: str | None = None
-    fabric_manager: str | None = None
-    k8s_manager: str | None = None
-    is_default: bool = False
-    capabilities: NetworkClassCapabilities
-    spec: NetworkClassSpec | None = None
-
-    @pydantic.model_validator(mode="after")
-    def _nest_defaults_in_spec(self) -> "NetworkClassTemplate":
-        if self.defaults is None:
-            return self
-        if self.spec is None:
-            self.spec = NetworkClassSpec(defaults=self.defaults)
-        elif self.spec.defaults is None:
-            self.spec.defaults = self.defaults
-        return self
-
-    @pydantic.field_serializer("path")
-    def serialize_path(self, value: Path):
-        return str(value)
-
-    @pydantic.computed_field
-    def metadata(self) -> dict[str, str]:
-        """Derive the NetworkClass's metadata.name the same way fulfillment-service does
-        when a caller omits it: prefer fabric_manager, falling back to k8s_manager
-        (guaranteed non-empty by the network-role gating in Collection.templates()).
-        """
-        if self.metadata_name:
-            name = self.metadata_name
-        else:
-            identity = self.fabric_manager or self.k8s_manager or self.name
-            name = identity.replace("_", "-")
-        return {"name": name}
 
 
 def _validate_collection_name(name: str) -> None:
@@ -579,11 +478,11 @@ class Collection(Base):
 
         return template_params
 
-    def templates(self) -> Generator[BaseTemplate | NetworkClassTemplate, None, None]:
+    def templates(self) -> Generator[BaseTemplate, None, None]:
         """Generate Template objects for all roles in this collection.
 
         Yields:
-            BaseTemplate or NetworkClassTemplate objects for each valid role found
+            BaseTemplate objects for each valid role found
         """
         roles_dir = self.parent_path / self.name.replace(".", "/") / "roles"
 
@@ -636,26 +535,13 @@ class Collection(Base):
                             spec_defaults=cluster_spec_defaults,
                         )
                     elif metadata.template_type == TemplateTypeEnum.network:
-                        if not metadata.fabric_manager and not metadata.k8s_manager:
-                            display.warning(
-                                f"Network role '{path.name}' in collection '{self.name}' "
-                                f"is missing required 'fabric_manager' or 'k8s_manager' in osac.yaml "
-                                f"(at least one is required)"
-                            )
-                            continue
-                        yield NetworkClassTemplate(
-                            collection=self.name,
-                            path=path,
-                            name=path.name,
-                            metadata_name=metadata.metadata_name,
-                            title=metadata.title,
-                            description=metadata.description,
-                            fabric_manager=metadata.fabric_manager,
-                            k8s_manager=metadata.k8s_manager,
-                            is_default=metadata.is_default,
-                            capabilities=metadata.capabilities or NetworkClassCapabilities(),
-                            defaults=metadata.defaults,
+                        # Network roles are not published as templates — NetworkClass
+                        # creation happens at install time via the osac-installer Helm
+                        # hook, not through template discovery.
+                        display.vvv(
+                            f"Skipping network role '{path.name}' in collection '{self.name}'"
                         )
+                        continue
                     elif metadata.template_type == TemplateTypeEnum.storage_provider:
                         # Storage provider roles are not yielded as compute instance or
                         # network templates — they are dispatched via osac.service.storage_provider.
@@ -684,14 +570,14 @@ class Collection(Base):
                     continue
 
 
-def find_template_roles(requested: list[str]) -> Generator[BaseTemplate | NetworkClassTemplate, None, None]:
+def find_template_roles(requested: list[str]) -> Generator[BaseTemplate, None, None]:
     """Find template roles in requested Ansible collections.
 
     Args:
         requested: List of collection names to search
 
     Yields:
-        BaseTemplate or NetworkClassTemplate objects found in the collections
+        BaseTemplate objects found in the collections
     """
     display.vv(f"Searching for templates in collections: {', '.join(requested)}")
 
@@ -800,34 +686,6 @@ def find_template_roles_filter(template_type: TemplateTypeEnum):
     return filter_func
 
 
-def find_network_class_roles_filter(requested: list[str]) -> list[dict[str, Any]]:
-    """Filter that discovers network class roles and returns NetworkClass API payloads.
-
-    Args:
-        requested: List of collection names to search
-
-    Returns:
-        List of NetworkClass dictionaries ready for the fulfillment service API
-    """
-    try:
-        roles = (
-            role for role in find_template_roles(requested)
-            if isinstance(role, NetworkClassTemplate)
-        )
-        result = [
-            role.model_dump(by_alias=True, exclude_none=True)
-            for role in roles
-        ]
-        display.vv(f"Returning {len(result)} network class(es)")
-        return result
-
-    except AnsibleFilterError:
-        raise
-    except Exception as e:
-        display.error(f"Unexpected error in find_network_class_roles filter: {e}")
-        raise AnsibleFilterError(f"Network class discovery failed: {str(e)}")
-
-
 class FilterModule:
     """Ansible filter plugin for finding template roles."""
 
@@ -841,22 +699,21 @@ class FilterModule:
             "find_cluster_template_roles": find_template_roles_filter(TemplateTypeEnum.cluster),
             "find_compute_instance_template_roles": find_template_roles_filter(TemplateTypeEnum.compute_instance),
             "find_bare_metal_instance_template_roles": find_template_roles_filter(TemplateTypeEnum.bare_metal_instance),
-            "find_network_class_roles": find_network_class_roles_filter,
         }
 
 
 if __name__ == "__main__":
     import sys
 
-    # Usage: python find_template_roles.py --type cluster|compute_instance|bare_metal_instance|network collection1 collection2 ...
+    # Usage: python find_template_roles.py --type cluster|compute_instance|bare_metal_instance collection1 collection2 ...
     if "--type" not in sys.argv:
         print("Error: --type parameter is required", file=sys.stderr)
-        print("Usage: python find_template_roles.py --type cluster|compute_instance|bare_metal_instance|network collection1 collection2 ...", file=sys.stderr)
+        print("Usage: python find_template_roles.py --type cluster|compute_instance|bare_metal_instance collection1 collection2 ...", file=sys.stderr)
         sys.exit(1)
 
     type_idx = sys.argv.index("--type")
     if type_idx + 1 >= len(sys.argv):
-        print("Error: --type requires a value (cluster, compute_instance, bare_metal_instance, or network)", file=sys.stderr)
+        print("Error: --type requires a value (cluster, compute_instance, or bare_metal_instance)", file=sys.stderr)
         sys.exit(1)
 
     template_type = sys.argv[type_idx + 1]
@@ -864,7 +721,7 @@ if __name__ == "__main__":
 
     if not collections:
         print("Error: At least one collection name is required", file=sys.stderr)
-        print("Usage: python find_template_roles.py --type cluster|compute_instance|bare_metal_instance|network collection1 collection2 ...", file=sys.stderr)
+        print("Usage: python find_template_roles.py --type cluster|compute_instance|bare_metal_instance collection1 collection2 ...", file=sys.stderr)
         sys.exit(1)
 
     if template_type == TemplateTypeEnum.cluster:
@@ -873,10 +730,8 @@ if __name__ == "__main__":
         filter_func = find_template_roles_filter(TemplateTypeEnum.compute_instance)
     elif template_type == TemplateTypeEnum.bare_metal_instance:
         filter_func = find_template_roles_filter(TemplateTypeEnum.bare_metal_instance)
-    elif template_type == TemplateTypeEnum.network:
-        filter_func = find_network_class_roles_filter
     else:
-        print(f"Error: Invalid template type '{template_type}'. Must be 'cluster', 'compute_instance', 'bare_metal_instance', or 'network'", file=sys.stderr)
+        print(f"Error: Invalid template type '{template_type}'. Must be 'cluster', 'compute_instance', or 'bare_metal_instance'", file=sys.stderr)
         sys.exit(1)
 
     found = filter_func(collections)

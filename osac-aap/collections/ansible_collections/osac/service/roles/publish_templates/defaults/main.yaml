@@ -2,4 +2,3 @@
 publish_templates_cluster_api_endpoint: "{{ osac_fulfillment_service_uri }}/api/private/v1/cluster_templates"
 publish_templates_compute_instance_api_endpoint: "{{ osac_fulfillment_service_uri }}/api/private/v1/compute_instance_templates"
 publish_templates_bare_metal_instance_api_endpoint: "{{ osac_fulfillment_service_uri }}/api/private/v1/baremetal_instance_templates"
-publish_templates_network_class_api_endpoint: "{{ osac_fulfillment_service_uri }}/api/private/v1/network_classes"

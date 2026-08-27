@@ -349,13 +349,19 @@ networkClass:
   # Create a NetworkClass in the fulfillment service after install. At least one of
   # k8sManager/fabricManager must be set when enabled — the corresponding manager
   # must already be registered via operator.networkManagers (see that chart's values).
-  enabled: false
+  #
+  # Enabled by default with fabricManager: cudn_net, matching operator.networkManagers'
+  # own cudn_net fabric manager (enabled by default) as the platform default NetworkClass --
+  # every install needs a default NetworkClass for VirtualNetwork/tenant onboarding to work.
+  enabled: true
   # [REQUIRED when enabled] Human-friendly short title — the fulfillment service
   # rejects NetworkClass creation without one (NC-VAL-02).
-  title: ""
-  description: ""
+  title: "CUDN Network Implementation"
+  description: >-
+    Provisions networking resources using ClusterUserDefinedNetwork (CUDN) on OpenShift.
+    Handles both VirtualNetwork (logical grouping) and Subnet (CUDN + Namespace creation).
   k8sManager: ""
-  fabricManager: ""
+  fabricManager: "cudn_net"
   isDefault: true
   defaults:
     # Tenant-onboarding defaults: without these, this being the default NetworkClass
@@ -367,7 +373,9 @@ networkClass:
     egressRules:
     - protocol: PROTOCOL_ALL
       ipv4Cidr: "0.0.0.0/0"
-  # Example (k8s-only profile):
-  # enabled: true
+  # Example override (k8s-only profile — switches the default NetworkClass's
+  # manager from cudn_net to k8s_only instead of adding a second NetworkClass,
+  # since only one NetworkClass may exist per deployment):
   # title: "K8s-only networking"
+  # fabricManager: ""
   # k8sManager: "k8s_only"

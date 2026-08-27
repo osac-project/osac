@@ -6,17 +6,12 @@ import yaml
 
 from find_template_roles import (
     Metadata,
-    NetworkClassCapabilities,
-    NetworkClassTemplate,
-    NetworkDefaults,
     ProtobufAnyValue,
     ProtobufType,
-    SecurityRule,
     TemplateParameter,
     TemplateParameterDefinition,
     TemplateTypeEnum,
     TypeMapping,
-    find_network_class_roles_filter,
 )
 
 
@@ -269,104 +264,6 @@ class TestMetadataTemplateTypes:
         metadata = _load_metadata(roles_dir, "ocp_virt_vm")
         assert metadata.spec_defaults is not None
         assert metadata.spec_defaults["boot_disk"] is not None
-
-    def test_network_has_capabilities(self, roles_dir):
-        metadata = _load_metadata(roles_dir, "cudn_net")
-        assert metadata.capabilities is not None
-        assert metadata.capabilities.supports_ipv4 is True
-
-    def test_network_has_defaults(self, roles_dir):
-        metadata = _load_metadata(roles_dir, "cudn_net")
-        assert metadata.defaults is not None
-        assert metadata.defaults.virtual_network_ipv4_cidr == "10.200.0.0/16"
-        assert metadata.defaults.subnet_ipv4_cidr == "10.200.0.0/20"
-        assert metadata.defaults.enable_nat_gateway is False
-        assert metadata.defaults.egress_rules is not None
-        assert len(metadata.defaults.egress_rules) == 1
-        assert metadata.defaults.egress_rules[0].protocol == "PROTOCOL_ALL"
-        assert metadata.defaults.egress_rules[0].ipv4_cidr == "0.0.0.0/0"
-
-    def test_network_defaults_serialized_in_spec(self):
-        template = NetworkClassTemplate(
-            collection="test",
-            path=Path("/tmp/test"),
-            name="test_net",
-            title="Test Network",
-            fabric_manager="test_net",
-            capabilities=NetworkClassCapabilities(supports_ipv4=True),
-            defaults=NetworkDefaults(
-                virtual_network_ipv4_cidr="10.200.0.0/16",
-                subnet_ipv4_cidr="10.200.0.0/20",
-                egress_rules=[SecurityRule(protocol="PROTOCOL_ALL", ipv4_cidr="0.0.0.0/0")],
-            ),
-        )
-        payload = template.model_dump(by_alias=True, exclude_none=True)
-        assert "defaults" not in payload
-        assert "spec" in payload
-        assert payload["spec"]["defaults"]["virtual_network_ipv4_cidr"] == "10.200.0.0/16"
-        assert payload["spec"]["defaults"]["subnet_ipv4_cidr"] == "10.200.0.0/20"
-        assert payload["spec"]["defaults"]["egress_rules"][0]["protocol"] == "PROTOCOL_ALL"
-        assert payload["spec"]["defaults"]["egress_rules"][0]["ipv4_cidr"] == "0.0.0.0/0"
-
-    def test_network_without_defaults_has_no_spec(self):
-        template = NetworkClassTemplate(
-            collection="test",
-            path=Path("/tmp/test"),
-            name="test_net",
-            title="Test Network",
-            fabric_manager="test_net",
-            capabilities=NetworkClassCapabilities(supports_ipv4=True),
-        )
-        payload = template.model_dump(by_alias=True, exclude_none=True)
-        assert "defaults" not in payload
-        assert "spec" not in payload
-
-    def test_network_payload_has_no_implementation_strategy(self):
-        """implementation_strategy is reserved on the NetworkClass proto and must
-        no longer be forwarded in the API payload — fabric_manager/k8s_manager and
-        metadata.name are the identity source now. `name` is deliberately distinct
-        from `fabric_manager` here so the metadata.name assertion actually proves
-        derivation from fabric_manager, not from `name`."""
-        template = NetworkClassTemplate(
-            collection="test",
-            path=Path("/tmp/test"),
-            name="role_name",
-            title="Test Network",
-            fabric_manager="fabric_net",
-            capabilities=NetworkClassCapabilities(supports_ipv4=True),
-        )
-        payload = template.model_dump(by_alias=True, exclude_none=True)
-        assert "implementation_strategy" not in payload
-        assert payload["fabric_manager"] == "fabric_net"
-        assert payload["metadata"]["name"] == "fabric-net"
-
-    def test_network_metadata_name_falls_back_to_k8s_manager(self):
-        """A network role that registers only a k8s_manager (no fabric_manager) must
-        still derive a non-empty metadata.name — from k8s_manager, not fabric_manager.
-        `name` is deliberately distinct from `k8s_manager` here so the metadata.name
-        assertion actually proves derivation from k8s_manager, not from `name`."""
-        template = NetworkClassTemplate(
-            collection="test",
-            path=Path("/tmp/test"),
-            name="role_name",
-            title="Test K8s-Only Network",
-            k8s_manager="k8s_net",
-            capabilities=NetworkClassCapabilities(supports_ipv4=True),
-        )
-        payload = template.model_dump(by_alias=True, exclude_none=True)
-        assert "fabric_manager" not in payload
-        assert payload["k8s_manager"] == "k8s_net"
-        assert payload["metadata"]["name"] == "k8s-net"
-
-    def test_network_defaults_propagate_through_discovery(self):
-        payloads = find_network_class_roles_filter(["osac.templates"])
-        cudn = next((p for p in payloads if p["metadata"]["name"] == "cudn-net"), None)
-        assert cudn is not None
-        assert "spec" in cudn
-        assert cudn["spec"]["defaults"]["virtual_network_ipv4_cidr"] == "10.200.0.0/16"
-        assert cudn["spec"]["defaults"]["subnet_ipv4_cidr"] == "10.200.0.0/20"
-        assert cudn["spec"]["defaults"]["egress_rules"][0]["protocol"] == "PROTOCOL_ALL"
-        assert cudn["spec"]["defaults"]["egress_rules"][0]["ipv4_cidr"] == "0.0.0.0/0"
 
     def test_cluster_with_parameters(self, roles_dir):
         metadata = _load_metadata(roles_dir, "ocp_4_20_ai_maas")

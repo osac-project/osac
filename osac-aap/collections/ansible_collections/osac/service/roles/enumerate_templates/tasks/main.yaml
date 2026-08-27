@@ -9,7 +9,3 @@
 - name: Enumerate BareMetalInstance templates
   ansible.builtin.set_fact:
     osac_bare_metal_instance_templates: "{{ osac_template_collections | osac.service.find_bare_metal_instance_template_roles }}"
-
-- name: Enumerate NetworkClass definitions
-  ansible.builtin.set_fact:
-    osac_network_classes: "{{ osac_template_collections | osac.service.find_network_class_roles }}"

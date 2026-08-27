@@ -28,6 +28,8 @@ on:
   # don't all land on the same offset simultaneously.
   schedule:
     - cron: '13 */12 * * *'
+  # Invoked as a parallel "box" by nightly-build.yaml.
+  workflow_call:
 
 permissions:
   contents: read

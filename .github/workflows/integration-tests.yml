@@ -14,6 +14,8 @@ on:
   # don't all land on the same offset simultaneously.
   schedule:
     - cron: '47 */12 * * *'
+  # Invoked as a parallel "box" by nightly-build.yaml.
+  workflow_call:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}

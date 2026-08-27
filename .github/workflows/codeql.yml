@@ -4,6 +4,8 @@ name: CodeQL
 on:
   pull_request:
     branches: [main]
+  # Invoked as a parallel "box" by nightly-build.yaml.
+  workflow_call:
 
 jobs:
   analyze:

@@ -153,9 +153,9 @@ jobs:
     # Stamp every sub-chart's Chart.yaml + values.yaml, the umbrella's own
     # values.yaml, and the 4 CI overlay files to the exact versions resolved
     # above -- all of it now, before the temp branch is pushed, so both the
-    # parallel build phase and e2e-test operate on consistent, final
+    # parallel build phase and the e2e jobs operate on consistent, final
     # references. No image exists at these tags yet; the build phase
-    # (needs: prepare) produces them before e2e-test runs.
+    # (needs: prepare) produces them before the e2e jobs run.
     - name: Stamp charts and values for nightly
       env:
         COMPONENT_VERSIONS: ${{ steps.versions.outputs.component-versions }}
@@ -248,8 +248,8 @@ jobs:
 
         # The 4 CI overlay values files (osac-installer/values/*/instance.yaml)
         # have their own separate floating image tag overrides on top of the
-        # umbrella chart's own values.yaml, and e2e-test below installs using
-        # one of them. Without this, e2e-test would keep validating stale
+        # umbrella chart's own values.yaml, and the e2e jobs below install using
+        # one of them. Without this, e2e would keep validating stale
         # :latest images even after the published chart itself is correctly
         # pinned. Every version is already fully resolved above, so these
         # get the exact same final SUB_VERSION strings as everywhere else --
@@ -308,7 +308,7 @@ jobs:
   # Job 2: Build — one fresh image per mono-repo component, all in
   # parallel, each tagged directly with the exact SUB_VERSION resolved
   # and stamped into charts/values by prepare. Only if every one of
-  # these succeeds do we proceed to E2E -- e2e-test and publish
+  # these succeeds do we proceed to E2E -- the e2e jobs and publish
   # (below) never run against a partially-built set of images.
   #
   # Reuses each component's own `make -C <dir> image-build`/`image-push`
@@ -470,12 +470,45 @@ jobs:
         make -C "${{ matrix.dir }}" "${{ matrix.push_target }}" "${BUILD_ARGS[@]}"
 
   # -------------------------------------------------------------------
-  # Job 3: E2E validation — test temp branch, not github.sha. Depends on
-  # `build` too, not just `prepare`: e2e-test must never install against
-  # images that don't exist yet or (pre-this-change) a floating :latest.
+  # Job 3: Code quality — unit tests, integration tests, and CodeQL SAST
+  # as three independent parallel boxes. These test source code directly
+  # (github.sha), not the temp branch's stamped charts/images, so they
+  # have no dependency on `prepare`/`build` and start immediately alongside
+  # them. Each `uses:` a local reusable workflow that already exists and
+  # runs standalone on pull_request/schedule -- reused here rather than
+  # duplicated, same reasoning as `build` reusing each component's own
+  # Makefile targets instead of inlining build steps.
   # -------------------------------------------------------------------
-  e2e-test:
-    name: E2E validation
+  unit-tests:
+    name: Unit tests
+    permissions:
+      contents: read
+    uses: ./.github/workflows/unit-tests.yml
+
+  integration-tests:
+    name: Integration tests
+    permissions:
+      contents: read
+    uses: ./.github/workflows/integration-tests.yml
+
+  security-tests:
+    name: Security tests (CodeQL)
+    permissions:
+      security-events: write
+      packages: read
+      actions: read
+      contents: read
+    uses: ./.github/workflows/codeql.yml
+
+  # -------------------------------------------------------------------
+  # Job 4: E2E validation — vmaas, caas, and bmaas full-install suites as
+  # three independent parallel boxes, each testing the temp branch (not
+  # github.sha). All three depend on `build` too, not just `prepare`:
+  # none may install against images that don't exist yet or (pre-this-change)
+  # a floating :latest.
+  # -------------------------------------------------------------------
+  e2e-vmaas-test:
+    name: E2E validation (vmaas)
     needs: [prepare, build]
     permissions:
       contents: read
@@ -487,16 +520,42 @@ jobs:
       test-infra-repository: osac-project/osac-test-infra
       test-infra-ref: main
 
+  e2e-caas-test:
+    name: E2E validation (caas)
+    needs: [prepare, build]
+    permissions:
+      contents: read
+    uses: osac-project/osac-test-infra/.github/workflows/e2e-caas-full-install.yml@main
+    with:
+      test-suite: caas
+      installer-repo: ${{ github.repository }}
+      installer-ref: ${{ needs.prepare.outputs.temp-branch }}
+      test-infra-repository: osac-project/osac-test-infra
+      test-infra-ref: main
+
+  e2e-bmaas-test:
+    name: E2E validation (bmaas)
+    needs: [prepare, build]
+    permissions:
+      contents: read
+    uses: osac-project/osac-test-infra/.github/workflows/e2e-bmaas-full-install.yml@main
+    with:
+      test-suite: bmaas
+      installer-repo: ${{ github.repository }}
+      installer-ref: ${{ needs.prepare.outputs.temp-branch }}
+      test-infra-repository: osac-project/osac-test-infra
+      test-infra-ref: main
+
   # -------------------------------------------------------------------
-  # Job 4: Publish — package and push every chart (only if build + E2E
-  # both passed). All Chart.yaml/values.yaml stamping already happened
+  # Job 5: Publish — package and push every chart (only if build and every
+  # test box passed). All Chart.yaml/values.yaml stamping already happened
   # in prepare, and every image already exists at its final tag from the
   # build phase -- this job only packages/pushes the charts, using
   # whatever version prepare already wrote into each Chart.yaml.
   # -------------------------------------------------------------------
   publish:
     name: Publish nightly chart
-    needs: [prepare, build, e2e-test]
+    needs: [prepare, build, unit-tests, integration-tests, security-tests, e2e-vmaas-test, e2e-caas-test, e2e-bmaas-test]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -720,7 +779,7 @@ jobs:
         retention-days: 14
 
   # -------------------------------------------------------------------
-  # Job 5: Tag and notify — record success on temp branch + Slack
+  # Job 6: Tag and notify — record success on temp branch + Slack
   # Create osac/v<version> git tag at the temp branch commit (same pin E2E
   # tested and publish packaged). Download chart-sources.txt artifact; post
   # Slack summary with published chart OCI links.
@@ -828,11 +887,11 @@ jobs:
           -d @/tmp/slack-payload.json
 
   # -------------------------------------------------------------------
-  # Job 6: Notify on failure
+  # Job 7: Notify on failure
   # -------------------------------------------------------------------
   notify-failure:
     name: Notify failure
-    needs: [prepare, build, e2e-test, publish, tag-and-notify]
+    needs: [prepare, build, unit-tests, integration-tests, security-tests, e2e-vmaas-test, e2e-caas-test, e2e-bmaas-test, publish, tag-and-notify]
     runs-on: osac-ci
     timeout-minutes: 10
     if: failure()
@@ -889,11 +948,11 @@ jobs:
           -d @/tmp/slack-payload.json
 
   # -------------------------------------------------------------------
-  # Job 7: Cleanup — delete temp branch (always, success or failure)
+  # Job 8: Cleanup — delete temp branch (always, success or failure)
   # -------------------------------------------------------------------
   cleanup:
     name: Cleanup temp branch
-    needs: [prepare, build, e2e-test, publish, tag-and-notify, notify-failure]
+    needs: [prepare, build, unit-tests, integration-tests, security-tests, e2e-vmaas-test, e2e-caas-test, e2e-bmaas-test, publish, tag-and-notify, notify-failure]
     runs-on: ubuntu-latest
     if: always()
     permissions:

@@ -1,0 +1,48 @@
+---
+# List ports for a server and optionally find one by interface name.
+# Required variables:
+#   server_id — Netris server (hardware) ID
+# Optional variables:
+#   port_name — find a specific port by interface name
+# Output facts:
+#   netris_server_ports — list of port objects
+#   netris_server_port  — matched port dict (or none)
+
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Get server ports
+  ansible.builtin.uri:
+    force: true
+    url: "{{ netris_controller_url }}/api/v2/ports?switchID={{ server_id }}"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+      Cache-Control: "no-cache"
+      Pragma: "no-cache"
+    return_content: true
+    status_code: 200
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _server_ports_resp
+  no_log: true
+
+- name: Normalize ports data
+  ansible.builtin.set_fact:
+    netris_server_ports: >-
+      {{ (_server_ports_resp.json.data.data | default(_server_ports_resp.json.data)) | default([]) }}
+
+- name: Find port by name
+  ansible.builtin.set_fact:
+    netris_server_port: >-
+      {{ netris_server_ports
+         | selectattr('port', 'equalto', port_name)
+         | list | first | default(none) }}
+  when: port_name is defined
+
+- name: Set port fact (no filter)
+  ansible.builtin.set_fact:
+    netris_server_port: "{{ none }}"
+  when: port_name is not defined

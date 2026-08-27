@@ -57,6 +57,7 @@ var _ = Describe("SecurityGroupReconciler", func() {
 		ctx          context.Context
 		sg           *osacv1alpha1.SecurityGroup
 		vnet         *osacv1alpha1.VirtualNetwork
+		readySubnet  *osacv1alpha1.Subnet
 	)
 
 	BeforeEach(func() {
@@ -102,12 +103,30 @@ var _ = Describe("SecurityGroupReconciler", func() {
 			},
 		}
 
+		// Create Ready subnet fixture so the subnet-readiness gate passes by default
+		readySubnet = &osacv1alpha1.Subnet{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-subnet",
+				Namespace: "test-namespace",
+				Labels: map[string]string{
+					osacVirtualNetworkIDLabel: "test-vnet-uuid",
+				},
+			},
+			Spec: osacv1alpha1.SubnetSpec{
+				VirtualNetwork: "test-vnet-uuid",
+			},
+		}
+
 		// Create fake client with fixtures
 		fakeClient = fake.NewClientBuilder().
 			WithScheme(testScheme).
-			WithObjects(vnet, sg).
-			WithStatusSubresource(&osacv1alpha1.SecurityGroup{}).
+			WithObjects(vnet, sg, readySubnet).
+			WithStatusSubresource(&osacv1alpha1.SecurityGroup{}, &osacv1alpha1.Subnet{}).
 			Build()
+
+		// Set subnet status to Ready (must be done after client creation with status subresource)
+		readySubnet.Status.Phase = osacv1alpha1.SubnetPhaseReady
+		Expect(fakeClient.Status().Update(ctx, readySubnet)).To(Succeed())
 
 		// Create mock provider
 		mockProvider = &mockProvisioningProvider{
@@ -652,6 +671,152 @@ var _ = Describe("SecurityGroupReconciler", func() {
 
 			Expect(updated.Finalizers).To(BeEmpty())
 			Expect(updated.Status.Phase).To(BeEmpty())
+		})
+	})
+
+	Context("subnet readiness gate", func() {
+		It("should requeue when parent VirtualNetwork has no Ready subnets", func() {
+			// Build a client WITHOUT any subnets
+			testScheme := runtime.NewScheme()
+			Expect(osacv1alpha1.AddToScheme(testScheme)).To(Succeed())
+			Expect(scheme.AddToScheme(testScheme)).To(Succeed())
+
+			noSubnetSG := &osacv1alpha1.SecurityGroup{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "sg-no-subnets",
+					Namespace: "test-namespace",
+				},
+				Spec: osacv1alpha1.SecurityGroupSpec{
+					VirtualNetwork: "test-vnet-uuid",
+				},
+			}
+			noSubnetClient := fake.NewClientBuilder().
+				WithScheme(testScheme).
+				WithObjects(vnet, noSubnetSG).
+				WithStatusSubresource(&osacv1alpha1.SecurityGroup{}).
+				Build()
+
+			provisionCalled := false
+			mockProvider.triggerProvisionFunc = func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+				provisionCalled = true
+				return &provisioning.ProvisionResult{
+					JobID:        "job-should-not-fire",
+					InitialState: osacv1alpha1.JobStatePending,
+				}, nil
+			}
+
+			r := &SecurityGroupReconciler{
+				Client:               noSubnetClient,
+				APIReader:            noSubnetClient,
+				Scheme:               testScheme,
+				NetworkingNamespace:  "test-namespace",
+				ProvisioningProvider: mockProvider,
+				StatusPollInterval:   1 * time.Second,
+				MaxJobHistory:        10,
+			}
+
+			key := types.NamespacedName{Name: noSubnetSG.Name, Namespace: noSubnetSG.Namespace}
+
+			// First reconcile adds finalizer
+			_, err := r.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Second reconcile should requeue because no subnets exist
+			result, err := r.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(provisionCalled).To(BeFalse())
+		})
+
+		It("should requeue when subnets exist but none are Ready", func() {
+			testScheme := runtime.NewScheme()
+			Expect(osacv1alpha1.AddToScheme(testScheme)).To(Succeed())
+			Expect(scheme.AddToScheme(testScheme)).To(Succeed())
+
+			progressingSubnet := &osacv1alpha1.Subnet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "progressing-subnet",
+					Namespace: "test-namespace",
+					Labels: map[string]string{
+						osacVirtualNetworkIDLabel: "test-vnet-uuid",
+					},
+				},
+				Spec: osacv1alpha1.SubnetSpec{
+					VirtualNetwork: "test-vnet-uuid",
+				},
+			}
+			progressingSG := &osacv1alpha1.SecurityGroup{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "sg-progressing-subnet",
+					Namespace: "test-namespace",
+				},
+				Spec: osacv1alpha1.SecurityGroupSpec{
+					VirtualNetwork: "test-vnet-uuid",
+				},
+			}
+			progressingClient := fake.NewClientBuilder().
+				WithScheme(testScheme).
+				WithObjects(vnet, progressingSG, progressingSubnet).
+				WithStatusSubresource(&osacv1alpha1.SecurityGroup{}, &osacv1alpha1.Subnet{}).
+				Build()
+
+			// Set subnet phase to Progressing
+			progressingSubnet.Status.Phase = osacv1alpha1.SubnetPhaseProgressing
+			Expect(progressingClient.Status().Update(ctx, progressingSubnet)).To(Succeed())
+
+			provisionCalled := false
+			mockProvider.triggerProvisionFunc = func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+				provisionCalled = true
+				return &provisioning.ProvisionResult{
+					JobID:        "job-should-not-fire",
+					InitialState: osacv1alpha1.JobStatePending,
+				}, nil
+			}
+
+			r := &SecurityGroupReconciler{
+				Client:               progressingClient,
+				APIReader:            progressingClient,
+				Scheme:               testScheme,
+				NetworkingNamespace:  "test-namespace",
+				ProvisioningProvider: mockProvider,
+				StatusPollInterval:   1 * time.Second,
+				MaxJobHistory:        10,
+			}
+
+			key := types.NamespacedName{Name: progressingSG.Name, Namespace: progressingSG.Namespace}
+
+			// First reconcile adds finalizer
+			_, err := r.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Second reconcile should requeue because subnet is not Ready
+			result, err := r.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+			Expect(provisionCalled).To(BeFalse())
+		})
+
+		It("should proceed to provisioning when at least one subnet is Ready", func() {
+			key := types.NamespacedName{Name: sg.Name, Namespace: sg.Namespace}
+
+			provisionCalled := false
+			mockProvider.triggerProvisionFunc = func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+				provisionCalled = true
+				return &provisioning.ProvisionResult{
+					JobID:        "job-with-ready-subnet",
+					InitialState: osacv1alpha1.JobStatePending,
+				}, nil
+			}
+
+			// First reconcile adds finalizer
+			_, err := reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Second reconcile should proceed because readySubnet exists from BeforeEach
+			_, err = reconciler.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(provisionCalled).To(BeTrue())
 		})
 	})
 

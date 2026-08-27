@@ -45,6 +45,10 @@ import (
 // BareMetalPoolReconciler reconciles a BareMetalPool object
 type BareMetalPoolReconciler struct {
 	client.Client
+	// APIReader is a direct, uncached reader (mgr.GetAPIReader) used by the
+	// duplicate-job guard so it does not read the same lagging informer cache it
+	// is meant to bypass. Set in SetupWithManager.
+	APIReader                        client.Reader
 	Scheme                           *runtime.Scheme
 	HostReadyPollIntervalDuration    time.Duration
 	HostDeletionPollIntervalDuration time.Duration
@@ -131,6 +135,7 @@ func (r *BareMetalPoolReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *BareMetalPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.APIReader = mgr.GetAPIReader()
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.BareMetalPool{}).
 		Owns(
@@ -149,6 +154,16 @@ func (r *BareMetalPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		).
 		Named("baremetalpool").
 		Complete(r)
+}
+
+// apiReaderOrClient returns the uncached API reader used by the duplicate-job
+// guard, falling back to the cached client when no direct reader is configured
+// (e.g. unit tests that construct the reconciler directly).
+func (r *BareMetalPoolReconciler) apiReaderOrClient() client.Reader {
+	if r.APIReader != nil {
+		return r.APIReader
+	}
+	return r.Client
 }
 
 // handleUpdate reconciles the BareMetalPool to match its desired state.
@@ -683,7 +698,7 @@ func (r *BareMetalPoolReconciler) reconcileProvisioning(ctx context.Context, bar
 			// Check API server for non-terminal provision job to prevent duplicates
 			return provisioning.CheckAPIServerForNonTerminalProvisionJob(
 				ctx,
-				r.Client,
+				r.apiReaderOrClient(),
 				client.ObjectKeyFromObject(bareMetalPool),
 				&v1alpha1.BareMetalPool{},
 				func(obj client.Object) []opv1alpha1.JobStatus {

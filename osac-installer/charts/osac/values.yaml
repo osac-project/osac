@@ -307,6 +307,19 @@ bmf:
 validation:
   enabled: true
 
+# --- Network Manager ConfigMaps ---
+# Each entry creates a ConfigMap for the osac-operator dispatcher to discover.
+# networkManagers:
+#   - name: netris
+#     role: fabric        # "fabric" or "k8s"
+#     description: "Netris SDN fabric manager"
+#     capabilities: "ipv4"
+#   - name: cudn_localnet
+#     role: k8s
+#     description: "CUDN LocalNet k8s manager"
+#     capabilities: "ipv4,ipv6,dualStack"
+networkManagers: []
+
 # --- MetalLB Address Pool ---
 metallb:
   enabled: false

@@ -1,0 +1,34 @@
+---
+# Get full V-Net details by ID with bounded retry for intermittent 304s.
+# Required variables:
+#   vnet_id — Netris V-Net numeric ID
+# Output facts:
+#   netris_vnet_detail — full V-Net object including ports, gateways, etc.
+
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Fetch V-Net details
+  ansible.builtin.uri:
+    force: true
+    url: "{{ netris_controller_url }}/api/v2/vnet/{{ vnet_id }}"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+      Cache-Control: "no-cache"
+      Pragma: "no-cache"
+    return_content: true
+    status_code: [200, 304]
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _vnet_detail_resp
+  until: _vnet_detail_resp.status == 200
+  retries: 5
+  delay: 2
+  no_log: true
+
+- name: Set V-Net detail fact
+  ansible.builtin.set_fact:
+    netris_vnet_detail: "{{ _vnet_detail_resp.json.data }}"

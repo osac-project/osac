@@ -29,6 +29,7 @@ const (
 	adminKubeconfigKey
 	storageTierDefinitionsKey
 	storageBackendConnectionsKey
+	networkAttachmentMACsKey
 )
 
 // TierDefinition is the flat, AAP-schema-shaped representation of a storage tier
@@ -110,4 +111,18 @@ func WithStorageBackendConnections(ctx context.Context, conns map[string]Backend
 func StorageBackendConnectionsFromContext(ctx context.Context) map[string]BackendConnection {
 	conns, _ := ctx.Value(storageBackendConnectionsKey).(map[string]BackendConnection)
 	return conns
+}
+
+// WithNetworkAttachmentMACs returns a context carrying the subnet-ref → MAC-address
+// map for a resource's network attachments. The AAP provider reads this when building
+// extra_vars so the query_dhcp_lease role can match a DHCP lease by MAC.
+func WithNetworkAttachmentMACs(ctx context.Context, macs map[string]string) context.Context {
+	return context.WithValue(ctx, networkAttachmentMACsKey, macs)
+}
+
+// NetworkAttachmentMACsFromContext retrieves the subnet-ref → MAC-address map from the
+// context, or nil if not set.
+func NetworkAttachmentMACsFromContext(ctx context.Context) map[string]string {
+	macs, _ := ctx.Value(networkAttachmentMACsKey).(map[string]string)
+	return macs
 }

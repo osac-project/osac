@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/util/retry"
@@ -121,6 +122,8 @@ func NewExternalIPAttachmentReconciler(
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=clusterorders/finalizers,verbs=update
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=baremetalinstances,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=baremetalinstances/finalizers,verbs=update
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=subnets,verbs=get;list;watch
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=virtualnetworks,verbs=get;list;watch
 
 // Reconcile handles create/update/delete for a ExternalIPAttachment CR.
 func (r *ExternalIPAttachmentReconciler) Reconcile(ctx context.Context, req mcreconcile.Request) (ctrl.Result, error) {
@@ -191,6 +194,11 @@ func (r *ExternalIPAttachmentReconciler) handleUpdate(ctx context.Context, attac
 	}
 	externalIP := &externalIPList.Items[0]
 
+	if externalIP.Status.Address == "" {
+		log.Info("ExternalIP address not allocated yet, requeueing", "externalIP", externalIP.Name)
+		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+	}
+
 	// Resolve parent ExternalIPPool by UUID label
 	poolList := &v1alpha1.ExternalIPPoolList{}
 	if err := r.List(ctx, poolList,
@@ -223,12 +231,28 @@ func (r *ExternalIPAttachmentReconciler) handleUpdate(ctx context.Context, attac
 	}
 
 	// Resolve target BareMetalInstance
-	_, result, err = r.resolveBaremetalInstance(ctx, attachment)
+	bmi, result, err := r.resolveBaremetalInstance(ctx, attachment)
 	if err != nil || result.RequeueAfter > 0 {
 		return result, err
 	}
 
-	needsUpdate := r.syncAnnotations(attachment, pool, externalIP, implementationStrategy, ci, co)
+	// BMI DNAT precondition: wait for primary IP to be discovered
+	if bmi != nil && bmi.PrimaryIPAddress() == "" {
+		log.Info("BareMetalInstance primary IP not yet discovered, requeueing",
+			"baremetalInstance", bmi.Name)
+		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+	}
+
+	// Resolve the tenant VirtualNetwork name so the AAP job can create the NAT rule in
+	// the tenant VPC that owns the target IP (VPC name == VirtualNetwork name).
+	targetVNName, result, err := r.resolveTargetVirtualNetworkName(ctx, ci, bmi)
+	if err != nil || result.RequeueAfter > 0 {
+		return result, err
+	}
+
+	needsUpdate := r.syncAnnotations(
+		attachment, pool, externalIP, implementationStrategy, ci, co, bmi, targetVNName,
+	)
 	if needsUpdate {
 		if err := r.Update(ctx, attachment); err != nil {
 			return ctrl.Result{}, err
@@ -270,6 +294,8 @@ func (r *ExternalIPAttachmentReconciler) syncAnnotations(
 	implementationStrategy string,
 	ci *v1alpha1.ComputeInstance,
 	co *v1alpha1.ClusterOrder,
+	bmi *bmfov1alpha1.BareMetalInstance,
+	targetVNName string,
 ) bool {
 	if attachment.Annotations == nil {
 		attachment.Annotations = make(map[string]string)
@@ -302,7 +328,91 @@ func (r *ExternalIPAttachmentReconciler) syncAnnotations(
 			needsUpdate = true
 		}
 	}
+	if bmi != nil {
+		targetIP := bmi.PrimaryIPAddress()
+		if targetIP != "" && attachment.Annotations[osacExternalIPTargetIPAnnotation] != targetIP {
+			attachment.Annotations[osacExternalIPTargetIPAnnotation] = targetIP
+			needsUpdate = true
+		}
+	}
+	if targetVNName != "" && attachment.Annotations[osacVirtualNetworkNameAnnotation] != targetVNName {
+		attachment.Annotations[osacVirtualNetworkNameAnnotation] = targetVNName
+		needsUpdate = true
+	}
 	return needsUpdate
+}
+
+// resolveTargetVirtualNetworkName resolves the tenant VirtualNetwork CR name for the
+// attachment's target — the parent VirtualNetwork of the target's primary subnet.
+// Returns "" when the target is not a tenant resource (e.g. a cluster attachment).
+// The AAP netris role resolves the Netris VPC from this name (VPC name == VN name).
+func (r *ExternalIPAttachmentReconciler) resolveTargetVirtualNetworkName(
+	ctx context.Context,
+	ci *v1alpha1.ComputeInstance,
+	bmi *bmfov1alpha1.BareMetalInstance,
+) (string, ctrl.Result, error) {
+	// Look up the target's primary Subnet CR. BMI carries a fulfillment Subnet UUID
+	// (looked up by label); ComputeInstance carries the Subnet CR name.
+	var subnet *v1alpha1.Subnet
+	switch {
+	case bmi != nil:
+		subnetRef := primaryBMISubnetRef(bmi)
+		if subnetRef == "" {
+			return "", ctrl.Result{}, nil
+		}
+		subnetList := &v1alpha1.SubnetList{}
+		if err := r.Client.List(ctx, subnetList,
+			client.InNamespace(r.NetworkingNamespace),
+			client.MatchingLabels{osacSubnetIDLabel: subnetRef}); err != nil {
+			return "", ctrl.Result{}, err
+		}
+		if len(subnetList.Items) == 0 {
+			return "", ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+		}
+		subnet = &subnetList.Items[0]
+	case ci != nil:
+		subnetName := ci.Spec.PrimarySubnetRef()
+		if subnetName == "" {
+			return "", ctrl.Result{}, nil
+		}
+		s := &v1alpha1.Subnet{}
+		if err := r.Client.Get(ctx,
+			client.ObjectKey{Namespace: r.NetworkingNamespace, Name: subnetName}, s); err != nil {
+			if apierrors.IsNotFound(err) {
+				return "", ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+			}
+			return "", ctrl.Result{}, err
+		}
+		subnet = s
+	default:
+		return "", ctrl.Result{}, nil
+	}
+
+	// Subnet.Spec.VirtualNetwork is the VN UUID; resolve it to the VN CR name.
+	vnList := &v1alpha1.VirtualNetworkList{}
+	if err := r.Client.List(ctx, vnList,
+		client.InNamespace(r.NetworkingNamespace),
+		client.MatchingLabels{osacVirtualNetworkIDLabel: subnet.Spec.VirtualNetwork}); err != nil {
+		return "", ctrl.Result{}, err
+	}
+	if len(vnList.Items) == 0 {
+		return "", ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+	}
+	return vnList.Items[0].Name, ctrl.Result{}, nil
+}
+
+// primaryBMISubnetRef returns the SubnetRef of the BareMetalInstance's primary network
+// attachment, mirroring BareMetalInstance.PrimaryIPAddress() selection.
+func primaryBMISubnetRef(bmi *bmfov1alpha1.BareMetalInstance) string {
+	for _, nas := range bmi.Status.NetworkAttachmentStatuses {
+		if nas.Primary && nas.IPAddress != "" {
+			return nas.SubnetRef
+		}
+	}
+	if len(bmi.Status.NetworkAttachmentStatuses) == 1 {
+		return bmi.Status.NetworkAttachmentStatuses[0].SubnetRef
+	}
+	return ""
 }
 
 // resolveComputeInstance looks up the target ComputeInstance by UUID label, handles

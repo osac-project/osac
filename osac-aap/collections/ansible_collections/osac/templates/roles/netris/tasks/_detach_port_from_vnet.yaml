@@ -1,0 +1,49 @@
+---
+# Detach _target_port from the Netris V-Net named _op_vnet_name. No-op if the
+# V-Net is absent, the port is unresolved, or the port is not on the V-Net.
+
+- name: Detach port from V-Net
+  when:
+    - _target_port is not none
+    - _op_vnet_name | length > 0
+  block:
+    - name: Find V-Net by name
+      ansible.builtin.include_role:
+        name: netris.controller.vnet
+        tasks_from: read
+      vars:
+        vnet_name: "{{ _op_vnet_name }}"
+
+    - name: Remove the port when the V-Net exists
+      when: netris_vnet is not none
+      block:
+        - name: Get V-Net details
+          ansible.builtin.include_role:
+            name: netris.controller.vnet
+            tasks_from: read_by_id
+          vars:
+            vnet_id: "{{ netris_vnet.id }}"
+
+        - name: Check port membership
+          ansible.builtin.set_fact:
+            _det_present: >-
+              {{ (netris_vnet_detail.ports | default([]))
+                 | selectattr('id', 'equalto', _target_port.id)
+                 | list | length > 0 }}
+
+        - name: Remove port from V-Net
+          ansible.builtin.include_role:
+            name: netris.controller.vnet
+            tasks_from: update
+          vars:
+            vnet_id: "{{ netris_vnet_detail.id }}"
+            vnet_body: >-
+              {{ netris_vnet_detail | combine({'ports': (netris_vnet_detail.ports | default([]))
+                 | rejectattr('id', 'equalto', _target_port.id) | list}) }}
+          when: _det_present | bool
+
+        - name: Display detach result
+          ansible.builtin.debug:
+            msg: >-
+              Detached port '{{ na_logical_interface }}' from V-Net '{{ _op_vnet_name }}'
+              {{ (_det_present | bool) | ternary('', '(was not attached)') }}

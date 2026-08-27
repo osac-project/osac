@@ -944,5 +944,40 @@ var _ = Describe("AAPProvider", func() {
 			_, err := provider.TriggerProvision(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
 		})
+
+		It("should emit network_attachment_macs keyed by subnet ref", func() {
+			ctx = provisioning.WithNetworkAttachmentMACs(ctx, map[string]string{
+				"subnet-a": "52:54:00:16:04:83",
+			})
+
+			aapClient.launchJobTemplateFunc = func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
+				jobVars := req.ExtraVars["osac_job_vars"].(map[string]any)
+				Expect(jobVars).To(HaveKey("network_attachment_macs"))
+				Expect(jobVars["network_attachment_macs"]).To(Equal(map[string]string{
+					"subnet-a": "52:54:00:16:04:83",
+				}))
+				return &aap.LaunchJobTemplateResponse{JobID: 123}, nil
+			}
+
+			instance := &v1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+			}
+			_, err := provider.TriggerProvision(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("should omit network_attachment_macs when not set in context", func() {
+			aapClient.launchJobTemplateFunc = func(ctx context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
+				jobVars := req.ExtraVars["osac_job_vars"].(map[string]any)
+				Expect(jobVars).NotTo(HaveKey("network_attachment_macs"))
+				return &aap.LaunchJobTemplateResponse{JobID: 124}, nil
+			}
+
+			instance := &v1alpha1.ComputeInstance{
+				ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+			}
+			_, err := provider.TriggerProvision(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+		})
 	})
 })

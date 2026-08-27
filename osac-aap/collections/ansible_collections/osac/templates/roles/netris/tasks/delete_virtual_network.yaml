@@ -9,29 +9,16 @@
   ansible.builtin.debug:
     msg: "Deleting Netris VPC + IPAM allocation for VirtualNetwork '{{ vn_name }}'"
 
-- name: Ensure Netris auth
-  ansible.builtin.include_role:
-    name: netris.controller.auth
-  when: netris_session_cookie is not defined
-
 - name: Look up VPC by name
-  ansible.builtin.uri:
-    url: "{{ netris_controller_url }}/api/v2/vpc"
-    method: GET
-    headers:
-      Cookie: "connect.sid={{ netris_session_cookie }}"
-    return_content: true
-    status_code: 200
-    validate_certs: "{{ netris_validate_certs | default(true) }}"
-  register: _vn_vpc_list_resp
-  no_log: true
+  ansible.builtin.include_role:
+    name: netris.controller.vpc
+    tasks_from: read
+  vars:
+    vpc_name: "{{ vn_name }}"
 
-- name: Find VPC ID
+- name: Set VPC ID
   ansible.builtin.set_fact:
-    _vn_vpc_id: >-
-      {{ ((_vn_vpc_list_resp.json.data | default([]))
-          | selectattr('name', 'equalto', vn_name)
-          | map(attribute='id') | list | first | default('')) }}
+    _vn_vpc_id: "{{ netris_vpc.id | default('') }}"
 
 - name: Delete IPAM allocation from Netris controller
   ansible.builtin.include_role:

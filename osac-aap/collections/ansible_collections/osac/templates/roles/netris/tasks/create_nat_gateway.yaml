@@ -59,6 +59,37 @@
     name: netris.controller.auth
   when: netris_session_cookie is not defined
 
+# The SNAT rule must live in the tenant VPC (the one owning the VN CIDR). The
+# operator passes the tenant VirtualNetwork name; the Netris VPC is named after it.
+# Default to the mgmt VPC and override when a tenant VPC is resolved.
+- name: Determine tenant VirtualNetwork name
+  ansible.builtin.set_fact:
+    natgw_vn_name: >-
+      {{ nat_gateway.metadata.annotations['osac.openshift.io/virtual-network-name']
+         | default('', true) }}
+
+- name: Default NAT VPC to the management VPC
+  ansible.builtin.set_fact:
+    natgw_nat_vpc_id: "{{ netris_mgmt_vpc_id }}"
+    natgw_nat_vpc_name: "{{ netris_mgmt_vpc_name | default('') }}"
+
+- name: Look up tenant VPC by VirtualNetwork name
+  ansible.builtin.include_role:
+    name: netris.controller.vpc
+    tasks_from: read
+  vars:
+    vpc_name: "{{ natgw_vn_name }}"
+  when: natgw_vn_name | length > 0
+
+- name: Use tenant VPC when resolved
+  ansible.builtin.set_fact:
+    natgw_nat_vpc_id: "{{ netris_vpc.id }}"
+    natgw_nat_vpc_name: "{{ netris_vpc.name }}"
+  when:
+    - natgw_vn_name | length > 0
+    - netris_vpc is defined
+    - netris_vpc is not none
+
 - name: Create SNAT rule for NATGateway
   ansible.builtin.include_role:
     name: netris.controller.nat
@@ -66,8 +97,8 @@
   vars:
     nat_name: "{{ natgw_name }}-snat"
     nat_site_id: "{{ netris_site_id }}"
-    nat_vpc_id: "{{ netris_mgmt_vpc_id }}"
-    nat_vpc_name: "{{ netris_mgmt_vpc_name | default('') }}"
+    nat_vpc_id: "{{ natgw_nat_vpc_id }}"
+    nat_vpc_name: "{{ natgw_nat_vpc_name }}"
     nat_action: snat
     nat_protocol: all
     nat_source_address: "{{ natgw_vn_ipv4_cidr }}"

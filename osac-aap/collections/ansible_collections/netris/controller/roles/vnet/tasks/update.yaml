@@ -1,0 +1,26 @@
+---
+# Update a V-Net by ID.
+# Required variables:
+#   vnet_id   — Netris V-Net numeric ID
+#   vnet_body — full V-Net object to PUT (typically from read_by_id with modifications)
+
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Update V-Net
+  ansible.builtin.uri:
+    force: true
+    url: "{{ netris_controller_url }}/api/v2/vnet/{{ vnet_id }}"
+    method: PUT
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+      Content-Type: "application/json"
+    body_format: json
+    body: "{{ vnet_body }}"
+    return_content: true
+    status_code: [200, 201]
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  no_log: true

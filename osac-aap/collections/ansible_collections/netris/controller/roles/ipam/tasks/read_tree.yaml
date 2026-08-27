@@ -1,0 +1,29 @@
+---
+# Query the IPAM allocation tree.
+# Output facts:
+#   netris_ipam_tree — list of top-level IPAM allocations (with children)
+
+- name: Ensure Netris auth
+  ansible.builtin.include_role:
+    name: netris.controller.auth
+  when: netris_session_cookie is not defined
+
+- name: Get IPAM tree
+  ansible.builtin.uri:
+    force: true
+    url: "{{ netris_controller_url }}/api/v2/ipam"
+    method: GET
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+      Cache-Control: "no-cache"
+      Pragma: "no-cache"
+    return_content: true
+    status_code: 200
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  register: _ipam_tree_resp
+  no_log: true
+
+- name: Set IPAM tree fact
+  ansible.builtin.set_fact:
+    netris_ipam_tree: "{{ _ipam_tree_resp.json.data | default([]) }}"

@@ -38,21 +38,34 @@ import (
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/management"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/shared"
 	opv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/pkg/aap"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 )
 
 // BareMetalInstanceReconciler reconciles a BareMetalInstance object
 type BareMetalInstanceReconciler struct {
 	client.Client
+	// APIReader is a direct, uncached reader (mgr.GetAPIReader) used by the
+	// duplicate-job guard so it does not read the same lagging informer cache it
+	// is meant to bypass. Set in SetupWithManager.
+	APIReader                         client.Reader
 	Scheme                            *runtime.Scheme
 	InventoryClient                   inventory.Client
 	ManagementClient                  management.Client
 	ProvisioningProvider              provisioning.ProvisioningProvider
+	NetworkingProvider                provisioning.ProvisioningProvider
+	IPDiscoveryProvider               provisioning.ProvisioningProvider
+	AAPClient                         *aap.Client
 	NoFreeHostsPollIntervalDuration   time.Duration
 	TryLockFailPollIntervalDuration   time.Duration
 	ManagementRecheckIntervalDuration time.Duration
 	ProvisionPollIntervalDuration     time.Duration
 }
+
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=subnets,verbs=get;list;watch
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=networkclasses,verbs=get;list;watch
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=externalips,verbs=get;list;watch;delete
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=externalipattachments,verbs=get;list;watch;delete
 
 func NewBareMetalInstanceReconciler(
 	client client.Client,
@@ -60,6 +73,9 @@ func NewBareMetalInstanceReconciler(
 	inventoryClient inventory.Client,
 	managementClient management.Client,
 	provisioningProvider provisioning.ProvisioningProvider,
+	networkingProvider provisioning.ProvisioningProvider,
+	ipDiscoveryProvider provisioning.ProvisioningProvider,
+	aapClient *aap.Client,
 	noFreeHostsPollIntervalDuration time.Duration,
 	tryLockFailPollIntervalDuration time.Duration,
 	managementRecheckIntervalDuration time.Duration,
@@ -89,6 +105,9 @@ func NewBareMetalInstanceReconciler(
 		TryLockFailPollIntervalDuration:   tryLockFailPollIntervalDuration,
 		ManagementClient:                  managementClient,
 		ProvisioningProvider:              provisioningProvider,
+		NetworkingProvider:                networkingProvider,
+		IPDiscoveryProvider:               ipDiscoveryProvider,
+		AAPClient:                         aapClient,
 		ManagementRecheckIntervalDuration: managementRecheckIntervalDuration,
 		ProvisionPollIntervalDuration:     provisionPollIntervalDuration,
 	}
@@ -139,6 +158,7 @@ func (r *BareMetalInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *BareMetalInstanceReconciler) SetupWithManager(mgr ctrl.Manager, maxConcurrentReconciles int) error {
+	r.APIReader = mgr.GetAPIReader()
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.BareMetalInstance{}).
 		WithOptions(controller.Options{
@@ -146,6 +166,16 @@ func (r *BareMetalInstanceReconciler) SetupWithManager(mgr ctrl.Manager, maxConc
 		}).
 		Named("baremetalinstance").
 		Complete(r)
+}
+
+// apiReaderOrClient returns the uncached API reader used by the duplicate-job
+// guard, falling back to the cached client when no direct reader is configured
+// (e.g. unit tests that construct the reconciler directly).
+func (r *BareMetalInstanceReconciler) apiReaderOrClient() client.Reader {
+	if r.APIReader != nil {
+		return r.APIReader
+	}
+	return r.Client
 }
 
 // handleUpdate assigns an inventory node to the BareMetalInstance CR and marks it as acquired.
@@ -318,24 +348,13 @@ func (r *BareMetalInstanceReconciler) reconcileManagement(ctx context.Context, b
 		return ctrl.Result{}, nil
 	}
 
-	// Provisioning runs first — power reconciliation is suspended during provisioning
-	if bareMetalInstance.Spec.TemplateID != "" && bareMetalInstance.Spec.TemplateID != shared.OsacNoopTemplate {
-		result, provErr := r.reconcileProvisioning(ctx, bareMetalInstance)
-		if provErr != nil {
-			bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
-			return result, provErr
-		}
-		if !result.IsZero() {
-			bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
-			return result, nil
-		}
+	// Add cleanup finalizer if auto-provisioned ExternalIP resources exist for this BMI
+	if err := r.addCleanupFinalizerIfNeeded(ctx, bareMetalInstance); err != nil {
+		return ctrl.Result{}, err
+	}
 
-		provisionCond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionProvisionTemplateComplete)
-		if provisionCond != nil && provisionCond.Status != metav1.ConditionTrue {
-			bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
-			log.Info("BareMetalInstance not ready: provision template not complete", "bareMetalInstance", bareMetalInstance.Name)
-			return ctrl.Result{}, nil
-		}
+	if result, err := r.reconcileNetworkProvisionAndDiscovery(ctx, bareMetalInstance); err != nil || !result.IsZero() {
+		return result, err
 	}
 
 	// Capture whether power was synced before this reconciliation modifies conditions.
@@ -477,6 +496,93 @@ func (r *BareMetalInstanceReconciler) reconcilePower(ctx context.Context, bareMe
 	return true, nil
 }
 
+func (r *BareMetalInstanceReconciler) reconcileNetworkProvisionAndDiscovery(ctx context.Context, bareMetalInstance *v1alpha1.BareMetalInstance) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
+	// 1) Provisioning runs FIRST, while the server is still on the provisioning
+	//    network segment (the initial provisioning-network attach done at bootstrap). Networking must
+	//    NOT run before provisioning — the tenant must not reach a half-built host.
+	//
+	//    NOTE: The handoff (provision → move → reboot → discovery) protects INITIAL
+	//    provisioning only. NetworkHandoffComplete is never reset, so an in-place
+	//    re-provision after Ready (if the provisioning config-version changes) would
+	//    run over the tenant network. This is a known short-term limitation; re-provision
+	//    handoff-reset is deferred to the long-term design.
+	if bareMetalInstance.Spec.TemplateID != "" && bareMetalInstance.Spec.TemplateID != shared.OsacNoopTemplate {
+		result, provErr := r.reconcileProvisioning(ctx, bareMetalInstance)
+		if provErr != nil {
+			bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+			return result, provErr
+		}
+		if !result.IsZero() {
+			bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
+			return result, nil
+		}
+		provisionCond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionProvisionTemplateComplete)
+		if provisionCond != nil && provisionCond.Status != metav1.ConditionTrue {
+			bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+			return ctrl.Result{}, nil
+		}
+	}
+
+	if len(bareMetalInstance.Spec.NetworkAttachments) == 0 {
+		return ctrl.Result{}, nil
+	}
+
+	// 2) Move the fabric port provisioning network -> tenant network (post-provision).
+	result, netErr := r.reconcileNetworking(ctx, bareMetalInstance)
+	if netErr != nil {
+		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+		return result, netErr
+	}
+	if !result.IsZero() {
+		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
+		return result, nil
+	}
+	netCond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
+	if netCond == nil || netCond.Status != metav1.ConditionTrue {
+		if netCond != nil && netCond.Reason == v1alpha1.HostConditionReasonTemplateFailed {
+			bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+			return ctrl.Result{}, nil
+		}
+		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
+		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
+	}
+
+	// 3) Reboot so the OS re-DHCPs on the tenant network (single default route).
+	result, rbErr := r.reconcileNetworkHandoffReboot(ctx, bareMetalInstance)
+	if rbErr != nil {
+		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+		return result, rbErr
+	}
+	if !result.IsZero() {
+		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
+		return result, nil
+	}
+
+	// 4) Discover the tenant-network DHCP lease (only after handoff reboot).
+	result, ipErr := r.reconcileIPDiscovery(ctx, bareMetalInstance)
+	if ipErr != nil {
+		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+		return result, ipErr
+	}
+	if !result.IsZero() {
+		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
+		return result, nil
+	}
+	ipCond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)
+	if ipCond == nil || ipCond.Status != metav1.ConditionTrue {
+		if ipCond != nil && ipCond.Reason == v1alpha1.HostConditionReasonTemplateFailed {
+			bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+			return ctrl.Result{}, nil
+		}
+		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
+		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
+	}
+	log.Info("Network handoff and IP discovery complete", "bmi", bareMetalInstance.Name)
+	return ctrl.Result{}, nil
+}
+
 func (r *BareMetalInstanceReconciler) reconcileProvisioning(ctx context.Context, bareMetalInstance *v1alpha1.BareMetalInstance) (ctrl.Result, error) {
 	desiredVersion, err := provisioning.ComputeDesiredConfigVersion(struct {
 		HostType                  string
@@ -528,7 +634,7 @@ func (r *BareMetalInstanceReconciler) reconcileProvisioning(ctx context.Context,
 		},
 		func() bool {
 			return provisioning.CheckAPIServerForNonTerminalProvisionJob(
-				ctx, r.Client, client.ObjectKeyFromObject(bareMetalInstance), &v1alpha1.BareMetalInstance{},
+				ctx, r.apiReaderOrClient(), client.ObjectKeyFromObject(bareMetalInstance), &v1alpha1.BareMetalInstance{},
 				func(obj client.Object) []opv1alpha1.JobStatus {
 					return obj.(*v1alpha1.BareMetalInstance).Status.ProvisioningJobs
 				},
@@ -554,6 +660,121 @@ func (r *BareMetalInstanceReconciler) reconcileProvisioning(ctx context.Context,
 	}
 
 	return result, nil
+}
+
+// reconcileNetworkHandoffReboot reboots the host once after its fabric port has
+// been moved to the tenant network, so the OS re-DHCPs on the tenant network. It is
+// idempotent: it runs only until HostConditionNetworkHandoffComplete is True.
+func (r *BareMetalInstanceReconciler) reconcileNetworkHandoffReboot(
+	ctx context.Context, bmi *v1alpha1.BareMetalInstance,
+) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
+	handoffCond := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete)
+
+	// Already complete — no-op
+	if handoffCond != nil && handoffCond.Status == metav1.ConditionTrue {
+		return ctrl.Result{}, nil
+	}
+
+	// Reboot already triggered (condition exists but is not True) — poll for completion
+	if handoffCond != nil {
+		completed, err := r.ManagementClient.IsRestartComplete(ctx, bmi.Spec.ExternalHostID)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if completed {
+			// A reboot we previously triggered has finished.
+			bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
+				metav1.ConditionTrue, "Succeeded", "Host rebooted onto the tenant network")
+			return ctrl.Result{}, nil
+		}
+		// Still rebooting, keep polling
+		return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
+	}
+
+	// Condition doesn't exist yet — check power state before deciding to trigger.
+	// A reboot only helps an already-running OS re-DHCP; an off host will boot fresh
+	// on the tenant network when reconcilePower next powers it on, so no reboot is needed.
+	powerStatus, err := r.ManagementClient.GetPowerState(ctx, bmi.Spec.ExternalHostID)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	if powerStatus.IsTransitioning {
+		// Power state is transitioning, requeue without triggering
+		return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
+	}
+
+	if powerStatus.State == management.PowerOff {
+		// Host is powered off — skip reboot. It will boot fresh on the tenant network
+		// when reconcilePower next powers it on (if RunStrategy=Always).
+		bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
+			metav1.ConditionTrue, "SkippedPoweredOff",
+			"Host powered off; will DHCP on the tenant network at next power-on")
+		log.Info("Skipped network-handoff reboot for powered-off host", "host", bmi.Spec.ExternalHostID)
+		return ctrl.Result{}, nil
+	}
+
+	// Host is powered on — trigger the handoff reboot (exactly once)
+	if err := r.ManagementClient.TriggerRestart(ctx, bmi.Spec.ExternalHostID); err != nil {
+		if !errors.Is(err, management.ErrTransitioning) {
+			return ctrl.Result{}, err
+		}
+	}
+	bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
+		metav1.ConditionFalse, v1alpha1.HostConditionReasonProgressing,
+		"Rebooting host onto the tenant network")
+	log.Info("Triggered network-handoff reboot", "host", bmi.Spec.ExternalHostID)
+	return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
+}
+
+// reconcileNetworkOffboardShutdown powers off the host during deletion BEFORE
+// the fabric port moves back to the provisioning network. This ensures tenant
+// workloads never run on the provisioning network — the workload stops while
+// the port is still on the tenant network, and by the time anything boots on
+// provisioning network it is Ironic's cleaning ramdisk, not the tenant OS.
+func (r *BareMetalInstanceReconciler) reconcileNetworkOffboardShutdown(
+	ctx context.Context, bmi *v1alpha1.BareMetalInstance,
+) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
+	offboardCond := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkOffboardComplete)
+
+	if offboardCond != nil && offboardCond.Status == metav1.ConditionTrue {
+		return ctrl.Result{}, nil
+	}
+
+	powerStatus, err := r.ManagementClient.GetPowerState(ctx, bmi.Spec.ExternalHostID)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	if powerStatus.State == management.PowerOff && !powerStatus.IsTransitioning {
+		bmi.SetStatusCondition(v1alpha1.HostConditionNetworkOffboardComplete,
+			metav1.ConditionTrue, "Succeeded",
+			"Host powered off; safe to move port to provisioning network")
+		log.Info("Offboard shutdown complete", "host", bmi.Spec.ExternalHostID)
+		return ctrl.Result{}, nil
+	}
+
+	if powerStatus.IsTransitioning {
+		log.Info("Host transitioning, waiting for power off", "host", bmi.Spec.ExternalHostID)
+		return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
+	}
+
+	// Host is powered on — power it off
+	if err := r.ManagementClient.SetPowerState(ctx, bmi.Spec.ExternalHostID, management.PowerOff); err != nil {
+		if errors.Is(err, management.ErrTransitioning) {
+			return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
+		}
+		return ctrl.Result{}, err
+	}
+	bmi.SetStatusCondition(v1alpha1.HostConditionNetworkOffboardComplete,
+		metav1.ConditionFalse, v1alpha1.HostConditionReasonProgressing,
+		"Powering off host before moving port to provisioning network")
+	log.Info("Triggered offboard shutdown", "host", bmi.Spec.ExternalHostID)
+	return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
 }
 
 func (r *BareMetalInstanceReconciler) syncBareMetalInstanceStatus(bareMetalInstance *v1alpha1.BareMetalInstance, powerStatus *management.PowerStatus, reconcileErr error, log logr.Logger) {
@@ -725,6 +946,39 @@ func (r *BareMetalInstanceReconciler) triggerRestart(ctx context.Context, bareMe
 func (r *BareMetalInstanceReconciler) handleDeletion(ctx context.Context, bareMetalInstance *v1alpha1.BareMetalInstance) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	log.Info("Deleting BareMetalInstance")
+
+	// Auto-cleanup: delete auto-provisioned ExternalIP resources first
+	result, done, err := r.reconcileAutoCleanup(ctx, bareMetalInstance)
+	if err != nil {
+		return result, err
+	}
+	if !done {
+		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseDeleting
+		return result, nil
+	}
+
+	// Power off BEFORE moving the port back to the provisioning network — ensures tenant
+	// workloads never run on the provisioning network.
+	if len(bareMetalInstance.Spec.NetworkAttachments) > 0 && r.ManagementClient != nil {
+		result, err = r.reconcileNetworkOffboardShutdown(ctx, bareMetalInstance)
+		if err != nil {
+			return result, err
+		}
+		if !result.IsZero() {
+			bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseDeleting
+			return result, nil
+		}
+	}
+
+	// Network attachment cleanup (port tenant → provisioning); host is off at this point
+	result, done, err = r.reconcileNetworkingDeletion(ctx, bareMetalInstance)
+	if err != nil {
+		return result, err
+	}
+	if !done {
+		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseDeleting
+		return result, nil
+	}
 
 	// Management cleanup
 	if controllerutil.ContainsFinalizer(bareMetalInstance, BareMetalInstanceManagementFinalizer) {

@@ -1,26 +1,20 @@
 ---
-# Query DHCP leases for a subnet and match a server port MAC address
-# to find the DHCP-assigned IP. Generic for any resource type that
-# receives IPs via fabric DHCP (bare-metal instances, CaaS agents).
+# Query DHCP leases for a network attachment against IPAM host entries in
+# the target subnet. Bare-metal hosts are matched by NIC MAC address (they
+# are not registered as named fabric servers); named fabric servers (e.g.
+# CaaS agents) fall back to matching by server name.
 #
-# Input: dhcp_lease_query dict with subnet_ref (Subnet UUID) and port_mac.
-# Output: discovered_ip_address fact set to the matched IP.
-#
-# Netris exposes DHCP leases via the IPAM hosts API:
-#   GET /api/v2/ipam/hosts/{subnetID}
-# Each host entry has address, name, meta, and mac fields.
-# DHCP lease entries include a mac array with address/source/state.
+# Input: network_attachment dict with host_name, logical_interface_name,
+#        subnet_ref. The subnet-ref → MAC map is supplied by the operator as
+#        osac_job_vars.network_attachment_macs.
+# Output: accumulates one entry per attachment into the _dhcp_leases fact,
+#         which the playbook publishes as the job's leases artifact.
 
-- name: Extract DHCP lease query parameters
+- name: Extract network attachment configuration
   ansible.builtin.set_fact:
-    _dq_subnet_ref: "{{ dhcp_lease_query.subnet_ref }}"
-    _dq_port_mac: "{{ dhcp_lease_query.port_mac | lower }}"
-
-- name: Validate port MAC format
-  ansible.builtin.assert:
-    that:
-      - _dq_port_mac is regex('^([0-9a-f]{2}:){5}[0-9a-f]{2}$')
-    fail_msg: "Invalid MAC address format: '{{ _dq_port_mac }}'"
+    _dq_host_name: "{{ network_attachment.host_name }}"
+    _dq_subnet_ref: "{{ network_attachment.subnet_ref }}"
+    _dq_interface: "{{ network_attachment.logical_interface_name | default('') }}"
 
 - name: Look up Subnet CR by UUID label
   kubernetes.core.k8s_info:
@@ -34,7 +28,6 @@
   ansible.builtin.fail:
     msg: >-
       Subnet with UUID '{{ _dq_subnet_ref }}' not found.
-      Ensure the Subnet has been created before querying DHCP leases.
   when: _dq_subnet_lookup.resources | length == 0
 
 - name: Set subnet name
@@ -44,87 +37,104 @@
 - name: Display DHCP lease query parameters
   ansible.builtin.debug:
     msg:
-      - "Querying DHCP lease for MAC '{{ _dq_port_mac }}'"
+      - "Querying DHCP lease for host '{{ _dq_host_name }}'"
       - "Subnet: {{ _dq_subnet_name }} (UUID: {{ _dq_subnet_ref }})"
 
-- name: Ensure Netris auth
-  ansible.builtin.include_role:
-    name: netris.controller.auth
-  when: netris_session_cookie is not defined
-
-- name: Get IPAM subnets from Netris
-  ansible.builtin.uri:
-    url: "{{ netris_controller_url }}/api/v2/ipam/subnets"
-    method: GET
-    headers:
-      Cookie: "connect.sid={{ netris_session_cookie }}"
-    return_content: true
-    status_code: 200
-    timeout: "{{ netris_timeout | default(30) }}"
-    validate_certs: "{{ netris_validate_certs | default(true) }}"
-  register: _dq_ipam_subnets_resp
-  no_log: true
+# --- Find IPAM subnet ID ---
 
 - name: Find IPAM subnet by name
+  ansible.builtin.include_role:
+    name: netris.controller.ipam
+    tasks_from: read_subnets
+  vars:
+    ipam_subnet_name: "{{ _dq_subnet_name }}"
+
+- name: Set IPAM subnet reference
   ansible.builtin.set_fact:
-    _dq_ipam_subnet: >-
-      {{ (_dq_ipam_subnets_resp.json.data | default([]))
-         | selectattr('name', 'equalto', _dq_subnet_name)
-         | list | first | default(none) }}
+    _dq_ipam_subnet: "{{ netris_ipam_subnet }}"
 
 - name: Fail if IPAM subnet not found
   ansible.builtin.fail:
     msg: >-
       IPAM subnet '{{ _dq_subnet_name }}' not found in Netris controller.
-      Ensure the Subnet has been provisioned before querying DHCP leases.
   when: _dq_ipam_subnet is none
 
+# --- Match IPAM host by server name ---
+
 - name: Query IPAM hosts for subnet
-  ansible.builtin.uri:
-    url: "{{ netris_controller_url }}/api/v2/ipam/hosts/{{ _dq_ipam_subnet.id }}"
-    method: GET
-    headers:
-      Cookie: "connect.sid={{ netris_session_cookie }}"
-    return_content: true
-    status_code: 200
-    timeout: "{{ netris_timeout | default(30) }}"
-    validate_certs: "{{ netris_validate_certs | default(true) }}"
-  register: _dq_hosts_resp
-  no_log: true
+  ansible.builtin.include_role:
+    name: netris.controller.ipam
+    tasks_from: read_hosts
+  vars:
+    ipam_subnet_id: "{{ _dq_ipam_subnet.id }}"
 
-- name: Initialize matched IP
+# The operator supplies the NIC MAC per subnet-ref. Netris stores lease MACs
+# lowercase (sourced from the DHCP request), so normalise for comparison.
+- name: Determine expected MAC for this attachment
   ansible.builtin.set_fact:
-    _dq_matched_ip: ""
+    _dq_mac: >-
+      {{ ((osac_job_vars.network_attachment_macs | default({}))[_dq_subnet_ref]
+          | default('')) | lower }}
 
-- name: Find host matching port MAC
+# A Netris IPAM host's `mac` is a list of dicts
+# ([{address, source, state, ...}]), so match _dq_mac against the lowercased
+# mac[].address values rather than the list of dicts itself. Reset first so a
+# non-match does not leak a previous attachment's host across the playbook loop.
+- name: Reset matched IPAM host (MAC branch)
   ansible.builtin.set_fact:
-    _dq_matched_ip: "{{ item.address }}"
-  loop: "{{ _dq_hosts_resp.json.data | default([]) }}"
-  when:
-    - _dq_matched_ip | length == 0
-    - (item.mac | default([]))
-      | map(attribute='address')
-      | map('lower')
-      | select('equalto', _dq_port_mac)
-      | list | length > 0
+    _dq_matched_host: "{{ none }}"
+  when: _dq_mac | length > 0
+
+- name: Find IPAM host matching MAC address
+  ansible.builtin.set_fact:
+    _dq_matched_host: "{{ item }}"
+  loop: >-
+    {{ (netris_ipam_hosts | default([]))
+       | selectattr('mac', 'defined')
+       | selectattr('mac', 'truthy')
+       | list }}
   loop_control:
-    label: "{{ item.address | default('unknown') }}"
-  no_log: true
+    label: "{{ item.name | default('') }}"
+  when:
+    - _dq_mac | length > 0
+    - _dq_mac in (item.mac | map(attribute='address', default='') | map('lower') | list)
 
-- name: Fail if no DHCP lease matches
-  ansible.builtin.fail:
-    msg: >-
-      No DHCP lease found for MAC '{{ _dq_port_mac }}' in IPAM subnet
-      '{{ _dq_subnet_name }}' (ID: {{ _dq_ipam_subnet.id }}).
-      Ensure the host has booted and received a DHCP lease.
-  when: _dq_matched_ip | length == 0
+- name: Find IPAM host matching server name
+  ansible.builtin.set_fact:
+    _dq_matched_host: >-
+      {{ (netris_ipam_hosts | default([]))
+         | selectattr('name', 'equalto', _dq_host_name)
+         | list | first | default(none) }}
+  when: _dq_mac | length == 0
 
 - name: Set discovered IP address
   ansible.builtin.set_fact:
-    discovered_ip_address: "{{ _dq_matched_ip }}"
+    discovered_ip_address: >-
+      {{ (_dq_matched_host is not none and _dq_matched_host is mapping)
+         | ternary(_dq_matched_host.address | default(''), '') }}
+
+- name: Fail if no DHCP lease found yet
+  ansible.builtin.fail:
+    msg: >-
+      No DHCP lease found for host '{{ _dq_host_name }}'
+      (interface '{{ _dq_interface }}', mac '{{ _dq_mac }}')
+      in subnet '{{ _dq_subnet_name }}'.
+      The server may not have booted yet or DHCP has not assigned a lease.
+  when: discovered_ip_address | length == 0
+
+# Accumulate across the playbook's per-attachment loop; the playbook publishes
+# the aggregated list once as the job's leases artifact. Keys match the
+# operator's DHCPLease struct (subnet_ref, interface, ip_address, mac_address).
+- name: Accumulate discovered lease for this attachment
+  ansible.builtin.set_fact:
+    _dhcp_leases: >-
+      {{ (_dhcp_leases | default([])) + [{
+           'subnet_ref': _dq_subnet_ref,
+           'interface': _dq_interface,
+           'ip_address': discovered_ip_address,
+           'mac_address': _dq_mac,
+         }] }}
 
 - name: Display DHCP lease query result
   ansible.builtin.debug:
-    msg: >-
-      DHCP lease found: MAC '{{ _dq_port_mac }}' → IP '{{ discovered_ip_address }}'
-      in subnet '{{ _dq_subnet_name }}'
+    msg: "DHCP lease found: host '{{ _dq_host_name }}' → IP '{{ discovered_ip_address }}' in subnet '{{ _dq_subnet_name }}'"

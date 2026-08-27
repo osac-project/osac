@@ -22,110 +22,11 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/gophercloud/gophercloud/v2"
-	"github.com/gophercloud/gophercloud/v2/openstack/baremetal/v1/ports"
 	th "github.com/gophercloud/gophercloud/v2/testhelper"
 	fakeclient "github.com/gophercloud/gophercloud/v2/testhelper/client"
 
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/shared"
 )
-
-func TestIsAuthError(t *testing.T) {
-	tests := []struct {
-		name string
-		err  error
-		want bool
-	}{
-		{
-			name: "nil error",
-			err:  nil,
-			want: false,
-		},
-		{
-			name: "generic error",
-			err:  fmt.Errorf("some random error"),
-			want: false,
-		},
-		{
-			name: "401 ErrUnexpectedResponseCode",
-			err: gophercloud.ErrUnexpectedResponseCode{
-				Actual:   http.StatusUnauthorized,
-				Expected: []int{http.StatusOK},
-			},
-			want: true,
-		},
-		{
-			name: "404 ErrUnexpectedResponseCode",
-			err: gophercloud.ErrUnexpectedResponseCode{
-				Actual:   http.StatusNotFound,
-				Expected: []int{http.StatusOK},
-			},
-			want: false,
-		},
-		{
-			name: "500 ErrUnexpectedResponseCode",
-			err: gophercloud.ErrUnexpectedResponseCode{
-				Actual:   http.StatusInternalServerError,
-				Expected: []int{http.StatusOK},
-			},
-			want: false,
-		},
-		{
-			name: "ErrUnableToReauthenticate pointer",
-			err: &gophercloud.ErrUnableToReauthenticate{
-				ErrOriginal: fmt.Errorf("original"),
-				ErrReauth:   fmt.Errorf("reauth failed"),
-			},
-			want: true,
-		},
-		{
-			name: "ErrErrorAfterReauthentication pointer",
-			err: &gophercloud.ErrErrorAfterReauthentication{
-				ErrOriginal: fmt.Errorf("still failing"),
-			},
-			want: true,
-		},
-		{
-			name: "wrapped ErrUnableToReauthenticate",
-			err: fmt.Errorf("operation failed: %w", &gophercloud.ErrUnableToReauthenticate{
-				ErrOriginal: fmt.Errorf("original"),
-				ErrReauth:   fmt.Errorf("reauth failed"),
-			}),
-			want: true,
-		},
-		{
-			name: "wrapped ErrErrorAfterReauthentication",
-			err: fmt.Errorf("operation failed: %w", &gophercloud.ErrErrorAfterReauthentication{
-				ErrOriginal: fmt.Errorf("still failing"),
-			}),
-			want: true,
-		},
-		{
-			name: "wrapped 401 error",
-			err: fmt.Errorf("operation failed: %w", gophercloud.ErrUnexpectedResponseCode{
-				Actual:   http.StatusUnauthorized,
-				Expected: []int{http.StatusOK},
-			}),
-			want: true,
-		},
-		{
-			name: "wrapped non-auth error",
-			err: fmt.Errorf("operation failed: %w", gophercloud.ErrUnexpectedResponseCode{
-				Actual:   http.StatusNotFound,
-				Expected: []int{http.StatusOK},
-			}),
-			want: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := isAuthError(tt.err); got != tt.want {
-				t.Errorf("isAuthError() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
 
 func TestGetHostNICs_OpenStack(t *testing.T) {
 	t.Run("returns lowercased MACs from port records", func(t *testing.T) {
@@ -142,12 +43,7 @@ func TestGetHostNICs_OpenStack(t *testing.T) {
 		})
 
 		sc := fakeclient.ServiceClient(fakeServer)
-		c := &OpenStackClient{
-			client: sc,
-			newServiceClient: func(context.Context) (*gophercloud.ServiceClient, error) {
-				return nil, fmt.Errorf("should not reconnect")
-			},
-		}
+		c := &OpenStackClient{client: sc}
 
 		nics, err := c.GetHostNICs(context.Background(), "test-node-uuid")
 		if err != nil {
@@ -175,12 +71,7 @@ func TestGetHostNICs_OpenStack(t *testing.T) {
 		})
 
 		sc := fakeclient.ServiceClient(fakeServer)
-		c := &OpenStackClient{
-			client: sc,
-			newServiceClient: func(context.Context) (*gophercloud.ServiceClient, error) {
-				return nil, fmt.Errorf("should not reconnect")
-			},
-		}
+		c := &OpenStackClient{client: sc}
 
 		_, err := c.GetHostNICs(context.Background(), "test-node-uuid")
 		if err == nil {
@@ -188,37 +79,20 @@ func TestGetHostNICs_OpenStack(t *testing.T) {
 		}
 	})
 
-	t.Run("retries on auth error and returns NICs on success", func(t *testing.T) {
+	t.Run("returns error on auth failure", func(t *testing.T) {
 		fakeServer := th.SetupHTTP()
 		defer fakeServer.Teardown()
 
-		callCount := 0
 		fakeServer.Mux.HandleFunc("/ports/detail", func(w http.ResponseWriter, r *http.Request) {
-			callCount++
-			if callCount == 1 {
-				w.WriteHeader(http.StatusUnauthorized)
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_, _ = fmt.Fprint(w, `{"ports": [{"address": "aa:bb:cc:dd:ee:01"}]}`)
+			w.WriteHeader(http.StatusUnauthorized)
 		})
 
 		sc := fakeclient.ServiceClient(fakeServer)
-		c := &OpenStackClient{
-			client:           sc,
-			newServiceClient: func(context.Context) (*gophercloud.ServiceClient, error) { return sc, nil },
-		}
+		c := &OpenStackClient{client: sc}
 
-		nics, err := c.GetHostNICs(context.Background(), "test-node-uuid")
-		if err != nil {
-			t.Fatalf("unexpected error after reconnect: %v", err)
-		}
-		if len(nics) != 1 || nics[0].MAC != "aa:bb:cc:dd:ee:01" {
-			t.Errorf("expected 1 NIC with correct MAC, got %v", nics)
-		}
-		if callCount != 2 {
-			t.Errorf("expected 2 calls (auth retry), got %d", callCount)
+		_, err := c.GetHostNICs(context.Background(), "test-node-uuid")
+		if err == nil {
+			t.Fatal("expected error for 401, got nil")
 		}
 	})
 
@@ -231,12 +105,7 @@ func TestGetHostNICs_OpenStack(t *testing.T) {
 		})
 
 		sc := fakeclient.ServiceClient(fakeServer)
-		c := &OpenStackClient{
-			client: sc,
-			newServiceClient: func(context.Context) (*gophercloud.ServiceClient, error) {
-				return nil, fmt.Errorf("should not reconnect")
-			},
-		}
+		c := &OpenStackClient{client: sc}
 
 		_, err := c.GetHostNICs(context.Background(), "test-node-uuid")
 		if err == nil {
@@ -267,9 +136,8 @@ func TestFindFreeHost_PortFilter(t *testing.T) {
 
 		sc := fakeclient.ServiceClient(fakeServer)
 		c := &OpenStackClient{
-			client:           sc,
-			newServiceClient: func(context.Context) (*gophercloud.ServiceClient, error) { return sc, nil },
-			HostClass:        "openstack",
+			client:    sc,
+			hostClass: "openstack",
 		}
 
 		host, err := c.FindFreeHost(context.Background(), map[string]string{"hostType": "gpu-node"})
@@ -301,9 +169,8 @@ func TestFindFreeHost_PortFilter(t *testing.T) {
 
 		sc := fakeclient.ServiceClient(fakeServer)
 		c := &OpenStackClient{
-			client:           sc,
-			newServiceClient: func(context.Context) (*gophercloud.ServiceClient, error) { return sc, nil },
-			HostClass:        "openstack",
+			client:    sc,
+			hostClass: "openstack",
 		}
 
 		host, err := c.FindFreeHost(context.Background(), map[string]string{"hostType": "gpu-node"})
@@ -330,9 +197,8 @@ func TestFindFreeHost_PortFilter(t *testing.T) {
 
 		sc := fakeclient.ServiceClient(fakeServer)
 		c := &OpenStackClient{
-			client:           sc,
-			newServiceClient: func(context.Context) (*gophercloud.ServiceClient, error) { return sc, nil },
-			HostClass:        "openstack",
+			client:    sc,
+			hostClass: "openstack",
 		}
 
 		host, err := c.FindFreeHost(context.Background(), map[string]string{"hostType": "gpu-node"})
@@ -368,9 +234,8 @@ func TestFindFreeHost_ManagedByGuard(t *testing.T) {
 
 		sc := fakeclient.ServiceClient(fakeServer)
 		c := &OpenStackClient{
-			client:           sc,
-			newServiceClient: func(context.Context) (*gophercloud.ServiceClient, error) { return sc, nil },
-			HostClass:        "openstack",
+			client:    sc,
+			hostClass: "openstack",
 		}
 
 		host, err := c.FindFreeHost(context.Background(), map[string]string{"hostType": "gpu-node"})
@@ -399,9 +264,8 @@ func TestFindFreeHost_ManagedByGuard(t *testing.T) {
 
 		sc := fakeclient.ServiceClient(fakeServer)
 		c := &OpenStackClient{
-			client:           sc,
-			newServiceClient: func(context.Context) (*gophercloud.ServiceClient, error) { return sc, nil },
-			HostClass:        "openstack",
+			client:    sc,
+			hostClass: "openstack",
 		}
 
 		host, err := c.FindFreeHost(context.Background(), map[string]string{"hostType": "gpu-node"})
@@ -436,9 +300,8 @@ func TestFindFreeHost_ManagedByGuard(t *testing.T) {
 
 		sc := fakeclient.ServiceClient(fakeServer)
 		c := &OpenStackClient{
-			client:           sc,
-			newServiceClient: func(context.Context) (*gophercloud.ServiceClient, error) { return sc, nil },
-			HostClass:        "openstack",
+			client:    sc,
+			hostClass: "openstack",
 		}
 
 		host, err := c.FindFreeHost(context.Background(), map[string]string{"hostType": "gpu-node"})
@@ -450,57 +313,6 @@ func TestFindFreeHost_ManagedByGuard(t *testing.T) {
 		}
 		if host.InventoryHostID != "node-1" {
 			t.Errorf("expected node-1, got %q", host.InventoryHostID)
-		}
-	})
-}
-
-// compile-time check that ports package is used
-var _ = ports.ListOpts{}
-
-func TestReconnect(t *testing.T) {
-	const (
-		oldEndpoint = "http://old:6385/v1/"
-		newEndpoint = "http://new:6385/v1/"
-	)
-
-	t.Run("swaps the service client on success", func(t *testing.T) {
-		oldSC := &gophercloud.ServiceClient{Endpoint: oldEndpoint}
-		newSC := &gophercloud.ServiceClient{Endpoint: newEndpoint}
-
-		c := &OpenStackClient{
-			client: oldSC,
-			newServiceClient: func(context.Context) (*gophercloud.ServiceClient, error) {
-				return newSC, nil
-			},
-		}
-
-		if err := c.reconnect(context.Background()); err != nil {
-			t.Fatalf("reconnect() unexpected error: %v", err)
-		}
-		if c.client != newSC {
-			t.Errorf("expected client to be swapped to newSC")
-		}
-		if c.client.Endpoint != newEndpoint {
-			t.Errorf("expected endpoint %q, got %q", newEndpoint, c.client.Endpoint)
-		}
-	})
-
-	t.Run("returns error when factory fails", func(t *testing.T) {
-		oldSC := &gophercloud.ServiceClient{Endpoint: oldEndpoint}
-
-		c := &OpenStackClient{
-			client: oldSC,
-			newServiceClient: func(context.Context) (*gophercloud.ServiceClient, error) {
-				return nil, fmt.Errorf("keystone is down")
-			},
-		}
-
-		err := c.reconnect(context.Background())
-		if err == nil {
-			t.Fatal("reconnect() expected error, got nil")
-		}
-		if c.client != oldSC {
-			t.Error("should keep old client on failure")
 		}
 	})
 }

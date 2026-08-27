@@ -271,7 +271,7 @@ func TestFindFreeHostValidation(t *testing.T) {
 	client := &OpenStackClient{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := client.findFreeHost(context.Background(), tt.matchExpressions)
+			_, err := client.FindFreeHost(context.Background(), tt.matchExpressions)
 			if err == nil {
 				t.Fatalf("expected error containing %q, got nil", tt.errorContains)
 			}

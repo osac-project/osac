@@ -71,6 +71,7 @@ class OsacCLI:
         name: str | None = None,
         network_attachments: list[dict[str, Any]] | None = None,
         boot_disk_size: int = 20,
+        boot_disk_storage_tier: str | None = None,
         disk_image: str | None = None,
         run_strategy: str = "Always",
         user_data_secret_ref: str | None = None,
@@ -86,6 +87,8 @@ class OsacCLI:
             "--run-strategy",
             run_strategy,
         ]
+        if boot_disk_storage_tier is not None:
+            args.extend(["--boot-disk-storage-tier", boot_disk_storage_tier])
         if name is not None:
             args.extend(["--name", name])
 

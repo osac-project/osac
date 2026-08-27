@@ -22,9 +22,11 @@ readonly NIGHTLY_CHART_SLACK_ORDER=(
     osac
 )
 
-# Umbrella and CI values files that override osac-ui subchart .Values.images.ui.
-readonly NIGHTLY_UMBRELLA_UI_VALUES=(
-    osac-installer/charts/osac/values.yaml
+# CI overlay values files with their own separate floating image tag
+# overrides for mono-repo components (operator/aap/bmf/metering/csiDriver),
+# on top of the umbrella chart's own values.yaml. Not every file overrides
+# every component -- see stamp_ci_overlay_if_present.
+readonly NIGHTLY_CI_OVERLAY_VALUES=(
     osac-installer/values/dev/instance.yaml
     osac-installer/values/vmaas-ci/instance.yaml
     osac-installer/values/bmaas-ci/instance.yaml
@@ -98,6 +100,49 @@ check_osac_ui_image() {
     echo "${sha}"
 }
 
+# Usage: retag_component_image <image_repo> <source_short_sha> <target_version>
+# Alias-tags the already-built <image_repo>:sha-<source_short_sha> image to
+# <image_repo>:<target_version> via a server-side skopeo copy (no rebuild).
+# <image_repo>:sha-<source_short_sha> is expected to already exist -- every
+# mono-repo component's image-build workflow triggers unconditionally on
+# push to main with no path filter, so a sha-<short> tag for main's current
+# HEAD is reliably present in GHCR by the time nightly runs. If it isn't
+# (e.g. a very recent merge whose build is still in flight), skopeo copy
+# itself fails with a clear "manifest unknown" error under set -euo
+# pipefail -- that failure IS the existence check; no separate pre-flight
+# HEAD request is needed. Fails loudly, no silent fallback, no retry.
+retag_component_image() {
+    local image_repo="$1" source_short_sha="$2" target_version="$3"
+    local source_tag="sha-${source_short_sha}"
+    local safe_repo safe_source safe_target
+
+    if [[ ! "${image_repo}" =~ ^[a-zA-Z0-9._/-]+$ ]]; then
+        safe_repo=$(_gha_sanitize_for_message "${image_repo}")
+        echo "::error::Invalid image repo '${safe_repo}'" >&2
+        return 1
+    fi
+    if [[ ! "${source_short_sha}" =~ ^[0-9a-f]{7,40}$ ]]; then
+        safe_source=$(_gha_sanitize_for_message "${source_short_sha}")
+        echo "::error::Invalid source SHA '${safe_source}' for ${image_repo}" >&2
+        return 1
+    fi
+    if [[ ! "${target_version}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+        safe_target=$(_gha_sanitize_for_message "${target_version}")
+        echo "::error::Invalid target version '${safe_target}' for ${image_repo}" >&2
+        return 1
+    fi
+
+    echo "Retagging ${image_repo}:${source_tag} -> ${image_repo}:${target_version}..."
+    if ! skopeo copy --all \
+        "docker://${image_repo}:${source_tag}" \
+        "docker://${image_repo}:${target_version}"; then
+        safe_repo=$(_gha_sanitize_for_message "${image_repo}")
+        echo "::error::Could not retag ${safe_repo}:${source_tag} -> ${target_version} — source image not found in GHCR yet (its build may still be in flight); failing nightly run rather than silently skipping or falling back to an older commit" >&2
+        return 1
+    fi
+    skopeo inspect "docker://${image_repo}:${target_version}" > /dev/null
+}
+
 # Strip characters that break or inject GitHub Actions workflow commands.
 _gha_sanitize_for_message() {
     local value="$1"
@@ -146,71 +191,92 @@ compute_nightly_chart_version() {
     printf '%s-%s' "${base_version}" "${nightly_suffix}"
 }
 
-# Usage: osac_ui_nightly_image_ref <image_repo> <short_sha>
-osac_ui_nightly_image_ref() {
-    local image_repo="$1" short_sha="$2"
-    printf '%s:sha-%s' "${image_repo}" "${short_sha}"
-}
-
-# Usage: stamp_umbrella_ui_image_ref <values_yaml> <image_ref>
-stamp_umbrella_ui_image_ref() {
-    local values_yaml="$1" image_ref="$2"
+# Usage: stamp_umbrella_nested_field <values_yaml> <top_key> <nested_key> <leaf_key> <new_value> [optional]
+# Awk-based rewrite of a single "<top_key>:\n  <nested_key>:\n    <leaf_key>: <value>"
+# scalar field, preserving every other line byte-for-byte.
+#
+# Uses awk instead of yq -i because yq reformats the entire YAML file on
+# write — removing blank lines and normalizing inline comment spacing from
+# 2 spaces to 1 space before '#'. This causes ct lint's yamllint (which
+# requires 2-space comment padding via ~/.ct/lintconf.yaml) to fail during
+# the nightly publish job. awk preserves all formatting outside the target
+# line.
+#
+# If [optional] is passed as a truthy 6th arg, a field not found in this
+# file is a silent no-op (return 0) instead of a hard error — needed for CI
+# overlay files, where not every environment overrides every component's
+# image. Without it (the umbrella chart's own values.yaml, where every
+# field is a mandatory always-present placeholder), a miss is a hard
+# ::error::/return 1, since that would indicate real corruption.
+stamp_umbrella_nested_field() {
+    local values_yaml="$1" top_key="$2" nested_key="$3" leaf_key="$4" new_value="$5"
+    local optional="${6:-false}"
     local safe_values_yaml tmp
+
     if [[ ! -f "${values_yaml}" ]]; then
         safe_values_yaml=$(_gha_sanitize_for_message "${values_yaml}")
-        echo "::warning title=Missing values file::Values file not found: ${safe_values_yaml} — skipping ui.images.ui stamp" >&2
+        echo "::warning title=Missing values file::Values file not found: ${safe_values_yaml} — skipping ${top_key}.${nested_key}.${leaf_key} stamp" >&2
         return 0
     fi
-    if ! grep -qE '[[:space:]]ui:' "${values_yaml}"; then
-        safe_values_yaml=$(_gha_sanitize_for_message "${values_yaml}")
-        echo "::error::ui.images.ui key not found in ${safe_values_yaml}" >&2
-        return 1
-    fi
-    # stamp_umbrella_ui_image_ref uses awk instead of yq -i because yq reformats
-    # the entire YAML file on write — removing blank lines and normalizing inline
-    # comment spacing from 2 spaces to 1 space before '#'. This causes ct lint's
-    # yamllint (which requires 2-space comment padding via ~/.ct/lintconf.yaml) to
-    # fail during the nightly publish job. awk preserves all formatting outside the
-    # target line.
+
     tmp="$(mktemp)"
-    if ! awk -v ref="${image_ref}" '
-        BEGIN { in_ui=0; in_ui_images=0; stamped=0; ui_key_indent="" }
-        /^ui:/ { in_ui=1; in_ui_images=0; ui_key_indent="" }
-        /^[^ #\t]/ && !/^ui:/ { in_ui=0; in_ui_images=0; ui_key_indent="" }
-        in_ui && /^[[:space:]]+images:/ {
+    if ! awk -v top="${top_key}:" -v nested_pat="^[[:space:]]+${nested_key}:" \
+            -v leaf="${leaf_key}" -v val="${new_value}" '
+        BEGIN { in_top=0; in_nested=0; stamped=0; nested_indent="" }
+        $0 == top { in_top=1; in_nested=0; nested_indent=""; print; next }
+        /^[^ #\t]/ && $0 != top { in_top=0; in_nested=0; nested_indent="" }
+        in_top && $0 ~ nested_pat {
             match($0, /^[[:space:]]+/)
-            ui_key_indent = substr($0, RSTART, RLENGTH) "  "
-            in_ui_images=1
+            nested_indent = substr($0, RSTART, RLENGTH) "  "
+            in_nested=1
+            print
+            next
         }
-        in_ui_images && ui_key_indent != "" && match($0, "^" ui_key_indent "ui:[[:space:]]") {
-            print ui_key_indent "ui: " ref
-            in_ui_images=0
+        in_nested && nested_indent != "" && match($0, "^" nested_indent leaf ":[[:space:]]") {
+            print nested_indent leaf ": " val
+            in_nested=0
             stamped=1
             next
         }
         { print }
         END { exit(stamped ? 0 : 1) }
     ' "${values_yaml}" > "${tmp}"; then
-        safe_values_yaml=$(_gha_sanitize_for_message "${values_yaml}")
-        echo "::error::ui.images.ui key not found under ui.images in ${safe_values_yaml}" >&2
         rm -f "${tmp}"
+        if [[ "${optional}" == true ]]; then
+            return 0
+        fi
+        safe_values_yaml=$(_gha_sanitize_for_message "${values_yaml}")
+        echo "::error::${top_key}.${nested_key}.${leaf_key} not found in ${safe_values_yaml}" >&2
         return 1
     fi
     chmod --reference="${values_yaml}" "${tmp}"
     mv "${tmp}" "${values_yaml}"
-    if ! grep -qF "${image_ref}" "${values_yaml}"; then
+    if ! grep -qF "${new_value}" "${values_yaml}"; then
         safe_values_yaml=$(_gha_sanitize_for_message "${values_yaml}")
-        echo "::error::Failed to stamp ui.images.ui in ${safe_values_yaml}" >&2
+        echo "::error::Failed to stamp ${top_key}.${nested_key}.${leaf_key} in ${safe_values_yaml}" >&2
         return 1
     fi
 }
 
-# Usage: stamp_umbrella_ui_values <image_ref>
-stamp_umbrella_ui_values() {
-    local image_ref="$1" values_yaml
-    for values_yaml in "${NIGHTLY_UMBRELLA_UI_VALUES[@]}"; do
-        stamp_umbrella_ui_image_ref "${values_yaml}" "${image_ref}"
-    done
+# Usage: stamp_ci_overlay_if_present <values_yaml> <yq_path> <new_value>
+# Stamps an arbitrary-depth field (e.g. .metering.echoAdapter.image.tag) in a
+# CI overlay file (osac-installer/values/*/instance.yaml), only if that path
+# already resolves to a non-null value in the file -- `yq -e <path> <file>`
+# exits non-zero when the path is absent/null, which we use purely as an
+# existence check (its own stdout/stderr is discarded). This avoids yq -i's
+# default auto-vivification behavior, which would otherwise silently create
+# a whole new key structure (e.g. add a `csiDriver:` block) in overlay files
+# that don't already configure that component. Unlike
+# stamp_umbrella_nested_field, this uses yq -i directly (not awk): these CI
+# overlay files are not yamllint/ct-lint-checked anywhere in this pipeline,
+# and changes here only ever live on the ephemeral nightly/* temp branch
+# (never merged, deleted by the cleanup job), so yq's whole-file comment
+# reformatting has no consequence.
+stamp_ci_overlay_if_present() {
+    local values_yaml="$1" yq_path="$2" new_value="$3"
+    if yq -e "${yq_path}" "${values_yaml}" > /dev/null 2>&1; then
+        VALUE="${new_value}" yq -i "${yq_path} = strenv(VALUE)" "${values_yaml}"
+    fi
 }
 
 # Usage: _chart_slack_rank <chart_name>

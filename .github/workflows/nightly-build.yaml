@@ -19,12 +19,11 @@ env:
 
 jobs:
   # -------------------------------------------------------------------
-  # Job 1: Prepare — pin osac-ui and push temp branch
-  # osac-ui is the only external dependency needing a gated pin per run.
-  # Resolve osac-ui@main HEAD (ls-remote); accept only when GHCR already
-  # has ghcr.io/.../osac-ui:sha-<7>. Write pinned/osac-ui.commit; stamp
-  # umbrella ui.images.ui and CI values files. Push nightly/<date>-<sha>-<run>
-  # temp branch — consumed by e2e-test and publish (one pin for whole run).
+  # Job 1: Prepare — resolve every component's nightly version upfront,
+  # stamp every Chart.yaml/values.yaml/CI-overlay reference to those
+  # exact versions, and push a temp branch. Nothing is built yet here;
+  # this just decides *what* every chart and image reference should say
+  # before the parallel build phase produces the images to match.
   # -------------------------------------------------------------------
   prepare:
     name: Prepare nightly state
@@ -35,7 +34,9 @@ jobs:
       temp-branch: ${{ steps.push.outputs.branch }}
       ui-sha: ${{ steps.ui.outputs.sha }}
       ui-short-sha: ${{ steps.ui.outputs.short-sha }}
-      ui-image-ref: ${{ steps.ui.outputs.image-ref }}
+      ui-sub-version: ${{ steps.versions.outputs.ui-sub-version }}
+      nightly-suffix: ${{ steps.versions.outputs.nightly-suffix }}
+      component-versions: ${{ steps.versions.outputs.component-versions }}
 
     steps:
     - name: Checkout repository
@@ -67,9 +68,8 @@ jobs:
         done < <(gh api --paginate "repos/${GITHUB_REPOSITORY}/git/matching-refs/heads/nightly/" --jq '.[].ref')
 
     # Resolve osac-ui@main HEAD once, but only accept it when ghcr.io/.../osac-ui:sha-<7>
-    # already exists (check_osac_ui_image). The full SHA is written to pinned/osac-ui.commit
-    # and propagated to E2E + publish via the temp branch outputs — same pin for the
-    # whole workflow run, matching the archived submodule bump model.
+    # already exists (check_osac_ui_image) -- osac-ui is a separate repo we
+    # don't build here, so we can only gate on an image it already published.
     - name: Resolve and gate osac-ui SHA
       id: ui
       run: |
@@ -78,23 +78,213 @@ jobs:
 
         UI_SHA=$(check_osac_ui_image osac-ui)
         UI_SHORT_SHA="${UI_SHA:0:7}"
-        # osac-ui is external; images always publish under ghcr.io/osac-project/osac-ui.
-        UI_IMAGE_REF=$(osac_ui_nightly_image_ref "${REGISTRY}/osac-project/osac-ui" "${UI_SHORT_SHA}")
 
         mkdir -p osac-installer/pinned
         printf '%s\n' "${UI_SHA}" > osac-installer/pinned/osac-ui.commit
-        stamp_umbrella_ui_values "${UI_IMAGE_REF}"
 
         echo "sha=${UI_SHA}" >> "$GITHUB_OUTPUT"
         echo "short-sha=${UI_SHORT_SHA}" >> "$GITHUB_OUTPUT"
-        echo "image-ref=${UI_IMAGE_REF}" >> "$GITHUB_OUTPUT"
-        echo "Pinned osac-ui ${UI_SHORT_SHA} (${UI_IMAGE_REF})"
+        echo "Pinned osac-ui ${UI_SHORT_SHA}"
+
+    # Needed only for resolve_bare_release_tag_at's `git describe` below --
+    # a local checkout of the pinned commit, not the file content (that's
+    # separately checked out again in publish, which packages its chart).
+    - name: Checkout osac-ui at pinned SHA
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v6
+      with:
+        repository: osac-project/osac-ui
+        ref: ${{ steps.ui.outputs.sha }}
+        path: osac-ui
+        fetch-depth: 0
+        persist-credentials: false
+
+    # Resolve every mono-repo component's nightly SUB_VERSION (and osac-ui's)
+    # up front, before anything is stamped or built. component-versions is a
+    # JSON map so the build matrix (a separate job) can look up its own
+    # component's version without re-deriving it independently.
+    - name: Resolve nightly versions
+      id: versions
+      env:
+        UI_SHA: ${{ steps.ui.outputs.sha }}
+      run: |
+        set -euo pipefail
+        source osac-installer/scripts/nightly-charts.sh
+
+        DATE=$(date -u +%Y%m%d)
+        SHORT_SHA=$(git rev-parse --short=7 HEAD)
+        # GITHUB_RUN_NUMBER/GITHUB_RUN_ATTEMPT keep a "Re-run failed jobs" of
+        # the same run from colliding with a version it already tried
+        # (RUN_ID/RUN_NUMBER stay constant across a re-run; only
+        # RUN_ATTEMPT increments).
+        NIGHTLY_SUFFIX="nightly.${DATE}.${SHORT_SHA}.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+        echo "nightly-suffix=${NIGHTLY_SUFFIX}" >> "$GITHUB_OUTPUT"
+
+        declare -a COMPONENTS=(
+          osac-operator
+          fulfillment-service
+          osac-aap
+          bare-metal-fulfillment-operator
+          osac-metering
+          osac-csi-driver
+        )
+        json="{}"
+        for COMPONENT in "${COMPONENTS[@]}"; do
+          if ! BASE_TAG=$(resolve_release_tag . "${COMPONENT}"); then
+            safe_component=$(_gha_sanitize_for_message "${COMPONENT}")
+            echo "::warning::No ${safe_component}/vX.Y.Z release tag found yet -- ${safe_component} will be skipped this run"
+            continue
+          fi
+          BASE_VERSION="${BASE_TAG#"${COMPONENT}"/v}"
+          SUB_VERSION="${BASE_VERSION}-${NIGHTLY_SUFFIX}"
+          json=$(jq -c --arg k "${COMPONENT}" --arg v "${SUB_VERSION}" '. + {($k): $v}' <<<"${json}")
+          echo "${COMPONENT}: ${SUB_VERSION} (from tag ${BASE_TAG})"
+        done
+        echo "component-versions=${json}" >> "$GITHUB_OUTPUT"
+
+        # osac-ui uses bare vX.Y.Z tags on the external repo, not <component>/vX.Y.Z.
+        if UI_BASE_TAG=$(resolve_bare_release_tag_at osac-ui "${UI_SHA}"); then
+          UI_SUB_VERSION=$(compute_nightly_chart_version "${UI_BASE_TAG}" "${NIGHTLY_SUFFIX}")
+          echo "ui-sub-version=${UI_SUB_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "osac-ui: ${UI_SUB_VERSION} (from tag ${UI_BASE_TAG})"
+        else
+          echo "::warning title=osac-ui::No vX.Y.Z release tag found for osac-ui -- its own sub-chart won't be stamped/published this run"
+        fi
+
+    # Stamp every sub-chart's Chart.yaml + values.yaml, the umbrella's own
+    # values.yaml, and the 4 CI overlay files to the exact versions resolved
+    # above -- all of it now, before the temp branch is pushed, so both the
+    # parallel build phase and e2e-test operate on consistent, final
+    # references. No image exists at these tags yet; the build phase
+    # (needs: prepare) produces them before e2e-test runs.
+    - name: Stamp charts and values for nightly
+      env:
+        COMPONENT_VERSIONS: ${{ steps.versions.outputs.component-versions }}
+        UI_SUB_VERSION: ${{ steps.versions.outputs.ui-sub-version }}
+      run: |
+        set -euo pipefail
+        source osac-installer/scripts/nightly-charts.sh
+
+        UMBRELLA_VALUES="osac-installer/charts/osac/values.yaml"
+
+        declare -A SUB_CHARTS=(
+          ["osac-operator"]="osac-operator/charts/operator osac-operator/charts/operator-crds"
+          ["fulfillment-service"]="fulfillment-service/charts/service"
+          ["osac-aap"]="osac-aap/charts/aap"
+          ["bare-metal-fulfillment-operator"]="bare-metal-fulfillment-operator/charts/operator bare-metal-fulfillment-operator/charts/operator-crds"
+          ["osac-metering"]="osac-metering/charts/osac-metering"
+          ["osac-csi-driver"]="osac-csi-driver/charts/csi-driver osac-csi-driver/charts/csi-backends"
+        )
+
+        for COMPONENT in $(printf '%s\n' "${!SUB_CHARTS[@]}" | sort); do
+          SUB_VERSION=$(jq -r --arg k "${COMPONENT}" '.[$k] // empty' <<<"${COMPONENT_VERSIONS}")
+          if [[ -z "${SUB_VERSION}" ]]; then
+            safe_component=$(_gha_sanitize_for_message "${COMPONENT}")
+            echo "::warning::Skipping ${safe_component} sub-charts — no resolved nightly version"
+            continue
+          fi
+
+          echo "Stamping ${COMPONENT} sub-charts to version ${SUB_VERSION}..."
+
+          # Intentional word splitting: each SUB_CHARTS value lists multiple chart paths.
+          for CHART_DIR in ${SUB_CHARTS[$COMPONENT]}; do
+            SUB_VERSION="${SUB_VERSION}" yq -i '.version = strenv(SUB_VERSION)' "${CHART_DIR}/Chart.yaml"
+            SUB_VERSION="${SUB_VERSION}" yq -i '.appVersion = strenv(SUB_VERSION)' "${CHART_DIR}/Chart.yaml"
+
+            # Stamp every values.yaml field that references this component's
+            # image (its own sub-chart values.yaml, plus the umbrella's own
+            # values.yaml where applicable) to the same SUB_VERSION the
+            # build phase will tag its fresh image with. Charts with no
+            # image of their own (operator-crds, bmf-crds, csi-backends)
+            # fall through the case with no action.
+            case "${CHART_DIR}" in
+              "osac-operator/charts/operator")
+                SUB_VERSION="${SUB_VERSION}" yq -i '.image.tag = strenv(SUB_VERSION)' "${CHART_DIR}/values.yaml"
+                stamp_umbrella_nested_field "${UMBRELLA_VALUES}" operator image tag "${SUB_VERSION}"
+                ;;
+              "bare-metal-fulfillment-operator/charts/operator")
+                SUB_VERSION="${SUB_VERSION}" yq -i '.image.tag = strenv(SUB_VERSION)' "${CHART_DIR}/values.yaml"
+                stamp_umbrella_nested_field "${UMBRELLA_VALUES}" bmf image tag "${SUB_VERSION}"
+                ;;
+              "fulfillment-service/charts/service")
+                IMAGE_REF="ghcr.io/osac-project/fulfillment-service:${SUB_VERSION}" \
+                  yq -i '.images.service = strenv(IMAGE_REF)' "${CHART_DIR}/values.yaml"
+                stamp_umbrella_nested_field "${UMBRELLA_VALUES}" service images service "ghcr.io/osac-project/fulfillment-service:${SUB_VERSION}"
+                ;;
+              "osac-aap/charts/aap")
+                IMAGE_REF="ghcr.io/osac-project/osac-aap:${SUB_VERSION}" \
+                  yq -i '.bootstrap.image = strenv(IMAGE_REF)' "${CHART_DIR}/values.yaml"
+                stamp_umbrella_nested_field "${UMBRELLA_VALUES}" aap bootstrap image "ghcr.io/osac-project/osac-aap:${SUB_VERSION}"
+                ;;
+              "osac-metering/charts/osac-metering")
+                SUB_VERSION="${SUB_VERSION}" yq -i '.image.tag = strenv(SUB_VERSION)' "${CHART_DIR}/values.yaml"
+                stamp_umbrella_nested_field "${UMBRELLA_VALUES}" metering image tag "${SUB_VERSION}"
+                # m360Adapter has no umbrella-level override field -- stamp
+                # only the subchart's own values.yaml. Stamped
+                # unconditionally even though disabled by default: cheap,
+                # and avoids a stale :latest surfacing the moment someone
+                # flips m360Adapter.enabled=true on a nightly install.
+                # (echoAdapter's image block is commented out by default in
+                # this chart -- only the vmaas-ci CI overlay enables and
+                # overrides it, stamped separately below.)
+                SUB_VERSION="${SUB_VERSION}" yq -i '.m360Adapter.image.tag = strenv(SUB_VERSION)' "${CHART_DIR}/values.yaml"
+                ;;
+              "osac-csi-driver/charts/csi-driver")
+                SUB_VERSION="${SUB_VERSION}" yq -i '.image.tag = strenv(SUB_VERSION)' "${CHART_DIR}/values.yaml"
+                stamp_umbrella_nested_field "${UMBRELLA_VALUES}" csiDriver image tag "${SUB_VERSION}"
+                ;;
+            esac
+          done
+        done
+
+        # osac-ui: stamp only the umbrella's own ui.images.ui field here.
+        # Its own sub-chart Chart.yaml/values.yaml are stamped and packaged
+        # later in the publish job, which checks out osac-ui again itself
+        # for that purpose (this job's own osac-ui/ checkout above is used
+        # only for git describe in "Resolve nightly versions", and is
+        # deleted below before it can interfere with this job's own commit).
+        if [[ -n "${UI_SUB_VERSION}" ]]; then
+          stamp_umbrella_nested_field "${UMBRELLA_VALUES}" ui images ui "ghcr.io/osac-project/osac-ui:${UI_SUB_VERSION}"
+        fi
+
+        # The 4 CI overlay values files (osac-installer/values/*/instance.yaml)
+        # have their own separate floating image tag overrides on top of the
+        # umbrella chart's own values.yaml, and e2e-test below installs using
+        # one of them. Without this, e2e-test would keep validating stale
+        # :latest images even after the published chart itself is correctly
+        # pinned. Every version is already fully resolved above, so these
+        # get the exact same final SUB_VERSION strings as everywhere else --
+        # no intermediate placeholder needed.
+        OPERATOR_VER=$(jq -r '.["osac-operator"] // empty' <<<"${COMPONENT_VERSIONS}")
+        FULFILLMENT_VER=$(jq -r '.["fulfillment-service"] // empty' <<<"${COMPONENT_VERSIONS}")
+        AAP_VER=$(jq -r '.["osac-aap"] // empty' <<<"${COMPONENT_VERSIONS}")
+        BMF_VER=$(jq -r '.["bare-metal-fulfillment-operator"] // empty' <<<"${COMPONENT_VERSIONS}")
+        METERING_VER=$(jq -r '.["osac-metering"] // empty' <<<"${COMPONENT_VERSIONS}")
+        CSI_VER=$(jq -r '.["osac-csi-driver"] // empty' <<<"${COMPONENT_VERSIONS}")
+
+        for overlay in "${NIGHTLY_CI_OVERLAY_VALUES[@]}"; do
+          [[ -f "${overlay}" ]] || continue
+          [[ -n "${OPERATOR_VER}" ]] && stamp_ci_overlay_if_present "${overlay}" '.operator.image.tag' "${OPERATOR_VER}"
+          [[ -n "${FULFILLMENT_VER}" ]] && stamp_ci_overlay_if_present "${overlay}" '.service.images.service' "ghcr.io/osac-project/fulfillment-service:${FULFILLMENT_VER}"
+          [[ -n "${AAP_VER}" ]] && stamp_ci_overlay_if_present "${overlay}" '.aap.bootstrap.image' "ghcr.io/osac-project/osac-aap:${AAP_VER}"
+          [[ -n "${AAP_VER}" ]] && stamp_ci_overlay_if_present "${overlay}" '.aap.configAsCode.eeImage' "ghcr.io/osac-project/osac-aap:${AAP_VER}"
+          [[ -n "${BMF_VER}" ]] && stamp_ci_overlay_if_present "${overlay}" '.bmf.image.tag' "${BMF_VER}"
+          [[ -n "${METERING_VER}" ]] && stamp_ci_overlay_if_present "${overlay}" '.metering.image.tag' "${METERING_VER}"
+          [[ -n "${METERING_VER}" ]] && stamp_ci_overlay_if_present "${overlay}" '.metering.echoAdapter.image.tag' "${METERING_VER}"
+          [[ -n "${METERING_VER}" ]] && stamp_ci_overlay_if_present "${overlay}" '.metering.m360Adapter.image.tag' "${METERING_VER}"
+          [[ -n "${CSI_VER}" ]] && stamp_ci_overlay_if_present "${overlay}" '.csiDriver.image.tag' "${CSI_VER}"
+          [[ -n "${UI_SUB_VERSION}" ]] && stamp_ci_overlay_if_present "${overlay}" '.ui.images.ui' "ghcr.io/osac-project/osac-ui:${UI_SUB_VERSION}"
+          echo "Stamped ${overlay} (fields present in that file only)"
+        done
 
     - name: Push temporary branch
       id: push
       run: |
         set -euo pipefail
-        source osac-installer/scripts/nightly-charts.sh
+        # osac-ui was checked out earlier (own nested .git) purely for git
+        # describe in "Resolve nightly versions" -- it is not part of this
+        # repo's tree and must not be staged as an embedded repository.
+        rm -rf osac-ui
+
         DATE=$(date -u +%Y%m%d)
         SHORT_SHA=$(git rev-parse --short=7 HEAD)
         BRANCH="nightly/${DATE}-${SHORT_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
@@ -102,15 +292,12 @@ jobs:
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
         git checkout -b "${BRANCH}"
-        git add osac-installer/pinned/osac-ui.commit
-        for values_yaml in "${NIGHTLY_UMBRELLA_UI_VALUES[@]}"; do
-          [[ -f "${values_yaml}" ]] && git add "${values_yaml}"
-        done
+        git add -A
         if git diff --cached --quiet; then
-          echo "::error::No osac-ui pin changes staged — refusing to push empty temp branch"
+          echo "::error::No nightly stamping changes staged — refusing to push empty temp branch"
           exit 1
         fi
-        git commit -m "nightly: pin osac-ui SHA and umbrella ui.images.ui"
+        git commit -m "nightly: stamp chart versions and image tags for this run"
 
         git push origin "${BRANCH}"
 
@@ -118,15 +305,178 @@ jobs:
         echo "Pushed temp branch: ${BRANCH}"
 
   # -------------------------------------------------------------------
-  # Job 2: E2E validation — test temp branch, not github.sha
-  # Reusable vmaas full-install workflow; installer-ref = prepare temp branch.
-  # Mono-repo components (operator, fulfillment-service, etc.) share that
-  # branch commit. osac-ui pin travels on the branch via pinned/osac-ui.commit
-  # and stamped umbrella ui.images.ui — same SHA E2E will install as publish.
+  # Job 2: Build — one fresh image per mono-repo component, all in
+  # parallel, each tagged directly with the exact SUB_VERSION resolved
+  # and stamped into charts/values by prepare. Only if every one of
+  # these succeeds do we proceed to E2E -- e2e-test and publish
+  # (below) never run against a partially-built set of images.
+  #
+  # Reuses each component's own `make -C <dir> image-build`/`image-push`
+  # target (the same targets a human runs locally) rather than
+  # duplicating build-step logic here or in each component's own
+  # per-push build workflow.
+  #
+  # osac-ui is the one exception: it's an external repo we don't build
+  # here, so its entry retags (skopeo, server-side, no rebuild) the
+  # already-published sha-<short> image prepare already gated on, to
+  # the same UI_SUB_VERSION, instead of running `make`.
+  # -------------------------------------------------------------------
+  build:
+    name: Build ${{ matrix.name }}
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: osac-operator
+            component: osac-operator
+            dir: osac-operator
+            target: image-build
+            push_target: image-push
+            image: ghcr.io/osac-project/osac-operator
+          - name: bare-metal-fulfillment-operator
+            component: bare-metal-fulfillment-operator
+            dir: bare-metal-fulfillment-operator
+            target: image-build
+            push_target: image-push
+            image: ghcr.io/osac-project/bare-metal-fulfillment-operator
+          - name: fulfillment-service
+            component: fulfillment-service
+            dir: fulfillment-service
+            target: image-build
+            push_target: image-push
+            image: ghcr.io/osac-project/fulfillment-service
+            version_arg: true
+          - name: osac-aap
+            component: osac-aap
+            dir: osac-aap
+            target: execution-environment-build
+            push_target: execution-environment-push
+            image: ghcr.io/osac-project/osac-aap
+          - name: osac-metering-service
+            component: osac-metering
+            dir: osac-metering/metering-service
+            target: image-build
+            push_target: image-push
+            image: ghcr.io/osac-project/metering-service
+          - name: osac-metering-m360-adapter
+            component: osac-metering
+            dir: osac-metering/adapters
+            target: image-build-m360-adapter
+            push_target: image-push-m360-adapter
+            image: ghcr.io/osac-project/metering-m360-adapter
+            image_var: IMG_M360_ADAPTER
+          - name: osac-metering-echo-adapter
+            component: osac-metering
+            dir: osac-metering/adapters
+            target: image-build-echo-adapter
+            push_target: image-push-echo-adapter
+            image: ghcr.io/osac-project/metering-echo-adapter
+            image_var: IMG_ECHO_ADAPTER
+          - name: osac-csi-driver
+            component: osac-csi-driver
+            dir: osac-csi-driver
+            target: image-build
+            push_target: image-push
+            image: ghcr.io/osac-project/osac-csi-driver
+            version_arg: true
+          - name: osac-ui
+            retag: true
+            image: ghcr.io/osac-project/osac-ui
+
+    steps:
+    - name: Checkout temporary branch
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v6
+      with:
+        ref: ${{ needs.prepare.outputs.temp-branch }}
+        fetch-depth: 0
+        persist-credentials: false
+
+    - name: Log in to GHCR
+      uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0  # v4.4.0
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Install skopeo
+      if: matrix.retag == true
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq skopeo
+
+    # osac-ui: alias-tag (no rebuild) rather than build -- see job comment.
+    - name: Retag osac-ui image
+      if: matrix.retag == true
+      env:
+        UI_SHORT_SHA: ${{ needs.prepare.outputs.ui-short-sha }}
+        UI_SUB_VERSION: ${{ needs.prepare.outputs.ui-sub-version }}
+      run: |
+        set -euo pipefail
+        source osac-installer/scripts/nightly-charts.sh
+        if [[ -z "${UI_SUB_VERSION}" ]]; then
+          echo "::notice::No resolved osac-ui nightly version -- skipping retag"
+          exit 0
+        fi
+        retag_component_image "${{ matrix.image }}" "${UI_SHORT_SHA}" "${UI_SUB_VERSION}"
+
+    # osac-aap's execution-environment-build target shells out to `uv`
+    # (ansible-builder is invoked via `uv tool run`) -- not present on
+    # ubuntu-latest by default. Mirrors execution-environment.yml's own setup.
+    - name: Install uv
+      if: matrix.name == 'osac-aap'
+      uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7.6.0
+
+    - name: Set up Python
+      if: matrix.name == 'osac-aap'
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+      with:
+        python-version-file: osac-aap/pyproject.toml
+
+    - name: Resolve component version
+      if: matrix.retag != true
+      id: resolve
+      env:
+        COMPONENT_VERSIONS: ${{ needs.prepare.outputs.component-versions }}
+      run: |
+        set -euo pipefail
+        VERSION=$(jq -r --arg k "${{ matrix.component }}" '.[$k] // empty' <<<"${COMPONENT_VERSIONS}")
+        if [[ -z "${VERSION}" ]]; then
+          echo "::notice::No resolved nightly version for ${{ matrix.component }} -- skipping build"
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        echo "skip=false" >> "$GITHUB_OUTPUT"
+        echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+    - name: Build and push image
+      if: matrix.retag != true && steps.resolve.outputs.skip != 'true'
+      env:
+        VERSION: ${{ steps.resolve.outputs.version }}
+        IMAGE_VAR: ${{ matrix.image_var || 'IMG' }}
+      run: |
+        set -euo pipefail
+        IMG_REF="${{ matrix.image }}:${VERSION}"
+        BUILD_ARGS=("${IMAGE_VAR}=${IMG_REF}")
+        if [[ "${{ matrix.version_arg }}" == "true" ]]; then
+          BUILD_ARGS+=("VERSION=${VERSION}")
+        fi
+        make -C "${{ matrix.dir }}" "${{ matrix.target }}" "${BUILD_ARGS[@]}"
+        make -C "${{ matrix.dir }}" "${{ matrix.push_target }}" "${BUILD_ARGS[@]}"
+
+  # -------------------------------------------------------------------
+  # Job 3: E2E validation — test temp branch, not github.sha. Depends on
+  # `build` too, not just `prepare`: e2e-test must never install against
+  # images that don't exist yet or (pre-this-change) a floating :latest.
   # -------------------------------------------------------------------
   e2e-test:
     name: E2E validation
-    needs: prepare
+    needs: [prepare, build]
     permissions:
       contents: read
     uses: osac-project/osac-test-infra/.github/workflows/e2e-vmaas-full-install.yml@main
@@ -138,15 +488,15 @@ jobs:
       test-infra-ref: main
 
   # -------------------------------------------------------------------
-  # Job 3: Publish — version and push all charts (only if E2E passes)
-  # Checkout prepare temp branch; reuse gated osac-ui SHA (not osac-ui@main).
-  # Stamp, package, and push every mono-repo sub-chart plus osac-ui sub-chart
-  # and the umbrella osac chart to GHCR OCI. Charts only — does not build
-  # or push container images (mono-repo images stay :latest in values).
+  # Job 4: Publish — package and push every chart (only if build + E2E
+  # both passed). All Chart.yaml/values.yaml stamping already happened
+  # in prepare, and every image already exists at its final tag from the
+  # build phase -- this job only packages/pushes the charts, using
+  # whatever version prepare already wrote into each Chart.yaml.
   # -------------------------------------------------------------------
   publish:
     name: Publish nightly chart
-    needs: [prepare, e2e-test]
+    needs: [prepare, build, e2e-test]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -169,10 +519,6 @@ jobs:
     # resolves one gated SHA per run (ls-remote main + GHCR sha-<7> manifest check)
     # and records it in osac-installer/pinned/osac-ui.commit on the temp branch.
     # Publish reuses that exact commit — do not checkout ref: main here.
-    # Reproducibility is enforced by:
-    #   - resolve_bare_release_tag_at() for chart semver baseline (git describe on pinned SHA)
-    #   - image pin ghcr.io/.../osac-ui:sha-<short-sha> (also stamped on umbrella ui.images.ui)
-    #   - rewrite_umbrella_osac_ui_dependency_and_rebuild() after publishing the nightly chart
     - name: Checkout osac-ui at pinned SHA
       uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v6
       with:
@@ -199,115 +545,87 @@ jobs:
     - name: Generate nightly version
       id: version
       working-directory: osac-installer
+      env:
+        NIGHTLY_SUFFIX: ${{ needs.prepare.outputs.nightly-suffix }}
       run: |
         set -euo pipefail
         source ./scripts/lib.sh
-        DATE=$(date -u +%Y%m%d)
-        SHORT_SHA=$(git rev-parse --short=7 HEAD)
-        # GITHUB_RUN_NUMBER/GITHUB_RUN_ATTEMPT keep a "Re-run failed jobs" of
-        # the same run from colliding with the chart version it already
-        # tried to publish (RUN_ID/RUN_NUMBER stay constant across a re-run;
-        # only RUN_ATTEMPT increments).
-        NIGHTLY_SUFFIX="nightly.${DATE}.${SHORT_SHA}.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
 
         # Use the umbrella chart's own latest real release tag (not the
         # Chart.yaml placeholder, which is never bumped) so the nightly
         # version reflects where this build actually sits relative to
-        # real releases.
+        # real releases. Reuse prepare's NIGHTLY_SUFFIX (not a freshly
+        # computed one) so every artifact from this run shares the same
+        # date/sha/run/attempt suffix.
         BASE_TAG=$(resolve_release_tag . osac)
         BASE_VERSION="${BASE_TAG#osac/v}"
         VERSION="${BASE_VERSION}-${NIGHTLY_SUFFIX}"
 
         echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
         echo "base-version=${BASE_VERSION}" >> "$GITHUB_OUTPUT"
-        echo "short-sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
-        echo "nightly-suffix=${NIGHTLY_SUFFIX}" >> "$GITHUB_OUTPUT"
         echo "Nightly version: ${VERSION} (base: ${BASE_VERSION})"
 
-    - name: Stamp and package sub-charts
-      env:
-        NIGHTLY_SUFFIX: ${{ steps.version.outputs.nightly-suffix }}
-        UI_SHA: ${{ needs.prepare.outputs.ui-sha }}
-        UI_SHORT_SHA: ${{ needs.prepare.outputs.ui-short-sha }}
-        UI_IMAGE_REF: ${{ needs.prepare.outputs.ui-image-ref }}
+    - name: Package and push sub-charts
       run: |
         set -euo pipefail
         # Repo root (not osac-installer/) — sub-charts live under component directories.
         source osac-installer/scripts/nightly-charts.sh
 
-        # Ensure target packaging directory exists
         mkdir -p ./packaged-charts
         : > chart-sources.txt
 
-        # Define sub-component map (component_dir -> chart_paths). Version baselines
-        # come from per-component git tags (<component>/vX.Y.Z), not static files.
-        # Components without a release tag yet (currently osac-metering and
-        # osac-csi-driver) are skipped here with a ::warning:: — they are not
-        # published to GHCR until their first <component>/vX.Y.Z tag exists. The
-        # umbrella chart still embeds them via file:// at Chart.yaml placeholder
-        # versions (0.0.0); installs work, but those sub-charts are not
-        # independently pullable from the OCI registry until published.
-        # TODO: derive SUB_CHARTS from umbrella file:// dependencies instead of hardcoding.
-        declare -A SUB_CHARTS=(
-          ["osac-operator"]="osac-operator/charts/operator osac-operator/charts/operator-crds"
-          ["fulfillment-service"]="fulfillment-service/charts/service"
-          ["osac-aap"]="osac-aap/charts/aap"
-          ["bare-metal-fulfillment-operator"]="bare-metal-fulfillment-operator/charts/operator bare-metal-fulfillment-operator/charts/operator-crds"
-          ["osac-metering"]="osac-metering/charts/osac-metering"
-          ["osac-csi-driver"]="osac-csi-driver/charts/csi-driver osac-csi-driver/charts/csi-backends"
+        # Components without a release tag yet are skipped by prepare's
+        # stamping step (Chart.yaml stays at its committed 0.0.0
+        # placeholder) -- detect that here and skip packaging too, rather
+        # than publishing an unversioned/placeholder chart.
+        declare -a CHART_DIRS=(
+          osac-operator/charts/operator
+          osac-operator/charts/operator-crds
+          fulfillment-service/charts/service
+          osac-aap/charts/aap
+          bare-metal-fulfillment-operator/charts/operator
+          bare-metal-fulfillment-operator/charts/operator-crds
+          osac-metering/charts/osac-metering
+          osac-csi-driver/charts/csi-driver
+          osac-csi-driver/charts/csi-backends
         )
 
-        for COMPONENT in $(printf '%s\n' "${!SUB_CHARTS[@]}" | sort); do
-          if ! BASE_TAG=$(resolve_release_tag . "${COMPONENT}"); then
-            safe_component=$(_gha_sanitize_for_message "${COMPONENT}")
-            echo "::warning::Skipping ${safe_component} sub-charts — no ${safe_component}/vX.Y.Z release tag found yet"
+        for CHART_DIR in "${CHART_DIRS[@]}"; do
+          CHART_NAME=$(read_validated_chart_name "${CHART_DIR}")
+          SUB_VERSION=$(yq -r '.version' "${CHART_DIR}/Chart.yaml")
+          if [[ -z "${SUB_VERSION}" || "${SUB_VERSION}" == "0.0.0" ]]; then
+            safe_chart=$(_gha_sanitize_for_message "${CHART_NAME}")
+            echo "::warning::Skipping ${safe_chart} — not stamped this run (no release tag yet)"
             continue
           fi
-          # Per-component base semver (independent of umbrella BASE_VERSION in the version step).
-          BASE_VERSION="${BASE_TAG#"${COMPONENT}"/v}"
-          SUB_VERSION="${BASE_VERSION}-${NIGHTLY_SUFFIX}"
 
-          echo "Stamping ${COMPONENT} sub-charts to version ${SUB_VERSION} (from tag ${BASE_TAG})..."
-
-          # Intentional word splitting: each SUB_CHARTS value lists multiple chart paths.
-          for CHART_DIR in ${SUB_CHARTS[$COMPONENT]}; do
-            CHART_NAME=$(read_validated_chart_name "${CHART_DIR}")
-
-            # Update Chart.yaml version fields (strenv avoids shell interpolation in yq)
-            SUB_VERSION="${SUB_VERSION}" yq -i '.version = strenv(SUB_VERSION)' "${CHART_DIR}/Chart.yaml"
-            SUB_VERSION="${SUB_VERSION}" yq -i '.appVersion = strenv(SUB_VERSION)' "${CHART_DIR}/Chart.yaml"
-
-            # Package sub-chart
-            helm package "${CHART_DIR}" --destination ./packaged-charts
-
-            # Push individual sub-chart to OCI registry (GHCR)
-            helm push "./packaged-charts/${CHART_NAME}-${SUB_VERSION}.tgz" "oci://${REGISTRY}/${CHARTS_REPO}"
-            append_chart_source chart-sources.txt "${CHART_NAME}" "${SUB_VERSION}"
-          done
+          echo "Packaging ${CHART_NAME} ${SUB_VERSION}..."
+          helm package "${CHART_DIR}" --destination ./packaged-charts
+          helm push "./packaged-charts/${CHART_NAME}-${SUB_VERSION}.tgz" "oci://${REGISTRY}/${CHARTS_REPO}"
+          append_chart_source chart-sources.txt "${CHART_NAME}" "${SUB_VERSION}"
         done
 
-        # osac-ui is required for nightly umbrella installs (ui.enabled). GHCR image
-        # existence was verified in prepare; baseline semver uses git describe on the
-        # pinned commit (not highest merged tag). Parent umbrella ui.images.ui was
-        # already stamped on the temp branch; subchart values stamp is defense-in-depth.
-        echo "Stamping osac-ui chart from pinned SHA ${UI_SHORT_SHA}..."
-        if ! UI_BASE_TAG=$(resolve_bare_release_tag_at osac-ui "${UI_SHA}"); then
-          echo "::warning title=osac-ui::No vX.Y.Z release tag found for osac-ui — skipping sub-chart stamping"
-        else
+        # osac-ui: stamp its own sub-chart now (needs the checkout above,
+        # unlike the umbrella-values-only stamp prepare already did), then
+        # package/push, mirroring every other component. Its image at
+        # UI_SUB_VERSION already exists -- retagged by the build job.
+        UI_SUB_VERSION="${{ needs.prepare.outputs.ui-sub-version }}"
+        if [[ -n "${UI_SUB_VERSION}" ]]; then
           UI_CHART_DIR="osac-ui/charts/ui"
           UI_CHART_NAME=$(read_validated_chart_name "${UI_CHART_DIR}")
-          UI_SUB_VERSION=$(compute_nightly_chart_version "${UI_BASE_TAG}" "${NIGHTLY_SUFFIX}")
+          UI_IMAGE_REF="ghcr.io/osac-project/osac-ui:${UI_SUB_VERSION}"
           stamp_osac_ui_chart "${UI_CHART_DIR}" "${UI_SUB_VERSION}" "${UI_IMAGE_REF}"
           helm package "${UI_CHART_DIR}" --destination ./packaged-charts
           helm push "./packaged-charts/${UI_CHART_NAME}-${UI_SUB_VERSION}.tgz" "oci://${REGISTRY}/${CHARTS_REPO}"
-          append_chart_source chart-sources.txt "${UI_CHART_NAME}" "${UI_SUB_VERSION}" "${UI_SHORT_SHA}" "${UI_SHA}"
+          append_chart_source chart-sources.txt "${UI_CHART_NAME}" "${UI_SUB_VERSION}" "${{ needs.prepare.outputs.ui-short-sha }}" "${{ needs.prepare.outputs.ui-sha }}"
           echo "${UI_SUB_VERSION}" > osac-ui-nightly-version.txt
+        else
+          echo "::warning title=osac-ui::No resolved osac-ui nightly version — skipping sub-chart packaging"
         fi
 
     - name: Build umbrella chart dependencies
       env:
         OCI_REPO: oci://${{ env.REGISTRY }}/${{ env.CHARTS_REPO }}
-        UI_IMAGE_REF: ${{ needs.prepare.outputs.ui-image-ref }}
       run: |
         set -euo pipefail
         source osac-installer/scripts/nightly-charts.sh
@@ -318,8 +636,6 @@ jobs:
         else
           helm dependency build osac-installer/charts/osac/
         fi
-        # Re-stamp all NIGHTLY_UMBRELLA_UI_VALUES paths (same set as prepare; idempotent defense-in-depth).
-        stamp_umbrella_ui_values "${UI_IMAGE_REF}"
 
     - name: Lint chart
       working-directory: osac-installer
@@ -363,7 +679,6 @@ jobs:
       env:
         VERSION: ${{ steps.version.outputs.version }}
         BASE_VERSION: ${{ steps.version.outputs.base-version }}
-        SHORT_SHA: ${{ steps.version.outputs.short-sha }}
         UI_SHORT_SHA: ${{ needs.prepare.outputs.ui-short-sha }}
       run: |
         set -euo pipefail
@@ -388,7 +703,7 @@ jobs:
 
         echo "" >> images.txt
         echo "# Chart source & version" >> images.txt
-        echo "# osac: source=v${BASE_VERSION} (${SHORT_SHA}), chart=oci://${REGISTRY}/${CHARTS_REPO}/osac:${VERSION}" >> images.txt
+        echo "# osac: source=v${BASE_VERSION} (${GITHUB_SHA:0:7}), chart=oci://${REGISTRY}/${CHARTS_REPO}/osac:${VERSION}" >> images.txt
         echo "# osac-ui: source=sha-${UI_SHORT_SHA}, chart=oci://${REGISTRY}/${CHARTS_REPO}/osac-ui (see chart-sources.txt)" >> images.txt
 
         echo "--- images.txt ---"
@@ -405,7 +720,7 @@ jobs:
         retention-days: 14
 
   # -------------------------------------------------------------------
-  # Job 4: Tag and notify — record success on temp branch + Slack
+  # Job 5: Tag and notify — record success on temp branch + Slack
   # Create osac/v<version> git tag at the temp branch commit (same pin E2E
   # tested and publish packaged). Download chart-sources.txt artifact; post
   # Slack summary with published chart OCI links.
@@ -513,11 +828,11 @@ jobs:
           -d @/tmp/slack-payload.json
 
   # -------------------------------------------------------------------
-  # Job 5: Notify on failure
+  # Job 6: Notify on failure
   # -------------------------------------------------------------------
   notify-failure:
     name: Notify failure
-    needs: [prepare, e2e-test, publish, tag-and-notify]
+    needs: [prepare, build, e2e-test, publish, tag-and-notify]
     runs-on: osac-ci
     timeout-minutes: 10
     if: failure()
@@ -574,11 +889,11 @@ jobs:
           -d @/tmp/slack-payload.json
 
   # -------------------------------------------------------------------
-  # Job 6: Cleanup — delete temp branch (always, success or failure)
+  # Job 7: Cleanup — delete temp branch (always, success or failure)
   # -------------------------------------------------------------------
   cleanup:
     name: Cleanup temp branch
-    needs: [prepare, e2e-test, publish, tag-and-notify, notify-failure]
+    needs: [prepare, build, e2e-test, publish, tag-and-notify, notify-failure]
     runs-on: ubuntu-latest
     if: always()
     permissions:

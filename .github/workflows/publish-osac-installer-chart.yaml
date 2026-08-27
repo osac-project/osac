@@ -136,7 +136,9 @@ jobs:
           .aap.bootstrap.image = \"ghcr.io/osac-project/osac-aap:v${VERSION}\" |
           .aap.configAsCode.eeImage = \"ghcr.io/osac-project/osac-aap:v${VERSION}\" |
           .ui.images.ui = \"ghcr.io/osac-project/osac-ui:v${UI_VER}\" |
-          .dbMigrate.image = \"ghcr.io/osac-project/fulfillment-service:v${VERSION}\"
+          .dbMigrate.image = \"ghcr.io/osac-project/fulfillment-service:v${VERSION}\" |
+          .metering.image.tag = \"v${VERSION}\" |
+          .csiDriver.image.tag = \"v${VERSION}\"
         " osac-installer/charts/osac/values.yaml
 
         echo "--- Updated values.yaml image references ---"

@@ -588,16 +588,18 @@ jobs:
 
     - name: Update image tag in values.yaml
       working-directory: osac-csi-driver
-      # sed exits 0 even when a pattern matches zero lines, so a future values.yaml
-      # format change could silently leave the placeholder unpinned. Verify the
-      # expected replacement actually landed and fail the release instead of
-      # packaging stale values (same pattern as publish-osac-aap-chart above).
+      # yq sets .image.tag directly by field path rather than matching the
+      # placeholder's exact text, so it's not dependent on the placeholder
+      # comment's exact wording (verified inconsistent across components).
+      # Still verify the expected value actually landed and fail the release
+      # instead of packaging stale values (same pattern as
+      # publish-osac-aap-chart above).
+      env:
+        VERSION: v${{ steps.version.outputs.version }}
       run: |
-        OLD="tag: main  # PLACEHOLDER -- overwritten at release time"
-        NEW="tag: v${{ steps.version.outputs.version }}"
-        sed -i "s|${OLD}|${NEW}|" charts/csi-driver/values.yaml
-        if ! grep -qF -- "${NEW}" charts/csi-driver/values.yaml; then
-          echo "::error::Expected '${NEW}' not found in charts/csi-driver/values.yaml after substitution (placeholder may be missing or already changed)" >&2
+        yq -i '.image.tag = strenv(VERSION)' charts/csi-driver/values.yaml
+        if ! grep -qF -- "tag: ${VERSION}" charts/csi-driver/values.yaml; then
+          echo "::error::Expected 'tag: ${VERSION}' not found in charts/csi-driver/values.yaml after yq substitution" >&2
           exit 1
         fi
 

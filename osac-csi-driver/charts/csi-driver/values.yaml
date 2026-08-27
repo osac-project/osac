@@ -4,7 +4,7 @@ driverName: csi.osac.openshift.io
 
 image:
   repository: ghcr.io/osac-project/osac-csi-driver
-  tag: main  # PLACEHOLDER -- overwritten at release time
+  tag: main  # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
   pullPolicy: Always
 
 controller:

@@ -1,6 +1,6 @@
 image:
   repository: ghcr.io/osac-project/metering-service
-  tag: latest
+  tag: latest  # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
   pullPolicy: Always
 
 # Fulfillment address is auto-derived from release namespace.
@@ -52,7 +52,7 @@ m360Adapter:
   enabled: false
   image:
     repository: ghcr.io/osac-project/metering-m360-adapter
-    tag: latest
+    tag: latest  # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
     pullPolicy: Always
   m360:
     apiUrl: ""

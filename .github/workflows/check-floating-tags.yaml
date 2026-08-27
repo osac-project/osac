@@ -8,6 +8,8 @@ on:
       - 'bare-metal-fulfillment-operator/charts/**/values.yaml'
       - 'osac-installer/charts/**/values.yaml'
       - 'osac-aap/charts/**/values.yaml'
+      - 'osac-metering/charts/**/values.yaml'
+      - 'osac-csi-driver/charts/**/values.yaml'
       - '.github/scripts/check-floating-tags.sh'
       - '.github/workflows/check-floating-tags.yaml'
 
@@ -49,6 +51,14 @@ jobs:
               - '.github/workflows/check-floating-tags.yaml'
             osac-aap:
               - 'osac-aap/charts/**/values.yaml'
+              - '.github/scripts/check-floating-tags.sh'
+              - '.github/workflows/check-floating-tags.yaml'
+            osac-metering:
+              - 'osac-metering/charts/**/values.yaml'
+              - '.github/scripts/check-floating-tags.sh'
+              - '.github/workflows/check-floating-tags.yaml'
+            osac-csi-driver:
+              - 'osac-csi-driver/charts/**/values.yaml'
               - '.github/scripts/check-floating-tags.sh'
               - '.github/workflows/check-floating-tags.yaml'
 

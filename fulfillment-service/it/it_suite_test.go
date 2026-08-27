@@ -22,8 +22,8 @@ import (
 	"github.com/kelseyhightower/envconfig"
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	"k8s.io/klog/v2"
 	crlog "sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -90,7 +90,9 @@ var _ = BeforeSuite(func() {
 		Expect(err).ToNot(HaveOccurred())
 	})
 
-	// Create a default cluster version for version resolution during cluster creation:
+	// Create a default cluster version for version resolution during cluster creation.
+	// Tolerate AlreadyExists so the suite can be re-run against a live cluster without
+	// needing to tear it down first.
 	cvClient := privatev1.NewClusterVersionsClient(tool.InternalView().AdminConn())
 	_, err = cvClient.Create(ctx, privatev1.ClusterVersionsCreateRequest_builder{
 		Object: privatev1.ClusterVersion_builder{
@@ -105,8 +107,9 @@ var _ = BeforeSuite(func() {
 		}.Build(),
 	}.Build())
 	if err != nil {
-		if st, ok := status.FromError(err); !ok || st.Code() != codes.AlreadyExists {
-			Expect(err).ToNot(HaveOccurred())
-		}
+		st, ok := grpcstatus.FromError(err)
+		Expect(ok && st.Code() == grpccodes.AlreadyExists).To(
+			BeTrue(), "BeforeSuite ClusterVersion create failed: %v", err,
+		)
 	}
 })

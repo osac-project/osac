@@ -109,7 +109,7 @@ func (c *m360Client) post(ctx context.Context, endpoint string, payload map[stri
 // Any HTTP response (regardless of status code) means M360 is reachable.
 // Only connection-level errors (timeout, refused, DNS) cause failure.
 // Auth and API route failures surface as post() errors /
-// osac_adapter_events_failed_total, not here.
+// osac_metering_adapter_events_failed_total, not here.
 func (c *m360Client) healthCheck(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, healthCheckTimeout)
 	defer cancel()

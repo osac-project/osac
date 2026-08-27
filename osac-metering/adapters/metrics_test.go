@@ -84,7 +84,7 @@ var _ = Describe("adapterMetrics", func() {
 
 			body, err := io.ReadAll(w.Result().Body)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(strings.Contains(string(body), "osac_adapter_events_submitted_total")).To(BeTrue())
+			Expect(strings.Contains(string(body), "osac_metering_adapter_events_submitted_total")).To(BeTrue())
 		})
 
 		It("exposes osac_metering_dlq_depth labeled by topic", func() {
@@ -98,7 +98,7 @@ var _ = Describe("adapterMetrics", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(string(body)).To(ContainSubstring("osac_metering_dlq_depth"))
 			Expect(string(body)).To(ContainSubstring(`topic="osac.metering.dlq"`))
-			Expect(string(body)).NotTo(ContainSubstring("osac_adapter_dlq_depth"))
+			Expect(string(body)).NotTo(ContainSubstring("osac_metering_adapter_dlq_depth"))
 		})
 	})
 })

@@ -98,18 +98,18 @@ The `adapters/` package is a standalone Go module that provides everything a bil
 - `DLQ_ENABLED` — set to `true` to enable DLQ (default: disabled). Helm adapter deployments set this to `true`.
 - `DLQ_TOPIC` — override the DLQ topic name (default: `osac.metering.dlq`)
 
-**Prometheus metrics** (`metrics.go`):
-- `osac_adapter_events_submitted_total` (provider, topic)
-- `osac_adapter_events_failed_total` (provider, error_type)
-- `osac_adapter_duplicates_suppressed_total` (provider)
-- `osac_adapter_out_of_order_events_total` (provider)
-- `osac_adapter_flush_duration_seconds` (provider)
-- `osac_adapter_flush_errors_total` (provider)
-- `osac_adapter_retry_duration_seconds` (provider)
-- `osac_adapter_events_dropped_total` (provider)
-- `osac_adapter_dlq_events_total` (provider)
-- `osac_adapter_dlq_send_errors_total` (provider)
-- `osac_adapter_dlq_bytes_total` (provider)
+**Prometheus metrics** (`metrics.go`) — adapter process series use `osac_metering_adapter_*`; shared DLQ occupancy is `osac_metering_dlq_depth`:
+- `osac_metering_adapter_events_submitted_total` (provider, topic)
+- `osac_metering_adapter_events_failed_total` (provider, error_type)
+- `osac_metering_adapter_duplicates_suppressed_total` (provider)
+- `osac_metering_adapter_out_of_order_events_total` (provider)
+- `osac_metering_adapter_flush_duration_seconds` (provider)
+- `osac_metering_adapter_flush_errors_total` (provider)
+- `osac_metering_adapter_retry_duration_seconds` (provider)
+- `osac_metering_adapter_events_dropped_total` (provider)
+- `osac_metering_adapter_dlq_events_total` (provider)
+- `osac_metering_adapter_dlq_send_errors_total` (provider)
+- `osac_metering_adapter_dlq_bytes_total` (provider)
 - `osac_metering_dlq_depth` (topic) — records currently retained in the DLQ topic (sum of newest−oldest offsets; not consumer lag). Scraped periodically from Kafka by each DLQ-enabled adapter. Multiple processes export the same value; aggregate with `max` or `avg`, not `sum`.
 
 ### Echo Adapter

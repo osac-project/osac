@@ -37,6 +37,7 @@ import (
 	mc "sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
+	bmfov1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/helpers"
 	privatev1 "github.com/osac-project/osac/osac-operator/internal/api/osac/private/v1"
@@ -113,6 +114,8 @@ func NewSubnetReconciler(
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=subnets/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=subnets/finalizers,verbs=update
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=virtualnetworks,verbs=get;list;watch
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=computeinstances,verbs=list
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=baremetalinstances,verbs=list
 // +kubebuilder:rbac:groups=metallb.io,resources=ipaddresspools,verbs=get;create;update;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
@@ -404,20 +407,59 @@ func (r *SubnetReconciler) handleDelete(ctx context.Context, subnet *v1alpha1.Su
 		return ctrl.Result{}, nil
 	}
 
-	// Remove MetalLB IPAddressPool before AAP deprovisioning (which removes the CUDN)
-	if err := r.deleteMetalLBIPAddressPool(ctx, subnet); err != nil {
-		return ctrl.Result{}, fmt.Errorf("deleting MetalLB IPAddressPool: %w", err)
+	// Gate: wait for ComputeInstances with network attachments to this subnet to be
+	// fully removed. Without this gate, the infrastructure backend rejects the subnet
+	// deletion because instances still exist on it.
+	subnetName := subnet.Name
+	ns := subnet.Namespace
+
+	ciList := &v1alpha1.ComputeInstanceList{}
+	if err := r.List(ctx, ciList, client.InNamespace(ns)); err != nil {
+		return ctrl.Result{}, fmt.Errorf("listing ComputeInstances: %w", err)
+	}
+	for i := range ciList.Items {
+		for _, na := range ciList.Items[i].Spec.NetworkAttachments {
+			if na.SubnetRef == subnetName {
+				log.Info("waiting for ComputeInstance to be deleted before deprovisioning Subnet",
+					"computeInstance", ciList.Items[i].Name)
+				return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+			}
+		}
 	}
 
-	// Handle deprovisioning
-	result, err := r.handleDeprovisioning(ctx, subnet)
-	if err != nil {
-		return result, err
+	// Gate: wait for BareMetalInstances with network attachments to this subnet.
+	bmiList := &bmfov1alpha1.BareMetalInstanceList{}
+	if err := r.List(ctx, bmiList, client.InNamespace(ns)); err != nil {
+		return ctrl.Result{}, fmt.Errorf("listing BareMetalInstances: %w", err)
+	}
+	for i := range bmiList.Items {
+		for _, na := range bmiList.Items[i].Spec.NetworkAttachments {
+			if na.SubnetRef == subnetName {
+				log.Info("waiting for BareMetalInstance to be deleted before deprovisioning Subnet",
+					"bareMetalInstance", bmiList.Items[i].Name)
+				return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+			}
+		}
 	}
 
-	// If we need to requeue (jobs still running), do so
-	if result.RequeueAfter > 0 {
-		return result, nil
+	if subnet.Annotations[osacImplementationStrategyAnnotation] == "" {
+		log.Info("skipping deprovisioning — resource was never provisioned")
+	} else {
+		// Remove MetalLB IPAddressPool before AAP deprovisioning (which removes the CUDN)
+		if err := r.deleteMetalLBIPAddressPool(ctx, subnet); err != nil {
+			return ctrl.Result{}, fmt.Errorf("deleting MetalLB IPAddressPool: %w", err)
+		}
+
+		// Handle deprovisioning
+		result, err := r.handleDeprovisioning(ctx, subnet)
+		if err != nil {
+			return result, err
+		}
+
+		// If we need to requeue (jobs still running), do so
+		if result.RequeueAfter > 0 {
+			return result, nil
+		}
 	}
 
 	// Deprovisioning complete or skipped, remove base finalizer

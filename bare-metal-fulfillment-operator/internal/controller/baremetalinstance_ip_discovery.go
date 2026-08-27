@@ -194,9 +194,8 @@ func (r *BareMetalInstanceReconciler) applyIPDiscoveryResults(
 		return fmt.Errorf("failed to get job %s for IP discovery results: %w", jobID, err)
 	}
 
-	if len(job.Artifacts) == 0 {
-		log.Info("No artifacts in IP discovery job")
-		return nil
+	if len(job.Artifacts) == 0 || string(job.Artifacts) == "null" || string(job.Artifacts) == "{}" {
+		return fmt.Errorf("IP discovery job %s returned no artifacts; DHCP lease not yet available", jobID)
 	}
 
 	var result DHCPLeaseResult
@@ -209,6 +208,7 @@ func (r *BareMetalInstanceReconciler) applyIPDiscoveryResults(
 		leaseMap[lease.SubnetRef] = lease
 	}
 
+	var missing []string
 	for i, na := range bareMetalInstance.Spec.NetworkAttachments {
 		if i >= len(bareMetalInstance.Status.NetworkAttachmentStatuses) {
 			bareMetalInstance.Status.NetworkAttachmentStatuses = append(
@@ -225,12 +225,20 @@ func (r *BareMetalInstanceReconciler) applyIPDiscoveryResults(
 			if net.ParseIP(lease.IPAddress) == nil {
 				log.Info("Skipping invalid IP address from DHCP lease",
 					"interface", na.Interface, "subnet", na.SubnetRef, "ip", lease.IPAddress)
+				missing = append(missing, na.SubnetRef)
 			} else {
 				status.IPAddress = lease.IPAddress
 				log.Info("Discovered IP for attachment",
 					"interface", na.Interface, "subnet", na.SubnetRef, "ip", lease.IPAddress)
 			}
+		} else {
+			missing = append(missing, na.SubnetRef)
 		}
+	}
+
+	if len(missing) > 0 {
+		return fmt.Errorf("DHCP lease not found for %d/%d network attachments (subnets: %v); will retry",
+			len(missing), len(bareMetalInstance.Spec.NetworkAttachments), missing)
 	}
 
 	return nil

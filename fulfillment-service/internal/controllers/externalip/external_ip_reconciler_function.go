@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"slices"
 
 	"google.golang.org/grpc"
@@ -48,11 +49,11 @@ type FunctionBuilder struct {
 }
 
 type function struct {
-	logger                *slog.Logger
-	hubCache              controllers.HubCache
-	externalIPsClient     privatev1.ExternalIPsClient
-	externalIPPoolsClient privatev1.ExternalIPPoolsClient
-	maskCalculator        *masks.Calculator
+	logger            *slog.Logger
+	hubCache          controllers.HubCache
+	externalIPsClient privatev1.ExternalIPsClient
+	hubsClient        privatev1.HubsClient
+	maskCalculator    *masks.Calculator
 }
 
 type task struct {
@@ -104,11 +105,11 @@ func (b *FunctionBuilder) Build() (result controllers.ReconcilerFunction[*privat
 
 	// Create and populate the object:
 	object := &function{
-		logger:                b.logger,
-		externalIPsClient:     privatev1.NewExternalIPsClient(b.connection),
-		externalIPPoolsClient: privatev1.NewExternalIPPoolsClient(b.connection),
-		hubCache:              b.hubCache,
-		maskCalculator:        masks.NewCalculator().Build(),
+		logger:            b.logger,
+		externalIPsClient: privatev1.NewExternalIPsClient(b.connection),
+		hubsClient:        privatev1.NewHubsClient(b.connection),
+		hubCache:          b.hubCache,
+		maskCalculator:    masks.NewCalculator().Build(),
 	}
 	result = object.run
 	return
@@ -297,28 +298,17 @@ func (t *task) delete(ctx context.Context) (err error) {
 	return
 }
 
-// selectHub derives the hub from the parent ExternalIPPool instead of random selection.
-// If the external IP already has a hub assigned, it uses that directly.
-// If the pool has no hub yet (not reconciled), the external IP is skipped and retried next cycle.
 func (t *task) selectHub(ctx context.Context) error {
 	t.hubId = t.externalIP.GetStatus().GetHub()
 	if t.hubId == "" {
-		poolKey := controllers.RefKeyStr(t.externalIP.GetSpec().GetPool())
-		// Look up the parent pool to derive the hub:
-		poolResponse, err := t.r.externalIPPoolsClient.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{
-			Id: poolKey,
-		}.Build())
+		response, err := t.r.hubsClient.List(ctx, privatev1.HubsListRequest_builder{}.Build())
 		if err != nil {
 			return err
 		}
-		poolHub := poolResponse.GetObject().GetStatus().GetHub()
-		if poolHub == "" {
-			return fmt.Errorf(
-				"pool %s has no hub assigned yet, skipping",
-				poolKey,
-			)
+		if len(response.Items) == 0 {
+			return errors.New("there are no hubs")
 		}
-		t.hubId = poolHub
+		t.hubId = response.Items[rand.IntN(len(response.Items))].GetId()
 	}
 	t.r.logger.DebugContext(
 		ctx,

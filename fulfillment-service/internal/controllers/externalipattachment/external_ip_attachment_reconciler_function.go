@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"slices"
 
 	"google.golang.org/grpc"
@@ -50,7 +51,7 @@ type function struct {
 	logger                      *slog.Logger
 	hubCache                    controllers.HubCache
 	externalIPAttachmentsClient privatev1.ExternalIPAttachmentsClient
-	externalIPsClient           privatev1.ExternalIPsClient
+	hubsClient                  privatev1.HubsClient
 	maskCalculator              *masks.Calculator
 }
 
@@ -103,7 +104,7 @@ func (b *FunctionBuilder) Build() (result controllers.ReconcilerFunction[*privat
 	object := &function{
 		logger:                      b.logger,
 		externalIPAttachmentsClient: privatev1.NewExternalIPAttachmentsClient(b.connection),
-		externalIPsClient:           privatev1.NewExternalIPsClient(b.connection),
+		hubsClient:                  privatev1.NewHubsClient(b.connection),
 		hubCache:                    b.hubCache,
 		maskCalculator:              masks.NewCalculator().Build(),
 	}
@@ -276,21 +277,14 @@ func (t *task) delete(ctx context.Context) (err error) {
 func (t *task) selectHub(ctx context.Context) error {
 	t.hubId = t.externalIPAttachment.GetStatus().GetHub()
 	if t.hubId == "" {
-		eipKey := controllers.RefKeyStr(t.externalIPAttachment.GetSpec().GetExternalIp())
-		eipResponse, err := t.r.externalIPsClient.Get(ctx, privatev1.ExternalIPsGetRequest_builder{
-			Id: eipKey,
-		}.Build())
+		response, err := t.r.hubsClient.List(ctx, privatev1.HubsListRequest_builder{}.Build())
 		if err != nil {
 			return err
 		}
-		eipHub := eipResponse.GetObject().GetStatus().GetHub()
-		if eipHub == "" {
-			return fmt.Errorf(
-				"external IP %s has no hub assigned yet, skipping",
-				eipKey,
-			)
+		if len(response.Items) == 0 {
+			return errors.New("there are no hubs")
 		}
-		t.hubId = eipHub
+		t.hubId = response.Items[rand.IntN(len(response.Items))].GetId()
 	}
 	t.r.logger.DebugContext(
 		ctx,

@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"slices"
 
 	"google.golang.org/grpc"
@@ -47,11 +48,11 @@ type FunctionBuilder struct {
 }
 
 type function struct {
-	logger                *slog.Logger
-	hubCache              controllers.HubCache
-	natGatewaysClient     privatev1.NATGatewaysClient
-	virtualNetworksClient privatev1.VirtualNetworksClient
-	maskCalculator        *masks.Calculator
+	logger            *slog.Logger
+	hubCache          controllers.HubCache
+	natGatewaysClient privatev1.NATGatewaysClient
+	hubsClient        privatev1.HubsClient
+	maskCalculator    *masks.Calculator
 }
 
 type task struct {
@@ -101,11 +102,11 @@ func (b *FunctionBuilder) Build() (result controllers.ReconcilerFunction[*privat
 	}
 
 	object := &function{
-		logger:                b.logger,
-		natGatewaysClient:     privatev1.NewNATGatewaysClient(b.connection),
-		virtualNetworksClient: privatev1.NewVirtualNetworksClient(b.connection),
-		hubCache:              b.hubCache,
-		maskCalculator:        masks.NewCalculator().Build(),
+		logger:            b.logger,
+		natGatewaysClient: privatev1.NewNATGatewaysClient(b.connection),
+		hubsClient:        privatev1.NewHubsClient(b.connection),
+		hubCache:          b.hubCache,
+		maskCalculator:    masks.NewCalculator().Build(),
 	}
 	result = object.run
 	return
@@ -276,20 +277,14 @@ func (t *task) delete(ctx context.Context) (err error) {
 func (t *task) selectHub(ctx context.Context) error {
 	t.hubId = t.natGateway.GetStatus().GetHub()
 	if t.hubId == "" {
-		vnResponse, err := t.r.virtualNetworksClient.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{
-			Id: controllers.RefKeyStr(t.natGateway.GetSpec().GetVirtualNetwork()),
-		}.Build())
+		response, err := t.r.hubsClient.List(ctx, privatev1.HubsListRequest_builder{}.Build())
 		if err != nil {
 			return err
 		}
-		vnHub := vnResponse.GetObject().GetStatus().GetHub()
-		if vnHub == "" {
-			return fmt.Errorf(
-				"virtual network %s has no hub assigned yet, skipping",
-				controllers.RefKeyStr(t.natGateway.GetSpec().GetVirtualNetwork()),
-			)
+		if len(response.Items) == 0 {
+			return errors.New("there are no hubs")
 		}
-		t.hubId = vnHub
+		t.hubId = response.Items[rand.IntN(len(response.Items))].GetId()
 	}
 	t.r.logger.DebugContext(
 		ctx,

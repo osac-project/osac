@@ -39,21 +39,6 @@ import (
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
 
-// fakeExternalIPsClient implements the ExternalIPsClient interface for testing selectHub.
-type fakeExternalIPsClient struct {
-	privatev1.ExternalIPsClient
-	getResponse *privatev1.ExternalIPsGetResponse
-	getErr      error
-}
-
-func (f *fakeExternalIPsClient) Get(
-	_ context.Context,
-	_ *privatev1.ExternalIPsGetRequest,
-	_ ...grpc.CallOption,
-) (*privatev1.ExternalIPsGetResponse, error) {
-	return f.getResponse, f.getErr
-}
-
 // newAttachmentCR creates a typed ExternalIPAttachment CR for use with the fake client.
 func newAttachmentCR(id, namespace, name string, deletionTimestamp *metav1.Time) *osacv1alpha1.ExternalIPAttachment {
 	obj := &osacv1alpha1.ExternalIPAttachment{
@@ -645,23 +630,19 @@ var _ = Describe("selectHub", func() {
 		Expect(t.hubNamespace).To(Equal("hub-ns"))
 	})
 
-	It("should derive hub from parent ExternalIP when status hub is empty", func() {
-		externalIPsClient := &fakeExternalIPsClient{
-			getResponse: privatev1.ExternalIPsGetResponse_builder{
-				Object: privatev1.ExternalIP_builder{
-					Id: "eip-uuid-1",
-					Status: privatev1.ExternalIPStatus_builder{
-						Hub: "eip-hub-1",
-					}.Build(),
-				}.Build(),
-			}.Build(),
-		}
+	It("should select hub randomly when status hub is empty", func() {
+		hubsClient := controllers.NewMockHubsClient(ctrl)
+		hubsClient.EXPECT().
+			List(gomock.Any(), gomock.Any()).
+			Return(&privatev1.HubsListResponse{
+				Items: []*privatev1.Hub{privatev1.Hub_builder{Id: "hub-random"}.Build()},
+			}, nil)
 
 		hubCache := controllers.NewMockHubCache(ctrl)
 		hubCache.EXPECT().
-			Get(gomock.Any(), "eip-hub-1").
+			Get(gomock.Any(), "hub-random").
 			Return(&controllers.HubEntry{
-				Namespace: "eip-hub-ns",
+				Namespace: "hub-random-ns",
 				Client:    fake.NewClientBuilder().Build(),
 			}, nil)
 
@@ -673,9 +654,9 @@ var _ = Describe("selectHub", func() {
 		}.Build()
 
 		f := &function{
-			logger:            logger,
-			hubCache:          hubCache,
-			externalIPsClient: externalIPsClient,
+			logger:     logger,
+			hubCache:   hubCache,
+			hubsClient: hubsClient,
 		}
 
 		t := &task{
@@ -685,30 +666,28 @@ var _ = Describe("selectHub", func() {
 
 		err := t.selectHub(ctx)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(t.hubId).To(Equal("eip-hub-1"))
-		Expect(t.hubNamespace).To(Equal("eip-hub-ns"))
+		Expect(t.hubId).To(Equal("hub-random"))
+		Expect(t.hubNamespace).To(Equal("hub-random-ns"))
 	})
 
-	It("should return error when parent ExternalIP has no hub", func() {
-		externalIPsClient := &fakeExternalIPsClient{
-			getResponse: privatev1.ExternalIPsGetResponse_builder{
-				Object: privatev1.ExternalIP_builder{
-					Id:     "eip-uuid-no-hub",
-					Status: privatev1.ExternalIPStatus_builder{}.Build(),
-				}.Build(),
-			}.Build(),
-		}
+	It("should return error when no hubs available", func() {
+		hubsClient := controllers.NewMockHubsClient(ctrl)
+		hubsClient.EXPECT().
+			List(gomock.Any(), gomock.Any()).
+			Return(&privatev1.HubsListResponse{
+				Items: []*privatev1.Hub{},
+			}, nil)
 
 		attachment := privatev1.ExternalIPAttachment_builder{
-			Id: "eia-uuid-eip-no-hub",
+			Id: "eia-uuid-no-hubs",
 			Spec: privatev1.ExternalIPAttachmentSpec_builder{
-				ExternalIp: privatev1.ExternalIPLocalReference_builder{Id: "eip-uuid-no-hub"}.Build(),
+				ExternalIp: privatev1.ExternalIPLocalReference_builder{Id: "eip-uuid-1"}.Build(),
 			}.Build(),
 		}.Build()
 
 		f := &function{
-			logger:            logger,
-			externalIPsClient: externalIPsClient,
+			logger:     logger,
+			hubsClient: hubsClient,
 		}
 
 		t := &task{
@@ -718,24 +697,25 @@ var _ = Describe("selectHub", func() {
 
 		err := t.selectHub(ctx)
 		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("no hub assigned yet"))
+		Expect(err.Error()).To(ContainSubstring("no hubs"))
 	})
 
-	It("should return error when ExternalIP lookup fails", func() {
-		externalIPsClient := &fakeExternalIPsClient{
-			getErr: errors.New("external IP not found"),
-		}
+	It("should return error when hub listing fails", func() {
+		hubsClient := controllers.NewMockHubsClient(ctrl)
+		hubsClient.EXPECT().
+			List(gomock.Any(), gomock.Any()).
+			Return(nil, errors.New("hub list failed"))
 
 		attachment := privatev1.ExternalIPAttachment_builder{
-			Id: "eia-uuid-eip-error",
+			Id: "eia-uuid-hub-error",
 			Spec: privatev1.ExternalIPAttachmentSpec_builder{
 				ExternalIp: privatev1.ExternalIPLocalReference_builder{Id: "eip-uuid-missing"}.Build(),
 			}.Build(),
 		}.Build()
 
 		f := &function{
-			logger:            logger,
-			externalIPsClient: externalIPsClient,
+			logger:     logger,
+			hubsClient: hubsClient,
 		}
 
 		t := &task{
@@ -745,7 +725,7 @@ var _ = Describe("selectHub", func() {
 
 		err := t.selectHub(ctx)
 		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("external IP not found"))
+		Expect(err.Error()).To(ContainSubstring("hub list failed"))
 	})
 })
 

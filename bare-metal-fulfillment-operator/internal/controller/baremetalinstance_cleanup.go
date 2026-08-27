@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -28,21 +29,6 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
-	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/shared"
-)
-
-const (
-	autoCreatedLabel    = shared.OsacPrefix + "/auto-created"
-	autoCreatedForLabel = shared.OsacPrefix + "/auto-created-for"
-)
-
-var (
-	externalIPAttachmentGVK = schema.GroupVersionKind{
-		Group: "osac.openshift.io", Version: "v1alpha1", Kind: "ExternalIPAttachment",
-	}
-	externalIPGVK = schema.GroupVersionKind{
-		Group: "osac.openshift.io", Version: "v1alpha1", Kind: "ExternalIP",
-	}
 )
 
 func listUnstructured(
@@ -77,9 +63,20 @@ func (r *BareMetalInstanceReconciler) reconcileAutoCleanup(
 
 	log.Info("Running auto-cleanup for auto-provisioned resources")
 
+	bmiID := bareMetalInstance.Labels[bareMetalInstanceIDLabel]
+	if bmiID == "" {
+		log.Info("BareMetalInstance has no UUID label, skipping auto-cleanup",
+			"label", bareMetalInstanceIDLabel)
+		controllerutil.RemoveFinalizer(bareMetalInstance, BareMetalInstanceCleanupFinalizer)
+		if updateErr := r.Update(ctx, bareMetalInstance); updateErr != nil {
+			return ctrl.Result{}, false, updateErr
+		}
+		return ctrl.Result{}, true, nil
+	}
+
 	labels := map[string]string{
 		autoCreatedLabel:    "true",
-		autoCreatedForLabel: string(bareMetalInstance.UID),
+		autoCreatedForLabel: bmiID,
 	}
 
 	attachments, err := listUnstructured(
@@ -87,13 +84,14 @@ func (r *BareMetalInstanceReconciler) reconcileAutoCleanup(
 		bareMetalInstance.Namespace, labels,
 	)
 	if err != nil {
-		log.Info("Cannot list ExternalIPAttachments, removing cleanup finalizer",
-			"error", err)
-		controllerutil.RemoveFinalizer(bareMetalInstance, BareMetalInstanceCleanupFinalizer)
-		if updateErr := r.Update(ctx, bareMetalInstance); updateErr != nil {
-			return ctrl.Result{}, false, updateErr
+		if apimeta.IsNoMatchError(err) {
+			log.Info("ExternalIPAttachment CRD not installed, skipping cleanup",
+				"error", err)
+			attachments = &unstructured.UnstructuredList{}
+		} else {
+			log.Error(err, "Cannot list ExternalIPAttachments, retrying")
+			return ctrl.Result{}, false, err
 		}
-		return ctrl.Result{}, true, nil
 	}
 
 	for i := range attachments.Items {
@@ -122,13 +120,14 @@ func (r *BareMetalInstanceReconciler) reconcileAutoCleanup(
 		bareMetalInstance.Namespace, labels,
 	)
 	if err != nil {
-		log.Info("Cannot list ExternalIPs, removing cleanup finalizer",
-			"error", err)
-		controllerutil.RemoveFinalizer(bareMetalInstance, BareMetalInstanceCleanupFinalizer)
-		if updateErr := r.Update(ctx, bareMetalInstance); updateErr != nil {
-			return ctrl.Result{}, false, updateErr
+		if apimeta.IsNoMatchError(err) {
+			log.Info("ExternalIP CRD not installed, skipping cleanup",
+				"error", err)
+			eips = &unstructured.UnstructuredList{}
+		} else {
+			log.Error(err, "Cannot list ExternalIPs, retrying")
+			return ctrl.Result{}, false, err
 		}
-		return ctrl.Result{}, true, nil
 	}
 
 	for i := range eips.Items {
@@ -169,9 +168,14 @@ func (r *BareMetalInstanceReconciler) addCleanupFinalizerIfNeeded(
 		return nil
 	}
 
+	bmiID := bareMetalInstance.Labels[bareMetalInstanceIDLabel]
+	if bmiID == "" {
+		return nil
+	}
+
 	labels := map[string]string{
 		autoCreatedLabel:    "true",
-		autoCreatedForLabel: string(bareMetalInstance.UID),
+		autoCreatedForLabel: bmiID,
 	}
 
 	eips, err := listUnstructured(

@@ -154,6 +154,10 @@ func (v *ReferenceValidator) UnaryServer(ctx context.Context, request any, info 
 		return handler(ctx, request)
 	}
 
+	if isObjectBeingDeleted(request) {
+		return handler(ctx, request)
+	}
+
 	err = v.validate(ctx, request)
 	if err != nil {
 		return
@@ -461,6 +465,26 @@ func isLocalReference(fullName protoreflect.FullName) bool {
 // isCreateOrUpdate checks if the gRPC method is a Create or Update operation.
 func isCreateOrUpdate(method string) bool {
 	return strings.HasSuffix(method, "/Create") || strings.HasSuffix(method, "/Update")
+}
+
+func isObjectBeingDeleted(request any) bool {
+	message, ok := request.(proto.Message)
+	if !ok {
+		return false
+	}
+	msg := message.ProtoReflect()
+	for _, name := range []protoreflect.Name{"object", "metadata"} {
+		fd := msg.Descriptor().Fields().ByName(name)
+		if fd == nil || fd.Kind() != protoreflect.MessageKind {
+			return false
+		}
+		msg = msg.Get(fd).Message()
+	}
+	fd := msg.Descriptor().Fields().ByName("deletion_timestamp")
+	if fd == nil {
+		return false
+	}
+	return msg.Has(fd)
 }
 
 // isNotFoundErr checks whether an error represents a "not found" condition.

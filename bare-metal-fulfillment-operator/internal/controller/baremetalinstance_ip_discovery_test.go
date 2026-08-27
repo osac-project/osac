@@ -320,6 +320,92 @@ var _ = Describe("BareMetalInstance IP Discovery", func() {
 		})
 	})
 
+	Describe("applyIPDiscoveryResults", func() {
+		It("should return error when job has no artifacts", func() {
+			bmi := bmiForIPDiscovery([]v1alpha1.BareMetalNetworkAttachment{
+				{SubnetRef: "subnet-1", Interface: "data-0", Primary: true},
+			})
+			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
+			defer func() { _ = k8sClient.Delete(ctx, bmi) }()
+
+			server, aapClient := newMockAAPServer("empty-job", nil)
+			defer server.Close()
+
+			reconciler = &BareMetalInstanceReconciler{
+				Client:    k8sClient,
+				Scheme:    k8sClient.Scheme(),
+				AAPClient: aapClient,
+			}
+
+			err := reconciler.applyIPDiscoveryResults(ctx, bmi, "empty-job")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("no artifacts"))
+		})
+
+		It("should return error when lease is missing for an attachment", func() {
+			// Use a single attachment so the CRD "exactly one primary" rule is satisfied,
+			// then return a lease with a mismatched subnetRef so no lease matches.
+			bmi := bmiForIPDiscovery([]v1alpha1.BareMetalNetworkAttachment{
+				{SubnetRef: "subnet-2", Interface: "data-0", Primary: true},
+			})
+			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
+			defer func() { _ = k8sClient.Delete(ctx, bmi) }()
+
+			// Return a lease only for subnet-1, not subnet-2
+			leaseResult := DHCPLeaseResult{
+				Leases: []DHCPLease{
+					{SubnetRef: "subnet-1", Interface: "data-0", IPAddress: "10.0.1.5", MACAddress: "aa:bb:cc:dd:ee:ff"},
+				},
+			}
+			artifactsJSON, _ := json.Marshal(leaseResult)
+			server, aapClient := newMockAAPServer("partial-job", artifactsJSON)
+			defer server.Close()
+
+			reconciler = &BareMetalInstanceReconciler{
+				Client:    k8sClient,
+				Scheme:    k8sClient.Scheme(),
+				AAPClient: aapClient,
+			}
+
+			err := reconciler.applyIPDiscoveryResults(ctx, bmi, "partial-job")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("subnet-2"))
+			Expect(err.Error()).To(ContainSubstring("1/1"))
+
+			// Verify attachment exists but has no IP (lease was for subnet-1, not subnet-2)
+			Expect(bmi.Status.NetworkAttachmentStatuses).To(HaveLen(1))
+			Expect(bmi.Status.NetworkAttachmentStatuses[0].IPAddress).To(BeEmpty())
+		})
+
+		It("should succeed when all leases are found", func() {
+			bmi := bmiForIPDiscovery([]v1alpha1.BareMetalNetworkAttachment{
+				{SubnetRef: "subnet-1", Interface: "data-0", Primary: true},
+			})
+			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
+			defer func() { _ = k8sClient.Delete(ctx, bmi) }()
+
+			leaseResult := DHCPLeaseResult{
+				Leases: []DHCPLease{
+					{SubnetRef: "subnet-1", Interface: "data-0", IPAddress: "10.0.1.5", MACAddress: "aa:bb:cc:dd:ee:ff"},
+				},
+			}
+			artifactsJSON, _ := json.Marshal(leaseResult)
+			server, aapClient := newMockAAPServer("full-job", artifactsJSON)
+			defer server.Close()
+
+			reconciler = &BareMetalInstanceReconciler{
+				Client:    k8sClient,
+				Scheme:    k8sClient.Scheme(),
+				AAPClient: aapClient,
+			}
+
+			err := reconciler.applyIPDiscoveryResults(ctx, bmi, "full-job")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(bmi.Status.NetworkAttachmentStatuses).To(HaveLen(1))
+			Expect(bmi.Status.NetworkAttachmentStatuses[0].IPAddress).To(Equal("10.0.1.5"))
+		})
+	})
+
 	Describe("buildSubnetMACMap", func() {
 		It("maps each attachment's subnet to the MAC of its interface", func() {
 			attachments := []v1alpha1.BareMetalNetworkAttachment{

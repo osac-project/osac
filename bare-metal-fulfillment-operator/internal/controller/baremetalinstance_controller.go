@@ -356,6 +356,9 @@ func (r *BareMetalInstanceReconciler) reconcileManagement(ctx context.Context, b
 	if result, err := r.reconcileNetworkProvisionAndDiscovery(ctx, bareMetalInstance); err != nil || !result.IsZero() {
 		return result, err
 	}
+	if bareMetalInstance.Status.Phase == v1alpha1.BareMetalInstancePhaseFailed {
+		return ctrl.Result{}, nil
+	}
 
 	// Capture whether power was synced before this reconciliation modifies conditions.
 	// Used to detect stale power state reads during rapid stop/start cycles.
@@ -700,6 +703,9 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkHandoffReboot(
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	if powerStatus == nil {
+		return ctrl.Result{}, fmt.Errorf("management backend returned nil power status for host %s", bmi.Spec.ExternalHostID)
+	}
 
 	if powerStatus.IsTransitioning {
 		// Power state is transitioning, requeue without triggering
@@ -718,9 +724,10 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkHandoffReboot(
 
 	// Host is powered on — trigger the handoff reboot (exactly once)
 	if err := r.ManagementClient.TriggerRestart(ctx, bmi.Spec.ExternalHostID); err != nil {
-		if !errors.Is(err, management.ErrTransitioning) {
-			return ctrl.Result{}, err
+		if errors.Is(err, management.ErrTransitioning) {
+			return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
 		}
+		return ctrl.Result{}, err
 	}
 	bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
 		metav1.ConditionFalse, v1alpha1.HostConditionReasonProgressing,
@@ -748,6 +755,9 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkOffboardShutdown(
 	powerStatus, err := r.ManagementClient.GetPowerState(ctx, bmi.Spec.ExternalHostID)
 	if err != nil {
 		return ctrl.Result{}, err
+	}
+	if powerStatus == nil {
+		return ctrl.Result{}, fmt.Errorf("management backend returned nil power status for host %s", bmi.Spec.ExternalHostID)
 	}
 
 	if powerStatus.State == management.PowerOff && !powerStatus.IsTransitioning {

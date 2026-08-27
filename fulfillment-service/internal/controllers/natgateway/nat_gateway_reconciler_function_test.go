@@ -39,19 +39,19 @@ import (
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
 
-// fakeVirtualNetworksClient implements the VirtualNetworksClient interface for testing selectHub.
-type fakeVirtualNetworksClient struct {
-	privatev1.VirtualNetworksClient
-	getResponse *privatev1.VirtualNetworksGetResponse
-	getErr      error
+// fakeHubsClient implements the HubsClient interface for testing selectHub.
+type fakeHubsClient struct {
+	privatev1.HubsClient
+	listResponse *privatev1.HubsListResponse
+	listErr      error
 }
 
-func (f *fakeVirtualNetworksClient) Get(
+func (f *fakeHubsClient) List(
 	_ context.Context,
-	_ *privatev1.VirtualNetworksGetRequest,
+	_ *privatev1.HubsListRequest,
 	_ ...grpc.CallOption,
-) (*privatev1.VirtualNetworksGetResponse, error) {
-	return f.getResponse, f.getErr
+) (*privatev1.HubsListResponse, error) {
+	return f.listResponse, f.listErr
 }
 
 // newNATGatewayCR creates a typed NATGateway CR for use with the fake client.
@@ -538,95 +538,76 @@ var _ = Describe("selectHub", func() {
 		Expect(t.hubNamespace).To(Equal("hub-ns"))
 	})
 
-	It("should derive hub from parent VirtualNetwork when status hub is empty", func() {
-		vnClient := &fakeVirtualNetworksClient{
-			getResponse: privatev1.VirtualNetworksGetResponse_builder{
-				Object: privatev1.VirtualNetwork_builder{
-					Id: "vn-uuid-1",
-					Status: privatev1.VirtualNetworkStatus_builder{
-						Hub: "vn-hub-1",
-					}.Build(),
-				}.Build(),
-			}.Build(),
+	It("should select hub randomly when status hub is empty", func() {
+		hubsClient := &fakeHubsClient{
+			listResponse: &privatev1.HubsListResponse{
+				Items: []*privatev1.Hub{privatev1.Hub_builder{Id: "hub-random-1"}.Build()},
+			},
 		}
 
 		hubCache := controllers.NewMockHubCache(ctrl)
 		hubCache.EXPECT().
-			Get(gomock.Any(), "vn-hub-1").
+			Get(gomock.Any(), "hub-random-1").
 			Return(&controllers.HubEntry{
-				Namespace: "vn-hub-ns",
+				Namespace: "hub-random-ns",
 				Client:    fake.NewClientBuilder().Build(),
 			}, nil)
 
 		t := &task{
 			r: &function{
-				logger:                logger,
-				hubCache:              hubCache,
-				virtualNetworksClient: vnClient,
+				logger:     logger,
+				hubCache:   hubCache,
+				hubsClient: hubsClient,
 			},
 			natGateway: privatev1.NATGateway_builder{
-				Id: "natgw-uuid-derive-hub",
-				Spec: privatev1.NATGatewaySpec_builder{
-					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "vn-uuid-1"}.Build(),
-				}.Build(),
+				Id: "natgw-uuid-random-hub",
 			}.Build(),
 		}
 
 		err := t.selectHub(ctx)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(t.hubId).To(Equal("vn-hub-1"))
-		Expect(t.hubNamespace).To(Equal("vn-hub-ns"))
+		Expect(t.hubId).To(Equal("hub-random-1"))
+		Expect(t.hubNamespace).To(Equal("hub-random-ns"))
 	})
 
-	It("should return error when parent VirtualNetwork has no hub", func() {
-		vnClient := &fakeVirtualNetworksClient{
-			getResponse: privatev1.VirtualNetworksGetResponse_builder{
-				Object: privatev1.VirtualNetwork_builder{
-					Id:     "vn-uuid-no-hub",
-					Status: privatev1.VirtualNetworkStatus_builder{}.Build(),
-				}.Build(),
-			}.Build(),
+	It("should return error when no hubs are available", func() {
+		hubsClient := &fakeHubsClient{
+			listResponse: &privatev1.HubsListResponse{},
 		}
 
 		t := &task{
 			r: &function{
-				logger:                logger,
-				virtualNetworksClient: vnClient,
+				logger:     logger,
+				hubsClient: hubsClient,
 			},
 			natGateway: privatev1.NATGateway_builder{
-				Id: "natgw-uuid-vn-no-hub",
-				Spec: privatev1.NATGatewaySpec_builder{
-					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "vn-uuid-no-hub"}.Build(),
-				}.Build(),
+				Id: "natgw-uuid-no-hubs",
 			}.Build(),
 		}
 
 		err := t.selectHub(ctx)
 		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("no hub assigned yet"))
+		Expect(err.Error()).To(ContainSubstring("there are no hubs"))
 	})
 
-	It("should return error when VirtualNetwork lookup fails", func() {
-		vnClient := &fakeVirtualNetworksClient{
-			getErr: errors.New("virtual network not found"),
+	It("should return error when hub listing fails", func() {
+		hubsClient := &fakeHubsClient{
+			listErr: errors.New("hub listing failed"),
 		}
 
 		t := &task{
 			r: &function{
-				logger:                logger,
-				virtualNetworksClient: vnClient,
+				logger:     logger,
+				hubsClient: hubsClient,
 			},
 			natGateway: privatev1.NATGateway_builder{
-				Id: "natgw-uuid-vn-error",
-				Spec: privatev1.NATGatewaySpec_builder{
-					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "vn-uuid-missing"}.Build(),
-				}.Build(),
+				Id: "natgw-uuid-hub-error",
 			}.Build(),
 		}
 
 		err := t.selectHub(ctx)
 		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("virtual network not found"))
+		Expect(err.Error()).To(ContainSubstring("hub listing failed"))
 	})
 })
 

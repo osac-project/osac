@@ -584,12 +584,6 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 		})
 
 		It("should skip deprovisioning when deleted before the implementation-strategy annotation was ever stamped", func() {
-			// A VirtualNetwork deleted in the narrow window before its first successful
-			// handleUpdate reconcile has neither the annotation nor any job history —
-			// nothing was ever provisioned, and (unlike Subnet) the VirtualNetwork
-			// delete playbook has no spec-field fallback for a missing annotation, so
-			// triggering a deprovision job here would just fail. handleDeprovisioning
-			// must skip it and let the finalizer come off immediately.
 			vnet.Finalizers = []string{osacVirtualNetworkFinalizer}
 			Expect(k8sClient.Create(ctx, vnet)).To(Succeed())
 			Expect(k8sClient.Delete(ctx, vnet)).To(Succeed())
@@ -607,6 +601,102 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			Expect(result.RequeueAfter).To(Equal(0 * time.Second))
 			Expect(vnet.Status.ProvisioningJobs).To(BeEmpty())
 			Expect(vnet.Finalizers).NotTo(ContainElement(osacVirtualNetworkFinalizer))
+		})
+
+		It("should wait for child Subnet before deprovisioning", func() {
+			const gateVnetSubnetUUID = "gate-vnet-subnet-uuid"
+			gateVnet := &osacv1alpha1.VirtualNetwork{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "gate-vnet-subnet",
+					Namespace:  "default",
+					Finalizers: []string{osacVirtualNetworkFinalizer},
+					Labels:     map[string]string{osacVirtualNetworkIDLabel: gateVnetSubnetUUID},
+				},
+				Spec: osacv1alpha1.VirtualNetworkSpec{
+					Region: "us-west-1", IPv4CIDR: "10.1.0.0/16",
+					NetworkClass: "cudn-net",
+				},
+			}
+			Expect(k8sClient.Create(ctx, gateVnet)).To(Succeed())
+
+			childSubnet := &osacv1alpha1.Subnet{
+				ObjectMeta: metav1.ObjectMeta{Name: "gate-child-subnet", Namespace: "default"},
+				Spec:       osacv1alpha1.SubnetSpec{VirtualNetwork: gateVnetSubnetUUID, IPv4CIDR: "10.1.1.0/24"},
+			}
+			Expect(k8sClient.Create(ctx, childSubnet)).To(Succeed())
+
+			result, err := reconciler.handleDelete(ctx, gateVnet)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+
+			Expect(k8sClient.Delete(ctx, childSubnet)).To(Succeed())
+			gateVnet.Finalizers = nil
+			_ = k8sClient.Update(ctx, gateVnet)
+			_ = k8sClient.Delete(ctx, gateVnet)
+		})
+
+		It("should wait for child SecurityGroup before deprovisioning", func() {
+			const gateVnetSGUUID = "gate-vnet-sg-uuid"
+			gateVnet := &osacv1alpha1.VirtualNetwork{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "gate-vnet-sg",
+					Namespace:  "default",
+					Finalizers: []string{osacVirtualNetworkFinalizer},
+					Labels:     map[string]string{osacVirtualNetworkIDLabel: gateVnetSGUUID},
+				},
+				Spec: osacv1alpha1.VirtualNetworkSpec{
+					Region: "us-west-1", IPv4CIDR: "10.2.0.0/16",
+					NetworkClass: "cudn-net",
+				},
+			}
+			Expect(k8sClient.Create(ctx, gateVnet)).To(Succeed())
+
+			childSG := &osacv1alpha1.SecurityGroup{
+				ObjectMeta: metav1.ObjectMeta{Name: "gate-child-sg", Namespace: "default"},
+				Spec:       osacv1alpha1.SecurityGroupSpec{VirtualNetwork: gateVnetSGUUID},
+			}
+			Expect(k8sClient.Create(ctx, childSG)).To(Succeed())
+
+			result, err := reconciler.handleDelete(ctx, gateVnet)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+
+			Expect(k8sClient.Delete(ctx, childSG)).To(Succeed())
+			gateVnet.Finalizers = nil
+			_ = k8sClient.Update(ctx, gateVnet)
+			_ = k8sClient.Delete(ctx, gateVnet)
+		})
+
+		It("should wait for child NATGateway before deprovisioning", func() {
+			const gateVnetNATGWUUID = "gate-vnet-natgw-uuid"
+			gateVnet := &osacv1alpha1.VirtualNetwork{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "gate-vnet-natgw",
+					Namespace:  "default",
+					Finalizers: []string{osacVirtualNetworkFinalizer},
+					Labels:     map[string]string{osacVirtualNetworkIDLabel: gateVnetNATGWUUID},
+				},
+				Spec: osacv1alpha1.VirtualNetworkSpec{
+					Region: "us-west-1", IPv4CIDR: "10.3.0.0/16",
+					NetworkClass: "cudn-net",
+				},
+			}
+			Expect(k8sClient.Create(ctx, gateVnet)).To(Succeed())
+
+			childNATGW := &osacv1alpha1.NATGateway{
+				ObjectMeta: metav1.ObjectMeta{Name: "gate-child-natgw", Namespace: "default"},
+				Spec:       osacv1alpha1.NATGatewaySpec{VirtualNetwork: gateVnetNATGWUUID, ExternalIP: "some-eip"},
+			}
+			Expect(k8sClient.Create(ctx, childNATGW)).To(Succeed())
+
+			result, err := reconciler.handleDelete(ctx, gateVnet)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+
+			Expect(k8sClient.Delete(ctx, childNATGW)).To(Succeed())
+			gateVnet.Finalizers = nil
+			_ = k8sClient.Update(ctx, gateVnet)
+			_ = k8sClient.Delete(ctx, gateVnet)
 		})
 
 		It("should remove finalizer after successful deprovision", func() {

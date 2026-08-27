@@ -1776,10 +1776,10 @@ var _ = Describe("BareMetalInstance network handoff reboot (OSAC-1448)", func() 
 			Expect(result.RequeueAfter).To(Equal(5 * time.Second))
 			Expect(triggerRestartCallCount).To(Equal(1))
 
+			// Condition should NOT be set when TriggerRestart returns ErrTransitioning,
+			// so the next reconcile retries the trigger instead of polling IsRestartComplete.
 			cond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete)
-			Expect(cond).NotTo(BeNil())
-			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
-			Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonProgressing))
+			Expect(cond).To(BeNil())
 		})
 
 		It("skips reboot for powered-off host and completes handoff", func() {

@@ -7,7 +7,7 @@
     resource: "{{ osac_job_vars.resource }}"
     resource_name: "{{ resource.metadata.name }}"
     implementation_strategy: >-
-      {{ resource.metadata.annotations
+      {{ (resource.metadata.annotations | default({}, true))
          ['osac.openshift.io/implementation-strategy']
          | default('netris', true) }}
     network_attachments: "{{ resource.spec.networkAttachments | default([]) }}"

@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"slices"
 	"strings"
 
@@ -49,12 +50,11 @@ type FunctionBuilder struct {
 }
 
 type function struct {
-	logger                *slog.Logger
-	hubCache              controllers.HubCache
-	securityGroupsClient  privatev1.SecurityGroupsClient
-	virtualNetworksClient privatev1.VirtualNetworksClient
-	hubsClient            privatev1.HubsClient
-	maskCalculator        *masks.Calculator
+	logger               *slog.Logger
+	hubCache             controllers.HubCache
+	securityGroupsClient privatev1.SecurityGroupsClient
+	hubsClient           privatev1.HubsClient
+	maskCalculator       *masks.Calculator
 }
 
 type task struct {
@@ -106,12 +106,11 @@ func (b *FunctionBuilder) Build() (result controllers.ReconcilerFunction[*privat
 
 	// Create and populate the object:
 	object := &function{
-		logger:                b.logger,
-		securityGroupsClient:  privatev1.NewSecurityGroupsClient(b.connection),
-		virtualNetworksClient: privatev1.NewVirtualNetworksClient(b.connection),
-		hubsClient:            privatev1.NewHubsClient(b.connection),
-		hubCache:              b.hubCache,
-		maskCalculator:        masks.NewCalculator().Build(),
+		logger:               b.logger,
+		securityGroupsClient: privatev1.NewSecurityGroupsClient(b.connection),
+		hubsClient:           privatev1.NewHubsClient(b.connection),
+		hubCache:             b.hubCache,
+		maskCalculator:       masks.NewCalculator().Build(),
 	}
 	result = object.run
 	return
@@ -160,25 +159,10 @@ func (t *task) update(ctx context.Context) error {
 		return err
 	}
 
-	// Look up the parent VirtualNetwork to get the hub assignment:
-	parentVN, err := t.getParentVirtualNetwork(ctx)
-	if err != nil {
+	// Select a hub:
+	if err := t.selectHub(ctx); err != nil {
 		return err
 	}
-
-	// Get the hub from the parent VirtualNetwork:
-	t.hubId = parentVN.GetStatus().GetHub()
-	if t.hubId == "" {
-		return errors.New("parent virtual network does not have a hub assigned yet")
-	}
-
-	// Look up the hub client:
-	hubEntry, err := t.r.hubCache.Get(ctx, t.hubId)
-	if err != nil {
-		return err
-	}
-	t.hubNamespace = hubEntry.Namespace
-	t.hubClient = hubEntry.Client
 
 	// Get the K8S object:
 	object, err := t.getKubeObject(ctx)
@@ -248,55 +232,14 @@ func (t *task) validateTenant() error {
 	return nil
 }
 
-func (t *task) getParentVirtualNetwork(ctx context.Context) (*privatev1.VirtualNetwork, error) {
-	vnRef := t.securityGroup.GetSpec().GetVirtualNetwork()
-	vnKey := controllers.RefKeyStr(vnRef)
-	if vnKey == "" {
-		return nil, errors.New("security group must reference a parent virtual network")
-	}
-	response, err := t.r.virtualNetworksClient.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{
-		Id: vnKey,
-	}.Build())
-	if err != nil {
-		return nil, fmt.Errorf("failed to get parent virtual network '%s': %w", vnKey, err)
-	}
-	return response.GetObject(), nil
-}
-
 func (t *task) delete(ctx context.Context) (err error) {
-	// Look up the parent VirtualNetwork to get the hub. If the parent is already deleted,
-	// we can just remove the finalizer since there's nothing to clean up.
-	parentVN, vnErr := t.getParentVirtualNetwork(ctx)
-	if vnErr != nil {
-		// Parent VN is gone — nothing to clean up on K8s side.
-		t.r.logger.DebugContext(
-			ctx,
-			"Parent virtual network not found during delete, removing finalizer",
-			slog.String("id", t.securityGroup.GetId()),
-		)
-		t.removeFinalizer()
-		return nil
-	}
-
-	t.hubId = parentVN.GetStatus().GetHub()
-	if t.hubId == "" {
-		// No hub assigned, nothing to clean up on K8s side.
-		t.removeFinalizer()
-		return nil
-	}
-
-	hubEntry, err := t.r.hubCache.Get(ctx, t.hubId)
-	if err != nil {
-		// Check if the hub has been decommissioned (deleted from database)
+	if err = t.selectHub(ctx); err != nil {
 		if errors.Is(err, controllers.ErrHubNotFound) {
 			controllers.RemoveFinalizerOnDecommissionedHub(ctx, t.r.logger, t.hubId, "security_group_id", t.securityGroup.GetId(), t.removeFinalizer)
 			return nil
 		}
-		// For transient errors (network, timeout, etc.), continue retrying
 		return
 	}
-	t.hubNamespace = hubEntry.Namespace
-	t.hubClient = hubEntry.Client
 
 	// Check if the K8S object still exists:
 	object, err := t.getKubeObject(ctx)
@@ -338,6 +281,29 @@ func (t *task) delete(ctx context.Context) (err error) {
 
 	// Don't remove finalizer — K8s object still exists with finalizers being processed.
 	return
+}
+
+func (t *task) selectHub(ctx context.Context) error {
+	response, err := t.r.hubsClient.List(ctx, privatev1.HubsListRequest_builder{}.Build())
+	if err != nil {
+		return err
+	}
+	if len(response.Items) == 0 {
+		return errors.New("there are no hubs")
+	}
+	t.hubId = response.Items[rand.IntN(len(response.Items))].GetId()
+	t.r.logger.DebugContext(
+		ctx,
+		"Selected hub",
+		slog.String("id", t.hubId),
+	)
+	hubEntry, err := t.r.hubCache.Get(ctx, t.hubId)
+	if err != nil {
+		return err
+	}
+	t.hubNamespace = hubEntry.Namespace
+	t.hubClient = hubEntry.Client
+	return nil
 }
 
 func (t *task) getKubeObject(ctx context.Context) (result *osacv1alpha1.SecurityGroup, err error) {

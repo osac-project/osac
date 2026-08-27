@@ -27,6 +27,11 @@
     _op_vnet_name: "{{ _na_from }}"
   when: _na_from | length > 0
 
+- name: Wait for fabric to settle after detach
+  ansible.builtin.pause:
+    seconds: 15
+  when: _na_from | length > 0 and _na_to | length > 0
+
 - name: Attach to target V-Net
   ansible.builtin.include_tasks: _attach_port_to_vnet.yaml
   vars:

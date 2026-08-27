@@ -338,6 +338,57 @@ var _ = Describe("ExternalIPPoolReconciler", func() {
 		// support setting DeletionTimestamp via Update. We add the finalizer via a
 		// normal Reconcile, then set DeletionTimestamp in memory and call handleDelete.
 
+		It("should wait for child ExternalIP before deprovisioning", func() {
+			// Add UUID label to pool so the guard can match children
+			const poolUUID = "test-pool-uuid"
+			pool.Labels = map[string]string{osacExternalIPPoolIDLabel: poolUUID}
+			Expect(fakeClient.Update(testCtx, pool)).To(Succeed())
+
+			childEIP := &osacv1alpha1.ExternalIP{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "child-eip",
+					Namespace: pool.Namespace,
+				},
+				Spec: osacv1alpha1.ExternalIPSpec{
+					Pool: poolUUID,
+				},
+			}
+			Expect(fakeClient.Create(testCtx, childEIP)).To(Succeed())
+
+			key := types.NamespacedName{Name: pool.Name, Namespace: pool.Namespace}
+			// Add finalizer via normal reconcile
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			toDelete := &osacv1alpha1.ExternalIPPool{}
+			Expect(fakeClient.Get(testCtx, key, toDelete)).To(Succeed())
+			now := metav1.Now()
+			toDelete.DeletionTimestamp = &now
+
+			result, err := reconciler.handleDelete(testCtx, toDelete)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+
+			// Clean up child, verify deprovision proceeds
+			Expect(fakeClient.Delete(testCtx, childEIP)).To(Succeed())
+
+			deprovisionCalled := false
+			mockProvider.triggerDeprovisionFunc = func(
+				ctx context.Context, resource client.Object, _ []osacv1alpha1.JobStatus,
+			) (*provisioning.DeprovisionResult, error) {
+				deprovisionCalled = true
+				return &provisioning.DeprovisionResult{
+					Action:                 provisioning.DeprovisionTriggered,
+					JobID:                  "deprovision-after-child-removed",
+					BlockDeletionOnFailure: true,
+				}, nil
+			}
+
+			_, err = reconciler.handleDelete(testCtx, toDelete)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(deprovisionCalled).To(BeTrue())
+		})
+
 		It("should trigger deprovision on delete", func() {
 			key := types.NamespacedName{Name: pool.Name, Namespace: pool.Namespace}
 

@@ -29,9 +29,6 @@ spec:
     - jsonPath: .spec.hostClass
       name: HostClass
       type: string
-    - jsonPath: .spec.networkClass
-      name: NetworkClass
-      type: string
     - jsonPath: .spec.externalHostID
       name: ExternalHostID
       type: string
@@ -97,10 +94,74 @@ spec:
                 x-kubernetes-validations:
                 - message: field is immutable
                   rule: self == oldSelf
-              networkClass:
-                description: NetworkClass is the network class for this host (e.g.
-                  openstack).
-                type: string
+              networkAttachments:
+                description: |-
+                  NetworkAttachments for the bare metal instance. One entry per physical NIC.
+                  The list structure is immutable after creation (entries cannot be added or removed),
+                  but securityGroupRefs within each entry can be updated.
+
+                  MaxItems is required for CEL cost budget calculation.
+                items:
+                  description: |-
+                    BareMetalNetworkAttachment defines one NIC: a Subnet reference, optional SecurityGroup
+                    references, a physical interface binding, and primary gateway designation.
+                  properties:
+                    interface:
+                      description: |-
+                        Interface is the physical interface name from the HostType's NetworkInterface list.
+                        When omitted on a single-attachment instance, the system selects the first fabric-role interface.
+                      type: string
+                      x-kubernetes-validations:
+                      - message: interface is immutable
+                        rule: self == oldSelf
+                    primary:
+                      description: |-
+                        Primary designates this attachment as the default gateway for multi-NIC instances.
+                        When omitted on a single-attachment instance, that attachment is implicitly primary.
+                      type: boolean
+                      x-kubernetes-validations:
+                      - message: primary is immutable
+                        rule: self == oldSelf
+                    securityGroupRefs:
+                      description: |-
+                        SecurityGroupRefs lists fulfillment SecurityGroup IDs applied on this NIC.
+                        Mutable — can be changed to add/remove security groups.
+                      items:
+                        type: string
+                      type: array
+                    subnetRef:
+                      description: SubnetRef is the fulfillment Subnet ID. Must reference
+                        a Subnet in READY state.
+                      maxLength: 253
+                      minLength: 1
+                      type: string
+                      x-kubernetes-validations:
+                      - message: subnetRef is immutable
+                        rule: self == oldSelf
+                  required:
+                  - subnetRef
+                  type: object
+                maxItems: 8
+                type: array
+                x-kubernetes-list-map-keys:
+                - subnetRef
+                x-kubernetes-list-type: map
+                x-kubernetes-validations:
+                - message: cannot change or add/remove network attachments after initial
+                    assignment
+                  rule: size(oldSelf) == 0 || (size(self) == size(oldSelf) && self.all(na,
+                    oldSelf.exists(old, old.subnetRef == na.subnetRef)))
+                - message: when multiple network attachments exist, exactly one must
+                    have primary set to true
+                  rule: self.size() <= 1 || self.filter(x, x.primary == true).size()
+                    == 1
+              restartTrigger:
+                description: |-
+                  RestartTrigger is used to trigger a restart of the physical machine.
+                  Change it to any value to trigger the restart.
+                  The value itself is not important; only the change matters.
+                format: int64
+                type: integer
               runStrategy:
                 allOf:
                 - enum:
@@ -211,11 +272,31 @@ spec:
                 description: DesiredConfigVersion is a hash of the spec, used to detect
                   spec changes and control retry behavior.
                 type: string
-              jobs:
+              hardware:
                 description: |-
-                  Jobs tracks the history of provision and deprovision operations
-                  Ordered chronologically, with latest operations at the end
-                  Limited to the last N jobs (configurable via OSAC_MAX_JOB_HISTORY, default 10)
+                  Hardware holds physical hardware metadata fetched from the inventory backend at allocation time.
+                  Absent until the inventory backend provides data.
+                properties:
+                  nics:
+                    description: NICs lists the physical network interfaces reported
+                      by the inventory backend.
+                    items:
+                      description: BareMetalNICStatus holds the MAC address of a single
+                        physical network interface.
+                      properties:
+                        mac:
+                          description: MAC is the hardware MAC address of this interface,
+                            lowercased (e.g. "aa:bb:cc:dd:ee:ff").
+                          pattern: ^[0-9a-f]{2}(:[0-9a-f]{2}){5}$
+                          type: string
+                      required:
+                      - mac
+                      type: object
+                    type: array
+                type: object
+              ipDiscoveryJobs:
+                description: IPDiscoveryJobs tracks the history of DHCP lease discovery
+                  operations.
                 items:
                   description: JobStatus represents the status of a provisioning or
                     deprovisioning job
@@ -223,7 +304,7 @@ spec:
                     blockDeletionOnFailure:
                       description: |-
                         BlockDeletionOnFailure indicates whether CR deletion should be blocked if this job fails.
-                        Set to true to prevent orphaned cloud resources.
+                        AAP sets this to true to prevent orphaned cloud resources when deprovisioning fails.
                       type: boolean
                     configVersion:
                       description: |-
@@ -233,8 +314,8 @@ spec:
                         If they match, the controller retries with exponential backoff.
                       type: string
                     jobID:
-                      description: |-
-                        JobID is the job identifier from the provisioning provider (AAP job ID).
+                      description: JobID is the AAP job identifier from the provisioning
+                        provider API response.
                       type: string
                     message:
                       description: Message provides human-readable status or error
@@ -251,6 +332,13 @@ spec:
                       - Canceled
                       - Unknown
                       type: string
+                    target:
+                      description: |-
+                        Target identifies which manager this job was dispatched to, for resources
+                        that provision through multiple managers concurrently (e.g. a Subnet
+                        dispatching to both a fabric manager and a k8s manager). Empty for
+                        resources with a single provisioning target.
+                      type: string
                     timestamp:
                       description: Timestamp when this job was created/triggered
                       format: date-time
@@ -260,8 +348,93 @@ spec:
                       enum:
                       - provision
                       - deprovision
-                      - attach
-                      - detach
+                      type: string
+                  required:
+                  - jobID
+                  - state
+                  - timestamp
+                  - type
+                  type: object
+                type: array
+              networkAttachmentStatuses:
+                description: |-
+                  NetworkAttachmentStatuses captures runtime networking state for each NIC.
+                  Populated by the operator after DHCP lease discovery.
+                items:
+                  description: BareMetalNetworkAttachmentStatus captures the runtime
+                    networking state for a single NIC.
+                  properties:
+                    interface:
+                      description: Interface is the physical interface name from the
+                        spec's network attachment.
+                      type: string
+                    ipAddress:
+                      description: IPAddress is the IP discovered after DHCP assignment.
+                      type: string
+                    primary:
+                      description: Primary indicates whether this attachment is the
+                        default gateway attachment.
+                      type: boolean
+                    subnetRef:
+                      description: SubnetRef is the fulfillment Subnet ID associated
+                        with this attachment.
+                      type: string
+                  type: object
+                type: array
+              networkingJobs:
+                description: NetworkingJobs tracks the history of network attachment
+                  provisioning/deprovisioning.
+                items:
+                  description: JobStatus represents the status of a provisioning or
+                    deprovisioning job
+                  properties:
+                    blockDeletionOnFailure:
+                      description: |-
+                        BlockDeletionOnFailure indicates whether CR deletion should be blocked if this job fails.
+                        AAP sets this to true to prevent orphaned cloud resources when deprovisioning fails.
+                      type: boolean
+                    configVersion:
+                      description: |-
+                        ConfigVersion is the DesiredConfigVersion at the time this job was triggered.
+                        Used to determine retry behavior on failure: if ConfigVersion differs from
+                        the current DesiredConfigVersion, a new job is triggered immediately.
+                        If they match, the controller retries with exponential backoff.
+                      type: string
+                    jobID:
+                      description: JobID is the AAP job identifier from the provisioning
+                        provider API response.
+                      type: string
+                    message:
+                      description: Message provides human-readable status or error
+                        information
+                      type: string
+                    state:
+                      description: State is the current state of the job
+                      enum:
+                      - Pending
+                      - Waiting
+                      - Running
+                      - Succeeded
+                      - Failed
+                      - Canceled
+                      - Unknown
+                      type: string
+                    target:
+                      description: |-
+                        Target identifies which manager this job was dispatched to, for resources
+                        that provision through multiple managers concurrently (e.g. a Subnet
+                        dispatching to both a fabric manager and a k8s manager). Empty for
+                        resources with a single provisioning target.
+                      type: string
+                    timestamp:
+                      description: Timestamp when this job was created/triggered
+                      format: date-time
+                      type: string
+                    type:
+                      description: Type indicates the operation type
+                      enum:
+                      - provision
+                      - deprovision
                       type: string
                   required:
                   - jobID
@@ -280,6 +453,75 @@ spec:
                 - Failed
                 - Deleting
                 type: string
+              provisioningJobs:
+                description: |-
+                  ProvisioningJobs tracks the history of provision and deprovision operations
+                  Ordered chronologically, with latest operations at the end
+                  Limited to the last N jobs (configurable via OSAC_MAX_JOB_HISTORY, default 10)
+                items:
+                  description: JobStatus represents the status of a provisioning or
+                    deprovisioning job
+                  properties:
+                    blockDeletionOnFailure:
+                      description: |-
+                        BlockDeletionOnFailure indicates whether CR deletion should be blocked if this job fails.
+                        AAP sets this to true to prevent orphaned cloud resources when deprovisioning fails.
+                      type: boolean
+                    configVersion:
+                      description: |-
+                        ConfigVersion is the DesiredConfigVersion at the time this job was triggered.
+                        Used to determine retry behavior on failure: if ConfigVersion differs from
+                        the current DesiredConfigVersion, a new job is triggered immediately.
+                        If they match, the controller retries with exponential backoff.
+                      type: string
+                    jobID:
+                      description: JobID is the AAP job identifier from the provisioning
+                        provider API response.
+                      type: string
+                    message:
+                      description: Message provides human-readable status or error
+                        information
+                      type: string
+                    state:
+                      description: State is the current state of the job
+                      enum:
+                      - Pending
+                      - Waiting
+                      - Running
+                      - Succeeded
+                      - Failed
+                      - Canceled
+                      - Unknown
+                      type: string
+                    target:
+                      description: |-
+                        Target identifies which manager this job was dispatched to, for resources
+                        that provision through multiple managers concurrently (e.g. a Subnet
+                        dispatching to both a fabric manager and a k8s manager). Empty for
+                        resources with a single provisioning target.
+                      type: string
+                    timestamp:
+                      description: Timestamp when this job was created/triggered
+                      format: date-time
+                      type: string
+                    type:
+                      description: Type indicates the operation type
+                      enum:
+                      - provision
+                      - deprovision
+                      type: string
+                  required:
+                  - jobID
+                  - state
+                  - timestamp
+                  - type
+                  type: object
+                type: array
+              restartTrigger:
+                description: RestartTrigger is the observed restart version of the
+                  instance
+                format: int64
+                type: integer
               runStrategy:
                 allOf:
                 - enum:

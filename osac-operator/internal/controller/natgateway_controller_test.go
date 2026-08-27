@@ -25,12 +25,21 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/utils/ptr"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	privatev1 "github.com/osac-project/osac/osac-operator/internal/api/osac/private/v1"
+	"github.com/osac-project/osac/osac-operator/internal/dispatcheradapter"
+	"github.com/osac-project/osac/osac-operator/pkg/dispatcher"
+	"github.com/osac-project/osac/osac-operator/pkg/networkmanager"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 )
 
@@ -519,6 +528,183 @@ var _ = Describe("NATGatewayReconciler", func() {
 			result, err := reconciler.handleDeprovisioning(ctx, natgw)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(0 * time.Second))
+		})
+	})
+
+	Context("dispatcher path", func() {
+		It("uses the resolved fabric manager name from the parent VirtualNetwork's NetworkClass", func() {
+			testScheme := runtime.NewScheme()
+			Expect(osacv1alpha1.AddToScheme(testScheme)).To(Succeed())
+			Expect(scheme.AddToScheme(testScheme)).To(Succeed())
+
+			dispatchVnet := &osacv1alpha1.VirtualNetwork{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "dispatch-vnet-natgw",
+					Namespace: "test-ns",
+					Labels:    map[string]string{osacVirtualNetworkIDLabel: "dispatch-vnet-uuid"},
+				},
+				Spec: osacv1alpha1.VirtualNetworkSpec{
+					Region:                 "us-west-1",
+					IPv4CIDR:               "10.0.0.0/16",
+					NetworkClass:           "nc-netris",
+					ImplementationStrategy: "cudn_net",
+				},
+				Status: osacv1alpha1.VirtualNetworkStatus{Phase: osacv1alpha1.VirtualNetworkPhaseReady},
+			}
+
+			dispatchEIP := &osacv1alpha1.ExternalIP{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "dispatch-eip-natgw",
+					Namespace: "test-ns",
+					Labels:    map[string]string{osacExternalIPIDLabel: "dispatch-eip-uuid"},
+				},
+				Spec:   osacv1alpha1.ExternalIPSpec{Pool: "some-pool"},
+				Status: osacv1alpha1.ExternalIPStatus{Address: "198.51.100.1"},
+			}
+
+			dispatchNATGW := &osacv1alpha1.NATGateway{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "dispatch-natgw",
+					Namespace: "test-ns",
+				},
+				Spec: osacv1alpha1.NATGatewaySpec{
+					VirtualNetwork: "dispatch-vnet-uuid",
+					ExternalIP:     "dispatch-eip-uuid",
+				},
+			}
+
+			fakeClient := fake.NewClientBuilder().
+				WithScheme(testScheme).
+				WithObjects(
+					dispatchVnet, dispatchEIP, dispatchNATGW,
+					newFabricManagerConfigMap("fm-netris", "test-ns", "netris"),
+				).
+				WithStatusSubresource(
+					&osacv1alpha1.VirtualNetwork{},
+					&osacv1alpha1.ExternalIP{},
+					&osacv1alpha1.NATGateway{},
+				).
+				Build()
+
+			// Status must be set after creation when using status subresource
+			dispatchVnet.Status.Phase = osacv1alpha1.VirtualNetworkPhaseReady
+			Expect(fakeClient.Status().Update(ctx, dispatchVnet)).To(Succeed())
+			dispatchEIP.Status.Address = "198.51.100.1"
+			Expect(fakeClient.Status().Update(ctx, dispatchEIP)).To(Succeed())
+
+			disc, err := networkmanager.NewDiscovery(fakeClient, "test-ns")
+			Expect(err).NotTo(HaveOccurred())
+			resolver := dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(newListingNetworkClassClient(
+				[]*privatev1.NetworkClass{{Id: "nc-netris", FabricManager: ptr.To("netris")}}, &[]*privatev1.NetworkClass{},
+			)), disc)
+
+			dispatchMock := &mockNATGatewayProvider{}
+			dispatchMock.triggerProvisionFunc = func(_ context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
+				return &provisioning.ProvisionResult{JobID: "job-dispatch", InitialState: osacv1alpha1.JobStatePending}, nil
+			}
+
+			r := &NATGatewayReconciler{
+				Client:               fakeClient,
+				APIReader:            fakeClient,
+				Scheme:               testScheme,
+				NetworkingNamespace:  "test-ns",
+				ProvisioningProvider: dispatchMock,
+				StatusPollInterval:   1 * time.Second,
+				MaxJobHistory:        10,
+				Resolver:             resolver,
+			}
+
+			key := types.NamespacedName{Name: dispatchNATGW.Name, Namespace: dispatchNATGW.Namespace}
+			// First reconcile adds finalizer, second sets annotation
+			_, err = r.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+			_, err = r.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &osacv1alpha1.NATGateway{}
+			Expect(fakeClient.Get(ctx, key, updated)).To(Succeed())
+			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("netris"))
+		})
+
+		It("falls back to VNet implementation strategy when no dispatcher is configured", func() {
+			testScheme := runtime.NewScheme()
+			Expect(osacv1alpha1.AddToScheme(testScheme)).To(Succeed())
+			Expect(scheme.AddToScheme(testScheme)).To(Succeed())
+
+			fallbackVnet := &osacv1alpha1.VirtualNetwork{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "fallback-vnet-natgw",
+					Namespace: "test-ns",
+					Labels:    map[string]string{osacVirtualNetworkIDLabel: "fallback-vnet-uuid"},
+				},
+				Spec: osacv1alpha1.VirtualNetworkSpec{
+					Region:                 "us-west-1",
+					IPv4CIDR:               "10.0.0.0/16",
+					NetworkClass:           "some-class",
+					ImplementationStrategy: "cudn_net",
+				},
+			}
+
+			fallbackEIP := &osacv1alpha1.ExternalIP{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "fallback-eip-natgw",
+					Namespace: "test-ns",
+					Labels:    map[string]string{osacExternalIPIDLabel: "fallback-eip-uuid"},
+				},
+				Spec: osacv1alpha1.ExternalIPSpec{Pool: "some-pool"},
+			}
+
+			fallbackNATGW := &osacv1alpha1.NATGateway{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "fallback-natgw",
+					Namespace: "test-ns",
+				},
+				Spec: osacv1alpha1.NATGatewaySpec{
+					VirtualNetwork: "fallback-vnet-uuid",
+					ExternalIP:     "fallback-eip-uuid",
+				},
+			}
+
+			fakeClient := fake.NewClientBuilder().
+				WithScheme(testScheme).
+				WithObjects(fallbackVnet, fallbackEIP, fallbackNATGW).
+				WithStatusSubresource(
+					&osacv1alpha1.VirtualNetwork{},
+					&osacv1alpha1.ExternalIP{},
+					&osacv1alpha1.NATGateway{},
+				).
+				Build()
+
+			fallbackVnet.Status.Phase = osacv1alpha1.VirtualNetworkPhaseReady
+			Expect(fakeClient.Status().Update(ctx, fallbackVnet)).To(Succeed())
+			fallbackEIP.Status.Address = "198.51.100.2"
+			Expect(fakeClient.Status().Update(ctx, fallbackEIP)).To(Succeed())
+
+			fallbackMock := &mockNATGatewayProvider{}
+			fallbackMock.triggerProvisionFunc = func(_ context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
+				return &provisioning.ProvisionResult{JobID: "job-fallback", InitialState: osacv1alpha1.JobStatePending}, nil
+			}
+
+			r := &NATGatewayReconciler{
+				Client:               fakeClient,
+				APIReader:            fakeClient,
+				Scheme:               testScheme,
+				NetworkingNamespace:  "test-ns",
+				ProvisioningProvider: fallbackMock,
+				StatusPollInterval:   1 * time.Second,
+				MaxJobHistory:        10,
+				// No Resolver — falls back to legacy strategy
+			}
+
+			key := types.NamespacedName{Name: fallbackNATGW.Name, Namespace: fallbackNATGW.Namespace}
+			_, err := r.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+			_, err = r.Reconcile(ctx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &osacv1alpha1.NATGateway{}
+			Expect(fakeClient.Get(ctx, key, updated)).To(Succeed())
+			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal("cudn_net"))
 		})
 	})
 })

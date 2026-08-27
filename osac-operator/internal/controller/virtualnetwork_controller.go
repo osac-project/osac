@@ -98,6 +98,9 @@ func NewVirtualNetworkReconciler(
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=virtualnetworks,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=virtualnetworks/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=virtualnetworks/finalizers,verbs=update
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=subnets,verbs=list
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=securitygroups,verbs=list
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=natgateways,verbs=list
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -249,15 +252,64 @@ func (r *VirtualNetworkReconciler) handleDelete(ctx context.Context, vnet *v1alp
 		return ctrl.Result{}, nil
 	}
 
-	// Handle deprovisioning
-	result, err := r.handleDeprovisioning(ctx, vnet)
-	if err != nil {
-		return result, err
+	// Gate: wait for all child resources referencing this VNet to be fully removed
+	// before triggering the AAP deprovision job. Without this gate, the infrastructure
+	// backend rejects the VNet deletion because children still exist, causing unnecessary
+	// failed jobs and backoff delays.
+	// Child resources reference the parent VN by its fulfillment-service UUID
+	// (stored in the osac.openshift.io/virtualnetwork-uuid label), not by K8s name.
+	vnetUUID := vnet.Labels[osacVirtualNetworkIDLabel]
+	ns := vnet.Namespace
+
+	subnetList := &v1alpha1.SubnetList{}
+	if err := r.List(ctx, subnetList, client.InNamespace(ns)); err != nil {
+		return ctrl.Result{}, fmt.Errorf("listing subnets: %w", err)
+	}
+	for i := range subnetList.Items {
+		if subnetList.Items[i].Spec.VirtualNetwork == vnetUUID {
+			log.Info("waiting for child Subnet to be deleted before deprovisioning VirtualNetwork",
+				"subnet", subnetList.Items[i].Name)
+			return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+		}
 	}
 
-	// If we need to requeue (jobs still running), do so
-	if result.RequeueAfter > 0 {
-		return result, nil
+	sgList := &v1alpha1.SecurityGroupList{}
+	if err := r.List(ctx, sgList, client.InNamespace(ns)); err != nil {
+		return ctrl.Result{}, fmt.Errorf("listing security groups: %w", err)
+	}
+	for i := range sgList.Items {
+		if sgList.Items[i].Spec.VirtualNetwork == vnetUUID {
+			log.Info("waiting for child SecurityGroup to be deleted before deprovisioning VirtualNetwork",
+				"securityGroup", sgList.Items[i].Name)
+			return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+		}
+	}
+
+	natgwList := &v1alpha1.NATGatewayList{}
+	if err := r.List(ctx, natgwList, client.InNamespace(ns)); err != nil {
+		return ctrl.Result{}, fmt.Errorf("listing NAT gateways: %w", err)
+	}
+	for i := range natgwList.Items {
+		if natgwList.Items[i].Spec.VirtualNetwork == vnetUUID {
+			log.Info("waiting for child NATGateway to be deleted before deprovisioning VirtualNetwork",
+				"natGateway", natgwList.Items[i].Name)
+			return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
+		}
+	}
+
+	// Handle deprovisioning
+	if vnet.Annotations[osacImplementationStrategyAnnotation] == "" {
+		log.Info("skipping deprovisioning — resource was never provisioned")
+	} else {
+		result, err := r.handleDeprovisioning(ctx, vnet)
+		if err != nil {
+			return result, err
+		}
+
+		// If we need to requeue (jobs still running), do so
+		if result.RequeueAfter > 0 {
+			return result, nil
+		}
 	}
 
 	// Deprovisioning complete or skipped, remove base finalizer

@@ -160,6 +160,10 @@ bmf:
     aapUrl: "http://osac-aap/api/controller"
     aapInsecureSkipVerify: "true"
     enableNetworkingProvisioning: "false"
+  metal3:
+    enabled: true
+    namespace: host-inventory
+    hostClass: metal3
 
 # --- Hub Access ---
 hubAccess:

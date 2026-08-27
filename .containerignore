@@ -1,6 +1,13 @@
 # Allowlist: exclude everything, then include only what Containerfiles need.
 *
 
+# Shared CI helper copied into Go build stages.
+!.github/
+.github/*
+!.github/scripts/
+.github/scripts/*
+!.github/scripts/go-network-retry.sh
+
 # Go workspace
 !go.work
 !go.work.sum

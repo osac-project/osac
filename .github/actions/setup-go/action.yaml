@@ -19,6 +19,10 @@ inputs:
     description: Directory containing go.mod (composite action steps don't inherit a calling job's defaults.run.working-directory)
     required: false
     default: '.'
+  install-ginkgo:
+    description: Install the ginkgo binary after downloading module dependencies
+    required: false
+    default: 'true'
 runs:
   using: composite
   steps:
@@ -28,16 +32,17 @@ runs:
   - shell: bash
     working-directory: ${{ inputs.working-directory }}
     run: |
-      go mod download
+      bash "${{ github.workspace }}/.github/scripts/go-network-retry.sh" mod download
   - id: ginkgo-cache
+    if: inputs.install-ginkgo == 'true'
     uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25  # v5
     with:
       key: ginkgo-${{ hashFiles(format('{0}/go.mod', inputs.working-directory)) }}
       path: ~/go/bin/ginkgo
-  - if: steps.ginkgo-cache.outputs.cache-hit != 'true'
+  - if: inputs.install-ginkgo == 'true' && steps.ginkgo-cache.outputs.cache-hit != 'true'
     shell: bash
     working-directory: ${{ inputs.working-directory }}
     run: |
       module="github.com/onsi/ginkgo/v2"
       version=$(go list -f '{{ .Version }}' -m "${module}")
-      go install "${module}/ginkgo@${version}"
+      bash "${{ github.workspace }}/.github/scripts/go-network-retry.sh" install "${module}/ginkgo@${version}"

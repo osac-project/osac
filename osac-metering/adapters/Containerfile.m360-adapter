@@ -5,7 +5,8 @@ ARG TARGETARCH
 WORKDIR /opt/app-root/src
 COPY --chown=1001:0 schema/ schema/
 COPY --chown=1001:0 adapters/go.mod adapters/go.sum adapters/
-RUN cd adapters && go mod download
+COPY --chown=1001:0 go-network-retry.sh /usr/local/bin/go-network-retry.sh
+RUN cd adapters && sh /usr/local/bin/go-network-retry.sh mod download
 
 COPY --chown=1001:0 adapters/ adapters/
 

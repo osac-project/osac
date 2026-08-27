@@ -9,6 +9,7 @@ WORKDIR /opt/app-root/src
 # repo (see root .gitignore); `go mod download` below regenerates it inside
 # the build using the go.sum files already copied in per module.
 COPY --chown=1001:1001 go.work ./
+COPY --chown=1001:1001 .github/scripts/go-network-retry.sh /usr/local/bin/go-network-retry.sh
 COPY --chown=1001:1001 osac-operator/go.mod osac-operator/go.sum osac-operator/
 COPY --chown=1001:1001 osac-operator/api/go.mod osac-operator/api/go.sum osac-operator/api/
 COPY --chown=1001:1001 bare-metal-fulfillment-operator/go.mod bare-metal-fulfillment-operator/go.sum bare-metal-fulfillment-operator/
@@ -17,7 +18,7 @@ COPY --chown=1001:1001 osac-csi-driver/go.mod osac-csi-driver/go.sum osac-csi-dr
 COPY --chown=1001:1001 osac-metering/schema/go.mod osac-metering/schema/go.sum osac-metering/schema/
 COPY --chown=1001:1001 osac-metering/metering-service/go.mod osac-metering/metering-service/go.sum osac-metering/metering-service/
 COPY --chown=1001:1001 osac-metering/adapters/go.mod osac-metering/adapters/go.sum osac-metering/adapters/
-RUN cd osac-operator && go mod download
+RUN cd osac-operator && sh /usr/local/bin/go-network-retry.sh mod download
 
 COPY --chown=1001:1001 osac-operator/ osac-operator/
 COPY --chown=1001:1001 bare-metal-fulfillment-operator/ bare-metal-fulfillment-operator/

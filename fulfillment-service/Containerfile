@@ -10,6 +10,7 @@ ARG DEBUG=false
 # the build using the go.sum files already copied in per module.
 WORKDIR /opt/app-root/src
 COPY --chown=1001:1001 go.work ./
+COPY --chown=1001:1001 .github/scripts/go-network-retry.sh /usr/local/bin/go-network-retry.sh
 COPY --chown=1001:1001 fulfillment-service/go.mod fulfillment-service/go.sum fulfillment-service/
 COPY --chown=1001:1001 bare-metal-fulfillment-operator/go.mod bare-metal-fulfillment-operator/go.sum bare-metal-fulfillment-operator/
 COPY --chown=1001:1001 osac-operator/go.mod osac-operator/go.sum osac-operator/
@@ -20,7 +21,7 @@ COPY --chown=1001:1001 osac-metering/metering-service/go.mod osac-metering/meter
 COPY --chown=1001:1001 osac-metering/adapters/go.mod osac-metering/adapters/go.sum osac-metering/adapters/
 RUN \
   set -e; \
-  cd fulfillment-service && go mod download
+  cd fulfillment-service && sh /usr/local/bin/go-network-retry.sh mod download
 
 ARG VERSION=""
 

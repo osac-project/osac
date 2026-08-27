@@ -5,7 +5,8 @@ ARG TARGETARCH
 WORKDIR /opt/app-root/src
 COPY --chown=1001:0 schema/ schema/
 COPY --chown=1001:0 metering-service/go.mod metering-service/go.sum metering-service/
-RUN cd metering-service && go mod download
+COPY --chown=1001:0 go-network-retry.sh /usr/local/bin/go-network-retry.sh
+RUN cd metering-service && sh /usr/local/bin/go-network-retry.sh mod download
 
 COPY --chown=1001:0 metering-service/ metering-service/
 

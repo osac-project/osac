@@ -958,13 +958,25 @@ jobs:
           -d @/tmp/slack-payload.json
 
   # -------------------------------------------------------------------
-  # Job 8: Cleanup — delete temp branch (always, success or failure)
+  # Job 8: Cleanup — delete temp branch, success only. Deleting unconditionally
+  # (the previous `if: always()`) broke GitHub's "Re-run failed jobs": a retry
+  # reuses `prepare`'s cached temp-branch output from the original attempt,
+  # but that branch was already gone -- this job had deleted it the moment
+  # the first attempt reached ANY terminal state, including failure. Branches
+  # from failed runs are now left for cleanup-nightly-branches.yaml's 7-day
+  # TTL sweep instead, so a failed run can still be retried.
   # -------------------------------------------------------------------
   cleanup:
     name: Cleanup temp branch
     needs: [prepare, build, unit-tests, integration-tests, security-tests, e2e-vmaas-test, e2e-caas-test, e2e-bmaas-test, publish, tag-and-notify, notify-failure]
     runs-on: ubuntu-latest
-    if: always()
+    # notify-failure is routinely skipped whenever nothing fails, and GitHub
+    # skip-cascades a job whose needs include a skipped job regardless of a
+    # custom `if:` unless the expression includes always() -- so always() is
+    # required here even though this job only wants to act on real success.
+    # tag-and-notify succeeding is sufficient proof the whole pipeline (build,
+    # every test box, publish) already succeeded, since it's gated on that.
+    if: always() && needs.tag-and-notify.result == 'success'
     permissions:
       contents: write
     env:

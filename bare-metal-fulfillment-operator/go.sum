@@ -119,8 +119,8 @@ github.com/kylelemons/godebug v1.1.0 h1:RPNrshWIDI6G2gRW9EHilWtl7Z6Sb1BR0xunSBf0
 github.com/kylelemons/godebug v1.1.0/go.mod h1:9/0rRGxNHcop5bhtWyNeEfOS8JIWk580+fNqagV/RAw=
 github.com/maruel/natural v1.1.1 h1:Hja7XhhmvEFhcByqDoHz9QZbkWey+COd9xWfCfn1ioo=
 github.com/maruel/natural v1.1.1/go.mod h1:v+Rfd79xlw1AgVBjbO0BEQmptqb5HvL/k9GRHB7ZKEg=
-github.com/metal3-io/baremetal-operator/apis v0.13.2 h1:WyjlQaMUFTWYPsaOgbpLk86XwIaaADjx9uFbjj7SsOg=
-github.com/metal3-io/baremetal-operator/apis v0.13.2/go.mod h1:OyXzgO9dvGlUf2sfnrowyu0mO3O8guFEdd2hcSufHEs=
+github.com/metal3-io/baremetal-operator/apis v0.13.3 h1:TNIII019aVCGZcO8tBguSWc/aZi4vrUsxz0PKTX9BuU=
+github.com/metal3-io/baremetal-operator/apis v0.13.3/go.mod h1:O0t+c92I8vWXIeAwzETQmzWL6FlfYxyz75BflFUi2u4=
 github.com/mfridman/tparse v0.18.0 h1:wh6dzOKaIwkUGyKgOntDW4liXSo37qg5AXbIhkMV3vE=
 github.com/mfridman/tparse v0.18.0/go.mod h1:gEvqZTuCgEhPbYk/2lS3Kcxg1GmTxxU7kTC8DvP0i/A=
 github.com/modern-go/concurrent v0.0.0-20180228061459-e0a39a4cb421/go.mod h1:6dJC0mAP4ikYIbvyc7fijjWJddQyLn8Ig3JB5CqoB9Q=

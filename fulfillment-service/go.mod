@@ -3,7 +3,7 @@ module github.com/osac-project/osac/fulfillment-service
 go 1.26.3
 
 require (
-	buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.36.12-20250717185734-6c6e0d3c608e.1
+	buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.36.12-20260709200747-435963d16310.1
 	buf.build/go/bufplugin v0.10.0
 	buf.build/go/protovalidate v1.2.0
 	charm.land/glamour/v2 v2.0.1

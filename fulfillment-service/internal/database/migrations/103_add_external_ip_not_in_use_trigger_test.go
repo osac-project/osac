@@ -24,7 +24,7 @@ import (
 
 var _ = DescribeMigration("Add ExternalIP not-in-use triggers", func() {
 	BeforeEach(func(ctx context.Context) {
-		err := tool.Migrate(ctx, 102)
+		err := tool.Migrate(ctx, 103)
 		Expect(err).ToNot(HaveOccurred())
 	})
 

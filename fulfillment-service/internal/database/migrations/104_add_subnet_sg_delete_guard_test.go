@@ -24,7 +24,7 @@ import (
 
 var _ = DescribeMigration("Add Subnet SG delete guard", func() {
 	BeforeEach(func(ctx context.Context) {
-		err := tool.Migrate(ctx, 103)
+		err := tool.Migrate(ctx, 104)
 		Expect(err).ToNot(HaveOccurred())
 	})
 

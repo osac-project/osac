@@ -24,7 +24,7 @@ import (
 
 var _ = DescribeMigration("Networking dependency guards", func() {
 	BeforeEach(func(ctx context.Context) {
-		err := tool.Migrate(ctx, 104)
+		err := tool.Migrate(ctx, 105)
 		Expect(err).ToNot(HaveOccurred())
 
 		_, err = conn.Exec(ctx,

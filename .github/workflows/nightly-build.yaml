@@ -246,6 +246,17 @@ jobs:
           stamp_umbrella_nested_field "${UMBRELLA_VALUES}" ui images ui "ghcr.io/osac-project/osac-ui:${UI_SUB_VERSION}"
         fi
 
+        # AAP's config-as-code sync pulls osac-aap's own Ansible automation
+        # (provisioning/restart/hardware-inventory playbooks, etc.) from
+        # aap.configAsCode.projectGitBranch/projectGitUri -- a floating git
+        # ref, same class of bug as a floating image tag, just pointing E2E's
+        # AAP jobs at whatever's on main instead of the exact commit under
+        # test. Pin it to this run's own commit unconditionally (independent
+        # of osac-aap's own release-tag status, which only gates image
+        # rebuilding above).
+        stamp_umbrella_nested_field "${UMBRELLA_VALUES}" aap configAsCode projectGitBranch "${GITHUB_SHA}"
+        stamp_umbrella_nested_field "${UMBRELLA_VALUES}" aap configAsCode projectGitUri "https://github.com/${GITHUB_REPOSITORY}"
+
         # The 4 CI overlay values files (osac-installer/values/*/instance.yaml)
         # have their own separate floating image tag overrides on top of the
         # umbrella chart's own values.yaml, and the e2e jobs below install using
@@ -267,6 +278,8 @@ jobs:
           [[ -n "${FULFILLMENT_VER}" ]] && stamp_ci_overlay_if_present "${overlay}" '.service.images.service' "ghcr.io/osac-project/fulfillment-service:${FULFILLMENT_VER}"
           [[ -n "${AAP_VER}" ]] && stamp_ci_overlay_if_present "${overlay}" '.aap.bootstrap.image' "ghcr.io/osac-project/osac-aap:${AAP_VER}"
           [[ -n "${AAP_VER}" ]] && stamp_ci_overlay_if_present "${overlay}" '.aap.configAsCode.eeImage' "ghcr.io/osac-project/osac-aap:${AAP_VER}"
+          stamp_ci_overlay_if_present "${overlay}" '.aap.configAsCode.projectGitBranch' "${GITHUB_SHA}"
+          stamp_ci_overlay_if_present "${overlay}" '.aap.configAsCode.projectGitUri' "https://github.com/${GITHUB_REPOSITORY}"
           [[ -n "${BMF_VER}" ]] && stamp_ci_overlay_if_present "${overlay}" '.bmf.image.tag' "${BMF_VER}"
           [[ -n "${METERING_VER}" ]] && stamp_ci_overlay_if_present "${overlay}" '.metering.image.tag' "${METERING_VER}"
           [[ -n "${METERING_VER}" ]] && stamp_ci_overlay_if_present "${overlay}" '.metering.echoAdapter.image.tag' "${METERING_VER}"

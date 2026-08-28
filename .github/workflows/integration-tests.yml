@@ -292,65 +292,48 @@ jobs:
       with:
         version: v3.17.0
 
-    - name: Create Kind cluster
+    - name: Install Kind
       uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc  # v1
       with:
-        cluster_name: osac-integration
-
-    - name: Install cert-manager
-      run: |
-        kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.17.1/cert-manager.yaml
-        kubectl wait --for=condition=Available deployment/cert-manager -n cert-manager --timeout=120s
-        kubectl wait --for=condition=Available deployment/cert-manager-webhook -n cert-manager --timeout=120s
-        kubectl wait --for=condition=Available deployment/cert-manager-cainjector -n cert-manager --timeout=120s
-
-    - name: Build chart dependencies
-      working-directory: osac-installer
-      run: helm dependency build charts/osac/
+        install_only: true
 
     - name: Lint charts
       working-directory: osac-installer
       run: |
+        helm dependency build charts/osac/
         helm lint charts/osac-deps/
         helm lint charts/osac-infra/ --values values/dev/infra.yaml
-        helm lint charts/osac/ --values values/dev/instance.yaml \
-          --set service.externalHostname=fulfillment-api.osac.svc.cluster.local \
-          --set service.internalHostname=fulfillment-internal-api.osac.svc.cluster.local
+        helm lint charts/osac/ --values values/dev/kind-instance.yaml
 
     - name: Template charts (dry-run validation)
       working-directory: osac-installer
       run: |
         helm template osac-deps charts/osac-deps/ --values values/dev/infra.yaml
-        helm template osac-infra charts/osac-infra/ --values values/dev/infra.yaml
-        helm template osac charts/osac/ --values values/dev/instance.yaml \
-          --set service.externalHostname=fulfillment-api.osac.svc.cluster.local \
-          --set service.internalHostname=fulfillment-internal-api.osac.svc.cluster.local
+        helm template osac-infra charts/osac-infra/ --values values/dev/infra.yaml \
+          --set trustManager.upstream.enabled=true
+        helm template osac charts/osac/ --values values/dev/kind-instance.yaml
+
+    # Same real command (and cluster: `make install-infra` creates its own
+    # Kind cluster, config, cert-manager/trust-manager/envoy-gateway/osac-infra
+    # install in one shot) fulfillment-service's and osac-operator's jobs in
+    # this same file already use successfully -- rather than hand-reimplementing
+    # the same sequence in workflow YAML, which is exactly how this job drifted
+    # out of sync with the real deployment path in the first place (missing
+    # trust-manager/envoy-gateway installs, wrong values file).
+    - name: Install infrastructure on Kind
+      env:
+        CONTAINER_TOOL: docker
+      run: make -C osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac
 
     - name: Deploy charts
-      continue-on-error: true
-      working-directory: osac-installer
-      run: |
-        helm install osac-infra charts/osac-infra/ \
-          --namespace osac \
-          --create-namespace \
-          --values values/dev/infra.yaml \
-          --timeout 5m \
-          --wait
-        helm install osac charts/osac/ \
-          --namespace osac \
-          --values values/dev/instance.yaml \
-          --set service.externalHostname=fulfillment-api.osac.svc.cluster.local \
-          --set service.internalHostname=fulfillment-internal-api.osac.svc.cluster.local \
-          --set validation.enabled=false \
-          --set aap.bootstrap.enabled=false \
-          --set aap.aap.instance.enabled=false \
-          --set dbMigrate.enabled=false \
-          --timeout 10m \
-          --wait
+      env:
+        CONTAINER_TOOL: docker
+      run: make -C osac-installer install-osac PLATFORM=kind PROFILE=dev NS=osac
 
     - name: Check deployed resources
       if: always()
       run: |
+        export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"
         echo "=== Pods ==="
         kubectl get pods -n osac
         echo "=== Deployments ==="
@@ -360,18 +343,11 @@ jobs:
         echo "=== Helm releases ==="
         helm list -n osac
 
+    # make install-osac is `helm upgrade --install` -- invoking it again
+    # against an unchanged values file/chart IS the real idempotency test,
+    # using the same real command as the initial deploy above rather than a
+    # hand-copied `helm upgrade` invocation that could drift from it.
     - name: Test idempotency (helm upgrade with no changes)
-      continue-on-error: true
-      working-directory: osac-installer
-      run: |
-        helm upgrade osac charts/osac/ \
-          --namespace osac \
-          --values values/dev/instance.yaml \
-          --set service.externalHostname=fulfillment-api.osac.svc.cluster.local \
-          --set service.internalHostname=fulfillment-internal-api.osac.svc.cluster.local \
-          --set validation.enabled=false \
-          --set aap.bootstrap.enabled=false \
-          --set aap.aap.instance.enabled=false \
-          --set dbMigrate.enabled=false \
-          --timeout 10m \
-          --wait
+      env:
+        CONTAINER_TOOL: docker
+      run: make -C osac-installer install-osac PLATFORM=kind PROFILE=dev NS=osac

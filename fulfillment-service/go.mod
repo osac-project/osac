@@ -65,7 +65,7 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
-	github.com/charmbracelet/ultraviolet v0.0.0-20260811164956-006e29f97886 // indirect
+	github.com/charmbracelet/ultraviolet v0.0.0-20260812204455-68fa937c71be // indirect
 	github.com/charmbracelet/x/ansi v0.11.8 // indirect
 	github.com/charmbracelet/x/exp/slice v0.0.0-20260823001701-96af6d2cb5f6 // indirect
 	github.com/charmbracelet/x/term v0.2.2 // indirect

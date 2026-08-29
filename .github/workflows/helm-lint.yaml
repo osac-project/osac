@@ -96,7 +96,7 @@ jobs:
 
     - name: Set up Go
       if: steps.should-run.outputs.run
-      uses: actions/setup-go@v6
+      uses: actions/setup-go@v7
       with:
         go-version: stable
 

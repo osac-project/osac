@@ -7,7 +7,7 @@ require (
 	github.com/gophercloud/gophercloud/v2 v2.13.0
 	github.com/gophercloud/utils/v2 v2.0.0-20260409164906-cd2167a8681a
 	github.com/metal3-io/baremetal-operator/apis v0.13.3
-	github.com/onsi/ginkgo/v2 v2.32.0
+	github.com/onsi/ginkgo/v2 v2.32.1
 	github.com/onsi/gomega v1.42.1
 	github.com/osac-project/osac/osac-operator v0.0.10
 	github.com/osac-project/osac/osac-operator/api v0.0.7

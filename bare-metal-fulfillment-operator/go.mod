@@ -4,8 +4,8 @@ go 1.26.3
 
 require (
 	github.com/go-logr/logr v1.4.4
-	github.com/gophercloud/gophercloud/v2 v2.13.0
-	github.com/gophercloud/utils/v2 v2.0.0-20260409164906-cd2167a8681a
+	github.com/gophercloud/gophercloud/v2 v2.14.0
+	github.com/gophercloud/utils/v2 v2.0.0-20260824073324-42b9474d09d4
 	github.com/metal3-io/baremetal-operator/apis v0.13.3
 	github.com/onsi/ginkgo/v2 v2.32.0
 	github.com/onsi/gomega v1.42.1
@@ -53,7 +53,7 @@ require (
 	github.com/go-openapi/swag/typeutils v0.29.1 // indirect
 	github.com/go-openapi/swag/yamlutils v0.29.1 // indirect
 	github.com/go-task/slim-sprig/v3 v3.0.0 // indirect
-	github.com/gofrs/uuid/v5 v5.4.0 // indirect
+	github.com/gofrs/uuid/v5 v5.5.1 // indirect
 	github.com/google/cel-go v0.30.0 // indirect
 	github.com/google/gnostic-models v0.7.0 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect

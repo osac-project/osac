@@ -256,7 +256,7 @@ python-esiclient @ git+https://github.com/cci-moc/python-esiclient.git@b9c4d2971
     # via osac-aap (pyproject.toml)
 python-esileapclient==1.1.0
     # via osac-aap (pyproject.toml)
-python-ironicclient==6.0.0
+python-ironicclient==6.3.0
     # via
     #   osac-aap (pyproject.toml)
     #   python-esiclient

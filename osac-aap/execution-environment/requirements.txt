@@ -48,7 +48,7 @@ cliff==4.13.2
     #   osc-lib
     #   python-ironicclient
     #   python-openstackclient
-cmd2==3.4.0
+cmd2==4.2.2
     # via cliff
 cryptography==46.0.7
     # via

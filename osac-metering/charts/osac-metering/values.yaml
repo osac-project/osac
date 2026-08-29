@@ -58,3 +58,15 @@ m360Adapter:
     apiUrl: ""
     apiKeySecret: ""     # name of K8s Secret with key "api-key"
     apiVersion: "v1"
+
+## Cost Management adapter — batches canonical CloudEvents into Cost's
+## durable ingress endpoint. The API token is mounted from a Secret.
+costManagementAdapter:
+  enabled: false
+  image:
+    repository: ghcr.io/osac-project/metering-cost-management-adapter
+    tag: latest
+    pullPolicy: Always
+  costManagement:
+    apiUrl: ""
+    apiTokenSecret: "" # name of a K8s Secret with key "api-token"

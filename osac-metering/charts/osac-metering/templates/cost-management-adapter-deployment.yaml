@@ -1,0 +1,155 @@
+{{- if .Values.costManagementAdapter.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "osac-metering.fullname" . }}-cost-management-adapter
+  labels:
+    {{- include "osac-metering.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cost-management-adapter
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "osac-metering.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: cost-management-adapter
+  template:
+    metadata:
+      labels:
+        {{- include "osac-metering.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: cost-management-adapter
+    spec:
+      serviceAccountName: {{ include "osac-metering.fullname" . }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: kafka-secrets
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        - name: cost-management-api-token
+          secret:
+            secretName: {{ required "costManagementAdapter.costManagement.apiTokenSecret is required when costManagementAdapter is enabled" .Values.costManagementAdapter.costManagement.apiTokenSecret }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 10Mi
+      initContainers:
+        - name: fetch-kafka-secrets
+          image: {{ .Values.cliImage | default "quay.io/openshift/origin-cli:4.20.0" }}
+          env:
+            - name: HOME
+              value: /tmp
+            - name: SOURCE_NS
+              value: {{ include "osac-metering.kafkaClusterNamespace" . }}
+            - name: SASL_SECRET
+              value: osac-metering-cost-management-adapter
+            - name: CA_SECRET
+              value: {{ include "osac-metering.kafkaCaSecret" . }}
+          volumeMounts:
+            - name: kafka-secrets
+              mountPath: /etc/kafka-secrets
+            - name: tmp
+              mountPath: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+          command:
+            - /bin/bash
+            - -euo
+            - pipefail
+            - -c
+            - |
+              DEADLINE=$((SECONDS + 300))
+              wait_for_secret() {
+                local name=$1 ns=$2
+                echo "Waiting for secret ${name} in ${ns} (timeout 5m)..."
+                until oc get secret "${name}" -n "${ns}" > /dev/null 2>&1; do
+                  if [ $SECONDS -ge $DEADLINE ]; then
+                    echo "Timed out waiting for secret ${name} in ${ns}"
+                    exit 1
+                  fi
+                  sleep 5
+                done
+              }
+              wait_for_secret "${SASL_SECRET}" "${SOURCE_NS}"
+              wait_for_secret "${CA_SECRET}" "${SOURCE_NS}"
+              oc get secret "${SASL_SECRET}" -n "${SOURCE_NS}" -o jsonpath='{.data.password}' | base64 -d > /etc/kafka-secrets/password
+              oc get secret "${CA_SECRET}" -n "${SOURCE_NS}" -o jsonpath='{.data.ca\.crt}' | base64 -d > /etc/kafka-secrets/ca.crt
+      containers:
+        - name: cost-management-adapter
+          image: "{{ required "costManagementAdapter.image.repository is required when costManagementAdapter is enabled" .Values.costManagementAdapter.image.repository }}:{{ required "costManagementAdapter.image.tag is required when costManagementAdapter is enabled" .Values.costManagementAdapter.image.tag }}"
+          imagePullPolicy: {{ .Values.costManagementAdapter.image.pullPolicy | default "Always" }}
+          env:
+            - name: KAFKA_BROKERS
+              value: {{ include "osac-metering.kafkaBrokers" . | quote }}
+            - name: KAFKA_TLS_ENABLED
+              value: "true"
+            - name: KAFKA_TLS_CA_CERT
+              value: /etc/kafka-secrets/ca.crt
+            - name: KAFKA_SASL_USERNAME
+              value: osac-metering-cost-management-adapter
+            - name: KAFKA_CONSUMER_GROUP
+              value: osac-metering-cost-management-adapter
+            - name: KAFKA_SASL_PASSWORD_FILE
+              value: /etc/kafka-secrets/password
+            - name: COST_MANAGEMENT_API_URL
+              value: {{ required "costManagementAdapter.costManagement.apiUrl is required when costManagementAdapter is enabled" .Values.costManagementAdapter.costManagement.apiUrl | quote }}
+            - name: COST_MANAGEMENT_API_TOKEN_FILE
+              value: /etc/cost-management/api-token
+            - name: DLQ_TOPIC
+              value: "osac.metering.dlq"
+            - name: DLQ_ENABLED
+              value: "true"
+            - name: METRICS_ADDR
+              value: ":8080"
+          volumeMounts:
+            - name: kafka-secrets
+              mountPath: /etc/kafka-secrets
+              readOnly: true
+            - name: cost-management-api-token
+              mountPath: /etc/cost-management
+              readOnly: true
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+{{- end }}

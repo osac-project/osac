@@ -725,6 +725,14 @@ jobs:
       success() &&
       (github.event.workflow_run.name == 'Build metering-service image' ||
        github.event.workflow_run.name == 'Build metering-m360-adapter image')
+    # Both triggering workflows completing for the same tag queues two runs
+    # of this job. The steps below are idempotent either way (OCI pushes,
+    # gh release create/edit), but serialize them (don't cancel, just queue)
+    # so the second run isn't wastefully polling/packaging/pushing in
+    # parallel with the first.
+    concurrency:
+      group: publish-metering-chart-${{ github.event.workflow_run.head_branch }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -820,6 +828,10 @@ jobs:
       success() &&
       (github.event.workflow_run.name == 'Build metering-service image' ||
        github.event.workflow_run.name == 'Build metering-m360-adapter image')
+    # Same reasoning as publish-metering-chart's concurrency group above.
+    concurrency:
+      group: create-metering-release-${{ github.event.workflow_run.head_branch }}
+      cancel-in-progress: false
     permissions:
       contents: write
     steps:

@@ -534,8 +534,16 @@ build_slack_charts_published_summary() {
 
     table=$(_build_slack_charts_table "${manifest_file}" true "${repo_owner}")
 
-    # Plain mrkdwn (no code fence): linked version cells use <url|text> markup.
-    printf '*Charts published:*\n%s' "${table}"
+    # Wrapped in a triple-backtick code fence to keep the box-drawing table
+    # monospace-aligned -- unfenced, Slack renders it in a proportional font
+    # and the columns don't line up (confirmed live: a real posted message
+    # without the fence showed a jagged, misaligned table). The fence does
+    # NOT break the <url|text> link markup used for the per-chart GHCR links
+    # -- also confirmed live: an earlier fenced message still rendered the
+    # linked version cell as a real, clickable, underlined link with a
+    # working preview tooltip. Slack supports both at once; the previous
+    # comment here assumed otherwise, which was the actual bug.
+    printf '*Charts published:*\n```\n%s\n```' "${table}"
 
     ui_source=$(_osac_ui_source_from_manifest "${manifest_file}") || true
     if [[ -n "${ui_source}" ]]; then

@@ -1,1 +1,13 @@
-.containerignore
+# Allowlist: exclude everything, then include only what Containerfiles need.
+*
+
+# Go workspace
+!go.work
+!go.work.sum
+
+# Go components (full source for those that are cross-module dependencies)
+!fulfillment-service/
+!bare-metal-fulfillment-operator/
+!osac-operator/
+!osac-csi-driver/
+!osac-metering/

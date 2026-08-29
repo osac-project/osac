@@ -21,7 +21,7 @@ on:
     # this workflow at all without each component's build workflow name also
     # present in this list (missed once for osac-aap, see OSAC-3511/#49 --
     # don't repeat that).
-    workflows: ["Container image", "Build container image", "Build execution environment", "Build bare-metal-fulfillment-operator image", "Build osac-csi-driver image", "Build metering-service image"]
+    workflows: ["Container image", "Build container image", "Build execution environment", "Build bare-metal-fulfillment-operator image", "Build osac-csi-driver image", "Build metering-service image", "Build metering-m360-adapter image"]
     types: [completed]
 
 env:
@@ -712,7 +712,19 @@ jobs:
   publish-metering-chart:
     name: Publish metering chart
     needs: guard
-    if: success() && github.event.workflow_run.name == 'Build metering-service image'
+    # osac-metering is the only component with more than one tag-triggered
+    # image-build workflow (metering-service, m360-adapter, echo-adapter --
+    # see build-metering-*-image.yaml, all on the same osac-metering/v* tag).
+    # They're fully independent workflows with no ordering between them, so
+    # this job can be triggered by either the service or the m360-adapter
+    # build completing -- whichever fires first waits for the other via the
+    # "Wait for sibling image builds" step below rather than assuming it's
+    # already done. echo-adapter's image isn't pinned at release time (its
+    # values.yaml block is commented out by default), so it doesn't gate this.
+    if: >
+      success() &&
+      (github.event.workflow_run.name == 'Build metering-service image' ||
+       github.event.workflow_run.name == 'Build metering-m360-adapter image')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -757,6 +769,18 @@ jobs:
           exit 1
         fi
 
+    - name: Wait for sibling image builds
+      # This job only got triggered by ONE of the two builds that matter for
+      # this chart's release completing -- wait for the other one's image to
+      # actually land in GHCR too before pinning both tags into values.yaml
+      # and packaging. 30 attempts * 20s = up to 10m, generous relative to a
+      # typical container build.
+      run: |
+        set -euo pipefail
+        VERSION="v${{ steps.version.outputs.version }}"
+        .github/scripts/wait-for-ghcr-image.sh "${REGISTRY}/osac-project/metering-service" "${VERSION}" 30 20
+        .github/scripts/wait-for-ghcr-image.sh "${REGISTRY}/osac-project/metering-m360-adapter" "${VERSION}" 30 20
+
     - name: Update image tags in values.yaml
       working-directory: osac-metering
       # sed exits 0 even when a pattern matches zero lines, so a future values.yaml
@@ -791,7 +815,11 @@ jobs:
     name: Create GitHub Release (osac-metering)
     runs-on: ubuntu-latest
     needs: [guard, publish-metering-chart]
-    if: success() && github.event.workflow_run.name == 'Build metering-service image'
+    # Same either/or gate as publish-metering-chart above -- see its comment.
+    if: >
+      success() &&
+      (github.event.workflow_run.name == 'Build metering-service image' ||
+       github.event.workflow_run.name == 'Build metering-m360-adapter image')
     permissions:
       contents: write
     steps:

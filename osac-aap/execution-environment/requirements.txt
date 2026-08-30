@@ -264,7 +264,7 @@ python-keystoneclient==5.8.0
     # via python-openstackclient
 python-novaclient==17.4.0
     # via python-esiclient
-python-openstackclient==9.0.0
+python-openstackclient==10.3.0
     # via
     #   osac-aap (pyproject.toml)
     #   python-esiclient

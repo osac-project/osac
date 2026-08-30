@@ -1,6 +1,6 @@
 # Build context: mono-repo root (not osac-operator/ alone).
 # Invoke with: podman build -f osac-operator/Containerfile .
-FROM registry.access.redhat.com/ubi10/go-toolset:1.26 AS builder
+FROM registry.access.redhat.com/ubi10/go-toolset:1.26.7-1787775323 AS builder
 ARG TARGETOS
 ARG TARGETARCH
 

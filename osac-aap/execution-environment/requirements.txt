@@ -69,7 +69,7 @@ dogpile-cache==1.5.0
     # via
     #   openstacksdk
     #   python-ironicclient
-durationpy==0.10
+durationpy==0.11
     # via kubernetes
 esisdk==1.5.0
     # via

@@ -129,7 +129,7 @@ mdurl==0.1.2
     # via markdown-it-py
 metalsmith==2.5.0
     # via python-esiclient
-msgpack==1.1.2
+msgpack==1.2.2
     # via oslo-serialization
 multidict==6.7.1
     # via

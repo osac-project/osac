@@ -143,6 +143,64 @@ retag_component_image() {
     skopeo inspect "docker://${image_repo}:${target_version}" > /dev/null
 }
 
+# Usage: stamp_component_image_refs <component> <umbrella_values> <tag_value>
+# Stamps every values.yaml field (the component's own sub-chart plus the
+# umbrella's corresponding field) that references <component>'s image to
+# <tag_value>. Called twice per nightly run with two different tag_values:
+# once in `prepare` with the provisional sha-<short> tag (before the image
+# is even built, so E2E has something consistent to install), and once more
+# in `publish` with the final resolved nightly version (after every test box
+# passes and the image has been promoted via retag_component_image) --
+# publish's call re-stamps the same fields in place before packaging, so the
+# shipped chart's image tag literally equals the chart version. Components
+# with no image of their own (operator-crds, bmf-crds, csi-backends) are not
+# handled here -- there's nothing to stamp.
+stamp_component_image_refs() {
+    local component="$1" umbrella_values="$2" tag_value="$3"
+
+    case "${component}" in
+        osac-operator)
+            TAG_VALUE="${tag_value}" yq -i '.image.tag = strenv(TAG_VALUE)' "osac-operator/charts/operator/values.yaml"
+            stamp_umbrella_nested_field "${umbrella_values}" operator image tag "${tag_value}"
+            ;;
+        bare-metal-fulfillment-operator)
+            TAG_VALUE="${tag_value}" yq -i '.image.tag = strenv(TAG_VALUE)' "bare-metal-fulfillment-operator/charts/operator/values.yaml"
+            stamp_umbrella_nested_field "${umbrella_values}" bmf image tag "${tag_value}"
+            ;;
+        fulfillment-service)
+            IMAGE_REF="ghcr.io/osac-project/fulfillment-service:${tag_value}" \
+                yq -i '.images.service = strenv(IMAGE_REF)' "fulfillment-service/charts/service/values.yaml"
+            stamp_umbrella_nested_field "${umbrella_values}" service images service "ghcr.io/osac-project/fulfillment-service:${tag_value}"
+            ;;
+        osac-aap)
+            IMAGE_REF="ghcr.io/osac-project/osac-aap:${tag_value}" \
+                yq -i '.bootstrap.image = strenv(IMAGE_REF)' "osac-aap/charts/aap/values.yaml"
+            stamp_umbrella_nested_field "${umbrella_values}" aap bootstrap image "ghcr.io/osac-project/osac-aap:${tag_value}"
+            ;;
+        osac-metering)
+            TAG_VALUE="${tag_value}" yq -i '.image.tag = strenv(TAG_VALUE)' "osac-metering/charts/osac-metering/values.yaml"
+            stamp_umbrella_nested_field "${umbrella_values}" metering image tag "${tag_value}"
+            # m360Adapter has no umbrella-level override field -- stamp only
+            # the subchart's own values.yaml. Stamped unconditionally even
+            # though disabled by default: cheap, and avoids a stale
+            # provisional/placeholder tag surfacing the moment someone flips
+            # m360Adapter.enabled=true on a nightly install. (echoAdapter's
+            # image block is commented out by default in this chart -- only
+            # the vmaas-ci CI overlay enables and overrides it, stamped
+            # separately.)
+            TAG_VALUE="${tag_value}" yq -i '.m360Adapter.image.tag = strenv(TAG_VALUE)' "osac-metering/charts/osac-metering/values.yaml"
+            ;;
+        osac-csi-driver)
+            TAG_VALUE="${tag_value}" yq -i '.image.tag = strenv(TAG_VALUE)' "osac-csi-driver/charts/csi-driver/values.yaml"
+            stamp_umbrella_nested_field "${umbrella_values}" csiDriver image tag "${tag_value}"
+            ;;
+        *)
+            echo "::error::stamp_component_image_refs: unknown component '${component}'" >&2
+            return 1
+            ;;
+    esac
+}
+
 # Strip characters that break or inject GitHub Actions workflow commands.
 _gha_sanitize_for_message() {
     local value="$1"

@@ -10,7 +10,7 @@ require (
 	github.com/go-logr/logr v1.4.4
 	github.com/go-logr/stdr v1.2.2
 	github.com/onsi/ginkgo/v2 v2.32.1
-	github.com/onsi/gomega v1.42.1
+	github.com/onsi/gomega v1.43.0
 	github.com/prometheus/client_golang v1.24.1
 	github.com/xdg-go/scram v1.2.0
 )

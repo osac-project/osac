@@ -690,6 +690,13 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkHandoffReboot(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
+	if r.NetworkingProvider == nil {
+		log.Info("Networking provider not configured, skipping network-handoff reboot")
+		bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
+			metav1.ConditionTrue, "Skipped", "Networking provider not configured")
+		return ctrl.Result{}, nil
+	}
+
 	handoffCond := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete)
 
 	// Already complete — no-op
@@ -985,8 +992,9 @@ func (r *BareMetalInstanceReconciler) handleDeletion(ctx context.Context, bareMe
 	}
 
 	// Power off BEFORE moving the port back to the provisioning network — ensures tenant
-	// workloads never run on the provisioning network.
-	if len(bareMetalInstance.Spec.NetworkAttachments) > 0 && r.ManagementClient != nil {
+	// workloads never run on the provisioning network. Only needed when networking
+	// provisioning is enabled (port was actually moved to the tenant network).
+	if len(bareMetalInstance.Spec.NetworkAttachments) > 0 && r.ManagementClient != nil && r.NetworkingProvider != nil {
 		result, err = r.reconcileNetworkOffboardShutdown(ctx, bareMetalInstance)
 		if err != nil {
 			return result, err

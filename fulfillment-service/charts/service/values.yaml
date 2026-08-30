@@ -13,30 +13,24 @@
 
 # This indicates if the chart is being deployed to an OpenShift or Kind cluster. Valid values are `openshift` and `kind`.
 variant: kind
-
 # This indicates if the debug mode is enabled. This will run the services under the control of the 'dlv' debugger
 # and is intended only for development environments.
 debug: false
-
 # Certificate configuration:
 certs:
-
   # This defines the cert-manager issuer that will be used for the certificates used by the service. The default is to
   # use a cluster wide issuer, but there is no default value for the name, so it must be set.
   issuerRef:
     kind: ClusterIssuer
     name:
-
   # This defines the trusted CA certificates bundle. It must be the name of a configmap in the release namespace
   # that contains trusted CA certificates in PEM format.
   caBundle:
     configMap:
-
 # Hostname for the external network, which gives regular users access to the public API. This value is required because
 # the TLS certificates need to be generated with the correct host names. In a typical environment the external network
 # is publicly reachable.
 externalHostname:
-
 # Hostname for the internal network, which gives administrators access to both the public and private APIs. This value
 # is required because the TLS certificates need to be generated with the correct host names. The internal network should
 # be restricted so that only administrators can reach it. In a typical environment this would be a network confined to
@@ -44,13 +38,10 @@ externalHostname:
 # is protected by authentication and authorization, but it is good practice to add network-level isolation as an
 # additional layer of defense.
 internalHostname:
-
 # Authentication and authorization configuration:
 auth:
-
   # This defines the URL of the OAuth issuer used for authentication. This parameter is mandatory.
   issuerUrl:
-
   # List of sources for the OAuth client credentials used by the controller to authenticate to the fulfillment API.
   # The controller uses the OAuth client credentials flow with the issuer URL specified in `auth.issuerUrl`.
   #
@@ -79,43 +70,35 @@ auth:
   # The keys of the ConfigMap and Secret don't need to match the parameter names. In the above example the client
   # identifier is in an `id` key but the credential parameter name is `client-id`.
   controllerCredentials:
-
   # List of names of Kubernetes service accounts that are allowed to access the private API with administrator
   # permissions. These are intended only for emergency situations, for example when the regular authentication
   # mechanisms are not working. The service accounts are expected to be in the namespace where the service is deployed.
   emergencyServiceAccounts:
-  - admin
-
+    - admin
 # Logging configuration:
 log:
-
   # This defines the log level for all components. Valid values are 'debug', 'info', 'warn', and 'error'.
   #
   # Note that setting this to 'debug' will significantly increase the size of logs and may impact service performance.
   level: info
-
   # This controls whether HTTP/gRPC headers are logged.
   #
   # Note that setting this to 'true' may result in sensitive information being logged, avoid doing this in production
   # environments.
   headers: false
-
   # This controls whether HTTP/gRPC request and response bodies are logged.
   #
   # Note that setting this to 'true' may result in sensitive information being logged, avoid doing this in production
   # environments.
   bodies: false
-
 # Image configuration:
 images:
-  service: ghcr.io/osac/fulfillment-service:main  # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
+  service: ghcr.io/osac-project/fulfillment-service:0.0.91-nightly.20260830.a0c8e89.51.1 # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
   pullPolicy: IfNotPresent
   envoy: docker.io/envoyproxy/envoy:v1.37.1
-
 # Database connection configuration. The service expects an external PostgreSQL database to be available. The database
 # should be created before installing this chart.
 database:
-
   # List of sources for database connection parameters. Each entry maps keys from a ConfigMap or Secret to named
   # database connection parameters. Each item has a 'key' field that indicates the name of the key in the ConfigMap (or
   # Secret) and a 'param' field indicating the name of the connection parameter.
@@ -150,18 +133,14 @@ database:
   # The keys of the ConfigMap and secret don't need to match the parameter names. In the above example the URL is in a
   # `uri` key but the connection parameter name is `url`.
   connection: []
-
 # Identity provider configuration. The controller uses this to manage tenants in the identity provider via the
 # tenant reconciler. This parameter is mandatory.
 idp:
-
   # IDP provider type. Currently only 'keycloak' is supported.
   provider: keycloak
-
   # Base URL of the identity provider (e.g., https://keycloak.keycloak.svc.cluster.local:8000). This parameter is
   # mandatory.
   url:
-
   # List of sources for the IDP OAuth client credentials. The controller uses the OAuth client credentials flow to
   # authenticate with the identity provider's admin API. The credentials must have sufficient privileges to manage
   # organizations and users (for Keycloak, this means the realm-management client roles: manage-realm, manage-users,
@@ -184,46 +163,34 @@ idp:
   #
   # This parameter is mandatory.
   credentials:
-
 # Vault-compatible secret store configuration.
 # When the endpoint is set, the service verifies connectivity to the vault at startup.
 # When empty, Vault integration is disabled.
 vault:
-
   # Vault API endpoint URL (e.g., http://openbao.openbao.svc.cluster.local:8200).
   endpoint: ""
-
   # Parent namespace path within the Vault-compatible store.
   namespace: osac
-
   # KV v2 secret engine mount path within tenant namespaces.
   kvMountPath: secret
-
   # Vault role name used when authenticating with JWT for lifecycle operations.
   lifecycleRole: ""
-
   # Auth method mount path in the Vault parent namespace for lifecycle JWT authentication.
   lifecycleMountPath: "jwt"
-
   # Keycloak client identifier used for Vault authentication.
   keycloakClientId: ""
-
   # Keycloak OIDC issuer URL (e.g. https://keycloak/realms/osac) used to obtain JWTs
   # for Vault authentication and to configure JWT auth in tenant Vault namespaces.
   keycloakIssuerUrl: ""
-
   # Expected audience claim in Keycloak JWTs for Vault JWT auth role configuration.
   keycloakAudience: "osac-api"
-
   # Trusted CA certificates bundle for TLS connections to the Vault-compatible secret store.
   # When set, this must be the name of a ConfigMap in the release namespace containing
   # trusted CA certificates in PEM format under the key 'bundle.pem'.
   # When empty, the shared CA pool is used.
   caBundle:
     configMap: ""
-
   # Volume sources for the Keycloak client secret used for Vault authentication.
   credentials: []
-
 consoleProxy:
   disabled: false

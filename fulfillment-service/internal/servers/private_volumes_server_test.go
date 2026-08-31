@@ -67,14 +67,35 @@ var _ = Describe("Private volumes server", func() {
 			Expect(server).To(BeNil())
 		})
 
-		It("Fails if tier resolver is not set", func() {
+		It("Can be built without a tier resolver (used by the read-only public delegate)", func() {
 			server, err := NewPrivateVolumesServer().
 				SetLogger(logger).
 				SetAttributionLogic(attribution).
 				SetTenancyLogic(tenancy).
 				Build()
-			Expect(err).To(MatchError("tier resolver is mandatory"))
-			Expect(server).To(BeNil())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(server).ToNot(BeNil())
+		})
+
+		It("Fails Create if tier resolver is not set", func() {
+			server, err := NewPrivateVolumesServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = server.Create(ctx, privatev1.VolumesCreateRequest_builder{
+				Object: privatev1.Volume_builder{
+					Metadata: privatev1.Metadata_builder{Name: "no-resolver"}.Build(),
+					Spec: privatev1.VolumeSpec_builder{
+						StorageTier: "gold",
+						SizeGib:     100,
+						AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("tier resolver is not configured"))
 		})
 	})
 

@@ -22,6 +22,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
@@ -46,6 +47,7 @@ type PrivateVolumesServerBuilder struct {
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
 	tierResolver      TierResolverFunc
+	filterDesc        protoreflect.MessageDescriptor
 }
 
 var _ privatev1.VolumesServer = (*PrivateVolumesServer)(nil)
@@ -92,6 +94,15 @@ func (b *PrivateVolumesServerBuilder) SetTierResolver(value TierResolverFunc) *P
 	return b
 }
 
+// SetFilterDesc sets the protobuf message descriptor used to validate and translate CEL filter
+// expressions. When unset the DAO defaults to the private Volume descriptor. The public volumes
+// server sets this to the public Volume descriptor so that callers can only filter on fields that
+// are visible through the public API.
+func (b *PrivateVolumesServerBuilder) SetFilterDesc(value protoreflect.MessageDescriptor) *PrivateVolumesServerBuilder {
+	b.filterDesc = value
+	return b
+}
+
 func (b *PrivateVolumesServerBuilder) Build() (result *PrivateVolumesServer, err error) {
 	if b.logger == nil {
 		err = errors.New("logger is mandatory")
@@ -101,10 +112,8 @@ func (b *PrivateVolumesServerBuilder) Build() (result *PrivateVolumesServer, err
 		err = errors.New("tenancy logic is mandatory")
 		return
 	}
-	if b.tierResolver == nil {
-		err = errors.New("tier resolver is mandatory")
-		return
-	}
+	// tierResolver is required only for the mutating Create path; the read-only public volumes
+	// server builds this delegate without one. Its absence is enforced in Create instead of here.
 
 	generic, err := NewGenericServer[*privatev1.Volume]().
 		SetLogger(b.logger).
@@ -113,6 +122,7 @@ func (b *PrivateVolumesServerBuilder) Build() (result *PrivateVolumesServer, err
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetFilterDesc(b.filterDesc).
 		Build()
 	if err != nil {
 		return
@@ -141,6 +151,11 @@ func (s *PrivateVolumesServer) Get(ctx context.Context,
 func (s *PrivateVolumesServer) Create(ctx context.Context,
 	request *privatev1.VolumesCreateRequest) (response *privatev1.VolumesCreateResponse, err error) {
 	vol := request.GetObject()
+
+	if s.tierResolver == nil {
+		err = grpcstatus.Errorf(grpccodes.Internal, "tier resolver is not configured for this server")
+		return
+	}
 
 	err = s.validateVolumeCreate(vol)
 	if err != nil {

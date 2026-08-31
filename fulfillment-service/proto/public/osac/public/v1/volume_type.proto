@@ -13,19 +13,14 @@
 
 syntax = "proto3";
 
-package osac.private.v1;
+package osac.public.v1;
 
 import "buf/validate/validate.proto";
-import "cleanapi/cleanapi.proto";
-import "osac/private/v1/metadata_type.proto";
-import "osac/private/v1/storage_common_type.proto";
-
-option (cleanapi.file).private = true;
+import "osac/public/v1/metadata_type.proto";
 
 // Emit the public counterpart of this type into the osac.public.v1 package. Fields marked with
 // [(cleanapi.field).private = true] below (internal routing details) are stripped from the public
 // Volume type.
-option (cleanapi.file).package = "osac.public.v1";
 
 // Access modes for Volume resources, matching Kubernetes PersistentVolume access modes.
 // https://kubernetes.io/docs/concepts/storage/persistent-volumes/#access-modes
@@ -112,20 +107,4 @@ message VolumeStatus {
   // Human-readable message providing additional details about the current state.
   optional string message = 2;
 
-  // Opaque identifier assigned by the vendor storage array. Set by the osac-operator after vendor
-  // CSI CreateVolume succeeds. Visible only through the private API.
-  string vendor_volume_id = 3 [(cleanapi.field).private = true];
-
-  // Name of the StorageBackend that serves this volume. Resolved during tier resolution at
-  // creation time. Visible only through the private API.
-  string backend = 4 [(cleanapi.field).private = true];
-
-  // Storage protocol used for this volume. Resolved during tier resolution at creation time.
-  // Visible only through the private API.
-  StorageProtocol protocol = 5 [(cleanapi.field).private = true];
-
-  // Identifier of the hub cluster where the Volume CR is created. Set by the fulfillment-service
-  // reconciler when selecting the hub. Used to look up the hub connection during delete. Visible
-  // only through the private API.
-  string hub = 6 [(cleanapi.field).private = true];
 }

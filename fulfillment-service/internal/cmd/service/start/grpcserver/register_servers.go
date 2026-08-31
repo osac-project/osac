@@ -985,6 +985,20 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	}
 	privatev1.RegisterProjectsServer(registrar, privateProjectsServer)
 
+	// Create the volumes server:
+	deps.Logger.InfoContext(ctx, "Creating volumes server")
+	volumesServer, err := servers.NewVolumesServer().
+		SetLogger(deps.Logger).
+		SetNotifier(deps.Notifier).
+		SetAttributionLogic(deps.PublicAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create volumes server: %w", err)
+	}
+	publicv1.RegisterVolumesServer(registrar, volumesServer)
+
 	// Create the private volumes server:
 	deps.Logger.InfoContext(ctx, "Creating private volumes server")
 	privateVolumesServer, err := servers.NewPrivateVolumesServer().

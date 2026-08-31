@@ -16,6 +16,7 @@ package fieldutil
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -24,6 +25,23 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/maputil"
 )
+
+// ParseEnum converts a CLI string flag value to a protobuf enum using the provided mapping.
+// The value is matched case-insensitively against the map keys. If not found, the error
+// message lists the valid keys in alphabetical order.
+func ParseEnum[T ~int32](value string, mapping map[string]T, flagName string) (T, error) {
+	normalized := strings.ToLower(value)
+	result, ok := mapping[normalized]
+	if !ok {
+		valid := make([]string, 0, len(mapping))
+		for k := range mapping {
+			valid = append(valid, k)
+		}
+		sort.Strings(valid)
+		return 0, fmt.Errorf("invalid %s %q, valid values: %s", flagName, value, strings.Join(valid, ", "))
+	}
+	return result, nil
+}
 
 // ApplyFields applies --set KEY=VALUE pairs to a proto.Message via JSON round-trip.
 // Paths prefixed with "template_parameters." are wrapped in protobuf Any format.

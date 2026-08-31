@@ -22,6 +22,7 @@ import (
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -118,11 +119,11 @@ var _ = Describe("Generic mapper", func() {
 					NodeSets: map[string]*privatev1.ClusterNodeSet{
 						"my_node_set": privatev1.ClusterNodeSet_builder{
 							HostType: privatev1.HostTypeReference_builder{Id: "my_host_type"}.Build(),
-							Size:     123,
+							Size:     proto.Int32(123),
 						}.Build(),
 						"your_node_set": privatev1.ClusterNodeSet_builder{
 							HostType: privatev1.HostTypeReference_builder{Id: "your_host_type"}.Build(),
-							Size:     456,
+							Size:     proto.Int32(456),
 						}.Build(),
 					},
 				}.Build(),
@@ -133,11 +134,11 @@ var _ = Describe("Generic mapper", func() {
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"my_node_set": publicv1.ClusterNodeSet_builder{
 							HostType: publicv1.HostTypeReference_builder{Id: "my_host_type"}.Build(),
-							Size:     123,
+							Size:     proto.Int32(123),
 						}.Build(),
 						"your_node_set": publicv1.ClusterNodeSet_builder{
 							HostType: publicv1.HostTypeReference_builder{Id: "your_host_type"}.Build(),
-							Size:     456,
+							Size:     proto.Int32(456),
 						}.Build(),
 					},
 				}.Build(),
@@ -316,7 +317,7 @@ var _ = Describe("Generic mapper", func() {
 					NodeSets: map[string]*privatev1.ClusterNodeSet{
 						"new_node_set": privatev1.ClusterNodeSet_builder{
 							HostType: privatev1.HostTypeReference_builder{Id: "new_host_type"}.Build(),
-							Size:     789,
+							Size:     proto.Int32(789),
 						}.Build(),
 					},
 				}.Build(),
@@ -326,7 +327,7 @@ var _ = Describe("Generic mapper", func() {
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"existing_node_set": publicv1.ClusterNodeSet_builder{
 							HostType: publicv1.HostTypeReference_builder{Id: "existing_host_type"}.Build(),
-							Size:     456,
+							Size:     proto.Int32(456),
 						}.Build(),
 					},
 				}.Build(),
@@ -336,11 +337,11 @@ var _ = Describe("Generic mapper", func() {
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"existing_node_set": publicv1.ClusterNodeSet_builder{
 							HostType: publicv1.HostTypeReference_builder{Id: "existing_host_type"}.Build(),
-							Size:     456,
+							Size:     proto.Int32(456),
 						}.Build(),
 						"new_node_set": publicv1.ClusterNodeSet_builder{
 							HostType: publicv1.HostTypeReference_builder{Id: "new_host_type"}.Build(),
-							Size:     789,
+							Size:     proto.Int32(789),
 						}.Build(),
 					},
 				}.Build(),
@@ -353,7 +354,7 @@ var _ = Describe("Generic mapper", func() {
 					NodeSets: map[string]*privatev1.ClusterNodeSet{
 						"node_set": privatev1.ClusterNodeSet_builder{
 							HostType: privatev1.HostTypeReference_builder{Id: "updated_host_type"}.Build(),
-							Size:     999,
+							Size:     proto.Int32(999),
 						}.Build(),
 					},
 				}.Build(),
@@ -363,7 +364,7 @@ var _ = Describe("Generic mapper", func() {
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"node_set": publicv1.ClusterNodeSet_builder{
 							HostType: publicv1.HostTypeReference_builder{Id: "original_host_type"}.Build(),
-							Size:     123,
+							Size:     proto.Int32(123),
 						}.Build(),
 					},
 				}.Build(),
@@ -373,7 +374,7 @@ var _ = Describe("Generic mapper", func() {
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"node_set": publicv1.ClusterNodeSet_builder{
 							HostType: publicv1.HostTypeReference_builder{Id: "updated_host_type"}.Build(),
-							Size:     999,
+							Size:     proto.Int32(999),
 						}.Build(),
 					},
 				}.Build(),

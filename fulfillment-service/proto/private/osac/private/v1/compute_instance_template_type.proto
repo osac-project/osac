@@ -15,6 +15,7 @@ syntax = "proto3";
 
 package osac.private.v1;
 
+import "buf/validate/validate.proto";
 import "cleanapi/cleanapi.proto";
 import "google/protobuf/any.proto";
 import "osac/private/v1/compute_instance_common_type.proto";
@@ -117,7 +118,7 @@ message ComputeInstanceTemplateSpecDefaults {
   optional ComputeInstanceDisk boot_disk = 4;
 
   // Default run strategy.
-  optional string run_strategy = 5;
+  optional ComputeInstanceRunStrategy run_strategy = 5 [(buf.validate.field).enum.defined_only = true];
 
   // Default instance type. Specifies the default compute configuration for instances
   // created from this template.

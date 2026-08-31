@@ -15,13 +15,12 @@ package diskimage
 
 import (
 	"fmt"
-	"sort"
-	"strings"
 
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
 
 	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/fieldutil"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 )
@@ -116,17 +115,17 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("at least one --architecture is required")
 	}
 
-	sourceType, err := parseEnum(c.sourceType, sourceTypeMap, "source-type")
+	sourceType, err := fieldutil.ParseEnum(c.sourceType, sourceTypeMap, "source-type")
 	if err != nil {
 		return err
 	}
-	guestOsFamily, err := parseEnum(c.guestOsFamily, guestOsFamilyMap, "guest-os-family")
+	guestOsFamily, err := fieldutil.ParseEnum(c.guestOsFamily, guestOsFamilyMap, "guest-os-family")
 	if err != nil {
 		return err
 	}
 	architectures := make([]publicv1.Architecture, len(c.architecture))
 	for i, a := range c.architecture {
-		arch, err := parseEnum(a, architectureMap, "architecture")
+		arch, err := fieldutil.ParseEnum(a, architectureMap, "architecture")
 		if err != nil {
 			return err
 		}
@@ -164,20 +163,6 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	c.console.Infof(ctx, "Created disk image '%s'.\n", response.GetObject().GetId())
 
 	return nil
-}
-
-func parseEnum[T ~int32](value string, mapping map[string]T, flagName string) (T, error) {
-	normalized := strings.ToLower(value)
-	result, ok := mapping[normalized]
-	if !ok {
-		valid := make([]string, 0, len(mapping))
-		for k := range mapping {
-			valid = append(valid, k)
-		}
-		sort.Strings(valid)
-		return 0, fmt.Errorf("invalid %s %q, valid values: %s", flagName, value, strings.Join(valid, ", "))
-	}
-	return result, nil
 }
 
 const shortHelp = `Create a disk image`

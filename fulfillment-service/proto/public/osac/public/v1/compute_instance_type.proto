@@ -15,6 +15,7 @@ syntax = "proto3";
 
 package osac.public.v1;
 
+import "buf/validate/validate.proto";
 import "google/api/field_behavior.proto";
 import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
@@ -134,8 +135,8 @@ message ComputeInstanceSpec {
   // Additional disk configurations.
   repeated ComputeInstanceDisk additional_disks = 9;
 
-  // Run strategy for the compute instance (e.g. "Always" or "Halted").
-  optional string run_strategy = 10;
+  // Run strategy for the compute instance.
+  optional ComputeInstanceRunStrategy run_strategy = 10 [(buf.validate.field).enum = {defined_only: true, not_in: [0]}];
 
   // User data for the compute instance (e.g. cloud-init, ignition).
   optional string user_data = 11;
@@ -163,7 +164,7 @@ message ComputeInstanceSpec {
   // When true, the system auto-selects an ExternalIPPool and creates an ExternalIP
   // with an ExternalIPAttachment for this instance atomically during creation.
   // Immutable after creation.
-  bool auto_external_ip_attachment = 18 [(google.api.field_behavior) = IMMUTABLE];
+  optional bool auto_external_ip_attachment = 18 [(google.api.field_behavior) = IMMUTABLE];
 
   // Reference to a DiskImage resource. Required after template/catalog item
   // defaults are applied. The server validates existence, lifecycle, and tenant visibility.

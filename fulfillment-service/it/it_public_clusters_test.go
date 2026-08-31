@@ -22,6 +22,7 @@ import (
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -232,7 +233,7 @@ var _ = Describe("Public clusters", func() {
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"my-node-set": {
 							HostType: publicv1.HostTypeReference_builder{Id: hostTypeId}.Build(),
-							Size:     4,
+							Size:     proto.Int32(4),
 						},
 					},
 				}.Build(),

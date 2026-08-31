@@ -19,6 +19,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -247,10 +248,10 @@ var _ = Describe("Compute instances server", func() {
 					InstanceType: privatev1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
 					DiskImage:    privatev1.DiskImageReference_builder{Id: "test-disk-image"}.Build(),
 					BootDisk: privatev1.ComputeInstanceDisk_builder{
-						SizeGib:     10,
+						SizeGib:     proto.Int32(10),
 						StorageTier: new("standard"),
 					}.Build(),
-					RunStrategy: new("Always"),
+					RunStrategy: privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
 				}.Build(),
 			}.Build()
 
@@ -468,10 +469,10 @@ var _ = Describe("Compute instances server", func() {
 					Spec: publicv1.ComputeInstanceSpec_builder{
 						Template:     publicv1.ComputeInstanceTemplateReference_builder{Id: "general.small"}.Build(),
 						InstanceType: publicv1.InstanceTypeReference_builder{Id: "standard-4-16"}.Build(),
-						RunStrategy:  new("Always"),
+						RunStrategy:  publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
 						DiskImage:    publicv1.DiskImageReference_builder{Id: "test-disk-image"}.Build(),
 						BootDisk: publicv1.ComputeInstanceDisk_builder{
-							SizeGib:     20,
+							SizeGib:     proto.Int32(20),
 							StorageTier: new("standard"),
 						}.Build(),
 						NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
@@ -513,7 +514,7 @@ var _ = Describe("Compute instances server", func() {
 			// Verify explicit fields were preserved:
 			Expect(object.GetSpec().GetTemplate().GetId()).To(Equal("general.small"))
 			Expect(object.GetSpec().GetInstanceType().GetId()).To(Equal("standard-4-16"))
-			Expect(object.GetSpec().GetRunStrategy()).To(Equal("Always"))
+			Expect(object.GetSpec().GetRunStrategy()).To(Equal(publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS))
 			Expect(object.GetSpec().GetDiskImage().GetId()).To(Equal("test-disk-image"))
 			Expect(object.GetSpec().GetBootDisk().GetSizeGib()).To(BeNumerically("==", 20))
 
@@ -524,7 +525,7 @@ var _ = Describe("Compute instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			fetched := getResponse.GetObject()
 			Expect(fetched.GetSpec().GetInstanceType().GetId()).To(Equal("standard-4-16"))
-			Expect(fetched.GetSpec().GetRunStrategy()).To(Equal("Always"))
+			Expect(fetched.GetSpec().GetRunStrategy()).To(Equal(publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS))
 			Expect(fetched.GetSpec().GetDiskImage().GetId()).To(Equal("test-disk-image"))
 			Expect(fetched.GetSpec().GetBootDisk().GetSizeGib()).To(BeNumerically("==", 20))
 			Expect(fetched.GetSpec().GetRestartRequestedAt()).ToNot(BeNil())
@@ -623,7 +624,7 @@ var _ = Describe("Compute instances server", func() {
 					}.Build(),
 					Spec: publicv1.ComputeInstanceSpec_builder{
 						Template:    publicv1.ComputeInstanceTemplateReference_builder{Id: "mapping-template"}.Build(),
-						RunStrategy: new("Halted"),
+						RunStrategy: publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_HALTED.Enum(),
 						NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
 							publicv1.ComputeNetworkAttachment_builder{
 								Subnet: publicv1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
@@ -637,7 +638,7 @@ var _ = Describe("Compute instances server", func() {
 
 			spec := response.GetObject().GetSpec()
 			// User-provided values preserved through mapping:
-			Expect(spec.GetRunStrategy()).To(Equal("Halted"))
+			Expect(spec.GetRunStrategy()).To(Equal(publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_HALTED))
 			// Template defaults should be stored:
 			Expect(spec.GetInstanceType().GetId()).To(Equal("standard-4-16"))
 			Expect(spec.GetDiskImage().GetId()).To(Equal("test-disk-image"))

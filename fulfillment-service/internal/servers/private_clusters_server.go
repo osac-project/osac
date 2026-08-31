@@ -1524,6 +1524,13 @@ func (s *PrivateClustersServer) validateNodeSets(
 
 	// Check that all the node sets given in the cluster have a positive size:
 	for clusterNodeSetKey, clusterNodeSet := range clusterNodeSets {
+		if !clusterNodeSet.HasSize() {
+			return grpcstatus.Errorf(
+				grpccodes.InvalidArgument,
+				"size for node set '%s' is required",
+				clusterNodeSetKey,
+			)
+		}
 		clusterNodeSetSize := clusterNodeSet.GetSize()
 		if clusterNodeSetSize <= 0 {
 			return grpcstatus.Errorf(
@@ -1555,7 +1562,7 @@ func mergeNodeSetsWithTemplate(
 		}
 		actualNodeSets[templateNodeSetKey] = privatev1.ClusterNodeSet_builder{
 			HostType: templateNodeSet.GetHostType(),
-			Size:     actualNodeSetSize,
+			Size:     proto.Int32(actualNodeSetSize),
 		}.Build()
 	}
 	cluster.GetSpec().SetNodeSets(actualNodeSets)

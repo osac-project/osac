@@ -850,7 +850,7 @@ func (c *runnerContext) validTemplateParameters(template *publicv1.ClusterTempla
 // applyNetworkingFlags sets NetworkAttachment and AutoExternalIpAttachment on the spec
 // builder from CLI flags. Called from run() before Build(), on both code paths.
 func (c *runnerContext) applyNetworkingFlags(specBuilder *publicv1.ClusterSpec_builder) error {
-	specBuilder.AutoExternalIpAttachment = c.args.externalIPAttachment
+	specBuilder.AutoExternalIpAttachment = proto.Bool(c.args.externalIPAttachment)
 	if c.args.networkAttachment != "" {
 		na, err := parseClusterNetworkAttachmentFlag(c.args.networkAttachment)
 		if err != nil {

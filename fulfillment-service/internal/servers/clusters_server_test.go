@@ -345,7 +345,7 @@ var _ = Describe("Clusters server", func() {
 						NodeSets: map[string]*publicv1.ClusterNodeSet{
 							"junk": publicv1.ClusterNodeSet_builder{
 								HostType: publicv1.HostTypeReference_builder{Id: "acme_1tib"}.Build(),
-								Size:     1000,
+								Size:     proto.Int32(1000),
 							}.Build(),
 						},
 					}.Build(),
@@ -373,7 +373,7 @@ var _ = Describe("Clusters server", func() {
 						NodeSets: map[string]*publicv1.ClusterNodeSet{
 							"compute": publicv1.ClusterNodeSet_builder{
 								HostType: publicv1.HostTypeReference_builder{Id: "hal_9000"}.Build(),
-								Size:     1000,
+								Size:     proto.Int32(1000),
 							}.Build(),
 						},
 					}.Build(),
@@ -400,7 +400,7 @@ var _ = Describe("Clusters server", func() {
 						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 						NodeSets: map[string]*publicv1.ClusterNodeSet{
 							"compute": publicv1.ClusterNodeSet_builder{
-								Size: 0,
+								Size: proto.Int32(0),
 							}.Build(),
 						},
 					}.Build(),
@@ -426,7 +426,7 @@ var _ = Describe("Clusters server", func() {
 						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 						NodeSets: map[string]*publicv1.ClusterNodeSet{
 							"compute": publicv1.ClusterNodeSet_builder{
-								Size: -1,
+								Size: proto.Int32(-1),
 							}.Build(),
 						},
 					}.Build(),
@@ -452,7 +452,7 @@ var _ = Describe("Clusters server", func() {
 						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 						NodeSets: map[string]*publicv1.ClusterNodeSet{
 							"compute": publicv1.ClusterNodeSet_builder{
-								Size: 1000,
+								Size: proto.Int32(1000),
 							}.Build(),
 						},
 					}.Build(),
@@ -476,10 +476,10 @@ var _ = Describe("Clusters server", func() {
 						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 						NodeSets: map[string]*publicv1.ClusterNodeSet{
 							"compute": publicv1.ClusterNodeSet_builder{
-								Size: 30,
+								Size: proto.Int32(30),
 							}.Build(),
 							"gpu": publicv1.ClusterNodeSet_builder{
-								Size: 10,
+								Size: proto.Int32(10),
 							}.Build(),
 						},
 					}.Build(),
@@ -506,7 +506,7 @@ var _ = Describe("Clusters server", func() {
 						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 						NodeSets: map[string]*publicv1.ClusterNodeSet{
 							"compute": publicv1.ClusterNodeSet_builder{
-								Size: 30,
+								Size: proto.Int32(30),
 							}.Build(),
 						},
 					}.Build(),
@@ -866,7 +866,7 @@ var _ = Describe("Clusters server", func() {
 						NodeSets: map[string]*publicv1.ClusterNodeSet{
 							"compute": publicv1.ClusterNodeSet_builder{
 								HostType: publicv1.HostTypeReference_builder{Id: "acme_1tib"}.Build(),
-								Size:     4,
+								Size:     proto.Int32(4),
 							}.Build(),
 						},
 					}.Build(),
@@ -1004,7 +1004,7 @@ var _ = Describe("Clusters server", func() {
 							NodeSets: map[string]*privatev1.ClusterNodeSet{
 								"compute": privatev1.ClusterNodeSet_builder{
 									HostType: privatev1.HostTypeReference_builder{Id: "my_host_type"}.Build(),
-									Size:     3,
+									Size:     proto.Int32(3),
 								}.Build(),
 							},
 						}.Build(),
@@ -1028,7 +1028,7 @@ var _ = Describe("Clusters server", func() {
 						NodeSets: map[string]*publicv1.ClusterNodeSet{
 							"compute": publicv1.ClusterNodeSet_builder{
 								HostType: publicv1.HostTypeReference_builder{Id: "my_host_type"}.Build(),
-								Size:     4,
+								Size:     proto.Int32(4),
 							}.Build(),
 						},
 					}.Build(),
@@ -1144,10 +1144,10 @@ var _ = Describe("Clusters server", func() {
 						Template: publicv1.ClusterTemplateReference_builder{Id: "your_template"}.Build(),
 						NodeSets: map[string]*publicv1.ClusterNodeSet{
 							"compute": publicv1.ClusterNodeSet_builder{
-								Size: 4,
+								Size: proto.Int32(4),
 							}.Build(),
 							"gpu": publicv1.ClusterNodeSet_builder{
-								Size: 2,
+								Size: proto.Int32(2),
 							}.Build(),
 						},
 					}.Build(),
@@ -1204,7 +1204,7 @@ var _ = Describe("Clusters server", func() {
 						NodeSets: map[string]*publicv1.ClusterNodeSet{
 							"compute": publicv1.ClusterNodeSet_builder{
 								HostType: publicv1.HostTypeReference_builder{Id: "acme_1tib"}.Build(),
-								Size:     3,
+								Size:     proto.Int32(3),
 							}.Build(),
 						},
 					}.Build(),

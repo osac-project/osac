@@ -18,6 +18,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/fieldutil"
 )
 
 var _ = Describe("Create diskimage flag registration", func() {
@@ -66,19 +67,19 @@ var _ = Describe("Create diskimage flag registration", func() {
 var _ = Describe("Enum parsing", func() {
 	Describe("parseEnum for source type", func() {
 		It("parses valid source type", func() {
-			result, err := parseEnum("registry", sourceTypeMap, "source-type")
+			result, err := fieldutil.ParseEnum("registry", sourceTypeMap, "source-type")
 			Expect(err).ToNot(HaveOccurred())
 			Expect(result).To(Equal(publicv1.SourceType_SOURCE_TYPE_REGISTRY))
 		})
 
 		It("parses case-insensitively", func() {
-			result, err := parseEnum("Registry", sourceTypeMap, "source-type")
+			result, err := fieldutil.ParseEnum("Registry", sourceTypeMap, "source-type")
 			Expect(err).ToNot(HaveOccurred())
 			Expect(result).To(Equal(publicv1.SourceType_SOURCE_TYPE_REGISTRY))
 		})
 
 		It("rejects invalid source type", func() {
-			_, err := parseEnum("s3", sourceTypeMap, "source-type")
+			_, err := fieldutil.ParseEnum("s3", sourceTypeMap, "source-type")
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("invalid source-type"))
 			Expect(err.Error()).To(ContainSubstring("registry"))
@@ -87,19 +88,19 @@ var _ = Describe("Enum parsing", func() {
 
 	Describe("parseEnum for guest OS family", func() {
 		It("parses linux", func() {
-			result, err := parseEnum("linux", guestOsFamilyMap, "guest-os-family")
+			result, err := fieldutil.ParseEnum("linux", guestOsFamilyMap, "guest-os-family")
 			Expect(err).ToNot(HaveOccurred())
 			Expect(result).To(Equal(publicv1.GuestOSFamily_GUEST_OS_FAMILY_LINUX))
 		})
 
 		It("parses windows", func() {
-			result, err := parseEnum("windows", guestOsFamilyMap, "guest-os-family")
+			result, err := fieldutil.ParseEnum("windows", guestOsFamilyMap, "guest-os-family")
 			Expect(err).ToNot(HaveOccurred())
 			Expect(result).To(Equal(publicv1.GuestOSFamily_GUEST_OS_FAMILY_WINDOWS))
 		})
 
 		It("rejects invalid family", func() {
-			_, err := parseEnum("macos", guestOsFamilyMap, "guest-os-family")
+			_, err := fieldutil.ParseEnum("macos", guestOsFamilyMap, "guest-os-family")
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("invalid guest-os-family"))
 			Expect(err.Error()).To(ContainSubstring("linux"))
@@ -109,25 +110,25 @@ var _ = Describe("Enum parsing", func() {
 
 	Describe("parseEnum for architecture", func() {
 		It("parses amd64", func() {
-			result, err := parseEnum("amd64", architectureMap, "architecture")
+			result, err := fieldutil.ParseEnum("amd64", architectureMap, "architecture")
 			Expect(err).ToNot(HaveOccurred())
 			Expect(result).To(Equal(publicv1.Architecture_ARCHITECTURE_AMD64))
 		})
 
 		It("parses arm64", func() {
-			result, err := parseEnum("arm64", architectureMap, "architecture")
+			result, err := fieldutil.ParseEnum("arm64", architectureMap, "architecture")
 			Expect(err).ToNot(HaveOccurred())
 			Expect(result).To(Equal(publicv1.Architecture_ARCHITECTURE_ARM64))
 		})
 
 		It("parses s390x", func() {
-			result, err := parseEnum("s390x", architectureMap, "architecture")
+			result, err := fieldutil.ParseEnum("s390x", architectureMap, "architecture")
 			Expect(err).ToNot(HaveOccurred())
 			Expect(result).To(Equal(publicv1.Architecture_ARCHITECTURE_S390X))
 		})
 
 		It("rejects invalid architecture", func() {
-			_, err := parseEnum("ppc64le", architectureMap, "architecture")
+			_, err := fieldutil.ParseEnum("ppc64le", architectureMap, "architecture")
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("invalid architecture"))
 		})

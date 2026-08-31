@@ -15,11 +15,24 @@ syntax = "proto3";
 
 package osac.public.v1;
 
+import "buf/validate/validate.proto";
+
 // Contains the disk configuration for a compute instance.
 message ComputeInstanceDisk {
   // Disk size in GiB.
-  int32 size_gib = 1;
+  optional int32 size_gib = 1 [(buf.validate.field).int32.gt = 0];
 
   // Storage tier name (e.g., "standard", "fast", "archive").
   optional string storage_tier = 2;
+}
+
+// Run strategy for the compute instance.
+enum ComputeInstanceRunStrategy {
+  COMPUTE_INSTANCE_RUN_STRATEGY_UNSPECIFIED = 0;
+
+  // The instance is kept powered on.
+  COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS = 1;
+
+  // The instance is powered off.
+  COMPUTE_INSTANCE_RUN_STRATEGY_HALTED = 2;
 }

@@ -15,6 +15,7 @@ syntax = "proto3";
 
 package osac.public.v1;
 
+import "buf/validate/validate.proto";
 import "google/api/field_behavior.proto";
 import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
@@ -189,7 +190,7 @@ message ClusterSpec {
   // The ExternalIP pool is selected automatically based on available capacity.
   //
   // This field is immutable after creation — it cannot be changed on update.
-  bool auto_external_ip_attachment = 10 [(google.api.field_behavior) = IMMUTABLE];
+  optional bool auto_external_ip_attachment = 10 [(google.api.field_behavior) = IMMUTABLE];
 
   // Reference to a Secret resource containing pull secret credentials.
   //
@@ -414,7 +415,7 @@ message ClusterNodeSet {
   HostTypeReference host_type = 1;
 
   // Number of nodes of the set.
-  int32 size = 2;
+  optional int32 size = 2 [(buf.validate.field).int32.gt = 0];
 }
 
 // Local reference to a Cluster resource.

@@ -72,7 +72,8 @@ var _ = Describe("buildSpec", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		want := publicv1.ComputeInstanceSpec_builder{
-			Template: publicv1.ComputeInstanceTemplateReference_builder{Id: "tmpl"}.Build(),
+			Template:                 publicv1.ComputeInstanceTemplateReference_builder{Id: "tmpl"}.Build(),
+			AutoExternalIpAttachment: proto.Bool(false),
 			NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
 				publicv1.ComputeNetworkAttachment_builder{Subnet: publicv1.SubnetLocalReference_builder{Id: "n1"}.Build()}.Build(),
 				publicv1.ComputeNetworkAttachment_builder{
@@ -112,7 +113,8 @@ var _ = Describe("buildSpecFromCatalogItem", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		want := publicv1.ComputeInstanceSpec_builder{
-			CatalogItem: publicv1.ComputeInstanceCatalogItemReference_builder{Id: "cat-001"}.Build(),
+			CatalogItem:              publicv1.ComputeInstanceCatalogItemReference_builder{Id: "cat-001"}.Build(),
+			AutoExternalIpAttachment: proto.Bool(false),
 			NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
 				publicv1.ComputeNetworkAttachment_builder{Subnet: publicv1.SubnetLocalReference_builder{Id: "n1"}.Build()}.Build(),
 				publicv1.ComputeNetworkAttachment_builder{
@@ -130,7 +132,8 @@ var _ = Describe("buildSpecFromCatalogItem", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		want := publicv1.ComputeInstanceSpec_builder{
-			CatalogItem: publicv1.ComputeInstanceCatalogItemReference_builder{Id: "cat-002"}.Build(),
+			CatalogItem:              publicv1.ComputeInstanceCatalogItemReference_builder{Id: "cat-002"}.Build(),
+			AutoExternalIpAttachment: proto.Bool(false),
 		}.Build()
 		Expect(proto.Equal(spec, want)).To(BeTrue(), "spec should equal expected spec")
 	})
@@ -230,6 +233,44 @@ var _ = Describe("Create computeinstance flag validation", func() {
 		Expect(err.Error()).To(ContainSubstring("at least one of the flags"))
 		Expect(err.Error()).To(ContainSubstring("catalog-item"))
 		Expect(err.Error()).To(ContainSubstring("template"))
+	})
+})
+
+var _ = Describe("buildBootDisk", func() {
+	It("should return nil when neither size nor storage tier is set", func() {
+		c := &runnerContext{}
+		disk, err := c.buildBootDisk()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(disk).To(BeNil())
+	})
+
+	It("should return error when storage tier is set without size", func() {
+		c := &runnerContext{}
+		c.args.bootDiskStorageTier = "premium"
+		_, err := c.buildBootDisk()
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("--boot-disk-size is required"))
+	})
+
+	It("should return disk with both fields when both are set", func() {
+		c := &runnerContext{}
+		c.args.bootDiskSizeGiB = 100
+		c.args.bootDiskStorageTier = "premium"
+		disk, err := c.buildBootDisk()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(disk).NotTo(BeNil())
+		Expect(disk.GetSizeGib()).To(Equal(int32(100)))
+		Expect(disk.GetStorageTier()).To(Equal("premium"))
+	})
+
+	It("should return disk with only size when storage tier is not set", func() {
+		c := &runnerContext{}
+		c.args.bootDiskSizeGiB = 50
+		disk, err := c.buildBootDisk()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(disk).NotTo(BeNil())
+		Expect(disk.GetSizeGib()).To(Equal(int32(50)))
+		Expect(disk.HasStorageTier()).To(BeFalse())
 	})
 })
 

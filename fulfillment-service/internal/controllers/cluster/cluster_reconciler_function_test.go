@@ -34,6 +34,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
+	"google.golang.org/protobuf/proto"
+
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
@@ -212,7 +214,7 @@ var _ = Describe("update tenant annotation", func() {
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
 					"gpu.gb200": privatev1.ClusterNodeSet_builder{
 						HostType: &privatev1.HostTypeReference{Name: "gpu.gb200"},
-						Size:     5,
+						Size:     proto.Int32(5),
 					}.Build(),
 				},
 			}.Build(),
@@ -298,7 +300,7 @@ var _ = Describe("update tenant annotation", func() {
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
 					"gpu.gb200": privatev1.ClusterNodeSet_builder{
 						HostType: &privatev1.HostTypeReference{Name: "gpu.gb200"},
-						Size:     5,
+						Size:     proto.Int32(5),
 					}.Build(),
 				},
 			}.Build(),
@@ -378,7 +380,7 @@ var _ = Describe("update tenant annotation", func() {
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
 					"gpu.gb200": privatev1.ClusterNodeSet_builder{
 						HostType: &privatev1.HostTypeReference{Name: "gpu.gb200"},
-						Size:     5,
+						Size:     proto.Int32(5),
 					}.Build(),
 				},
 			}.Build(),
@@ -638,7 +640,7 @@ var _ = Describe("update tenant annotation", func() {
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
 					"gpu.gb200": privatev1.ClusterNodeSet_builder{
 						HostType: &privatev1.HostTypeReference{Name: "gpu.gb200"},
-						Size:     5,
+						Size:     proto.Int32(5),
 					}.Build(),
 				},
 			}.Build(),
@@ -746,7 +748,7 @@ var _ = Describe("update tenant annotation", func() {
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
 					"gpu.gb200": privatev1.ClusterNodeSet_builder{
 						HostType: &privatev1.HostTypeReference{Name: "gpu.gb200"},
-						Size:     3,
+						Size:     proto.Int32(3),
 					}.Build(),
 				},
 			}.Build(),

@@ -247,6 +247,16 @@ class ComputeInstanceTemplateSpecDefaults(Base):
         serialization_alias="run_strategy",
     )
 
+    @pydantic.field_serializer("run_strategy")
+    def _serialize_run_strategy(self, value: str | None) -> str | None:
+        # The REST API now expects the full protojson enum name.
+        # meta/osac.yaml files continue to use the friendly short form.
+        _map = {
+            "Always": "COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS",
+            "Halted": "COMPUTE_INSTANCE_RUN_STRATEGY_HALTED",
+        }
+        return _map.get(value, value) if value is not None else None
+
 
 class ClusterNetwork(Base):
     """Network CIDR configuration for cluster spec defaults."""

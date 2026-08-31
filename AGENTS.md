@@ -112,41 +112,6 @@ the canonical copy is [`.claude/rules/dev-conventions.md`](.claude/rules/dev-con
 hosted in osac-ai-skills and available at `~/.osac-ai-skills` or
 `./.osac-ai-skills`.
 
-### PRD and design publish remotes
-
-flightctl `/prd:publish` and `/design:publish` Step 5 literally say
-`git push -u origin {branch}` and `gh pr create --head {branch}`. **Do not
-run those commands** here. After bootstrap, `origin` is `osac-project/*`
-(the PR target). Pushing to it either fails (no write) or publishes a
-branch on the canonical repo (org members). `--head {branch}` then looks
-for that branch on osac-project, not on your fork.
-
-Substitute the same remotes `/create-pr` uses. `git fetch origin` in those
-skills is correct (upstream). Only the push and `--head` are wrong.
-
-```bash
-docs="{docs_repo_path}"  # typically $REPO/enhancement-proposals
-for d in "$HOME/.osac-ai-skills" "./.osac-ai-skills"; do
-  [[ -x "$d/tools/resolve-remotes.sh" ]] && { RR="$d/tools/resolve-remotes.sh"; break; }
-done
-[[ -n "${RR:-}" ]] || { echo "resolve-remotes.sh not found; run tools/bootstrap.sh" >&2; exit 1; }
-eval "$("$RR" "$docs")"
-[[ -n "${PUSH_REMOTE:-}" ]] || {
-  echo "No push remote — re-run tools/bootstrap.sh without --no-fork." >&2
-  exit 1
-}
-git -C "$docs" push -u "$PUSH_REMOTE" "{branch-name}"
-UPSTREAM=$(gh repo view "$(git -C "$docs" remote get-url "$UPSTREAM_REMOTE")" --json nameWithOwner -q .nameWithOwner)
-FORK_OWNER=$(gh repo view "$(git -C "$docs" remote get-url "$PUSH_REMOTE")" --json owner -q .owner.login)
-gh pr create --draft --repo "$UPSTREAM" --head "$FORK_OWNER:{branch-name}" --base main ...
-```
-
-`/prd:respond`'s `git push` (no remote) follows the branch's tracking
-remote. After the first fork-aware push it tracks `fork`. The same
-origin-push appears in flightctl `/implement:publish` and `/e2e:publish`;
-OSAC code PRs use `/create-pr` instead. Patching those skill files belongs
-in `flightctl/ai-workflows`, not this repo.
-
 ## Cross-Component Changes
 
 A feature spanning multiple components lands in a single branch and PR. Apply changes in dependency order:

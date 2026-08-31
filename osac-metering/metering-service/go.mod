@@ -53,7 +53,7 @@ require (
 	github.com/pierrec/lz4/v4 v4.1.29 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.70.1 // indirect
-	github.com/prometheus/procfs v0.21.1 // indirect
+	github.com/prometheus/procfs v0.22.0 // indirect
 	github.com/rcrowley/go-metrics v0.0.0-20250401214520-65e299d6c5c9 // indirect
 	github.com/rogpeppe/go-internal v1.15.0 // indirect
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect

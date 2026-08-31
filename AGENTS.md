@@ -16,7 +16,7 @@ OSAC (Open Sovereign AI Cloud) is a fulfillment system for provisioning Kubernet
 
 ### Distrobox (Linux/x86_64)
 
-Fedora 42 image (`tools/distrobox/Containerfile`). Requires [podman](https://podman.io/) and [distrobox](https://distrobox.it/) on Linux. Image tool binaries are x86_64 only.
+See `tools/distrobox/Containerfile`. Requires [podman](https://podman.io/) and [distrobox](https://distrobox.it/) on Linux. Image tool binaries are x86_64 only.
 
 ```bash
 make enter                     # Build image and enter distrobox

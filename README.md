@@ -76,7 +76,7 @@ source tools/osac-helpers.sh
 osac-new-worktree feat/OSAC-1234
 ```
 
-Creates `../osac-OSAC-1234`, checks out the new branch, and runs `tools/bootstrap.sh`. Remove with `git worktree remove ../osac-OSAC-1234` from the original clone.
+Creates `../osac-OSAC-1234` by default (or `$OSAC_WORKTREE_PARENT/osac-OSAC-1234`), checks out the new branch, and runs `tools/bootstrap.sh`. Remove with `git worktree remove` on that path from the original clone.
 
 > [!WARNING]
 > Be mindful of the content you commit to this repository. Do not commit any

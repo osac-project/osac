@@ -38,7 +38,7 @@ After clone, run `tools/bootstrap.sh` to vendor AI skills and workflows (see [AI
 
 ### Parallel worktrees
 
-Source [`tools/osac-helpers.sh`](tools/osac-helpers.sh) and run `osac-new-worktree <branch>` from this repo. It adds a sibling worktree (`../osac-<branch-basename>`), runs `tools/bootstrap.sh` there, and appends Jira context to `.claude/CLAUDE.md` when the branch name contains `OSAC-NNNN`. Override the parent directory with `OSAC_WORKTREE_PARENT`. Clean up with `git worktree remove ../osac-<suffix>`.
+Source [`tools/osac-helpers.sh`](tools/osac-helpers.sh) and run `osac-new-worktree <branch>` from this repo. It adds a sibling worktree (`../osac-<branch-basename>`), runs `tools/bootstrap.sh` there, and appends Jira context to `.claude/CLAUDE.md` when the branch name contains `OSAC-NNNN`. Override the parent directory with `OSAC_WORKTREE_PARENT`. Clean up with `git worktree remove` on that path (default `../osac-<suffix>`; with `OSAC_WORKTREE_PARENT`, `$OSAC_WORKTREE_PARENT/osac-<suffix>`).
 
 ## Components
 

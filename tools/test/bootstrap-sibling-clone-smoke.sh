@@ -58,6 +58,10 @@ if [[ " \$* " == *" clone "* ]]; then
   "\$REAL" -C "\$dest" -c user.email=smoke@test -c user.name=smoke \
     commit -q --allow-empty -m seed
   "\$REAL" -C "\$dest" remote add origin "\$url"
+  if [[ "\$(basename "\$dest")" == "${AI_WORKFLOWS_NAME}" ]]; then
+    printf '#!/bin/sh\\necho stub-install\\nexit 0\\n' > "\$dest/install.sh"
+    chmod +x "\$dest/install.sh"
+  fi
   exit 0
 fi
 if [[ " \$* " == *" fetch "* ]] || [[ " \$* " == *" rebase "* ]]; then
@@ -514,6 +518,81 @@ test_fork_remote_match_requires_user_boundary() {
   pass "fork-remote match requires / or : before \$GH_USER/repo"
 }
 
+test_home_git_subdir_skills_falls_back_to_repo_local() {
+  local home root bin home_skills home_workflows repo_skills clone_log out
+  prepare_fixture leftover-home-skills
+  rm -rf "$home_skills"
+  "$REAL_GIT" init -q "$home"
+  "$REAL_GIT" -C "$home" checkout -q -b main
+  mkdir -p "$home_skills/skills" "$home_skills/tools"
+  printf '#!/bin/sh\nexit 0\n' > "${home_skills}/tools/link-agent-skills.sh"
+  chmod +x "${home_skills}/tools/link-agent-skills.sh"
+
+  out=$(run_bootstrap "$root" "$home" "$bin" 2>&1) || fail "bootstrap failed: $out"
+  echo "$out" | grep -q "not a usable vendor checkout; using" \
+    || fail "HOME leftover subdir should fall back to repo-local: $out"
+  echo "$out" | grep -q "Cloning osac-ai-skills" \
+    || fail "should clone repo-local vendor: $out"
+  echo "$out" | grep -q "Updating osac-ai-skills" \
+    && fail "must not treat HOME leftover subdir as the vendor: $out"
+  grep -q "osac-project/osac-ai-skills" "$clone_log" \
+    && grep -q "${OSAC_AI_SKILLS_NAME}" "$clone_log" \
+    || fail "clone log should target repo-local vendor: $(cat "$clone_log")"
+  [[ -d "${repo_skills}/.git" ]] \
+    || fail "expected cloned repo-local vendor at ${repo_skills}"
+  pass "HOME git checkout with plain .osac-ai-skills subdir falls back to repo-local"
+}
+
+test_repo_local_leftover_ai_workflows_errors_without_updating() {
+  local home root bin home_skills home_workflows repo_skills clone_log out leftover rc=0
+  prepare_fixture leftover-repo-wf
+  rm -rf "$home_workflows"
+  leftover="${root}/${AI_WORKFLOWS_NAME}"
+  "$REAL_GIT" init -q "$root"
+  "$REAL_GIT" -C "$root" checkout -q -b main
+  "$REAL_GIT" -C "$root" -c user.email=smoke@test -c user.name=smoke \
+    commit -q --allow-empty -m osac
+  mkdir -p "$leftover"
+  echo leftover > "${leftover}/not-a-clone"
+
+  out=$(run_bootstrap "$root" "$home" "$bin" 2>&1) || rc=$?
+  [[ "$rc" -eq 1 ]] || fail "leftover .ai-workflows expected exit 1, got $rc: $out"
+  echo "$out" | grep -q "not a usable ai-workflows checkout" \
+    || fail "expected leftover error: $out"
+  echo "$out" | grep -q "Updating ai-workflows" \
+    && fail "must not update leftover .ai-workflows (would git the enclosing repo): $out"
+  grep -q leftover "${leftover}/not-a-clone" \
+    || fail "must not overwrite leftover .ai-workflows"
+  pass "repo-local leftover .ai-workflows errors without fetch/rebase of osac"
+}
+
+test_home_git_subdir_ai_workflows_falls_back_to_repo_local() {
+  local home root bin home_skills home_workflows repo_skills clone_log out repo_wf
+  prepare_fixture leftover-home-wf
+  rm -rf "$home_workflows"
+  repo_wf="${root}/${AI_WORKFLOWS_NAME}"
+  "$REAL_GIT" init -q "$home"
+  "$REAL_GIT" -C "$home" checkout -q -b main
+  mkdir -p "$home_workflows"
+  echo leftover > "${home_workflows}/not-a-clone"
+
+  out=$(run_bootstrap "$root" "$home" "$bin" 2>&1) || fail "bootstrap failed: $out"
+  echo "$out" | grep -q "not a usable ai-workflows checkout; using" \
+    || fail "HOME leftover subdir should fall back to repo-local: $out"
+  echo "$out" | grep -q "Cloning ai-workflows" \
+    || fail "should clone repo-local ai-workflows: $out"
+  echo "$out" | grep -q "Updating ai-workflows" \
+    && fail "must not treat HOME leftover subdir as ai-workflows: $out"
+  grep -q leftover "${home_workflows}/not-a-clone" \
+    || fail "must not overwrite HOME leftover .ai-workflows"
+  grep -q "flightctl/ai-workflows" "$clone_log" \
+    && grep -q "${AI_WORKFLOWS_NAME}" "$clone_log" \
+    || fail "clone log should target repo-local ai-workflows: $(cat "$clone_log")"
+  [[ -d "${repo_wf}/.git" ]] \
+    || fail "expected cloned repo-local ai-workflows at ${repo_wf}"
+  pass "HOME git checkout with plain .ai-workflows subdir falls back to repo-local"
+}
+
 test_clones_all_five_into_project_root
 test_rerun_updates_expected_clone
 test_skips_unrelated_existing_dir
@@ -529,5 +608,8 @@ test_unrelated_same_name_github_repo_is_not_used_as_fork
 test_home_worktree_vendor_is_updated_not_recloned
 test_skips_update_when_sibling_not_on_main
 test_fork_remote_match_requires_user_boundary
+test_home_git_subdir_skills_falls_back_to_repo_local
+test_repo_local_leftover_ai_workflows_errors_without_updating
+test_home_git_subdir_ai_workflows_falls_back_to_repo_local
 
 echo "All bootstrap sibling-clone smoke tests passed."

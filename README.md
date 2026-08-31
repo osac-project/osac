@@ -46,8 +46,9 @@ After clone, run `tools/bootstrap.sh` from this repo root. It vendors
 [flightctl/ai-workflows](https://github.com/flightctl/ai-workflows), clones
 skill-relative sibling repos (see `AGENTS.md`), forks the writeable siblings
 to your GitHub account, and links Claude Code / Cursor / Gemini CLI skill
-discovery. Requires authenticated `gh` unless you pass `--no-fork`. Do not
-run it from an `osac/` nested inside `osac-workspace`.
+discovery. Requires authenticated `gh` unless you pass `--no-fork`. This
+repo is the project root. A nested `osac-workspace/osac/` checkout aborts;
+use a standalone clone or worktree instead.
 
 The Feature → PRD → Design → Jira sync → Implement → E2E sequence is documented in
 [osac-ai-skills](https://github.com/osac-project/osac-ai-skills#recommended-skill-sequence)

@@ -84,12 +84,13 @@ Run `tools/bootstrap.sh` once after clone (and anytime to refresh). It vendors
 [`osac-ai-skills`](https://github.com/osac-project/osac-ai-skills) and
 [`flightctl/ai-workflows`](https://github.com/flightctl/ai-workflows), clones
 the [External Repos](#external-repos), and links Claude Code / Cursor / Gemini
-CLI skill discovery under this repo. No separate checkout of `osac-workspace`
-or a manual `osac-ai-skills` clone is required.
-Do not run this script from an `osac/` nested inside `osac-workspace` — it
-aborts (override: `OSAC_ALLOW_NESTED_BOOTSTRAP=1`). Use the workspace
-`./bootstrap.sh` instead. For a clone-only sibling pass (no GitHub forks),
-use `tools/bootstrap.sh --no-fork`.
+CLI skill discovery under this repo. This checkout is the project root — no
+separate `osac-workspace` or manual `osac-ai-skills` clone is required.
+
+A directory nested as `osac-workspace/osac/` still aborts (override:
+`OSAC_ALLOW_NESTED_BOOTSTRAP=1`) so it cannot install a second skill overlay.
+Use a standalone clone or worktree of this repo, not that nested copy. For a
+clone-only sibling pass (no GitHub forks), use `tools/bootstrap.sh --no-fork`.
 
 Edit OSAC-native skills only in `osac-project/osac-ai-skills`. Local `skills/`
 and `.osac-ai-skills/` are bootstrap-managed and gitignored, as are the
@@ -102,6 +103,45 @@ E2E) lives in osac-ai-skills, not in this repo. After bootstrap, see
 `~/.osac-ai-skills/README.md` or `.osac-ai-skills/README.md` (section
 **Recommended Skill Sequence**), or the
 [upstream README](https://github.com/osac-project/osac-ai-skills#recommended-skill-sequence).
+
+## Enhancement Proposals
+
+OSAC uses the flightctl PRD and design skills with project-level template
+overrides. Both documents publish to the `enhancement-proposals` sibling
+cloned by bootstrap.
+
+### Docs repo and paths
+
+- Local path: `./enhancement-proposals/` — give this path when `/prd:publish`
+  or `/design:publish` asks for the docs repo
+- Skip the "release" question — use `enhancements` as the fixed directory prefix
+- Feature directory: `enhancements/<jira-key>-<feature-slug>/`, where
+  `<jira-key>` is the Jira **Feature**-level key exactly as it appears in Jira
+  (no zero-padding), e.g. `enhancements/OSAC-42-example-feature/`
+- PRD filename: `prd.md`; design (EP) filename: `design.md`; both in that
+  same directory
+
+### Feature dimensions and templates
+
+PRD and design ingest must read all files in `.design/context/`:
+
+- **`osac-dimensions.md`** — which cross-cutting dimensions apply; guides
+  clarifying questions, persona/user-story scope, and design coverage (see
+  also `osac-docs/personas.md`)
+- **`review-patterns.md`** — common design-reviewer themes and anti-patterns
+
+Templates live in the sibling clone; section guidance is vendored from
+osac-ai-skills (edit there, not the local copy):
+
+- Design: `enhancement-proposals/guidelines/design_template.md` and
+  `.design/templates/section-guidance.md`
+- PRD: `enhancement-proposals/guidelines/prd_template.md` and
+  `.prd/templates/section-guidance.md`
+
+Design and implement ingest must read the `AGENTS.md` of each affected
+component. For fulfillment-service API work (proto, services,
+request/response), [`fulfillment-service/docs/API.md`](fulfillment-service/docs/API.md)
+is canonical — see also [`fulfillment-service/AGENTS.md`](fulfillment-service/AGENTS.md).
 
 ## Git Workflow
 

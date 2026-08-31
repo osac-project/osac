@@ -64,16 +64,17 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Nested osac/ inside osac-workspace would install a second skill overlay
-# (two PROJECT_ROOTs). Workspace ./bootstrap.sh already covers this clone.
-# Temporary until osac-workspace is decommissioned.
-# Override: OSAC_ALLOW_NESTED_BOOTSTRAP=1
+# Nested osac-workspace/osac would install a second skill overlay (two
+# PROJECT_ROOTs). This repo is the project root — abort that one path so
+# people use a standalone clone or worktree. Temporary until osac-workspace
+# is decommissioned. Override: OSAC_ALLOW_NESTED_BOOTSTRAP=1
 if [[ "${OSAC_ALLOW_NESTED_BOOTSTRAP:-}" != "1" ]] \
    && [[ -x "${PROJECT_ROOT}/../bootstrap.sh" ]]; then
   nested_osac="$(realpath "${PROJECT_ROOT}/../osac" 2>/dev/null || true)"
   if [[ -n "${nested_osac}" && "${nested_osac}" == "${PROJECT_ROOT}" ]]; then
     echo "ERROR: this osac/ checkout is inside osac-workspace." >&2
-    echo "Run the workspace ./bootstrap.sh instead (it already covers this clone)." >&2
+    echo "This repo is the project root — use a standalone clone or worktree," >&2
+    echo "then run tools/bootstrap.sh there (not from osac-workspace/osac)." >&2
     echo "To force this script anyway: OSAC_ALLOW_NESTED_BOOTSTRAP=1 $0" >&2
     exit 1
   fi
@@ -103,6 +104,16 @@ REPO_OSAC_AI_SKILLS="${PROJECT_ROOT}/.osac-ai-skills"
 HOME_AI_WORKFLOWS="${HOME}/.ai-workflows"
 REPO_AI_WORKFLOWS="${PROJECT_ROOT}/.ai-workflows"
 
+# Linked worktrees store .git as a file; require a work-tree root so a
+# leftover directory inside some other checkout does not inherit that parent
+# (git -C would otherwise fetch/rebase the enclosing repo).
+is_git_work_tree_root() {
+  local dir="$1"
+  [[ -n "$dir" && -d "$dir" ]] \
+    && git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+    && [[ -z "$(git -C "$dir" rev-parse --show-prefix 2>/dev/null)" ]]
+}
+
 # Git-capable check — gates the git fetch/rebase below. tools/link-agent-skills.sh's
 # resolve_osac_ai_skills_dir() intentionally uses a weaker, content-based check
 # instead (skills/ + executable fan-out, no .git): it never runs git against the
@@ -112,13 +123,14 @@ REPO_AI_WORKFLOWS="${PROJECT_ROOT}/.ai-workflows"
 # still has open (git subtree / copy-bot) for automated-framework consumption.
 osac_ai_skills_vendor_ok() {
   local dir="$1"
-  # Linked worktrees store .git as a file; require a work-tree root so a
-  # leftover directory inside some other checkout does not count.
-  [[ -n "$dir" && -d "$dir" ]] \
-    && git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
-    && [[ -z "$(git -C "$dir" rev-parse --show-prefix 2>/dev/null)" ]] \
+  is_git_work_tree_root "$dir" \
     && [[ -d "${dir}/skills" ]] \
     && [[ -x "${dir}/tools/link-agent-skills.sh" ]]
+}
+
+ai_workflows_checkout_ok() {
+  local dir="$1"
+  is_git_work_tree_root "$dir" && [[ -x "${dir}/install.sh" ]]
 }
 
 # Fetch + rebase a git checkout onto origin/main. Warns and continues on
@@ -172,15 +184,23 @@ AI_WORKFLOWS_DIR=""
 
 # --- ai-workflows (flightctl) ---
 
-if [[ -d "${HOME_AI_WORKFLOWS}" ]]; then
+if ai_workflows_checkout_ok "${HOME_AI_WORKFLOWS}"; then
   AI_WORKFLOWS_DIR="$(readlink -f "${HOME_AI_WORKFLOWS}")"
   echo "Updating ai-workflows (${AI_WORKFLOWS_DIR})..."
   update_git_repo "${AI_WORKFLOWS_DIR}" "ai-workflows"
-elif [[ -d "${REPO_AI_WORKFLOWS}" ]]; then
+elif ai_workflows_checkout_ok "${REPO_AI_WORKFLOWS}"; then
   AI_WORKFLOWS_DIR="${REPO_AI_WORKFLOWS}"
   echo "Updating ai-workflows (.ai-workflows)..."
   update_git_repo "${AI_WORKFLOWS_DIR}" "ai-workflows"
+elif [[ -d "${REPO_AI_WORKFLOWS}" ]]; then
+  echo "ERROR: ${REPO_AI_WORKFLOWS} exists but is not a usable ai-workflows checkout." >&2
+  echo "Expected a git clone with an executable install.sh." >&2
+  echo "Remove or rename that directory, then re-run tools/bootstrap.sh to clone a fresh copy." >&2
+  exit 1
 else
+  if [[ -d "${HOME_AI_WORKFLOWS}" ]]; then
+    echo "  ${HOME_AI_WORKFLOWS} exists but is not a usable ai-workflows checkout; using ${REPO_AI_WORKFLOWS}"
+  fi
   AI_WORKFLOWS_DIR="${REPO_AI_WORKFLOWS}"
   echo "Cloning ai-workflows..."
   git clone "https://github.com/${AI_WORKFLOWS_REPO}.git" "${AI_WORKFLOWS_DIR}"

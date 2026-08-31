@@ -233,7 +233,7 @@ ptyprocess==0.7.0
     # via pexpect
 pycparser==3.0
     # via cffi
-pydantic==2.12.5
+pydantic==2.13.5
     # via osac-aap (pyproject.toml)
 pydantic-core==2.41.5
     # via pydantic

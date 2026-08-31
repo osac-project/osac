@@ -753,6 +753,24 @@ jobs:
           stamp_umbrella_nested_field "${UMBRELLA_VALUES}" ui images ui "ghcr.io/osac-project/osac-ui:${UI_SUB_VERSION}"
         fi
 
+        # dev/instance.yaml is the one CI overlay that ISN'T dead after e2e:
+        # "Generate images.txt" below renders the umbrella chart with it as
+        # an extra --values file (needed to fill in fields with no
+        # defaults), which means whatever it says for the 4 fields it
+        # overrides wins over the umbrella's own (just-promoted) values.
+        # Prepare only ever stamped it with the provisional sha tag, so
+        # without this re-stamp images.txt would report stale provisional
+        # tags for these 4 components even though the packaged chart itself
+        # is correctly pinned to the final version.
+        DEV_OVERLAY="osac-installer/values/dev/instance.yaml"
+        OPERATOR_VER=$(jq -r '.["osac-operator"] // empty' <<<"${COMPONENT_VERSIONS}")
+        FULFILLMENT_VER=$(jq -r '.["fulfillment-service"] // empty' <<<"${COMPONENT_VERSIONS}")
+        AAP_VER=$(jq -r '.["osac-aap"] // empty' <<<"${COMPONENT_VERSIONS}")
+        [[ -n "${OPERATOR_VER}" ]] && stamp_ci_overlay_if_present "${DEV_OVERLAY}" '.operator.image.tag' "${OPERATOR_VER}"
+        [[ -n "${FULFILLMENT_VER}" ]] && stamp_ci_overlay_if_present "${DEV_OVERLAY}" '.service.images.service' "ghcr.io/osac-project/fulfillment-service:${FULFILLMENT_VER}"
+        [[ -n "${AAP_VER}" ]] && stamp_ci_overlay_if_present "${DEV_OVERLAY}" '.aap.bootstrap.image' "ghcr.io/osac-project/osac-aap:${AAP_VER}"
+        [[ -n "${UI_SUB_VERSION}" ]] && stamp_ci_overlay_if_present "${DEV_OVERLAY}" '.ui.images.ui' "ghcr.io/osac-project/osac-ui:${UI_SUB_VERSION}"
+
     - name: Package and push sub-charts
       run: |
         set -euo pipefail

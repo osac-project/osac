@@ -1,10 +1,8 @@
 image:
   repository: ghcr.io/osac-project/osac-operator
-  tag: latest  # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
+  tag: sha-d4bf7d7 # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
   pullPolicy: Always
-
 replicaCount: 1
-
 resources:
   limits:
     cpu: 500m
@@ -12,18 +10,15 @@ resources:
   requests:
     cpu: 10m
     memory: 64Mi
-
 aap:
   url: ""
   token: ""
   insecureSkipVerify: "true"
   statusPollInterval: "30s"
   templatePrefix: "osac"
-
 fulfillment:
   serverAddress: ""
   tokenFile: ""
-
 controllers:
   clusterOrder: true
   computeInstance: true
@@ -37,7 +32,6 @@ controllers:
   # Progressing) and never fails operator startup.
   volume: true
   networkingProvisioning: true
-
 # vendorControllers maps StorageBackend names to their vendor CSI controller
 # gRPC endpoints, rendered into OSAC_VENDOR_CONTROLLERS for the Volume
 # controller. Optional: leave empty on setups with no vendor storage backend
@@ -46,15 +40,12 @@ controllers:
 #   vendorControllers:
 #     vast: vast-csi-controller.osac-csi-backends.svc:50051
 vendorControllers: {}
-
 configSecret:
   name: "osac-config"
   optional: true
-
 serviceAccount:
   create: true
   name: ""
-
 consoleProxy:
   disabled: false
   vmClusterMode: auto
@@ -65,19 +56,14 @@ consoleProxy:
     requests:
       cpu: 10m
       memory: 64Mi
-
 certs:
   issuerRef:
     kind: ClusterIssuer
     name: default-ca
-
 remoteClusterKubeconfig: ""
-
 hubAccess:
   enabled: false
-
 tenants: []
-
 # --- Network Manager Registration ---
 # ConfigMaps that register networking managers for the two-manager model.
 # The operator discovers managers by selecting ConfigMaps with labels
@@ -92,22 +78,16 @@ networkManagers:
     netris:
       enabled: false
       description: >-
-        Netris SDN controller for physical fabric management.
-        Manages VLAN/VxLAN segments, ACLs, public IP allocation, and NAT gateways.
+        Netris SDN controller for physical fabric management. Manages VLAN/VxLAN segments, ACLs, public IP allocation, and NAT gateways.
       capabilities: "ipv4"
     cudn_net:
       enabled: true
       description: >-
-        CUDN-based isolated networking (ClusterUserDefinedNetwork). Self-contained
-        VirtualNetwork/Subnet provisioning with no separate physical fabric to
-        bridge into — used as the platform default NetworkClass.
+        CUDN-based isolated networking (ClusterUserDefinedNetwork). Self-contained VirtualNetwork/Subnet provisioning with no separate physical fabric to bridge into — used as the platform default NetworkClass.
       capabilities: "ipv4,ipv6,dualStack"
   k8sManagers:
     k8s_only:
       enabled: false
       description: >-
-        Composite k8s-native networking (CUDN, Kubernetes NetworkPolicy, MetalLB
-        L2) with no separate physical fabric. Delegates each resource type to an
-        existing k8s-native implementation — see osac-aap's osac.templates.k8s_only
-        role.
+        Composite k8s-native networking (CUDN, Kubernetes NetworkPolicy, MetalLB L2) with no separate physical fabric. Delegates each resource type to an existing k8s-native implementation — see osac-aap's osac.templates.k8s_only role.
       capabilities: "ipv4,ipv6"

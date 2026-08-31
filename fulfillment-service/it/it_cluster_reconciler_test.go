@@ -258,7 +258,7 @@ var _ = Describe("Cluster reconciler", func() {
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"my_node_set": publicv1.ClusterNodeSet_builder{
 							HostType: publicv1.HostTypeReference_builder{Id: hostTypeId}.Build(),
-							Size:     3,
+							Size:     proto.Int32(3),
 						}.Build(),
 					},
 				}.Build(),
@@ -310,7 +310,7 @@ var _ = Describe("Cluster reconciler", func() {
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"my_node_set": publicv1.ClusterNodeSet_builder{
 							HostType: publicv1.HostTypeReference_builder{Id: hostTypeId}.Build(),
-							Size:     5,
+							Size:     proto.Int32(5),
 						}.Build(),
 					},
 				}.Build(),

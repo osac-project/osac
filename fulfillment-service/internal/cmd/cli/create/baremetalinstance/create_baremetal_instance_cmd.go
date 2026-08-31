@@ -30,6 +30,11 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 )
 
+var runStrategyMap = map[string]publicv1.BareMetalInstanceRunStrategy{
+	"always": publicv1.BareMetalInstanceRunStrategy_BARE_METAL_INSTANCE_RUN_STRATEGY_ALWAYS,
+	"halted": publicv1.BareMetalInstanceRunStrategy_BARE_METAL_INSTANCE_RUN_STRATEGY_HALTED,
+}
+
 func Cmd() *cobra.Command {
 	runner := &runnerContext{}
 	result := &cobra.Command{
@@ -176,17 +181,15 @@ func (c *runnerContext) run(cmd *cobra.Command, _ []string) error {
 		}.Build()
 	}
 	if c.args.runStrategy != "" {
-		val, ok := publicv1.BareMetalInstanceRunStrategy_value["BARE_METAL_INSTANCE_RUN_STRATEGY_"+strings.ToUpper(c.args.runStrategy)]
-		if !ok {
-			return fmt.Errorf(
-				"unknown run strategy %q, valid values are Always and Halted",
-				c.args.runStrategy,
-			)
+		rs, err := fieldutil.ParseEnum(c.args.runStrategy, runStrategyMap, "run-strategy")
+		if err != nil {
+			return err
 		}
-		rs := publicv1.BareMetalInstanceRunStrategy(val)
 		spec.RunStrategy = &rs
 	}
-	spec.AutoExternalIpAttachment = c.args.externalIPAttachment
+	if cmd.Flags().Changed("external-ip-attachment") {
+		spec.AutoExternalIpAttachment = proto.Bool(c.args.externalIPAttachment)
+	}
 
 	if err := c.applyNetworkingFlags(&spec); err != nil {
 		return err

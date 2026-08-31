@@ -446,9 +446,8 @@ var _ = Describe("applyFieldDefinitions rejects unlisted fields", func() {
 	})
 
 	It("rejects unlisted field on ComputeInstanceSpec", func() {
-		runStrategy := "Always"
 		spec := &privatev1.ComputeInstanceSpec{
-			RunStrategy: &runStrategy,
+			RunStrategy: privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
 		}
 		defaultVal, err := structpb.NewValue("ssh-ed25519 AAAA")
 		Expect(err).ToNot(HaveOccurred())

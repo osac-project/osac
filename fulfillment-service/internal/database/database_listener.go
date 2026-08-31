@@ -174,10 +174,6 @@ func (l *Listener) Listen(ctx context.Context, callback events.Callback) error {
 	// Run the loop that waits for notifications and creates new connections in case of failure or timeout:
 	for {
 		err := l.waitLoop(ctx)
-		if err == nil {
-			l.logger.DebugContext(ctx, "Wait finishied")
-			continue
-		}
 		if errors.Is(err, context.DeadlineExceeded) {
 			l.logger.InfoContext(
 				ctx,

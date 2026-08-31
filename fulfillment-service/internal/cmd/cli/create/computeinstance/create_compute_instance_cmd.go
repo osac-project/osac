@@ -46,6 +46,11 @@ import (
 //go:embed templates
 var templatesFS embed.FS
 
+var runStrategyMap = map[string]publicv1.ComputeInstanceRunStrategy{
+	"always": publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS,
+	"halted": publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_HALTED,
+}
+
 func Cmd() *cobra.Command {
 	runner := &runnerContext{}
 	result := &cobra.Command{
@@ -260,6 +265,9 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		if specErr != nil {
 			return specErr
 		}
+		if cmd.Flags().Changed("external-ip-attachment") {
+			specResult.SetAutoExternalIpAttachment(c.args.externalIPAttachment)
+		}
 		if err := fieldutil.ApplyFields(specResult, c.args.setFields); err != nil {
 			return err
 		}
@@ -315,6 +323,9 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	spec, err := c.buildSpec(template.GetId(), templateParameterValues)
 	if err != nil {
 		return err
+	}
+	if cmd.Flags().Changed("external-ip-attachment") {
+		spec.SetAutoExternalIpAttachment(c.args.externalIPAttachment)
 	}
 
 	// Prepare the compute instance:
@@ -728,7 +739,11 @@ func (c *runnerContext) buildSpec(templateID string,
 	if c.args.sshPublicKey != "" {
 		spec.SshPublicKey = proto.String(c.args.sshPublicKey)
 	}
-	if disk := c.buildBootDisk(); disk != nil {
+	disk, err := c.buildBootDisk()
+	if err != nil {
+		return nil, err
+	}
+	if disk != nil {
 		spec.BootDisk = disk
 	}
 	if len(c.args.additionalDisks) > 0 {
@@ -739,12 +754,15 @@ func (c *runnerContext) buildSpec(templateID string,
 		spec.AdditionalDisks = disks
 	}
 	if c.args.runStrategy != "" {
-		spec.RunStrategy = proto.String(c.args.runStrategy)
+		rs, err := fieldutil.ParseEnum(c.args.runStrategy, runStrategyMap, "run-strategy")
+		if err != nil {
+			return nil, err
+		}
+		spec.RunStrategy = &rs
 	}
 	if c.args.userData != "" {
 		spec.UserData = proto.String(c.args.userData)
 	}
-	spec.AutoExternalIpAttachment = c.args.externalIPAttachment
 	if err := c.applyNetworkingFlags(&spec); err != nil {
 		return nil, err
 	}
@@ -752,17 +770,20 @@ func (c *runnerContext) buildSpec(templateID string,
 }
 
 // buildBootDisk returns a boot disk from CLI flags, or nil if neither size nor storage tier was set.
-func (c *runnerContext) buildBootDisk() *publicv1.ComputeInstanceDisk {
+func (c *runnerContext) buildBootDisk() (*publicv1.ComputeInstanceDisk, error) {
 	if c.args.bootDiskSizeGiB <= 0 && c.args.bootDiskStorageTier == "" {
-		return nil
+		return nil, nil
+	}
+	if c.args.bootDiskSizeGiB <= 0 {
+		return nil, fmt.Errorf("--boot-disk-size is required when --boot-disk-storage-tier is set")
 	}
 	builder := publicv1.ComputeInstanceDisk_builder{
-		SizeGib: c.args.bootDiskSizeGiB,
+		SizeGib: proto.Int32(c.args.bootDiskSizeGiB),
 	}
 	if c.args.bootDiskStorageTier != "" {
 		builder.StorageTier = proto.String(c.args.bootDiskStorageTier)
 	}
-	return builder.Build()
+	return builder.Build(), nil
 }
 
 // applyNetworkingFlags sets spec.network_attachments from CLI flags.
@@ -861,7 +882,11 @@ func (c *runnerContext) buildSpecFromCatalogItem(catalogItemID string) (*publicv
 	if c.args.sshPublicKey != "" {
 		spec.SshPublicKey = proto.String(c.args.sshPublicKey)
 	}
-	if disk := c.buildBootDisk(); disk != nil {
+	disk, err := c.buildBootDisk()
+	if err != nil {
+		return nil, err
+	}
+	if disk != nil {
 		spec.BootDisk = disk
 	}
 	if len(c.args.additionalDisks) > 0 {
@@ -872,12 +897,15 @@ func (c *runnerContext) buildSpecFromCatalogItem(catalogItemID string) (*publicv
 		spec.AdditionalDisks = disks
 	}
 	if c.args.runStrategy != "" {
-		spec.RunStrategy = proto.String(c.args.runStrategy)
+		rs, err := fieldutil.ParseEnum(c.args.runStrategy, runStrategyMap, "run-strategy")
+		if err != nil {
+			return nil, err
+		}
+		spec.RunStrategy = &rs
 	}
 	if c.args.userData != "" {
 		spec.UserData = proto.String(c.args.userData)
 	}
-	spec.AutoExternalIpAttachment = c.args.externalIPAttachment
 	if err := c.applyNetworkingFlags(&spec); err != nil {
 		return nil, err
 	}
@@ -904,7 +932,7 @@ func parseAdditionalDisks(diskArgs []string) ([]*publicv1.ComputeInstanceDisk, e
 				return nil, fmt.Errorf("invalid --additional-disk value %q: expected an integer or key=value format", arg)
 			}
 			disk := publicv1.ComputeInstanceDisk_builder{
-				SizeGib: int32(sizeGiB),
+				SizeGib: proto.Int32(int32(sizeGiB)),
 			}.Build()
 			disks = append(disks, disk)
 			continue
@@ -938,7 +966,7 @@ func parseAdditionalDisks(diskArgs []string) ([]*publicv1.ComputeInstanceDisk, e
 				if err != nil {
 					return nil, fmt.Errorf("invalid size value %q: expected an integer number of GiB", value)
 				}
-				disk.SizeGib = int32(sizeGiB)
+				disk.SizeGib = proto.Int32(int32(sizeGiB))
 				hasSize = true
 			case "storage-tier":
 				disk.StorageTier = proto.String(value)

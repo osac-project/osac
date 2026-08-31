@@ -25,6 +25,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
@@ -91,7 +92,7 @@ var _ = Describe("scaleCluster", func() {
 	clusterWith := func(id string, nodeSets map[string]int32) *publicv1.Cluster {
 		sets := make(map[string]*publicv1.ClusterNodeSet, len(nodeSets))
 		for name, size := range nodeSets {
-			sets[name] = publicv1.ClusterNodeSet_builder{Size: size}.Build()
+			sets[name] = publicv1.ClusterNodeSet_builder{Size: proto.Int32(size)}.Build()
 		}
 		return publicv1.Cluster_builder{
 			Id:   id,

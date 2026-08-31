@@ -24,6 +24,7 @@ import (
 
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -1338,7 +1339,7 @@ var _ = Describe("Private bare metal instances server", func() {
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						CatalogItem:              privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						AutoExternalIpAttachment: true,
+						AutoExternalIpAttachment: proto.Bool(true),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -1360,7 +1361,7 @@ var _ = Describe("Private bare metal instances server", func() {
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						CatalogItem:              privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						AutoExternalIpAttachment: true,
+						AutoExternalIpAttachment: proto.Bool(true),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -1397,7 +1398,7 @@ var _ = Describe("Private bare metal instances server", func() {
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						CatalogItem:              privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						AutoExternalIpAttachment: true,
+						AutoExternalIpAttachment: proto.Bool(true),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -1408,7 +1409,7 @@ var _ = Describe("Private bare metal instances server", func() {
 				Object: privatev1.BareMetalInstance_builder{
 					Id: object.GetId(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						AutoExternalIpAttachment: false,
+						AutoExternalIpAttachment: proto.Bool(false),
 					}.Build(),
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{

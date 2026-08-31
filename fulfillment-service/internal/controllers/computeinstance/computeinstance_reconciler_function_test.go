@@ -25,6 +25,7 @@ import (
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -185,20 +186,20 @@ var _ = Describe("buildSpec", func() {
 					Spec: privatev1.ComputeInstanceSpec_builder{
 						Template:     &privatev1.ComputeInstanceTemplateReference{Name: template},
 						InstanceType: &privatev1.InstanceTypeReference{Name: "standard-4-8"},
-						RunStrategy:  new("Always"),
+						RunStrategy:  privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
 						SshPublicKey: new("ssh-rsa AAAA..."),
 						DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 						BootDisk: privatev1.ComputeInstanceDisk_builder{
-							SizeGib:     20,
+							SizeGib:     proto.Int32(20),
 							StorageTier: new("fast"),
 						}.Build(),
 						AdditionalDisks: []*privatev1.ComputeInstanceDisk{
 							privatev1.ComputeInstanceDisk_builder{
-								SizeGib:     100,
+								SizeGib:     proto.Int32(100),
 								StorageTier: new("standard"),
 							}.Build(),
 							privatev1.ComputeInstanceDisk_builder{
-								SizeGib:     50,
+								SizeGib:     proto.Int32(50),
 								StorageTier: new("archive"),
 							}.Build(),
 						},

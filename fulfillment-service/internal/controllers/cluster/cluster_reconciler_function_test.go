@@ -24,6 +24,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -212,7 +213,7 @@ var _ = Describe("update tenant annotation", func() {
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
 					"gpu.gb200": privatev1.ClusterNodeSet_builder{
 						HostType: &privatev1.HostTypeReference{Name: "gpu.gb200"},
-						Size:     5,
+						Size:     proto.Int32(5),
 					}.Build(),
 				},
 			}.Build(),
@@ -298,7 +299,7 @@ var _ = Describe("update tenant annotation", func() {
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
 					"gpu.gb200": privatev1.ClusterNodeSet_builder{
 						HostType: &privatev1.HostTypeReference{Name: "gpu.gb200"},
-						Size:     5,
+						Size:     proto.Int32(5),
 					}.Build(),
 				},
 			}.Build(),
@@ -378,7 +379,7 @@ var _ = Describe("update tenant annotation", func() {
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
 					"gpu.gb200": privatev1.ClusterNodeSet_builder{
 						HostType: &privatev1.HostTypeReference{Name: "gpu.gb200"},
-						Size:     5,
+						Size:     proto.Int32(5),
 					}.Build(),
 				},
 			}.Build(),
@@ -638,7 +639,7 @@ var _ = Describe("update tenant annotation", func() {
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
 					"gpu.gb200": privatev1.ClusterNodeSet_builder{
 						HostType: &privatev1.HostTypeReference{Name: "gpu.gb200"},
-						Size:     5,
+						Size:     proto.Int32(5),
 					}.Build(),
 				},
 			}.Build(),
@@ -746,7 +747,7 @@ var _ = Describe("update tenant annotation", func() {
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
 					"gpu.gb200": privatev1.ClusterNodeSet_builder{
 						HostType: &privatev1.HostTypeReference{Name: "gpu.gb200"},
-						Size:     3,
+						Size:     proto.Int32(3),
 					}.Build(),
 				},
 			}.Build(),

@@ -384,7 +384,7 @@ var _ = Describe("Private clusters server", func() {
 						NodeSets: map[string]*privatev1.ClusterNodeSet{
 							"compute": privatev1.ClusterNodeSet_builder{
 								HostType: privatev1.HostTypeReference_builder{Id: "acme-1ti-name"}.Build(),
-								Size:     5,
+								Size:     proto.Int32(5),
 							}.Build(),
 						},
 					}.Build(),
@@ -419,7 +419,7 @@ var _ = Describe("Private clusters server", func() {
 						NodeSets: map[string]*privatev1.ClusterNodeSet{
 							"compute": privatev1.ClusterNodeSet_builder{
 								HostType: privatev1.HostTypeReference_builder{Id: "acme-1ti-id"}.Build(),
-								Size:     7,
+								Size:     proto.Int32(7),
 							}.Build(),
 						},
 					}.Build(),
@@ -454,7 +454,7 @@ var _ = Describe("Private clusters server", func() {
 						NodeSets: map[string]*privatev1.ClusterNodeSet{
 							"compute": privatev1.ClusterNodeSet_builder{
 								HostType: privatev1.HostTypeReference_builder{Id: "acme-1ti-name"}.Build(),
-								Size:     7,
+								Size:     proto.Int32(7),
 							}.Build(),
 						},
 					}.Build(),
@@ -491,7 +491,7 @@ var _ = Describe("Private clusters server", func() {
 						NodeSets: map[string]*privatev1.ClusterNodeSet{
 							"compute": privatev1.ClusterNodeSet_builder{
 								HostType: privatev1.HostTypeReference_builder{Id: "does-not-exist"}.Build(),
-								Size:     5,
+								Size:     proto.Int32(5),
 							}.Build(),
 						},
 					}.Build(),
@@ -520,7 +520,7 @@ var _ = Describe("Private clusters server", func() {
 						NodeSets: map[string]*privatev1.ClusterNodeSet{
 							"does-not-exist": privatev1.ClusterNodeSet_builder{
 								HostType: privatev1.HostTypeReference_builder{Id: "acme-1ti-id"}.Build(),
-								Size:     5,
+								Size:     proto.Int32(5),
 							}.Build(),
 						},
 					}.Build(),
@@ -550,7 +550,7 @@ var _ = Describe("Private clusters server", func() {
 						NodeSets: map[string]*privatev1.ClusterNodeSet{
 							"compute": privatev1.ClusterNodeSet_builder{
 								HostType: privatev1.HostTypeReference_builder{Id: "acme-gpu-id"}.Build(),
-								Size:     5,
+								Size:     proto.Int32(5),
 							}.Build(),
 						},
 					}.Build(),
@@ -962,15 +962,15 @@ var _ = Describe("Private clusters server", func() {
 						NodeSets: map[string]*privatev1.ClusterNodeSet{
 							"compute": privatev1.ClusterNodeSet_builder{
 								HostType: privatev1.HostTypeReference_builder{Id: "acme-1ti-id"}.Build(),
-								Size:     3,
+								Size:     proto.Int32(3),
 							}.Build(),
 							"gpu": privatev1.ClusterNodeSet_builder{
 								HostType: privatev1.HostTypeReference_builder{Id: "acme-gpu-id"}.Build(),
-								Size:     1,
+								Size:     proto.Int32(1),
 							}.Build(),
 							"storage": privatev1.ClusterNodeSet_builder{
 								HostType: privatev1.HostTypeReference_builder{Id: "acme-1ti-id"}.Build(),
-								Size:     2,
+								Size:     proto.Int32(2),
 							}.Build(),
 						},
 					}.Build(),
@@ -1004,7 +1004,7 @@ var _ = Describe("Private clusters server", func() {
 						NodeSets: map[string]*privatev1.ClusterNodeSet{
 							"compute": privatev1.ClusterNodeSet_builder{
 								HostType: privatev1.HostTypeReference_builder{Id: "acme-1ti-id"}.Build(),
-								Size:     3,
+								Size:     proto.Int32(3),
 							}.Build(),
 						},
 					}.Build(),
@@ -1070,11 +1070,11 @@ var _ = Describe("Private clusters server", func() {
 						NodeSets: map[string]*privatev1.ClusterNodeSet{
 							"compute": privatev1.ClusterNodeSet_builder{
 								HostType: privatev1.HostTypeReference_builder{Id: "acme-gpu-id"}.Build(), // Changed from acme-1ti-id
-								Size:     3,
+								Size:     proto.Int32(3),
 							}.Build(),
 							"gpu": privatev1.ClusterNodeSet_builder{
 								HostType: privatev1.HostTypeReference_builder{Id: "acme-gpu-id"}.Build(),
-								Size:     1,
+								Size:     proto.Int32(1),
 							}.Build(),
 						},
 					}.Build(),
@@ -1111,11 +1111,11 @@ var _ = Describe("Private clusters server", func() {
 						NodeSets: map[string]*privatev1.ClusterNodeSet{
 							"compute": privatev1.ClusterNodeSet_builder{
 								HostType: privatev1.HostTypeReference_builder{Id: "acme-1ti-id"}.Build(),
-								Size:     5, // Changed from 3
+								Size:     proto.Int32(5),
 							}.Build(),
 							"gpu": privatev1.ClusterNodeSet_builder{
 								HostType: privatev1.HostTypeReference_builder{Id: "acme-gpu-id"}.Build(),
-								Size:     1,
+								Size:     proto.Int32(1),
 							}.Build(),
 						},
 					}.Build(),
@@ -1153,7 +1153,7 @@ var _ = Describe("Private clusters server", func() {
 					Spec: privatev1.ClusterSpec_builder{
 						NodeSets: map[string]*privatev1.ClusterNodeSet{
 							"compute": privatev1.ClusterNodeSet_builder{
-								Size: newSize,
+								Size: proto.Int32(newSize),
 							}.Build(),
 						},
 					}.Build(),
@@ -1211,7 +1211,7 @@ var _ = Describe("Private clusters server", func() {
 						Spec: privatev1.ClusterSpec_builder{
 							NodeSets: map[string]*privatev1.ClusterNodeSet{
 								"compute": privatev1.ClusterNodeSet_builder{
-									Size: 5,
+									Size: proto.Int32(5),
 								}.Build(),
 							},
 						}.Build(),
@@ -1237,7 +1237,7 @@ var _ = Describe("Private clusters server", func() {
 						Spec: privatev1.ClusterSpec_builder{
 							NodeSets: map[string]*privatev1.ClusterNodeSet{
 								"compute": privatev1.ClusterNodeSet_builder{
-									Size: 5,
+									Size: proto.Int32(5),
 								}.Build(),
 							},
 						}.Build(),
@@ -1263,7 +1263,7 @@ var _ = Describe("Private clusters server", func() {
 						Spec: privatev1.ClusterSpec_builder{
 							NodeSets: map[string]*privatev1.ClusterNodeSet{
 								"compute": privatev1.ClusterNodeSet_builder{
-									Size: 5,
+									Size: proto.Int32(5),
 								}.Build(),
 							},
 						}.Build(),
@@ -1289,7 +1289,7 @@ var _ = Describe("Private clusters server", func() {
 						Spec: privatev1.ClusterSpec_builder{
 							NodeSets: map[string]*privatev1.ClusterNodeSet{
 								"compute": privatev1.ClusterNodeSet_builder{
-									Size: 5,
+									Size: proto.Int32(5),
 								}.Build(),
 							},
 						}.Build(),
@@ -1327,7 +1327,7 @@ var _ = Describe("Private clusters server", func() {
 						Spec: privatev1.ClusterSpec_builder{
 							NodeSets: map[string]*privatev1.ClusterNodeSet{
 								"compute": privatev1.ClusterNodeSet_builder{
-									Size: 5,
+									Size: proto.Int32(5),
 								}.Build(),
 							},
 						}.Build(),
@@ -1348,7 +1348,7 @@ var _ = Describe("Private clusters server", func() {
 						Spec: privatev1.ClusterSpec_builder{
 							NodeSets: map[string]*privatev1.ClusterNodeSet{
 								"compute": privatev1.ClusterNodeSet_builder{
-									Size: 5,
+									Size: proto.Int32(5),
 								}.Build(),
 							},
 						}.Build(),
@@ -2918,7 +2918,7 @@ var _ = Describe("Private clusters server", func() {
 							NodeSets: map[string]*privatev1.ClusterNodeSet{
 								"compute": privatev1.ClusterNodeSet_builder{
 									HostType: privatev1.HostTypeReference_builder{Id: "acme-1ti-name"}.Build(),
-									Size:     7,
+									Size:     proto.Int32(7),
 								}.Build(),
 							},
 						}.Build(),
@@ -3062,8 +3062,8 @@ var _ = Describe("Private clusters server", func() {
 						Spec: privatev1.ClusterSpec_builder{
 							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 							NodeSets: map[string]*privatev1.ClusterNodeSet{
-								"compute": privatev1.ClusterNodeSet_builder{Size: 3}.Build(),
-								"gpu":     privatev1.ClusterNodeSet_builder{Size: 1}.Build(),
+								"compute": privatev1.ClusterNodeSet_builder{Size: proto.Int32(3)}.Build(),
+								"gpu":     privatev1.ClusterNodeSet_builder{Size: proto.Int32(1)}.Build(),
 							},
 							PullSecretSecret: privatev1.SecretLocalReference_builder{Id: "my-secret-id"}.Build(),
 						}.Build(),
@@ -3087,8 +3087,8 @@ var _ = Describe("Private clusters server", func() {
 						Spec: privatev1.ClusterSpec_builder{
 							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 							NodeSets: map[string]*privatev1.ClusterNodeSet{
-								"compute": privatev1.ClusterNodeSet_builder{Size: 3}.Build(),
-								"gpu":     privatev1.ClusterNodeSet_builder{Size: 1}.Build(),
+								"compute": privatev1.ClusterNodeSet_builder{Size: proto.Int32(3)}.Build(),
+								"gpu":     privatev1.ClusterNodeSet_builder{Size: proto.Int32(1)}.Build(),
 							},
 							PullSecretSecret: privatev1.SecretLocalReference_builder{Name: "my-secret-name"}.Build(),
 						}.Build(),
@@ -3111,8 +3111,8 @@ var _ = Describe("Private clusters server", func() {
 						Spec: privatev1.ClusterSpec_builder{
 							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 							NodeSets: map[string]*privatev1.ClusterNodeSet{
-								"compute": privatev1.ClusterNodeSet_builder{Size: 3}.Build(),
-								"gpu":     privatev1.ClusterNodeSet_builder{Size: 1}.Build(),
+								"compute": privatev1.ClusterNodeSet_builder{Size: proto.Int32(3)}.Build(),
+								"gpu":     privatev1.ClusterNodeSet_builder{Size: proto.Int32(1)}.Build(),
 							},
 							PullSecret:       proto.String("inline-secret"),
 							PullSecretSecret: privatev1.SecretLocalReference_builder{Id: "my-secret-id"}.Build(),
@@ -3136,8 +3136,8 @@ var _ = Describe("Private clusters server", func() {
 						Spec: privatev1.ClusterSpec_builder{
 							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 							NodeSets: map[string]*privatev1.ClusterNodeSet{
-								"compute": privatev1.ClusterNodeSet_builder{Size: 3}.Build(),
-								"gpu":     privatev1.ClusterNodeSet_builder{Size: 1}.Build(),
+								"compute": privatev1.ClusterNodeSet_builder{Size: proto.Int32(3)}.Build(),
+								"gpu":     privatev1.ClusterNodeSet_builder{Size: proto.Int32(1)}.Build(),
 							},
 							PullSecretSecret: privatev1.SecretLocalReference_builder{Id: "nonexistent-secret"}.Build(),
 						}.Build(),
@@ -3160,8 +3160,8 @@ var _ = Describe("Private clusters server", func() {
 						Spec: privatev1.ClusterSpec_builder{
 							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 							NodeSets: map[string]*privatev1.ClusterNodeSet{
-								"compute": privatev1.ClusterNodeSet_builder{Size: 3}.Build(),
-								"gpu":     privatev1.ClusterNodeSet_builder{Size: 1}.Build(),
+								"compute": privatev1.ClusterNodeSet_builder{Size: proto.Int32(3)}.Build(),
+								"gpu":     privatev1.ClusterNodeSet_builder{Size: proto.Int32(1)}.Build(),
 							},
 							PullSecret: proto.String("my-inline-secret"),
 						}.Build(),
@@ -3184,8 +3184,8 @@ var _ = Describe("Private clusters server", func() {
 						Spec: privatev1.ClusterSpec_builder{
 							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 							NodeSets: map[string]*privatev1.ClusterNodeSet{
-								"compute": privatev1.ClusterNodeSet_builder{Size: 3}.Build(),
-								"gpu":     privatev1.ClusterNodeSet_builder{Size: 1}.Build(),
+								"compute": privatev1.ClusterNodeSet_builder{Size: proto.Int32(3)}.Build(),
+								"gpu":     privatev1.ClusterNodeSet_builder{Size: proto.Int32(1)}.Build(),
 							},
 						}.Build(),
 						Status: privatev1.ClusterStatus_builder{
@@ -3225,8 +3225,8 @@ var _ = Describe("Private clusters server", func() {
 						Spec: privatev1.ClusterSpec_builder{
 							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 							NodeSets: map[string]*privatev1.ClusterNodeSet{
-								"compute": privatev1.ClusterNodeSet_builder{Size: 3}.Build(),
-								"gpu":     privatev1.ClusterNodeSet_builder{Size: 1}.Build(),
+								"compute": privatev1.ClusterNodeSet_builder{Size: proto.Int32(3)}.Build(),
+								"gpu":     privatev1.ClusterNodeSet_builder{Size: proto.Int32(1)}.Build(),
 							},
 						}.Build(),
 						Status: privatev1.ClusterStatus_builder{
@@ -3263,8 +3263,8 @@ var _ = Describe("Private clusters server", func() {
 							Template:   privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 							PullSecret: proto.String("existing-inline-secret"),
 							NodeSets: map[string]*privatev1.ClusterNodeSet{
-								"compute": privatev1.ClusterNodeSet_builder{Size: 3}.Build(),
-								"gpu":     privatev1.ClusterNodeSet_builder{Size: 1}.Build(),
+								"compute": privatev1.ClusterNodeSet_builder{Size: proto.Int32(3)}.Build(),
+								"gpu":     privatev1.ClusterNodeSet_builder{Size: proto.Int32(1)}.Build(),
 							},
 						}.Build(),
 						Status: privatev1.ClusterStatus_builder{
@@ -3330,7 +3330,7 @@ var _ = Describe("Private clusters server", func() {
 						Spec: privatev1.ClusterSpec_builder{
 							Template: privatev1.ClusterTemplateReference_builder{Id: "template-with-secret-ref"}.Build(),
 							NodeSets: map[string]*privatev1.ClusterNodeSet{
-								"compute": privatev1.ClusterNodeSet_builder{Size: 3}.Build(),
+								"compute": privatev1.ClusterNodeSet_builder{Size: proto.Int32(3)}.Build(),
 							},
 						}.Build(),
 						Status: privatev1.ClusterStatus_builder{
@@ -3381,7 +3381,7 @@ var _ = Describe("Private clusters server", func() {
 						Spec: privatev1.ClusterSpec_builder{
 							Template: privatev1.ClusterTemplateReference_builder{Id: "template-override-secret"}.Build(),
 							NodeSets: map[string]*privatev1.ClusterNodeSet{
-								"compute": privatev1.ClusterNodeSet_builder{Size: 3}.Build(),
+								"compute": privatev1.ClusterNodeSet_builder{Size: proto.Int32(3)}.Build(),
 							},
 							PullSecret: proto.String("my-override-secret"),
 						}.Build(),

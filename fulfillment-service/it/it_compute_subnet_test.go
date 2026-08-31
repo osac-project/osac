@@ -20,6 +20,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
@@ -332,9 +333,9 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 				Spec: publicv1.ComputeInstanceSpec_builder{
 					Template:     publicv1.ComputeInstanceTemplateReference_builder{Id: computeInstanceTemplateId}.Build(),
 					InstanceType: publicv1.InstanceTypeReference_builder{Name: instanceTypeId}.Build(),
-					RunStrategy:  new("Always"),
+					RunStrategy:  publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
 					BootDisk: publicv1.ComputeInstanceDisk_builder{
-						SizeGib:     20,
+						SizeGib:     proto.Int32(20),
 						StorageTier: &storageTierId,
 					}.Build(),
 					DiskImage: &publicv1.DiskImageReference{Id: diskImageId},
@@ -370,9 +371,9 @@ var _ = Describe("ComputeInstance with Subnet attachment", func() {
 				Spec: publicv1.ComputeInstanceSpec_builder{
 					Template:     publicv1.ComputeInstanceTemplateReference_builder{Id: computeInstanceTemplateId}.Build(),
 					InstanceType: publicv1.InstanceTypeReference_builder{Name: instanceTypeId}.Build(),
-					RunStrategy:  new("Always"),
+					RunStrategy:  publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
 					BootDisk: publicv1.ComputeInstanceDisk_builder{
-						SizeGib:     20,
+						SizeGib:     proto.Int32(20),
 						StorageTier: &storageTierId,
 					}.Build(),
 					DiskImage: &publicv1.DiskImageReference{Id: diskImageId},

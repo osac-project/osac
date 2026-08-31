@@ -262,6 +262,9 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 			CatalogItem: &publicv1.ClusterCatalogItemReference{Name: c.args.catalogItem},
 		}
 		c.applyOptionalSpecFields(&specBuilder, sshPublicKey)
+		if cmd.Flags().Changed("external-ip-attachment") {
+			specBuilder.AutoExternalIpAttachment = proto.Bool(c.args.externalIPAttachment)
+		}
 		if err := c.applyNetworkingFlags(&specBuilder); err != nil {
 			return err
 		}
@@ -301,6 +304,9 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		TemplateParameters: templateParameterValues,
 	}
 	c.applyOptionalSpecFields(&specBuilder, sshPublicKey)
+	if cmd.Flags().Changed("external-ip-attachment") {
+		specBuilder.AutoExternalIpAttachment = proto.Bool(c.args.externalIPAttachment)
+	}
 	if err := c.applyNetworkingFlags(&specBuilder); err != nil {
 		return err
 	}
@@ -847,10 +853,9 @@ func (c *runnerContext) validTemplateParameters(template *publicv1.ClusterTempla
 	return results
 }
 
-// applyNetworkingFlags sets NetworkAttachment and AutoExternalIpAttachment on the spec
+// applyNetworkingFlags sets NetworkAttachment on the spec
 // builder from CLI flags. Called from run() before Build(), on both code paths.
 func (c *runnerContext) applyNetworkingFlags(specBuilder *publicv1.ClusterSpec_builder) error {
-	specBuilder.AutoExternalIpAttachment = c.args.externalIPAttachment
 	if c.args.networkAttachment != "" {
 		na, err := parseClusterNetworkAttachmentFlag(c.args.networkAttachment)
 		if err != nil {

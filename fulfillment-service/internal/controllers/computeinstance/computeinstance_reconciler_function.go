@@ -716,7 +716,12 @@ func (t *task) addExplicitFields(ctx context.Context, spec *osacv1alpha1.Compute
 		}
 	}
 	if ciSpec.HasRunStrategy() {
-		spec.RunStrategy = osacv1alpha1.RunStrategyType(ciSpec.GetRunStrategy())
+		switch ciSpec.GetRunStrategy() {
+		case privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS:
+			spec.RunStrategy = osacv1alpha1.RunStrategyAlways
+		case privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_HALTED:
+			spec.RunStrategy = osacv1alpha1.RunStrategyHalted
+		}
 	}
 	if ciSpec.HasSshPublicKey() {
 		spec.SSHKey = ciSpec.GetSshPublicKey()

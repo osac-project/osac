@@ -300,7 +300,7 @@ catalog item, the server rejects any spec field not listed in `field_definitions
 |------|-------------|
 | `ssh_public_key` | SSH public key |
 | `instance_type` | Instance Type includes number of CPU cores, memory, etc. |
-| `run_strategy` | VM run strategy (e.g., `Always`, `Halted`) |
+| `run_strategy` | VM run strategy (`COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS`, `COMPUTE_INSTANCE_RUN_STRATEGY_HALTED`) |
 | `user_data` | Cloud-init or ignition user data |
 | `disk_image` | DiskImage reference (name or ID) |
 | `boot_disk.size_gib` | Boot disk size in GiB |

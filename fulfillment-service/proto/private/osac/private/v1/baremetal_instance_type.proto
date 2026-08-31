@@ -139,7 +139,7 @@ message BareMetalInstanceSpec {
   // When true, the system auto-selects an ExternalIPPool and creates an ExternalIP
   // with an ExternalIPAttachment for this instance atomically during creation.
   // Immutable after creation.
-  bool auto_external_ip_attachment = 9 [(google.api.field_behavior) = IMMUTABLE];
+  optional bool auto_external_ip_attachment = 9 [(google.api.field_behavior) = IMMUTABLE];
 }
 
 // The status contains the details of the bare metal instance provided by the system.

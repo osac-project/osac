@@ -482,7 +482,7 @@ var _ = Describe("Tenancy logic", func() {
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"compute": publicv1.ClusterNodeSet_builder{
 							HostType: publicv1.HostTypeReference_builder{Id: "acme_1tib"}.Build(),
-							Size:     4,
+							Size:     proto.Int32(4),
 						}.Build(),
 					},
 				}.Build(),

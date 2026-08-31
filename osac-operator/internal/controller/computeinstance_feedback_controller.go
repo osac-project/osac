@@ -146,7 +146,7 @@ func syncCIConditionFromCR(remote *privatev1.ComputeInstance, vmConditionType pr
 	newStatus := mapCIConditionStatus(crCondition.Status)
 	vmCondition.SetStatus(newStatus)
 	vmCondition.SetReason(crCondition.Reason)
-	vmCondition.SetMessage(crCondition.Message)
+	vmCondition.SetMessage(sanitizeFeedbackText(crCondition.Message))
 	if newStatus != oldStatus {
 		vmCondition.SetLastTransitionTime(timestamppb.Now())
 	}

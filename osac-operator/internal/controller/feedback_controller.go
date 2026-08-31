@@ -165,7 +165,7 @@ func syncClusterConditionFromCR(remote *privatev1.Cluster, condType privatev1.Cl
 	oldStatus := clusterCondition.GetStatus()
 	newStatus := mapClusterConditionStatus(condition.Status)
 	clusterCondition.SetStatus(newStatus)
-	clusterCondition.SetMessage(condition.Message)
+	clusterCondition.SetMessage(sanitizeFeedbackText(condition.Message))
 	if newStatus != oldStatus {
 		clusterCondition.SetLastTransitionTime(timestamppb.Now())
 	}

@@ -134,6 +134,6 @@ func syncSubnetPhase(ctx context.Context, obj *v1alpha1.Subnet, remote *privatev
 
 func syncSubnetBackendNetworkID(obj *v1alpha1.Subnet, remote *privatev1.Subnet) {
 	if obj.Status.BackendNetworkID != "" {
-		remote.GetStatus().SetMessage(obj.Status.BackendNetworkID)
+		remote.GetStatus().SetMessage(sanitizeFeedbackText(obj.Status.BackendNetworkID))
 	}
 }

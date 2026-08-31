@@ -106,6 +106,7 @@ func TestNewClientCredentialsTokenSource(t *testing.T) {
 			"osac-csi-driver",
 			secretFile,
 			"https://keycloak.example.com/realms/myrealm",
+			false,
 		)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -121,6 +122,7 @@ func TestNewClientCredentialsTokenSource(t *testing.T) {
 			"osac-csi-driver",
 			"/nonexistent/path/secret",
 			"https://keycloak.example.com/realms/myrealm",
+			false,
 		)
 		if err == nil {
 			t.Fatal("expected error for missing secret file")
@@ -139,6 +141,7 @@ func TestNewClientCredentialsTokenSource(t *testing.T) {
 			"osac-csi-driver",
 			secretFile,
 			"https://keycloak.example.com/realms/myrealm",
+			false,
 		)
 		if err == nil {
 			t.Fatal("expected error for empty secret file")
@@ -157,9 +160,32 @@ func TestNewClientCredentialsTokenSource(t *testing.T) {
 			"osac-csi-driver",
 			secretFile,
 			"https://keycloak.example.com/realms/myrealm",
+			false,
 		)
 		if err == nil {
 			t.Fatal("expected error for whitespace-only secret file")
+		}
+	})
+
+	t.Run("insecureSkipVerify true produces a token source", func(t *testing.T) {
+		dir := t.TempDir()
+		secretFile := filepath.Join(dir, "client-secret")
+		if err := os.WriteFile(secretFile, []byte("test-secret\n"), 0o600); err != nil {
+			t.Fatalf("writing secret file: %v", err)
+		}
+
+		ts, err := newClientCredentialsTokenSource(
+			context.Background(),
+			"osac-csi-driver",
+			secretFile,
+			"https://keycloak.example.com/realms/myrealm",
+			true,
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if ts == nil {
+			t.Fatal("expected non-nil token source")
 		}
 	})
 }

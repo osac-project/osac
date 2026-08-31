@@ -150,7 +150,7 @@ jobs:
 
     - name: Set up Helm
       if: steps.should-run.outputs.run
-      uses: azure/setup-helm@v5
+      uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
       with:
         version: v3.21.4
 

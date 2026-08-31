@@ -25,7 +25,7 @@ COPY --chown=1001:1001 osac-operator/ osac-operator/
 WORKDIR /opt/app-root/src/bare-metal-fulfillment-operator
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o manager cmd/main.go
 
-FROM registry.access.redhat.com/ubi10-minimal:10.2
+FROM registry.access.redhat.com/ubi10-minimal:10.2-1788137716
 WORKDIR /
 COPY --from=builder /opt/app-root/src/bare-metal-fulfillment-operator/manager /usr/local/bin/
 USER 1001

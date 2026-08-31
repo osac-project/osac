@@ -48,7 +48,7 @@ FROM builder AS dlv-builder
 RUN go install github.com/go-delve/delve/cmd/dlv@latest
 
 # Common runtime base with the service binary.
-FROM registry.access.redhat.com/ubi10-minimal:10.2 AS runtime-base
+FROM registry.access.redhat.com/ubi10-minimal:10.2-1788137716 AS runtime-base
 COPY --from=builder /opt/app-root/src/fulfillment-service/fulfillment-service /usr/local/bin
 USER 1001
 

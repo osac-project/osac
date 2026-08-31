@@ -28,7 +28,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
     go build -a -buildvcs=false -ldflags "-X main.version=${VERSION} -X main.gitCommit=${GIT_COMMIT}" \
     -o osac-csi-driver ./cmd/osac-csi-driver
 
-FROM registry.access.redhat.com/ubi10-minimal:10.2
+FROM registry.access.redhat.com/ubi10-minimal:10.2-1788137716
 COPY --from=builder /opt/app-root/src/osac-csi-driver/osac-csi-driver /usr/local/bin/
 USER 1001
 ENTRYPOINT ["/usr/local/bin/osac-csi-driver"]

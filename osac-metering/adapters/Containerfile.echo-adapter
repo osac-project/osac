@@ -11,7 +11,7 @@ COPY --chown=1001:0 adapters/ adapters/
 
 RUN cd adapters && CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -buildvcs=false -a -o /opt/app-root/src/echo-adapter ./cmd/echo-adapter
 
-FROM registry.access.redhat.com/ubi10-minimal:10.2
+FROM registry.access.redhat.com/ubi10-minimal:10.2-1788137716
 WORKDIR /
 COPY --from=builder /opt/app-root/src/echo-adapter .
 USER 65532:65532

@@ -26,7 +26,7 @@ WORKDIR /opt/app-root/src/osac-operator
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o manager cmd/main.go
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o console-proxy cmd/console-proxy/main.go
 
-FROM registry.access.redhat.com/ubi10-minimal:10.2
+FROM registry.access.redhat.com/ubi10-minimal:10.2-1788137716
 COPY --from=builder /opt/app-root/src/osac-operator/manager /usr/local/bin/
 COPY --from=builder /opt/app-root/src/osac-operator/console-proxy /usr/local/bin/
 USER 1001

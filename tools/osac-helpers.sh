@@ -5,7 +5,7 @@
 #
 # Usage:
 #   source tools/osac-helpers.sh
-#   osac-new-worktree feat/my-feature [-- bootstrap args...]
+#   osac-new-worktree feat/my-feature [bootstrap args...]
 #
 # Safe to source from bash or zsh (macOS default). Do not use BASH_REMATCH.
 

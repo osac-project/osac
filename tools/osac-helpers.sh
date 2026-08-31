@@ -5,7 +5,7 @@
 #
 # Usage:
 #   source tools/osac-helpers.sh
-#   osac-new-worktree feat/my-feature
+#   osac-new-worktree feat/my-feature [-- bootstrap args...]
 #
 # Safe to source from bash or zsh (macOS default). Do not use BASH_REMATCH.
 
@@ -58,7 +58,7 @@ osac-new-worktree() {
     cd "$target_dir" || return 1
     echo "Switched to worktree: $(pwd)"
 
-    if ! ./tools/bootstrap.sh; then
+    if ! ./tools/bootstrap.sh "${@:2}"; then
         echo "Error: tools/bootstrap.sh failed." >&2
         echo "  Worktree exists at ${target_dir}." >&2
         echo "  Current directory is already ${target_dir}." >&2

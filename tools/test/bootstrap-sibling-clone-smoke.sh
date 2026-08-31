@@ -120,6 +120,10 @@ case "${1:-}" in
       if [[ -n "${OSAC_SMOKE_EMPTY_LOGIN:-}" ]]; then
         exit 0
       fi
+      if [[ -n "${OSAC_SMOKE_NULL_LOGIN:-}" ]]; then
+        echo null
+        exit 0
+      fi
       echo smokeuser
       exit 0
     fi
@@ -292,6 +296,31 @@ test_extra_list_entry_clones_without_other_edits() {
   pass "adding a SIBLINGS list entry clones an extra dest with no other code edits"
 }
 
+test_dot_sibling_dir_does_not_rm_project_root() {
+  local home root bin home_skills home_workflows repo_skills clone_log out tmp
+  prepare_fixture dot-dir
+
+  grep -q 'SIBLINGS=(' "${root}/tools/bootstrap.sh" \
+    || fail "bootstrap.sh has no SIBLINGS=( list"
+  tmp="${root}/tools/bootstrap.sh.new"
+  awk '
+    { print }
+    /SIBLINGS=\(/ && !done { print "  \"bogus:.\""; done=1 }
+  ' "${root}/tools/bootstrap.sh" >"$tmp"
+  mv "$tmp" "${root}/tools/bootstrap.sh"
+  chmod +x "${root}/tools/bootstrap.sh"
+
+  out=$(run_bootstrap "$root" "$home" "$bin" 2>&1) || fail "bootstrap failed: $out"
+  echo "$out" | grep -q "invalid sibling directory" \
+    || fail "expected invalid dest skip: $out"
+  [[ -f "${root}/docs/ARCHITECTURE.md" ]] \
+    || fail "PROJECT_ROOT must not be removed for dir=."
+  grep -q in-tree "${root}/docs/ARCHITECTURE.md" \
+    || fail "tracked docs/ARCHITECTURE.md was overwritten"
+  assert_expected_clones "$root" "$clone_log"
+  pass "malformed sibling dir=. does not rm PROJECT_ROOT"
+}
+
 test_nested_abort_skips_sibling_clones() {
   local nest="${TMPDIR_ROOT}/nested-ws"
   local empty_home="${TMPDIR_ROOT}/nested-ws-home"
@@ -374,6 +403,8 @@ test_missing_gh_without_no_fork_exits() {
     || fail "expected gh-missing error: $out"
   [[ ! -d "${root}/enhancement-proposals" ]] \
     || fail "must not clone siblings when gh is missing"
+  [[ ! -s "$clone_log" ]] \
+    || fail "must not clone when gh is missing: $(cat "$clone_log")"
   pass "missing gh without --no-fork exits before sibling clones"
 }
 
@@ -392,9 +423,29 @@ test_empty_gh_user_without_no_fork_exits() {
     || fail "expected empty-username error: $out"
   [[ ! -d "${root}/enhancement-proposals" ]] \
     || fail "must not clone siblings when GH_USER is empty"
+  [[ ! -s "$clone_log" ]] \
+    || fail "must not clone when GH_USER is empty: $(cat "$clone_log")"
   grep -q 'api user' "${home}/gh.log" \
     || fail "expected gh api user invocation: $(cat "${home}/gh.log" 2>/dev/null || true)"
   pass "empty GH_USER without --no-fork exits before sibling clones"
+}
+
+test_null_gh_user_without_no_fork_exits() {
+  local home root bin home_skills home_workflows repo_skills clone_log out rc=0
+  prepare_fixture null-gh-user
+  write_gh_wrapper "${bin}/gh"
+
+  out=$(HOME="$home" PATH="${bin}:${PATH}" \
+    OSAC_SMOKE_CLONE_LOG="$clone_log" \
+    OSAC_SMOKE_GH_LOG="${home}/gh.log" \
+    OSAC_SMOKE_NULL_LOGIN=1 \
+    bash "${root}/tools/bootstrap.sh" 2>&1) || rc=$?
+  [[ "$rc" -eq 1 ]] || fail "null GH_USER expected exit 1, got $rc: $out"
+  echo "$out" | grep -qi 'empty GitHub username' \
+    || fail "expected empty-username error: $out"
+  [[ ! -s "$clone_log" ]] \
+    || fail "must not clone when GH_USER is null: $(cat "$clone_log")"
+  pass "null GH_USER without --no-fork exits before sibling clones"
 }
 
 test_no_fork_leaves_writeable_without_fork_remote() {
@@ -643,11 +694,13 @@ test_clones_all_five_into_project_root
 test_rerun_updates_expected_clone
 test_skips_unrelated_existing_dir
 test_extra_list_entry_clones_without_other_edits
+test_dot_sibling_dir_does_not_rm_project_root
 test_nested_abort_skips_sibling_clones
 test_failed_clone_cleans_dest
 test_expected_sibling_requires_org_boundary
 test_missing_gh_without_no_fork_exits
 test_empty_gh_user_without_no_fork_exits
+test_null_gh_user_without_no_fork_exits
 test_no_fork_leaves_writeable_without_fork_remote
 test_forks_writeable_siblings_not_osac_ux_or_vendors
 test_rerun_adds_fork_remote_to_existing_clone

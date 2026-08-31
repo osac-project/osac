@@ -341,6 +341,36 @@ EOF
   pass "Jira summary and type strip CR/LF before append"
 }
 
+test_forwards_bootstrap_args() {
+  local parent repo dest bin log
+  parent="${TMPDIR_ROOT}/wt-args-parent"
+  repo="${parent}/osac"
+  dest="${parent}/osac-extra-args"
+  bin="${TMPDIR_ROOT}/wt-args-bin"
+  log="${TMPDIR_ROOT}/wt-args.log"
+  mkdir -p "${repo}/tools" "$bin"
+  printf '#!/bin/sh\nprintf "bootstrap %%s\\n" "$*" >> "%s"\nexit 0\n' "$log" \
+    > "${repo}/tools/bootstrap.sh"
+  chmod +x "${repo}/tools/bootstrap.sh"
+  "$REAL_GIT" init -q "$repo"
+  "$REAL_GIT" -C "$repo" checkout -q -b main
+  "$REAL_GIT" -C "$repo" -c user.email=smoke@test -c user.name=smoke \
+    commit -q --allow-empty -m seed
+  write_git_worktree_stub "$bin" "$repo" "$log"
+
+  (
+    cd "$repo"
+    # shellcheck source=../osac-helpers.sh
+    source "$HELPERS"
+    export PATH="${bin}:${PATH}"
+    export OSAC_WORKTREE_PARENT="$parent"
+    osac-new-worktree feat/extra-args --no-fork >/dev/null
+  )
+  grep -q -- '--no-fork' "$log" \
+    || fail "expected bootstrap --no-fork: $(cat "$log")"
+  pass "forwards extra args to tools/bootstrap.sh"
+}
+
 test_dest_basename_and_repo_bootstrap
 test_jira_ticket_from_branch
 test_zsh_nounset_jira_ticket
@@ -348,5 +378,6 @@ test_bootstrap_fail_prints_recovery
 test_no_timeout_skips_jira
 test_gtimeout_used_when_timeout_missing
 test_jira_summary_strips_newlines
+test_forwards_bootstrap_args
 
 echo "All osac-new-worktree smoke tests passed."

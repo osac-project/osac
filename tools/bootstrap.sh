@@ -92,7 +92,7 @@ if [[ "$NO_FORK" == false ]]; then
     exit 1
   fi
   GH_USER=$(gh api user -q .login)
-  if [[ -z "$GH_USER" ]]; then
+  if [[ -z "$GH_USER" || "$GH_USER" == "null" ]]; then
     echo "ERROR: gh API returned an empty GitHub username." >&2
     echo "Cannot construct fork URLs. Run 'gh auth login' or use --no-fork for read-only clone." >&2
     exit 1
@@ -331,6 +331,11 @@ maybe_fork_sibling() {
 ensure_sibling() {
   local repo="$1" dir="$2"
   local dest="${PROJECT_ROOT}/${dir}"
+  dest="${dest%/}"
+  if [[ -z "$dir" || "$dir" == "." || "$dest" == "$PROJECT_ROOT" ]]; then
+    echo "Skipping ${repo} — invalid sibling directory '${dir}'."
+    return 0
+  fi
   if [[ -d "${dest}" ]] && is_expected_sibling "${dest}" "${repo}"; then
     echo "Updating ${dir}..."
     update_git_repo "${dest}" "${dir}"
@@ -341,7 +346,9 @@ ensure_sibling() {
     echo "Cloning ${repo} into ${dir}..."
     if ! git clone "https://github.com/${GITHUB_ORG}/${repo}.git" "${dest}"; then
       echo "  Clone failed for ${repo}. Skipping."
-      rm -rf "${dest}" 2>/dev/null || true
+      if [[ -n "$dir" && "$dest" != "$PROJECT_ROOT" ]]; then
+        rm -rf "${dest}" 2>/dev/null || true
+      fi
       return 0
     fi
     maybe_fork_sibling "$repo" "$dest"

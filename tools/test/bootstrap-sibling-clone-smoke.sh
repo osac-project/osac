@@ -115,7 +115,24 @@ case "${1:-}" in
     echo https
     exit 0
     ;;
-  repo) exit 0 ;;
+  repo)
+    if [[ "${2:-}" == "fork" ]]; then
+      for a in "$@"; do
+        if [[ -n "${OSAC_SMOKE_FORK_COLLISION:-}" && "$a" == "osac-project/${OSAC_SMOKE_FORK_COLLISION}" ]]; then
+          exit 1
+        fi
+      done
+      exit 0
+    fi
+    if [[ "${2:-}" == "view" ]]; then
+      if [[ " $* " == *" --json "* && " $* " == *" parent "* ]]; then
+        echo ""
+        exit 0
+      fi
+      exit 0
+    fi
+    exit 0
+    ;;
 esac
 exit 0
 EOF
@@ -363,10 +380,14 @@ test_missing_gh_without_no_fork_exits() {
   seed_ai_workflows "${home}/.ai-workflows"
   prepare_osac "$root"
 
+  ln -sf "$(command -v realpath)" "${bin}/realpath"
+  ln -sf "$(command -v dirname)" "${bin}/dirname"
   local out rc=0
-  out=$(HOME="$home" PATH="${bin}:/usr/bin:/bin" \
+  # PATH is $bin only so a host /usr/bin/gh cannot satisfy command -v gh.
+  # Invoke bash by absolute path so PATH isolation does not hide the interpreter.
+  out=$(HOME="$home" PATH="$bin" \
     OSAC_SMOKE_CLONE_LOG="${home}/clone.log" \
-    bash "${root}/tools/bootstrap.sh" 2>&1) || rc=$?
+    /bin/bash "${root}/tools/bootstrap.sh" 2>&1) || rc=$?
   [[ "$rc" -eq 1 ]] || fail "missing gh expected exit 1, got $rc: $out"
   echo "$out" | grep -qi 'gh CLI is not installed' \
     || fail "expected gh-missing error: $out"
@@ -460,6 +481,52 @@ test_rerun_adds_fork_remote_to_existing_clone() {
   pass "re-run adds fork remotes to existing origin-only clones"
 }
 
+test_unrelated_same_name_github_repo_is_not_used_as_fork() {
+  local home="${TMPDIR_ROOT}/home-fork-collision"
+  local root="${TMPDIR_ROOT}/osac-fork-collision"
+  local bin="${TMPDIR_ROOT}/bin-fork-collision"
+  mkdir -p "$home" "$bin"
+  write_git_wrapper "${bin}/git"
+  write_gh_wrapper "${bin}/gh"
+  seed_vendor_ok "${home}/.osac-ai-skills"
+  seed_ai_workflows "${home}/.ai-workflows"
+  prepare_osac "$root"
+
+  local out
+  out=$(OSAC_SMOKE_FORK_COLLISION=docs run_bootstrap_fork "$root" "$home" "$bin" 2>&1) \
+    || fail "bootstrap should continue when docs fork collides: $out"
+  echo "$out" | grep -qi 'Failed to fork osac-project/docs' \
+    || fail "expected skip for unrelated github.com/smokeuser/docs: $out"
+  assert_no_fork_remote "${root}/osac-docs" "osac-docs after docs name collision"
+  assert_fork_remote "${root}/enhancement-proposals" "enhancement-proposals"
+  pass "does not point fork at an unrelated same-name GitHub repo"
+}
+
+test_fork_remote_match_requires_user_boundary() {
+  local home="${TMPDIR_ROOT}/home-fork-boundary"
+  local root="${TMPDIR_ROOT}/osac-fork-boundary"
+  local bin="${TMPDIR_ROOT}/bin-fork-boundary"
+  mkdir -p "$home" "$bin"
+  write_git_wrapper "${bin}/git"
+  write_gh_wrapper "${bin}/gh"
+  seed_vendor_ok "${home}/.osac-ai-skills"
+  seed_ai_workflows "${home}/.ai-workflows"
+  prepare_osac "$root"
+
+  run_bootstrap "$root" "$home" "$bin" >/dev/null
+  "$REAL_GIT" -C "${root}/osac-docs" remote add fork \
+    "https://github.com/evilsmokeuser/docs.git"
+
+  local out
+  out=$(run_bootstrap_fork "$root" "$home" "$bin" 2>&1) || fail "bootstrap failed: $out"
+  echo "$out" | grep -q 'already exists with a different URL' \
+    || fail "evilsmokeuser/docs must not count as smokeuser/docs: $out"
+  url=$(git -C "${root}/osac-docs" remote get-url fork)
+  [[ "$url" == *evilsmokeuser/docs* ]] \
+    || fail "must not overwrite an existing mismatched fork remote: $url"
+  pass "fork-remote match requires / or : before \$GH_USER/repo"
+}
+
 test_clones_all_five_into_project_root
 test_rerun_updates_expected_clone
 test_skips_unrelated_existing_dir
@@ -471,5 +538,7 @@ test_missing_gh_without_no_fork_exits
 test_no_fork_leaves_writeable_without_fork_remote
 test_forks_writeable_siblings_not_osac_ux_or_vendors
 test_rerun_adds_fork_remote_to_existing_clone
+test_unrelated_same_name_github_repo_is_not_used_as_fork
+test_fork_remote_match_requires_user_boundary
 
 echo "All bootstrap sibling-clone smoke tests passed."

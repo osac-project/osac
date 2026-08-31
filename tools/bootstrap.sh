@@ -220,25 +220,36 @@ get_fork_url() {
   fi
 }
 
-# Returns 0 if every push URL for $remote in $dir ends with $expected_suffix
-# (e.g. $GH_USER/$repo). Checks push URLs, not the fetch URL.
+# Returns 0 if every push URL for $remote in $dir is a path/SSH match for
+# $expected_suffix (e.g. $GH_USER/$repo). Require / or : before the suffix
+# so user "ed" does not match github.com/fred/<repo>. Checks push URLs.
 fork_remote_push_matches() {
   local dir="$1" remote="$2" expected_suffix="$3"
   local push_urls
   push_urls=$(git -C "$dir" remote get-url --push --all "$remote" 2>/dev/null) || return 1
   [[ -n "$push_urls" ]] || return 1
-  local push_url
+  local push_url stripped
   while IFS= read -r push_url; do
-    [[ "${push_url%.git}" == *"$expected_suffix" ]] || return 1
+    stripped="${push_url%.git}"
+    [[ "$stripped" == *"/${expected_suffix}" || "$stripped" == *":${expected_suffix}" ]] || return 1
   done <<< "$push_urls"
   return 0
+}
+
+# True when $GH_USER/$repo is a GitHub fork of osac-project/$repo (not an
+# unrelated same-name repo — common for the docs sibling).
+is_github_fork_of_org_repo() {
+  local repo="$1"
+  local parent
+  parent=$(gh repo view "${GH_USER}/${repo}" --json parent -q '.parent.nameWithOwner // empty' 2>/dev/null) || return 1
+  [[ "$parent" == "${GITHUB_ORG}/${repo}" ]]
 }
 
 ensure_fork_remote() {
   local repo="$1" dir="$2"
   local url
   if ! gh repo fork "${GITHUB_ORG}/${repo}" --clone=false --default-branch-only; then
-    if ! gh repo view "${GH_USER}/${repo}" >/dev/null; then
+    if ! is_github_fork_of_org_repo "$repo"; then
       echo "  Failed to fork ${GITHUB_ORG}/${repo}. Skipping fork remote."
       return 1
     fi

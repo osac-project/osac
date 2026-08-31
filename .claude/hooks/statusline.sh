@@ -68,7 +68,17 @@ resolve_osac_ai_skills_dir() {
   fi
 }
 
-AI_DIR="${HOME}/.ai-workflows"
+resolve_ai_workflows_dir() {
+  local home_wf="${HOME}/.ai-workflows"
+  local repo_wf="${REPO_DIR}/.ai-workflows"
+  if is_git_work_tree_root "${home_wf}"; then
+    printf '%s\n' "${home_wf}"
+  else
+    printf '%s\n' "${repo_wf}"
+  fi
+}
+
+AI_DIR="$(resolve_ai_workflows_dir)"
 SKILLS_DIR="$(resolve_osac_ai_skills_dir)"
 
 ws=$(repo_status "$REPO_DIR" "osac")

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # shellcheck shell=bash
 #
 # osac-helpers.sh — source this file to get OSAC developer workflow utilities.
@@ -80,8 +80,8 @@ osac-new-worktree() {
         else
             raw=$("$timeout_bin" 15 jira issue view "$ticket" --raw 2>/dev/null) || raw=""
             if [[ -n "$raw" ]]; then
-                summary=$(echo "$raw" | jq -r '.fields.summary // empty' 2>/dev/null)
-                issue_type=$(echo "$raw" | jq -r '.fields.issuetype.name // empty' 2>/dev/null)
+                summary=$(echo "$raw" | jq -r '.fields.summary // empty' 2>/dev/null | tr -d '\n\r')
+                issue_type=$(echo "$raw" | jq -r '.fields.issuetype.name // empty' 2>/dev/null | tr -d '\n\r')
                 if [[ -n "$summary" ]]; then
                     mkdir -p .claude
                     printf '\n## Current Work\n- **Jira:** [%s](https://redhat.atlassian.net/browse/%s)\n- **Summary:** %s\n- **Type:** %s\n' \

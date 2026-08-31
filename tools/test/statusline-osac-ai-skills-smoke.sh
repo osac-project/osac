@@ -172,6 +172,23 @@ test_home_git_subdir_falls_back_to_repo_local() {
   pass "HOME git checkout with plain subdir falls back to repo-local"
 }
 
+test_leftover_home_ai_workflows_falls_back_to_repo_local() {
+  local home project out
+  home="${TMPDIR_ROOT}/home-ai-leftover"
+  project="${TMPDIR_ROOT}/proj-ai-leftover"
+  mkdir -p "$home"
+  init_repo "$home"
+  mkdir -p "${home}/.ai-workflows"
+  init_repo "$project"
+  init_repo "${project}/.ai-workflows"
+  out=$(run_statusline "$home" "$project")
+  echo "$out" | grep -q 'ai-workflows: main ✓' \
+    || fail "leftover HOME dest must fall back to repo-local ai-workflows: $out"
+  echo "$out" | grep -q 'ai-workflows: not found' \
+    && fail "must not mute ai-workflows when repo-local exists: $out"
+  pass "leftover ~/.ai-workflows falls back to repo-local"
+}
+
 test_missing_vendor_is_muted_not_found
 test_repo_local_up_to_date
 test_repo_local_behind
@@ -180,5 +197,6 @@ test_home_without_git_falls_back_to_repo_local
 test_home_worktree_wins_over_repo_local
 test_repo_local_nongit_dir_is_not_found
 test_home_git_subdir_falls_back_to_repo_local
+test_leftover_home_ai_workflows_falls_back_to_repo_local
 
 echo "All statusline osac-ai-skills smoke tests passed."

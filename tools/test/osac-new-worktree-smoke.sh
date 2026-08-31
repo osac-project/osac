@@ -147,7 +147,7 @@ test_zsh_nounset_jira_ticket() {
 # PATH with only this bin (no host timeout/gtimeout). Requires git wrapper already in $bin.
 isolated_core_path() {
   local bin="$1" c src
-  for c in awk jq basename dirname mkdir chmod cat cp bash; do
+  for c in awk jq basename dirname mkdir chmod cat cp bash tr; do
     src=$(command -v "$c") || fail "need $c for isolated PATH"
     ln -sf "$src" "${bin}/$c"
   done
@@ -291,11 +291,57 @@ EOF
   pass "gtimeout is used when timeout is missing"
 }
 
+test_jira_summary_strips_newlines() {
+  local parent repo dest bin log
+  parent="${TMPDIR_ROOT}/wt-nl-parent"
+  repo="${parent}/osac"
+  dest="${parent}/osac-OSAC-1234"
+  bin="${TMPDIR_ROOT}/wt-nl-bin"
+  log="${TMPDIR_ROOT}/wt-nl.log"
+  mkdir -p "${repo}/tools" "$bin"
+  printf '#!/bin/sh\nprintf "bootstrap %%s\\n" "$0" >> "%s"\nexit 0\n' "$log" \
+    > "${repo}/tools/bootstrap.sh"
+  chmod +x "${repo}/tools/bootstrap.sh"
+  "$REAL_GIT" init -q "$repo"
+  "$REAL_GIT" -C "$repo" checkout -q -b main
+  "$REAL_GIT" -C "$repo" -c user.email=smoke@test -c user.name=smoke \
+    commit -q --allow-empty -m seed
+  write_git_worktree_stub "$bin" "$repo" "$log"
+  cat > "${bin}/timeout" <<'EOF'
+#!/bin/sh
+shift
+exec "$@"
+EOF
+  chmod +x "${bin}/timeout"
+  cat > "${bin}/jira" <<'EOF'
+#!/bin/sh
+printf '%s\n' '{"fields":{"summary":"dogfood\n## Injected","issuetype":{"name":"Task\nBad"}}}'
+EOF
+  chmod +x "${bin}/jira"
+
+  (
+    cd "$repo"
+    # shellcheck source=../osac-helpers.sh
+    source "$HELPERS"
+    export PATH="${bin}:${PATH}"
+    export OSAC_WORKTREE_PARENT="$parent"
+    osac-new-worktree feat/OSAC-1234 >/dev/null
+  )
+  grep -q 'dogfood## Injected' "${dest}/.claude/CLAUDE.md" \
+    || fail "expected stripped summary, got: $(cat "${dest}/.claude/CLAUDE.md")"
+  grep -q 'TaskBad' "${dest}/.claude/CLAUDE.md" \
+    || fail "expected stripped type, got: $(cat "${dest}/.claude/CLAUDE.md")"
+  grep -q '^## Injected' "${dest}/.claude/CLAUDE.md" \
+    && fail "newline in summary must not become a markdown heading"
+  pass "Jira summary and type strip CR/LF before append"
+}
+
 test_dest_basename_and_repo_bootstrap
 test_jira_ticket_from_branch
 test_zsh_nounset_jira_ticket
 test_bootstrap_fail_prints_recovery
 test_no_timeout_skips_jira
 test_gtimeout_used_when_timeout_missing
+test_jira_summary_strips_newlines
 
 echo "All osac-new-worktree smoke tests passed."

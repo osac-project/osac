@@ -28,6 +28,8 @@ message ComputeInstanceDisk {
 
 // Run strategy for the compute instance.
 enum ComputeInstanceRunStrategy {
+  // buf:lint:ignore ENUM_NO_ALLOW_ALIAS
+  option allow_alias = true;
   COMPUTE_INSTANCE_RUN_STRATEGY_UNSPECIFIED = 0;
 
   // The instance is kept powered on.
@@ -35,4 +37,14 @@ enum ComputeInstanceRunStrategy {
 
   // The instance is powered off.
   COMPUTE_INSTANCE_RUN_STRATEGY_HALTED = 2;
+
+  // TODO: Remove aliases once osac-test-infra sends canonical enum names.
+  // Aliases let protojson accept short names ("Always", "Halted") alongside
+  // canonical names, avoiding a chicken-and-egg with the separate test repo.
+  // buf:lint:ignore ENUM_VALUE_UPPER_SNAKE_CASE
+  // buf:lint:ignore ENUM_VALUE_PREFIX
+  Always = 1;
+  // buf:lint:ignore ENUM_VALUE_UPPER_SNAKE_CASE
+  // buf:lint:ignore ENUM_VALUE_PREFIX
+  Halted = 2;
 }

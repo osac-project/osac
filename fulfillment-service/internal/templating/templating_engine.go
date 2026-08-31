@@ -275,7 +275,9 @@ func (e *Engine) base64Func(value any) (result string, err error) {
 			"don't know how to encode value of type %T",
 			value,
 		)
-		return
+		if err != nil {
+			return
+		}
 	}
 	result = base64.StdEncoding.EncodeToString(data)
 	return

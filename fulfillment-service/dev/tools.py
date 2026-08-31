@@ -124,13 +124,11 @@ class Tool:
 
 GOLANGCI_LINT = Tool(
     name="golangci-lint",
-    # v2.13.2 is built with Go 1.27; v2.12.x panics or emits typecheck errors
-    # when CI runs Go 1.27 because the embedded go/types is Go 1.26.
-    version="2.13.2",
+    version="2.12.2",
     github_repo="golangci/golangci-lint",
     version_pattern=r"^golangci-lint has version (?P<version>\S+) built",
     checksums={
-        "golangci-lint-{version}-checksums.txt": "b5830eaec7cf0accdbfe3a27cc372c4987f80a22db494a6bacee287bf4b03c3c",
+        "golangci-lint-{version}-checksums.txt": "9accc7943a5b4be44416a7d4efa7efb3d18c7f1919d6581cc3536e185301a2d4",
     },
 )
 

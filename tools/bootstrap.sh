@@ -113,11 +113,18 @@ osac_ai_skills_vendor_ok() {
     && [[ -x "${dir}/tools/link-agent-skills.sh" ]]
 }
 
-# Fetch + rebase a vendored git checkout onto origin/main. Warns and continues
-# on failure rather than exiting — a stale vendor is recoverable manually, and
-# this runs before any skill-discovery step that depends on it.
+# Fetch + rebase a git checkout onto origin/main. Warns and continues on
+# failure rather than exiting — a stale checkout is recoverable manually.
+# Skip when HEAD is not main so a later bootstrap does not rebase a feature
+# branch (siblings now have a fork remote; developers will check those out).
 update_git_repo() {
   local dir="$1" label="$2"
+  local branch
+  branch=$(git -C "$dir" symbolic-ref --short HEAD 2>/dev/null || echo "")
+  if [[ "$branch" != "main" ]]; then
+    echo "  ${label} is on '${branch:-unknown}'. Skipping update to avoid rebasing your work."
+    return 0
+  fi
   if ! (cd "${dir}" && git fetch origin -q); then
     echo "  Fetch failed for ${label}. Skipping update."
   elif ! (cd "${dir}" && git rebase origin/main --autostash -q); then

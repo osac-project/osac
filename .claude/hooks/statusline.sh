@@ -47,8 +47,13 @@ repo_status() {
 REPO_DIR="${project_dir:-$(printf '%s' "$input" | jq -r '.workspace.project_dir // empty' 2>/dev/null)}"
 
 resolve_osac_ai_skills_dir() {
-  if [[ -d "${HOME}/.osac-ai-skills/.git" ]]; then
-    printf '%s\n' "${HOME}/.osac-ai-skills"
+  # Linked worktrees store .git as a file, so [[ -d .git ]] misses them.
+  # --show-prefix must be empty so a plain dir inside some parent git checkout
+  # (for example $HOME itself) does not count as ~/.osac-ai-skills.
+  local home_skills="${HOME}/.osac-ai-skills"
+  if git -C "${home_skills}" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+     && [[ -z "$(git -C "${home_skills}" rev-parse --show-prefix 2>/dev/null)" ]]; then
+    printf '%s\n' "${home_skills}"
   else
     printf '%s\n' "${REPO_DIR}/.osac-ai-skills"
   fi

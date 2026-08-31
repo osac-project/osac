@@ -52,6 +52,8 @@ if [[ " \$* " == *" clone "* ]]; then
   mkdir -p "\$dest"
   "\$REAL" init -q "\$dest"
   "\$REAL" -C "\$dest" checkout -q -b main
+  "\$REAL" -C "\$dest" -c user.email=smoke@test -c user.name=smoke \
+    commit -q --allow-empty -m seed
   "\$REAL" -C "\$dest" remote add origin "\$url"
   exit 0
 fi
@@ -168,7 +170,7 @@ assert_fork_remote() {
   local url
   url=$(git -C "$dest" remote get-url fork 2>/dev/null) \
     || fail "missing fork remote on ${dest}: $(git -C "$dest" remote -v 2>/dev/null || true)"
-  [[ "${url%.git}" == *"smokeuser/${repo}" ]] \
+  [[ "${url%.git}" == *"/smokeuser/${repo}" || "${url%.git}" == *":smokeuser/${repo}" ]] \
     || fail "fork remote on ${dest} expected smokeuser/${repo}, got: $url"
 }
 
@@ -502,6 +504,37 @@ test_unrelated_same_name_github_repo_is_not_used_as_fork() {
   pass "does not point fork at an unrelated same-name GitHub repo"
 }
 
+test_skips_update_when_sibling_not_on_main() {
+  local home="${TMPDIR_ROOT}/home-skip-rebase"
+  local root="${TMPDIR_ROOT}/osac-skip-rebase"
+  local bin="${TMPDIR_ROOT}/bin-skip-rebase"
+  mkdir -p "$home" "$bin"
+  write_git_wrapper "${bin}/git"
+  write_gh_wrapper "${bin}/gh"
+  seed_vendor_ok "${home}/.osac-ai-skills"
+  seed_ai_workflows "${home}/.ai-workflows"
+  prepare_osac "$root"
+
+  run_bootstrap "$root" "$home" "$bin" >/dev/null
+  "$REAL_GIT" -C "${root}/enhancement-proposals" checkout -q -b feat/keep-me
+  echo keep > "${root}/enhancement-proposals/keep-me"
+
+  local out branch
+  out=$(run_bootstrap_fork "$root" "$home" "$bin" 2>&1) \
+    || fail "bootstrap failed: $out"
+  echo "$out" | grep -q "enhancement-proposals is on 'feat/keep-me'" \
+    || fail "should skip rebase when sibling is not on main: $out"
+  echo "$out" | grep -q "enhancement-proposals up to date" \
+    && fail "must not claim a feature branch was rebased: $out"
+  branch=$("$REAL_GIT" -C "${root}/enhancement-proposals" symbolic-ref --short HEAD)
+  [[ "$branch" == "feat/keep-me" ]] \
+    || fail "must stay on feat/keep-me, got: $branch"
+  [[ -f "${root}/enhancement-proposals/keep-me" ]] \
+    || fail "must not drop uncommitted work on a feature branch"
+  assert_fork_remote "${root}/enhancement-proposals" "enhancement-proposals"
+  pass "skips rebase on a feature branch and still adds the fork remote"
+}
+
 test_fork_remote_match_requires_user_boundary() {
   local home="${TMPDIR_ROOT}/home-fork-boundary"
   local root="${TMPDIR_ROOT}/osac-fork-boundary"
@@ -539,6 +572,7 @@ test_no_fork_leaves_writeable_without_fork_remote
 test_forks_writeable_siblings_not_osac_ux_or_vendors
 test_rerun_adds_fork_remote_to_existing_clone
 test_unrelated_same_name_github_repo_is_not_used_as_fork
+test_skips_update_when_sibling_not_on_main
 test_fork_remote_match_requires_user_boundary
 
 echo "All bootstrap sibling-clone smoke tests passed."

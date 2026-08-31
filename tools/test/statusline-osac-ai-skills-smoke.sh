@@ -115,10 +115,34 @@ test_home_without_git_falls_back_to_repo_local() {
   pass "HOME without .git falls back to repo-local"
 }
 
+test_home_worktree_wins_over_repo_local() {
+  local home="${TMPDIR_ROOT}/home-wt"
+  local project="${TMPDIR_ROOT}/proj-wt"
+  local source="${TMPDIR_ROOT}/skills-src"
+  mkdir -p "$home"
+  init_repo "$source"
+  init_repo "$project"
+  init_repo "${project}/.osac-ai-skills"
+  make_behind "${project}/.osac-ai-skills" 2
+  # Free `main` in the source checkout so the linked worktree can occupy it.
+  "$REAL_GIT" -C "$source" checkout -q --detach
+  "$REAL_GIT" -C "$source" worktree add -q "${home}/.osac-ai-skills" main
+  [[ -f "${home}/.osac-ai-skills/.git" ]] || fail "expected linked worktree .git file"
+  [[ ! -d "${home}/.osac-ai-skills/.git" ]] || fail "worktree .git should not be a directory"
+  local out
+  out=$(run_statusline "$home" "$project")
+  echo "$out" | grep -q 'osac-ai-skills: main ✓' \
+    || fail "HOME worktree should win (✓), got: $out"
+  echo "$out" | grep -q '↓2' \
+    && fail "should not report repo-local behind when HOME worktree wins: $out"
+  pass "HOME linked worktree wins over repo-local"
+}
+
 test_missing_vendor_is_muted_not_found
 test_repo_local_up_to_date
 test_repo_local_behind
 test_home_git_wins_over_repo_local
 test_home_without_git_falls_back_to_repo_local
+test_home_worktree_wins_over_repo_local
 
 echo "All statusline osac-ai-skills smoke tests passed."

@@ -954,9 +954,17 @@ osac login https://fulfillment-api.osac.svc.cluster.local:8000
 osac login https://fulfillment-api.osac.svc.cluster.local:8000 \
   --user USERNAME --password PASSWORD
 
+# Login using password flow with credentials read from files (avoids shell history exposure)
+osac login https://fulfillment-api.osac.svc.cluster.local:8000 \
+  --user-file /run/secrets/username --password-file /run/secrets/password
+
 # Login using client credentials flow (for service accounts)
 osac login https://fulfillment-api.osac.svc.cluster.local:8000 \
   --client-id my-service --client-secret MY_SECRET
+
+# Login using client credentials with credentials read from files
+osac login https://fulfillment-api.osac.svc.cluster.local:8000 \
+  --client-id-file /run/secrets/client-id --client-secret-file /run/secrets/client-secret
 
 # Login with a custom CA certificate
 osac login https://fulfillment-api.osac.svc.cluster.local:8000 \
@@ -966,6 +974,11 @@ osac login https://fulfillment-api.osac.svc.cluster.local:8000 \
 osac login https://fulfillment-api.osac.svc.cluster.local:8000 \
   --token-script 'kubectl create token -n osac client --duration 1h'
 ```
+
+> **Note — file-based credential flags**: `--password-file`, `--client-secret-file`, `--user-file`,
+> and `--client-id-file` read the respective value from a file and trim surrounding whitespace.
+> Each is mutually exclusive with its direct counterpart flag. This avoids exposing secrets in
+> shell history, `ps` output, and CI logs.
 
 After login, the configuration is saved to `~/.config/osac/` and subsequent `osac` commands use the
 stored credentials automatically.

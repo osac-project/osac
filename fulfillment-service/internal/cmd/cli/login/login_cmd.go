@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/dustin/go-humanize"
@@ -116,10 +117,22 @@ func Cmd() *cobra.Command {
 		clientIdFlagHelp,
 	)
 	flags.StringVar(
+		&runner.args.clientIdFile,
+		"client-id-file",
+		"",
+		clientIdFileFlagHelp,
+	)
+	flags.StringVar(
 		&runner.args.clientSecret,
 		"client-secret",
 		"",
 		clientSecretFlagHelp,
+	)
+	flags.StringVar(
+		&runner.args.clientSecretFile,
+		"client-secret-file",
+		"",
+		clientSecretFileFlagHelp,
 	)
 	flags.StringSliceVar(
 		&runner.args.scopes,
@@ -140,10 +153,22 @@ func Cmd() *cobra.Command {
 		userFlagHelp,
 	)
 	flags.StringVar(
+		&runner.args.userFile,
+		"user-file",
+		"",
+		userFileFlagHelp,
+	)
+	flags.StringVar(
 		&runner.args.password,
 		"password",
 		"",
 		passwordFlagHelp,
+	)
+	flags.StringVar(
+		&runner.args.passwordFile,
+		"password-file",
+		"",
+		passwordFileFlagHelp,
 	)
 
 	// Define the depreacated alternatives for the OAuth flags:
@@ -222,22 +247,55 @@ type runnerContext struct {
 	caPool     *x509.CertPool
 	tokenStore auth.TokenStore
 	args       struct {
-		plaintext    bool
-		insecure     bool
-		caFiles      []string
-		address      string
-		private      bool
-		token        string
-		tokenScript  string
-		issuer       string
-		flow         string
-		clientId     string
-		clientSecret string
-		scopes       []string
-		redirectUri  string
-		user         string
-		password     string
+		plaintext        bool
+		insecure         bool
+		caFiles          []string
+		address          string
+		private          bool
+		token            string
+		tokenScript      string
+		issuer           string
+		flow             string
+		clientId         string
+		clientIdFile     string
+		clientSecret     string
+		clientSecretFile string
+		scopes           []string
+		redirectUri      string
+		user             string
+		userFile         string
+		password         string
+		passwordFile     string
 	}
+}
+
+// maxCredentialFileSize is the upper bound for credential files read by readTrimmedFile.
+// Passwords and secrets are never this large; anything bigger is almost certainly a mistake.
+const maxCredentialFileSize = 1 << 20 // 1 MiB
+
+// readTrimmedFile reads the content of the given file and returns it with all leading and
+// trailing whitespace removed. It rejects non-regular files (directories, FIFOs, devices)
+// to prevent blocking reads from special files, and files larger than maxCredentialFileSize.
+func (c *runnerContext) readTrimmedFile(file string) (result string, err error) {
+	cleanPath := filepath.Clean(file)
+	info, err := os.Stat(cleanPath)
+	if err != nil {
+		return
+	}
+	if !info.Mode().IsRegular() {
+		err = fmt.Errorf("'%s' is not a regular file", file)
+		return
+	}
+	if info.Size() > maxCredentialFileSize {
+		err = fmt.Errorf("'%s' exceeds the maximum credential file size (%d bytes)", file, maxCredentialFileSize)
+		return
+	}
+	data, err := os.ReadFile(cleanPath)
+	if err != nil {
+		return
+	}
+	result = strings.TrimSpace(string(data))
+	return
 }
 
 func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
@@ -257,8 +315,8 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to load templates: %w", err)
 	}
 
-	// Infer the OAuth flow from other flags when it hasn't been explicitly set:
-	err = c.inferFlow(ctx)
+	// Resolve *-file flags and infer the OAuth flow in one combined step:
+	err = c.resolveAndInferFlow(ctx)
 	if err != nil {
 		return err
 	}
@@ -564,6 +622,64 @@ func (c *runnerContext) createTokenSource(ctx context.Context, tokenIssuer strin
 	return
 }
 
+// resolveAndInferFlow resolves *-file flags and then infers the OAuth flow. Combining the two
+// steps into one call keeps run() under the cyclomatic-complexity limit while preserving the
+// required ordering: file flags must be resolved before the Changed() checks in inferFlow.
+func (c *runnerContext) resolveAndInferFlow(ctx context.Context) error {
+	if err := c.resolveFileFlags(); err != nil {
+		return err
+	}
+	return c.inferFlow(ctx)
+}
+
+// resolveFileFlags reads each *-file flag and populates the corresponding plain field. It returns
+// an error if a *-file flag and its direct counterpart (or its deprecated oauth-* alias) are both
+// set, or if the file cannot be read. It must be called before inferFlow so that Changed() checks
+// on the *-file flags are still effective for flow inference.
+func (c *runnerContext) resolveFileFlags() error {
+	if c.flags.Changed("password-file") {
+		if c.flags.Changed("password") || c.flags.Changed("oauth-password") {
+			return fmt.Errorf("flags '--password'/'--oauth-password' and '--password-file' are mutually exclusive")
+		}
+		secret, err := c.readTrimmedFile(c.args.passwordFile)
+		if err != nil {
+			return fmt.Errorf("failed to read password file '%s': %w", c.args.passwordFile, err)
+		}
+		c.args.password = secret
+	}
+	if c.flags.Changed("client-secret-file") {
+		if c.flags.Changed("client-secret") || c.flags.Changed("oauth-client-secret") {
+			return fmt.Errorf("flags '--client-secret'/'--oauth-client-secret' and '--client-secret-file' are mutually exclusive")
+		}
+		secret, err := c.readTrimmedFile(c.args.clientSecretFile)
+		if err != nil {
+			return fmt.Errorf("failed to read client secret file '%s': %w", c.args.clientSecretFile, err)
+		}
+		c.args.clientSecret = secret
+	}
+	if c.flags.Changed("user-file") {
+		if c.flags.Changed("user") || c.flags.Changed("oauth-user") {
+			return fmt.Errorf("flags '--user'/'--oauth-user' and '--user-file' are mutually exclusive")
+		}
+		user, err := c.readTrimmedFile(c.args.userFile)
+		if err != nil {
+			return fmt.Errorf("failed to read user file '%s': %w", c.args.userFile, err)
+		}
+		c.args.user = user
+	}
+	if c.flags.Changed("client-id-file") {
+		if c.flags.Changed("client-id") || c.flags.Changed("oauth-client-id") {
+			return fmt.Errorf("flags '--client-id'/'--oauth-client-id' and '--client-id-file' are mutually exclusive")
+		}
+		clientId, err := c.readTrimmedFile(c.args.clientIdFile)
+		if err != nil {
+			return fmt.Errorf("failed to read client ID file '%s': %w", c.args.clientIdFile, err)
+		}
+		c.args.clientId = clientId
+	}
+	return nil
+}
+
 // inferFlow infers the OAuth flow from other command line flags when the user hasn't explicitly set the '--flow' flag.
 // If '--client-secret' is provided, the flow is inferred to be 'credentials'. If '--user' or '--password' is provided,
 // the flow is inferred to be 'password'. If both sets of flags are present without an explicit '--flow', an error is
@@ -572,9 +688,10 @@ func (c *runnerContext) inferFlow(ctx context.Context) error {
 	if c.flags.Changed("flow") || c.flags.Changed("oauth-flow") {
 		return nil
 	}
-	credentialsHint := c.flags.Changed("client-secret") || c.flags.Changed("oauth-client-secret")
+	credentialsHint := c.flags.Changed("client-secret") || c.flags.Changed("oauth-client-secret") ||
+		c.flags.Changed("client-secret-file")
 	passwordHint := c.flags.Changed("user") || c.flags.Changed("oauth-user") || c.flags.Changed("password") ||
-		c.flags.Changed("oauth-password")
+		c.flags.Changed("oauth-password") || c.flags.Changed("user-file") || c.flags.Changed("password-file")
 	if credentialsHint && passwordHint {
 		c.console.Render(ctx, "ambiguous_flow.txt", nil)
 		return exit.Error(1)
@@ -725,10 +842,11 @@ const flowFlagHelp = `
 _FLOW_ - OAuth flow to use. Must be one of {{ bt }}code{{ bt }}, {{ bt }}device{{ bt }}, {{ bt }}credentials{{ bt }} or
 {{ bt }}password{{ bt }}.
 
-When this flag is omitted, the flow is inferred from other flags. If {{ bt }}--client-secret{{ bt }} is provided, the
-flow is set to {{ bt }}credentials{{ bt }}. If {{ bt }}--user{{ bt }} or {{ bt }}--password{{ bt }} is provided, the
-flow is set to {{ bt }}password{{ bt }}. If both {{ bt }}--client-secret{{ bt }} and {{ bt }}--user{{ bt }} or {{ bt
-}}--password{{ bt }} are provided, the flow cannot be inferred and this flag must be set explicitly.
+When this flag is omitted, the flow is inferred from other flags. If {{ bt }}--client-secret{{ bt }} or {{ bt
+}}--client-secret-file{{ bt }} is provided, the flow is set to {{ bt }}credentials{{ bt }}. If {{ bt }}--user{{ bt }},
+{{ bt }}--user-file{{ bt }}, {{ bt }}--password{{ bt }}, or {{ bt }}--password-file{{ bt }} is provided, the flow is
+set to {{ bt }}password{{ bt }}. If both credential and password hints are present, the flow cannot be inferred and
+this flag must be set explicitly.
 `
 
 const clientIdFlagHelp = `
@@ -759,4 +877,20 @@ _USER_ - OAuth user name. Required when using the {{ bt }}password{{ bt }} flow,
 const passwordFlagHelp = `
 _PASSWORD_ - OAuth password. Required when using the {{ bt }}password{{ bt }} flow, along with the
 {{ bt }}--user{{ bt }} flag.
+`
+
+const passwordFileFlagHelp = `
+_FILE_ - File containing the OAuth password. Mutually exclusive with {{ bt }}--password{{ bt }}.
+`
+
+const clientSecretFileFlagHelp = `
+_FILE_ - File containing the OAuth client secret. Mutually exclusive with {{ bt }}--client-secret{{ bt }}.
+`
+
+const userFileFlagHelp = `
+_FILE_ - File containing the OAuth user name. Mutually exclusive with {{ bt }}--user{{ bt }}.
+`
+
+const clientIdFileFlagHelp = `
+_FILE_ - File containing the OAuth client identifier. Mutually exclusive with {{ bt }}--client-id{{ bt }}.
 `

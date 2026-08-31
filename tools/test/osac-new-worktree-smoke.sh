@@ -82,6 +82,19 @@ exec "${REAL_GIT}" "\$@"
 EOF
   chmod +x "${bin}/git"
 
+  cat > "${bin}/timeout" <<'EOF'
+#!/bin/sh
+shift
+exec "$@"
+EOF
+  chmod +x "${bin}/timeout"
+
+  cat > "${bin}/jira" <<'EOF'
+#!/bin/sh
+printf '%s\n' '{"fields":{"summary":"dogfood ticket","issuetype":{"name":"Task"}}}'
+EOF
+  chmod +x "${bin}/jira"
+
   (
     cd "$repo"
     # shellcheck source=../osac-helpers.sh
@@ -99,9 +112,36 @@ EOF
     || fail "bootstrap was not invoked: $(cat "$log")"
   [[ -x "${dest}/tools/bootstrap.sh" ]] \
     || fail "dest should contain tools/bootstrap.sh"
+  grep -q 'redhat.atlassian.net/browse/OSAC-1234' "${dest}/.claude/CLAUDE.md" \
+    || fail "expected Jira context in ${dest}/.claude/CLAUDE.md"
   pass "worktree dest is osac-<basename> and runs tools/bootstrap.sh"
 }
 
+test_jira_ticket_from_branch() {
+  local got
+  got=$(osac_jira_ticket_from_branch "feat/OSAC-4040-wt-dogfood")
+  [[ "$got" == "OSAC-4040" ]] || fail "expected OSAC-4040, got ${got}"
+  got=$(osac_jira_ticket_from_branch "feat/no-ticket")
+  [[ -z "$got" ]] || fail "expected empty ticket, got ${got}"
+  pass "osac_jira_ticket_from_branch extracts OSAC-NNNN"
+}
+
+test_zsh_nounset_jira_ticket() {
+  if ! command -v zsh >/dev/null 2>&1; then
+    echo "SKIP: zsh not on PATH (Jira ticket parse under nounset)"
+    return 0
+  fi
+  zsh -c '
+    set -eu
+    source "$1"
+    got=$(osac_jira_ticket_from_branch "feat/OSAC-4040-wt-dogfood")
+    [[ "$got" == "OSAC-4040" ]]
+  ' zsh "$HELPERS" || fail "zsh nounset failed to parse OSAC-4040 from branch"
+  pass "osac_jira_ticket_from_branch works under zsh nounset"
+}
+
 test_dest_basename_and_repo_bootstrap
+test_jira_ticket_from_branch
+test_zsh_nounset_jira_ticket
 
 echo "All osac-new-worktree smoke tests passed."

@@ -6,6 +6,13 @@
 # Usage:
 #   source tools/osac-helpers.sh
 #   osac-new-worktree feat/my-feature
+#
+# Safe to source from bash or zsh (macOS default). Do not use BASH_REMATCH.
+
+# First OSAC-NNNN in a branch name; empty if none. POSIX so zsh nounset is fine.
+osac_jira_ticket_from_branch() {
+    printf '%s\n' "${1:-}" | sed -n 's/.*\(OSAC-[0-9][0-9]*\).*/\1/p'
+}
 
 osac-new-worktree() {
     if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -57,8 +64,8 @@ osac-new-worktree() {
     fi
 
     local ticket=""
-    if [[ "$branch_name" =~ (OSAC-[0-9]+) ]]; then
-        ticket="${BASH_REMATCH[1]}"
+    ticket=$(osac_jira_ticket_from_branch "$branch_name")
+    if [[ -n "$ticket" ]]; then
         echo "Fetching Jira ticket ${ticket}..."
         local raw summary issue_type
         raw=$(timeout 15 jira issue view "$ticket" --raw 2>/dev/null)

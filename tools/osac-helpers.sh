@@ -68,7 +68,11 @@ osac-new-worktree() {
     if [[ -n "$ticket" ]]; then
         echo "Fetching Jira ticket ${ticket}..."
         local raw summary issue_type
-        raw=$(timeout 15 jira issue view "$ticket" --raw 2>/dev/null)
+        if command -v timeout >/dev/null 2>&1; then
+            raw=$(timeout 15 jira issue view "$ticket" --raw 2>/dev/null) || raw=""
+        else
+            raw=$(jira issue view "$ticket" --raw 2>/dev/null) || raw=""
+        fi
         if [[ -n "$raw" ]]; then
             summary=$(echo "$raw" | jq -r '.fields.summary // empty' 2>/dev/null)
             issue_type=$(echo "$raw" | jq -r '.fields.issuetype.name // empty' 2>/dev/null)

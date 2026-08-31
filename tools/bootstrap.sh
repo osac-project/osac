@@ -108,7 +108,11 @@ OSAC_AI_SKILLS_REPO="osac-project/osac-ai-skills"
 # still has open (git subtree / copy-bot) for automated-framework consumption.
 osac_ai_skills_vendor_ok() {
   local dir="$1"
-  [[ -d "${dir}/.git" ]] \
+  # Linked worktrees store .git as a file; require a work-tree root so a
+  # leftover directory inside some other checkout does not count.
+  [[ -n "$dir" && -d "$dir" ]] \
+    && git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+    && [[ -z "$(git -C "$dir" rev-parse --show-prefix 2>/dev/null)" ]] \
     && [[ -d "${dir}/skills" ]] \
     && [[ -x "${dir}/tools/link-agent-skills.sh" ]]
 }

@@ -28,9 +28,21 @@ log_info() { printf '%b%s%b' "$GREEN" "$1" "$RESET"; }
 log_warning() { printf '%b%s%b' "$YELLOW" "$1" "$RESET"; }
 log_muted() { printf '%b%s%b' "$GRAY" "$1" "$RESET"; }
 
+# True only for the root of a clone or linked worktree. A leftover directory
+# inside some other checkout would otherwise inherit that parent's branch.
+is_git_work_tree_root() {
+  local dir="$1"
+  [[ -n "$dir" && -d "$dir" ]] \
+    && git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+    && [[ -z "$(git -C "$dir" rev-parse --show-prefix 2>/dev/null)" ]]
+}
+
 repo_status() {
   local dir="$1" name="$2"
-  [[ -d "$dir" ]] || { log_muted "$name: not found"; return; }
+  if ! is_git_work_tree_root "$dir"; then
+    log_muted "$name: not found"
+    return
+  fi
 
   local branch behind
   branch=$(git -C "$dir" branch --show-current 2>/dev/null) || branch="detached"
@@ -47,12 +59,8 @@ repo_status() {
 REPO_DIR="${project_dir:-$(printf '%s' "$input" | jq -r '.workspace.project_dir // empty' 2>/dev/null)}"
 
 resolve_osac_ai_skills_dir() {
-  # Linked worktrees store .git as a file, so [[ -d .git ]] misses them.
-  # --show-prefix must be empty so a plain dir inside some parent git checkout
-  # (for example $HOME itself) does not count as ~/.osac-ai-skills.
   local home_skills="${HOME}/.osac-ai-skills"
-  if git -C "${home_skills}" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
-     && [[ -z "$(git -C "${home_skills}" rev-parse --show-prefix 2>/dev/null)" ]]; then
+  if is_git_work_tree_root "${home_skills}"; then
     printf '%s\n' "${home_skills}"
   else
     printf '%s\n' "${REPO_DIR}/.osac-ai-skills"

@@ -68,6 +68,7 @@ EOF
 seed_vendor_ok() {
   local dir="$1"
   mkdir -p "${dir}/skills" "${dir}/tools"
+  printf '#\n' > "${dir}/skills/.keep"
   printf '#!/bin/sh\nexit 0\n' > "${dir}/tools/link-agent-skills.sh"
   chmod +x "${dir}/tools/link-agent-skills.sh"
   "$REAL_GIT" init -q "$dir"
@@ -504,6 +505,31 @@ test_unrelated_same_name_github_repo_is_not_used_as_fork() {
   pass "does not point fork at an unrelated same-name GitHub repo"
 }
 
+test_home_worktree_vendor_is_updated_not_recloned() {
+  local home="${TMPDIR_ROOT}/home-vendor-wt"
+  local root="${TMPDIR_ROOT}/osac-vendor-wt"
+  local bin="${TMPDIR_ROOT}/bin-vendor-wt"
+  local source="${TMPDIR_ROOT}/skills-vendor-src"
+  mkdir -p "$home" "$bin"
+  write_git_wrapper "${bin}/git"
+  seed_vendor_ok "$source"
+  seed_ai_workflows "${home}/.ai-workflows"
+  prepare_osac "$root"
+  "$REAL_GIT" -C "$source" checkout -q --detach
+  "$REAL_GIT" -C "$source" worktree add -q "${home}/.osac-ai-skills" main
+  [[ -f "${home}/.osac-ai-skills/.git" ]] || fail "expected HOME vendor worktree"
+
+  local out
+  out=$(run_bootstrap "$root" "$home" "$bin" 2>&1) || fail "bootstrap failed: $out"
+  echo "$out" | grep -q "Updating osac-ai-skills" \
+    || fail "HOME worktree vendor should be updated: $out"
+  echo "$out" | grep -q "Cloning osac-ai-skills" \
+    && fail "must not clone a second vendor over a HOME worktree: $out"
+  [[ ! -e "${root}/.osac-ai-skills" ]] \
+    || fail "must not create project-local vendor when HOME worktree is usable"
+  pass "HOME linked worktree vendor is updated, not re-cloned"
+}
+
 test_skips_update_when_sibling_not_on_main() {
   local home="${TMPDIR_ROOT}/home-skip-rebase"
   local root="${TMPDIR_ROOT}/osac-skip-rebase"
@@ -572,6 +598,7 @@ test_no_fork_leaves_writeable_without_fork_remote
 test_forks_writeable_siblings_not_osac_ux_or_vendors
 test_rerun_adds_fork_remote_to_existing_clone
 test_unrelated_same_name_github_repo_is_not_used_as_fork
+test_home_worktree_vendor_is_updated_not_recloned
 test_skips_update_when_sibling_not_on_main
 test_fork_remote_match_requires_user_boundary
 

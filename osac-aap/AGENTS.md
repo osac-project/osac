@@ -188,12 +188,13 @@ Shared utilities imported by template roles:
 - `cluster_settings` — Cluster configuration management
 - `cluster_working_namespace` — Cluster namespace utilities
 - `common` — Kubeconfig and credential management (`get_remote_cluster_kubeconfig`)
+- `csi_driver_install` — Idempotent OSAC CSI driver Helm chart install (csi-driver only), called directly from hub-targeting storage dispatch playbooks
 - `enumerate_templates` — Template enumeration
 - `external_access` — External access configuration
 - `extract_template_info` — Template metadata extraction
 - `finalizer` — Kubernetes finalizer lifecycle (`add_finalizer`, `remove_finalizer`)
 - `hosted_cluster` — Hosted cluster management
-- `lease` — Bare metal lease management
+- `lease` — Generic Kubernetes Lease-based mutex (despite the name, not bare-metal-specific — also serializes cluster-order provisioning, agent-pool selection, and CSI driver/CSI backends install dispatches via two independent locks)
 - `manage_agents` — Agent management utilities
 - `metallb_ingress` — MetalLB ingress setup
 - `nmstate_config` — Network configuration with nmstate
@@ -228,6 +229,8 @@ Test targets in `tests/integration/targets/`:
 - `cluster_*` — ClusterOrder lifecycle (create, delete, post_install, status_reporting)
 - `compute_instance_*` — ComputeInstance lifecycle (create, delete, with_gpu)
 - `storage_provider_*` — Storage onboarding, setup, teardown, rollback
+- `storage_provider_ensure_csi_backends` — sole-owner `csi-backends` Helm chart install: cumulative vendor enablement across dispatches, vmsHost resolution, OAuth Secret lifecycle, install-lock contention
+- `csi_driver_install`, `tenant_storage_backend_csi_driver_install_wiring`, `tenant_cluster_storage_csi_driver_install_gate`, `compute_instance_jit_csi_driver_install_wiring` — OSAC CSI driver Helm chart install (csi-driver only): role behavior, playbook wiring, per-call-site JIT-install gating
 - `finalizer`, `lease`, `tenant_target_namespace` — Service role tests
 - `config_as_code_pod_specs` — AAP configuration validation
 
@@ -276,7 +279,7 @@ Build definition: `execution-environment/execution-environment.yaml`
 - **Base image**: UBI 10.2 (Red Hat Universal Base Image)
 - **Python**: 3.12 in container runtime
 - **System packages**: systemd-libs, systemd-devel, gcc, python3.12-devel, git-core, bind-utils, krb5-devel
-- **CLI tools**: oc and kubectl copied from `quay.io/openshift/origin-cli:4.19`
+- **CLI tools**: oc and kubectl copied from `quay.io/openshift/origin-cli:4.19`; Helm v3.17.0 installed via SHA256-verified download
 - **Build files**: Copies local `collections/` and `vendor/` into container
 
 No compilation step — Ansible playbooks are interpreted at runtime.

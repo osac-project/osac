@@ -100,8 +100,14 @@ echo "=== Running Role Integration Tests ==="
 echo ""
 
 # Create a real pod for lease ownerReference tests (prevents K8s GC).
-# Scoped to role tests only -- workflow tests use the placeholder UID
-# so leases get GC'd between baseline and override runs.
+# Scoped to role and storage tests -- workflow tests use the placeholder UID
+# so leases get GC'd between baseline and override runs. Kept alive through
+# the STORAGE_TESTS loop below (storage_provider_ensure_csi_backends and
+# csi_driver_install each have their own lock-contention scenario that also
+# needs a live owner pod matching POD_NAME/POD_UID) -- deleting it right
+# after the role-tests loops orphans any Lease those later tests create,
+# and Kubernetes garbage-collects an orphaned Lease almost immediately,
+# which silently defeats the whole point of those scenarios.
 echo "Creating test-runner pod for lease role tests..."
 kubectl run lease-test-pod --image=registry.k8s.io/pause:3.9 --restart=Never -n osac-system 2>/dev/null || true
 kubectl wait --for=condition=Ready pod/lease-test-pod -n osac-system --timeout=60s 2>/dev/null || true
@@ -147,9 +153,6 @@ for entry in "${ROLE_SCENARIO_TESTS[@]}"; do
 
   echo ""
 done
-
-# Clean up lease test pod
-kubectl delete pod lease-test-pod -n osac-system --ignore-not-found 2>/dev/null || true
 
 echo "=== Running Storage Provider Dispatcher Unit Tests ==="
 echo ""
@@ -208,6 +211,33 @@ if [ "${STORAGE_TESTS_ENABLED:-}" = "true" ]; then
     "storage_provider_ensure_sc"
     "storage_provider_onboarding"
     "storage_provider_setup_rollback"
+    # ensure_csi_backends.yaml's own role-level test (sole owner of the csi-backends
+    # release as of OSAC-3290) -- verified before the csi_driver_install* entries
+    # below, which depend on the vendor controller Service it creates. Uses the same
+    # OSAC_CSI_BACKENDS_CHART_REF local-filesystem chart path storage_provider_setup
+    # above already relies on -- no OCI registry needed, unlike csi_driver_install's
+    # own role-level test further down.
+    "storage_provider_ensure_csi_backends"
+    # Playbook-level wiring tests for osac.service.csi_driver_install (stub the
+    # real Helm install via csi_driver_install_override, run the real
+    # storage_provider dispatch after it) -- share this gate/mock server since
+    # they need the same infrastructure. One target per hub-targeting dispatch
+    # point: tenant storage backend (setup), compute-instance JIT storage
+    # (ensure_storage_class), and tenant/cluster storage's Tenant-vs-ClusterOrder
+    # gate (ensure_storage_class).
+    "tenant_storage_backend_csi_driver_install_wiring"
+    "compute_instance_jit_csi_driver_install_wiring"
+    "tenant_cluster_storage_csi_driver_install_gate"
+    # csi_driver_install's own role-level test. Runs unconditionally alongside the
+    # rest of STORAGE_TESTS -- setup_test_env.sh's "local TLS OCI registry" section
+    # (same STORAGE_TESTS_ENABLED gate) packages and pushes the real
+    # osac-csi-driver/charts/{csi-driver,csi-backends} charts at versions
+    # 0.1.0/0.1.1, so this no longer needs a real oci://ghcr.io/osac-project/charts
+    # release tag (none has been cut yet -- OSAC-3290 Risk Assessment item 1).
+    # Does not need the mock VMS server itself -- csi_driver_install never calls
+    # the VAST VMS API directly -- but shares this array/gate since it now shares
+    # the same local-registry setup step.
+    "csi_driver_install"
   )
 
   for storage_test in "${STORAGE_TESTS[@]}"; do
@@ -225,6 +255,10 @@ if [ "${STORAGE_TESTS_ENABLED:-}" = "true" ]; then
     fi
   done
 fi
+
+# Clean up lease test pod -- kept alive through both the role-tests and
+# storage-tests loops above (see the creation comment for why).
+kubectl delete pod lease-test-pod -n osac-system --ignore-not-found 2>/dev/null || true
 
 echo "========================================"
 echo "Test Results"

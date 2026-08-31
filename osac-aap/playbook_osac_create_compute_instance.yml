@@ -14,6 +14,13 @@
     # No environment defines a tier literally named 'default' -- that name only
     # ever appeared in storage_provider's own VAST-oriented unit test fixtures.
     _requested_storage_tier: "{{ lookup('env', 'STORAGE_REQUESTED_TIER') | default('local', true) }}"
+    # Overridable so tests can stub out the real Helm install while still
+    # exercising this playbook's own when: gate and vars: mapping, matching
+    # the pattern osac.templates.ocp_virt_vm already uses for its
+    # create_step_* hooks.
+    csi_driver_install_default:
+      name: osac.service.csi_driver_install
+      tasks_from: main.yaml
 
   pre_tasks:
     - name: Show resource metadata
@@ -68,6 +75,26 @@
               Available tiers: {{ osac_job_vars.storage_tier_definitions | map(attribute='name') | list | to_json }}.
               JIT storage provisioning will be skipped.
           when: _jit_storage_tiers | length == 0
+
+    # This is a hub-targeted (hosts: localhost, no _remote_kubeconfig) ensure_storage_class
+    # dispatch, the same as the Stage 2 hub call site in
+    # playbook_osac_create_tenant_cluster_storage.yml -- so it needs the same
+    # once-per-dispatch OSAC CSI driver install ahead of it.
+    #
+    # Unlike the Tenant call site, no ordering guarantee exists here -- this
+    # JIT path has no osac-operator Stage-gating invariant protecting it.
+    # csi_driver_install's own pre-block fail-fast (checking each dispatched
+    # vendor's controller Service exists) is the actual protection, not
+    # assumed safety. In practice this path almost always dispatches zero
+    # CSI-driver-supported vendors today (typically 'lvms'), so the fail-fast
+    # is expected to be rarely exercised but is a real, live code path.
+    - name: Install OSAC CSI driver for JIT storage (once per dispatch, regardless of provider count)
+      when: _jit_storage_tiers is defined and _jit_storage_tiers | length > 0
+      ansible.builtin.include_role:
+        name: "{{ (csi_driver_install_override | default(csi_driver_install_default)).name }}"
+        tasks_from: "{{ (csi_driver_install_override | default(csi_driver_install_default)).tasks_from }}"
+      vars:
+        csi_driver_install_tiers: "{{ _jit_storage_tiers }}"
 
     - name: Ensure storage is provisioned for tenant (JIT)
       when: _jit_storage_tiers is defined and _jit_storage_tiers | length > 0

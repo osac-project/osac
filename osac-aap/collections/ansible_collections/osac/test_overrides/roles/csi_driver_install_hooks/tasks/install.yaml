@@ -1,0 +1,20 @@
+---
+# Overrides osac.service.csi_driver_install's include_role in the calling
+# playbooks (via csi_driver_install_override) so playbook-level wiring tests
+# can verify the when: gate fired and the vars: mapping resolved correctly,
+# without a real Helm install against the not-yet-published osac-csi-driver
+# chart. Logs only a non-sensitive identifier (tiers) -- never a payload that
+# could carry secrets. Matches vm_create_hooks/tasks/resources.yml's
+# log-and-skip pattern, which likewise logs only a non-sensitive identifier
+# (compute_instance_name), never a payload that could carry secrets.
+- name: Log CSI driver install step execution with the vars this dispatch received
+  ansible.builtin.lineinfile:
+    path: /tmp/osac_test_overrides.log
+    line: >-
+      {{ ansible_date_time.iso8601 }} | csi_driver_install |
+      tiers={{ csi_driver_install_tiers | to_json }}
+    create: true
+
+- name: Skip actual Helm install (test mode)
+  ansible.builtin.debug:
+    msg: "Test mode - skipping actual OSAC CSI driver Helm install"

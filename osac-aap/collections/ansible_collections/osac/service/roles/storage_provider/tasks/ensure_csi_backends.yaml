@@ -4,14 +4,15 @@
 #
 # WHY THIS IS CUMULATIVE (do not "simplify" back to enabled: <v> in _unique_providers):
 # The csi-backends release is a single, hub-wide (platform) resource, but this
-# task runs once PER TENANT — setup.yaml is invoked by
+# task runs once PER DISPATCH — setup.yaml is invoked by
 # playbook_osac_create_tenant_storage_backend.yml with _unique_providers derived
-# from *that tenant's* resolved storage tiers, i.e. a per-tenant subset. A plain
-# `helm upgrade` replaces the release's values wholesale (it does not merge with
-# the previous release), so setting a vendor's enabled flag straight from
-# _unique_providers would flip other vendors to enabled: false and tear down a
-# controller a different tenant still relies on (e.g. onboarding a trident-only
-# tenant would uninstall the vast controller a vast tenant depends on).
+# from storage_provider_tiers, the same unfiltered, platform-wide tier catalog
+# described below (not a per-tenant subset). A plain `helm upgrade` replaces the
+# release's values wholesale (it does not merge with the previous release), so
+# setting a vendor's enabled flag straight from _unique_providers would flip
+# other vendors to enabled: false and tear down a controller a different tenant
+# still relies on (e.g. onboarding a trident-only tenant would uninstall the
+# vast controller a vast tenant depends on).
 #
 # To prevent that, enablement here only ever GROWS: a vendor is enabled if this
 # tenant needs it OR its controller Deployment already exists on the hub. Disabling
@@ -23,86 +24,305 @@
 # cluster) every task here — including the cluster reads — is skipped and the
 # facts these tasks set are never referenced.
 #
+# This task is the sole owner of the csi-backends release (OSAC-3290): it runs
+# once per dispatch regardless of which tenant triggered it, so its own
+# discover-compute-install sequence is additionally serialized by an
+# osac.service.lease lock (csi-backends-install-lock, independent of
+# csi_driver_install's own csi-driver-install-lock — the two are now separate
+# shared resources) around the read-modify-write of the release's cumulative
+# vendor-enablement state. Without it, two concurrent tenant onboardings could
+# both read the same pre-install Deployment set and race to install, each
+# unaware of the other's vendor.
+#
 # Requires (from caller / main.yaml):
 #   _unique_providers — list of provider names from this tenant's tier list
+#   storage_provider_tiers, storage_provider_backend_connections — the
+#     platform-wide (not per-tenant-filtered) tier/connection catalogs used to
+#     resolve vast's vmsHost below
 
 - name: Ensure vendor CSI controllers are deployed on the hub (cumulative across tenants)
   when: storage_provider_csi_backends_enabled | default(true) | bool
   block:
-    - name: Discover vendor controllers already deployed on the hub
-      kubernetes.core.k8s_info:
-        api_version: apps/v1
-        kind: Deployment
-        namespace: "{{ storage_provider_csi_backends_namespace }}"
-      register: _csi_backends_existing
-
-    - name: Compute this tenant's vendors and the controllers already present
+    - name: Compute this tenant's vendors requiring csi-backends controllers
       ansible.builtin.set_fact:
         # Vendors this tenant's tiers require, bounded to the chart-managed vendor set.
         _this_tenant_vendors: "{{ _unique_providers | intersect(['vast', 'trident', 'pure']) }}"
-        # Names of vendor controller Deployments that already exist in the namespace.
-        _existing_controller_names: >-
-          {{ (_csi_backends_existing.resources | default([]))
-             | map(attribute='metadata.name') | list }}
 
-    - name: Compute cumulative vendor enablement set (this tenant's vendors ∪ already-deployed)
+    # Resolved unconditionally on every dispatch, regardless of which tenant triggered
+    # it or what that tenant needs — storage_provider_tiers/storage_provider_backend_connections
+    # are populated by osac-operator from an unfiltered, platform-wide gRPC List call
+    # (StorageTier is platform-scoped), so a vast backend_id and its endpoint are
+    # resolvable here even when THIS dispatch's own tenant doesn't use vast at all.
+    # This matters because the Helm call below has no reuse_values/reset_values
+    # override (a genuine wholesale values replace every time) — gating this
+    # resolution on the current tenant needing vast would mean a later non-vast
+    # tenant's dispatch pushes a full values replace with vast.config.vmsHost unset,
+    # silently breaking an already-working vast tenant even though vast.enabled
+    # correctly stays true via the cumulative-enablement union below.
+    - name: Resolve vast backend_id(s) registered anywhere in the platform-wide tier catalog
       ansible.builtin.set_fact:
-        # A vendor stays/gets enabled if THIS tenant needs it OR its controller already
-        # exists — the union is what keeps a per-tenant run from clobbering others.
-        _csi_backends_enabled_vendors: >-
-          {{
-            (['vast'] if ('vast' in _this_tenant_vendors
-                          or 'vast-csi-controller' in _existing_controller_names) else [])
-            + (['trident'] if ('trident' in _this_tenant_vendors
-                               or 'trident-csi-controller' in _existing_controller_names) else [])
-            + (['pure'] if ('pure' in _this_tenant_vendors
-                            or 'pure-csi-controller' in _existing_controller_names) else [])
+        _csi_backends_vast_backend_ids: >-
+          {{ storage_provider_tiers | selectattr('provider', 'equalto', 'vast')
+             | selectattr('backend_id', 'defined') | map(attribute='backend_id') | unique | list }}
+
+    - name: Fail if more than one VAST backend is registered platform-wide
+      ansible.builtin.fail:
+        msg: >-
+          Expected at most one VAST backend_id platform-wide for the csi-backends
+          vmsHost config, got {{ _csi_backends_vast_backend_ids | length }}:
+          {{ _csi_backends_vast_backend_ids | to_json }}. Multiple VAST backends
+          are not yet supported.
+      when: _csi_backends_vast_backend_ids | length > 1
+
+    - name: Resolve vast VMS host from the platform-wide backend connection catalog (non-secret connection detail only)
+      ansible.builtin.set_fact:
+        _csi_backends_vast_vms_host: "{{ storage_provider_backend_connections[_csi_backends_vast_backend_ids[0]].endpoint }}"
+      when: _csi_backends_vast_backend_ids | length == 1
+
+    - name: Set csi-backends install lock holder identity
+      ansible.builtin.set_fact:
+        _csi_backends_lock_holder: >-
+          csi-backends-install-{{ awx_job_id | default('unknown') }}-{{
+            lookup('community.general.random_string', special=false, numbers=false, upper=false)
           }}
+        # Reset explicitly on every invocation, same rationale as
+        # csi_driver_install's own lock-acquired fact: a stale `true` left over from
+        # an earlier successful dispatch targeting this same host (facts persist
+        # across plays) must never be read by a LATER invocation whose own acquire
+        # attempt fails before reaching "Mark the lock as acquired" below.
+        _csi_backends_lock_acquired: false
 
-    - name: Build csi-backends chart values from the cumulative vendor set
-      ansible.builtin.set_fact:
-        _csi_backends_values:
-          namespace: "{{ storage_provider_csi_backends_namespace }}"
-          vast:
-            enabled: "{{ 'vast' in _csi_backends_enabled_vendors }}"
-          trident:
-            enabled: "{{ 'trident' in _csi_backends_enabled_vendors }}"
-          pure:
-            enabled: "{{ 'pure' in _csi_backends_enabled_vendors }}"
-        _csi_backends_any_enabled: "{{ _csi_backends_enabled_vendors | length > 0 }}"
+    - name: Discover, compute, and install vendor CSI controllers under a dedicated lock
+      block:
+        - name: Acquire csi-backends install lock
+          ansible.builtin.include_role:
+            name: osac.service.lease
+          vars:
+            lease_state: present
+            lease_name: "csi-backends-install-lock"
+            lease_holder: "{{ _csi_backends_lock_holder }}"
+            lease_retries: 20
+            lease_delay: 5
 
-    - name: Ensure csi-backends namespace exists with privileged Pod Security labels
-      # Vendor CSI controllers require privileged Pod Security Admission (trident runs
-      # runAsNonRoot: false; vast/pure declare no securityContext). The chart no longer
-      # ships a Namespace template, and helm's create_namespace only creates a bare,
-      # unlabeled namespace — under the default restricted PSA that would reject the
-      # vendor pods. Create the namespace here with the required labels (idempotent, so
-      # it also patches the labels onto a namespace a prior create_namespace run left
-      # bare), then install the chart into it with create_namespace: false below.
-      when: _csi_backends_any_enabled | bool
-      kubernetes.core.k8s:
-        state: present
-        definition:
-          apiVersion: v1
-          kind: Namespace
-          metadata:
-            name: "{{ storage_provider_csi_backends_namespace }}"
-            labels:
-              pod-security.kubernetes.io/enforce: privileged
-              pod-security.kubernetes.io/warn: privileged
+        # Only mark the lock as ours to release once acquisition genuinely succeeded —
+        # see the "Release csi-backends install lock" task in always: for why this
+        # must not release unconditionally.
+        - name: Mark the csi-backends install lock as acquired by this dispatch
+          ansible.builtin.set_fact:
+            _csi_backends_lock_acquired: true
 
-    - name: Install or upgrade csi-backends Helm chart
-      when: _csi_backends_any_enabled | bool
-      kubernetes.core.helm:
-        name: "{{ storage_provider_csi_backends_release_name }}"
-        chart_ref: "{{ storage_provider_csi_backends_chart_ref }}"
-        chart_version: "{{ storage_provider_csi_backends_chart_version | default(omit, true) }}"
-        release_namespace: "{{ storage_provider_csi_backends_namespace }}"
-        # Namespace is created above with the required PSA labels; do not let helm
-        # create a bare, unlabeled one.
-        create_namespace: false
-        release_state: present
-        release_values: "{{ _csi_backends_values }}"
+        - name: Discover vendor controllers already deployed on the hub
+          kubernetes.core.k8s_info:
+            api_version: apps/v1
+            kind: Deployment
+            namespace: "{{ storage_provider_csi_backends_namespace }}"
+          register: _csi_backends_existing
+
+        - name: Compute controllers already present on the hub
+          ansible.builtin.set_fact:
+            # Names of vendor controller Deployments that already exist in the namespace.
+            _existing_controller_names: >-
+              {{ (_csi_backends_existing.resources | default([]))
+                 | map(attribute='metadata.name') | list }}
+
+        - name: Compute cumulative vendor enablement set (this tenant's vendors ∪ already-deployed)
+          ansible.builtin.set_fact:
+            # A vendor stays/gets enabled if THIS tenant needs it OR its controller already
+            # exists — the union is what keeps a per-tenant run from clobbering others.
+            # vast is additionally gated on a vast backend_id still being registered
+            # platform-wide. A vast controller can linger on the hub after its last backend
+            # is removed; enabling vast off that lingering Deployment alone — with zero vast
+            # backend_ids left, so _csi_backends_vast_vms_host never resolves — would push
+            # vast.enabled:true with an unset config.vmsHost on the next wholesale values
+            # replace, silently wiping a working vast config. Zero backends left → vast
+            # auto-disables (helm prunes the controller when another enabled vendor keeps
+            # the release installed).
+            _csi_backends_enabled_vendors: >-
+              {{
+                (['vast'] if (('vast' in _this_tenant_vendors
+                               or 'vast-csi-controller' in _existing_controller_names)
+                              and _csi_backends_vast_backend_ids | length > 0) else [])
+                + (['trident'] if ('trident' in _this_tenant_vendors
+                                   or 'trident-csi-controller' in _existing_controller_names) else [])
+                + (['pure'] if ('pure' in _this_tenant_vendors
+                                or 'pure-csi-controller' in _existing_controller_names) else [])
+              }}
+
+        - name: Build csi-backends chart values from the cumulative vendor set
+          ansible.builtin.set_fact:
+            _csi_backends_values:
+              namespace: "{{ storage_provider_csi_backends_namespace }}"
+              vast:
+                enabled: "{{ 'vast' in _csi_backends_enabled_vendors }}"
+              trident:
+                enabled: "{{ 'trident' in _csi_backends_enabled_vendors }}"
+              pure:
+                enabled: "{{ 'pure' in _csi_backends_enabled_vendors }}"
+            _csi_backends_any_enabled: "{{ _csi_backends_enabled_vendors | length > 0 }}"
+
+        # is defined guard is belt-and-suspenders: the enablement set above only adds
+        # vast when a vast backend_id (hence a resolvable vmsHost) remains, so vast being
+        # in _csi_backends_enabled_vendors already implies this fact is set.
+        - name: Layer vast-specific config onto csi-backends chart values
+          ansible.builtin.set_fact:
+            _csi_backends_values: >-
+              {{ _csi_backends_values | combine({'vast': {'config': {'vmsHost': _csi_backends_vast_vms_host}}}, recursive=true) }}
+          when: "'vast' in _csi_backends_enabled_vendors and _csi_backends_vast_vms_host is defined"
+
+        - name: Ensure csi-backends namespace exists with privileged Pod Security labels
+          # Vendor CSI controllers require privileged Pod Security Admission (trident runs
+          # runAsNonRoot: false; vast/pure declare no securityContext). The chart no longer
+          # ships a Namespace template, and helm's create_namespace only creates a bare,
+          # unlabeled namespace — under the default restricted PSA that would reject the
+          # vendor pods. Create the namespace here with the required labels (idempotent, so
+          # it also patches the labels onto a namespace a prior create_namespace run left
+          # bare), then install the chart into it with create_namespace: false below.
+          when: _csi_backends_any_enabled | bool
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: "{{ storage_provider_csi_backends_namespace }}"
+                labels:
+                  pod-security.kubernetes.io/enforce: privileged
+                  pod-security.kubernetes.io/warn: privileged
+
+        - name: Check currently installed csi-backends release
+          kubernetes.core.helm_info:
+            name: "{{ storage_provider_csi_backends_release_name }}"
+            release_namespace: "{{ storage_provider_csi_backends_namespace }}"
+          register: _csi_backends_release_info
+
+        # Used by rescue: below to decide whether the release is safe to roll back:
+        # only a release THIS run installed from nothing may be torn down on failure.
+        # helm_info omits the `status` key entirely (rather than returning it as null)
+        # when a release doesn't exist yet, so `| default(none, true)` is required
+        # before the `is not none` check — a bare `.status` access on a nonexistent
+        # release raises an Undefined error.
+        - name: Track whether the csi-backends release existed before this run
+          ansible.builtin.set_fact:
+            _csi_backends_release_existed_before: "{{ (_csi_backends_release_info.status | default(none, true)) is not none }}"
+
+        - name: Install or upgrade csi-backends Helm chart
+          when: _csi_backends_any_enabled | bool
+          kubernetes.core.helm:
+            name: "{{ storage_provider_csi_backends_release_name }}"
+            chart_ref: "{{ storage_provider_csi_backends_chart_ref }}"
+            chart_version: "{{ storage_provider_csi_backends_chart_version | default(omit, true) }}"
+            release_namespace: "{{ storage_provider_csi_backends_namespace }}"
+            # Namespace is created above with the required PSA labels; do not let helm
+            # create a bare, unlabeled one.
+            create_namespace: false
+            release_state: present
+            release_values: "{{ _csi_backends_values }}"
+          register: _csi_backends_install_result
+
+        - name: Check whether the OAuth client-credentials Secret already exists
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Secret
+            name: "{{ storage_provider_csi_backends_oauth_secret_name }}"
+            namespace: "{{ storage_provider_csi_backends_namespace }}"
+          register: _csi_backends_oauth_secret_check
+          no_log: true
+
+        - name: Track whether the OAuth client-credentials Secret existed before this run
+          ansible.builtin.set_fact:
+            _csi_backends_oauth_secret_existed_before: "{{ _csi_backends_oauth_secret_check.resources | length > 0 }}"
+
+        - name: Warn if OAuth client credentials are not configured
+          ansible.builtin.debug:
+            msg: >-
+              STORAGE_PROVIDER_CSI_BACKENDS_OAUTH_CLIENT_ID/STORAGE_PROVIDER_CSI_BACKENDS_OAUTH_CLIENT_SECRET
+              are not set — the '{{ storage_provider_csi_backends_oauth_secret_name }}'
+              Secret will be created/updated with blank client-id/client-secret. The
+              vast-csi-controller init-container (once it exists) will not be able to
+              authenticate to fulfillment-service's private API until a real OAuth
+              client is registered and these are configured as AAP Credential Type /
+              vault-backed environment variables.
+          when: (storage_provider_csi_backends_oauth_client_id | length == 0) or (storage_provider_csi_backends_oauth_client_secret | length == 0)
+
+        # A dispatch running without STORAGE_PROVIDER_CSI_BACKENDS_OAUTH_CLIENT_ID/_SECRET
+        # configured must never blank out a previously-real client-id/client-secret: only
+        # write when the secret doesn't exist yet (initial bootstrap, blank creds
+        # acceptable per the design above) or this dispatch actually supplies real,
+        # non-blank credentials.
+        - name: Create OAuth client-credentials Secret for the vast-csi-controller init-container
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Secret
+              metadata:
+                name: "{{ storage_provider_csi_backends_oauth_secret_name }}"
+                namespace: "{{ storage_provider_csi_backends_namespace }}"
+              type: Opaque
+              stringData:
+                client-id: "{{ storage_provider_csi_backends_oauth_client_id }}"
+                client-secret: "{{ storage_provider_csi_backends_oauth_client_secret }}"
+          no_log: true
+          when: >-
+            not (_csi_backends_oauth_secret_existed_before | bool)
+            or (storage_provider_csi_backends_oauth_client_id | length > 0 and storage_provider_csi_backends_oauth_client_secret | length > 0)
+          register: _csi_backends_oauth_secret_result
+
+      rescue:
+        # Each rollback only fires when THIS run created the resource from nothing
+        # (existed_before is false) and the corresponding task actually ran without
+        # failing — never for the shared, cluster-wide release/Secret that pre-existed
+        # and other tenants may already depend on.
+        - name: Rollback - uninstall csi-backends Helm release if this run installed it fresh
+          kubernetes.core.helm:
+            name: "{{ storage_provider_csi_backends_release_name }}"
+            release_namespace: "{{ storage_provider_csi_backends_namespace }}"
+            state: absent
+          when:
+            - not (_csi_backends_release_existed_before | default(false))
+            - _csi_backends_install_result is defined
+            - _csi_backends_install_result is not failed
+          ignore_errors: true  # noqa: ignore-errors
+
+        - name: Rollback - delete OAuth client-credentials Secret if this run created it fresh
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Secret
+            name: "{{ storage_provider_csi_backends_oauth_secret_name }}"
+            namespace: "{{ storage_provider_csi_backends_namespace }}"
+          when:
+            - not (_csi_backends_oauth_secret_existed_before | default(false))
+            - _csi_backends_oauth_secret_result is defined
+            - _csi_backends_oauth_secret_result is not failed
+          ignore_errors: true  # noqa: ignore-errors
+
+        - name: Report csi-backends install failure
+          ansible.builtin.fail:
+            msg: >-
+              csi-backends install failed. Failed task: {{ ansible_failed_task.name | default('unknown') }}.
+              Error: {{ ansible_failed_result.msg | default('see logs for details') }}.
+              Rollback attempted for any Helm release/Secret this run created fresh.
+
+      always:
+        # Guarded by _csi_backends_lock_acquired -- see the "Mark the
+        # csi-backends install lock as acquired" task above for why this must not
+        # release unconditionally (the lease role's own delete task does not check
+        # current holder identity before deleting).
+        - name: Release csi-backends install lock
+          when: _csi_backends_lock_acquired | default(false)
+          ansible.builtin.include_role:
+            name: osac.service.lease
+          vars:
+            lease_state: absent
+            lease_name: "csi-backends-install-lock"
+            lease_holder: "{{ _csi_backends_lock_holder }}"
+
+        - name: Clear OAuth client-credential facts from play scope
+          ansible.builtin.set_fact:
+            storage_provider_csi_backends_oauth_client_id: ""
+            storage_provider_csi_backends_oauth_client_secret: ""
+          no_log: true
 
     - name: Wait for enabled vendor controller deployments
       when: _csi_backends_any_enabled | bool

@@ -31,8 +31,8 @@ var _ = Describe("Private volumes server", func() {
 	Describe("Creation", func() {
 		stubResolver := TierResolverFunc(func(_ context.Context, _ string) (*TierResolution, error) {
 			return &TierResolution{
-				BackendID: "test-backend",
-				Protocol:  privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
+				Backend:  "test-backend",
+				Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
 			}, nil
 		})
 
@@ -89,8 +89,8 @@ var _ = Describe("Private volumes server", func() {
 				SetTenancyLogic(tenancy).
 				SetTierResolver(func(_ context.Context, _ string) (*TierResolution, error) {
 					return &TierResolution{
-						BackendID: "test-backend",
-						Protocol:  privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
+						Backend:  "test-backend",
+						Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
 					}, nil
 				}).
 				Build()

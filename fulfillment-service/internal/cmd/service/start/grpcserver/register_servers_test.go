@@ -162,14 +162,19 @@ var _ = BeforeSuite(func() {
 	Expect(err).ToNot(HaveOccurred())
 	metricsRegisterer := prometheus.NewRegistry()
 
-	// Create the storage tiers DAO and tier resolver, exactly as production wires them in
+	// Create the storage tiers and backends DAOs and the tier resolver, exactly as production wires them in
 	// start_grpc_server_cmd.go's run(), for the private volumes server's mandatory SetTierResolver dependency.
 	storageTiersDAO, err := dao.NewGenericDAO[*privatev1.StorageTier]().
 		SetLogger(logger).
 		SetTenancyLogic(tenancy).
 		Build()
 	Expect(err).ToNot(HaveOccurred())
-	tierResolver := newDAOTierResolver(storageTiersDAO)
+	storageBackendsDAO, err := dao.NewGenericDAO[*privatev1.StorageBackend]().
+		SetLogger(logger).
+		SetTenancyLogic(tenancy).
+		Build()
+	Expect(err).ToNot(HaveOccurred())
+	tierResolver := newDAOTierResolver(storageTiersDAO, storageBackendsDAO)
 
 	// Create the private users server, exactly as production does in start_grpc_server_cmd.go's run(). It's
 	// constructed outside RegisterResourceServers there because the JIT provisioning interceptor needs it before

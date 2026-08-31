@@ -666,7 +666,14 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	if err != nil {
 		return fmt.Errorf("failed to create storage tiers DAO: %w", err)
 	}
-	tierResolver := newDAOTierResolver(storageTiersDAO)
+	storageBackendsDAO, err := dao.NewGenericDAO[*privatev1.StorageBackend]().
+		SetLogger(c.logger).
+		SetTenancyLogic(tenancyLogic).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create storage backends DAO: %w", err)
+	}
+	tierResolver := newDAOTierResolver(storageTiersDAO, storageBackendsDAO)
 
 	// Register all filterable resources' public and private servers:
 	resourceServers, err := RegisterResourceServers(ctx, grpcServer, ResourceServerDeps{
@@ -934,6 +941,7 @@ consumers derive the JWKS endpoint as <issuer>/.well-known/jwks.json.
 
 func newDAOTierResolver(
 	tiersDAO *dao.GenericDAO[*privatev1.StorageTier],
+	backendsDAO *dao.GenericDAO[*privatev1.StorageBackend],
 ) servers.TierResolverFunc {
 	return func(ctx context.Context, tierName string) (*servers.TierResolution, error) {
 		filter := fmt.Sprintf("this.metadata.name == %s", strconv.Quote(tierName))
@@ -961,9 +969,26 @@ func newDAOTierResolver(
 		}
 
 		selected := backends[0]
+		backendID := selected.GetBackendId()
+
+		// Volume.status.backend (and osac.backend downstream) identifies the
+		// vendor CSI routing target, not this specific StorageBackend row, so
+		// it must carry the backend's provider (e.g. "vast") rather than its
+		// server-generated id -- osac-csi-driver's --vendor-controllers and
+		// --vendor-sockets maps are keyed by provider, set once in the Helm
+		// chart, long before any StorageBackend id exists.
+		backendResp, err := backendsDAO.Get().SetId(backendID).Do(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to look up storage backend %q: %w", backendID, err)
+		}
+		backend := backendResp.GetObject()
+		if backend == nil {
+			return nil, grpcstatus.Errorf(grpccodes.NotFound, "storage backend %q not found", backendID)
+		}
+
 		return &servers.TierResolution{
-			BackendID: selected.GetBackendId(),
-			Protocol:  tier.GetSpec().GetProtocol(),
+			Backend:  backend.GetSpec().GetProvider(),
+			Protocol: tier.GetSpec().GetProtocol(),
 		}, nil
 	}
 }

@@ -23,7 +23,7 @@ operator:
   enabled: true
   image:
     repository: ghcr.io/osac-project/osac-operator
-    tag: latest  # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
+    tag: 0.0.12-nightly.20260831.35232d2.53.1
     pullPolicy: Always
   replicaCount: 1
   resources:
@@ -64,7 +64,7 @@ service:
   # [REQUIRED] Hostname for the internal API Route (e.g. fulfillment-internal-api-osac.apps.mycluster.example.com)
   internalHostname: ""
   images:
-    service: ghcr.io/osac-project/fulfillment-service:latest  # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
+    service: ghcr.io/osac-project/fulfillment-service:0.0.91-nightly.20260831.35232d2.53.1
     envoy: ghcr.io/osac-project/envoy:v1.33.0
   certs:
     issuerRef:
@@ -123,7 +123,7 @@ aap:
       imagePullPolicy: IfNotPresent
   bootstrap:
     enabled: true
-    image: ghcr.io/osac-project/osac-aap:latest  # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
+    image: ghcr.io/osac-project/osac-aap:0.0.13-nightly.20260831.35232d2.53.1
     backoffLimit: 15
     readinessConsecutiveSuccesses: 3
     gateway:
@@ -134,8 +134,8 @@ aap:
     manifestSecret: "config-as-code-manifest-ig"
     secret: "config-as-code-ig"
     eeImage: ""
-    projectGitUri: ""
-    projectGitBranch: ""
+    projectGitUri: https://github.com/osac-project/osac
+    projectGitBranch: 35232d29795078e929e753bd286e6a82ccfdb57d
     importAgentsEnabled: false
     importBcmAgentsEnabled: false
   importAgents:
@@ -226,7 +226,7 @@ ui:
   log:
     level: info
   images:
-    ui: ghcr.io/osac-project/osac-ui:latest  # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
+    ui: ghcr.io/osac-project/osac-ui:0.0.6-nightly.20260831.35232d2.53.1
 
 # --- Metering ---
 metering:
@@ -255,7 +255,7 @@ bmf:
   enabled: true
   image:
     repository: ghcr.io/osac-project/bare-metal-fulfillment-operator
-    tag: latest  # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
+    tag: 0.0.12-nightly.20260831.35232d2.53.1
     pullPolicy: Always
   replicaCount: 1
   resources:

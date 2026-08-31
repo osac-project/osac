@@ -321,6 +321,33 @@ test_dot_sibling_dir_does_not_rm_project_root() {
   pass "malformed sibling dir=. does not rm PROJECT_ROOT"
 }
 
+test_parent_dir_sibling_does_not_rm_external() {
+  local home root bin home_skills home_workflows repo_skills clone_log out tmp victim
+  prepare_fixture parent-dir
+  victim="${root}/../victim"
+  echo keep > "$victim"
+
+  grep -q 'SIBLINGS=(' "${root}/tools/bootstrap.sh" \
+    || fail "bootstrap.sh has no SIBLINGS=( list"
+  tmp="${root}/tools/bootstrap.sh.new"
+  awk '
+    { print }
+    /SIBLINGS=\(/ && !done { print "  \"bogus:../victim\""; done=1 }
+  ' "${root}/tools/bootstrap.sh" >"$tmp"
+  mv "$tmp" "${root}/tools/bootstrap.sh"
+  chmod +x "${root}/tools/bootstrap.sh"
+
+  out=$(run_bootstrap "$root" "$home" "$bin" 2>&1) || fail "bootstrap failed: $out"
+  echo "$out" | grep -q "invalid sibling directory" \
+    || fail "expected invalid dest skip for ../victim: $out"
+  grep -q keep "$victim" \
+    || fail "must not rm path outside PROJECT_ROOT: ${victim}"
+  grep -q 'osac-project/bogus' "$clone_log" \
+    && fail "must not clone bogus:../victim: $(cat "$clone_log")"
+  assert_expected_clones "$root" "$clone_log"
+  pass "malformed sibling dir=../victim does not rm an external path"
+}
+
 test_nested_abort_skips_sibling_clones() {
   local nest="${TMPDIR_ROOT}/nested-ws"
   local empty_home="${TMPDIR_ROOT}/nested-ws-home"
@@ -695,6 +722,7 @@ test_rerun_updates_expected_clone
 test_skips_unrelated_existing_dir
 test_extra_list_entry_clones_without_other_edits
 test_dot_sibling_dir_does_not_rm_project_root
+test_parent_dir_sibling_does_not_rm_external
 test_nested_abort_skips_sibling_clones
 test_failed_clone_cleans_dest
 test_expected_sibling_requires_org_boundary

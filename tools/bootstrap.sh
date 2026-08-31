@@ -332,7 +332,8 @@ ensure_sibling() {
   local repo="$1" dir="$2"
   local dest="${PROJECT_ROOT}/${dir}"
   dest="${dest%/}"
-  if [[ -z "$dir" || "$dir" == "." || "$dest" == "$PROJECT_ROOT" ]]; then
+  # Single child of PROJECT_ROOT — no empty, ., .., or slash (blocks ../victim).
+  if [[ -z "$dir" || "$dir" == "." || "$dir" == ".." || "$dir" == */* || "$dest" == "$PROJECT_ROOT" ]]; then
     echo "Skipping ${repo} — invalid sibling directory '${dir}'."
     return 0
   fi
@@ -346,7 +347,7 @@ ensure_sibling() {
     echo "Cloning ${repo} into ${dir}..."
     if ! git clone "https://github.com/${GITHUB_ORG}/${repo}.git" "${dest}"; then
       echo "  Clone failed for ${repo}. Skipping."
-      if [[ -n "$dir" && "$dest" != "$PROJECT_ROOT" ]]; then
+      if [[ "$dest" == "$PROJECT_ROOT"/* ]]; then
         rm -rf "${dest}" 2>/dev/null || true
       fi
       return 0

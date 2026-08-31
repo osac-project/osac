@@ -61,6 +61,7 @@ osac-new-worktree() {
     if ! ./tools/bootstrap.sh; then
         echo "Error: tools/bootstrap.sh failed." >&2
         echo "  Worktree exists at ${target_dir}." >&2
+        echo "  Current directory is already ${target_dir}." >&2
         echo "  Recovery: cd ${target_dir} && ./tools/bootstrap.sh --no-fork" >&2
         return 1
     fi

@@ -62,7 +62,8 @@ covers broader project-level architecture guides and diagrams).
 `tools/bootstrap.sh` clones these into gitignored directories at this repo
 root (skill-relative paths when this checkout is the project root). By
 default it also forks the writeable four to your GitHub account (`origin` =
-osac-project, `fork` = you) so `/create-pr` has a push remote. Never forked:
+osac-project, `fork` = you — the `$PUSH_REMOTE` that `resolve-remotes.sh`
+reports) so `/create-pr` has a push remote. Never forked:
 `osac-ux`, `.osac-ai-skills`, `.ai-workflows`. Pass `--no-fork` for
 read-only or CI clones (requires no `gh`). Default path requires
 authenticated `gh`.

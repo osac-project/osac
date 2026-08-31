@@ -202,6 +202,8 @@ test_bootstrap_fail_prints_recovery() {
       || fail "expected worktree path in recovery: $out"
     echo "$out" | grep -Fq "Recovery: cd ${dest} && ./tools/bootstrap.sh --no-fork" \
       || fail "expected --no-fork recovery: $out"
+    echo "$out" | grep -q "Current directory is already ${dest}" \
+      || fail "expected cwd hint on bootstrap failure: $out"
   )
   pass "bootstrap failure prints --no-fork recovery"
 }
@@ -266,10 +268,11 @@ test_gtimeout_used_when_timeout_missing() {
     commit -q --allow-empty -m seed
   write_git_worktree_stub "$bin" "$repo" "$log"
   isolated_core_path "$bin" >/dev/null
-  cat > "${bin}/gtimeout" <<'EOF'
+  cat > "${bin}/gtimeout" <<EOF
 #!/bin/sh
+printf 'gtimeout %s\\n' "\$*" >> "${log}"
 shift
-exec "$@"
+exec "\$@"
 EOF
   chmod +x "${bin}/gtimeout"
   cat > "${bin}/jira" <<'EOF'
@@ -288,6 +291,8 @@ EOF
   )
   grep -q 'gtimeout ticket' "${dest}/.claude/CLAUDE.md" \
     || fail "expected gtimeout-backed Jira context in ${dest}/.claude/CLAUDE.md"
+  grep -q '^gtimeout 15 jira issue view OSAC-1234 --raw$' "$log" \
+    || fail "expected Jira to run through gtimeout: $(cat "$log")"
   pass "gtimeout is used when timeout is missing"
 }
 

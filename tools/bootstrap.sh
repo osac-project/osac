@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install AI workflow skills for this repo.
 #
-# Usage: tools/bootstrap.sh
+# Usage: tools/bootstrap.sh [--no-fork]
 #
 # This script:
 #   1. Clones or updates osac-project/osac-ai-skills (prefers ~/.osac-ai-skills)
@@ -13,12 +13,56 @@
 #   5. Clones skill-relative sibling repos under this checkout
 #      (enhancement-proposals, osac-ux, osac-ui, osac-test-infra,
 #      osac-docs). osac-docs is osac-project/docs — not docs/.
+#      Writeable siblings get a `fork` remote (origin = osac-project).
+#      osac-ux and vendor clones are never forked.
 #
 # Re-run anytime to update to latest main.
 set -euo pipefail
 
 SCRIPT_DIR="$(realpath "$(dirname "${BASH_SOURCE[0]}")")"
 PROJECT_ROOT="$(realpath "${SCRIPT_DIR}/..")"
+
+GITHUB_ORG="osac-project"
+NO_FORK=false
+FORK_REMOTE_NAME="fork"
+GH_USER=""
+GIT_PROTOCOL="https"
+
+usage() {
+  cat <<'EOF'
+Usage: tools/bootstrap.sh [--no-fork]
+
+Vendors AI skills/workflows and clones skill-relative sibling repos under
+this checkout.
+
+By default, each writeable sibling is forked to your GitHub account:
+  origin     = osac-project/<repo>     (upstream source, PR target)
+  fork       = <your-username>/<repo>  (push target for feature branches)
+
+osac-ux is a reference clone (no fork). Vendor checkouts (.osac-ai-skills,
+.ai-workflows) are never forked.
+
+Options:
+  --no-fork   Clone siblings from osac-project without forking.
+              Useful for read-only access or CI environments.
+  --help      Show this help message.
+
+Prerequisites:
+  - gh CLI installed and authenticated (gh auth login), unless --no-fork
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --no-fork) NO_FORK=true; shift ;;
+    --help|-h) usage; exit 0 ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
 
 # Nested osac/ inside osac-workspace would install a second skill overlay
 # (two PROJECT_ROOTs). Workspace ./bootstrap.sh already covers this clone.
@@ -33,6 +77,24 @@ if [[ "${OSAC_ALLOW_NESTED_BOOTSTRAP:-}" != "1" ]] \
     echo "To force this script anyway: OSAC_ALLOW_NESTED_BOOTSTRAP=1 $0" >&2
     exit 1
   fi
+fi
+
+if [[ "$NO_FORK" == false ]]; then
+  if ! command -v gh &>/dev/null; then
+    echo "ERROR: gh CLI is not installed." >&2
+    echo "Install it (https://cli.github.com/) or use --no-fork for read-only clone." >&2
+    exit 1
+  fi
+  if ! gh auth status; then
+    echo "ERROR: gh CLI is not authenticated." >&2
+    echo "Run 'gh auth login' or use --no-fork for read-only clone." >&2
+    exit 1
+  fi
+  GH_USER=$(gh api user -q .login)
+  GIT_PROTOCOL=$(gh config get git_protocol 2>/dev/null || echo "https")
+  echo "Bootstrapping OSAC for GitHub user: ${GH_USER}"
+else
+  echo "Bootstrapping OSAC (read-only, no forks)..."
 fi
 
 OSAC_AI_SKILLS_REPO="osac-project/osac-ai-skills"
@@ -137,7 +199,7 @@ SIBLINGS=(
 
 is_expected_sibling() {
   local dir="$1" repo="$2"
-  local expected_suffix="osac-project/${repo}"
+  local expected_suffix="${GITHUB_ORG}/${repo}"
   local remote url
   for remote in $(git -C "$dir" remote 2>/dev/null); do
     url=$(git -C "$dir" remote get-url "$remote" 2>/dev/null) || continue
@@ -149,20 +211,89 @@ is_expected_sibling() {
   return 1
 }
 
+get_fork_url() {
+  local repo="$1"
+  if [[ "$GIT_PROTOCOL" == "ssh" ]]; then
+    echo "git@github.com:${GH_USER}/${repo}.git"
+  else
+    echo "https://github.com/${GH_USER}/${repo}.git"
+  fi
+}
+
+# Returns 0 if every push URL for $remote in $dir ends with $expected_suffix
+# (e.g. $GH_USER/$repo). Checks push URLs, not the fetch URL.
+fork_remote_push_matches() {
+  local dir="$1" remote="$2" expected_suffix="$3"
+  local push_urls
+  push_urls=$(git -C "$dir" remote get-url --push --all "$remote" 2>/dev/null) || return 1
+  [[ -n "$push_urls" ]] || return 1
+  local push_url
+  while IFS= read -r push_url; do
+    [[ "${push_url%.git}" == *"$expected_suffix" ]] || return 1
+  done <<< "$push_urls"
+  return 0
+}
+
+ensure_fork_remote() {
+  local repo="$1" dir="$2"
+  local url
+  if ! gh repo fork "${GITHUB_ORG}/${repo}" --clone=false --default-branch-only; then
+    if ! gh repo view "${GH_USER}/${repo}" >/dev/null; then
+      echo "  Failed to fork ${GITHUB_ORG}/${repo}. Skipping fork remote."
+      return 1
+    fi
+  fi
+  url=$(get_fork_url "$repo")
+  if git -C "$dir" remote get-url "$FORK_REMOTE_NAME" &>/dev/null; then
+    if fork_remote_push_matches "$dir" "$FORK_REMOTE_NAME" "${GH_USER}/${repo}"; then
+      return 0
+    fi
+    echo "  Remote '${FORK_REMOTE_NAME}' already exists with a different URL. Skipping."
+    return 1
+  fi
+  git -C "$dir" remote add "$FORK_REMOTE_NAME" "$url"
+  git -C "$dir" fetch "$FORK_REMOTE_NAME" || {
+    echo "  Fetch of ${FORK_REMOTE_NAME} failed for ${repo}. Remote was added."
+    return 0
+  }
+}
+
+# Writeable siblings get a fork remote. osac-ux is reference-only; vendors
+# never enter this loop.
+should_fork_sibling() {
+  local repo="$1"
+  [[ "$NO_FORK" == false ]] || return 1
+  [[ "$repo" != "osac-ux" ]] || return 1
+  return 0
+}
+
+maybe_fork_sibling() {
+  local repo="$1" dest="$2"
+  should_fork_sibling "$repo" || return 0
+  if fork_remote_push_matches "$dest" "$FORK_REMOTE_NAME" "${GH_USER}/${repo}"; then
+    return 0
+  fi
+  echo "Adding ${FORK_REMOTE_NAME} remote for ${repo}..."
+  ensure_fork_remote "$repo" "$dest" || echo "  Fork remote for ${repo} failed. Continuing."
+}
+
 ensure_sibling() {
   local repo="$1" dir="$2"
   local dest="${PROJECT_ROOT}/${dir}"
   if [[ -d "${dest}" ]] && is_expected_sibling "${dest}" "${repo}"; then
     echo "Updating ${dir}..."
     update_git_repo "${dest}" "${dir}"
+    maybe_fork_sibling "$repo" "$dest"
   elif [[ -d "${dest}" ]]; then
-    echo "Skipping ${dir} — directory exists but is not a clone of osac-project/${repo}."
+    echo "Skipping ${dir} — directory exists but is not a clone of ${GITHUB_ORG}/${repo}."
   else
     echo "Cloning ${repo} into ${dir}..."
-    if ! git clone "https://github.com/osac-project/${repo}.git" "${dest}"; then
+    if ! git clone "https://github.com/${GITHUB_ORG}/${repo}.git" "${dest}"; then
       echo "  Clone failed for ${repo}. Skipping."
       rm -rf "${dest}" 2>/dev/null || true
+      return 0
     fi
+    maybe_fork_sibling "$repo" "$dest"
   fi
 }
 

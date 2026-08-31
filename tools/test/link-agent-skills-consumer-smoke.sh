@@ -505,7 +505,7 @@ test_bootstrap_aborts_when_nested_in_workspace() {
 
   rc=0
   out=$(HOME="${empty_home}" PATH="${nest}/bin:${PATH}" \
-    OSAC_ALLOW_NESTED_BOOTSTRAP=1 bash "${nest}/osac/tools/bootstrap.sh" 2>&1) || rc=$?
+    OSAC_ALLOW_NESTED_BOOTSTRAP=1 bash "${nest}/osac/tools/bootstrap.sh" --no-fork 2>&1) || rc=$?
   echo "$out" | grep -q "inside osac-workspace" \
     && fail "override must skip the nested abort: $out"
   echo "$out" | grep -q "stub-git" \

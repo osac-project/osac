@@ -96,11 +96,63 @@ prepare_osac() {
   echo "in-tree" > "${root}/docs/ARCHITECTURE.md"
 }
 
+write_gh_wrapper() {
+  local dest="$1"
+  cat >"$dest" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+LOG="${OSAC_SMOKE_GH_LOG:-/dev/null}"
+printf 'gh %s\n' "$*" >> "$LOG"
+case "${1:-}" in
+  auth) exit 0 ;;
+  api)
+    if [[ "${2:-}" == "user" ]]; then
+      echo smokeuser
+      exit 0
+    fi
+    ;;
+  config)
+    echo https
+    exit 0
+    ;;
+  repo) exit 0 ;;
+esac
+exit 0
+EOF
+  chmod +x "$dest"
+}
+
 run_bootstrap() {
+  local root="$1" home="$2" bin="$3"
+  shift 3
+  HOME="$home" PATH="${bin}:${PATH}" \
+    OSAC_SMOKE_CLONE_LOG="${home}/clone.log" \
+    OSAC_SMOKE_GH_LOG="${home}/gh.log" \
+    bash "${root}/tools/bootstrap.sh" --no-fork "$@"
+}
+
+run_bootstrap_fork() {
   local root="$1" home="$2" bin="$3"
   HOME="$home" PATH="${bin}:${PATH}" \
     OSAC_SMOKE_CLONE_LOG="${home}/clone.log" \
+    OSAC_SMOKE_GH_LOG="${home}/gh.log" \
     bash "${root}/tools/bootstrap.sh"
+}
+
+assert_no_fork_remote() {
+  local dest="$1" label="$2"
+  if git -C "$dest" remote get-url fork >/dev/null 2>&1; then
+    fail "$label must not have a fork remote: $(git -C "$dest" remote -v)"
+  fi
+}
+
+assert_fork_remote() {
+  local dest="$1" repo="$2"
+  local url
+  url=$(git -C "$dest" remote get-url fork 2>/dev/null) \
+    || fail "missing fork remote on ${dest}: $(git -C "$dest" remote -v 2>/dev/null || true)"
+  [[ "${url%.git}" == *"smokeuser/${repo}" ]] \
+    || fail "fork remote on ${dest} expected smokeuser/${repo}, got: $url"
 }
 
 assert_expected_clones() {
@@ -301,6 +353,113 @@ test_expected_sibling_requires_org_boundary() {
   pass "expected-clone match requires / or : before osac-project"
 }
 
+test_missing_gh_without_no_fork_exits() {
+  local home="${TMPDIR_ROOT}/home-no-gh"
+  local root="${TMPDIR_ROOT}/osac-no-gh"
+  local bin="${TMPDIR_ROOT}/bin-no-gh"
+  mkdir -p "$home" "$bin"
+  write_git_wrapper "${bin}/git"
+  seed_vendor_ok "${home}/.osac-ai-skills"
+  seed_ai_workflows "${home}/.ai-workflows"
+  prepare_osac "$root"
+
+  local out rc=0
+  out=$(HOME="$home" PATH="${bin}:/usr/bin:/bin" \
+    OSAC_SMOKE_CLONE_LOG="${home}/clone.log" \
+    bash "${root}/tools/bootstrap.sh" 2>&1) || rc=$?
+  [[ "$rc" -eq 1 ]] || fail "missing gh expected exit 1, got $rc: $out"
+  echo "$out" | grep -qi 'gh CLI is not installed' \
+    || fail "expected gh-missing error: $out"
+  [[ ! -d "${root}/enhancement-proposals" ]] \
+    || fail "must not clone siblings when gh is missing"
+  pass "missing gh without --no-fork exits before sibling clones"
+}
+
+test_no_fork_leaves_writeable_without_fork_remote() {
+  local home="${TMPDIR_ROOT}/home-nofork"
+  local root="${TMPDIR_ROOT}/osac-nofork"
+  local bin="${TMPDIR_ROOT}/bin-nofork"
+  mkdir -p "$home" "$bin"
+  write_git_wrapper "${bin}/git"
+  write_gh_wrapper "${bin}/gh"
+  seed_vendor_ok "${home}/.osac-ai-skills"
+  seed_ai_workflows "${home}/.ai-workflows"
+  prepare_osac "$root"
+
+  local out
+  out=$(run_bootstrap "$root" "$home" "$bin" 2>&1) || fail "bootstrap --no-fork failed: $out"
+  echo "$out" | grep -q 'read-only, no forks' \
+    || fail "expected read-only banner: $out"
+  assert_expected_clones "$root" "${home}/clone.log"
+  assert_no_fork_remote "${root}/enhancement-proposals" "enhancement-proposals"
+  assert_no_fork_remote "${root}/osac-ui" "osac-ui"
+  assert_no_fork_remote "${root}/osac-test-infra" "osac-test-infra"
+  assert_no_fork_remote "${root}/osac-docs" "osac-docs"
+  assert_no_fork_remote "${root}/osac-ux" "osac-ux"
+  [[ ! -s "${home}/gh.log" ]] || fail "--no-fork must not invoke gh: $(cat "${home}/gh.log")"
+  pass "--no-fork clones siblings without fork remotes even if gh is on PATH"
+}
+
+test_forks_writeable_siblings_not_osac_ux_or_vendors() {
+  local home="${TMPDIR_ROOT}/home-fork"
+  local root="${TMPDIR_ROOT}/osac-fork"
+  local bin="${TMPDIR_ROOT}/bin-fork"
+  mkdir -p "$home" "$bin"
+  write_git_wrapper "${bin}/git"
+  write_gh_wrapper "${bin}/gh"
+  seed_vendor_ok "${home}/.osac-ai-skills"
+  seed_ai_workflows "${home}/.ai-workflows"
+  prepare_osac "$root"
+
+  local out
+  out=$(run_bootstrap_fork "$root" "$home" "$bin" 2>&1) || fail "bootstrap fork path failed: $out"
+  echo "$out" | grep -q 'GitHub user: smokeuser' \
+    || fail "expected GitHub user banner: $out"
+  assert_expected_clones "$root" "${home}/clone.log"
+  assert_fork_remote "${root}/enhancement-proposals" "enhancement-proposals"
+  assert_fork_remote "${root}/osac-ui" "osac-ui"
+  assert_fork_remote "${root}/osac-test-infra" "osac-test-infra"
+  assert_fork_remote "${root}/osac-docs" "docs"
+  assert_no_fork_remote "${root}/osac-ux" "osac-ux"
+  assert_no_fork_remote "${home}/.osac-ai-skills" "osac-ai-skills vendor"
+  assert_no_fork_remote "${home}/.ai-workflows" "ai-workflows vendor"
+  grep -q 'repo fork osac-project/enhancement-proposals' "${home}/gh.log" \
+    || fail "expected gh repo fork for enhancement-proposals: $(cat "${home}/gh.log")"
+  grep -q 'repo fork osac-project/docs' "${home}/gh.log" \
+    || fail "docs fork must use GitHub repo name docs: $(cat "${home}/gh.log")"
+  if grep -q 'repo fork osac-project/osac-ux' "${home}/gh.log"; then
+    fail "must not gh fork osac-ux: $(cat "${home}/gh.log")"
+  fi
+  if grep -q 'repo fork osac-project/osac-ai-skills' "${home}/gh.log"; then
+    fail "must not gh fork osac-ai-skills: $(cat "${home}/gh.log")"
+  fi
+  pass "forks writeable siblings; skips osac-ux and vendors"
+}
+
+test_rerun_adds_fork_remote_to_existing_clone() {
+  local home="${TMPDIR_ROOT}/home-fork-rerun"
+  local root="${TMPDIR_ROOT}/osac-fork-rerun"
+  local bin="${TMPDIR_ROOT}/bin-fork-rerun"
+  mkdir -p "$home" "$bin"
+  write_git_wrapper "${bin}/git"
+  write_gh_wrapper "${bin}/gh"
+  seed_vendor_ok "${home}/.osac-ai-skills"
+  seed_ai_workflows "${home}/.ai-workflows"
+  prepare_osac "$root"
+
+  run_bootstrap "$root" "$home" "$bin" >/dev/null
+  assert_no_fork_remote "${root}/enhancement-proposals" "enhancement-proposals after --no-fork"
+  : > "${home}/gh.log"
+  local out
+  out=$(run_bootstrap_fork "$root" "$home" "$bin" 2>&1) || fail "fork re-run failed: $out"
+  assert_fork_remote "${root}/enhancement-proposals" "enhancement-proposals"
+  assert_fork_remote "${root}/osac-docs" "docs"
+  assert_no_fork_remote "${root}/osac-ux" "osac-ux"
+  echo "$out" | grep -q 'Adding fork remote for enhancement-proposals' \
+    || fail "re-run should add missing fork remotes: $out"
+  pass "re-run adds fork remotes to existing origin-only clones"
+}
+
 test_clones_all_five_into_project_root
 test_rerun_updates_expected_clone
 test_skips_unrelated_existing_dir
@@ -308,5 +467,9 @@ test_extra_list_entry_clones_without_other_edits
 test_nested_abort_skips_sibling_clones
 test_failed_clone_cleans_dest
 test_expected_sibling_requires_org_boundary
+test_missing_gh_without_no_fork_exits
+test_no_fork_leaves_writeable_without_fork_remote
+test_forks_writeable_siblings_not_osac_ux_or_vendors
+test_rerun_adds_fork_remote_to_existing_clone
 
 echo "All bootstrap sibling-clone smoke tests passed."

@@ -40,15 +40,20 @@ covers broader project-level architecture guides and diagrams).
 ## External Repos
 
 `tools/bootstrap.sh` clones these into gitignored directories at this repo
-root (skill-relative paths when this checkout is the project root):
+root (skill-relative paths when this checkout is the project root). By
+default it also forks the writeable four to your GitHub account (`origin` =
+osac-project, `fork` = you) so `/create-pr` has a push remote. Never forked:
+`osac-ux`, `.osac-ai-skills`, `.ai-workflows`. Pass `--no-fork` for
+read-only or CI clones (requires no `gh`). Default path requires
+authenticated `gh`.
 
-| Repo | Local path | Description |
-|------|------------|-------------|
-| [osac-test-infra](https://github.com/osac-project/osac-test-infra) | `osac-test-infra/` | E2E pytest tests against the fulfillment-service gRPC API |
-| [osac-ui](https://github.com/osac-project/osac-ui) | `osac-ui/` | Web console (React, PatternFly 6) |
-| [osac-ux](https://github.com/osac-project/osac-ux) | `osac-ux/` | Read-only UI reference (`@temp-api` types) |
-| [enhancement-proposals](https://github.com/osac-project/enhancement-proposals) | `enhancement-proposals/` | PRDs and design documents (two-stage EP flow) |
-| [docs](https://github.com/osac-project/docs) | `osac-docs/` | Architecture guides and personas |
+| Repo | Local path | Fork remote | Description |
+|------|------------|-------------|-------------|
+| [osac-test-infra](https://github.com/osac-project/osac-test-infra) | `osac-test-infra/` | yes | E2E pytest tests against the fulfillment-service gRPC API |
+| [osac-ui](https://github.com/osac-project/osac-ui) | `osac-ui/` | yes | Web console (React, PatternFly 6) |
+| [osac-ux](https://github.com/osac-project/osac-ux) | `osac-ux/` | no | Read-only UI reference (`@temp-api` types) |
+| [enhancement-proposals](https://github.com/osac-project/enhancement-proposals) | `enhancement-proposals/` | yes | PRDs and design documents (two-stage EP flow) |
+| [docs](https://github.com/osac-project/docs) | `osac-docs/` | yes | Architecture guides and personas |
 
 In-tree [`docs/`](docs/) (`ARCHITECTURE.md`, `CONVENTIONS.md`) is **not** that
 repo. Skills read `osac-docs/personas.md`.
@@ -77,12 +82,14 @@ surfaces API gaps against the current UI.
 
 Run `tools/bootstrap.sh` once after clone (and anytime to refresh). It vendors
 [`osac-ai-skills`](https://github.com/osac-project/osac-ai-skills) and
-[`flightctl/ai-workflows`](https://github.com/flightctl/ai-workflows), then links
-Claude Code / Cursor / Gemini CLI skill discovery under this repo. No separate
-checkout of `osac-workspace` or a manual `osac-ai-skills` clone is required.
+[`flightctl/ai-workflows`](https://github.com/flightctl/ai-workflows), clones
+the [External Repos](#external-repos), and links Claude Code / Cursor / Gemini
+CLI skill discovery under this repo. No separate checkout of `osac-workspace`
+or a manual `osac-ai-skills` clone is required.
 Do not run this script from an `osac/` nested inside `osac-workspace` — it
 aborts (override: `OSAC_ALLOW_NESTED_BOOTSTRAP=1`). Use the workspace
-`./bootstrap.sh` instead.
+`./bootstrap.sh` instead. For a clone-only sibling pass (no GitHub forks),
+use `tools/bootstrap.sh --no-fork`.
 
 Edit OSAC-native skills only in `osac-project/osac-ai-skills`. Local `skills/`
 and `.osac-ai-skills/` are bootstrap-managed and gitignored, as are the
@@ -104,6 +111,41 @@ the canonical copy is [`.claude/rules/dev-conventions.md`](.claude/rules/dev-con
 (a symlink into the vendored osac-ai-skills tree). `resolve-remotes.sh` is
 hosted in osac-ai-skills and available at `~/.osac-ai-skills` or
 `./.osac-ai-skills`.
+
+### PRD and design publish remotes
+
+flightctl `/prd:publish` and `/design:publish` Step 5 literally say
+`git push -u origin {branch}` and `gh pr create --head {branch}`. **Do not
+run those commands** here. After bootstrap, `origin` is `osac-project/*`
+(the PR target). Pushing to it either fails (no write) or publishes a
+branch on the canonical repo (org members). `--head {branch}` then looks
+for that branch on osac-project, not on your fork.
+
+Substitute the same remotes `/create-pr` uses. `git fetch origin` in those
+skills is correct (upstream). Only the push and `--head` are wrong.
+
+```bash
+docs="{docs_repo_path}"  # typically $REPO/enhancement-proposals
+for d in "$HOME/.osac-ai-skills" "./.osac-ai-skills"; do
+  [[ -x "$d/tools/resolve-remotes.sh" ]] && { RR="$d/tools/resolve-remotes.sh"; break; }
+done
+[[ -n "${RR:-}" ]] || { echo "resolve-remotes.sh not found; run tools/bootstrap.sh" >&2; exit 1; }
+eval "$("$RR" "$docs")"
+[[ -n "${PUSH_REMOTE:-}" ]] || {
+  echo "No push remote — re-run tools/bootstrap.sh without --no-fork." >&2
+  exit 1
+}
+git -C "$docs" push -u "$PUSH_REMOTE" "{branch-name}"
+UPSTREAM=$(gh repo view "$(git -C "$docs" remote get-url "$UPSTREAM_REMOTE")" --json nameWithOwner -q .nameWithOwner)
+FORK_OWNER=$(gh repo view "$(git -C "$docs" remote get-url "$PUSH_REMOTE")" --json owner -q .owner.login)
+gh pr create --draft --repo "$UPSTREAM" --head "$FORK_OWNER:{branch-name}" --base main ...
+```
+
+`/prd:respond`'s `git push` (no remote) follows the branch's tracking
+remote. After the first fork-aware push it tracks `fork`. The same
+origin-push appears in flightctl `/implement:publish` and `/e2e:publish`;
+OSAC code PRs use `/create-pr` instead. Patching those skill files belongs
+in `flightctl/ai-workflows`, not this repo.
 
 ## Cross-Component Changes
 

@@ -12,7 +12,7 @@ require (
 	github.com/osac-project/osac/osac-operator v0.0.10
 	github.com/osac-project/osac/osac-operator/api v0.0.7
 	github.com/prometheus/client_golang v1.24.1
-	github.com/stmcginnis/gofish v0.24.0
+	github.com/stmcginnis/gofish v0.25.0
 	go.uber.org/mock v0.6.0
 	k8s.io/api v0.36.4
 	k8s.io/apimachinery v0.36.4

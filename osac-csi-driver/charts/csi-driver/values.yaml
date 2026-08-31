@@ -109,6 +109,13 @@ vendors:
       repository: docker.io/vastdataorg/csi
       tag: v2.6.6
     config:
+      # Vendor plugin this node process serves. VAST selects one plugin per process:
+      #   "block" -> raw-block (support_block=True)
+      #   "csi"   -> NFS/filesystem (support_block=False)
+      # Must match charts/csi-backends' vast controller plugin (OSAC-4262): a
+      # node process running the wrong plugin rejects every volume capability
+      # the matching controller successfully attached.
+      plugin: block
       vmsHost: ""
       vipPoolName: ""
       nfsExport: /k8s

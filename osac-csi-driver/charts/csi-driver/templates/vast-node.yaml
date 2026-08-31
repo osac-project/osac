@@ -24,7 +24,7 @@ spec:
       containers:
         - name: vast-csi-node
           image: "{{ .Values.vendors.vast.image.repository }}:{{ .Values.vendors.vast.image.tag }}"
-          args: ["serve"]
+          args: ["serve", "--plugin", {{ .Values.vendors.vast.config.plugin | quote }}]
           env:
             - name: CSI_ENDPOINT
               value: "unix://{{ .Values.vendors.vast.node.socketPath }}/csi.sock"
@@ -54,6 +54,13 @@ spec:
             - name: kubelet-dir
               mountPath: /var/lib/kubelet
               mountPropagation: Bidirectional
+            # The block plugin looks for the node's own filesystem at /host (NVMe-TCP
+            # device discovery/mapping needs to see host devices, unlike the NFS plugin).
+            # Without this mount: "[NodeStageVolume]: Could not find Docker engine host's
+            # filesystem at expected location: /host".
+            - name: host-root
+              mountPath: /host
+              mountPropagation: HostToContainer
             {{- if .Values.vendors.vast.config.credentialsSecret }}
             - name: vast-credentials
               mountPath: /opt/vms-auth
@@ -67,6 +74,9 @@ spec:
         - name: kubelet-dir
           hostPath:
             path: /var/lib/kubelet
+        - name: host-root
+          hostPath:
+            path: /
             type: Directory
         {{- if .Values.vendors.vast.config.credentialsSecret }}
         - name: vast-credentials

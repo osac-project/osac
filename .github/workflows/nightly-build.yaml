@@ -5,6 +5,16 @@ on:
     # Run nightly at 03:00 UTC
     - cron: '0 3 * * *'
   workflow_dispatch:
+    inputs:
+      skip_e2e:
+        description: >-
+          Skip e2e validation (vmaas/caas/bmaas) and publish anyway if
+          unit/integration/security tests pass. Manual runs only -- this
+          input does not exist on the scheduled trigger, so the nightly
+          cron can never skip e2e.
+        type: boolean
+        default: false
+        required: false
 
 concurrency:
   group: nightly-build
@@ -492,10 +502,18 @@ jobs:
   # github.sha). All three depend on `build` too, not just `prepare`:
   # none may install against images that don't exist yet or (pre-this-change)
   # a floating :latest.
+  #
+  # Skippable via workflow_dispatch's skip_e2e input (see `on:` above) --
+  # `github.event_name != 'workflow_dispatch'` makes the check a no-op
+  # (always true, so e2e always runs) on the scheduled trigger, where
+  # `github.event.inputs` doesn't exist at all. `publish` below tolerates
+  # these being skipped as well as succeeded; unit/integration/security
+  # tests are NOT skippable by this input.
   # -------------------------------------------------------------------
   e2e-vmaas-test:
     name: E2E validation (vmaas)
     needs: [prepare, build]
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.skip_e2e != 'true'
     permissions:
       contents: read
     uses: osac-project/osac-test-infra/.github/workflows/e2e-vmaas-full-install.yml@main
@@ -509,6 +527,7 @@ jobs:
   e2e-caas-test:
     name: E2E validation (caas)
     needs: [prepare, build]
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.skip_e2e != 'true'
     permissions:
       contents: read
     uses: osac-project/osac-test-infra/.github/workflows/e2e-caas-full-install.yml@main
@@ -522,6 +541,7 @@ jobs:
   e2e-bmaas-test:
     name: E2E validation (bmaas)
     needs: [prepare, build]
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.skip_e2e != 'true'
     permissions:
       contents: read
     uses: osac-project/osac-test-infra/.github/workflows/e2e-bmaas-full-install.yml@main
@@ -540,10 +560,27 @@ jobs:
   # values.yaml image-tag fields were stamped provisionally by prepare
   # and get re-stamped here to the same final version each image is
   # promoted to, immediately before packaging.
+  #
+  # `if:` (not just `needs:`) because a skipped job is not a `success()`
+  # by GitHub's default job-gating -- explicitly tolerating
+  # skipped alongside success only for the three e2e jobs (which can only
+  # be skipped via workflow_dispatch's skip_e2e input, see Job 4 above)
+  # keeps unit/integration/security tests hard-required in every case, on
+  # both triggers.
   # -------------------------------------------------------------------
   publish:
     name: Publish nightly chart
     needs: [prepare, build, unit-tests, integration-tests, security-tests, e2e-vmaas-test, e2e-caas-test, e2e-bmaas-test]
+    if: |
+      always() &&
+      needs.prepare.result == 'success' &&
+      needs.build.result == 'success' &&
+      needs.unit-tests.result == 'success' &&
+      needs.integration-tests.result == 'success' &&
+      needs.security-tests.result == 'success' &&
+      contains(fromJSON('["success", "skipped"]'), needs.e2e-vmaas-test.result) &&
+      contains(fromJSON('["success", "skipped"]'), needs.e2e-caas-test.result) &&
+      contains(fromJSON('["success", "skipped"]'), needs.e2e-bmaas-test.result)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -872,6 +909,8 @@ jobs:
         # persist-credentials left enabled (default): this job pushes the nightly git tag.
 
     - name: Create nightly tag
+      env:
+        SKIP_E2E: ${{ github.event.inputs.skip_e2e }}
       run: |
         set -euo pipefail
         source osac-installer/scripts/nightly-charts.sh
@@ -879,6 +918,11 @@ jobs:
         git config user.email "github-actions[bot]@users.noreply.github.com"
         TAG="osac/v${VERSION}"
         COMMIT_SHA=$(git rev-parse HEAD)
+        TAG_MESSAGE="Nightly build ${VERSION}"
+        # Only ever true on a manual workflow_dispatch run (see the e2e
+        # jobs' own `if:` guards) -- keep this visible in the tag's own
+        # history, not just the transient Slack message below.
+        [[ "${SKIP_E2E}" == "true" ]] && TAG_MESSAGE="${TAG_MESSAGE} (e2e skipped: manual workflow_dispatch run)"
 
         if git fetch origin "refs/tags/${TAG}:refs/tags/${TAG}" 2>/dev/null; then
           EXISTING_SHA=$(git rev-parse "${TAG}^{commit}")
@@ -893,7 +937,7 @@ jobs:
           exit 1
         fi
 
-        git tag "${TAG}" -m "Nightly build ${VERSION}"
+        git tag "${TAG}" -m "${TAG_MESSAGE}"
         git push origin "${TAG}"
         echo "Tagged: ${TAG}"
 
@@ -915,6 +959,7 @@ jobs:
         RUN_ID: ${{ github.run_id }}
         REPO_OWNER: ${{ github.repository_owner }}
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        SKIP_E2E: ${{ github.event.inputs.skip_e2e }}
       run: |
         set -euo pipefail
         source osac-installer/scripts/nightly-charts.sh
@@ -922,15 +967,24 @@ jobs:
         WORKFLOW_URL="${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
         SUMMARY_TEXT=$(build_slack_charts_published_summary nightly-artifacts/chart-sources.txt "${REPO_OWNER}")
 
+        # Only ever true on a manual workflow_dispatch run (see the e2e
+        # jobs' own `if:` guards) -- never silent: a release that skipped
+        # e2e must be obvious in the same place every other nightly
+        # success is announced, not just in the tag message/run log.
+        HEADER_TEXT=":white_check_mark: Nightly Build ${VERSION} - Published"
+        if [[ "${SKIP_E2E}" == "true" ]]; then
+          HEADER_TEXT=":warning: Nightly Build ${VERSION} - Published (e2e SKIPPED)"
+        fi
+
         jq -n \
-          --arg version "${VERSION}" \
+          --arg header "${HEADER_TEXT}" \
           --arg summary "${SUMMARY_TEXT}" \
           --arg workflow_url "${WORKFLOW_URL}" \
           '{
             "blocks": [
               {
                 "type": "header",
-                "text": {"type": "plain_text", "text": (":white_check_mark: Nightly Build " + $version + " - Published")}
+                "text": {"type": "plain_text", "text": $header}
               },
               {
                 "type": "section",

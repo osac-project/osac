@@ -46,7 +46,7 @@ After clone, run `tools/bootstrap.sh` from this repo root. It vendors
 [flightctl/ai-workflows](https://github.com/flightctl/ai-workflows), clones
 skill-relative sibling repos (see `AGENTS.md`), forks the writeable siblings
 to your GitHub account, and links Claude Code / Cursor / Gemini CLI skill
-discovery. Requires authenticated `gh` unless you pass `--no-fork`. This
+discovery. Requires an authenticated `gh` session unless you pass `--no-fork`. This
 repo is the project root. A nested `osac-workspace/osac/` checkout aborts;
 use a standalone clone or worktree instead.
 

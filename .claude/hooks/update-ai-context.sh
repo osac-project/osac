@@ -48,9 +48,11 @@ fetch_and_rebase() {
 }
 
 home_wf="${HOME}/.ai-workflows"
-proj_wf="${CLAUDE_PROJECT_DIR:-}/.ai-workflows"
 if is_git_work_tree_root "$home_wf"; then
   fetch_and_rebase "$home_wf" "ai-workflows"
-elif is_git_work_tree_root "$proj_wf"; then
-  fetch_and_rebase "$proj_wf" "ai-workflows"
+elif [[ -n "${CLAUDE_PROJECT_DIR:-}" ]]; then
+  proj_wf="${CLAUDE_PROJECT_DIR}/.ai-workflows"
+  if is_git_work_tree_root "$proj_wf"; then
+    fetch_and_rebase "$proj_wf" "ai-workflows"
+  fi
 fi

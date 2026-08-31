@@ -121,9 +121,11 @@ test_jira_ticket_from_branch() {
   local got
   got=$(osac_jira_ticket_from_branch "feat/OSAC-4040-wt-dogfood")
   [[ "$got" == "OSAC-4040" ]] || fail "expected OSAC-4040, got ${got}"
+  got=$(osac_jira_ticket_from_branch "feat/OSAC-1234-follow-up-OSAC-5678")
+  [[ "$got" == "OSAC-1234" ]] || fail "expected first key OSAC-1234, got ${got}"
   got=$(osac_jira_ticket_from_branch "feat/no-ticket")
   [[ -z "$got" ]] || fail "expected empty ticket, got ${got}"
-  pass "osac_jira_ticket_from_branch extracts OSAC-NNNN"
+  pass "osac_jira_ticket_from_branch extracts the first OSAC-NNNN"
 }
 
 test_zsh_nounset_jira_ticket() {
@@ -136,12 +138,164 @@ test_zsh_nounset_jira_ticket() {
     source "$1"
     got=$(osac_jira_ticket_from_branch "feat/OSAC-4040-wt-dogfood")
     [[ "$got" == "OSAC-4040" ]]
-  ' zsh "$HELPERS" || fail "zsh nounset failed to parse OSAC-4040 from branch"
+    got=$(osac_jira_ticket_from_branch "feat/OSAC-1234-follow-up-OSAC-5678")
+    [[ "$got" == "OSAC-1234" ]]
+  ' zsh "$HELPERS" || fail "zsh nounset failed to parse first OSAC-NNNN from branch"
   pass "osac_jira_ticket_from_branch works under zsh nounset"
+}
+
+# PATH with only this bin (no host timeout/gtimeout). Requires git wrapper already in $bin.
+isolated_core_path() {
+  local bin="$1" c src
+  for c in awk jq basename dirname mkdir chmod cat cp bash; do
+    src=$(command -v "$c") || fail "need $c for isolated PATH"
+    ln -sf "$src" "${bin}/$c"
+  done
+  printf '%s' "$bin"
+}
+
+write_git_worktree_stub() {
+  local bin="$1" repo="$2" log="$3"
+  cat > "${bin}/git" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ " \$* " == *" worktree "* && " \$* " == *" add "* ]]; then
+  dest="\${!#}"
+  mkdir -p "\$dest/tools"
+  cp "${repo}/tools/bootstrap.sh" "\$dest/tools/bootstrap.sh"
+  chmod +x "\$dest/tools/bootstrap.sh"
+  echo "worktree-add \$dest" >> "${log}"
+  exit 0
+fi
+exec "${REAL_GIT}" "\$@"
+EOF
+  chmod +x "${bin}/git"
+}
+
+test_bootstrap_fail_prints_recovery() {
+  local parent repo dest bin log out
+  parent="${TMPDIR_ROOT}/wt-fail-parent"
+  repo="${parent}/osac"
+  dest="${parent}/osac-OSAC-3958"
+  bin="${TMPDIR_ROOT}/wt-fail-bin"
+  log="${TMPDIR_ROOT}/wt-fail.log"
+  mkdir -p "${repo}/tools" "$bin"
+  printf '#!/bin/sh\necho bootstrap-fail >> "%s"\nexit 1\n' "$log" \
+    > "${repo}/tools/bootstrap.sh"
+  chmod +x "${repo}/tools/bootstrap.sh"
+  "$REAL_GIT" init -q "$repo"
+  "$REAL_GIT" -C "$repo" checkout -q -b main
+  "$REAL_GIT" -C "$repo" -c user.email=smoke@test -c user.name=smoke \
+    commit -q --allow-empty -m seed
+  write_git_worktree_stub "$bin" "$repo" "$log"
+
+  (
+    cd "$repo"
+    # shellcheck source=../osac-helpers.sh
+    source "$HELPERS"
+    export PATH="${bin}:${PATH}"
+    export OSAC_WORKTREE_PARENT="$parent"
+    out=$(osac-new-worktree feat/OSAC-3958 2>&1) && fail "bootstrap fail should fail: $out" || true
+    echo "$out" | grep -q "tools/bootstrap.sh failed" \
+      || fail "expected bootstrap failure: $out"
+    echo "$out" | grep -q "Worktree exists at ${dest}" \
+      || fail "expected worktree path in recovery: $out"
+    echo "$out" | grep -Fq "Recovery: cd ${dest} && ./tools/bootstrap.sh --no-fork" \
+      || fail "expected --no-fork recovery: $out"
+  )
+  pass "bootstrap failure prints --no-fork recovery"
+}
+
+test_no_timeout_skips_jira() {
+  local parent repo dest bin log jira_log out
+  parent="${TMPDIR_ROOT}/wt-skip-parent"
+  repo="${parent}/osac"
+  dest="${parent}/osac-OSAC-1234"
+  bin="${TMPDIR_ROOT}/wt-skip-bin"
+  log="${TMPDIR_ROOT}/wt-skip.log"
+  jira_log="${TMPDIR_ROOT}/wt-skip-jira.log"
+  mkdir -p "${repo}/tools" "$bin"
+  printf '#!/bin/sh\nprintf "bootstrap %%s\\n" "$0" >> "%s"\nexit 0\n' "$log" \
+    > "${repo}/tools/bootstrap.sh"
+  chmod +x "${repo}/tools/bootstrap.sh"
+  "$REAL_GIT" init -q "$repo"
+  "$REAL_GIT" -C "$repo" checkout -q -b main
+  "$REAL_GIT" -C "$repo" -c user.email=smoke@test -c user.name=smoke \
+    commit -q --allow-empty -m seed
+  write_git_worktree_stub "$bin" "$repo" "$log"
+  isolated_core_path "$bin" >/dev/null
+  cat > "${bin}/jira" <<EOF
+#!/bin/sh
+echo jira-called >> "${jira_log}"
+printf '%s\\n' '{"fields":{"summary":"should-not-run","issuetype":{"name":"Task"}}}'
+EOF
+  chmod +x "${bin}/jira"
+
+  out=$(
+    cd "$repo"
+    # shellcheck source=../osac-helpers.sh
+    source "$HELPERS"
+    export PATH="$bin"
+    export OSAC_WORKTREE_PARENT="$parent"
+    osac-new-worktree feat/OSAC-1234 2>&1
+  ) || fail "skip-jira path should succeed: $out"
+  echo "$out" | grep -q "no timeout or gtimeout on PATH" \
+    || fail "expected timeout skip warning: $out"
+  echo "$out" | grep -q "could not fetch Jira ticket" \
+    && fail "skip path must not also warn about fetch: $out"
+  [[ -f "$jira_log" ]] && fail "jira must not be invoked without timeout: $(cat "$jira_log")"
+  [[ -f "${dest}/.claude/CLAUDE.md" ]] \
+    && fail "skip path must not write Jira context"
+  pass "missing timeout/gtimeout skips Jira fetch"
+}
+
+test_gtimeout_used_when_timeout_missing() {
+  local parent repo dest bin log
+  parent="${TMPDIR_ROOT}/wt-gto-parent"
+  repo="${parent}/osac"
+  dest="${parent}/osac-OSAC-1234"
+  bin="${TMPDIR_ROOT}/wt-gto-bin"
+  log="${TMPDIR_ROOT}/wt-gto.log"
+  mkdir -p "${repo}/tools" "$bin"
+  printf '#!/bin/sh\nprintf "bootstrap %%s\\n" "$0" >> "%s"\nexit 0\n' "$log" \
+    > "${repo}/tools/bootstrap.sh"
+  chmod +x "${repo}/tools/bootstrap.sh"
+  "$REAL_GIT" init -q "$repo"
+  "$REAL_GIT" -C "$repo" checkout -q -b main
+  "$REAL_GIT" -C "$repo" -c user.email=smoke@test -c user.name=smoke \
+    commit -q --allow-empty -m seed
+  write_git_worktree_stub "$bin" "$repo" "$log"
+  isolated_core_path "$bin" >/dev/null
+  cat > "${bin}/gtimeout" <<'EOF'
+#!/bin/sh
+shift
+exec "$@"
+EOF
+  chmod +x "${bin}/gtimeout"
+  cat > "${bin}/jira" <<'EOF'
+#!/bin/sh
+printf '%s\n' '{"fields":{"summary":"gtimeout ticket","issuetype":{"name":"Task"}}}'
+EOF
+  chmod +x "${bin}/jira"
+
+  (
+    cd "$repo"
+    # shellcheck source=../osac-helpers.sh
+    source "$HELPERS"
+    export PATH="$bin"
+    export OSAC_WORKTREE_PARENT="$parent"
+    osac-new-worktree feat/OSAC-1234 >/dev/null
+  )
+  grep -q 'gtimeout ticket' "${dest}/.claude/CLAUDE.md" \
+    || fail "expected gtimeout-backed Jira context in ${dest}/.claude/CLAUDE.md"
+  pass "gtimeout is used when timeout is missing"
 }
 
 test_dest_basename_and_repo_bootstrap
 test_jira_ticket_from_branch
 test_zsh_nounset_jira_ticket
+test_bootstrap_fail_prints_recovery
+test_no_timeout_skips_jira
+test_gtimeout_used_when_timeout_missing
 
 echo "All osac-new-worktree smoke tests passed."

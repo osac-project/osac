@@ -11,7 +11,7 @@
 
 # First OSAC-NNNN in a branch name; empty if none. POSIX so zsh nounset is fine.
 osac_jira_ticket_from_branch() {
-    printf '%s\n' "${1:-}" | sed -n 's/.*\(OSAC-[0-9][0-9]*\).*/\1/p'
+    printf '%s\n' "${1:-}" | awk 'match($0, /OSAC-[0-9]+/) { print substr($0, RSTART, RLENGTH); exit }'
 }
 
 osac-new-worktree() {
@@ -60,6 +60,8 @@ osac-new-worktree() {
 
     if ! ./tools/bootstrap.sh; then
         echo "Error: tools/bootstrap.sh failed." >&2
+        echo "  Worktree exists at ${target_dir}." >&2
+        echo "  Recovery: cd ${target_dir} && ./tools/bootstrap.sh --no-fork" >&2
         return 1
     fi
 
@@ -67,25 +69,30 @@ osac-new-worktree() {
     ticket=$(osac_jira_ticket_from_branch "$branch_name")
     if [[ -n "$ticket" ]]; then
         echo "Fetching Jira ticket ${ticket}..."
-        local raw summary issue_type
+        local timeout_bin="" raw="" summary issue_type
         if command -v timeout >/dev/null 2>&1; then
-            raw=$(timeout 15 jira issue view "$ticket" --raw 2>/dev/null) || raw=""
-        else
-            raw=$(jira issue view "$ticket" --raw 2>/dev/null) || raw=""
+            timeout_bin=timeout
+        elif command -v gtimeout >/dev/null 2>&1; then
+            timeout_bin=gtimeout
         fi
-        if [[ -n "$raw" ]]; then
-            summary=$(echo "$raw" | jq -r '.fields.summary // empty' 2>/dev/null)
-            issue_type=$(echo "$raw" | jq -r '.fields.issuetype.name // empty' 2>/dev/null)
-            if [[ -n "$summary" ]]; then
-                mkdir -p .claude
-                printf '\n## Current Work\n- **Jira:** [%s](https://redhat.atlassian.net/browse/%s)\n- **Summary:** %s\n- **Type:** %s\n' \
-                    "$ticket" "$ticket" "$summary" "${issue_type:-Unknown}" >> .claude/CLAUDE.md
-                echo "Appended Jira context to .claude/CLAUDE.md"
-            else
-                echo "Warning: Jira ticket ${ticket} has no summary field." >&2
-            fi
+        if [[ -z "$timeout_bin" ]]; then
+            echo "Warning: no timeout or gtimeout on PATH; skipping Jira fetch for ${ticket}." >&2
         else
-            echo "Warning: could not fetch Jira ticket ${ticket} (is jira CLI configured?)" >&2
+            raw=$("$timeout_bin" 15 jira issue view "$ticket" --raw 2>/dev/null) || raw=""
+            if [[ -n "$raw" ]]; then
+                summary=$(echo "$raw" | jq -r '.fields.summary // empty' 2>/dev/null)
+                issue_type=$(echo "$raw" | jq -r '.fields.issuetype.name // empty' 2>/dev/null)
+                if [[ -n "$summary" ]]; then
+                    mkdir -p .claude
+                    printf '\n## Current Work\n- **Jira:** [%s](https://redhat.atlassian.net/browse/%s)\n- **Summary:** %s\n- **Type:** %s\n' \
+                        "$ticket" "$ticket" "$summary" "${issue_type:-Unknown}" >> .claude/CLAUDE.md
+                    echo "Appended Jira context to .claude/CLAUDE.md"
+                else
+                    echo "Warning: Jira ticket ${ticket} has no summary field." >&2
+                fi
+            else
+                echo "Warning: could not fetch Jira ticket ${ticket} (is jira CLI configured?)" >&2
+            fi
         fi
     fi
 

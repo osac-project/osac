@@ -76,8 +76,23 @@ test_skip_rebase_off_main() {
   pass "skips rebase when ~/.ai-workflows is not on main"
 }
 
+test_empty_claude_project_dir_skips_repo_local() {
+  local home project out
+  home="${TMPDIR_ROOT}/empty-proj-home"
+  project="${TMPDIR_ROOT}/empty-proj-proj"
+  mkdir -p "$home" "$project"
+  init_repo "$home"
+  mkdir -p "${home}/.ai-workflows"
+  init_repo "${project}/.ai-workflows"
+  out=$(HOME="$home" CLAUDE_PROJECT_DIR="" bash "$HOOK")
+  echo "$out" | grep -q 'ai-workflows:' \
+    && fail "empty CLAUDE_PROJECT_DIR must not update repo-local: $out"
+  pass "empty CLAUDE_PROJECT_DIR does not fall back to repo-local"
+}
+
 test_leftover_home_dir_does_not_rebase_enclosing_repo
 test_leftover_home_falls_back_to_repo_local
 test_skip_rebase_off_main
+test_empty_claude_project_dir_skips_repo_local
 
 echo "All update-ai-context smoke tests passed."

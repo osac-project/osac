@@ -86,7 +86,7 @@ if [[ "$NO_FORK" == false ]]; then
     echo "Install it (https://cli.github.com/) or use --no-fork for read-only clone." >&2
     exit 1
   fi
-  if ! gh auth status; then
+  if ! gh auth status &>/dev/null; then
     echo "ERROR: gh CLI is not authenticated." >&2
     echo "Run 'gh auth login' or use --no-fork for read-only clone." >&2
     exit 1

@@ -356,7 +356,7 @@ urllib3==2.6.3
     #   botocore
     #   kubernetes
     #   requests
-wcwidth==0.6.0
+wcwidth==0.8.3
     # via prettytable
 websocket-client==1.9.0
     # via

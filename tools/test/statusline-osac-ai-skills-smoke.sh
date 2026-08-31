@@ -7,6 +7,7 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "${SCRIPT_DIR}/../.." && pwd)
 STATUSLINE="${REPO_ROOT}/.claude/hooks/statusline.sh"
 REAL_GIT=$(command -v git)
+OSAC_AI_SKILLS_NAME=".osac-ai-skills"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "PASS: $*"; }
@@ -44,12 +45,19 @@ run_statusline() {
   printf '%s' '{}' | HOME="$home" bash "$STATUSLINE" "$project"
 }
 
+# Sets caller's home, project, home_skills, repo_skills.
+fixture() {
+  home="${TMPDIR_ROOT}/home-$1"
+  project="${TMPDIR_ROOT}/proj-$1"
+  home_skills="${home}/${OSAC_AI_SKILLS_NAME}"
+  repo_skills="${project}/${OSAC_AI_SKILLS_NAME}"
+}
+
 test_missing_vendor_is_muted_not_found() {
-  local home="${TMPDIR_ROOT}/home-missing"
-  local project="${TMPDIR_ROOT}/proj-missing"
+  local home project home_skills repo_skills out
+  fixture missing
   mkdir -p "$home"
   init_repo "$project"
-  local out
   out=$(run_statusline "$home" "$project")
   echo "$out" | grep -q 'osac-ai-skills: not found' \
     || fail "expected muted osac-ai-skills: not found, got: $out"
@@ -57,26 +65,24 @@ test_missing_vendor_is_muted_not_found() {
 }
 
 test_repo_local_up_to_date() {
-  local home="${TMPDIR_ROOT}/home-local"
-  local project="${TMPDIR_ROOT}/proj-local"
+  local home project home_skills repo_skills out
+  fixture local
   mkdir -p "$home"
   init_repo "$project"
-  init_repo "${project}/.osac-ai-skills"
-  local out
+  init_repo "$repo_skills"
   out=$(run_statusline "$home" "$project")
   echo "$out" | grep -q 'osac-ai-skills: main ✓' \
     || fail "expected repo-local ✓, got: $out"
-  pass "repo-local .osac-ai-skills at origin/main → ✓"
+  pass "repo-local ${OSAC_AI_SKILLS_NAME} at origin/main → ✓"
 }
 
 test_repo_local_behind() {
-  local home="${TMPDIR_ROOT}/home-behind"
-  local project="${TMPDIR_ROOT}/proj-behind"
+  local home project home_skills repo_skills out
+  fixture behind
   mkdir -p "$home"
   init_repo "$project"
-  init_repo "${project}/.osac-ai-skills"
-  make_behind "${project}/.osac-ai-skills" 3
-  local out
+  init_repo "$repo_skills"
+  make_behind "$repo_skills" 3
   out=$(run_statusline "$home" "$project")
   echo "$out" | grep -q 'osac-ai-skills: main ↓3 behind' \
     || fail "expected ↓3 behind, got: $out"
@@ -84,29 +90,27 @@ test_repo_local_behind() {
 }
 
 test_home_git_wins_over_repo_local() {
-  local home="${TMPDIR_ROOT}/home-pref"
-  local project="${TMPDIR_ROOT}/proj-pref"
+  local home project home_skills repo_skills out
+  fixture pref
   mkdir -p "$home"
   init_repo "$project"
-  init_repo "${project}/.osac-ai-skills"
-  make_behind "${project}/.osac-ai-skills" 2
-  init_repo "${home}/.osac-ai-skills"
-  local out
+  init_repo "$repo_skills"
+  make_behind "$repo_skills" 2
+  init_repo "$home_skills"
   out=$(run_statusline "$home" "$project")
   echo "$out" | grep -q 'osac-ai-skills: main ✓' \
     || fail "HOME git checkout should win (✓), got: $out"
   echo "$out" | grep -q '↓2' \
     && fail "should not report repo-local behind when HOME wins: $out"
-  pass "~/.osac-ai-skills/.git wins over repo-local"
+  pass "~/${OSAC_AI_SKILLS_NAME}/.git wins over repo-local"
 }
 
 test_home_without_git_falls_back_to_repo_local() {
-  local home="${TMPDIR_ROOT}/home-nongit"
-  local project="${TMPDIR_ROOT}/proj-nongit"
-  mkdir -p "${home}/.osac-ai-skills"
+  local home project home_skills repo_skills out
+  fixture nongit
+  mkdir -p "$home_skills"
   init_repo "$project"
-  init_repo "${project}/.osac-ai-skills"
-  local out
+  init_repo "$repo_skills"
   out=$(run_statusline "$home" "$project")
   echo "$out" | grep -q 'osac-ai-skills: not found' \
     && fail "HOME dir without .git must not hide repo-local: $out"
@@ -116,20 +120,19 @@ test_home_without_git_falls_back_to_repo_local() {
 }
 
 test_home_worktree_wins_over_repo_local() {
-  local home="${TMPDIR_ROOT}/home-wt"
-  local project="${TMPDIR_ROOT}/proj-wt"
-  local source="${TMPDIR_ROOT}/skills-src"
+  local home project home_skills repo_skills source out
+  fixture wt
+  source="${TMPDIR_ROOT}/skills-src"
   mkdir -p "$home"
   init_repo "$source"
   init_repo "$project"
-  init_repo "${project}/.osac-ai-skills"
-  make_behind "${project}/.osac-ai-skills" 2
+  init_repo "$repo_skills"
+  make_behind "$repo_skills" 2
   # Free `main` in the source checkout so the linked worktree can occupy it.
   "$REAL_GIT" -C "$source" checkout -q --detach
-  "$REAL_GIT" -C "$source" worktree add -q "${home}/.osac-ai-skills" main
-  [[ -f "${home}/.osac-ai-skills/.git" ]] || fail "expected linked worktree .git file"
-  [[ ! -d "${home}/.osac-ai-skills/.git" ]] || fail "worktree .git should not be a directory"
-  local out
+  "$REAL_GIT" -C "$source" worktree add -q "$home_skills" main
+  [[ -f "${home_skills}/.git" ]] || fail "expected linked worktree .git file"
+  [[ ! -d "${home_skills}/.git" ]] || fail "worktree .git should not be a directory"
   out=$(run_statusline "$home" "$project")
   echo "$out" | grep -q 'osac-ai-skills: main ✓' \
     || fail "HOME worktree should win (✓), got: $out"
@@ -139,33 +142,31 @@ test_home_worktree_wins_over_repo_local() {
 }
 
 test_repo_local_nongit_dir_is_not_found() {
-  local home="${TMPDIR_ROOT}/home-leftover"
-  local project="${TMPDIR_ROOT}/proj-leftover"
+  local home project home_skills repo_skills out
+  fixture leftover
   mkdir -p "$home"
   init_repo "$project"
-  mkdir -p "${project}/.osac-ai-skills"
-  local out
+  mkdir -p "$repo_skills"
   out=$(run_statusline "$home" "$project")
   echo "$out" | grep -q 'osac-ai-skills: not found' \
     || fail "leftover non-git dir must not inherit osac's branch: $out"
   echo "$out" | grep -q 'osac-ai-skills: main ✓' \
-    && fail "false green for leftover .osac-ai-skills: $out"
+    && fail "false green for leftover ${OSAC_AI_SKILLS_NAME}: $out"
   pass "repo-local leftover dir → osac-ai-skills: not found"
 }
 
 test_home_git_subdir_falls_back_to_repo_local() {
-  local home="${TMPDIR_ROOT}/home-dotfiles"
-  local project="${TMPDIR_ROOT}/proj-dotfiles"
+  local home project home_skills repo_skills out
+  fixture dotfiles
   mkdir -p "$home"
   init_repo "$home"
   make_behind "$home" 5
-  mkdir -p "${home}/.osac-ai-skills"
+  mkdir -p "$home_skills"
   init_repo "$project"
-  init_repo "${project}/.osac-ai-skills"
-  local out
+  init_repo "$repo_skills"
   out=$(run_statusline "$home" "$project")
   echo "$out" | grep -q 'osac-ai-skills: main ✓' \
-    || fail "HOME git with plain .osac-ai-skills subdir must fall back: $out"
+    || fail "HOME git with plain ${OSAC_AI_SKILLS_NAME} subdir must fall back: $out"
   echo "$out" | grep -q '↓5' \
     && fail "must not report HOME's behind-count as osac-ai-skills: $out"
   pass "HOME git checkout with plain subdir falls back to repo-local"

@@ -60,10 +60,11 @@ REPO_DIR="${project_dir:-$(printf '%s' "$input" | jq -r '.workspace.project_dir 
 
 resolve_osac_ai_skills_dir() {
   local home_skills="${HOME}/.osac-ai-skills"
+  local repo_skills="${REPO_DIR}/.osac-ai-skills"
   if is_git_work_tree_root "${home_skills}"; then
     printf '%s\n' "${home_skills}"
   else
-    printf '%s\n' "${REPO_DIR}/.osac-ai-skills"
+    printf '%s\n' "${repo_skills}"
   fi
 }
 

@@ -26,6 +26,9 @@ EXPECTED_DIRS=(
   osac-docs
 )
 
+OSAC_AI_SKILLS_NAME=".osac-ai-skills"
+AI_WORKFLOWS_NAME=".ai-workflows"
+
 write_git_wrapper() {
   local dest="$1"
   cat >"$dest" <<EOF
@@ -142,6 +145,22 @@ EOF
   chmod +x "$dest"
 }
 
+# Sets caller's home, root, bin, home_skills, home_workflows, repo_skills, clone_log.
+prepare_fixture() {
+  home="${TMPDIR_ROOT}/home-$1"
+  root="${TMPDIR_ROOT}/osac-$1"
+  bin="${TMPDIR_ROOT}/bin-$1"
+  home_skills="${home}/${OSAC_AI_SKILLS_NAME}"
+  home_workflows="${home}/${AI_WORKFLOWS_NAME}"
+  repo_skills="${root}/${OSAC_AI_SKILLS_NAME}"
+  clone_log="${home}/clone.log"
+  mkdir -p "$home" "$bin"
+  write_git_wrapper "${bin}/git"
+  seed_vendor_ok "$home_skills"
+  seed_ai_workflows "$home_workflows"
+  prepare_osac "$root"
+}
+
 run_bootstrap() {
   local root="$1" home="$2" bin="$3"
   shift 3
@@ -200,64 +219,42 @@ assert_expected_clones() {
 }
 
 test_clones_all_five_into_project_root() {
-  local home="${TMPDIR_ROOT}/home-five"
-  local root="${TMPDIR_ROOT}/osac-five"
-  local bin="${TMPDIR_ROOT}/bin-five"
-  mkdir -p "$home" "$bin"
-  write_git_wrapper "${bin}/git"
-  seed_vendor_ok "${home}/.osac-ai-skills"
-  seed_ai_workflows "${home}/.ai-workflows"
-  prepare_osac "$root"
+  local home root bin home_skills home_workflows repo_skills clone_log out
+  prepare_fixture five
 
-  local out
   out=$(run_bootstrap "$root" "$home" "$bin" 2>&1) || fail "bootstrap failed: $out"
-  assert_expected_clones "$root" "${home}/clone.log"
+  assert_expected_clones "$root" "$clone_log"
   pass "clones all five sibling repos under PROJECT_ROOT, not into docs/"
 }
 
 test_rerun_updates_expected_clone() {
-  local home="${TMPDIR_ROOT}/home-update"
-  local root="${TMPDIR_ROOT}/osac-update"
-  local bin="${TMPDIR_ROOT}/bin-update"
-  mkdir -p "$home" "$bin"
-  write_git_wrapper "${bin}/git"
-  seed_vendor_ok "${home}/.osac-ai-skills"
-  seed_ai_workflows "${home}/.ai-workflows"
-  prepare_osac "$root"
+  local home root bin home_skills home_workflows repo_skills clone_log out ep
+  prepare_fixture update
+  ep="${root}/enhancement-proposals"
 
   run_bootstrap "$root" "$home" "$bin" >/dev/null
-  echo marker > "${root}/enhancement-proposals/keep-me"
-  : > "${home}/clone.log"
-  local out
+  echo marker > "${ep}/keep-me"
+  : > "$clone_log"
   out=$(run_bootstrap "$root" "$home" "$bin" 2>&1) || fail "bootstrap re-run failed: $out"
-  [[ -f "${root}/enhancement-proposals/keep-me" ]] \
-    || fail "re-run deleted an expected clone"
-  [[ ! -s "${home}/clone.log" ]] \
-    || fail "re-run should not git clone again: $(cat "${home}/clone.log")"
+  [[ -f "${ep}/keep-me" ]] || fail "re-run deleted an expected clone"
+  [[ ! -s "$clone_log" ]] || fail "re-run should not git clone again: $(cat "$clone_log")"
   echo "$out" | grep -q 'enhancement-proposals' \
     || fail "re-run should mention enhancement-proposals update: $out"
   pass "re-run updates an expected clone and does not delete it"
 }
 
 test_skips_unrelated_existing_dir() {
-  local home="${TMPDIR_ROOT}/home-skip"
-  local root="${TMPDIR_ROOT}/osac-skip"
-  local bin="${TMPDIR_ROOT}/bin-skip"
-  mkdir -p "$home" "$bin"
-  write_git_wrapper "${bin}/git"
-  seed_vendor_ok "${home}/.osac-ai-skills"
-  seed_ai_workflows "${home}/.ai-workflows"
-  prepare_osac "$root"
-  mkdir -p "${root}/osac-ux"
-  echo leftover > "${root}/osac-ux/not-the-repo"
+  local home root bin home_skills home_workflows repo_skills clone_log out ux
+  prepare_fixture skip
+  ux="${root}/osac-ux"
+  mkdir -p "$ux"
+  echo leftover > "${ux}/not-the-repo"
 
-  local out
   out=$(run_bootstrap "$root" "$home" "$bin" 2>&1) || fail "bootstrap failed: $out"
-  grep -q leftover "${root}/osac-ux/not-the-repo" \
-    || fail "unrelated osac-ux/ dir was overwritten"
+  grep -q leftover "${ux}/not-the-repo" || fail "unrelated osac-ux/ dir was overwritten"
   echo "$out" | grep -qi 'skip' \
     || fail "expected skip warning for unrelated osac-ux/: $out"
-  [[ ! -d "${root}/osac-ux/.git" ]] || fail "skip path must not init a git repo"
+  [[ ! -d "${ux}/.git" ]] || fail "skip path must not init a git repo"
   [[ -d "${root}/osac-ui/.git" ]] \
     || fail "skip of osac-ux must still clone later siblings (osac-ui)"
   [[ -d "${root}/osac-docs/.git" ]] \
@@ -266,19 +263,12 @@ test_skips_unrelated_existing_dir() {
 }
 
 test_extra_list_entry_clones_without_other_edits() {
-  local home="${TMPDIR_ROOT}/home-extra"
-  local root="${TMPDIR_ROOT}/osac-extra"
-  local bin="${TMPDIR_ROOT}/bin-extra"
-  mkdir -p "$home" "$bin"
-  write_git_wrapper "${bin}/git"
-  seed_vendor_ok "${home}/.osac-ai-skills"
-  seed_ai_workflows "${home}/.ai-workflows"
-  prepare_osac "$root"
+  local home root bin home_skills home_workflows repo_skills clone_log out tmp
+  prepare_fixture extra
 
   grep -q 'SIBLINGS=(' "${root}/tools/bootstrap.sh" \
     || fail "bootstrap.sh has no SIBLINGS=( list"
-  # Insert one extra entry after the opening SIBLINGS=( line only.
-  local tmp="${root}/tools/bootstrap.sh.new"
+  tmp="${root}/tools/bootstrap.sh.new"
   awk '
     { print }
     /SIBLINGS=\(/ && !done { print "  \"fixture-sibling\""; done=1 }
@@ -286,13 +276,12 @@ test_extra_list_entry_clones_without_other_edits() {
   mv "$tmp" "${root}/tools/bootstrap.sh"
   chmod +x "${root}/tools/bootstrap.sh"
 
-  local out
   out=$(run_bootstrap "$root" "$home" "$bin" 2>&1) || fail "bootstrap failed: $out"
-  assert_expected_clones "$root" "${home}/clone.log"
+  assert_expected_clones "$root" "$clone_log"
   [[ -d "${root}/fixture-sibling/.git" ]] \
     || fail "extra SIBLINGS entry was not cloned"
-  grep -q 'osac-project/fixture-sibling' "${home}/clone.log" \
-    || fail "extra entry clone URL missing: $(cat "${home}/clone.log")"
+  grep -q 'osac-project/fixture-sibling' "$clone_log" \
+    || fail "extra entry clone URL missing: $(cat "$clone_log")"
   pass "adding a SIBLINGS list entry clones an extra dest with no other code edits"
 }
 
@@ -317,55 +306,44 @@ test_nested_abort_skips_sibling_clones() {
 }
 
 test_failed_clone_cleans_dest() {
-  local home="${TMPDIR_ROOT}/home-fail"
-  local root="${TMPDIR_ROOT}/osac-fail"
-  local bin="${TMPDIR_ROOT}/bin-fail"
-  mkdir -p "$home" "$bin"
-  write_git_wrapper "${bin}/git"
-  seed_vendor_ok "${home}/.osac-ai-skills"
-  seed_ai_workflows "${home}/.ai-workflows"
-  prepare_osac "$root"
+  local home root bin home_skills home_workflows repo_skills clone_log out ux
+  prepare_fixture fail
+  ux="${root}/osac-ux"
 
-  local out
   out=$(OSAC_SMOKE_FAIL_CLONE=osac-ux run_bootstrap "$root" "$home" "$bin" 2>&1) \
     || fail "bootstrap should continue after a sibling clone failure: $out"
   echo "$out" | grep -qi 'Clone failed for osac-ux' \
     || fail "expected clone-failed message for osac-ux: $out"
-  [[ ! -e "${root}/osac-ux" ]] \
-    || fail "failed clone must not leave dest behind: $(ls -la "${root}/osac-ux" 2>/dev/null || true)"
+  [[ ! -e "$ux" ]] \
+    || fail "failed clone must not leave dest behind: $(ls -la "$ux" 2>/dev/null || true)"
   [[ -d "${root}/osac-ui/.git" ]] \
     || fail "clone failure of osac-ux must still clone later siblings"
   [[ -d "${root}/enhancement-proposals/.git" ]] \
     || fail "clone failure of osac-ux must still clone earlier siblings"
 
   out=$(run_bootstrap "$root" "$home" "$bin" 2>&1) || fail "retry after failed clone failed: $out"
-  [[ -d "${root}/osac-ux/.git" ]] || fail "retry did not clone osac-ux after cleanup"
+  [[ -d "${ux}/.git" ]] || fail "retry did not clone osac-ux after cleanup"
   pass "failed clone removes dest so a later run can retry"
 }
 
 test_expected_sibling_requires_org_boundary() {
-  local home="${TMPDIR_ROOT}/home-boundary"
-  local root="${TMPDIR_ROOT}/osac-boundary"
-  local bin="${TMPDIR_ROOT}/bin-boundary"
-  mkdir -p "$home" "$bin"
-  write_git_wrapper "${bin}/git"
-  seed_vendor_ok "${home}/.osac-ai-skills"
-  seed_ai_workflows "${home}/.ai-workflows"
-  prepare_osac "$root"
+  local home root bin home_skills home_workflows repo_skills clone_log out docs_dest ep
+  prepare_fixture boundary
+  docs_dest="${root}/osac-docs"
+  ep="${root}/enhancement-proposals"
 
   run_bootstrap "$root" "$home" "$bin" >/dev/null
-  "$REAL_GIT" -C "${root}/osac-docs" remote set-url origin \
+  "$REAL_GIT" -C "$docs_dest" remote set-url origin \
     "https://github.com/evil-osac-project/docs.git"
-  echo keep > "${root}/osac-docs/keep-me"
+  echo keep > "${docs_dest}/keep-me"
 
-  local out
   out=$(run_bootstrap "$root" "$home" "$bin" 2>&1) || fail "bootstrap failed: $out"
   echo "$out" | grep -qi 'skip' \
     || fail "evil-osac-project/docs must not count as osac-project/docs: $out"
-  grep -q keep "${root}/osac-docs/keep-me" \
+  grep -q keep "${docs_dest}/keep-me" \
     || fail "unrelated osac-docs/ dir was overwritten"
 
-  "$REAL_GIT" -C "${root}/enhancement-proposals" remote set-url origin \
+  "$REAL_GIT" -C "$ep" remote set-url origin \
     "git@github.com:osac-project/enhancement-proposals.git"
   out=$(run_bootstrap "$root" "$home" "$bin" 2>&1) || fail "bootstrap failed on SSH remote: $out"
   echo "$out" | grep -q 'Updating enhancement-proposals' \
@@ -374,22 +352,15 @@ test_expected_sibling_requires_org_boundary() {
 }
 
 test_missing_gh_without_no_fork_exits() {
-  local home="${TMPDIR_ROOT}/home-no-gh"
-  local root="${TMPDIR_ROOT}/osac-no-gh"
-  local bin="${TMPDIR_ROOT}/bin-no-gh"
-  mkdir -p "$home" "$bin"
-  write_git_wrapper "${bin}/git"
-  seed_vendor_ok "${home}/.osac-ai-skills"
-  seed_ai_workflows "${home}/.ai-workflows"
-  prepare_osac "$root"
+  local home root bin home_skills home_workflows repo_skills clone_log out rc=0
+  prepare_fixture no-gh
 
   ln -sf "$(command -v realpath)" "${bin}/realpath"
   ln -sf "$(command -v dirname)" "${bin}/dirname"
-  local out rc=0
   # PATH is $bin only so a host /usr/bin/gh cannot satisfy command -v gh.
   # Invoke bash by absolute path so PATH isolation does not hide the interpreter.
   out=$(HOME="$home" PATH="$bin" \
-    OSAC_SMOKE_CLONE_LOG="${home}/clone.log" \
+    OSAC_SMOKE_CLONE_LOG="$clone_log" \
     /bin/bash "${root}/tools/bootstrap.sh" 2>&1) || rc=$?
   [[ "$rc" -eq 1 ]] || fail "missing gh expected exit 1, got $rc: $out"
   echo "$out" | grep -qi 'gh CLI is not installed' \
@@ -400,21 +371,14 @@ test_missing_gh_without_no_fork_exits() {
 }
 
 test_no_fork_leaves_writeable_without_fork_remote() {
-  local home="${TMPDIR_ROOT}/home-nofork"
-  local root="${TMPDIR_ROOT}/osac-nofork"
-  local bin="${TMPDIR_ROOT}/bin-nofork"
-  mkdir -p "$home" "$bin"
-  write_git_wrapper "${bin}/git"
+  local home root bin home_skills home_workflows repo_skills clone_log out
+  prepare_fixture nofork
   write_gh_wrapper "${bin}/gh"
-  seed_vendor_ok "${home}/.osac-ai-skills"
-  seed_ai_workflows "${home}/.ai-workflows"
-  prepare_osac "$root"
 
-  local out
   out=$(run_bootstrap "$root" "$home" "$bin" 2>&1) || fail "bootstrap --no-fork failed: $out"
   echo "$out" | grep -q 'read-only, no forks' \
     || fail "expected read-only banner: $out"
-  assert_expected_clones "$root" "${home}/clone.log"
+  assert_expected_clones "$root" "$clone_log"
   assert_no_fork_remote "${root}/enhancement-proposals" "enhancement-proposals"
   assert_no_fork_remote "${root}/osac-ui" "osac-ui"
   assert_no_fork_remote "${root}/osac-test-infra" "osac-test-infra"
@@ -425,58 +389,46 @@ test_no_fork_leaves_writeable_without_fork_remote() {
 }
 
 test_forks_writeable_siblings_not_osac_ux_or_vendors() {
-  local home="${TMPDIR_ROOT}/home-fork"
-  local root="${TMPDIR_ROOT}/osac-fork"
-  local bin="${TMPDIR_ROOT}/bin-fork"
-  mkdir -p "$home" "$bin"
-  write_git_wrapper "${bin}/git"
+  local home root bin home_skills home_workflows repo_skills clone_log out gh_log
+  prepare_fixture fork
   write_gh_wrapper "${bin}/gh"
-  seed_vendor_ok "${home}/.osac-ai-skills"
-  seed_ai_workflows "${home}/.ai-workflows"
-  prepare_osac "$root"
+  gh_log="${home}/gh.log"
 
-  local out
   out=$(run_bootstrap_fork "$root" "$home" "$bin" 2>&1) || fail "bootstrap fork path failed: $out"
   echo "$out" | grep -q 'GitHub user: smokeuser' \
     || fail "expected GitHub user banner: $out"
-  assert_expected_clones "$root" "${home}/clone.log"
+  assert_expected_clones "$root" "$clone_log"
   assert_fork_remote "${root}/enhancement-proposals" "enhancement-proposals"
   assert_fork_remote "${root}/osac-ui" "osac-ui"
   assert_fork_remote "${root}/osac-test-infra" "osac-test-infra"
   assert_fork_remote "${root}/osac-docs" "docs"
   assert_no_fork_remote "${root}/osac-ux" "osac-ux"
-  assert_no_fork_remote "${home}/.osac-ai-skills" "osac-ai-skills vendor"
-  assert_no_fork_remote "${home}/.ai-workflows" "ai-workflows vendor"
-  grep -q 'repo fork osac-project/enhancement-proposals' "${home}/gh.log" \
-    || fail "expected gh repo fork for enhancement-proposals: $(cat "${home}/gh.log")"
-  grep -q 'repo fork osac-project/docs' "${home}/gh.log" \
-    || fail "docs fork must use GitHub repo name docs: $(cat "${home}/gh.log")"
-  if grep -q 'repo fork osac-project/osac-ux' "${home}/gh.log"; then
-    fail "must not gh fork osac-ux: $(cat "${home}/gh.log")"
+  assert_no_fork_remote "$home_skills" "osac-ai-skills vendor"
+  assert_no_fork_remote "$home_workflows" "ai-workflows vendor"
+  grep -q 'repo fork osac-project/enhancement-proposals' "$gh_log" \
+    || fail "expected gh repo fork for enhancement-proposals: $(cat "$gh_log")"
+  grep -q 'repo fork osac-project/docs' "$gh_log" \
+    || fail "docs fork must use GitHub repo name docs: $(cat "$gh_log")"
+  if grep -q 'repo fork osac-project/osac-ux' "$gh_log"; then
+    fail "must not gh fork osac-ux: $(cat "$gh_log")"
   fi
-  if grep -q 'repo fork osac-project/osac-ai-skills' "${home}/gh.log"; then
-    fail "must not gh fork osac-ai-skills: $(cat "${home}/gh.log")"
+  if grep -q 'repo fork osac-project/osac-ai-skills' "$gh_log"; then
+    fail "must not gh fork osac-ai-skills: $(cat "$gh_log")"
   fi
   pass "forks writeable siblings; skips osac-ux and vendors"
 }
 
 test_rerun_adds_fork_remote_to_existing_clone() {
-  local home="${TMPDIR_ROOT}/home-fork-rerun"
-  local root="${TMPDIR_ROOT}/osac-fork-rerun"
-  local bin="${TMPDIR_ROOT}/bin-fork-rerun"
-  mkdir -p "$home" "$bin"
-  write_git_wrapper "${bin}/git"
+  local home root bin home_skills home_workflows repo_skills clone_log out ep
+  prepare_fixture fork-rerun
   write_gh_wrapper "${bin}/gh"
-  seed_vendor_ok "${home}/.osac-ai-skills"
-  seed_ai_workflows "${home}/.ai-workflows"
-  prepare_osac "$root"
+  ep="${root}/enhancement-proposals"
 
   run_bootstrap "$root" "$home" "$bin" >/dev/null
-  assert_no_fork_remote "${root}/enhancement-proposals" "enhancement-proposals after --no-fork"
+  assert_no_fork_remote "$ep" "enhancement-proposals after --no-fork"
   : > "${home}/gh.log"
-  local out
   out=$(run_bootstrap_fork "$root" "$home" "$bin" 2>&1) || fail "fork re-run failed: $out"
-  assert_fork_remote "${root}/enhancement-proposals" "enhancement-proposals"
+  assert_fork_remote "$ep" "enhancement-proposals"
   assert_fork_remote "${root}/osac-docs" "docs"
   assert_no_fork_remote "${root}/osac-ux" "osac-ux"
   echo "$out" | grep -q 'Adding fork remote for enhancement-proposals' \
@@ -485,17 +437,10 @@ test_rerun_adds_fork_remote_to_existing_clone() {
 }
 
 test_unrelated_same_name_github_repo_is_not_used_as_fork() {
-  local home="${TMPDIR_ROOT}/home-fork-collision"
-  local root="${TMPDIR_ROOT}/osac-fork-collision"
-  local bin="${TMPDIR_ROOT}/bin-fork-collision"
-  mkdir -p "$home" "$bin"
-  write_git_wrapper "${bin}/git"
+  local home root bin home_skills home_workflows repo_skills clone_log out
+  prepare_fixture fork-collision
   write_gh_wrapper "${bin}/gh"
-  seed_vendor_ok "${home}/.osac-ai-skills"
-  seed_ai_workflows "${home}/.ai-workflows"
-  prepare_osac "$root"
 
-  local out
   out=$(OSAC_SMOKE_FORK_COLLISION=docs run_bootstrap_fork "$root" "$home" "$bin" 2>&1) \
     || fail "bootstrap should continue when docs fork collides: $out"
   echo "$out" | grep -qi 'Failed to fork osac-project/docs' \
@@ -506,81 +451,64 @@ test_unrelated_same_name_github_repo_is_not_used_as_fork() {
 }
 
 test_home_worktree_vendor_is_updated_not_recloned() {
-  local home="${TMPDIR_ROOT}/home-vendor-wt"
-  local root="${TMPDIR_ROOT}/osac-vendor-wt"
-  local bin="${TMPDIR_ROOT}/bin-vendor-wt"
-  local source="${TMPDIR_ROOT}/skills-vendor-src"
-  mkdir -p "$home" "$bin"
-  write_git_wrapper "${bin}/git"
+  local home root bin home_skills home_workflows repo_skills clone_log source out
+  prepare_fixture vendor-wt
+  source="${TMPDIR_ROOT}/skills-vendor-src"
+  rm -rf "$home_skills"
   seed_vendor_ok "$source"
-  seed_ai_workflows "${home}/.ai-workflows"
-  prepare_osac "$root"
   "$REAL_GIT" -C "$source" checkout -q --detach
-  "$REAL_GIT" -C "$source" worktree add -q "${home}/.osac-ai-skills" main
-  [[ -f "${home}/.osac-ai-skills/.git" ]] || fail "expected HOME vendor worktree"
+  "$REAL_GIT" -C "$source" worktree add -q "$home_skills" main
+  [[ -f "${home_skills}/.git" ]] || fail "expected HOME vendor worktree"
 
-  local out
   out=$(run_bootstrap "$root" "$home" "$bin" 2>&1) || fail "bootstrap failed: $out"
   echo "$out" | grep -q "Updating osac-ai-skills" \
     || fail "HOME worktree vendor should be updated: $out"
   echo "$out" | grep -q "Cloning osac-ai-skills" \
     && fail "must not clone a second vendor over a HOME worktree: $out"
-  [[ ! -e "${root}/.osac-ai-skills" ]] \
+  [[ ! -e "$repo_skills" ]] \
     || fail "must not create project-local vendor when HOME worktree is usable"
   pass "HOME linked worktree vendor is updated, not re-cloned"
 }
 
 test_skips_update_when_sibling_not_on_main() {
-  local home="${TMPDIR_ROOT}/home-skip-rebase"
-  local root="${TMPDIR_ROOT}/osac-skip-rebase"
-  local bin="${TMPDIR_ROOT}/bin-skip-rebase"
-  mkdir -p "$home" "$bin"
-  write_git_wrapper "${bin}/git"
+  local home root bin home_skills home_workflows repo_skills clone_log out branch ep
+  prepare_fixture skip-rebase
   write_gh_wrapper "${bin}/gh"
-  seed_vendor_ok "${home}/.osac-ai-skills"
-  seed_ai_workflows "${home}/.ai-workflows"
-  prepare_osac "$root"
+  ep="${root}/enhancement-proposals"
 
   run_bootstrap "$root" "$home" "$bin" >/dev/null
-  "$REAL_GIT" -C "${root}/enhancement-proposals" checkout -q -b feat/keep-me
-  echo keep > "${root}/enhancement-proposals/keep-me"
+  "$REAL_GIT" -C "$ep" checkout -q -b feat/keep-me
+  echo keep > "${ep}/keep-me"
 
-  local out branch
   out=$(run_bootstrap_fork "$root" "$home" "$bin" 2>&1) \
     || fail "bootstrap failed: $out"
   echo "$out" | grep -q "enhancement-proposals is on 'feat/keep-me'" \
     || fail "should skip rebase when sibling is not on main: $out"
   echo "$out" | grep -q "enhancement-proposals up to date" \
     && fail "must not claim a feature branch was rebased: $out"
-  branch=$("$REAL_GIT" -C "${root}/enhancement-proposals" symbolic-ref --short HEAD)
+  branch=$("$REAL_GIT" -C "$ep" symbolic-ref --short HEAD)
   [[ "$branch" == "feat/keep-me" ]] \
     || fail "must stay on feat/keep-me, got: $branch"
-  [[ -f "${root}/enhancement-proposals/keep-me" ]] \
+  [[ -f "${ep}/keep-me" ]] \
     || fail "must not drop uncommitted work on a feature branch"
-  assert_fork_remote "${root}/enhancement-proposals" "enhancement-proposals"
+  assert_fork_remote "$ep" "enhancement-proposals"
   pass "skips rebase on a feature branch and still adds the fork remote"
 }
 
 test_fork_remote_match_requires_user_boundary() {
-  local home="${TMPDIR_ROOT}/home-fork-boundary"
-  local root="${TMPDIR_ROOT}/osac-fork-boundary"
-  local bin="${TMPDIR_ROOT}/bin-fork-boundary"
-  mkdir -p "$home" "$bin"
-  write_git_wrapper "${bin}/git"
+  local home root bin home_skills home_workflows repo_skills clone_log out url docs_dest
+  prepare_fixture fork-boundary
   write_gh_wrapper "${bin}/gh"
-  seed_vendor_ok "${home}/.osac-ai-skills"
-  seed_ai_workflows "${home}/.ai-workflows"
-  prepare_osac "$root"
+  docs_dest="${root}/osac-docs"
 
   run_bootstrap "$root" "$home" "$bin" >/dev/null
-  "$REAL_GIT" -C "${root}/osac-docs" remote add fork \
+  "$REAL_GIT" -C "$docs_dest" remote add fork \
     "https://github.com/evilsmokeuser/docs.git"
 
-  local out
   out=$(run_bootstrap_fork "$root" "$home" "$bin" 2>&1) || fail "bootstrap failed: $out"
   echo "$out" | grep -q 'already exists with a different URL' \
     || fail "evilsmokeuser/docs must not count as smokeuser/docs: $out"
-  url=$(git -C "${root}/osac-docs" remote get-url fork)
+  url=$(git -C "$docs_dest" remote get-url fork)
   [[ "$url" == *evilsmokeuser/docs* ]] \
     || fail "must not overwrite an existing mismatched fork remote: $url"
   pass "fork-remote match requires / or : before \$GH_USER/repo"

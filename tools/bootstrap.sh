@@ -98,6 +98,10 @@ else
 fi
 
 OSAC_AI_SKILLS_REPO="osac-project/osac-ai-skills"
+HOME_OSAC_AI_SKILLS="${HOME}/.osac-ai-skills"
+REPO_OSAC_AI_SKILLS="${PROJECT_ROOT}/.osac-ai-skills"
+HOME_AI_WORKFLOWS="${HOME}/.ai-workflows"
+REPO_AI_WORKFLOWS="${PROJECT_ROOT}/.ai-workflows"
 
 # Git-capable check — gates the git fetch/rebase below. tools/link-agent-skills.sh's
 # resolve_osac_ai_skills_dir() intentionally uses a weaker, content-based check
@@ -141,24 +145,24 @@ update_git_repo() {
 
 # --- osac-ai-skills ---
 
-if [[ -d "${HOME}/.osac-ai-skills" ]] && osac_ai_skills_vendor_ok "${HOME}/.osac-ai-skills"; then
-  OSAC_AI_SKILLS_DIR="$(readlink -f "${HOME}/.osac-ai-skills")"
+if [[ -d "${HOME_OSAC_AI_SKILLS}" ]] && osac_ai_skills_vendor_ok "${HOME_OSAC_AI_SKILLS}"; then
+  OSAC_AI_SKILLS_DIR="$(readlink -f "${HOME_OSAC_AI_SKILLS}")"
   echo "Updating osac-ai-skills (${OSAC_AI_SKILLS_DIR})..."
   update_git_repo "${OSAC_AI_SKILLS_DIR}" "osac-ai-skills"
-elif [[ -d "${PROJECT_ROOT}/.osac-ai-skills" ]] && osac_ai_skills_vendor_ok "${PROJECT_ROOT}/.osac-ai-skills"; then
-  OSAC_AI_SKILLS_DIR="${PROJECT_ROOT}/.osac-ai-skills"
+elif [[ -d "${REPO_OSAC_AI_SKILLS}" ]] && osac_ai_skills_vendor_ok "${REPO_OSAC_AI_SKILLS}"; then
+  OSAC_AI_SKILLS_DIR="${REPO_OSAC_AI_SKILLS}"
   echo "Updating osac-ai-skills (.osac-ai-skills)..."
   update_git_repo "${OSAC_AI_SKILLS_DIR}" "osac-ai-skills"
-elif [[ -d "${PROJECT_ROOT}/.osac-ai-skills" ]]; then
-  echo "ERROR: ${PROJECT_ROOT}/.osac-ai-skills exists but is not a usable vendor checkout." >&2
+elif [[ -d "${REPO_OSAC_AI_SKILLS}" ]]; then
+  echo "ERROR: ${REPO_OSAC_AI_SKILLS} exists but is not a usable vendor checkout." >&2
   echo "Expected a git clone with skills/ and an executable tools/link-agent-skills.sh." >&2
   echo "Remove or rename that directory, then re-run tools/bootstrap.sh to clone a fresh copy." >&2
   exit 1
 else
-  if [[ -d "${HOME}/.osac-ai-skills" ]]; then
-    echo "  ${HOME}/.osac-ai-skills exists but is not a usable vendor checkout; using ${PROJECT_ROOT}/.osac-ai-skills"
+  if [[ -d "${HOME_OSAC_AI_SKILLS}" ]]; then
+    echo "  ${HOME_OSAC_AI_SKILLS} exists but is not a usable vendor checkout; using ${REPO_OSAC_AI_SKILLS}"
   fi
-  OSAC_AI_SKILLS_DIR="${PROJECT_ROOT}/.osac-ai-skills"
+  OSAC_AI_SKILLS_DIR="${REPO_OSAC_AI_SKILLS}"
   echo "Cloning osac-ai-skills..."
   git clone "https://github.com/${OSAC_AI_SKILLS_REPO}.git" "${OSAC_AI_SKILLS_DIR}"
 fi
@@ -168,16 +172,16 @@ AI_WORKFLOWS_DIR=""
 
 # --- ai-workflows (flightctl) ---
 
-if [[ -d "${HOME}/.ai-workflows" ]]; then
-  AI_WORKFLOWS_DIR="$(readlink -f "${HOME}/.ai-workflows")"
+if [[ -d "${HOME_AI_WORKFLOWS}" ]]; then
+  AI_WORKFLOWS_DIR="$(readlink -f "${HOME_AI_WORKFLOWS}")"
   echo "Updating ai-workflows (${AI_WORKFLOWS_DIR})..."
   update_git_repo "${AI_WORKFLOWS_DIR}" "ai-workflows"
-elif [[ -d "${PROJECT_ROOT}/.ai-workflows" ]]; then
-  AI_WORKFLOWS_DIR="${PROJECT_ROOT}/.ai-workflows"
+elif [[ -d "${REPO_AI_WORKFLOWS}" ]]; then
+  AI_WORKFLOWS_DIR="${REPO_AI_WORKFLOWS}"
   echo "Updating ai-workflows (.ai-workflows)..."
   update_git_repo "${AI_WORKFLOWS_DIR}" "ai-workflows"
 else
-  AI_WORKFLOWS_DIR="${PROJECT_ROOT}/.ai-workflows"
+  AI_WORKFLOWS_DIR="${REPO_AI_WORKFLOWS}"
   echo "Cloning ai-workflows..."
   git clone "https://github.com/${AI_WORKFLOWS_REPO}.git" "${AI_WORKFLOWS_DIR}"
 fi

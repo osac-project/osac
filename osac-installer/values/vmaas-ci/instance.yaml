@@ -31,6 +31,15 @@ operator:
   tenants:
   - name: shared
   - name: osac-e2e-ci
+  # VMaaS has no physical fabric. Register k8s_only so the dispatcher can
+  # stamp ExternalIP/VN/SG onto the composite role (CUDN + NetworkPolicy +
+  # MetalLB L2) instead of fabricManager cudn_net, which cannot provision
+  # ExternalIP pools.
+  networkManagers:
+    k8sManagers:
+      k8s_only:
+        enabled: true
+        capabilities: "ipv4,ipv6,dualStack"
 
 # --- Fulfillment Service ---
 service:
@@ -205,3 +214,16 @@ metering:
 # --- LVMS StorageBackend registration ---
 lvms:
   enabled: true
+
+# Default NetworkClass for VMaaS-without-fabric. Created after AAP
+# publish-templates (hook weight 25 vs 20). AAP still publishes a cudn_net
+# class; this Create becomes the default (fabric_manager is immutable once
+# set, so the published class cannot be retargeted).
+networkClass:
+  enabled: true
+  title: "K8s-only networking"
+  description: >-
+    VMaaS overlay without a physical fabric. VirtualNetwork/Subnet use CUDN,
+    SecurityGroup uses NetworkPolicy, ExternalIP uses MetalLB L2.
+  k8sManager: "k8s_only"
+  isDefault: true

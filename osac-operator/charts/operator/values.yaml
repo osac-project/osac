@@ -98,9 +98,10 @@ networkManagers:
     cudn_net:
       enabled: true
       description: >-
-        CUDN-based isolated networking (ClusterUserDefinedNetwork). Self-contained
-        VirtualNetwork/Subnet provisioning with no separate physical fabric to
-        bridge into — used as the platform default NetworkClass.
+        CUDN-based isolated networking (ClusterUserDefinedNetwork). Leaf overlay
+        role for VirtualNetwork/Subnet — not a physical fabric manager. VMaaS
+        without a fabric uses k8sManagers.k8s_only as the NetworkClass manager,
+        which delegates overlay work here.
       capabilities: "ipv4,ipv6,dualStack"
   k8sManagers:
     k8s_only:

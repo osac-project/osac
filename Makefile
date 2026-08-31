@@ -15,13 +15,13 @@ image: ## Build the distrobox image
 
 enter: image ## Enter the distrobox (creates it on first run)
 	@if ! distrobox list --no-color 2>/dev/null | awk -F'|' 'NR>1{gsub(/^ +| +$$/,"",$$2); print $$2}' | grep -Fxq "$(DISTROBOX_NAME)"; then \
-		distrobox create --image $(IMAGE_NAME) --name $(DISTROBOX_NAME) --home $(HOME_DIR); \
+		distrobox create --image $(IMAGE_NAME) --name $(DISTROBOX_NAME) --home "$(HOME_DIR)"; \
 	fi
 	distrobox enter $(DISTROBOX_NAME)
 
 claude: image ## Run Claude Code inside distrobox (ARGS="--flag" to pass flags)
 	@if ! distrobox list --no-color 2>/dev/null | awk -F'|' 'NR>1{gsub(/^ +| +$$/,"",$$2); print $$2}' | grep -Fxq "$(DISTROBOX_NAME)"; then \
-		distrobox create --image $(IMAGE_NAME) --name $(DISTROBOX_NAME) --home $(HOME_DIR); \
+		distrobox create --image $(IMAGE_NAME) --name $(DISTROBOX_NAME) --home "$(HOME_DIR)"; \
 	fi
 	distrobox enter $(DISTROBOX_NAME) -- claude $(ARGS)
 

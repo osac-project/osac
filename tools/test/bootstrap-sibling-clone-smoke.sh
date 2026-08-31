@@ -414,6 +414,28 @@ test_expected_sibling_requires_org_boundary() {
   pass "expected-clone match requires / or : before osac-project"
 }
 
+test_expected_sibling_requires_origin_remote() {
+  local home root bin home_skills home_workflows repo_skills clone_log out ep
+  prepare_fixture origin-only
+  ep="${root}/enhancement-proposals"
+
+  run_bootstrap "$root" "$home" "$bin" >/dev/null
+  "$REAL_GIT" -C "$ep" remote set-url origin \
+    "https://github.com/unrelated/enhancement-proposals.git"
+  "$REAL_GIT" -C "$ep" remote add extra \
+    "https://github.com/osac-project/enhancement-proposals.git"
+  echo keep > "${ep}/keep-me"
+
+  out=$(run_bootstrap "$root" "$home" "$bin" 2>&1) || fail "bootstrap failed: $out"
+  echo "$out" | grep -qi 'skip' \
+    || fail "non-origin osac-project remote must not count as expected clone: $out"
+  echo "$out" | grep -q 'Updating enhancement-proposals' \
+    && fail "must not update when origin is unrelated: $out"
+  grep -q keep "${ep}/keep-me" \
+    || fail "dir with unrelated origin was overwritten"
+  pass "expected-clone match uses origin only, not other remotes"
+}
+
 test_missing_gh_without_no_fork_exits() {
   local home root bin home_skills home_workflows repo_skills clone_log out rc=0
   prepare_fixture no-gh
@@ -726,6 +748,7 @@ test_parent_dir_sibling_does_not_rm_external
 test_nested_abort_skips_sibling_clones
 test_failed_clone_cleans_dest
 test_expected_sibling_requires_org_boundary
+test_expected_sibling_requires_origin_remote
 test_missing_gh_without_no_fork_exits
 test_empty_gh_user_without_no_fork_exits
 test_null_gh_user_without_no_fork_exits

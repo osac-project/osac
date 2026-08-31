@@ -240,15 +240,11 @@ SIBLINGS=(
 is_expected_sibling() {
   local dir="$1" repo="$2"
   local expected_suffix="${GITHUB_ORG}/${repo}"
-  local remote url
-  for remote in $(git -C "$dir" remote 2>/dev/null); do
-    url=$(git -C "$dir" remote get-url "$remote" 2>/dev/null) || continue
-    # Require a path or SSH separator so evil-osac-project/<repo> does not match.
-    if [[ "${url%.git}" == *"/${expected_suffix}" || "${url%.git}" == *":${expected_suffix}" ]]; then
-      return 0
-    fi
-  done
-  return 1
+  local url
+  url=$(git -C "$dir" remote get-url origin 2>/dev/null) || return 1
+  # Require a path or SSH separator so evil-osac-project/<repo> does not match.
+  # origin only: update_git_repo rebases origin/main, so any other remote is irrelevant.
+  [[ "${url%.git}" == *"/${expected_suffix}" || "${url%.git}" == *":${expected_suffix}" ]]
 }
 
 get_fork_url() {

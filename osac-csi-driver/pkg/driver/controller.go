@@ -132,15 +132,24 @@ func (c *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 
 	klog.Infof("CreateVolume succeeded: volumeId=%s backend=%s", vol.ID, vol.Backend)
 
+	// vol.VendorContext carries opaque, backend-specific attach parameters (e.g. VAST's
+	// "subsystem" and "vip_pool_name"). Kubernetes caches this VolumeContext and replays it
+	// unchanged on ControllerPublishVolume/NodeStageVolume, which is how those calls learn the
+	// vendor parameters they need without this driver having to understand what they mean.
+	volumeContext := map[string]string{
+		"osac.backend":   vol.Backend,
+		"osac.volume-id": vol.VendorVolumeID,
+		"osac.protocol":  vol.Protocol,
+	}
+	for k, v := range vol.VendorContext {
+		volumeContext[k] = v
+	}
+
 	return &csi.CreateVolumeResponse{
 		Volume: &csi.Volume{
 			VolumeId:      vol.ID,
 			CapacityBytes: vol.CapacityBytes,
-			VolumeContext: map[string]string{
-				"osac.backend":   vol.Backend,
-				"osac.volume-id": vol.VendorVolumeID,
-				"osac.protocol":  vol.Protocol,
-			},
+			VolumeContext: volumeContext,
 		},
 	}, nil
 }

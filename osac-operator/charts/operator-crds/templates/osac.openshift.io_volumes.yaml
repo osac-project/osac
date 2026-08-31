@@ -195,6 +195,16 @@ spec:
                   Protocol is the storage protocol used for this volume.
                   Resolved during tier resolution at creation time.
                 type: string
+              vendorContext:
+                additionalProperties:
+                  type: string
+                description: |-
+                  VendorContext holds backend-specific attach parameters needed by the vendor CSI controller
+                  (for example VAST's "subsystem" and "vip_pool_name"). Opaque to the operator's own
+                  reconciliation logic: set from the same parameters used for the vendor CreateVolume call,
+                  synced to fulfillment-service by the feedback controller, and forwarded unchanged by
+                  osac-csi-driver to the vendor CSI controller's ControllerPublishVolume.
+                type: object
               vendorVolumeID:
                 description: |-
                   VendorVolumeID is the opaque identifier assigned by the vendor storage array.

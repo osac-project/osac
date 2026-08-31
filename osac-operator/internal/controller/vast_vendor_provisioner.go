@@ -184,6 +184,10 @@ func (p *VastVendorProvisioner) CreateVolume(ctx context.Context, req VendorCrea
 		VendorVolumeID: vol.GetVolumeId(),
 		Backend:        req.Backend,
 		Protocol:       string(v1alpha1.VolumeProtocolBlock),
+		// ControllerPublishVolume needs the same subsystem/tenant_name/vip_pool_* parameters
+		// CreateVolume used -- csiReq.Parameters already has exactly those, so reuse it rather than
+		// re-deriving a second copy that could drift out of sync.
+		VendorContext: csiReq.Parameters,
 	}, nil
 }
 

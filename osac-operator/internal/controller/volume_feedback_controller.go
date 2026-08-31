@@ -153,15 +153,18 @@ func syncVolumePhase(ctx context.Context, obj *v1alpha1.Volume, remote *privatev
 	}
 }
 
-// syncVolumeVendorFields copies the vendor-assigned identifiers from the CR
-// status to the proto status so the fulfillment-service inventory reflects
-// the actual storage array state.
+// syncVolumeVendorFields copies the vendor-assigned identifiers (and vendor
+// attach context) from the CR status to the proto status so the
+// fulfillment-service inventory reflects the actual storage array state.
 func syncVolumeVendorFields(ctx context.Context, obj *v1alpha1.Volume, remote *privatev1.Volume) {
 	if obj.Status.VendorVolumeID != "" {
 		remote.GetStatus().SetVendorVolumeId(obj.Status.VendorVolumeID)
 	}
 	if obj.Status.Backend != "" {
 		remote.GetStatus().SetBackend(obj.Status.Backend)
+	}
+	if len(obj.Status.VendorContext) > 0 {
+		remote.GetStatus().SetVendorContext(obj.Status.VendorContext)
 	}
 	if obj.Status.Protocol != "" {
 		// Only sync a protocol the switch recognizes. An unrecognized CRD value

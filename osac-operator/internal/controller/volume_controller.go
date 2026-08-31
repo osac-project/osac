@@ -82,6 +82,13 @@ type VendorCreateVolumeResponse struct {
 	VendorVolumeID string
 	Backend        string
 	Protocol       string
+
+	// VendorContext holds the backend-specific attach parameters used for this vendor's
+	// CreateVolume call (for example VAST's "subsystem" and "vip_pool_name"). Opaque to the
+	// operator: synced to fulfillment-service and forwarded unchanged by osac-csi-driver to the
+	// vendor CSI controller's ControllerPublishVolume, since that call needs the same parameters
+	// CreateVolume used and has no other way to obtain them.
+	VendorContext map[string]string
 }
 
 // VendorDeleteVolumeRequest identifies the vendor volume to deprovision. Tenant
@@ -257,6 +264,7 @@ func (r *VolumeReconciler) handleProvisioning(ctx context.Context, vol *v1alpha1
 	vol.Status.VendorVolumeID = resp.VendorVolumeID
 	vol.Status.Backend = resp.Backend
 	vol.Status.Protocol = v1alpha1.VolumeProtocol(resp.Protocol)
+	vol.Status.VendorContext = resp.VendorContext
 	vol.Status.Phase = v1alpha1.VolumePhaseReady
 	setVendorProvisionedCondition(&vol.Status.Conditions, metav1.ConditionTrue, "Provisioned", "Volume provisioned on vendor storage array")
 

@@ -122,4 +122,10 @@ message VolumeStatus {
   // Identifier of the hub cluster where the Volume CR is created. Set by the fulfillment-service
   // reconciler when selecting the hub. Used to look up the hub connection during delete.
   string hub = 6;
+
+  // Backend-specific attach parameters needed by the vendor CSI controller (for example VAST's
+  // "subsystem" and "vip_pool_name"). Opaque to fulfillment-service and osac-csi-driver: set by
+  // the osac-operator from the same parameters it used for the vendor CreateVolume call, and
+  // forwarded unchanged by osac-csi-driver to the vendor CSI controller's ControllerPublishVolume.
+  map<string, string> vendor_context = 7;
 }

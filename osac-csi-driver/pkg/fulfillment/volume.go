@@ -22,6 +22,12 @@ type VolumeInfo struct {
 	VendorVolumeID string
 	Protocol       string
 	CapacityBytes  int64
+
+	// VendorContext holds backend-specific attach parameters (for example VAST's "subsystem" and
+	// "vip_pool_name") needed by the vendor CSI controller's ControllerPublishVolume. Opaque to
+	// this driver: set by the osac-operator at provisioning time and merged unchanged into
+	// CreateVolume's CSI VolumeContext response so Kubernetes replays it on later attach calls.
+	VendorContext map[string]string
 }
 
 // CreateVolumeParams are the parameters for creating a volume through the

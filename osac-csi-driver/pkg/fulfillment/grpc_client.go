@@ -183,6 +183,7 @@ func volumeToInfo(v *privatev1.Volume) *VolumeInfo {
 		info.Backend = st.GetBackend()
 		info.VendorVolumeID = st.GetVendorVolumeId()
 		info.Protocol = fromProtoProtocol(st.GetProtocol())
+		info.VendorContext = st.GetVendorContext()
 	}
 	return info
 }

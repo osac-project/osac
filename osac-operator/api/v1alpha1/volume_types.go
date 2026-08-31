@@ -117,6 +117,14 @@ type VolumeStatus struct {
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Enum=Block;NFS
 	Protocol VolumeProtocol `json:"protocol,omitempty"`
+
+	// VendorContext holds backend-specific attach parameters needed by the vendor CSI controller
+	// (for example VAST's "subsystem" and "vip_pool_name"). Opaque to the operator's own
+	// reconciliation logic: set from the same parameters used for the vendor CreateVolume call,
+	// synced to fulfillment-service by the feedback controller, and forwarded unchanged by
+	// osac-csi-driver to the vendor CSI controller's ControllerPublishVolume.
+	// +kubebuilder:validation:Optional
+	VendorContext map[string]string `json:"vendorContext,omitempty"`
 }
 
 // +kubebuilder:object:root=true

@@ -594,7 +594,7 @@ _osac_ui_source_from_manifest() {
 # everyone, rather than something you have to know to go look for.
 build_slack_images_published_summary() {
     local images_file="$1"
-    local content
+    local content truncated last_line_boundary
 
     if [[ ! -f "${images_file}" ]]; then
         echo "::warning title=build_slack_images_published_summary::images.txt not found: ${images_file}" >&2
@@ -605,9 +605,16 @@ build_slack_images_published_summary() {
     # Slack's own block.text.text limit is 3000 chars; images.txt isn't
     # expected to get anywhere near that today, but truncate defensively
     # rather than have the whole Slack API call fail on some future
-    # component explosion.
+    # component explosion. Cut at the last newline at or before the limit
+    # (not a hard byte count) so a truncated message never ends mid-line
+    # with a broken, unusable image reference.
     if (( ${#content} > 2800 )); then
-        content="${content:0:2800}"$'\n... (truncated -- see the workflow run artifact for the full list)'
+        truncated="${content:0:2800}"
+        last_line_boundary="${truncated%$'\n'*}"
+        if [[ "${last_line_boundary}" != "${truncated}" ]]; then
+            truncated="${last_line_boundary}"
+        fi
+        content="${truncated}"$'\n... (truncated -- see the workflow run artifact for the full list)'
     fi
 
     printf '*Images published:*\n```\n%s\n```' "${content}"

@@ -40,7 +40,7 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       with:
         ref: ${{ github.sha }}
         fetch-depth: 0
@@ -90,7 +90,7 @@ jobs:
     # a local checkout of the pinned commit, not the file content (that's
     # separately checked out again in publish, which packages its chart).
     - name: Checkout osac-ui at pinned SHA
-      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       with:
         repository: osac-project/osac-ui
         ref: ${{ steps.ui.outputs.sha }}
@@ -376,7 +376,7 @@ jobs:
             version_arg: true
     steps:
     - name: Checkout temporary branch
-      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       with:
         ref: ${{ needs.prepare.outputs.temp-branch }}
         fetch-depth: 0
@@ -556,7 +556,7 @@ jobs:
 
     steps:
     - name: Checkout temporary branch
-      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       with:
         ref: ${{ needs.prepare.outputs.temp-branch }}
         fetch-depth: 0
@@ -567,7 +567,7 @@ jobs:
     # and records it in osac-installer/pinned/osac-ui.commit on the temp branch.
     # Publish reuses that exact commit — do not checkout ref: main here.
     - name: Checkout osac-ui at pinned SHA
-      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       with:
         repository: osac-project/osac-ui
         ref: ${{ needs.prepare.outputs.ui-sha }}
@@ -865,7 +865,7 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
       with:
         ref: ${{ needs.prepare.outputs.temp-branch }}
         fetch-depth: 0
@@ -976,7 +976,7 @@ jobs:
     - name: Checkout repository
       # Only needed to resolve the local ./.github/actions/vault-slack-webhook
       # composite action -- no chart/script content is used in this job.
-      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
 
     - name: Retrieve Slack webhook from Vault
       id: vault

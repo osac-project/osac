@@ -1,12 +1,9 @@
 namespace: osac-csi
-
 driverName: csi.osac.openshift.io
-
 image:
   repository: ghcr.io/osac-project/osac-csi-driver
-  tag: main  # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
+  tag: sha-a2f7bab # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
   pullPolicy: Always
-
 controller:
   replicas: 1
   clusterID: ""
@@ -58,7 +55,6 @@ controller:
       cpu: 100m
       memory: 128Mi
   leaderElection: true
-
 node:
   privileged: true
   vendorSockets: ""
@@ -69,7 +65,6 @@ node:
     requests:
       cpu: 100m
       memory: 128Mi
-
 sidecars:
   provisioner:
     image:
@@ -83,7 +78,6 @@ sidecars:
     image:
       repository: registry.k8s.io/sig-storage/csi-node-driver-registrar
       tag: v2.12.0
-
 serviceAccount:
   controller:
     create: true
@@ -91,7 +85,6 @@ serviceAccount:
   node:
     create: true
     name: ""
-
 vendors:
   trident:
     enabled: false
@@ -102,7 +95,6 @@ vendors:
       certsSecret: ""
     node:
       socketPath: /var/lib/kubelet/plugins/csi.trident.netapp.io
-
   vast:
     enabled: false
     image:
@@ -117,7 +109,6 @@ vendors:
       credentialsSecret: ""
     node:
       socketPath: /var/lib/kubelet/plugins/csi.vast.vastdata.com
-
   pure:
     enabled: false
     image:

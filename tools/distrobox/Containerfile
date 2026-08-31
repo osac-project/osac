@@ -1,0 +1,101 @@
+# Distrobox-compatible development container for the osac mono-repo.
+# Usage (from repo root):
+#   make enter
+#   # or: podman build -t osac-dev -f tools/distrobox/Containerfile tools/distrobox
+#
+# Inside the container, Claude Code and all dev tools are available.
+#
+# Rootful podman (host socket for kind / nested containers):
+#   On the host, run once from the osac repo root:
+#     sudo install -d /etc/systemd/system/podman.socket.d
+#     sudo install -m 0644 tools/distrobox/podman-socket-rootful.conf \
+#       /etc/systemd/system/podman.socket.d/rootful-group.conf
+#     sudo chgrp wheel /run/podman && sudo chmod 710 /run/podman
+#     sudo systemctl daemon-reload && sudo systemctl restart podman.socket
+
+# Fedora 42 — pinned to digest; bump with: skopeo inspect docker://registry.fedoraproject.org/fedora:42
+FROM registry.fedoraproject.org/fedora@sha256:63773f454664cd77e239f8e0b13ae7f18effe9e3d6612a325b5646eb3bda11f1
+
+# --- DNF packages (distrobox compat + dev tools) ---
+RUN dnf install -y \
+    bash bc bzip2 curl diffutils dnf-plugins-core findutils git gnupg2 \
+    hostname iproute iputils keyutils less lsof man-db man-pages \
+    mesa-dri-drivers mesa-vulkan-drivers ncurses nss-mdns openssh-clients \
+    openssl passwd pinentry pigz procps-ng rsync shadow-utils sudo tar time \
+    tree unzip util-linux vte-profile wget which words xorg-x11-xauth xz \
+    zip zsh \
+    nodejs npm python3 python3-pip python3-pyyaml \
+    make gcc gcc-c++ jq ripgrep \
+    'dnf-command(config-manager)' \
+    && dnf config-manager addrepo --from-repofile=https://cli.github.com/packages/rpm/gh-cli.repo \
+    && dnf install -y gh \
+    && dnf clean all
+
+# --- Binary tools (Go, buf, kubectl, kind, jira, grpcurl, ginkgo) ---
+# NOTE: binary downloads target x86_64 only.
+# Each download is verified against the project's published checksum.
+ARG GO_VERSION=1.24.4
+ARG BUF_VERSION=1.50.0
+ARG KUBECTL_VERSION=1.33.1
+ARG KIND_VERSION=0.27.0
+ARG JIRA_VERSION=1.7.0
+ARG GRPCURL_VERSION=1.9.3
+ARG GINKGO_VERSION=2.23.4
+RUN set -e \
+    # -- Go --
+    && curl -fsSLo /tmp/go.tar.gz "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" \
+    && curl -fsSL "https://dl.google.com/go/go${GO_VERSION}.linux-amd64.tar.gz.sha256" \
+       | tr -d '[:space:]' > /tmp/go.sha256 \
+    && echo "  /tmp/go.tar.gz" >> /tmp/go.sha256 \
+    && sha256sum -c /tmp/go.sha256 \
+    && tar -C /usr/local -xzf /tmp/go.tar.gz \
+    && ln -s /usr/local/go/bin/go /usr/local/bin/go \
+    && ln -s /usr/local/go/bin/gofmt /usr/local/bin/gofmt \
+    && GOBIN=/usr/local/bin go install "github.com/onsi/ginkgo/v2/ginkgo@v${GINKGO_VERSION}" \
+    # -- buf --
+    && curl -fsSLo /tmp/buf.tar.gz "https://github.com/bufbuild/buf/releases/download/v${BUF_VERSION}/buf-Linux-x86_64.tar.gz" \
+    && curl -fsSL "https://github.com/bufbuild/buf/releases/download/v${BUF_VERSION}/sha256.txt" \
+       | grep 'buf-Linux-x86_64.tar.gz' | sed 's|buf-Linux-x86_64.tar.gz|/tmp/buf.tar.gz|' > /tmp/buf.sha256 \
+    && sha256sum -c /tmp/buf.sha256 \
+    && tar -C /usr/local -xzf /tmp/buf.tar.gz --strip-components=1 buf/bin/buf buf/bin/protoc-gen-buf-breaking buf/bin/protoc-gen-buf-lint \
+    # -- kubectl --
+    && curl -fsSLo /usr/local/bin/kubectl \
+       "https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
+    && curl -fsSL "https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/amd64/kubectl.sha256" \
+       | tr -d '[:space:]' > /tmp/kubectl.sha256 \
+    && echo "  /usr/local/bin/kubectl" >> /tmp/kubectl.sha256 \
+    && sha256sum -c /tmp/kubectl.sha256 \
+    && chmod +x /usr/local/bin/kubectl \
+    # -- kind --
+    && curl -fsSLo /usr/local/bin/kind \
+       "https://github.com/kubernetes-sigs/kind/releases/download/v${KIND_VERSION}/kind-linux-amd64" \
+    && curl -fsSL "https://github.com/kubernetes-sigs/kind/releases/download/v${KIND_VERSION}/kind-linux-amd64.sha256sum" \
+       | sed 's|kind-linux-amd64|/usr/local/bin/kind|' > /tmp/kind.sha256 \
+    && sha256sum -c /tmp/kind.sha256 \
+    && chmod +x /usr/local/bin/kind \
+    # -- jira --
+    && curl -fsSLo /tmp/jira.tar.gz "https://github.com/ankitpokhrel/jira-cli/releases/download/v${JIRA_VERSION}/jira_${JIRA_VERSION}_linux_x86_64.tar.gz" \
+    && curl -fsSL "https://github.com/ankitpokhrel/jira-cli/releases/download/v${JIRA_VERSION}/checksums.txt" \
+       | grep "jira_${JIRA_VERSION}_linux_x86_64.tar.gz" | sed "s|jira_${JIRA_VERSION}_linux_x86_64.tar.gz|/tmp/jira.tar.gz|" > /tmp/jira.sha256 \
+    && sha256sum -c /tmp/jira.sha256 \
+    && tar -C /usr/local/bin -xzf /tmp/jira.tar.gz --strip-components=2 --wildcards '*/bin/jira' \
+    && chmod +x /usr/local/bin/jira \
+    # -- grpcurl --
+    && curl -fsSLo /tmp/grpcurl.tar.gz "https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}/grpcurl_${GRPCURL_VERSION}_linux_x86_64.tar.gz" \
+    && curl -fsSL "https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}/grpcurl_${GRPCURL_VERSION}_checksums.txt" \
+       | grep "grpcurl_${GRPCURL_VERSION}_linux_x86_64.tar.gz" | sed "s|grpcurl_${GRPCURL_VERSION}_linux_x86_64.tar.gz|/tmp/grpcurl.tar.gz|" > /tmp/grpcurl.sha256 \
+    && sha256sum -c /tmp/grpcurl.sha256 \
+    && tar -C /usr/local/bin --no-same-owner -xzf /tmp/grpcurl.tar.gz grpcurl \
+    && chmod +x /usr/local/bin/grpcurl \
+    # -- cleanup --
+    && rm -f /tmp/*.tar.gz /tmp/*.sha256
+
+# --- Language-level packages (pip, npm) ---
+RUN pip3 install --no-cache-dir pytest ansible \
+    && npm install -g @anthropic-ai/claude-code
+
+# --- podman wrapper (delegates to host via distrobox-host-exec) ---
+# Supports rootful mode: set PODMAN_ROOTFUL=1 to use the system podman socket.
+# Requires the host to have the socket group override installed (see header).
+COPY podman-wrapper.sh /usr/local/bin/podman
+RUN chmod +x /usr/local/bin/podman

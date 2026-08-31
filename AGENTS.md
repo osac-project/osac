@@ -14,11 +14,31 @@ OSAC (Open Sovereign AI Cloud) is a fulfillment system for provisioning Kubernet
 
 ## Dev Environment
 
-Local toolchain: install Go, Node.js, buf, kubectl, kind, jira CLI, gh CLI, and jq.
+### Distrobox (recommended)
 
-For a local Kind cluster, see `osac-installer/AGENTS.md` (`PLATFORM=kind`, e.g. `make test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment`) and `fulfillment-service/README.md` for service-level setup. Distrobox/Containerfile tooling lives in `osac-workspace` and is not ported here.
+All dev tools are packaged in a Fedora 42 container (`tools/distrobox/Containerfile`). Requires `podman` and `distrobox`.
+
+```bash
+make enter                     # Build image and enter distrobox
+make status                    # Check image and distrobox status
+make rebuild                   # Rebuild image from scratch
+```
+
+The distrobox shares your home directory by default (override with `HOME_DIR`). See `make help`.
+
+### Local toolchain
+
+Install Go, Node.js, buf, kubectl, kind, jira CLI, gh CLI, and jq.
+
+### Local Kind cluster
+
+See `osac-installer/AGENTS.md` (`PLATFORM=kind`, e.g. `make test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment`) and `fulfillment-service/README.md` for service-level setup.
 
 After clone, run `tools/bootstrap.sh` to vendor AI skills and workflows (see [AI-Assisted Development](#ai-assisted-development)).
+
+### Parallel worktrees
+
+Source [`tools/osac-helpers.sh`](tools/osac-helpers.sh) and run `osac-new-worktree <branch>` from this repo. It adds a sibling worktree (`../osac-<branch-basename>`), runs `tools/bootstrap.sh` there, and appends Jira context to `.claude/CLAUDE.md` when the branch name contains `OSAC-NNNN`. Override the parent directory with `OSAC_WORKTREE_PARENT`. Clean up with `git worktree remove ../osac-<suffix>`.
 
 ## Components
 

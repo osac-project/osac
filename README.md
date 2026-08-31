@@ -56,6 +56,28 @@ The Feature → PRD → Design → Jira sync → Implement → E2E sequence is d
 `.osac-ai-skills/README.md`). See [`AGENTS.md`](AGENTS.md)
 for bootstrap details and component conventions.
 
+## Distrobox
+
+Requires [podman](https://podman.io/) and [distrobox](https://distrobox.it/). From this repo root:
+
+```bash
+make enter                     # Build image and enter
+make claude                    # Run Claude Code inside the distrobox
+make status
+make rebuild
+```
+
+The image lives in `tools/distrobox/`. It shares `$HOME` by default (`HOME_DIR` to override).
+
+## Parallel worktrees
+
+```bash
+source tools/osac-helpers.sh
+osac-new-worktree feat/OSAC-1234
+```
+
+Creates `../osac-OSAC-1234`, checks out the new branch, and runs `tools/bootstrap.sh`. Remove with `git worktree remove ../osac-OSAC-1234` from the original clone.
+
 > [!WARNING]
 > Be mindful of the content you commit to this repository. Do not commit any
 > material containing Red Hat confidential content, including information about

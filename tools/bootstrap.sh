@@ -92,6 +92,11 @@ if [[ "$NO_FORK" == false ]]; then
     exit 1
   fi
   GH_USER=$(gh api user -q .login)
+  if [[ -z "$GH_USER" ]]; then
+    echo "ERROR: gh API returned an empty GitHub username." >&2
+    echo "Cannot construct fork URLs. Run 'gh auth login' or use --no-fork for read-only clone." >&2
+    exit 1
+  fi
   GIT_PROTOCOL=$(gh config get git_protocol 2>/dev/null || echo "https")
   echo "Bootstrapping OSAC for GitHub user: ${GH_USER}"
 else

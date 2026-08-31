@@ -921,28 +921,37 @@ jobs:
 
         WORKFLOW_URL="${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
         SUMMARY_TEXT=$(build_slack_charts_published_summary nightly-artifacts/chart-sources.txt "${REPO_OWNER}")
+        IMAGES_TEXT=$(build_slack_images_published_summary nightly-artifacts/images.txt)
 
         jq -n \
           --arg version "${VERSION}" \
           --arg summary "${SUMMARY_TEXT}" \
+          --arg images "${IMAGES_TEXT}" \
           --arg workflow_url "${WORKFLOW_URL}" \
           '{
-            "blocks": [
-              {
-                "type": "header",
-                "text": {"type": "plain_text", "text": (":white_check_mark: Nightly Build " + $version + " - Published")}
-              },
-              {
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": $summary}
-              },
-              {
-                "type": "actions",
-                "elements": [
-                  {"type": "button", "text": {"type": "plain_text", "text": "View Run"}, "url": $workflow_url}
-                ]
-              }
-            ]
+            "blocks": (
+              [
+                {
+                  "type": "header",
+                  "text": {"type": "plain_text", "text": (":white_check_mark: Nightly Build " + $version + " - Published")}
+                },
+                {
+                  "type": "section",
+                  "text": {"type": "mrkdwn", "text": $summary}
+                }
+              ]
+              # Slack rejects a section with empty text -- omit it entirely
+              # rather than send one if images.txt was somehow unavailable.
+              + (if $images != "" then [{"type": "section", "text": {"type": "mrkdwn", "text": $images}}] else [] end)
+              + [
+                {
+                  "type": "actions",
+                  "elements": [
+                    {"type": "button", "text": {"type": "plain_text", "text": "View Run"}, "url": $workflow_url}
+                  ]
+                }
+              ]
+            )
           }' > /tmp/slack-payload.json
 
         curl -sf --max-time 15 -X POST "${SLACK_WEBHOOK_URL}" \

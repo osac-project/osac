@@ -584,6 +584,35 @@ _osac_ui_source_from_manifest() {
     done < "${manifest_file}"
 }
 
+# Usage: build_slack_images_published_summary <images_file>
+# Wraps images.txt's content in a fenced code block for Slack -- same
+# rationale as build_slack_charts_published_summary's table: unfenced,
+# Slack reflows the plain-text list into a proportional font and long
+# image refs wrap awkwardly. This is the one place a nightly's exact,
+# already-promoted image tags show up without downloading the run
+# artifact -- the Slack message a nightly success already sends to
+# everyone, rather than something you have to know to go look for.
+build_slack_images_published_summary() {
+    local images_file="$1"
+    local content
+
+    if [[ ! -f "${images_file}" ]]; then
+        echo "::warning title=build_slack_images_published_summary::images.txt not found: ${images_file}" >&2
+        return 0
+    fi
+
+    content=$(<"${images_file}")
+    # Slack's own block.text.text limit is 3000 chars; images.txt isn't
+    # expected to get anywhere near that today, but truncate defensively
+    # rather than have the whole Slack API call fail on some future
+    # component explosion.
+    if (( ${#content} > 2800 )); then
+        content="${content:0:2800}"$'\n... (truncated -- see the workflow run artifact for the full list)'
+    fi
+
+    printf '*Images published:*\n```\n%s\n```' "${content}"
+}
+
 # Usage: build_slack_charts_published_summary <manifest_file> <repo_owner>
 # Reads GH_TOKEN from environment.
 build_slack_charts_published_summary() {

@@ -257,16 +257,12 @@ func (r *ExternalIPAttachmentReconciler) handleUpdate(ctx context.Context, attac
 	}
 	pool := &poolList.Items[0]
 
-	legacyStrategy := pool.Spec.ImplementationStrategy
-	if legacyStrategy == "" {
-		legacyStrategy = defaultExternalIPPoolImplementationStrategy
-	}
 	networkClassID, err := lookupDefaultNetworkClassID(ctx, r.networkClassesClient)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	implementationStrategy, err := resolveImplementationStrategy(
-		ctx, r.Resolver, "ExternalIPAttachment", networkClassID, legacyStrategy)
+		ctx, r.Resolver, "ExternalIPAttachment", networkClassID, pool.Spec.ImplementationStrategy)
 	if err != nil {
 		return ctrl.Result{}, err
 	}

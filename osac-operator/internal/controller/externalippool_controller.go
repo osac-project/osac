@@ -187,18 +187,14 @@ func (r *ExternalIPPoolReconciler) handleUpdate(ctx context.Context, pool *v1alp
 	}
 
 	// Resolve implementation strategy from the default NetworkClass via the
-	// dispatcher. pool spec.implementationStrategy (then the metallb-l2 constant)
-	// is only used when the dispatcher path is not active.
-	legacyStrategy := pool.Spec.ImplementationStrategy
-	if legacyStrategy == "" {
-		legacyStrategy = defaultExternalIPPoolImplementationStrategy
-	}
+	// dispatcher. pool spec.implementationStrategy is only used as a fallback
+	// when the dispatcher path is not active.
 	networkClassID, err := lookupDefaultNetworkClassID(ctx, r.networkClassesClient)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	implementationStrategy, err := resolveImplementationStrategy(
-		ctx, r.Resolver, "ExternalIPPool", networkClassID, legacyStrategy)
+		ctx, r.Resolver, "ExternalIPPool", networkClassID, pool.Spec.ImplementationStrategy)
 	if err != nil {
 		return ctrl.Result{}, err
 	}

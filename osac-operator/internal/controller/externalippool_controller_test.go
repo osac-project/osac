@@ -217,8 +217,10 @@ var _ = Describe("ExternalIPPoolReconciler", func() {
 			Expect(provisionCalled).To(BeTrue(), "AAP provisioning must be triggered after annotation is stamped")
 		})
 
-		It("should stamp default metallb-l2 annotation when spec.implementationStrategy is empty", func() {
-			// Create a pool that omits ImplementationStrategy (relies on the default).
+		It("should not stamp annotation when no strategy is resolved and spec.implementationStrategy is empty", func() {
+			// Create a pool that omits ImplementationStrategy. With no resolver configured
+			// and no spec.implementationStrategy, no annotation is set (dispatcher must be
+			// configured for a real strategy).
 			poolNoStrategy := &osacv1alpha1.ExternalIPPool{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "pool-no-strategy",
@@ -234,15 +236,16 @@ var _ = Describe("ExternalIPPoolReconciler", func() {
 
 			key := types.NamespacedName{Name: poolNoStrategy.Name, Namespace: poolNoStrategy.Namespace}
 
-			// Pass 1: finalizer + annotation with defaultExternalIPPoolImplementationStrategy.
+			// Pass 1: finalizer. With no resolver and no spec.implementationStrategy,
+			// the resolved strategy is "" and no annotation update occurs (nil != "" is false
+			// because accessing a nil map returns the zero value).
 			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
 			annotated := &osacv1alpha1.ExternalIPPool{}
 			Expect(fakeClient.Get(testCtx, key, annotated)).To(Succeed())
-			Expect(annotated.Annotations).To(HaveKeyWithValue(
-				osacImplementationStrategyAnnotation, defaultExternalIPPoolImplementationStrategy,
-			))
+			// Annotation is not set when the resolved strategy is empty
+			Expect(annotated.Annotations[osacImplementationStrategyAnnotation]).To(Equal(""))
 		})
 
 		It("should set ConfigurationApplied condition to True", func() {

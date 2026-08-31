@@ -325,7 +325,8 @@ var _ = Describe("ExternalIPAttachmentReconciler", func() {
 
 			updated := &osacv1alpha1.ExternalIPAttachment{}
 			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
-			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal(defaultExternalIPPoolImplementationStrategy))
+			// Pool has no spec.implementationStrategy and no resolver is configured, so annotation is ""
+			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal(""))
 		})
 	})
 

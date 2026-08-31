@@ -244,9 +244,9 @@ var _ = Describe("ExternalIPReconciler", func() {
 			Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
 		})
 
-		It("should use default implementation strategy when pool has none", func() {
-			// A pool with no ImplementationStrategy in its spec should fall back
-			// to defaultExternalIPPoolImplementationStrategy ("metallb-l2").
+		It("should use empty implementation strategy when pool has none and no resolver is configured", func() {
+			// A pool with no ImplementationStrategy in its spec and no resolver
+			// configured results in an empty annotation (dispatcher must be configured).
 			poolNoStrategy := &osacv1alpha1.ExternalIPPool{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "pool-no-strategy",
@@ -279,13 +279,13 @@ var _ = Describe("ExternalIPReconciler", func() {
 			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
-			// Pass 2: inherits default strategy since pool has none
+			// Pass 2: no pool spec.implementationStrategy and no resolver, so annotation is ""
 			_, err = reconciler.Reconcile(testCtx, mcreconcile.Request{Request: ctrl.Request{NamespacedName: key}})
 			Expect(err).NotTo(HaveOccurred())
 
 			updated := &osacv1alpha1.ExternalIP{}
 			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
-			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal(defaultExternalIPPoolImplementationStrategy))
+			Expect(updated.Annotations[osacImplementationStrategyAnnotation]).To(Equal(""))
 			Expect(updated.Annotations[osacExternalIPPoolNameAnnotation]).To(Equal("pool-no-strategy"))
 		})
 

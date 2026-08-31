@@ -47,16 +47,6 @@ const (
 	// set on ExternalIP CRs
 	osacExternalIPPoolNameAnnotation = osacPrefix + "/externalippool-name"
 
-	// defaultExternalIPPoolImplementationStrategy is the fallback strategy when none is specified.
-	// Used by ExternalIPPool (from its own spec) and ExternalIP (inherited from parent pool).
-	defaultExternalIPPoolImplementationStrategy = "metallb-l2"
-
-	// defaultSecurityGroupImplementationStrategy is the fallback implementation strategy
-	// for SecurityGroup (standard Kubernetes NetworkPolicy) when neither the SecurityGroup
-	// spec nor the parent VirtualNetwork's NetworkClass (via the dispatcher path) resolve
-	// one.
-	defaultSecurityGroupImplementationStrategy = "network_policy"
-
 	conditionReasonConfigurationApplied  = "ConfigurationApplied"
 	conditionMessageConfigurationApplied = "Controller has processed the current spec"
 

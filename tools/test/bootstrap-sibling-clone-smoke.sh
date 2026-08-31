@@ -566,6 +566,29 @@ test_repo_local_leftover_ai_workflows_errors_without_updating() {
   pass "repo-local leftover .ai-workflows errors without fetch/rebase of osac"
 }
 
+test_repo_local_leftover_osac_ai_skills_errors_without_updating() {
+  local home root bin home_skills home_workflows repo_skills clone_log out leftover rc=0
+  prepare_fixture leftover-repo-skills
+  rm -rf "$home_skills"
+  leftover="${root}/${OSAC_AI_SKILLS_NAME}"
+  "$REAL_GIT" init -q "$root"
+  "$REAL_GIT" -C "$root" checkout -q -b main
+  "$REAL_GIT" -C "$root" -c user.email=smoke@test -c user.name=smoke \
+    commit -q --allow-empty -m osac
+  mkdir -p "$leftover"
+  echo leftover > "${leftover}/not-a-clone"
+
+  out=$(run_bootstrap "$root" "$home" "$bin" 2>&1) || rc=$?
+  [[ "$rc" -eq 1 ]] || fail "leftover .osac-ai-skills expected exit 1, got $rc: $out"
+  echo "$out" | grep -q "not a usable vendor checkout" \
+    || fail "expected leftover vendor error: $out"
+  echo "$out" | grep -q "Updating osac-ai-skills" \
+    && fail "must not update leftover .osac-ai-skills (would git the enclosing repo): $out"
+  grep -q leftover "${leftover}/not-a-clone" \
+    || fail "must not overwrite leftover .osac-ai-skills"
+  pass "repo-local leftover .osac-ai-skills errors without fetch/rebase of osac"
+}
+
 test_home_git_subdir_ai_workflows_falls_back_to_repo_local() {
   local home root bin home_skills home_workflows repo_skills clone_log out repo_wf
   prepare_fixture leftover-home-wf
@@ -610,6 +633,7 @@ test_skips_update_when_sibling_not_on_main
 test_fork_remote_match_requires_user_boundary
 test_home_git_subdir_skills_falls_back_to_repo_local
 test_repo_local_leftover_ai_workflows_errors_without_updating
+test_repo_local_leftover_osac_ai_skills_errors_without_updating
 test_home_git_subdir_ai_workflows_falls_back_to_repo_local
 
 echo "All bootstrap sibling-clone smoke tests passed."

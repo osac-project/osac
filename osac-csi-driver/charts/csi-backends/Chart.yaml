@@ -2,4 +2,5 @@ apiVersion: v2
 name: csi-backends
 description: Vendor CSI controller deployments for the OSAC CSI meta-driver
 type: application
-version: 0.0.0
+version: 0.0.1-nightly.20260831.4148211.57.1
+appVersion: 0.0.1-nightly.20260831.4148211.57.1

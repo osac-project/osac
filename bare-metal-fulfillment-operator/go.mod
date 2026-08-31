@@ -9,7 +9,7 @@ require (
 	github.com/metal3-io/baremetal-operator/apis v0.13.3
 	github.com/onsi/ginkgo/v2 v2.32.1
 	github.com/onsi/gomega v1.42.1
-	github.com/osac-project/osac/osac-operator v0.0.10
+	github.com/osac-project/osac/osac-operator v0.0.12
 	github.com/osac-project/osac/osac-operator/api v0.0.7
 	github.com/prometheus/client_golang v1.24.1
 	github.com/stmcginnis/gofish v0.24.0

@@ -43,9 +43,19 @@ class GRPCClient:
     def call(self, *, service: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
         return json.loads(run(*self._build_args(service=service, data=data)))
 
-    def create_compute_instance(self, *, catalog_item: str, subnet_ids: list[str], name: str | None = None) -> str:
+    def create_compute_instance(
+        self,
+        *,
+        catalog_item: str,
+        subnet_ids: list[str],
+        name: str | None = None,
+        boot_disk_storage_tier: str | None = None,
+    ) -> str:
         attachments = [{"subnet": {"id": sid}} for sid in subnet_ids]
-        obj: dict[str, Any] = {"spec": {"catalog_item": {"id": catalog_item}, "network_attachments": attachments}}
+        spec: dict[str, Any] = {"catalog_item": {"id": catalog_item}, "network_attachments": attachments}
+        if boot_disk_storage_tier is not None:
+            spec["boot_disk"] = {"storage_tier": boot_disk_storage_tier}
+        obj: dict[str, Any] = {"spec": spec}
         if name is not None:
             obj["metadata"] = {"name": name}
         response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.ComputeInstances/Create", data={"object": obj})
@@ -598,6 +608,7 @@ class GRPCClient:
         subnet_ids: list[str],
         instance_type: str | None = None,
         name: str | None = None,
+        boot_disk_storage_tier: str | None = None,
     ) -> dict[str, Any]:
         attachments = [{"subnet": {"id": sid}} for sid in subnet_ids]
         spec: dict[str, Any] = {
@@ -607,6 +618,8 @@ class GRPCClient:
         }
         if instance_type is not None:
             spec["instance_type"] = {"name": instance_type}
+        if boot_disk_storage_tier is not None:
+            spec["boot_disk"] = {"storage_tier": boot_disk_storage_tier}
         obj: dict[str, Any] = {"spec": spec}
         if name is not None:
             obj["metadata"] = {"name": name}

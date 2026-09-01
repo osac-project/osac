@@ -25,6 +25,16 @@ from tests.core.osac_cli import OsacCLI
 from tests.core.runner import env, run
 
 
+@pytest.fixture(scope="session")
+def default_storage_tier() -> str:
+    """Reference installer-provided storage tier.
+
+    Defaults to "local" tier created by osac-installer when lvms.enabled=true.
+    Available to all suites that create ComputeInstances (vmaas, catalog, references).
+    """
+    return env("OSAC_STORAGE_TIER", "local")
+
+
 def pytest_configure(config: pytest.Config) -> None:
     """Give each xdist worker its own log_file so records stay chronologically ordered.
 

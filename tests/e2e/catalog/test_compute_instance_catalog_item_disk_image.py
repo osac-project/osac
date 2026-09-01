@@ -12,7 +12,7 @@ SOURCE_REF = "quay.io/containerdisks/fedora:41"
 
 
 def test_catalog_item_disk_image_default_applied(
-    grpc: GRPCClient, compute_instance_template: str, default_subnet_id: str
+    grpc: GRPCClient, compute_instance_template: str, default_subnet_id: str, default_storage_tier: str
 ) -> None:
     """AC-2 / TC-FR9-01: CatalogItem disk_image field_definition default is applied to the ComputeInstance."""
     di_id: str | None = None
@@ -28,10 +28,12 @@ def test_catalog_item_disk_image_default_applied(
         # network_attachments must also be declared: with field_definitions present, the server
         # (applyFieldDefinitions) allowlists only catalog_item, template, and the declared fd
         # paths, then rejects any other spec leaf. The CI-create below sends network_attachments
-        # (the subnet), so it must be a declared field or the create is rejected InvalidArgument.
+        # (the subnet) and boot_disk.storage_tier, so both must be declared or the create is
+        # rejected InvalidArgument.
         field_defs = [
             {"path": "disk_image", "display_name": "Disk Image", "editable": True, "default": di_name},
             {"path": "network_attachments", "display_name": "Network", "editable": True},
+            {"path": "boot_disk.storage_tier", "display_name": "Boot Disk Storage Tier", "editable": True},
         ]
         catalog_item_id = grpc.create_compute_instance_catalog_item(
             name=unique_name("e2e-cidi-cat"),
@@ -42,7 +44,10 @@ def test_catalog_item_disk_image_default_applied(
 
         # disk_image is deliberately omitted — it must be inherited from the catalog default.
         ci_id = grpc.create_compute_instance(
-            name=unique_name("e2e-cidi-ci"), catalog_item=catalog_item_id, subnet_ids=[default_subnet_id]
+            name=unique_name("e2e-cidi-ci"),
+            catalog_item=catalog_item_id,
+            subnet_ids=[default_subnet_id],
+            boot_disk_storage_tier=default_storage_tier,
         )
 
         ci = grpc.get_compute_instance(ci_id=ci_id)

@@ -66,7 +66,13 @@ def ref_disk_image(grpc: GRPCClient) -> Generator[str, None, None]:
 
 
 def _ci_create_data(
-    name: str, cat_item_name: str, subnet_name: str, sg_name: str, instance_type: str, disk_image: str
+    name: str,
+    cat_item_name: str,
+    subnet_name: str,
+    sg_name: str,
+    instance_type: str,
+    disk_image: str,
+    storage_tier: str,
 ) -> dict[str, Any]:
     return {
         "object": {
@@ -75,6 +81,7 @@ def _ci_create_data(
                 "catalog_item": {"name": cat_item_name},
                 "instance_type": {"name": instance_type},
                 "disk_image": {"name": disk_image},
+                "boot_disk": {"storage_tier": storage_tier},
                 "network_attachments": [
                     {"subnet": {"name": subnet_name}, "security_groups": [{"name": sg_name}]}
                 ],
@@ -95,6 +102,7 @@ class TestComputeReferences:
         ref_ci_catalog_item: str,
         ref_instance_type: str,
         ref_disk_image: str,
+        default_storage_tier: str,
     ):
         tag = uuid4().hex[:8]
         ci_name = f"ref-ci-chain-{tag}"
@@ -110,6 +118,7 @@ class TestComputeReferences:
                 ref_security_group["name"],
                 ref_instance_type,
                 ref_disk_image,
+                default_storage_tier,
             ),
         )
         ci_id = response["object"]["id"]
@@ -144,6 +153,7 @@ class TestComputeReferences:
         ref_ci_catalog_item: str,
         ref_instance_type: str,
         ref_disk_image: str,
+        default_storage_tier: str,
     ):
         tag = uuid4().hex[:8]
         ci_name = f"ref-ci-run-{tag}"
@@ -159,6 +169,7 @@ class TestComputeReferences:
                 ref_security_group["name"],
                 ref_instance_type,
                 ref_disk_image,
+                default_storage_tier,
             ),
         )
         ci_id = response["object"]["id"]
@@ -185,6 +196,7 @@ class TestComputeReferences:
         ref_ci_catalog_item: str,
         ref_instance_type: str,
         ref_disk_image: str,
+        default_storage_tier: str,
     ):
         tag = uuid4().hex[:8]
         cat_item = grpc.get_compute_instance_catalog_item(catalog_item_id=ref_ci_catalog_item)
@@ -200,6 +212,7 @@ class TestComputeReferences:
                             "catalog_item": {"name": cat_item_name},
                             "instance_type": {"name": ref_instance_type},
                             "disk_image": {"name": ref_disk_image},
+                            "boot_disk": {"storage_tier": default_storage_tier},
                             "network_attachments": [
                                 {
                                     "subnet": {"name": ref_subnet["name"]},
@@ -221,6 +234,7 @@ class TestComputeReferences:
         ref_security_group: dict[str, str],
         ref_instance_type: str,
         ref_disk_image: str,
+        default_storage_tier: str,
     ):
         tag = uuid4().hex[:8]
         cat_name = f"ref-xt-cat-{tag}"
@@ -236,6 +250,7 @@ class TestComputeReferences:
                     ref_security_group["name"],
                     ref_instance_type,
                     ref_disk_image,
+                    default_storage_tier,
                 ),
             )
             ci_id = response["object"]["id"]

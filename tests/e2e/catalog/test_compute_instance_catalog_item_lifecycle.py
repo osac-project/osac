@@ -142,7 +142,7 @@ def test_compute_instance_catalog_item_field_definitions(
 
 
 def test_create_compute_instance_with_catalog_item(
-    grpc: GRPCClient, compute_instance_template: str, default_subnet_id: str
+    grpc: GRPCClient, compute_instance_template: str, default_subnet_id: str, default_storage_tier: str
 ) -> None:
     name = unique_name("e2e-ci-cat")
     catalog_item_id = grpc.create_compute_instance_catalog_item(
@@ -152,7 +152,10 @@ def test_create_compute_instance_with_catalog_item(
     try:
         ci_name = unique_name("e2e-ci")
         ci_id = grpc.create_compute_instance(
-            name=ci_name, catalog_item=catalog_item_id, subnet_ids=[default_subnet_id]
+            name=ci_name,
+            catalog_item=catalog_item_id,
+            subnet_ids=[default_subnet_id],
+            boot_disk_storage_tier=default_storage_tier,
         )
 
         assert ci_id in grpc.list_compute_instance_ids()
@@ -173,7 +176,7 @@ def test_create_compute_instance_with_catalog_item(
 
 
 def test_create_compute_instance_with_unpublished_catalog_item_fails(
-    grpc: GRPCClient, compute_instance_template: str, default_subnet_id: str
+    grpc: GRPCClient, compute_instance_template: str, default_subnet_id: str, default_storage_tier: str
 ) -> None:
     name = unique_name("e2e-ci-unpub")
     catalog_item_id = grpc.create_compute_instance_catalog_item(
@@ -186,6 +189,7 @@ def test_create_compute_instance_with_unpublished_catalog_item_fails(
                 "object": {
                     "spec": {
                         "catalog_item": {"id": catalog_item_id},
+                        "boot_disk": {"storage_tier": default_storage_tier},
                         "network_attachments": [{"subnet": {"id": default_subnet_id}}],
                     }
                 }
@@ -198,7 +202,7 @@ def test_create_compute_instance_with_unpublished_catalog_item_fails(
 
 
 def test_delete_compute_instance_catalog_item_blocked_when_referenced(
-    grpc: GRPCClient, compute_instance_template: str, default_subnet_id: str
+    grpc: GRPCClient, compute_instance_template: str, default_subnet_id: str, default_storage_tier: str
 ) -> None:
     name = unique_name("e2e-ci-ref")
     catalog_item_id = grpc.create_compute_instance_catalog_item(
@@ -208,7 +212,10 @@ def test_delete_compute_instance_catalog_item_blocked_when_referenced(
     try:
         ci_name = unique_name("e2e-ci")
         ci_id = grpc.create_compute_instance(
-            name=ci_name, catalog_item=catalog_item_id, subnet_ids=[default_subnet_id]
+            name=ci_name,
+            catalog_item=catalog_item_id,
+            subnet_ids=[default_subnet_id],
+            boot_disk_storage_tier=default_storage_tier,
         )
 
         output, rc = grpc.call_unchecked(

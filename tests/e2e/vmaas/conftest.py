@@ -184,16 +184,6 @@ def default_disk_image(grpc: GRPCClient, test_run_id: str) -> Iterator[str]:
 
 
 @pytest.fixture(scope="session")
-def default_storage_tier() -> str:
-    """
-    Reference installer-provided storage tier (matches network_class pattern).
-
-    Defaults to "local" tier created by osac-installer when lvms.enabled=true.
-    """
-    return env("OSAC_STORAGE_TIER", "local")
-
-
-@pytest.fixture(scope="session")
 def additional_storage_tiers(private_grpc: GRPCClient, test_run_id: str) -> Iterator[dict[str, dict[str, str]]]:
     """
     Create additional storage tiers on the real backend for multi-tier tests.

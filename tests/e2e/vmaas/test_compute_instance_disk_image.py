@@ -24,7 +24,12 @@ def _unique_name(prefix: str = "e2e-cidi") -> str:
 
 
 def test_compute_instance_with_disk_image(
-    grpc: GRPCClient, vm_template: str, default_subnet: str, default_instance_type: str, k8s_hub_client: K8sClient
+    grpc: GRPCClient,
+    vm_template: str,
+    default_subnet: str,
+    default_instance_type: str,
+    k8s_hub_client: K8sClient,
+    default_storage_tier: str,
 ) -> None:
     """AC-1 / TC-FR7-01: Create CI with DiskImage reference, verify VM runs with correct image."""
     di_name = _unique_name("e2e-di")
@@ -47,6 +52,7 @@ def test_compute_instance_with_disk_image(
             subnet_ids=[default_subnet],
             instance_type=default_instance_type,
             name=_unique_name("e2e-ci"),
+            boot_disk_storage_tier=default_storage_tier,
         )
         ci_id = response["object"]["id"]
         assert ci_id, "create_compute_instance should return a non-empty ID"
@@ -78,7 +84,7 @@ def test_compute_instance_with_disk_image(
 
 
 def test_obsolete_disk_image_blocks_creation(
-    grpc: GRPCClient, vm_template: str, default_subnet: str, default_instance_type: str
+    grpc: GRPCClient, vm_template: str, default_subnet: str, default_instance_type: str, default_storage_tier: str
 ) -> None:
     """AC-2 / TC-FR7-04: OBSOLETE DiskImage blocks ComputeInstance creation."""
     di_name = _unique_name("e2e-di")
@@ -96,6 +102,7 @@ def test_obsolete_disk_image_blocks_creation(
                 disk_image_name=di_name,
                 subnet_ids=[default_subnet],
                 instance_type=default_instance_type,
+                boot_disk_storage_tier=default_storage_tier,
             )
         assert_grpc_rejected(exc_info, "FailedPrecondition")
     finally:
@@ -104,7 +111,12 @@ def test_obsolete_disk_image_blocks_creation(
 
 
 def test_deprecated_disk_image_allows_creation_with_warning(
-    grpc: GRPCClient, vm_template: str, default_subnet: str, default_instance_type: str, k8s_hub_client: K8sClient
+    grpc: GRPCClient,
+    vm_template: str,
+    default_subnet: str,
+    default_instance_type: str,
+    k8s_hub_client: K8sClient,
+    default_storage_tier: str,
 ) -> None:
     """AC-3 / TC-FR7-05: DEPRECATED DiskImage allows creation with warning."""
     di_name = _unique_name("e2e-di")
@@ -123,6 +135,7 @@ def test_deprecated_disk_image_allows_creation_with_warning(
             subnet_ids=[default_subnet],
             instance_type=default_instance_type,
             name=_unique_name("e2e-ci"),
+            boot_disk_storage_tier=default_storage_tier,
         )
         ci_id = response["object"]["id"]
         assert ci_id, "CI creation with DEPRECATED DiskImage should succeed"
@@ -187,7 +200,12 @@ def test_template_disk_image_default(grpc: GRPCClient, private_grpc: GRPCClient)
 
 
 def test_disk_image_deletion_protection(
-    grpc: GRPCClient, vm_template: str, default_subnet: str, default_instance_type: str, k8s_hub_client: K8sClient
+    grpc: GRPCClient,
+    vm_template: str,
+    default_subnet: str,
+    default_instance_type: str,
+    k8s_hub_client: K8sClient,
+    default_storage_tier: str,
 ) -> None:
     """AC-5 / TC-FR12-01 + TC-FR12-04: Deletion protection lifecycle."""
     di_name = _unique_name("e2e-di")
@@ -204,6 +222,7 @@ def test_disk_image_deletion_protection(
             subnet_ids=[default_subnet],
             instance_type=default_instance_type,
             name=_unique_name("e2e-ci"),
+            boot_disk_storage_tier=default_storage_tier,
         )
         ci_id = response["object"]["id"]
         ci_name = wait_for_cr(k8s=k8s_hub_client, uuid=ci_id)

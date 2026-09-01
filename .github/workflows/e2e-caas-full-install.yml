@@ -160,7 +160,11 @@ jobs:
       pr-number: ${{ github.event.pull_request.number }}
       # Checkout osac-test-infra for tests/Containerfile (not the caller repo)
       test-infra-repository: osac-project/osac-test-infra
-      test-infra-ref: ${{ inputs.test-infra-ref || 'main' }}
+      # TEMPORARY -- OSAC-4741 validation only, DO NOT MERGE. Deliberately
+      # invalid ref so the reusable workflow's own first checkout step
+      # fails immediately (before any real cluster/infra is touched), to
+      # validate the new cross-repo workflow_call diagnostic pipeline.
+      test-infra-ref: "definitely-not-a-real-branch-osac-4741-validation"
       # OSAC-3593: Use tests from osac mono-repo instead of osac-test-infra
       test-source: "osac"
       test-repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}

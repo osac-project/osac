@@ -26,6 +26,7 @@ import (
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
+	"google.golang.org/protobuf/proto"
 )
 
 var _ = Describe("Identity provider login flow", func() {
@@ -89,10 +90,10 @@ var _ = Describe("Identity provider login flow", func() {
 						// authorizationUrl must be reachable from the test runner (host).
 						// mockoidc binds to 0.0.0.0 so 127.0.0.1:<port> works on the host.
 						AuthorizationUrl: mockOIDC.LocalAuthURL(),
-						// tokenUrl and jwksUrl must be reachable from Keycloak inside Kind.
-						// The Podman bridge IP is the host-side gateway of the Kind network.
-						TokenUrl:     mockOIDC.ClusterTokenURL(),
-						JwksUrl:      mockOIDC.ClusterJWKSURL(),
+					// tokenUrl and jwksUrl must be reachable from Keycloak inside Kind.
+					// The Podman bridge IP is the host-side gateway of the Kind network.
+					TokenUrl: mockOIDC.ClusterTokenURL(),
+					JwksUrl:  proto.String(mockOIDC.ClusterJWKSURL()),
 						ClientId:     mockOIDC.ClientID(),
 						ClientSecret: mockOIDC.ClientSecret(),
 						// Issuer must match the `iss` claim mockoidc embeds in its tokens.

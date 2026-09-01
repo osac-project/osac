@@ -22,7 +22,6 @@ EXPECTED_DIRS=(
   enhancement-proposals
   osac-ux
   osac-ui
-  osac-test-infra
   osac-docs
 )
 
@@ -221,7 +220,9 @@ assert_expected_clones() {
   grep -q 'osac-project/osac-ux' "$log" || fail "clone log missing osac-ux: $(cat "$log")"
   grep -q 'osac-project/osac-ui' "$log" || fail "clone log missing osac-ui: $(cat "$log")"
   grep -q 'osac-project/osac-test-infra' "$log" \
-    || fail "clone log missing osac-test-infra: $(cat "$log")"
+    && fail "osac-test-infra must not be cloned (e2e is tests/e2e/): $(cat "$log")"
+  [[ ! -d "${root}/osac-test-infra" ]] \
+    || fail "osac-test-infra/ must not exist after bootstrap"
   grep -q 'osac-project/docs' "$log" || fail "clone log missing osac-project/docs: $(cat "$log")"
   grep -q "${root}/osac-docs" "$log" || fail "docs repo dest must be osac-docs: $(cat "$log")"
   if grep -F "osac-project/docs.git ${root}/docs" "$log"; then
@@ -229,13 +230,13 @@ assert_expected_clones() {
   fi
 }
 
-test_clones_all_five_into_project_root() {
+test_clones_all_four_into_project_root() {
   local home root bin home_skills home_workflows repo_skills clone_log out
-  prepare_fixture five
+  prepare_fixture four
 
   out=$(run_bootstrap "$root" "$home" "$bin" 2>&1) || fail "bootstrap failed: $out"
   assert_expected_clones "$root" "$clone_log"
-  pass "clones all five sibling repos under PROJECT_ROOT, not into docs/"
+  pass "clones all four sibling repos under PROJECT_ROOT, not into docs/"
 }
 
 test_rerun_updates_expected_clone() {
@@ -508,7 +509,6 @@ test_no_fork_leaves_writeable_without_fork_remote() {
   assert_expected_clones "$root" "$clone_log"
   assert_no_fork_remote "${root}/enhancement-proposals" "enhancement-proposals"
   assert_no_fork_remote "${root}/osac-ui" "osac-ui"
-  assert_no_fork_remote "${root}/osac-test-infra" "osac-test-infra"
   assert_no_fork_remote "${root}/osac-docs" "osac-docs"
   assert_no_fork_remote "${root}/osac-ux" "osac-ux"
   [[ ! -s "${home}/gh.log" ]] || fail "--no-fork must not invoke gh: $(cat "${home}/gh.log")"
@@ -527,7 +527,6 @@ test_forks_writeable_siblings_not_osac_ux_or_vendors() {
   assert_expected_clones "$root" "$clone_log"
   assert_fork_remote "${root}/enhancement-proposals" "enhancement-proposals"
   assert_fork_remote "${root}/osac-ui" "osac-ui"
-  assert_fork_remote "${root}/osac-test-infra" "osac-test-infra"
   assert_fork_remote "${root}/osac-docs" "docs"
   assert_no_fork_remote "${root}/osac-ux" "osac-ux"
   assert_no_fork_remote "$home_skills" "osac-ai-skills vendor"
@@ -538,6 +537,9 @@ test_forks_writeable_siblings_not_osac_ux_or_vendors() {
     || fail "docs fork must use GitHub repo name docs: $(cat "$gh_log")"
   if grep -q 'repo fork osac-project/osac-ux' "$gh_log"; then
     fail "must not gh fork osac-ux: $(cat "$gh_log")"
+  fi
+  if grep -q 'repo fork osac-project/osac-test-infra' "$gh_log"; then
+    fail "must not gh fork osac-test-infra: $(cat "$gh_log")"
   fi
   if grep -q 'repo fork osac-project/osac-ai-skills' "$gh_log"; then
     fail "must not gh fork osac-ai-skills: $(cat "$gh_log")"
@@ -739,7 +741,7 @@ test_home_git_subdir_ai_workflows_falls_back_to_repo_local() {
   pass "HOME git checkout with plain .ai-workflows subdir falls back to repo-local"
 }
 
-test_clones_all_five_into_project_root
+test_clones_all_four_into_project_root
 test_rerun_updates_expected_clone
 test_skips_unrelated_existing_dir
 test_extra_list_entry_clones_without_other_edits

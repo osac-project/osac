@@ -119,7 +119,7 @@ CLI flags are defined in `cmd/osac-csi-driver/main.go`. Run `go run ./cmd/osac-c
 
 - **Unit tests**: `pkg/driver/controller_test.go` — standard Go `testing` package with hand-written mocks; covers CreateVolume, DeleteVolume, Publish/Unpublish, polling, idempotency, error handling
 - **Sanity tests**: `test/sanity/` — kubernetes-csi/csi-test/v5 compliance suite against the real driver + a fake vendor backend
-- **E2E tests**: None in this component (E2E tests live in `osac-test-infra`)
+- **E2E tests**: None in this component (E2E tests live in `tests/e2e/`)
 - Run all: `make test`
 
 ## Helm Charts

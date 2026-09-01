@@ -121,7 +121,7 @@ hack/sync-helm-crds.py     # Script invoked by `make helm-crds` to sync CRDs to 
 
 - **Unit tests**: Ginkgo + Gomega with `envtest` (real etcd + kube-apiserver)
 - **Integration**: `make -C ../osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=operator`
-- **E2E tests**: pytest-based, live in the separate `osac-test-infra` repo; triggered by the root-level `.github/workflows/e2e-vmaas-full-install.yml`
+- **E2E tests**: pytest-based, live in [`tests/e2e/`](../tests/e2e/) (OSAC-3593); triggered by the root-level `.github/workflows/e2e-vmaas-full-install.yml`
 - Kind cluster defaults to `osac-dev` (`KIND_CLUSTER_NAME` in Makefile)
 - Clean up: `kind delete cluster --name osac-dev`
 

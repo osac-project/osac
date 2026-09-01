@@ -61,7 +61,7 @@ covers broader project-level architecture guides and diagrams).
 
 `tools/bootstrap.sh` clones these into gitignored directories at this repo
 root (skill-relative paths when this checkout is the project root). By
-default it also forks the writeable four to your GitHub account (`origin` =
+default it also forks the writeable three to your GitHub account (`origin` =
 osac-project, `fork` = you — the `$PUSH_REMOTE` that `resolve-remotes.sh`
 reports) so `/create-pr` has a push remote. Never forked:
 `osac-ux`, `.osac-ai-skills`, `.ai-workflows`. Pass `--no-fork` for
@@ -70,11 +70,16 @@ authenticated `gh`.
 
 | Repo | Local path | Fork remote | Description |
 |------|------------|-------------|-------------|
-| [osac-test-infra](https://github.com/osac-project/osac-test-infra) | `osac-test-infra/` | yes | E2E pytest tests against the fulfillment-service gRPC API |
 | [osac-ui](https://github.com/osac-project/osac-ui) | `osac-ui/` | yes | Web console (React, PatternFly 6) |
 | [osac-ux](https://github.com/osac-project/osac-ux) | `osac-ux/` | no | Read-only UI reference (`@temp-api` types) |
 | [enhancement-proposals](https://github.com/osac-project/enhancement-proposals) | `enhancement-proposals/` | yes | PRDs and design documents (two-stage EP flow) |
 | [docs](https://github.com/osac-project/docs) | `osac-docs/` | yes | Architecture guides and personas |
+
+[osac-test-infra](https://github.com/osac-project/osac-test-infra) is **not**
+cloned. E2E pytest suites live in [`tests/e2e/`](tests/e2e/) (OSAC-3593). That
+repo keeps infrastructure backends, reusable e2e caller workflows, and a
+`tests/` placeholder — do not add or modify suites there. Clone it only for
+infra or `/debug-e2e` work.
 
 In-tree [`docs/`](docs/) (`ARCHITECTURE.md`, `CONVENTIONS.md`) is **not** that
 repo. Skills read `osac-docs/personas.md`.
@@ -164,6 +169,16 @@ component. For fulfillment-service API work (proto, services,
 request/response), [`fulfillment-service/docs/API.md`](fulfillment-service/docs/API.md)
 is canonical — see also [`fulfillment-service/AGENTS.md`](fulfillment-service/AGENTS.md).
 
+## E2E tests
+
+`/e2e` writes pytest suites in [`tests/e2e/`](tests/e2e/) in this repo
+(OSAC-3593). Discover patterns from `tests/e2e/<suite>/` and
+`tests/core/`. Do not add, modify, or delete test suites in
+[osac-test-infra](https://github.com/osac-project/osac-test-infra) — that
+repo's `tests/` tree is a placeholder plus the infrastructure backend
+contract. `/debug-e2e` still lives there; clone that repo only when
+debugging Prow or changing infra backends.
+
 ## Git Workflow
 
 Fork-based push rules, branch naming, DCO sign-off, AI attribution, and PR
@@ -204,7 +219,7 @@ osac/                              Mono-repo: fulfillment-service + osac-operato
   bare-metal-fulfillment-operator  Kubernetes operator for bare metal fulfillment
   osac-csi-driver                  CSI storage driver, routes to vendor backends via storage tiers
   osac-metering                    Metering pipeline for usage events and Kafka publishing
-osac-test-infra                    E2E test playbooks against fulfillment-service gRPC API
+  tests/e2e/                         E2E pytest suites (BMaaS, VMaaS, CaaS, catalog, storage, references)
 osac-ui                            Web console (React, PatternFly 6)
 osac-ux                            Read-only UI reference (@temp-api)
 enhancement-proposals              Design documents and RFCs

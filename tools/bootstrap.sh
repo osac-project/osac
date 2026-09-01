@@ -11,8 +11,9 @@
 #      writes workflow links into those paths)
 #   4. Installs workflows (bugfix, implement, prd, design, e2e)
 #   5. Clones skill-relative sibling repos under this checkout
-#      (enhancement-proposals, osac-ux, osac-ui, osac-test-infra,
-#      osac-docs). osac-docs is osac-project/docs — not docs/.
+#      (enhancement-proposals, osac-ux, osac-ui, osac-docs). osac-docs
+#      is osac-project/docs — not docs/. E2E suites live in-tree at
+#      tests/e2e/ (OSAC-3593); osac-test-infra is not cloned.
 #      Writeable siblings get a `fork` remote (origin = osac-project).
 #      osac-ux and vendor clones are never forked.
 #
@@ -233,7 +234,6 @@ SIBLINGS=(
   "enhancement-proposals"
   "osac-ux"
   "osac-ui"
-  "osac-test-infra"
   "docs:osac-docs"
 )
 

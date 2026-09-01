@@ -28,6 +28,7 @@ require (
 	github.com/mattn/go-colorable v0.1.15
 	github.com/mattn/go-isatty v0.0.24
 	github.com/muesli/cancelreader v0.2.2
+	github.com/oauth2-proxy/mockoidc v0.0.0-20240214162133-caebfff84d25
 	github.com/open-policy-agent/opa v1.18.2
 	github.com/osac-project/osac/bare-metal-fulfillment-operator v0.0.0-00010101000000-000000000000
 	github.com/osac-project/osac/osac-operator/api v0.0.7
@@ -82,6 +83,7 @@ require (
 	github.com/evanphx/json-patch/v5 v5.9.11 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.3 // indirect
+	github.com/go-jose/go-jose/v3 v3.0.1 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/go-openapi/jsonpointer v1.0.0 // indirect
 	github.com/go-openapi/jsonreference v1.0.1 // indirect
@@ -131,7 +133,6 @@ require (
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
-	github.com/oauth2-proxy/mockoidc v0.0.0-20240214162133-caebfff84d25 // indirect
 	github.com/prometheus/common v0.70.1 // indirect
 	github.com/prometheus/procfs v0.21.1 // indirect
 	github.com/rcrowley/go-metrics v0.0.0-20250401214520-65e299d6c5c9 // indirect

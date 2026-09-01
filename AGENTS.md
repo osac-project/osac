@@ -174,7 +174,7 @@ is canonical — see also [`fulfillment-service/AGENTS.md`](fulfillment-service/
 
 `/e2e` writes pytest suites in [`tests/e2e/`](tests/e2e/) in this repo.
 Discover patterns from `tests/e2e/<suite>/` and
-`tests/core/`. Do not add, modify, or delete test suites in
+[`tests/e2e/core/`](tests/e2e/core/). Do not add, modify, or delete test suites in
 [osac-test-infra](https://github.com/osac-project/osac-test-infra) —
 osac-test-infra's `tests/` tree is a placeholder plus the infrastructure backend
 contract. `/debug-e2e` still lives there; clone that repo only when

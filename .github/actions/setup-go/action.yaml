@@ -24,7 +24,7 @@ runs:
   steps:
   - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6
     with:
-      go-version: '1.26.3'
+      go-version: '1.27.0'
       # Without this, setup-go looks for go.sum at the repo root by
       # default -- this is a mono-repo, every component's go.sum lives in
       # its own subdirectory, so the built-in module cache silently never

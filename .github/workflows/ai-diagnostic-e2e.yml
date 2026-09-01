@@ -1,0 +1,174 @@
+---
+# Every real PR here is fork-originated, and GitHub Actions gives a
+# pull_request-triggered job from a fork a read-only token with no OIDC
+# minting at all -- unconditionally, by policy. So an AI diagnosis step can
+# never live inside the job that runs the fork's own test code. This
+# workflow_run listener runs default-branch YAML with a write token in this
+# repo's own context regardless of what triggered the original run, which is
+# the safe place to authenticate to Vertex AI and read the (already
+# gitleaks-scanned/redacted) log artifact the failed run already produced --
+# no fork code is ever checked out or executed here.
+#
+# workflow_run only fires for runs that happened in *this* repo, so this only
+# covers E2E runs triggered directly here (this repo's own caller
+# workflows). See osac-test-infra's own mirrored copy of this workflow (same
+# name) for the equivalent coverage of PRs against that repo.
+name: AI diagnostic (E2E fork PR failures)
+
+on:
+  workflow_run:  # zizmor: ignore[dangerous-triggers] -- no PR-head checkout; only trusted SHA-pinned/local composite actions; untrusted event data via env:, never interpolated into run: bodies.
+    workflows:
+      - E2E CaaS Full Install
+      - E2E BMaaS Full Install
+      - E2E VMaaS Full Install
+    types: [completed]
+
+concurrency:
+  group: ai-diagnostic-e2e-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+# Deny-by-default at the workflow level; the job below sets its own
+# least-privilege block regardless.
+permissions: {}
+
+jobs:
+  diagnose:
+    # Only real PR failures -- schedule/workflow_dispatch runs against main
+    # already get a same-job diagnosis in the Job Summary (Phase 1); this is
+    # specifically the path for genuine fork PRs, which never reach that
+    # code (no OIDC there at all). merge_group has no single PR to attach a
+    # Check Run to and is excluded the same way (event != 'pull_request').
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read       # checkout this repo's own default-branch composite action + script only
+      actions: read        # list/download the failed run's artifacts
+      pull-requests: read  # list open PRs to resolve head SHA -> PR number
+      checks: write        # publish the diagnostic Check Run
+      id-token: write      # Vertex AI WIF auth
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Resolve fork PR from head SHA
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          # commits/{sha}/pulls is empty for unmerged fork SHAs (same gap
+          # e2e-on-approval-fork.yml works around). List open PRs targeting
+          # main and match head.sha; require a unique match rather than
+          # trusting github.event.workflow_run.pull_requests[], which is
+          # unreliable/empty for genuine cross-fork PRs.
+          if ! prs_json=$(gh api --paginate \
+            "repos/${REPO}/pulls?state=open&base=main&per_page=100" \
+            --jq '.[]' | jq -s '.'); then
+            echo "Failed to list open PRs for ${HEAD_SHA:0:7}; skipping."
+            echo "found=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          pr_json=$(jq -c --arg sha "${HEAD_SHA}" '
+            [.[] | select(.state == "open") | select(.head.sha == $sha)]
+            | if length == 1 then .[0] else empty end
+          ' <<<"${prs_json}")
+          if [[ -z "${pr_json}" || "${pr_json}" == "null" ]]; then
+            echo "No unique open PR at ${HEAD_SHA:0:7}; skipping (stale head, or not a PR run)."
+            echo "found=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          echo "found=true" >> "${GITHUB_OUTPUT}"
+          echo "number=$(jq -r '.number' <<<"${pr_json}")" >> "${GITHUB_OUTPUT}"
+
+      - name: Download failure artifact
+        id: artifact
+        if: steps.pr.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          EXTRACT_DIR="${RUNNER_TEMP}/osac-artifacts"
+          mkdir -p "${EXTRACT_DIR}"
+
+          # Same run ID as the reusable workflow's own job (workflow_call
+          # jobs share the caller's run), so this is the exact artifact
+          # gather-artifacts uploaded for this failure.
+          art_json=$(gh api --paginate "repos/${REPO}/actions/runs/${RUN_ID}/artifacts?per_page=100" --jq '.artifacts[]' | jq -s '
+            [.[] | select(.expired == false) | select(.name | startswith("osac-logs-"))]
+            | first // empty
+          ')
+          if [[ -z "${art_json}" || "${art_json}" == "null" ]]; then
+            echo "No osac-logs-* artifact found for run ${RUN_ID}; diagnosing without log/junit signal."
+            echo "found=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          art_id=$(jq -r '.id' <<<"${art_json}")
+          zip_path="${RUNNER_TEMP}/artifact-${art_id}.zip"
+          if ! gh api "repos/${REPO}/actions/artifacts/${art_id}/zip" > "${zip_path}"; then
+            echo "Failed to download artifact ${art_id}; diagnosing without log/junit signal."
+            echo "found=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          unzip -q -o "${zip_path}" -d "${EXTRACT_DIR}"
+          echo "found=true" >> "${GITHUB_OUTPUT}"
+          echo "dir=${EXTRACT_DIR}" >> "${GITHUB_OUTPUT}"
+
+      - name: Authenticate for AI diagnosis
+        id: vertex-auth
+        if: steps.pr.outputs.found == 'true'
+        uses: ./.github/actions/vertex-ai-auth
+
+      - name: Run AI failure diagnosis
+        if: steps.pr.outputs.found == 'true'
+        env:
+          ARTIFACT_DIR: ${{ steps.artifact.outputs.dir }}
+          JUNIT_PATH: ${{ steps.artifact.outputs.dir }}/junit.xml
+          GOOGLE_CLOUD_PROJECT: ${{ steps.vertex-auth.outputs.gcp-project }}
+          GOOGLE_CLOUD_LOCATION: ${{ steps.vertex-auth.outputs.gcp-location }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          DIAGNOSIS_FILE: ${{ runner.temp }}/diagnosis.md
+        run: python3 .github/scripts/ai-diagnose-failure.py
+
+      - name: Publish Check Run
+        if: steps.pr.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+        run: |
+          set -euo pipefail
+          DIAGNOSIS_FILE="${RUNNER_TEMP}/diagnosis.md"
+          if [[ ! -s "${DIAGNOSIS_FILE}" ]]; then
+            echo "_AI diagnosis unavailable (no diagnosis produced for this run)._" > "${DIAGNOSIS_FILE}"
+          fi
+          # Built with jq (not shell interpolation) so LLM-generated diagnosis
+          # text -- untrusted output -- is never treated as anything but a
+          # JSON string value.
+          jq -n \
+            --arg head_sha "${HEAD_SHA}" \
+            --arg title "AI diagnosis: ${WORKFLOW_NAME}" \
+            --rawfile body "${DIAGNOSIS_FILE}" \
+            --arg run_url "${RUN_URL}" \
+            '{
+              name: "AI Failure Diagnosis",
+              head_sha: $head_sha,
+              status: "completed",
+              conclusion: "neutral",
+              output: {
+                title: $title,
+                summary: ($body + "\n\n[Full run](" + $run_url + ")")
+              }
+            }' | gh api "repos/${REPO}/check-runs" --input -

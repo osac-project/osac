@@ -1,0 +1,58 @@
+---
+name: Vertex AI auth
+description: >-
+  Authenticates to the osac-ci GCP project via Workload Identity Federation
+  (no static keys/secrets) and installs the google-genai SDK, so a step can
+  call Gemini via Vertex AI immediately afterward.
+
+# WIF trust is scoped to osac-project repos on the main branch (see
+# graphify-brain-refresh-vertex-poc.yaml's history for how this was set up
+# and validated). schedule-triggered runs always execute against main, so
+# this needs no special handling there. It does NOT work for pull_request
+# runs from a fork -- GitHub gives those a read-only token and never mints
+# an OIDC token at all, regardless of this action or the WIF condition.
+# Never call this action from a job that also checks out/executes a fork
+# PR's own code; see ai-diagnostic-e2e.yml for the safe (workflow_run,
+# base-repo-context, no fork-code execution) pattern for PR failures.
+#
+# Requires the calling job to declare `permissions: id-token: write` --
+# this action cannot grant that permission itself.
+
+inputs:
+  gcp-project:
+    description: "GCP project ID Vertex AI calls are billed/scoped to"
+    required: false
+    default: "osac-ci"
+  gcp-location:
+    description: "Vertex AI region"
+    required: false
+    default: "us-central1"
+
+outputs:
+  gcp-project:
+    description: "GCP project ID (pass through to the calling step's env)"
+    value: ${{ inputs.gcp-project }}
+  gcp-location:
+    description: "GCP region (pass through to the calling step's env)"
+    value: ${{ inputs.gcp-location }}
+
+runs:
+  using: composite
+  steps:
+    # Installed BEFORE authenticating, deliberately: pip install executes
+    # arbitrary code (build hooks, setup.py) for the package and everything
+    # in its dependency tree. Doing that after google-github-actions/auth
+    # has already exported live GCP credentials into the job's environment
+    # would mean a compromised package (this one or a transitive dep) could
+    # exfiltrate those credentials during install. Installing first means
+    # there's nothing to steal yet -- swap the order back only if you've
+    # independently re-verified this reasoning no longer applies.
+    - name: Install google-genai SDK
+      shell: bash
+      run: pip install --user --quiet "google-genai==2.21.0"
+
+    - name: Authenticate to Google Cloud (Vertex AI)
+      uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2.1.13
+      with:
+        workload_identity_provider: projects/1008600636152/locations/global/workloadIdentityPools/github-actions-pool/providers/github-actions-provider
+        service_account: osac-ci@osac-ci.iam.gserviceaccount.com

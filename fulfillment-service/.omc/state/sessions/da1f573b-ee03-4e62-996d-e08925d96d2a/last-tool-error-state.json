@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"cd fulfillment-service/internal/database/migrations && rtk ls -1 106_add_instance_type_*\",\"description\":\"List files to rename\"}",
+  "error": "Exit code 1\n/bin/bash: line 1: cd: fulfillment-service/internal/database/migrations: No such file or directory",
+  "timestamp": "2026-09-01T11:11:47.058Z",
+  "retry_count": 3
+}

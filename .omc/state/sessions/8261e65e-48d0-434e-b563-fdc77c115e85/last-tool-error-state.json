@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"gh run view 33491142425 --repo osac-project/osac --job 99802671125 --log-failed | rtk grep -A 3 \\\"could not import\\\"\",\"description\":\"Show the actual Go error\"}",
+  "error": "Exit code 1",
+  "timestamp": "2026-09-01T09:26:30.822Z",
+  "retry_count": 1
+}

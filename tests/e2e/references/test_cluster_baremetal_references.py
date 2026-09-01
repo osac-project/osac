@@ -17,6 +17,7 @@ from tests.e2e.core.runner import env
 logger = logging.getLogger(__name__)
 
 _ENV_SKIP_PATTERNS = [re.compile(r"no host type"), re.compile(r"no instance type")]
+_FABRIC_MANAGER_SKIP_PATTERN = re.compile(r"require a fabric manager")
 
 
 def _create_cluster_or_skip(cli: OsacCLI, *, catalog_item: str, name: str, version: str) -> str:
@@ -27,6 +28,16 @@ def _create_cluster_or_skip(cli: OsacCLI, *, catalog_item: str, name: str, versi
         for pat in _ENV_SKIP_PATTERNS:
             if pat.search(output):
                 pytest.skip(f"Cluster creation not viable in this environment: {output.strip()}")
+        raise
+
+
+def _create_bmi_or_skip(grpc: GRPCClient, *, data: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return grpc.call(service=f"{PUBLIC_API}.BareMetalInstances/Create", data=data)
+    except subprocess.CalledProcessError as exc:
+        output = (exc.stdout or "") + (exc.stderr or "")
+        if _FABRIC_MANAGER_SKIP_PATTERN.search(output):
+            pytest.skip("BMI creation requires a fabric manager, which is not available in this environment")
         raise
 
 
@@ -139,8 +150,8 @@ class TestClusterBareMetalReferences:
             assert tmpl_ref.get("name") == bmi_template
             assert tmpl_ref.get("id"), "template.id should be auto-populated in BMI catalog item"
 
-            bmi_response: dict[str, Any] = grpc.call(
-                service=f"{PUBLIC_API}.BareMetalInstances/Create",
+            bmi_response: dict[str, Any] = _create_bmi_or_skip(
+                grpc,
                 data={"object": {"metadata": {"name": f"ref-bmi-{tag}"}, "spec": {"catalog_item": {"name": cat_name}}}},
             )
             bmi_id = bmi_response["object"]["id"]

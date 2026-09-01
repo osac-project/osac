@@ -61,6 +61,15 @@ spec:
             - name: host-root
               mountPath: /host
               mountPropagation: HostToContainer
+            # /host makes host paths readable for NVMe-TCP session discovery, but the
+            # plugin operates on device special files (blockdev, mount) using their raw
+            # host paths (e.g. /dev/nvme1n1), not /host-prefixed ones. Those device nodes
+            # are created dynamically after connect, so the container's own /dev (baked
+            # in at image build) never has them. Without this mount:
+            # "blockdev: cannot open /dev/nvme1n1: No such file or directory".
+            - name: dev-dir
+              mountPath: /dev
+              mountPropagation: HostToContainer
             {{- if .Values.vendors.vast.config.credentialsSecret }}
             - name: vast-credentials
               mountPath: /opt/vms-auth
@@ -77,6 +86,10 @@ spec:
         - name: host-root
           hostPath:
             path: /
+            type: Directory
+        - name: dev-dir
+          hostPath:
+            path: /dev
             type: Directory
         {{- if .Values.vendors.vast.config.credentialsSecret }}
         - name: vast-credentials

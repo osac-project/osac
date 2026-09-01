@@ -67,7 +67,7 @@ var _ = Describe("Identity provider login flow", func() {
 		// Keycloak pods inside Kind can reach the token and JWKS endpoints via the
 		// Podman bridge IP.
 		var startErr error
-		mockOIDC, startErr = tool.StartMockOIDC()
+		mockOIDC, startErr = tool.StartMockOIDC(ctx)
 		Expect(startErr).ToNot(HaveOccurred())
 		DeferCleanup(func() { Expect(StopMockOIDC(mockOIDC)).To(Succeed()) })
 
@@ -92,6 +92,7 @@ var _ = Describe("Identity provider login flow", func() {
 						// tokenUrl and jwksUrl must be reachable from Keycloak inside Kind.
 						// The Podman bridge IP is the host-side gateway of the Kind network.
 						TokenUrl:     mockOIDC.ClusterTokenURL(),
+						JwksUrl:      mockOIDC.ClusterJWKSURL(),
 						ClientId:     mockOIDC.ClientID(),
 						ClientSecret: mockOIDC.ClientSecret(),
 						// Issuer must match the `iss` claim mockoidc embeds in its tokens.

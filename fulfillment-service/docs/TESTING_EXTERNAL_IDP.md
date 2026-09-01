@@ -159,7 +159,7 @@ Wraps a raw JWT into a gRPC connection to the OSAC external API for asserting ac
 ```bash
 cd osac/fulfillment-service
 
-# All IdP login specs (each BeforeEach waits ~60s for controller reconciliation)
+# All IdP login specs (each BeforeEach waits up to 2 minutes for controller reconciliation)
 ginkgo run -v --focus="Identity provider login flow" it
 
 # Single spec

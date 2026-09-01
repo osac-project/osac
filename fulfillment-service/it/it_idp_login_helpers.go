@@ -88,7 +88,7 @@ func (s *MockOIDCState) QueueUser(subject, email, preferredUsername string) {
 // StartMockOIDC starts an embedded mock OIDC server bound to all interfaces so that
 // Keycloak pods inside the Kind cluster can reach the token and JWKS endpoints.
 // Call StopMockOIDC(state) in DeferCleanup to shut it down.
-func (t *Tool) StartMockOIDC() (*MockOIDCState, error) {
+func (t *Tool) StartMockOIDC(ctx context.Context) (*MockOIDCState, error) {
 	ln, err := net.Listen("tcp", "0.0.0.0:0")
 	if err != nil {
 		return nil, fmt.Errorf("failed to start mock OIDC listener: %w", err)
@@ -104,7 +104,7 @@ func (t *Tool) StartMockOIDC() (*MockOIDCState, error) {
 		return nil, fmt.Errorf("failed to start mock OIDC server: %w", err)
 	}
 
-	bridgeIP, err := t.kindBridgeIP()
+	bridgeIP, err := t.kindBridgeIP(ctx)
 	if err != nil {
 		_ = srv.Shutdown()
 		return nil, fmt.Errorf("failed to detect Kind bridge IP: %w", err)
@@ -128,15 +128,15 @@ func StopMockOIDC(state *MockOIDCState) error {
 // kindBridgeIP returns the gateway IP of the Kind network: the host-accessible IP that
 // pods inside the Kind cluster can use to reach services on the test runner's host.
 // Tries podman first (this environment uses Podman), then falls back to docker.
-func (t *Tool) kindBridgeIP() (string, error) {
+func (t *Tool) kindBridgeIP(ctx context.Context) (string, error) {
 	// Podman's network inspect returns JSON with a different schema than Docker's.
 	// Try it first since this environment uses Podman.
-	if ip, err := t.kindBridgeIPViaPodman(); err == nil {
+	if ip, err := t.kindBridgeIPViaPodman(ctx); err == nil {
 		return ip, nil
 	}
 
 	// Fall back to Docker's template-based inspect.
-	out, err := t.runCommand(context.Background(), "docker", "network", "inspect", "kind",
+	out, err := t.runCommand(ctx, "docker", "network", "inspect", "kind",
 		"--format", "{{range .IPAM.Config}}{{if .Gateway}}{{.Gateway}}\n{{end}}{{end}}")
 	if err != nil {
 		return "", fmt.Errorf("could not detect Kind bridge IP via podman or docker: %w", err)
@@ -148,8 +148,8 @@ func (t *Tool) kindBridgeIP() (string, error) {
 // gateway of the Kind network. Podman's schema is:
 //
 //	[{"subnets": [{"subnet": "10.89.0.0/24", "gateway": "10.89.0.1"}]}]
-func (t *Tool) kindBridgeIPViaPodman() (string, error) {
-	out, err := t.runCommand(context.Background(), "podman", "network", "inspect", "kind")
+func (t *Tool) kindBridgeIPViaPodman(ctx context.Context) (string, error) {
+	out, err := t.runCommand(ctx, "podman", "network", "inspect", "kind")
 	if err != nil {
 		return "", err
 	}
@@ -299,16 +299,16 @@ func (t *Tool) WaitForKeycloakIdP(ctx context.Context, alias string) error {
 // Keycloak JWT for an external IdP user. The redirect chain is:
 //
 //  1. Test runner  → GET KC auth endpoint (kc_idp_hint=<alias>)
-//  2.              ← 302 to mockoidc /oidc/authorize
+//  2. ← 302 to mockoidc /oidc/authorize
 //  3. Test runner  → GET mockoidc /oidc/authorize  (pops queued user; auto-approves)
-//  4.              ← 302 to KC broker callback with mock code
+//  4. ← 302 to KC broker callback with mock code
 //  5. Test runner  → GET KC /broker/<alias>/endpoint?code=<mock-code>
 //  6. KC (in-Kind) → POST mockoidc /oidc/token (bridge IP) — exchanges code
 //  7. KC (in-Kind) → GET  mockoidc /oidc/.well-known/jwks.json — validates signature
 //  8. KC           ← 302 to original redirect_uri?code=<kc-code>
 //  9. Test runner intercepts redirect, extracts kc-code
 //  10. Test runner → POST KC /token grant_type=authorization_code&code=<kc-code>
-//  11.             ← KC JWT access_token
+//  11. ← KC JWT access_token
 //
 // Call QueueUser on the MockOIDCState before calling this function to control which user
 // is returned. If the queue is empty, mockoidc uses DefaultUser().

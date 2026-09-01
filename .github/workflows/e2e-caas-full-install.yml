@@ -128,6 +128,10 @@ jobs:
       && needs.changes.outputs.should-run == 'true'
       && (needs.e2e-readiness.result == 'success'
           || needs.e2e-readiness.result == 'skipped')
+    permissions:
+      contents: read
+      # See e2e-vmaas-full-install.yml's identical grant for why this is needed.
+      id-token: write
     uses: osac-project/osac-test-infra/.github/workflows/e2e-caas-full-install.yml@main
     with:
       test-suite: ${{ inputs.test-suite || 'caas' }}

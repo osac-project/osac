@@ -516,6 +516,12 @@ jobs:
     if: github.event_name != 'workflow_dispatch' || github.event.inputs.skip_e2e != 'true'
     permissions:
       contents: read
+      # Required by e2e-vmaas-full-install.yml@main's "e2e" job -- only
+      # exercised there when enable-ai-diagnostic is true (we never pass
+      # it), but GitHub statically validates a called reusable workflow's
+      # declared job permissions against what the caller grants regardless
+      # of runtime reachability, so it must still be granted here.
+      id-token: write
     uses: osac-project/osac-test-infra/.github/workflows/e2e-vmaas-full-install.yml@main
     with:
       test-suite: vmaas
@@ -532,6 +538,8 @@ jobs:
     if: github.event_name != 'workflow_dispatch' || github.event.inputs.skip_e2e != 'true'
     permissions:
       contents: read
+      # See e2e-vmaas-test's identical grant above for why this is needed.
+      id-token: write
     uses: osac-project/osac-test-infra/.github/workflows/e2e-caas-full-install.yml@main
     with:
       test-suite: caas
@@ -548,6 +556,8 @@ jobs:
     if: github.event_name != 'workflow_dispatch' || github.event.inputs.skip_e2e != 'true'
     permissions:
       contents: read
+      # See e2e-vmaas-test's identical grant above for why this is needed.
+      id-token: write
     uses: osac-project/osac-test-infra/.github/workflows/e2e-bmaas-full-install.yml@main
     with:
       test-suite: bmaas

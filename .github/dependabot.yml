@@ -7,12 +7,18 @@ updates:
   schedule:
     # Check for updates to GitHub Actions every week
     interval: "weekly"
+    day: "friday"
+    time: "22:00"
+    timezone: "America/Los_Angeles"
 
 - package-ecosystem: "gomod"
   directory: "/fulfillment-service"
   schedule:
     # Check for updates to Go modules every week
     interval: "weekly"
+    day: "friday"
+    time: "22:00"
+    timezone: "America/Los_Angeles"
   groups:
     fulfillment-service-go-dependencies:
       patterns:
@@ -27,6 +33,9 @@ updates:
   schedule:
     # Check for updates to Go modules every week
     interval: "weekly"
+    day: "friday"
+    time: "22:00"
+    timezone: "America/Los_Angeles"
   groups:
     osac-operator-go-dependencies:
       patterns:
@@ -39,6 +48,9 @@ updates:
   schedule:
     # Check for updates to Go modules every week
     interval: "weekly"
+    day: "friday"
+    time: "22:00"
+    timezone: "America/Los_Angeles"
   groups:
     osac-csi-driver-go-dependencies:
       patterns:
@@ -51,6 +63,9 @@ updates:
   schedule:
     # Check for updates to Python (uv) dependencies every week
     interval: "weekly"
+    day: "friday"
+    time: "22:00"
+    timezone: "America/Los_Angeles"
   groups:
     osac-aap-python-dependencies:
       patterns:
@@ -63,6 +78,9 @@ updates:
   schedule:
     # Check for updates to container base images every week
     interval: "weekly"
+    day: "friday"
+    time: "22:00"
+    timezone: "America/Los_Angeles"
   groups:
     fulfillment-service-container-images:
       patterns:
@@ -80,6 +98,9 @@ updates:
   schedule:
     # Check for updates to container base images every week
     interval: "weekly"
+    day: "friday"
+    time: "22:00"
+    timezone: "America/Los_Angeles"
   groups:
     osac-operator-container-images:
       patterns:

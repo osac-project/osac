@@ -1,0 +1,5 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "schedule": ["* 22-23 * * 5"],
+  "timezone": "America/Los_Angeles"
+}

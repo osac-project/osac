@@ -27,6 +27,13 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8stypes "k8s.io/apimachinery/pkg/types"
+	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/network"
@@ -227,6 +234,126 @@ func (t *Tool) PatchKCIdPDisableTrustManager(ctx context.Context, idpAlias strin
 
 // AddUser creates a user with the given credentials in the ext realm. Returns the
 // Keycloak-assigned user ID, which is the `sub` claim value in tokens issued by this realm.
+// EnsureKCTrustsClusterCA patches the keycloak-service Deployment in the keycloak
+// namespace so that Keycloak's JVM trusts the cluster's self-signed CA. This is
+// required for Quarkus-based Keycloak 26, which uses the Vert.x HTTP client for
+// back-channel calls (e.g. the token exchange at hop 4 of the OIDC broker flow).
+// Unlike the legacy Wildfly-era "disableTrustManager" IdP flag, the Quarkus KC
+// respects the KC_TRUSTSTORE_PATHS environment variable to inject extra CAs.
+//
+// Without this, Keycloak returns HTTP 502 when the osac realm's broker tries to
+// exchange the authorization code for tokens with the ext realm's token endpoint:
+//
+//	POST https://keycloak.keycloak.svc.cluster.local:8443/realms/ext-.../token
+//
+// Both realms are on the same Keycloak pod, so the URL is reachable, but the TLS
+// handshake fails because the cluster CA is not in the JVM's default truststore.
+//
+// The function reads the cluster CA bundle from the osac/ca-bundle ConfigMap,
+// creates an it-cluster-ca ConfigMap in the keycloak namespace, and uses a
+// strategic merge patch to add the volume, volumeMount, and KC_TRUSTSTORE_PATHS
+// env var to the Deployment. It then waits up to 3 minutes for the rollout.
+//
+// The function is idempotent: if the it-cluster-ca ConfigMap already exists (from a
+// previous run against the same Kind cluster), it assumes KC is already configured
+// and returns immediately without restarting KC.
+func (t *Tool) EnsureKCTrustsClusterCA(ctx context.Context) error {
+	const (
+		kcNamespace  = "keycloak"
+		kcDeployment = "keycloak-service"
+		kcContainer  = "keycloak"
+		cmName       = "it-cluster-ca"
+		mountPath    = "/etc/it-cluster-ca"
+		caFilename   = "ca.crt"
+	)
+
+	t.logger.InfoContext(ctx, "Ensuring Keycloak trusts cluster CA")
+
+	// Idempotency: if the marker ConfigMap already exists KC is already patched.
+	existing := &corev1.ConfigMap{}
+	err := t.kubeClient.Get(ctx, crclient.ObjectKey{Namespace: kcNamespace, Name: cmName}, existing)
+	if err == nil {
+		t.logger.InfoContext(ctx, "Keycloak cluster-CA ConfigMap already present; skipping KC patch")
+		return nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("check existing cluster-ca configmap: %w", err)
+	}
+
+	// Read the cluster CA bundle that the IT tool already loaded at suite startup.
+	caBundleMap := &corev1.ConfigMap{}
+	if err := t.kubeClient.Get(ctx, crclient.ObjectKey{Namespace: "osac", Name: "ca-bundle"}, caBundleMap); err != nil {
+		return fmt.Errorf("read osac/ca-bundle configmap: %w", err)
+	}
+	var caPEM strings.Builder
+	for _, cert := range caBundleMap.Data {
+		caPEM.WriteString(cert)
+		if len(cert) > 0 && cert[len(cert)-1] != '\n' {
+			caPEM.WriteByte('\n')
+		}
+	}
+
+	// Create the ConfigMap in the keycloak namespace (acts as both the CA source
+	// and the idempotency marker for future runs).
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Namespace: kcNamespace, Name: cmName},
+		Data:       map[string]string{caFilename: caPEM.String()},
+	}
+	if err := t.kubeClient.Create(ctx, cm); err != nil {
+		return fmt.Errorf("create cluster-ca configmap in keycloak namespace: %w", err)
+	}
+
+	// Strategic merge patch: add volume, volumeMount, and KC_TRUSTSTORE_PATHS.
+	// The containers array is merged by the "name" field in strategic merge patch.
+	patch := []byte(fmt.Sprintf(`{
+		"spec": {
+			"template": {
+				"spec": {
+					"volumes": [{"name":%q,"configMap":{"name":%q}}],
+					"containers": [{
+						"name": %q,
+						"env":          [{"name":"KC_TRUSTSTORE_PATHS","value":%q}],
+						"volumeMounts": [{"name":%q,"mountPath":%q,"readOnly":true}]
+					}]
+				}
+			}
+		}
+	}`, cmName, cmName, kcContainer, mountPath+"/"+caFilename, cmName, mountPath))
+
+	if _, err := t.kubeClientSet.AppsV1().Deployments(kcNamespace).Patch(
+		ctx, kcDeployment, k8stypes.StrategicMergePatchType, patch, metav1.PatchOptions{},
+	); err != nil {
+		return fmt.Errorf("patch keycloak deployment with cluster CA: %w", err)
+	}
+
+	t.logger.InfoContext(ctx, "Patched Keycloak deployment with cluster CA; waiting for rollout")
+	return t.waitForKCRollout(ctx, kcNamespace, kcDeployment)
+}
+
+// waitForKCRollout polls until the named Deployment has fully rolled out all replicas.
+func (t *Tool) waitForKCRollout(ctx context.Context, namespace, name string) error {
+	deadline := time.Now().Add(3 * time.Minute)
+	for time.Now().Before(deadline) {
+		dep, err := t.kubeClientSet.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("get deployment %s/%s during rollout wait: %w", namespace, name, err)
+		}
+		desired := int32(1)
+		if dep.Spec.Replicas != nil {
+			desired = *dep.Spec.Replicas
+		}
+		if dep.Status.ObservedGeneration >= dep.Generation &&
+			dep.Status.UpdatedReplicas == desired &&
+			dep.Status.ReadyReplicas == desired {
+			t.logger.InfoContext(ctx, "Keycloak rollout complete",
+				"namespace", namespace, "deployment", name)
+			return nil
+		}
+		time.Sleep(5 * time.Second)
+	}
+	return fmt.Errorf("keycloak deployment %s/%s did not finish rollout within 3 minutes", namespace, name)
+}
+
 // Use the returned ID as the external subject when linking the user in the osac realm via
 // ProvisionOIDCUser.
 func (s *ExtRealmState) AddUser(ctx context.Context, username, password, email string) (userID string, err error) {

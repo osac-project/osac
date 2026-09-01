@@ -279,6 +279,14 @@ func (t *Tool) Setup(ctx context.Context) error {
 		return err
 	}
 
+	// Ensure Keycloak trusts the cluster CA so that the OIDC broker can complete
+	// back-channel token exchanges with intra-cluster realm endpoints over TLS.
+	// The function is idempotent and is a no-op if KC is already patched.
+	err = t.EnsureKCTrustsClusterCA(ctx)
+	if err != nil {
+		return err
+	}
+
 	// Create test users in Keycloak and set up admin org membership before
 	// creating clients — the admin token source needs admin to be in an org
 	// for the password flow to succeed:

@@ -181,6 +181,8 @@ func (s *ExtRealmState) AddUser(ctx context.Context, username, password, email s
 			"email":           email,
 			"emailVerified":   true,
 			"enabled":         true,
+			"firstName":       username,
+			"lastName":        "ExtIdPTest",
 			"requiredActions": []string{},
 		})
 	if err != nil {
@@ -248,6 +250,8 @@ func (t *Tool) ProvisionOIDCUser(
 		"email":           email,
 		"emailVerified":   true,
 		"enabled":         true,
+		"firstName":       username,
+		"lastName":        "OsacIdPTest",
 		"requiredActions": []string{},
 	})
 	if err != nil {

@@ -305,4 +305,3 @@ def wait_for_project_not_in_keycloak(
         f"Project group '/{project_name}' (or variant) still exists in Keycloak after {timeout_seconds}s. "
         f"Organization ID: {org_id}."
     )
-

@@ -430,6 +430,11 @@ func (s *PrivateBareMetalInstancesServer) validateSpec(bmi *privatev1.BareMetalI
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "bare metal instance spec is mandatory")
 	}
 
+	if (!spec.HasSshPublicKey() || spec.GetSshPublicKey() == "") && (!spec.HasUserData() || spec.GetUserData() == "") {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"at least one authentication method must be provided: spec.ssh_public_key or spec.user_data")
+	}
+
 	if spec.HasSshPublicKey() {
 		sshPublicKey := spec.GetSshPublicKey()
 		if sshPublicKey != "" {

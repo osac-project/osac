@@ -102,13 +102,32 @@ var _ = Describe("Bare metal instances server", func() {
 						Name: "test-baremetal-instance",
 					}.Build(),
 					Spec: publicv1.BareMetalInstanceSpec_builder{
-						CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						SshPublicKey: new(testSSHPublicKey),
 					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(response.GetObject().GetId()).ToNot(BeEmpty())
 			Expect(response.GetObject().GetSpec().GetCatalogItem().GetId()).To(Equal(catalogItemID))
+		})
+
+		It("Rejects create without any authentication method", func() {
+			_, err := server.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
+				Object: publicv1.BareMetalInstance_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "test-no-auth",
+					}.Build(),
+					Spec: publicv1.BareMetalInstanceSpec_builder{
+						CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			s, ok := status.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(s.Code()).To(Equal(codes.InvalidArgument))
+			Expect(s.Message()).To(ContainSubstring("at least one authentication method"))
 		})
 
 		It("Fails to create without an object", func() {
@@ -125,7 +144,8 @@ var _ = Describe("Bare metal instances server", func() {
 				_, err := server.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 					Object: publicv1.BareMetalInstance_builder{
 						Spec: publicv1.BareMetalInstanceSpec_builder{
-							CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+							CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+							SshPublicKey: new(testSSHPublicKey),
 						}.Build(),
 						Metadata: publicv1.Metadata_builder{
 							Name: fmt.Sprintf("bmi-%d", i),
@@ -147,7 +167,8 @@ var _ = Describe("Bare metal instances server", func() {
 						Name: "test-baremetal-instance",
 					}.Build(),
 					Spec: publicv1.BareMetalInstanceSpec_builder{
-						CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						SshPublicKey: new(testSSHPublicKey),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -169,8 +190,9 @@ var _ = Describe("Bare metal instances server", func() {
 						Name: "test-baremetal-instance",
 					}.Build(),
 					Spec: publicv1.BareMetalInstanceSpec_builder{
-						CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-						RunStrategy: new(publicv1.BareMetalInstanceRunStrategy_BARE_METAL_INSTANCE_RUN_STRATEGY_ALWAYS),
+						CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						SshPublicKey: new(testSSHPublicKey),
+						RunStrategy:  new(publicv1.BareMetalInstanceRunStrategy_BARE_METAL_INSTANCE_RUN_STRATEGY_ALWAYS),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -218,7 +240,8 @@ var _ = Describe("Bare metal instances server", func() {
 						Name: "test-baremetal-instance",
 					}.Build(),
 					Spec: publicv1.BareMetalInstanceSpec_builder{
-						CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						SshPublicKey: new(testSSHPublicKey),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -249,7 +272,8 @@ var _ = Describe("Bare metal instances server", func() {
 						Name: "test-baremetal-instance",
 					}.Build(),
 					Spec: publicv1.BareMetalInstanceSpec_builder{
-						CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						SshPublicKey: new(testSSHPublicKey),
 					}.Build(),
 				}.Build(),
 			}.Build())

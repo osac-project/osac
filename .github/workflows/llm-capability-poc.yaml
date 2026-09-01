@@ -13,6 +13,13 @@ name: LLM Capability POC (fleet-wide, non-osac-ci-1)
 
 on:
   workflow_dispatch: {}
+  # pull_request so this can run and be validated entirely on this PR's
+  # own branch, without ever landing on main -- workflow_dispatch alone
+  # requires the workflow file to already exist on the default branch to
+  # be dispatchable, which a throwaway POC shouldn't need.
+  pull_request:
+    paths:
+      - .github/workflows/llm-capability-poc.yaml
 
 permissions: {}
 

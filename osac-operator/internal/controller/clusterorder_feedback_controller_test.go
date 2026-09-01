@@ -1004,3 +1004,19 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 		})
 	})
 })
+
+var _ = Describe("humanizeConditionName", func() {
+	DescribeTable("splits a PascalCase condition name into words",
+		func(name, expected string) {
+			Expect(humanizeConditionName(name)).To(Equal(expected))
+		},
+		Entry("single word", "Ready", "Ready"),
+		Entry("two words", "ClusterStorageReady", "Cluster Storage Ready"),
+		Entry("three words", "ControlPlaneCreated", "Control Plane Created"),
+		Entry("leading acronym", "CSIDriverReady", "CSI Driver Ready"),
+		Entry("trailing acronym", "EnableTLS", "Enable TLS"),
+		Entry("acronym-only", "TLS", "TLS"),
+		Entry("acronym then word", "TLSReady", "TLS Ready"),
+		Entry("empty string", "", ""),
+	)
+})

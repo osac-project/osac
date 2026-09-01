@@ -270,13 +270,29 @@ func trueConditionTypes(clusterOrder *ckv1alpha1.ClusterOrder) map[string]struct
 
 // humanizeConditionName turns a PascalCase condition name into space-separated words for
 // a human-readable message, e.g. "ControlPlaneCreated" -> "Control Plane Created".
-// ClusterOrder condition names are simple PascalCase without acronyms, so inserting a
-// space before each interior uppercase rune is sufficient.
+// Multi-letter acronyms are kept intact, e.g. "CSIDriverReady" -> "CSI Driver Ready" and
+// "EnableTLS" -> "Enable TLS", so a space is only inserted at a genuine word boundary.
+//
+// Version-suffixed acronyms such as "IPv4"/"IPv6" are not handled: the trailing lowercase
+// of the suffix is indistinguishable from an acronym-to-word boundary with single-rune
+// lookahead, so "IPv4Ready" splits as "I Pv4 Ready". No ClusterOrder condition name uses
+// that form today; add explicit handling here if one is ever introduced.
 func humanizeConditionName(name string) string {
+	runes := []rune(name)
 	var builder strings.Builder
-	for index, runeValue := range name {
+	for index, runeValue := range runes {
 		if index > 0 && unicode.IsUpper(runeValue) {
-			builder.WriteRune(' ')
+			previous := runes[index-1]
+			// A new word starts when an uppercase rune follows a lowercase rune or a
+			// digit (e.g. the "P" in "ControlPlane"), or when an uppercase rune ends a
+			// run of uppercase letters that begins the next word, i.e. the following
+			// rune is lowercase (e.g. the "D" in "CSIDriver"). Both checks leave a run
+			// of uppercase letters such as "CSI" or "TLS" unsplit.
+			startsWord := unicode.IsLower(previous) || unicode.IsDigit(previous)
+			endsAcronym := unicode.IsUpper(previous) && index+1 < len(runes) && unicode.IsLower(runes[index+1])
+			if startsWord || endsAcronym {
+				builder.WriteRune(' ')
+			}
 		}
 		builder.WriteRune(runeValue)
 	}

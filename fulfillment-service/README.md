@@ -31,6 +31,49 @@ To work with this project you will need the following tools:
 See [dev/README.md](dev/README.md) for more information about the `dev.py` script and how to extend
 it with new commands.
 
+## Working with Protocol Buffers
+
+The API is defined using protocol buffers in the [`proto`](proto) directory.
+
+### Editing Proto Files
+
+**IMPORTANT**: Only edit proto files in `proto/private/`. The `proto/public/` directory contains generated files and must never be edited manually.
+
+After making changes to `.proto` files in `proto/private/`, you must regenerate the public protos and Go code:
+
+```bash
+# From the fulfillment-service/ directory:
+$ uv run dev.py build protos
+```
+
+This command performs three steps:
+1. **Generates the public API from the private API**
+2. Lints the proto files
+3. Generates Go code from the proto definitions
+
+### Generated Code
+
+The following directories contain generated code and must never be edited manually:
+- `proto/public/` - Public API proto files (generated from `proto/private/`)
+- `internal/api/` - Generated Go code (generated from all proto files)
+
+**Important**: You must commit **all three** changes when modifying protos:
+1. Your edits to `.proto` files in `proto/private/`
+2. The generated public protos in `proto/public/`
+3. The generated Go code in `internal/api/`
+
+A CI check (`check-generated-code.yaml`) runs on every PR to verify that the generated code is up to date. If the check fails, it means you forgot to regenerate or commit the generated code.
+
+### Incremental Builds
+
+For incremental builds (skipping public proto generation, only regenerating Go code):
+
+```bash
+$ buf generate
+```
+
+See [docs/CLEANAPI.md](docs/CLEANAPI.md) for a complete guide on using cleanapi annotations, best practices, and common workflows. See [AGENTS.md](AGENTS.md) for build commands and development workflow.
+
 ## Building the binaries
 
 The project contains two binaries: the service and the CLI.

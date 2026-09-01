@@ -7,6 +7,7 @@ Metering pipeline for OSAC — collects resource usage events from the fulfillme
 - **Three Go modules** — `schema/` (shared types), `metering-service/` (producer), and `adapters/` (consumer framework) have independent `go.mod`; both `metering-service` and `adapters` depend on `schema` via `replace` directives
 - **Always `make test`** in the module you changed before committing
 - **Always `make helm-lint`** from `osac-metering/` before committing chart changes
+- **Always `make generate`** (from `osac-metering/metering-service/`) after updating fulfillment-service API version in `buf.gen.yaml` — **commit the generated code changes** in `internal/api/`
 - **Kafka cluster required** — metering subsystem needs AMQ Streams and Kafka (deployed via osac-installer phases 1-2)
 - **CloudEvents format** — all metering events use CloudEvents specification for consistency
 - **Implement `ProviderAdapter`** — new billing integrations implement the `ProviderAdapter` interface in `adapters/adapter.go`; the `Runner` handles Kafka consumption, dedup, retry, DLQ routing, and offset management
@@ -26,7 +27,7 @@ cd metering-service
 make build                     # Build the metering-service binary
 make test                      # Run unit tests with Ginkgo
 make lint                      # Run golangci-lint
-make generate                  # Regenerate proto client code from BSR
+make generate                  # Regenerate proto client code from BSR (commit changes to internal/api/)
 make clean                     # Clean build artifacts
 
 # adapters (consumer framework)
@@ -174,6 +175,7 @@ Key configuration parameters in `charts/osac-metering/values.yaml`:
 - **build-metering-service-image.yaml** — Builds and pushes metering-service container image
 - **build-metering-echo-adapter-image.yaml** — Builds echo-adapter image on `osac-metering/adapters/**` changes
 - **build-metering-m360-adapter-image.yaml** — Builds m360-adapter image on `osac-metering/adapters/**` changes
+- **check-generated-code.yaml** (repo root, matrixed across components) — Validates `buf generate` output unchanged (ensures gRPC client is up-to-date). **If this check fails**: From `osac-metering/metering-service/`, run `make generate` and commit the generated code changes in `internal/api/`.
 - **run-osac-metering-tests** — Runs unit tests as part of the mono-repo test suite
 - **publish-charts.yaml** — Publishes the osac-metering Helm chart to GHCR and creates a GitHub Release when `osac-metering/vX.Y.Z` tags are pushed
 - **E2E workflows** (CaaS, VMaaS, BMaaS) — Tests metering in full OSAC deployments

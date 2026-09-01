@@ -22,7 +22,7 @@ OSAC operator is a Kubernetes operator that reconciles infrastructure resources 
 - **Always `make manifests generate`** after modifying CRD types in `api/v1alpha1/*_types.go`
 - **Always `make helm-crds`** after regenerating CRDs (runs `make manifests` + `hack/sync-helm-crds.py`) to sync Helm charts (or run `make check-helm-crds` to verify sync)
 - **Never edit** `config/crd/`, `zz_generated.deepcopy.go`, `internal/api/`, or `go.sum` — all generated (regenerate `go.sum` with `go mod tidy`)
-- **Always `buf generate`** after updating the module version in `buf.gen.yaml` (check the file for the current pinned version)
+- **Always `buf generate`** (from `osac-operator/` directory) after updating the module version in `buf.gen.yaml` (check the file for the current pinned version) — **commit the generated code changes** in `internal/api/`
 - **Commit message format**: `OSAC-XXXXX: description of change` (Red Hat Jira key prefix)
 - **AI attribution**: Use `Assisted-by: Claude Code <noreply@anthropic.com>` (not Co-Authored-By)
 - **Sign-off required**: `git commit -s` for DCO compliance
@@ -41,10 +41,10 @@ make lint                     # golangci-lint v2.12.1 (strict — always run bef
 make fmt                      # go fmt + goimports
 make vet                      # go vet
 
-# Code generation
+# Code generation (from osac-operator/)
 make manifests                # Generate CRD manifests + RBAC
 make generate                 # Generate DeepCopy
-buf generate                  # Generate gRPC client from Buf Schema Registry
+buf generate                  # Generate gRPC client from Buf Schema Registry (commit changes to internal/api/)
 
 # Local development
 make install                  # Install CRDs into cluster
@@ -163,7 +163,7 @@ Hooks are configured in `.claude/settings.json` and run automatically during age
 ## CI Workflows
 
 - **build-image.yaml**: Runs `make test`, `make helm-lint`, then builds and pushes container + manifest container
-- **check-generated-code.yaml** (repo root, matrixed across components): Validates `buf generate` output unchanged (ensures gRPC client is up-to-date)
+- **check-generated-code.yaml** (repo root, matrixed across components): Validates `buf generate` output unchanged (ensures gRPC client is up-to-date). **If this check fails**: From `osac-operator/`, run `buf generate` and commit the generated code changes in `internal/api/`.
 - **helm-lint.yaml**: Checks CRD sync (`hack/sync-helm-crds.py`) and lints Helm charts
 - **e2e-vmaas-full-install.yml** (repo root, shared with fulfillment-service): builds both components and runs E2E tests in a VMaaS environment
 

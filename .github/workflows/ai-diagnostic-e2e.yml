@@ -90,7 +90,18 @@ jobs:
             exit 0
           fi
           echo "found=true" >> "${GITHUB_OUTPUT}"
-          echo "number=$(jq -r '.number' <<<"${pr_json}")" >> "${GITHUB_OUTPUT}"
+          pr_number=$(jq -r '.number' <<<"${pr_json}")
+          echo "number=${pr_number}" >> "${GITHUB_OUTPUT}"
+
+          # Changed-file list for extra prompt context. Emitted as a single
+          # compact JSON line (jq -c), not a newline-delimited block -- PR
+          # file paths are attacker-controlled (fork PR author's own
+          # filenames), so a heredoc-style multiline GITHUB_OUTPUT here
+          # would risk delimiter-collision output injection. Capped at 40
+          # so a huge PR can't blow up the prompt.
+          files_json=$(gh api --paginate "repos/${REPO}/pulls/${pr_number}/files?per_page=100" --jq '.[].filename' 2>/dev/null \
+            | jq -Rsc '[splits("\n")] | map(select(length > 0)) | .[:40]')
+          echo "files=${files_json:-[]}" >> "${GITHUB_OUTPUT}"
 
       - name: Download failure artifact
         id: artifact
@@ -143,6 +154,7 @@ jobs:
           WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
           DIAGNOSIS_FILE: ${{ runner.temp }}/diagnosis.md
+          CHANGED_FILES: ${{ steps.pr.outputs.files }}
         run: python3 .github/scripts/ai-diagnose-failure.py
 
       # Deliberately a commit Status, not a Check Run. Check Runs are only

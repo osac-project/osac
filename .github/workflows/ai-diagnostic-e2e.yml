@@ -156,8 +156,14 @@ jobs:
       # such linkage requirement -- they attach directly to the SHA and
       # always show up in the rollup, which is how pre-Checks-API CI
       # integrations (e.g. classic Travis CI) supported fork PRs for years.
+      # !cancelled() (rather than relying on the implicit success() this
+      # if: would otherwise AND in) so this still runs -- and posts the
+      # "diagnosis unavailable" fallback below -- even if an earlier step
+      # (artifact download, Vertex auth, diagnosis itself) hard-fails.
+      # Without it, any of those failing means the PR gets no feedback at
+      # all instead of at least an honest "unavailable" status.
       - name: Publish diagnostic status
-        if: steps.pr.outputs.found == 'true'
+        if: steps.pr.outputs.found == 'true' && !cancelled()
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}

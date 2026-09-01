@@ -123,10 +123,11 @@ invent log locations that weren't given to you:
 2. Lines matching error/traceback/panic/failed/exception, grepped from the
    OpenShift pod logs, `oc describe` output, and Kubernetes events that
    this run's log-gathering step collected from the target cluster (this
-   is NOT the GitHub Actions job log itself -- if this section says no
-   artifact directory was found, that means the cluster never came up far
-   enough to gather anything, which is itself useful signal, e.g. an
-   earlier infra step like cluster boot likely failed first).
+   is NOT the GitHub Actions job log itself). If this section says no
+   artifact directory was found, that only means no cluster evidence was
+   collected for this run -- it is not proof of what went wrong or when;
+   rely on the GitHub Actions run's own job logs at the URL above for
+   what actually happened.
 
 Given only this evidence, write a SHORT (under 200 words) root-cause
 diagnosis for a developer who has not looked at the run yet: what likely

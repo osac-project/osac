@@ -188,7 +188,9 @@ func parseFirstIPv4Line(s string) (string, error) {
 // organization so the organization claim appears in their JWT.
 //
 // The password is set to the user's username for simplicity — these are ephemeral test
-// users. Use LoginOIDCUser to authenticate via the password grant.
+// users. After provisioning, use SimulateOIDCLogin to drive the full OIDC redirect chain,
+// or LoginOIDCUser for a lightweight password-grant token when the redirect chain is not
+// under test.
 func (t *Tool) ProvisionOIDCUser(
 	ctx context.Context,
 	username, email, tenantName, idpAlias, externalSubject string,
@@ -255,6 +257,10 @@ func (t *Tool) ProvisionOIDCUser(
 // returns a JWT access token. This avoids the full OIDC redirect chain (which requires
 // the Kind cluster to reach mockoidc on the host) while still validating that the user
 // is properly linked to the IdP and has the correct tenant/organization claims.
+//
+// Not used by the current IdP login specs (which use SimulateOIDCLogin to exercise the
+// full redirect chain), but kept as a reusable utility for future tests that only need a
+// valid token without caring about the redirect flow.
 func (t *Tool) LoginOIDCUser(ctx context.Context, username string) (string, error) {
 	tokenSource, err := t.makeKeycloakTokenSource(ctx, username, username)
 	if err != nil {
@@ -268,6 +274,9 @@ func (t *Tool) LoginOIDCUser(ctx context.Context, username string) (string, erro
 }
 
 // WaitForKeycloakIdP polls until the Keycloak admin API reports the IdP alias as present.
+// Not called by the current specs (which rely on the OSAC controller status reaching READY
+// instead), but kept as a reusable low-level utility for tests that need to assert KC state
+// directly.
 func (t *Tool) WaitForKeycloakIdP(ctx context.Context, alias string) error {
 	bo := backoff.NewExponentialBackOff()
 	bo.InitialInterval = 2 * time.Second

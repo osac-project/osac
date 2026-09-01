@@ -217,6 +217,10 @@ var _ = Describe("Identity provider login flow", func() {
 		Expect(createErr).To(HaveOccurred(), "IdP user must not create resources in another tenant")
 		grpcStatus, ok := grpcstatus.FromError(createErr)
 		Expect(ok).To(BeTrue())
+		// Accept either PermissionDenied or Unauthenticated: OPA may reject the request
+		// at the authz layer (PermissionDenied) or the token's organization claim may not
+		// match the target tenant causing the authn middleware to treat it as unauthenticated.
+		// Both codes confirm the cross-tenant access was correctly denied.
 		Expect(grpcStatus.Code()).To(SatisfyAny(
 			Equal(grpccodes.PermissionDenied),
 			Equal(grpccodes.Unauthenticated),

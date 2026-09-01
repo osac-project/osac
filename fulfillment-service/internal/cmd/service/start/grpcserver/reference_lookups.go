@@ -178,6 +178,19 @@ func registerReferenceLookups(
 	references.RegisterDAOLookup(validator, "osac.private.v1.ClusterTemplateReference", clusterTemplatesDAO)
 	references.RegisterDAOLookup(validator, "osac.public.v1.ClusterTemplateReference", clusterTemplatesDAO)
 
+	addOnOperatorsDAO, err := dao.NewGenericDAO[*privatev1.AddOnOperator]().
+		SetLogger(logger).
+		SetTenancyLogic(tenancyLogic).
+		SetMetricsRegisterer(metricsRegisterer).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create AddOnOperator DAO for reference lookups: %w", err)
+	}
+	references.RegisterDAOLookup(validator, "osac.private.v1.AddOnOperatorReference", addOnOperatorsDAO)
+	references.RegisterDAOLookup(validator, "osac.public.v1.AddOnOperatorReference", addOnOperatorsDAO)
+	references.RegisterDAOLookup(validator, "osac.private.v1.AddOnOperatorLocalReference", addOnOperatorsDAO)
+	references.RegisterDAOLookup(validator, "osac.public.v1.AddOnOperatorLocalReference", addOnOperatorsDAO)
+
 	clusterCatalogItemsDAO, err := dao.NewGenericDAO[*privatev1.ClusterCatalogItem]().
 		SetLogger(logger).
 		SetTenancyLogic(tenancyLogic).

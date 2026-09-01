@@ -289,6 +289,7 @@ func (c *runnerContext) registerHandlers(ctx context.Context, mux *runtime.Serve
 		// Public API:
 		publicv1.RegisterCapabilitiesHandler,
 		publicv1.RegisterClusterTemplatesHandler,
+		publicv1.RegisterAddOnOperatorsHandler,
 		publicv1.RegisterClusterCatalogItemsHandler,
 		publicv1.RegisterClustersHandler,
 		publicv1.RegisterClusterVersionsHandler,
@@ -318,6 +319,7 @@ func (c *runnerContext) registerHandlers(ctx context.Context, mux *runtime.Serve
 		// Private API:
 		privatev1.RegisterCapabilitiesHandler,
 		privatev1.RegisterClusterTemplatesHandler,
+		privatev1.RegisterAddOnOperatorsHandler,
 		privatev1.RegisterClusterCatalogItemsHandler,
 		privatev1.RegisterClustersHandler,
 		privatev1.RegisterClusterVersionsHandler,

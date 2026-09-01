@@ -31,6 +31,10 @@ keycloak:
   adminUsername: admin
   adminPassword: admin
   defaultUserPassword: foobar
+  # extraEnv injects additional environment variables into the Keycloak pod.
+  # Use this for SPI overrides that must be set at the server level (e.g.
+  # KC_SPI_CONNECTIONS_HTTP_CLIENT_DEFAULT_DISABLE_TRUST_MANAGER for Kind).
+  extraEnv: []
   route:
     hostname: ""
     publicIngress: false

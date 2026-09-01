@@ -43,6 +43,13 @@ keycloak:
   enabled: true
   hostname: "https://keycloak.keycloak.svc.cluster.local:8443"
   extraPort: 8443
+  # Kind/IT only: disable back-channel TLS verification so KC's OIDC broker
+  # can reach a second KC realm via the cluster-internal self-signed cert.
+  # KC 26+ uses a Quarkus HTTP client whose per-IdP disableTrustManager flag
+  # is not honoured; the SPI-level flag is required instead.
+  extraEnv:
+    - name: KC_SPI_CONNECTIONS_HTTP_CLIENT_DEFAULT_DISABLE_TRUST_MANAGER
+      value: "true"
   # Kind/IT only: seed known passwords for the realm's built-in test users.
   devFixtures:
     enabled: true

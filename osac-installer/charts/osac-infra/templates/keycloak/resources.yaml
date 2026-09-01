@@ -458,6 +458,10 @@ spec:
         - name: KC_SPI_IMPORT_REALM_FILE_STRATEGY
           value: OVERWRITE
         {{- end }}
+        {{- range .Values.keycloak.extraEnv }}
+        - name: {{ .name | quote }}
+          value: {{ .value | quote }}
+        {{- end }}
         args:
         - start
         - --import-realm

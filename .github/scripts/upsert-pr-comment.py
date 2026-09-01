@@ -18,12 +18,25 @@ import re
 import sys
 
 COMMENT_MARKER = "<!-- osac-ai-diagnostic-comment -->"
+# Matches any of our own marker shapes so they can be neutralized if they
+# ever show up *inside* section content (see upsert_section below).
+_MARKER_RE = re.compile(r"<!--\s*/?section:.*?-->", re.DOTALL)
 
 
 def upsert_section(body, key, content):
     start = f"<!-- section:{key} -->"
     end = f"<!-- /section:{key} -->"
-    block = f"{start}\n{content.strip()}\n{end}"
+    # content (e.g. an LLM diagnosis) can echo attacker-influenced log/diff
+    # text verbatim. If it happens to contain a literal copy of `end` (or
+    # any other section marker), a later non-greedy regex search below
+    # would terminate at that embedded copy instead of the real delimiter,
+    # truncating the match and leaving stale content behind on the next
+    # update. Neutralize any embedded marker-shaped text before it's ever
+    # written into the body -- rendered as inert literal text, not parsed.
+    safe_content = _MARKER_RE.sub(
+        lambda m: m.group(0).replace("<!--", "&lt;!--"), content.strip()
+    )
+    block = f"{start}\n{safe_content}\n{end}"
     pattern = re.compile(re.escape(start) + r".*?" + re.escape(end), re.DOTALL)
     if pattern.search(body):
         # Replacement via a function, not a literal string, so backslash

@@ -1,0 +1,57 @@
+name: LLM Capability POC (fleet-wide, non-osac-ci-1)
+
+# Throwaway validation, not a real capability: proves whether the existing
+# WIF auth to the osac-ci GCP project (already used by
+# graphify-brain-refresh-vertex-poc.yaml, which only ever runs on
+# osac-ci-1) works "out of the box" on a different fleet host with zero
+# new GCP-side configuration -- since WIF trust is based on the calling
+# job's OIDC identity (repo/ref), not on which physical runner executes
+# it, this should just work. Deliberately has nothing to do with
+# graphify -- tests the general Vertex AI capability in isolation.
+#
+# Delete this file once the answer is confirmed either way.
+
+on:
+  workflow_dispatch: {}
+
+permissions: {}
+
+jobs:
+  test:
+    name: Call Vertex AI from osac-1
+    runs-on: [self-hosted, osac-1]
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+    env:
+      GOOGLE_CLOUD_PROJECT: osac-ci
+      GOOGLE_CLOUD_LOCATION: us-central1
+    steps:
+      - name: Authenticate to Google Cloud (Vertex AI)
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2.1.13
+        with:
+          workload_identity_provider: projects/1008600636152/locations/global/workloadIdentityPools/github-actions-pool/providers/github-actions-provider
+          service_account: osac-ci@osac-ci.iam.gserviceaccount.com
+
+      - name: Install google-genai SDK
+        run: pip install --user --quiet google-genai
+
+      - name: Call Vertex AI Gemini (minimal smoke test)
+        run: |
+          set -euo pipefail
+          python3 - <<'PYEOF'
+          import os
+          from google import genai
+
+          client = genai.Client(
+              vertexai=True,
+              project=os.environ["GOOGLE_CLOUD_PROJECT"],
+              location=os.environ["GOOGLE_CLOUD_LOCATION"],
+          )
+          resp = client.models.generate_content(
+              model="gemini-2.5-flash",
+              contents="Reply with exactly one word: WORKS",
+          )
+          print("Response:", resp.text)
+          print("Hostname check: this ran on", os.uname().nodename)
+          PYEOF

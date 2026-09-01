@@ -215,6 +215,28 @@ class K8sClient:
         dv = self.get_json(resource="datavolume", name=name)
         return dv.get("spec", {}).get("pvc", {}).get("storageClassName", "")
 
+    # NATGateway queries
+
+    def get_nat_gateway_name(self, *, uuid: str, checked: bool = True) -> str:
+        output, rc = self._get(
+            "get",
+            "natgateway",
+            "-n",
+            self.namespace,
+            "-l",
+            f"osac.openshift.io/natgateway-uuid={uuid}",
+            "-o",
+            "jsonpath={.items[0].metadata.name}",
+            checked=checked,
+        )
+        return output if rc == 0 else ""
+
+    def get_nat_gateway_phase(self, *, name: str, checked: bool = True) -> str:
+        output, rc = self._get(
+            "get", "natgateway", name, "-n", self.namespace, "-o", "jsonpath={.status.phase}", checked=checked
+        )
+        return output if rc == 0 else ""
+
     # ExternalIPPool queries
 
     def get_external_ip_pool_name(self, *, uuid: str, checked: bool = True) -> str:

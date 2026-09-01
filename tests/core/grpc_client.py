@@ -43,9 +43,20 @@ class GRPCClient:
     def call(self, *, service: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
         return json.loads(run(*self._build_args(service=service, data=data)))
 
-    def create_compute_instance(self, *, catalog_item: str, subnet_ids: list[str], name: str | None = None) -> str:
-        attachments = [{"subnet": {"id": sid}} for sid in subnet_ids]
-        obj: dict[str, Any] = {"spec": {"catalog_item": {"id": catalog_item}, "network_attachments": attachments}}
+    def create_compute_instance(
+        self,
+        *,
+        catalog_item: str,
+        subnet_ids: list[str] | None = None,
+        name: str | None = None,
+        auto_external_ip_attachment: bool = False,
+    ) -> str:
+        spec: dict[str, Any] = {"catalog_item": {"id": catalog_item}}
+        if subnet_ids is not None:
+            spec["network_attachments"] = [{"subnet": {"id": sid}} for sid in subnet_ids]
+        if auto_external_ip_attachment:
+            spec["auto_external_ip_attachment"] = True
+        obj: dict[str, Any] = {"spec": spec}
         if name is not None:
             obj["metadata"] = {"name": name}
         response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.ComputeInstances/Create", data={"object": obj})
@@ -84,6 +95,10 @@ class GRPCClient:
 
     # VirtualNetwork operations
 
+    def list_virtual_networks(self) -> list[dict[str, Any]]:
+        response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.VirtualNetworks/List")
+        return response.get("items", [])
+
     def create_virtual_network(self, *, name: str, ipv4_cidr: str) -> str:
         response: dict[str, Any] = self.call(
             service=f"{PUBLIC_API}.VirtualNetworks/Create",
@@ -102,6 +117,10 @@ class GRPCClient:
         self.call(service=f"{PUBLIC_API}.VirtualNetworks/Delete", data={"id": vn_id})
 
     # Subnet operations
+
+    def list_subnets(self) -> list[dict[str, Any]]:
+        response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.Subnets/List")
+        return response.get("items", [])
 
     def create_subnet(self, *, name: str, virtual_network: str, ipv4_cidr: str) -> str:
         response: dict[str, Any] = self.call(
@@ -138,6 +157,10 @@ class GRPCClient:
         return self.call(service=f"{PUBLIC_API}.Clusters/Get", data={"id": cluster_id})
 
     # SecurityGroup operations
+
+    def list_security_groups(self) -> list[dict[str, Any]]:
+        response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.SecurityGroups/List")
+        return response.get("items", [])
 
     def create_security_group(self, *, name: str, virtual_network: str) -> str:
         response: dict[str, Any] = self.call(
@@ -226,15 +249,41 @@ class GRPCClient:
                     continue
                 raise RuntimeError(f"Failed to create tenant '{name}': {output}") from e
 
+    def get_tenant_condition_status(self, *, name: str, condition_type: str) -> str:
+        proto_type = "TENANT_CONDITION_TYPE_" + re.sub(r"(?<!^)(?=[A-Z])", "_", condition_type).upper()
+        response = self.call(
+            service=f"{PRIVATE_API}.Tenants/List", data={"filter": f'this.metadata.name == "{name}"', "limit": 1}
+        )
+        items = response.get("items", [])
+        if not items:
+            return ""
+        for cond in items[0].get("status", {}).get("conditions", []):
+            if cond.get("type") == proto_type:
+                raw = cond.get("status", "")
+                if raw == "CONDITION_STATUS_TRUE":
+                    return "True"
+                if raw == "CONDITION_STATUS_FALSE":
+                    return "False"
+                return raw
+        return ""
+
+    def get_tenant_condition_reason(self, *, name: str, condition_type: str) -> str:
+        proto_type = "TENANT_CONDITION_TYPE_" + re.sub(r"(?<!^)(?=[A-Z])", "_", condition_type).upper()
+        response = self.call(
+            service=f"{PRIVATE_API}.Tenants/List", data={"filter": f'this.metadata.name == "{name}"', "limit": 1}
+        )
+        items = response.get("items", [])
+        if not items:
+            return ""
+        for cond in items[0].get("status", {}).get("conditions", []):
+            if cond.get("type") == proto_type:
+                return cond.get("reason", "")
+        return ""
+
     # ExternalIPPool operations (private API only)
 
     def create_external_ip_pool(
-        self,
-        *,
-        name: str,
-        cidrs: list[str],
-        ip_family: str = "IP_FAMILY_IPV4",
-        implementation_strategy: str = "",
+        self, *, name: str, cidrs: list[str], ip_family: str = "IP_FAMILY_IPV4", implementation_strategy: str = ""
     ) -> str:
         response: dict[str, Any] = self.call(
             service=f"{PRIVATE_API}.ExternalIPPools/Create",
@@ -263,6 +312,10 @@ class GRPCClient:
 
     # ExternalIP operations (public API)
 
+    def list_external_ips(self) -> list[dict[str, Any]]:
+        response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.ExternalIPs/List")
+        return response.get("items", [])
+
     def create_external_ip(self, *, name: str, pool: str) -> str:
         response: dict[str, Any] = self.call(
             service=f"{PUBLIC_API}.ExternalIPs/Create",
@@ -281,6 +334,10 @@ class GRPCClient:
         self.call(service=f"{PUBLIC_API}.ExternalIPs/Delete", data={"id": external_ip_id})
 
     # ExternalIPAttachment operations (public API)
+
+    def list_external_ip_attachments(self) -> list[dict[str, Any]]:
+        response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.ExternalIPAttachments/List")
+        return response.get("items", [])
 
     def create_external_ip_attachment(self, *, name: str, external_ip: str, compute_instance: str) -> str:
         response: dict[str, Any] = self.call(
@@ -650,6 +707,13 @@ class GRPCClient:
         return response.get("items", [])
 
     # NATGateway operations (public API)
+
+    def list_nat_gateways(self) -> list[dict[str, Any]]:
+        response: dict[str, Any] = self.call(service=f"{PUBLIC_API}.NATGateways/List")
+        return response.get("items", [])
+
+    def get_nat_gateway(self, *, nat_gateway_id: str) -> dict[str, Any]:
+        return self.call(service=f"{PUBLIC_API}.NATGateways/Get", data={"id": nat_gateway_id})
 
     def create_nat_gateway(self, *, name: str, virtual_network_name: str, external_ip_name: str) -> str:
         response: dict[str, Any] = self.call(

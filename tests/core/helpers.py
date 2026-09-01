@@ -266,6 +266,16 @@ def wait_for_external_ip_attachment_deletion(*, k8s: K8sClient, name: str) -> No
     )
 
 
+def wait_for_nat_gateway_cr(*, k8s: K8sClient, uuid: str) -> str:
+    return poll_until(
+        fn=lambda: k8s.get_nat_gateway_name(uuid=uuid, checked=False),
+        until=lambda v: v != "",
+        retries=30,
+        delay=2,
+        description=f"NATGateway CR for {uuid}",
+    )
+
+
 # NATGateway helpers
 
 
@@ -549,6 +559,18 @@ def wait_for_tenant_condition(*, k8s: K8sClient, name: str, condition_type: str,
     )
 
 
+def wait_for_grpc_tenant_condition(
+    *, grpc: GRPCClient, name: str, condition_type: str, expected_status: str = "True"
+) -> None:
+    poll_until(
+        fn=lambda: grpc.get_tenant_condition_status(name=name, condition_type=condition_type),
+        until=lambda v: v == expected_status,
+        retries=120,
+        delay=5,
+        description=f"Tenant {name} {condition_type}={expected_status} (gRPC)",
+    )
+
+
 def wait_for_tenant_deletion(*, k8s: K8sClient, name: str) -> None:
     poll_until(
         fn=lambda: not k8s.is_present(resource="tenant", name=name),
@@ -675,12 +697,7 @@ def wait_for_bmi_running(*, grpc: GRPCClient, bmi_id: str) -> None:
 
 
 def assert_bmi_lifecycle_on_running(
-    *,
-    grpc: GRPCClient,
-    k8s: K8sClient,
-    bmi_id: str,
-    bmh_namespace: str,
-    power_cycle: bool = True,
+    *, grpc: GRPCClient, k8s: K8sClient, bmi_id: str, bmh_namespace: str, power_cycle: bool = True
 ) -> tuple[str, str]:
     """Assert BMH binding/provisioning on an already-RUNNING BMI.
 

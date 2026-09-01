@@ -79,6 +79,7 @@ class OsacCLI:
         run_strategy: str = "Always",
         user_data_secret_ref: str | None = None,
         instance_type: str | None = None,
+        external_ip_attachment: bool = False,
     ) -> str:
         args: list[str] = [
             "create",
@@ -125,9 +126,7 @@ class OsacCLI:
 
                 storage_tier = disk.get("storage_tier")
                 if storage_tier is None:
-                    raise ValueError(
-                        f"additional_disks[{idx}]: 'storage_tier' is required, got None"
-                    )
+                    raise ValueError(f"additional_disks[{idx}]: 'storage_tier' is required, got None")
 
                 # Build --additional-disk flag value: size=<GiB>,storage-tier=<name>
                 disk_spec = f"size={size},storage-tier={storage_tier}"
@@ -161,6 +160,9 @@ class OsacCLI:
 
         if user_data_secret_ref is not None:
             args.extend(["--user-data", user_data_secret_ref])
+
+        if external_ip_attachment:
+            args.append("--external-ip-attachment")
 
         return self._parse_uuid(self._run(*args))
 

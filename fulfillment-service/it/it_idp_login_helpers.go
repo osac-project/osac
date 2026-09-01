@@ -182,7 +182,7 @@ func (t *Tool) DeleteExtRealm(ctx context.Context, state *ExtRealmState) error {
 func (t *Tool) PatchKCIdPDisableTrustManager(ctx context.Context, idpAlias string) error {
 	// GET the current KC IdP to obtain the full config.
 	code, body, err := t.KeycloakAdminRequest(ctx, http.MethodGet,
-		fmt.Sprintf("/identity-providers/instances/%s", url.PathEscape(idpAlias)), nil)
+		fmt.Sprintf("/identity-provider/instances/%s", url.PathEscape(idpAlias)), nil)
 	if err != nil {
 		return fmt.Errorf("get KC IdP %q for trust-manager patch: %w", idpAlias, err)
 	}
@@ -204,7 +204,7 @@ func (t *Tool) PatchKCIdPDisableTrustManager(ctx context.Context, idpAlias strin
 	kcIdp["config"] = config
 
 	code, body, err = t.KeycloakAdminRequest(ctx, http.MethodPut,
-		fmt.Sprintf("/identity-providers/instances/%s", url.PathEscape(idpAlias)), kcIdp)
+		fmt.Sprintf("/identity-provider/instances/%s", url.PathEscape(idpAlias)), kcIdp)
 	if err != nil {
 		return fmt.Errorf("patch KC IdP %q disableTrustManager: %w", idpAlias, err)
 	}

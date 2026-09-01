@@ -345,10 +345,12 @@ func buildHandlerList() []handlerRegistrar {
 		privatev1.RegisterVolumesHandler,
 		// CaaS:
 		publicv1.RegisterClusterTemplatesHandler,
+		publicv1.RegisterAddOnOperatorsHandler,
 		publicv1.RegisterClusterCatalogItemsHandler,
 		publicv1.RegisterClustersHandler,
 		publicv1.RegisterClusterVersionsHandler,
 		privatev1.RegisterClusterTemplatesHandler,
+		privatev1.RegisterAddOnOperatorsHandler,
 		privatev1.RegisterClusterCatalogItemsHandler,
 		privatev1.RegisterClustersHandler,
 		privatev1.RegisterClusterVersionsHandler,

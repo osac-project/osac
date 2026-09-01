@@ -1,0 +1,75 @@
+//
+// Copyright (c) 2025 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "buf/validate/validate.proto";
+import "cleanapi/cleanapi.proto";
+import "osac/private/v1/metadata_type.proto";
+
+option (cleanapi.file).package = "osac.public.v1";
+
+// An add-on operator represents a platform-supported OLM operator that can be installed on CaaS clusters. The resource
+// stores metadata for validation and display; OLM subscription details remain in the Ansible role.
+//
+// buf:lint:ignore OSAC_OBJECT_SHAPE
+message AddOnOperator {
+  // Unique identifier of the add-on operator.
+  string id = 1;
+
+  Metadata metadata = 2;
+
+  // Human friendly short description of the add-on operator, suitable for displaying in one single line on a UI or CLI.
+  string title = 3 [(buf.validate.field).string.min_len = 1];
+
+  // Human friendly long description of the add-on operator, using Markdown format.
+  string description = 4;
+
+  // Minimum supported OpenShift version (inclusive semver). Empty means no minimum.
+  string min_ocp_version = 5;
+
+  // Maximum supported OpenShift version (inclusive semver). Empty means no maximum.
+  string max_ocp_version = 6;
+
+  // Other add-on operators that are mutually exclusive with this one. Bidirectional: if A excludes B, ordering a
+  // cluster with both A and B is rejected at order time.
+  repeated AddOnOperatorLocalReference exclusions = 7;
+
+  // Other add-on operators that this one depends on. Dependencies are auto-included in the resolved operator set at
+  // order time.
+  repeated AddOnOperatorLocalReference dependencies = 8;
+
+  // Whether this add-on operator is visible through the public API. Defaults to false; the Cloud Provider Admin
+  // publishes operators explicitly after review.
+  bool published = 9;
+
+  // Tenant scope for this add-on operator. An empty string means the operator is global and visible to all tenants. A
+  // non-empty string scopes the operator to that specific tenant.
+  string tenant = 10 [(cleanapi.field).private = true];
+}
+
+// Standard reference to an AddOnOperator resource (used by ClusterCatalogItem and ClusterSpec).
+message AddOnOperatorReference {
+  string id = 1;
+  string name = 2;
+  string project = 3;
+  bool shared = 4;
+}
+
+// Local reference to an AddOnOperator (used within the AddOnOperator message for exclusions and dependencies).
+message AddOnOperatorLocalReference {
+  string id = 1;
+  string name = 2;
+}

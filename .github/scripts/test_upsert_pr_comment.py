@@ -32,10 +32,20 @@ class UpsertSectionTests(unittest.TestCase):
         self.assertIn("diagnosis B", body)
 
     def test_backslash_content_survives_replacement(self):
-        body = upsert_section("", "CaaS", r"trace \1 and \g<name>")
-        body2 = upsert_section(body, "CaaS", "replacement")
-        self.assertIn("replacement", body2)
-        self.assertNotIn("\\1", body2)
+        # Both the existing section AND its replacement contain
+        # backslash-digit/group sequences, so the second call must go
+        # through the pattern.sub() replace path (not the plain-concat
+        # insert path) with backslash content in the *replacement* text --
+        # exactly the case that breaks if pattern.sub() is ever called with
+        # a literal string instead of a function (Python would try to
+        # interpret \1/\g<name> as backreferences and raise or corrupt the
+        # output). A version of this test that only put backslashes in the
+        # discarded old content would pass even with that bug, since
+        # nothing would ever ask re.sub to parse them.
+        body = upsert_section("", "CaaS", r"old trace \1 here")
+        body2 = upsert_section(body, "CaaS", r"new trace \1 and \g<name> here")
+        self.assertIn(r"new trace \1 and \g<name> here", body2)
+        self.assertNotIn("old trace", body2)
 
     def test_embedded_delimiter_does_not_leave_stale_text(self):
         # Content that itself contains this section's own closing marker --

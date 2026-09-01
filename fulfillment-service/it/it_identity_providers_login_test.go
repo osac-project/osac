@@ -118,6 +118,12 @@ var _ = Describe("Identity provider login flow", func() {
 				Equal(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY),
 			)
 		}, 2*time.Minute, time.Second).Should(Succeed())
+
+		// Patch the Keycloak IdP to disable TLS certificate verification for back-channel
+		// calls. Keycloak's JVM HTTP client cannot verify the cluster's self-signed cert
+		// when performing the broker token exchange with the ext realm. Without this patch,
+		// the broker callback (hop 4) returns HTTP 502.
+		Expect(tool.PatchKCIdPDisableTrustManager(ctx, idpAlias)).To(Succeed())
 	})
 
 	// provisionAndLogin creates a user in both the ext realm (credentials) and the

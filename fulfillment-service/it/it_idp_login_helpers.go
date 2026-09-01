@@ -168,6 +168,53 @@ func (t *Tool) DeleteExtRealm(ctx context.Context, state *ExtRealmState) error {
 	return nil
 }
 
+// PatchKCIdPDisableTrustManager patches the osac-realm Keycloak IdP identified by
+// idpAlias to set disableTrustManager=true in its config. This is required in test
+// environments where Keycloak uses a self-signed TLS certificate: when Keycloak (osac
+// realm) makes the back-channel token exchange to the ext realm endpoint it acts as an
+// HTTP client and the JVM default truststore does not include the cluster's self-signed
+// CA. Without this patch, Keycloak returns HTTP 502 from its broker callback endpoint.
+//
+// This must be called after the OSAC controller has reconciled the IdP into Keycloak
+// (i.e. after the IdP reaches READY phase), because the reconciler will create the IdP
+// without this flag and a subsequent reconciliation will not overwrite it (the reconciler
+// does not manage this field).
+func (t *Tool) PatchKCIdPDisableTrustManager(ctx context.Context, idpAlias string) error {
+	// GET the current KC IdP to obtain the full config.
+	code, body, err := t.KeycloakAdminRequest(ctx, http.MethodGet,
+		fmt.Sprintf("/identity-providers/instances/%s", url.PathEscape(idpAlias)), nil)
+	if err != nil {
+		return fmt.Errorf("get KC IdP %q for trust-manager patch: %w", idpAlias, err)
+	}
+	if code != http.StatusOK {
+		return fmt.Errorf("get KC IdP %q for trust-manager patch: HTTP %d: %s", idpAlias, code, body)
+	}
+
+	// Unmarshal the response, patch the config, and PUT it back.
+	var kcIdp map[string]any
+	if err := json.Unmarshal(body, &kcIdp); err != nil {
+		return fmt.Errorf("unmarshal KC IdP %q: %w", idpAlias, err)
+	}
+
+	config, _ := kcIdp["config"].(map[string]any)
+	if config == nil {
+		config = map[string]any{}
+	}
+	config["disableTrustManager"] = "true"
+	kcIdp["config"] = config
+
+	code, body, err = t.KeycloakAdminRequest(ctx, http.MethodPut,
+		fmt.Sprintf("/identity-providers/instances/%s", url.PathEscape(idpAlias)), kcIdp)
+	if err != nil {
+		return fmt.Errorf("patch KC IdP %q disableTrustManager: %w", idpAlias, err)
+	}
+	if code != http.StatusNoContent {
+		return fmt.Errorf("patch KC IdP %q disableTrustManager: unexpected HTTP %d: %s", idpAlias, code, body)
+	}
+
+	return nil
+}
+
 // AddUser creates a user with the given credentials in the ext realm. Returns the
 // Keycloak-assigned user ID, which is the `sub` claim value in tokens issued by this realm.
 // Use the returned ID as the external subject when linking the user in the osac realm via

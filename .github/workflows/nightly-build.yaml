@@ -516,9 +516,9 @@ jobs:
     if: github.event_name != 'workflow_dispatch' || github.event.inputs.skip_e2e != 'true'
     permissions:
       contents: read
-      # Required by e2e-vmaas-full-install.yml@main's "e2e" job -- only
-      # exercised there when enable-ai-diagnostic is true (we never pass
-      # it), but GitHub statically validates a called reusable workflow's
+      # Required by e2e-vmaas-full-install.yml@main's "e2e" job when
+      # enable-ai-diagnostic is true (now always the case here, see below)
+      # -- GitHub statically validates a called reusable workflow's
       # declared job permissions against what the caller grants regardless
       # of runtime reachability, so it must still be granted here.
       id-token: write
@@ -531,6 +531,16 @@ jobs:
       test-infra-ref: main
       test-source: osac
       test-ref: ${{ needs.prepare.outputs.temp-branch }}
+      # This pipeline only runs via schedule/workflow_dispatch against
+      # main, same safe WIF context as the regular e2e-*-full-install.yml
+      # callers' own enable-ai-diagnostic gating -- see that input's
+      # description in osac-test-infra for the full reasoning. Without
+      # this, a nightly e2e failure only gets a generic "Nightly Build
+      # Failed" Slack ping (see notify-failure below) with no diagnosis;
+      # workflow_run-based Phase 2 doesn't cover this pipeline either,
+      # since it tracks this file's own top-level name ("Nightly Build"),
+      # not the reusable workflow it happens to call into.
+      enable-ai-diagnostic: ${{ github.ref == 'refs/heads/main' }}
 
   e2e-caas-test:
     name: E2E validation (caas)
@@ -549,6 +559,8 @@ jobs:
       test-infra-ref: main
       test-source: osac
       test-ref: ${{ needs.prepare.outputs.temp-branch }}
+      # See e2e-vmaas-test's identical input above for why this is set.
+      enable-ai-diagnostic: ${{ github.ref == 'refs/heads/main' }}
 
   e2e-bmaas-test:
     name: E2E validation (bmaas)
@@ -567,6 +579,8 @@ jobs:
       test-infra-ref: main
       test-source: osac
       test-ref: ${{ needs.prepare.outputs.temp-branch }}
+      # See e2e-vmaas-test's identical input above for why this is set.
+      enable-ai-diagnostic: ${{ github.ref == 'refs/heads/main' }}
 
   # -------------------------------------------------------------------
   # Job 5: Publish — promote every image from its provisional sha-<short>

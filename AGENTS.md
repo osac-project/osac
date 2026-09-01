@@ -75,14 +75,15 @@ authenticated `gh`.
 | [enhancement-proposals](https://github.com/osac-project/enhancement-proposals) | `enhancement-proposals/` | yes | PRDs and design documents (two-stage EP flow) |
 | [docs](https://github.com/osac-project/docs) | `osac-docs/` | yes | Architecture guides and personas |
 
-[osac-test-infra](https://github.com/osac-project/osac-test-infra) is **not**
-cloned. E2E pytest suites live in [`tests/e2e/`](tests/e2e/). That
-repo keeps infrastructure backends, reusable e2e caller workflows, and a
-`tests/` placeholder — do not add or modify suites there. Clone it only for
-infra or `/debug-e2e` work.
+In-tree [`docs/`](docs/) (`ARCHITECTURE.md`, `CONVENTIONS.md`) is **not**
+the osac-project/docs checkout at `osac-docs/`. Skills read
+`osac-docs/personas.md`.
 
-In-tree [`docs/`](docs/) (`ARCHITECTURE.md`, `CONVENTIONS.md`) is **not** that
-repo. Skills read `osac-docs/personas.md`.
+[osac-test-infra](https://github.com/osac-project/osac-test-infra) is **not**
+cloned. E2E pytest suites live in [`tests/e2e/`](tests/e2e/).
+osac-test-infra keeps infrastructure backends, reusable e2e caller
+workflows, and a `tests/` placeholder — do not add or modify suites
+there. Clone osac-test-infra only for infra or `/debug-e2e` work.
 
 ## UI Reference (osac-ux)
 
@@ -174,8 +175,8 @@ is canonical — see also [`fulfillment-service/AGENTS.md`](fulfillment-service/
 `/e2e` writes pytest suites in [`tests/e2e/`](tests/e2e/) in this repo.
 Discover patterns from `tests/e2e/<suite>/` and
 `tests/core/`. Do not add, modify, or delete test suites in
-[osac-test-infra](https://github.com/osac-project/osac-test-infra) — that
-repo's `tests/` tree is a placeholder plus the infrastructure backend
+[osac-test-infra](https://github.com/osac-project/osac-test-infra) —
+osac-test-infra's `tests/` tree is a placeholder plus the infrastructure backend
 contract. `/debug-e2e` still lives there; clone that repo only when
 debugging Prow or changing infra backends.
 

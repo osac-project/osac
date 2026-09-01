@@ -76,7 +76,7 @@ authenticated `gh`.
 | [docs](https://github.com/osac-project/docs) | `osac-docs/` | yes | Architecture guides and personas |
 
 [osac-test-infra](https://github.com/osac-project/osac-test-infra) is **not**
-cloned. E2E pytest suites live in [`tests/e2e/`](tests/e2e/) (OSAC-3593). That
+cloned. E2E pytest suites live in [`tests/e2e/`](tests/e2e/). That
 repo keeps infrastructure backends, reusable e2e caller workflows, and a
 `tests/` placeholder — do not add or modify suites there. Clone it only for
 infra or `/debug-e2e` work.
@@ -171,8 +171,8 @@ is canonical — see also [`fulfillment-service/AGENTS.md`](fulfillment-service/
 
 ## E2E tests
 
-`/e2e` writes pytest suites in [`tests/e2e/`](tests/e2e/) in this repo
-(OSAC-3593). Discover patterns from `tests/e2e/<suite>/` and
+`/e2e` writes pytest suites in [`tests/e2e/`](tests/e2e/) in this repo.
+Discover patterns from `tests/e2e/<suite>/` and
 `tests/core/`. Do not add, modify, or delete test suites in
 [osac-test-infra](https://github.com/osac-project/osac-test-infra) — that
 repo's `tests/` tree is a placeholder plus the infrastructure backend

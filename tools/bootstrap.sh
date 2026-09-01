@@ -13,7 +13,7 @@
 #   5. Clones skill-relative sibling repos under this checkout
 #      (enhancement-proposals, osac-ux, osac-ui, osac-docs). osac-docs
 #      is osac-project/docs — not docs/. E2E suites live in-tree at
-#      tests/e2e/ (OSAC-3593); osac-test-infra is not cloned.
+#      tests/e2e/; osac-test-infra is not cloned.
 #      Writeable siblings get a `fork` remote (origin = osac-project).
 #      osac-ux and vendor clones are never forked.
 #

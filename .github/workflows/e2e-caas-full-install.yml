@@ -169,6 +169,13 @@ jobs:
       # flavor-name, namespace, etc.) are left at the reusable workflow's own
       # defaults -- none are required and this caller has no need to override
       # them today.
+      # AI failure diagnosis only for scheduled runs: those always run
+      # against main in this repo's own context (no fork involved), unlike
+      # pull_request/merge_group runs from PRs, which come from genuine
+      # forks and cannot get OIDC/WIF access at all regardless of this
+      # input (a GitHub Actions security policy, not something this input
+      # can override).
+      enable-ai-diagnostic: ${{ github.event_name == 'schedule' }}
 
   e2e-caas-gate:
     if: always()

@@ -165,6 +165,13 @@ jobs:
       test-source: "osac"
       test-repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
       test-ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      # AI failure diagnosis only for scheduled runs: those always run
+      # against main in this repo's own context (no fork involved), unlike
+      # pull_request/merge_group runs from PRs, which come from genuine
+      # forks and cannot get OIDC/WIF access at all regardless of this
+      # input (a GitHub Actions security policy, not something this input
+      # can override).
+      enable-ai-diagnostic: ${{ github.event_name == 'schedule' }}
 
   e2e-vmaas-gate:
     if: always()

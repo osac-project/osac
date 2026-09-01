@@ -169,16 +169,21 @@ func (t *Tool) DeleteExtRealm(ctx context.Context, state *ExtRealmState) error {
 }
 
 // PatchKCIdPDisableTrustManager patches the osac-realm Keycloak IdP identified by
-// idpAlias to set disableTrustManager=true in its config. This is required in test
-// environments where Keycloak uses a self-signed TLS certificate: when Keycloak (osac
-// realm) makes the back-channel token exchange to the ext realm endpoint it acts as an
-// HTTP client and the JVM default truststore does not include the cluster's self-signed
-// CA. Without this patch, Keycloak returns HTTP 502 from its broker callback endpoint.
+// idpAlias to configure it for a test environment where Keycloak uses a self-signed
+// TLS certificate. It sets the following flags:
+//
+//   - disableTrustManager=true — KC skips TLS certificate verification when making the
+//     back-channel token exchange call to the ext realm. Without this, KC returns HTTP 502
+//     because the cluster's self-signed CA is not in its JVM default truststore.
+//   - validateSignature=false — prevents KC from making a separate back-channel JWKS
+//     fetch to validate the ID token signature, which would also fail TLS verification.
+//   - useJwksUrl=false — disables the JWKS URL lookup so KC does not attempt any
+//     additional back-channel HTTPS call to retrieve public keys.
 //
 // This must be called after the OSAC controller has reconciled the IdP into Keycloak
 // (i.e. after the IdP reaches READY phase), because the reconciler will create the IdP
-// without this flag and a subsequent reconciliation will not overwrite it (the reconciler
-// does not manage this field).
+// without these flags and a subsequent reconciliation will not overwrite them (the
+// reconciler does not manage these fields).
 func (t *Tool) PatchKCIdPDisableTrustManager(ctx context.Context, idpAlias string) error {
 	// GET the current KC IdP to obtain the full config.
 	code, body, err := t.KeycloakAdminRequest(ctx, http.MethodGet,
@@ -200,7 +205,12 @@ func (t *Tool) PatchKCIdPDisableTrustManager(ctx context.Context, idpAlias strin
 	if config == nil {
 		config = map[string]any{}
 	}
+	// Disable TLS verification for back-channel token exchange (cluster self-signed cert).
 	config["disableTrustManager"] = "true"
+	// Disable signature validation to avoid a separate JWKS back-channel HTTPS call.
+	config["validateSignature"] = "false"
+	// Disable the JWKS URL lookup so KC does not attempt an additional HTTPS fetch.
+	config["useJwksUrl"] = "false"
 	kcIdp["config"] = config
 
 	code, body, err = t.KeycloakAdminRequest(ctx, http.MethodPut,

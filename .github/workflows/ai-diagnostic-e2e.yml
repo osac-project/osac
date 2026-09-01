@@ -47,7 +47,7 @@ jobs:
       contents: read       # checkout this repo's own default-branch composite action + script only
       actions: read        # list/download the failed run's artifacts
       pull-requests: read  # list open PRs to resolve head SHA -> PR number
-      checks: write        # publish the diagnostic Check Run
+      statuses: write      # publish the diagnostic commit status (see below for why not checks: write)
       id-token: write      # Vertex AI WIF auth
     steps:
       - name: Checkout repository
@@ -140,35 +140,49 @@ jobs:
           DIAGNOSIS_FILE: ${{ runner.temp }}/diagnosis.md
         run: python3 .github/scripts/ai-diagnose-failure.py
 
-      - name: Publish Check Run
+      # Deliberately a commit Status, not a Check Run. Check Runs are only
+      # linked into a PR's Checks-tab rollup (statusCheckRollup) via their
+      # check_suite's `pull_requests` association, and GitHub can only
+      # populate that when the PR's head branch lives in the SAME repo --
+      # for a genuine cross-fork PR (which is every real PR here) it's
+      # always empty, so a Check Run created this way is queryable via the
+      # API but silently never appears on the PR page. Verified empirically
+      # against a real fork PR before landing this. Commit statuses have no
+      # such linkage requirement -- they attach directly to the SHA and
+      # always show up in the rollup, which is how pre-Checks-API CI
+      # integrations (e.g. classic Travis CI) supported fork PRs for years.
+      - name: Publish diagnostic status
         if: steps.pr.outputs.found == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-          RUN_URL: ${{ github.event.workflow_run.html_url }}
           WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          # This job's own run -- not the failed E2E run -- since this is
+          # the one whose Job Summary actually has the full diagnosis text
+          # (ai-diagnose-failure.py always writes it there too; commit
+          # status `description` is capped at ~140 chars and plain text).
+          LISTENER_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
           DIAGNOSIS_FILE="${RUNNER_TEMP}/diagnosis.md"
           if [[ ! -s "${DIAGNOSIS_FILE}" ]]; then
-            echo "_AI diagnosis unavailable (no diagnosis produced for this run)._" > "${DIAGNOSIS_FILE}"
+            echo "AI diagnosis unavailable for this run." > "${DIAGNOSIS_FILE}"
+          fi
+          SNIPPET=$(tr '\n' ' ' <"${DIAGNOSIS_FILE}" | cut -c1-137)
+          if [[ "$(wc -c <"${DIAGNOSIS_FILE}")" -gt 137 ]]; then
+            SNIPPET="${SNIPPET}..."
           fi
           # Built with jq (not shell interpolation) so LLM-generated diagnosis
           # text -- untrusted output -- is never treated as anything but a
           # JSON string value.
           jq -n \
-            --arg head_sha "${HEAD_SHA}" \
-            --arg title "AI diagnosis: ${WORKFLOW_NAME}" \
-            --rawfile body "${DIAGNOSIS_FILE}" \
-            --arg run_url "${RUN_URL}" \
+            --arg description "${SNIPPET}" \
+            --arg target_url "${LISTENER_RUN_URL}" \
+            --arg context "AI diagnosis: ${WORKFLOW_NAME}" \
             '{
-              name: "AI Failure Diagnosis",
-              head_sha: $head_sha,
-              status: "completed",
-              conclusion: "neutral",
-              output: {
-                title: $title,
-                summary: ($body + "\n\n[Full run](" + $run_url + ")")
-              }
-            }' | gh api "repos/${REPO}/check-runs" --input -
+              state: "success",
+              context: $context,
+              description: $description,
+              target_url: $target_url
+            }' | gh api "repos/${REPO}/statuses/${HEAD_SHA}" --input -

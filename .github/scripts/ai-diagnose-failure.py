@@ -109,13 +109,31 @@ def main():
     junit_section = extract_junit_failures(JUNIT_PATH)
     log_section = extract_log_signal(ARTIFACT_DIR)
 
-    prompt = f"""You are diagnosing a failed CI run for an OpenShift-based
-platform (OSAC). Given the test failures and matching log/event lines
-below, write a SHORT (under 200 words) root-cause diagnosis for a
-developer who has not looked at the logs yet: what likely broke, which
-component is implicated, and one concrete next step to investigate. If the
-evidence is insufficient to say anything confident, say so plainly rather
-than guessing.
+    prompt = f"""You are diagnosing a failed GitHub Actions workflow run
+named "{WORKFLOW_NAME}", part of OSAC (an OpenShift-based fulfillment
+platform). This run installs OSAC components onto a real OpenShift/KubeVirt
+cluster and runs a pytest E2E suite against it. The run's own logs and
+job list are at: {RUN_URL or "(url unavailable)"}
+
+Below are the only two sources of evidence you have -- do not assume any
+other CI system (Jenkins, GitLab CI, Tekton, etc.) is involved, and do not
+invent log locations that weren't given to you:
+
+1. JUnit failures/errors from the pytest suite (parsed from junit.xml).
+2. Lines matching error/traceback/panic/failed/exception, grepped from the
+   OpenShift pod logs, `oc describe` output, and Kubernetes events that
+   this run's log-gathering step collected from the target cluster (this
+   is NOT the GitHub Actions job log itself -- if this section says no
+   artifact directory was found, that means the cluster never came up far
+   enough to gather anything, which is itself useful signal, e.g. an
+   earlier infra step like cluster boot likely failed first).
+
+Given only this evidence, write a SHORT (under 200 words) root-cause
+diagnosis for a developer who has not looked at the run yet: what likely
+broke, which component is implicated, and one concrete next step (point
+them at the GitHub Actions run's own job logs at the URL above, not a
+generic/other CI system). If the evidence is insufficient to say anything
+confident, say so plainly rather than guessing.
 
 ## JUnit failures
 {junit_section}

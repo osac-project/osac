@@ -116,14 +116,14 @@ func newClusterOrderFeedbackBridge(hubClient clnt.Client, clustersClient private
 // newClusterOrderSyncUpdate returns a SyncUpdate function that captures hubClient
 // for HostedCluster URL lookups on the Ready phase.
 func newClusterOrderSyncUpdate(hubClient clnt.Client) func(context.Context, *ckv1alpha1.ClusterOrder, *privatev1.Cluster) error {
-	return func(ctx context.Context, obj *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) error {
-		syncClusterOrderConditions(ctx, obj, remote)
-		syncClusterOrderPhase(ctx, obj, remote)
-		if err := syncClusterOrderURLs(ctx, hubClient, obj, remote); err != nil {
+	return func(ctx context.Context, clusterOrder *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) error {
+		syncClusterOrderConditions(ctx, clusterOrder, remote)
+		syncClusterOrderPhase(ctx, clusterOrder, remote)
+		if err := syncClusterOrderURLs(ctx, hubClient, clusterOrder, remote); err != nil {
 			return err
 		}
-		syncClusterOrderNodeRequests(ctx, obj, remote)
-		syncClusterOrderVIPEndpoints(obj, remote)
+		syncClusterOrderNodeRequests(ctx, clusterOrder, remote)
+		syncClusterOrderVIPEndpoints(clusterOrder, remote)
 		return nil
 	}
 }
@@ -131,19 +131,19 @@ func newClusterOrderSyncUpdate(hubClient clnt.Client) func(context.Context, *ckv
 // syncClusterOrderVIPEndpoints copies MetalLB VIP addresses from ClusterOrder status
 // to the Cluster proto. The VIPs are written by the CaaS template and consumed by the
 // ExternalIPAttachment controller and the fulfillment-service API surface.
-func syncClusterOrderVIPEndpoints(obj *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) {
-	if obj.Status.ApiEndpoint != "" {
-		remote.GetStatus().SetApiEndpoint(obj.Status.ApiEndpoint)
+func syncClusterOrderVIPEndpoints(clusterOrder *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) {
+	if clusterOrder.Status.ApiEndpoint != "" {
+		remote.GetStatus().SetApiEndpoint(clusterOrder.Status.ApiEndpoint)
 	}
-	if obj.Status.IngressEndpoint != "" {
-		remote.GetStatus().SetIngressEndpoint(obj.Status.IngressEndpoint)
+	if clusterOrder.Status.IngressEndpoint != "" {
+		remote.GetStatus().SetIngressEndpoint(clusterOrder.Status.IngressEndpoint)
 	}
 }
 
-func syncClusterOrderDelete(ctx context.Context, obj *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) error {
-	syncClusterOrderConditions(ctx, obj, remote)
-	syncClusterOrderPhase(ctx, obj, remote)
-	syncClusterOrderNodeRequests(ctx, obj, remote)
+func syncClusterOrderDelete(ctx context.Context, clusterOrder *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) error {
+	syncClusterOrderConditions(ctx, clusterOrder, remote)
+	syncClusterOrderPhase(ctx, clusterOrder, remote)
+	syncClusterOrderNodeRequests(ctx, clusterOrder, remote)
 	remote.GetStatus().SetState(privatev1.ClusterState_CLUSTER_STATE_DELETING)
 	return nil
 }
@@ -306,9 +306,9 @@ func mapClusterConditionStatus(status metav1.ConditionStatus) privatev1.Conditio
 	}
 }
 
-func syncClusterOrderPhase(ctx context.Context, obj *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) {
+func syncClusterOrderPhase(ctx context.Context, clusterOrder *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) {
 	log := ctrllog.FromContext(ctx)
-	switch obj.Status.Phase {
+	switch clusterOrder.Status.Phase {
 	case ckv1alpha1.ClusterOrderPhaseProgressing:
 		remote.GetStatus().SetState(privatev1.ClusterState_CLUSTER_STATE_PROGRESSING)
 	case ckv1alpha1.ClusterOrderPhaseFailed:
@@ -318,18 +318,18 @@ func syncClusterOrderPhase(ctx context.Context, obj *ckv1alpha1.ClusterOrder, re
 	case ckv1alpha1.ClusterOrderPhaseDeleting:
 		remote.GetStatus().SetState(privatev1.ClusterState_CLUSTER_STATE_DELETING)
 	default:
-		log.Info("Unknown phase, will ignore it", "phase", obj.Status.Phase)
+		log.Info("Unknown phase, will ignore it", "phase", clusterOrder.Status.Phase)
 	}
 }
 
 // syncClusterOrderURLs fetches the HostedCluster and populates API/console URLs
 // on the Ready phase. Only called on the update path.
-func syncClusterOrderURLs(ctx context.Context, hubClient clnt.Client, obj *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) error {
-	if obj.Status.Phase != ckv1alpha1.ClusterOrderPhaseReady {
+func syncClusterOrderURLs(ctx context.Context, hubClient clnt.Client, clusterOrder *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) error {
+	if clusterOrder.Status.Phase != ckv1alpha1.ClusterOrderPhaseReady {
 		return nil
 	}
 
-	hostedCluster, err := fetchHostedCluster(ctx, hubClient, obj)
+	hostedCluster, err := fetchHostedCluster(ctx, hubClient, clusterOrder)
 	if err != nil {
 		return err
 	}
@@ -347,10 +347,10 @@ func syncClusterOrderURLs(ctx context.Context, hubClient clnt.Client, obj *ckv1a
 	return nil
 }
 
-func syncClusterOrderNodeRequests(ctx context.Context, obj *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) {
+func syncClusterOrderNodeRequests(ctx context.Context, clusterOrder *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) {
 	log := ctrllog.FromContext(ctx)
-	for i := range len(obj.Status.NodeRequests) {
-		nodeRequest := &obj.Status.NodeRequests[i]
+	for i := range len(clusterOrder.Status.NodeRequests) {
+		nodeRequest := &clusterOrder.Status.NodeRequests[i]
 
 		var nodeSetID string
 		for candidateNodeSetID, candidateNodeSet := range remote.GetSpec().GetNodeSets() {
@@ -392,8 +392,8 @@ func syncClusterOrderNodeRequests(ctx context.Context, obj *ckv1alpha1.ClusterOr
 	}
 }
 
-func fetchHostedCluster(ctx context.Context, hubClient clnt.Client, obj *ckv1alpha1.ClusterOrder) (*hypershiftv1beta1.HostedCluster, error) {
-	hostedClusterRef := obj.Status.ClusterReference
+func fetchHostedCluster(ctx context.Context, hubClient clnt.Client, clusterOrder *ckv1alpha1.ClusterOrder) (*hypershiftv1beta1.HostedCluster, error) {
+	hostedClusterRef := clusterOrder.Status.ClusterReference
 	if hostedClusterRef == nil || hostedClusterRef.Namespace == "" || hostedClusterRef.HostedClusterName == "" {
 		return nil, nil
 	}

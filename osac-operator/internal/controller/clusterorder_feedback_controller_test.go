@@ -152,7 +152,7 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 
 	Context("When reconciling a resource without the cluster ID label", func() {
 		BeforeEach(func() {
-			co := &osacv1alpha1.ClusterOrder{
+			clusterOrder := &osacv1alpha1.ClusterOrder{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      resourceName,
 					Namespace: clusterOrderNS,
@@ -161,16 +161,16 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 					TemplateID: "test_template",
 				},
 			}
-			Expect(k8sClient.Create(testCtx, co)).To(Succeed())
+			Expect(k8sClient.Create(testCtx, clusterOrder)).To(Succeed())
 		})
 
 		AfterEach(func() {
-			co := &osacv1alpha1.ClusterOrder{}
-			err := k8sClient.Get(testCtx, typeNamespacedName, co)
+			clusterOrder := &osacv1alpha1.ClusterOrder{}
+			err := k8sClient.Get(testCtx, typeNamespacedName, clusterOrder)
 			if err == nil {
-				co.Finalizers = nil
-				_ = k8sClient.Update(testCtx, co)
-				_ = k8sClient.Delete(testCtx, co)
+				clusterOrder.Finalizers = nil
+				_ = k8sClient.Update(testCtx, clusterOrder)
+				_ = k8sClient.Delete(testCtx, clusterOrder)
 			}
 		})
 
@@ -185,13 +185,13 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 		})
 
 		It("should remove feedback finalizer from CR without cluster ID label being deleted", func() {
-			co := &osacv1alpha1.ClusterOrder{}
-			Expect(k8sClient.Get(testCtx, typeNamespacedName, co)).To(Succeed())
-			co.Finalizers = []string{osacClusterOrderFeedbackFinalizer}
-			Expect(k8sClient.Update(testCtx, co)).To(Succeed())
+			clusterOrder := &osacv1alpha1.ClusterOrder{}
+			Expect(k8sClient.Get(testCtx, typeNamespacedName, clusterOrder)).To(Succeed())
+			clusterOrder.Finalizers = []string{osacClusterOrderFeedbackFinalizer}
+			Expect(k8sClient.Update(testCtx, clusterOrder)).To(Succeed())
 
-			Expect(k8sClient.Get(testCtx, typeNamespacedName, co)).To(Succeed())
-			Expect(k8sClient.Delete(testCtx, co)).To(Succeed())
+			Expect(k8sClient.Get(testCtx, typeNamespacedName, clusterOrder)).To(Succeed())
+			Expect(k8sClient.Delete(testCtx, clusterOrder)).To(Succeed())
 
 			request := reconcile.Request{
 				NamespacedName: typeNamespacedName,
@@ -209,7 +209,7 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 
 	Context("When reconciling a resource that is being deleted", func() {
 		BeforeEach(func() {
-			co := &osacv1alpha1.ClusterOrder{
+			clusterOrder := &osacv1alpha1.ClusterOrder{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      resourceName,
 					Namespace: clusterOrderNS,
@@ -222,25 +222,25 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 					TemplateID: "test_template",
 				},
 			}
-			Expect(k8sClient.Create(testCtx, co)).To(Succeed())
+			Expect(k8sClient.Create(testCtx, clusterOrder)).To(Succeed())
 
-			Expect(k8sClient.Get(testCtx, typeNamespacedName, co)).To(Succeed())
-			co.Status.Phase = osacv1alpha1.ClusterOrderPhaseDeleting
-			Expect(k8sClient.Status().Update(testCtx, co)).To(Succeed())
+			Expect(k8sClient.Get(testCtx, typeNamespacedName, clusterOrder)).To(Succeed())
+			clusterOrder.Status.Phase = osacv1alpha1.ClusterOrderPhaseDeleting
+			Expect(k8sClient.Status().Update(testCtx, clusterOrder)).To(Succeed())
 
-			Expect(k8sClient.Get(testCtx, typeNamespacedName, co)).To(Succeed())
-			Expect(k8sClient.Delete(testCtx, co)).To(Succeed())
+			Expect(k8sClient.Get(testCtx, typeNamespacedName, clusterOrder)).To(Succeed())
+			Expect(k8sClient.Delete(testCtx, clusterOrder)).To(Succeed())
 
 			mockClient.getResponse = newClusterGetResponse()
 			mockClient.updateResponse = &privatev1.ClustersUpdateResponse{}
 		})
 
 		AfterEach(func() {
-			co := &osacv1alpha1.ClusterOrder{}
-			err := k8sClient.Get(testCtx, typeNamespacedName, co)
+			clusterOrder := &osacv1alpha1.ClusterOrder{}
+			err := k8sClient.Get(testCtx, typeNamespacedName, clusterOrder)
 			if err == nil {
-				co.Finalizers = nil
-				Expect(k8sClient.Update(testCtx, co)).To(Succeed())
+				clusterOrder.Finalizers = nil
+				Expect(k8sClient.Update(testCtx, clusterOrder)).To(Succeed())
 			}
 		})
 
@@ -290,7 +290,7 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 
 	Context("When reconciling a resource deleted while still in Progressing phase", func() {
 		BeforeEach(func() {
-			co := &osacv1alpha1.ClusterOrder{
+			clusterOrder := &osacv1alpha1.ClusterOrder{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      resourceName,
 					Namespace: clusterOrderNS,
@@ -303,25 +303,25 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 					TemplateID: "test_template",
 				},
 			}
-			Expect(k8sClient.Create(testCtx, co)).To(Succeed())
+			Expect(k8sClient.Create(testCtx, clusterOrder)).To(Succeed())
 
-			Expect(k8sClient.Get(testCtx, typeNamespacedName, co)).To(Succeed())
-			co.Status.Phase = osacv1alpha1.ClusterOrderPhaseProgressing
-			Expect(k8sClient.Status().Update(testCtx, co)).To(Succeed())
+			Expect(k8sClient.Get(testCtx, typeNamespacedName, clusterOrder)).To(Succeed())
+			clusterOrder.Status.Phase = osacv1alpha1.ClusterOrderPhaseProgressing
+			Expect(k8sClient.Status().Update(testCtx, clusterOrder)).To(Succeed())
 
-			Expect(k8sClient.Get(testCtx, typeNamespacedName, co)).To(Succeed())
-			Expect(k8sClient.Delete(testCtx, co)).To(Succeed())
+			Expect(k8sClient.Get(testCtx, typeNamespacedName, clusterOrder)).To(Succeed())
+			Expect(k8sClient.Delete(testCtx, clusterOrder)).To(Succeed())
 
 			mockClient.getResponse = newClusterGetResponse()
 			mockClient.updateResponse = &privatev1.ClustersUpdateResponse{}
 		})
 
 		AfterEach(func() {
-			co := &osacv1alpha1.ClusterOrder{}
-			err := k8sClient.Get(testCtx, typeNamespacedName, co)
+			clusterOrder := &osacv1alpha1.ClusterOrder{}
+			err := k8sClient.Get(testCtx, typeNamespacedName, clusterOrder)
 			if err == nil {
-				co.Finalizers = nil
-				Expect(k8sClient.Update(testCtx, co)).To(Succeed())
+				clusterOrder.Finalizers = nil
+				Expect(k8sClient.Update(testCtx, clusterOrder)).To(Succeed())
 			}
 		})
 
@@ -345,7 +345,7 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 
 	Context("When reconciling a resource being deleted with multiple finalizers", func() {
 		BeforeEach(func() {
-			co := &osacv1alpha1.ClusterOrder{
+			clusterOrder := &osacv1alpha1.ClusterOrder{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      resourceName,
 					Namespace: clusterOrderNS,
@@ -358,25 +358,25 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 					TemplateID: "test_template",
 				},
 			}
-			Expect(k8sClient.Create(testCtx, co)).To(Succeed())
+			Expect(k8sClient.Create(testCtx, clusterOrder)).To(Succeed())
 
-			Expect(k8sClient.Get(testCtx, typeNamespacedName, co)).To(Succeed())
-			co.Status.Phase = osacv1alpha1.ClusterOrderPhaseDeleting
-			Expect(k8sClient.Status().Update(testCtx, co)).To(Succeed())
+			Expect(k8sClient.Get(testCtx, typeNamespacedName, clusterOrder)).To(Succeed())
+			clusterOrder.Status.Phase = osacv1alpha1.ClusterOrderPhaseDeleting
+			Expect(k8sClient.Status().Update(testCtx, clusterOrder)).To(Succeed())
 
-			Expect(k8sClient.Get(testCtx, typeNamespacedName, co)).To(Succeed())
-			Expect(k8sClient.Delete(testCtx, co)).To(Succeed())
+			Expect(k8sClient.Get(testCtx, typeNamespacedName, clusterOrder)).To(Succeed())
+			Expect(k8sClient.Delete(testCtx, clusterOrder)).To(Succeed())
 
 			mockClient.getResponse = newClusterGetResponse()
 			mockClient.updateResponse = &privatev1.ClustersUpdateResponse{}
 		})
 
 		AfterEach(func() {
-			co := &osacv1alpha1.ClusterOrder{}
-			err := k8sClient.Get(testCtx, typeNamespacedName, co)
+			clusterOrder := &osacv1alpha1.ClusterOrder{}
+			err := k8sClient.Get(testCtx, typeNamespacedName, clusterOrder)
 			if err == nil {
-				co.Finalizers = nil
-				Expect(k8sClient.Update(testCtx, co)).To(Succeed())
+				clusterOrder.Finalizers = nil
+				Expect(k8sClient.Update(testCtx, clusterOrder)).To(Succeed())
 			}
 		})
 
@@ -398,7 +398,7 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 
 	Context("When reconciling a resource being deleted without feedback finalizer", func() {
 		BeforeEach(func() {
-			co := &osacv1alpha1.ClusterOrder{
+			clusterOrder := &osacv1alpha1.ClusterOrder{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      resourceName,
 					Namespace: clusterOrderNS,
@@ -411,25 +411,25 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 					TemplateID: "test_template",
 				},
 			}
-			Expect(k8sClient.Create(testCtx, co)).To(Succeed())
+			Expect(k8sClient.Create(testCtx, clusterOrder)).To(Succeed())
 
-			Expect(k8sClient.Get(testCtx, typeNamespacedName, co)).To(Succeed())
-			co.Status.Phase = osacv1alpha1.ClusterOrderPhaseDeleting
-			Expect(k8sClient.Status().Update(testCtx, co)).To(Succeed())
+			Expect(k8sClient.Get(testCtx, typeNamespacedName, clusterOrder)).To(Succeed())
+			clusterOrder.Status.Phase = osacv1alpha1.ClusterOrderPhaseDeleting
+			Expect(k8sClient.Status().Update(testCtx, clusterOrder)).To(Succeed())
 
-			Expect(k8sClient.Get(testCtx, typeNamespacedName, co)).To(Succeed())
-			Expect(k8sClient.Delete(testCtx, co)).To(Succeed())
+			Expect(k8sClient.Get(testCtx, typeNamespacedName, clusterOrder)).To(Succeed())
+			Expect(k8sClient.Delete(testCtx, clusterOrder)).To(Succeed())
 
 			mockClient.getResponse = newClusterGetResponse()
 			mockClient.updateResponse = &privatev1.ClustersUpdateResponse{}
 		})
 
 		AfterEach(func() {
-			co := &osacv1alpha1.ClusterOrder{}
-			err := k8sClient.Get(testCtx, typeNamespacedName, co)
+			clusterOrder := &osacv1alpha1.ClusterOrder{}
+			err := k8sClient.Get(testCtx, typeNamespacedName, clusterOrder)
 			if err == nil {
-				co.Finalizers = nil
-				Expect(k8sClient.Update(testCtx, co)).To(Succeed())
+				clusterOrder.Finalizers = nil
+				Expect(k8sClient.Update(testCtx, clusterOrder)).To(Succeed())
 			}
 		})
 
@@ -446,7 +446,7 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 
 	Context("When reconciling a resource being deleted and fulfillment-service returns NotFound", func() {
 		BeforeEach(func() {
-			co := &osacv1alpha1.ClusterOrder{
+			clusterOrder := &osacv1alpha1.ClusterOrder{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      resourceName,
 					Namespace: clusterOrderNS,
@@ -459,24 +459,24 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 					TemplateID: "test_template",
 				},
 			}
-			Expect(k8sClient.Create(testCtx, co)).To(Succeed())
+			Expect(k8sClient.Create(testCtx, clusterOrder)).To(Succeed())
 
-			Expect(k8sClient.Get(testCtx, typeNamespacedName, co)).To(Succeed())
-			co.Status.Phase = osacv1alpha1.ClusterOrderPhaseDeleting
-			Expect(k8sClient.Status().Update(testCtx, co)).To(Succeed())
+			Expect(k8sClient.Get(testCtx, typeNamespacedName, clusterOrder)).To(Succeed())
+			clusterOrder.Status.Phase = osacv1alpha1.ClusterOrderPhaseDeleting
+			Expect(k8sClient.Status().Update(testCtx, clusterOrder)).To(Succeed())
 
-			Expect(k8sClient.Get(testCtx, typeNamespacedName, co)).To(Succeed())
-			Expect(k8sClient.Delete(testCtx, co)).To(Succeed())
+			Expect(k8sClient.Get(testCtx, typeNamespacedName, clusterOrder)).To(Succeed())
+			Expect(k8sClient.Delete(testCtx, clusterOrder)).To(Succeed())
 
 			mockClient.getError = grpcstatus.Errorf(codes.NotFound, "object with identifier '%s' not found", clusterID)
 		})
 
 		AfterEach(func() {
-			co := &osacv1alpha1.ClusterOrder{}
-			err := k8sClient.Get(testCtx, typeNamespacedName, co)
+			clusterOrder := &osacv1alpha1.ClusterOrder{}
+			err := k8sClient.Get(testCtx, typeNamespacedName, clusterOrder)
 			if err == nil {
-				co.Finalizers = nil
-				Expect(k8sClient.Update(testCtx, co)).To(Succeed())
+				clusterOrder.Finalizers = nil
+				Expect(k8sClient.Update(testCtx, clusterOrder)).To(Succeed())
 			}
 		})
 
@@ -498,7 +498,7 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 
 	Context("When fulfillment-service returns NotFound for a resource that is NOT being deleted", func() {
 		BeforeEach(func() {
-			co := &osacv1alpha1.ClusterOrder{
+			clusterOrder := &osacv1alpha1.ClusterOrder{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      resourceName,
 					Namespace: clusterOrderNS,
@@ -511,18 +511,18 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 					TemplateID: "test_template",
 				},
 			}
-			Expect(k8sClient.Create(testCtx, co)).To(Succeed())
+			Expect(k8sClient.Create(testCtx, clusterOrder)).To(Succeed())
 
 			mockClient.getError = grpcstatus.Errorf(codes.NotFound, "object with identifier '%s' not found", clusterID)
 		})
 
 		AfterEach(func() {
-			co := &osacv1alpha1.ClusterOrder{}
-			err := k8sClient.Get(testCtx, typeNamespacedName, co)
+			clusterOrder := &osacv1alpha1.ClusterOrder{}
+			err := k8sClient.Get(testCtx, typeNamespacedName, clusterOrder)
 			if err == nil {
-				co.Finalizers = nil
-				_ = k8sClient.Update(testCtx, co)
-				_ = k8sClient.Delete(testCtx, co)
+				clusterOrder.Finalizers = nil
+				_ = k8sClient.Update(testCtx, clusterOrder)
+				_ = k8sClient.Delete(testCtx, clusterOrder)
 			}
 		})
 
@@ -538,7 +538,7 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 
 	Context("When reconciling a valid resource", func() {
 		BeforeEach(func() {
-			co := &osacv1alpha1.ClusterOrder{
+			clusterOrder := &osacv1alpha1.ClusterOrder{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      resourceName,
 					Namespace: clusterOrderNS,
@@ -550,19 +550,19 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 					TemplateID: "test_template",
 				},
 			}
-			Expect(k8sClient.Create(testCtx, co)).To(Succeed())
+			Expect(k8sClient.Create(testCtx, clusterOrder)).To(Succeed())
 
 			mockClient.getResponse = newClusterGetResponse()
 			mockClient.updateResponse = &privatev1.ClustersUpdateResponse{}
 		})
 
 		AfterEach(func() {
-			co := &osacv1alpha1.ClusterOrder{}
-			err := k8sClient.Get(testCtx, typeNamespacedName, co)
+			clusterOrder := &osacv1alpha1.ClusterOrder{}
+			err := k8sClient.Get(testCtx, typeNamespacedName, clusterOrder)
 			if err == nil {
-				co.Finalizers = nil
-				_ = k8sClient.Update(testCtx, co)
-				_ = k8sClient.Delete(testCtx, co)
+				clusterOrder.Finalizers = nil
+				_ = k8sClient.Update(testCtx, clusterOrder)
+				_ = k8sClient.Delete(testCtx, clusterOrder)
 			}
 		})
 
@@ -579,10 +579,10 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 		})
 
 		It("should sync Progressing phase", func() {
-			co := &osacv1alpha1.ClusterOrder{}
-			Expect(k8sClient.Get(testCtx, typeNamespacedName, co)).To(Succeed())
-			co.Status.Phase = osacv1alpha1.ClusterOrderPhaseProgressing
-			Expect(k8sClient.Status().Update(testCtx, co)).To(Succeed())
+			clusterOrder := &osacv1alpha1.ClusterOrder{}
+			Expect(k8sClient.Get(testCtx, typeNamespacedName, clusterOrder)).To(Succeed())
+			clusterOrder.Status.Phase = osacv1alpha1.ClusterOrderPhaseProgressing
+			Expect(k8sClient.Status().Update(testCtx, clusterOrder)).To(Succeed())
 
 			request := reconcile.Request{
 				NamespacedName: typeNamespacedName,
@@ -594,10 +594,10 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 		})
 
 		It("should sync Failed phase", func() {
-			co := &osacv1alpha1.ClusterOrder{}
-			Expect(k8sClient.Get(testCtx, typeNamespacedName, co)).To(Succeed())
-			co.Status.Phase = osacv1alpha1.ClusterOrderPhaseFailed
-			Expect(k8sClient.Status().Update(testCtx, co)).To(Succeed())
+			clusterOrder := &osacv1alpha1.ClusterOrder{}
+			Expect(k8sClient.Get(testCtx, typeNamespacedName, clusterOrder)).To(Succeed())
+			clusterOrder.Status.Phase = osacv1alpha1.ClusterOrderPhaseFailed
+			Expect(k8sClient.Status().Update(testCtx, clusterOrder)).To(Succeed())
 
 			request := reconcile.Request{
 				NamespacedName: typeNamespacedName,
@@ -609,11 +609,11 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 		})
 
 		It("should sync VIP endpoints to Cluster proto when set in status", func() {
-			co := &osacv1alpha1.ClusterOrder{}
-			Expect(k8sClient.Get(testCtx, typeNamespacedName, co)).To(Succeed())
-			co.Status.ApiEndpoint = "10.0.0.1"
-			co.Status.IngressEndpoint = "10.0.0.2"
-			Expect(k8sClient.Status().Update(testCtx, co)).To(Succeed())
+			clusterOrder := &osacv1alpha1.ClusterOrder{}
+			Expect(k8sClient.Get(testCtx, typeNamespacedName, clusterOrder)).To(Succeed())
+			clusterOrder.Status.ApiEndpoint = "10.0.0.1"
+			clusterOrder.Status.IngressEndpoint = "10.0.0.2"
+			Expect(k8sClient.Status().Update(testCtx, clusterOrder)).To(Succeed())
 
 			request := reconcile.Request{NamespacedName: typeNamespacedName}
 			_, err := reconciler.Reconcile(testCtx, request)
@@ -632,10 +632,10 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 		})
 
 		It("should not call update when reconciled twice with same data", func() {
-			co := &osacv1alpha1.ClusterOrder{}
-			Expect(k8sClient.Get(testCtx, typeNamespacedName, co)).To(Succeed())
-			co.Status.Phase = osacv1alpha1.ClusterOrderPhaseProgressing
-			Expect(k8sClient.Status().Update(testCtx, co)).To(Succeed())
+			clusterOrder := &osacv1alpha1.ClusterOrder{}
+			Expect(k8sClient.Get(testCtx, typeNamespacedName, clusterOrder)).To(Succeed())
+			clusterOrder.Status.Phase = osacv1alpha1.ClusterOrderPhaseProgressing
+			Expect(k8sClient.Status().Update(testCtx, clusterOrder)).To(Succeed())
 
 			mockClient.getResponse.GetObject().GetStatus().SetState(privatev1.ClusterState_CLUSTER_STATE_PROGRESSING)
 

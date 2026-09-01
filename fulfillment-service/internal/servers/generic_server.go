@@ -505,6 +505,13 @@ func (s *GenericServer[O]) Get(ctx context.Context, request any, response any) e
 	return nil
 }
 
+// isSingletonConstraintViolation reports whether constraintName identifies a unique partial index that enforces a
+// "singleton" or "single default" invariant (e.g. network_classes_singleton, network_classes_single_default) rather
+// than an ordinary per-object name/ID uniqueness constraint.
+func isSingletonConstraintViolation(constraintName string) bool {
+	return strings.HasSuffix(constraintName, "_singleton") || strings.HasSuffix(constraintName, "_single_default")
+}
+
 func (s *GenericServer[O]) Create(ctx context.Context, request any, response any) error {
 	// Route dry-run requests to skip persistence and event emission. Resource-specific
 	// validation (template resolution, catalog item field definitions, spec defaults)
@@ -527,6 +534,15 @@ func (s *GenericServer[O]) Create(ctx context.Context, request any, response any
 	if err != nil {
 		var alreadyExistsErr *dao.ErrAlreadyExists
 		if errors.As(err, &alreadyExistsErr) {
+			// A unique partial index on a constant expression (e.g. network_classes_singleton,
+			// network_classes_single_default) models a "singleton" or "single default" invariant rather than a
+			// per-object name/ID collision. Report those as FailedPrecondition (retry may succeed once the
+			// conflicting row is gone) instead of AlreadyExists (which implies the *new* object is a duplicate).
+			if isSingletonConstraintViolation(alreadyExistsErr.ConstraintName) {
+				return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+					"concurrent create violated a singleton invariant (constraint '%s'); please retry",
+					alreadyExistsErr.ConstraintName)
+			}
 			return grpcstatus.Errorf(grpccodes.AlreadyExists, "%s", alreadyExistsErr.Error())
 		}
 		var notUniqueErr *dao.ErrNotUnique

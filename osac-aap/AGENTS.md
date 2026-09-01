@@ -449,6 +449,9 @@ OPA policies enforce isolation at runtime (handled by fulfillment-service).
      supports_ipv6: true           # optional
      supports_dual_stack: true     # optional
    ```
+   Only one NetworkClass may exist per deployment (OSAC-4073) — config-as-code publishing this role's NetworkClass
+   requires the existing one to be removed first, regardless of `is_default`. Adding a new network backend means
+   replacing the existing NetworkClass, not adding a second one.
 3. Implement tasks in `tasks/main.yml` (provision and deprovision logic)
 4. Add integration test in `tests/integration/targets/<backend>_test/`
 5. Update `playbook_osac_config_as_code.yml` if needed

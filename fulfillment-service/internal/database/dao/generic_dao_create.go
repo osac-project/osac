@@ -208,9 +208,10 @@ func (r *CreateRequest[O]) translateError(ctx context.Context, id, tenant, proje
 	switch pgErr.Code {
 	case pgerrcode.UniqueViolation:
 		return &ErrAlreadyExists{
-			Kind: r.dao.kind,
-			ID:   id,
-			Name: name,
+			Kind:           r.dao.kind,
+			ID:             id,
+			Name:           name,
+			ConstraintName: pgErr.ConstraintName,
 		}
 	case errReferenceCode:
 		return &ErrReference{

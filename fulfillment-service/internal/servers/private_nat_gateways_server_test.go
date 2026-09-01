@@ -36,10 +36,15 @@ var _ = Describe("Private NAT gateways server", func() {
 		externalIPDao     *dao.GenericDAO[*privatev1.ExternalIP]
 		networkClassDao   *dao.GenericDAO[*privatev1.NetworkClass]
 		sharedPool        *privatev1.ExternalIPPool
+		// networkClassCache memoizes createNetworkClass by manager config within a single It, since
+		// the one-NetworkClass-per-deployment invariant (OSAC-4073) means only one non-deleted
+		// NetworkClass can exist in the (per-It) test database at a time. Reset in BeforeEach below.
+		networkClassCache map[string]*privatev1.NetworkClass
 	)
 
 	BeforeEach(func() {
 		var err error
+		networkClassCache = map[string]*privatev1.NetworkClass{}
 		vnDao, err = dao.NewGenericDAO[*privatev1.VirtualNetwork]().
 			SetLogger(logger).
 			SetTenancyLogic(tenancy).
@@ -86,7 +91,20 @@ var _ = Describe("Private NAT gateways server", func() {
 
 	// createNetworkClass creates a NetworkClass with the given managers via the DAO
 	// (bypassing NetworkClass server validation, matching this file's existing fixture pattern).
+	// Memoized per manager config: the one-NetworkClass-per-deployment invariant (OSAC-4073) means
+	// a second call with the same config within the same It reuses the first NetworkClass rather
+	// than attempting (and failing) to create another.
 	createNetworkClass := func(fabricManager, k8sManager *string) *privatev1.NetworkClass {
+		deref := func(s *string) string {
+			if s == nil {
+				return ""
+			}
+			return *s
+		}
+		key := deref(fabricManager) + "/" + deref(k8sManager)
+		if nc, ok := networkClassCache[key]; ok {
+			return nc
+		}
 		resp, err := networkClassDao.Create().SetObject(
 			privatev1.NetworkClass_builder{
 				FabricManager: fabricManager,
@@ -98,7 +116,9 @@ var _ = Describe("Private NAT gateways server", func() {
 			}.Build(),
 		).Do(ctx)
 		Expect(err).ToNot(HaveOccurred())
-		return resp.GetObject()
+		nc := resp.GetObject()
+		networkClassCache[key] = nc
+		return nc
 	}
 
 	createVirtualNetwork := func() string {

@@ -467,6 +467,14 @@ var _ = Describe("Private virtual networks server", func() {
 			})
 
 			It("resolves by id rather than an unrelated NetworkClass whose name collides with the id", func() {
+				// Drop the network_classes_singleton unique index (OSAC-4073, migration 106): this
+				// test predates the one-NetworkClass-per-deployment invariant and needs "target" and
+				// "collider" to coexist to exercise id-vs-name collision resolution.
+				tx, txErr := database.TxFromContext(ctx)
+				Expect(txErr).ToNot(HaveOccurred())
+				_, txErr = tx.Exec(ctx, "drop index if exists network_classes_singleton")
+				Expect(txErr).ToNot(HaveOccurred())
+
 				ncDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
 					SetLogger(logger).
 					SetTenancyLogic(tenancy).
@@ -1459,6 +1467,15 @@ var _ = Describe("Private virtual networks server", func() {
 		})
 
 		It("Explicit network_class ignores default", func() {
+			// Drop the network_classes_singleton unique index (OSAC-4073, migration 106): this
+			// test predates the one-NetworkClass-per-deployment invariant and needs NC-A and NC-B
+			// to coexist to exercise explicit-selection-overrides-default logic. Mirrors the
+			// "Multiple defaults fallback" test's approach in network_classes_server_test.go.
+			tx, txErr := database.TxFromContext(ctx)
+			Expect(txErr).ToNot(HaveOccurred())
+			_, txErr = tx.Exec(ctx, "drop index if exists network_classes_singleton")
+			Expect(txErr).ToNot(HaveOccurred())
+
 			// Create NC-A as default:
 			_ = createDefaultNetworkClassViaDAO(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
 
@@ -1608,6 +1625,15 @@ var _ = Describe("Private virtual networks server", func() {
 		})
 
 		It("Auto-populated network_class is immutable on Update", func() {
+			// Drop the network_classes_singleton unique index (OSAC-4073, migration 106): this
+			// test predates the one-NetworkClass-per-deployment invariant and needs a second NC
+			// (ncB below) to attempt (and be rejected from) switching to. Mirrors the "Multiple
+			// defaults fallback" test's approach in network_classes_server_test.go.
+			tx, txErr := database.TxFromContext(ctx)
+			Expect(txErr).ToNot(HaveOccurred())
+			_, txErr = tx.Exec(ctx, "drop index if exists network_classes_singleton")
+			Expect(txErr).ToNot(HaveOccurred())
+
 			// Create a default NC in READY state:
 			defaultNC := createDefaultNetworkClassViaDAO(ctx, privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY)
 

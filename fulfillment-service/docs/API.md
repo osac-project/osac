@@ -131,6 +131,14 @@ Once an object is created, its `metadata.name` cannot be changed. Updates that i
 | Name fails RFC 1123 format | `InvalidArgument` | Validation error on `metadata.name` (protovalidate) |
 | Name already taken in scope | `AlreadyExists` | `virtual network 'prod-net' already exists` |
 | Update attempts to change name | `InvalidArgument` | `field 'metadata.name' is immutable` |
+| Singleton or single-default invariant (for example a second non-deleted `NetworkClass`) | `FailedPrecondition` | `only one NetworkClass per deployment is allowed (existing NetworkClass id '...')` |
+
+Not every unique-index violation is `AlreadyExists`. Ordinary per-object name uniqueness stays
+`AlreadyExists`. Unique partial indexes that enforce a singleton or "single default" invariant
+(for example one `NetworkClass` per deployment, or at most one default `NetworkClass`) map to
+`FailedPrecondition`: the slot is occupied, and a retry may succeed once the conflicting object
+is gone. Consumers must match on the gRPC status code rather than assuming every uniqueness
+conflict is `AlreadyExists`.
 
 ### Spec and status ownership
 
@@ -247,8 +255,15 @@ expressed in proto annotations and must be implemented in server logic. Examples
 - Custom business rules that depend on multiple objects or system state
 
 For these cases, implement validation in the server's `Create` or `Update` methods and return
-appropriate gRPC errors (`AlreadyExists` for uniqueness violations, `InvalidArgument` for other
-constraint failures) with descriptive messages.
+appropriate gRPC errors with descriptive messages:
+
+- `AlreadyExists` for ordinary per-object uniqueness (the same name already exists in scope)
+- `FailedPrecondition` for singleton or "single default" invariants (another object already
+  occupies the unique slot; a retry may succeed once that object is gone)
+- `InvalidArgument` for other constraint failures
+
+Match on the gRPC status code, not on message text. Do not assume every uniqueness violation is
+`AlreadyExists`.
 
 ## Declarative, intent-based design
 

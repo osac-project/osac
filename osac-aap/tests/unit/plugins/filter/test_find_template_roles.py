@@ -3,6 +3,7 @@ from pathlib import Path
 import pydantic
 import pytest
 import yaml
+from ansible.errors import AnsibleFilterError
 
 from find_template_roles import (
     Metadata,

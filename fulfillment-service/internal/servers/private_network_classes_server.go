@@ -67,6 +67,31 @@ func findDefaultNetworkClass(ctx context.Context, logger *slog.Logger, ncDao *da
 	return items[0], nil
 }
 
+// checkSingleNetworkClass enforces the "one NetworkClass per deployment" invariant (unified
+// networking design, OSAC-1433): NetworkClass is a provider-level singleton, and tenants never
+// interact with it directly. Returns a FailedPrecondition error if a non-deleted NetworkClass
+// already exists.
+//
+// This is a fast, clear-error-message check for the common (non-racing) case. The
+// network_classes_singleton unique partial index (migration 106) is the authoritative,
+// race-free enforcement — see the AlreadyExists remap in Create().
+func (s *PrivateNetworkClassesServer) checkSingleNetworkClass(ctx context.Context) error {
+	listResponse, err := s.generic.dao.List().
+		SetFilter("!has(this.metadata.deletion_timestamp)").
+		SetLimit(1).
+		Do(ctx)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to check for existing NetworkClass", slog.Any("error", err))
+		return grpcstatus.Errorf(grpccodes.Internal, "failed to check for existing NetworkClass")
+	}
+	if items := listResponse.GetItems(); len(items) > 0 {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"only one NetworkClass per deployment is allowed (existing NetworkClass id '%s')",
+			items[0].GetId())
+	}
+	return nil
+}
+
 type PrivateNetworkClassesServerBuilder struct {
 	logger            *slog.Logger
 	notifier          events.Notifier
@@ -204,22 +229,14 @@ func (s *PrivateNetworkClassesServer) Create(ctx context.Context,
 		}
 	}
 
+	// A concurrent Create can race past checkSingleNetworkClass and hit the
+	// network_classes_singleton unique partial index (migration 106); when creating a
+	// default NC, a concurrent default-swap can also hit network_classes_single_default
+	// (migration 32). GenericServer.Create maps either of those constraint violations to
+	// FailedPrecondition (keyed on the actual PostgreSQL constraint name, not on this
+	// request's is_default flag), so no remapping is needed here. A gRPC AlreadyExists
+	// from this call means the ordinary per-name uniqueness index was violated instead.
 	err = s.generic.Create(ctx, request, &response)
-	if err != nil {
-		// When creating a default NC, a concurrent default-swap triggers the unique partial
-		// index (network_classes_single_default). The error path is:
-		//   DAO catches UniqueViolation → wraps as ErrAlreadyExists (discards pgconn.PgError)
-		//   → GenericServer maps ErrAlreadyExists → gRPC AlreadyExists status error.
-		// Since we generate fresh UUIDs (line 178 clears caller-provided ID), a primary key
-		// collision is impossible — so a gRPC AlreadyExists here means a concurrent
-		// default-swap conflict from the unique partial index.
-		if nc.GetIsDefault() {
-			if st, ok := grpcstatus.FromError(err); ok && st.Code() == grpccodes.AlreadyExists {
-				return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition,
-					"concurrent default NetworkClass change detected, please retry")
-			}
-		}
-	}
 	return
 }
 
@@ -348,6 +365,16 @@ func (s *PrivateNetworkClassesServer) validateNetworkClass(ctx context.Context,
 
 	if newNC == nil {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "network class is mandatory")
+	}
+
+	// NC-VAL-09: enforce one NetworkClass per deployment (Create only). The unified networking
+	// design (OSAC-1433) specifies NetworkClass as a provider-level singleton that tenants never
+	// interact with directly. existingNC is nil only on the Create path (Update always fetches
+	// and passes the existing object), so this never runs for Update.
+	if existingNC == nil {
+		if err := s.checkSingleNetworkClass(ctx); err != nil {
+			return err
+		}
 	}
 
 	// NC-VAL-02: title is required

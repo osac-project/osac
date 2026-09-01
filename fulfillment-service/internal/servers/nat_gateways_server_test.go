@@ -74,10 +74,16 @@ var _ = Describe("Public NAT gateways server", func() {
 			externalIPDao     *dao.GenericDAO[*privatev1.ExternalIP]
 			networkClassDao   *dao.GenericDAO[*privatev1.NetworkClass]
 			sharedPool        *privatev1.ExternalIPPool
+			// sharedNetworkClass memoizes the NetworkClass fixture across multiple
+			// createVirtualNetwork calls within a single It: the one-NetworkClass-per-deployment
+			// invariant (OSAC-4073) means only one non-deleted NetworkClass can exist in the
+			// (per-It) test database at a time.
+			sharedNetworkClass *privatev1.NetworkClass
 		)
 
 		BeforeEach(func() {
 			var err error
+			sharedNetworkClass = nil
 
 			publicServer, err = NewNATGatewaysServer().
 				SetLogger(logger).
@@ -131,16 +137,19 @@ var _ = Describe("Public NAT gateways server", func() {
 		})
 
 		createVirtualNetwork := func() string {
-			ncResp, err := networkClassDao.Create().SetObject(
-				privatev1.NetworkClass_builder{
-					FabricManager: new("netris"),
-					Metadata: privatev1.Metadata_builder{
-						Tenant: auth.SharedTenant,
-						Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+			if sharedNetworkClass == nil {
+				ncResp, err := networkClassDao.Create().SetObject(
+					privatev1.NetworkClass_builder{
+						FabricManager: new("netris"),
+						Metadata: privatev1.Metadata_builder{
+							Tenant: auth.SharedTenant,
+							Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						}.Build(),
 					}.Build(),
-				}.Build(),
-			).Do(ctx)
-			Expect(err).ToNot(HaveOccurred())
+				).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				sharedNetworkClass = ncResp.GetObject()
+			}
 
 			resp, err := vnDao.Create().SetObject(
 				privatev1.VirtualNetwork_builder{
@@ -149,7 +158,7 @@ var _ = Describe("Public NAT gateways server", func() {
 						Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.VirtualNetworkSpec_builder{
-						NetworkClass: privatev1.NetworkClassReference_builder{Id: ncResp.GetObject().GetId()}.Build(),
+						NetworkClass: privatev1.NetworkClassReference_builder{Id: sharedNetworkClass.GetId()}.Build(),
 					}.Build(),
 				}.Build(),
 			).Do(ctx)

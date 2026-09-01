@@ -386,6 +386,19 @@ var _ = Describe("NATGateway lifecycle", func() {
 	})
 
 	It("Rejects create when the VirtualNetwork's NetworkClass has no fabric_manager", func() {
+		// Only one NetworkClass may exist per deployment (OSAC-4073), so the fabric-manager
+		// NetworkClass and VirtualNetwork created by the outer BeforeEach must be torn down
+		// before creating the k8s-only NetworkClass this test needs. The outer AfterEach's
+		// cleanup of the same IDs is a no-op (errors ignored) once these are already deleted.
+		_, err := virtualNetworksClient.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{
+			Id: virtualNetworkId,
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		_, err = networkClassesClient.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{
+			Id: networkClassId,
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
 		// Create a k8s-only NetworkClass (no fabric_manager):
 		k8sOnlyNC, err := networkClassesClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 			Object: privatev1.NetworkClass_builder{

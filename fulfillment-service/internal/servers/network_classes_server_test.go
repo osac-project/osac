@@ -19,6 +19,8 @@ import (
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
@@ -74,11 +76,52 @@ var _ = Describe("Network classes server", func() {
 			return response.GetObject()
 		}
 
+		// createNetworkClassViaDAO creates a NetworkClass directly via the DAO, bypassing the
+		// private server's Create validation — including the one-NetworkClass-per-deployment
+		// check (OSAC-4073). Used by tests that need multiple NetworkClasses to coexist
+		// simultaneously, i.e. invariant-violation states that can no longer arise through the
+		// server's Create path but can still arise from pre-existing data or direct DB access.
+		//
+		// This also drops the network_classes_singleton unique index (migration 106), which
+		// enforces the same invariant unconditionally at the DB level and would otherwise block
+		// this too. Safe to call repeatedly: "drop index if exists" is a no-op once dropped, and
+		// the drop is scoped to this test's transaction (rolled back in the suite's AfterEach).
+		createNetworkClassViaDAO := func(isDefault bool) *privatev1.NetworkClass {
+			tx, err := database.TxFromContext(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = tx.Exec(ctx, "drop index if exists network_classes_singleton")
+			Expect(err).ToNot(HaveOccurred())
+
+			ncDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			response, err := ncDao.Create().SetObject(privatev1.NetworkClass_builder{
+				Title:         "Test Network Class",
+				FabricManager: new("netris"),
+				IsDefault:     new(isDefault),
+				Metadata: privatev1.Metadata_builder{
+					Name:   fmt.Sprintf("test-nc-%s", uuid.NewString()[:8]),
+					Tenant: auth.SharedTenant,
+				}.Build(),
+				Status: privatev1.NetworkClassStatus_builder{
+					State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			return response.GetObject()
+		}
+
 		It("List objects", func() {
-			// Create a few objects via the private server:
+			// Create a few objects via the DAO directly: List/pagination behavior is orthogonal
+			// to the one-NetworkClass-per-deployment invariant (OSAC-4073), which only gates the
+			// server's Create path, so multiple coexisting NCs are seeded the same way the
+			// invariant-violation tests below do.
 			const count = 10
 			for range count {
-				createNetworkClass()
+				createNetworkClassViaDAO(false)
 			}
 
 			// List the objects via the private server:
@@ -90,10 +133,10 @@ var _ = Describe("Network classes server", func() {
 		})
 
 		It("List objects with limit", func() {
-			// Create a few objects via the private server:
+			// Create a few objects via the DAO directly (see "List objects" above):
 			const count = 10
 			for range count {
-				createNetworkClass()
+				createNetworkClassViaDAO(false)
 			}
 
 			// List the objects via the private server:
@@ -105,10 +148,10 @@ var _ = Describe("Network classes server", func() {
 		})
 
 		It("List objects with offset", func() {
-			// Create a few objects via the private server:
+			// Create a few objects via the DAO directly (see "List objects" above):
 			const count = 10
 			for range count {
-				createNetworkClass()
+				createNetworkClassViaDAO(false)
 			}
 
 			// List the objects via the private server:
@@ -120,11 +163,11 @@ var _ = Describe("Network classes server", func() {
 		})
 
 		It("List objects with filter", func() {
-			// Create a few objects via the private server:
+			// Create a few objects via the DAO directly (see "List objects" above):
 			const count = 10
 			var ids []string
 			for range count {
-				obj := createNetworkClass()
+				obj := createNetworkClassViaDAO(false)
 				ids = append(ids, obj.GetId())
 			}
 
@@ -226,6 +269,99 @@ var _ = Describe("Network classes server", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
+		Describe("Single NetworkClass invariant", func() {
+			// createSecondNetworkClass attempts to Create a second NetworkClass via the private
+			// server, distinct from the object built by createNetworkClass/createDefaultNetworkClass.
+			createSecondNetworkClass := func() (*privatev1.NetworkClassesCreateResponse, error) {
+				return privateServer.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
+					Object: privatev1.NetworkClass_builder{
+						Metadata:      privatev1.Metadata_builder{Name: fmt.Sprintf("second-nc-%s", uuid.NewString()[:8])}.Build(),
+						Title:         "Second Network Class",
+						FabricManager: new("netris"),
+					}.Build(),
+				}.Build())
+			}
+
+			It("Create succeeds when no NetworkClass exists yet", func() {
+				nc := createNetworkClass()
+				Expect(nc.GetId()).ToNot(BeEmpty())
+			})
+
+			It("Second Create is rejected with FailedPrecondition", func() {
+				createNetworkClass()
+
+				_, err := createSecondNetworkClass()
+				Expect(err).To(HaveOccurred())
+				status, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+				Expect(err.Error()).To(ContainSubstring("only one NetworkClass per deployment is allowed"))
+			})
+
+			It("Second Create is rejected regardless of is_default", func() {
+				createDefaultNetworkClass()
+
+				_, err := createSecondNetworkClass()
+				Expect(err).To(HaveOccurred())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+				Expect(err.Error()).To(ContainSubstring("only one NetworkClass per deployment is allowed"))
+			})
+
+			It("Create succeeds again after the only NetworkClass is deleted", func() {
+				first := createNetworkClass()
+
+				// Add a finalizer so the delete soft-deletes rather than immediately archiving,
+				// exercising the deletion_timestamp-based exclusion rather than row absence.
+				tx, err := database.TxFromContext(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				_, err = tx.Exec(ctx,
+					`update network_classes set finalizers = '{"a"}' where id = $1`,
+					first.GetId(),
+				)
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = privateServer.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{
+					Id: first.GetId(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				second, err := createSecondNetworkClass()
+				Expect(err).ToNot(HaveOccurred())
+				Expect(second.GetObject().GetId()).ToNot(Equal(first.GetId()))
+			})
+
+			It("network_classes_singleton unique index prevents a second non-deleted NC via DAO", func() {
+				// Bypass the server (and its app-level check) to prove the DB-level unique
+				// partial index (migration 106) independently enforces the same invariant.
+				ncDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+
+				buildNC := func(name string) *privatev1.NetworkClass {
+					return privatev1.NetworkClass_builder{
+						Title:         "NC",
+						FabricManager: new("netris"),
+						Metadata: privatev1.Metadata_builder{
+							Name:   name,
+							Tenant: auth.SharedTenant,
+						}.Build(),
+						Status: privatev1.NetworkClassStatus_builder{
+							State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+						}.Build(),
+					}.Build()
+				}
+
+				_, err = ncDao.Create().SetObject(buildNC("test-nc-a")).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = ncDao.Create().SetObject(buildNC("test-nc-b")).Do(ctx)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("already exists"))
+			})
+		})
+
 		Describe("Default NetworkClass", func() {
 			It("Create NC with is_default=true is visible via Get", func() {
 				// Create via private server with is_default=true:
@@ -240,37 +376,17 @@ var _ = Describe("Network classes server", func() {
 				Expect(getResponse.GetObject().GetIsDefault()).To(BeTrue())
 			})
 
-			It("Auto-swap on second default: first NC loses its default flag", func() {
-				// Create NC-A as default:
-				ncA := createDefaultNetworkClass()
-				Expect(ncA.GetIsDefault()).To(BeTrue())
-
-				// Create NC-B as default: NC-A should lose its default flag:
-				ncB := createDefaultNetworkClass()
-				Expect(ncB.GetIsDefault()).To(BeTrue())
-
-				// Verify NC-A is no longer the default:
-				getResponseA, err := privateServer.Get(ctx, privatev1.NetworkClassesGetRequest_builder{
-					Id: ncA.GetId(),
-				}.Build())
-				Expect(err).ToNot(HaveOccurred())
-				Expect(getResponseA.GetObject().GetIsDefault()).To(BeFalse())
-
-				// Verify NC-B is still the default:
-				getResponseB, err := privateServer.Get(ctx, privatev1.NetworkClassesGetRequest_builder{
-					Id: ncB.GetId(),
-				}.Build())
-				Expect(err).ToNot(HaveOccurred())
-				Expect(getResponseB.GetObject().GetIsDefault()).To(BeTrue())
-			})
-
 			It("Update to set is_default triggers swap", func() {
-				// Create NC-A as default:
+				// Create NC-A as default via the server:
 				ncA := createDefaultNetworkClass()
 				Expect(ncA.GetIsDefault()).To(BeTrue())
 
-				// Create NC-B not as default:
-				ncB := createNetworkClass()
+				// Seed NC-B (not default) via the DAO directly: with the one-NetworkClass-per-
+				// deployment invariant (OSAC-4073), the server would reject a second Create
+				// while NC-A exists, so a coexisting NC-B can only arise from pre-existing data
+				// or direct DB access — exactly what this simulates to exercise the still-live
+				// Update-time swap logic.
+				ncB := createNetworkClassViaDAO(false)
 				Expect(ncB.GetIsDefault()).To(BeFalse())
 
 				// Update NC-B with field mask setting is_default=true:
@@ -297,8 +413,9 @@ var _ = Describe("Network classes server", func() {
 				ncA := createDefaultNetworkClass()
 				Expect(ncA.GetIsDefault()).To(BeTrue())
 
-				// Create NC-B (non-default):
-				ncB := createNetworkClass()
+				// Seed NC-B (non-default) via the DAO directly (see "Update to set is_default
+				// triggers swap" above for why NC-B can't be created via the server here):
+				ncB := createNetworkClassViaDAO(false)
 				Expect(ncB.GetIsDefault()).To(BeFalse())
 
 				// Explicitly set NC-B's is_default=false via masked Update.
@@ -370,10 +487,14 @@ var _ = Describe("Network classes server", func() {
 
 			It("Multiple defaults fallback: newest by creation_timestamp wins", func() {
 				// Drop the unique index to simulate a race condition where creation of two default
-				// network classes succeed.
+				// network classes succeed. network_classes_singleton (migration 106) is also
+				// dropped since it would otherwise block the second raw DAO insert below,
+				// independently of is_default.
 				tx, err := database.TxFromContext(ctx)
 				Expect(err).ToNot(HaveOccurred())
 				_, err = tx.Exec(ctx, "drop index if exists network_classes_single_default")
+				Expect(err).ToNot(HaveOccurred())
+				_, err = tx.Exec(ctx, "drop index if exists network_classes_singleton")
 				Expect(err).ToNot(HaveOccurred())
 
 				// Create two default network classes:
@@ -424,9 +545,20 @@ var _ = Describe("Network classes server", func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(listResponse.GetItems()).To(HaveLen(2))
 
-				// The default-swap on a new Create should clear all existing defaults:
-				ncC := createDefaultNetworkClass()
-				Expect(ncC.GetIsDefault()).To(BeTrue())
+				// Seed NC-C via the DAO directly (not default) — the server would reject a
+				// Create here regardless of is_default, since NC-A/NC-B already exist
+				// (OSAC-4073). Trigger the default-swap via Update instead, which still
+				// exercises the same clearExistingDefaults logic used by Create.
+				ncC := createNetworkClassViaDAO(false)
+				updateResponse, err := privateServer.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
+					Object: privatev1.NetworkClass_builder{
+						Id:        ncC.GetId(),
+						IsDefault: new(true),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"is_default"}},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(updateResponse.GetObject().GetIsDefault()).To(BeTrue())
 
 				// NC-B should have been unset by the swap:
 				getResponseB, err := privateServer.Get(ctx, privatev1.NetworkClassesGetRequest_builder{
@@ -542,8 +674,9 @@ var _ = Describe("Network classes server", func() {
 				ncA := createDefaultNetworkClass()
 				Expect(ncA.GetIsDefault()).To(BeTrue())
 
-				// Create NC-B (non-default):
-				ncB := createNetworkClass()
+				// Seed NC-B (non-default) via the DAO directly (see "Update to set is_default
+				// triggers swap" above for why NC-B can't be created via the server here):
+				ncB := createNetworkClassViaDAO(false)
 				name := ncB.GetMetadata().GetName()
 
 				// Update NC-B with no mask and is_default absent.

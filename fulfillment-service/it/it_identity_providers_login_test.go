@@ -26,7 +26,6 @@ import (
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
-	"google.golang.org/protobuf/proto"
 )
 
 var _ = Describe("Identity provider login flow", func() {
@@ -34,7 +33,7 @@ var _ = Describe("Identity provider login flow", func() {
 		ctx           context.Context
 		client        privatev1.IdentityProvidersClient
 		tenantsClient privatev1.TenantsClient
-		mockOIDC      *MockOIDCState
+		extRealm      *ExtRealmState
 		tenantName    string
 		tenantID      string
 		idpAlias      string
@@ -46,7 +45,7 @@ var _ = Describe("Identity provider login flow", func() {
 		client = privatev1.NewIdentityProvidersClient(tool.InternalView().AdminConn())
 		tenantsClient = privatev1.NewTenantsClient(tool.InternalView().AdminConn())
 
-		// Create a fresh tenant for each test.
+		// Create a fresh OSAC tenant for each test.
 		tenantName = fmt.Sprintf("idp-login-%s", uuid.New())
 		createResp, err := tenantsClient.Create(ctx, privatev1.TenantsCreateRequest_builder{
 			Object: privatev1.Tenant_builder{
@@ -64,16 +63,18 @@ var _ = Describe("Identity provider login flow", func() {
 		})
 		waitForTenantSynced(ctx, tenantsClient, tenantID)
 
-		// Start a mock OIDC server per test. It listens on all interfaces so that
-		// Keycloak pods inside Kind can reach the token and JWKS endpoints via the
-		// Podman bridge IP.
-		var startErr error
-		mockOIDC, startErr = tool.StartMockOIDC(ctx)
-		Expect(startErr).ToNot(HaveOccurred())
-		DeferCleanup(func() { Expect(StopMockOIDC(mockOIDC)).To(Succeed()) })
+		// Create a temporary Keycloak realm that acts as the external IdP.
+		// Both the test runner and Keycloak pods inside Kind reach this realm via the
+		// same cluster-internal address, so no host-to-cluster networking is required.
+		var realmErr error
+		extRealm, realmErr = tool.CreateExtRealm(ctx)
+		Expect(realmErr).ToNot(HaveOccurred())
+		DeferCleanup(func() {
+			Expect(tool.DeleteExtRealm(ctx, extRealm)).To(Succeed())
+		})
 
-		// Register the IdP through the OSAC API — the controller reconciles it into
-		// Keycloak. All endpoint URLs go through OSAC; no direct Keycloak admin calls.
+		// Register the external IdP through the OSAC API. The controller reconciles
+		// it into Keycloak's osac realm. No direct Keycloak admin calls for registration.
 		idpName := fmt.Sprintf("mock-%s", uuid.New())
 		idpAlias = fmt.Sprintf("%s-%s", tenantName, idpName)
 
@@ -84,20 +85,16 @@ var _ = Describe("Identity provider login flow", func() {
 					Tenant: tenantName,
 				}.Build(),
 				Spec: privatev1.IdentityProviderSpec_builder{
-					Title:   "Mock OIDC Test Provider",
+					Title:   "Ext Realm Test Provider",
 					Enabled: true,
 					Oidc: privatev1.OidcConfig_builder{
-						// authorizationUrl must be reachable from the test runner (host).
-						// mockoidc binds to 0.0.0.0 so 127.0.0.1:<port> works on the host.
-						AuthorizationUrl: mockOIDC.LocalAuthURL(),
-					// tokenUrl and jwksUrl must be reachable from Keycloak inside Kind.
-					// The Podman bridge IP is the host-side gateway of the Kind network.
-					TokenUrl: mockOIDC.ClusterTokenURL(),
-					JwksUrl:  proto.String(mockOIDC.ClusterJWKSURL()),
-						ClientId:     mockOIDC.ClientID(),
-						ClientSecret: mockOIDC.ClientSecret(),
-						// Issuer must match the `iss` claim mockoidc embeds in its tokens.
-						Issuer: mockOIDC.LocalIssuer(),
+						// All URLs are cluster-internal — both the test runner and
+						// Keycloak reach the ext realm via the same address.
+						AuthorizationUrl: extRealm.AuthorizationURL(),
+						TokenUrl:         extRealm.TokenURL(),
+						ClientId:         extRealm.ClientID(),
+						ClientSecret:     extRealm.ClientSecret(),
+						Issuer:           extRealm.IssuerURL(),
 					}.Build(),
 				}.Build(),
 			}.Build(),
@@ -123,29 +120,30 @@ var _ = Describe("Identity provider login flow", func() {
 		}, 2*time.Minute, time.Second).Should(Succeed())
 	})
 
-	// provisionAndLogin creates a test user linked to the IdP in Keycloak (test
-	// scaffolding), queues that user as the next auto-approved login in mockoidc, then
-	// drives the full OIDC authorization code redirect chain to obtain a Keycloak JWT.
+	// provisionAndLogin creates a user in both the ext realm (credentials) and the
+	// osac KC realm (federated identity link + org membership), then drives the full
+	// OIDC authorization code redirect chain to obtain a Keycloak JWT.
 	//
-	// This is the end-to-end login path: the same flow the OSAC CLI would execute.
+	// This mirrors what `osac login` + `osac get <resource>` does.
 	provisionAndLogin := func(ctx context.Context, tenantName, idpAlias string) string {
 		username := fmt.Sprintf("idp-user-%s", uuid.New())
-		externalSubject := "ext-" + uuid.New()
+		password := uuid.New()
 		email := username + "@example.com"
 
-		// Create the Keycloak user and link it to the IdP. Keycloak requires the
-		// federated identity to exist so it can match the returning user during the
-		// first-broker-login flow without prompting for profile review.
-		_, err := tool.ProvisionOIDCUser(ctx, username, email, tenantName, idpAlias, externalSubject)
+		// Step 1: create the user in the ext realm with real credentials.
+		extUserID, err := extRealm.AddUser(ctx, username, password, email)
 		ExpectWithOffset(1, err).ToNot(HaveOccurred())
 
-		// Tell mockoidc which user to return for the next authorization request.
-		// The subject must match the federated identity we just linked above.
-		mockOIDC.QueueUser(externalSubject, email, username)
+		// Step 2: link the user in KC osac realm so first-broker-login finds them
+		// without prompting for profile review. extUserID is the `sub` claim KC will
+		// receive from the ext realm when the user authenticates.
+		_, err = tool.ProvisionOIDCUser(ctx, username, email, tenantName, idpAlias, extUserID)
+		ExpectWithOffset(1, err).ToNot(HaveOccurred())
 
-		// Drive the full OIDC redirect chain: test runner → KC → mockoidc → KC → token.
-		// This is the same flow as `osac login` followed by `osac get <resource>`.
-		token, loginErr := tool.SimulateOIDCLogin(ctx, idpAlias)
+		// Step 3: drive the full OIDC redirect chain — test runner follows KC's
+		// redirect to the ext realm login page, submits credentials, and KC exchanges
+		// the code with the ext realm (server-to-server, cluster-internal).
+		token, loginErr := tool.SimulateOIDCLogin(ctx, idpAlias, username, password)
 		ExpectWithOffset(1, loginErr).ToNot(HaveOccurred())
 		ExpectWithOffset(1, token).ToNot(BeEmpty())
 		return token
@@ -195,7 +193,6 @@ var _ = Describe("Identity provider login flow", func() {
 		Expect(err).ToNot(HaveOccurred())
 		defer conn.Close()
 
-		// Attempt to create a resource in a different tenant — must be denied.
 		idpClient := publicv1.NewIdentityProvidersClient(conn)
 		_, createErr := idpClient.Create(ctx, publicv1.IdentityProvidersCreateRequest_builder{
 			Object: publicv1.IdentityProvider_builder{
@@ -219,10 +216,6 @@ var _ = Describe("Identity provider login flow", func() {
 		Expect(createErr).To(HaveOccurred(), "IdP user must not create resources in another tenant")
 		grpcStatus, ok := grpcstatus.FromError(createErr)
 		Expect(ok).To(BeTrue())
-		// Accept either PermissionDenied or Unauthenticated: OPA may reject the request
-		// at the authz layer (PermissionDenied) or the token's organization claim may not
-		// match the target tenant causing the authn middleware to treat it as unauthenticated.
-		// Both codes confirm the cross-tenant access was correctly denied.
 		Expect(grpcStatus.Code()).To(SatisfyAny(
 			Equal(grpccodes.PermissionDenied),
 			Equal(grpccodes.Unauthenticated),
@@ -231,15 +224,15 @@ var _ = Describe("Identity provider login flow", func() {
 
 	It("Rejects login via an unregistered IdP alias", func() {
 		rogueAlias := fmt.Sprintf("unregistered-%s", uuid.New())
-		_, loginErr := tool.SimulateOIDCLogin(ctx, rogueAlias)
+		_, loginErr := tool.SimulateOIDCLogin(ctx, rogueAlias, "", "")
 		Expect(loginErr).To(HaveOccurred(),
 			"Login via an unregistered IdP alias must fail — KC should not redirect there")
 	})
 
 	It("Verifies the OSAC controller status is READY and the alias is reported", func() {
-		// The BeforeEach already registers via OSAC API and waits for READY.
-		// This test explicitly asserts the reported alias in the status message,
-		// confirming the controller correctly reconciled the IdP into Keycloak.
+		// BeforeEach already registers via OSAC API and waits for READY.
+		// Explicitly assert the status message contains the KC alias to confirm the
+		// controller correctly reconciled the IdP into Keycloak.
 		getResp, err := client.Get(ctx, privatev1.IdentityProvidersGetRequest_builder{
 			Id: osacIdpID,
 		}.Build())
@@ -249,7 +242,7 @@ var _ = Describe("Identity provider login flow", func() {
 		)
 		Expect(getResp.GetObject().GetStatus().GetMessage()).To(ContainSubstring(idpAlias))
 
-		// And confirm that a user can actually log in through the reconciled IdP.
+		// Confirm a user can authenticate through the OSAC-reconciled IdP end-to-end.
 		token := provisionAndLogin(ctx, tenantName, idpAlias)
 		Expect(token).ToNot(BeEmpty())
 	})

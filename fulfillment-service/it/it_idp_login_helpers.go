@@ -22,306 +22,407 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"regexp"
 	"strings"
-	"time"
-
-	"github.com/cenkalti/backoff/v4"
-	"github.com/oauth2-proxy/mockoidc"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/network"
+	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	"github.com/osac-project/osac/fulfillment-service/internal/version"
 	"google.golang.org/grpc"
 )
 
-// MockOIDCState holds a running mock OIDC server and the addresses from which it can be
-// reached by the test runner and by Keycloak pods inside the Kind cluster.
-type MockOIDCState struct {
-	server      *mockoidc.MockOIDC
-	localAddr   string // 127.0.0.1:<port> — reachable by the test runner
-	clusterAddr string // <bridge-ip>:<port> — reachable by Keycloak inside Kind
+// ExtRealmState holds a temporary Keycloak realm that acts as the external OIDC Identity
+// Provider in IdP login integration tests. Both the test runner and Keycloak pods inside
+// Kind reach this realm at the same cluster-internal address, eliminating the host-to-cluster
+// networking issue that affects mock servers running on the test runner's host.
+type ExtRealmState struct {
+	tool         *Tool
+	realmName    string
+	clientID     string
+	clientSecret string
 }
 
-// ClientID returns the OAuth2 client ID that mockoidc expects.
-func (s *MockOIDCState) ClientID() string { return s.server.ClientID }
-
-// ClientSecret returns the OAuth2 client secret that mockoidc expects.
-func (s *MockOIDCState) ClientSecret() string { return s.server.ClientSecret }
-
-// LocalIssuer returns the OIDC issuer URL as seen by the test runner.
-// This is also the `iss` claim that mockoidc puts into every token it issues.
-func (s *MockOIDCState) LocalIssuer() string {
-	return fmt.Sprintf("http://%s%s", s.localAddr, mockoidc.IssuerBase)
+// IssuerURL returns the OIDC issuer URL for this realm.
+// This is used as both the OSAC IdP issuer config and as the `iss` claim validator.
+func (s *ExtRealmState) IssuerURL() string {
+	return fmt.Sprintf("https://%s/realms/%s", keycloakAddr, s.realmName)
 }
 
-// ClusterTokenURL returns the token endpoint URL reachable by Keycloak inside Kind.
-func (s *MockOIDCState) ClusterTokenURL() string {
-	return fmt.Sprintf("http://%s%s", s.clusterAddr, mockoidc.TokenEndpoint)
+// AuthorizationURL returns the OIDC authorization endpoint.
+func (s *ExtRealmState) AuthorizationURL() string {
+	return s.IssuerURL() + "/protocol/openid-connect/auth"
 }
 
-// ClusterJWKSURL returns the JWKS endpoint URL reachable by Keycloak inside Kind.
-func (s *MockOIDCState) ClusterJWKSURL() string {
-	return fmt.Sprintf("http://%s%s", s.clusterAddr, mockoidc.JWKSEndpoint)
+// TokenURL returns the OIDC token endpoint.
+// Since this is a cluster-internal URL, Keycloak can reach it for server-to-server
+// token exchange without any bridge IP or host networking.
+func (s *ExtRealmState) TokenURL() string {
+	return s.IssuerURL() + "/protocol/openid-connect/token"
 }
 
-// LocalAuthURL returns the authorization endpoint URL reachable by the test runner.
-func (s *MockOIDCState) LocalAuthURL() string {
-	return fmt.Sprintf("http://%s%s", s.localAddr, mockoidc.AuthorizationEndpoint)
+// JWKSURL returns the OIDC JWKS endpoint.
+func (s *ExtRealmState) JWKSURL() string {
+	return s.IssuerURL() + "/protocol/openid-connect/certs"
 }
 
-// QueueUser adds a mock user to the authorization queue. The next call to the
-// authorization endpoint pops this user and issues a token on their behalf.
-// If the queue is empty, mockoidc uses DefaultUser() automatically.
-func (s *MockOIDCState) QueueUser(subject, email, preferredUsername string) {
-	s.server.QueueUser(&mockoidc.MockUser{
-		Subject:           subject,
-		Email:             email,
-		EmailVerified:     true,
-		PreferredUsername: preferredUsername,
+// ClientID returns the OIDC client ID registered in this realm.
+func (s *ExtRealmState) ClientID() string { return s.clientID }
+
+// ClientSecret returns the OIDC client secret registered in this realm.
+func (s *ExtRealmState) ClientSecret() string { return s.clientSecret }
+
+// RealmName returns the Keycloak realm name.
+func (s *ExtRealmState) RealmName() string { return s.realmName }
+
+// CreateExtRealm creates a temporary Keycloak realm with a pre-configured OIDC client.
+// The realm serves as the external OIDC Identity Provider for the test. Call
+// DeleteExtRealm in DeferCleanup to remove it.
+//
+// The realm and its client are accessible at the same cluster-internal Keycloak address
+// used by all other OSAC integration tests, so no special networking is required.
+func (t *Tool) CreateExtRealm(ctx context.Context) (*ExtRealmState, error) {
+	realmName := fmt.Sprintf("ext-%s", uuid.New())
+	clientID := "ext-client-" + uuid.New()
+	clientSecret := uuid.New()
+
+	// Create the realm.
+	code, body, err := t.KeycloakAdminRequestForRealm(ctx, "", http.MethodPost, "/realms", map[string]any{
+		"realm":   realmName,
+		"enabled": true,
 	})
-}
-
-// StartMockOIDC starts an embedded mock OIDC server bound to all interfaces so that
-// Keycloak pods inside the Kind cluster can reach the token and JWKS endpoints.
-// Call StopMockOIDC(state) in DeferCleanup to shut it down.
-func (t *Tool) StartMockOIDC(ctx context.Context) (*MockOIDCState, error) {
-	ln, err := net.Listen("tcp", "0.0.0.0:0")
 	if err != nil {
-		return nil, fmt.Errorf("failed to start mock OIDC listener: %w", err)
+		return nil, fmt.Errorf("failed to create ext realm %q: %w", realmName, err)
 	}
-	port := ln.Addr().(*net.TCPAddr).Port
+	if code != http.StatusCreated {
+		return nil, fmt.Errorf("unexpected HTTP %d creating ext realm %q: %s", code, realmName, body)
+	}
 
-	srv, err := mockoidc.NewServer(nil)
+	// Disable VERIFY_PROFILE as a realm-level default required action so that new users
+	// are not prompted to verify their profile during their first login. Setting
+	// requiredActions:[] on the user object only clears user-specific actions; realm
+	// defaults are injected into the login session at runtime, which is why we must
+	// disable the default here. A 404 response is acceptable — it just means the
+	// action is not registered in this realm.
+	code, body, err = t.KeycloakAdminRequestForRealm(ctx, realmName, http.MethodPut,
+		"/authentication/required-actions/VERIFY_PROFILE",
+		map[string]any{
+			"alias":         "VERIFY_PROFILE",
+			"name":          "Verify Profile",
+			"providerId":    "VERIFY_PROFILE",
+			"enabled":       true,
+			"defaultAction": false,
+			"priority":      90,
+			"config":        map[string]any{},
+		})
 	if err != nil {
-		_ = ln.Close()
-		return nil, fmt.Errorf("failed to create mock OIDC server: %w", err)
+		return nil, fmt.Errorf("failed to disable VERIFY_PROFILE default in ext realm %q: %w", realmName, err)
 	}
-	if err := srv.Start(ln, nil); err != nil {
-		return nil, fmt.Errorf("failed to start mock OIDC server: %w", err)
+	if code != http.StatusNoContent && code != http.StatusNotFound {
+		return nil, fmt.Errorf("unexpected HTTP %d disabling VERIFY_PROFILE in ext realm %q: %s", code, realmName, body)
 	}
 
-	bridgeIP, err := t.kindBridgeIP(ctx)
+	// Create an OIDC client in the new realm. redirectUris is set to "*" so KC osac
+	// realm can use any broker callback URL without us needing to know the IdP alias
+	// in advance.
+	code, body, err = t.KeycloakAdminRequestForRealm(ctx, realmName, http.MethodPost, "/clients", map[string]any{
+		"clientId":            clientID,
+		"secret":              clientSecret,
+		"protocol":            "openid-connect",
+		"publicClient":        false,
+		"redirectUris":        []string{"*"},
+		"enabled":             true,
+		"standardFlowEnabled": true,
+	})
 	if err != nil {
-		_ = srv.Shutdown()
-		return nil, fmt.Errorf("failed to detect Kind bridge IP: %w", err)
+		return nil, fmt.Errorf("failed to create OIDC client in ext realm %q: %w", realmName, err)
+	}
+	if code != http.StatusCreated {
+		return nil, fmt.Errorf("unexpected HTTP %d creating client in ext realm %q: %s", code, realmName, body)
 	}
 
-	return &MockOIDCState{
-		server:      srv,
-		localAddr:   fmt.Sprintf("127.0.0.1:%d", port),
-		clusterAddr: fmt.Sprintf("%s:%d", bridgeIP, port),
+	return &ExtRealmState{
+		tool:         t,
+		realmName:    realmName,
+		clientID:     clientID,
+		clientSecret: clientSecret,
 	}, nil
 }
 
-// StopMockOIDC shuts down the mock OIDC server.
-func StopMockOIDC(state *MockOIDCState) error {
-	if state == nil || state.server == nil {
+// DeleteExtRealm removes the temporary Keycloak realm. Safe to call with a nil state.
+func (t *Tool) DeleteExtRealm(ctx context.Context, state *ExtRealmState) error {
+	if state == nil {
 		return nil
 	}
-	return state.server.Shutdown()
-}
-
-// kindBridgeIP returns the gateway IP of the Kind network: the host-accessible IP that
-// pods inside the Kind cluster can use to reach services on the test runner's host.
-// Tries podman first (this environment uses Podman), then falls back to docker.
-func (t *Tool) kindBridgeIP(ctx context.Context) (string, error) {
-	// Podman's network inspect returns JSON with a different schema than Docker's.
-	// Try it first since this environment uses Podman.
-	if ip, err := t.kindBridgeIPViaPodman(ctx); err == nil {
-		return ip, nil
-	}
-
-	// Fall back to Docker's template-based inspect.
-	out, err := t.runCommand(ctx, "docker", "network", "inspect", "kind",
-		"--format", "{{range .IPAM.Config}}{{if .Gateway}}{{.Gateway}}\n{{end}}{{end}}")
+	code, body, err := t.KeycloakAdminRequestForRealm(ctx, "", http.MethodDelete,
+		"/realms/"+state.realmName, nil)
 	if err != nil {
-		return "", fmt.Errorf("could not detect Kind bridge IP via podman or docker: %w", err)
+		return fmt.Errorf("failed to delete ext realm %q: %w", state.realmName, err)
 	}
-	return parseFirstIPv4Line(string(out))
+	if code != http.StatusNoContent && code != http.StatusNotFound {
+		return fmt.Errorf("unexpected HTTP %d deleting ext realm %q: %s", code, state.realmName, body)
+	}
+	return nil
 }
 
-// kindBridgeIPViaPodman uses `podman network inspect kind` (JSON output) to find the
-// gateway of the Kind network. Podman's schema is:
-//
-//	[{"subnets": [{"subnet": "10.89.0.0/24", "gateway": "10.89.0.1"}]}]
-func (t *Tool) kindBridgeIPViaPodman(ctx context.Context) (string, error) {
-	out, err := t.runCommand(ctx, "podman", "network", "inspect", "kind")
+// AddUser creates a user with the given credentials in the ext realm. Returns the
+// Keycloak-assigned user ID, which is the `sub` claim value in tokens issued by this realm.
+// Use the returned ID as the external subject when linking the user in the osac realm via
+// ProvisionOIDCUser.
+func (s *ExtRealmState) AddUser(ctx context.Context, username, password, email string) (userID string, err error) {
+	// Create the user. requiredActions is explicitly cleared so KC does not trigger
+	// VERIFY_PROFILE or any other required-action interstitial during the OIDC flow.
+	code, body, err := s.tool.KeycloakAdminRequestForRealm(ctx, s.realmName, http.MethodPost, "/users",
+		map[string]any{
+			"username":        username,
+			"email":           email,
+			"emailVerified":   true,
+			"enabled":         true,
+			"requiredActions": []string{},
+		})
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to create user %q in ext realm %q: %w", username, s.realmName, err)
 	}
-	// Parse the JSON array that podman returns.
-	var networks []struct {
-		Subnets []struct {
-			Gateway string `json:"gateway"`
-		} `json:"subnets"`
+	if code != http.StatusCreated {
+		return "", fmt.Errorf("unexpected HTTP %d creating user %q in ext realm %q: %s",
+			code, username, s.realmName, body)
 	}
-	if jsonErr := json.Unmarshal(out, &networks); jsonErr != nil {
-		return "", fmt.Errorf("failed to parse podman network inspect output: %w", jsonErr)
+
+	// Look up the user to get their ID.
+	code, body, err = s.tool.KeycloakAdminRequestForRealm(ctx, s.realmName, http.MethodGet,
+		fmt.Sprintf("/users?username=%s&exact=true", url.QueryEscape(username)), nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to look up user %q in ext realm %q: %w", username, s.realmName, err)
 	}
-	for _, net := range networks {
-		for _, subnet := range net.Subnets {
-			if gw := strings.TrimSpace(subnet.Gateway); gw != "" && !strings.Contains(gw, ":") {
-				return gw, nil
-			}
-		}
+	if code != http.StatusOK {
+		return "", fmt.Errorf("unexpected HTTP %d looking up user %q in ext realm %q: %s",
+			code, username, s.realmName, body)
 	}
-	return "", fmt.Errorf("no IPv4 gateway found in podman network inspect output")
+	var users []struct {
+		ID string `json:"id"`
+	}
+	if jsonErr := json.Unmarshal(body, &users); jsonErr != nil || len(users) == 0 {
+		return "", fmt.Errorf("failed to parse user list for %q in ext realm %q (body=%s): %w",
+			username, s.realmName, body, jsonErr)
+	}
+	userID = users[0].ID
+
+	// Set the password.
+	code, body, err = s.tool.KeycloakAdminRequestForRealm(ctx, s.realmName, http.MethodPut,
+		fmt.Sprintf("/users/%s/reset-password", userID),
+		map[string]any{"type": "password", "value": password, "temporary": false})
+	if err != nil {
+		return "", fmt.Errorf("failed to set password for user %q in ext realm %q: %w",
+			username, s.realmName, err)
+	}
+	if code != http.StatusNoContent {
+		return "", fmt.Errorf("unexpected HTTP %d setting password for user %q in ext realm %q: %s",
+			code, username, s.realmName, body)
+	}
+	return userID, nil
 }
 
-// parseFirstIPv4Line returns the first non-empty, non-IPv6 line from s.
-func parseFirstIPv4Line(s string) (string, error) {
-	for _, line := range strings.Split(strings.TrimSpace(s), "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" && !strings.Contains(line, ":") {
-			return line, nil
-		}
-	}
-	return "", fmt.Errorf("no IPv4 address found in output: %q", s)
-}
-
-// ProvisionOIDCUser creates a Keycloak user with a password, links them to the given IdP
-// alias using the provided external subject, and adds them to the tenant's Keycloak
-// organization so the organization claim appears in their JWT.
+// ProvisionOIDCUser creates a user in the KC **osac** realm and configures everything
+// needed for that user to authenticate via an external IdP:
 //
-// The password is set to the user's username for simplicity — these are ephemeral test
-// users. After provisioning, use SimulateOIDCLogin to drive the full OIDC redirect chain,
-// or LoginOIDCUser for a lightweight password-grant token when the redirect chain is not
-// under test.
+//  1. Creates the user in the osac realm (username, email, enabled).
+//  2. Sets their password (same as username, for direct-grant fallback in other tests).
+//  3. Links the user to the external IdP via a KC federated identity record.
+//     externalSubject must be the `sub` claim value in tokens issued by the ext realm
+//     (i.e. the user's UUID in the ext realm — returned by ExtRealmState.AddUser).
+//  4. Adds the user to the KC organization that corresponds to tenantName, and puts them
+//     in the /members group so the `organization` claim appears in their JWT.
+//
+// Returns the KC user ID in the osac realm.
 func (t *Tool) ProvisionOIDCUser(
 	ctx context.Context,
 	username, email, tenantName, idpAlias, externalSubject string,
 ) (userID string, err error) {
+	// 1. Create user. requiredActions is explicitly cleared so KC does not trigger
+	// VERIFY_PROFILE or any other required-action interstitial during the OIDC flow.
 	code, body, err := t.KeycloakAdminRequest(ctx, http.MethodPost, "/users", map[string]any{
-		"username":      username,
-		"email":         email,
-		"emailVerified": true,
-		"enabled":       true,
-		"firstName":     username,
-		"lastName":      "IdPTest",
+		"username":        username,
+		"email":           email,
+		"emailVerified":   true,
+		"enabled":         true,
+		"requiredActions": []string{},
 	})
 	if err != nil {
-		return "", fmt.Errorf("failed to create Keycloak user %q: %w", username, err)
+		return "", fmt.Errorf("create KC osac user %q: %w", username, err)
 	}
-	if code != http.StatusCreated && code != http.StatusConflict {
-		return "", fmt.Errorf("unexpected HTTP status creating user %q: %d body=%s", username, code, string(body))
+	if code != http.StatusCreated {
+		return "", fmt.Errorf("create KC osac user %q: HTTP %d: %s", username, code, body)
 	}
 
-	userID, err = t.keycloakEnsureUserReady(ctx, username)
+	// Look up user ID.
+	code, body, err = t.KeycloakAdminRequest(ctx, http.MethodGet,
+		fmt.Sprintf("/users?username=%s&exact=true", url.QueryEscape(username)), nil)
 	if err != nil {
-		return
+		return "", fmt.Errorf("look up KC osac user %q: %w", username, err)
 	}
+	if code != http.StatusOK {
+		return "", fmt.Errorf("look up KC osac user %q: HTTP %d: %s", username, code, body)
+	}
+	var users []struct {
+		ID string `json:"id"`
+	}
+	if jsonErr := json.Unmarshal(body, &users); jsonErr != nil || len(users) == 0 {
+		return "", fmt.Errorf("user %q not found in osac realm after creation (body=%s): %w",
+			username, body, jsonErr)
+	}
+	userID = users[0].ID
 
-	// Set the password via a separate API call (KC ignores credentials in the create payload).
+	// 2. Set password.
 	code, body, err = t.KeycloakAdminRequest(ctx, http.MethodPut,
 		fmt.Sprintf("/users/%s/reset-password", userID),
-		map[string]any{
-			"type":      "password",
-			"value":     username,
-			"temporary": false,
-		},
-	)
+		map[string]any{"type": "password", "value": username, "temporary": false})
 	if err != nil {
-		return "", fmt.Errorf("failed to set password for user %q: %w", username, err)
+		return "", fmt.Errorf("set password for KC osac user %q: %w", username, err)
 	}
 	if code != http.StatusNoContent {
-		return "", fmt.Errorf("unexpected HTTP status setting password for %q: %d body=%s", username, code, string(body))
+		return "", fmt.Errorf("set password for KC osac user %q: HTTP %d: %s", username, code, body)
 	}
 
-	// Link user to the external IdP (federated identity).
+	// 3. Link federated identity to the ext realm IdP.
+	//    The identityProvider field must match the KC IdP alias exactly.
 	code, body, err = t.KeycloakAdminRequest(ctx, http.MethodPost,
 		fmt.Sprintf("/users/%s/federated-identity/%s", userID, idpAlias),
 		map[string]any{
 			"identityProvider": idpAlias,
 			"userId":           externalSubject,
 			"userName":         username,
-		},
-	)
+		})
 	if err != nil {
-		return "", fmt.Errorf("failed to link user %q to IdP %q: %w", username, idpAlias, err)
+		return "", fmt.Errorf("link federated identity for %q → %q: %w", username, idpAlias, err)
 	}
 	if code != http.StatusCreated && code != http.StatusNoContent && code != http.StatusConflict {
-		return "", fmt.Errorf("unexpected HTTP status linking user %q to IdP: %d body=%s", username, code, string(body))
+		return "", fmt.Errorf("link federated identity for %q → %q: HTTP %d: %s",
+			username, idpAlias, code, body)
 	}
 
-	if err = t.ensureUserInOrg(ctx, username, tenantName); err != nil {
-		return "", fmt.Errorf("failed to add user %q to org %q: %w", username, tenantName, err)
+	// 4. Add user to the KC organization for this tenant and put them in /members.
+	if addErr := t.addOIDCUserToOrg(ctx, userID, username, tenantName); addErr != nil {
+		return "", addErr
 	}
+
 	return userID, nil
 }
 
-// LoginOIDCUser authenticates a provisioned IdP user via Keycloak's password grant and
-// returns a JWT access token. This avoids the full OIDC redirect chain (which requires
-// the Kind cluster to reach mockoidc on the host) while still validating that the user
-// is properly linked to the IdP and has the correct tenant/organization claims.
-//
-// Not used by the current IdP login specs (which use SimulateOIDCLogin to exercise the
-// full redirect chain), but kept as a reusable utility for future tests that only need a
-// valid token without caring about the redirect flow.
-func (t *Tool) LoginOIDCUser(ctx context.Context, username string) (string, error) {
-	tokenSource, err := t.makeKeycloakTokenSource(ctx, username, username)
+// addOIDCUserToOrg adds a KC osac realm user to the organization named tenantName and
+// puts them in the /members group so the `organization` claim appears in their JWT.
+func (t *Tool) addOIDCUserToOrg(ctx context.Context, userID, username, tenantName string) error {
+	// Find (or create) the KC organization for this tenant.
+	orgPayload := map[string]any{"name": tenantName, "enabled": true}
+	code, body, err := t.KeycloakAdminRequest(ctx, http.MethodPost, "/organizations", orgPayload)
 	if err != nil {
-		return "", fmt.Errorf("failed to create token source for user %q: %w", username, err)
+		return fmt.Errorf("ensure KC org %q: %w", tenantName, err)
 	}
-	token, err := tokenSource.Token(ctx)
-	if err != nil {
-		return "", fmt.Errorf("failed to obtain token for user %q: %w", username, err)
+	if code != http.StatusCreated && code != http.StatusConflict {
+		return fmt.Errorf("ensure KC org %q: HTTP %d: %s", tenantName, code, body)
 	}
-	return token.Access, nil
-}
 
-// WaitForKeycloakIdP polls until the Keycloak admin API reports the IdP alias as present.
-// Not called by the current specs (which rely on the OSAC controller status reaching READY
-// instead), but kept as a reusable low-level utility for tests that need to assert KC state
-// directly.
-func (t *Tool) WaitForKeycloakIdP(ctx context.Context, alias string) error {
-	bo := backoff.NewExponentialBackOff()
-	bo.InitialInterval = 2 * time.Second
-	bo.MaxInterval = 10 * time.Second
-	bo.MaxElapsedTime = 2 * time.Minute
-	return backoff.Retry(func() error {
-		code, _, err := t.KeycloakAdminRequest(ctx, http.MethodGet,
-			fmt.Sprintf("/identity-provider/instances/%s", alias), nil)
+	code, body, err = t.KeycloakAdminRequest(ctx, http.MethodGet,
+		fmt.Sprintf("/organizations?exact=true&search=%s", url.QueryEscape(tenantName)), nil)
+	if err != nil {
+		return fmt.Errorf("look up KC org %q: %w", tenantName, err)
+	}
+	if code != http.StatusOK {
+		return fmt.Errorf("look up KC org %q: HTTP %d: %s", tenantName, code, body)
+	}
+	var orgs []struct {
+		ID string `json:"id"`
+	}
+	if jsonErr := json.Unmarshal(body, &orgs); jsonErr != nil || len(orgs) == 0 {
+		return fmt.Errorf("KC org %q not found after creation (body=%s)", tenantName, body)
+	}
+	orgID := orgs[0].ID
+
+	// Add user to org.
+	code, _, err = t.KeycloakAdminRequest(ctx, http.MethodPost,
+		fmt.Sprintf("/organizations/%s/members", orgID), userID)
+	if err != nil {
+		return fmt.Errorf("add user %q to KC org %q: %w", username, tenantName, err)
+	}
+	if code != http.StatusCreated && code != http.StatusNoContent && code != http.StatusConflict {
+		return fmt.Errorf("add user %q to KC org %q: HTTP %d", username, tenantName, code)
+	}
+
+	// Ensure the /members group exists in the org and add the user to it.
+	groupPayload := map[string]any{"name": "/members"}
+	code, body, err = t.KeycloakAdminRequest(ctx, http.MethodPost,
+		fmt.Sprintf("/organizations/%s/groups", orgID), groupPayload)
+	if err != nil {
+		return fmt.Errorf("ensure /members group in KC org %q: %w", tenantName, err)
+	}
+
+	var groupID string
+	if code == http.StatusCreated {
+		var g map[string]any
+		if jsonErr := json.Unmarshal(body, &g); jsonErr == nil {
+			groupID, _ = g["id"].(string)
+		}
+	}
+	if groupID == "" {
+		_, body, err = t.KeycloakAdminRequest(ctx, http.MethodGet,
+			fmt.Sprintf("/organizations/%s/groups", orgID), nil)
 		if err != nil {
-			return err
+			return fmt.Errorf("list groups in KC org %q: %w", tenantName, err)
 		}
-		if code == http.StatusOK {
-			return nil
+		var groups []map[string]any
+		if jsonErr := json.Unmarshal(body, &groups); jsonErr == nil {
+			for _, g := range groups {
+				if name, ok := g["name"].(string); ok && name == "/members" {
+					groupID, _ = g["id"].(string)
+					break
+				}
+			}
 		}
-		return fmt.Errorf("IdP %q not yet in Keycloak (status %d)", alias, code)
-	}, backoff.WithContext(bo, ctx))
+	}
+	if groupID == "" {
+		return fmt.Errorf("could not find /members group in KC org %q", tenantName)
+	}
+
+	code, _, err = t.KeycloakAdminRequest(ctx, http.MethodPut,
+		fmt.Sprintf("/organizations/%s/groups/%s/members/%s", orgID, groupID, userID), nil)
+	if err != nil {
+		return fmt.Errorf("add user %q to /members group in KC org %q: %w", username, tenantName, err)
+	}
+	if code != http.StatusOK && code != http.StatusCreated &&
+		code != http.StatusNoContent && code != http.StatusConflict {
+		return fmt.Errorf("add user %q to /members group in KC org %q: HTTP %d", username, tenantName, code)
+	}
+	return nil
 }
 
-// SimulateOIDCLogin drives the OIDC authorization code flow programmatically to obtain a
-// Keycloak JWT for an external IdP user. The redirect chain is:
+// SimulateOIDCLogin drives the full OIDC authorization code redirect chain to obtain a
+// Keycloak JWT for an external IdP user. This mirrors the flow that `osac login` executes.
 //
-//  1. Test runner  → GET KC auth endpoint (kc_idp_hint=<alias>)
-//  2. ← 302 to mockoidc /oidc/authorize
-//  3. Test runner  → GET mockoidc /oidc/authorize  (pops queued user; auto-approves)
-//  4. ← 302 to KC broker callback with mock code
-//  5. Test runner  → GET KC /broker/<alias>/endpoint?code=<mock-code>
-//  6. KC (in-Kind) → POST mockoidc /oidc/token (bridge IP) — exchanges code
-//  7. KC (in-Kind) → GET  mockoidc /oidc/.well-known/jwks.json — validates signature
-//  8. KC           ← 302 to original redirect_uri?code=<kc-code>
-//  9. Test runner intercepts redirect, extracts kc-code
-//  10. Test runner → POST KC /token grant_type=authorization_code&code=<kc-code>
+// The redirect chain is:
+//  1. Test runner  → GET KC /auth?kc_idp_hint=<alias>&code_challenge=... (PKCE S256)
+//  2. ← 302 → ext realm login page
+//  3. Test runner  → GET ext realm login page (KC login form HTML)
+//  4. Test runner  → POST credentials to login form action URL
+//  5. ← 302 → KC /broker/<alias>/endpoint?code=<ext-code>
+//  6. Test runner  → GET KC broker endpoint
+//  7. KC (in-Kind) → POST ext realm /token (cluster-internal — same KC instance ✓)
+//  8. KC (in-Kind) → GET  ext realm /certs (JWKS — cluster-internal ✓)
+//  9. ← 302 → http://localhost?code=<kc-code>
+//  10. Test runner  → POST KC /token (authorization_code grant + PKCE verifier)
 //  11. ← KC JWT access_token
 //
-// Call QueueUser on the MockOIDCState before calling this function to control which user
-// is returned. If the queue is empty, mockoidc uses DefaultUser().
+// Steps 7–8 are server-to-server calls from KC to the ext realm. Because both realms
+// live in the same Keycloak instance, these calls use the cluster-internal address and
+// never need to leave the cluster — eliminating the host-to-cluster networking issue.
 //
-// The returned access token can be used directly as a Bearer token against the OSAC API.
-func (t *Tool) SimulateOIDCLogin(ctx context.Context, idpAlias string) (string, error) {
-	// The osac-cli Keycloak client only allows "http://localhost" as a redirect URI.
-	// We use that exact value and intercept the redirect via CheckRedirect before
-	// the HTTP client actually tries to connect to it.
+// idpAlias is the Keycloak IdP alias (typically "<tenantName>-<idpName>").
+// username and password are credentials for a user in the ext realm.
+// Pass empty strings if login is expected to fail before reaching the login form.
+func (t *Tool) SimulateOIDCLogin(ctx context.Context, idpAlias, username, password string) (string, error) {
 	const callbackBase = "http://localhost"
-	callbackURL := callbackBase
 
-	// PKCE (RFC 7636) — required by the osac-cli Keycloak client.
 	codeVerifier, codeChallenge, err := generatePKCE()
 	if err != nil {
 		return "", fmt.Errorf("failed to generate PKCE challenge: %w", err)
@@ -332,8 +433,8 @@ func (t *Tool) SimulateOIDCLogin(ctx context.Context, idpAlias string) (string, 
 		return "", fmt.Errorf("failed to create cookie jar: %w", err)
 	}
 
-	var kcCode string
-	var redirectLog []string
+	// Do NOT auto-follow redirects — we drive each hop manually so we can detect
+	// KC login forms and submit credentials.
 	httpClient := &http.Client{
 		Jar: jar,
 		Transport: &http.Transport{
@@ -342,22 +443,17 @@ func (t *Tool) SimulateOIDCLogin(ctx context.Context, idpAlias string) (string, 
 				MinVersion: tls.VersionTLS12,
 			},
 		},
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			target := req.URL.String()
-			redirectLog = append(redirectLog, fmt.Sprintf("redirect #%d → %s", len(via), target))
-			if strings.HasPrefix(target, callbackBase) {
-				kcCode = req.URL.Query().Get("code")
-				if kcErr := req.URL.Query().Get("error"); kcErr != "" {
-					redirectLog = append(redirectLog, fmt.Sprintf("  KC error: %s — %s",
-						kcErr, req.URL.Query().Get("error_description")))
-				}
-				return http.ErrUseLastResponse
-			}
-			return nil
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
 		},
 	}
 
-	// Steps 1–9: drive the full redirect chain until we hit the callback URL.
+	type hop struct {
+		method string
+		rawURL string
+		form   url.Values
+	}
+
 	authURL := fmt.Sprintf(
 		"https://%s/realms/osac/protocol/openid-connect/auth?"+
 			"client_id=osac-cli&response_type=code"+
@@ -365,40 +461,116 @@ func (t *Tool) SimulateOIDCLogin(ctx context.Context, idpAlias string) (string, 
 			"&kc_idp_hint=%s&scope=%s"+
 			"&code_challenge=%s&code_challenge_method=S256",
 		keycloakAddr,
-		url.QueryEscape(callbackURL),
+		url.QueryEscape(callbackBase),
 		url.QueryEscape("osac-it-"+idpAlias),
 		url.QueryEscape(idpAlias),
 		url.QueryEscape("openid organization"),
 		url.QueryEscape(codeChallenge),
 	)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, authURL, nil)
-	if err != nil {
-		return "", fmt.Errorf("failed to build KC auth request: %w", err)
-	}
-	resp, doErr := httpClient.Do(req)
-	var respDebug string
-	if resp != nil {
-		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+	next := hop{method: http.MethodGet, rawURL: authURL}
+	var redirectLog []string
+
+	for i := 0; i < 20; i++ {
+		var bodyReader io.Reader
+		if next.form != nil {
+			bodyReader = strings.NewReader(next.form.Encode())
+		}
+		req, err := http.NewRequestWithContext(ctx, next.method, next.rawURL, bodyReader)
+		if err != nil {
+			return "", fmt.Errorf("hop %d: failed to build request to %s: %w", i, next.rawURL, err)
+		}
+		if next.form != nil {
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		}
+
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			return "", fmt.Errorf("hop %d: request to %s failed: %w\nchain:\n%s",
+				i, next.rawURL, err, strings.Join(redirectLog, "\n"))
+		}
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
 		resp.Body.Close()
-		respDebug = fmt.Sprintf("status=%d url=%s body=%s", resp.StatusCode, resp.Request.URL, string(bodyBytes))
-	}
-	// ErrUseLastResponse is how CheckRedirect signals "stop here, I captured the code".
-	if doErr != nil && kcCode == "" {
-		return "", fmt.Errorf("OIDC redirect chain failed before capturing KC code: %w (response: %s)", doErr, respDebug)
-	}
-	if kcCode == "" {
-		return "", fmt.Errorf("redirect chain stopped without KC code — redirects:\n%s\nfinal response: %s",
-			strings.Join(redirectLog, "\n"), respDebug)
+
+		redirectLog = append(redirectLog, fmt.Sprintf("hop %d: %s %s → HTTP %d",
+			i, next.method, next.rawURL, resp.StatusCode))
+
+		switch resp.StatusCode {
+		case http.StatusFound, http.StatusSeeOther, http.StatusMovedPermanently,
+			http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+			location := resp.Header.Get("Location")
+			if location == "" {
+				return "", fmt.Errorf("hop %d: %d response has no Location header\nchain:\n%s",
+					i, resp.StatusCode, strings.Join(redirectLog, "\n"))
+			}
+			// Resolve relative Location URLs against the current request URL.
+			locURL, resolveErr := req.URL.Parse(location)
+			if resolveErr != nil {
+				return "", fmt.Errorf("hop %d: invalid Location %q: %w", i, location, resolveErr)
+			}
+			location = locURL.String()
+
+			if strings.HasPrefix(location, callbackBase) {
+				// KC redirected to the callback — extract the authorization code.
+				parsed, parseErr := url.Parse(location)
+				if parseErr != nil {
+					return "", fmt.Errorf("hop %d: invalid callback URL %q: %w", i, location, parseErr)
+				}
+				if kcErr := parsed.Query().Get("error"); kcErr != "" {
+					return "", fmt.Errorf("KC error at callback: %s — %s",
+						kcErr, parsed.Query().Get("error_description"))
+				}
+				kcCode := parsed.Query().Get("code")
+				if kcCode == "" {
+					return "", fmt.Errorf("hop %d: callback URL has no code: %s", i, location)
+				}
+				return t.exchangeKCCode(ctx, httpClient, kcCode, callbackBase, codeVerifier)
+			}
+			next = hop{method: http.MethodGet, rawURL: location}
+
+		case http.StatusOK:
+			// Check for a KC login form (e.g. the ext realm presenting its login page).
+			formAction := extractKCLoginFormAction(respBody)
+			if formAction == "" {
+				return "", fmt.Errorf("hop %d: got HTTP 200 but response is not a KC login form\nchain:\n%s\nbody (first 500 chars): %.500s",
+					i, strings.Join(redirectLog, "\n"), string(respBody))
+			}
+			if username == "" || password == "" {
+				return "", fmt.Errorf("hop %d: KC login form presented but no credentials provided (idpAlias=%s)",
+					i, idpAlias)
+			}
+			// Resolve the form action URL relative to the current request URL.
+			actionURL, resolveErr := req.URL.Parse(formAction)
+			if resolveErr != nil {
+				return "", fmt.Errorf("hop %d: invalid form action %q: %w", i, formAction, resolveErr)
+			}
+			next = hop{
+				method: http.MethodPost,
+				rawURL: actionURL.String(),
+				form: url.Values{
+					"username":     {username},
+					"password":     {password},
+					"credentialId": {""},
+				},
+			}
+
+		default:
+			return "", fmt.Errorf("hop %d: unexpected HTTP %d at %s\nchain:\n%s\nbody (first 500 chars): %.500s",
+				i, resp.StatusCode, next.rawURL, strings.Join(redirectLog, "\n"), string(respBody))
+		}
 	}
 
-	// Step 10–11: exchange the KC authorization code for a KC JWT.
+	return "", fmt.Errorf("OIDC redirect chain exceeded maximum hops\nchain:\n%s", strings.Join(redirectLog, "\n"))
+}
+
+// exchangeKCCode exchanges a KC authorization code for a JWT access token.
+func (t *Tool) exchangeKCCode(ctx context.Context, httpClient *http.Client, code, redirectURI, codeVerifier string) (string, error) {
 	tokenURL := fmt.Sprintf("https://%s/realms/osac/protocol/openid-connect/token", keycloakAddr)
 	tokenReq, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL,
 		strings.NewReader(url.Values{
 			"grant_type":    {"authorization_code"},
-			"code":          {kcCode},
-			"redirect_uri":  {callbackURL},
+			"code":          {code},
+			"redirect_uri":  {redirectURI},
 			"client_id":     {"osac-cli"},
 			"code_verifier": {codeVerifier},
 		}.Encode()),
@@ -416,28 +588,28 @@ func (t *Tool) SimulateOIDCLogin(ctx context.Context, idpAlias string) (string, 
 
 	if tokenResp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(tokenResp.Body)
-		return "", fmt.Errorf("token exchange returned HTTP %d: %s", tokenResp.StatusCode, string(body))
+		return "", fmt.Errorf("token exchange returned HTTP %d: %s", tokenResp.StatusCode, body)
 	}
 
-	var tokenPayload struct {
+	var payload struct {
 		AccessToken string `json:"access_token"`
 		Error       string `json:"error"`
 		Description string `json:"error_description"`
 	}
-	if err := json.NewDecoder(tokenResp.Body).Decode(&tokenPayload); err != nil {
+	if err := json.NewDecoder(tokenResp.Body).Decode(&payload); err != nil {
 		return "", fmt.Errorf("failed to decode token response: %w", err)
 	}
-	if tokenPayload.Error != "" {
-		return "", fmt.Errorf("token exchange error %q: %s", tokenPayload.Error, tokenPayload.Description)
+	if payload.Error != "" {
+		return "", fmt.Errorf("token exchange error %q: %s", payload.Error, payload.Description)
 	}
-	if tokenPayload.AccessToken == "" {
+	if payload.AccessToken == "" {
 		return "", fmt.Errorf("token exchange returned OK but access_token is empty")
 	}
-	return tokenPayload.AccessToken, nil
+	return payload.AccessToken, nil
 }
 
-// MakeOIDCGRPCConn creates a gRPC connection to the external API authenticated with the
-// given raw JWT bearer token. Intended for use with tokens obtained via SimulateOIDCLogin.
+// MakeOIDCGRPCConn creates a gRPC connection to the OSAC external API authenticated with
+// the given raw JWT bearer token. Intended for use with tokens from SimulateOIDCLogin.
 func (t *Tool) MakeOIDCGRPCConn(_ context.Context, jwtToken string) (*grpc.ClientConn, error) {
 	tokenSource, err := auth.NewStaticTokenSource().
 		SetLogger(t.logger).
@@ -455,6 +627,23 @@ func (t *Tool) MakeOIDCGRPCConn(_ context.Context, jwtToken string) (*grpc.Clien
 		Build()
 }
 
+// WaitForKeycloakIdP polls until the Keycloak admin API reports the IdP alias as present
+// in the osac realm.
+func (t *Tool) WaitForKeycloakIdP(ctx context.Context, alias string) error {
+	for {
+		code, _, err := t.KeycloakAdminRequest(ctx, http.MethodGet,
+			fmt.Sprintf("/identity-provider/instances/%s", alias), nil)
+		if err == nil && code == http.StatusOK {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timed out waiting for KC IdP alias %q", alias)
+		default:
+		}
+	}
+}
+
 // generatePKCE creates a PKCE code_verifier and its S256 code_challenge (RFC 7636).
 func generatePKCE() (verifier, challenge string, err error) {
 	buf := make([]byte, 32)
@@ -465,4 +654,21 @@ func generatePKCE() (verifier, challenge string, err error) {
 	h := sha256.Sum256([]byte(verifier))
 	challenge = base64.RawURLEncoding.EncodeToString(h[:])
 	return verifier, challenge, nil
+}
+
+// kcLoginFormActionRe matches the action attribute of KC's login form.
+// KC login forms look like:
+//
+//	<form id="kc-form-login" ... action="https://keycloak/realms/xxx/login-actions/authenticate?...">
+var kcLoginFormActionRe = regexp.MustCompile(`action="(https?://[^"]+/login-actions/authenticate[^"]*)"`)
+
+// extractKCLoginFormAction parses a KC login page HTML body and returns the form action
+// URL, or an empty string if the body is not a KC login form.
+func extractKCLoginFormAction(body []byte) string {
+	matches := kcLoginFormActionRe.FindSubmatch(body)
+	if len(matches) < 2 {
+		return ""
+	}
+	// KC HTML-encodes & as &amp; in attribute values.
+	return strings.ReplaceAll(string(matches[1]), "&amp;", "&")
 }

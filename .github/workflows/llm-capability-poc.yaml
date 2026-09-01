@@ -1,32 +1,51 @@
-name: LLM Capability POC (fleet-wide, non-osac-ci-1)
+name: LLM Capability POC (fleet-wide)
 
 # Throwaway validation, not a real capability: proves whether the existing
 # WIF auth to the osac-ci GCP project (already used by
 # graphify-brain-refresh-vertex-poc.yaml, which only ever runs on
-# osac-ci-1) works "out of the box" on a different fleet host with zero
-# new GCP-side configuration -- since WIF trust is based on the calling
-# job's OIDC identity (repo/ref), not on which physical runner executes
-# it, this should just work. Deliberately has nothing to do with
+# osac-ci-1) works "out of the box" on every fleet host with zero new
+# GCP-side configuration -- since WIF trust is based on the calling job's
+# OIDC identity (repo/ref), not on which physical runner executes it,
+# this should just work on main. Deliberately has nothing to do with
 # graphify -- tests the general Vertex AI capability in isolation.
+#
+# Host list is hardcoded here rather than read from
+# osac-test-infra's fleet/inventory/hosts.yml (source of truth for the
+# real fleet) -- that file lives in a different repo, and a throwaway
+# POC isn't worth a cross-repo checkout for. Keep in sync manually if the
+# fleet changes before this file is deleted.
 #
 # Delete this file once the answer is confirmed either way.
 
 on:
   workflow_dispatch: {}
-  # pull_request so this can run and be validated entirely on this PR's
-  # own branch, without ever landing on main -- workflow_dispatch alone
-  # requires the workflow file to already exist on the default branch to
-  # be dispatchable, which a throwaway POC shouldn't need.
-  pull_request:
-    paths:
-      - .github/workflows/llm-capability-poc.yaml
 
 permissions: {}
 
 jobs:
   test:
-    name: Call Vertex AI from osac-1
-    runs-on: [self-hosted, osac-1]
+    name: Call Vertex AI (${{ matrix.host }})
+    strategy:
+      fail-fast: false
+      matrix:
+        host:
+          - osac-ci-1
+          - osac-1
+          - osac-2
+          - osac-3
+          - osac-4
+          - osac-5
+          - osac-6
+          - osac-7
+          - osac-8
+          - osac-9
+          - osac-10
+          - osac-11
+          - osac-12
+          - osac-13
+          - osac-14
+          - osac-15
+    runs-on: [self-hosted, "${{ matrix.host }}"]
     timeout-minutes: 10
     permissions:
       id-token: write

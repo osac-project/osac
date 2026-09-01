@@ -539,8 +539,8 @@ var _ = Describe("Private clusters server", func() {
 			))
 		})
 
-		It("Fails when creating object with host type that doesn't match template", func() {
-			_, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+		It("Accepts host type that differs from the template", func() {
+			response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 				Object: privatev1.Cluster_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name: fmt.Sprintf("test-%s", uuid.New()[24:32]),
@@ -559,14 +559,36 @@ var _ = Describe("Private clusters server", func() {
 					}.Build(),
 				}.Build(),
 			}.Build())
-			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(Equal(
-				"host type for node set 'compute' should be empty, 'acme-1ti-name' or 'acme-1ti-id', " +
-					"like in template 'my-template-id', but it is 'acme-gpu-id'",
-			))
+			Expect(err).ToNot(HaveOccurred())
+			object := response.GetObject()
+			nodeSets := object.GetSpec().GetNodeSets()
+			Expect(nodeSets).To(HaveKey("compute"))
+			Expect(nodeSets["compute"].GetHostType().GetId()).To(Equal("acme-gpu-id"))
+			Expect(nodeSets["compute"].GetSize()).To(Equal(int32(5)))
+		})
+
+		It("Uses template host type when cluster node set omits it", func() {
+			response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+				Object: privatev1.Cluster_builder{
+					Spec: privatev1.ClusterSpec_builder{
+						Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+						NodeSets: map[string]*privatev1.ClusterNodeSet{
+							"compute": privatev1.ClusterNodeSet_builder{
+								Size: 5,
+							}.Build(),
+						},
+					}.Build(),
+					Status: privatev1.ClusterStatus_builder{
+						Hub: "my-hub-id",
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			object := response.GetObject()
+			nodeSets := object.GetSpec().GetNodeSets()
+			Expect(nodeSets).To(HaveKey("compute"))
+			Expect(nodeSets["compute"].GetHostType().GetId()).To(Equal("acme-1ti-id"))
+			Expect(nodeSets["compute"].GetSize()).To(Equal(int32(5)))
 		})
 
 		It("Returns 'already exists' when creating object with existing identifier", func() {

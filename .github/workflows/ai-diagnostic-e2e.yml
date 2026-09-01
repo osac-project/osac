@@ -103,6 +103,25 @@ jobs:
             | jq -Rsc '[splits("\n")] | map(select(length > 0)) | .[:40]')
           echo "files=${files_json:-[]}" >> "${GITHUB_OUTPUT}"
 
+          # Bounded PR diff for extra prompt context. Same JSON-single-line
+          # encoding as the filenames above, and for the same reason (the
+          # diff's actual content is even more fully attacker-authored than
+          # a filename, so no custom delimiter). Truncated in raw text
+          # BEFORE JSON-encoding to keep the prompt size predictable
+          # regardless of PR size -- the model only ever uses this as
+          # inert diagnostic context (never executed, and the eventual
+          # commit status is built with jq, never shell-interpolated), so
+          # a crafted/adversarial diff can produce a weird diagnosis at
+          # worst, not a security issue.
+          MAX_DIFF_CHARS=8000
+          raw_diff=$(gh api -H "Accept: application/vnd.github.v3.diff" "repos/${REPO}/pulls/${pr_number}" 2>/dev/null || true)
+          diff_text="${raw_diff:0:${MAX_DIFF_CHARS}}"
+          if [[ "${#raw_diff}" -gt "${MAX_DIFF_CHARS}" ]]; then
+            diff_text=$(printf '%s\n... (truncated, diff exceeds %s chars)' "${diff_text}" "${MAX_DIFF_CHARS}")
+          fi
+          diff_json=$(jq -Rs . <<<"${diff_text}")
+          echo "diff=${diff_json}" >> "${GITHUB_OUTPUT}"
+
       - name: Download failure artifact
         id: artifact
         if: steps.pr.outputs.found == 'true'
@@ -155,6 +174,7 @@ jobs:
           RUN_URL: ${{ github.event.workflow_run.html_url }}
           DIAGNOSIS_FILE: ${{ runner.temp }}/diagnosis.md
           CHANGED_FILES: ${{ steps.pr.outputs.files }}
+          PR_DIFF: ${{ steps.pr.outputs.diff }}
         run: python3 .github/scripts/ai-diagnose-failure.py
 
       # Deliberately a commit Status, not a Check Run. Check Runs are only

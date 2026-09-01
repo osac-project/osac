@@ -39,4 +39,5 @@ jobs:
       pull-requests: read
       id-token: write
     uses: osac-project/osac-test-infra/.github/workflows/ai-diagnostic-e2e.yml@main
-    secrets: inherit
+    secrets:
+      AI_DIAGNOSTIC_TOKEN: ${{ secrets.AI_DIAGNOSTIC_TOKEN }}

@@ -33,6 +33,11 @@ permissions: {}
 
 jobs:
   diagnose:
+    # Explicit name so the job's auto-generated Job Summary section header
+    # reads "Diagnose summary" instead of the raw job id ("diagnose
+    # summary") -- GitHub appends the literal, lowercase word "summary"
+    # itself; that part isn't controllable from here.
+    name: Diagnose
     # Only real PR failures -- schedule/workflow_dispatch runs against main
     # already get a same-job diagnosis in the Job Summary (Phase 1); this is
     # specifically the path for genuine fork PRs, which never reach that

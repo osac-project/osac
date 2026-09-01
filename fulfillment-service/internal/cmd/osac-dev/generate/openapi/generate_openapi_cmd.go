@@ -28,7 +28,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"go.yaml.in/yaml/v2"
+	"go.yaml.in/yaml/v3"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/cache"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"

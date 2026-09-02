@@ -358,8 +358,9 @@ fork_remote_push_matches() {
   return 0
 }
 
-# True when $GH_USER/$repo is a GitHub fork of osac-project/$repo (not an
-# unrelated same-name repo — common for the docs sibling).
+# True when $GH_USER/$(fork_repo_for "$repo") is a GitHub fork of
+# osac-project/$repo (not an unrelated same-name repo — common for docs,
+# whose fork is osac-docs).
 is_github_fork_of_org_repo() {
   local repo="$1"
   local parent fork_repo

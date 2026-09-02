@@ -663,6 +663,8 @@ test_unrelated_same_name_github_repo_is_not_used_as_fork() {
     || fail "bootstrap should continue when docs fork collides: $out"
   echo "$out" | grep -qi 'Failed to fork osac-project/docs' \
     || fail "expected skip for unrelated github.com/smokeuser/docs: $out"
+  grep -q 'repo view smokeuser/osac-docs' "${home}/gh.log" \
+    || fail "parent check must view smokeuser/osac-docs: $(cat "${home}/gh.log")"
   assert_no_fork_remote "${root}/osac-docs" "osac-docs after docs name collision"
   assert_fork_remote "${root}/enhancement-proposals" "enhancement-proposals"
   pass "does not point fork at an unrelated same-name GitHub repo"
@@ -721,13 +723,13 @@ test_fork_remote_match_requires_user_boundary() {
 
   run_bootstrap "$root" "$home" "$bin" >/dev/null
   "$REAL_GIT" -C "$docs_dest" remote add fork \
-    "https://github.com/evilsmokeuser/docs.git"
+    "https://github.com/evilsmokeuser/osac-docs.git"
 
   out=$(run_bootstrap_fork "$root" "$home" "$bin" 2>&1) || fail "bootstrap failed: $out"
   echo "$out" | grep -q 'already exists with a different URL' \
-    || fail "evilsmokeuser/docs must not count as smokeuser/docs: $out"
+    || fail "evilsmokeuser/osac-docs must not count as smokeuser/osac-docs: $out"
   url=$(git -C "$docs_dest" remote get-url fork)
-  [[ "$url" == *evilsmokeuser/docs* ]] \
+  [[ "$url" == *evilsmokeuser/osac-docs* ]] \
     || fail "must not overwrite an existing mismatched fork remote: $url"
   pass "fork-remote match requires / or : before \$GH_USER/repo"
 }
@@ -801,6 +803,13 @@ test_fork_name_origin_rerun_is_idempotent() {
     || fail "re-run must rebase onto upstream/main: $(cat "$git_log")"
   assert_origin_layout_writeable "$ep" "enhancement-proposals"
   assert_no_named_remote "$ep" osac-upstream "enhancement-proposals"
+  echo "$out" | grep -q 'Updating osac-docs' \
+    || fail "re-run should update origin-as-fork osac-docs: $out"
+  echo "$out" | grep -qi 'skipping osac-docs' \
+    && fail "must not skip osac-docs on --fork-name origin re-run: $out"
+  assert_remote_url "${root}/osac-docs" origin "smokeuser/osac-docs"
+  assert_remote_url "${root}/osac-docs" upstream "osac-project/docs"
+  assert_no_named_remote "${root}/osac-docs" fork "osac-docs"
   pass "--fork-name origin re-run updates via upstream and does not rename again"
 }
 

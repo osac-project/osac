@@ -33,6 +33,9 @@ def test_cluster_create(
     ssh_public_key_path: str,
     metering: MeteringCollector,
 ) -> None:
+    """Verify the full CaaS cluster lifecycle: create, provision to Ready, version and
+    releaseImage propagation to the HostedCluster, N+1 metering heartbeat decomposition,
+    worker scale-up reflected in updated.v1 metering, and deletion."""
     name = unique_name("e2e-cluster")
     uuid = cli.create_cluster(
         name=name,
@@ -79,6 +82,7 @@ def test_cluster_create(
 
         # Derive expected N+1 count from cluster spec
         node_sets = cluster.get("object", {}).get("spec", {}).get("nodeSets", {})
+        assert node_sets, "Cluster spec should have at least one node set for the scaling test"
         expected_components = 1 + len(node_sets)
 
         # Verify N+1 heartbeat decomposition

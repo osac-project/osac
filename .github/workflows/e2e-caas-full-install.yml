@@ -187,22 +187,29 @@ jobs:
     if: always()
     needs: [changes, e2e-readiness, e2e-caas-full-install]
     runs-on: ubuntu-latest
+    permissions:
+      statuses: write
     steps:
-      - if: needs.e2e-readiness.result == 'failure'
-        run: |
-          echo "e2e-readiness failed: expensive e2e is gated until unlock."
-          echo "Need coderabbitai[bot] APPROVED on this HEAD, lgtm, or /e2e-ready."
-          echo "See .github/e2e-readiness.md"
-          echo "Upstream: changes=${{ needs.changes.result }} e2e-readiness=failure full-install=${{ needs.e2e-caas-full-install.result }}"
-          exit 1
-      - if: >-
-          needs.e2e-readiness.result != 'failure'
-          && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
-        run: |
-          echo "Upstream job results:"
-          echo "  changes: ${{ needs.changes.result }}"
-          echo "  e2e-readiness: ${{ needs.e2e-readiness.result }}"
-          echo "  e2e-caas-full-install: ${{ needs.e2e-caas-full-install.result }}"
-          echo ""
-          echo "One or more upstream jobs failed or were cancelled."
-          exit 1
+      - name: Post gate status
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9
+        with:
+          script: |
+            const r = {
+              changes: '${{ needs.changes.result }}',
+              readiness: '${{ needs.e2e-readiness.result }}',
+              install: '${{ needs.e2e-caas-full-install.result }}',
+            };
+            let state = 'success', description = 'All checks passed';
+            if (r.readiness === 'failure') {
+              state = 'pending';
+              description = 'Waiting for e2e readiness (lgtm, coderabbit approve, or /e2e-ready)';
+            } else if (Object.values(r).some(v => v === 'failure' || v === 'cancelled')) {
+              state = 'failure';
+              description = `changes=${r.changes} readiness=${r.readiness} install=${r.install}`;
+            }
+            const sha = context.payload.pull_request?.head?.sha ?? context.sha;
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner, repo: context.repo.repo,
+              sha, state, context: 'e2e-caas-gate',
+              description: description.slice(0, 140),
+            });

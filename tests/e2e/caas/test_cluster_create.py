@@ -208,13 +208,15 @@ def test_cluster_create_with_version(
         wait_for_cluster_grpc_deleting_or_archived(grpc=grpc, uuid=uuid)
         wait_for_cluster_deletion(k8s=k8s_hub_client, name=co_name)
         wait_for_cluster_grpc_removal(grpc=grpc, uuid=uuid)
+        uuid = None  # deleted cleanly; the finally only needs to remove the version
     finally:
+        # On the failure path the cluster may still exist and reference the
+        # version; a referenced ClusterVersion cannot be deleted, so remove the
+        # cluster and wait for it to be gone first. Skipped entirely on the happy
+        # path, where the body already deleted the cluster and cleared uuid.
         if uuid is not None:
             with contextlib.suppress(subprocess.CalledProcessError):
                 cli.delete_cluster(uuid=uuid)
-            # A referenced ClusterVersion cannot be deleted, so wait for the
-            # cluster to be fully removed first. Returns immediately on the happy
-            # path, where the body already waited for removal.
             with contextlib.suppress(TimeoutError):
                 wait_for_cluster_grpc_removal(grpc=grpc, uuid=uuid)
         private_grpc.call_unchecked(service="osac.private.v1.ClusterVersions/Delete", data={"id": version["id"]})

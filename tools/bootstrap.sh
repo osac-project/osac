@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install AI workflow skills for this repo.
 #
-# Usage: tools/bootstrap.sh [--no-fork]
+# Usage: tools/bootstrap.sh [--no-fork] [--fork-name NAME]
 #
 # This script:
 #   1. Clones or updates osac-project/osac-ai-skills (prefers ~/.osac-ai-skills)
@@ -14,8 +14,9 @@
 #      (enhancement-proposals, osac-ux, osac-ui, osac-docs). osac-docs
 #      is osac-project/docs — not docs/. E2E suites live in-tree at
 #      tests/e2e/; osac-test-infra is not cloned.
-#      Writeable siblings get a `fork` remote (origin = osac-project).
-#      osac-ux and vendor clones are never forked.
+#      Writeable siblings get a push remote (default name `fork`;
+#      origin = osac-project). --fork-name only rearranges remotes on
+#      those siblings — not this checkout, osac-ux, or vendor clones.
 #
 # Re-run anytime to update to latest main.
 set -euo pipefail
@@ -31,22 +32,30 @@ GIT_PROTOCOL="https"
 
 usage() {
   cat <<'EOF'
-Usage: tools/bootstrap.sh [--no-fork]
+Usage: tools/bootstrap.sh [--no-fork] [--fork-name NAME]
 
 Vendors AI skills/workflows and clones skill-relative sibling repos under
 this checkout.
 
 By default, each writeable sibling is forked to your GitHub account:
   origin     = osac-project/<repo>     (upstream source, PR target)
-  fork       = <your-username>/<repo>  (push target for feature branches)
+  <fork-name> = <your-username>/<repo>  (push target; default name: fork)
+
+--fork-name origin uses the conventional GitHub layout on writeable
+siblings only (origin = your fork, upstream = osac-project). Pick a name
+and stick with it — re-running with a different name mutates remotes.
+This checkout, osac-ux, and vendor clones are never renamed. Skills
+resolve remotes by URL, not by name.
 
 osac-ux is a reference clone (no fork). Vendor checkouts (.osac-ai-skills,
-.ai-workflows) are never forked.
+.ai-workflows) are never forked. --no-fork skips forking even when
+--fork-name is also passed.
 
 Options:
-  --no-fork   Clone siblings from osac-project without forking.
-              Useful for read-only access or CI environments.
-  --help      Show this help message.
+  --no-fork          Clone siblings from osac-project without forking.
+                     Useful for read-only access or CI environments.
+  --fork-name NAME   Name for the writeable-sibling push remote (default: fork).
+  --help             Show this help message.
 
 Prerequisites:
   - gh CLI installed and authenticated (gh auth login), unless --no-fork
@@ -56,6 +65,11 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-fork) NO_FORK=true; shift ;;
+    --fork-name)
+      [[ -n "${2:-}" ]] || { echo "Error: --fork-name requires a value" >&2; usage >&2; exit 1; }
+      FORK_REMOTE_NAME="$2"
+      shift 2
+      ;;
     --help|-h) usage; exit 0 ;;
     *)
       echo "Unknown option: $1" >&2
@@ -139,23 +153,24 @@ ai_workflows_checkout_ok() {
   is_git_work_tree_root "$dir" && [[ -x "${dir}/install.sh" ]]
 }
 
-# Fetch + rebase a git checkout onto origin/main. Warns and continues on
-# failure rather than exiting — a stale checkout is recoverable manually.
-# Skip when HEAD is not main so a later bootstrap does not rebase a feature
-# branch (siblings now have a fork remote; developers will check those out).
+# Fetch + rebase a git checkout onto $remote/main (default origin). Warns and
+# continues on failure rather than exiting — a stale checkout is recoverable
+# manually. Skip when HEAD is not main so a later bootstrap does not rebase a
+# feature branch (siblings now have a push remote; developers will check those
+# out). Vendors always pass origin (or omit the third arg).
 update_git_repo() {
-  local dir="$1" label="$2"
+  local dir="$1" label="$2" remote="${3:-origin}"
   local branch
   branch=$(git -C "$dir" symbolic-ref --short HEAD 2>/dev/null || echo "")
   if [[ "$branch" != "main" ]]; then
     echo "  ${label} is on '${branch:-unknown}'. Skipping update to avoid rebasing your work."
     return 0
   fi
-  if ! (cd "${dir}" && git fetch origin -q); then
+  if ! (cd "${dir}" && git fetch "$remote" -q); then
     echo "  Fetch failed for ${label}. Skipping update."
-  elif ! (cd "${dir}" && git rebase origin/main --autostash -q); then
+  elif ! (cd "${dir}" && git rebase "${remote}/main" --autostash -q); then
     (cd "${dir}" && git rebase --abort 2>/dev/null || true)
-    echo "  Rebase failed for ${label}. Resolve manually: cd ${dir} && git rebase origin/main"
+    echo "  Rebase failed for ${label}. Resolve manually: cd ${dir} && git rebase ${remote}/main"
   else
     echo "  ${label} up to date"
   fi
@@ -237,14 +252,53 @@ SIBLINGS=(
   "docs:osac-docs"
 )
 
+# True when $url is a path or SSH remote for $suffix (e.g. osac-project/docs).
+# Require / or : before the suffix so evil-osac-project/<repo> does not match.
+remote_url_matches_suffix() {
+  local url="$1" suffix="$2"
+  local stripped="${url%.git}"
+  [[ "$stripped" == *"/${suffix}" || "$stripped" == *":${suffix}" ]]
+}
+
+find_upstream_remote() {
+  local dir="$1" repo="$2"
+  local remote url
+  local expected_suffix="${GITHUB_ORG}/${repo}"
+  for remote in $(git -C "$dir" remote 2>/dev/null); do
+    url=$(git -C "$dir" remote get-url "$remote" 2>/dev/null) || continue
+    if remote_url_matches_suffix "$url" "$expected_suffix"; then
+      echo "$remote"
+      return 0
+    fi
+  done
+  return 1
+}
+
 is_expected_sibling() {
   local dir="$1" repo="$2"
-  local expected_suffix="${GITHUB_ORG}/${repo}"
   local url
   url=$(git -C "$dir" remote get-url origin 2>/dev/null) || return 1
-  # Require a path or SSH separator so evil-osac-project/<repo> does not match.
-  # origin only: update_git_repo rebases origin/main, so any other remote is irrelevant.
-  [[ "${url%.git}" == *"/${expected_suffix}" || "${url%.git}" == *":${expected_suffix}" ]]
+  if remote_url_matches_suffix "$url" "${GITHUB_ORG}/${repo}"; then
+    return 0
+  fi
+  # --fork-name origin layout: origin is the user's fork, another remote is org.
+  if [[ "$NO_FORK" == false && -n "$GH_USER" ]] \
+     && remote_url_matches_suffix "$url" "${GH_USER}/${repo}"; then
+    find_upstream_remote "$dir" "$repo" >/dev/null
+    return $?
+  fi
+  return 1
+}
+
+sibling_update_remote() {
+  local dir="$1" repo="$2"
+  local url
+  url=$(git -C "$dir" remote get-url origin 2>/dev/null) || { echo origin; return 0; }
+  if remote_url_matches_suffix "$url" "${GITHUB_ORG}/${repo}"; then
+    echo origin
+    return 0
+  fi
+  find_upstream_remote "$dir" "$repo"
 }
 
 get_fork_url() {
@@ -264,10 +318,9 @@ fork_remote_push_matches() {
   local push_urls
   push_urls=$(git -C "$dir" remote get-url --push --all "$remote" 2>/dev/null) || return 1
   [[ -n "$push_urls" ]] || return 1
-  local push_url stripped
+  local push_url
   while IFS= read -r push_url; do
-    stripped="${push_url%.git}"
-    [[ "$stripped" == *"/${expected_suffix}" || "$stripped" == *":${expected_suffix}" ]] || return 1
+    remote_url_matches_suffix "$push_url" "$expected_suffix" || return 1
   done <<< "$push_urls"
   return 0
 }
@@ -283,7 +336,7 @@ is_github_fork_of_org_repo() {
 
 ensure_fork_remote() {
   local repo="$1" dir="$2"
-  local url
+  local url occupant old_url target renamed_to=""
   if ! gh repo fork "${GITHUB_ORG}/${repo}" --clone=false --default-branch-only; then
     if ! is_github_fork_of_org_repo "$repo"; then
       echo "  Failed to fork ${GITHUB_ORG}/${repo}. Skipping fork remote."
@@ -295,10 +348,28 @@ ensure_fork_remote() {
     if fork_remote_push_matches "$dir" "$FORK_REMOTE_NAME" "${GH_USER}/${repo}"; then
       return 0
     fi
-    echo "  Remote '${FORK_REMOTE_NAME}' already exists with a different URL. Skipping."
+    occupant=$(git -C "$dir" remote get-url "$FORK_REMOTE_NAME")
+    if remote_url_matches_suffix "$occupant" "${GITHUB_ORG}/${repo}"; then
+      old_url="$occupant"
+      target="upstream"
+      while git -C "$dir" remote get-url "$target" &>/dev/null; do
+        target="osac-${target}"
+      done
+      git -C "$dir" remote rename "$FORK_REMOTE_NAME" "$target"
+      renamed_to="$target"
+      echo "  Renamed existing '${FORK_REMOTE_NAME}' (${old_url}) → '${target}'"
+    else
+      echo "  Remote '${FORK_REMOTE_NAME}' already exists with a different URL. Skipping."
+      return 1
+    fi
+  fi
+  if ! git -C "$dir" remote add "$FORK_REMOTE_NAME" "$url"; then
+    if [[ -n "$renamed_to" ]]; then
+      git -C "$dir" remote rename "$renamed_to" "$FORK_REMOTE_NAME" 2>/dev/null || true
+    fi
+    echo "  Failed to add '${FORK_REMOTE_NAME}' remote for ${repo}."
     return 1
   fi
-  git -C "$dir" remote add "$FORK_REMOTE_NAME" "$url"
   git -C "$dir" fetch "$FORK_REMOTE_NAME" || {
     echo "  Fetch of ${FORK_REMOTE_NAME} failed for ${repo}. Remote was added."
     return 0
@@ -335,7 +406,9 @@ ensure_sibling() {
   fi
   if [[ -d "${dest}" ]] && is_expected_sibling "${dest}" "${repo}"; then
     echo "Updating ${dir}..."
-    update_git_repo "${dest}" "${dir}"
+    local update_remote
+    update_remote=$(sibling_update_remote "${dest}" "${repo}") || update_remote=origin
+    update_git_repo "${dest}" "${dir}" "$update_remote"
     maybe_fork_sibling "$repo" "$dest"
   elif [[ -d "${dest}" ]]; then
     echo "Skipping ${dir} — directory exists but is not a clone of ${GITHUB_ORG}/${repo}."

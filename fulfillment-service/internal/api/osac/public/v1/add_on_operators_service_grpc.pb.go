@@ -32,11 +32,8 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	AddOnOperators_List_FullMethodName   = "/osac.public.v1.AddOnOperators/List"
-	AddOnOperators_Get_FullMethodName    = "/osac.public.v1.AddOnOperators/Get"
-	AddOnOperators_Create_FullMethodName = "/osac.public.v1.AddOnOperators/Create"
-	AddOnOperators_Delete_FullMethodName = "/osac.public.v1.AddOnOperators/Delete"
-	AddOnOperators_Update_FullMethodName = "/osac.public.v1.AddOnOperators/Update"
+	AddOnOperators_List_FullMethodName = "/osac.public.v1.AddOnOperators/List"
+	AddOnOperators_Get_FullMethodName  = "/osac.public.v1.AddOnOperators/Get"
 )
 
 // AddOnOperatorsClient is the client API for AddOnOperators service.
@@ -47,12 +44,6 @@ type AddOnOperatorsClient interface {
 	List(ctx context.Context, in *AddOnOperatorsListRequest, opts ...grpc.CallOption) (*AddOnOperatorsListResponse, error)
 	// Retrieves the details of one specific add-on operator.
 	Get(ctx context.Context, in *AddOnOperatorsGetRequest, opts ...grpc.CallOption) (*AddOnOperatorsGetResponse, error)
-	// Creates a new add-on operator.
-	Create(ctx context.Context, in *AddOnOperatorsCreateRequest, opts ...grpc.CallOption) (*AddOnOperatorsCreateResponse, error)
-	// Deletes an add-on operator.
-	Delete(ctx context.Context, in *AddOnOperatorsDeleteRequest, opts ...grpc.CallOption) (*AddOnOperatorsDeleteResponse, error)
-	// Updates an existing add-on operator.
-	Update(ctx context.Context, in *AddOnOperatorsUpdateRequest, opts ...grpc.CallOption) (*AddOnOperatorsUpdateResponse, error)
 }
 
 type addOnOperatorsClient struct {
@@ -83,36 +74,6 @@ func (c *addOnOperatorsClient) Get(ctx context.Context, in *AddOnOperatorsGetReq
 	return out, nil
 }
 
-func (c *addOnOperatorsClient) Create(ctx context.Context, in *AddOnOperatorsCreateRequest, opts ...grpc.CallOption) (*AddOnOperatorsCreateResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(AddOnOperatorsCreateResponse)
-	err := c.cc.Invoke(ctx, AddOnOperators_Create_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *addOnOperatorsClient) Delete(ctx context.Context, in *AddOnOperatorsDeleteRequest, opts ...grpc.CallOption) (*AddOnOperatorsDeleteResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(AddOnOperatorsDeleteResponse)
-	err := c.cc.Invoke(ctx, AddOnOperators_Delete_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *addOnOperatorsClient) Update(ctx context.Context, in *AddOnOperatorsUpdateRequest, opts ...grpc.CallOption) (*AddOnOperatorsUpdateResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(AddOnOperatorsUpdateResponse)
-	err := c.cc.Invoke(ctx, AddOnOperators_Update_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 // AddOnOperatorsServer is the server API for AddOnOperators service.
 // All implementations must embed UnimplementedAddOnOperatorsServer
 // for forward compatibility.
@@ -121,12 +82,6 @@ type AddOnOperatorsServer interface {
 	List(context.Context, *AddOnOperatorsListRequest) (*AddOnOperatorsListResponse, error)
 	// Retrieves the details of one specific add-on operator.
 	Get(context.Context, *AddOnOperatorsGetRequest) (*AddOnOperatorsGetResponse, error)
-	// Creates a new add-on operator.
-	Create(context.Context, *AddOnOperatorsCreateRequest) (*AddOnOperatorsCreateResponse, error)
-	// Deletes an add-on operator.
-	Delete(context.Context, *AddOnOperatorsDeleteRequest) (*AddOnOperatorsDeleteResponse, error)
-	// Updates an existing add-on operator.
-	Update(context.Context, *AddOnOperatorsUpdateRequest) (*AddOnOperatorsUpdateResponse, error)
 	mustEmbedUnimplementedAddOnOperatorsServer()
 }
 
@@ -142,15 +97,6 @@ func (UnimplementedAddOnOperatorsServer) List(context.Context, *AddOnOperatorsLi
 }
 func (UnimplementedAddOnOperatorsServer) Get(context.Context, *AddOnOperatorsGetRequest) (*AddOnOperatorsGetResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Get not implemented")
-}
-func (UnimplementedAddOnOperatorsServer) Create(context.Context, *AddOnOperatorsCreateRequest) (*AddOnOperatorsCreateResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Create not implemented")
-}
-func (UnimplementedAddOnOperatorsServer) Delete(context.Context, *AddOnOperatorsDeleteRequest) (*AddOnOperatorsDeleteResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
-}
-func (UnimplementedAddOnOperatorsServer) Update(context.Context, *AddOnOperatorsUpdateRequest) (*AddOnOperatorsUpdateResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Update not implemented")
 }
 func (UnimplementedAddOnOperatorsServer) mustEmbedUnimplementedAddOnOperatorsServer() {}
 func (UnimplementedAddOnOperatorsServer) testEmbeddedByValue()                        {}
@@ -209,60 +155,6 @@ func _AddOnOperators_Get_Handler(srv interface{}, ctx context.Context, dec func(
 	return interceptor(ctx, in, info, handler)
 }
 
-func _AddOnOperators_Create_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(AddOnOperatorsCreateRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(AddOnOperatorsServer).Create(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: AddOnOperators_Create_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(AddOnOperatorsServer).Create(ctx, req.(*AddOnOperatorsCreateRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _AddOnOperators_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(AddOnOperatorsDeleteRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(AddOnOperatorsServer).Delete(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: AddOnOperators_Delete_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(AddOnOperatorsServer).Delete(ctx, req.(*AddOnOperatorsDeleteRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _AddOnOperators_Update_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(AddOnOperatorsUpdateRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(AddOnOperatorsServer).Update(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: AddOnOperators_Update_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(AddOnOperatorsServer).Update(ctx, req.(*AddOnOperatorsUpdateRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 // AddOnOperators_ServiceDesc is the grpc.ServiceDesc for AddOnOperators service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -277,18 +169,6 @@ var AddOnOperators_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Get",
 			Handler:    _AddOnOperators_Get_Handler,
-		},
-		{
-			MethodName: "Create",
-			Handler:    _AddOnOperators_Create_Handler,
-		},
-		{
-			MethodName: "Delete",
-			Handler:    _AddOnOperators_Delete_Handler,
-		},
-		{
-			MethodName: "Update",
-			Handler:    _AddOnOperators_Update_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

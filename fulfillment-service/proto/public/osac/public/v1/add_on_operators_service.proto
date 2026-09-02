@@ -116,26 +116,4 @@ service AddOnOperators {
     };
   }
 
-  // Creates a new add-on operator.
-  rpc Create(AddOnOperatorsCreateRequest) returns (AddOnOperatorsCreateResponse) {
-    option (google.api.http) = {
-      post: "/api/fulfillment/v1/add_on_operators"
-      body: "object"
-      response_body: "object"
-    };
-  }
-
-  // Deletes an add-on operator.
-  rpc Delete(AddOnOperatorsDeleteRequest) returns (AddOnOperatorsDeleteResponse) {
-    option (google.api.http) = {delete: "/api/fulfillment/v1/add_on_operators/{id}"};
-  }
-
-  // Updates an existing add-on operator.
-  rpc Update(AddOnOperatorsUpdateRequest) returns (AddOnOperatorsUpdateResponse) {
-    option (google.api.http) = {
-      patch: "/api/fulfillment/v1/add_on_operators/{object.id}"
-      body: "object"
-      response_body: "object"
-    };
-  }
 }

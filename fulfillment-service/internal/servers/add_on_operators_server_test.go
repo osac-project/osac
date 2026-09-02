@@ -18,11 +18,13 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"go.uber.org/mock/gomock"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 )
 
@@ -177,6 +179,191 @@ var _ = Describe("Add-on operators server", func() {
 				Expect(item.GetTitle()).To(Equal("GPU Operator"))
 				Expect(item.GetPublished()).To(BeTrue())
 			}
+		})
+	})
+
+	Describe("Tenant scope filtering", func() {
+		var privateServer *PrivateAddOnOperatorsServer
+
+		BeforeEach(func() {
+			var err error
+			privateServer, err = NewPrivateAddOnOperatorsServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		// makeTenancyForTenants creates a mock tenancy logic with visibility restricted to the given
+		// tenants plus the shared tenant and the test-tenant (the ownership tenant for all objects
+		// created in this suite). This lets the delegate's GenericServer see the objects while the
+		// public server's tenant scope filter exercises the top-level tenant field.
+		makeTenancyForTenants := func(tenants ...string) *auth.MockTenancyLogic {
+			builder := auth.NewVisibility()
+			builder.AddVisibleTenants(auth.SharedTenant)
+			builder.AddVisibleTenants(testTenant)
+			for _, t := range tenants {
+				builder.AddVisibleTenants(t)
+			}
+			visibility, visErr := builder.Build()
+			Expect(visErr).ToNot(HaveOccurred())
+			mock := auth.NewMockTenancyLogic(ctrl)
+			mock.EXPECT().DetermineAssignableTenants(gomock.Any()).
+				Return(auth.AllTenants, nil).
+				AnyTimes()
+			mock.EXPECT().DetermineDefaultTenant(gomock.Any()).
+				Return(testTenant, nil).
+				AnyTimes()
+			mock.EXPECT().DetermineVisibility(gomock.Any()).
+				Return(visibility, nil).
+				AnyTimes()
+			return mock
+		}
+
+		It("List returns global operators to any tenant", func() {
+			_, err := privateServer.Create(ctx, privatev1.AddOnOperatorsCreateRequest_builder{
+				Object: privatev1.AddOnOperator_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("global-%s", uuid.New()[24:32]),
+					}.Build(),
+					Title:     "Global Operator",
+					Published: true,
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			restrictedTenancy := makeTenancyForTenants("other-tenant")
+			publicServer, err := NewAddOnOperatorsServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(restrictedTenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			response, err := publicServer.List(ctx, publicv1.AddOnOperatorsListRequest_builder{}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			titles := make([]string, len(response.GetItems()))
+			for i, item := range response.GetItems() {
+				titles[i] = item.GetTitle()
+			}
+			Expect(titles).To(ContainElement("Global Operator"))
+		})
+
+		It("List returns tenant-scoped operators to matching tenant", func() {
+			_, err := privateServer.Create(ctx, privatev1.AddOnOperatorsCreateRequest_builder{
+				Object: privatev1.AddOnOperator_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("scoped-%s", uuid.New()[24:32]),
+					}.Build(),
+					Title:     "Scoped Operator",
+					Published: true,
+					Tenant:    "tenant-a",
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			matchingTenancy := makeTenancyForTenants("tenant-a")
+			publicServer, err := NewAddOnOperatorsServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(matchingTenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			response, err := publicServer.List(ctx, publicv1.AddOnOperatorsListRequest_builder{}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			titles := make([]string, len(response.GetItems()))
+			for i, item := range response.GetItems() {
+				titles[i] = item.GetTitle()
+			}
+			Expect(titles).To(ContainElement("Scoped Operator"))
+		})
+
+		It("List hides tenant-scoped operators from non-matching tenant", func() {
+			_, err := privateServer.Create(ctx, privatev1.AddOnOperatorsCreateRequest_builder{
+				Object: privatev1.AddOnOperator_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("hidden-%s", uuid.New()[24:32]),
+					}.Build(),
+					Title:     "Hidden Operator",
+					Published: true,
+					Tenant:    "tenant-a",
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			otherTenancy := makeTenancyForTenants("tenant-b")
+			publicServer, err := NewAddOnOperatorsServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(otherTenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			response, err := publicServer.List(ctx, publicv1.AddOnOperatorsListRequest_builder{}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			for _, item := range response.GetItems() {
+				Expect(item.GetTitle()).ToNot(Equal("Hidden Operator"))
+			}
+		})
+
+		It("Get returns tenant-scoped operator to matching tenant", func() {
+			createResponse, err := privateServer.Create(ctx, privatev1.AddOnOperatorsCreateRequest_builder{
+				Object: privatev1.AddOnOperator_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("scoped-%s", uuid.New()[24:32]),
+					}.Build(),
+					Title:     "Scoped Operator",
+					Published: true,
+					Tenant:    "tenant-a",
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			matchingTenancy := makeTenancyForTenants("tenant-a")
+			publicServer, err := NewAddOnOperatorsServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(matchingTenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			getResponse, err := publicServer.Get(ctx, publicv1.AddOnOperatorsGetRequest_builder{
+				Id: createResponse.GetObject().GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(getResponse.GetObject().GetTitle()).To(Equal("Scoped Operator"))
+		})
+
+		It("Get returns NotFound for tenant-scoped operator from non-matching tenant", func() {
+			createResponse, err := privateServer.Create(ctx, privatev1.AddOnOperatorsCreateRequest_builder{
+				Object: privatev1.AddOnOperator_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("hidden-%s", uuid.New()[24:32]),
+					}.Build(),
+					Title:     "Hidden Operator",
+					Published: true,
+					Tenant:    "tenant-a",
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			otherTenancy := makeTenancyForTenants("tenant-b")
+			publicServer, err := NewAddOnOperatorsServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(otherTenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = publicServer.Get(ctx, publicv1.AddOnOperatorsGetRequest_builder{
+				Id: createResponse.GetObject().GetId(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.NotFound))
 		})
 	})
 })

@@ -775,7 +775,8 @@ test_fork_name_rejects_option_as_value() {
   gh_log="${home}/gh.log"
 
   set +e
-  out=$(HOME="$home" PATH="${bin}:${PATH}" bash "${root}/tools/bootstrap.sh" --fork-name --no-fork 2>&1)
+  out=$(HOME="$home" PATH="${bin}:${PATH}" OSAC_SMOKE_GH_LOG="$gh_log" \
+    bash "${root}/tools/bootstrap.sh" --fork-name --no-fork 2>&1)
   rc=$?
   set -e
   [[ "$rc" -ne 0 ]] || fail "expected non-zero for --fork-name --no-fork: $out"

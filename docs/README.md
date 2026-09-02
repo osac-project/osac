@@ -32,3 +32,9 @@ the two files.
   on any automated regeneration). Any future regeneration must re-apply
   this trim (cross-component content only) rather than overwrite these
   files wholesale with an unfiltered snapshot.
+
+## Other cross-component docs
+
+- [skill-parity-checklist.md](skill-parity-checklist.md) — verifies AI-skill
+  parity for a standalone `osac/`-only clone across Claude Code, Cursor, and
+  Gemini CLI (backed by `tools/test/skill-parity-smoke.sh`).

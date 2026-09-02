@@ -1486,11 +1486,12 @@
         "enabled": {
           "type": "boolean",
           "description": "Deploy a bundled OpenBao instance for development/CI use",
-          "default": false
+          "default": true
         },
         "devRootToken": {
           "type": "string",
-          "description": "Root token for OpenBao dev mode (required when enabled)"
+          "description": "Root token for OpenBao dev mode (required when enabled)",
+          "default": "dev-root-token"
         },
         "image": {
           "type": "string",

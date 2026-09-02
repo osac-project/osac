@@ -22,7 +22,7 @@ from tests.e2e.core.helpers import (
 )
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
-from tests.e2e.vmaas.external_ip.helpers import allocate_worker_subnet, create_ip
+from tests.e2e.vmaas.regression.external_ip.helpers import allocate_worker_subnet, create_ip
 
 logger = logging.getLogger(__name__)
 

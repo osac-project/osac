@@ -225,7 +225,7 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(status.Message()).To(ContainSubstring("does-not-exist"))
 		})
 
-		It("Rejects catalog item referenced by name instead of ID", func() {
+		It("Catalog item path materializes spec.template from the catalog item's template", func() {
 			namedResp, err := catalogServer.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -238,29 +238,37 @@ var _ = Describe("Private bare metal instances server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			namedID := namedResp.GetObject().GetId()
+			// Catalog item cleanup registered first; DeferCleanup runs LIFO so BMI cleanup
+			// (registered below) runs before this, satisfying the deletion guard.
 			DeferCleanup(func() {
 				_, err := catalogServer.Delete(ctx, privatev1.BareMetalInstanceCatalogItemsDeleteRequest_builder{
 					Id: namedID,
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 			})
-			Expect(namedResp.GetObject().GetMetadata().GetName()).To(Equal("my-named-catalog-item"))
 
-			_, err = server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+			// Unit tests bypass the gRPC interceptor chain, so name→id resolution does not
+			// run here. The reference validator interceptor handles that in production and
+			// always back-fills Id before the handler is called. Use the UUID directly.
+			response, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: "my-named-catalog-item"}.Build(),
+						CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: namedID}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
-			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.NotFound))
-			Expect(status.Message()).To(ContainSubstring("my-named-catalog-item"))
+			Expect(err).ToNot(HaveOccurred())
+			bmiID := response.GetObject().GetId()
+			DeferCleanup(func() {
+				_, err := server.Delete(ctx, privatev1.BareMetalInstancesDeleteRequest_builder{
+					Id: bmiID,
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+			})
+			Expect(response.GetObject().GetSpec().GetTemplate().GetId()).To(Equal("test-template"))
 		})
 
 		It("Rejects unpublished catalog item", func() {
@@ -292,6 +300,77 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.NotFound))
 			Expect(status.Message()).To(ContainSubstring("not published"))
+		})
+
+		It("Rejects create with both catalog_item and template", func() {
+			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						Template:    privatev1.BareMetalInstanceTemplateReference_builder{Id: "some-template"}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(Equal("catalog_item and template are mutually exclusive"))
+		})
+
+		It("Creates object with direct template", func() {
+			templateID := fmt.Sprintf("direct-tmpl-%s", uuid.NewString()[:8])
+			createTemplate(templateID, nil)
+
+			response, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: templateID}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().GetSpec().GetTemplate().GetId()).To(Equal(templateID))
+		})
+
+		It("Rejects direct template that does not exist", func() {
+			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "nonexistent-template"}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.NotFound))
+		})
+
+		It("Catalog item path materializes spec.template", func() {
+			response, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			// The catalog item's template reference should be materialized into spec.template.
+			Expect(response.GetObject().GetSpec().GetTemplate()).ToNot(BeNil())
+			Expect(response.GetObject().GetSpec().GetTemplate().GetId()).To(Equal("test-template"))
 		})
 
 		// validateSpec runs before catalog item lookup, so invalid SSH key/user data
@@ -395,6 +474,41 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 			Expect(status.Message()).To(ContainSubstring("catalog_item is immutable"))
+		})
+
+		It("Rejects PATCH that changes template", func() {
+			templateID := fmt.Sprintf("immut-tmpl-%s", uuid.NewString()[:8])
+			createTemplate(templateID, nil)
+
+			createResponse, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: templateID}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			object := createResponse.GetObject()
+
+			_, err = server.Update(ctx, privatev1.BareMetalInstancesUpdateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Id: object.GetId(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "different-template"}.Build(),
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{
+					Paths: []string{"spec.template"},
+				},
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(ContainSubstring("template is immutable"))
 		})
 
 		It("Rejects PATCH that changes ssh_public_key", func() {
@@ -837,6 +951,7 @@ var _ = Describe("Private bare metal instances server", func() {
 					Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+						Template:    privatev1.BareMetalInstanceTemplateReference_builder{Id: "test-template"}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -1423,7 +1538,7 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(status.Message()).To(ContainSubstring("auto_external_ip_attachment is immutable"))
 		})
 
-		It("Rejects template_parameters when catalog item has no template", func() {
+		It("Rejects catalog item that does not reference a template", func() {
 			noTemplateResp, err := catalogServer.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -1436,17 +1551,13 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			noTemplateCatID := noTemplateResp.GetObject().GetId()
 
-			osParam, err := anypb.New(wrapperspb.String("rhel9.4"))
-			Expect(err).ToNot(HaveOccurred())
-
 			_, err = server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem:        privatev1.BareMetalInstanceCatalogItemReference_builder{Id: noTemplateCatID}.Build(),
-						TemplateParameters: map[string]*anypb.Any{"os_version": osParam},
+						CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: noTemplateCatID}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -1454,7 +1565,7 @@ var _ = Describe("Private bare metal instances server", func() {
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(ContainSubstring("no template"))
+			Expect(status.Message()).To(ContainSubstring("does not reference a template"))
 		})
 	})
 

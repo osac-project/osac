@@ -253,8 +253,29 @@ func (s *PrivateBareMetalInstancesServer) Get(ctx context.Context,
 
 func (s *PrivateBareMetalInstancesServer) Create(ctx context.Context,
 	request *privatev1.BareMetalInstancesCreateRequest) (response *privatev1.BareMetalInstancesCreateResponse, err error) {
-	if err = s.validateAndApplyCatalogItem(ctx, request.GetObject()); err != nil {
+	// Dispatch between catalog item and template paths:
+	spec := request.GetObject().GetSpec()
+	catalogItemRef := spec.GetCatalogItem()
+	templateRef := spec.GetTemplate()
+	if catalogItemRef != nil && templateRef != nil {
+		err = grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"catalog_item and template are mutually exclusive")
 		return
+	}
+	if catalogItemRef == nil && templateRef == nil {
+		err = grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"either catalog_item or template is required")
+		return
+	}
+
+	if catalogItemRef != nil {
+		if err = s.validateAndTransformCatalogItem(ctx, request.GetObject()); err != nil {
+			return
+		}
+	} else {
+		if err = s.validateAndTransformTemplate(ctx, request.GetObject()); err != nil {
+			return
+		}
 	}
 	if err = s.validateSpec(request.GetObject()); err != nil {
 		return
@@ -560,26 +581,12 @@ func (s *PrivateBareMetalInstancesServer) findDefaultSecurityGroup(
 }
 
 // resolveDefaultInterface returns the first fabric-role interface name from the HostType
-// resolved via the catalog_item → template → host_type chain. Returns ("", nil) if the
-// chain cannot be resolved (no template or no host_type). Returns an error if a HostType
-// is found but has no fabric-role interface.
+// resolved via the spec.template → host_type chain. Returns ("", nil) if the chain cannot
+// be resolved (no template or no host_type). Returns an error if a HostType is found but
+// has no fabric-role interface.
 func (s *PrivateBareMetalInstancesServer) resolveDefaultInterface(
 	ctx context.Context, bmi *privatev1.BareMetalInstance) (string, error) {
-	catalogItemID := refKey(bmi.GetSpec().GetCatalogItem())
-	if catalogItemID == "" {
-		return "", nil
-	}
-	catResp, err := s.catalogItemsDao.Get().SetId(catalogItemID).Do(ctx)
-	if err != nil {
-		var notFoundErr *dao.ErrNotFound
-		if errors.As(err, &notFoundErr) {
-			return "", nil
-		}
-		s.logger.ErrorContext(ctx, "Failed to lookup catalog item for default interface resolution",
-			slog.String("catalog_item", catalogItemID), slog.Any("error", err))
-		return "", grpcstatus.Errorf(grpccodes.Internal, "failed to resolve default interface")
-	}
-	templateID := refKey(catResp.GetObject().GetTemplate())
+	templateID := refKey(bmi.GetSpec().GetTemplate())
 	if templateID == "" {
 		return "", nil
 	}
@@ -616,27 +623,30 @@ func (s *PrivateBareMetalInstancesServer) resolveDefaultInterface(
 		"host type '%s' has no fabric-role interface for default network attachment", hostTypeID)
 }
 
-// validateAndApplyCatalogItem verifies the referenced catalog item exists, is accessible,
-// and applies its field definitions to the spec.
-func (s *PrivateBareMetalInstancesServer) validateAndApplyCatalogItem(ctx context.Context,
+// validateAndTransformCatalogItem validates a catalog item reference, ensures it references
+// a template, and applies its field definitions to the bare metal instance spec. Materializes
+// spec.template from the catalog item so downstream logic reads from a single source.
+func (s *PrivateBareMetalInstancesServer) validateAndTransformCatalogItem(ctx context.Context,
 	bmi *privatev1.BareMetalInstance) error {
 	if bmi == nil {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "bare metal instance is mandatory")
 	}
-	ref := bmi.GetSpec().GetCatalogItem()
-	if ref == nil {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, "spec.catalog_item is mandatory")
+	catalogItemRef := bmi.GetSpec().GetCatalogItem()
+	if catalogItemRef == nil {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "catalog_item is mandatory")
 	}
-	refStr := refKey(ref)
+	// The reference validation interceptor resolves name→id before the handler runs,
+	// so refKey always returns a UUID by the time we reach here.
+	catalogItemRefStr := refKey(catalogItemRef)
 
 	response, err := s.catalogItemsDao.Get().
-		SetId(refStr).
+		SetId(catalogItemRefStr).
 		Do(ctx)
 	if err != nil {
 		var notFoundErr *dao.ErrNotFound
 		if errors.As(err, &notFoundErr) {
 			return grpcstatus.Errorf(grpccodes.NotFound,
-				"catalog item '%s' not found", refStr)
+				"catalog item '%s' not found", catalogItemRefStr)
 		}
 		s.logger.ErrorContext(ctx, "Failed to lookup bare metal instance catalog item",
 			slog.Any("error", err))
@@ -644,15 +654,56 @@ func (s *PrivateBareMetalInstancesServer) validateAndApplyCatalogItem(ctx contex
 	}
 	item := response.GetObject()
 
-	if err := validateCatalogItemAccess(item, refStr); err != nil {
+	if err := validateCatalogItemAccess(item, catalogItemRefStr); err != nil {
 		return err
 	}
+
+	templateRef := item.GetTemplate()
+	if templateRef == nil {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"catalog item '%s' does not reference a template", catalogItemRefStr)
+	}
+	bmi.GetSpec().SetTemplate(templateRef)
 
 	if err := applyFieldDefinitions(bmi.GetSpec(), item.GetFieldDefinitions()); err != nil {
 		return err
 	}
 
-	return s.validateAndApplyTemplateParameters(ctx, bmi, refKey(item.GetTemplate()))
+	return s.validateAndApplyTemplateParameters(ctx, bmi, refKey(bmi.GetSpec().GetTemplate()))
+}
+
+// validateAndTransformTemplate validates a direct template reference, fetches the template,
+// validates and applies template parameters, and applies spec defaults.
+func (s *PrivateBareMetalInstancesServer) validateAndTransformTemplate(
+	ctx context.Context, bmi *privatev1.BareMetalInstance) error {
+	if bmi == nil {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "bare metal instance is mandatory")
+	}
+	spec := bmi.GetSpec()
+	if spec == nil {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "bare metal instance spec is mandatory")
+	}
+	templateRef := spec.GetTemplate()
+	templateID := refKey(templateRef)
+	if templateID == "" {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "template is required")
+	}
+	// Verify the template exists before proceeding. validateAndApplyTemplateParameters
+	// tolerates a missing template (for the catalog item path), but the direct-template
+	// path requires it.
+	_, err := s.templatesDao.Get().SetId(templateID).Do(ctx)
+	if err != nil {
+		var notFoundErr *dao.ErrNotFound
+		if errors.As(err, &notFoundErr) {
+			return grpcstatus.Errorf(grpccodes.NotFound,
+				"bare metal instance template '%s' not found", templateID)
+		}
+		s.logger.ErrorContext(ctx, "Failed to fetch template",
+			slog.String("template_id", templateID),
+			slog.Any("error", err))
+		return grpcstatus.Errorf(grpccodes.Internal, "failed to fetch template")
+	}
+	return s.validateAndApplyTemplateParameters(ctx, bmi, templateID)
 }
 
 // validateAndApplyTemplateParameters fetches the template referenced by the catalog item,
@@ -705,11 +756,12 @@ func (s *PrivateBareMetalInstancesServer) validateAndApplyTemplateParameters(ctx
 	return nil
 }
 
-// validateImmutability ensures catalog_item, ssh_public_key, user_data, template_parameters,
+// validateImmutability ensures template, catalog_item, ssh_public_key, user_data, template_parameters,
 // image, and auto_external_ip_attachment cannot be changed after creation.
-func (s *PrivateBareMetalInstancesServer) validateImmutability(ctx context.Context,
+func (s *PrivateBareMetalInstancesServer) validateImmutability(ctx context.Context, //nolint:gocyclo
 	request *privatev1.BareMetalInstancesUpdateRequest) error {
 	mask := request.GetUpdateMask()
+	updatingTemplate := updateIncludesField(mask, "spec.template")
 	updatingCatalogItem := updateIncludesField(mask, "spec.catalog_item")
 	updatingSshKey := updateIncludesField(mask, "spec.ssh_public_key")
 	updatingUserData := updateIncludesField(mask, "spec.user_data")
@@ -723,7 +775,7 @@ func (s *PrivateBareMetalInstancesServer) validateImmutability(ctx context.Conte
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "bare metal instance is mandatory")
 	}
 	newSpec := bmi.GetSpec()
-	if newSpec == nil && (updatingCatalogItem || updatingSshKey || updatingUserData || updatingTemplateParams || updatingImage || updatingAutoExternalIP || updatingNetworkAttachments) {
+	if newSpec == nil && (updatingTemplate || updatingCatalogItem || updatingSshKey || updatingUserData || updatingTemplateParams || updatingImage || updatingAutoExternalIP || updatingNetworkAttachments) {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "bare metal instance spec is mandatory")
 	}
 	id := bmi.GetId()
@@ -745,6 +797,12 @@ func (s *PrivateBareMetalInstancesServer) validateImmutability(ctx context.Conte
 	existingSpec := existing.GetSpec()
 	if existingSpec == nil {
 		return grpcstatus.Errorf(grpccodes.Internal, "stored bare metal instance is missing spec")
+	}
+
+	if updatingTemplate && refKey(existingSpec.GetTemplate()) != refKey(newSpec.GetTemplate()) {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"cannot change spec.template from '%s' to '%s': template is immutable",
+			refKey(existingSpec.GetTemplate()), refKey(newSpec.GetTemplate()))
 	}
 
 	if updatingCatalogItem && refKey(existingSpec.GetCatalogItem()) != refKey(newSpec.GetCatalogItem()) {
@@ -856,23 +914,7 @@ func (s *PrivateBareMetalInstancesServer) validateNetworkAttachments(ctx context
 	}
 
 	// Interface-against-HostType validation (only when template has host_type).
-	catalogItemRef := bmi.GetSpec().GetCatalogItem()
-	catalogItemID := catalogItemRef.GetId()
-	if catalogItemID == "" {
-		return nil
-	}
-	catResp, err := s.catalogItemsDao.Get().SetId(catalogItemID).Do(ctx)
-	if err != nil {
-		var notFoundErr *dao.ErrNotFound
-		if errors.As(err, &notFoundErr) {
-			return nil
-		}
-		s.logger.ErrorContext(ctx, "Failed to lookup catalog item for interface validation",
-			slog.String("catalog_item", catalogItemID), slog.Any("error", err))
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate network attachments")
-	}
-	templateRef := catResp.GetObject().GetTemplate()
-	templateID := templateRef.GetId()
+	templateID := refKey(bmi.GetSpec().GetTemplate())
 	if templateID == "" {
 		return nil
 	}

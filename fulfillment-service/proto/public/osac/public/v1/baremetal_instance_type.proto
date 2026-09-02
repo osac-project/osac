@@ -21,6 +21,7 @@ import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
 import "osac/public/v1/baremetal_instance_catalog_item_type.proto";
 import "osac/public/v1/baremetal_instance_common_type.proto";
+import "osac/public/v1/baremetal_instance_template_type.proto";
 import "osac/public/v1/condition_status_type.proto";
 import "osac/public/v1/metadata_type.proto";
 import "osac/public/v1/security_group_type.proto";
@@ -66,7 +67,11 @@ message BareMetalInstanceSpec {
     expression: "this.network_attachments.size() <= 1 || this.network_attachments.filter(a, a.primary == true).size() == 1"
   };
 
-  // Reference to the BareMetalInstanceCatalogItem. Required on create; immutable after creation.
+  // Reference to the BareMetalInstanceCatalogItem. Either `catalog_item` or `template` is required on create.
+  //
+  // Mutually exclusive with `template`.
+  //
+  // This can't be modified after the bare metal instance is created.
   BareMetalInstanceCatalogItemReference catalog_item = 1 [(google.api.field_behavior) = IMMUTABLE];
 
   // SSH public key injected into the OS at provisioning time. Immutable after creation.
@@ -137,6 +142,13 @@ message BareMetalInstanceSpec {
   // with an ExternalIPAttachment for this instance atomically during creation.
   // Immutable after creation.
   optional bool auto_external_ip_attachment = 9 [(google.api.field_behavior) = IMMUTABLE];
+
+  // Reference to the bare metal instance template. Either `template` or `catalog_item` is required on create.
+  //
+  // Mutually exclusive with `catalog_item`.
+  //
+  // This can't be modified after the bare metal instance is created.
+  BareMetalInstanceTemplateReference template = 10 [(google.api.field_behavior) = IMMUTABLE];
 }
 
 // The status contains the details of the bare metal instance provided by the system.

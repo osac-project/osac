@@ -61,12 +61,11 @@ type FunctionBuilder struct {
 }
 
 type function struct {
-	logger                              *slog.Logger
-	hubCache                            controllers.HubCache
-	bareMetalInstancesClient            privatev1.BareMetalInstancesClient
-	bareMetalInstanceCatalogItemsClient privatev1.BareMetalInstanceCatalogItemsClient
-	hubsClient                          privatev1.HubsClient
-	maskCalculator                      *masks.Calculator
+	logger                   *slog.Logger
+	hubCache                 controllers.HubCache
+	bareMetalInstancesClient privatev1.BareMetalInstancesClient
+	hubsClient               privatev1.HubsClient
+	maskCalculator           *masks.Calculator
 }
 
 type task struct {
@@ -117,12 +116,11 @@ func (b *FunctionBuilder) Build() (result controllers.ReconcilerFunction[*privat
 	}
 
 	object := &function{
-		logger:                              b.logger,
-		bareMetalInstancesClient:            privatev1.NewBareMetalInstancesClient(b.connection),
-		bareMetalInstanceCatalogItemsClient: privatev1.NewBareMetalInstanceCatalogItemsClient(b.connection),
-		hubsClient:                          privatev1.NewHubsClient(b.connection),
-		hubCache:                            b.hubCache,
-		maskCalculator:                      masks.NewCalculator().Build(),
+		logger:                   b.logger,
+		bareMetalInstancesClient: privatev1.NewBareMetalInstancesClient(b.connection),
+		hubsClient:               privatev1.NewHubsClient(b.connection),
+		hubCache:                 b.hubCache,
+		maskCalculator:           masks.NewCalculator().Build(),
 	}
 	result = object.run
 	return
@@ -610,16 +608,8 @@ func (t *task) mutateBMI(ctx context.Context, object *bmfov1alpha1.BareMetalInst
 	}
 	object.Annotations[annotations.Tenant] = t.bareMetalInstance.GetMetadata().GetTenant()
 
-	catalogItemID := t.bareMetalInstance.GetSpec().GetCatalogItem()
-	catalogItemResp, err := t.r.bareMetalInstanceCatalogItemsClient.Get(ctx, privatev1.BareMetalInstanceCatalogItemsGetRequest_builder{
-		Id: catalogItemID.GetId(),
-	}.Build())
-	if err != nil {
-		return fmt.Errorf("failed to get catalog item '%s': %w", catalogItemID, err)
-	}
-
 	object.Spec.HostType = defaultHostType
-	object.Spec.TemplateID = catalogItemResp.GetObject().GetTemplate().GetId()
+	object.Spec.TemplateID = controllers.RefKeyStr(t.bareMetalInstance.GetSpec().GetTemplate())
 	object.Spec.TemplateParameters = ""
 	object.Spec.RunStrategy = bmfov1alpha1.RunStrategyUnspecified
 	object.Spec.RestartTrigger = t.bareMetalInstance.GetSpec().GetRestartTrigger()

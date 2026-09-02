@@ -167,8 +167,3 @@ capiProvider:
 kafka:
   enabled: true
   replicas: 1
-
-# --- Vault compatible secret store (OpenBao) ---
-bundledVault:
-  enabled: true
-  devRootToken: "dev-root-token"

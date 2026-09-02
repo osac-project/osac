@@ -208,13 +208,31 @@ assert_no_named_remote() {
   fi
 }
 
+assert_url_suffix() {
+  local url="$1" suffix="$2" label="$3"
+  [[ "${url%.git}" == *"/${suffix}" || "${url%.git}" == *":${suffix}" ]] \
+    || fail "${label} expected ${suffix}, got: $url"
+}
+
+assert_remote_push_urls() {
+  local dest="$1" remote="$2" suffix="$3"
+  local push_urls push_url
+  push_urls=$(git -C "$dest" remote get-url --push --all "$remote" 2>/dev/null) \
+    || fail "missing push URL for ${remote} on ${dest}"
+  [[ -n "$push_urls" ]] || fail "empty push URL list for ${remote} on ${dest}"
+  while IFS= read -r push_url; do
+    [[ -n "$push_url" ]] || continue
+    assert_url_suffix "$push_url" "$suffix" "push URL for ${remote} on ${dest}"
+  done <<< "$push_urls"
+}
+
 assert_remote_url() {
   local dest="$1" remote="$2" suffix="$3"
   local url
   url=$(git -C "$dest" remote get-url "$remote" 2>/dev/null) \
     || fail "missing remote ${remote} on ${dest}: $(git -C "$dest" remote -v 2>/dev/null || true)"
-  [[ "${url%.git}" == *"/${suffix}" || "${url%.git}" == *":${suffix}" ]] \
-    || fail "remote ${remote} on ${dest} expected ${suffix}, got: $url"
+  assert_url_suffix "$url" "$suffix" "remote ${remote} on ${dest}"
+  assert_remote_push_urls "$dest" "$remote" "$suffix"
 }
 
 assert_fork_remote() {
@@ -222,8 +240,8 @@ assert_fork_remote() {
   local url
   url=$(git -C "$dest" remote get-url fork 2>/dev/null) \
     || fail "missing fork remote on ${dest}: $(git -C "$dest" remote -v 2>/dev/null || true)"
-  [[ "${url%.git}" == *"/smokeuser/${repo}" || "${url%.git}" == *":smokeuser/${repo}" ]] \
-    || fail "fork remote on ${dest} expected smokeuser/${repo}, got: $url"
+  assert_url_suffix "$url" "smokeuser/${repo}" "fork remote on ${dest}"
+  assert_remote_push_urls "$dest" fork "smokeuser/${repo}"
 }
 
 seed_osac_root_git() {
@@ -749,6 +767,26 @@ test_fork_name_requires_value() {
   pass "--fork-name requires a value"
 }
 
+test_fork_name_rejects_option_as_value() {
+  local home root bin home_skills home_workflows repo_skills clone_log out rc
+  local gh_log
+  prepare_fixture fork-name-opt-val
+  write_gh_wrapper "${bin}/gh"
+  gh_log="${home}/gh.log"
+
+  set +e
+  out=$(HOME="$home" PATH="${bin}:${PATH}" bash "${root}/tools/bootstrap.sh" --fork-name --no-fork 2>&1)
+  rc=$?
+  set -e
+  [[ "$rc" -ne 0 ]] || fail "expected non-zero for --fork-name --no-fork: $out"
+  echo "$out" | grep -qi 'fork-name requires a value' \
+    || fail "expected --fork-name value error for option-as-value: $out"
+  if [[ -f "$gh_log" ]] && grep -q 'repo fork' "$gh_log"; then
+    fail "must not call gh repo fork when --fork-name value is another option: $(cat "$gh_log")"
+  fi
+  pass "--fork-name rejects another option as its value"
+}
+
 test_fork_name_origin_renames_org_origin() {
   local home root bin home_skills home_workflows repo_skills clone_log out
   local skills_origin wf_origin gh_log
@@ -829,6 +867,21 @@ test_fork_name_origin_uses_osac_upstream_when_upstream_taken() {
   [[ "$url" == *example/placeholder* ]] \
     || fail "pre-existing upstream must be left in place, got: $url"
   pass "--fork-name origin uses osac-upstream when upstream exists"
+}
+
+test_fork_name_origin_renames_when_only_pushurl_is_fork() {
+  local home root bin home_skills home_workflows repo_skills clone_log out ep
+  prepare_fixture fork-name-origin-pushurl
+  write_gh_wrapper "${bin}/gh"
+  ep="${root}/enhancement-proposals"
+
+  run_bootstrap "$root" "$home" "$bin" >/dev/null
+  "$REAL_GIT" -C "$ep" remote set-url --push origin \
+    "https://github.com/smokeuser/enhancement-proposals.git"
+  out=$(run_bootstrap_fork "$root" "$home" "$bin" --fork-name origin 2>&1) \
+    || fail "--fork-name origin with fork-only pushurl failed: $out"
+  assert_origin_layout_writeable "$ep" "enhancement-proposals"
+  pass "--fork-name origin renames when only origin pushurl is the fork"
 }
 
 test_fork_name_origin_rename_does_not_log_remote_url() {
@@ -1032,9 +1085,11 @@ test_home_worktree_vendor_is_updated_not_recloned
 test_skips_update_when_sibling_not_on_main
 test_fork_remote_match_requires_user_boundary
 test_fork_name_requires_value
+test_fork_name_rejects_option_as_value
 test_fork_name_origin_renames_org_origin
 test_fork_name_origin_rerun_is_idempotent
 test_fork_name_origin_uses_osac_upstream_when_upstream_taken
+test_fork_name_origin_renames_when_only_pushurl_is_fork
 test_fork_name_origin_rename_does_not_log_remote_url
 test_no_fork_with_fork_name_origin_is_read_only
 test_docs_fork_uses_osac_docs_github_name

@@ -70,7 +70,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-fork) NO_FORK=true; shift ;;
     --fork-name)
-      [[ -n "${2:-}" ]] || { echo "Error: --fork-name requires a value" >&2; usage >&2; exit 1; }
+      [[ -n "${2:-}" && "$2" != --* ]] || { echo "Error: --fork-name requires a value" >&2; usage >&2; exit 1; }
       FORK_REMOTE_NAME="$2"
       shift 2
       ;;
@@ -361,6 +361,16 @@ fork_remote_push_matches() {
   return 0
 }
 
+# True when $remote already *is* the user fork: fetch URL and every push URL
+# match $expected_suffix. Push-only (org fetch + fork pushurl) is not enough.
+fork_remote_is_user_fork() {
+  local dir="$1" remote="$2" expected_suffix="$3"
+  local fetch_url
+  fetch_url=$(git -C "$dir" remote get-url "$remote" 2>/dev/null) || return 1
+  remote_url_matches_suffix "$fetch_url" "$expected_suffix" || return 1
+  fork_remote_push_matches "$dir" "$remote" "$expected_suffix"
+}
+
 # True when $GH_USER/$(fork_repo_for "$repo") is a GitHub fork of
 # osac-project/$repo (not an unrelated same-name repo — common for docs,
 # whose fork is osac-docs).
@@ -389,10 +399,10 @@ ensure_fork_remote() {
   fi
   url=$(get_fork_url "$repo")
   if git -C "$dir" remote get-url "$FORK_REMOTE_NAME" &>/dev/null; then
-    if fork_remote_push_matches "$dir" "$FORK_REMOTE_NAME" "${GH_USER}/${fork_repo}"; then
+    occupant=$(git -C "$dir" remote get-url "$FORK_REMOTE_NAME")
+    if fork_remote_is_user_fork "$dir" "$FORK_REMOTE_NAME" "${GH_USER}/${fork_repo}"; then
       return 0
     fi
-    occupant=$(git -C "$dir" remote get-url "$FORK_REMOTE_NAME")
     if remote_url_matches_suffix "$occupant" "${GITHUB_ORG}/${repo}"; then
       target="upstream"
       while git -C "$dir" remote get-url "$target" &>/dev/null; do
@@ -400,6 +410,9 @@ ensure_fork_remote() {
       done
       git -C "$dir" remote rename "$FORK_REMOTE_NAME" "$target"
       renamed_to="$target"
+      # Rename keeps a leftover pushurl (org fetch + fork push). Drop it so
+      # the org remote fetches and pushes to osac-project.
+      git -C "$dir" config --unset-all "remote.${target}.pushurl" 2>/dev/null || true
       echo "  Renamed existing '${FORK_REMOTE_NAME}' → '${target}'"
     else
       echo "  Remote '${FORK_REMOTE_NAME}' already exists with a different URL. Skipping."
@@ -431,7 +444,7 @@ should_fork_sibling() {
 maybe_fork_sibling() {
   local repo="$1" dest="$2"
   should_fork_sibling "$repo" || return 0
-  if fork_remote_push_matches "$dest" "$FORK_REMOTE_NAME" "${GH_USER}/$(fork_repo_for "$repo")"; then
+  if fork_remote_is_user_fork "$dest" "$FORK_REMOTE_NAME" "${GH_USER}/$(fork_repo_for "$repo")"; then
     return 0
   fi
   echo "Adding ${FORK_REMOTE_NAME} remote for ${repo}..."

@@ -106,9 +106,13 @@ var _ = Describe("Add-on operators server", func() {
 			// List via public server — should only see published:
 			response, err := publicServer.List(ctx, publicv1.AddOnOperatorsListRequest_builder{}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			for _, item := range response.GetItems() {
+			titles := make([]string, len(response.GetItems()))
+			for i, item := range response.GetItems() {
 				Expect(item.GetPublished()).To(BeTrue())
+				titles[i] = item.GetTitle()
 			}
+			Expect(titles).To(ContainElement("Published Operator"))
+			Expect(titles).ToNot(ContainElement("Unpublished Operator"))
 		})
 
 		It("Get returns published operator", func() {
@@ -169,7 +173,10 @@ var _ = Describe("Add-on operators server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(response.GetItems()).ToNot(BeEmpty())
-			Expect(response.GetItems()[0].GetTitle()).To(Equal("GPU Operator"))
+			for _, item := range response.GetItems() {
+				Expect(item.GetTitle()).To(Equal("GPU Operator"))
+				Expect(item.GetPublished()).To(BeTrue())
+			}
 		})
 	})
 })

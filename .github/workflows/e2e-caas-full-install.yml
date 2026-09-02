@@ -138,7 +138,18 @@ jobs:
       id-token: write
     uses: osac-project/osac-test-infra/.github/workflows/e2e-caas-full-install.yml@main
     with:
-      test-suite: ${{ inputs.test-suite || 'caas' }}
+      # PR/merge_group: sanity. Schedule: serial. workflow_dispatch: honor
+      # input, else sanity. caas/serial is empty scaffolding today (no
+      # resource-contention justification like BMaaS's serial tier -- just
+      # reserving the shape); the reusable workflow's own fallback runs the
+      # full caas suite whenever a tier dir has no real tests yet.
+      test-suite: >-
+        ${{
+          inputs.test-suite != '' && inputs.test-suite ||
+          (github.event_name == 'pull_request' || github.event_name == 'merge_group') && 'caas/sanity' ||
+          github.event_name == 'schedule' && 'caas/serial' ||
+          'caas/sanity'
+        }}
       test-filter: ${{ inputs.test-filter || '' }}
       # osac-installer now lives as a subdirectory of this same monorepo checkout
       # (its Chart.yaml deps resolve fulfillment-service/osac-operator/osac-aap/BMF

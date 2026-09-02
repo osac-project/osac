@@ -41,10 +41,11 @@ var _ publicv1.AddOnOperatorsServer = (*AddOnOperatorsServer)(nil)
 type AddOnOperatorsServer struct {
 	publicv1.UnimplementedAddOnOperatorsServer
 
-	logger    *slog.Logger
-	delegate  privatev1.AddOnOperatorsServer
-	inMapper  *GenericMapper[*publicv1.AddOnOperator, *privatev1.AddOnOperator]
-	outMapper *GenericMapper[*privatev1.AddOnOperator, *publicv1.AddOnOperator]
+	logger       *slog.Logger
+	tenancyLogic auth.TenancyLogic
+	delegate     privatev1.AddOnOperatorsServer
+	inMapper     *GenericMapper[*publicv1.AddOnOperator, *privatev1.AddOnOperator]
+	outMapper    *GenericMapper[*privatev1.AddOnOperator, *publicv1.AddOnOperator]
 }
 
 func NewAddOnOperatorsServer() *AddOnOperatorsServerBuilder {
@@ -114,10 +115,11 @@ func (b *AddOnOperatorsServerBuilder) Build() (result *AddOnOperatorsServer, err
 	}
 
 	result = &AddOnOperatorsServer{
-		logger:    b.logger,
-		delegate:  delegate,
-		inMapper:  inMapper,
-		outMapper: outMapper,
+		logger:       b.logger,
+		tenancyLogic: b.tenancyLogic,
+		delegate:     delegate,
+		inMapper:     inMapper,
+		outMapper:    outMapper,
 	}
 	return
 }
@@ -141,20 +143,28 @@ func (s *AddOnOperatorsServer) List(ctx context.Context,
 		return nil, err
 	}
 
-	privateItems := privateResponse.GetItems()
-	publicItems := make([]*publicv1.AddOnOperator, len(privateItems))
-	for i, privateItem := range privateItems {
+	visibility, err := s.tenancyLogic.DetermineVisibility(ctx)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to determine visibility", slog.Any("error", err))
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to determine visibility")
+	}
+
+	var publicItems []*publicv1.AddOnOperator
+	for _, privateItem := range privateResponse.GetItems() {
+		if !s.isVisibleToTenant(privateItem, visibility) {
+			continue
+		}
 		publicItem := &publicv1.AddOnOperator{}
 		err = s.outMapper.Copy(ctx, privateItem, publicItem)
 		if err != nil {
 			s.logger.ErrorContext(ctx, "Failed to map private add-on operator to public", slog.Any("error", err))
 			return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process add-on operators")
 		}
-		publicItems[i] = publicItem
+		publicItems = append(publicItems, publicItem)
 	}
 
 	response = &publicv1.AddOnOperatorsListResponse{}
-	response.SetSize(privateResponse.GetSize())
+	response.SetSize(int32(len(publicItems))) // #nosec G115 -- bounded by page size
 	response.SetTotal(privateResponse.GetTotal())
 	response.SetItems(publicItems)
 	return
@@ -170,12 +180,22 @@ func (s *AddOnOperatorsServer) Get(ctx context.Context,
 		return nil, err
 	}
 
-	if !privateResponse.GetObject().GetPublished() {
+	object := privateResponse.GetObject()
+	if !object.GetPublished() {
+		return nil, grpcstatus.Errorf(grpccodes.NotFound, "add-on operator not found")
+	}
+
+	visibility, err := s.tenancyLogic.DetermineVisibility(ctx)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to determine visibility", slog.Any("error", err))
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to determine visibility")
+	}
+	if !s.isVisibleToTenant(object, visibility) {
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "add-on operator not found")
 	}
 
 	publicOperator := &publicv1.AddOnOperator{}
-	err = s.outMapper.Copy(ctx, privateResponse.GetObject(), publicOperator)
+	err = s.outMapper.Copy(ctx, object, publicOperator)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to map private add-on operator to public", slog.Any("error", err))
 		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process add-on operator")
@@ -184,6 +204,14 @@ func (s *AddOnOperatorsServer) Get(ctx context.Context,
 	response = &publicv1.AddOnOperatorsGetResponse{}
 	response.SetObject(publicOperator)
 	return
+}
+
+// isVisibleToTenant reports whether an add-on operator is visible given the caller's tenant
+// visibility. Global operators (tenant=="") are visible to all; tenant-scoped operators are visible
+// only when the caller can see that tenant.
+func (s *AddOnOperatorsServer) isVisibleToTenant(object *privatev1.AddOnOperator, visibility *auth.Visibility) bool {
+	scopeTenant := object.GetTenant()
+	return scopeTenant == "" || visibility.IsTenantVisible(scopeTenant)
 }
 
 func (s *AddOnOperatorsServer) addPublishedFilter(filter string) (string, error) {

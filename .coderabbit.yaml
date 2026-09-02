@@ -1,0 +1,196 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit configuration for the OSAC mono-repo.
+# Mono-repo: fulfillment-service, osac-operator, osac-aap, osac-installer,
+# bare-metal-fulfillment-operator, osac-csi-driver, osac-metering.
+#
+# Schema: https://coderabbit.ai/integrations/schema.v2.json
+# Validate: comment "@coderabbitai configuration" on any PR
+#
+language: "en-US"
+early_access: true
+tone_instructions: >-
+  Direct and constructive. Lead with the most impactful finding.
+  For security issues, state severity and blast radius.
+
+reviews:
+  profile: "assertive"
+  request_changes_workflow: false
+  high_level_summary: true
+  high_level_summary_instructions: >-
+    Summarize changes in terms of which components are affected
+    (fulfillment-service, osac-operator, osac-aap, osac-installer,
+    bare-metal-fulfillment-operator, osac-csi-driver, osac-metering),
+    whether the change affects the API surface (proto definitions,
+    CRD types, gRPC services), the operator controllers, the database
+    layer, Ansible provisioning, Helm deployment, or test infrastructure,
+    and flag any backward-compatibility implications. End the summary
+    with a "Risk classification" section that states which risk label
+    (risk:ship, risk:show, or risk:ask) was applied and the specific
+    criteria from the labeling instructions that determined the
+    classification. If the PR was close to a different classification,
+    note which one and why it did not qualify.
+  collapse_walkthrough: false
+  sequence_diagrams: true
+
+  path_filters:
+    # Generated code — review the source, not the output
+    - "!**/*.pb.go"
+    - "!**/*_protoopaque.pb.go"
+    - "!**/*_grpc.pb.go"
+    - "!**/zz_generated.deepcopy.go"
+    - "!**/mock_*.go"
+    - "!**/*_mock.go"
+    # Build artifacts
+    - "!bin/**"
+    # Dependency lock
+    - "!go.sum"
+    # Vendored Ansible collections
+    - "!osac-aap/vendor/**"
+
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: false
+    base_branches:
+      - "main"
+    ignore_title_keywords:
+      - "[skip-review]"
+      - "WIP"
+
+  # ── Risk classification (Ship/Show/Ask) ───────────────────────
+  # Informational labels only — no automation. Builds trust in the
+  # classification before any merge-path changes.
+  auto_apply_labels: true
+  labeling_instructions:
+    - label: "risk:ship"
+      instructions: >
+        Apply when the PR makes ONLY trivial, mechanical changes with
+        near-zero risk of runtime impact. ALL changed files must fall
+        into one or more of these categories — if ANY file falls outside,
+        do not apply this label.
+
+        Eligible file categories:
+        - Documentation (*.md, docs/**) excluding review-policy files
+          (AGENTS.md, CLAUDE.md, CONTRIBUTING.md — these govern review
+          behavior and are not trivial)
+        - CI configuration — comment and formatting changes only to
+          existing files under .github/workflows/** and
+          .github/actions/** (any semantic change — including run,
+          uses, on, if, needs, runs-on, concurrency, timeout-minutes,
+          continue-on-error, defaults, environment, artifacts, build
+          inputs, test matrix, secrets, or permissions — is not Ship;
+          new workflow files are not Ship)
+        - Dependency version bumps in go.mod and matching checksum
+          updates in go.sum with no API surface change (patch or minor
+          only; major version bumps are not Ship)
+        - Generated code regeneration with no hand-edited changes
+          (**/*.pb.go, **/*_grpc.pb.go, **/zz_generated.deepcopy.go)
+        - .gitignore, .editorconfig, Makefile comment-only or
+          whitespace-only changes with no effect on targets or recipes,
+          lint config additions or formatting (not rule removals or
+          disablement)
+
+        Never Ship: any change to hand-maintained Go source in any
+        component (generated files matching the patterns above are
+        exempt from this exclusion); proto definitions
+        (fulfillment-service/proto/**); CRD types
+        (*/api/v1alpha1/*.go); Helm charts (**/charts/**);
+        Containerfiles; Ansible roles or playbooks
+        (osac-aap/collections/**, osac-aap/config/**); database
+        migrations (*/internal/database/migrations/**,
+        osac-operator/internal/migrations/**); CSI driver source
+        (osac-csi-driver/**); hack/ or scripts/ directories;
+        .coderabbit.yaml; review-policy files (AGENTS.md, CLAUDE.md,
+        CONTRIBUTING.md); .ai-bot/**; .fullsend/**.
+
+        When uncertain, do not apply this label.
+
+    - label: "risk:show"
+      instructions: >
+        Apply when the PR is low-to-medium risk — it changes functional
+        code but is well-scoped and unlikely to cause incidents if the
+        AI review is the only review. Apply ONLY if risk:ship does not
+        fit and ALL of the following are true:
+
+        1. The change is additive or isolated — no removal of existing
+           behavior, no cross-cutting refactors.
+        2. The blast radius is contained to one component (e.g., one
+           operator controller, one server endpoint, one Ansible role,
+           one Helm value with a clear default).
+        3. The PR does NOT introduce a new dependency, remove an
+           existing one, or bump a major version.
+        4. The change does NOT touch any of these high-risk areas:
+           - Proto definitions (fulfillment-service/proto/**)
+           - CRD types (*/api/v1alpha1/*.go)
+           - Auth, OAuth, or IDP (fulfillment-service/internal/auth/**,
+             fulfillment-service/internal/oauth/**,
+             fulfillment-service/internal/idp/**)
+           - Database layer or migrations
+             (*/internal/database/**,
+             osac-operator/internal/migrations/**)
+           - Operator controller reconciliation
+             (*/internal/controller/**,
+             fulfillment-service/internal/controllers/**)
+           - Secrets, credentials, or certificate handling anywhere
+           - Containerfiles or deployment manifests
+           - Helm chart values or templates (**/charts/**)
+           - Ansible roles or playbooks
+             (osac-aap/collections/**, osac-aap/config/**)
+           - hack/ or scripts/ directories
+           - .coderabbit.yaml
+           - Review-policy files (AGENTS.md, CLAUDE.md,
+             CONTRIBUTING.md)
+           - .ai-bot/** or .fullsend/**
+           - Hand-edited generated files (*.pb.go,
+             zz_generated.deepcopy.go)
+
+        Typical Show changes: test additions or fixes, CLI help text,
+        logging improvements, Helm chart doc annotations, single-
+        function bug fixes in non-critical paths, new utility functions
+        with tests.
+
+        When uncertain, do not apply this label.
+
+    - label: "risk:ask"
+      instructions: >
+        Apply when the PR does not qualify for risk:ship or risk:show.
+        This is the default — if neither of the other labels fits,
+        apply this one. Also apply when:
+
+        - The change touches proto definitions, CRD types, auth,
+          database, or operator controllers
+        - The change modifies security-sensitive configuration
+        - The change is a cross-cutting refactor affecting multiple
+          components
+        - The PR introduces a new dependency or removes an existing one
+        - The change modifies Containerfiles or Helm charts in ways
+          that affect runtime behavior
+        - The change modifies hack/ or scripts/ directories
+        - The change modifies Ansible roles or playbooks
+        - The change modifies .coderabbit.yaml (review policy)
+        - The change modifies review-policy files (AGENTS.md,
+          CLAUDE.md, CONTRIBUTING.md)
+        - The change hand-edits generated files (*.pb.go,
+          zz_generated.deepcopy.go) rather than pure regeneration
+        - You are uncertain about the appropriate risk level
+
+  mutually_exclusive_groups:
+    risk:
+      - "risk:ship"
+      - "risk:show"
+      - "risk:ask"
+
+knowledge_base:
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "**/AGENTS.md"
+      - "**/CLAUDE.md"
+      - "**/CONTRIBUTING.md"
+
+  issues:
+    scope: "auto"
+  pull_requests:
+    scope: "auto"
+  learnings:
+    scope: "auto"

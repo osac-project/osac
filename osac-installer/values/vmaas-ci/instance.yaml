@@ -215,15 +215,15 @@ metering:
 lvms:
   enabled: true
 
-# Default NetworkClass for VMaaS-without-fabric. Created after AAP
-# publish-templates (hook weight 25 vs 20). AAP still publishes a cudn_net
-# class; this Create becomes the default (fabric_manager is immutable once
-# set, so the published class cannot be retargeted).
+# Default NetworkClass for VMaaS-without-fabric (create-network-class hook).
+# Must clear fabricManager — chart defaults leave cudn_net, and Helm merge
+# would stamp both managers
 networkClass:
   enabled: true
   title: "K8s-only networking"
   description: >-
     VMaaS overlay without a physical fabric. VirtualNetwork/Subnet use CUDN,
     SecurityGroup uses NetworkPolicy, ExternalIP uses MetalLB L2.
+  fabricManager: ""
   k8sManager: "k8s_only"
   isDefault: true

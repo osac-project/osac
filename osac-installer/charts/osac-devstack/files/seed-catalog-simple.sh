@@ -26,7 +26,7 @@ log "Seeding catalog into '${NS}'..."
 # Disk images
 log "Creating disk images..."
 grpc_call "osac.private.v1.DiskImages/Create" \
-  '{"object":{"metadata":{"name":"fedora"},"spec":{"sourceType":"SOURCE_TYPE_REGISTRY","sourceRef":"quay.io/containerdisks/fedora:latest"}}}' \
+  '{"object":{"metadata":{"name":"fedora"},"spec":{"sourceType":"SOURCE_TYPE_REGISTRY","sourceRef":"quay.io/containerdisks/fedora:latest","architecture":["amd64","arm64"]}}}' \
   >/dev/null 2>&1 || log "  disk-image: fedora (already exists)"
 log "  disk-image: fedora"
 

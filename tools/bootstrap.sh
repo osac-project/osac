@@ -371,6 +371,24 @@ fork_remote_is_user_fork() {
   fork_remote_push_matches "$dir" "$remote" "$expected_suffix"
 }
 
+# git remote rename retargets branch.*.remote to the new name. After we add
+# the fork back as $to_remote, point those branches at the fork again so
+# `git push` on main does not go to osac-project.
+restore_branch_remotes() {
+  local dir="$1" from_remote="$2" to_remote="$3"
+  local line key value branch configs
+  configs=$(git -C "$dir" config --get-regexp '^branch\..*\.remote$' 2>/dev/null || true)
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    key="${line%% *}"
+    value="${line#* }"
+    [[ "$value" == "$from_remote" ]] || continue
+    branch="${key#branch.}"
+    branch="${branch%.remote}"
+    git -C "$dir" config "branch.${branch}.remote" "$to_remote"
+  done <<< "$configs"
+}
+
 # True when $GH_USER/$(fork_repo_for "$repo") is a GitHub fork of
 # osac-project/$repo (not an unrelated same-name repo — common for docs,
 # whose fork is osac-docs).
@@ -425,6 +443,9 @@ ensure_fork_remote() {
     fi
     echo "  Failed to add '${FORK_REMOTE_NAME}' remote for ${repo}."
     return 1
+  fi
+  if [[ -n "$renamed_to" ]]; then
+    restore_branch_remotes "$dir" "$renamed_to" "$FORK_REMOTE_NAME"
   fi
   git -C "$dir" fetch "$FORK_REMOTE_NAME" || {
     echo "  Fetch of ${FORK_REMOTE_NAME} failed for ${repo}. Remote was added."

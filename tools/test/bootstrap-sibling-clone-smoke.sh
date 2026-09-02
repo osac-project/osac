@@ -57,6 +57,8 @@ if [[ " \$* " == *" clone "* ]]; then
   "\$REAL" -C "\$dest" -c user.email=smoke@test -c user.name=smoke \
     commit -q --allow-empty -m seed
   "\$REAL" -C "\$dest" remote add origin "\$url"
+  "\$REAL" -C "\$dest" config branch.main.remote origin
+  "\$REAL" -C "\$dest" config branch.main.merge refs/heads/main
   if [[ "\$(basename "\$dest")" == "${AI_WORKFLOWS_NAME}" ]]; then
     printf '#!/bin/sh\\necho stub-install\\nexit 0\\n' > "\$dest/install.sh"
     chmod +x "\$dest/install.sh"
@@ -266,11 +268,20 @@ assert_vendor_untouched() {
   assert_no_named_remote "$dest" upstream "$label"
 }
 
+assert_branch_tracks() {
+  local dest="$1" branch="$2" remote="$3"
+  local got
+  got=$(git -C "$dest" config --get "branch.${branch}.remote" 2>/dev/null || true)
+  [[ "$got" == "$remote" ]] \
+    || fail "${dest} branch ${branch} should track ${remote}, got: ${got:-unset}"
+}
+
 assert_origin_layout_writeable() {
   local dest="$1" repo="$2"
   assert_remote_url "$dest" origin "smokeuser/${repo}"
   assert_remote_url "$dest" upstream "osac-project/${repo}"
   assert_no_named_remote "$dest" fork "$(basename "$dest")"
+  assert_branch_tracks "$dest" main origin
 }
 
 assert_expected_clones() {
@@ -867,6 +878,7 @@ test_fork_name_origin_uses_osac_upstream_when_upstream_taken() {
   url=$(git -C "$ep" remote get-url upstream)
   [[ "$url" == *example/placeholder* ]] \
     || fail "pre-existing upstream must be left in place, got: $url"
+  assert_branch_tracks "$ep" main origin
   pass "--fork-name origin uses osac-upstream when upstream exists"
 }
 

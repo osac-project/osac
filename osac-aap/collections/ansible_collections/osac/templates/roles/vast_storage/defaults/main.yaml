@@ -53,13 +53,6 @@ vast_storage_vip_pool_slice_size: "{{ lookup('env', 'VAST_VIP_POOL_SLICE_SIZE') 
 vast_storage_vip_pool_gw_ip: "{{ lookup('env', 'VAST_VIP_POOL_GW_IP') | default('', true) }}"
 vast_storage_vip_pool_gw_ipv6: "{{ lookup('env', 'VAST_VIP_POOL_GW_IPV6') | default('', true) }}"
 
-# Client IP ranges for tenant NFS access on shared VIP pools.
-# Required when using shared (tenant_id=null) VIP pools — VAST resolves the
-# tenant by matching the NFS client's source IP against each tenant's ranges.
-# Without this, NFS access is denied for non-default tenants.
-# Format: JSON array of [start, end] pairs, e.g. '[["10.0.0.1","10.0.0.10"]]'
-vast_storage_client_ip_ranges: "{{ lookup('env', 'VAST_CLIENT_IP_RANGES') | default('', true) }}"
-
 # Local provider naming — each tenant gets its own identity provider.
 vast_storage_local_provider_prefix: "lp-"
 

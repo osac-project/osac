@@ -317,60 +317,6 @@
                       '{{ vast_storage_vip_pool_name }}', owned by tenant '{{ tenant_name }}'
                       (or All-Tenants), with a routable IP range on the VAST data network.
 
-        - name: Configure tenant client IP ranges for shared VIP pool NFS access
-          block:
-            - name: Parse explicit client IP ranges when provided
-              when: vast_storage_client_ip_ranges | length > 0
-              ansible.builtin.set_fact:
-                _vast_client_ip_ranges: >-
-                  {{ vast_storage_client_ip_ranges if (vast_storage_client_ip_ranges is not string)
-                     else (vast_storage_client_ip_ranges | from_json) }}
-
-            - name: Auto-detect node IPs when client IP ranges not configured
-              when: vast_storage_client_ip_ranges | length == 0
-              block:
-                - name: Get cluster node internal IPs
-                  kubernetes.core.k8s_info:
-                    api_version: v1
-                    kind: Node
-                  register: _vast_node_list
-
-                - name: Build client IP ranges from node InternalIP addresses
-                  ansible.builtin.set_fact:
-                    _vast_client_ip_ranges: >-
-                      {{ _vast_node_list.resources
-                         | map(attribute='status.addresses')
-                         | map('selectattr', 'type', 'equalto', 'InternalIP')
-                         | map('map', attribute='address')
-                         | flatten
-                         | map('regex_replace', '^(.*)$', '["\1","\1"]')
-                         | map('from_json')
-                         | list }}
-
-                - name: Log auto-detected node IPs
-                  ansible.builtin.debug:
-                    msg: "Auto-detected {{ _vast_client_ip_ranges | length }} node IP(s) for client_ip_ranges"
-
-            - name: Set client_ip_ranges on VAST tenant
-              when: _vast_client_ip_ranges | default([]) | length > 0
-              ansible.builtin.uri:
-                url: "https://{{ vast_endpoint }}/api/tenants/{{ _vast_tenant_id }}/"
-                method: PATCH
-                body_format: json
-                body:
-                  client_ip_ranges: "{{ _vast_client_ip_ranges }}"
-                headers:
-                  Authorization: "Bearer {{ _vast_setup_auth.json.access }}"
-                validate_certs: "{{ vast_storage_validate_certs }}"
-                timeout: "{{ vast_storage_api_timeout | int }}"
-                status_code: [200]
-              no_log: true
-
-            - name: Log client IP ranges configuration
-              ansible.builtin.debug:
-                msg: "Set {{ _vast_client_ip_ranges | length }} client_ip_range(s) on tenant '{{ tenant_name }}'"
-              when: _vast_client_ip_ranges | default([]) | length > 0
-
         - name: Create per-tenant VMS manager with CSI role
           ansible.builtin.include_tasks: create_tenant_manager.yaml
 
@@ -521,8 +467,6 @@
         _vast_setup_auth: {}
         _vast_lp_check: {}
         _vast_lp_create_result: {}
-        _vast_client_ip_ranges: []
-        _vast_node_list: {}
         _vast_vip_pool_check: {}
         _vast_vip_pool_existing: {}
         _vast_vip_pool_present: false

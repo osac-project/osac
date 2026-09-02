@@ -831,6 +831,26 @@ test_fork_name_origin_uses_osac_upstream_when_upstream_taken() {
   pass "--fork-name origin uses osac-upstream when upstream exists"
 }
 
+test_fork_name_origin_rename_does_not_log_remote_url() {
+  local home root bin home_skills home_workflows repo_skills clone_log out ep
+  local cred_url
+  prepare_fixture fork-name-origin-no-url-log
+  write_gh_wrapper "${bin}/gh"
+  ep="${root}/enhancement-proposals"
+  cred_url="https://user:s3cret@github.com/osac-project/enhancement-proposals.git"
+
+  run_bootstrap "$root" "$home" "$bin" >/dev/null
+  "$REAL_GIT" -C "$ep" remote set-url origin "$cred_url"
+  out=$(run_bootstrap_fork "$root" "$home" "$bin" --fork-name origin 2>&1) \
+    || fail "--fork-name origin with credential origin failed: $out"
+  echo "$out" | grep -q "s3cret" \
+    && fail "rename log must not print remote credentials: $out"
+  echo "$out" | grep -qE "Renamed existing 'origin' → 'upstream'" \
+    || fail "expected names-only rename log: $out"
+  assert_origin_layout_writeable "$ep" "enhancement-proposals"
+  pass "--fork-name origin rename log omits remote URL"
+}
+
 test_no_fork_with_fork_name_origin_is_read_only() {
   local home root bin home_skills home_workflows repo_skills clone_log out
   local skills_origin
@@ -1015,6 +1035,7 @@ test_fork_name_requires_value
 test_fork_name_origin_renames_org_origin
 test_fork_name_origin_rerun_is_idempotent
 test_fork_name_origin_uses_osac_upstream_when_upstream_taken
+test_fork_name_origin_rename_does_not_log_remote_url
 test_no_fork_with_fork_name_origin_is_read_only
 test_docs_fork_uses_osac_docs_github_name
 test_fork_overrides_file_can_remap_docs

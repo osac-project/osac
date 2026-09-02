@@ -374,7 +374,7 @@ is_github_fork_of_org_repo() {
 
 ensure_fork_remote() {
   local repo="$1" dir="$2"
-  local url occupant old_url target renamed_to="" fork_repo
+  local url occupant target renamed_to="" fork_repo
   local fork_name_args=()
   fork_repo=$(fork_repo_for "$repo")
   if [[ "$fork_repo" != "$repo" ]]; then
@@ -394,14 +394,13 @@ ensure_fork_remote() {
     fi
     occupant=$(git -C "$dir" remote get-url "$FORK_REMOTE_NAME")
     if remote_url_matches_suffix "$occupant" "${GITHUB_ORG}/${repo}"; then
-      old_url="$occupant"
       target="upstream"
       while git -C "$dir" remote get-url "$target" &>/dev/null; do
         target="osac-${target}"
       done
       git -C "$dir" remote rename "$FORK_REMOTE_NAME" "$target"
       renamed_to="$target"
-      echo "  Renamed existing '${FORK_REMOTE_NAME}' (${old_url}) → '${target}'"
+      echo "  Renamed existing '${FORK_REMOTE_NAME}' → '${target}'"
     else
       echo "  Remote '${FORK_REMOTE_NAME}' already exists with a different URL. Skipping."
       return 1

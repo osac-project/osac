@@ -45,7 +45,8 @@ By default, each writeable sibling is forked to your GitHub account:
 siblings only (origin = your fork, upstream = osac-project). Pick a name
 and stick with it — re-running with a different name mutates remotes.
 This checkout, osac-ux, and vendor clones are never renamed. Skills
-resolve remotes by URL, not by name.
+resolve remotes by URL, not by name. The GitHub fork of osac-project/docs
+is named osac-docs (override extra mappings in tools/fork-overrides.sh).
 
 osac-ux is a reference clone (no fork). Vendor checkouts (.osac-ai-skills,
 .ai-workflows) are never forked. --no-fork skips forking even when
@@ -242,6 +243,36 @@ echo "Installing ai-workflows skills..."
 AI_WORKFLOWS="bugfix,implement,prd,design,e2e"
 "${AI_WORKFLOWS_DIR}/install.sh" all --project "${PROJECT_ROOT}" --workflows "${AI_WORKFLOWS}"
 
+# Optional tools/fork-overrides.sh may replace or append FORK_OVERRIDE_PAIRS
+# entries ("upstream-repo:github-fork-name"). docs defaults to osac-docs.
+FORK_OVERRIDE_PAIRS=()
+if [[ -f "${SCRIPT_DIR}/fork-overrides.sh" ]]; then
+  # shellcheck disable=SC1091
+  source "${SCRIPT_DIR}/fork-overrides.sh"
+fi
+_fork_override_has_docs=false
+for _pair in "${FORK_OVERRIDE_PAIRS[@]+"${FORK_OVERRIDE_PAIRS[@]}"}"; do
+  if [[ "${_pair%%:*}" == "docs" ]]; then
+    _fork_override_has_docs=true
+    break
+  fi
+done
+if [[ "$_fork_override_has_docs" == false ]]; then
+  FORK_OVERRIDE_PAIRS+=("docs:osac-docs")
+fi
+unset _fork_override_has_docs _pair
+
+fork_repo_for() {
+  local repo="$1" pair
+  for pair in "${FORK_OVERRIDE_PAIRS[@]+"${FORK_OVERRIDE_PAIRS[@]}"}"; do
+    if [[ "${pair%%:*}" == "$repo" ]]; then
+      echo "${pair#*:}"
+      return 0
+    fi
+  done
+  echo "$repo"
+}
+
 # Skill-relative sibling checkouts (gitignored). Local dir name follows the
 # GitHub repo except docs → osac-docs (docs/ is in-tree conventions).
 # Format: "repo" or "repo:local-dir"
@@ -283,7 +314,7 @@ is_expected_sibling() {
   fi
   # --fork-name origin layout: origin is the user's fork, another remote is org.
   if [[ "$NO_FORK" == false && -n "$GH_USER" ]] \
-     && remote_url_matches_suffix "$url" "${GH_USER}/${repo}"; then
+     && remote_url_matches_suffix "$url" "${GH_USER}/$(fork_repo_for "$repo")"; then
     find_upstream_remote "$dir" "$repo" >/dev/null
     return $?
   fi
@@ -303,10 +334,12 @@ sibling_update_remote() {
 
 get_fork_url() {
   local repo="$1"
+  local fork_repo
+  fork_repo=$(fork_repo_for "$repo")
   if [[ "$GIT_PROTOCOL" == "ssh" ]]; then
-    echo "git@github.com:${GH_USER}/${repo}.git"
+    echo "git@github.com:${GH_USER}/${fork_repo}.git"
   else
-    echo "https://github.com/${GH_USER}/${repo}.git"
+    echo "https://github.com/${GH_USER}/${fork_repo}.git"
   fi
 }
 
@@ -329,15 +362,22 @@ fork_remote_push_matches() {
 # unrelated same-name repo — common for the docs sibling).
 is_github_fork_of_org_repo() {
   local repo="$1"
-  local parent
-  parent=$(gh repo view "${GH_USER}/${repo}" --json parent -q '.parent.nameWithOwner // empty' 2>/dev/null) || return 1
+  local parent fork_repo
+  fork_repo=$(fork_repo_for "$repo")
+  parent=$(gh repo view "${GH_USER}/${fork_repo}" --json parent -q '.parent.nameWithOwner // empty' 2>/dev/null) || return 1
   [[ "$parent" == "${GITHUB_ORG}/${repo}" ]]
 }
 
 ensure_fork_remote() {
   local repo="$1" dir="$2"
-  local url occupant old_url target renamed_to=""
-  if ! gh repo fork "${GITHUB_ORG}/${repo}" --clone=false --default-branch-only; then
+  local url occupant old_url target renamed_to="" fork_repo
+  local fork_name_args=()
+  fork_repo=$(fork_repo_for "$repo")
+  if [[ "$fork_repo" != "$repo" ]]; then
+    fork_name_args=(--fork-name "$fork_repo")
+  fi
+  if ! gh repo fork "${GITHUB_ORG}/${repo}" --clone=false --default-branch-only \
+       ${fork_name_args[@]+"${fork_name_args[@]}"}; then
     if ! is_github_fork_of_org_repo "$repo"; then
       echo "  Failed to fork ${GITHUB_ORG}/${repo}. Skipping fork remote."
       return 1
@@ -345,7 +385,7 @@ ensure_fork_remote() {
   fi
   url=$(get_fork_url "$repo")
   if git -C "$dir" remote get-url "$FORK_REMOTE_NAME" &>/dev/null; then
-    if fork_remote_push_matches "$dir" "$FORK_REMOTE_NAME" "${GH_USER}/${repo}"; then
+    if fork_remote_push_matches "$dir" "$FORK_REMOTE_NAME" "${GH_USER}/${fork_repo}"; then
       return 0
     fi
     occupant=$(git -C "$dir" remote get-url "$FORK_REMOTE_NAME")
@@ -388,7 +428,7 @@ should_fork_sibling() {
 maybe_fork_sibling() {
   local repo="$1" dest="$2"
   should_fork_sibling "$repo" || return 0
-  if fork_remote_push_matches "$dest" "$FORK_REMOTE_NAME" "${GH_USER}/${repo}"; then
+  if fork_remote_push_matches "$dest" "$FORK_REMOTE_NAME" "${GH_USER}/$(fork_repo_for "$repo")"; then
     return 0
   fi
   echo "Adding ${FORK_REMOTE_NAME} remote for ${repo}..."

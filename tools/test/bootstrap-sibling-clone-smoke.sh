@@ -614,7 +614,7 @@ test_forks_writeable_siblings_not_osac_ux_or_vendors() {
   assert_expected_clones "$root" "$clone_log"
   assert_fork_remote "${root}/enhancement-proposals" "enhancement-proposals"
   assert_fork_remote "${root}/osac-ui" "osac-ui"
-  assert_fork_remote "${root}/osac-docs" "docs"
+  assert_fork_remote "${root}/osac-docs" "osac-docs"
   assert_no_fork_remote "${root}/osac-ux" "osac-ux"
   assert_no_fork_remote "$home_skills" "osac-ai-skills vendor"
   assert_no_fork_remote "$home_workflows" "ai-workflows vendor"
@@ -622,6 +622,8 @@ test_forks_writeable_siblings_not_osac_ux_or_vendors() {
     || fail "expected gh repo fork for enhancement-proposals: $(cat "$gh_log")"
   grep -q 'repo fork osac-project/docs' "$gh_log" \
     || fail "docs fork must use GitHub repo name docs: $(cat "$gh_log")"
+  grep -q 'fork-name osac-docs' "$gh_log" \
+    || fail "docs fork must pass --fork-name osac-docs: $(cat "$gh_log")"
   if grep -q 'repo fork osac-project/osac-ux' "$gh_log"; then
     fail "must not gh fork osac-ux: $(cat "$gh_log")"
   fi
@@ -645,7 +647,7 @@ test_rerun_adds_fork_remote_to_existing_clone() {
   : > "${home}/gh.log"
   out=$(run_bootstrap_fork "$root" "$home" "$bin" 2>&1) || fail "fork re-run failed: $out"
   assert_fork_remote "$ep" "enhancement-proposals"
-  assert_fork_remote "${root}/osac-docs" "docs"
+  assert_fork_remote "${root}/osac-docs" "osac-docs"
   assert_no_fork_remote "${root}/osac-ux" "osac-ux"
   echo "$out" | grep -q 'Adding fork remote for enhancement-proposals' \
     || fail "re-run should add missing fork remotes: $out"
@@ -760,7 +762,9 @@ test_fork_name_origin_renames_org_origin() {
 
   assert_origin_layout_writeable "${root}/enhancement-proposals" "enhancement-proposals"
   assert_origin_layout_writeable "${root}/osac-ui" "osac-ui"
-  assert_origin_layout_writeable "${root}/osac-docs" "docs"
+  assert_remote_url "${root}/osac-docs" origin "smokeuser/osac-docs"
+  assert_remote_url "${root}/osac-docs" upstream "osac-project/docs"
+  assert_no_named_remote "${root}/osac-docs" fork "osac-docs"
   assert_remote_url "${root}/osac-ux" origin "osac-project/osac-ux"
   assert_no_named_remote "${root}/osac-ux" fork "osac-ux"
   assert_no_named_remote "${root}/osac-ux" upstream "osac-ux"
@@ -839,6 +843,43 @@ test_no_fork_with_fork_name_origin_is_read_only() {
   assert_osac_root_untouched "$root"
   [[ ! -s "${home}/gh.log" ]] || fail "--no-fork --fork-name origin must not invoke gh: $(cat "${home}/gh.log")"
   pass "--no-fork wins over --fork-name origin"
+}
+
+test_docs_fork_uses_osac_docs_github_name() {
+  local home root bin home_skills home_workflows repo_skills clone_log out gh_log
+  local skills_origin
+  prepare_fixture docs-fork-name
+  write_gh_wrapper "${bin}/gh"
+  gh_log="${home}/gh.log"
+  skills_origin=$(git -C "$home_skills" remote get-url origin)
+
+  out=$(run_bootstrap_fork "$root" "$home" "$bin" 2>&1) || fail "bootstrap failed: $out"
+  assert_fork_remote "${root}/osac-docs" "osac-docs"
+  grep -q 'fork-name osac-docs' "$gh_log" \
+    || fail "expected gh repo fork --fork-name osac-docs: $(cat "$gh_log")"
+  assert_vendor_untouched "$home_skills" "osac-ai-skills vendor" "$skills_origin"
+  assert_no_fork_remote "${root}/osac-ux" "osac-ux"
+  pass "docs GitHub fork name is osac-docs, not docs"
+}
+
+test_fork_overrides_file_can_remap_docs() {
+  local home root bin home_skills home_workflows repo_skills clone_log out
+  local skills_origin
+  prepare_fixture docs-override
+  write_gh_wrapper "${bin}/gh"
+  skills_origin=$(git -C "$home_skills" remote get-url origin)
+  cat > "${root}/tools/fork-overrides.sh" <<'EOF'
+FORK_OVERRIDE_PAIRS=("docs:custom-docs")
+EOF
+
+  out=$(run_bootstrap_fork "$root" "$home" "$bin" 2>&1) || fail "bootstrap failed: $out"
+  assert_fork_remote "${root}/osac-docs" "custom-docs"
+  grep -q 'fork-name custom-docs' "${home}/gh.log" \
+    || fail "override must pass --fork-name custom-docs: $(cat "${home}/gh.log")"
+  assert_fork_remote "${root}/osac-ui" "osac-ui"
+  assert_vendor_untouched "$home_skills" "osac-ai-skills vendor" "$skills_origin"
+  assert_no_fork_remote "${root}/osac-ux" "osac-ux"
+  pass "tools/fork-overrides.sh can remap docs without affecting ux/vendors"
 }
 
 test_home_git_subdir_skills_falls_back_to_repo_local() {
@@ -966,6 +1007,8 @@ test_fork_name_origin_renames_org_origin
 test_fork_name_origin_rerun_is_idempotent
 test_fork_name_origin_uses_osac_upstream_when_upstream_taken
 test_no_fork_with_fork_name_origin_is_read_only
+test_docs_fork_uses_osac_docs_github_name
+test_fork_overrides_file_can_remap_docs
 test_home_git_subdir_skills_falls_back_to_repo_local
 test_repo_local_leftover_ai_workflows_errors_without_updating
 test_repo_local_leftover_osac_ai_skills_errors_without_updating

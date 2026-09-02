@@ -15,6 +15,9 @@ osac-ui/
 osac-test-infra/
 osac-docs/
 
+# Local GitHub fork-name mappings (see tools/fork-overrides.sh.example).
+/tools/fork-overrides.sh
+
 # Harness output and osac-ai-skills fan-out. Keep repo-local Claude settings
 # and hook *scripts* tracked; fan-out only adds .claude/hooks/README.md.
 .claude/*

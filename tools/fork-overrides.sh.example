@@ -1,0 +1,8 @@
+# GitHub fork-name mappings: "upstream-repo:your-fork-name"
+# Copy to tools/fork-overrides.sh (gitignored) and uncomment/add entries.
+#
+# osac-project/docs already maps to osac-docs in tools/bootstrap.sh unless
+# this file sets a docs: pair.
+#
+# FORK_OVERRIDE_PAIRS=("docs:osac-docs")
+# FORK_OVERRIDE_PAIRS+=("enhancement-proposals:my-ep-fork")

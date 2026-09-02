@@ -46,7 +46,10 @@ After clone, run `tools/bootstrap.sh` from this repo root. It vendors
 [flightctl/ai-workflows](https://github.com/flightctl/ai-workflows), clones
 skill-relative sibling repos (see `AGENTS.md`), forks the writeable siblings
 to your GitHub account, and links Claude Code / Cursor / Gemini CLI skill
-discovery. Requires an authenticated `gh` session unless you pass `--no-fork`. This
+discovery. Requires an authenticated `gh` session unless you pass `--no-fork`.
+`--fork-name origin` sets writeable sibling remotes to `origin` = your fork and
+`upstream` = osac-project; it does not change this checkout or skill vendor
+remotes. The GitHub fork of `osac-project/docs` is `osac-docs`. This
 repo is the project root. A nested `osac-workspace/osac/` checkout aborts;
 use a standalone clone or worktree instead.
 
@@ -76,7 +79,7 @@ source tools/osac-helpers.sh
 osac-new-worktree feat/OSAC-1234
 ```
 
-Creates `../osac-OSAC-1234` by default (or `$OSAC_WORKTREE_PARENT/osac-OSAC-1234`), checks out the new branch, and runs `tools/bootstrap.sh` (extra args after the branch are forwarded, e.g. `--no-fork`). Remove with `git worktree remove` on that path from the original clone.
+Creates `../osac-OSAC-1234` by default (or `$OSAC_WORKTREE_PARENT/osac-OSAC-1234`), checks out the new branch, and runs `tools/bootstrap.sh` (extra args after the branch are forwarded, e.g. `--no-fork` or `--fork-name origin`). Remove with `git worktree remove` on that path from the original clone.
 
 > [!WARNING]
 > Be mindful of the content you commit to this repository. Do not commit any

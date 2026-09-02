@@ -38,7 +38,7 @@ After clone, run `tools/bootstrap.sh` to vendor AI skills and workflows (see [AI
 
 ### Parallel worktrees
 
-Source [`tools/osac-helpers.sh`](tools/osac-helpers.sh) and run `osac-new-worktree <branch>` from this repo. It adds a sibling worktree (`../osac-<branch-basename>`), runs `tools/bootstrap.sh` there (extra args after the branch are forwarded, e.g. `--no-fork`), and appends Jira context to `.claude/CLAUDE.md` when the branch name contains `OSAC-NNNN`. Override the parent directory with `OSAC_WORKTREE_PARENT`. Clean up with `git worktree remove` on that path (default `../osac-<suffix>`; with `OSAC_WORKTREE_PARENT`, `$OSAC_WORKTREE_PARENT/osac-<suffix>`).
+Source [`tools/osac-helpers.sh`](tools/osac-helpers.sh) and run `osac-new-worktree <branch>` from this repo. It adds a sibling worktree (`../osac-<branch-basename>`), runs `tools/bootstrap.sh` there (extra args after the branch are forwarded, e.g. `--no-fork` or `--fork-name origin`), and appends Jira context to `.claude/CLAUDE.md` when the branch name contains `OSAC-NNNN`. Override the parent directory with `OSAC_WORKTREE_PARENT`. Clean up with `git worktree remove` on that path (default `../osac-<suffix>`; with `OSAC_WORKTREE_PARENT`, `$OSAC_WORKTREE_PARENT/osac-<suffix>`).
 
 ## Components
 
@@ -63,10 +63,17 @@ covers broader project-level architecture guides and diagrams).
 root (skill-relative paths when this checkout is the project root). By
 default it also forks the writeable three to your GitHub account (`origin` =
 osac-project, `fork` = you — the `$PUSH_REMOTE` that `resolve-remotes.sh`
-reports) so `/create-pr` has a push remote. Never forked:
+reports) so `/create-pr` has a push remote. `--fork-name origin` uses the
+conventional GitHub layout on **writeable siblings only** (`origin` = you,
+`upstream` = osac-project). Pick a name and stick with it; re-running with a
+different name mutates sibling remotes. This osac checkout, `osac-ux`, and
+vendor clones are never renamed — skills keep resolving remotes by URL.
+`--no-fork` skips forking even if `--fork-name` is also passed. Never forked:
 `osac-ux`, `.osac-ai-skills`, `.ai-workflows`. Pass `--no-fork` for
 read-only or CI clones (requires no `gh`). Default path requires
-authenticated `gh`.
+authenticated `gh`. The GitHub fork of [osac-project/docs](https://github.com/osac-project/docs)
+is named `osac-docs` (not `docs`); extra mappings go in `tools/fork-overrides.sh`
+(see `tools/fork-overrides.sh.example`).
 
 | Repo | Local path | Fork remote | Description |
 |------|------------|-------------|-------------|
@@ -118,6 +125,8 @@ A directory nested as `osac-workspace/osac/` still aborts (override:
 `OSAC_ALLOW_NESTED_BOOTSTRAP=1`) so it cannot install a second skill overlay.
 Use a standalone clone or worktree of this repo, not that nested copy. For a
 clone-only sibling pass (no GitHub forks), use `tools/bootstrap.sh --no-fork`.
+`--fork-name origin` only rearranges remotes on writeable siblings (see
+[External Repos](#external-repos)).
 
 Edit OSAC-native skills only in `osac-project/osac-ai-skills`. Local `skills/`
 and `.osac-ai-skills/` are bootstrap-managed and gitignored, as are the

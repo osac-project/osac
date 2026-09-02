@@ -13,28 +13,29 @@ on:
 jobs:
   check-labels:
     runs-on: ubuntu-latest
+    permissions:
+      statuses: write
     steps:
       - name: Auto-pass for merge queue
         if: github.event_name == 'merge_group'
         run: echo "Labels already validated on PR"
-      - name: Check required Prow labels
+      - name: Post label gate status
         if: github.event_name == 'pull_request'
-        env:
-          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
-        run: |
-          missing=()
-          for label in lgtm approved jira/valid-reference; do
-            if ! echo "$LABELS" | jq -e "index(\"$label\")" > /dev/null 2>&1; then
-              missing+=("$label")
-            fi
-          done
-          if [[ ${#missing[@]} -gt 0 ]]; then
-            echo "::error::Missing required labels: ${missing[*]}"
-            echo ""
-            echo "Required labels are set by Prow plugins via OWNERS files:"
-            echo "  lgtm           - reviewer types /lgtm"
-            echo "  approved       - approver types /approve"
-            echo "  jira/valid-reference - PR title has valid Jira key"
-            exit 1
-          fi
-          echo "All required labels present"
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9
+        with:
+          script: |
+            const labels = ${{ toJSON(github.event.pull_request.labels.*.name) }};
+            const required = ['lgtm', 'approved', 'jira/valid-reference'];
+            const missing = required.filter(l => !labels.includes(l));
+            const state = missing.length ? 'pending' : 'success';
+            const description = missing.length
+              ? `Missing: ${missing.join(', ')}`
+              : 'All required labels present';
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.payload.pull_request.head.sha,
+              state,
+              context: 'label-gate',
+              description,
+            });

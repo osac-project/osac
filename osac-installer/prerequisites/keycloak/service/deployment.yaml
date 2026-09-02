@@ -69,6 +69,11 @@ spec:
               --from-literal=osac-controller="$(openssl rand -base64 18)" \
               --from-literal=osac-admin="$(openssl rand -base64 18)" \
               --from-literal=osac-csi-driver="$(openssl rand -base64 18)"
+          elif ! oc get secret keycloak-client-secrets -o jsonpath='{.data.osac-csi-driver}' | grep -q .; then
+            echo "patching keycloak-client-secrets to add osac-csi-driver key"
+            CSI_DRIVER_NEW=$(openssl rand -base64 18)
+            oc patch secret keycloak-client-secrets \
+              -p "{\"data\":{\"osac-csi-driver\":\"$(printf '%s' "${CSI_DRIVER_NEW}" | base64 -w0)\"}}"
           fi
           CONTROLLER_SECRET=$(oc get secret keycloak-client-secrets -o jsonpath='{.data.osac-controller}' | base64 -d)
           ADMIN_SECRET=$(oc get secret keycloak-client-secrets -o jsonpath='{.data.osac-admin}' | base64 -d)

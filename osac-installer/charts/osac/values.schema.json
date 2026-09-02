@@ -191,6 +191,11 @@
               "description": "Enable networking controllers",
               "default": true
             },
+            "networkingProvisioning": {
+              "type": "boolean",
+              "description": "Dispatch AAP jobs to provision networking resources. Set false for Kind dev (no fabric): controllers reconcile VirtualNetwork/Subnet/SecurityGroup to READY without provisioning.",
+              "default": true
+            },
             "bareMetalInstance": {
               "type": "boolean",
               "description": "Enable BareMetalInstance controller",

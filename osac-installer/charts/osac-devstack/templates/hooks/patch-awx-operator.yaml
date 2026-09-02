@@ -1,0 +1,52 @@
+{{- if .Values.awx.enabled }}
+---
+# Regular Job (not a hook) to patch AWX operator kube-rbac-proxy image
+# The upstream awx-operator chart v2.19.1 references a non-existent gcr.io image.
+# This Job runs immediately as part of chart installation, not as a post-install hook,
+# so it can patch the deployment before Helm --wait checks pod readiness.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "osac-devstack.fullname" . }}-patch-awx-operator
+  namespace: {{ .Values.osacNamespace }}
+  labels:
+    {{- include "osac-devstack.labels" . | nindent 4 }}
+    job: patch-awx-operator
+spec:
+  template:
+    metadata:
+      labels:
+        {{- include "osac-devstack.selectorLabels" . | nindent 8 }}
+        job: patch-awx-operator
+    spec:
+      serviceAccountName: {{ include "osac-devstack.serviceAccountName" . }}
+      restartPolicy: OnFailure
+      containers:
+      - name: patch-awx-operator
+        image: {{ .Values.cliImage }}
+        command: ["/bin/bash", "-c"]
+        args:
+          - |
+            set -euo pipefail
+            echo "Waiting for AWX operator deployment to exist..."
+            for i in $(seq 1 30); do
+              if kubectl -n {{ .Values.osacNamespace }} get deployment awx-operator-controller-manager >/dev/null 2>&1; then
+                echo "Deployment found"
+                break
+              fi
+              sleep 2
+            done
+
+            echo "Patching kube-rbac-proxy image to official ghcr.io location..."
+            kubectl -n {{ .Values.osacNamespace }} patch deployment awx-operator-controller-manager \
+              --type=json -p='[{
+                "op":"replace",
+                "path":"/spec/template/spec/containers/0/image",
+                "value":"ghcr.io/kube-rbac-proxy/kube-rbac-proxy:v0.22.1"
+              }]'
+
+            echo "Waiting for patched pod to be ready..."
+            kubectl -n {{ .Values.osacNamespace }} rollout status deployment/awx-operator-controller-manager --timeout=2m
+
+            echo "AWX operator patched successfully"
+{{- end }}

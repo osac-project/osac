@@ -1,0 +1,96 @@
+# OSAC dev-full local development stack
+osacNamespace: osac
+kindClusterName: osac-dev
+# Multi-arch CLI image for hook Jobs (supports amd64, arm64, etc.).
+# The upstream quay.io/openshift/origin-cli:4.20.0 only supports amd64, blocking Mac ARM users.
+# Build the custom multi-arch image with: make -C charts/osac-devstack build-cli-tools
+cliImage: quay.io/openshift/origin-cli:4.20.0  # TODO: Replace with ghcr.io/osac-project/cli-tools:latest after first build
+
+# --- KubeVirt/CDI/Multus ---
+virt:
+  enabled: true
+  multusVersion: "v4.2.0"
+  kubevirtVersion: ""  # Empty = latest stable
+  cdiVersion: ""       # Empty = latest stable
+
+# --- AWX ---
+# AWX instance is deployed in osacNamespace (not a separate namespace) for dev-full
+# simplicity - the operator watches its own namespace by default.
+awx:
+  enabled: true
+  operatorChart: awx-operator/awx-operator
+  operatorVersion: ""  # Empty = latest
+  instance:
+    name: awx
+    serviceType: ClusterIP
+    postgresStorageClass: standard
+    projectsPersistence: false
+    resources:
+      postgres:
+        requests: {cpu: 100m, memory: 256Mi}
+        limits: {cpu: 500m, memory: 512Mi}
+      web:
+        requests: {cpu: 100m, memory: 256Mi}
+        limits: {cpu: "1", memory: 2Gi}
+      task:
+        requests: {cpu: 100m, memory: 256Mi}
+        limits: {cpu: "1", memory: 2Gi}
+      ee:
+        requests: {cpu: 100m, memory: 128Mi}
+        limits: {cpu: "500m", memory: 1Gi}
+
+# --- OSAC UI ---
+ui:
+  enabled: true
+  image:
+    repository: ghcr.io/osac-project/osac-ui
+    tag: latest  # DEV_FLOATING -- intentionally unpinned for local dev
+    pullPolicy: Always
+  replicas: 1
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+  config:
+    logLevel: info
+    fulfillmentApiUrl: "https://fulfillment-api.osac.localhost:8000"
+    oidcClientId: osac-ui
+    oidcIssuerUrl: "https://keycloak.osac.localhost:8443/realms/osac"
+    tlsInsecure: "1"
+
+# --- Catalog Seeding ---
+catalog:
+  enabled: true
+  internalApiService: fulfillment-internal-api
+  internalApiPort: 8001
+  diskImages:
+    - name: fedora
+      sourceType: SOURCE_TYPE_REGISTRY
+      sourceRef: quay.io/containerdisks/fedora:latest  # DEV_FLOATING -- intentionally unpinned for local dev
+  instanceTypes:
+    - {name: u1-small, cores: 2, memoryGib: 4, description: "2 cores, 4 GiB RAM"}
+    - {name: u1-medium, cores: 4, memoryGib: 8, description: "4 cores, 8 GiB RAM"}
+    - {name: u1-large, cores: 8, memoryGib: 16, description: "8 cores, 16 GiB RAM"}
+  templates:
+    - id: osac.templates.ocp_virt_vm
+      title: "Virtual Machine Template (Linux and Windows)"
+  catalogItems:
+    - name: linux-vm
+      title: "Linux Virtual Machine"
+      description: "Fedora-based VM with KVM acceleration"
+      templateId: osac.templates.ocp_virt_vm
+      published: true
+
+# --- Tenant Provisioning ---
+tenant:
+  enabled: true
+  name: tenant1
+  users: "tenant1_user,tenant1_admin"  # Comma-separated
+  keycloak:
+    namespace: keycloak
+    realm: osac
+
+# --- RBAC ---
+rbac:
+  create: true
+  serviceAccount:
+    name: devstack-admin

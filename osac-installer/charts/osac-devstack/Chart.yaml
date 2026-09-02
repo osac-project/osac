@@ -1,0 +1,18 @@
+apiVersion: v2
+name: osac-devstack
+description: OSAC dev-full local development stack (KubeVirt, AWX, UI, seeded catalog)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - osac
+  - development
+  - kubevirt
+  - awx
+maintainers:
+  - name: OSAC Team
+dependencies:
+  - name: awx-operator
+    version: "2.19.1"
+    repository: "https://ansible-community.github.io/awx-operator-helm/"
+    condition: awx.enabled

@@ -18,8 +18,8 @@ while IFS= read -r -d '' f; do
     code_line="$(printf '%s\n' "$line" | sed -E 's/[[:space:]]+#.*$//')"
     if printf '%s\n' "$code_line" | grep -qE "(^|[[:space:]])tag:[[:space:]]*['\"]?(latest|main)['\"]?([]},[:space:]]|$)|:(latest|main)['\"]?([]},[:space:]]|$)" && \
        printf '%s\n' "$code_line" | grep -qvE '^[[:space:]]*#'; then
-      if printf '%s\n' "$prev_line" | grep -qE '(^|[[:space:]])#[[:space:]]PLACEHOLDER -- overwritten at release time([[:space:]]|$)' || \
-         printf '%s\n' "$line" | grep -qE '(^|[[:space:]])#[[:space:]]PLACEHOLDER -- overwritten at release time([[:space:]]|$)'; then
+      if printf '%s\n' "$prev_line" | grep -qE '(^|[[:space:]])#[[:space:]](PLACEHOLDER -- overwritten at release time|DEV_FLOATING -- intentionally unpinned for local dev)([[:space:]]|$)' || \
+         printf '%s\n' "$line" | grep -qE '(^|[[:space:]])#[[:space:]](PLACEHOLDER -- overwritten at release time|DEV_FLOATING -- intentionally unpinned for local dev)([[:space:]]|$)'; then
         : # properly documented
       else
         tag_match="$(printf '%s\n' "$code_line" | grep -oE '\b(latest|main)\b' | head -1)"

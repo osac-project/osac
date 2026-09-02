@@ -1,0 +1,102 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: osac-ui
+  namespace: osac
+data:
+  LOG_LEVEL: "info"
+  # In-cluster upstream for the UI's backend proxy (the browser only ever talks to
+  # this pod on :8080, never directly to the fulfillment API). The fulfillment-api
+  # Service listens on :8000 — :8443 is the host-side kind nodeport for browser
+  # traffic and is NOT a valid in-cluster port, so the backend must use :8000.
+  # The .localhost host is kept so the TLS SNI matches what the ingress-proxy
+  # expects (CoreDNS rewrites *.osac.localhost → the in-cluster Service); TLS
+  # verification is disabled below.
+  FULFILLMENT_API_URL: "https://fulfillment-api.osac.localhost:8000"
+  FULFILLMENT_TLS_INSECURE: "1"
+  OIDC_TLS_INSECURE: "1"
+  OIDC_CLIENT_ID: "osac-ui"
+  OIDC_ISSUER_URL: "https://keycloak.osac.localhost:8443/realms/osac"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: osac-ui
+  namespace: osac
+  labels:
+    app: osac-ui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: osac-ui
+  template:
+    metadata:
+      labels:
+        app: osac-ui
+    spec:
+      containers:
+      - name: osac-ui
+        image: ghcr.io/osac-project/osac-ui:latest
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: osac-ui
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 15
+          periodSeconds: 30
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: osac-ui
+  namespace: osac
+  labels:
+    app: osac-ui
+spec:
+  selector:
+    app: osac-ui
+  ports:
+  - name: http
+    port: 80
+    targetPort: http
+---
+# HTTPRoute for OSAC UI — accessible at http://ui.osac.localhost:8080
+# The HTTP listener on the shared Gateway is created by the osac-infra chart.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: osac-ui
+  namespace: osac
+spec:
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    namespace: envoy-gateway
+    name: default
+    sectionName: http
+  hostnames:
+  - ui.osac.localhost
+  rules:
+  - backendRefs:
+    - name: osac-ui
+      port: 80

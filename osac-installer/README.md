@@ -147,9 +147,77 @@ make install-osac  PLATFORM=openshift PROFILE=<profile> NS=<namespace>   # OSAC 
 | Variable | Description |
 |----------|-------------|
 | `PLATFORM` | `kind` or `openshift` (required) |
-| `PROFILE` | `dev`, `vmaas-ci`, `bmaas-ci`, `caas-ci`, or `full-ci` (required) |
+| `PROFILE` | `dev`, `dev-full`, `vmaas-ci`, `bmaas-ci`, `caas-ci`, or `full-ci` (required; `dev-full` is kind only) |
 | `NS` | Target namespace (required) |
 | `EXTRA_HELM_ARGS` | Extra `--set`/`--set-string` args appended to helm commands |
+
+#### Full local dev environment (`PROFILE=dev-full`, kind only)
+
+`PROFILE=dev` on kind stands up only the control plane (cert-manager,
+envoy-gateway, PostgreSQL, Keycloak, OpenBao, fulfillment-service, operator) —
+the same footprint the integration tests use. `PROFILE=dev-full` is a **superset**:
+it runs that identical chart-based install, then layers on everything needed for
+the end-to-end "create a VM from the UI" experience:
+
+```bash
+make install PLATFORM=kind PROFILE=dev-full NS=osac
+```
+
+On top of `dev`, `dev-full` adds (via `scripts/dev-full/`, orchestrated by the
+`install-devstack` target):
+
+- **Virtualization** — Multus CNI + bridge plugin, KubeVirt (operator + CR, `l2bridge`
+  binding), CDI
+- **AWX** — the open-source AAP backend the operator drives: awx-operator + instance,
+  configured with an inventory, a project (`github.com/osac-project/osac.git`,
+  playbooks under `osac-aap/`), job templates, a Kubernetes credential, and the
+  `awx-token` secret the operator reads
+- **OSAC UI** — deployed directly (the chart's `ui.enabled` uses an OpenShift Route,
+  unusable on kind) and routed through the shared Envoy Gateway
+- **Seeded catalog** — a `fedora` disk image, `u1-small/medium/large` instance types,
+  the `osac.templates.ocp_virt_vm` template, and a `linux-vm` catalog item (shared/global
+  objects; networking is per-tenant and auto-provisioned, see below)
+- **Ready-to-use tenant** — `provision-tenant.sh` creates a DB tenant (`tenant1`) via the
+  private gRPC Tenants API, a matching enabled Keycloak organization, and adds the dev
+  users (`tenant1_user`, `tenant1_admin`) as organization members so their tokens carry
+  the `organization` claim needed to create resources. Creating the tenant auto-provisions
+  its default VirtualNetwork + Subnet + SecurityGroup via tenant onboarding, so those are
+  ready without manual seeding.
+
+The `dev-full` overlay also sets `operator.controllers.networkingProvisioning=false`
+so networking resources reconcile to READY without a real fabric (kind has none).
+
+**Prerequisites** (beyond the base tools) — enforced by `scripts/dev-full/kind-runtime.sh check`:
+
+- A **rootful** container runtime, because KubeVirt chowns `/dev/kvm`:
+  - **Linux host** — rootful podman (invoked via `sudo`) or Docker
+  - **Linux + Distrobox** — the rootful podman host socket (`/run/podman/podman.sock`);
+    install the drop-in at `scripts/dev-full/manifests/podman-socket-rootful.conf`
+  - **macOS** — Docker Desktop (auto-detected)
+- **`/dev/kvm`** present (Linux), **`fs.inotify.max_user_instances >= 256`**, and
+  `kind`, `helm`, `kubectl`, `jq`, `curl`, `openssl`, `python3` on `PATH`
+- Override runtime detection with `KIND_EXPERIMENTAL_PROVIDER=docker|podman`
+
+**Endpoints** (via the kind port mappings; every `*.localhost` name resolves to
+127.0.0.1 automatically, so no `/etc/hosts` editing is needed):
+
+- OSAC UI — `http://ui.osac.localhost:8080`
+- AWX UI — `http://awx.awx.localhost:8080` (admin password:
+  `kubectl -n awx get secret awx-admin-password -o jsonpath='{.data.password}' | base64 -d`)
+- Keycloak — `https://keycloak.osac.localhost:8443`
+- OSAC API — `https://fulfillment-api.osac.localhost:8443` (TLS Passthrough, SNI via Envoy)
+
+**Log in** to the UI as `tenant1_user` (or `tenant1_admin`). The password is the
+Keycloak dev-fixtures `default-user-password`:
+`kubectl -n keycloak get secret keycloak-admin-credentials -o jsonpath='{.data.default-user-password}' | base64 -d`.
+Both users are members of the `tenant1` organization, so they can immediately create
+compute instances on the auto-provisioned default network.
+
+Tear down everything (including the kind cluster, via the same runtime wrapper):
+
+```bash
+make uninstall PLATFORM=kind PROFILE=dev-full NS=osac
+```
 
 #### Configure Values
 

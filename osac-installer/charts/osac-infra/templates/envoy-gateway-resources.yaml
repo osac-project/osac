@@ -76,7 +76,14 @@ spec:
       namespace: envoy-gateway
       sectionName: tls
   hostnames:
-    - keycloak.keycloak.svc.cluster.local
+    # SNI the gateway matches for browser-facing Keycloak. Defaults to the
+    # in-cluster service name (used by PROFILE=dev integration tests via
+    # /etc/hosts); PROFILE=dev-full overrides keycloak.route.hostname to a
+    # browser-resolvable *.localhost name so the OIDC login flow works with no
+    # /etc/hosts editing. In-cluster JWKS fetches bypass the gateway (CoreDNS
+    # rewrites *.localhost straight to the Keycloak service), so a single SNI
+    # here is sufficient. keycloak.route.hostname also drives the cert SAN below.
+    - {{ .Values.keycloak.route.hostname | default "keycloak.keycloak.svc.cluster.local" }}
   rules:
     - backendRefs:
         - name: keycloak

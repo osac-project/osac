@@ -5,13 +5,19 @@
 #
 # Usage:
 # Every deployment target requires PLATFORM, PROFILE, and NS. No exceptions.
-#   make install         PLATFORM=kind|openshift  PROFILE=dev|vmaas-ci|bmaas-ci|caas-ci|full-ci  NS=osac
-#   make uninstall       PLATFORM=kind|openshift  PROFILE=dev|vmaas-ci|bmaas-ci|caas-ci|full-ci  NS=osac
-#   make install-infra   PLATFORM=kind|openshift  PROFILE=dev|vmaas-ci|bmaas-ci|caas-ci|full-ci  NS=osac
-#   make install-osac    PLATFORM=kind|openshift  PROFILE=dev|vmaas-ci|bmaas-ci|caas-ci|full-ci  NS=osac
-#   make uninstall-osac  PLATFORM=kind|openshift  PROFILE=dev|vmaas-ci|bmaas-ci|caas-ci|full-ci  NS=osac
-#   make uninstall-infra PLATFORM=kind|openshift  PROFILE=dev|vmaas-ci|bmaas-ci|caas-ci|full-ci  NS=osac
-#   make test            PLATFORM=kind|openshift  PROFILE=dev|vmaas-ci|bmaas-ci|caas-ci|full-ci  NS=osac  SUITE=all|fulfillment|operator|bmf
+#   make install         PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci  NS=osac
+#   make uninstall       PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci  NS=osac
+#   make install-infra   PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci  NS=osac
+#   make install-osac    PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci  NS=osac
+#   make uninstall-osac  PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci  NS=osac
+#   make uninstall-infra PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci  NS=osac
+#   make test            PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci  NS=osac  SUITE=all|fulfillment|operator|bmf
+#
+# PROFILE=dev-full (kind only) is a superset of dev: it runs the same chart-based
+# control plane, then layers on the full local dev stack (KubeVirt/CDI/Multus, AWX,
+# UI, seeded catalog) via scripts/dev-full/. It needs a rootful container runtime
+# (Linux: rootful podman or Docker; macOS: Docker Desktop) and /dev/kvm on Linux —
+# see scripts/dev-full/kind-runtime.sh and README.md.
 #
 # Helm chart management (no parameters required):
 #   make helm-lint
@@ -26,7 +32,7 @@ EXTRA_HELM_ARGS ?=
 # -- Fail-fast parameter validation ------------------------------------
 # Guards fire at parse time, gated by MAKECMDGOALS so `make help` works.
 
-ALL_TARGETS := install uninstall install-infra uninstall-infra install-osac uninstall-osac test
+ALL_TARGETS := install uninstall install-infra uninstall-infra install-osac uninstall-osac install-devstack test
 
 ifneq ($(filter $(ALL_TARGETS),$(MAKECMDGOALS)),)
 ifndef PLATFORM
@@ -36,17 +42,17 @@ ifeq ($(filter $(PLATFORM),kind openshift),)
 $(error PLATFORM=$(PLATFORM) is invalid; must be kind or openshift)
 endif
 ifndef PROFILE
-$(error PROFILE is required (dev|vmaas-ci|bmaas-ci|caas-ci|full-ci))
+$(error PROFILE is required (dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci))
 endif
-ifeq ($(filter $(PROFILE),dev vmaas-ci bmaas-ci caas-ci full-ci),)
-$(error PROFILE=$(PROFILE) is invalid; must be dev, vmaas-ci, bmaas-ci, caas-ci, or full-ci)
+ifeq ($(filter $(PROFILE),dev dev-full vmaas-ci bmaas-ci caas-ci full-ci),)
+$(error PROFILE=$(PROFILE) is invalid; must be dev, dev-full, vmaas-ci, bmaas-ci, caas-ci, or full-ci)
 endif
 ifndef NS
 $(error NS is required (namespace for OSAC instance, e.g. NS=osac))
 endif
 ifeq ($(PLATFORM),kind)
-ifneq ($(PROFILE),dev)
-$(error PLATFORM=kind only supports PROFILE=dev)
+ifeq ($(filter $(PROFILE),dev dev-full),)
+$(error PLATFORM=kind only supports PROFILE=dev or PROFILE=dev-full)
 endif
 endif
 endif
@@ -69,20 +75,43 @@ INFRA_CHART    := $(CHARTS)/osac-infra
 OSAC_CHART     := $(CHARTS)/osac
 
 # Values file selection: kind uses kind-specific files, OpenShift uses profile files.
+# dev-full reuses the identical dev control-plane values, plus a small overlay that
+# disables AAP-based networking provisioning (no fabric on kind).
+INSTANCE_VALUES_EXTRA :=
+INFRA_VALUES_EXTRA :=
 ifeq ($(PLATFORM),kind)
 INFRA_VALUES    := values/dev/kind-infra.yaml
 INSTANCE_VALUES := values/dev/kind-instance.yaml
+ifeq ($(PROFILE),dev-full)
+INSTANCE_VALUES_EXTRA := -f values/dev/kind-instance-devfull.yaml
+INFRA_VALUES_EXTRA := -f values/dev/kind-infra-devfull.yaml
+endif
 else ifdef PROFILE
 INFRA_VALUES    := values/$(PROFILE)/infra.yaml
 INSTANCE_VALUES := values/$(PROFILE)/instance.yaml
 endif
 
+# Kind cluster create/delete routing. dev-full needs a rootful runtime (KubeVirt
+# chowns /dev/kvm), so it goes through the cross-platform wrapper; plain dev uses
+# bare kind (unchanged integration-test path).
+KIND_RUNTIME := scripts/dev-full/kind-runtime.sh
+
 # Container tool and Kind cluster config.
 CONTAINER_TOOL ?= $(or $(shell command -v podman 2>/dev/null),$(shell command -v docker 2>/dev/null),$(error neither podman nor docker found in PATH))
 KIND_CLUSTER_NAME ?= osac-dev
 KIND_CONFIG := kind-config.yaml
+# dev-full runs its cluster in a separate (rootful) podman daemon; give it a
+# distinct kubeconfig so it never collides with the rootless PROFILE=dev cluster
+# of the same name (both would otherwise share this one file and clobber it).
+ifeq ($(PROFILE),dev-full)
+KIND_KUBECONFIG := $(HOME)/.kube/$(KIND_CLUSTER_NAME)-kind-root.kubeconfig
+else
 KIND_KUBECONFIG := $(HOME)/.kube/$(KIND_CLUSTER_NAME)-kind.kubeconfig
-export KUBECONFIG ?= $(KIND_KUBECONFIG)
+endif
+# Use the caller's KUBECONFIG if they set a non-empty one, otherwise the kind file.
+# `?=` is not enough: a shell that exports KUBECONFIG= (empty-but-defined) would keep
+# it empty and helm/kubectl would fall back to localhost:8080. `$(or ...)` skips empty.
+export KUBECONFIG := $(or $(KUBECONFIG),$(KIND_KUBECONFIG))
 
 define kind-load-image
 	@if [ "$$(basename $(CONTAINER_TOOL))" = "podman" ]; then \
@@ -106,6 +135,10 @@ help: ## Display this help
 .PHONY: install-infra
 install-infra: ## Install infrastructure (PLATFORM= PROFILE= NS= required)
 ifeq ($(PLATFORM),kind)
+ifeq ($(PROFILE),dev-full)
+	@$(KIND_RUNTIME) check
+	@$(KIND_RUNTIME) create-cluster $(KIND_CLUSTER_NAME) $(KIND_CONFIG) $(KIND_KUBECONFIG)
+else
 	@if kind get clusters | grep -q "^$(KIND_CLUSTER_NAME)$$"; then \
 		echo "Kind cluster '$(KIND_CLUSTER_NAME)' already exists"; \
 	else \
@@ -113,6 +146,7 @@ ifeq ($(PLATFORM),kind)
 		kind create cluster --name $(KIND_CLUSTER_NAME) --config $(KIND_CONFIG) --wait 60s; \
 	fi
 	@kind export kubeconfig --name $(KIND_CLUSTER_NAME) --kubeconfig $(KIND_KUBECONFIG)
+endif
 	helm upgrade --install cert-manager oci://quay.io/jetstack/charts/cert-manager \
 		--version v1.20.0 --namespace cert-manager --create-namespace \
 		--set crds.enabled=true --wait --timeout 5m
@@ -127,7 +161,7 @@ ifeq ($(PLATFORM),kind)
 		--wait --timeout 5m
 	helm upgrade --install osac-infra $(INFRA_CHART) \
 		--namespace osac-infra --create-namespace \
-		-f $(INFRA_VALUES) \
+		-f $(INFRA_VALUES) $(INFRA_VALUES_EXTRA) \
 		--set osacNamespace=$(NS) \
 		--wait-for-jobs --timeout 30m
 	@for f in ../osac-operator/config/crd/fakes/*.yaml; do \
@@ -163,12 +197,16 @@ endif
 .PHONY: uninstall-infra
 uninstall-infra: ## Uninstall infrastructure (PLATFORM= PROFILE= NS= required)
 ifeq ($(PLATFORM),kind)
+ifeq ($(PROFILE),dev-full)
+	@$(KIND_RUNTIME) delete-cluster $(KIND_CLUSTER_NAME)
+else
 	helm uninstall osac-infra --namespace osac-infra --ignore-not-found
 	helm uninstall strimzi-cluster-operator --namespace osac-kafka --ignore-not-found
 	helm uninstall envoy-gateway --namespace envoy-gateway --ignore-not-found
 	helm uninstall trust-manager --namespace cert-manager --ignore-not-found
 	helm uninstall cert-manager --namespace cert-manager --ignore-not-found
 	kind delete cluster --name $(KIND_CLUSTER_NAME)
+endif
 else
 	helm uninstall osac-infra --namespace osac-infra --ignore-not-found --wait --timeout 10m
 	helm uninstall osac-deps --namespace osac-deps --ignore-not-found
@@ -196,7 +234,7 @@ ifneq ($(PLATFORM),kind)
 	@[ -n "$(DOMAIN)" ] || { echo "ERROR: Could not determine cluster domain. Is oc logged in?" >&2; exit 1; }
 endif
 	helm upgrade --install osac $(OSAC_CHART) \
-		-f $(INSTANCE_VALUES) \
+		-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
 		--namespace $(NS) --create-namespace \
 		$(if $(DOMAIN),--set service.externalHostname=fulfillment-api-$(NS).$(DOMAIN) --set service.internalHostname=fulfillment-internal-api-$(NS).$(DOMAIN) --set service.auth.issuerUrl=https://keycloak-keycloak.$(DOMAIN)/realms/osac --set service.idp.url=https://keycloak-keycloak.$(DOMAIN)) \
 		$(EXTRA_HELM_ARGS) \
@@ -206,10 +244,30 @@ endif
 uninstall-osac: ## Uninstall OSAC instance (PLATFORM= PROFILE= NS= required)
 	helm uninstall osac --namespace $(NS) --ignore-not-found
 
+##@ Entity: Dev Stack (kind PROFILE=dev-full only)
+
+.PHONY: install-devstack
+install-devstack: ## Install dev-full extras: KubeVirt/CDI/Multus + AWX + UI + seeded catalog
+ifneq ($(PLATFORM)/$(PROFILE),kind/dev-full)
+	@echo "ERROR: install-devstack requires PLATFORM=kind PROFILE=dev-full" >&2; exit 1
+endif
+	# Pre-install: node-level CNI setup (requires host container runtime access)
+	scripts/dev-full/install-virt-node-setup.sh $(KIND_CLUSTER_NAME)
+	# Helm install: operators + AWX + UI + seeding
+	helm upgrade --install osac-devstack charts/osac-devstack \
+		--namespace $(NS) --create-namespace \
+		--set osacNamespace=$(NS) \
+		--set kindClusterName=$(KIND_CLUSTER_NAME) \
+		--wait --timeout 30m
+
 ##@ Composite
 
 .PHONY: install
+ifeq ($(PROFILE),dev-full)
+install: install-infra install-osac install-devstack ## Full install: infra + osac (+ dev stack for dev-full)
+else
 install: install-infra install-osac ## Full install: infra + osac (PLATFORM= PROFILE= required)
+endif
 
 .PHONY: uninstall
 uninstall: uninstall-osac uninstall-infra ## Full uninstall: osac + infra (PLATFORM= PROFILE= required)

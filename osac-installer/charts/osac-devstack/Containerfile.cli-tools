@@ -1,0 +1,30 @@
+# Multi-arch CLI tools image for dev-full hook Jobs
+# Supports amd64, arm64, ppc64le, s390x
+#
+# Build and push:
+#   podman build --platform linux/amd64,linux/arm64 -t ghcr.io/osac-project/cli-tools:latest -f Containerfile.cli-tools .
+#   podman push ghcr.io/osac-project/cli-tools:latest
+
+FROM registry.k8s.io/kubectl:v1.32.1
+
+# Install required tools for dev-full hooks
+RUN apt-get update && apt-get install -y \
+    curl \
+    jq \
+    python3 \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install grpcurl (multi-arch)
+ARG TARGETARCH
+RUN curl -sL "https://github.com/fullstorydev/grpcurl/releases/download/v1.9.1/grpcurl_1.9.1_linux_${TARGETARCH}.tar.gz" \
+    | tar -xz -C /usr/local/bin grpcurl
+
+# Verify installations
+RUN kubectl version --client && \
+    curl --version && \
+    jq --version && \
+    python3 --version && \
+    grpcurl --version
+
+ENTRYPOINT ["/bin/bash"]

@@ -1054,18 +1054,19 @@
       "clientId": "osac-ui",
       "name": "OSAC UI",
       "description": "OSAC web console",
-      "rootUrl": "",
+      "rootUrl": "http://ui.osac.localhost:8080",
       "adminUrl": "",
-      "baseUrl": "",
+      "baseUrl": "/",
       "surrogateAuthRequired": false,
       "enabled": true,
       "alwaysDisplayInConsole": false,
       "clientAuthenticatorType": "client-secret",
       "redirectUris": [
-        "/*"
+        "http://ui.osac.localhost:8080/callback",
+        "http://ui.osac.localhost:8080/*"
       ],
       "webOrigins": [
-        "+"
+        "http://ui.osac.localhost:8080"
       ],
       "notBefore": 0,
       "bearerOnly": false,

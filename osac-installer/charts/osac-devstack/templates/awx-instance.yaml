@@ -1,0 +1,64 @@
+{{- if .Values.awx.enabled }}
+---
+apiVersion: awx.ansible.com/v1beta1
+kind: AWX
+metadata:
+  name: {{ .Values.awx.instance.name }}
+  namespace: {{ .Values.osacNamespace }}
+  labels:
+    {{- include "osac-devstack.labels" . | nindent 4 }}
+spec:
+  service_type: {{ .Values.awx.instance.serviceType }}
+  postgres_storage_class: {{ .Values.awx.instance.postgresStorageClass }}
+  projects_persistence: {{ .Values.awx.instance.projectsPersistence }}
+  postgres_resource_requirements:
+    requests:
+      cpu: {{ .Values.awx.instance.resources.postgres.requests.cpu | quote }}
+      memory: {{ .Values.awx.instance.resources.postgres.requests.memory | quote }}
+    limits:
+      cpu: {{ .Values.awx.instance.resources.postgres.limits.cpu | quote }}
+      memory: {{ .Values.awx.instance.resources.postgres.limits.memory | quote }}
+  web_resource_requirements:
+    requests:
+      cpu: {{ .Values.awx.instance.resources.web.requests.cpu | quote }}
+      memory: {{ .Values.awx.instance.resources.web.requests.memory | quote }}
+    limits:
+      cpu: {{ .Values.awx.instance.resources.web.limits.cpu | quote }}
+      memory: {{ .Values.awx.instance.resources.web.limits.memory | quote }}
+  task_resource_requirements:
+    requests:
+      cpu: {{ .Values.awx.instance.resources.task.requests.cpu | quote }}
+      memory: {{ .Values.awx.instance.resources.task.requests.memory | quote }}
+    limits:
+      cpu: {{ .Values.awx.instance.resources.task.limits.cpu | quote }}
+      memory: {{ .Values.awx.instance.resources.task.limits.memory | quote }}
+  ee_resource_requirements:
+    requests:
+      cpu: {{ .Values.awx.instance.resources.ee.requests.cpu | quote }}
+      memory: {{ .Values.awx.instance.resources.ee.requests.memory | quote }}
+    limits:
+      cpu: {{ .Values.awx.instance.resources.ee.limits.cpu | quote }}
+      memory: {{ .Values.awx.instance.resources.ee.limits.memory | quote }}
+---
+# HTTPRoute for AWX web UI
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: awx-external
+  namespace: {{ .Values.osacNamespace }}
+  labels:
+    {{- include "osac-devstack.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    namespace: envoy-gateway
+    name: default
+    sectionName: http
+  hostnames:
+  - awx.awx.localhost
+  rules:
+  - backendRefs:
+    - name: awx-service
+      port: 80
+{{- end }}

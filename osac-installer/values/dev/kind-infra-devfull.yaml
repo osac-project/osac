@@ -1,0 +1,26 @@
+# Kind dev-full overlay -- layered on top of kind-infra.yaml (PROFILE=dev-full).
+#
+# dev-full exercises the browser-driven OIDC login flow, so Keycloak must be
+# reachable from the host at a name that resolves without /etc/hosts. Setting the
+# hostname to keycloak.osac.localhost makes:
+#   - the Keycloak TLS cert SAN + the gateway TLSRoute SNI use keycloak.osac.localhost
+#     (so a browser hitting https://keycloak.osac.localhost:8443 matches a route), and
+#   - Keycloak issue tokens with iss=https://keycloak.osac.localhost:8443/realms/osac,
+#     matching service.auth.issuerUrl in kind-instance-devfull.yaml.
+# In-cluster, the CoreDNS localhostRewrite (kind-infra.yaml: coredns.localhostRewrite)
+# already maps keycloak.osac.localhost → keycloak.keycloak.svc.cluster.local, so
+# fulfillment-service still reaches Keycloak's JWKS endpoint directly.
+#
+# The plain `dev`/IT profile keeps keycloak.keycloak.svc.cluster.local (kind-infra.yaml).
+keycloak:
+  # KC_HOSTNAME / OIDC issuer (full URL with scheme + port).
+  hostname: "https://keycloak.osac.localhost:8443"
+  route:
+    # Bare hostname (no scheme/port). Drives BOTH the keycloak-tls cert SAN
+    # (charts/osac-infra keycloak Certificate) and the gateway TLSRoute SNI
+    # (charts/osac-infra envoy-gateway-resources.yaml). Browsers reach Keycloak
+    # at https://keycloak.osac.localhost:8443 and validate the presented cert
+    # against this SAN; in-cluster JWKS fetches also validate it (CoreDNS
+    # rewrites the name to the Keycloak service). The plain dev/IT profile leaves
+    # this empty, so the chart falls back to keycloak.keycloak.svc.cluster.local.
+    hostname: "keycloak.osac.localhost"

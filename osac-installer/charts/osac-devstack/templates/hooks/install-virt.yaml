@@ -1,0 +1,95 @@
+{{- if .Values.virt.enabled }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "osac-devstack.fullname" . }}-install-virt
+  namespace: {{ .Values.osacNamespace }}
+  labels:
+    {{- include "osac-devstack.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  template:
+    metadata:
+      labels:
+        {{- include "osac-devstack.selectorLabels" . | nindent 8 }}
+        job: install-virt
+    spec:
+      serviceAccountName: {{ include "osac-devstack.serviceAccountName" . }}
+      restartPolicy: OnFailure
+      containers:
+      - name: install-multus
+        image: {{ .Values.cliImage }}
+        command: ["/bin/bash", "-c"]
+        args:
+          - |
+            set -euo pipefail
+            echo "Installing Multus CNI..."
+            kubectl apply -f https://raw.githubusercontent.com/k8snetworkplumbingwg/multus-cni/{{ .Values.virt.multusVersion }}/deployments/multus-daemonset.yml
+            kubectl -n kube-system wait --for=condition=Ready pods -l app=multus --timeout=120s || true
+            echo "Multus installed"
+      - name: install-kubevirt
+        image: {{ .Values.cliImage }}
+        command: ["/bin/bash", "-c"]
+        args:
+          - |
+            set -euo pipefail
+            echo "Installing KubeVirt..."
+
+            # Delete conflicting CRDs created by osac-infra fake CRDs
+            kubectl delete crd virtualmachines.kubevirt.io virtualmachineinstances.kubevirt.io 2>/dev/null || true
+
+            # Determine version
+            {{- if .Values.virt.kubevirtVersion }}
+            version="{{ .Values.virt.kubevirtVersion }}"
+            {{- else }}
+            version=$(curl -s https://storage.googleapis.com/kubevirt-prow/release/kubevirt/kubevirt/stable.txt)
+            {{- end }}
+
+            echo "KubeVirt version: $version"
+
+            # Install operator
+            kubectl apply -f "https://github.com/kubevirt/kubevirt/releases/download/${version}/kubevirt-operator.yaml"
+            kubectl wait --for=condition=available --timeout=120s -n kubevirt deployments -l kubevirt.io || true
+
+            # Create KubeVirt CR
+            kubectl apply -f "https://github.com/kubevirt/kubevirt/releases/download/${version}/kubevirt-cr.yaml"
+            kubectl -n kubevirt wait kv kubevirt --for condition=Available --timeout=300s || true
+
+            # Register l2bridge network binding plugin
+            kubectl patch kubevirts -n kubevirt kubevirt --type=merge \
+              -p='{"spec":{"configuration":{"network":{"binding":{"l2bridge":{"domainAttachmentType":"managedTap"}}}}}}'
+
+            echo "KubeVirt installed"
+      - name: install-cdi
+        image: {{ .Values.cliImage }}
+        command: ["/bin/bash", "-c"]
+        args:
+          - |
+            set -euo pipefail
+            echo "Installing CDI (Containerized Data Importer)..."
+
+            # Determine version
+            {{- if .Values.virt.cdiVersion }}
+            version="{{ .Values.virt.cdiVersion }}"
+            {{- else }}
+            version=$(basename "$(curl -fsSL -o /dev/null -w '%{url_effective}' \
+              https://github.com/kubevirt/containerized-data-importer/releases/latest)")
+            {{- end }}
+
+            echo "CDI version: $version"
+
+            # Install operator
+            kubectl apply -f "https://github.com/kubevirt/containerized-data-importer/releases/download/${version}/cdi-operator.yaml"
+            kubectl apply -f "https://github.com/kubevirt/containerized-data-importer/releases/download/${version}/cdi-cr.yaml"
+            kubectl wait --for=condition=available --timeout=120s -n cdi deployments -l cdi.kubevirt.io || true
+
+            # Patch feature gates to drop HonorWaitForFirstConsumer
+            kubectl patch cdi cdi --type=json \
+              -p '[{"op":"replace","path":"/spec/config/featureGates","value":["WebhookPvcRendering"]}]' || true
+
+            echo "CDI installed"
+{{- end }}

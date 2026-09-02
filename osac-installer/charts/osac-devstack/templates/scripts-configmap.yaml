@@ -1,0 +1,17 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "osac-devstack.fullname" . }}-scripts
+  namespace: {{ .Values.osacNamespace }}
+  labels:
+    {{- include "osac-devstack.labels" . | nindent 4 }}
+data:
+  install-virt.sh: |
+{{ .Files.Get "files/install-virt.sh" | indent 4 }}
+  configure-awx.sh: |
+{{ .Files.Get "files/configure-awx.sh" | indent 4 }}
+  seed-catalog-simple.sh: |
+{{ .Files.Get "files/seed-catalog-simple.sh" | indent 4 }}
+  provision-tenant.sh: |
+{{ .Files.Get "files/provision-tenant.sh" | indent 4 }}

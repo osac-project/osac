@@ -1,0 +1,65 @@
+OSAC dev-full development stack has been installed.
+
+Components deployed:
+  - KubeVirt + CDI + Multus (virtualization stack)
+  - AWX (provisioning backend)
+  - OSAC UI (web console)
+  - Seeded catalog (disk images, templates, instance types)
+  - Tenant: {{ .Values.tenant.name }}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🌐 WEB UI ACCESS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+OSAC UI:     http://ui.osac.localhost:8080
+AWX Web UI:  http://awx.awx.localhost:8080
+
+Login credentials:
+  Username: {{ .Values.tenant.users | replace "," " or " }}
+  Password: (run this command)
+    kubectl -n {{ .Values.tenant.keycloak.namespace }} get secret keycloak-admin-credentials \
+      -o jsonpath='{.data.default-user-password}' | base64 -d && echo
+
+Next steps:
+  1. Open http://ui.osac.localhost:8080
+  2. Click "Sign in" → authenticate via Keycloak
+  3. Browse the catalog and create a virtual machine
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔧 CLI ACCESS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Extract the CA bundle:
+   kubectl -n {{ .Values.osacNamespace }} get configmap ca-bundle \
+     -o jsonpath='{.data.ca-bundle\.crt}' > /tmp/osac-ca-bundle.pem
+
+2. Get the admin client secret:
+   OSAC_ADMIN_SECRET=$(kubectl -n {{ .Values.tenant.keycloak.namespace }} get secret keycloak-clients \
+     -o jsonpath='{.data.osac-admin}' | base64 -d)
+
+3. Login with the osac CLI:
+   osac login --ca-file /tmp/osac-ca-bundle.pem \
+     --flow credentials \
+     --client-id osac-admin \
+     --client-secret "${OSAC_ADMIN_SECRET}" \
+     --private \
+     https://fulfillment-api.osac.localhost:8443
+
+4. Verify access:
+   osac get clusters
+   osac get compute-instances
+
+For more CLI commands, see: osac --help
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📊 STATUS CHECKS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Check component status:
+  kubectl -n {{ .Values.osacNamespace }} get pods        # OSAC + UI + AWX
+  kubectl -n kubevirt get kubevirt                       # KubeVirt
+
+Check seeded resources:
+  osac get disk-images
+  osac get instance-types
+  osac get catalog-items

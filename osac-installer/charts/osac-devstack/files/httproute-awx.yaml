@@ -1,0 +1,21 @@
+# HTTPRoute for the AWX web UI — accessible at http://awx.awx.localhost:8080
+# The HTTP listener on the shared Gateway is created by the osac-infra chart
+# (envoy-gateway-resources.yaml); dev-full only needs to route to AWX.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: awx-external
+  namespace: awx
+spec:
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    namespace: envoy-gateway
+    name: default
+    sectionName: http
+  hostnames:
+  - awx.awx.localhost
+  rules:
+  - backendRefs:
+    - name: awx-service
+      port: 80

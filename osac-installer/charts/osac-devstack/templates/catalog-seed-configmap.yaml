@@ -1,0 +1,13 @@
+{{- if .Values.catalog.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "osac-devstack.fullname" . }}-catalog-seed
+  namespace: {{ .Values.osacNamespace }}
+  labels:
+    {{- include "osac-devstack.labels" . | nindent 4 }}
+data:
+  catalog-seed.yaml: |
+{{ .Files.Get "files/catalog-seed.yaml" | indent 4 }}
+{{- end }}

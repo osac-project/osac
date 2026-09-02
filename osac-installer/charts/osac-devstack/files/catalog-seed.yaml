@@ -1,0 +1,37 @@
+# Catalog seed data for dev-full
+# These resources are created via the private gRPC API by the seed-catalog Job
+
+diskImages:
+  - name: fedora
+    sourceType: SOURCE_TYPE_REGISTRY
+    sourceRef: quay.io/containerdisks/fedora:latest
+
+instanceTypes:
+  - name: u1-small
+    cores: 2
+    memoryGib: 4
+    description: "2 cores, 4 GiB RAM"
+  - name: u1-medium
+    cores: 4
+    memoryGib: 8
+    description: "4 cores, 8 GiB RAM"
+  - name: u1-large
+    cores: 8
+    memoryGib: 16
+    description: "8 cores, 16 GiB RAM"
+
+templates:
+  - id: osac.templates.ocp_virt_vm
+    title: "Virtual Machine Template (Linux and Windows)"
+    description: "KubeVirt-based VM template with configurable resources"
+    specDefaults:
+      bootDisk:
+        sizeGib: 10
+      runStrategy: Always
+
+catalogItems:
+  - name: linux-vm
+    title: "Linux Virtual Machine"
+    description: "Fedora-based VM with KVM acceleration"
+    templateId: osac.templates.ocp_virt_vm
+    published: true

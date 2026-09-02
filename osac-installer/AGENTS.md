@@ -47,6 +47,11 @@ make uninstall PLATFORM=openshift PROFILE=<profile> NS=<namespace>
 
 # Integration tests (Kind)
 make test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment
+
+# Full local dev environment on Kind (superset of dev: KubeVirt + AWX + UI +
+# seeded catalog). Needs a rootful runtime + /dev/kvm — see README.md and
+# scripts/dev-full/. Adds the install-devstack phase after infra + osac.
+make install PLATFORM=kind PROFILE=dev-full NS=osac
 ```
 
 ## Critical Rules
@@ -128,11 +133,22 @@ Phase 3: charts/osac/                   # OSAC platform (per-instance workload)
 ```text
 values/
   dev/infra.yaml + instance.yaml       # Local dev (Kind + OpenShift)
+  dev/kind-infra.yaml + kind-instance.yaml       # Kind control plane (PROFILE=dev, dev-full)
+  dev/kind-instance-devfull.yaml                 # PROFILE=dev-full overlay (noop networking provisioning)
   vmaas-ci/infra.yaml + instance.yaml  # VMaaS CI
   caas-ci/infra.yaml + instance.yaml   # CaaS CI
   bmaas-ci/infra.yaml + instance.yaml  # BMaaS CI
   full-ci/infra.yaml + instance.yaml   # Full CI (all components)
 ```
+
+`PROFILE=dev-full` (kind only) reuses the `dev` kind control-plane values and adds
+the `kind-instance-devfull.yaml` overlay; the extra dev stack (KubeVirt, AWX, UI,
+seeded catalog, and a ready-to-use `tenant1`) is installed imperatively by
+`scripts/dev-full/` (the `install-devstack` phase), not by the charts. The final
+step, `provision-tenant.sh`, creates the DB tenant via the gRPC-only Tenants API
+(creating it auto-provisions the tenant's default network via tenant onboarding),
+creates the matching Keycloak organization, and adds `tenant1_user`/`tenant1_admin`
+as members so they can log in and manage resources. See README.md.
 
 Pull secrets and AAP license files are stored alongside values files (e.g.,
 `values/<profile>/pull-secret.json`, `values/<profile>/license.zip`).

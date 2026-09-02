@@ -57,7 +57,7 @@ spec:
         - name: KC_REALM
           value: {{ .Values.tenant.keycloak.realm | quote }}
         - name: GRPCURL_IMAGE
-          value: {{ .Values.cliImage | quote }}
+          value: "docker.io/fullstorydev/grpcurl:latest"
         volumeMounts:
         - name: scripts
           mountPath: /scripts

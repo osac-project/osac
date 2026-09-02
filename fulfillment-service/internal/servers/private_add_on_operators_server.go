@@ -16,6 +16,7 @@ package servers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"strconv"
@@ -102,7 +103,13 @@ func (b *PrivateAddOnOperatorsServerBuilder) Build() (result *PrivateAddOnOperat
 
 	defaultPublished := b.defaultPublished
 	if !defaultPublished {
-		defaultPublished, _ = strconv.ParseBool(os.Getenv("ADDON_OPERATOR_DEFAULT_PUBLISHED"))
+		if raw := os.Getenv("ADDON_OPERATOR_DEFAULT_PUBLISHED"); raw != "" {
+			defaultPublished, err = strconv.ParseBool(raw)
+			if err != nil {
+				err = fmt.Errorf("invalid ADDON_OPERATOR_DEFAULT_PUBLISHED value %q: %w", raw, err)
+				return
+			}
+		}
 	}
 
 	generic, err := NewGenericServer[*privatev1.AddOnOperator]().

@@ -24,21 +24,29 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "${SCRIPT_DIR}/../.." && pwd)
 WRAPPER="${REPO_ROOT}/tools/link-agent-skills.sh"
 
-# OSAC-native skills fanned out by osac-ai-skills (kept in sync with
-# link-agent-skills-consumer-smoke.sh's inventory).
+# OSAC-native skills fanned out by osac-ai-skills. Used ONLY by the stub-fixture
+# fallback (no bootstrap present); the primary bootstrapped path mirrors the real
+# vendored skills/ tree and lets link-agent-skills.sh --verify be authoritative.
+# Kept aligned with the real vendored inventory (currently 24 skills).
 OSAC_SKILL_NAMES=(
   browser-demo-recording capture-tasks-from-meeting-notes create-pr
   design-review generate-status-report github-actions-workflows jira-task-management
   milestone-scope osac-cluster osac-demo-recording osac-feature osac-release
-  performance-review prd-review presentation quick-fix report-bug review-gate
-  security-review
+  performance-review ponytail-review prd-review pre-pr-review presentation
+  quick-fix release-plan report-bug review-gate security-review test-plan-review
+  test-plan-score
 )
 # ai-workflow skills linked under skills/ via --with-ai-workflows.
 WORKFLOW_SKILL_NAMES=(bugfix design e2e implement prd)
 
+SKIP_COUNT=0
+SKIPPED_CHECKS=()
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "PASS: $*"; }
-skip() { echo "SKIP: $*"; }
+# A skip means a required check (A1 precondition, or the A2/A3 OSAC-4005
+# resolution paths) could not run — record it so the final summary cannot
+# report an unqualified pass with the load-bearing checks unexercised.
+skip() { echo "SKIP: $*"; SKIP_COUNT=$((SKIP_COUNT + 1)); SKIPPED_CHECKS+=("$*"); }
 
 [[ -f "$WRAPPER" ]] || fail "missing $WRAPPER"
 [[ -x "$WRAPPER" ]] || fail "$WRAPPER is not executable"
@@ -216,9 +224,11 @@ seed_standalone_clone() {
   echo "$backing"
 }
 
-# The create-pr / osac-release resolution snippet, verbatim from
-# skills/create-pr/references/resolve-remotes.md, run against $REPO_DIR.
-# Prints the resolved vendor dir on success.
+# The resolve-remotes resolution snippet run against $REPO_DIR. The dual-path
+# candidate loop is verbatim from skills/create-pr/references/resolve-remotes.md;
+# osac-release ships an equivalent WORKSPACE_ROOT variant (steps/preflight.md)
+# that resolves to the same repo-local vendor. Prints the resolved vendor dir on
+# success.
 run_resolve_remotes_snippet() {
   local REPO_DIR="$1"
   OSAC_AI_SKILLS_DIR=""
@@ -236,8 +246,8 @@ run_resolve_remotes_snippet() {
   echo "$OSAC_AI_SKILLS_DIR"
 }
 
-# The jira-task-management resolution snippet, verbatim from
-# skills/jira-task-management/references/resolve-jira-safe-create.md.
+# The jira-task-management resolution snippet — the dual-path candidate loop
+# verbatim from skills/jira-task-management/references/resolve-jira-safe-create.md.
 # Sources jira-safe-create.sh and confirms it defined its functions.
 run_jira_safe_create_snippet() {
   local REPO_DIR="$1"
@@ -354,4 +364,12 @@ test_standalone_jira_safe_create_resolution
 test_all_harness_discovery_parity
 test_verify_passes_in_standalone_clone
 
+if [[ "$SKIP_COUNT" -gt 0 ]]; then
+  echo
+  echo "All executed skill parity smoke tests passed, but ${SKIP_COUNT} required check(s) were SKIPPED —"
+  echo "this run is NOT a valid parity attestation:"
+  for _s in "${SKIPPED_CHECKS[@]}"; do echo "  - ${_s}"; done
+  echo "Run tools/bootstrap.sh so the OSAC-4005 resolution checks execute, then re-run."
+  exit 1
+fi
 echo "All skill parity smoke tests passed."

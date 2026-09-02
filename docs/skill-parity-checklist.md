@@ -51,8 +51,12 @@ Run the parity smoke test from the repo root:
 bash tools/test/skill-parity-smoke.sh
 ```
 
-It must end with `All skill parity smoke tests passed.` It asserts, on an
-isolated standalone-clone fixture (empty `HOME`, no `osac-workspace` sibling):
+It must end with `All skill parity smoke tests passed.` If the required checks
+(A1–A3) cannot run — e.g. run before `tools/bootstrap.sh` has vendored
+`.osac-ai-skills` — the script reports them as `SKIP`, exits non-zero, and the
+run is **not** a valid parity attestation: bootstrap first, then re-run. It
+asserts, on an isolated standalone-clone fixture (empty `HOME`, no
+`osac-workspace` sibling):
 
 | # | Check | Contract |
 |---|-------|----------|

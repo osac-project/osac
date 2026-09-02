@@ -68,7 +68,10 @@ conventional GitHub layout on **writeable siblings only** (`origin` = you,
 `upstream` = osac-project). Pick a name and stick with it; re-running with a
 different name mutates sibling remotes. This osac checkout, `osac-ux`, and
 vendor clones are never renamed — skills keep resolving remotes by URL.
-`--no-fork` skips forking even if `--fork-name` is also passed. Never forked:
+`--no-fork` skips forking even if `--fork-name` is also passed. A later
+`--no-fork` after `--fork-name origin` does not rewrite remotes back and
+skips updates on siblings whose `origin` is already the fork (no `gh`).
+Never forked:
 `osac-ux`, `.osac-ai-skills`, `.ai-workflows`. Pass `--no-fork` for
 read-only or CI clones (requires no `gh`). Default path requires
 authenticated `gh`. The GitHub fork of [osac-project/docs](https://github.com/osac-project/docs)

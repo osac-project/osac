@@ -49,7 +49,9 @@ to your GitHub account, and links Claude Code / Cursor / Gemini CLI skill
 discovery. Requires an authenticated `gh` session unless you pass `--no-fork`.
 `--fork-name origin` sets writeable sibling remotes to `origin` = your fork and
 `upstream` = osac-project; it does not change this checkout or skill vendor
-remotes. The GitHub fork of `osac-project/docs` is `osac-docs`. This
+remotes. `--no-fork` wins over `--fork-name`. After `--fork-name origin`, a
+later `--no-fork` run skips updates on those origin-as-fork siblings rather
+than calling `gh`. The GitHub fork of `osac-project/docs` is `osac-docs`. This
 repo is the project root. A nested `osac-workspace/osac/` checkout aborts;
 use a standalone clone or worktree instead.
 

@@ -50,11 +50,14 @@ is named osac-docs (override extra mappings in tools/fork-overrides.sh).
 
 osac-ux is a reference clone (no fork). Vendor checkouts (.osac-ai-skills,
 .ai-workflows) are never forked. --no-fork skips forking even when
---fork-name is also passed.
+--fork-name is also passed. After --fork-name origin, a later --no-fork
+run does not rewrite remotes and skips updates on those origin-as-fork
+siblings (no gh).
 
 Options:
   --no-fork          Clone siblings from osac-project without forking.
                      Useful for read-only access or CI environments.
+                     Does not update siblings already using --fork-name origin.
   --fork-name NAME   Name for the writeable-sibling push remote (default: fork).
   --help             Show this help message.
 

@@ -105,7 +105,8 @@ var _ = Describe("Public volumes", func() {
 		response, err := privateClient.Create(ctx, privatev1.VolumesCreateRequest_builder{
 			Object: privatev1.Volume_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name: name,
+					Name:   name,
+					Tenant: "default",
 				}.Build(),
 				Spec: privatev1.VolumeSpec_builder{
 					StorageTier: storageTierName,

@@ -26,6 +26,7 @@ import (
 	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/events"
+	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 )
 
 type ComputeInstancesServerBuilder struct {
@@ -34,6 +35,7 @@ type ComputeInstancesServerBuilder struct {
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
+	secretStore       vault.SecretStore
 }
 
 var _ publicv1.ComputeInstancesServer = (*ComputeInstancesServer)(nil)
@@ -82,6 +84,11 @@ func (b *ComputeInstancesServerBuilder) SetMetricsRegisterer(value prometheus.Re
 	return b
 }
 
+func (b *ComputeInstancesServerBuilder) SetSecretStore(value vault.SecretStore) *ComputeInstancesServerBuilder {
+	b.secretStore = value
+	return b
+}
+
 func (b *ComputeInstancesServerBuilder) Build() (result *ComputeInstancesServer, err error) {
 	// Check parameters:
 	if b.logger == nil {
@@ -116,6 +123,7 @@ func (b *ComputeInstancesServerBuilder) Build() (result *ComputeInstancesServer,
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetSecretStore(b.secretStore).
 		SetFilterDesc((*publicv1.ComputeInstance)(nil).ProtoReflect().Descriptor()).
 		Build()
 	if err != nil {

@@ -1064,6 +1064,42 @@ var _ = Describe("ensureUserDataSecret", func() {
 		Expect(ownerRefs[0].Kind).To(Equal("BareMetalInstance"))
 	})
 
+	It("should create a Secret from a referenced OSAC Secret", func() {
+		ctrl := gomock.NewController(GinkgoT())
+		secretsClient := NewMockSecretsClient(ctrl)
+		secretsClient.EXPECT().Get(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, request *privatev1.SecretsGetRequest, _ ...grpc.CallOption) (*privatev1.SecretsGetResponse, error) {
+				Expect(request.GetId()).To(Equal("source-secret-id"))
+				return privatev1.SecretsGetResponse_builder{Object: privatev1.Secret_builder{
+					Data: map[string][]byte{userDataSecretKey: []byte("referenced-data")},
+				}.Build()}.Build(), nil
+			},
+		)
+		fakeClient := fake.NewClientBuilder().WithScheme(newFakeScheme()).Build()
+		t := &task{
+			r: &function{logger: logger, secretsClient: secretsClient},
+			bareMetalInstance: privatev1.BareMetalInstance_builder{Id: bmiID, Spec: privatev1.BareMetalInstanceSpec_builder{
+				UserDataSecret: privatev1.SecretLocalReference_builder{Id: "source-secret-id"}.Build(),
+			}.Build()}.Build(),
+			hubNamespace: hubNamespace, hubClient: fakeClient, userDataSecretName: bmiID + userDataSecretSuffix,
+		}
+		Expect(t.ensureUserDataSecret(ctx, owner)).To(Succeed())
+		secret := &corev1.Secret{}
+		Expect(fakeClient.Get(ctx, clnt.ObjectKey{Namespace: hubNamespace, Name: bmiID + userDataSecretSuffix}, secret)).To(Succeed())
+		Expect(secret.StringData[userDataSecretKey]).To(Equal("referenced-data"))
+	})
+
+	It("should propagate referenced OSAC Secret fetch errors", func() {
+		ctrl := gomock.NewController(GinkgoT())
+		secretsClient := NewMockSecretsClient(ctrl)
+		secretsClient.EXPECT().Get(gomock.Any(), gomock.Any()).Return(nil, errors.New("fetch failed"))
+		t := &task{r: &function{logger: logger, secretsClient: secretsClient},
+			bareMetalInstance: privatev1.BareMetalInstance_builder{Spec: privatev1.BareMetalInstanceSpec_builder{
+				UserDataSecret: privatev1.SecretLocalReference_builder{Id: "source-secret-id"}.Build(),
+			}.Build()}.Build(), userDataSecretName: bmiID + userDataSecretSuffix}
+		Expect(t.ensureUserDataSecret(ctx, owner)).To(MatchError(ContainSubstring("fetch failed")))
+	})
+
 	It("should be idempotent when Secret already exists", func() {
 		existingSecret := &unstructured.Unstructured{}
 		existingSecret.SetGroupVersionKind(gvks.Secret)

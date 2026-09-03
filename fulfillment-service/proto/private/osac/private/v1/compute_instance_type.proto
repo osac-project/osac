@@ -28,6 +28,7 @@ import "osac/private/v1/disk_image_type.proto";
 import "osac/private/v1/metadata_type.proto";
 import "osac/private/v1/instance_type_type.proto";
 import "osac/private/v1/security_group_type.proto";
+import "osac/private/v1/secret_type.proto";
 import "osac/private/v1/subnet_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
@@ -172,6 +173,13 @@ message ComputeInstanceSpec {
   // Reference to a DiskImage resource. Required after template/catalog item
   // defaults are applied. The server validates existence, lifecycle, and tenant visibility.
   DiskImageReference disk_image = 19;
+
+  // Reference to a Secret containing user data for the compute instance.
+  // The Secret must contain a non-empty `userdata` entry. Mutually exclusive with `user_data`.
+  // Immutable after creation: an existing inline value may be migrated by setting this field
+  // while clearing `user_data` in the same update, but the reference itself cannot be changed
+  // afterwards.
+  SecretLocalReference user_data_secret = 20 [(google.api.field_behavior) = IMMUTABLE];
 }
 
 

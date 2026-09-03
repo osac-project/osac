@@ -26,6 +26,7 @@ import (
 	publicv1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/public/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/events"
+	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 )
 
 type BareMetalInstancesServerBuilder struct {
@@ -34,6 +35,7 @@ type BareMetalInstancesServerBuilder struct {
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
+	secretStore       vault.SecretStore
 }
 
 var _ publicv1.BareMetalInstancesServer = (*BareMetalInstancesServer)(nil)
@@ -82,6 +84,11 @@ func (b *BareMetalInstancesServerBuilder) SetMetricsRegisterer(value prometheus.
 	return b
 }
 
+func (b *BareMetalInstancesServerBuilder) SetSecretStore(value vault.SecretStore) *BareMetalInstancesServerBuilder {
+	b.secretStore = value
+	return b
+}
+
 func (b *BareMetalInstancesServerBuilder) Build() (result *BareMetalInstancesServer, err error) {
 	if b.logger == nil {
 		err = errors.New("logger is mandatory")
@@ -113,6 +120,7 @@ func (b *BareMetalInstancesServerBuilder) Build() (result *BareMetalInstancesSer
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
+		SetSecretStore(b.secretStore).
 		SetFilterDesc((*publicv1.BareMetalInstance)(nil).ProtoReflect().Descriptor()).
 		Build()
 	if err != nil {

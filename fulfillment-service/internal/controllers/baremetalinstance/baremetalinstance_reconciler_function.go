@@ -14,6 +14,7 @@ language governing permissions and limitations under the License.
 package baremetalinstance
 
 //go:generate mockgen -source=../../api/osac/private/v1/baremetal_instances_service_grpc.pb.go -destination=bare_metal_instances_client_mock.go -package=baremetalinstance BareMetalInstancesClient
+//go:generate mockgen -source=../../api/osac/private/v1/secrets_service_grpc.pb.go -destination=secrets_client_mock.go -package=baremetalinstance SecretsClient
 
 import (
 	"context"
@@ -65,6 +66,7 @@ type function struct {
 	hubCache                 controllers.HubCache
 	bareMetalInstancesClient privatev1.BareMetalInstancesClient
 	hubsClient               privatev1.HubsClient
+	secretsClient            privatev1.SecretsClient
 	maskCalculator           *masks.Calculator
 }
 
@@ -119,6 +121,7 @@ func (b *FunctionBuilder) Build() (result controllers.ReconcilerFunction[*privat
 		logger:                   b.logger,
 		bareMetalInstancesClient: privatev1.NewBareMetalInstancesClient(b.connection),
 		hubsClient:               privatev1.NewHubsClient(b.connection),
+		secretsClient:            privatev1.NewSecretsClient(b.connection),
 		hubCache:                 b.hubCache,
 		maskCalculator:           masks.NewCalculator().Build(),
 	}
@@ -173,7 +176,7 @@ func (t *task) update(ctx context.Context) error {
 		return err
 	}
 
-	if t.bareMetalInstance.GetSpec().HasUserData() {
+	if t.bareMetalInstance.GetSpec().HasUserData() || t.bareMetalInstance.GetSpec().GetUserDataSecret() != nil {
 		t.userDataSecretName = fmt.Sprintf("%s%s", t.bareMetalInstance.GetId(), userDataSecretSuffix)
 	}
 
@@ -687,6 +690,10 @@ func (t *task) ensureUserDataSecret(ctx context.Context, owner *bmfov1alpha1.Bar
 		return nil
 	}
 
+	userData, err := t.resolveUserData(ctx)
+	if err != nil {
+		return err
+	}
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: t.hubNamespace,
@@ -704,11 +711,11 @@ func (t *task) ensureUserDataSecret(ctx context.Context, owner *bmfov1alpha1.Bar
 			},
 		},
 		StringData: map[string]string{
-			userDataSecretKey: t.bareMetalInstance.GetSpec().GetUserData(),
+			userDataSecretKey: userData,
 		},
 	}
 
-	err := t.hubClient.Create(ctx, secret)
+	err = t.hubClient.Create(ctx, secret)
 	if apierrors.IsAlreadyExists(err) {
 		return nil
 	}
@@ -722,4 +729,26 @@ func (t *task) ensureUserDataSecret(ctx context.Context, owner *bmfov1alpha1.Bar
 		slog.String("name", secret.GetName()),
 	)
 	return nil
+}
+
+func (t *task) resolveUserData(ctx context.Context) (string, error) {
+	ref := t.bareMetalInstance.GetSpec().GetUserDataSecret()
+	if ref == nil {
+		return t.bareMetalInstance.GetSpec().GetUserData(), nil
+	}
+	if t.r.secretsClient == nil {
+		return "", errors.New("secrets client is required to resolve user_data_secret")
+	}
+	if ref.GetId() == "" {
+		return "", errors.New("user_data_secret must have an id")
+	}
+	response, err := t.r.secretsClient.Get(ctx, privatev1.SecretsGetRequest_builder{Id: ref.GetId()}.Build())
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch user_data_secret: %w", err)
+	}
+	value, ok := response.GetObject().GetData()[userDataSecretKey]
+	if !ok || len(value) == 0 {
+		return "", fmt.Errorf("secret %q is missing non-empty data[%q]", ref.GetId(), userDataSecretKey)
+	}
+	return string(value), nil
 }

@@ -28,12 +28,14 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	privatev1 "github.com/osac-project/osac/fulfillment-service/internal/api/osac/private/v1"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	"github.com/osac-project/osac/fulfillment-service/internal/utils"
+	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 )
 
 const bareMetalInstanceUserDataMaxBytes = 64 * 1024
@@ -45,6 +47,7 @@ type PrivateBareMetalInstancesServerBuilder struct {
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
 	filterDesc        protoreflect.MessageDescriptor
+	secretStore       vault.SecretStore
 }
 
 var _ privatev1.BareMetalInstancesServer = (*PrivateBareMetalInstancesServer)(nil)
@@ -65,6 +68,8 @@ type PrivateBareMetalInstancesServer struct {
 	externalIPPoolDao       *dao.GenericDAO[*privatev1.ExternalIPPool]
 	externalIPDao           *dao.GenericDAO[*privatev1.ExternalIP]
 	externalIPAttachmentDao *dao.GenericDAO[*privatev1.ExternalIPAttachment]
+	secretsDao              *dao.GenericDAO[*privatev1.Secret]
+	secretStore             vault.SecretStore
 }
 
 func NewPrivateBareMetalInstancesServer() *PrivateBareMetalInstancesServerBuilder {
@@ -100,6 +105,11 @@ func (b *PrivateBareMetalInstancesServerBuilder) SetMetricsRegisterer(value prom
 // expressions. This is optional. When unset, the descriptor of this server's own private message type is used.
 func (b *PrivateBareMetalInstancesServerBuilder) SetFilterDesc(value protoreflect.MessageDescriptor) *PrivateBareMetalInstancesServerBuilder {
 	b.filterDesc = value
+	return b
+}
+
+func (b *PrivateBareMetalInstancesServerBuilder) SetSecretStore(value vault.SecretStore) *PrivateBareMetalInstancesServerBuilder {
+	b.secretStore = value
 	return b
 }
 
@@ -207,6 +217,15 @@ func (b *PrivateBareMetalInstancesServerBuilder) Build() (result *PrivateBareMet
 		return
 	}
 
+	secretsDao, err := dao.NewGenericDAO[*privatev1.Secret]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
 	generic, err := NewGenericServer[*privatev1.BareMetalInstance]().
 		SetLogger(b.logger).
 		SetService(privatev1.BareMetalInstances_ServiceDesc.ServiceName).
@@ -235,6 +254,8 @@ func (b *PrivateBareMetalInstancesServerBuilder) Build() (result *PrivateBareMet
 		externalIPPoolDao:       externalIPPoolDao,
 		externalIPDao:           externalIPDao,
 		externalIPAttachmentDao: externalIPAttachmentDao,
+		secretsDao:              secretsDao,
+		secretStore:             b.secretStore,
 	}
 	return
 }
@@ -280,6 +301,18 @@ func (s *PrivateBareMetalInstancesServer) Create(ctx context.Context,
 	if err = s.validateSpec(request.GetObject()); err != nil {
 		return
 	}
+	if err = s.validateUserDataMutualExclusion(request.GetObject().GetSpec()); err != nil {
+		return
+	}
+	if request.GetObject().GetSpec().GetUserDataSecret() != nil {
+		var resolved *privatev1.SecretLocalReference
+		resolved, err = validateUserDataSecret(ctx, s.logger, s.secretsDao, s.secretStore,
+			request.GetObject().GetSpec().GetUserDataSecret())
+		if err != nil {
+			return
+		}
+		request.GetObject().GetSpec().SetUserDataSecret(resolved)
+	}
 	if err = s.applyDefaultNetworkAttachments(ctx, request.GetObject()); err != nil {
 		return
 	}
@@ -305,11 +338,71 @@ func (s *PrivateBareMetalInstancesServer) Create(ctx context.Context,
 
 func (s *PrivateBareMetalInstancesServer) Update(ctx context.Context,
 	request *privatev1.BareMetalInstancesUpdateRequest) (response *privatev1.BareMetalInstancesUpdateResponse, err error) {
+	if err = s.validateUserDataMutualExclusionForUpdate(ctx, request); err != nil {
+		return
+	}
+	if request.GetObject().GetSpec().GetUserDataSecret() != nil &&
+		updateIncludesField(request.GetUpdateMask(), "spec.user_data_secret") {
+		var resolved *privatev1.SecretLocalReference
+		resolved, err = validateUserDataSecret(ctx, s.logger, s.secretsDao, s.secretStore,
+			request.GetObject().GetSpec().GetUserDataSecret())
+		if err != nil {
+			return
+		}
+		request.GetObject().GetSpec().SetUserDataSecret(resolved)
+	}
 	if err = s.validateImmutability(ctx, request); err != nil {
 		return
 	}
 	err = s.generic.Update(ctx, request, &response)
 	return
+}
+
+func (s *PrivateBareMetalInstancesServer) validateUserDataMutualExclusion(spec *privatev1.BareMetalInstanceSpec) error {
+	if spec.HasUserData() && spec.GetUserDataSecret() != nil {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"user_data and user_data_secret are mutually exclusive")
+	}
+	return nil
+}
+
+func (s *PrivateBareMetalInstancesServer) validateUserDataMutualExclusionForUpdate(
+	ctx context.Context, request *privatev1.BareMetalInstancesUpdateRequest,
+) error {
+	spec := request.GetObject().GetSpec()
+	if err := s.validateUserDataMutualExclusion(spec); err != nil {
+		return err
+	}
+	mask := request.GetUpdateMask()
+	if mask == nil || len(mask.GetPaths()) == 0 {
+		return nil
+	}
+	settingRef := spec.GetUserDataSecret() != nil && updateIncludesField(mask, "spec.user_data_secret")
+	settingInline := spec.HasUserData() && updateIncludesField(mask, "spec.user_data")
+	if !settingRef && !settingInline {
+		return nil
+	}
+	existingResponse, err := s.generic.dao.Get().SetId(request.GetObject().GetId()).Do(ctx)
+	if err != nil {
+		var notFoundErr *dao.ErrNotFound
+		if errors.As(err, &notFoundErr) {
+			return grpcstatus.Errorf(grpccodes.NotFound, "bare metal instance '%s' not found",
+				request.GetObject().GetId())
+		}
+		s.logger.ErrorContext(ctx, "Failed to load bare metal instance for user data validation", "error", err)
+		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate bare metal instance user data")
+	}
+	existingSpec := existingResponse.GetObject().GetSpec()
+	if settingRef && existingSpec.HasUserData() && !updateIncludesField(mask, "spec.user_data") {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"user_data and user_data_secret are mutually exclusive")
+	}
+	if settingInline && existingSpec.GetUserDataSecret() != nil &&
+		!updateIncludesField(mask, "spec.user_data_secret") {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"user_data and user_data_secret are mutually exclusive")
+	}
+	return nil
 }
 
 func (s *PrivateBareMetalInstancesServer) Delete(ctx context.Context,
@@ -758,13 +851,14 @@ func (s *PrivateBareMetalInstancesServer) validateAndApplyTemplateParameters(ctx
 
 // validateImmutability ensures template, catalog_item, ssh_public_key, user_data, template_parameters,
 // image, and auto_external_ip_attachment cannot be changed after creation.
-func (s *PrivateBareMetalInstancesServer) validateImmutability(ctx context.Context, //nolint:gocyclo
+func (s *PrivateBareMetalInstancesServer) validateImmutability(ctx context.Context,
 	request *privatev1.BareMetalInstancesUpdateRequest) error {
 	mask := request.GetUpdateMask()
 	updatingTemplate := updateIncludesField(mask, "spec.template")
 	updatingCatalogItem := updateIncludesField(mask, "spec.catalog_item")
 	updatingSshKey := updateIncludesField(mask, "spec.ssh_public_key")
 	updatingUserData := updateIncludesField(mask, "spec.user_data")
+	updatingUserDataSecret := updateIncludesField(mask, "spec.user_data_secret")
 	updatingTemplateParams := updateIncludesField(mask, "spec.template_parameters")
 	updatingImage := updateIncludesField(mask, "spec.image")
 	updatingAutoExternalIP := updateIncludesField(mask, "spec.auto_external_ip_attachment")
@@ -775,7 +869,7 @@ func (s *PrivateBareMetalInstancesServer) validateImmutability(ctx context.Conte
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "bare metal instance is mandatory")
 	}
 	newSpec := bmi.GetSpec()
-	if newSpec == nil && (updatingTemplate || updatingCatalogItem || updatingSshKey || updatingUserData || updatingTemplateParams || updatingImage || updatingAutoExternalIP || updatingNetworkAttachments) {
+	if newSpec == nil && bareMetalUpdateRequiresSpec(mask) {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "bare metal instance spec is mandatory")
 	}
 	id := bmi.GetId()
@@ -816,9 +910,10 @@ func (s *PrivateBareMetalInstancesServer) validateImmutability(ctx context.Conte
 			"cannot change spec.ssh_public_key: ssh_public_key is immutable after creation")
 	}
 
-	if updatingUserData && existingSpec.GetUserData() != newSpec.GetUserData() {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"cannot change spec.user_data: user_data is immutable after creation")
+	if err := validateBareMetalUserDataImmutability(
+		existingSpec, newSpec, updatingUserData, updatingUserDataSecret,
+	); err != nil {
+		return err
 	}
 
 	if updatingTemplateParams {
@@ -847,6 +942,38 @@ func (s *PrivateBareMetalInstancesServer) validateImmutability(ctx context.Conte
 		}
 	}
 
+	return nil
+}
+
+func bareMetalUpdateRequiresSpec(mask *fieldmaskpb.FieldMask) bool {
+	return updateIncludesField(mask, "spec.template") ||
+		updateIncludesField(mask, "spec.catalog_item") ||
+		updateIncludesField(mask, "spec.ssh_public_key") ||
+		updateIncludesField(mask, "spec.user_data") ||
+		updateIncludesField(mask, "spec.user_data_secret") ||
+		updateIncludesField(mask, "spec.template_parameters") ||
+		updateIncludesField(mask, "spec.image") ||
+		updateIncludesField(mask, "spec.auto_external_ip_attachment") ||
+		updateIncludesField(mask, "spec.network_attachments")
+}
+
+func validateBareMetalUserDataImmutability(
+	existingSpec, newSpec *privatev1.BareMetalInstanceSpec,
+	updatingUserData, updatingUserDataSecret bool,
+) error {
+	isAtomicMigration := updatingUserData && updatingUserDataSecret &&
+		existingSpec.HasUserData() && !newSpec.HasUserData() &&
+		existingSpec.GetUserDataSecret() == nil && newSpec.GetUserDataSecret() != nil
+	if updatingUserData && existingSpec.GetUserData() != newSpec.GetUserData() && !isAtomicMigration {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"cannot change spec.user_data: user_data is immutable after creation")
+	}
+	if updatingUserDataSecret && existingSpec.GetUserDataSecret() != nil &&
+		!proto.Equal(existingSpec.GetUserDataSecret(), newSpec.GetUserDataSecret()) &&
+		!isAtomicMigration {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"cannot change spec.user_data_secret: user_data_secret is immutable after creation")
+	}
 	return nil
 }
 

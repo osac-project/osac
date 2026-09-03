@@ -25,6 +25,7 @@ import "osac/public/v1/baremetal_instance_template_type.proto";
 import "osac/public/v1/condition_status_type.proto";
 import "osac/public/v1/metadata_type.proto";
 import "osac/public/v1/security_group_type.proto";
+import "osac/public/v1/secret_type.proto";
 import "osac/public/v1/subnet_type.proto";
 
 // Contains the details of a bare metal instance.
@@ -149,6 +150,12 @@ message BareMetalInstanceSpec {
   //
   // This can't be modified after the bare metal instance is created.
   BareMetalInstanceTemplateReference template = 10 [(google.api.field_behavior) = IMMUTABLE];
+
+  // Reference to a Secret containing user data for the bare metal instance.
+  // The Secret must contain a non-empty `userdata` entry. Mutually exclusive with `user_data`.
+  // An existing inline value may be migrated by setting this field while clearing `user_data`
+  // in the same update.
+  SecretLocalReference user_data_secret = 11 [(google.api.field_behavior) = IMMUTABLE];
 }
 
 // The status contains the details of the bare metal instance provided by the system.

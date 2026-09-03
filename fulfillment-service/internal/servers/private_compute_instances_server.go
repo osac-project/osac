@@ -38,6 +38,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	"github.com/osac-project/osac/fulfillment-service/internal/utils"
+	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 )
 
 type PrivateComputeInstancesServerBuilder struct {
@@ -47,6 +48,7 @@ type PrivateComputeInstancesServerBuilder struct {
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
 	filterDesc        protoreflect.MessageDescriptor
+	secretStore       vault.SecretStore
 }
 
 var _ privatev1.ComputeInstancesServer = (*PrivateComputeInstancesServer)(nil)
@@ -68,6 +70,8 @@ type PrivateComputeInstancesServer struct {
 	externalIPPoolDao       *dao.GenericDAO[*privatev1.ExternalIPPool]
 	externalIPDao           *dao.GenericDAO[*privatev1.ExternalIP]
 	externalIPAttachmentDao *dao.GenericDAO[*privatev1.ExternalIPAttachment]
+	secretsDao              *dao.GenericDAO[*privatev1.Secret]
+	secretStore             vault.SecretStore
 }
 
 func NewPrivateComputeInstancesServer() *PrivateComputeInstancesServerBuilder {
@@ -105,6 +109,11 @@ func (b *PrivateComputeInstancesServerBuilder) SetMetricsRegisterer(value promet
 // expressions. This is optional. When unset, the descriptor of this server's own private message type is used.
 func (b *PrivateComputeInstancesServerBuilder) SetFilterDesc(value protoreflect.MessageDescriptor) *PrivateComputeInstancesServerBuilder {
 	b.filterDesc = value
+	return b
+}
+
+func (b *PrivateComputeInstancesServerBuilder) SetSecretStore(value vault.SecretStore) *PrivateComputeInstancesServerBuilder {
+	b.secretStore = value
 	return b
 }
 
@@ -216,6 +225,15 @@ func (b *PrivateComputeInstancesServerBuilder) Build() (result *PrivateComputeIn
 		return
 	}
 
+	secretsDao, err := dao.NewGenericDAO[*privatev1.Secret]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
 	// Create the generic server:
 	generic, err := NewGenericServer[*privatev1.ComputeInstance]().
 		SetLogger(b.logger).
@@ -246,6 +264,8 @@ func (b *PrivateComputeInstancesServerBuilder) Build() (result *PrivateComputeIn
 		externalIPPoolDao:       externalIPPoolDao,
 		externalIPDao:           externalIPDao,
 		externalIPAttachmentDao: externalIPAttachmentDao,
+		secretsDao:              secretsDao,
+		secretStore:             b.secretStore,
 	}
 	return
 }
@@ -313,6 +333,7 @@ func (s *PrivateComputeInstancesServer) injectDefaultNetworkAttachments(ctx cont
 
 func (s *PrivateComputeInstancesServer) Create(ctx context.Context,
 	request *privatev1.ComputeInstancesCreateRequest) (response *privatev1.ComputeInstancesCreateResponse, err error) {
+	spec := request.GetObject().GetSpec()
 	// Auto-inject default network attachments if none provided:
 	if len(request.GetObject().GetSpec().GetNetworkAttachments()) == 0 {
 		err = s.injectDefaultNetworkAttachments(ctx, request.GetObject())
@@ -334,7 +355,6 @@ func (s *PrivateComputeInstancesServer) Create(ctx context.Context,
 	}
 
 	// Dispatch between catalog item and template paths:
-	spec := request.GetObject().GetSpec()
 	catalogItemRef := spec.GetCatalogItem()
 	templateRef := spec.GetTemplate()
 	if catalogItemRef != nil && templateRef != nil {
@@ -361,6 +381,17 @@ func (s *PrivateComputeInstancesServer) Create(ctx context.Context,
 	err = s.applySpecDefaults(spec, template)
 	if err != nil {
 		return
+	}
+	if err = s.validateUserDataMutualExclusion(spec); err != nil {
+		return
+	}
+	if spec.GetUserDataSecret() != nil {
+		var resolved *privatev1.SecretLocalReference
+		resolved, err = validateUserDataSecret(ctx, s.logger, s.secretsDao, s.secretStore, spec.GetUserDataSecret())
+		if err != nil {
+			return
+		}
+		spec.SetUserDataSecret(resolved)
 	}
 
 	err = s.validateStorageTiers(ctx, spec)
@@ -410,6 +441,19 @@ func (s *PrivateComputeInstancesServer) Update(ctx context.Context,
 	// is sparse so validating fields absent from it would fail incorrectly.
 	mask := request.GetUpdateMask()
 	isBeingDeleted := request.GetObject().GetMetadata().GetDeletionTimestamp() != nil
+	if err = s.validateUserDataMutualExclusionForUpdate(ctx, request); err != nil {
+		return
+	}
+	if request.GetObject().GetSpec().GetUserDataSecret() != nil &&
+		hasMaskPrefix(mask, "spec.user_data_secret") {
+		var resolved *privatev1.SecretLocalReference
+		resolved, err = validateUserDataSecret(ctx, s.logger, s.secretsDao, s.secretStore,
+			request.GetObject().GetSpec().GetUserDataSecret())
+		if err != nil {
+			return
+		}
+		request.GetObject().GetSpec().SetUserDataSecret(resolved)
+	}
 
 	// ALWAYS validate tenant isolation for network references, even during deletion.
 	// This prevents cross-tenant updates on ComputeInstances being deleted.
@@ -446,6 +490,52 @@ func (s *PrivateComputeInstancesServer) Update(ctx context.Context,
 
 	err = s.generic.Update(ctx, request, &response)
 	return
+}
+
+func (s *PrivateComputeInstancesServer) validateUserDataMutualExclusion(spec *privatev1.ComputeInstanceSpec) error {
+	if spec.HasUserData() && spec.GetUserDataSecret() != nil {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"user_data and user_data_secret are mutually exclusive")
+	}
+	return nil
+}
+
+func (s *PrivateComputeInstancesServer) validateUserDataMutualExclusionForUpdate(
+	ctx context.Context, request *privatev1.ComputeInstancesUpdateRequest,
+) error {
+	spec := request.GetObject().GetSpec()
+	if err := s.validateUserDataMutualExclusion(spec); err != nil {
+		return err
+	}
+	mask := request.GetUpdateMask()
+	if mask == nil || len(mask.GetPaths()) == 0 {
+		return nil
+	}
+	settingRef := spec.GetUserDataSecret() != nil && hasMaskPrefix(mask, "spec.user_data_secret")
+	settingInline := spec.HasUserData() && hasMaskPrefix(mask, "spec.user_data")
+	if !settingRef && !settingInline {
+		return nil
+	}
+	existingResponse, err := s.generic.dao.Get().SetId(request.GetObject().GetId()).Do(ctx)
+	if err != nil {
+		var notFoundErr *dao.ErrNotFound
+		if errors.As(err, &notFoundErr) {
+			return grpcstatus.Errorf(grpccodes.NotFound, "compute instance '%s' not found",
+				request.GetObject().GetId())
+		}
+		s.logger.ErrorContext(ctx, "Failed to load compute instance for user data validation", "error", err)
+		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate compute instance user data")
+	}
+	existingSpec := existingResponse.GetObject().GetSpec()
+	if settingRef && existingSpec.HasUserData() && !hasMaskPrefix(mask, "spec.user_data") {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"user_data and user_data_secret are mutually exclusive")
+	}
+	if settingInline && existingSpec.GetUserDataSecret() != nil && !hasMaskPrefix(mask, "spec.user_data_secret") {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"user_data and user_data_secret are mutually exclusive")
+	}
+	return nil
 }
 
 func (s *PrivateComputeInstancesServer) Delete(ctx context.Context,
@@ -675,8 +765,9 @@ func (s *PrivateComputeInstancesServer) validateTemplateImmutability(ctx context
 	updatingInstanceType := hasMaskPrefix(updateMask, "spec.instance_type")
 	updatingDiskImage := hasMaskPrefix(updateMask, "spec.disk_image")
 	updatingAutoExternalIP := hasMaskPrefix(updateMask, "spec.auto_external_ip_attachment")
+	updatingUserDataSecret := hasMaskPrefix(updateMask, "spec.user_data_secret")
 
-	if !updatingTemplate && !updatingTemplateParams && !updatingCatalogItem && !updatingInstanceType && !updatingDiskImage && !updatingAutoExternalIP {
+	if !updatingTemplate && !updatingTemplateParams && !updatingCatalogItem && !updatingInstanceType && !updatingDiskImage && !updatingAutoExternalIP && !updatingUserDataSecret {
 		return nil
 	}
 
@@ -749,6 +840,16 @@ func (s *PrivateComputeInstancesServer) validateTemplateImmutability(ctx context
 	if updatingAutoExternalIP && existingSpec.GetAutoExternalIpAttachment() != newSpec.GetAutoExternalIpAttachment() {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"cannot change spec.auto_external_ip_attachment: auto_external_ip_attachment is immutable after creation")
+	}
+
+	// The user_data_secret reference is immutable once set. Setting it for the first time is
+	// allowed (including migrating from an inline user_data value), but it cannot be changed or
+	// cleared afterwards. Mutual exclusion with inline user_data is enforced separately in
+	// validateUserDataMutualExclusionForUpdate.
+	if updatingUserDataSecret && existingSpec.GetUserDataSecret() != nil &&
+		!proto.Equal(existingSpec.GetUserDataSecret(), newSpec.GetUserDataSecret()) {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"cannot change spec.user_data_secret: user_data_secret is immutable after creation")
 	}
 
 	return nil

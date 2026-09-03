@@ -16,6 +16,7 @@ package computeinstance
 //go:generate mockgen -source=../../api/osac/private/v1/compute_instances_service_grpc.pb.go -destination=compute_instances_client_mock.go -package=computeinstance ComputeInstancesClient
 //go:generate mockgen -source=../../api/osac/private/v1/instance_types_service_grpc.pb.go -destination=instance_types_client_mock.go -package=computeinstance InstanceTypesClient
 //go:generate mockgen -source=../../api/osac/private/v1/disk_images_service_grpc.pb.go -destination=disk_images_client_mock.go -package=computeinstance DiskImagesClient
+//go:generate mockgen -source=../../api/osac/private/v1/secrets_service_grpc.pb.go -destination=secrets_client_mock.go -package=computeinstance SecretsClient
 
 import (
 	"context"
@@ -74,6 +75,7 @@ type function struct {
 	hubsClient             privatev1.HubsClient
 	instanceTypesClient    privatev1.InstanceTypesClient
 	diskImagesClient       privatev1.DiskImagesClient
+	secretsClient          privatev1.SecretsClient
 	maskCalculator         *masks.Calculator
 }
 
@@ -132,6 +134,7 @@ func (b *FunctionBuilder) Build() (result controllers.ReconcilerFunction[*privat
 		hubsClient:             privatev1.NewHubsClient(b.connection),
 		instanceTypesClient:    privatev1.NewInstanceTypesClient(b.connection),
 		diskImagesClient:       privatev1.NewDiskImagesClient(b.connection),
+		secretsClient:          privatev1.NewSecretsClient(b.connection),
 		hubCache:               b.hubCache,
 		maskCalculator:         masks.NewCalculator().Build(),
 	}
@@ -212,7 +215,7 @@ func (t *task) update(ctx context.Context) error {
 	}
 
 	// Set the user data Secret name if user data is provided (no K8s call yet):
-	if t.computeInstance.GetSpec().HasUserData() {
+	if t.computeInstance.GetSpec().HasUserData() || t.computeInstance.GetSpec().GetUserDataSecret() != nil {
 		t.userDataSecretName = fmt.Sprintf("%s%s", t.computeInstance.GetId(), userDataSecretSuffix)
 	}
 
@@ -776,6 +779,10 @@ func (t *task) ensureUserDataSecret(ctx context.Context, owner *osacv1alpha1.Com
 		return nil
 	}
 
+	userData, err := t.resolveUserData(ctx)
+	if err != nil {
+		return err
+	}
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: t.hubNamespace,
@@ -793,11 +800,11 @@ func (t *task) ensureUserDataSecret(ctx context.Context, owner *osacv1alpha1.Com
 			},
 		},
 		StringData: map[string]string{
-			userDataSecretKey: t.computeInstance.GetSpec().GetUserData(),
+			userDataSecretKey: userData,
 		},
 	}
 
-	err := t.hubClient.Create(ctx, secret)
+	err = t.hubClient.Create(ctx, secret)
 	if apierrors.IsAlreadyExists(err) {
 		return nil
 	}
@@ -811,6 +818,28 @@ func (t *task) ensureUserDataSecret(ctx context.Context, owner *osacv1alpha1.Com
 		slog.String("name", secret.GetName()),
 	)
 	return nil
+}
+
+func (t *task) resolveUserData(ctx context.Context) (string, error) {
+	ref := t.computeInstance.GetSpec().GetUserDataSecret()
+	if ref == nil {
+		return t.computeInstance.GetSpec().GetUserData(), nil
+	}
+	if t.r.secretsClient == nil {
+		return "", errors.New("secrets client is required to resolve user_data_secret")
+	}
+	if ref.GetId() == "" {
+		return "", errors.New("user_data_secret must have an id")
+	}
+	response, err := t.r.secretsClient.Get(ctx, privatev1.SecretsGetRequest_builder{Id: ref.GetId()}.Build())
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch user_data_secret: %w", err)
+	}
+	value, ok := response.GetObject().GetData()[userDataSecretKey]
+	if !ok || len(value) == 0 {
+		return "", fmt.Errorf("secret %q is missing non-empty data[%q]", ref.GetId(), userDataSecretKey)
+	}
+	return string(value), nil
 }
 
 func mapSourceType(st privatev1.SourceType) osacv1alpha1.ImageSourceType {

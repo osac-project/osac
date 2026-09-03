@@ -2,4 +2,5 @@ apiVersion: v2
 name: bare-metal-fulfillment-operator-crds
 description: CRDs for the Bare Metal Fulfillment Operator
 type: application
-version: 0.0.0
+version: 0.0.12-nightly.20260903.b82a239.68.1
+appVersion: 0.0.12-nightly.20260903.b82a239.68.1

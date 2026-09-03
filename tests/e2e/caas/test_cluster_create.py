@@ -39,6 +39,9 @@ def test_cluster_create(
     ssh_public_key_path: str,
     metering: MeteringCollector,
 ) -> None:
+    """Verify the full CaaS cluster lifecycle: create, provision to Ready, version and
+    releaseImage propagation to the HostedCluster, N+1 metering heartbeat decomposition,
+    worker scale-up reflected in updated.v1 metering, and deletion."""
     name = unique_name("e2e-cluster")
     uuid = cli.create_cluster(
         name=name,
@@ -85,6 +88,7 @@ def test_cluster_create(
 
         # Derive expected N+1 count from cluster spec
         node_sets = cluster.get("object", {}).get("spec", {}).get("nodeSets", {})
+        assert node_sets, "Cluster spec should have at least one node set for the scaling test"
         expected_components = 1 + len(node_sets)
 
         # Verify N+1 heartbeat decomposition
@@ -162,16 +166,19 @@ def test_cluster_create_with_version(
     image propagation is covered by test_cluster_create."""
     version = private_grpc.ensure_cluster_version(version="4.20.0-e2e", image=TEST_RELEASE_IMAGE)
 
-    name = unique_name("e2e-cluster-version")
-    uuid = cli.create_cluster(
-        name=name,
-        template=cluster_template,
-        version=version["name"],
-        template_parameter_files={"pull_secret": pull_secret_path},
-        template_parameters={"ssh_public_key": Path(ssh_public_key_path).read_text().strip()},
-    )
-
+    # create_cluster runs inside the try so a failure there still triggers the
+    # ClusterVersion cleanup in the finally (the version already exists by then).
+    uuid: str | None = None
     try:
+        name = unique_name("e2e-cluster-version")
+        uuid = cli.create_cluster(
+            name=name,
+            template=cluster_template,
+            version=version["name"],
+            template_parameter_files={"pull_secret": pull_secret_path},
+            template_parameters={"ssh_public_key": Path(ssh_public_key_path).read_text().strip()},
+        )
+
         co_name = wait_for_cluster_order_cr(k8s=k8s_hub_client, uuid=uuid)
 
         cluster = grpc.get_cluster(cluster_id=uuid)
@@ -201,9 +208,18 @@ def test_cluster_create_with_version(
         wait_for_cluster_grpc_deleting_or_archived(grpc=grpc, uuid=uuid)
         wait_for_cluster_deletion(k8s=k8s_hub_client, name=co_name)
         wait_for_cluster_grpc_removal(grpc=grpc, uuid=uuid)
+        uuid = None  # deleted cleanly; the finally only needs to remove the version
     finally:
-        with contextlib.suppress(subprocess.CalledProcessError):
-            cli.delete_cluster(uuid=uuid)
+        # On the failure path the cluster may still exist and reference the
+        # version; a referenced ClusterVersion cannot be deleted, so remove the
+        # cluster and wait for it to be gone first. Skipped entirely on the happy
+        # path, where the body already deleted the cluster and cleared uuid.
+        if uuid is not None:
+            with contextlib.suppress(subprocess.CalledProcessError):
+                cli.delete_cluster(uuid=uuid)
+            with contextlib.suppress(TimeoutError):
+                wait_for_cluster_grpc_removal(grpc=grpc, uuid=uuid)
+        private_grpc.call_unchecked(service="osac.private.v1.ClusterVersions/Delete", data={"id": version["id"]})
 
 
 def test_cluster_create_rejected_for_invalid_version(
@@ -211,11 +227,6 @@ def test_cluster_create_rejected_for_invalid_version(
 ) -> None:
     """Verify cluster creation is rejected for disabled, obsolete, and
     non-existent versions."""
-    disabled = private_grpc.ensure_cluster_version(version="4.20.0-e2e-disabled", image=TEST_RELEASE_IMAGE)
-    private_grpc.update_cluster_version(version_id=disabled["id"], enabled=False)
-
-    obsolete = private_grpc.ensure_cluster_version(version="4.20.0-e2e-obsolete", image=TEST_RELEASE_IMAGE)
-    private_grpc.update_cluster_version(version_id=obsolete["id"], state="CLUSTER_VERSION_STATE_OBSOLETE")
 
     def _create_with_version(version_name: str) -> tuple[str, int]:
         return grpc.call_unchecked(
@@ -223,14 +234,29 @@ def test_cluster_create_rejected_for_invalid_version(
             data={"object": {"spec": {"template": {"name": cluster_template}, "version": {"name": version_name}}}},
         )
 
-    output, rc = _create_with_version(disabled["name"])
-    assert rc != 0, f"Expected create to reject disabled version, got: {output}"
-    assert "disabled" in output.lower(), f"Expected 'disabled' in rejection, got: {output}"
+    # Track versions as they are created so the finally cleans up whatever
+    # exists, even if a later ensure/update call raises before the assertions.
+    created_version_ids: list[str] = []
+    try:
+        disabled = private_grpc.ensure_cluster_version(version="4.20.0-e2e-disabled", image=TEST_RELEASE_IMAGE)
+        created_version_ids.append(disabled["id"])
+        private_grpc.update_cluster_version(version_id=disabled["id"], enabled=False)
 
-    output, rc = _create_with_version(obsolete["name"])
-    assert rc != 0, f"Expected create to reject obsolete version, got: {output}"
-    assert "obsolete" in output.lower(), f"Expected 'obsolete' in rejection, got: {output}"
+        obsolete = private_grpc.ensure_cluster_version(version="4.20.0-e2e-obsolete", image=TEST_RELEASE_IMAGE)
+        created_version_ids.append(obsolete["id"])
+        private_grpc.update_cluster_version(version_id=obsolete["id"], state="CLUSTER_VERSION_STATE_OBSOLETE")
 
-    output, rc = _create_with_version("4-20-0-e2e-does-not-exist")
-    assert rc != 0, f"Expected create to reject non-existent version, got: {output}"
-    assert "not found" in output.lower(), f"Expected 'not found' in rejection, got: {output}"
+        output, rc = _create_with_version(disabled["name"])
+        assert rc != 0, f"Expected create to reject disabled version, got: {output}"
+        assert "disabled" in output.lower(), f"Expected 'disabled' in rejection, got: {output}"
+
+        output, rc = _create_with_version(obsolete["name"])
+        assert rc != 0, f"Expected create to reject obsolete version, got: {output}"
+        assert "obsolete" in output.lower(), f"Expected 'obsolete' in rejection, got: {output}"
+
+        output, rc = _create_with_version("4-20-0-e2e-does-not-exist")
+        assert rc != 0, f"Expected create to reject non-existent version, got: {output}"
+        assert "not found" in output.lower(), f"Expected 'not found' in rejection, got: {output}"
+    finally:
+        for version_id in created_version_ids:
+            private_grpc.call_unchecked(service="osac.private.v1.ClusterVersions/Delete", data={"id": version_id})

@@ -191,16 +191,16 @@ var _ = Describe("buildSpec", func() {
 						DiskImage:    &privatev1.DiskImageReference{Id: "test-disk-image"},
 						BootDisk: privatev1.ComputeInstanceDisk_builder{
 							SizeGib:     proto.Int32(20),
-							StorageTier: new("fast"),
+							StorageTier: privatev1.StorageTierReference_builder{Name: "fast"}.Build(),
 						}.Build(),
 						AdditionalDisks: []*privatev1.ComputeInstanceDisk{
 							privatev1.ComputeInstanceDisk_builder{
 								SizeGib:     proto.Int32(100),
-								StorageTier: new("standard"),
+								StorageTier: privatev1.StorageTierReference_builder{Name: "standard"}.Build(),
 							}.Build(),
 							privatev1.ComputeInstanceDisk_builder{
 								SizeGib:     proto.Int32(50),
-								StorageTier: new("archive"),
+								StorageTier: privatev1.StorageTierReference_builder{Name: "archive"}.Build(),
 							}.Build(),
 						},
 						NetworkAttachments: []*privatev1.ComputeNetworkAttachment{

@@ -1,24 +1,18 @@
 image:
   repository: ghcr.io/osac-project/metering-service
-  tag: latest  # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
+  tag: sha-e6e4f62 # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
   pullPolicy: Always
-
 # Fulfillment address is auto-derived from release namespace.
 # Override fulfillment.address for cross-namespace/cross-cluster (OSAC-3537).
-
 database:
   connection: []
-
 heartbeat:
   interval: "60s"
-
 reconciliation:
   interval: "60m"
-
 certs:
   caBundle:
     configMap: ca-bundle
-
 resources:
   requests:
     cpu: 100m
@@ -26,15 +20,13 @@ resources:
   limits:
     cpu: 500m
     memory: 256Mi
-
 # Kafka connection and topic naming. Override to point at a different
 # Kafka cluster or to prefix topics for per-instance isolation.
 # TLS trust uses certs.caBundle (the shared OSAC CA), not the Strimzi cluster CA.
 kafka:
-  brokers: ""          # default: osac-kafka-kafka-bootstrap.osac-kafka.svc.cluster.local:9093
-  clusterName: ""      # default: osac-kafka
+  brokers: "" # default: osac-kafka-kafka-bootstrap.osac-kafka.svc.cluster.local:9093
+  clusterName: "" # default: osac-kafka
   clusterNamespace: "" # default: osac-kafka
-
 # Prefix prepended to all topic names (e.g. "pr101" -> "pr101.osac.metering.lifecycle").
 # When set, this chart skips KafkaTopic/KafkaUser creation (the parent chart owns them).
 
@@ -46,15 +38,14 @@ echoAdapter:
   #   repository: ghcr.io/osac-project/metering-echo-adapter
   #   tag: latest
   #   pullPolicy: Always
-
 ## M360 adapter — forwards metering events to Monetize360 Usage API.
 m360Adapter:
   enabled: false
   image:
     repository: ghcr.io/osac-project/metering-m360-adapter
-    tag: latest  # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
+    tag: sha-e6e4f62 # PLACEHOLDER -- overwritten at release time by publish-charts.yaml
     pullPolicy: Always
   m360:
     apiUrl: ""
-    apiKeySecret: ""     # name of K8s Secret with key "api-key"
+    apiKeySecret: "" # name of K8s Secret with key "api-key"
     apiVersion: "v1"

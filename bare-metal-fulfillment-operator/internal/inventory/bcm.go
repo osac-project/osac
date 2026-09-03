@@ -23,6 +23,7 @@ import (
 	"math/rand"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -165,19 +166,43 @@ func (c *BCMClient) CertWatcher() *certwatcher.CertWatcher {
 	return c.client.CertWatcher()
 }
 
-// FindFreeHost queries BCM for all devices and returns a randomly selected
-// free LiteNode matching the requested hostType. All filtering is client-side
-// because the BCM JSON API has no server-side filtering.
-func (c *BCMClient) FindFreeHost(ctx context.Context, matchExpressions map[string]string) (*Host, error) {
-	log := ctrllog.FromContext(ctx)
-	log.Info("Finding free BCM host")
+// Selector keys with dedicated handling, excluded from the generic label match.
+const (
+	managedByKey      = "managedBy"
+	provisionStateKey = "provisionState"
+)
 
-	matchManagedBy := matchExpressions["managedBy"]
+// reservedExtraValueKeys are OSAC-internal extra_values, never matchable as labels.
+var reservedExtraValueKeys = map[string]bool{
+	bcmclient.ExtraValueInstanceID:     true,
+	bcmclient.ExtraValueBMCAddress:     true,
+	bcmclient.ExtraValueBMCCredentials: true,
+}
+
+// FindFreeHost returns a randomly selected free LiteNode whose extra_values
+// satisfy the selector labels (arbitrary key=value, matched client-side against
+// extra_values — the BCM JSON API has no server-side filtering). managedBy is a
+// default-aware ownership guard; provisionState is excluded (no BCM analog).
+func (c *BCMClient) FindFreeHost(ctx context.Context, matchExpressions map[string]string) (*Host, error) {
+	if err := validateBCMMatchExpressions(matchExpressions); err != nil {
+		return nil, err
+	}
+
+	log := ctrllog.FromContext(ctx)
+	log.Info("Finding free BCM host", "selectorKeys", sortedKeys(matchExpressions))
+
+	matchManagedBy := matchExpressions[managedByKey]
 	if matchManagedBy == "" {
 		matchManagedBy = shared.OsacDefaultManagedByValue
 	}
-	if matchManagedBy != shared.OsacDefaultManagedByValue {
-		return nil, nil
+
+	// Generic label match: the selector minus keys with dedicated handling.
+	labelMatchExpressions := make(map[string]string, len(matchExpressions))
+	for key, value := range matchExpressions {
+		if key == managedByKey || key == provisionStateKey {
+			continue
+		}
+		labelMatchExpressions[key] = value
 	}
 
 	devices, err := c.client.GetDevices(ctx)
@@ -185,24 +210,13 @@ func (c *BCMClient) FindFreeHost(ctx context.Context, matchExpressions map[strin
 		return nil, fmt.Errorf("FindFreeHost: %w", err)
 	}
 
-	hostType := matchExpressions["hostType"]
-
+	// available holds every valid, unassigned LiteNode regardless of the selector;
+	// it feeds the availability gauge (the total free pool by resource_class).
+	// candidates narrows that pool by the selector labels and managedBy ownership.
+	available := make([]bcmclient.Device, 0, len(devices))
 	candidates := make([]bcmclient.Device, 0, len(devices))
 	for _, d := range devices {
-		if d.ChildType != "LiteNode" {
-			continue
-		}
-
-		if d.ExtraValues == nil {
-			continue
-		}
-
-		resourceClass, _ := d.ExtraValues[bcmclient.ExtraValueResourceClass].(string)
-		if resourceClass == "" {
-			continue
-		}
-
-		if hostType != "" && resourceClass != hostType {
+		if d.ChildType != "LiteNode" || d.ExtraValues == nil {
 			continue
 		}
 
@@ -218,9 +232,92 @@ func (c *BCMClient) FindFreeHost(ctx context.Context, matchExpressions map[strin
 			continue
 		}
 
+		available = append(available, d)
+
+		if !deviceMatchesLabels(d, labelMatchExpressions) {
+			continue
+		}
+
+		if deviceManagedBy(d) != matchManagedBy {
+			continue
+		}
+
 		candidates = append(candidates, d)
 	}
 
+	updateAvailableMetric(available)
+
+	if len(candidates) == 0 {
+		log.Info("no free BCM host matches selector", "selectorKeys", sortedKeys(labelMatchExpressions))
+		return nil, nil
+	}
+
+	rand.Shuffle(len(candidates), func(i, j int) {
+		candidates[i], candidates[j] = candidates[j], candidates[i]
+	})
+
+	selected := &candidates[0]
+	// Report the selected device's resource_class as HostType (observability only;
+	// resource_class is also matchable as an ordinary label).
+	resourceClass, _ := selected.ExtraValues[bcmclient.ExtraValueResourceClass].(string)
+
+	return &Host{
+		InventoryHostID: fmt.Sprintf("%s/%s", c.bmhManager.Namespace(), selected.Hostname),
+		Name:            selected.Hostname,
+		HostType:        resourceClass,
+		HostClass:       c.hostClass,
+		ManagedBy:       matchManagedBy,
+	}, nil
+}
+
+// validateBCMMatchExpressions rejects an empty selector, empty keys, keys with
+// spaces, empty values, and OSAC-internal reserved keys.
+func validateBCMMatchExpressions(matchExpressions map[string]string) error {
+	if len(matchExpressions) == 0 {
+		return fmt.Errorf("invalid matchExpressions: empty map")
+	}
+	for key, value := range matchExpressions {
+		if key == "" {
+			return fmt.Errorf("invalid matchExpression: empty key not allowed")
+		}
+		if strings.Contains(key, " ") {
+			return fmt.Errorf("invalid matchExpression: key %q contains spaces", key)
+		}
+		if reservedExtraValueKeys[key] {
+			return fmt.Errorf("invalid matchExpression: %q is a reserved OSAC key", key)
+		}
+		if value == "" {
+			return fmt.Errorf("invalid matchExpression: empty value not allowed for key %q", key)
+		}
+	}
+	return nil
+}
+
+// deviceMatchesLabels reports whether the device's extra_values satisfy every
+// selector key=value (AND). Reserved keys are rejected by
+// validateBCMMatchExpressions before this is reached.
+func deviceMatchesLabels(d bcmclient.Device, matchExpressions map[string]string) bool {
+	for key, want := range matchExpressions {
+		got, ok := d.ExtraValues[key].(string)
+		if !ok || got != want {
+			return false
+		}
+	}
+	return true
+}
+
+// deviceManagedBy returns the device's managedBy label, defaulting to the
+// standard owner when absent or empty.
+func deviceManagedBy(d bcmclient.Device) string {
+	if v, ok := d.ExtraValues[managedByKey].(string); ok && v != "" {
+		return v
+	}
+	return shared.OsacDefaultManagedByValue
+}
+
+// updateAvailableMetric refreshes the available-hosts gauge, keyed by
+// resource_class as a best-effort reporting dimension.
+func updateAvailableMetric(candidates []bcmclient.Device) {
 	bcmHostsAvailable.Reset()
 	availableByType := map[string]float64{}
 	for _, cd := range candidates {
@@ -230,25 +327,17 @@ func (c *BCMClient) FindFreeHost(ctx context.Context, matchExpressions map[strin
 	for t, count := range availableByType {
 		bcmHostsAvailable.WithLabelValues(t).Set(count)
 	}
+}
 
-	if len(candidates) == 0 {
-		return nil, nil
+// sortedKeys returns the map's keys sorted, for stable, value-free logging.
+// Selector values may be sensitive and are never logged.
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
 	}
-
-	rand.Shuffle(len(candidates), func(i, j int) {
-		candidates[i], candidates[j] = candidates[j], candidates[i]
-	})
-
-	selected := &candidates[0]
-	resourceClass, _ := selected.ExtraValues[bcmclient.ExtraValueResourceClass].(string)
-
-	return &Host{
-		InventoryHostID: fmt.Sprintf("%s/%s", c.bmhManager.Namespace(), selected.Hostname),
-		Name:            selected.Hostname,
-		HostType:        resourceClass,
-		HostClass:       c.hostClass,
-		ManagedBy:       shared.OsacDefaultManagedByValue,
-	}, nil
+	sort.Strings(keys)
+	return keys
 }
 
 // AssignHost records the assignment identifier in BCM, resolves the BMC

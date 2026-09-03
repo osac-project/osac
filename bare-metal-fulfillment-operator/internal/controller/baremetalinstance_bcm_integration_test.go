@@ -249,13 +249,15 @@ func bmhExistsInNS(name string) bool {
 	return err == nil
 }
 
-func createBCMBMI(name, hostType string) {
+func createBCMBMI(name, resourceClass string) {
 	bmi := &v1alpha1.BareMetalInstance{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: bcmTestNS},
 		Spec: v1alpha1.BareMetalInstanceSpec{
 			Selector: v1alpha1.HostSelectorSpec{
+				// The BCM backend matches selector keys against a device's
+				// extra_values, where resource_class lives.
 				HostSelector: map[string]string{
-					"hostType": hostType,
+					"resource_class": resourceClass,
 				},
 			},
 			TemplateID: shared.OsacNoopTemplate,

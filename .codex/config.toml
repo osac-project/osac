@@ -1,0 +1,10 @@
+# OpenAI Codex project configuration for the OSAC mono-repo.
+# Codex walks from the .git root down to the working directory and merges any
+# .codex/config.toml it finds, so this file applies repo-wide.
+
+# Raise the AGENTS.md load budget above Codex's 32 KiB default. Codex loads the
+# repo-root AGENTS.md plus the nearest component AGENTS.md for the working
+# directory; the root (~17 KB) combined with the largest component doc
+# (osac-aap, ~20 KB) exceeds 32 KiB and would otherwise be truncated, dropping
+# project conventions. 64 KiB leaves headroom as those docs grow.
+project_doc_max_bytes = 65536

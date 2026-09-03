@@ -106,7 +106,7 @@ var _ = Describe("Public volumes", func() {
 			Object: privatev1.Volume_builder{
 				Metadata: privatev1.Metadata_builder{
 					Name:   name,
-					Tenant: "default",
+					Tenant: "users",
 				}.Build(),
 				Spec: privatev1.VolumeSpec_builder{
 					StorageTier: storageTierName,
